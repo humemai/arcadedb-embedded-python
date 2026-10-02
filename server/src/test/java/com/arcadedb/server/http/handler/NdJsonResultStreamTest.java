@@ -27,6 +27,8 @@ import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -116,7 +118,7 @@ class NdJsonResultStreamTest {
     final FlushRecordingStream out = new FlushRecordingStream();
     try (final NdJsonResultStream stream = new NdJsonResultStream(out)) {
       stream.writeRecord(new JSONObject().put("name", "a"));
-      stream.writeError("index rebuild in progress");
+      stream.writeError("index rebuild in progress", 503, "com.arcadedb.exception.ConcurrentModificationException", null);
     }
 
     final List<String> lines = out.lines();
@@ -124,6 +126,43 @@ class NdJsonResultStreamTest {
     assertThat(new JSONObject(lines.get(1)).getJSONObject("error").getString("message"))
         .isEqualTo("index rebuild in progress");
     assertThat(lines).noneMatch(line -> line.contains("\"stats\""));
+  }
+
+  /**
+   * Issue #8235: the error line carries the status the buffered encoding would have sent, and the reported exception
+   * class, so a client can tell a retryable conflict from a server fault without parsing the message. The structured
+   * arguments travel only when the failure has any - an absent member, not a JSON null.
+   */
+  @Test
+  void anErrorLineCarriesStatusExceptionAndArguments() throws IOException {
+    final FlushRecordingStream out = new FlushRecordingStream();
+    try (final NdJsonResultStream stream = new NdJsonResultStream(out)) {
+      stream.writeError("duplicated", 409, "com.arcadedb.exception.DuplicatedKeyException", "idx|[1]|#1:0");
+      stream.writeError("conflict", 503, "com.arcadedb.exception.ConcurrentModificationException", null);
+    }
+
+    final JSONObject duplicated = new JSONObject(out.lines().get(0)).getJSONObject("error");
+    assertThat(duplicated.getString("message")).isEqualTo("duplicated");
+    assertThat(duplicated.getInt("status")).isEqualTo(409);
+    assertThat(duplicated.getString("exception")).isEqualTo("com.arcadedb.exception.DuplicatedKeyException");
+    assertThat(duplicated.getString("exceptionArgs")).isEqualTo("idx|[1]|#1:0");
+
+    final JSONObject conflict = new JSONObject(out.lines().get(1)).getJSONObject("error");
+    assertThat(conflict.getInt("status")).isEqualTo(503);
+    assertThat(conflict.has("exceptionArgs")).isFalse();
+  }
+
+  @Test
+  void anErrorLineWithNoExceptionLeavesTheMemberOut() throws IOException {
+    final FlushRecordingStream out = new FlushRecordingStream();
+    try (final NdJsonResultStream stream = new NdJsonResultStream(out)) {
+      stream.writeError("failed", 500, null, null);
+    }
+
+    final JSONObject error = new JSONObject(out.lines().getFirst()).getJSONObject("error");
+    assertThat(error.getInt("status")).isEqualTo(500);
+    assertThat(error.has("exception")).isFalse();
+    assertThat(error.has("exceptionArgs")).isFalse();
   }
 
   /**
@@ -196,5 +235,93 @@ class NdJsonResultStreamTest {
     assertThat(out.flushes).hasSize(2);
     assertThat(out.flushes.getLast()).isEqualTo(out.bytes.size());
     assertThat(out.closed).isTrue();
+  }
+
+  /** Issue #8565: a stream that has been silent for the interval says it is alive, and nothing else. */
+  @Test
+  void keepAliveWritesABareNewlineOnlyAfterTheIdleInterval() throws IOException {
+    final FlushRecordingStream out = new FlushRecordingStream();
+    try (final NdJsonResultStream stream = new NdJsonResultStream(out, 50)) {
+      assertThat(stream.keepAlive(60_000)).as("time left until it could be idle").isBetween(1L, 60_000L);
+      assertThat(out.text()).as("not idle for long enough yet").isEmpty();
+
+      assertThat(stream.keepAlive(0)).isGreaterThanOrEqualTo(0);
+      assertThat(out.text()).isEqualTo("\n");
+      assertThat(out.flushes).hasSize(1);
+      assertThat(stream.hasStarted()).isTrue();
+    }
+  }
+
+  @Test
+  void keepAliveDeliversPendingRowsInsteadOfAddingANewline() throws IOException {
+    final FlushRecordingStream out = new FlushRecordingStream();
+    try (final NdJsonResultStream stream = new NdJsonResultStream(out, 60_000)) {
+      stream.writeRecord(new JSONObject().put("n", 1)); // first line is flushed at once
+      stream.writeRecord(new JSONObject().put("n", 2)); // pending: neither threshold reached
+      assertThat(out.flushes).hasSize(1);
+
+      assertThat(stream.keepAlive(0)).isGreaterThanOrEqualTo(0);
+      assertThat(out.flushes).hasSize(2);
+      assertThat(out.lines()).hasSize(2).noneMatch(String::isEmpty);
+    }
+  }
+
+  @Test
+  void keepAliveStopsOnceTheStreamIsClosed() throws IOException {
+    final FlushRecordingStream out = new FlushRecordingStream();
+    final NdJsonResultStream stream = new NdJsonResultStream(out, 50);
+    stream.close();
+
+    assertThat(stream.keepAlive(0)).isEqualTo(-1);
+    assertThat(out.text()).isEmpty();
+  }
+
+  @Test
+  void keepAliveReportsAFailedWriteSoTheTimerStops() throws IOException {
+    final OutputStream failing = new OutputStream() {
+      @Override
+      public void write(final int b) throws IOException {
+        throw new IOException("client gone");
+      }
+    };
+    final NdJsonResultStream stream = new NdJsonResultStream(failing, 50);
+
+    assertThat(stream.keepAlive(0)).isEqualTo(-1);
+  }
+
+  @Test
+  void keepAliveDoesNotWaitForAWriterHoldingTheStream() throws Exception {
+    final CountDownLatch inWrite = new CountDownLatch(1);
+    final CountDownLatch release = new CountDownLatch(1);
+    final OutputStream blocking = new OutputStream() {
+      @Override
+      public void write(final int b) {
+      }
+
+      @Override
+      public void write(final byte[] b, final int off, final int len) {
+        inWrite.countDown();
+        try {
+          release.await();
+        } catch (final InterruptedException e) {
+          Thread.currentThread().interrupt();
+        }
+      }
+    };
+    final NdJsonResultStream stream = new NdJsonResultStream(blocking, 50);
+    final Thread writer = new Thread(() -> {
+      try {
+        stream.writeRecord(new JSONObject().put("n", 1));
+      } catch (final IOException ignored) {
+      }
+    });
+    writer.start();
+    try {
+      assertThat(inWrite.await(10, TimeUnit.SECONDS)).isTrue();
+      assertThat(stream.keepAlive(0)).as("a stream somebody is writing to is not silent").isEqualTo(0);
+    } finally {
+      release.countDown();
+      writer.join(10_000);
+    }
   }
 }

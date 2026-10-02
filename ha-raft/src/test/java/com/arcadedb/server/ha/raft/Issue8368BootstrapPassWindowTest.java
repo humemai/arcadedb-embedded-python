@@ -20,7 +20,6 @@ package com.arcadedb.server.ha.raft;
 
 import com.arcadedb.ContextConfiguration;
 import com.arcadedb.GlobalConfiguration;
-import com.arcadedb.database.BootstrapFingerprint;
 import com.arcadedb.database.DatabaseFactory;
 import com.arcadedb.database.LocalDatabase;
 import com.arcadedb.database.ProtocolContext;
@@ -124,7 +123,8 @@ class Issue8368BootstrapPassWindowTest {
 
   /** The baseline this node's own copy produces: it matches, so the apply bootstraps locally and installs nothing. */
   private RaftLogEntryCodec.DecodedEntry matchingBaseline() throws Exception {
-    final String fingerprint = BootstrapFingerprint.compute(new File(localDb.getDatabasePath()));
+    // Sampled from the settled copy (issue #8177): setUp's commit may still be in flight to the disk.
+    final String fingerprint = SettledBootstrapFingerprint.of(localDb);
     final ByteString encoded = RaftLogEntryCodec.encodeBootstrapFingerprintEntry(DB_NAME, fingerprint,
         localDb.getLastTransactionId());
     return RaftLogEntryCodec.decode(encoded);
@@ -497,6 +497,8 @@ class Issue8368BootstrapPassWindowTest {
         RaftPeer.newBuilder().setId(REMOTE_PEER).build()));
     // Port 1 refuses at once: the conclusion the failed pass sends it is best effort and must not delay the test.
     when(ha.getHttpAddresses()).thenReturn(Map.of(REMOTE_PEER, "localhost:1"));
+    // The elected source has answered this leader recently, which the transfer to it requires (issue #8714).
+    when(ha.followerContactPeers()).thenReturn(Set.of(REMOTE_PEER.toString()));
     // The election dials a declared endpoint only when it identifies the peer alone (issue #8033).
     when(ha.getUnambiguousPeerHttpAddress(REMOTE_PEER)).thenReturn("localhost:1");
     return ha;

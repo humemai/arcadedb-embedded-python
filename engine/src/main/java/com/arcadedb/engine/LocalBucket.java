@@ -203,9 +203,17 @@ public class LocalBucket extends PaginatedComponent implements Bucket {
    */
   private static final   boolean                   CHECK_FREE_SPACE_CLAIMS          = LocalBucket.class.desiredAssertionStatus();
   private static final   int                       SPARE_SPACE_FOR_GROWTH           = 32;
+  /** Test-only seam run by a {@link #count()} recompute after it read its stamp, before its scan (#8640). */
+  static volatile        Runnable                  recountScanHookForTesting;
   protected final        int                       contentHeaderSize;
   private final          int                       maxRecordsInPage;
   private final          AtomicLong                cachedRecordCount                = new AtomicLong(-1);
+  // #8640: bumped under this bucket's monitor by every replicated apply that writes its pages WITHOUT the file lock
+  // while the counter is unknown; a count() recompute publishes only if it did not move since its scan started
+  private                long                      unlockedApplyStamp;
+  // #8640: set when a replicated apply timed out on this bucket's lock, so the following ones do not wait again for the
+  // same long recompute; cleared by the first apply that gets the lock
+  private volatile       boolean                   applyLockContended;
 
   /**
    * Bucket purpose tag. Declared up here (next to the {@link #purpose} field that uses it) so the enum is the
@@ -239,6 +247,11 @@ public class LocalBucket extends PaginatedComponent implements Bucket {
   // #4958: both fields are read/written outside the freeSpaceInPages monitor on some paths (delete,
   // updatePageStatistics), so they must be safe on their own: volatile timestamp + atomic counter.
   private volatile       long                      timeOfLastStats                  = 0L;
+  // #8660: a gather stops at MAX_PAGES_GATHER_STATS entries. When it did, the next one resumes at the page after the one it
+  // stopped on instead of rescanning the same head of the file, and is not held back by the timeout. Guarded by the
+  // `freeSpaceInPages` monitor (gatherTruncated is also read outside it, hence volatile).
+  private                int                       gatherResumePage                 = 0;
+  private volatile       boolean                   gatherTruncated                  = false;
   private final          AtomicLong                changesFromLastStats             = new AtomicLong();
 
   private enum REUSE_SPACE_MODE {
@@ -484,6 +497,8 @@ public class LocalBucket extends PaginatedComponent implements Bucket {
   public void close() {
     super.close();
     freeSpaceInPages.clear();
+    gatherTruncated = false;
+    gatherResumePage = 0;
     insertReservations.clear();
   }
 
@@ -628,6 +643,18 @@ public class LocalBucket extends PaginatedComponent implements Bucket {
   @Override
   public void deleteRecord(final RID rid) {
     database.checkPermissionsOnFile(fileId, SecurityDatabaseUser.ACCESS.DELETE_RECORD);
+    deleteRecordInternal(rid, false, false, false);
+  }
+
+  /**
+   * Frees a record the engine has JUST written on behalf of a caller that was authorized to write it, because the
+   * indexing that followed refused it (#7467, #8051). Deliberately NOT permission-checked: {@code DELETE_RECORD} is a
+   * grant independent of {@code CREATE_RECORD}, so an ingestion role that can create a record but not delete one
+   * would otherwise see the compensation refused and the whole transaction marked rollback-only over one refused
+   * row. The engine undoing its own write is not a user delete. Only for that caller: a user-initiated delete must
+   * go through {@link #deleteRecord(RID)}.
+   */
+  public void retractRecord(final RID rid) {
     deleteRecordInternal(rid, false, false, false);
   }
 
@@ -1201,6 +1228,13 @@ public class LocalBucket extends PaginatedComponent implements Bucket {
       if (recomputed > -1)
         return recomputed + (transaction != null ? transaction.getBucketRecordDelta(fileId) : 0);
 
+      // #8640: read before the scan, so an apply that wrote pages without the lock while the scan ran is detected
+      final long stampAtScanStart = getUnlockedApplyStamp();
+
+      final Runnable scanHook = recountScanHookForTesting;
+      if (scanHook != null)
+        scanHook.run();
+
       long total = 0;
       int undecodableSlots = 0;
 
@@ -1249,13 +1283,16 @@ public class LocalBucket extends PaginatedComponent implements Bucket {
       // Publish the recomputed value only when this scan ran under the lock (acquired now, or already held by
       // an enclosing transaction). On a lock-acquisition timeout (NO) the scan ran lock-free and may be drifted,
       // so leave the counter at -1 and return a best-effort value: a later call recomputes cleanly.
-      if (lockStatus != LockManager.LOCK_STATUS.NO)
+      if (lockStatus != LockManager.LOCK_STATUS.NO) {
         // The scan reads the transaction's view (getPage returns its uncommitted pages first), so `total`
         // already includes this transaction's pending delta. Cache the COMMITTED base (total - pending) so the
         // commit-time fold adds the delta exactly once instead of double-counting it; the caller still gets the
         // transaction-visible `total` below.
-        cachedRecordCount.set(transaction != null ? total - transaction.getBucketRecordDelta(fileId) : total);
-      else
+        if (!publishRecomputedCount(transaction != null ? total - transaction.getBucketRecordDelta(fileId) : total, stampAtScanStart))
+          LogManager.instance().log(this, Level.FINE,
+              "count() recompute on bucket '%s' overlapped a replicated apply that could not take the bucket lock; result not cached",
+              componentName);
+      } else
         LogManager.instance().log(this, Level.FINE,
                 "count() recompute on bucket '%s' ran lock-free after a %dms lock-acquisition timeout; result not cached", componentName,
                 lockTimeout);
@@ -2381,6 +2418,42 @@ public class LocalBucket extends PaginatedComponent implements Bucket {
 
   public void setCachedRecordCount(final long count) {
     cachedRecordCount.set(count);
+  }
+
+  /**
+   * Called before and after a replicated apply writes this bucket's pages without holding its file lock (issue #8640):
+   * a {@link #count()} recompute that started before either call does not publish its scan, and one that already
+   * published is thrown away by the call after, because its scan may hold part of the apply and the apply's delta fold
+   * cannot tell which part. The counter is left unknown and the next {@code count()} recomputes it.
+   */
+  synchronized void invalidateCachedRecordCountForUnlockedApply() {
+    ++unlockedApplyStamp;
+    cachedRecordCount.set(-1);
+  }
+
+  synchronized long getUnlockedApplyStamp() {
+    return unlockedApplyStamp;
+  }
+
+  boolean isApplyLockContended() {
+    return applyLockContended;
+  }
+
+  void setApplyLockContended(final boolean contended) {
+    applyLockContended = contended;
+  }
+
+  /**
+   * Publishes a recomputed counter unless an unlocked apply ran since {@code stampAtScanStart} was read (issue #8640).
+   * Synchronized with {@link #invalidateCachedRecordCountForUnlockedApply()} so the check and the publish are one step.
+   */
+  synchronized boolean publishRecomputedCount(final long count, final long stampAtScanStart) {
+    if (unlockedApplyStamp != stampAtScanStart)
+      return false;
+    cachedRecordCount.set(count);
+    // A known counter makes the applies skip the lock, so nothing else would clear the mark before the next -1
+    applyLockContended = false;
+    return true;
   }
 
   private RID createRecordInternal(final Record record, final boolean isPlaceHolder, final boolean discardRecordAfter) {
@@ -6233,6 +6306,16 @@ public class LocalBucket extends PaginatedComponent implements Bucket {
               bestPageAnalysis = findAvailableSpaceFromStatistics(currentPageId, spaceNeeded / 2, multiPageRecord,
                       avoidPageNumber);
           }
+
+          if (bestPageAnalysis == null && gatherTruncated && freeSpaceInPages.size() < MAX_PAGES_GATHER_STATS) {
+            // #8660: NOTHING THE MAP HOLDS FITS, AND THE LAST GATHER LEFT PART OF THE FILE UNVISITED: LOOK THERE BEFORE GROWING
+            gatherPageStatistics();
+            if (!freeSpaceInPages.isEmpty()) {
+              bestPageAnalysis = findAvailableSpaceFromStatistics(currentPageId, spaceNeeded, multiPageRecord, avoidPageNumber);
+              if (bestPageAnalysis == null)
+                bestPageAnalysis = findAvailableSpaceFromStatistics(currentPageId, spaceNeeded / 2, multiPageRecord, avoidPageNumber);
+            }
+          }
         }
 
         if (bestPageAnalysis != null) {
@@ -6358,19 +6441,28 @@ public class LocalBucket extends PaginatedComponent implements Bucket {
    */
   public void gatherPageStatistics() {
     final boolean firstRun = timeOfLastStats == 0L;
-    if (!firstRun && System.currentTimeMillis() - timeOfLastStats <= MAX_TIMEOUT_GATHER_STATS)
+    // #8660: a scan cut short by the entry cap left pages unvisited, so the next one is due whatever the clock and the change
+    // counter say. It cannot loop on a bucket with nothing to offer: the cursor moves on, and only a scan that reaches the
+    // end of the file without filling the map goes back to being throttled.
+    final boolean resuming = gatherTruncated;
+    if (!firstRun && !resuming && System.currentTimeMillis() - timeOfLastStats <= MAX_TIMEOUT_GATHER_STATS)
       return;
 
     // #5063: consume the change counter atomically at the decision point. The previous
     // get() > 0 check paired with a set(0L) at the end of the scan wiped any increment landing while the
     // scan ran; getAndSet(0L) carries those increments into the next cycle instead of losing them.
     final long consumedChanges = changesFromLastStats.getAndSet(0L);
-    if (consumedChanges > 0 || firstRun)
+    if (consumedChanges > 0 || firstRun || resuming)
       try {
         int txPageCount = getTotalPages();
 
         synchronized (freeSpaceInPages) {
-          for (int pageId = 0; pageId < txPageCount - 2; ++pageId) {
+          final int pagesToScan = Math.max(0, txPageCount - 2);
+          final int startPage = gatherTruncated && gatherResumePage < pagesToScan ? gatherResumePage : 0;
+          gatherTruncated = false;
+
+          int pageId = startPage;
+          for (int scanned = 0; scanned < pagesToScan; ++scanned) {
             final BasePage page = database.getTransaction().getPage(new PageId(database, file.getFileId(), pageId), pageSize);
             final short recordCountInPage = page.readShort(PAGE_RECORD_COUNT_IN_PAGE_OFFSET);
             final List<int[]> orderedRecordContentInPage = getOrderedRecordsInPage(page, recordCountInPage);
@@ -6381,11 +6473,19 @@ public class LocalBucket extends PaginatedComponent implements Bucket {
 
             final int freeSpacePerc = freeSpaceInPage * 100 / (page.getMaxContentSize() - contentHeaderSize);
 
-            if (freeSpacePerc > GATHER_STATS_MIN_SPACE_PERC)
+            if (freeSpacePerc > GATHER_STATS_MIN_SPACE_PERC
+                && (freeSpaceInPages.size() < MAX_PAGES_GATHER_STATS || freeSpaceInPages.containsKey(pageId)))
               freeSpaceInPages.put(pageId, freeSpaceInPage);
 
-            if (freeSpaceInPages.size() >= MAX_PAGES_GATHER_STATS)
+            ++pageId;
+            if (freeSpaceInPages.size() >= MAX_PAGES_GATHER_STATS) {
+              // #8660: THE MAP IS FULL. REMEMBER WHERE TO PICK UP WHEN IT DRAINS
+              gatherTruncated = scanned + 1 < pagesToScan;
+              gatherResumePage = pageId < pagesToScan ? pageId : 0;
               break;
+            }
+            if (pageId >= pagesToScan)
+              pageId = 0;
           }
 
           timeOfLastStats = System.currentTimeMillis();
@@ -6395,6 +6495,9 @@ public class LocalBucket extends PaginatedComponent implements Bucket {
         // SINGLE INCREMENT, WHICH UNDERCOUNTED THE PENDING CHANGES) SO THE FAILED SCAN IS RETRIED AT THE
         // NEXT CYCLE; max(consumed, 1) COVERS THE firstRun CASE WHERE THE CONSUMED COUNT MAY BE ZERO
         changesFromLastStats.addAndGet(Math.max(consumedChanges, 1L));
+        // #8660: BACK OFF LIKE ANY OTHER GATHER, SO A PERSISTENT ERROR IS NOT RETRIED (AND LOGGED) ON EVERY ALLOCATION
+        gatherTruncated = false;
+        timeOfLastStats = System.currentTimeMillis();
         LogManager.instance().log(this, Level.WARNING, "Error on gathering statistics on bucket '%s'", e, getName());
       }
   }
@@ -6459,12 +6562,13 @@ public class LocalBucket extends PaginatedComponent implements Bucket {
         final int newSpace = availableSpace + delta;
 
         if (hasEntry) {
-          if (newSpace <= MINIMUM_SPACE_LEFT_IN_PAGE || (freeSpaceInPages.size() >= MAX_PAGES_GATHER_STATS
-                  && newSpace * 100 / usableSpaceInPage < GATHER_STATS_MIN_SPACE_PERC))
+          // #8660: a page under the threshold is one gatherPageStatistics() would not list, and keeping it until the map fills
+          // up leaves the map full of pages that cannot take a record, which nothing then removes
+          if (newSpace <= MINIMUM_SPACE_LEFT_IN_PAGE || newSpace * 100 / usableSpaceInPage <= GATHER_STATS_MIN_SPACE_PERC)
             freeSpaceInPages.remove(pageId, -1);
           else
             freeSpaceInPages.put(pageId, newSpace);
-        } else if (newSpace * 100 / usableSpaceInPage >= GATHER_STATS_MIN_SPACE_PERC) {
+        } else if (newSpace * 100 / usableSpaceInPage > GATHER_STATS_MIN_SPACE_PERC) {
           if (freeSpaceInPages.size() >= MAX_PAGES_GATHER_STATS) {
             // REMOVE THE SMALLEST PAGE
             final int[] lowestPageId = { -1 };

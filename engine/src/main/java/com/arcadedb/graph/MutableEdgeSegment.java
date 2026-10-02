@@ -251,18 +251,20 @@ public class MutableEdgeSegment extends BaseRecord implements EdgeSegment, Recor
 
   @Override
   public JSONObject toJSON(final boolean includeMetadata) {
-    final JSONObject json = new JSONObject().put(RID_PROPERTY, getIdentity().toString());
+    final JSONObject json = new JSONObject();
+    final RID identity = getIdentity();
+    if (includeMetadata && identity != null)
+      json.put(RID_PROPERTY, identity.toString());
     final int used = getUsed();
     if (used > 0) {
       final JSONArray entries = new JSONArray();
 
       buffer.position(CONTENT_START_POSITION);
       while (buffer.position() < used) {
-        new JSONObject()
-                // EDGE RID
-                .put("edge", "#" + buffer.getNumber() + ":" + buffer.getNumber())
-                // VERTEX RID
-                .put("vertex", "#" + buffer.getNumber() + ":" + buffer.getNumber());
+        // The operands of + are evaluated left to right, which is the order the four numbers were written in
+        final String edge = "#" + buffer.getNumber() + ":" + buffer.getNumber();
+        final String vertex = "#" + buffer.getNumber() + ":" + buffer.getNumber();
+        entries.put(new JSONObject().put("edge", edge).put("vertex", vertex));
       }
 
       if (!entries.isEmpty())
@@ -511,6 +513,34 @@ public class MutableEdgeSegment extends BaseRecord implements EdgeSegment, Recor
             .deserializeValue(database, buffer, BinaryTypes.TYPE_COMPRESSED_RID, null); // NEXT
     currentPosition.set(buffer.position());
     return next;
+  }
+
+  @Override
+  public int nextEntryInBuckets(final int position, final EdgeBucketMask bucketMask) {
+    final int used = getUsed();
+    int entryStart = position;
+
+    buffer.position(entryStart);
+    while (entryStart < used) {
+      if (bucketMask.matches(buffer.getNumber()))
+        return entryStart;
+
+      // SKIP EDGE POSITION AND VERTEX RID
+      buffer.getNumber();
+      buffer.getNumber();
+      buffer.getNumber();
+      entryStart = buffer.position();
+    }
+
+    return used;
+  }
+
+  @Override
+  public void skipRID(final AtomicInteger currentPosition) {
+    buffer.position(currentPosition.get());
+    buffer.getNumber();
+    buffer.getNumber();
+    currentPosition.set(buffer.position());
   }
 
   @Override

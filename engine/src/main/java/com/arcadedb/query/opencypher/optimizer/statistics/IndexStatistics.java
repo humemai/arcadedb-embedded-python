@@ -29,13 +29,42 @@ public class IndexStatistics {
   private final List<String> propertyNames;
   private final boolean isUnique;
   private final String indexName;
+  private final boolean caseInsensitive;
+  private final boolean ordered;
 
   public IndexStatistics(final String typeName, final List<String> propertyNames,
                         final boolean isUnique, final String indexName) {
+    this(typeName, propertyNames, isUnique, indexName, false);
+  }
+
+  public IndexStatistics(final String typeName, final List<String> propertyNames,
+                        final boolean isUnique, final String indexName, final boolean caseInsensitive) {
+    this(typeName, propertyNames, isUnique, indexName, caseInsensitive, true);
+  }
+
+  public IndexStatistics(final String typeName, final List<String> propertyNames,
+                        final boolean isUnique, final String indexName, final boolean caseInsensitive, final boolean ordered) {
+    this.ordered = ordered;
     this.typeName = typeName;
     this.propertyNames = propertyNames;
     this.isUnique = isUnique;
     this.indexName = indexName;
+    this.caseInsensitive = caseInsensitive;
+  }
+
+  /**
+   * Whether any key of the index is stored case-folded, so that its order is not the order of the values (issue #8666).
+   */
+  public boolean isCaseInsensitive() {
+    return caseInsensitive;
+  }
+
+  /**
+   * Whether the index can be read in key order, which a range needs: a hash index answers an equality and nothing else
+   * (issue #8835).
+   */
+  public boolean isOrdered() {
+    return ordered;
   }
 
   /**

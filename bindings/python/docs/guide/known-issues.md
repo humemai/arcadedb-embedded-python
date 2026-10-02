@@ -75,7 +75,7 @@ rows = db.query("sql", "SELECT FROM T WHERE a = ?", True).to_list()
 ## openCypher compares a `LONG` above `2**53` with a float or `Decimal` in double precision
 
 ArcadeDB [#8888](https://github.com/ArcadeData/arcadedb/issues/8888); measured on a
-26.10.1 snapshot.
+26.10.1 snapshot. **Fixed in 26.10.1** (PR #8894, verified on its merge).
 
 With two vertices whose `LONG` property `b` holds `2**53` and `2**53 + 1`,
 `MATCH (n:C) WHERE n.b = $v RETURN n` returned both vertices for `{"v": float(2**53)}` and
@@ -98,8 +98,11 @@ rows = db.query(
 
 ## `CONTAINS` and `CONTAINSVALUE` miss an integer operand on a `LIST OF DOUBLE` or `MAP OF DOUBLE`
 
-ArcadeDB [#8890](https://github.com/ArcadeData/arcadedb/issues/8890); measured on a
-26.10.1 snapshot.
+ArcadeDB [#8890](https://github.com/ArcadeData/arcadedb/issues/8890); measured on 26.9.1
+and a 26.10.1 snapshot. **Fixed in 26.10.1** (PR #8894, verified on its merge): a `BY ITEM`
+index is keyed by the list's declared item type. An index built before the upgrade keeps its
+old keys, and its old answers, until you rebuild it with `REBUILD INDEX <name>`; until then a
+lookup through it can disagree with the same query without the index.
 
 On a `LIST OF DOUBLE` property `l` holding `[7.0, 8.5]` with a `BY ITEM` index,
 `SELECT FROM T WHERE l CONTAINS ?` with `7` returned 0 rows; on an unindexed twin it
@@ -117,7 +120,7 @@ rows = db.query("sql", "SELECT FROM T WHERE m CONTAINSVALUE ?", float(7)).to_lis
 ## `sysdate()` is off by the JVM's offset from UTC
 
 ArcadeDB [#8892](https://github.com/ArcadeData/arcadedb/issues/8892); measured on a
-26.10.1 snapshot.
+26.10.1 snapshot. **Fixed in 26.10.1** (PR #8894, verified on its merge).
 
 `sysdate()` returns, and stores, the current time shifted by the JVM's offset from UTC. In a
 JVM on Asia/Seoul time, `INSERT INTO T SET t = sysdate()` stored a time 9 hours ahead of the

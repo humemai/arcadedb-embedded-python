@@ -578,6 +578,9 @@ notes.txt
 /server/profiler
 /server/chats
 config/ai.json
+config/support.json
+config/instance.id
+config/mcp-config.json
 # results/ rules live in ONE place now, the allowlist at the end of this file.
 # Three generations of exact-path rules used to sit here and each was outrun by
 # the next artifact someone added.

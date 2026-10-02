@@ -163,8 +163,6 @@ public class BinaryComparator {
       case BinaryTypes.TYPE_SHORT:
       case BinaryTypes.TYPE_BYTE:
       case BinaryTypes.TYPE_LONG:
-      case BinaryTypes.TYPE_DATETIME:
-      case BinaryTypes.TYPE_DATE:
       case BinaryTypes.TYPE_DECIMAL:
       case BinaryTypes.TYPE_FLOAT:
       case BinaryTypes.TYPE_DOUBLE:
@@ -178,6 +176,15 @@ public class BinaryComparator {
       case BinaryTypes.TYPE_STRING:
         return Integer.compare(v1, Boolean.parseBoolean((String) value2) ? 1 : 0);
 
+      case BinaryTypes.TYPE_DATE:
+      case BinaryTypes.TYPE_DATETIME:
+      case BinaryTypes.TYPE_DATETIME_SECOND:
+      case BinaryTypes.TYPE_DATETIME_MICROS:
+      case BinaryTypes.TYPE_DATETIME_NANOS:
+        // A boolean is not a point in time: refused here exactly as the temporal arm below refuses it, so both
+        // directions agree (issue #7754).
+        throw unsupportedPair(type1, type2);
+
       default:
         return -1;
       }
@@ -187,11 +194,11 @@ public class BinaryComparator {
     case BinaryTypes.TYPE_DATETIME_SECOND:
     case BinaryTypes.TYPE_DATETIME_MICROS:
     case BinaryTypes.TYPE_DATETIME_NANOS: {
-      // KNOWN GAP, issue #7754: a BOOLEAN value2 reaches here and dateTimeToTimestampInferringStringPrecision has
-      // no case for it, so the null it answers NPEs on unboxing - while the reverse direction, BOOLEAN as type1,
-      // maps it to 1/0 and answers. Deliberately not patched in passing: whether that comparison should mean
-      // anything at all is the actual question, and whichever way it is settled BOTH directions have to implement
-      // it, or the comparator stops being antisymmetric (the failure mode of #5900, #5947 and #6997).
+      // A BOOLEAN operand has no timestamp meaning and dateTimeToTimestampInferringStringPrecision has no case for
+      // it (it answered null, which NPE'd on unboxing). The BOOLEAN arm above refuses the reverse pair the same way,
+      // so both directions agree (issue #7754).
+      if (type2 == BinaryTypes.TYPE_BOOLEAN || value2 instanceof Boolean)
+        throw unsupportedPair(type1, type2);
       final ChronoUnit higherPrecision = DateUtils.getHigherPrecision(value1, value2);
       final long v1 = DateUtils.dateTimeToTimestampInferringStringPrecision(value1, higherPrecision);
       final long v2 = DateUtils.dateTimeToTimestampInferringStringPrecision(value2, higherPrecision);
@@ -284,7 +291,11 @@ public class BinaryComparator {
 
     }
 
-    throw new IllegalArgumentException("Comparison between type " + type1 + " and " + type2 + " not supported");
+    throw unsupportedPair(type1, type2);
+  }
+
+  private static IllegalArgumentException unsupportedPair(final byte type1, final byte type2) {
+    return new IllegalArgumentException("Comparison between type " + type1 + " and " + type2 + " not supported");
   }
 
   /**
@@ -505,6 +516,21 @@ public class BinaryComparator {
     return Integer.compare(buffer1[mismatch] & 0xFF, buffer2.getByte(buffer2.position() - 1) & 0xFF);
   }
 
+  /**
+   * The exact twin of {@link #equals(Object, Object)} for key matching inside hash chains, where the FLOAT/DOUBLE
+   * looseness of {@link Type#numbersEqual} would let a Double key overwrite a Float one (issue #8882).
+   */
+  public static boolean equalsExact(final Object a, final Object b) {
+    if (a instanceof BigDecimal && b instanceof BigDecimal)
+      // scale-sensitive on purpose: BigDecimal.hashCode() is, and these keys pick their slot by hash
+      return a.equals(b);
+    if (!(a != null && b != null && !a.getClass().equals(b.getClass()) && a instanceof Number number && b instanceof Number number1))
+      return equals(a, b);
+    final Number[] pair = Type.castComparableNumber(number, number1);
+    return pair[0].equals(pair[1]);
+  }
+
+  /** Numbers of different classes follow {@link Type#numbersEqual}: not transitive, so never a hash or grouping key. */
   public static boolean equals(final Object a, final Object b) {
     if (a == b)
       return true;
@@ -518,9 +544,10 @@ public class BinaryComparator {
       return equalsBinary(binary, binary1);
     else if (!a.getClass().equals(b.getClass()) &&//
         a instanceof Number number && b instanceof Number number1) {
-      final Number[] pair = Type.castComparableNumber(number, number1);
-      return pair[0].equals(pair[1]);
-    }
+      return Type.numbersEqual(number, number1);
+    } else if (a instanceof BigDecimal decimal && b instanceof BigDecimal decimal1)
+      // compareTo, not equals(): 19.9 and 19.90 are one value, as the index, GROUP BY and the range answer
+      return decimal.compareTo(decimal1) == 0;
     return a.equals(b);
   }
 
@@ -564,6 +591,9 @@ public class BinaryComparator {
   }
 
   public static boolean equalsBytes(final byte[] buffer1, final byte[] buffer2, final int length) {
+    if (length == 0)
+      // NOTHING TO COMPARE, SO EQUAL, WHICHEVER COMPARATOR IMPLEMENTATION IS SELECTED (ISSUE #7890)
+      return true;
     return UnsignedBytesComparator.BEST_COMPARATOR.equals(buffer1, buffer2, length);
   }
 
@@ -592,10 +622,16 @@ public class BinaryComparator {
       return aDate.compareTo(bDate);
     else if (a instanceof ChronoLocalDateTime<?> aDate && b instanceof ChronoLocalDateTime<?> bDate)
       return aDate.compareTo(bDate);
-    else if (DateUtils.isDate(a) || DateUtils.isDate(b))
+    else if (DateUtils.isDate(a) || DateUtils.isDate(b)) {
+      // The untyped twin of the refusal in the typed compare(): a Boolean has no timestamp meaning, and the helper
+      // below answers null for it, which NPE'd on unboxing (issue #7754). The operators already catch this
+      // IllegalArgumentException and report "not comparable".
+      if (a instanceof Boolean || b instanceof Boolean)
+        throw new IllegalArgumentException(
+            "Comparison between " + a.getClass().getName() + " and " + b.getClass().getName() + " not supported");
       return DateUtils.dateTimeToTimestampInferringStringPrecision(a, ChronoUnit.NANOS)
           .compareTo(DateUtils.dateTimeToTimestampInferringStringPrecision(b, ChronoUnit.NANOS));
-    else if (a.getClass() == b.getClass())
+    } else if (a.getClass() == b.getClass())
       // Deliberately unguarded, unlike the class-mismatch branches below: two instances of the SAME class that
       // does not implement Comparable is exactly the case LtOperatorTest/GeOperatorTest/LeOperatorTest pin as
       // "genuinely not orderable" and expect to throw ClassCastException here (they wrap it in a try/catch and

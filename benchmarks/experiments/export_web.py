@@ -1770,6 +1770,41 @@ _F133 = ("Qdrant + Neo4j's row is marked `re-run`. Its vector half ran in the "
          "It is being re-run against the Qdrant server the vector table uses. Its all-or-nothing result "
          "on the table above does not depend on this.")
 _BEFORE_F132 = lambda r: str(r.get("filtered_access") or "") != "record ids"      # noqa: E731
+# Neo4j's vector index ran BINARY-quantized (BUGS F164, DECISIONS #135): Neo4j 2026.08.1 builds a vector index with
+# `vector.quantization.type: "BINARY"` and a search expansion factor of 3 when the definition names no quantization,
+# and neither arm's definition did, while their rows recorded `quantization: "fp32"`. Every cell resting on the index
+# comes down; the cross-model atomicity row does not rest on it and stays. The re-measured rows read the applied
+# index configuration back as `neo4j_vector_quantization`, so a row without that field is a row from before the fix.
+_F164_DENSE = ("Neo4j's row is marked `re-run`: its vector index ran at Neo4j's default quantization, binary with a "
+               "three-fold search expansion, which our index definition did not override, while the row recorded it as "
+               "unquantized. It is being re-measured with the quantization set explicitly, unquantized here and as a "
+               "separate scalar-quantized row.")
+_F164_E2 = ("Neo4j's row is marked `re-run`: its vector index ran at Neo4j's default quantization, binary with a "
+            "three-fold search expansion, which our index definition did not override, so its vector search was not "
+            "the unquantized search the other engines ran. It is being re-measured with the quantization set "
+            "explicitly. Its all-or-nothing result on the atomicity table does not depend on the index.")
+_BEFORE_F164 = lambda r: not r.get("neo4j_vector_quantization")                # noqa: E731
+
+# SurrealDB served ran at its default, a sync to disk at every commit, in BOTH durability classes (BUGS F165).
+# Its rows said "behaviour at commit is not verified": the harness held that 3.2.4 had no sync setting, having
+# searched only its SURREAL_* variable names, while the setting is a parameter on the storage path
+# (`rocksdb:/path?sync=never`) and the server printed "Sync mode: every transaction commit" at INFO in every
+# serverlog the October campaign kept (107 of 107). So its single-record writes and its cross-model transaction,
+# where one sync is most of the cost, sat beside every other engine's no-wait cells; they come down until the
+# re-measurement, whose rows carry the mode read back from the server (`surreal_sync_mode`). Its reads, analytics,
+# and ingest stay: ingest commits once per 5,000- or 10,000-record batch, and the durability table shows its writes
+# in the waiting column, where they belong.
+_F165_WRITES = ("SurrealDB (server)'s write cells are marked `re-run`: the server ran at its default, a sync to disk "
+                "at every commit, although it has a setting that does not wait, and every other engine on this table "
+                "that has such a setting ran at it. Our harness missed that setting, and it is being re-measured at "
+                "it. Its read cells commit nothing and stay.")
+_F165_E2 = ("SurrealDB (server)'s transaction cells are marked `re-run`: the server ran at its default, a sync to "
+            "disk at every commit, although it has a setting that does not wait, and every other engine on this "
+            "table that has such a setting ran at it. Our harness missed that setting, and it is being re-measured "
+            "at it.")
+_SURREAL_SERVED_SYNCED = lambda r: (str(r.get("backend") or "").startswith("surrealdb_")      # noqa: E731
+                                    and str(r.get("backend") or "").endswith("_server")
+                                    and not r.get("surreal_sync_mode"))
 _BEFORE_F134 = lambda r: not str(r.get("settle_s") or "").strip()                  # noqa: E731
 _BEFORE_F133 = lambda r: "qdrant-local" in str(r.get("engine_version") or "")     # noqa: E731
 STALE_UNTIL_RERUN = {
@@ -1778,6 +1813,15 @@ STALE_UNTIL_RERUN = {
     ("e2", "surrealdb_e2_server", "retrieval p50 ms", "e2_500k"): (_F134, _BEFORE_F134),
     ("e2", "surrealdb_e2_server", "retrieval recall@10", "e2_500k"): (_F134, _BEFORE_F134),
     ("e2", "composed_qdrant_neo4j", None, None): (_F133, _BEFORE_F133),
+    ("e2", "neo4j_e2", None, None): (_F164_E2, _BEFORE_F164),
+    ("l3d", "neo4j_dense", None, None): (_F164_DENSE, _BEFORE_F164),
+    **{("docs_oltp", "surrealdb_tpc_server", c, None): (_F165_WRITES, _SURREAL_SERVED_SYNCED)
+       for c in ("new-order p50 ms", "new-order p99 ms", "payment p50 ms", "insert p50 ms", "update p50 ms",
+                 "delete p50 ms", "OLTP ops/s")},
+    **{("l2", "surrealdb_graph_server", c, None): (_F165_WRITES, _SURREAL_SERVED_SYNCED)
+       for c in ("insert p50 ms", "update p50 ms", "delete p50 ms")},
+    **{("e2", "surrealdb_e2_server", c, None): (_F165_E2, _SURREAL_SERVED_SYNCED)
+       for c in ("transaction p50 ms", "transaction p99 ms")},
 }
 
 
@@ -1789,7 +1833,9 @@ def _rows_behind(table_id, backend_key, scale=None):
     if not lane_wl:
         return []
     lane, wl = lane_wl
-    rs = [r for r in (_FROZEN_ROWS or []) if r.get("lane") == lane and r.get("workload") == wl
+    # A table whose lane has one workload maps to None, which means any workload here: the literal comparison
+    # matched no dense, sparse, time-series, or lifecycle row, so a stale entry on those tables could never fire.
+    rs = [r for r in (_FROZEN_ROWS or []) if r.get("lane") == lane and (wl is None or r.get("workload") == wl)
           and r.get("backend") == backend_key and (scale is None or str(r.get("scale")) == str(scale))]
     relaxed = [r for r in rs if str(r.get("durability_class")) == "relaxed"]
     return relaxed or rs
@@ -2759,7 +2805,8 @@ def _durability_note(entries, rows, table_lane=None):
         lbl = display_name(str(r.get("backend") or ""))
         if lbl not in want and not any(lbl in w for w in want):
             continue
-        cls = bench_common.durability_class(r.get("durability"))
+        cls = ("synced_default" if _SURREAL_SERVED_SYNCED(r)
+               else bench_common.durability_class(r.get("durability")))
         if cls:
             seen.setdefault(cls, set()).add(lbl)
     if not seen:
@@ -2780,7 +2827,13 @@ def _durability_note(entries, rows, table_lane=None):
         parts.append(f"{names} exposes no durability setting at all and what it does at "
                      f"commit could not be established, so it is in neither class and its "
                      f"row says so rather than claiming one.")
-    return _gen(" ".join(parts), *sorted(_strict_only | seen.get("unverified", set())))
+    if seen.get("synced_default"):
+        names = _join_and(sorted(seen["synced_default"]))
+        parts.append(f"{names} ran at its default in both runs, a sync to disk at every commit "
+                     f"(its server log reads \"Sync mode: every transaction commit\" in every run), "
+                     f"although it has a setting that does not wait; the next measurement runs both.")
+    return _gen(" ".join(parts), *sorted(_strict_only | seen.get("unverified", set())
+                                         | seen.get("synced_default", set())))
 
 
 # _pinned_dir cannot be used here: it is defined below and this is module scope.
@@ -3447,7 +3500,8 @@ def _lifecycle_table(all_rows):
             "already running when the probe connects, so those three columns describe "
             "the embedded process only. The session columns are measured for both.",
         ]) + [_gen(f"{LIFECYCLE_SITUATION_LABELS.get(k, k)} is withheld: {v}", v) for k, v in sorted(LIFECYCLE_WITHHELD.items())]
-           + [_gen(w) for w in stale_notes] + declared_notes,
+           + [_gen(w) for w in stale_notes] + declared_notes
+           + _engine_defect_notes("lifecycle", entries),
         "columns": _lc_columns,
         "withheld_scales": [],
         "withheld_reason": None,
@@ -3580,6 +3634,23 @@ def _durability_scope_note(entries):
 # answer -- the pin is unknown to this checkout -- it prints: for a number that
 # flatters our own engine, over-disclosing is the safe direction.
 ENGINE_DEFECTS_AT_PIN = {
+    # ArcadeDB #8852 (ours, 2026-10-01; fixed by PR #8863, merge 09a7aeff90, after the
+    # October pin 417314c18): the first vector search after a reopen re-reads every
+    # vector's document on one thread. The lifecycle sessions that search after opening
+    # (one query, write then query) are dominated by it from 1M up at the pin: 853 and
+    # 897 ms at 1M (open and close 98 and 16), 17.9 and 18.1 s at 10M (1.4 s and 15 ms),
+    # embedded and server alike. One entry names the embedded row and speaks for both.
+    "lifecycle": [{
+        "backend": "Dense vectors (embedded)",
+        "fix": "09a7aeff90",
+        "issue": "8852",
+        "release": "26.10.1",
+        "text": ("The dense-vector rows' one-query and write-then-query sessions, embedded and server alike, "
+                 "carry a defect in the engine build measured here, ArcadeDB issue #{issue} "
+                 "(https://github.com/ArcadeData/arcadedb/issues/{issue}): the first vector search after a "
+                 "database is reopened re-reads every vector's record on one thread, so from a million vectors "
+                 "up those sessions are mostly that re-read, and ArcadeDB {release} fixes it."),
+    }],
     "durability": [{
         "backend": "ArcadeDB (one transaction)",
         "fix": "a618b3ae5a",
@@ -3622,8 +3693,9 @@ def _engine_defect_notes(table_id, entries):
 def _durability_table(all_rows):
     """The same write per engine at both durability settings, with the ratio.
 
-    An engine with no setting (Neo4j, DuckDB, LadybugDB, the SurrealDB 3.2.4
-    server) runs the same way in both cells, so printing its two numbers as a
+    An engine with no setting (Neo4j, DuckDB, LadybugDB) runs the same way in
+    both cells, as the SurrealDB 3.2.4 server did at the October pin (its
+    default, a sync at every commit, in both; BUGS F165), so printing its two numbers as a
     relaxed/strict pair would invent a comparison the engine cannot make. It
     gets ONE number, and the conditions name it, which is also what puts it on
     an equal footing rather than reading as fast-or-slow against everyone
@@ -3700,6 +3772,12 @@ def _durability_table(all_rows):
                 bench_common.durability_class(r.get("durability")) for r in _stamped)
             entry["_durability_note_class"] = (
                 _classes.most_common(1)[0][0] if (no_setting and _classes) else None)
+            # BUGS F165: the SurrealDB server's rows say "not verified", and
+            # what they ran is now known from its own log: a sync at every
+            # commit, its default, in both cells. The setting existed; the
+            # harness missed it. Its own sentence, not the unknown's.
+            if no_setting and _stamped and all(_SURREAL_SERVED_SYNCED(r) for r in _stamped):
+                entry["_durability_note_class"] = "synced_default"
             # ACROSS CORPORA ON PURPOSE, AND MEASURED BEFORE SAYING SO. Each
             # row here is one engine running ONE operation, and the graph
             # lane times its writes at both sf1 and sf10, so these rows span
@@ -3741,6 +3819,8 @@ def _durability_table(all_rows):
                        if e.get("_durability_note_class") == "strict"})
     _unverified = sorted({e["backend"] for e in entries
                           if e.get("_durability_note_class") == "unverified"})
+    _synced_default = sorted({e["backend"] for e in entries
+                              if e.get("_durability_note_class") == "synced_default"})
     for e in entries:
         e.pop("_durability_note_class", None)
 
@@ -3754,7 +3834,7 @@ def _durability_table(all_rows):
     # off whichever row sorted first. Refusing here is the capability table's
     # rule -- refuse the kind you cannot define rather than printing it and
     # hoping -- applied to the one other table that prints a lone number.
-    _explained = set(_no_knob) | set(_unverified)
+    _explained = set(_no_knob) | set(_unverified) | set(_synced_default)
     _lone = sorted({e["backend"] for e in entries
                     if e["metrics"].get("waits for the disk ms")
                     and not e["metrics"].get("no wait ms")}
@@ -3789,6 +3869,13 @@ def _durability_table(all_rows):
                     f"number printed is in neither class. It is placed in the "
                     f"waiting column because that is the safer reading of an "
                     f"unknown, and this line is why it is there.", *_unverified)] if _unverified else []),
+            *([_gen(f"{_join_and(_synced_default)} ran at {'their' if len(_synced_default) > 1 else 'its'} "
+                    f"default in both runs, a sync to disk at every commit: the server log of every run "
+                    f"reads \"Sync mode: every transaction commit\", and a trace counts one sync per "
+                    f"commit. So the one number printed is in the waiting column. "
+                    f"{'They have' if len(_synced_default) > 1 else 'It has'} a setting that does not "
+                    f"wait, which our harness missed, and the next measurement runs both.",
+                    *_synced_default)] if _synced_default else []),
             *_engine_defect_notes("durability", entries),
             _R("durability", "ratio"),
         ],

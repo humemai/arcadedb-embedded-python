@@ -28,6 +28,7 @@ import com.arcadedb.database.bucketselectionstrategy.PartitionedBucketSelectionS
 import com.arcadedb.schema.LocalDocumentType;
 import com.arcadedb.exception.CommandExecutionException;
 import com.arcadedb.index.Index;
+import com.arcadedb.index.IndexException;
 import com.arcadedb.index.IndexInternal;
 import com.arcadedb.index.RangeIndex;
 import com.arcadedb.index.TypeIndex;
@@ -57,10 +58,14 @@ import com.arcadedb.query.sql.parser.Identifier;
 import com.arcadedb.query.sql.parser.InCondition;
 import com.arcadedb.query.sql.parser.IndexIdentifier;
 import com.arcadedb.query.sql.parser.InputParameter;
+import com.arcadedb.query.sql.parser.IsNotNullCondition;
 import com.arcadedb.query.sql.parser.IsNullCondition;
+import com.arcadedb.query.sql.parser.JsonItem;
 import com.arcadedb.query.sql.parser.LeOperator;
 import com.arcadedb.query.sql.parser.LetClause;
 import com.arcadedb.query.sql.parser.LetItem;
+import com.arcadedb.query.sql.parser.Limit;
+import com.arcadedb.query.sql.parser.LikeOperator;
 import com.arcadedb.query.sql.parser.LtOperator;
 import com.arcadedb.query.sql.parser.MathExpression;
 import com.arcadedb.query.sql.parser.Node;
@@ -78,6 +83,7 @@ import com.arcadedb.query.sql.parser.SuffixIdentifier;
 import com.arcadedb.query.sql.parser.Statement;
 import com.arcadedb.query.sql.parser.TraverseStatement;
 import com.arcadedb.query.sql.parser.SubQueryCollector;
+import com.arcadedb.query.sql.parser.ValueExpression;
 import com.arcadedb.query.sql.parser.WhereClause;
 import com.arcadedb.engine.timeseries.AggregationType;
 import com.arcadedb.engine.timeseries.ColumnDefinition;
@@ -97,6 +103,7 @@ import com.arcadedb.utility.DateUtils;
 import com.arcadedb.utility.IntHashSet;
 import com.arcadedb.utility.Pair;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
@@ -128,6 +135,17 @@ public class SelectExecutionPlanner {
   private static final String            LOCAL_NODE_NAME = "local";
   private final        SelectStatement   statement;
   private              QueryPlanningInfo info;
+  /**
+   * Whether the plan was shaped by the value of an input parameter (the bounds a {@code LIKE :p} contributes to an index
+   * search are computed from it), and so must not be reused for another set of parameters.
+   */
+  private              boolean           planDependsOnInputParameters;
+  /**
+   * Set when {@link #rewriteRangeMinMaxAsOrderedFetch} turned {@code SELECT min(a) FROM T WHERE a > ?} into an ordered
+   * fetch of {@code a} limited to one row: the column the fetch publishes, and the one the statement asked for.
+   */
+  private              String            rangeMinMaxSource;
+  private              String            rangeMinMaxAlias;
 
   public SelectExecutionPlanner(final SelectStatement oSelectStatement) {
     this.statement = oSelectStatement;
@@ -136,6 +154,8 @@ public class SelectExecutionPlanner {
   private void init(final CommandContext context) {
     //copying the content, so that it can be manipulated and optimized
     info = new QueryPlanningInfo();
+    rangeMinMaxSource = null;
+    rangeMinMaxAlias = null;
     info.projection = this.statement.getProjection() == null ? null : this.statement.getProjection().copy();
     info.projection = translateDistinct(info.projection);
     info.distinct = info.projection != null && info.projection.isDistinct();
@@ -165,6 +185,8 @@ public class SelectExecutionPlanner {
     // now carried by the command deadline, which every guard reads and no statement kind can miss (issue #6304).
     info.timeout = this.statement.getTimeout() == null ? null : this.statement.getTimeout().copy();
 
+    rewriteDistinctAsGroupBy(context);
+
     // A filter that keeps every record (WHERE 1=1, WHERE true) says nothing the statement did not already say, so it
     // is dropped here rather than pushed into the fetch: everything downstream - the projected properties computed
     // just below, the choice between FetchFromTypeWithFilterStep and FetchFromTypeExecutionStep, the hardwired
@@ -183,7 +205,7 @@ public class SelectExecutionPlanner {
         return (InternalExecutionPlan) plan;
     }
 
-    final long planningStart = System.currentTimeMillis();
+    final long planningEpoch = db.getExecutionPlanCache().getInvalidationEpoch();
 
     init(context);
 
@@ -203,6 +225,9 @@ public class SelectExecutionPlanner {
     // A statement whose own text proves that it cannot return a row is answered without touching the storage. This is
     // read off the clauses as the statement wrote them, before optimizeQuery() rearranges them into index searches.
     final String emptyReason = emptyByConstructionReason(context);
+
+    if (emptyReason == null)
+      rewriteRangeMinMaxAsOrderedFetch(context);
 
     optimizeQuery(info, context);
 
@@ -243,13 +268,17 @@ public class SelectExecutionPlanner {
 
       handleProjectionsBlock(selectExecutionPlan, info, context);
 
+      if (rangeMinMaxSource != null)
+        selectExecutionPlan.chain(new FirstRowValueStep(rangeMinMaxSource, rangeMinMaxAlias, context));
+
       chainTimeout(selectExecutionPlan, info, context);
     }
 
-    if (useCache && !context.isProfiling() && statement.executionPlanCanBeCached() && selectExecutionPlan.canBeCached())
-      // The planningStart < lastInvalidation re-check happens atomically inside put(), under the same lock as
-      // invalidate(), so a DDL racing this call can never be missed the way two separately-locked calls could (#6671).
-      db.getExecutionPlanCache().put(statement.getOriginalStatement(), selectExecutionPlan, planningStart);
+    if (useCache && !context.isProfiling() && statement.executionPlanCanBeCached() && !planDependsOnInputParameters
+        && selectExecutionPlan.canBeCached())
+      // The planningEpoch re-check happens atomically inside put(), under the same lock as invalidate(), so a DDL
+      // racing this call can never be missed the way two separately-locked calls could (#6671).
+      db.getExecutionPlanCache().put(statement.getOriginalStatement(), selectExecutionPlan, planningEpoch);
 
     return selectExecutionPlan;
   }
@@ -369,6 +398,60 @@ public class SelectExecutionPlanner {
     }
     info.fetchExecutionPlan = null;
     info.planCreated = true;
+  }
+
+  /** Records of the target type below which a DISTINCT is not rewritten: the parallel scan would decline it anyway. */
+  private static final long MIN_DISTINCT_REWRITE_RECORDS = 10_000L;
+
+  /**
+   * A plain {@code SELECT DISTINCT a, b FROM T} is the same set of rows as {@code SELECT a, b FROM T GROUP BY a, b}, and the GROUP BY is
+   * the one that aggregates in the parallel workers of a scan (issue #8799). Rewritten here, so that the dedup runs per worker and the
+   * partial results are merged at the end, instead of one {@code DistinctKey} per row on the consuming thread. The groups come out in
+   * the order of their first row, as the rows of a DISTINCT do.
+   * <p>
+   * Left as a DISTINCT when it cannot be the same plan: an aggregate, a GROUP BY, an ORDER BY (the dedup sees the sorted rows), expand()
+   * or UNWIND, a wildcard, excluded or nested items; and under a LIMIT, where DISTINCT stops reading as soon as it has enough rows while a
+   * GROUP BY has to read them all. Also left alone where the GROUP BY brings nothing but its blocking: a target that is not a type
+   * (subquery, index, RIDs), a transaction, or parallel scans disabled, so the streaming DISTINCT keeps its early exit and its
+   * memory-lean RID dedup.
+   */
+  private void rewriteDistinctAsGroupBy(final CommandContext context) {
+    if (!info.distinct || info.groupBy != null || info.orderBy != null || info.unwind != null || info.limit != null
+        || info.projection.isExpand())
+      return;
+    // A per-record LET variable is not in the row the GROUP BY key and the aggregated row are evaluated on
+    if (info.perRecordLetClause != null)
+      return;
+    if (info.target == null || info.target.getItem() == null || info.target.getItem().getIdentifier() == null)
+      return;
+    // What follows depends on the thread, the transaction and the size of the type at planning time, not on the statement alone: a plan
+    // either way must not be reused by an execution for which the answer differs
+    planDependsOnInputParameters = true;
+    if (!ParallelTypeScan.isAllowed(context.getDatabase()))
+      return;
+    // A small type is not scanned in parallel at run time, so the GROUP BY would only block where the DISTINCT streams
+    final String typeName = info.target.getItem().getIdentifier().getStringValue();
+    final Database database = context.getDatabase();
+    if (!database.getSchema().existsType(typeName) || database.countType(typeName, true) < MIN_DISTINCT_REWRITE_RECORDS)
+      return;
+
+    final List<ProjectionItem> items = info.projection.getItems();
+    if (items == null || items.isEmpty())
+      return;
+
+    final GroupBy groupBy = new GroupBy();
+    for (final ProjectionItem item : items) {
+      // Plain identifiers only: a computed expression would be evaluated for the key and again for the projected value, which for a
+      // non-deterministic one (rand()) gives groups that project to the same value, and costs a second evaluation per row
+      if (item.isAll() || item.exclude || item.nestedProjection != null || item.getExpression() == null || item.isAggregate(context)
+          || !item.getExpression().isBaseIdentifier())
+        return;
+      groupBy.getItems().add(item.getExpression().copy());
+    }
+
+    info.groupBy = groupBy;
+    info.distinctRewrittenAsGroupBy = true;
+    info.distinct = false;
   }
 
   /**
@@ -601,6 +684,117 @@ public class SelectExecutionPlanner {
   }
 
   /**
+   * Answers {@code SELECT min(a) FROM T WHERE a > ?} (and {@code max}, and {@code <}, {@code >=}, {@code <=},
+   * {@code BETWEEN}) from the first entry of the matching range of the index on {@code a}, the way
+   * {@link #handleHardwiredMaxMinOnIndex} already does for the whole type (issue #8812). Left alone, the aggregate reads
+   * every record of the range.
+   * <p>
+   * The statement is rewritten, before the planner looks at it, into {@code SELECT a FROM T WHERE ... ORDER BY a
+   * ASC|DESC LIMIT 1}: the planner already knows how to seek an index range, to keep the index order instead of sorting
+   * and to stop after one row, and doing it through the same path keeps every rule about the bounds (type narrowing,
+   * incomparable bounds, case-insensitive keys) in one place. A {@link FirstRowValueStep} then gives back the one row
+   * the aggregate has to produce, a null value when the range is empty.
+   * <p>
+   * Only the shape where the rewrite is the same query is taken: one {@code min}/{@code max} of a plain property that
+   * has an ordered index, nothing but a conjunction of range comparisons of that very property against values that need
+   * no record, and none of the clauses that would see the difference (GROUP BY, ORDER BY, SKIP, LIMIT, LET, UNWIND,
+   * DISTINCT, TIMEOUT). A range excludes null by itself, which is why no null can come first, as it would for an
+   * unranged {@code ORDER BY}.
+   */
+  private void rewriteRangeMinMaxAsOrderedFetch(final CommandContext context) {
+    if (info.whereClause == null || info.projection == null || info.target == null || info.distinct || info.expand
+        || info.groupBy != null || info.orderBy != null || info.skip != null || info.limit != null || info.unwind != null
+        || info.perRecordLetClause != null || info.timeout != null || statement.getLetClause() != null)
+      return;
+
+    final Identifier targetClass = info.target.getItem().getIdentifier();
+    if (targetClass == null || info.target.getItem().getIndex() != null || info.target.getItem().getInputParam() != null)
+      return;
+
+    if (info.projection.getItems() == null || info.projection.getItems().size() != 1)
+      return;
+    final ProjectionItem item = info.projection.getItems().getFirst();
+    if (item.isAll() || item.exclude || item.nestedProjection != null || item.getExpression() == null
+        || !(item.getExpression().getMathExpression() instanceof BaseExpression base) || base.getModifier() != null
+        || base.getIdentifier() == null || base.getIdentifier().getLevelZero() == null)
+      return;
+    final FunctionCall functionCall = base.getIdentifier().getLevelZero().getFunctionCall();
+    if (functionCall == null || functionCall.getParams() == null || functionCall.getParams().size() != 1)
+      return;
+
+    final boolean max;
+    final String functionName = functionCall.getName().getStringValue().toLowerCase(Locale.ROOT);
+    if ("max".equals(functionName))
+      max = true;
+    else if ("min".equals(functionName))
+      max = false;
+    else
+      return;
+
+    final Expression argument = functionCall.getParams().getFirst();
+    if (!argument.isBaseIdentifier())
+      return;
+    final String propertyName = argument.toString().trim();
+
+    final DocumentType type = context.getDatabase().getSchema().existsType(targetClass.getStringValue()) ?
+        context.getDatabase().getSchema().getType(targetClass.getStringValue()) :
+        null;
+    if (type == null || !type.existsProperty(propertyName) || findIndexForProperty(type, propertyName) == null)
+      return;
+
+    final List<AndBlock> flattened = info.whereClause.flatten();
+    if (flattened == null || flattened.size() != 1)
+      return;
+    for (final BooleanExpression condition : flattened.getFirst().getSubBlocks())
+      if (!isRangeConditionOn(condition, propertyName, context))
+        return;
+
+    final String alias = item.getProjectionAliasAsString();
+
+    final OrderByItem orderByItem = new OrderByItem();
+    orderByItem.setAlias(propertyName);
+    orderByItem.setType(max ? OrderByItem.DESC : OrderByItem.ASC);
+    final OrderBy orderBy = new OrderBy();
+    orderBy.setItems(new ArrayList<>(List.of(orderByItem)));
+    final PInteger one = new PInteger();
+    one.setValue(1, "1");
+    final Limit limit = new Limit();
+    limit.num = one;
+
+    // the property goes out under its own name, so that the ORDER BY resolves against it and keeps the index order; the
+    // name the statement asked for is given back by the FirstRowValueStep
+    final Projection projection = new Projection();
+    projection.setItems(new ArrayList<>(List.of(projectionFromAlias(new Identifier(propertyName)))));
+
+    info.projection = projection;
+    info.orderBy = orderBy;
+    info.limit = limit;
+    rangeMinMaxSource = propertyName;
+    rangeMinMaxAlias = alias;
+  }
+
+  /**
+   * True for {@code prop > x}, {@code >=}, {@code <}, {@code <=} and {@code prop BETWEEN x AND y}, where {@code x} and
+   * {@code y} need no record.
+   */
+  private static boolean isRangeConditionOn(final BooleanExpression condition, final String propertyName,
+      final CommandContext context) {
+    if (condition instanceof BinaryCondition binary) {
+      final BinaryCompareOperator operator = binary.getOperator();
+      return (operator instanceof GtOperator || operator instanceof GeOperator || operator instanceof LtOperator
+          || operator instanceof LeOperator) && binary.getLeft() != null && binary.getLeft().isBaseIdentifier()
+          && propertyName.equals(binary.getLeft().toString().trim()) && binary.getRight() != null
+          && binary.getRight().isEarlyCalculated(context);
+    }
+    if (condition instanceof BetweenCondition between)
+      return between.getFirst() != null && between.getFirst().isBaseIdentifier()
+          && propertyName.equals(between.getFirst().toString().trim()) && between.getSecond() != null
+          && between.getSecond().isEarlyCalculated(context) && between.getThird() != null
+          && between.getThird().isEarlyCalculated(context);
+    return false;
+  }
+
+  /**
    * Information about a MAX/MIN aggregate function.
    *
    * @param isMax true for MAX, false for MIN
@@ -676,14 +870,19 @@ public class SelectExecutionPlanner {
    * Finds a RangeIndex (LSM_TREE) on the specified property.
    */
   private RangeIndex findIndexForProperty(final DocumentType type, final String propertyName) {
-    final Collection<TypeIndex> indexes = type.getAllIndexes(true);
-    for (final TypeIndex index : indexes) {
-      // Must be a single-property index on the exact property
-      final List<String> propNames = index.getPropertyNames();
-      if (propNames.size() == 1 && propNames.getFirst().equals(propertyName)) {
-        // Must support ordered iterations (RangeIndex like LSM_TREE)
-        if (index.supportsOrderedIterations())
-          return index;
+    for (final TypeIndex index : plannableIndexes(type.getAllIndexes(true))) {
+      try {
+        // Must be a single-property index on the exact property
+        final List<String> propNames = index.getPropertyNames();
+        if (propNames.size() == 1 && propNames.getFirst().equals(propertyName)) {
+          // Must support ordered iterations (RangeIndex like LSM_TREE). A case-insensitive index holds its keys folded, so
+          // its ends are not the ends of the values and its key is not a value any record holds (issue #8698)
+          if (index.supportsOrderedIterations() && !holdsFoldedKeys(index))
+            return index;
+        }
+      } catch (final IndexException e) {
+        // Dropped or rebuilt while reading it: not a candidate
+        logSkippedIndex(index, e);
       }
     }
     return null;
@@ -978,7 +1177,15 @@ public class SelectExecutionPlanner {
     final Projection postAggregate = new Projection();
     postAggregate.setItems(new ArrayList<>());
 
+    // A GROUP BY on a computed expression (GROUP BY a % 10) needs the split even with no aggregate in the projection: the unsplit path
+    // evaluates the projected expression on the aggregated row, where it does not exist, and answered null for it
     boolean isSplitted = false;
+    if (info.groupBy != null && info.groupBy.getItems() != null)
+      for (final Expression exp : info.groupBy.getItems())
+        if (!exp.isBaseIdentifier()) {
+          isSplitted = true;
+          break;
+        }
 
     //split for aggregate projections
     final AggregateProjectionSplit result = new AggregateProjectionSplit();
@@ -1818,12 +2025,14 @@ public class SelectExecutionPlanner {
     if (info.expand || info.unwind != null || info.distinct)
       maxResults = null;
 
-    if (!info.orderApplied && info.orderBy != null && info.orderBy.getItems() != null && !info.orderBy.getItems().isEmpty()) {
+    if (!info.orderApplied && info.orderBy != null && info.orderBy.getItems() != null && !info.orderBy.getItems().isEmpty())
       plan.chain(new OrderByStep(info.orderBy, maxResults, context, info.timeout != null ? info.timeout.getVal().longValue() : -1));
-      if (info.projectionAfterOrderBy != null) {
-        plan.chain(new ProjectionCalculationStep(info.projectionAfterOrderBy, context));
-      }
-    }
+
+    // The projection that drops the aliases generated for the ORDER BY keys runs even when an index already ordered the rows
+    // (#8811): the generated columns are in the rows either way
+    if (info.projectionAfterOrderBy != null && info.orderBy != null && info.orderBy.getItems() != null
+        && !info.orderBy.getItems().isEmpty())
+      plan.chain(new ProjectionCalculationStep(info.projectionAfterOrderBy, context));
   }
 
   /**
@@ -3178,6 +3387,20 @@ public class SelectExecutionPlanner {
     return false;
   }
 
+  private static boolean isLiteralOptions(final Expression expression) {
+    if (expression.isLiteral())
+      return true;
+    if (expression.json != null) {
+      for (final JsonItem item : expression.json.items)
+        if (!item.right.isLiteral())
+          return false;
+      return true;
+    }
+    // the parser wraps a map literal in a BaseExpression around the Expression that holds it
+    return expression.mathExpression instanceof BaseExpression base && base.modifier == null && base.expression != null
+        && isLiteralOptions(base.expression);
+  }
+
   /**
    * Attempts to push down aggregation into the TimeSeries engine.
    * Eligible queries have: ts.timeBucket GROUP BY, simple aggregate functions (avg, max, min, sum, count),
@@ -3209,6 +3432,7 @@ public class SelectExecutionPlanner {
     // Find the timeBucket item and aggregate items
     String timeBucketAlias = null;
     String intervalStr = null;
+    Object bucketOptions = null;
     final List<MultiColumnAggregationRequest> requests = new ArrayList<>();
     final Map<String, String> requestAliasToOutputAlias = new HashMap<>();
     final List<ColumnDefinition> columns = tsType.getTsColumns();
@@ -3232,8 +3456,27 @@ public class SelectExecutionPlanner {
         if (!(intervalVal instanceof String))
           return false;
         intervalStr = (String) intervalVal;
+        // The optional options parameter (origin, offset, timezone) moves the bucket grid and the push-down has to
+        // bucket on the same one as the function does (issue #8798). Resolved here, once, so it must be a constant:
+        // anything that needs the current record is left to the generic path, which evaluates it per row.
+        if (funcCall.getParams().size() > 3)
+          return false;
+        if (funcCall.getParams().size() == 3) {
+          // Only a literal, or a JSON object of literals, is resolved once here: anything that reads the record (a column,
+          // coalesce(col, ...)) would be evaluated against no record and bucket differently from the generic plan
+          final Expression optionsExpression = funcCall.getParams().get(2);
+          if (!isLiteralOptions(optionsExpression))
+            return false;
+          try {
+            bucketOptions = funcCall.getParams().get(2).execute((Identifiable) null, context);
+          } catch (final CommandExecutionException | IllegalArgumentException e) {
+            return false;
+          }
+        }
       } else {
-        // Must be an aggregate function
+        // Must be an aggregate function, over every value: the engine does not count DISTINCT ones (issue #8889)
+        if (funcCall.isDistinct())
+          return false;
         final String aggFuncName = funcName.toLowerCase(Locale.ROOT);
         final AggregationType aggType = switch (aggFuncName) {
           case "avg" -> AggregationType.AVG;
@@ -3300,6 +3543,14 @@ public class SelectExecutionPlanner {
     if (bucketIntervalMs <= 0)
       return false;
 
+    // Same for the grid options: a malformed one is the generic path's to refuse, with the message the function gives
+    final long bucketOffsetMs;
+    try {
+      bucketOffsetMs = SQLFunctionTimeBucket.resolveOffset(bucketOptions, intervalStr, bucketIntervalMs);
+    } catch (final IllegalArgumentException e) {
+      return false;
+    }
+
     // Extract tag filter from WHERE clause for push-down
     final TagFilter tagFilter = extractTagFilter(info.flattenedWhereClause, columns, tsType.getTimestampColumn(), context);
 
@@ -3310,7 +3561,7 @@ public class SelectExecutionPlanner {
       return false;
 
     // Chain the push-down step
-    plan.chain(new AggregateFromTimeSeriesStep(tsType, fromTs, toTs, requests, bucketIntervalMs,
+    plan.chain(new AggregateFromTimeSeriesStep(tsType, fromTs, toTs, requests, bucketIntervalMs, bucketOffsetMs,
         timeBucketAlias, requestAliasToOutputAlias, tagFilter, context));
 
     // Null out the aggregate projections so handleProjections doesn't add duplicate steps
@@ -3374,7 +3625,7 @@ public class SelectExecutionPlanner {
       indexedFunctionConditions = filterIndexedFunctionsWithoutIndex(indexedFunctionConditions, info.target, context);
 
       if (indexedFunctionConditions == null || indexedFunctionConditions.isEmpty()) {
-        IndexSearchDescriptor bestIndex = findBestIndexFor(context, typez.getAllIndexes(true), block, typez);
+        IndexSearchDescriptor bestIndex = findBestIndexFor(context, plannableIndexes(typez.getAllIndexes(true)), block, typez);
         if (bestIndex != null) {
 
           final FetchFromIndexStep step = new FetchFromIndexStep(bestIndex.index, bestIndex.keyCondition,
@@ -3638,8 +3889,22 @@ public class SelectExecutionPlanner {
     if (typez == null)
       throw new CommandExecutionException("Type not found: " + queryTarget.getStringValue());
 
-    for (final Index idx : typez.getAllIndexes(true).stream().filter(TypeIndex::supportsOrderedIterations).toList()) {
-      final List<String> indexFields = idx.getPropertyNames();
+    for (final TypeIndex idx : plannableIndexes(typez.getAllIndexes(true))) {
+      final List<String> indexFields;
+      final LSMTreeIndexAbstract.NULL_STRATEGY nullStrategy;
+      try {
+        if (!idx.supportsOrderedIterations())
+          continue;
+        // A case-insensitive index iterates its folded keys, which is not the order of the values (issue #8700)
+        if (holdsFoldedKeys(idx))
+          continue;
+        indexFields = idx.getPropertyNames();
+        nullStrategy = idx.getNullStrategy();
+      } catch (final IndexException e) {
+        // Dropped or rebuilt while reading it: not a candidate
+        logSkippedIndex(idx, e);
+        continue;
+      }
       if (indexFields.size() < info.orderBy.getItems().size()) {
         continue;
       }
@@ -3656,7 +3921,7 @@ public class SelectExecutionPlanner {
             break;//ASC/DESC interleaved, cannot be used with index.
           }
         }
-        if (!indexField.equals(orderItem.getAlias())) {
+        if (!indexField.equals(resolveOrderByProperty(orderItem, info))) {
           indexFound = false;
           break;
         }
@@ -3669,9 +3934,10 @@ public class SelectExecutionPlanner {
           filterClusterIds = filterClusters.stream()
               .map(name -> context.getDatabase().getSchema().getBucketByName(name).getFileId()).mapToInt(i -> i).boxed().toList();
 
-        // Check if the index has NULL_STRATEGY.INDEX - if so, NULLs are already in the index
-        if (idx.getNullStrategy() == LSMTreeIndexAbstract.NULL_STRATEGY.INDEX) {
-          // NULLs are indexed, just use the index directly
+        // Check if the index has NULL_STRATEGY.INDEX - if so, NULLs are already in the index. The same goes when no record
+        // can hold a null for the first indexed property: it is NOTNULL, or the WHERE clause filters nulls out (#8664)
+        if (nullStrategy == LSMTreeIndexAbstract.NULL_STRATEGY.INDEX || cannotHoldNull(typez, indexFields.getFirst(), info)) {
+          // NULLs are indexed or there are none, just use the index directly
           plan.chain(new FetchFromIndexValuesStep((RangeIndex) idx, isAsc, context));
           plan.chain(new GetValueFromIndexEntryStep(context, filterClusterIds));
         } else {
@@ -3714,6 +3980,84 @@ public class SelectExecutionPlanner {
       }
     }
     return false;
+  }
+
+  /**
+   * The record property an ORDER BY item sorts on, or null when it sorts on anything else (an expression, a computed
+   * projection, a record attribute, a path). A name that is a projection alias is resolved through that projection item, so
+   * {@code SELECT a AS c ... ORDER BY c} and the generated alias {@link #addOrderByProjections} gives an ORDER BY key the
+   * projection does not hold both resolve to {@code a}, while {@code SELECT b AS a ... ORDER BY a} resolves to {@code b} and
+   * not to the property {@code a} the alias shadows (#8811).
+   */
+  private static String resolveOrderByProperty(final OrderByItem item, final QueryPlanningInfo info) {
+    final String name = item.getAlias();
+    if (name == null || item.expression != null || item.getModifier() != null || item.getDirectionParameter() != null)
+      return null;
+
+    final Projection projection = info.projection;
+    if (projection == null || projection.getItems() == null)
+      return name;
+
+    ProjectionItem match = null;
+    for (final ProjectionItem projectionItem : projection.getItems()) {
+      if (projectionItem.isAll() || !name.equals(projectionItem.getProjectionAliasAsString()))
+        continue;
+      if (match != null)
+        // two items under one name: which one the sort sees is not for the index to guess
+        return null;
+      match = projectionItem;
+    }
+    if (match == null)
+      return name;
+    final Expression expression = match.getExpression();
+    return expression != null && expression.isBaseIdentifier() ? expression.getDefaultAlias().getStringValue() : null;
+  }
+
+  /**
+   * True when no record this query returns can have a null (or missing) value for {@code propertyName}: the property is
+   * declared NOTNULL and MANDATORY, or every branch of the WHERE clause has a conjunct that a null cannot satisfy. Lets an
+   * index-ordered read skip the full scan that would otherwise look for the records the index does not hold (#8664).
+   * Only the shape {@code property <op> expression} is recognised (not {@code 5 < x}), and only the first indexed property is
+   * considered: both fall back to the null sub-plan, which is always correct.
+   */
+  private static boolean cannotHoldNull(final DocumentType type, final String propertyName, final QueryPlanningInfo info) {
+    final Property property = type.getPropertyIfExists(propertyName);
+    // NOTNULL alone only rejects an explicit null: a record that never sets the property is legal and is not in the index
+    // either (#8701). Only NOTNULL together with MANDATORY rules out both cases the index does not hold.
+    if (property != null && property.isNotNull() && property.isMandatory())
+      return true;
+
+    if (info.flattenedWhereClause == null || info.flattenedWhereClause.isEmpty())
+      return false;
+
+    for (final AndBlock branch : info.flattenedWhereClause) {
+      boolean excludes = false;
+      for (final BooleanExpression conjunct : branch.getSubBlocks())
+        if (excludesNull(conjunct, propertyName)) {
+          excludes = true;
+          break;
+        }
+      if (!excludes)
+        return false;
+    }
+    return true;
+  }
+
+  private static boolean excludesNull(final BooleanExpression conjunct, final String propertyName) {
+    if (conjunct instanceof IsNotNullCondition notNull)
+      return isPropertyReference(notNull.expression, propertyName);
+
+    if (conjunct instanceof BinaryCondition binary) {
+      final BinaryCompareOperator operator = binary.getOperator();
+      // >= and <= are left out: they answer true for two nulls (WHERE x >= x), so a null row can satisfy them
+      return (operator instanceof EqualsCompareOperator || operator instanceof GtOperator || operator instanceof LtOperator)
+          && isPropertyReference(binary.getLeft(), propertyName);
+    }
+    return false;
+  }
+
+  private static boolean isPropertyReference(final Expression expression, final String propertyName) {
+    return expression != null && expression.isBaseIdentifier() && propertyName.equals(expression.getDefaultAlias().getStringValue());
   }
 
   private boolean handleTypeAsTargetWithIndex(final SelectExecutionPlan plan, final Identifier targetType,
@@ -3831,7 +4175,7 @@ public class SelectExecutionPlanner {
     if (typez == null)
       throw new CommandExecutionException("Cannot find type " + targetType);
 
-    final Collection<TypeIndex> indexes = typez.getAllIndexes(true);
+    final List<TypeIndex> indexes = plannableIndexes(typez.getAllIndexes(true));
 
     if (indexes.isEmpty())
       return null;
@@ -3875,7 +4219,7 @@ public class SelectExecutionPlanner {
         filterClusterIds = clazz.getBucketIds(true);
       }
       final boolean indexOrderApplied =
-          orderAsc != null && info.orderBy != null && fullySorted(info.orderBy, (AndBlock) desc.keyCondition, desc.getIndex());
+          orderAsc != null && info.orderBy != null && fullySorted(info, (AndBlock) desc.keyCondition, desc.getIndex());
       result.add(new GetValueFromIndexEntryStep(context, filterClusterIds,
           indexOrderApplied ? null : scanFallbackFor(desc, clazz, filterClusters, info, context)));
       if (desc.requiresDistinctStep()) {
@@ -3930,15 +4274,25 @@ public class SelectExecutionPlanner {
     return refersToLet(Collections.singletonList(condition), info.perRecordLetClause);
   }
 
-  private boolean fullySorted(final OrderBy orderBy, final AndBlock conditions, final Index idx) {
-    if (!idx.supportsOrderedIterations())
+  /**
+   * The property an ORDER BY item sorts on, or its record attribute name; null when it sorts on a derived value.
+   */
+  private static String orderByPropertyName(final OrderByItem item, final QueryPlanningInfo info) {
+    // a direction bound at execution time is unknown to the planner: the sort step stays
+    if (item.getModifier() != null || item.getDirectionParameter() != null)
+      return null;
+    return item.getAlias() != null ? resolveOrderByProperty(item, info) : item.getName();
+  }
+
+  private boolean fullySorted(final QueryPlanningInfo info, final AndBlock conditions, final Index idx) {
+    if (!idx.supportsOrderedIterations() || holdsFoldedKeys(idx))
       return false;
 
     final List<String> orderItems = new ArrayList<>();
     String order = null;
 
-    for (final OrderByItem item : orderBy.getItems()) {
-      if (order == null) {
+    for (final OrderByItem item : info.orderBy.getItems()) {
+        if (order == null) {
         order = item.getType();
       } else if (!order.equals(item.getType())) {
         return false;
@@ -3949,7 +4303,9 @@ public class SelectExecutionPlanner {
       // than by the property itself (ORDER BY s.right(1), ORDER BY s[0]), which the index does not hold. In both cases
       // the planner cannot prove the index iteration already yields the requested order, so the ORDER BY step has to
       // stay (issue #6926).
-      final String name = item.getModifier() == null ? item.getName() : null;
+      // A name that is a projection alias is the property it renames (SELECT a AS c ... ORDER BY c), or the one it shadows
+      // (SELECT b AS a ... ORDER BY a sorts on b), as in handleClassWithIndexForSortOnly (#8836)
+      final String name = orderByPropertyName(item, info);
       if (name == null)
         return false;
 
@@ -4071,6 +4427,9 @@ public class SelectExecutionPlanner {
         .getValueAsFloat(GlobalConfiguration.QUERY_INDEX_MAX_SELECTIVITY);
     if (!(maxSelectivity > 0))
       return null;
+    // A DISTINCT returns its rows in first-occurrence order, which for an index search is key order: the fallbacks would change it
+    if (info.distinctRewrittenAsGroupBy)
+      return null;
 
     // The rows of an index search come in key order, and a statement that returns them as they come can show it:
     // users rely on it (a partial key on a composite index reads sorted by the rest of the key). Physical order and a
@@ -4092,7 +4451,7 @@ public class SelectExecutionPlanner {
     final Index index = desc.getIndex();
     if (index.getType() != Schema.INDEX_TYPE.LSM_TREE)
       return null;
-    if (index instanceof IndexInternal internal && internal.getMetadata() != null && internal.getMetadata().hasAnyCaseInsensitive())
+    if (holdsFoldedKeys(index))
       return null;
     final List<String> indexProperties = index.getPropertyNames();
     for (final String property : indexProperties)
@@ -4253,6 +4612,43 @@ public class SelectExecutionPlanner {
     return results;
   }
 
+  private static boolean isFullText(final Index index) {
+    try {
+      return index.getType() == FULL_TEXT;
+    } catch (final IndexException e) {
+      return false;
+    }
+  }
+
+  private void logSkippedIndex(final Index index, final IndexException e) {
+    LogManager.instance().log(this, Level.FINE, "Index '%s' skipped while planning: %s", index.getName(), e.getMessage());
+  }
+
+  private static boolean isPlannable(final Index index) {
+    try {
+      if (index instanceof TypeIndex typeIndex)
+        return typeIndex.isReadyForQueries();
+      return (!(index instanceof IndexInternal internal) || internal.isValid()) && index.getType() != null;
+    } catch (final IndexException e) {
+      return false;
+    }
+  }
+
+  /**
+   * Snapshot of the indexes of a type that can be planned on, see {@link TypeIndex#isReadyForQueries()}: neither an index being
+   * created nor one being dropped by a concurrent DDL is a candidate for a query that does not name it. The check is a best
+   * effort: the callers read an index's metadata under a try/catch of IndexException, and any new planner path that reads
+   * index metadata must do the same.
+   */
+  private static List<TypeIndex> plannableIndexes(final Collection<TypeIndex> indexes) {
+    final List<TypeIndex> result = new ArrayList<>(indexes.size());
+    for (final TypeIndex index : indexes) {
+      if (isPlannable(index))
+        result.add(index);
+    }
+    return result;
+  }
+
   /**
    * given a flat AND block and a set of indexes, returns the best index to be used to process it,
    * with the complete description on how to use it
@@ -4263,7 +4659,7 @@ public class SelectExecutionPlanner {
    *
    * @return
    */
-  private IndexSearchDescriptor findBestIndexFor(final CommandContext context, final Collection<TypeIndex> indexes,
+  private IndexSearchDescriptor findBestIndexFor(final CommandContext context, final List<TypeIndex> indexes,
       final AndBlock block, final DocumentType clazz) {
 
     // get all valid index descriptors
@@ -4275,8 +4671,7 @@ public class SelectExecutionPlanner {
         .collect(Collectors.toList());
 
     final List<IndexSearchDescriptor> fullTextIndexDescriptors = indexes.stream()
-        .filter(idx -> idx.getType().equals(FULL_TEXT))
-        .map(idx -> buildIndexSearchDescriptorForFulltext(context, idx, block, clazz))
+        .map(idx -> buildIndexSearchDescriptorForFulltextSafely(context, idx, block, clazz))
         .filter(Objects::nonNull)
         .filter(x -> x.keyCondition != null)
         .filter(x -> !x.getSubBlocks().isEmpty())
@@ -4288,9 +4683,23 @@ public class SelectExecutionPlanner {
     // is redundant, just discard it)
     //descriptors = removePrefixIndexes(descriptors);
 
-    if (descriptors.isEmpty())
-      return null;
+    // Ranking reads the metadata of the candidates again: one dropped meanwhile is discarded and the ranking restarts. It
+    // ends: every pass returns, rethrows, or leaves strictly fewer candidates
+    while (true) {
+      if (descriptors.isEmpty())
+        return null;
+      try {
+        return pickBestDescriptor(context, descriptors);
+      } catch (final IndexException e) {
+        final List<IndexSearchDescriptor> stillValid = descriptors.stream().filter(d -> isPlannable(d.index)).toList();
+        if (stillValid.size() == descriptors.size())
+          throw e;
+        descriptors = stillValid;
+      }
+    }
+  }
 
+  private IndexSearchDescriptor pickBestDescriptor(final CommandContext context, List<IndexSearchDescriptor> descriptors) {
     // First, prefer indexes that cover more conditions (more subBlocks)
     // This ensures composite indexes are preferred over single-property indexes
     final int maxSubBlocks = descriptors.stream()
@@ -4309,7 +4718,7 @@ public class SelectExecutionPlanner {
     // condition would lose full-text semantics. (Issue #3483 follow-up)
     if (descriptors.size() > 1) {
       final List<IndexSearchDescriptor> fullTextDescriptors = descriptors.stream()
-          .filter(d -> d.index.getType().equals(FULL_TEXT))
+          .filter(d -> isFullText(d.index))
           .toList();
       if (!fullTextDescriptors.isEmpty() && fullTextDescriptors.size() < descriptors.size())
         descriptors = fullTextDescriptors;
@@ -4422,6 +4831,17 @@ public class SelectExecutionPlanner {
     return result;
   }
 
+  private IndexSearchDescriptor buildIndexSearchDescriptorForFulltextSafely(final CommandContext context, final TypeIndex index,
+      final AndBlock block, final DocumentType clazz) {
+    try {
+      return index.getType() == FULL_TEXT ? buildIndexSearchDescriptorForFulltext(context, index, block, clazz) : null;
+    } catch (final IndexException e) {
+      // Dropped or rebuilt after plannableIndexes()
+      logSkippedIndex(index, e);
+      return null;
+    }
+  }
+
   /**
    * given a full text index and a flat AND block, returns a descriptor on how to process it with an
    * index (index, index key and additional filters to apply after index fetch
@@ -4499,13 +4919,26 @@ public class SelectExecutionPlanner {
    */
   private IndexSearchDescriptor buildIndexSearchDescriptor(final CommandContext context, final Index index, final AndBlock block,
       final DocumentType clazz) {
+    try {
+      return buildIndexSearchDescriptorInternal(context, index, block, clazz);
+    } catch (final IndexException e) {
+      // Dropped or rebuilt between plannableIndexes() and here: not a candidate for this plan
+      logSkippedIndex(index, e);
+      return null;
+    }
+  }
+
+  private IndexSearchDescriptor buildIndexSearchDescriptorInternal(final CommandContext context, final Index index,
+      final AndBlock block, final DocumentType clazz) {
     // Only a key index answers "the value equals the key". A FULL_TEXT index - BY ITEM included - answers by analyzer
     // token (so `txt = 'two'` also matched the item 'two words' and 'Two') and parses the key as a query (so '--', '-two'
     // or 'a:b' find nothing), and the vector and geospatial families answer a similarity or a shape. Handing them `=`,
     // IN, CONTAINS, CONTAINSANY, CONTAINSALL and dropping the condition from the residual filter was answering them
     // wrong in both directions; a recheck could remove the extra rows but never bring back the missing ones. CONTAINSTEXT
     // reaches a FULL_TEXT index through buildIndexSearchDescriptorForFulltext instead (issues #8435, #8438).
-    if (!index.getType().isExactKeyLookup())
+    final Schema.INDEX_TYPE indexType = index.getType();
+    // null: sub-indexes emptied by a concurrent drop or rebuild after plannableIndexes()
+    if (indexType == null || !indexType.isExactKeyLookup())
       return null;
 
     final List<String> indexFields = index.getPropertyNames();
@@ -4516,6 +4949,8 @@ public class SelectExecutionPlanner {
 
     AndBlock indexKeyValue = new AndBlock();
     BinaryCondition additionalRangeCondition = null;
+    // Conditions answered through the lower-casing of a CI index key, which must still be checked on what the index returns
+    List<BooleanExpression> lowerCaseRewrites = null;
 
     for (String indexField : indexFields) {
       final String baseFieldName = Index.basePropertyName(indexField);
@@ -4532,15 +4967,22 @@ public class SelectExecutionPlanner {
       final IndexSearchInfo info = new IndexSearchInfo(baseFieldName, allowsRangeQueries(index), isMap(clazz, baseFieldName),
           isIndexByKey(index, baseFieldName), isIndexByValue(index, baseFieldName), isIndexByItem(index, baseFieldName), supportNull,
           ciCollation, context);
+      if (!ciCollation && info.allowsRange() && baseFieldName.equals(indexField))
+        addLikePrefixRange(blockCopy, info, clazz);
       blockIterator = blockCopy.getSubBlocks().iterator();
       boolean indexFieldFound = false;
       boolean rangeOp = false;
       while (blockIterator.hasNext()) {
         BooleanExpression singleExp = blockIterator.next();
-        if (singleExp.isIndexAware(info)) {
+        if (singleExp.isIndexAware(info) && !hasLossyDecimalLiteralBound(singleExp, clazz, baseFieldName, context)) {
           indexFieldFound = true;
           indexKeyValue.getSubBlocks().add(singleExp.copy());
           blockIterator.remove();
+          if (ciCollation && needsLowerCaseResidual(singleExp, info)) {
+            if (lowerCaseRewrites == null)
+              lowerCaseRewrites = new ArrayList<>(2);
+            lowerCaseRewrites.add(singleExp);
+          }
           if (singleExp instanceof BetweenCondition
               || (singleExp instanceof BinaryCondition condition && condition.getOperator().isRangeOperator())) {
             // a range-shaped condition (BETWEEN, or a single-sided comparison like >/</>=/<=) is terminal for
@@ -4553,7 +4995,9 @@ public class SelectExecutionPlanner {
             // side of the range)
             while (blockIterator.hasNext()) {
               BooleanExpression next = blockIterator.next();
-              if (next.createRangeWith(singleExp)) {
+              // The other side of a range over field.toLowerCase() is probed lower-cased too, so it must already be
+              if (next.createRangeWith(singleExp) && rangePartnerAllowed(singleExp, next, ciCollation, info)
+                  && !hasLossyDecimalLiteralBound(next, clazz, baseFieldName, context)) {
                 additionalRangeCondition = (BinaryCondition) next;
                 blockIterator.remove();
                 break;
@@ -4578,10 +5022,160 @@ public class SelectExecutionPlanner {
       }
     }
 
-    if (found)
+    if (found) {
+      // The user wrote field.toLowerCase() <op> X, but a CI index lower-cases X as well before probing, and its keys hold
+      // the lower-cased field. That answers the question only when X is already lower case (and a range over 'A'..'C'
+      // becomes one over 'a'..'c'), so the condition stays as a filter on what the index returns (issue #8560)
+      if (lowerCaseRewrites != null)
+        for (final BooleanExpression rewrite : lowerCaseRewrites)
+          blockCopy.getSubBlocks().add(rewrite.copy());
       return new IndexSearchDescriptor((RangeIndex) index, indexKeyValue, additionalRangeCondition, blockCopy);
+    }
 
     return null;
+  }
+
+  /**
+   * True when a comparison against a property that is not a DECIMAL has a literal BigDecimal bound, a decimal literal a
+   * double cannot hold (issue #8872). A key index converts the bound to its key type, so on a DOUBLE key it would answer for
+   * the rounded bound, and neither the rows it returns nor the ones it leaves out follow the exact comparison a scan makes.
+   * Such a condition is left to the scan, so the indexed and the unindexed query agree.
+   */
+  private static boolean hasLossyDecimalLiteralBound(final BooleanExpression expression, final DocumentType type, final String field,
+      final CommandContext context) {
+    final boolean decimalBound;
+    if (expression instanceof BinaryCondition condition)
+      decimalBound = isDecimalLiteral(condition.getRight(), context);
+    else if (expression instanceof BetweenCondition between)
+      decimalBound = isDecimalLiteral(between.getSecond(), context) || isDecimalLiteral(between.getThird(), context);
+    else if (expression instanceof InCondition in)
+      decimalBound = hasDecimalLiteralElement(in, context);
+    else
+      return false;
+    if (!decimalBound)
+      return false;
+    // a null property is unreachable (an index needs a declared property); treated as lossy to stay on the safe scan path
+    // any non-DECIMAL key type (DOUBLE, FLOAT, INTEGER, LONG) would round or truncate the bound; the scan is slower but exact
+    final Property property = type.getPropertyIfExists(field);
+    return property == null || property.getType() != Type.DECIMAL;
+  }
+
+  private static boolean hasDecimalLiteralElement(final InCondition in, final CommandContext context) {
+    final MathExpression right = in.getRightMathExpression();
+    if (right == null || !right.isLiteral() || !(right.execute((Result) null, context) instanceof Collection<?> values))
+      return false;
+    for (final Object value : values)
+      if (value instanceof BigDecimal)
+        return true;
+    return false;
+  }
+
+  private static boolean isDecimalLiteral(final Expression expression, final CommandContext context) {
+    return expression != null && expression.isLiteral() && expression.execute((Result) null, context) instanceof BigDecimal;
+  }
+
+  /**
+   * True when {@code next} may be the other side of the range {@code first} opens. Over {@code field.toLowerCase()} on a CI
+   * index its bound is probed lower-cased too, so it must already be a lower-case literal (issue #8560).
+   */
+  private static boolean rangePartnerAllowed(final BooleanExpression first, final BooleanExpression next, final boolean ciCollation,
+      final IndexSearchInfo info) {
+    if (!ciCollation || !isLowerCaseRewrite(first, info))
+      return true;
+    return next instanceof BinaryCondition other && BinaryCondition.isLowerCaseLiteral(other.getRight(), info.getContext());
+  }
+
+  /**
+   * True when a condition answered through {@code field.toLowerCase()} must still be checked on what the index returns:
+   * an equality or IN whose operand is not a lower-case literal (a parameter cannot be judged now). A range or BETWEEN is
+   * index-aware only with lower-case literal bounds, and an operand that is its own lower-case form is probed as written,
+   * so neither needs the check (issue #8560).
+   */
+  private static boolean needsLowerCaseResidual(final BooleanExpression expression, final IndexSearchInfo info) {
+    if (!isLowerCaseRewrite(expression, info))
+      return false;
+    final CommandContext context = info.getContext();
+    if (expression instanceof BinaryCondition condition)
+      return condition.getOperator() instanceof EqualsCompareOperator && !BinaryCondition.isLowerCaseLiteral(condition.getRight(), context);
+    if (expression instanceof InCondition in) {
+      final MathExpression right = in.getRightMathExpression();
+      if (right == null || !right.isLiteral() || !(right.execute((Result) null, context) instanceof Collection<?> values))
+        return true;
+      for (final Object value : values)
+        if (!(value instanceof String string) || !string.equals(string.toLowerCase(Locale.ROOT)))
+          return true;
+      return false;
+    }
+    return false;
+  }
+
+  /**
+   * True when {@code expression} reached a case-insensitive index through {@code field.toLowerCase()} rather than through
+   * the plain property.
+   */
+  private static boolean isLowerCaseRewrite(final BooleanExpression expression, final IndexSearchInfo info) {
+    final Expression subject = switch (expression) {
+      case BinaryCondition condition -> condition.getLeft();
+      case InCondition condition -> condition.getLeft();
+      case BetweenCondition condition -> condition.getFirst();
+      default -> null;
+    };
+    return BinaryCondition.isFieldWithLowerCaseMethod(subject, info.getField());
+  }
+
+  /**
+   * Adds, next to {@code field LIKE 'abc%'}, the range {@code field >= 'abc' AND field < 'abd'} that holds every value
+   * the pattern can match, so that an ordered index on the field answers it instead of a scan of the type (issue #8666).
+   * <p>
+   * The {@code LIKE} itself stays in the block, and is evaluated on what the range returns: the range is only a
+   * superset, and the answer never depends on how the index orders its keys. The pattern's literal prefix is what
+   * precedes its first wildcard, so {@code 'abc%def'} and {@code 'ab?d%'} are bounded too, by {@code abc} and {@code ab}.
+   * <p>
+   * Added only where it can be used and cannot be wrong:
+   * <ul>
+   *   <li>the caller has already ruled out a case-insensitive index, whose keys are lower-cased while the {@code LIKE}
+   *   is case sensitive, and a modified key ({@code by key}, {@code by value}, {@code by item});</li>
+   *   <li>the property is a declared STRING, so every key is one;</li>
+   *   <li>no condition of the block already bounds the field (an equality or a range of the user's own is tighter);</li>
+   *   <li>the pattern is known now: a literal, or an input parameter, whose value shapes this plan, which is then not
+   *   cached for other parameters.</li>
+   * </ul>
+   */
+  private void addLikePrefixRange(final AndBlock block, final IndexSearchInfo info, final DocumentType clazz) {
+    final Property property = clazz.getPropertyIfExists(info.getField());
+    if (property == null || property.getType() != Type.STRING)
+      return;
+
+    BinaryCondition like = null;
+    for (final BooleanExpression expression : block.getSubBlocks()) {
+      if (expression.isIndexAware(info))
+        return;
+      if (like == null && expression instanceof BinaryCondition condition && condition.getOperator() instanceof LikeOperator
+          && condition.getLeft().isBaseIdentifier() && info.getField().equals(condition.getLeft().getDefaultAlias().getStringValue())
+          && condition.getRight().isLiteral(true))
+        like = condition;
+    }
+    if (like == null || !(like.getRight().execute((Result) null, info.getContext()) instanceof String pattern))
+      return;
+
+    final String prefix = QueryHelper.likeLiteralPrefix(pattern);
+    if (prefix.isEmpty())
+      return;
+    if (!like.getRight().isLiteral())
+      planDependsOnInputParameters = true;
+
+    block.getSubBlocks().add(comparison(like.getLeft(), new GeOperator(), prefix));
+    final String successor = QueryHelper.prefixSuccessor(prefix);
+    if (successor != null)
+      block.getSubBlocks().add(comparison(like.getLeft(), new LtOperator(), successor));
+  }
+
+  private static BinaryCondition comparison(final Expression field, final BinaryCompareOperator operator, final String value) {
+    final BinaryCondition condition = new BinaryCondition();
+    condition.setLeft(field.copy());
+    condition.setOperator(operator);
+    condition.setRight(new ValueExpression(value));
+    return condition;
   }
 
   private boolean createsRangeWith(final BinaryCondition left, final BooleanExpression next) {
@@ -4634,6 +5228,15 @@ public class SelectExecutionPlanner {
         return true;
     }
     return false;
+  }
+
+  /**
+   * Whether any key of the index is stored case-folded: its iteration order is that of the folded keys, so it can neither
+   * stand in for a sort nor answer min() / max() with a key. Deliberately conservative for a composite index with one
+   * folded column: it is refused even when the ORDER BY only reads a column that is not folded.
+   */
+  private static boolean holdsFoldedKeys(final Index index) {
+    return index instanceof IndexInternal internal && internal.getMetadata() != null && internal.getMetadata().hasAnyCaseInsensitive();
   }
 
   private static boolean isIndexCaseInsensitive(final Index index, final int propertyIndex) {

@@ -20,8 +20,6 @@ package com.arcadedb.remote;
 
 import java.net.URI;
 import java.net.URLEncoder;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -30,7 +28,6 @@ import java.util.Map;
 import java.util.Objects;
 
 import com.arcadedb.ContextConfiguration;
-import com.arcadedb.exception.DatabaseOperationException;
 import com.arcadedb.network.HostUtil;
 import com.arcadedb.serializer.json.JSONArray;
 import com.arcadedb.serializer.json.JSONObject;
@@ -68,7 +65,7 @@ public class RemoteServer extends RemoteHttpComponent {
   }
 
   public List<String> databases() {
-    return (List<String>) serverCommand("POST", "list databases", true, true,
+    return (List<String>) serverCommand("POST", "list databases", "list databases", true, true, true,
         (connection, response) -> response.getJSONArray("result").toList());
   }
 
@@ -78,25 +75,7 @@ public class RemoteServer extends RemoteHttpComponent {
   }
 
   public void drop(final String databaseName) {
-    try {
-      final JSONObject jsonRequest = new JSONObject().put("command", "drop database " + databaseName);
-      String payload = getRequestPayload(jsonRequest);
-
-      HttpRequest request = createRequestBuilder("POST", getUrl("server"))
-          .POST(HttpRequest.BodyPublishers.ofString(payload))
-          .header("Content-Type", "application/json")
-          .build();
-
-      HttpResponse<String> response = sendWithWatchdog(request);
-
-      if (response.statusCode() != 200) {
-        final Exception detail = manageException(response, "drop database");
-        throw new RemoteException("Error on deleting database", detail);
-      }
-
-    } catch (final Exception e) {
-      throw new DatabaseOperationException("Error on deleting database", e);
-    }
+    serverCommand("POST", "drop database " + databaseName, true, true, null);
   }
 
   @Override
@@ -104,36 +83,21 @@ public class RemoteServer extends RemoteHttpComponent {
     return protocol + "://" + currentServer + ":" + currentPort;
   }
 
-  public void createUser(final String userName, final String password, final Map<String,String> databases) {
-    try {
-      final JSONObject jsonUser = new JSONObject();
-      jsonUser.put("name", userName);
-      jsonUser.put("password", password);
-      if (databases != null && !databases.isEmpty()) {
-        final JSONObject databasesJson = new JSONObject();
-        for (Map.Entry<String, String> entry : databases.entrySet())
-          databasesJson.put(entry.getKey(), new String[] { entry.getValue() });
-        jsonUser.put("databases", databasesJson);
-      }
-
-      final JSONObject jsonRequest = new JSONObject().put("command", "create user " + jsonUser);
-      String payload = getRequestPayload(jsonRequest);
-
-      HttpRequest request = createRequestBuilder("POST", getUrl("server"))
-          .POST(HttpRequest.BodyPublishers.ofString(payload))
-          .header("Content-Type", "application/json")
-          .build();
-
-      HttpResponse<String> response = sendWithWatchdog(request);
-
-      if (response.statusCode() != 200) {
-        final Exception detail = manageException(response, "create user");
-        throw new SecurityException("Error on creating user", detail);
-      }
-
-    } catch (final Exception e) {
-      throw new DatabaseOperationException("Error on creating user", e);
+  /**
+   * The error label names the user only: the command text carries the password.
+   */
+  public void createUser(final String userName, final String password, final Map<String, String> databases) {
+    final JSONObject jsonUser = new JSONObject();
+    jsonUser.put("name", userName);
+    jsonUser.put("password", password);
+    if (databases != null && !databases.isEmpty()) {
+      final JSONObject databasesJson = new JSONObject();
+      for (final Map.Entry<String, String> entry : databases.entrySet())
+        databasesJson.put(entry.getKey(), new String[] { entry.getValue() });
+      jsonUser.put("databases", databasesJson);
     }
+
+    serverCommand("POST", "create user " + jsonUser, "create user " + userName, true, true, null);
   }
 
   public void createUser(final String userName, final String password, final List<String> databases) {
@@ -146,25 +110,7 @@ public class RemoteServer extends RemoteHttpComponent {
   }
 
   public void dropUser(final String userName) {
-    try {
-      final JSONObject jsonRequest = new JSONObject().put("command", "drop user " + userName);
-      String payload = getRequestPayload(jsonRequest);
-
-      HttpRequest request = createRequestBuilder("POST", getUrl("server"))
-          .POST(HttpRequest.BodyPublishers.ofString(payload))
-          .header("Content-Type", "application/json")
-          .build();
-
-      HttpResponse<String> response = sendWithWatchdog(request);
-
-      if (response.statusCode() != 200) {
-        final Exception detail = manageException(response, "drop user");
-        throw new RemoteException("Error on deleting user", detail);
-      }
-
-    } catch (final Exception e) {
-      throw new RemoteException("Error on deleting user", e);
-    }
+    serverCommand("POST", "drop user " + userName, true, true, null);
   }
 
 
@@ -304,10 +250,9 @@ public class RemoteServer extends RemoteHttpComponent {
     body.put("expiresAt", expiresAt);
     body.put("permissions", permissions != null ? permissions : new JSONObject());
 
-    final String url = getUrl("server/api-tokens");
-    checkTransportCarriesSecrets(url);
-
-    return securityRequestTo(url, "POST", body, "create api token").getJSONObject("result");
+    // Checked against each URL the request is about to be sent to: failover changes the host that writes the token back.
+    return controlPlaneRequest("POST", "server/api-tokens", body, "create api token", this::checkTransportCarriesSecrets)
+        .getJSONObject("result");
   }
 
   /**
@@ -358,62 +303,20 @@ public class RemoteServer extends RemoteHttpComponent {
   }
 
   /**
-   * Sends one request against a {@code /server/*} route and returns its parsed body.
+   * Sends one request against a {@code /server/*} route and returns its parsed body, empty rather than null when the
+   * route answered with none.
    * <p>
-   * The request goes to the node this client is connected to, with no leader preference of its own,
-   * because each route already settles its own cluster semantics: the {@code /server/users} routes
-   * forward to the leader themselves (issue #7380), and the group and API-token routes submit a Raft
-   * entry through the group committer, which reaches the leader without the client choosing it.
+   * It goes through {@link #controlPlaneRequest}, the {@code httpCommand} loop every server command uses, so a node
+   * that is mid-election is waited out, and one that is down is replaced when {@code NETWORK_SAME_SERVER_ERROR_RETRIES}
+   * allows more than one attempt, exactly as for {@code createUser} (issue #8710), and a write
+   * whose answer was lost is not sent again. The leader is preferred; the {@code /server/users} routes forward to it
+   * themselves (issue #7380) and the group and API-token routes submit a Raft entry, so reaching a follower still works.
    *
    * @param path the route and query string, relative to {@code /api/v<n>/}
    */
   private JSONObject securityRequest(final String method, final String path, final JSONObject body,
       final String operation) {
-    return securityRequestTo(getUrl(path), method, body, operation);
-  }
-
-  /**
-   * Sends one request against a {@code /server/*} route and returns its parsed body, empty rather than
-   * null when the route answered with none.
-   * <p>
-   * It goes through {@link #sendWithWatchdog}, not through {@code httpClient.send}: an admin call that
-   * hangs must be bounded by the same budget as every other request this driver makes (issue #5847).
-   */
-  private JSONObject securityRequestTo(final String url, final String method, final JSONObject body,
-      final String operation) {
-    try {
-      HttpRequest.Builder builder = createRequestBuilder(method, url);
-
-      if (body != null)
-        builder = builder.method(method, HttpRequest.BodyPublishers.ofString(getRequestPayload(body)))
-            .header("Content-Type", "application/json");
-      else if ("GET".equals(method))
-        builder = builder.GET();
-      else
-        builder = builder.method(method, HttpRequest.BodyPublishers.noBody());
-
-      final HttpResponse<String> response = sendWithWatchdog(builder.build());
-
-      // 200 and 201 are both success on these routes: POST /server/users and POST /server/api-tokens
-      // answer 201, every other route answers 200.
-      if (response.statusCode() != 200 && response.statusCode() != 201) {
-        final Exception detail = manageException(response, operation);
-        if (detail instanceof final RuntimeException runtime)
-          throw runtime;
-        throw new RemoteException("Error on executing '" + operation + "'", detail);
-      }
-
-      final String payload = response.body();
-      return payload == null || payload.isBlank() ? new JSONObject() : new JSONObject(payload);
-
-    } catch (final InterruptedException e) {
-      Thread.currentThread().interrupt();
-      throw new RemoteException("Error on executing '" + operation + "': interrupted", e);
-    } catch (final RuntimeException e) {
-      throw e;
-    } catch (final Exception e) {
-      throw new RemoteException("Error on executing '" + operation + "'", e);
-    }
+    return controlPlaneRequest(method, path, body, operation, null);
   }
 
   private static JSONObject toDatabasesDocument(final Map<String, List<String>> databases) {
@@ -434,8 +337,29 @@ public class RemoteServer extends RemoteHttpComponent {
     return URLEncoder.encode(value, StandardCharsets.UTF_8);
   }
 
+  /**
+   * Every server command goes through {@code httpCommand}, for its election retry, failover and typed exceptions.
+   */
   private Object serverCommand(final String method, final String command, final boolean leaderIsPreferable,
       final boolean autoReconnect, final Callback callback) {
-    return httpCommand(method, null, "server", null, command, null, leaderIsPreferable, autoReconnect, callback);
+    return serverCommand(method, command, command, leaderIsPreferable, autoReconnect, callback);
+  }
+
+  /**
+   * As above, naming the command as {@code errorOperation} in an error message, for a command carrying a secret.
+   */
+  private Object serverCommand(final String method, final String command, final String errorOperation,
+      final boolean leaderIsPreferable, final boolean autoReconnect, final Callback callback) {
+    return serverCommand(method, command, errorOperation, leaderIsPreferable, autoReconnect, false, callback);
+  }
+
+  /**
+   * As above, stating that the command is read-only so a transport failure after it was sent does not stop the
+   * failover loop (issue #8570). Every other server command may write, so it defaults to not replayable.
+   */
+  private Object serverCommand(final String method, final String command, final String errorOperation,
+      final boolean leaderIsPreferable, final boolean autoReconnect, final boolean replayable, final Callback callback) {
+    return httpCommand(method, null, "server", null, command, null, leaderIsPreferable, autoReconnect, callback,
+        errorOperation, replayable);
   }
 }

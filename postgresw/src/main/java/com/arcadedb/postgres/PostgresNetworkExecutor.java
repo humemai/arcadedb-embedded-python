@@ -19,6 +19,7 @@
 package com.arcadedb.postgres;
 
 import com.arcadedb.Constants;
+import com.arcadedb.ContextConfiguration;
 import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.database.Binary;
 import com.arcadedb.database.Database;
@@ -139,6 +140,8 @@ public class PostgresNetworkExecutor extends Thread {
   /** Bind-message parameter length denoting a NULL value (wire value -1, read unsigned). */
   private static final long                                           NULL_PARAM_LENGTH = 0xFFFFFFFFL;
   private static final Object[]                                       NO_PARAMETERS     = new Object[0];
+  /** PostgreSQL itself caps a statement at 65535 parameters. */
+  private static final int                                            MAX_STATEMENT_PARAMETERS = 65535;
   /** Shared between the simple and extended query protocol's identical ROLLBACK TO refusal (issue #7846). */
   private static final String                                         ROLLBACK_TO_NOT_SUPPORTED_MESSAGE =
       "ROLLBACK TO SAVEPOINT is not supported by this server: it cannot discard the writes made since the savepoint";
@@ -164,7 +167,13 @@ public class PostgresNetworkExecutor extends Thread {
   private static final Pattern                                        TRANSACTION_MODE_SEPARATOR = Pattern.compile("[\\s,]+");
 
   private final ArcadeDBServer              server;
-  private final ChannelBinaryServer         channel;
+  // Replaced once, by the TLS upgrade of the startup phase and before the session is registered in ACTIVE_SESSIONS, whose
+  // map publishes it to the cancel path. Not volatile, as it is read on every message. A stale reference could only be the
+  // pre-upgrade channel, and closing that closes the raw socket under the TLS one.
+  private ChannelBinaryServer               channel;
+  private final PostgresSslHelper           sslHelper;
+  private boolean                           tlsActive;
+  private boolean                           gssEncRequestAnswered;
   private final byte[]                      buffer                = new byte[BUFFER_LENGTH];
   private final Map<String, PostgresPortal> portals               = new HashMap<>();
   // Prepared statements registered by PARSE, keyed by statement name (issue #6660 / CodeRabbit on #6658).
@@ -241,17 +250,14 @@ public class PostgresNetworkExecutor extends Thread {
     void write() throws IOException;
   }
 
-  public PostgresNetworkExecutor(final ArcadeDBServer server, final Socket socket, final Database database) throws IOException {
-    this(server, socket, database, null);
-  }
-
   public PostgresNetworkExecutor(final ArcadeDBServer server, final Socket socket, final Database database,
-      final PreAuthConnectionGate.Ticket preAuthTicket) throws IOException {
+      final PreAuthConnectionGate.Ticket preAuthTicket, final PostgresSslHelper sslHelper) throws IOException {
     setName(Constants.PRODUCT + "-postgres/" + socket.getInetAddress());
     this.server = server;
     this.channel = new ChannelBinaryServer(socket, server.getConfiguration());
     this.database = database;
     this.preAuthTicket = preAuthTicket;
+    this.sslHelper = sslHelper;
     this.DEBUG = server.getConfiguration().getValueAsBoolean(GlobalConfiguration.POSTGRES_DEBUG);
     this.QUOTED_IDENTIFIERS = server.getConfiguration().getValueAsBoolean(GlobalConfiguration.POSTGRES_QUOTED_IDENTIFIERS);
 
@@ -618,9 +624,7 @@ public class PostgresNetworkExecutor extends Thread {
         else {
           // A catalog query whose filters are bound parameters is answered at Execute, but the columns are those of
           // the emulated catalog relation whatever the filter values are, so they can be named now (issue #8379)
-          final CatalogAnswer catalogAnswer = handleCatalogQuery(portal.query);
-          if (catalogAnswer != null)
-            portal.columns = catalogAnswer.columns();
+          portal.columns = describeCatalogColumns(portal.query);
         }
       }
 
@@ -675,7 +679,8 @@ public class PostgresNetworkExecutor extends Thread {
     if (portal.catalogQuery) {
       // Deferred from parseCommand because the query's filters are bound parameters (issue #6412).
       final CatalogAnswer catalogAnswer = handleCatalogQuery(portal.query, getParams(portal));
-      if (catalogAnswer != null)
+      // A Describe('S') already announced the columns, and the rows are encoded from what the client was told
+      if (catalogAnswer != null && !portal.columnsDescribed)
         portal.columns = catalogAnswer.columns();
       return new IteratorResultSet(
           (catalogAnswer != null ? catalogAnswer.rows() : Collections.<Result>emptyList()).iterator());
@@ -791,9 +796,11 @@ public class PostgresNetworkExecutor extends Thread {
           writeCommandComplete("COPY", rows);
         }
       } else {
-        if (portal.showName != null)
-          // SHOW answers the value as it stands at THIS Execute, as PostgreSQL does, not the one fixed at Parse
-          portal.cachedResultSet = showResultSet(portal.showName);
+        if (portal.showName != null && portal.resultCursor == 0)
+          // SHOW answers the value as it stands at THIS Execute, as PostgreSQL does, not the one fixed at Parse. Only
+          // until its first row has gone out: a fetch-size cursor continuing a suspended SHOW ALL must keep slicing
+          // the answer it started on, and a drained one must stay drained (issue #8708)
+          portal.fullResultSet = showResultSet(portal.showName);
         if (!portal.executed) {
           final long engineStart = System.nanoTime();
           final ResultSet resultSet = runPortalQuery(portal);
@@ -883,13 +890,12 @@ public class PostgresNetworkExecutor extends Thread {
           // rather than before them: PortalSuspended when this slice stopped short of fullResultSet with the
           // row-limit reached, CommandComplete once the portal is fully drained - tagged with resultCursor,
           // the running total across every slice this portal has sent (matching PostgreSQL's own convention),
-          // when this portal is the paginated fullResultSet-backed kind; a portal whose cachedResultSet was
-          // set directly (a synthetic single-row answer - SHOW/catalog/etc.) never touches resultCursor, so it
-          // keeps reporting its own size exactly as before this fix.
+          // when this portal is the paginated fullResultSet-backed kind. Every portal that produces rows is that
+          // kind, including the ones answered at Parse (SHOW, system and catalog answers, issue #8708).
           if (portal.suspended)
             portalSuspendedResponse();
           else
-            writeCommandComplete(portal.query, portal.fullResultSet != null ? portal.resultCursor : portal.cachedResultSet.size());
+            writeCommandComplete(portal.query, portal.resultCursor);
           profile.addSerializationNanos(System.nanoTime() - serStart);
         } else {
           final long serStart = System.nanoTime();
@@ -1609,6 +1615,12 @@ public class PostgresNetworkExecutor extends Thread {
     if (isRowlessWrite(parsed))
       return null;
 
+    // A write WITH a RETURN returns rows, and its RETURN names them. Never the textual FROM fallback below: a write has
+    // no FROM target of its own to read the columns from, and a " FROM " inside a sub-select it carries would name the
+    // columns of that sub-select's type (issue #8562)
+    if (parsed instanceof InsertStatement || parsed instanceof UpdateStatement || parsed instanceof DeleteStatement)
+      return getColumnsFromWriteReturn(parsed);
+
     // Not parsable as an ArcadeDB SELECT: fall back to the textual FROM-target extraction
     // Patterns: "SELECT FROM TypeName", "SELECT * FROM TypeName", "SELECT ... FROM TypeName"
     final String upperQuery = query.toUpperCase(Locale.ROOT);
@@ -1635,6 +1647,81 @@ public class PostgresNetworkExecutor extends Thread {
     }
 
     return getColumnsFromType(typeName);
+  }
+
+  /**
+   * Columns announced by a write that has a RETURN clause: a projection names its own, {@code RETURN BEFORE} and
+   * {@code RETURN AFTER} return the record itself, so they are those of the target type. Null when they cannot be named
+   * before the statement runs (issue #8562).
+   */
+  private Map<String, PostgresType> getColumnsFromWriteReturn(final Statement statement) {
+    switch (statement) {
+    case InsertStatement insert:
+      return getColumnsFromReturn(insert.getTargetType(), insert.getReturnStatement());
+    case UpdateStatement update: {
+      if (update.getReturnProjection() != null) {
+        final FromItem item = update.getTarget() != null ? update.getTarget().getItem() : null;
+        return getColumnsFromReturn(item != null ? item.getIdentifier() : null, update.getReturnProjection());
+      }
+      if (update.isReturnBefore() || update.isReturnAfter())
+        return getColumnsFromTarget(update.getTarget());
+      return null;
+    }
+    case DeleteStatement delete:
+      return delete.isReturnBefore() ? getColumnsFromTarget(delete.getFromClause()) : null;
+    default:
+      return null;
+    }
+  }
+
+  /**
+   * The columns of a RETURN projection, typed from the declared properties of the type the write targets when it is
+   * known, so {@code RETURN id} on an INTEGER property is not announced as text.
+   */
+  private Map<String, PostgresType> getColumnsFromReturn(final Identifier targetType, final Projection projection) {
+    if (targetType != null) {
+      final Map<String, PostgresType> typeColumns = getColumnsFromType(targetType.getStringValue());
+      if (typeColumns != null && !typeColumns.isEmpty()) {
+        final Map<String, PostgresType> projected = applyProjection(projection, typeColumns);
+        if (projected != null && !projected.isEmpty())
+          return projected;
+      }
+    }
+    return getColumnsFromProjection(projection);
+  }
+
+  private Map<String, PostgresType> getColumnsFromTarget(final FromClause target) {
+    final FromItem item = target != null ? target.getItem() : null;
+    return item != null && item.getIdentifier() != null ? getColumnsFromType(item.getIdentifier().getStringValue()) : null;
+  }
+
+  /**
+   * The columns a {@code Describe('S')} announces for a catalog query whose filters are bound parameters, or null when
+   * they cannot be named. They are those of the emulated catalog relation whatever the filter values are (issue #8379),
+   * but a shape whose resolver needs a value to recognise it declines the query while the parameters are unbound, so it is
+   * asked again with a placeholder for each of them: only the columns are kept, never the rows of that probe (issue #8562).
+   */
+  private Map<String, PostgresType> describeCatalogColumns(final String query) {
+    CatalogAnswer answer = handleCatalogQuery(query);
+    if (answer != null && !answer.columns().isEmpty())
+      return answer.columns();
+
+    final int placeholders = PostgresCatalog.countPlaceholders(query);
+    // PostgreSQL itself caps a statement at 65535 parameters: a larger index is no placeholder to probe with
+    if (placeholders > 0 && placeholders <= MAX_STATEMENT_PARAMETERS) {
+      final Object[] probe = new Object[placeholders];
+      Arrays.fill(probe, "");
+      try {
+        answer = handleCatalogQuery(query, probe);
+      } catch (final RuntimeException e) {
+        if (DEBUG)
+          LogManager.instance().log(this, Level.INFO, "PSQL: cannot name the columns of catalog query '%s': %s", query, e.getMessage());
+        return null;
+      }
+      if (answer != null && !answer.columns().isEmpty())
+        return answer.columns();
+    }
+    return null;
   }
 
   /**
@@ -3066,8 +3153,10 @@ public class PostgresNetworkExecutor extends Thread {
         // value again, since a BEGIN ISOLATION or a SET between Parse and Execute changes it
         portal.showName = portal.query.substring(5);
         portal.executed = true;
-        portal.cachedResultSet = showResultSet(portal.showName);
-        portal.columns = getColumns(portal.cachedResultSet);
+        // Held as the portal's full result, so the one slicing path in executeCommand honours the Execute row limit
+        // for SHOW ALL as for any other multi-row answer (issue #8708)
+        portal.fullResultSet = showResultSet(portal.showName);
+        portal.columns = getColumns(portal.fullResultSet);
 
       } else if (PostgresCopyStatement.isCopy(portal.query)) {
         // COPY ... TO STDOUT (issue #7188): the Arrow ADBC driver sends it through Parse/Bind/Describe/Execute
@@ -3095,7 +3184,8 @@ public class PostgresNetworkExecutor extends Thread {
           portal.catalogQuery = true;
         } else if (catalogAnswer != null) {
           portal.executed = true;
-          portal.cachedResultSet = catalogAnswer.rows();
+          // Sliced by the Execute row limit exactly like the same catalog query with bound parameters (issue #8708)
+          portal.fullResultSet = catalogAnswer.rows();
           portal.columns = catalogAnswer.columns();
         } else {
           switch (portal.language) {
@@ -3556,7 +3646,26 @@ public class PostgresNetworkExecutor extends Thread {
     return true;
   }
 
-  private boolean readStartupMessage(final boolean no2ssl) {
+  /**
+   * Layers TLS over the connection after the {@code S} answer to an SSLRequest, and carries on with a channel over the
+   * encrypted socket. The previous channel is dropped without being closed: closing it would close the socket the TLS
+   * socket is layered on.
+   */
+  private void upgradeToTls() throws IOException {
+    final ContextConfiguration configuration = server.getConfiguration();
+    try {
+      channel = new ChannelBinaryServer(sslHelper.wrapWithTls(channel.socket), configuration);
+    } catch (final IOException e) {
+      // FINE like the closed connection the caller logs: a scanner or a health probe controls what reaches this line
+      // before authenticating, so it must not be able to fill the log at the default level.
+      LogManager.instance().log(this, Level.FINE, "PSQL: TLS handshake with %s failed: %s", channel.socket.getRemoteSocketAddress(),
+          e.getMessage());
+      throw e;
+    }
+    tlsActive = true;
+  }
+
+  private boolean readStartupMessage(final boolean firstPacket) {
     try {
       final long len = channel.readUnsignedInt();
       // The declared length used to be read and then ignored, so the parameter loop below ran until the
@@ -3569,19 +3678,44 @@ public class PostgresNetworkExecutor extends Thread {
 
       final long protocolVersion = channel.readUnsignedInt();
       if (protocolVersion == 80877103) {
-        // REQUEST FOR SSL, NOT SUPPORTED
-        if (no2ssl) {
+        // REQUEST FOR SSL. Only the first request of a connection is honored: a second one, or one inside TLS, is a
+        // protocol violation.
+        if (!firstPacket)
+          throw new PostgresProtocolException("Unexpected SSL request");
+
+        if (sslHelper.getTlsMode() == PostgresSslHelper.TlsMode.DISABLED) {
           channel.writeByte((byte) 'N');
           channel.flush();
 
-          LogManager.instance().log(this, Level.INFO,
-              "PSQL: received not supported SSL connection request. Sending back error message to the client");
+          LogManager.instance().log(this, Level.FINE,
+              "PSQL: received an SSL connection request but TLS is not enabled (" + GlobalConfiguration.POSTGRES_SSL.getKey()
+                  + "). Telling the client to continue in plaintext");
+        } else {
+          // A client sends nothing before it has read the answer: bytes already buffered behind the SSLRequest were
+          // sent in plaintext by someone who did not wait for it, and are refused rather than dropped silently or
+          // replayed into the session (the class of attack of CVE-2021-23222). Only what has ALREADY arrived is seen: later
+          // plaintext goes into the TLS engine and fails the handshake, so this is not an exhaustive check, and it need not be.
+          if (channel.inputHasData())
+            throw new PostgresProtocolException("Unexpected data after SSL request");
 
-          // REPEAT
-          return readStartupMessage(false);
+          channel.writeByte((byte) 'S');
+          channel.flush();
+          upgradeToTls();
         }
 
-        throw new PostgresProtocolException("SSL authentication is not supported");
+        // THE REAL STARTUP MESSAGE FOLLOWS
+        return readStartupMessage(false);
+      } else if (protocolVersion == 80877104) {
+        // GSSAPI ENCRYPTION REQUEST: NOT SUPPORTED. libpq sends it before the SSLRequest when it has Kerberos
+        // credentials (gssencmode=prefer, its default) and carries on with the SSLRequest or a plain startup after
+        // the N, so answering anything else - or taking it for a startup packet - fails stock clients.
+        if (gssEncRequestAnswered || tlsActive)
+          throw new PostgresProtocolException("Unexpected GSSAPI encryption request");
+        gssEncRequestAnswered = true;
+
+        channel.writeByte((byte) 'N');
+        channel.flush();
+        return readStartupMessage(firstPacket);
       } else if (protocolVersion == 80877102) {
         // CANCEL REQUEST, IGNORE IT
         final long pid = channel.readUnsignedInt();
@@ -3600,6 +3734,14 @@ public class PostgresNetworkExecutor extends Thread {
           LogManager.instance().log(this, Level.INFO, "PSQL: Session " + pid + " not found");
 
         close();
+        return false;
+      }
+
+      if (!tlsActive && sslHelper.getTlsMode() == PostgresSslHelper.TlsMode.REQUIRED) {
+        // Read the rest of the packet (bounded by the length check above) before answering: closing a socket with unread
+        // data sends an RST that can make the client lose the error.
+        channel.readBytes(new byte[(int) (len - 8)]);
+        writeError(ERROR_SEVERITY.FATAL, "SSL connection is required", "28000");
         return false;
       }
 
@@ -3986,8 +4128,8 @@ public class PostgresNetworkExecutor extends Thread {
 
   private void createResultSet(final PostgresPortal portal, final Object... elements) {
     portal.executed = true;
-    portal.cachedResultSet = createResultSet(elements);
-    portal.columns = getColumns(portal.cachedResultSet);
+    portal.fullResultSet = createResultSet(elements);
+    portal.columns = getColumns(portal.fullResultSet);
   }
 
   private List<Result> createResultSet(final Object... elements) {

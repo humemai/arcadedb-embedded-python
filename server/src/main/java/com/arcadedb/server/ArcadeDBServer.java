@@ -21,10 +21,12 @@ package com.arcadedb.server;
 import com.arcadedb.Constants;
 import com.arcadedb.ContextConfiguration;
 import com.arcadedb.GlobalConfiguration;
+import com.arcadedb.Profiler;
 import com.arcadedb.database.Database;
 import com.arcadedb.database.DatabaseFactory;
 import com.arcadedb.database.DatabaseInternal;
 import com.arcadedb.database.LocalDatabase;
+import com.arcadedb.schema.LocalSchema;
 import com.arcadedb.engine.ComponentFile;
 import com.arcadedb.engine.MaintenanceCoordinator;
 import com.arcadedb.engine.MaintenanceCoordinator.Operation;
@@ -54,12 +56,14 @@ import com.arcadedb.server.monitor.TimeSeriesReadMetrics;
 import com.arcadedb.server.monitor.MicrometerQueryTracer;
 import com.arcadedb.server.monitor.HAReplicationMetrics;
 import com.arcadedb.server.monitor.PoolMetrics;
+import com.arcadedb.utility.DedicatedThreadPool.PoolStats;
 import com.arcadedb.server.monitor.ServerMonitor;
 import com.arcadedb.server.monitor.ServerQueryProfiler;
 import com.arcadedb.server.plugin.PluginManager;
 import com.arcadedb.server.security.ServerSecurity;
 import com.arcadedb.server.security.ServerSecurityException;
 import com.arcadedb.server.security.ServerSecurityUser;
+import com.arcadedb.server.support.SupportService;
 import com.arcadedb.utility.CodeUtils;
 import com.arcadedb.utility.FileUtils;
 import com.arcadedb.utility.ServerPathUtils;
@@ -76,6 +80,7 @@ import io.micrometer.core.instrument.logging.LoggingMeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.micrometer.observation.ObservationRegistry;
 
+import java.io.Closeable;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
@@ -96,6 +101,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Function;
+import java.util.function.LongSupplier;
+import java.util.function.Supplier;
 import java.util.logging.Level;
 
 import static com.arcadedb.engine.ComponentFile.MODE.READ_ONLY;
@@ -118,6 +125,7 @@ public class ArcadeDBServer {
    * must not be registered at startup, nor exposed through the server/cluster status APIs.
    */
   public static final String                                RESERVED_DATABASE_PREFIX             = ".";
+  public static final String                                FILESYSTEM_RECOVERY_DIRECTORY        = "lost+found";
 
   /**
    * Marker file the HA snapshot installer writes into {@code databases/<name>/} before it touches a single file
@@ -152,6 +160,17 @@ public class ArcadeDBServer {
    */
   public static final String                                CONCEALED_ERROR_MESSAGE              =
       "The request failed. Check the server log for the details";
+
+  /**
+   * What the keys segment of a duplicated-key answer carries when {@link #isProductionMode()} holds. The key VALUES
+   * are the customer's stored data, unlike the exception class, the index name and the RID, which are schema and
+   * addressing metadata a driver needs to rebuild a typed {@code DuplicatedKeyException} (issue #7760). A
+   * placeholder rather than an empty segment, so the pipe-separated {@code exceptionArgs} keeps its three parts for
+   * every consumer that splits it. HTTP ({@code exceptionArgs}) and gRPC (the {@code arcadedb-dup-keys} trailer) must both apply it, or the setting means one thing on each surface.
+   * Any new surface that serialises {@code getKeys()} or the exception message must apply it too: nothing enforces
+   * it, and the /ws insert session, Bolt and Redis do not yet (issue #8749).
+   */
+  public static final String                                CONCEALED_DUPLICATED_KEYS            = "[concealed]";
 
   /**
    * The two steps the startup {@code restore:} command publishes - {@link RestoreProgress#STEP_EXTRACT} then
@@ -204,10 +223,12 @@ public class ArcadeDBServer {
   private final       ObservationRegistry                   observationRegistry                  = ObservationRegistry.create();
   private             FileServerEventLog                    eventLog;
   private             PluginManager                         pluginManager;
+  private final       SecurityConvergenceGate               securityConvergenceGate = new SecurityConvergenceGate();
   private             String                                serverRootPath;
   // Issue #7415: resolved once, in the constructor, from arcadedb.server.configDirectory. Every server-side reader
   // and writer of a configuration file goes through getConfigPath() rather than appending "/config" to the root.
   private             String                                serverConfigPath;
+  private volatile    String                                instanceId;
   // volatile: written by the HA plugin during startPlugins(AFTER_HTTP_ON), i.e. after httpServer.startService()
   // has begun accepting requests. Undertow worker threads reading these (readiness/cluster handlers, getDatabase's
   // HA wrapping) need a happens-before with those writes, otherwise under the JMM they may observe null indefinitely.
@@ -215,6 +236,7 @@ public class ArcadeDBServer {
   private volatile    ServerSecurity                        security;
   private volatile    HttpServer                            httpServer;
   private             AiConfiguration                       aiConfiguration;
+  private             SupportService                        supportService;
   private             ServerQueryProfiler                   queryProfiler;
   // Admission for backups of a database, shared by every entry point that can start one on this server: the
   // auto-backup schedule, its immediate trigger, and the HTTP "trigger backup" command (issue #6753). Created with
@@ -286,6 +308,9 @@ public class ArcadeDBServer {
   // Holds the per-follower gauge refresh scheduler open; must be closed on stop or the daemon
   // thread it starts leaks one instance per restart (issue #5850).
   private              HAReplicationMetrics haReplicationMetrics;
+  // Executor-pool rows owned by THIS server rather than the JVM (issue #7856), closed in stopMetrics() so a restart
+  // re-registers them against the new instances instead of leaving rows that read the stopped ones. Guarded by itself.
+  private final        List<Closeable> instancePoolMetrics = new ArrayList<>();
   // The server-health monitor (low disk, heap pressure, JVM safepoint spikes). Issue #7124 fixed two defects in
   // it - the low-disk warning measured the JVM working directory rather than the configured database directory,
   // and the safepoint "spike" check compared two lifetime cumulative averages - on a class nothing constructed:
@@ -419,6 +444,8 @@ public class ArcadeDBServer {
       // every later stop. Only the metrics install is undone here; the rest of the failure path is
       // unchanged, and a stop() that follows finds nothing left to dismantle.
       CodeUtils.executeIgnoringExceptions(this::stopMetrics, "Error on stopping the metrics collection", false);
+      // Nor does the profiler keep describing the directory of a server that is not running (issue #7869).
+      Profiler.withdrawDiskSpaceConfiguration(configuration);
       throw e;
     } finally {
       clearLifecycleOwner();
@@ -447,6 +474,14 @@ public class ArcadeDBServer {
       return;
 
     status = STATUS.STARTING;
+
+    // A (re)start has not been held by the security-convergence gate yet (issue #8446).
+    securityConvergenceGate.reset();
+
+    // Issue #7869: the profiler behind GET /api/v1/server and the Studio disk card reads the database directory
+    // through THIS configuration, which is where a directory set in config/server-configuration.json lands - the
+    // file never reaches the process-wide enum. Withdrawn in stopInternal() and on a failed start.
+    Profiler.publishDiskSpaceConfiguration(configuration);
 
     // Armed before any database is opened: the HA plugin that wraps them starts only after the network listeners.
     awaitingHAWrapper = isHARequested();
@@ -511,8 +546,15 @@ public class ArcadeDBServer {
 
     security = new ServerSecurity(this, configuration, serverConfigPath);
     security.startService();
+    final ServerSecurity installedSecurity = security;
+    registerExecutorPoolMetrics("security_refresh", "ServerSecurity cached-permission refresh worker",
+        installedSecurity::getPermissionsRefreshPoolStats,
+        () -> installedSecurity.getPermissionRefreshStats().refreshesCoalesced());
 
     createDirectories();
+
+    instanceId = InstanceIdResolver.resolve(configuration, Paths.get(serverConfigPath));
+    LogManager.instance().log(this, Level.INFO, "Instance id: %s", instanceId);
 
     loadDatabases(false);
 
@@ -521,6 +563,9 @@ public class ArcadeDBServer {
     // INITIALIZE AI CONFIGURATION (always available, inactive until subscription token is set)
     aiConfiguration = new AiConfiguration(Paths.get(serverConfigPath));
     aiConfiguration.load();
+
+    // SUPPORT (registration with the ArcadeData customer portal, redacted diagnostics bundles): inactive until registered
+    supportService = new SupportService(this, Paths.get(serverConfigPath));
 
     // START HTTP SERVER IMMEDIATELY. THE HTTP ADDRESS WILL BE USED BY HA
     httpServer = new HttpServer(this);
@@ -1013,11 +1058,43 @@ public class ArcadeDBServer {
     LogManager.instance().log(this, Level.INFO, "Metrics Collection Started");
   }
 
+  /**
+   * Publishes an executor pool that belongs to this server - or to something it runs, such as a plugin or the HA
+   * state machine - on the {@code arcadedb.executor.*} rows the JVM-wide pools use, so it reaches
+   * {@code /api/v1/metrics} and Studio's "Executor Pools" card (issue #7856). See
+   * {@link PoolMetrics#bindInstancePool} for the row it publishes and what the suppliers must honour.
+   * <p>
+   * The row lives until the returned handle is closed or this server stops, whichever comes first, so an owner
+   * that outlives neither need not close it; one that can stop on its own, a plugin, should.
+   *
+   * @return the handle that removes the row; a no-op one when metrics are disabled for this server
+   */
+  public Closeable registerExecutorPoolMetrics(final String poolTag, final String description,
+      final Supplier<PoolStats> stats, final LongSupplier coalesced) {
+    synchronized (instancePoolMetrics) {
+      if (!metricsInstalled)
+        return () -> {
+        };
+      final Closeable handle = PoolMetrics.bindInstancePool(Metrics.globalRegistry, poolTag, description, stats,
+          coalesced);
+      instancePoolMetrics.add(handle);
+      return handle;
+    }
+  }
+
   private void stopMetrics() {
     if (!metricsInstalled)
       // Metrics were disabled for this server, or already dismantled: nothing of ours to release.
       return;
-    metricsInstalled = false;
+
+    synchronized (instancePoolMetrics) {
+      metricsInstalled = false;
+      // Before the last-one-out teardown below, and regardless of it: with a sibling server still running that
+      // teardown is skipped, and these rows would otherwise keep reading this server's stopped pools.
+      for (final Closeable handle : instancePoolMetrics)
+        CodeUtils.executeIgnoringExceptions(handle::close, "Error on removing an executor pool's metrics", false);
+      instancePoolMetrics.clear();
+    }
 
     LogManager.instance().log(this, Level.INFO, "- Stop metrics collection");
 
@@ -1090,6 +1167,15 @@ public class ArcadeDBServer {
     if (serverMonitor != null) {
       CodeUtils.executeIgnoringExceptions(serverMonitor::stop, "Error on stopping the server health monitor", false);
       serverMonitor = null;
+    }
+
+    // Issue #7869: hand the profiler's disk figures back to another running server, or to the process-wide setting.
+    Profiler.withdrawDiskSpaceConfiguration(configuration);
+
+    // The previews of the support bundle are temporary files: deleted on shutdown
+    if (supportService != null) {
+      CodeUtils.executeIgnoringExceptions(supportService::close, "Error on stopping the support service", false);
+      supportService = null;
     }
 
     // Stop plugins managed by PluginManager first
@@ -1292,10 +1378,23 @@ public class ArcadeDBServer {
 
   /**
    * Returns {@code true} if the given name belongs to a reserved internal database (e.g. the Raft
-   * control directory {@code .raft}) that must not be exposed as a user database.
+   * control directory {@code .raft}) that must not be exposed as a user database. The ext4
+   * {@code lost+found} directory is reserved too: it sits at the root of every freshly formatted
+   * volume, so it appears in the database directory whenever a volume is mounted there directly
+   * (issue #8805).
    */
   public static boolean isReservedDatabaseName(final String databaseName) {
-    return databaseName != null && databaseName.startsWith(RESERVED_DATABASE_PREFIX);
+    return databaseName != null && (databaseName.startsWith(RESERVED_DATABASE_PREFIX) || databaseName.equals(
+        FILESYSTEM_RECOVERY_DIRECTORY));
+  }
+
+  /**
+   * Returns {@code true} when {@code directory} holds an ArcadeDB database, meaning it carries a schema file (or its
+   * previous copy). Anything else under the database directory is not a database whatever its name, and must not be
+   * opened: opening it would create one inside it (issue #8805).
+   */
+  public static boolean holdsDatabase(final File directory) {
+    return new DatabaseFactory(directory.getPath()).exists();
   }
 
   /**
@@ -1321,6 +1420,52 @@ public class ArcadeDBServer {
     if (ha != null)
       return !ha.isLeader();
     return isHARequested();
+  }
+
+  /**
+   * Whether {@code databaseDirectory} carries the {@link #UNVERIFIED_CLOSED_COPY_FILE} marker on the leader, where
+   * reopening it makes this copy the cluster's (issue #8605): only once the peers have verified it, through
+   * {@link HAServerPlugin#refuseToReopenUnverifiedClosedCopy}.
+   */
+  boolean leaderHoldsUnverifiedClosedCopy(final File databaseDirectory) {
+    final HAServerPlugin ha = haServer;
+    return ha != null && ha.isLeader() && new File(databaseDirectory, UNVERIFIED_CLOSED_COPY_FILE).exists();
+  }
+
+  /**
+   * On the leader, asks the HA plugin whether a peer holds a newer copy of {@code databaseName} than the one this node
+   * holds closed and marked unverified, before anything reopens it (issue #8605).
+   *
+   * @return {@code true} when this node is the leader, the copy is marked and the peers verified it; {@code false} when
+   * there was nothing to verify
+   * @throws DatabaseNotAvailableException when the plugin refuses: the copy stays closed and keeps its mark
+   */
+  private boolean verifyUnverifiedClosedCopyWithPeers(final String databaseName) {
+    final HAServerPlugin ha = haServer;
+    if (ha == null || !ha.isLeader())
+      return false;
+    // Already open (the slow path is also taken while STARTING): nothing is reopened, so there is nothing to ask about.
+    final ServerDatabase registered = databases.get(databaseName);
+    if (registered != null && registered.isOpen())
+      return false;
+    checkDatabaseNameIsValid(databaseName);
+    final File databaseDirectory = new File(
+        configuration.getValueAsString(GlobalConfiguration.SERVER_DATABASE_DIRECTORY) + File.separator + databaseName);
+    if (!new File(databaseDirectory, UNVERIFIED_CLOSED_COPY_FILE).exists())
+      return false;
+    final String refusal = ha.refuseToReopenUnverifiedClosedCopy(databaseName);
+    if (refusal != null) {
+      // The reason names peers and carries the text of a failed peer call, so it goes to the log and to the cluster
+      // alert, which filter who sees it, and not to whichever client named the database.
+      LogManager.instance().log(this, Level.FINE, "Database '%s' not reopened on the leader: %s", null, databaseName,
+          refusal);
+      throw new DatabaseNotAvailableException("Database '" + databaseName + "' is not available: this node is the "
+          + "leader and holds a closed copy the last HA resync could not verify, and the other servers did not confirm "
+          + "that none of them holds a newer one, so it is not reopened as the cluster's copy. The reason is in the "
+          + "server log and in the cluster alerts. Transfer the leadership to the server holding the newer copy, or "
+          + "remove this node's '" + UNVERIFIED_CLOSED_COPY_FILE + "' marker to accept this copy as it is");
+    }
+    return true;
   }
 
   /**
@@ -1446,6 +1591,14 @@ public class ArcadeDBServer {
     return hostAddress;
   }
 
+  /**
+   * The one security-convergence window of this server, shared by every {@link ServerControlPlane} built on it (issue
+   * #8555).
+   */
+  SecurityConvergenceGate getSecurityConvergenceGate() {
+    return securityConvergenceGate;
+  }
+
   public HAServerPlugin getHA() {
     return haServer;
   }
@@ -1569,6 +1722,10 @@ public class ArcadeDBServer {
     return aiConfiguration;
   }
 
+  public SupportService getSupportService() {
+    return supportService;
+  }
+
   public ServerQueryProfiler getQueryProfiler() {
     return queryProfiler;
   }
@@ -1589,6 +1746,13 @@ public class ArcadeDBServer {
     if (replicationLifecycleEventsEnabled)
       for (final ReplicationCallback c : testEventListeners)
         c.onEvent(type, object, this);
+  }
+
+  /**
+   * The instance id reported to support (see {@link InstanceIdResolver}), or null until the server has started.
+   */
+  public String getInstanceId() {
+    return instanceId;
   }
 
   public String getRootPath() {
@@ -1673,6 +1837,18 @@ public class ArcadeDBServer {
     if (status == STATUS.ONLINE && db != null && db.isOpen())
       return db;
 
+    // A leader about to reopen a copy a resync could not verify asks its peers first (issue #8605), and does so here,
+    // before the registry lock: the answer may take a round trip to every peer, and the lock serialises every open on
+    // this server. The lock re-checks below: a copy that became leader-held only after this point is refused rather
+    // than reopened unasked.
+    // The verdict is a point-in-time answer: a peer whose copy changes between the check and the open, or a leadership
+    // lost in that window, is not re-asked. The window is one request long, and the mark is dropped only when the
+    // check passed.
+    // The snapshot installer's own reopen is not asked about: it runs holding the registry lock, and a copy it restored
+    // with its mark stays closed, as a rolled-back install on a follower leaves it.
+    final boolean peersVerifiedCopy =
+        allowLoad && !underSnapshotRecovery && verifyUnverifiedClosedCopyWithPeers(databaseName);
+
     boolean loaded = false;
     synchronized (databasesLock) {
       db = databases.get(databaseName);
@@ -1700,12 +1876,24 @@ public class ArcadeDBServer {
         // every caller, underSnapshotRecovery included: a successful install never meets the marker, because its swap
         // moved it out with the old files, and a rolled-back one restores it with them and stays closed.
         final File databaseDirectory = new File(path);
-        if (refusesUnverifiedClosedCopy(databaseDirectory))
+        if (refusesUnverifiedClosedCopy(databaseDirectory)) {
+          // Re-verified in the background; the refusal only brings the next attempt forward (issue #8606).
+          final HAServerPlugin ha = haServer;
+          if (ha != null)
+            ha.onUnverifiedClosedCopyRefused(databaseName);
           throw new DatabaseNotAvailableException("Database '" + databaseName + "' is not available on this node: it "
               + "was closed here and the last HA resync could not verify its copy, because the leader did not hold it. "
               + "It may be behind the cluster, so it is not reopened on a follower. It is reinstalled by the next resync "
-              + "that finds the leader holding it; open it on the leader, or remove this node's copy (or its '"
-              + UNVERIFIED_CLOSED_COPY_FILE + "' marker, to accept it as it is)");
+              + "that finds the leader holding it, which this node checks periodically; open it on the leader, or "
+              + "remove this node's copy (or its '" + UNVERIFIED_CLOSED_COPY_FILE + "' marker, to accept it as it is)");
+        }
+        // On the leader the copy becomes the cluster's, so it is reopened only once its peers have said none of them
+        // holds a newer one (issue #8605) - which the check before the lock established, or this node was not the
+        // leader yet when it ran.
+        if (!peersVerifiedCopy && leaderHoldsUnverifiedClosedCopy(databaseDirectory))
+          throw new DatabaseNotAvailableException("Database '" + databaseName + "' is not available: this node became "
+              + "the leader while opening a copy the last HA resync could not verify, and has not compared it with the "
+              + "other servers' copies yet. Retry the request");
 
         final DatabaseFactory factory = new DatabaseFactory(path).setAutoTransaction(true);
 
@@ -1751,8 +1939,10 @@ public class ArcadeDBServer {
         loaded = true;
 
         // Only once the copy is open and registered on the leader: a mark dropped before an open that then failed
-        // would leave the copy reopenable by this node as a follower, never having been verified.
-        clearUnverifiedClosedCopyMarker(databaseDirectory, databaseName);
+        // would leave the copy reopenable by this node as a follower, never having been verified. And only when the
+        // peers verified it (issue #8605).
+        if (peersVerifiedCopy)
+          clearUnverifiedClosedCopyMarker(databaseDirectory, databaseName);
       }
     }
 
@@ -1809,12 +1999,25 @@ public class ArcadeDBServer {
                     SNAPSHOT_PENDING_FILE);
               continue;
             }
+            // Not a database at all: a directory the operating system or the storage put there (Windows 'System Volume
+            // Information', Synology '@eaDir', ...). Opening it would create a database inside it (issue #8805).
+            if (!holdsDatabase(f)) {
+              final String[] content = f.list();
+              if (content != null && content.length > 0)
+                LogManager.instance().log(this, Level.WARNING,
+                    "Directory '%s' in the database directory was NOT opened: it holds no database (neither '%s' nor '%s' "
+                        + "found)", null, f.getName(), LocalSchema.SCHEMA_FILE_NAME, LocalSchema.SCHEMA_PREV_FILE_NAME);
+              continue;
+            }
             // Not a failure to load: a closed copy the last resync could not verify, which a follower does not serve
             // (issue #8589). Throwing here would abort the whole boot for one database the node is not serving anyway.
-            if (refusesUnverifiedClosedCopy(f)) {
+            // Nor is it opened by a node that already leads at the second pass: that open asks every peer first (issue
+            // #8605), which is the next request's job, not the boot's.
+            if (refusesUnverifiedClosedCopy(f) || leaderHoldsUnverifiedClosedCopy(f)) {
               LogManager.instance().log(this, Level.WARNING,
                   "Database '%s' was NOT opened: the last HA resync could not verify this node's copy (the leader did "
-                      + "not hold it), so it stays closed until a resync reinstalls it or this node leads", null,
+                      + "not hold it), so it stays closed until a resync reinstalls it, or a request opens it on the leader once "
+                      + "the other servers have verified it", null,
                   f.getName());
               continue;
             }
@@ -1853,8 +2056,9 @@ public class ArcadeDBServer {
                   + "disk still holds the interrupted install", null, dbName);
           continue;
         }
-        if (refusesUnverifiedClosedCopy(
-            new File(configuration.getValueAsString(GlobalConfiguration.SERVER_DATABASE_DIRECTORY), dbName))) {
+        final File defaultDatabaseDirectory = new File(
+            configuration.getValueAsString(GlobalConfiguration.SERVER_DATABASE_DIRECTORY), dbName);
+        if (refusesUnverifiedClosedCopy(defaultDatabaseDirectory) || leaderHoldsUnverifiedClosedCopy(defaultDatabaseDirectory)) {
           LogManager.instance().log(this, Level.WARNING,
               "Default database '%s' holds a copy the last HA resync could not verify: not opened, and NOT recreated "
                   + "(issue #8589)", null, dbName);
@@ -2023,13 +2227,34 @@ public class ArcadeDBServer {
    * @param databasePath the directory the archive is restored into
    *
    * @throws ServerControlPlane.OperationInProgressException when a backup, restore or import of
-   *                                                         {@code databaseName} is already running on this
-   *                                                         server. Nothing is dropped and nothing is published.
+   *                                                         {@code databaseName} is still running on this server
+   *                                                         once {@code arcadedb.server.startupRestoreSlotWaitMs}
+   *                                                         has elapsed (issue #7652). Nothing is dropped and
+   *                                                         nothing is published.
    */
   void restoreDatabaseFromStartupCommand(final String databaseName, final String url, final String databasePath) {
     // Issue #7454. Taken FIRST, before the drop and before anything is published: a refusal must leave the
     // database on disk exactly as it found it. Released in the finally at the bottom, which is the only exit.
-    final Operation running = backupCoordinator.begin(databaseName, Operation.RESTORE);
+    //
+    // Issue #7652. A conflicting holder is waited out, up to SERVER_STARTUP_RESTORE_SLOT_WAIT_MS, before refusing:
+    // a backup holding the slot then completes with a valid archive instead of dying with the JVM, and a client
+    // restore or import completes and is then replaced by this command - the same end state a refusal and restart
+    // reach. The wait is bounded and the refusal stays its fallback, so a pathological holder still fails the boot
+    // loudly instead of hanging it. Unlike SnapshotInstaller, which proceeds without the slot when its wait expires
+    // because it applies a committed Raft entry, an operator's startup command is allowed to decline, so on
+    // timeout it refuses instead.
+    //
+    // The non-waiting begin() below is not redundant with the waiting one: it is what names the holder in the INFO
+    // line an operator sees while the boot pauses, and it skips the log entirely when the slot is free. The waiting
+    // overload repeats that first attempt itself, so by the time it parks the holder may be a different one.
+    final long waitMs = configuration.getValueAsLong(GlobalConfiguration.SERVER_STARTUP_RESTORE_SLOT_WAIT_MS);
+    Operation running = backupCoordinator.begin(databaseName, Operation.RESTORE);
+    if (running != null && waitMs > 0) {
+      LogManager.instance().log(this, Level.INFO,
+          "The startup 'restore:' command for database '%s' is waiting up to %dms for %s that was running on it to finish",
+          null, databaseName, waitMs, running.phrase());
+      running = backupCoordinator.begin(databaseName, Operation.RESTORE, waitMs);
+    }
     if (running != null)
       throw new ServerControlPlane.OperationInProgressException(
           MaintenanceCoordinator.refusal(Operation.RESTORE, databaseName, running));

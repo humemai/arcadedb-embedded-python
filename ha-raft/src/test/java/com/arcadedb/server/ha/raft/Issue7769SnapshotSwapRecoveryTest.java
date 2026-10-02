@@ -342,6 +342,55 @@ class Issue7769SnapshotSwapRecoveryTest {
     assertThat(backup).doesNotExist();
   }
 
+  /** #8305: a crash after the validating reopen failed but before ROLLING_BACK was published must restore the backup. */
+  @ParameterizedTest
+  @ValueSource(strings = { "VALIDATION_FAILED", "ROLLING_BACK_UNPUBLISHED", "ROLLING_BACK", "RESTORING:" })
+  void failedValidationRollbackResumesAfterEachBoundary(final String crashPoint, @TempDir final Path root) throws Exception {
+    final Path db = root.resolve("database");
+    final Path staged = db.resolve(".snapshot-new");
+    final Path backup = db.resolve(".snapshot-backup");
+    createDatabase(db, "old");
+    createDatabase(staged, "new");
+    Files.writeString(db.resolve(".snapshot-pending"), "");
+    Files.writeString(staged.resolve(".snapshot-complete"), "");
+    swap(db, staged, backup);
+    assertThat(db.resolve(".snapshot-swap-state")).hasContent("INSTALLED");
+
+    final AtomicBoolean interrupted = new AtomicBoolean();
+    SnapshotInstaller.swapProgressForTesting = point -> {
+      if ((crashPoint.endsWith(":") ? point.startsWith(crashPoint) : point.equals(crashPoint))
+          && interrupted.compareAndSet(false, true))
+        throw new SimulatedCrash();
+    };
+    try {
+      assertThatThrownBy(() -> SnapshotInstaller.rollbackAfterFailedValidation(db, backup)).isInstanceOf(SimulatedCrash.class);
+    } finally {
+      SnapshotInstaller.swapProgressForTesting = null;
+    }
+    assertThat(interrupted).isTrue();
+
+    SnapshotInstaller.recoverPendingSnapshotSwaps(root);
+    SnapshotInstaller.recoverPendingSnapshotSwaps(root);
+
+    assertDatabaseValue(db, "old");
+    assertThat(db.resolve(".snapshot-pending")).doesNotExist();
+    assertThat(db.resolve(".snapshot-swap-state")).doesNotExist();
+    assertThat(backup).doesNotExist();
+  }
+
+  @Test
+  void failedValidationWithoutABackupRollsForward(@TempDir final Path root) throws Exception {
+    final Path db = root.resolve("database");
+    createDatabase(db, "new");
+    Files.writeString(db.resolve(".snapshot-pending"), "");
+    Files.writeString(db.resolve(".snapshot-swap-state"), "VALIDATION_FAILED");
+
+    SnapshotInstaller.recoverPendingSnapshotSwaps(root);
+
+    assertDatabaseValue(db, "new");
+    assertThat(db.resolve(".snapshot-pending")).doesNotExist();
+  }
+
   @Test
   void unknownPhasePreservesAllFiles(@TempDir final Path root) throws Exception {
     final Path db = root.resolve("database");
@@ -428,7 +477,8 @@ class Issue7769SnapshotSwapRecoveryTest {
    * The two layouts the issue reproduces with {@code SwapRepro} and {@code SwapRepro2}, as a node killed mid-swap
    * by a binary that recorded no phase leaves them for this one. Before the fix the first lost {@code A.0.bucket}
    * from both copies and the second emptied the database directory, each with the marker cleared and success
-   * logged. Now no file is lost in either: the first is preserved for an operator, the second only cleaned up.
+   * logged. Now no file is lost in either, and since issue #8304 the first is rolled forward rather than preserved
+   * for an operator: a name in both the live directory and the backup proves phase 2 was under way.
    */
   @ParameterizedTest
   @ValueSource(booleans = { false, true })
@@ -450,24 +500,20 @@ class Issue7769SnapshotSwapRecoveryTest {
     SnapshotInstaller.recoverPendingSnapshotSwaps(root.resolve("databases"));
 
     assertThat(db.resolve("A.0.bucket")).hasContent("NEW-A");
-    if (phase2Finished) {
-      assertThat(db.resolve("B.0.bucket")).hasContent("NEW-B");
-      assertThat(db.resolve("schema.json")).hasContent("NEW-SCHEMA");
-      assertThat(db.resolve(".snapshot-pending")).doesNotExist();
-      assertThat(staged).doesNotExist();
-      assertThat(backup).doesNotExist();
-    } else {
-      assertThat(staged.resolve("B.0.bucket")).hasContent("NEW-B");
-      assertThat(staged.resolve("schema.json")).hasContent("NEW-SCHEMA");
-      assertThat(backup.resolve("A.0.bucket")).hasContent("OLD-A");
-      assertThat(backup.resolve("B.0.bucket")).hasContent("OLD-B");
-      assertThat(backup.resolve("schema.json")).hasContent("OLD-SCHEMA");
-      assertThat(db.resolve(".snapshot-pending")).exists();
-    }
+    assertThat(db.resolve("B.0.bucket")).hasContent("NEW-B");
+    assertThat(db.resolve("schema.json")).hasContent("NEW-SCHEMA");
+    assertThat(db.resolve(".snapshot-pending")).doesNotExist();
+    assertThat(staged).doesNotExist();
+    assertThat(backup).doesNotExist();
   }
 
+  /**
+   * A legacy layout that cannot be recovered into a database (no schema anywhere) keeps every copy and its
+   * pending marker: the roll-forward moved the staged file, but the backup is only deleted once the result is
+   * a database.
+   */
   @Test
-  void legacyAmbiguousSwapKeepsEveryCopyAndItsPendingMarker(@TempDir final Path root) throws Exception {
+  void legacySwapThatRecoversNoDatabaseKeepsTheBackupAndItsPendingMarker(@TempDir final Path root) throws Exception {
     final Path db = root.resolve("database");
     final Path staged = db.resolve(".snapshot-new");
     final Path backup = db.resolve(".snapshot-backup");
@@ -483,8 +529,8 @@ class Issue7769SnapshotSwapRecoveryTest {
     SnapshotInstaller.recoverPendingSnapshotSwaps(root);
 
     assertThat(db.resolve("A.0.bucket")).hasContent("new-A");
+    assertThat(db.resolve("B.0.bucket")).hasContent("new-B");
     assertThat(backup.resolve("A.0.bucket")).hasContent("old-A");
-    assertThat(staged.resolve("B.0.bucket")).hasContent("new-B");
     assertThat(db.resolve(".snapshot-pending")).exists();
   }
 

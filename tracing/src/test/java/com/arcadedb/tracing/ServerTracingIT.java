@@ -19,10 +19,14 @@
 package com.arcadedb.tracing;
 
 import com.arcadedb.server.BaseGraphServerTest;
-import io.opentelemetry.api.common.AttributeKey;
+import io.micrometer.core.instrument.Metrics;
+import io.micrometer.core.instrument.Timer;
 import io.micrometer.observation.ObservationRegistry;
+import io.opentelemetry.api.common.AttributeKey;
+import io.opentelemetry.sdk.common.CompletableResultCode;
 import io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter;
 import io.opentelemetry.sdk.trace.data.SpanData;
+import io.opentelemetry.sdk.trace.export.SpanExporter;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
@@ -30,6 +34,7 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
+import java.util.Collection;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -57,11 +62,13 @@ class ServerTracingIT extends BaseGraphServerTest {
 
     try {
       final String parentTraceId = "4bf92f3577b34da6a3ce929d0e0e4736";
-      final HttpURLConnection c = (HttpURLConnection) new URL(getServerHttpUrl("/api/v1/ready")).openConnection();
+      // Not /api/v1/ready: the probes are excluded from tracing by default (issue #7295).
+      final HttpURLConnection c = (HttpURLConnection) new URL(getServerHttpUrl("/api/v1/databases")).openConnection();
       c.setRequestMethod("GET");
+      c.setRequestProperty("Authorization", basicAuth());
       c.setRequestProperty("traceparent", "00-" + parentTraceId + "-00f067aa0ba902b7-01");
       c.connect();
-      assertThat(c.getResponseCode()).isEqualTo(204);
+      assertThat(c.getResponseCode()).isEqualTo(200);
       c.disconnect();
 
       // The span is exported in the handler's finally block, just after the client gets the
@@ -93,14 +100,14 @@ class ServerTracingIT extends BaseGraphServerTest {
     final ObservationRegistry registry = getServer(0).getObservationRegistry();
     final InMemorySpanExporter exporter = InMemorySpanExporter.create();
     final TracingPlugin plugin = new TracingPlugin();
-    plugin.attachForTest(registry, exporter);
+    // Issue #8801: the HTTP span is exported after the response is sent, so hold it back to make that window deterministic.
+    plugin.attachForTest(registry, new HttpSpanDelayingExporter(exporter, 300));
 
     try {
       final HttpURLConnection c = (HttpURLConnection) new URL(getServerHttpUrl("/api/v1/command/graph")).openConnection();
       c.setRequestMethod("POST");
       c.setDoOutput(true);
-      c.setRequestProperty("Authorization",
-          "Basic " + Base64.getEncoder().encodeToString(("root:" + DEFAULT_PASSWORD_FOR_TESTS).getBytes()));
+      c.setRequestProperty("Authorization", basicAuth());
       c.setRequestProperty("Content-Type", "application/json");
       c.getOutputStream().write("{\"language\":\"sql\",\"command\":\"SELECT 1 AS one\"}".getBytes(StandardCharsets.UTF_8));
       c.connect();
@@ -111,11 +118,19 @@ class ServerTracingIT extends BaseGraphServerTest {
       // originating protocol (http here), nested under the HTTP request span.
       SpanData querySpan = null;
       SpanData httpSpan = null;
-      for (int attempt = 0; attempt < 100 && querySpan == null; attempt++) {
+      // Poll until BOTH spans are exported: the query span ends during the command, the HTTP span only in the handler's
+      // finally block, after the client already has its response (#8801).
+      for (int attempt = 0; attempt < 250 && (querySpan == null || httpSpan == null); attempt++) {
         final List<SpanData> spans = exporter.getFinishedSpanItems();
         querySpan = spans.stream().filter(s -> "arcadedb.query".equals(s.getName())).findFirst().orElse(null);
-        httpSpan = spans.stream().filter(s -> "arcadedb.http.server.requests".equals(s.getName())).findFirst().orElse(null);
-        if (querySpan == null)
+        // Match the HTTP span of this request (same trace as the query span), not any HTTP span exported meanwhile.
+        final SpanData query = querySpan;
+        httpSpan = query == null ? null : spans.stream()
+            .filter(s -> "arcadedb.http.server.requests".equals(s.getName()))
+            .filter(s -> query.getTraceId().equals(s.getTraceId()))
+            .findFirst()
+            .orElse(null);
+        if (querySpan == null || httpSpan == null)
           Thread.sleep(20);
       }
 
@@ -128,6 +143,125 @@ class ServerTracingIT extends BaseGraphServerTest {
       assertThat(querySpan.getParentSpanId()).isEqualTo(httpSpan.getSpanId());
     } finally {
       plugin.stopService();
+    }
+  }
+
+  /**
+   * Issue #7295: a readiness or health probe produces no span through the production handler wiring, while a request
+   * sent after it does. The probe's span, were it created, would be exported before the handler records its RED timer, so
+   * the test waits for every probe's timer before asserting that no span carries a probe path (issue #8803).
+   */
+  @Test
+  void healthProbesProduceNoSpan() throws Exception {
+    final ObservationRegistry registry = getServer(0).getObservationRegistry();
+    final InMemorySpanExporter exporter = InMemorySpanExporter.create();
+    final TracingPlugin plugin = new TracingPlugin();
+    plugin.attachForTest(registry, exporter);
+
+    try {
+      final String[] methods = { "GET", "HEAD" };
+      final String[] probes = { "/ready", "/health" };
+      final long[][] probeRequestsBefore = new long[methods.length][probes.length];
+      for (int m = 0; m < methods.length; m++)
+        for (int p = 0; p < probes.length; p++)
+          probeRequestsBefore[m][p] = probeRequestCount(methods[m], probes[p]);
+
+      for (final String method : methods)
+        for (final String probe : probes) {
+          final HttpURLConnection c = (HttpURLConnection) new URL(getServerHttpUrl("/api/v1" + probe)).openConnection();
+          c.setRequestMethod(method);
+          c.connect();
+          assertThat(c.getResponseCode()).as(method + " " + probe).isBetween(200, 299);
+          c.disconnect();
+        }
+
+      final HttpURLConnection c = (HttpURLConnection) new URL(getServerHttpUrl("/api/v1/databases")).openConnection();
+      c.setRequestMethod("GET");
+      c.setRequestProperty("Authorization", basicAuth());
+      c.connect();
+      assertThat(c.getResponseCode()).isEqualTo(200);
+      c.disconnect();
+
+      final AttributeKey<String> pathKey = AttributeKey.stringKey("path");
+      SpanData databasesSpan = null;
+      for (int attempt = 0; attempt < 100 && databasesSpan == null; attempt++) {
+        databasesSpan = exporter.getFinishedSpanItems().stream()
+            .filter(s -> "/databases".equals(s.getAttributes().get(pathKey)))
+            .findFirst()
+            .orElse(null);
+        if (databasesSpan == null)
+          Thread.sleep(20);
+      }
+
+      assertThat(databasesSpan).as("the non-probe request must still be traced").isNotNull();
+
+      // Only the tracing handler declines the probe; the always-on HTTP RED timer is recorded outside the Observation and
+      // must still count it. Polled: the timer is recorded in the handler's finally block, after the response. It is also
+      // recorded AFTER observation.stop(), so once every probe request is counted, a span a probe produced is already
+      // exported. Wait on all four probes, not only GET /ready, so the noneMatch below does not depend on request ordering (#8803).
+      for (int m = 0; m < methods.length; m++)
+        for (int p = 0; p < probes.length; p++) {
+          long after = probeRequestCount(methods[m], probes[p]);
+          for (int attempt = 0; attempt < 250 && after <= probeRequestsBefore[m][p]; attempt++) {
+            Thread.sleep(20);
+            after = probeRequestCount(methods[m], probes[p]);
+          }
+          assertThat(after).as("the RED timer must still record the untraced probe " + methods[m] + " " + probes[p])
+              .isGreaterThan(probeRequestsBefore[m][p]);
+        }
+      assertThat(exporter.getFinishedSpanItems())
+          .as("no span may carry a probe path")
+          .noneMatch(s -> "/ready".equals(s.getAttributes().get(pathKey)) || "/health".equals(s.getAttributes().get(pathKey)));
+    } finally {
+      plugin.stopService();
+    }
+  }
+
+  /**
+   * Reads the RED timers of a method and path from the global registry, summed over the status and db tags. That needs a
+   * child registry, which the server fixture's metrics setup adds; without one {@code find(...).timers()} is empty and the
+   * count stays 0, so the assertion above fails loudly.
+   */
+  private static long probeRequestCount(final String method, final String path) {
+    long count = 0L;
+    for (final Timer timer : Metrics.globalRegistry.find("arcadedb.http.requests").tag("path", path).tag("method", method).timers())
+      count += timer.count();
+    return count;
+  }
+
+  private static String basicAuth() {
+    return "Basic " + Base64.getEncoder().encodeToString(("root:" + DEFAULT_PASSWORD_FOR_TESTS).getBytes());
+  }
+
+  /** Delays the export of the HTTP request span, reproducing a slow runner where the handler's finally block lags the response. */
+  private static final class HttpSpanDelayingExporter implements SpanExporter {
+    private final SpanExporter delegate;
+    private final long        delayMs;
+
+    private HttpSpanDelayingExporter(final SpanExporter delegate, final long delayMs) {
+      this.delegate = delegate;
+      this.delayMs = delayMs;
+    }
+
+    @Override
+    public CompletableResultCode export(final Collection<SpanData> spans) {
+      if (spans.stream().anyMatch(s -> "arcadedb.http.server.requests".equals(s.getName())))
+        try {
+          Thread.sleep(delayMs);
+        } catch (final InterruptedException e) {
+          Thread.currentThread().interrupt();
+        }
+      return delegate.export(spans);
+    }
+
+    @Override
+    public CompletableResultCode flush() {
+      return delegate.flush();
+    }
+
+    @Override
+    public CompletableResultCode shutdown() {
+      return delegate.shutdown();
     }
   }
 }

@@ -19,7 +19,10 @@ ArcadeDB Python bindings wrap a Java database engine. When you:
 
 - Set properties on records → Python values converted to Java
 - Read properties from records → Java values converted to Python
-- Pass query parameters → Python values converted to Java
+- Pass query parameters → Python values converted to Java (positional parameters
+  convert `Decimal`, `date`, and `datetime` as below from 26.10.1; before, a `Decimal`
+  reached the engine as a `Double` and kept only about 16 significant digits, and a `date` or
+  `datetime` was refused with "No matching overloads")
 - Receive query results → Java values converted to Python
 
 The type_conversion module handles this automatically.
@@ -51,14 +54,24 @@ that JPype performs the conversion automatically (a Python `int` reaches Java as
 | `dict` | `HashMap` |
 | `list` | `ArrayList` |
 | `tuple` | `ArrayList` |
-| `datetime` | `java.util.Date` |
+| `datetime` | `java.time.LocalDateTime` (a UTC wall clock) |
 | `date` | `LocalDate` |
 | `bytes`, `bytearray` | `byte[]` |
 
 **Notes:**
 
-- `datetime` is converted to a `java.util.Date` built from its epoch milliseconds, so
-  sub-millisecond precision is dropped.
+- `datetime` is converted to a `LocalDateTime` with its microseconds. The engine
+  stores `DATETIME` as a UTC wall clock, whatever the host's or the database's time
+  zone, and reads it back as a naive `datetime`. A naive value is taken as that wall
+  clock as it stands, so it reads back unchanged on every host. A timezone-aware value
+  is converted to UTC first and keeps its instant: `21:34+09:00` is stored and read
+  back as `12:34`.
+- For the current time, store `datetime.now(timezone.utc)`. A naive `datetime.now()`
+  is the host's local wall clock, which the engine then reads as UTC: on a UTC+9 host
+  it lands nine hours after the real instant.
+- Before 26.10.1 a `datetime` crossed as a `java.util.Date`, which read a naive value
+  as local time and kept milliseconds, so `DATETIME_MICROS` and `DATETIME_NANOS` lost
+  the rest and a lookup by the same value found nothing.
 - `date` is converted to a `LocalDate`. If the Java types are unavailable it is
   combined with `time.min` and converted as a `datetime`.
 - Collection elements, set members, and map keys/values are converted recursively.
@@ -68,7 +81,7 @@ that JPype performs the conversion automatically (a Python `int` reaches Java as
 
 ```python
 from arcadedb_embedded.type_conversion import convert_python_to_java
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 
 # Primitive types
@@ -77,7 +90,7 @@ java_str = convert_python_to_java("hello")
 java_bool = convert_python_to_java(True)
 
 # Date/time
-java_datetime = convert_python_to_java(datetime.now())
+java_datetime = convert_python_to_java(datetime.now(timezone.utc))
 
 # Decimal
 java_decimal = convert_python_to_java(Decimal("123.456"))
@@ -223,14 +236,14 @@ emoji = row.get("emoji")                       # Full Unicode support
 ### Dates and Times
 
 ```python
-from datetime import datetime, date
+from datetime import date, datetime, timezone
 
 # datetime/date with SQL parameter binding
 with db.transaction():
     db.command(
         "sql",
         "INSERT INTO Event SET timestamp = ?, birthDate = ?",
-        datetime.now(),
+        datetime.now(timezone.utc),
         date(1990, 1, 15),
     )
 
@@ -362,7 +375,7 @@ with db.transaction():
 
 ```python
 import arcadedb_embedded as arcadedb
-from datetime import datetime, date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 # Create database
@@ -383,7 +396,7 @@ with db.transaction():
     product.set("tax", Decimal("50.00"))               # Decimal
 
     # Date/time
-    product.set("createdAt", datetime.now())           # datetime
+    product.set("createdAt", datetime.now(timezone.utc))  # datetime
     product.set("releaseDate", date(2024, 1, 15))      # date
 
     # Collections
@@ -459,7 +472,7 @@ print(python_dict)  # {"name": "Alice", "age": 30}
 # ✅ Good: Use Python types
 vertex.set("tags", ["python", "java"])
 vertex.set("count", 42)
-vertex.set("timestamp", datetime.now())
+vertex.set("timestamp", datetime.now(timezone.utc))
 
 # ❌ Bad: Manually convert (unnecessary)
 from arcadedb_embedded.type_conversion import convert_python_to_java
@@ -578,11 +591,14 @@ total = price + tax  # Exactly 20.00
 ```python
 from datetime import datetime, timezone
 
-# ⚠️ Naive datetime (no timezone)
-now = datetime.now()  # Local time, no timezone
+# ⚠️ Naive local time: stored as if it were UTC, so off by the host's offset
+now = datetime.now()
 
-# ✅ Aware datetime (with timezone)
-now_utc = datetime.now(timezone.utc)  # UTC time
+# ✅ Aware UTC time: stored as the real instant
+now_utc = datetime.now(timezone.utc)
+
+# ✅ A naive value you mean as a UTC wall clock reads back unchanged on any host
+meeting = datetime(2026, 10, 1, 12, 34)
 ```
 
 ## See Also

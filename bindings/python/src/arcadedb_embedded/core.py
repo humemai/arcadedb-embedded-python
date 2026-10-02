@@ -5,6 +5,8 @@ Database and DatabaseFactory classes for embedded database access.
 """
 
 from collections.abc import Mapping
+from datetime import date
+from decimal import Decimal
 from os import PathLike
 from typing import Any, List, Optional
 
@@ -92,6 +94,11 @@ class Database:
                 # parameter (e.g. a query vector). Plain Python collections
                 # don't participate in JPype's varargs overload resolution, so
                 # convert them to java.util collections explicitly.
+                converted_args.append(convert_python_to_java(arg))
+            elif isinstance(arg, (Decimal, date)):
+                # Left to JPype, a Decimal reached the engine as a Double (38
+                # digits stored as 1.2345678901234567E+19), and a datetime or a
+                # date matched no overload at all (#58). datetime is a date.
                 converted_args.append(convert_python_to_java(arg))
             else:
                 converted_args.append(arg)
@@ -913,9 +920,10 @@ class Database:
             edge_list_initial_size: Initial edge-segment size in bytes.
             light_edges: Create property-less edges as light edges when True.
             bidirectional: Connect incoming edges as well as outgoing edges (the
-                default). Pass False only for an edge type declared UNIDIRECTIONAL: the
-                batch does not check, and one-way edges in a two-way type make any query
-                the planner walks from the target end return 0 rows
+                default). Pass False only for an edge type declared UNIDIRECTIONAL. From
+                26.10.1 a one-way edge in a two-way type is refused: ``new_edge`` raises
+                ArcadeDBError naming the type. Before 26.10.1 it was accepted, and any
+                query the planner walked from the target end returned 0 rows
                 (ArcadeData/arcadedb#8625).
             commit_every: Commit cadence within a flush. `0` means one commit per flush.
             use_wal: Write-ahead log during the import. Off by default, so a crash mid-import can lose its

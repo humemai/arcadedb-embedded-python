@@ -38,9 +38,11 @@ Create a configured batch helper tied to the current database.
 - `light_edges`: create property-less light edges when appropriate
 - `bidirectional`: store each edge on both vertices (the default) or on its source only.
   Pass `False` only for an edge type declared one-way (`CREATE EDGE TYPE ...
-  UNIDIRECTIONAL`). The batch does not check: one-way edges loaded into a two-way type
-  (the default `CREATE EDGE TYPE`) make any query the planner walks from the target end
-  return 0 rows with no error (ArcadeData/arcadedb#8625)
+  UNIDIRECTIONAL`). From 26.10.1 a one-way edge in a two-way type (the default
+  `CREATE EDGE TYPE`) is refused: `new_edge` raises `ArcadeDBError` naming the type and
+  writes nothing. Before 26.10.1 it was accepted, and every query the planner walked from
+  the target end returned 0 rows with no error (ArcadeData/arcadedb#8625). What a one-way
+  edge is visible to is in [Graphs](../guide/graphs.md)
 - `commit_every`: commit cadence during batch work
 - `use_wal`: write-ahead log during the import. **Off by default**: a crash in
   the middle of the import can lose its tail, with nothing to replay. Pass

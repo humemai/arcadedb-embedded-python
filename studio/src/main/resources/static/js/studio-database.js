@@ -464,7 +464,6 @@ function updateDatabases(callback, preferSelected) {
       let username = data.user || globalUsername || 'unknown';
       $("#queryUser").html(username);
       $("#databaseUser").html(username);
-      $("#tsUser").html(username);
       console.log("Set user to:", username);
 
       // CRITICAL: Always hide login and show studio, even if other operations fail
@@ -2143,6 +2142,15 @@ function refreshActiveSidebarPanel() {
   }
 }
 
+// SETS THE QUERY LANGUAGE AND SWITCHES THE EDITOR'S SYNTAX MODE WITH IT: SETTING THE DROPDOWN ALONE LEFT A CYPHER QUERY
+// HIGHLIGHTED AS SQL (AND VICE VERSA), BECAUSE A PROGRAMMATIC .val() DOES NOT FIRE THE DROPDOWN'S change HANDLER
+function setEditorLanguage(language) {
+  $("#inputLanguage").val(language);
+  editor.setOption("mode", getEditorMode());
+  vecLanguageChanged();
+  chartLanguageChanged();
+}
+
 // --- Saved Queries ---
 
 function getSavedQueries() {
@@ -2174,9 +2182,13 @@ function populateSavedQueriesPanel() {
     let name = escapeHtml(q.name);
     let cmd = escapeHtml(q.c || "");
     let lang = escapeHtml(q.l || "sql");
-    html += "<div class='saved-query-entry' onclick='executeSavedQuery(" + i + ")'>";
+    // A CLICK ONLY LOADS THE QUERY, SO IT CAN BE EDITED BEFORE RUNNING IT; RUNNING IS THE EXPLICIT PLAY BUTTON (ISSUE #7049)
+    html += "<div class='saved-query-entry' title='Click to load into the editor' onclick='loadSavedQuery(" + i + ")'>";
     html += "<div class='saved-query-name'><span>" + name + "<span class='saved-query-lang'>" + lang + "</span></span>";
-    html += "<span class='saved-query-delete' onclick='event.stopPropagation(); deleteSavedQuery(" + i + ")' title='Delete'><i class='fa fa-times'></i></span></div>";
+    html += "<span class='saved-query-actions'>";
+    html += "<span class='saved-query-run' onclick='event.stopPropagation(); executeSavedQuery(" + i + ")' title='Run'><i class='fa fa-play'></i></span>";
+    html += "<span class='saved-query-delete' onclick='event.stopPropagation(); deleteSavedQuery(" + i + ")' title='Delete'><i class='fa fa-times'></i></span>";
+    html += "</span></div>";
     html += "<div class='saved-query-preview'>" + cmd + "</div>";
     html += "</div>";
   }
@@ -2210,6 +2222,16 @@ function saveCurrentQuery() {
     populateSavedQueriesPanel();
     globalNotify("Saved", "Query saved as '" + escapeHtml(name.trim()) + "'", "success");
   });
+}
+
+function loadSavedQuery(index) {
+  let queries = getSavedQueries();
+  let q = queries[index];
+  if (!q) return;
+  if (q.l) setEditorLanguage(q.l);
+  editor.setValue(q.c || "");
+  globalActivateTab("tab-query");
+  editor.focus();
 }
 
 function executeSavedQuery(index) {
@@ -2337,7 +2359,7 @@ function loadHistoryEntry(index) {
   let queryHistory = getQueryHistory();
   let q = queryHistory[index];
   if (!q) return;
-  if (q.l) $("#inputLanguage").val(q.l);
+  if (q.l) setEditorLanguage(q.l);
   editor.setValue(q.c || "");
   globalActivateTab("tab-query");
   editor.focus();
@@ -2934,10 +2956,7 @@ function pasteReferenceExample(code, lang) {
   let tmp = document.createElement("textarea");
   tmp.innerHTML = code;
   let decoded = tmp.value;
-  if (lang) {
-    $("#inputLanguage").val(lang);
-    editor.setOption("mode", getEditorMode());
-  }
+  if (lang) setEditorLanguage(lang);
   editor.setValue(decoded);
   editor.focus();
 }
@@ -3074,7 +3093,7 @@ function browseType(typeName) {
   let limit = parseInt($("#inputLimit").val()) || 100;
   let query = "select from " + quoteSqlName(typeName);
 
-  $("#inputLanguage").val("sql");
+  setEditorLanguage("sql");
   editor.setValue(query);
   globalActivateTab("tab-query");
 
@@ -3134,7 +3153,7 @@ function countRecords(typeName) {
 function executeCommand(language, query) {
   globalResultset = null;
 
-  if (language != null) $("#inputLanguage").val(language);
+  if (language != null) setEditorLanguage(language);
   else language = $("#inputLanguage").val();
 
   if (query != null) editor.setValue(query);
@@ -3152,7 +3171,9 @@ function executeCommand(language, query) {
   globalActivateTab("tab-query");
 
   let activeTab = $("#tabs-command .active").attr("id");
-  if (activeTab == "tab-graph-sel") executeCommandGraph();
+  if (vecModeForLanguage(language) != null) executeSearchCommand();
+  else if (chartIsPromQL(language)) executePromQLCommand();
+  else if (activeTab == "tab-graph-sel") executeCommandGraph();
   else executeCommandTable();
 
   let queryHistory = getQueryHistory();
@@ -3271,6 +3292,7 @@ function executeCommandTable() {
       globalResultset = data.result;
       globalCy = null;
       renderTable();
+      queryChartResultChanged();
     })
     .fail(function (jqXHR, textStatus, errorThrown) {
       globalNotifyError(jqXHR.responseText);
@@ -3328,7 +3350,8 @@ function executeCommandGraph() {
 
       let activeTab = $("#tabs-command .active").attr("id");
 
-      if (data.result.vertices.length == 0 && data.result.records.length > 0) {
+      if (activeTab == "tab-chart-sel") queryChartResultChanged();
+      else if (data.result.vertices.length == 0 && data.result.records.length > 0) {
         if (activeTab == "tab-table-sel") renderTable();
         else globalActivateTab("tab-table");
       } else {
@@ -4412,6 +4435,8 @@ $(document).ready(function () {
     if (activeTab == "tab-db-backup-sel") {
       if (!dbBackupsLoaded)
         loadDatabaseBackups();
+    } else if (activeTab == "tab-db-timeseries-sel") {
+      initTimeSeries();
     } else if (activeTab == "tab-db-metrics-sel") {
       loadDatabaseMetrics();
     } else if (activeTab == "tab-db-buckets-sel") {

@@ -695,6 +695,40 @@ class VectorIndex:
         except Exception:
             return "NONE"
 
+    def warm_up(self):
+        """
+        Load the vector graph now instead of on the first search.
+
+        After a database is opened, the index loads its persisted graph lazily,
+        on the first search, and that search pays the load (ArcadeData/arcadedb#8852:
+        about 1 s at 1M 64-dimension vectors on 26.10.1, growing with the index, and
+        more on an index with deletions since its graph was saved, which still
+        re-reads every vector's document). Calling this right after
+        opening the database pays it before the first query arrives, which is
+        what a service that restarts wants. It loads the existing graph and does
+        not rebuild it; a no-op when the graph is already in memory, and safe to
+        call while other threads search. For TypeIndex wrappers, warms every
+        underlying LSMVectorIndex.
+
+        The alternative on engines before 26.10.1 is one throwaway search.
+
+        Raises:
+            ArcadeDBError: the index cannot be warmed, including on an engine
+                older than 26.10.1, which has no ``warmUp()``.
+        """
+        try:
+            warmed_any = False
+            for index in self._iter_lsm_indexes():
+                index.warmUp()
+                warmed_any = True
+            if warmed_any:
+                return
+            raise ArcadeDBError("Underlying index is not an LSM vector index")
+        except ArcadeDBError:
+            raise
+        except Exception as e:
+            raise ArcadeDBError(f"Failed to warm up vector index: {e}") from e
+
     def build_graph_now(self):
         """
         Trigger an immediate rebuild of the underlying vector graph.
