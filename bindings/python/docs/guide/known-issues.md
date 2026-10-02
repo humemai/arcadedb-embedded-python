@@ -32,8 +32,8 @@ with db.transaction():
 
 ## An unindexed SQL `=` or `IN` on a `DECIMAL` misses a value written with another scale
 
-ArcadeDB [#8885](https://github.com/ArcadeData/arcadedb/issues/8885); measured on a
-26.10.1 snapshot.
+ArcadeDB [#8885](https://github.com/ArcadeData/arcadedb/issues/8885); measured on 26.9.1
+and a 26.10.1 snapshot. **Fixed in 26.10.1** (PR #8893, verified on its merge).
 
 With `Decimal("19.90")` stored in a `DECIMAL` property `b`, `SELECT FROM T WHERE b = :v`
 with `{"v": Decimal("19.9")}` returned 0 rows when `b` had no index, and 1 row when it had
@@ -56,8 +56,8 @@ digits a double cannot hold (see the previous entry).
 
 ## Comparing an indexed `BOOLEAN` with `1` or `'true'` raises
 
-ArcadeDB [#8887](https://github.com/ArcadeData/arcadedb/issues/8887); measured on a
-26.10.1 snapshot.
+ArcadeDB [#8887](https://github.com/ArcadeData/arcadedb/issues/8887); measured on 26.9.1
+and a 26.10.1 snapshot. **Fixed in 26.10.1** (PR #8893, verified on its merge).
 
 With a `NOTUNIQUE` or `NOTUNIQUE_HASH` index on a `BOOLEAN` property `a`,
 `SELECT FROM T WHERE a = ?` with `1` raises `ArcadeDBError` (`ClassCastException: class
