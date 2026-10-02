@@ -3101,7 +3101,7 @@ def _lc_short_reason(text):
 # all) but the same edit changed its SCOPE from 100 seeds to an unbounded
 # whole-graph 2-hop, so its numbers describe the query written rather than the
 # view. Withheld rather than published with a caveat nobody reads.
-LIFECYCLE_WITHHELD = {"graph_gav": "its query grew from a bounded set of seeds to an unbounded 2-hop, so the cell is re-measured in October"}   # PAGE-SPEC rule 7
+LIFECYCLE_WITHHELD = {"graph_gav": "its query grew from a bounded set of seeds to an unbounded 2-hop, so the cell is re-measured in October."}   # PAGE-SPEC rule 7
 
 # SURREALDB'S OCTOBER LIFECYCLE ROWS CARRY OUR INPUT LIST (BUGS F161, DECISIONS #134). Its build fed the
 # engine from one in-memory Python list while the ArcadeDB arm streamed, fixed in the lane on 2026-09-30.
@@ -4594,7 +4594,7 @@ OCT_PROSE = {
         # session, not numbers, so no pins. Printed only when that engine's rows are on the table.
         "ladybug_rows": ("LadybugDB's documents, graph, and time-series rows each carry one index that ArcadeDB's do not: a LadybugDB node table must have a primary key, and the engine keeps a hash index on it. Its time-series row is a plain table of timestamped rows keyed on the timestamp.", []),
         "chroma_rows": ("A Chroma open is the client plus a handle on each collection the database holds, which is what ArcadeDB's open does with its schema, and Chroma loads a collection's HNSW index on its first query. Every Chroma record carries an embedding, so the scratch collection that the empty row writes into holds one-dimensional vectors.", []),
-        "lance_rows": ("A LanceDB open is the connection plus a handle on each table the database holds. LanceDB has no close: neither the connection nor a table exposes one, and each write commits a new table version as it is made, so its close column times the session dropping its handles. Its dense-vector index is IVF_HNSW_FLAT, unquantized like every dense-vector index on this table.", []),
+        "lance_rows": ("A LanceDB open is the connection plus a handle on each table the database holds. LanceDB has no close for a session like this one: the connection has none, a table's only close drains writers that its appends never open, and each write commits a new table version as it is made, so its close column times the session dropping its handles. Its dense-vector index is IVF_HNSW_FLAT, unquantized like every dense-vector index on this table.", []),
         "sqlitevec_rows": ("sqlite-vec's dense-vector row is an exact scan: vec0 builds no approximate index, so its query reads every vector and there is no index to drop. It runs inside SQLite under WAL with synchronous=NORMAL, as every SQLite arm on this page does.", []),
     },
     "durability": {

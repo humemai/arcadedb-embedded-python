@@ -39,9 +39,12 @@ lands in the action, as ArcadeDB's lazy vector graph load does.
 WHAT A CLOSE IS. LadybugDB closes its connection and database; Chroma's
 client.close() releases the client's system and stops it when it was the
 last (chromadb 1.5.9, Client.close); sqlite-vec closes the SQLite connection.
-LanceDB 0.39.0 exposes no close on the connection or on a table (each write
-commits a new table version as it is made), so its session drops its handles,
-which is all a caller can do, and the row says so (`close_note`).
+LanceDB 0.39.0 has no close on the connection, and a table's one close,
+`close_lsm_writers()`, drains MemWAL writers that only `merge_insert` under an
+LSM write spec opens; this arm appends with `add()`, so it would be a no-op
+(read in the pinned image, 2026-10-02). Each write commits a new table version
+as it is made, so the session drops its handles, which is all a caller can do,
+and the row says so (`close_note`).
 
 RESOURCES (FAIRNESS F3/F6). LadybugDB sizes its thread pool and buffer pool
 from the host when left at 0, so both are fitted as on its other arms
@@ -502,8 +505,9 @@ class Lance(Arm):
     path = "/lcdb/lc_lance"
     DURABILITY = bench_common.DURABILITY_LANCEDB
     TABLES = {"doc": "D", "doc_idx10": "D", "ts": "T", "vector": "V"}   # beside Scratch in every situation
-    close_note = ("lancedb 0.39.0 exposes no close on the connection or on a table; each write commits a new "
-                  "table version as it is made, so the session drops its handles, which is all a caller can do")
+    close_note = ("lancedb 0.39.0 has no close on the connection, and a table's close_lsm_writers() only drains "
+                  "writers that merge_insert opens under an LSM write spec, which this arm's add() never does; each "
+                  "write commits a new table version as it is made, so the session drops its handles")
 
     def version(self):
         import importlib.metadata
