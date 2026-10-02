@@ -2051,6 +2051,10 @@ def _equivalence_notes(rows):
         return {}
     groups, _skipped, _seen, _silent = EQ.collect(rows)
     per_table = collections.defaultdict(list)
+    # ONE CLAUSE PER (query, reason), every engine that shares it named once:
+    # "situation 'empty' issues no read" is true of every lifecycle engine, and
+    # a clause per engine made this one sentence a loop's output.
+    unexpr = collections.defaultdict(dict)
     for (lane, _scale, workload, query), by_backend in groups.items():
         tid = (EQUIVALENCE_TABLE_OF.get((lane, workload))
                or EQUIVALENCE_TABLE_OF.get((lane, None)))
@@ -2062,9 +2066,16 @@ def _equivalence_notes(rows):
         for be, digests in by_backend.items():
             for d in digests:
                 if bench_common.is_unexpressible(d):
-                    per_table[tid].append(
-                        f"{display_name(str(be))} cannot express {query}: "
-                        f"{str(d)[len(bench_common.UNEXPRESSIBLE_PREFIX):]}")
+                    # THE REASON, NOT THE ATTEMPT. A declaration reads "<reason>;
+                    # tried `<statement>` and the engine answered: <error>", and
+                    # the error is the engine's own text: SurrealDB's parse errors
+                    # carry positions like [1:8], digits with no source that
+                    # page_check refuses, and with every lifecycle engine declared
+                    # the sentence ran to 11,000 characters (rehearsing the
+                    # 26.10.1 publish, 2026-10-02). The statement and the answer
+                    # stay on the row, as the per-engine sentence says.
+                    _why = str(d)[len(bench_common.UNEXPRESSIBLE_PREFIX):].split("; tried ", 1)[0]
+                    unexpr[tid].setdefault((query, _why), set()).add(display_name(str(be)))
                 elif bench_common.is_censored_answer(d):
                     # NOT "cannot express" (DECISIONS #120): the engine asked,
                     # and its budget stopped it before every start was answered.
@@ -2074,6 +2085,11 @@ def _equivalence_notes(rows):
                         f"{display_name(str(be))}'s {_labels.get(query, query)} answer is not "
                         f"compared, because it "
                         f"{str(d)[len(bench_common.CENSORED_ANSWER_PREFIX):]}")
+    for tid, by_reason in unexpr.items():
+        for (query, why), names in by_reason.items():
+            _n = sorted(names)
+            per_table[tid].append(f"{_join_and(_n)} cannot "
+                                  f"express {query}: {why}")
     out = {}
     for tid, items in per_table.items():
         uniq = sorted(set(items))

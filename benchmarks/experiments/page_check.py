@@ -1122,7 +1122,7 @@ NOT_PRINTED = [
      "are the per-side splits those two are computed from"),
     (r"^(hnsw_M|m|k|ef_construction|ef_search|ivf_\w+|degree_param|"
      r"graph_build_cache_\w+|qps|neo4j_vector_search_expansion|ladybug_ml|ladybug_mu|"
-     r"lance_nprobes)$",
+     r"lance_nprobes|es_num_candidates|es_rescore_oversample)$",
      "index parameters and their calibration: matched by effect and printed "
      "as conditions under the table, never as columns"),
     (r"^(settle_s|settle_s_lane|settle_s_adapter|engine_settle_s|gt_load_s|"
@@ -1157,6 +1157,43 @@ NOT_PRINTED = [
      "the LadybugDB graph arm's thread pool (read back from the engine) and "
      "buffer pool, fitted to the cpuset and to the cgroup memory limit (FAIRNESS "
      "F6, BUGS F160; audited in FAIRNESS.md rather than printed as a column)"),
+    # THE 26.10.1 ARMS' READ-BACKS (found rehearsing that publish, 2026-10-02):
+    # each is a setting or a check a new arm records about itself, and none is
+    # a measurement of the work a table compares.
+    (r"^pg_\w+$",
+     "a PostgreSQL arm's server settings read back with SHOW: the pool fit "
+     "(parallel workers, worker processes, work_mem, hash_mem_multiplier) sized "
+     "from the cell's cpuset and cap (FAIRNESS F3/F6), audited in FAIRNESS.md "
+     "rather than printed as a column"),
+    (r"^es_(allocated_processors|available_processors|heap_max_mib)$",
+     "Elasticsearch's processors and heap, read back from _nodes: its pool and "
+     "heap fitted to the cell (FAIRNESS F6), audited rather than printed"),
+    (r"^duckdb_threads$",
+     "the DuckDB cross-model arm's thread pool, sized from the cpuset (FAIRNESS "
+     "F6, audited in FAIRNESS.md rather than printed as a column)"),
+    (r"^lc_affinity_cpus$",
+     "the CPUs the lifecycle process could run on (sched_getaffinity), recorded "
+     "beside its thread count after open so the pool can be audited against "
+     "them (FAIRNESS F6); it describes the cell, not the session it times"),
+    (r"^vector_index_size$",
+     "a build check: the entries the vector index holds after the build, and "
+     "the cell is refused unless that equals the products loaded; it qualifies "
+     "the build rather than measures it"),
+    (r"^qdrant_(points_at_first_green|settle_after_green_s)$",
+     "the Qdrant sparse settle (BUGS F166): how many points the collection held "
+     "at its first green status and how long the build then waited for the "
+     "rest, both inside the build timer, so they explain the build column "
+     "rather than add one"),
+    (r"^(async_writers|lineitem_buckets|served_load_batch|load_call_rows)$",
+     "the ArcadeDB documents loader's configuration: async writers, LineItem "
+     "buckets (CAMPAIGN section 7 item 10), rows per load call, and the served "
+     "batch size, recorded so the load can be reproduced; it sets the build up "
+     "rather than measures it"),
+    (r"^setup_s$",
+     "the part of a dense build that is neither the ingest nor the index timer "
+     "(schema, collection, connection), derived from three numbers the row "
+     "carries; the table states its range in a sentence computed from the "
+     "printed columns (BUGS F101) rather than a column of its own"),
     (r"^duckpgq_threads$",
      "the DuckPGQ graph arm's DuckDB thread pool, sized from the cpuset via "
      "PRAGMA threads=sched_getaffinity (FAIRNESS F6, audited in FAIRNESS.md "
@@ -1549,6 +1586,7 @@ CONDITION_ALLOWED = [
     (r"\bv\d+\b", "an API path version"),
     (r"\bsha256\b", "the digest algorithm"),
     (r"\bNeo4j\b", "an engine name"),
+    (r"\bvec0\b", "sqlite-vec's virtual-table module name"),
     (r"\b[A-Za-z_]+=\d+\b", "a configuration assignment (txWalFlush=0)"),
     (r"\bcpuset \d+(?:-\d+)?\b", "the cpuset, checked by the setup section"),
     (r"\bTPC-[CH]\b", "a benchmark name"),
