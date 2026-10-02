@@ -133,3 +133,51 @@ def test_default_host_is_localhost(temp_server_root):
         root_password=TEST_PASSWORD,
     )
     assert server.get_studio_url().startswith("http://localhost:")
+
+
+@pytest.mark.server
+@pytest.mark.skipif(not has_server_support(), reason="Requires server support")
+def test_failed_server_start_does_not_hang_process_exit(tmp_path):
+    """A server.start() that fails part-way must not leave the process unable to exit.
+
+    Regression: with a later plugin's port taken, the engine has already started
+    non-daemon threads (the HTTP idempotency cleaner, the security and session
+    timers) when start() throws, and only the Java stop() ends them. The wrapper's
+    stop() returned early because the start never completed, so the process hung
+    at exit (a CI job ran 28 minutes past its tests on 2026-10-02).
+    """
+    import subprocess  # nosec B404 - fixed argv, no shell
+    import sys
+
+    code = (
+        "import socket\n"
+        "from arcadedb_embedded import create_server\n"
+        "def free():\n"
+        "    with socket.socket() as s:\n"
+        "        s.bind(('127.0.0.1', 0))\n"
+        "        return s.getsockname()[1]\n"
+        "busy = socket.socket()\n"
+        "busy.bind(('0.0.0.0', 0))\n"
+        "busy.listen()\n"
+        "server = create_server(\n"
+        f"    root_path={str(tmp_path / 'databases')!r},\n"
+        f"    root_password={TEST_PASSWORD!r},\n"
+        "    config={\n"
+        "        'http_port': free(),\n"
+        "        'server_plugins': 'Redis:com.arcadedb.redis.RedisProtocolPlugin,'\n"
+        "                          'Postgres:com.arcadedb.postgres.PostgresProtocolPlugin',\n"
+        "        'redis_port': free(),\n"
+        "        'postgres_port': busy.getsockname()[1],\n"
+        "    },\n"
+        ")\n"
+        "try:\n"
+        "    server.start()\n"
+        "    print('started')\n"
+        "except Exception:\n"
+        "    print('start failed')\n"
+    )
+    proc = subprocess.run(  # nosec B603 - interpreter + inline snippet, no shell
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=120
+    )
+    assert "start failed" in proc.stdout, proc.stdout + proc.stderr
+    assert proc.returncode == 0
