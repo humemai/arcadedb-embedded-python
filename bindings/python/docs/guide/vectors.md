@@ -78,6 +78,10 @@ Preferred split:
 - `get_stats()` returns live counters (cache hits and misses, where vectors were read
   from, graph state) for sizing caches and diagnosing build cost. See
   [Vector Caches](../api/vector.md#vector-caches).
+- After a database is opened, an index loads its graph on the first search, and that
+  search pays for it. A service that restarts can call `warm_up()` on the loaded index
+  right after opening (26.10.1 and later), or run one throwaway search on older engines.
+  See [`VectorIndex.warm_up()`](../api/vector.md#vectorindexwarm_up).
 
 ## Distance Functions (scoring behavior)
 

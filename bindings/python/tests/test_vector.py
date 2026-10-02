@@ -1811,3 +1811,42 @@ class TestLSMVectorIndex:
             pytest.fail(
                 f"Failed to create index with graph storage and quantization: {e}"
             )
+
+
+def test_warm_up_loads_the_persisted_graph_before_the_first_search(tmp_path):
+    """After a reopen the index loads its persisted graph on the first search,
+    which pays for it (ArcadeData/arcadedb#8852). `warm_up()` loads it now, so
+    the first query does not: asserted on the engine's own counters rather than
+    on a time, which is noisy at test size. On engines before 26.10.1 there is
+    no warmUp() and the call raises."""
+    import random
+
+    db_path = str(tmp_path / "warm_up")
+    rnd = random.Random(3)  # nosec B311 - deterministic test corpus, not security
+    vecs = [[rnd.random() for _ in range(16)] for _ in range(2000)]
+    with arcadedb.create_database(db_path) as db:
+        db.command("sql", "CREATE VERTEX TYPE Doc")
+        db.command("sql", "CREATE PROPERTY Doc.embedding ARRAY_OF_FLOATS")
+        with db.transaction():
+            for i, v in enumerate(vecs):
+                # Two parameters: a lone list argument is read as the
+                # parameter list itself, binding its first float.
+                db.command("sql", "INSERT INTO Doc SET k = ?, embedding = ?", i, v)
+        db.create_vector_index("Doc", "embedding", dimensions=16, quantization="NONE")
+
+    with arcadedb.open_database(db_path) as db:
+        index = db.schema.get_vector_index("Doc", "embedding")
+        before = index.get_stats()
+        # Opened, not yet loaded: graphState LOADING (0) and nothing resident.
+        assert before["graphState"] == 0, before["graphState"]
+        assert before["graphNodeCount"] == 0, before["graphNodeCount"]
+
+        index.warm_up()
+        after = index.get_stats()
+        assert after["graphState"] != 0, after["graphState"]
+        assert after["graphNodeCount"] == len(vecs), after["graphNodeCount"]
+
+        index.warm_up()  # a no-op once loaded
+        nearest = index.find_nearest(vecs[7], k=1)
+        assert nearest[0][1] == 0.0, nearest
+        assert index.get_stats()["graphNodeCount"] == len(vecs)

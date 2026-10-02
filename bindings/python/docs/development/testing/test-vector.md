@@ -55,6 +55,7 @@ What the tests cover:
 - **test_lsm_vector_search_ef_search**: `find_nearest(k=2, ef_search=32)` returns 2 results with the closest vector first.
 - **test_lsm_vector_search_rejects_invalid_ef_search**: `ef_search=0` raises `ArcadeDBError` mentioning `ef_search`.
 - **test_lsm_vector_build_graph_now**: after `build_graph_now()`, a search returns the closest vector.
+- **test_warm_up_loads_the_persisted_graph_before_the_first_search**: 2,000 vectors, index built, database reopened: `get_stats()` reads `graphState` 0 and `graphNodeCount` 0; after `warm_up()` the state is not 0 and all 2,000 nodes are resident; a second `warm_up()` changes nothing, and the search for a stored vector returns it at distance 0.0. Fails on 26.9.1, which has no `warm_up()` (ArcadeData/arcadedb#8852).
 - **test_lsm_vector_delete_and_search_others**: of 100 random vectors, every tenth is deleted; each deleted vector is absent from its own search and each remaining one is found.
 - **test_lsm_vector_search_comprehensive**: on small word embeddings, the neighbours of `king` include `queen` and `man` or `woman` but not `cat` or `dog`, and the neighbours of `cat` include `dog` but not `king`.
 - **test_document_vector_search**: search on a document type returns `apple` and `banana` (not `car`) for one query and `car` and `truck` (not `apple`) for another; results are `MyDoc` records with 4-dimensional embeddings.
