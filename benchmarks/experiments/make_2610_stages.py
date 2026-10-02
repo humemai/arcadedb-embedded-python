@@ -123,11 +123,13 @@ STAGES = [
      _october("qOE")[5], {}, list(RESTART_ENV), list(RESTART_BY_MODEL["docs"])),
     ("qRL", "server restart on the graph, both sizes", "restart", ["restart"], ["sf1", "sf10"],
      _october("qOA")[5], {}, list(RESTART_ENV), list(RESTART_BY_MODEL["graph"])),
-    ("qRM", "server restart on dense vectors", "restart", ["restart"], ["small"],
+    # 1M and 10M (DECISIONS #139 item 2, 2026-10-02): a vector index's restart cost is
+    # the index coming back, and it shows at 10M; about 25-40 h more, mostly loads.
+    ("qRM", "server restart on dense vectors, both sizes", "restart", ["restart"], ["small", "deep10m"],
      [], {}, list(RESTART_ENV), list(RESTART_BY_MODEL["dense"])),
     ("qRN", "server restart on time series, both sizes", "restart", ["restart"], ["ts100", "ts1000"],
      [_october("qOJ")[5][0]], {}, list(RESTART_ENV), list(RESTART_BY_MODEL["ts"])),
-    # No qRK: the lifecycle expansion to the single-model embedded engines was
+    # The lifecycle expansion stage (the single-model embedded engines) was
     # dropped (DECISIONS #139); the lane's roster is ArcadeDB and SurrealDB.
 ]
 

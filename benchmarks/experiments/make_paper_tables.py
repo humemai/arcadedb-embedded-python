@@ -124,7 +124,7 @@ PAPER_SCALES = {"l1": ["medium"], "l1tpc": ["tpch1"], "l2": ["sf1", "sf10"], "e4
                 "lifecycle": ["lc10k", "lc100k", "lc1m", "lc10m"],
                 # The server restart (DECISIONS #139 item 2): each model at its
                 # own lane's tiers, the scale naming the model (l6_restart.py).
-                "restart": ["tpch1", "tpch10", "sf1", "sf10", "small", "ts100", "ts1000"]}
+                "restart": ["tpch1", "tpch10", "sf1", "sf10", "small", "deep10m", "ts100", "ts1000"]}
 # OCTOBER'S LARGE SIZES, WHICH #108 MAKES ROW GROUPS RATHER THAN REPLACEMENTS.
 # Dense and sparse always carried two (l3d small+deep10m, l3s three), so the
 # multi-size rendering has worked all along; these four lanes were simply
