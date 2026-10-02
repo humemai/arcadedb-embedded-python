@@ -3069,6 +3069,32 @@ LIFECYCLE_SITUATION_LABELS = {
     "graph": "Graph", "graph_gav": "Graph with the analytical view", "vector": "Dense vectors",
     "sparse": "Sparse vectors", "ts": "Time series",
 }
+# The same situations inside a sentence, in the lane's order, for the one
+# declared-situations sentence each engine gets (_lifecycle_table).
+LIFECYCLE_SITUATION_ORDER = ["empty", "doc", "doc_idx10", "graph", "graph_gav", "vector", "sparse", "ts"]
+LIFECYCLE_SITUATION_PHRASES = {
+    "empty": "the empty database", "doc": "documents", "doc_idx10": "documents with ten indexes",
+    "graph": "the graph", "graph_gav": "the graph with the analytical view", "vector": "dense vectors",
+    "sparse": "sparse vectors", "ts": "time series",
+}
+
+
+def _or_series(items):
+    """'a', 'a or b', 'a, b, or c' (the serial comma, as everywhere on the page)."""
+    items = list(items)
+    if len(items) <= 2:
+        return " or ".join(items)
+    return ", ".join(items[:-1]) + ", or " + items[-1]
+
+
+def _lc_short_reason(text):
+    """The head of a lifecycle declaration: the adapter's reason up to its
+    first colon, without the statement it tried, the engine's answer, or any
+    parenthetical (a documentation link or a filing number belongs on the row,
+    not in a sentence on the page)."""
+    why = text.split("; tried `", 1)[0]
+    head = why.split(":", 1)[0]
+    return re.sub(r"\s*\([^)]*\)", "", head).strip()
 
 # Situations whose probe is not yet trustworthy. graph_gav's read reaches the
 # view now (it is issued in cypher; SQL cannot reach a Graph Analytical View at
@@ -3244,18 +3270,37 @@ def _lifecycle_table(all_rows):
 
     if not entries:
         return None
-    # The declared situations, one sentence each, in the row's own words
-    # (the reason carries the documentation cited and the engine's exact
-    # error), and the same fact as data for the coverage gate.
+    # The declared situations, ONE sentence per engine (2026-10-02): the
+    # situations it cannot build, grouped by reason, each reason the head of
+    # the adapter's own statement. One sentence per situation printed 21
+    # near-identical sentences for four engines; the statement the adapter
+    # tried and the engine's exact answer stay on the row and in the CSV. The
+    # same fact, as data, is one whole-row absence per engine for the
+    # coverage gate.
+    by_engine = collections.defaultdict(dict)
+    for r in declared:
+        by_engine[_engine_of(r)][r.get("workload")] = _lc_short_reason(
+            str(r.get("lifecycle_situation_unexpressible")))
     declared_notes = []
-    for (engine, situation), why in sorted({
-            (_engine_of(r), r.get("workload")): str(r.get("lifecycle_situation_unexpressible"))
-            for r in declared}.items()):
+    if by_engine:
+        declared_notes.append(_R("lifecycle", "declared"))
+    for engine, sits in sorted(by_engine.items()):
         _label = f"{engine} (embedded)"
-        _sit = LIFECYCLE_SITUATION_LABELS.get(situation, situation)
-        note = _gen(f"{_label} has no {_sit} row: the situation cannot be built in "
-                    f"the engine's own language, declared by the adapter rather than "
-                    f"left blank ({why}).", _label, _sit, why)
+        groups = {}
+        for sit in sorted(sits, key=lambda k: LIFECYCLE_SITUATION_ORDER.index(k)
+                          if k in LIFECYCLE_SITUATION_ORDER else len(LIFECYCLE_SITUATION_ORDER)):
+            groups.setdefault(sits[sit], []).append(LIFECYCLE_SITUATION_PHRASES.get(sit, sit))
+        items = [f"{_or_series(names)} ({reason})" for reason, names in groups.items()]
+        # Semicolons between the groups once a group is itself a list, so the
+        # two levels of list do not run together.
+        if len(items) == 1:
+            joined = items[0]
+        elif any(len(n) > 1 for n in groups.values()):
+            joined = "; ".join(items[:-1]) + "; or " + items[-1]
+        else:
+            joined = _or_series(items)
+        note = _gen(f"{_label} has no row for {joined}.", _label,
+                    *[n for names in groups.values() for n in names], *groups)
         declared_notes.append(note)
         _declare_absence("lifecycle", _label, None, "unexpressible", note)
     return {
@@ -4542,6 +4587,8 @@ OCT_PROSE = {
         # dense-vector "open and close" cell is not a session that touched nothing. No number here: the split is
         # measured on the laptop only. Retires with CAMPAIGN section 7 row 22 (the read moves to an untimed cycle).
         "vector_stats": ("ArcadeDB's embedded dense-vector rows read the index's statistics just before close, to record whether a rebuild ran. The read is outside the timers, but on this engine build it raises the cost of the close that follows it, so that row's open and close figure is an upper bound for a session that touches nothing.", []),
+        # The lead of the declared-situations sentences (one per engine, built in _lifecycle_table).
+        "declared": ("An engine with no row for a situation cannot build it, and its adapter says so rather than leaving the row blank; the declared row keeps the statement the adapter tried and the engine's own answer.", []),
         "surreal_rows": ("SurrealDB rows have no JVM start: the SurrealDB core is a compiled extension that the Python import loads, so there is no runtime to start apart from the import. Their first open is the first open with the SDK already imported, and their cold process is interpreter start, import, open, and close, the same span the ArcadeDB embedded rows time. SurrealDB's time-series row is a plain table of timestamped records, the footing its time-series rows elsewhere on this page run on, because the engine has no time-series type.", []),
         # The other in-process engines (row 40, 2026-10-02, l5_lifecycle_embedded): facts about each engine's
         # session, not numbers, so no pins. Printed only when that engine's rows are on the table.

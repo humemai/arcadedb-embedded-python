@@ -692,13 +692,16 @@ class SqliteVec(Arm):
             "graph_gav": (self.GRAPH_PROBE, ()),
             "sparse": ("CREATE VIRTUAL TABLE S USING vec0(id integer primary key, emb sparse[30000])", ()),
         }
+        # Each reason's head, up to its first colon, is what the page prints (export_web._lc_short_reason).
         whys = {
-            "doc": ("sqlite-vec's one structure is the vec0 virtual table, which holds vectors; a table of plain "
-                    "records is a SQLite table, the SQLite arm's row"),
-            "doc_idx10": ("a vec0 table cannot carry a secondary index, and indexed plain records are a SQLite "
-                          "table, the SQLite arm's row"),
-            "graph": "no graph query language (DECISIONS #128): sqlite-vec adds vector tables to SQLite's SQL",
-            "graph_gav": "no graph query language and no analytical graph view (DECISIONS #128)",
+            "doc": ("its one structure, the vec0 virtual table, needs a vector column: a table of plain records "
+                    "is a SQLite table, the SQLite arm's row"),
+            "doc_idx10": ("a vec0 table cannot be indexed: indexed plain records are a SQLite table, the SQLite "
+                          "arm's row"),
+            "graph": ("no graph query language: sqlite-vec adds vector tables to SQLite's SQL, which has none "
+                      "(DECISIONS #128)"),
+            "graph_gav": ("no graph query language: sqlite-vec adds vector tables to SQLite's SQL, so there is no "
+                          "analytical graph view to build either (DECISIONS #128)"),
             "sparse": "no sparse-vector type: vec0 columns are dense float, int8, or bit vectors",
         }
         whys["ts"] = whys["doc"]

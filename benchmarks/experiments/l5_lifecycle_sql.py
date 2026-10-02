@@ -107,12 +107,13 @@ class SQLiteEngine(Engine):
                       "no graph query language: the graph situations need one (DECISIONS #128), and SQLite's "
                       "SQL has no GRAPH_TABLE, MATCH, or property graph"),
             "graph_gav": ("SELECT * FROM GRAPH_TABLE (g MATCH (a)-[e]->(b) COLUMNS (b.id))",
-                          "no graph query language and no analytical graph view (DECISIONS #128)"),
+                          "no graph query language: without one there is no analytical graph view to build "
+                          "either (DECISIONS #128)"),
             "vector": ("CREATE VIRTUAL TABLE v USING vec0(emb float[64])",
                        "no vector index in SQLite's core: sqlite-vec is a separate engine with its own arm on "
                        "the dense table, not part of the SQLite this arm runs"),
             "sparse": ("CREATE VIRTUAL TABLE s USING vec0(emb float[30000])",
-                       "no sparse-vector index in SQLite's core or in any extension this arm loads"),
+                       "no sparse-vector index: neither SQLite's core nor any extension this arm loads has one"),
         }
 
 
