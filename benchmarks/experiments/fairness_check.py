@@ -890,6 +890,12 @@ INDEX_DECISIONS = {
         "sqlite":                     "(host, ts): 35.36 -> 0.01 ms last-point",
         "duckdb":                     "(host, ts): 7.06 -> 6.20 ms last-point (added 2026-09-22)",
         "timescaledb":                "(host, ts DESC)",
+        # Plain PostgreSQL (DECISIONS #131 item 6), measured 2026-10-02 on ts100
+        # (repros/pg-ts-index/index_probe.py): the host-filtered queries need it,
+        # and the scan-wide 12 h aggregate pays for it (the planner reads through
+        # the index), stated rather than tuned away: the same index as TimescaleDB.
+        "postgres_ts":                "(host, ts DESC): 108.95 -> 0.48 ms last-point, 92.91 -> 1.08 ms windowed; "
+                                      "12 h aggregate 136 -> 217 ms with it present",
         "surrealdb_ts":               "(host, ts) before the load",
         "surrealdb_ts_server":        "(host, ts)",
         "arangodb_ts":                "persistent (host, ts)",

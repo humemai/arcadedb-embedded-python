@@ -408,6 +408,19 @@ _PCT_OPT = (" -Darcadedb.vectorIndex.graphBuildCacheMaxHeapPercent=" + DENSE_BUI
 LC_HOST_DIR = os.path.abspath(os.environ.get(
     "BENCH_LC_HOST_DIR", "/var/tmp/arcadedb-lifecycle"))
 
+# THE POSTGRESQL QUERY POOLS, FITTED TO THE CELL (FAIRNESS F3/F6; measured on
+# PG+AGE 2026-10-02, repros/age-dialect/resource_fit_probe.py; extended to every
+# PostgreSQL arm but `postgres`, which is the defaults arm by design). The
+# placeholders are filled per cell beside {sb}/{ecs}/{mwm} below: parallel
+# workers per query = cpuset - 1 (the leader is the last core), the cluster's
+# parallel pool = cpuset, and work_mem = the cap left after shared_buffers over
+# the cpuset's processes, sixteen buffers each. BENCH_PG_FIT=off formats them to
+# PostgreSQL's own defaults (2 workers, a pool of 8, 4 MB) for a same-run A/B
+# and nothing else; the row's `server_cmd` records which ran.
+PG_FIT_CMD = ["-c", "max_worker_processes={pg_procs}", "-c", "max_parallel_workers={pg_par}",
+              "-c", "max_parallel_workers_per_gather={pg_workers}",
+              "-c", "max_parallel_maintenance_workers={pg_workers}", "-c", "work_mem={pg_work_mem}"]
+
 BACKENDS = {
     "arcadedb_embedded": {
         "topology": "embedded",
@@ -503,7 +516,20 @@ BACKENDS = {
         "server_image": "timescale/timescaledb@sha256:f7036933154c52dbc500f7b08ff8e28404a8ccabbf8ce3528142cde6ab253eef",  # 2.30.1-pg18
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
         "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
-                       "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=4GB"],
+                       "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=4GB"] + PG_FIT_CMD,
+        "server_port": 5432,
+        "ready_regex": r"(?s)PostgreSQL init process complete.*"
+                       r"database system is ready to accept connections",
+    },
+    # Plain PostgreSQL on the time-series lane (DECISIONS #131 item 6): the
+    # default arm's image, TimescaleDB's memory fit, and the pool fit.
+    "postgres_ts": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "postgres@sha256:7341002d2b8c7c5bdd7542a671a95b36196c0b5b888daf454ae4fc33ba5346d7",  # 18.6, the `postgres` arm's digest
+        "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
+        "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
+                       "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=4GB"] + PG_FIT_CMD,
         "server_port": 5432,
         "ready_regex": r"(?s)PostgreSQL init process complete.*"
                        r"database system is ready to accept connections",
@@ -654,11 +680,12 @@ BACKENDS = {
         # tpch1), so a literal 6GB would be a quarter of one and a half of the
         # other. {sb} and {ecs} are filled in below from the memory this
         # container is actually given.
+        # work_mem was a constant 64MB until 2026-10-02; it is fitted to the
+        # cell now, with the parallel pools, as on every PostgreSQL arm (PG_FIT_CMD).
         "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}",
                        "-c", "effective_cache_size={ecs}",
-                       "-c", "work_mem=64MB",
                        "-c", "maintenance_work_mem=1GB",
-                       "-c", "max_wal_size=4GB"],
+                       "-c", "max_wal_size=4GB"] + PG_FIT_CMD,
         "server_port": 5432,
         "ready_regex": r"(?s)PostgreSQL init process complete.*"
                        r"database system is ready to accept connections",
@@ -826,8 +853,7 @@ BACKENDS = {
         "server_image": "dbbench:pg-age",  # PostgreSQL 18 + pgvector 0.8.6 + AGE 1.8.0, built from Dockerfile.pgage
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
         "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
-                       "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=4GB",
-                       "-c", "max_worker_processes={pg_procs}", "-c", "max_parallel_workers={ncpu}", "-c", "max_parallel_workers_per_gather={pg_workers}", "-c", "max_parallel_maintenance_workers={pg_workers}", "-c", "work_mem={pg_work_mem}"],
+                       "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=4GB"] + PG_FIT_CMD,
         "server_port": 5432,
         "ready_regex": r"(?s)PostgreSQL init process complete.*"
                        r"database system is ready to accept connections",
@@ -854,8 +880,7 @@ BACKENDS = {
         "server_image": "dbbench:pg-age",  # PostgreSQL 18 + pgvector 0.8.6 + AGE 1.8.0, built from Dockerfile.pgage
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
         "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
-                       "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=4GB",
-                       "-c", "max_worker_processes={pg_procs}", "-c", "max_parallel_workers={ncpu}", "-c", "max_parallel_workers_per_gather={pg_workers}", "-c", "max_parallel_maintenance_workers={pg_workers}", "-c", "work_mem={pg_work_mem}"],
+                       "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=4GB"] + PG_FIT_CMD,
         "server_port": 5432,
         "ready_regex": r"(?s)PostgreSQL init process complete.*"
                        r"database system is ready to accept connections",
@@ -987,6 +1012,10 @@ BACKENDS = {
     # The lifecycle comparator (2026-09-16): SurrealDB embedded through its SDK
     # on SurrealKV, under the lane's /lcdb bind mount like the ArcadeDB arm.
     "surrealdb_lifecycle": {"topology": "embedded", "image": "dbbench:client"},
+    # The in-process SQL engines on the lifecycle table (DECISIONS #131 item 5,
+    # queued last by #133): SQLite in the client image, DuckDB in its pinned one.
+    "sqlite_lifecycle": {"topology": "embedded", "image": "dbbench:client"},
+    "duckdb_lifecycle": {"topology": "embedded", "image": "dbbench:duckdb"},
     "surrealdb_dense_server": {
         "topology": "client_server",
         "image": "dbbench:client",
@@ -1312,7 +1341,7 @@ BACKENDS = {
         "server_image": "pgvector/pgvector@sha256:1d50c689b0a6511b9ea0a15615281c81a59fd04a08eb35057ec8646fb3a2118a",  # 0.8.6-pg18
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
         "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
-                       "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=8GB"],
+                       "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=8GB"] + PG_FIT_CMD,
         "server_port": 5432,
         "ready_regex": r"(?s)PostgreSQL init process complete.*"
                        r"database system is ready to accept connections",
@@ -1323,7 +1352,7 @@ BACKENDS = {
         "server_image": "pgvector/pgvector@sha256:1d50c689b0a6511b9ea0a15615281c81a59fd04a08eb35057ec8646fb3a2118a",  # 0.8.6-pg18
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
         "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
-                       "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=8GB"],
+                       "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=8GB"] + PG_FIT_CMD,
         "server_port": 5432,
         "ready_regex": r"(?s)PostgreSQL init process complete.*"
                        r"database system is ready to accept connections",
@@ -1637,7 +1666,8 @@ LANES = {
     # that a process can open and close in-process: SurrealDB embedded, whose
     # situations it cannot build are declared on the row (l5_lifecycle_surreal).
     "lifecycle": ("l5_lifecycle.py",
-                  ["arcadedb_embedded", "arcadedb_server", "surrealdb_lifecycle"],
+                  ["arcadedb_embedded", "arcadedb_server", "surrealdb_lifecycle",
+                   "sqlite_lifecycle", "duckdb_lifecycle"],
                   ["empty", "doc", "doc_idx10", "graph", "graph_gav",
                    "vector", "sparse", "ts"]),
     "l3s": ("l3_sparse.py",
@@ -1693,7 +1723,9 @@ LANES = {
            ["arcadedb_ts_doc", "arcadedb_ts_doc_server", "arcadedb_ts_native", "arcadedb_ts_native_server", "questdb", "duckdb", "sqlite", "mongodb", "timescaledb",
             # The plain-table comparators (2026-09-15): no time-series type,
             # SQLite's footing, see l4_tsbs.SurrealTS / ArangoTS.
-            "surrealdb_ts", "surrealdb_ts_server", "arangodb_ts"],
+            "surrealdb_ts", "surrealdb_ts_server", "arangodb_ts",
+            # Plain PostgreSQL beside TimescaleDB (DECISIONS #131 item 6).
+            "postgres_ts"],
            ["ingest"]),
 }
 
@@ -2375,8 +2407,12 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             _fit = dict(ncpu=_ncpu,
                         mem90_mib=int(server_mem * 0.9) >> 20,
                         pg_workers=max(1, _ncpu - 1),
+                        pg_par=_ncpu,
                         pg_procs=_ncpu + 2,
                         pg_work_mem=f"{max(4, int((server_mem >> 20) * 0.75 / (_ncpu * 16)))}MB")
+            if os.environ.get("BENCH_PG_FIT", "").lower() == "off":
+                # PostgreSQL's own defaults, for a same-run A/B only (PG_FIT_CMD).
+                _fit.update(pg_workers=2, pg_par=8, pg_procs=8, pg_work_mem="4MB")
             server_cmd = [c.format(sb=f"{max(1, srv_gb // 4)}GB",
                                    ecs=f"{max(1, srv_gb * 3 // 4)}GB",
                                    mwm=f"{max(1, srv_gb // 2)}GB", **_fit)

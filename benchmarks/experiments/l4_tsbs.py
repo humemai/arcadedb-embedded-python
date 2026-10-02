@@ -8,6 +8,8 @@ questdb (server; ILP ingest on 9009, SQL over pg-wire). InfluxDB3 omitted
 SurrealDB (embedded core 2.3.10 through the SDK, and the served 3.2.4) and
 ArangoDB 3.12.11 joined 2026-09-15 on SQLite's footing: a plain table with a
 datetime field and a composite (host, ts) index, no time-series type.
+Plain PostgreSQL 18.6 (`postgres_ts`) joins at the 26.10.1 measurement on the
+same footing (DECISIONS #131 item 6), beside TimescaleDB on the same engine.
 
 Queries (TSBS-flavored):
   q_last    last point for one host
@@ -910,6 +912,11 @@ class TimescaleTS:
             self._pv = c.fetchone()[0].split(" (")[0]
             c.execute("SHOW synchronous_commit")   # read, not asserted (#81, #90)
             _sc = c.fetchone()[0]
+            # The pools the runner fits to the cell (FAIRNESS F6), read back.
+            self.row_extra = {}
+            for k in PostgresTS._SHOW:
+                c.execute(f"SHOW {k}")
+                self.row_extra[f"pg_{k}"] = c.fetchone()[0]
         self.durability = bench_common.pg_durability_string(_sc)
 
     def version(self):
@@ -960,6 +967,97 @@ class TimescaleTS:
     def q_orderlimit(self):
         with self.cx.cursor() as c:
             c.execute("SELECT time_bucket('1 hour', ts) AS h, max(uu) FROM p WHERE ts >= %s AND ts < %s "
+                      "GROUP BY h ORDER BY h DESC LIMIT %s",
+                      (self._t(T0), self._t(T0 + 43200), ORDERLIMIT_N))
+            return c.fetchall()
+
+    def close(self):
+        self.cx.close()
+
+
+class PostgresTS:
+    """Plain PostgreSQL 18.6 on a plain table (DECISIONS #131 item 6, CAMPAIGN.md
+    section 7 row 41): no time-series type, on the same footing as SQLite,
+    DuckDB, SurrealDB, and ArangoDB, so the table shows what the time-series
+    extension buys over the engine it extends (TimescaleDB, same PostgreSQL,
+    same COPY path, same index).
+
+    COPY ingest, then the (host, ts DESC) btree TimescaleDB's arm carries,
+    timed by index_timer, then ANALYZE, PostgreSQL's documented step after a
+    bulk load. Buckets are date_trunc in UTC (set on the session, never
+    inherited), the plain-PostgreSQL spelling of time_bucket for minute and
+    hour buckets. Memory and parallel query are fitted to the cell by the
+    runner (FAIRNESS F6), and every setting is read back onto the row
+    (`pg_*`); durability is the server's own answer (#81, #90).
+    """
+    name = "postgres_ts"
+    _SHOW = ("shared_buffers", "effective_cache_size", "work_mem", "hash_mem_multiplier",
+             "maintenance_work_mem", "max_parallel_workers_per_gather", "max_parallel_workers",
+             "max_parallel_maintenance_workers", "max_worker_processes", "jit")
+
+    def connect(self):
+        import psycopg
+        host = os.environ.get("BENCH_SERVER_HOST", "localhost")
+        self.cx = psycopg.connect(f"host={host} dbname=bench user=postgres password=dbbenchpass", autocommit=True)
+        with self.cx.cursor() as c:
+            c.execute("SET TIME ZONE 'UTC'")
+            c.execute("SELECT version()")
+            self._pv = c.fetchone()[0].split(" (")[0]
+            c.execute("SHOW synchronous_commit")   # read, not asserted (#81, #90)
+            self.durability = bench_common.pg_durability_string(c.fetchone()[0])
+            self.row_extra = {}
+            for k in self._SHOW:
+                c.execute(f"SHOW {k}")
+                self.row_extra[f"pg_{k}"] = c.fetchone()[0]
+
+    def version(self):
+        return f"postgresql {self._pv}"
+
+    def ingest(self, pts):
+        with self.cx.cursor() as c:
+            c.execute("CREATE TABLE p (host TEXT, ts TIMESTAMPTZ NOT NULL, uu DOUBLE PRECISION, us DOUBLE PRECISION, ui DOUBLE PRECISION)")
+            with c.copy("COPY p (host, ts, uu, us, ui) FROM STDIN") as cp:
+                for h, t, uu, us, ui in pts:
+                    cp.write_row((h, _dt.datetime.fromtimestamp(t, _dt.timezone.utc), uu, us, ui))
+            with bench_common.index_timer(self):
+                c.execute("CREATE INDEX p_host_ts ON p (host, ts DESC)")
+            c.execute("ANALYZE p")
+
+    def _t(self, s):
+        return _dt.datetime.fromtimestamp(s, _dt.timezone.utc)
+
+    def q_last(self):
+        with self.cx.cursor() as c:
+            c.execute("SELECT ts, uu FROM p WHERE host = %s ORDER BY ts DESC LIMIT 1", (HOST,))
+            return c.fetchall()
+
+    def q_range(self):
+        with self.cx.cursor() as c:
+            c.execute("SELECT date_trunc('minute', ts) AS m, max(uu) FROM p WHERE host = %s AND ts >= %s AND ts < %s "
+                      "GROUP BY m ORDER BY m", (HOST, self._t(T0), self._t(T0 + 3600)))
+            return c.fetchall()
+
+    def q_global(self):
+        with self.cx.cursor() as c:
+            c.execute("SELECT date_trunc('hour', ts) AS h, avg(uu) FROM p WHERE ts >= %s AND ts < %s GROUP BY h ORDER BY h",
+                      (self._t(T0), self._t(T0 + 43200)))
+            return c.fetchall()
+
+    def q_groupby(self):
+        with self.cx.cursor() as c:
+            c.execute("SELECT host, date_trunc('hour', ts) AS h, avg(uu) FROM p WHERE ts >= %s AND ts < %s "
+                      "GROUP BY host, h ORDER BY host, h", (self._t(T0), self._t(T0 + 43200)))
+            return c.fetchall()
+
+    def q_high(self):
+        with self.cx.cursor() as c:
+            c.execute("SELECT host, ts, uu FROM p WHERE ts >= %s AND ts < %s AND uu > %s",
+                      (self._t(T0), self._t(T0 + 43200), HIGH))
+            return c.fetchall()
+
+    def q_orderlimit(self):
+        with self.cx.cursor() as c:
+            c.execute("SELECT date_trunc('hour', ts) AS h, max(uu) FROM p WHERE ts >= %s AND ts < %s "
                       "GROUP BY h ORDER BY h DESC LIMIT %s",
                       (self._t(T0), self._t(T0 + 43200), ORDERLIMIT_N))
             return c.fetchall()
@@ -1327,7 +1425,7 @@ class ArangoTS:
 _CLIENT_SERVER = {"questdb", "surrealdb_ts_server", "arangodb_ts"}
 
 BACKENDS = {c.name: c for c in (ArcadeTS, ArcadeTSServer, ArcadeNativeTS, ArcadeNativeTSServer, DuckTS, SQLiteTS, MongoTS, TimescaleTS, QuestTS,
-                                SurrealTS, SurrealTSServer, ArangoTS)}
+                                SurrealTS, SurrealTSServer, ArangoTS, PostgresTS)}
 
 # DECISIONS #81: what each arm runs at commit, recorded on the row. DuckDB is
 # the named exception here; TimescaleDB reads the server's own
@@ -1348,6 +1446,8 @@ DURABILITY = {
     "surrealdb_ts": bench_common.DURABILITY_SURREAL_EMBEDDED,
     "surrealdb_ts_server": bench_common.DURABILITY_SURREAL_SERVER,
     "arangodb_ts": arango_common.DURABILITY,
+    # Read back with SHOW at connect (the adapter's own answer wins).
+    "postgres_ts": bench_common.DURABILITY_PG_OFF,
 }
 
 
@@ -1582,6 +1682,9 @@ def main():
     # under so a reader never has to infer it.
     bench_common.stamp_durability(out, getattr(b, "durability", None)
                                   or DURABILITY.get(args.backend))
+    # What a served engine reported about its own settings at connect (the
+    # PostgreSQL arms' pools, FAIRNESS F6), read back rather than restated.
+    out.update(getattr(b, "row_extra", None) or {})
     out["instrument"] = bench_common.INSTRUMENT
     # DECISIONS #89: the queries carry a cold/warm split; the ingest does not,
     # and the row says why rather than leaving the pair blank.
