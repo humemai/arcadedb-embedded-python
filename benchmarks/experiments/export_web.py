@@ -3015,6 +3015,38 @@ LIFECYCLE_SITUATION_LABELS = {
 # view. Withheld rather than published with a caveat nobody reads.
 LIFECYCLE_WITHHELD = {"graph_gav": "its query grew from a bounded set of seeds to an unbounded 2-hop, so the cell is re-measured in October"}   # PAGE-SPEC rule 7
 
+# SURREALDB'S OCTOBER LIFECYCLE ROWS CARRY OUR INPUT LIST (BUGS F161, DECISIONS #134). Its build fed the
+# engine from one in-memory Python list while the ArcadeDB arm streamed, fixed in the lane on 2026-09-30.
+# The re-run of every SurrealDB lifecycle cell (qOA6) was stopped by decision, because the 26.10.1
+# measurement re-runs them with the streamed input, so the October rows are all from before the fix. Two
+# things on them carried our list and come down: each row's peak memory, and the 10M vector row, whose
+# kill at the cap was our allocation (the kernel log names python), not SurrealDB's. The two other 10M
+# kills named SurrealDB's own storage thread and stand, as does the 1M vector timeout; the session timings
+# ran after the build and stand too. KEYED ON THE ROWS (the October pin), so the 26.10.1 rows are not
+# recognised and the cells return at their landing with nothing to edit.
+# (backend key, situation or None, scale or None, column or None for the whole entry) -> (why, stale)
+_SURREAL_LIST = ("SurrealDB's peak memory on this table is withheld and its 10M dense-vector row is marked "
+                 "`re-run`: our build fed SurrealDB from one in-memory Python list while the ArcadeDB arm "
+                 "streamed, so its memory reading was partly ours, and the 10M vector build was killed for our "
+                 "allocation, not SurrealDB's. Its session timings ran after the build and stand. Both are "
+                 "being re-measured with the input streamed.")
+_SURREAL_LIST_ROW = lambda r: str(r.get("engine_commit") or "").startswith("417314c18")   # noqa: E731
+LIFECYCLE_STALE = {
+    ("surrealdb_lifecycle", None, None, "peak memory GiB"): (_SURREAL_LIST, _SURREAL_LIST_ROW),
+    ("surrealdb_lifecycle", "vector", "lc10m", None): (_SURREAL_LIST, _SURREAL_LIST_ROW),
+}
+
+
+def _lifecycle_stale(row):
+    """The LIFECYCLE_STALE entry that takes this row's whole cell down, if any: the censored-cell
+    reader must not print a withdrawn row's failure as the engine's."""
+    for (bk, situation, scale, column), (why, pred) in LIFECYCLE_STALE.items():
+        if (column is None and str(row.get("backend")) == bk
+                and situation in (None, row.get("workload")) and scale in (None, str(row.get("scale")))
+                and pred(row)):
+            return why
+    return None
+
 
 def _lc_vector_note(rows):
     """The disclosure sentence for the vector situation, with its numbers
@@ -3075,7 +3107,9 @@ def _lifecycle_table(all_rows):
             continue
         by.setdefault((r.get("workload"), r.get("scale"), _srv, _engine_of(r)), []).append(r)
 
-    entries = []
+    entries, stale_notes = [], []
+    _lc_columns = (["JVM start ms", "first open ms", "cold process ms"]
+                   + [LIFECYCLE_SCENARIO_LABELS[k] for k in LIFECYCLE_PAGE_SCENARIOS])
     for (situation, scale, _srv, engine), rs in sorted(by.items()):
         if situation in LIFECYCLE_WITHHELD:
             continue
@@ -3128,6 +3162,21 @@ def _lifecycle_table(all_rows):
             got = _agg(rs, field)
             if got is not None:
                 entry["metrics"][label] = got
+        for (bk, sit, sc, column), (why, pred) in LIFECYCLE_STALE.items():
+            if (bk != entry["backend_key"] or sit not in (None, situation) or sc not in (None, str(scale))
+                    or not any(pred(r) for r in rs)):
+                continue
+            if column is None:
+                entry["outcome"] = "withdrawn"
+                entry["metrics"] = {c: {"text": "re-run"} for c in _lc_columns}
+                _declare_absence("lifecycle", entry["backend"], None, "withdrawn", why)
+            elif column in entry["metrics"]:
+                entry["metrics"][column] = {"text": "re-run"}
+                _declare_absence("lifecycle", entry["backend"], column, "withheld", why)
+            else:
+                continue
+            if why not in stale_notes:
+                stale_notes.append(why)
         if entry["metrics"]:
             entries.append(entry)
 
@@ -3166,9 +3215,8 @@ def _lifecycle_table(all_rows):
             "already running when the probe connects, so those three columns describe "
             "the embedded process only. The session columns are measured for both.",
         ]) + [_gen(f"{LIFECYCLE_SITUATION_LABELS.get(k, k)} is withheld: {v}", v) for k, v in sorted(LIFECYCLE_WITHHELD.items())]
-           + declared_notes,
-        "columns": ["JVM start ms", "first open ms", "cold process ms"]
-                   + [LIFECYCLE_SCENARIO_LABELS[k] for k in LIFECYCLE_PAGE_SCENARIOS],
+           + [_gen(w) for w in stale_notes] + declared_notes,
+        "columns": _lc_columns,
         "withheld_scales": [],
         "withheld_reason": None,
         "entries": entries,
@@ -5129,6 +5177,8 @@ def _censored_cells():
             continue
         if not _same_pin(r):
             continue
+        if r.get("lane") == "lifecycle" and _lifecycle_stale(r):
+            continue   # withdrawn, marked `re-run`: its failure was ours (LIFECYCLE_STALE)
         key = (r.get("lane"), str(r.get("scale")), r.get("backend"), r.get("workload"))
         err = str(r.get("error") or "")
         if not err:
