@@ -6426,8 +6426,12 @@ def _finish_table(table: dict) -> dict:
             # MERGED, for the reason every other note on this page is merged:
             # these differ only in a name, and thirteen of them under one
             # table is a loop's output. One sentence, every engine named.
+            # Not the off-page arms: they are absent from every table by
+            # decision (OFF_PAGE_ARMS), and saying "the skeleton did not cover"
+            # them names an arm the page does not print, which page_check's
+            # OFF-PAGE check refuses (found rehearsing the 26.10.1 publish).
             _norow = [display_name(_be) for _be in (LANES_RUNNER.get(_lane) or ())
-                      if _be not in _have]
+                      if _be not in _have and _be not in OFF_PAGE_ARMS]
             if _norow:
                 _who = _join_and(_norow)
                 _why = _gen(f"{_who} {'has' if len(_norow) == 1 else 'have'} no row on this "
@@ -6699,6 +6703,22 @@ def _restructure_tables(tables, rows):
         t["source_paths"] = list(t.get("source_paths") or []) + list(by["l3smp"].get("source_paths") or [])
         t["source_urls"] = list(t.get("source_urls") or []) + list(by["l3smp"].get("source_urls") or [])
         tables.remove(by["l3smp"])
+    elif "l3s" in by:
+        # NO SECOND PASS TO FOLD, the lane's own pass is still the cold one.
+        # The skeleton declares l3smp absent, and a sparse landing can arrive
+        # before its overlay; either way the single pass is the first after
+        # the build, so its columns are labelled cold as the folded table's
+        # are, and the query set's `cold p50 ms` is a column (page_check
+        # coverage A1 refused the skeleton's `p50 ms`, rehearsing the 26.10.1
+        # publish, 2026-10-02). No warm columns: there is no warm pass to show.
+        t = by["l3s"]
+        for e in t["entries"]:
+            m = e["metrics"]
+            if "p50 ms" in m:
+                m["cold p50 ms"] = m.pop("p50 ms")
+            if "p99 ms" in m:
+                m["cold p99 ms"] = m.pop("p99 ms")
+        t["columns"] = [{"p50 ms": "cold p50 ms", "p99 ms": "cold p99 ms"}.get(c, c) for c in t["columns"]]
     # KEYED ON l1tpc ALONE, because that is the only table this split reads.
     # It used to require l1 and l1olap to be present too, which was true in
     # September and stops being true in October: DECISIONS #72 withdrew the

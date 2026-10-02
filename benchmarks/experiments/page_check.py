@@ -763,6 +763,17 @@ def _check_no_arcadedb_row_lost(payload):
             # the E2 table published with only comparators), and that still
             # fails. No mode flag: at the switch every lane has rows, so the
             # check tightens back to strict on its own.
+            # A SKELETON'S DECLARED ABSENCE IS NOT A LOSS. The placeholder
+            # names the tables it does not build (`skeleton_absent_tables`:
+            # e4, the second sparse pass, pycost), each with its reason, and
+            # once the live preview carried e4 every skeleton publish failed
+            # here on a table it had already said it leaves out (found
+            # rehearsing the 26.10.1 publish, 2026-10-02). A campaign payload
+            # carries no such list, so this never excuses a real one.
+            if payload.get("skeleton") and tid in (payload.get("skeleton_absent_tables") or {}):
+                print(f"  skeleton: table {tid} is declared absent from the placeholder "
+                      f"({payload['skeleton_absent_tables'][tid][:80]})")
+                continue
             lane = _table_lanes().get(tid, (None,))[0]
             if lane and lane not in _lanes_with_rows():
                 print(f"  not yet measured: table {tid} is on the live page and "
