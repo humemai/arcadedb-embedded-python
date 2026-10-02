@@ -74,6 +74,33 @@ public class TypeIndexBuilder extends IndexBuilder<TypeIndex> {
   }
 
   /**
+   * The key type of a {@code BY ITEM} index over a LIST: the declared {@code OF} item type when it is a plain scalar, so
+   * a lookup by a number of another Java type ({@code CONTAINS 7} against a {@code LIST OF DOUBLE} holding {@code 7.0})
+   * is converted to the stored type the way a scan compares it (issue #8890). STRING is kept for:
+   * <ul>
+   *   <li>a list with no declared item type, since lists can hold heterogeneous values;</li>
+   *   <li>non-scalar items (links, embedded documents, nested collections);</li>
+   *   <li>BOOLEAN, since a lookup by the text 'true' cannot be read as a boolean key;</li>
+   *   <li>a FULL_TEXT index, which tokenizes text.</li>
+   * </ul>
+   */
+  static Type listItemKeyType(final Property property, final Schema.INDEX_TYPE indexType) {
+    if (indexType == Schema.INDEX_TYPE.FULL_TEXT)
+      return Type.STRING;
+
+    final String ofType = property.getOfType();
+    final Type itemType = ofType != null ? Type.getTypeByName(ofType) : null;
+    if (itemType == null)
+      return Type.STRING;
+
+    return switch (itemType) {
+      case LIST, MAP, EMBEDDED, LINK, BINARY, BOOLEAN, ARRAY_OF_SHORTS, ARRAY_OF_INTEGERS, ARRAY_OF_LONGS, ARRAY_OF_FLOATS,
+           ARRAY_OF_DOUBLES -> Type.STRING;
+      default -> itemType;
+    };
+  }
+
+  /**
    * The one copy constructor of the whole builder hierarchy: the specialised builders {@link #withType} swaps in -
    * {@link TypeFullTextIndexBuilder}, {@link TypeLSMVectorIndexBuilder}, {@link TypeLSMSparseVectorIndexBuilder} and
    * {@link TypeGeoIndexBuilder} - all delegate here, each supplying only the two things that make it different: the
@@ -433,9 +460,7 @@ public class TypeIndexBuilder extends IndexBuilder<TypeIndex> {
         }
 
         if (isByItem) {
-          // For BY ITEM on LIST, the key type should be STRING (since list items are indexed individually).
-          // Lists can contain heterogeneous types, so we use STRING as a generic type for list items
-          keyTypes[i++] = Type.STRING;
+          keyTypes[i++] = listItemKeyType(property, indexType);
         } else if (isByKey) {
           // MAP keys are strings
           keyTypes[i++] = Type.STRING;
@@ -517,12 +542,13 @@ public class TypeIndexBuilder extends IndexBuilder<TypeIndex> {
 
             // TWO TRANSACTIONS, and the split is the whole of issue #6324, item 1.
             //
-            // The COMPONENT is created in a transaction of its OWN. recordFileChanges writes the schema entry that
-            // names this index as soon as this callback returns, whatever the caller's transaction goes on to do, so
-            // the index FILE has to be committed on the same terms: leaving its first page inside a caller's
-            // transaction that later rolls back would leave the schema pointing at a file with no pages, which fails
-            // on the next write with "the file is invalid". Committing it also keeps the index usable from a NESTED
-            // transaction, which cannot see an outer transaction's uncommitted pages.
+            // The COMPONENT is created in a transaction of its OWN. The schema entry that names this index is written
+            // whatever the caller's transaction goes on to do - postponed to its end, commit and rollback alike
+            // (#8635), since the index exists either way - so the index FILE has to be committed on the same terms:
+            // leaving its first page inside a caller's transaction that later rolls back would leave the schema
+            // pointing at a file with no pages, which fails on the next write with "the file is invalid". Committing
+            // it also keeps the index usable from a NESTED transaction, which cannot see an outer transaction's
+            // uncommitted pages.
             database.transaction(() -> {
 
               final LocalBucket bucket = (LocalBucket) buckets.get(finalIdx);

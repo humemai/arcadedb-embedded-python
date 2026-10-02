@@ -27,6 +27,7 @@ import com.arcadedb.index.Index;
 import com.arcadedb.index.IndexCursor;
 import com.arcadedb.index.IndexInternal;
 import com.arcadedb.index.RangeIndex;
+import com.arcadedb.index.lsm.LSMTreeIndexAbstract;
 import com.arcadedb.query.sql.parser.AndBlock;
 import com.arcadedb.query.sql.parser.BetweenCondition;
 import com.arcadedb.query.sql.parser.BinaryCompareOperator;
@@ -530,6 +531,12 @@ public class FetchFromIndexStep extends AbstractExecutionStep {
       if (convertedTo.length == 0)
         convertedTo = null;
 
+      // A comparison with null is never true (issue #8812): a null range bound matches nothing, it must not read as "no bound"
+      // (the other endpoint of a prefix range is shorter than the range slot, and may end with such an equality null)
+      final int rangeKeySize = Math.max(fromKey.getExpressions().size(), toKey.getExpressions().size());
+      if (isRangeCondition() && (endsWithNull(convertedFrom, rangeKeySize) || endsWithNull(convertedTo, rangeKeySize)))
+        continue;
+
       if (!valuesConvertToIndexKeyTypes(convertedFrom) || !valuesConvertToIndexKeyTypes(convertedTo))
         // This combination's bound has no defined ordering against the index's declared key type: it matches no
         // indexed row, consistent with the row-scan operators (#5900). Skip it rather than aborting the whole scan.
@@ -542,18 +549,30 @@ public class FetchFromIndexStep extends AbstractExecutionStep {
       sortSeeksInIndexOrder(seeks);
 
     for (final Object[][] seek : seeks) {
-      final Object[] convertedFrom = seek[0];
+      Object[] convertedFrom = seek[0];
       final Object[] convertedTo = seek[1];
+      boolean fromIncluded = fromKeyIncluded;
       final IndexCursor cursor;
 
-      if (Arrays.equals(convertedFrom, convertedTo) && fromKeyIncluded && toKeyIncluded
+      // NULL_STRATEGY INDEX sorts null keys lowest: start past them, a comparison with null is never true (issue #8833)
+      if (convertedTo != null && (convertedFrom == null || convertedTo.length > convertedFrom.length)
+          && index.supportsOrderedIterations() && index.getNullStrategy() == LSMTreeIndexAbstract.NULL_STRATEGY.INDEX) {
+        final int prefix = convertedFrom == null ? 0 : convertedFrom.length;
+        final Object[] extended = new Object[prefix + 1];
+        if (prefix > 0)
+          System.arraycopy(convertedFrom, 0, extended, 0, prefix);
+        convertedFrom = extended;
+        fromIncluded = false;
+      }
+
+      if (Arrays.equals(convertedFrom, convertedTo) && fromIncluded && toKeyIncluded
           && convertedFrom != null && index.getPropertyNames().size() == convertedFrom.length)
         cursor = index.get(convertedFrom);
       else if (index.supportsOrderedIterations()) {
         if (orderAsc)
-          cursor = index.range(true, convertedFrom, fromKeyIncluded, convertedTo, toKeyIncluded);
+          cursor = index.range(true, convertedFrom, fromIncluded, convertedTo, toKeyIncluded);
         else
-          cursor = index.range(false, convertedTo, toKeyIncluded, convertedFrom, fromKeyIncluded);
+          cursor = index.range(false, convertedTo, toKeyIncluded, convertedFrom, fromIncluded);
       } else if (additionalRangeCondition == null && allEqualities((AndBlock) condition)) {
         cursor = index.iterator(isOrderAsc(), convertedFrom, true);
       } else {
@@ -566,6 +585,29 @@ public class FetchFromIndexStep extends AbstractExecutionStep {
       cursor = nextCursors.removeFirst();
       fetchNextEntry();
     }
+  }
+
+  private static boolean endsWithNull(final Object[] key, final int rangeKeySize) {
+    return key != null && key.length == rangeKeySize && key[key.length - 1] == null;
+  }
+
+  /**
+   * Whether the last key position is bounded by {@code <}, {@code <=}, {@code >}, {@code >=} or {@code BETWEEN}, as opposed
+   * to being matched exactly.
+   */
+  private boolean isRangeCondition() {
+    if (additionalRangeCondition != null)
+      return true;
+    if (!(condition instanceof AndBlock andBlock) || andBlock.getSubBlocks().isEmpty())
+      return false;
+    final BooleanExpression last = andBlock.getSubBlocks().getLast();
+    if (last instanceof BetweenCondition)
+      return true;
+    if (!(last instanceof BinaryCondition binary))
+      return false;
+    final BinaryCompareOperator operator = binary.getOperator();
+    return operator instanceof GtOperator || operator instanceof GeOperator || operator instanceof LtOperator
+        || operator instanceof LeOperator;
   }
 
   /**

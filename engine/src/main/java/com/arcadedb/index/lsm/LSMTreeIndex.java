@@ -40,6 +40,7 @@ import com.arcadedb.index.IndexCursorEntry;
 import com.arcadedb.index.IndexException;
 import com.arcadedb.index.IndexFactoryHandler;
 import com.arcadedb.index.IndexInternal;
+import com.arcadedb.index.PendingIndexRemovals;
 import com.arcadedb.index.RangeIndex;
 import com.arcadedb.index.TempIndexCursor;
 import com.arcadedb.index.TypeIndex;
@@ -556,15 +557,22 @@ public class LSMTreeIndex implements RangeIndex, IndexInternal {
   @Override
   public IndexCursor get(final Object[] keys, final int limit) {
     checkIsValid();
-    final Object[] convertedKeys = convertKeys(keys);
+    final Object[] convertedKeys;
+    try {
+      convertedKeys = convertKeys(keys);
+    } catch (final IllegalArgumentException e) {
+      LogManager.instance().log(this, Level.FINE, "Lookup key cannot be read as the key types of index '%s': no row", e, getName());
+      // A lookup key the declared type cannot read ('7.0' against an INTEGER key; NumberFormatException is an IllegalArgumentException) cannot equal any indexed
+      // key: it answers no row, as the same predicate does without the index (issue #8888). A WRITE of such a key
+      // still fails in put(), which is the build/insert contract convertIndexKeyOrNull documents.
+      return EMPTY_CURSOR;
+    }
 
     if (getDatabase().getTransaction().getStatus() == TransactionContext.STATUS.BEGUN) {
       Set<IndexCursorEntry> txChanges = null;
-      Set<RID> removedRids = null;
-      boolean hasRemoves = false;
-      // #6927: a remove(keys) carrying no RID kills EVERY disk RID at this key. It used to allocate an EMPTY
-      // removedRids set, which then filtered nothing at all, so the disk entries survived a whole-key removal.
-      boolean keyWideRemove = false;
+      // what the pending entries of this key hide from the disk result, or null when they hide nothing (#6970)
+      PendingIndexRemovals removals = null;
+      final boolean unique = isUnique();
 
       final Map<TransactionIndexContext.ComparableKey, Map<TransactionIndexContext.IndexKey,
           TransactionIndexContext.IndexKey>> indexChanges = getDatabase().getTransaction()
@@ -575,32 +583,14 @@ public class LSMTreeIndex implements RangeIndex, IndexInternal {
         if (values != null) {
           for (final TransactionIndexContext.IndexKey value : values.values()) {
             if (value != null) {
-              if (value.operation == TransactionIndexContext.IndexKey.IndexKeyOperation.REMOVE) {
-                if (isUnique())
-                  // FOR UNIQUE INDEXES, A REMOVE MEANS THE KEY IS GONE
-                  return EMPTY_CURSOR;
+              if (unique && PendingIndexRemovals.removesWholeKey(value, true))
+                // ON A UNIQUE INDEX NOTHING SURVIVES A WHOLE-KEY REMOVAL: ANSWER BEFORE ALLOCATING THE FILTER
+                return EMPTY_CURSOR;
 
-                hasRemoves = true;
-                if (value.rid == null)
-                  keyWideRemove = true;
-                else {
-                  if (removedRids == null)
-                    removedRids = new HashSet<>();
-                  removedRids.add(value.rid);
-                }
+              // #6970: which disk RIDs a pending entry hides is decided by PendingIndexRemovals
+              removals = PendingIndexRemovals.accumulate(removals, value, unique);
+              if (value.operation == TransactionIndexContext.IndexKey.IndexKeyOperation.REMOVE)
                 continue;
-              }
-
-              if (value.operation == TransactionIndexContext.IndexKey.IndexKeyOperation.REPLACE && value.oldRid != null) {
-                // #6927: on a unique index a same-key REMOVE + ADD is merged into ONE entry whose oldRid is the RID
-                // being replaced - the REMOVE no longer exists on its own. Commit replays that removal
-                // (TransactionIndexContext.commit), so the lookup must not hand the old RID back either; without this
-                // the caller saw BOTH RIDs under a key that is supposed to hold one.
-                hasRemoves = true;
-                if (removedRids == null)
-                  removedRids = new HashSet<>();
-                removedRids.add(value.oldRid);
-              }
 
               if (txChanges == null)
                 txChanges = new HashSet<>();
@@ -617,14 +607,14 @@ public class LSMTreeIndex implements RangeIndex, IndexInternal {
 
       final IndexCursor result = lock.executeInReadLock(() -> mutable.get(convertedKeys, limit));
 
-      if (txChanges != null || hasRemoves) {
+      if (txChanges != null || removals != null) {
         if (txChanges == null)
           txChanges = new HashSet<>();
 
         // MERGE WITH DISK RESULTS, FILTERING OUT REMOVED RIDS
         while (result.hasNext()) {
           final Identifiable next = result.next();
-          if (keyWideRemove || (removedRids != null && removedRids.contains(next.getIdentity())))
+          if (removals != null && removals.hides(next))
             continue;
           txChanges.add(new IndexCursorEntry(convertedKeys, next, 1));
         }

@@ -133,6 +133,28 @@ public class PostBootstrapStateHandler extends AbstractServerHttpHandler {
 
     final ArcadeDBServer server = httpServer.getServer();
 
+    // Issue #8605: a leader about to reopen a closed copy a resync could not verify asks about this node's copy of that
+    // one database. Answered from the registry, the directory and the persisted applied index alone: nothing is opened
+    // or hashed, a closed copy included.
+    final String copyOf = payload != null ? payload.getString(UnverifiedClosedCopyCheck.COPY_OF, null) : null;
+    if (copyOf != null) {
+      try {
+        server.checkDatabaseNameIsValid(copyOf);
+      } catch (final IllegalArgumentException e) {
+        return new ExecutionResponse(400, new JSONObject().put("error", e.getMessage()).toString());
+      }
+      final ArcadeStateMachine stateMachine = raftHAServer.getStateMachine();
+      final JSONObject response = new JSONObject();
+      response.put("peerId", raftHAServer.getLocalPeerId().toString());
+      response.put(UnverifiedClosedCopyCheck.COPY,
+          UnverifiedClosedCopyCheck.localCopyState(server, stateMachine, copyOf).toJSON(copyOf));
+      // Whether this node's snapshot endpoint would serve it - registered, and not quarantined (#8468): what a follower
+      // re-verifying a copy asks (issue #8606).
+      response.put(UnverifiedClosedCopyCheck.SERVES,
+          server.existsDatabase(copyOf) && (stateMachine == null || stateMachine.quarantineCause(copyOf) == null));
+      return new ExecutionResponse(200, response.toString());
+    }
+
     // Issue #8368: the probe of a running first-formation pass says so, and this is the only local signal a
     // follower gets that a pass is under way before the committed baseline reaches it. Taken before the
     // fingerprints below are computed: the pass is already running, and hashing a large database is not quick.
@@ -146,7 +168,7 @@ public class PostBootstrapStateHandler extends AbstractServerHttpHandler {
     for (final String dbName : server.getDatabaseNames()) {
       // Reserved internal databases (e.g. ".raft") are not part of the operator-visible state and
       // their fingerprint would be meaningless to a peer that's about to seed itself; skip them.
-      if (dbName.startsWith("."))
+      if (ArcadeDBServer.isReservedDatabaseName(dbName))
         continue;
 
       try {

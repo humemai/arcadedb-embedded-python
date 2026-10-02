@@ -25,6 +25,7 @@ import com.arcadedb.database.LocalDatabase;
 import com.arcadedb.engine.TransactionManager;
 import com.arcadedb.engine.ComponentFile;
 import com.arcadedb.engine.PageSnapshot;
+import com.arcadedb.engine.PaginatedComponent;
 import com.arcadedb.engine.timeseries.TimeSeriesCompactionPause;
 import com.arcadedb.engine.timeseries.TimeSeriesSealedStore;
 import com.arcadedb.exception.DatabaseOperationException;
@@ -59,7 +60,6 @@ import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Base64;
-import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -361,7 +361,9 @@ public class SnapshotHttpHandler implements HttpHandler {
       // Advertise that this stream ends with a completeness manifest (issue #4831) so the follower
       // requires it and rejects a download truncated at a ZIP-entry boundary.
       exchange.getResponseHeaders().put(new HttpString(SnapshotManager.MANIFEST_HEADER), "1");
-      // The follower refuses a copy behind the entries it already applied to the one it is replacing (issue #8454).
+      // The follower refuses a copy behind the entries it already applied to the one it is replacing (issue #8454),
+      // and does not re-apply any TX or schema entry at or below this index once it installs the copy (issue #8579):
+      // the index must never run ahead of what the captured copy carries.
       if (appliedIndex != Long.MIN_VALUE)
         exchange.getResponseHeaders().put(new HttpString(SnapshotManager.APPLIED_INDEX_HEADER), String.valueOf(appliedIndex));
       exchange.startBlocking();
@@ -816,15 +818,7 @@ public class SnapshotHttpHandler implements HttpHandler {
       if (pause != null)
         pause.close();
 
-      if (snapshot != null)
-        for (final PageSnapshot.SnapshotFile file : snapshot.getFiles())
-          addStreamToZip(zipOut, file.fileName(), snapshot.newInputStream(file.fileId()), manifest);
-      else {
-        final Collection<ComponentFile> files = db.getFileManager().getFiles();
-        for (final ComponentFile file : new ArrayList<>(files))
-          if (file != null)
-            addFileToZip(zipOut, file.getOSFile(), manifest);
-      }
+      addPageFilesToZip(zipOut, db, snapshot, manifest);
 
       // Ship the recency marker (issue #5277). last-tx-id.bin is written on a clean close and on WAL
       // rotation, but a follower that receives this database via snapshot and is later force-killed
@@ -919,7 +913,8 @@ public class SnapshotHttpHandler implements HttpHandler {
       for (final PageSnapshot.SnapshotConfigFile config : snapshot.getConfigurationFiles())
         total += config.size();
       for (final PageSnapshot.SnapshotFile file : snapshot.getFiles())
-        total += file.size();
+        if (isShippedPageFile(file.fileName()))
+          total += file.size();
     } else {
       final File configFile = ((LocalDatabase) db.getEmbedded()).getConfigurationFile();
       if (configFile.exists())
@@ -930,7 +925,7 @@ public class SnapshotHttpHandler implements HttpHandler {
         total += schemaFile.length();
 
       for (final ComponentFile file : new ArrayList<>(db.getFileManager().getFiles()))
-        if (file != null)
+        if (file != null && isShippedPageFile(file.getFileName()))
           total += file.getOSFile().length();
     }
 
@@ -1010,6 +1005,41 @@ public class SnapshotHttpHandler implements HttpHandler {
             + "' went away after the snapshot's point in time: the archive would declare its type without its data ("
             + e.getMessage() + ")");
       }
+  }
+
+  /**
+   * Archives the page files of the ship: the window's files when there is one, the registered files frozen on disk
+   * otherwise - the same two sources {@link #estimateUncompressedBytes} sizes.
+   * <p>
+   * An index-compaction temporary ({@code temp_*}) is registered, so both sources carry it, but it is skipped (issue
+   * #8019): the shipped {@code schema.json} still names the files it has not replaced yet, because
+   * {@code removeTempSuffix()} runs before the schema switches over, and on the follower nothing would ever register
+   * or delete it. See {@link #isShippedPageFile(String)}.
+   * <p>
+   * Package-private and static so both branches can be driven from a test without an HTTP exchange.
+   */
+  static void addPageFilesToZip(final ZipOutputStream zipOut, final DatabaseInternal db, final PageSnapshot snapshot,
+      final List<SnapshotManager.ManifestEntry> manifest) throws Exception {
+    if (snapshot != null) {
+      for (final PageSnapshot.SnapshotFile file : snapshot.getFiles())
+        if (isShippedPageFile(file.fileName()))
+          addStreamToZip(zipOut, file.fileName(), snapshot.newInputStream(file.fileId()), manifest);
+    } else
+      for (final ComponentFile file : new ArrayList<>(db.getFileManager().getFiles()))
+        if (file != null && isShippedPageFile(file.getFileName()))
+          addFileToZip(zipOut, file.getOSFile(), manifest);
+  }
+
+  /**
+   * Whether a registered page file belongs in the snapshot ZIP: every one except an index-compaction temporary
+   * (issue #8019). The ONE predicate both {@link #addPageFilesToZip} and {@link #estimateUncompressedBytes} apply, so
+   * the size announced to the follower's space check (#7037) cannot drift from the archive actually sent.
+   * <p>
+   * Deliberately applied here and not in {@code PageManager.openSnapshot}: the full backup reads the same window, and
+   * what a backup archive contains is a separate contract (the backup half is #8848).
+   */
+  static boolean isShippedPageFile(final String fileName) {
+    return !PaginatedComponent.isTemporaryFileName(fileName);
   }
 
   /**

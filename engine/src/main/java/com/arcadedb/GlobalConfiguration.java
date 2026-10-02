@@ -604,6 +604,10 @@ public enum GlobalConfiguration {
       "Per-transaction soft cap (in bytes) on the record pre-images/final images retained for the disjoint-slot merge (TX_PAGE_SLOT_MERGE). When a transaction's tracked images exceed this, the merge is disabled for the rest of that transaction and its conflicting pages fall back to a normal retry - bounding heap on a very large transaction (e.g. a bulk in-place update) instead of retaining ~2x every touched record until commit",
       Long.class, 16L * 1024 * 1024),
 
+  TX_STALE_READ_CHECK("arcadedb.txStaleReadCheck", SCOPE.DATABASE,
+      "Refuse, with a retryable ConcurrentModificationException, a property write on a record read in the current transaction when a concurrent transaction committed a change to that record in between (issue #8610). Without it, modify() refreshes such a record silently and a value computed from the older read overwrites the concurrent change (a lost update under READ_COMMITTED). A change that touches only the edge lists of a vertex (edge creation) is never refused. Only direct property assignment and removal is checked: an in-place change to a list, map or embedded document got from the record is not. Set to false to restore the previous last-writer-wins behavior",
+      Boolean.class, true),
+
   GRAPH_SUPERNODE_THRESHOLD("arcadedb.graph.supernodeThreshold", SCOPE.DATABASE,
       "Approximate number of edges (per vertex, per direction) after which the vertex's edge list is promoted to the striped super-node layout, spreading further appends over multiple files so concurrent insertions on the same hot vertex do not contend. FORWARD-INCOMPATIBLE ON FIRST USE: promotion writes a new record type (the stripe directory), so once any vertex promotes, the database can no longer be opened by releases older than 26.8.1; promotion is one-way. This ordering guarantee applies only to the OLTP edge-list read walks (edgeIterator/vertexIterator/ridIterator): iteration order on promoted vertices is APPROXIMATELY newest-first instead of exactly newest-first, the stripe chains are interleaved so the newest edge is always within the first 'supernodeStripes' entries and an edge of recency rank r is returned at a position of order r, but only the order WITHIN a stripe is exact - an application needing an exact order must sort or use an index. That rank-fidelity holds for the whole read: the first 'supernodeInterleaveRounds x supernodeStripes' entries are taken one per stripe per turn and past that the rotation widens into geometrically growing batches, which costs the position of an entry a bounded factor rather than the relation to its rank (see GRAPH_SUPERNODE_INTERLEAVE_ROUNDS). It does NOT hold for a query the planner routes through a GraphAnalyticalView (e.g. GAVExpandAll): a view returns neighbours ordered by internal dense node ID, which carries no relationship to recency. 0 disables promotion entirely (databases stay fully readable by older versions)",
       Integer.class, 4096),
@@ -834,6 +838,14 @@ public enum GlobalConfiguration {
       'groovy' enables the legacy Groovy engine with security restrictions (use only if needed for compatibility). \
       'auto' attempts Java first, falls back to Groovy if needed (not recommended for security-critical deployments).""",
       String.class, "java", Set.of("auto", "groovy", "java")),
+
+  GREMLIN_CLIENT_PORT("arcadedb.gremlin.client.port", SCOPE.DATABASE,
+      """
+      Port of the Gremlin Server the remote ArcadeGraph client connects to. 0 (default) uses the port the ArcadeDB server \
+      advertises for its Gremlin plugin, and falls back to 8182 (the TinkerPop default) when the server advertises none. \
+      Set it when the Gremlin port is reached through a mapping the server does not know about (container port publishing, \
+      a load balancer).""",
+      Integer.class, 0),
 
   /**
    * Not in use anymore after removing Gremlin Executor
@@ -1375,6 +1387,15 @@ public enum GlobalConfiguration {
       "Number of automatic retries in case of IO errors with a specific server. If replica servers are configured, look also at HA_ERROR_RETRY setting. 0 (default) = no retry",
       Integer.class, 0),
 
+  NETWORK_RETRY_AFTER_MAX_WAIT("arcadedb.network.retryAfterMaxWait", SCOPE.SERVER, """
+      Upper bound, in milliseconds, on how long the remote client honors the Retry-After a server sends with a request it \
+      refused before running it (a 503 from a node installing a snapshot) before retrying it: the transaction retry loop \
+      and the election retry loop wait at least that long, and the hint is capped at this value, so a misbehaving \
+      server cannot park the client. A random spread of up to a tenth of the hint is added on top, so the clients a node \
+      refused together do not all come back at once. The most a refused request can wait is therefore 1.1 times this \
+      value per retry: txRetries - 1 pauses for a transaction, arcadedb.ha.clientElectionRetryCount for a command. 0 \
+      ignores Retry-After, leaving only the retry backoff (issue #8617)""", Long.class, 30_000L),
+
   NETWORK_SOCKET_TIMEOUT("arcadedb.network.socketTimeout", SCOPE.SERVER, "TCP/IP Socket timeout (in ms)", Integer.class, 30000),
 
   NETWORK_REMOTE_FETCH_CONNECT_TIMEOUT("arcadedb.network.remoteFetchConnectTimeout", SCOPE.SERVER, """
@@ -1439,6 +1460,28 @@ public enum GlobalConfiguration {
   // SERVER
   SERVER_NAME("arcadedb.server.name", SCOPE.SERVER, "Server name", String.class, Constants.PRODUCT + "_0"),
 
+  INSTANCE_ID("arcadedb.instance.id", SCOPE.DATABASE,
+      "Optional instance id (format 'adb-' followed by a lowercase UUID) to use instead of the one ArcadeDB generates and "
+          + "persists in the file 'instance.id' of the server configuration directory. Set it when that directory is read-only "
+          + "or is copied between nodes. The id identifies this instance (standalone server, HA node or embedded engine) to "
+          + "ArcadeData support. It is NOT a credential and is never used for authentication. Empty means generated. "
+          + "A malformed value is ignored with a warning", String.class, ""),
+
+  SUPPORT_URL("arcadedb.support.url", SCOPE.SERVER,
+      "Base URL of the ArcadeData customer portal used by the Support tab of Studio. Must be HTTPS (plain HTTP is accepted only "
+          + "for localhost/127.0.0.1, for tests). Overrides the value registered in the file 'support.json' of the server "
+          + "configuration directory", String.class, "https://portal.arcadedb.com"),
+
+  SUPPORT_CLIENT_ID("arcadedb.support.clientId", SCOPE.SERVER,
+      "Client ID (workspace id) of the ArcadeData customer portal used by the Support tab of Studio. Together with "
+          + "arcadedb.support.clientKey it registers the server without using Studio (e.g. containers or Kubernetes secrets) "
+          + "and overrides the file 'support.json' of the server configuration directory. Empty means not set", String.class, ""),
+
+  SUPPORT_CLIENT_KEY("arcadedb.support.clientKey", SCOPE.SERVER,
+      "Client key (a 'wsk_...' workspace key) of the ArcadeData customer portal used by the Support tab of Studio. It is a "
+          + "credential: it is masked when settings are listed or dumped, never returned by any API and never logged. "
+          + "Empty means not set", String.class, ""),
+
   SERVER_ROOT_PASSWORD("arcadedb.server.rootPassword", SCOPE.SERVER,
       "Password for root user to use at first startup of the server. Set this to avoid asking the password to the user",
       String.class, null),
@@ -1489,8 +1532,10 @@ public enum GlobalConfiguration {
       "Enable pushing the server metrics to an OTLP endpoint, alongside (never replacing) the Prometheus scrape endpoint. Requires the optional metrics plugin on the classpath and arcadedb.serverMetrics to be true",
       Boolean.class, false),
 
-  SERVER_METRICS_OTLP_ENDPOINT("arcadedb.serverMetrics.otlp.endpoint", SCOPE.SERVER, "OTLP metrics export endpoint",
-      String.class, "http://localhost:4317"),
+  SERVER_METRICS_OTLP_ENDPOINT("arcadedb.serverMetrics.otlp.endpoint", SCOPE.SERVER, """
+      OTLP metrics export endpoint. Metrics are pushed over OTLP/HTTP (protobuf), not gRPC, so this is the collector's \
+      HTTP receiver (port 4318, path /v1/metrics), not the gRPC port 4317. A URL without a path gets /v1/metrics \
+      appended""", String.class, "http://localhost:4318/v1/metrics"),
 
   SERVER_METRICS_TRACING_ENABLED("arcadedb.serverMetrics.tracing.enabled", SCOPE.SERVER,
       "Enable OpenTelemetry distributed tracing (requires the optional tracing plugin on the classpath). Note: query/command spans include the statement text as the db.statement span attribute, which may contain sensitive data, so secure the OTLP collector endpoint",
@@ -1501,6 +1546,22 @@ public enum GlobalConfiguration {
 
   SERVER_METRICS_TRACING_SAMPLING_RATE("arcadedb.serverMetrics.tracing.samplingRate", SCOPE.SERVER,
       "Parent-based trace sampling ratio in [0.0,1.0]", Float.class, 0.0f),
+
+  SERVER_METRICS_TRACING_EXCLUDED_PATHS("arcadedb.serverMetrics.tracing.excludedPaths", SCOPE.SERVER, """
+      Comma-separated HTTP request paths that never produce a trace span, matched exactly against the request path \
+      (query string excluded, one trailing slash ignored, no wildcards). The default leaves out the readiness and health probes, which a container \
+      orchestrator or load balancer calls every few seconds and which would otherwise flood the trace backend \
+      with noise (issue #7295). Only the tracing handler declines these requests: the Micrometer \
+      Observation stays alive for any other handler, and the HTTP request timer (arcadedb.http.requests) still counts \
+      them. Set it to an empty string to trace every request. Read \
+      when the tracing plugin starts.""", String.class, "/api/v1/ready,/api/v1/health"),
+
+  SERVER_METRICS_SERVICE_NAME("arcadedb.serverMetrics.serviceName", SCOPE.SERVER, """
+      The OpenTelemetry service.name resource attribute the tracing and OTLP metrics plugins report. The standard \
+      OpenTelemetry environment variables take precedence, as they do for any OpenTelemetry SDK: OTEL_SERVICE_NAME \
+      first, then a service.name entry in OTEL_RESOURCE_ATTRIBUTES (whose other attributes are reported as well); \
+      this setting applies only when neither names a service. Before issue #7295 the tracing plugin ignored both \
+      variables and reported unknown_service:java. Read when the plugins start.""", String.class, "arcadedb"),
 
   SERVER_HEALTH_CHECK_ENABLED("arcadedb.server.healthCheck.enabled", SCOPE.SERVER, """
       True (the default) to run the server health monitor: one daemon thread that samples free disk space on \
@@ -1577,6 +1638,11 @@ public enum GlobalConfiguration {
        with the same startup configuration, not as a way to replace a database cluster-wide from one node. A node that finds an existing copy of the database drops ONLY its own local copy before restoring, and logs a WARNING when \
        that copy was replicated, because the rest of the cluster keeps whatever it already has until it is restored the same way.""",
       String.class, ""),
+
+  SERVER_STARTUP_RESTORE_SLOT_WAIT_MS("arcadedb.server.startupRestoreSlotWaitMs", SCOPE.SERVER, """
+      Milliseconds the `restore:` command of `arcadedb.server.defaultDatabases` waits for a backup, restore or import of the same database, \
+      already running on this server, to finish before it refuses to start. A refusal stops the server boot. 0 or a negative value refuses immediately, without waiting.""",
+      Long.class, 60_000L),
 
   SERVER_DEFAULT_DATABASE_MODE("arcadedb.server.defaultDatabaseMode", SCOPE.SERVER, """
       The default mode to load pre-existing databases. The value must match a com.arcadedb.engine.PaginatedFile.MODE enum value: {READ_ONLY, READ_WRITE}\
@@ -1715,20 +1781,35 @@ public enum GlobalConfiguration {
 
   SERVER_HTTP_STREAMING_WRITE_TIMEOUT("arcadedb.server.httpStreamingWriteTimeout", SCOPE.SERVER,
       """
-      Budget in milliseconds a single blocking write of a STREAMED HTTP response may make no progress for \
-      (today only the newline-delimited answer of the bulk-load /api/v1/batch endpoint). That response is \
-      written while the request body is still being read, and its size grows with the size of the load, so a \
-      client that uploads everything before reading anything can fill the socket buffers between the two: the \
-      server then blocks inside a response write, and a server blocked there is not reading the upload either \
-      (issue #7381). This bounds that block instead of leaving it indefinite - the connection is closed, the \
-      load fails with a logged diagnosis and the worker thread is released. It is the write-side counterpart \
+      Budget in milliseconds a single blocking write of a STREAMED HTTP response may make no progress for: \
+      the newline-delimited answer of the bulk-load /api/v1/batch endpoint, the newline-delimited query \
+      encoding of /query and /command (Accept: application/x-ndjson), the Server-Sent Events of the AI chat and \
+      of the long-running server commands, and a follower's relay of any of them. Their size grows with the \
+      size of a load, a result set or a conversation, so a client that stops reading fills the socket buffers \
+      and the server blocks inside a response write - on /batch, while not reading the upload either (issue \
+      #7381); everywhere else, holding a worker thread for as long as the client keeps the connection open \
+      (issue #7806). This bounds that block instead of leaving it indefinite - the connection is closed, the \
+      failure is logged with a diagnosis and the worker thread is released. It is the write-side counterpart \
       of 'arcadedb.server.httpStreamingReadTimeout' and is shorter than it on purpose: that budget covers a \
       pause nobody is at fault for (the server committing), while a write that has made no progress at all \
-      for this long means the peer stopped consuming. The timer is armed around one write and disarmed as \
-      soon as it returns, so a long server-side pause BETWEEN two writes never trips it. Set to 0, or to any \
-      negative value, to leave streamed writes unbounded (WARNING: restores the indefinite block). Default is \
-      1 minute""",
+      for this long means the peer stopped consuming. The timer is armed around each hand-off of at most \
+      64 KB to the socket and disarmed as soon as it returns, so a long server-side pause BETWEEN two writes \
+      never trips it, and a large response sent to a slow but reading client restarts it with every chunk. \
+      Set to 0, or to any negative value, to leave streamed writes unbounded (WARNING: restores the indefinite \
+      block). Default is 1 minute""",
       Integer.class, 60_000), // 1 MINUTE DEFAULT
+
+  SERVER_HTTP_STREAMING_KEEPALIVE_INTERVAL("arcadedb.server.httpStreamingKeepAliveInterval", SCOPE.SERVER,
+      """
+      Interval in milliseconds after which a streamed query answer (Accept: application/x-ndjson on /query and \
+      /command) that has had nothing to send writes a bare newline, which every consumer of the encoding skips. \
+      Without it a query whose next row takes a while to produce - a selective predicate over a large bucket, an \
+      expensive projection, a cold cache - is silent on the wire, and a client that bounds the silence (the Java \
+      remote client does, with 'arcadedb.network.socketTimeout' and a 30 second floor) cannot tell it from a \
+      server that went away and fails a healthy query (issue #8565). Keep it well below the smallest silence \
+      budget of the clients and of any proxy in front of the server. Set to 0, or to any negative value, to send \
+      no keep-alive. Default is 5 seconds""",
+      Integer.class, 5_000), // 5 SECONDS DEFAULT
 
   // SERVER gRPC
   SERVER_GRPC_QUERY_MAX_RESULT_ROWS("arcadedb.server.grpcQueryMaxResultRows", SCOPE.SERVER,
@@ -1860,8 +1941,12 @@ public enum GlobalConfiguration {
   SERVER_API_TOKEN_TRUSTED_PROXIES("arcadedb.server.apiTokenTrustedProxies", SCOPE.SERVER,
       """
       Comma-separated list of literal IP addresses or CIDR ranges (IPv4 and IPv6) of the reverse proxies allowed to \
-      vouch for the transport of `POST /api/v1/server/api-tokens` through the X-Forwarded-Proto header. Empty by \
-      default, which trusts no proxy and leaves the header unread. \
+      vouch for the transport of an API token mint through the X-Forwarded-Proto header: `POST \
+      /api/v1/server/api-tokens` over HTTP, and the gRPC `CreateApiToken` RPC, where the proxy reports it as the \
+      `x-forwarded-proto` metadata key (Envoy adds it on its own; nginx with `grpc_set_header X-Forwarded-Proto \
+      $scheme`). List only an L7 proxy that sets or overwrites the header: an L4 balancer (nginx `stream`, HAProxy \
+      `mode tcp`) passes the client's own header through untouched, so listing one lets any client vouch for itself. \
+      Empty by default, which trusts no proxy and leaves the header unread. \
       When the request's direct peer matches an entry AND the header reports https for every hop, the mint is treated \
       as protected even though the proxy-to-server leg is cleartext - that leg is on the network the operator owns, \
       and by listing the proxy they state where their trust boundary is. A peer that is not on the list can send the \
@@ -1869,7 +1954,7 @@ public enum GlobalConfiguration {
       the caller who would forge it. \
       Entries must be literal addresses - a hostname is rejected rather than resolved, since a DNS answer is not a \
       trust decision. An unparseable list is treated as empty, so a typo denies rather than opening the gate \
-      (issue #7804)""",
+      (issues #7804, #7821)""",
       String.class, ""),
 
   SERVER_SECURITY_IMPORT_BLOCK_LOCAL_NETWORKS("arcadedb.server.security.importBlockLocalNetworks", SCOPE.SERVER,
@@ -1945,7 +2030,9 @@ public enum GlobalConfiguration {
       """
       Maximum election timeout in milliseconds. Default of 10000ms is a balance between fast failover and \
       resilience to heartbeat blips under heavy ingest. Bump higher for WAN clusters or sustained bulk-load \
-      workloads where leader appender threads compete with replication.""",
+      workloads where leader appender threads compete with replication. A value at or below \
+      arcadedb.ha.electionTimeoutMin is widened to twice the minimum, because with no spread followers split the vote \
+      again and again.""",
       Integer.class, 10_000),
 
   HA_LOG_SEGMENT_SIZE("arcadedb.ha.logSegmentSize", SCOPE.SERVER,
@@ -2217,6 +2304,27 @@ public enum GlobalConfiguration {
       Defaults to 128MB, higher than Ratis's 64MB stock default, so reasonable bulk-load batches do not get rejected. \
       Lower it to bound memory exposure on hostile inputs; raise it if a single transaction legitimately exceeds 128MB.""",
       Long.class, 128L * 1024 * 1024),
+
+  HA_TX_SCHEMA_CHECK("arcadedb.ha.txSchemaCheck", SCOPE.SERVER,
+      """
+      Have every transaction a node replicates state the Raft log index that node had applied when the transaction \
+      began, so the leader can refuse a transaction that was prepared before a schema change it has already applied \
+      (issue #8686). Without it a replica that has not yet applied a committed CREATE INDEX ships transactions whose \
+      WAL carries no page changes for the new index; the leader accepts them, every node applies them as they are, \
+      and the record is missing from the index on all nodes, with no error anywhere. The refusal is a retryable \
+      ConcurrentModificationException, and the retry waits for the schema change to be applied locally first. \
+      \
+      The index is written only once every peer advertises the capability to read it, so a rolling upgrade needs no \
+      sequencing, but ONE peer that is old, not yet probed or offline turns the check off for every writer, so a \
+      mixed-version cluster is unprotected until the last node is upgraded. Protection is also best-effort across a \
+      leader restart or a snapshot install: the leader knows no schema change until it applies the next one. \
+      \
+      This setting only controls whether THIS node states an index. The leader checks every entry that carries one, so \
+      turning it off on the leader alone changes nothing. Expect retryable ConcurrentModificationExceptions on replicas \
+      during DDL and set transaction retries accordingly: a transaction begun before a schema change is refused, and \
+      callers that do not retry (the default for plain HTTP commands) see the error. Turn it off on the nodes that write \
+      if a workload running long transactions across frequent schema changes sees too many retries.""",
+      Boolean.class, true),
 
   HA_SCHEMA_DELTA("arcadedb.ha.schemaDelta", SCOPE.SERVER,
       """
@@ -2502,8 +2610,24 @@ public enum GlobalConfiguration {
   HA_STALE_FOLLOWER_RECOVERY_DURATION_MS("arcadedb.ha.staleFollowerRecoveryDurationMs", SCOPE.SERVER,
       """
       How long in milliseconds the lag described by HA_STALE_FOLLOWER_LAG_THRESHOLD must persist continuously \
-      (across consecutive health-monitor ticks) before recovery is triggered. Avoids acting on transient catch-up lag.""",
+      (across consecutive health-monitor ticks) before recovery is triggered. Avoids acting on transient catch-up lag. \
+      Governs only the lag-based recovery: the stuck-at-stale-term reformat has its own window, \
+      HA_DIVERGED_FOLLOWER_RECOVERY_DURATION_MS.""",
       Long.class, 60_000L),
+
+  HA_DIVERGED_FOLLOWER_RECOVERY_DURATION_MS("arcadedb.ha.divergedFollowerRecoveryDurationMs", SCOPE.SERVER,
+      """
+      How long in milliseconds a follower must stay stuck at a stale term (see HA_DIVERGED_FOLLOWER_RECOVERY) - on \
+      consecutive health-monitor ticks and without its applied index advancing - before it reformats its Raft storage \
+      and rejoins. Any advance of the applied index restarts the window, so a follower that is still applying entries is \
+      never reformatted however long its catch-up takes. The effective value is floored at 2x HA_ELECTION_TIMEOUT_MAX: \
+      a follower that stops hearing its leader gives up on it within one election timeout, which clears the signature, \
+      so a window shorter than that could reformat a node that was only waiting for an election. \
+      UPGRADE NOTE: before 26.10.1 this window was HA_STALE_FOLLOWER_RECOVERY_DURATION_MS (default 60000), shared \
+      with the lag-based recovery. It is now separate and defaults to 20000, cutting the time a cluster runs without \
+      that follower's fault tolerance; a deployment that raised the old setting to delay the reformat must raise this \
+      one instead.""",
+      Long.class, 20_000L),
 
   HA_DIVERGED_FOLLOWER_RECOVERY("arcadedb.ha.divergedFollowerRecovery", SCOPE.SERVER,
       """
@@ -2515,11 +2639,11 @@ public enum GlobalConfiguration {
       (HA_STALE_FOLLOWER_LAG_THRESHOLD) nor the leader-driven stalled-replica resync \
       (HA_STALLED_REPLICA_RESYNC_DURATION_MS) ever fire - both need a large lag - and the leader's appender otherwise \
       loops on INCONSISTENCY forever until an operator restarts a node. The stuck condition must persist for \
-      HA_STALE_FOLLOWER_RECOVERY_DURATION_MS before recovery triggers, and HA_DIVERGED_FOLLOWER_MAX_REFORMATS bounds how \
-      often it retries. \
+      HA_DIVERGED_FOLLOWER_RECOVERY_DURATION_MS before recovery triggers, and HA_DIVERGED_FOLLOWER_MAX_REFORMATS bounds \
+      how often it retries. \
       DESTRUCTIVE: this deletes the local Raft storage automatically (the database files are preserved and re-synced \
       from the leader). The signature is "stuck at a stale term", which a genuine log divergence satisfies but so can a \
-      sustained (> HA_STALE_FOLLOWER_RECOVERY_DURATION_MS) one-sided network outage where heartbeats arrive but the \
+      sustained (> HA_DIVERGED_FOLLOWER_RECOVERY_DURATION_MS) one-sided network outage where heartbeats arrive but the \
       leader's current-term entries do not; in that case the reformat is wasteful (no data loss - the leader holds \
       everything) but does not fix the connectivity. \
       No cross-follower coordination: if a systemic condition makes several followers satisfy the signature at once they \
@@ -2532,7 +2656,7 @@ public enum GlobalConfiguration {
       """
       Maximum number of automatic Raft-storage reformats (HA_DIVERGED_FOLLOWER_RECOVERY) allowed within one divergence \
       episode before the follower gives up and logs a SEVERE message for operator intervention, instead of reformatting \
-      and full-snapshot-installing every HA_STALE_FOLLOWER_RECOVERY_DURATION_MS forever. A clean reformat resets the \
+      and full-snapshot-installing every HA_DIVERGED_FOLLOWER_RECOVERY_DURATION_MS forever. A clean reformat resets the \
       shared Ratis restart-retry budget, so without this cap a node whose divergence keeps reproducing would loop \
       silently. The budget re-arms once the follower has looked healthy for 5x the recovery duration (the episode is \
       considered resolved). Set to 0 for unbounded reformats (no breaker).""",
@@ -2713,6 +2837,10 @@ public enum GlobalConfiguration {
 
   POSTGRES_HOST("arcadedb.postgres.host", SCOPE.SERVER,
       "TCP/IP host name used for incoming connections for Postgres plugin. Default is '0.0.0.0'", String.class, "0.0.0.0"),
+
+  POSTGRES_SSL("arcadedb.postgres.ssl", SCOPE.SERVER,
+      "TLS mode for Postgres wire protocol connections, negotiated through the protocol's own SSLRequest handshake and using the shared SSL key/trust store settings (arcadedb.ssl.*): DISABLED (no TLS, default), OPTIONAL (TLS or plaintext, the client chooses), REQUIRED (TLS only, plaintext startup is refused)",
+      String.class, "DISABLED"),
 
   POSTGRES_DEBUG("arcadedb.postgres.debug", SCOPE.SERVER,
       "Enables the printing of Postgres protocol to the console. Default is false", Boolean.class, false),
@@ -3657,11 +3785,11 @@ public enum GlobalConfiguration {
    * cannot read here ({@code abc} for an {@code Integer} throws); {@code Boolean} was the one that did not.
    * <p>
    * This is the entry point for a value that arrived from an administrative command, where refusing loudly is an
-   * error the operator can read and act on. All four such writers use it: the {@code set server setting} and
-   * {@code set database setting} HTTP commands, the {@code set_server_setting} MCP tool, and
-   * {@code ALTER DATABASE ... SETTING} in SQL.
+   * error the operator can read and act on. The administrative writers use it: the {@code set server setting} and
+   * {@code set database setting} HTTP commands, the {@code set_server_setting} MCP tool,
+   * {@code ALTER DATABASE ... SETTING} in SQL, and the console's {@code SET} command and {@code -D} arguments (#7870).
    * <p>
-   * There is a FIFTH writer of raw text, and issue #7222 is what it cost to leave it out of that list:
+   * There is a further writer of raw text, and issue #7222 is what it cost to leave it out of that list:
    * {@link #readConfiguration()}, the system-property and environment-variable path, which used
    * {@link #setValue(Object)} and so got the permissive {@code Boolean.parseBoolean} - a container deployment
    * configures through exactly that path, and {@code requireAuthentication=yes} silently became {@code false}. It
@@ -3684,10 +3812,15 @@ public enum GlobalConfiguration {
    *       {@link #fromJSON(String)} twin through the same (#7296);</li>
    *   <li>{@code arcadedb.ha.raftPersistStorage} read straight off {@code System.getProperty} by
    *       {@code RaftHAServer.resolvePersistStorage}, which is a READER of raw text rather than a writer and so
-   *       calls {@link #coerceFromConfigurationSource(Object, String)} without storing (#7296).</li>
+   *       calls {@link #coerceFromConfigurationSource(Object, String)} without storing (#7296);</li>
+   *   <li>the console's {@code SET <key> = <value>} command and its {@code -D<key>=<value>} arguments
+   *       ({@code Console.setGlobalConfiguration} and {@code Console.applyCommandLineSetting}), which call this
+   *       method directly and report a refusal to the operator - as an error for {@code SET}, on {@code System.err}
+   *       for {@code -D} (#7870).</li>
    * </ol>
-   * The last one used to store what it read straight into the overlay map with a plain {@code put}, touching
-   * neither this method nor {@link #setValue(Object)}, so a {@code "yes"} written there survived as the string
+   * The configuration-file one ({@link ContextConfiguration#fromJSON(String)}) used to store what it read straight
+   * into the overlay map with a plain {@code put}, touching neither this method nor {@link #setValue(Object)}, so a
+   * {@code "yes"} written there survived as the string
    * {@code "yes"} and {@link ContextConfiguration#getValueAsBoolean(GlobalConfiguration)} read it as {@code false}
    * through {@code Boolean.parseBoolean} - which for {@code arcadedb.ha.tls.mutualAuth} meant an operator writing
    * down that they wanted mutual TLS on the Raft channel turned it off instead.
@@ -3965,7 +4098,7 @@ public enum GlobalConfiguration {
   }
 
   public boolean isHidden() {
-    return hidden || key.contains("clusterToken") || key.contains("Password") || key.contains("password");
+    return hidden || key.contains("clusterToken") || key.contains("Password") || key.contains("password") || key.contains("clientKey");
   }
 
   /**

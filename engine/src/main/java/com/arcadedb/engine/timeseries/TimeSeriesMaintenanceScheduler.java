@@ -25,6 +25,7 @@ import com.arcadedb.log.LogManager;
 import com.arcadedb.schema.LocalTimeSeriesType;
 
 import java.lang.ref.WeakReference;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -44,6 +45,13 @@ import java.util.logging.Level;
 public class TimeSeriesMaintenanceScheduler {
 
   private static final long DEFAULT_CHECK_INTERVAL_MS = 60_000; // 1 minute
+
+  /**
+   * A merge of small sealed blocks rewrites the whole sealed file, so a pass is only run once it removes at least this
+   * many blocks (issue #8794). Bounds the small blocks a shard carries to about this many per shard, and the rewrite to
+   * once per that many maintenance passes of a slow feed.
+   */
+  static final int MERGE_MIN_BLOCKS_SAVED = 8;
 
   private final ScheduledExecutorService executor;
   private final Map<String, ScheduledFuture<?>> tasks = new ConcurrentHashMap<>();
@@ -134,15 +142,25 @@ public class TimeSeriesMaintenanceScheduler {
       // all samples are in the sealed store and subject to truncation.
       engine.compactAll();
 
-      // Apply retention policy
-      if (type.getRetentionMs() > 0) {
-        final long cutoff = nowMs - type.getRetentionMs();
-        engine.applyRetention(cutoff);
+      // A feed slower than a block per pass seals a small block per pass; fold them into full ones (issue #8794).
+      // Its own guard: a store that cannot be merged must not take retention and downsampling down with it.
+      try {
+        engine.mergeSmallBlocks(MERGE_MIN_BLOCKS_SAVED);
+      } catch (final Exception e) {
+        LogManager.instance().log(TimeSeriesMaintenanceScheduler.class, Level.WARNING,
+            "Error merging small sealed blocks of TimeSeries type '%s'", e, typeName);
       }
 
+      // Each setting is read ONCE: the type can be altered concurrently, and a retention checked as positive but
+      // re-read as 0 would compute a cutoff of "now" and drop every sample (issue #7866).
+      final long retentionMs = type.getRetentionMs();
+      if (retentionMs > 0)
+        engine.applyRetention(nowMs - retentionMs);
+
       // Apply downsampling tiers
-      if (!type.getDownsamplingTiers().isEmpty())
-        engine.applyDownsampling(type.getDownsamplingTiers(), nowMs);
+      final List<DownsamplingTier> tiers = type.getDownsamplingTiers();
+      if (!tiers.isEmpty())
+        engine.applyDownsampling(tiers, nowMs);
 
     } catch (final Throwable e) {
       LogManager.instance().log(TimeSeriesMaintenanceScheduler.class, Level.WARNING,

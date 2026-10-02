@@ -43,6 +43,8 @@ function updateServer(callback) {
       // Popover details
       let popoverHtml = "<div style='margin-bottom:8px;font-weight:600;color:var(--text-primary);'>Server Details</div>";
       popoverHtml += "<div style='margin-bottom:6px;'><b>Server:</b> " + escapeHtml(data.user) + "@" + escapeHtml(data.serverName) + "</div>";
+      if (data.instanceId)
+        popoverHtml += "<div style='margin-bottom:6px;word-break:break-all;'><b>Instance ID:</b> <span style='font-family:monospace;font-size:0.82rem;'>" + escapeHtml(data.instanceId) + "</span></div>";
       popoverHtml += "<div style='margin-bottom:6px;'><b>Version:</b> " + escapeHtml(version) + "</div>";
       if (buildInfo)
         popoverHtml += "<div style='margin-bottom:6px;font-size:0.78rem;color:var(--text-muted);word-break:break-all;'><b>Build:</b> " + escapeHtml(buildInfo) + "</div>";
@@ -51,6 +53,15 @@ function updateServer(callback) {
       $("#serverInfoPopoverBody").html(popoverHtml);
 
       serverData = data;
+
+      // The id ArcadeDB generated for itself (also logged at startup): what to quote to ArcadeDB support and what to
+      // paste into the customer portal. Hidden on a server too old to report one.
+      if (data.instanceId) {
+        $("#summInstanceId").text(data.instanceId);
+        $("#summInstanceIdRow").show();
+      } else {
+        $("#summInstanceIdRow").hide();
+      }
 
       displayServerSummary();
       displayMetrics();
@@ -325,10 +336,13 @@ function displayMetrics() {
   // (SparseVectorScoringPool) and "parallel_scan" (ParallelScanProducerPool). Each pool's gauges
   // are: pool.size, pool.active, queue.depth, queue.capacity_remaining, tasks.completed,
   // tasks.caller_run_fallbacks, tasks.reclaimed. The sparse-vector pool adds pool.reserved, queries.in_flight and
-  // queries.split, which explain its per-query decision to parallelise or not (#4085).
+  // queries.split, which explain its per-query decision to parallelise or not (#4085). The per-server pools
+  // (security_refresh, and on an HA node security_seed and security_catch_up) add tasks.coalesced (#7856).
   var ex = serverData.metrics.executors || {};
   var executorRowLabels = { "query": "Query Parallelism", "sparse_vector": "Sparse Vector Scoring",
-      "parallel_scan": "Parallel Scan Producers", "async_command": "Async DDL Commands" };
+      "parallel_scan": "Parallel Scan Producers", "async_command": "Async DDL Commands",
+      "security_refresh": "Security Permission Refresh", "security_seed": "HA Security Seed",
+      "security_catch_up": "HA Security Catch-Up" };
   var executorPoolNames = Object.keys(ex).sort();
   var executorsHtml = "";
   for (var i = 0; i < executorPoolNames.length; i++) {
@@ -352,6 +366,10 @@ function displayMetrics() {
     // highlighted like the fallback cell - it is the pool being busy rather than full, and it is the
     // mechanism that keeps a blocking fan-out from deadlocking, so a non-zero value is healthy.
     executorsHtml += "<td class='text-end'>" + Math.round(pool["tasks.reclaimed"] || 0).toLocaleString() + "</td>";
+    // Coalesced (#7856): tasks a one-slot per-server pool did not run because the one already queued covers
+    // them. Only those pools publish it, so the singleton pools show "-" - and it is not highlighted, since a
+    // coalesced refresh is the design working; the number to worry about is one climbing on a quiet node.
+    executorsHtml += "<td class='text-end'>" + gaugeOrDash(pool, "tasks.coalesced") + "</td>";
     // Split-decision columns (#4085). Only the sparse-vector pool decides per query whether to
     // parallelise, so a pool that does not report them shows "-" rather than a zero that would read
     // as "nothing is splitting" when the concept simply does not apply. "Queries Split" is the
@@ -362,7 +380,7 @@ function displayMetrics() {
     executorsHtml += "<td class='text-end'>" + gaugeOrDash(pool, "queries.split") + "</td>";
     executorsHtml += "</tr>";
   }
-  $("#srvMetricExecutorsTable").html(executorsHtml || "<tr><td colspan='10' class='text-muted text-center'>No executor pool metrics available.</td></tr>");
+  $("#srvMetricExecutorsTable").html(executorsHtml || "<tr><td colspan='11' class='text-muted text-center'>No executor pool metrics available.</td></tr>");
 
   // Sparse Vector Indexes table - rendered from metrics.sparseVectorIndexes. Shape:
   //   { dbName: { typeIndexName: { memtablePostings, segmentCount, totalPostings } } }
@@ -1147,3 +1165,18 @@ document.addEventListener("DOMContentLoaded", function (event) {
   if (serverRefreshTimeoutInSecs == null) serverRefreshTimeoutInSecs = 0;
   $("#serverRefreshTimeout").val(serverRefreshTimeoutInSecs);
 });
+
+/** Copies the server's instance id (shown on the Summary tab) to the clipboard. */
+function copyInstanceId(button) {
+  var id = $("#summInstanceId").text();
+  if (!id) return;
+  var done = function () {
+    var icon = $(button).find("i");
+    icon.removeClass("fa-copy").addClass("fa-check");
+    setTimeout(function () { icon.removeClass("fa-check").addClass("fa-copy"); }, 1500);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText)
+    navigator.clipboard.writeText(id).then(done, function () { window.prompt("Instance ID", id); });
+  else
+    window.prompt("Instance ID", id);
+}

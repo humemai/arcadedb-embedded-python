@@ -51,13 +51,19 @@ import java.net.http.HttpHeaders;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Optional;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.function.Consumer;
 import java.util.logging.Level;
 import java.util.stream.Collectors;
 
@@ -69,8 +75,14 @@ import javax.net.ssl.SSLSession;
  * @author Luca Garulli (l.garulli@arcadedata.com)
  */
 public class RemoteHttpComponent extends RWLockContext {
-  public static final  int    DEFAULT_PORT = 2480;
-  private static final String charset      = "UTF-8";
+  public static final  int    DEFAULT_PORT       = 2480;
+  private static final String charset            = "UTF-8";
+  private static final String RETRY_AFTER_HEADER = "Retry-After";
+  /**
+   * The server's refusal of a request it did not run, with the back-off in {@code exceptionArgs}. Matched by name: the
+   * class lives in the server module, which this client does not depend on.
+   */
+  private static final String RETRY_LATER_EXCEPTION = "com.arcadedb.server.http.RetryLaterException";
 
   protected       String                      protocol                  = "http";
   private final   String                      originalServer;
@@ -78,6 +90,7 @@ public class RemoteHttpComponent extends RWLockContext {
   private final   String                      userName;
   private final   String                      userPassword;
   private volatile List<Pair<String, Integer>> replicaServerList        = new ArrayList<>();
+  private volatile Map<String, Integer>         advertisedPorts         = Map.of();
   protected final HttpClient                  httpClient;
   protected final DatabaseStats               stats                     = new DatabaseStats();
   protected final ContextConfiguration        configuration;
@@ -185,6 +198,17 @@ public class RemoteHttpComponent extends RWLockContext {
   HttpResponse<String> sendWithWatchdog(final HttpRequest request, final long watchdogMs) throws IOException, InterruptedException {
     return BoundedHttpExchange.send(httpClient, request, HttpResponse.BodyHandlers.ofString(), watchdogMs,
         "HTTP request watchdog timeout after " + watchdogMs + "ms: " + request.uri());
+  }
+
+  /**
+   * The silence, in milliseconds, a STREAMED answer may show before the read fails (issue #8565): the buffered path's
+   * budget, so a caller that set a short timeout to fail fast on a dead node gets the same floor on a stream as on
+   * every other call instead of a stricter one. A server that is alive but slow to produce the next row is not
+   * silent: it sends a keep-alive newline (see {@code arcadedb.server.httpStreamingKeepAliveInterval}). Overridable
+   * so a test can pin a short budget.
+   */
+  long streamSilenceMs() {
+    return computeWatchdogMs(timeout);
   }
 
   /**
@@ -331,6 +355,94 @@ public class RemoteHttpComponent extends RWLockContext {
       final boolean leaderIsPreferable,
       final boolean autoReconnect,
       final Callback callback) {
+    return httpCommand(method, extendedURL, operation, language, payloadCommand, params, leaderIsPreferable, autoReconnect,
+        callback, payloadCommand != null ? payloadCommand : operation);
+  }
+
+  /**
+   * As {@link #httpCommand(String, String, String, String, String, Map, boolean, boolean, Callback)}, naming the
+   * failed request in an error message as {@code errorOperation} rather than by its command text. A command whose
+   * text carries a secret - {@code create user} carries the password (issue #7796) - must not have that text
+   * copied into an exception message, and from there into whatever logs it.
+   */
+  Object httpCommand(final String method,
+      final String extendedURL,
+      final String operation,
+      final String language,
+      final String payloadCommand,
+      final Map<String, Object> params,
+      final boolean leaderIsPreferable,
+      final boolean autoReconnect,
+      final Callback callback,
+      final String errorOperation) {
+    return httpCommand(method, extendedURL, operation, language, payloadCommand, params, leaderIsPreferable, autoReconnect,
+        callback, errorOperation, isReplayable(method, operation));
+  }
+
+  /**
+   * As above, with the caller stating whether the request may be sent again after a transport failure that leaves
+   * its outcome unknown (issue #8570). {@link #isReplayable(String, String)} classifies by route name, which cannot
+   * tell a read-only server command such as {@code list databases} from {@code create database}: both are POSTs to
+   * {@code /server}. Only the caller knows what the command does, so it says so.
+   */
+  Object httpCommand(final String method,
+      final String extendedURL,
+      final String operation,
+      final String language,
+      final String payloadCommand,
+      final Map<String, Object> params,
+      final boolean leaderIsPreferable,
+      final boolean autoReconnect,
+      final Callback callback,
+      final String errorOperation,
+      final boolean replayable) {
+    return httpCommand(method, extendedURL, operation, language, payloadCommand, params, leaderIsPreferable, autoReconnect,
+        callback, errorOperation, replayable, null);
+  }
+
+  /**
+   * How a {@code /server/*} control-plane request (issue #8710) differs from a command: its body is sent as it is
+   * rather than wrapped in a command document, {@code 201} is a success as well as {@code 200}, an empty answer is an
+   * empty document, and {@code urlGuard} vets the URL of every attempt - failover changes the host a request reaches.
+   *
+   * @param body     the request body, or null for none
+   * @param urlGuard called with each URL before the request is sent, or null
+   */
+  record ControlPlaneRequest(JSONObject body, Consumer<String> urlGuard) {
+  }
+
+  /**
+   * Sends a {@code /server/*} control-plane request ({@code /server/users}, {@code /server/groups},
+   * {@code /server/api-tokens}) through the {@link #httpCommand} loop, so it gets the election retry, the failover and
+   * the replay guard every other server command has (issue #8710). Routed to the leader when known.
+   *
+   * @param path the route and query string, relative to {@code /api/v<n>/}
+   *
+   * @return the parsed answer, an empty document when the route answered with none
+   */
+  JSONObject controlPlaneRequest(final String method, final String path, final JSONObject body, final String operation,
+      final Consumer<String> urlGuard) {
+    // Leader-preferred like every server command (list databases included): that keeps the same-server retry budget, which
+    // a read spread over a stale replica list would lose. isReplayable only looks at the method (GET); the path has a query string.
+    return (JSONObject) httpCommand(method, null, path, null, null, null, true, true, (response, json) -> json, operation,
+        isReplayable(method, path), new ControlPlaneRequest(body, urlGuard));
+  }
+
+  private Object httpCommand(final String method,
+      final String extendedURL,
+      final String operation,
+      final String language,
+      final String payloadCommand,
+      final Map<String, Object> params,
+      final boolean leaderIsPreferable,
+      final boolean autoReconnect,
+      final Callback callback,
+      final String errorOperation,
+      final boolean replayable,
+      final ControlPlaneRequest controlPlane) {
+
+    // The route of a control-plane request carries names and ids; messages and logs name the operation instead
+    final String messageLabel = controlPlane != null ? errorOperation : operation;
 
     Exception lastException = null;
 
@@ -373,6 +485,9 @@ public class RemoteHttpComponent extends RWLockContext {
         url += "/" + extendedURL;
 
       try {
+        if (controlPlane != null && controlPlane.urlGuard() != null)
+          controlPlane.urlGuard().accept(url);
+
         HttpRequest.Builder requestBuilder = createRequestBuilder(method, url);
 
         // Inject HA read-consistency headers when used from a RemoteDatabase.
@@ -388,7 +503,15 @@ public class RemoteHttpComponent extends RWLockContext {
 
         HttpRequest request;
 
-        if (payloadCommand != null) {
+        if (controlPlane != null) {
+          if (controlPlane.body() != null)
+            request = requestBuilder.method(method, HttpRequest.BodyPublishers.ofString(getRequestPayload(controlPlane.body())))
+                .header("Content-Type", "application/json").build();
+          else if ("GET".equalsIgnoreCase(method))
+            request = requestBuilder.GET().build();
+          else
+            request = requestBuilder.method(method, HttpRequest.BodyPublishers.noBody()).build();
+        } else if (payloadCommand != null) {
           if ("GET".equalsIgnoreCase(method))
             throw new IllegalArgumentException("Cannot execute a HTTP GET request with a payload");
 
@@ -429,9 +552,12 @@ public class RemoteHttpComponent extends RWLockContext {
         if (this instanceof RemoteDatabase remoteDb)
           remoteDb.captureResponseHeaders(response);
 
-        if (response.statusCode() != 200) {
-          lastException = manageException(response, payloadCommand != null ? payloadCommand : operation);
-          if (lastException instanceof RuntimeException && "Empty payload received".equals(lastException.getMessage())) {
+        // POST /server/users and POST /server/api-tokens answer 201, every other control-plane route 200
+        if (response.statusCode() != 200 && !(controlPlane != null && response.statusCode() == 201)) {
+          lastException = manageException(response, errorOperation);
+          // A control-plane write is never replayed on an empty answer: the server may have applied it
+          if (lastException instanceof RuntimeException && "Empty payload received".equals(lastException.getMessage())
+              && (controlPlane == null || replayable)) {
             LogManager.instance()
                 .log(this, Level.FINE, "Empty payload received, retrying (retry=%d/%d)...", null, retry, maxRetry);
             continue;
@@ -445,9 +571,11 @@ public class RemoteHttpComponent extends RWLockContext {
         // so it is not confused with a network failure or buried as a generic error.
         final JSONObject jsonResponse;
         try {
-          jsonResponse = new JSONObject(response.body());
+          jsonResponse = controlPlane != null && (response.body() == null || response.body().isBlank()) ?
+              new JSONObject() :
+              new JSONObject(response.body());
         } catch (final JSONException e) {
-          throw new RemoteException("Malformed server response for operation '" + operation + "'", e);
+          throw new RemoteException("Malformed server response for operation '" + messageLabel + "'", e);
         }
 
         if (callback == null)
@@ -462,7 +590,7 @@ public class RemoteHttpComponent extends RWLockContext {
           break;
 
         if (connectionStrategy == CONNECTION_STRATEGY.FIXED || stickyPinned) {
-          refuseToReplayAPossiblyAppliedRequest(e, method, operation, connectToServer);
+          refuseToReplayAPossiblyAppliedRequest(e, replayable, messageLabel, connectToServer);
           LogManager.instance()
               .log(this, Level.WARNING, "Remote server (%s:%d) seems unreachable, retrying...",
                   connectToServer.getFirst(), connectToServer.getSecond());
@@ -473,10 +601,10 @@ public class RemoteHttpComponent extends RWLockContext {
           }
 
           // Failing over hands the same write to the next server, which runs it again if the first one applied it.
-          refuseToReplayAPossiblyAppliedRequest(e, method, operation, connectToServer);
+          refuseToReplayAPossiblyAppliedRequest(e, replayable, messageLabel, connectToServer);
 
           if (!reloadClusterConfiguration())
-            throw new RemoteException("Error on executing remote operation " + operation + ", no server available", e);
+            throw new RemoteException("Error on executing remote operation " + messageLabel + ", no server available", e);
 
           final Pair<String, Integer> currentConnectToServer = connectToServer;
           final Pair<String, Integer> snapshotLeader = leaderServer;
@@ -504,14 +632,16 @@ public class RemoteHttpComponent extends RWLockContext {
           lastException = e;
           break;
         }
+        // THE SERVER'S Retry-After, WHEN IT SENT ONE, IS A FLOOR ON THE CONFIGURED DELAY (ISSUE #8617)
+        final long retryDelayMs = Math.max(electionRetryDelayMs, retryAfterPauseMs(e));
         try {
-          Thread.sleep(electionRetryDelayMs);
+          Thread.sleep(retryDelayMs);
         } catch (final InterruptedException ie) {
           Thread.currentThread().interrupt();
           throw new RemoteException("Request interrupted during election retry", ie);
         }
         LogManager.instance().log(this, Level.WARNING,
-            "Server asked to retry, retrying after %dms (retry=%d/%d)...", null, electionRetryDelayMs, retry,
+            "Server asked to retry, retrying after %dms (retry=%d/%d)...", null, retryDelayMs, retry,
             maxElectionRetries);
       } catch (final RuntimeException e) {
         // Propagate any RuntimeException unchanged (issue #4580): a callback-side bug (e.g. NPE), a
@@ -521,7 +651,7 @@ public class RemoteHttpComponent extends RWLockContext {
         throw e;
       } catch (final Exception e) {
         // Only checked exceptions thrown by the callback reach here: wrap them as a RemoteException.
-        throw new RemoteException("Error on executing remote operation " + operation + " (cause: " + e.getMessage() + ")", e);
+        throw new RemoteException("Error on executing remote operation " + messageLabel + " (cause: " + e.getMessage() + ")", e);
       }
     }
 
@@ -529,7 +659,7 @@ public class RemoteHttpComponent extends RWLockContext {
       throw exception;
 
     throw new RemoteException(
-        "Error on executing remote operation '" + operation + "' (server=" + server + " retry=" + maxRetry + ")", lastException);
+        "Error on executing remote operation '" + messageLabel + "' (server=" + server + " retry=" + maxRetry + ")", lastException);
   }
 
   /**
@@ -539,9 +669,9 @@ public class RemoteHttpComponent extends RWLockContext {
    * other transport failure on a request that is not {@link #isReplayable replayable} propagates, because the
    * statement may have run and only its response been lost - a replay would run it twice and report success.
    */
-  private static void refuseToReplayAPossiblyAppliedRequest(final Exception e, final String method, final String operation,
+  private static void refuseToReplayAPossiblyAppliedRequest(final Exception e, final boolean replayable, final String operation,
       final Pair<String, Integer> server) {
-    if (e instanceof IOException ioe && !isReplayable(method, operation) && !provablyNeverSent(ioe))
+    if (e instanceof IOException ioe && !replayable && !provablyNeverSent(ioe))
       throw new RemoteException("Error on executing remote operation '" + operation + "' on server " + server.getFirst() + ":"
           + server.getSecond() + ": the connection failed after the request was sent (" + e.getMessage()
           + "), so the server may already have applied it. It is not sent again, because a replay could apply it twice",
@@ -689,6 +819,8 @@ public class RemoteHttpComponent extends RWLockContext {
 
       LogManager.instance().log(this, Level.FINE, "Configuring remote database: %s", null, response);
 
+      publishAdvertisedPorts(response);
+
     } catch (final SecurityException e) {
       throw e;
     } catch (final Exception e) {
@@ -700,6 +832,8 @@ public class RemoteHttpComponent extends RWLockContext {
               null, currentServer, currentPort, e.getMessage());
       leaderServer = new Pair<>(originalServer, originalPort);
       publishReplicaServerList(new ArrayList<>());
+      // A REFRESH THAT FAILED MUST NOT LEAVE THE PORTS OF THE PREVIOUS ANSWER BEHIND
+      advertisedPorts = Map.of();
       return;
     }
 
@@ -757,6 +891,37 @@ public class RemoteHttpComponent extends RWLockContext {
       leaderServer = new Pair<>(originalServer, originalPort);
       publishReplicaServerList(new ArrayList<>());
     }
+  }
+
+  /**
+   * The client-side settings this component was built with, for the layers on top of it (such as the remote
+   * {@code ArcadeGraph}) that resolve their own client settings from the same place.
+   */
+  public ContextConfiguration getClientConfiguration() {
+    return configuration;
+  }
+
+  /**
+   * The port the server advertised for {@code service} (issue #8578), or 0 when it advertised none - an older server,
+   * a plugin that is not running, or a cluster configuration that could not be fetched. The plugins' listeners are not
+   * the HTTP port this client was pointed at, so a client that needs one asks here instead of assuming a default.
+   */
+  public int getAdvertisedPort(final String service) {
+    final Integer port = advertisedPorts.get(service);
+    return port != null ? port : 0;
+  }
+
+  private void publishAdvertisedPorts(final JSONObject response) {
+    final Map<String, Integer> ports = new HashMap<>();
+    final JSONObject json = response.getJSONObject("ports", null);
+    if (json != null)
+      for (final String service : json.keySet()) {
+        // A MALFORMED ENTRY IS SKIPPED: IT MUST NOT FAIL THE TOPOLOGY THE SAME ANSWER CARRIES
+        final Object value = json.get(service);
+        if (value instanceof Number number && number.longValue() > 0 && number.longValue() <= 65535)
+          ports.put(service, number.intValue());
+      }
+    this.advertisedPorts = ports.isEmpty() ? Map.of() : Map.copyOf(ports);
   }
 
   /**
@@ -843,7 +1008,75 @@ public class RemoteHttpComponent extends RWLockContext {
    * an {@link java.io.InputStream} - can reach the same mapping instead of growing a second, divergent one.
    */
   protected Exception manageException(final HttpResponse<String> response, final String operation) {
-    return manageException(response.statusCode(), response.body(), operation);
+    final Exception exception = manageException(response.statusCode(), response.body(), operation);
+
+    // A REFUSAL THAT SAYS HOW LONG TO WAIT CARRIES IT TO THE RETRY LOOP, WHATEVER TYPE IT WAS REBUILT AS (ISSUE #8617). THE
+    // HEADER WINS OVER THE BODY: IT IS THE STANDARD CARRIER, AND THE ONLY ONE A PROXY IN FRONT OF THE SERVER SETS
+    final HttpHeaders headers = response.headers();
+    if (exception instanceof NeedRetryException retryable && headers != null) {
+      final long retryAfterMs = retryAfterMs(headers.firstValue(RETRY_AFTER_HEADER).orElse(null), System.currentTimeMillis());
+      if (retryAfterMs > 0)
+        retryable.setRetryAfterMs(retryAfterMs);
+    }
+    return exception;
+  }
+
+  /**
+   * The wait a {@code Retry-After} value asks for, in milliseconds, or 0 when there is none or it cannot be read (issue
+   * #8617). Both forms of RFC 9110 are accepted: delay-seconds, which ArcadeDB sends, and an HTTP-date, which a proxy or
+   * a load balancer in front of it may send instead. A date already past asks for no wait.
+   */
+  static long retryAfterMs(final String value, final long nowMs) {
+    if (value == null)
+      return 0L;
+
+    final String trimmed = value.trim();
+    if (trimmed.isEmpty())
+      return 0L;
+
+    if (Character.isDigit(trimmed.charAt(0))) {
+      try {
+        final long seconds = Long.parseLong(trimmed);
+        return seconds > Long.MAX_VALUE / 1_000L ? Long.MAX_VALUE : seconds * 1_000L;
+      } catch (final NumberFormatException e) {
+        return unreadableRetryAfter(trimmed);
+      }
+    }
+
+    try {
+      return Math.max(0L, ZonedDateTime.parse(trimmed, DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().toEpochMilli() - nowMs);
+    } catch (final DateTimeParseException e) {
+      return unreadableRetryAfter(trimmed);
+    }
+  }
+
+  /** A hint neither form of RFC 9110 can read is ignored, and said so for whoever is diagnosing the proxy that sent it. */
+  private static long unreadableRetryAfter(final String value) {
+    LogManager.instance().log(RemoteHttpComponent.class, Level.FINE, "Ignoring unreadable Retry-After value '%s'", null, value);
+    return 0L;
+  }
+
+  /**
+   * The part of a server's {@code Retry-After} the client honors: all of it up to {@link
+   * GlobalConfiguration#NETWORK_RETRY_AFTER_MAX_WAIT}, so a misbehaving server cannot park the client, and none of it
+   * when that cap is 0 (issue #8617).
+   */
+  private long boundedRetryAfterMs(final Exception exception) {
+    if (!(exception instanceof NeedRetryException retryable) || retryable.getRetryAfterMs() <= 0)
+      return 0L;
+    return Math.min(retryable.getRetryAfterMs(),
+        Math.max(0L, configuration.getValueAsLong(GlobalConfiguration.NETWORK_RETRY_AFTER_MAX_WAIT)));
+  }
+
+  /**
+   * The pause a server's {@code Retry-After} asks for before the next attempt: the {@link #boundedRetryAfterMs bounded}
+   * hint plus a random spread of up to a tenth of it, or 0 when there is none. A node answers every client it refuses
+   * with the same hint, so without the spread they would all come back at the same instant and be refused together
+   * again - the synchronised re-entry the full jitter of {@code RetryBackoff} exists to break (issue #8617).
+   */
+  long retryAfterPauseMs(final Exception exception) {
+    final long bounded = boundedRetryAfterMs(exception);
+    return bounded <= 0 ? 0L : bounded + ThreadLocalRandom.current().nextLong(bounded / 10 + 1);
   }
 
   protected Exception manageException(final int statusCode, final String responseBody, final String operation) {
@@ -931,6 +1164,12 @@ public class RemoteHttpComponent extends RWLockContext {
         return new NeedRetryException(detail);
       } else if (exception.equals(NeedRetryException.class.getName())) {
         return new NeedRetryException(detail);
+      } else if (RETRY_LATER_EXCEPTION.equals(exception)) {
+        // A NODE REFUSED THE REQUEST BEFORE RUNNING IT AND SAID HOW LONG TO WAIT, IN exceptionArgs AS WELL AS IN THE
+        // Retry-After HEADER, SO THE BACK-OFF SURVIVES A HOP THAT DROPS THE HEADER (ISSUES #8355, #8617)
+        final NeedRetryException retryLater = new NeedRetryException(detail);
+        retryLater.setRetryAfterMs(retryAfterMs(exceptionArgs, System.currentTimeMillis()));
+        return retryLater;
       } else if (statusCode == 503) {
         // An unrecognised exception type (e.g. added by a newer server) delivered with 503 is still
         // retry-worthy by the status-code contract below.

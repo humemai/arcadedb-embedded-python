@@ -556,6 +556,7 @@ tsCodecClause
 /**
  * ALTER TIMESERIES TYPE body - add or drop downsampling policy
  * Example: ALTER TIMESERIES TYPE SensorData ADD DOWNSAMPLING POLICY AFTER 7 DAYS GRANULARITY 1 HOURS AFTER 30 DAYS GRANULARITY 1 DAYS
+ * Example: ALTER TIMESERIES TYPE SensorData ADD DOWNSAMPLING POLICY AFTER 30 DAYS GRANULARITY 1 DAYS OFFSET -8 HOURS  (days start at local midnight in UTC+8, issue #8798)
  * Example: ALTER TIMESERIES TYPE SensorData DROP DOWNSAMPLING POLICY
  */
 alterTimeSeriesTypeBody
@@ -564,7 +565,7 @@ alterTimeSeriesTypeBody
     ;
 
 downsamplingTierClause
-    : AFTER INTEGER_LITERAL tsTimeUnit GRANULARITY INTEGER_LITERAL tsTimeUnit
+    : AFTER INTEGER_LITERAL tsTimeUnit GRANULARITY INTEGER_LITERAL tsTimeUnit (OFFSET MINUS? INTEGER_LITERAL tsTimeUnit)?
     ;
 
 tsTimeUnit
@@ -808,13 +809,16 @@ dropTriggerBody
 
 /**
  * CREATE MATERIALIZED VIEW statement
- * Syntax: CREATE MATERIALIZED VIEW [IF NOT EXISTS] name AS selectStatement [REFRESH MANUAL|INCREMENTAL|EVERY n SECOND|MINUTE|HOUR] [BUCKETS n]
+ * Syntax: CREATE MATERIALIZED VIEW [IF NOT EXISTS] name AS selectStatement [REFRESH MANUAL|INCREMENTAL|EVERY n SECOND|MINUTE|HOUR] [BUCKETS n] [PAGESIZE n]
+ * PAGESIZE (issue #7688) gives the backing type's page size the expression MaterializedViewBuilder.withPageSize() needs
+ * to be rendered as DDL by a remote schema.
  */
 createMaterializedViewBody
     : (IF NOT EXISTS)? identifier
       AS selectStatement
       materializedViewRefreshClause?
-      (BUCKETS INTEGER_LITERAL)?
+      (BUCKETS bucketCount=INTEGER_LITERAL)?
+      (PAGESIZE pageSize=INTEGER_LITERAL)?
     ;
 
 materializedViewRefreshClause
@@ -1482,13 +1486,14 @@ extendedCaseAlternative
 /**
  * Function call
  * Allows STAR (*) as parameter for aggregate functions like COUNT(*), SUM(*), etc.
+ * Allows DISTINCT before the arguments of an aggregate function: COUNT(DISTINCT x), SUM(DISTINCT x), etc. (issue #8889)
  * Supports method call chains: out('Follows').out('Follows')
  * Supports array selectors: someFunc()[0]
  * Supports modifiers: someFunc().asString()
  * Supports nested projections: list({x:1}):{x} (processed before methodCall/arraySelector/modifier)
  */
 functionCall
-    : identifier LPAREN (STAR | expression (COMMA expression)*)? RPAREN nestedProjection* methodCall* arraySelector* modifier*
+    : identifier LPAREN (STAR | DISTINCT? expression (COMMA expression)*)? RPAREN nestedProjection* methodCall* arraySelector* modifier*
     ;
 
 /**

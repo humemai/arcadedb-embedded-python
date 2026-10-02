@@ -29,12 +29,14 @@ import com.arcadedb.server.ServerException;
 import com.arcadedb.server.monitor.HAReplicationStatsProvider;
 import com.arcadedb.server.http.HttpServer;
 import com.arcadedb.server.http.handler.LeaderDial;
+import com.arcadedb.utility.CodeUtils;
 
 import io.undertow.server.handlers.PathHandler;
 import org.apache.ratis.protocol.RaftPeerId;
 
 import com.arcadedb.database.DatabaseInternal;
 
+import java.io.Closeable;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -92,6 +94,11 @@ public class RaftHAPlugin implements HAServerPlugin, HAReplicationStatsProvider 
   // threads, not thread confinement. Safe only as long as that lock still wraps both paths.
   private SnapshotHttpHandler       snapshotHttpHandler;
   private PostVerifyDatabaseHandler postVerifyDatabaseHandler;
+
+  // The executor-pool rows of the two security workers the state machine owns (issue #7856). Same lifecycle as the
+  // handlers above: set by startService(), closed and cleared by the first of stopService()'s two calls.
+  private Closeable securitySeedPoolMetrics;
+  private Closeable securityCatchUpPoolMetrics;
 
   /**
    * Test-only: runs at the start of {@link #startService()} on the server being started, before this plugin has
@@ -192,6 +199,8 @@ public class RaftHAPlugin implements HAServerPlugin, HAReplicationStatsProvider 
       // Register this plugin as the HA implementation on the server
       server.setHA(this);
 
+      registerSecurityPoolMetrics();
+
       LogManager.instance().log(this, Level.INFO, "Raft HA plugin started successfully");
     } catch (final IOException e) {
       throw new RuntimeException("Failed to start Raft HA server", e);
@@ -220,6 +229,16 @@ public class RaftHAPlugin implements HAServerPlugin, HAReplicationStatsProvider 
     // (RaftHAPlugin is itself a discovered ServerPlugin) and once via ArcadeDBServer.stopInternal()'s
     // direct haServer.stopService() call, since startService() above did server.setHA(this), making
     // ArcadeDBServer.haServer the very same instance. The second call must be a no-op (issue #5890).
+    if (securitySeedPoolMetrics != null) {
+      CodeUtils.executeIgnoringExceptions(securitySeedPoolMetrics::close, "Error on removing the security seed pool metrics",
+          false);
+      securitySeedPoolMetrics = null;
+    }
+    if (securityCatchUpPoolMetrics != null) {
+      CodeUtils.executeIgnoringExceptions(securityCatchUpPoolMetrics::close,
+          "Error on removing the security catch-up pool metrics", false);
+      securityCatchUpPoolMetrics = null;
+    }
     if (snapshotHttpHandler != null) {
       snapshotHttpHandler.close();
       snapshotHttpHandler = null;
@@ -543,6 +562,56 @@ public class RaftHAPlugin implements HAServerPlugin, HAReplicationStatsProvider 
   @Override
   public boolean isLeader() {
     return raftHAServer != null && raftHAServer.isLeader();
+  }
+
+  /** Asks every peer about its copy first (issue #8605); see {@link UnverifiedClosedCopyCheck}. */
+  @Override
+  public String refuseToReopenUnverifiedClosedCopy(final String databaseName) {
+    final RaftHAServer s = raftHAServer;
+    if (s == null)
+      return "the HA layer of this server has not started yet";
+    return s.getUnverifiedClosedCopyCheck().check(databaseName);
+  }
+
+  /** Someone wants the database now: the next health tick re-verifies the copy (issue #8606). */
+  @Override
+  public void onUnverifiedClosedCopyRefused(final String databaseName) {
+    final RaftHAServer s = raftHAServer;
+    final ArcadeStateMachine sm = s != null ? s.getStateMachine() : null;
+    if (sm != null)
+      sm.restartUnverifiedClosedCopyReverification();
+  }
+
+  /**
+   * Publishes the state machine's two one-slot security workers as executor rows (issue #7856): the leader-side
+   * membership seed ({@code pool=security_seed}) and the rejoining node's catch-up ({@code pool=security_catch_up}).
+   * <p>
+   * Both suppliers resolve the worker through {@link #raftHAServer} on every scrape rather than capturing it: an
+   * in-place Ratis restart builds a new state machine, and with it a new seeder and catch-up. Between a stop and the
+   * next start, or before Ratis is up, the row reads as an idle pool rather than throwing.
+   */
+  private void registerSecurityPoolMetrics() {
+    securitySeedPoolMetrics = server.registerExecutorPoolMetrics("security_seed",
+        "MembershipSecuritySeeder leader-side cluster security seed worker", () -> {
+          final ArcadeStateMachine sm = liveStateMachine();
+          return sm != null ? sm.getMembershipSecuritySeeder().getPoolStats() : MembershipSecuritySeeder.EMPTY_POOL_STATS;
+        }, () -> {
+          final ArcadeStateMachine sm = liveStateMachine();
+          return sm != null ? sm.getMembershipSecuritySeeder().getCoalescedSeeds() : 0L;
+        });
+    securityCatchUpPoolMetrics = server.registerExecutorPoolMetrics("security_catch_up",
+        "SecurityCatchUp rejoining-node security catch-up worker", () -> {
+          final ArcadeStateMachine sm = liveStateMachine();
+          return sm != null ? sm.getSecurityCatchUp().getPoolStats() : MembershipSecuritySeeder.EMPTY_POOL_STATS;
+        }, () -> {
+          final ArcadeStateMachine sm = liveStateMachine();
+          return sm != null ? sm.getSecurityCatchUp().getCoalescedRequests() : 0L;
+        });
+  }
+
+  private ArcadeStateMachine liveStateMachine() {
+    final RaftHAServer s = raftHAServer;
+    return s != null ? s.getStateMachine() : null;
   }
 
   @Override
@@ -999,7 +1068,7 @@ public class RaftHAPlugin implements HAServerPlugin, HAReplicationStatsProvider 
    * The whole of it is {@code RaftClusterManager.addPeer} with the peer derived from one
    * {@code arcadedb.ha.serverList} entry, which is what makes the verb a thin alias for
    * {@code POST /api/v1/cluster/peer} rather than a second way to grow a cluster: the membership change
-   * is the same atomic {@code Mode.ADD}, issued by the same {@code RaftClusterManager}, with the same
+   * is the same atomic compare-and-set change, issued by the same {@code RaftClusterManager}, with the same
    * retry and the same idempotence when the peer is already a member.
    * <p>
    * It carries one thing that route cannot: the leader-election <b>priority</b>, which the object form
@@ -1010,6 +1079,10 @@ public class RaftHAPlugin implements HAServerPlugin, HAReplicationStatsProvider 
    * Not leader-routed, matching the add-peer route and {@code PostServerCommandHandler}, which forwards
    * neither half of the cluster pair: the Ratis client underneath {@code addPeer} sends the
    * configuration change to the leader itself.
+   * <p>
+   * The membership change alone: a residual security-seed failure is reported by
+   * {@link #connectClusterAndReportSeed}, which is what {@code ServerControlPlane.connectCluster} and an embedder
+   * that needs the outcome call (issue #8077).
    */
   @Override
   public void connectCluster(final String serverAddress) {
@@ -1025,14 +1098,23 @@ public class RaftHAPlugin implements HAServerPlugin, HAReplicationStatsProvider 
 
     // The peer goes in whole, not as an id and an address: it also carries the leader-election
     // priority the entry may have declared, and rebuilding it from parts is how that gets lost.
-    final RaftPeerId peerId = target.peer().getId();
-    raft.addPeer(target.peer(), target.name());
+    // A declared HTTP port goes in with it, so it is in place before the commit starts the security seed whose
+    // capability probe dials it (issue #8330).
+    raft.addPeer(target.peer(), target.name(), target.httpAddress());
+  }
 
-    // After addPeer, not before: RaftClusterManager.addPeer derives an HTTP address from the Raft port
-    // plus THIS node's HTTP offset, which is right only for a homogeneous cluster. An entry that
-    // declared its own HTTP port said so, and that answer wins over the derived one.
-    if (target.httpAddress() != null)
-      raft.getHttpAddresses().put(peerId, target.httpAddress());
+  /**
+   * {@inheritDoc}
+   * <p>
+   * The join first, the seed report second, exactly as {@link #addPeerAndReportSeed} does it (issue #8077): the
+   * seed is asked of the leader, which already seeds every membership change of its own accord (issues #7531 and
+   * #7834), and nothing raised while asking can turn the committed join back into a failed one. Never an empty
+   * {@code Optional}, so {@code ServerControlPlane.connectCluster} reports this result and does not ask again.
+   */
+  @Override
+  public Optional<List<String>> connectClusterAndReportSeed(final String serverAddress) {
+    connectCluster(serverAddress);
+    return Optional.of(seedReportForAdmission(serverAddress));
   }
 
   @Override

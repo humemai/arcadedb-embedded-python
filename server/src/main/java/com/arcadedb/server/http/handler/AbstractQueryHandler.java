@@ -346,11 +346,13 @@ public abstract class AbstractQueryHandler extends DatabaseAbstractHandler {
     exchange.getResponseHeaders().put(Headers.CACHE_CONTROL, "no-cache");
     exchange.getResponseHeaders().put(X_ACCEL_BUFFERING, "no");
     exchange.setStatusCode(200);
-    if (!exchange.isBlocking())
-      exchange.startBlocking();
-
     int returned = 0;
-    try (final NdJsonResultStream stream = new NdJsonResultStream(exchange.getOutputStream())) {
+    // Every write bounded (issue #7806): the stream grows with the result set, so a client that stops reading it
+    // would otherwise hold this worker thread blocked in write() for as long as it keeps the connection open.
+    try (final NdJsonResultStream stream = new NdJsonResultStream(streamedResponseOutput(exchange,
+        () -> "the streamed result of a query on database '" + (database != null ? database.getName() : null) + "'"));
+         // Declared after the stream so it is closed first: the timer must be gone before the stream is (issue #8565)
+         final NdJsonKeepAlive keepAlive = NdJsonKeepAlive.start(exchange, stream, streamingKeepAliveInterval())) {
       final boolean truncated;
       try {
         while (qResult != null && qResult.hasNext()) {
@@ -365,14 +367,14 @@ public abstract class AbstractQueryHandler extends DatabaseAbstractHandler {
       } catch (final RuntimeException e) {
         LogManager.instance().log(this, Level.WARNING, "Error while streaming the result of a query on database '%s'",
             e, database != null ? database.getName() : null);
-        stream.writeError(e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName());
+        writeClassifiedError(stream, e);
         return new SerializationOutcome(returned, false);
       }
 
       if (ceilingLowered && truncated) {
         // What the buffered path answers 413 for. A 200 is already on the wire, so the refusal goes in band and
         // the stats trailer is withheld - which is exactly how a consumer tells this from a complete stream.
-        stream.writeError(resultSetTooLarge(maxResultRows).getMessage());
+        writeClassifiedError(stream, resultSetTooLarge(maxResultRows));
         return new SerializationOutcome(returned, true);
       }
 
@@ -383,6 +385,21 @@ public abstract class AbstractQueryHandler extends DatabaseAbstractHandler {
       stream.writeStats(statedLimit, returned, truncated);
       return new SerializationOutcome(returned, truncated);
     }
+  }
+
+  /**
+   * Writes the in-band {@code error} line of a stream whose 200 is already on the wire, carrying the status, the
+   * reported exception class and the {@code exceptionArgs} the buffered encoding would have answered the same failure
+   * with (issue #8235). Decided by {@link #classifyError}, the one classifier every handler answers with, so the two
+   * encodings cannot disagree about what a failure is. {@code message} is kept as it always was - the failure's own
+   * message, or its simple class name when it has none - so a consumer that reads only that member sees no change.
+   */
+  private void writeClassifiedError(final NdJsonResultStream stream, final Throwable failure) throws IOException {
+    final ErrorClassification classification = classifyError(failure);
+    final Throwable reported = classification.reported();
+    stream.writeError(failure.getMessage() != null ? failure.getMessage() : failure.getClass().getSimpleName(),
+        classification.status(), reported != null ? reported.getClass().getName() : null,
+        classification.exceptionArgs());
   }
 
   /**
@@ -893,9 +910,10 @@ public abstract class AbstractQueryHandler extends DatabaseAbstractHandler {
    * still be a status code, is what keeps the streaming encoding from being a weaker contract than the buffered
    * one.
    * <p>
-   * On the two POST operations - whose {@code requiresTransaction()} is true - it also closes two transactional
-   * hazards that {@code GET /query} does not have, since {@code GetQueryHandler.requiresTransaction()} returns
-   * false:
+   * On {@code POST /command}, and on {@code POST /query} when the request asks for the auto-commit wrapper with
+   * {@code autoCommit: true} - the wrapper is otherwise off for {@code POST /query} since #8775, like for
+   * {@code GET /query} - it also closes two transactional hazards that {@code GET /query} does not have, since
+   * {@code GetQueryHandler.requiresTransaction()} returns false:
    * <ul>
    * <li>A failure reported in band lets the auto-commit wrapper see a clean return, so it commits whatever the
    * half-executed statement already wrote. The buffered encoding propagates the exception and rolls back.</li>
