@@ -1898,6 +1898,57 @@ def durability_server_patch(cfg, cls):
     return cfg, (", ".join(notes) if notes else None)
 
 
+# The environment variables a campaign sets to choose an operating point or an
+# ablation. The manifest records the ones the runner was started with; the
+# forwarding allowlist in run_cell decides which of them reach a lane.
+MANIFEST_ENV_PREFIXES = ("BENCH_", "TS_", "E2_", "ARCADEDB_")
+
+
+def build_manifest(ts, args, workers, shards, jobs):
+    """What this runner invocation was asked to run, written once before the
+    first cell and named by every row it produces (`manifest`).
+
+    It recorded the cpuset, the memory caps, the heap, and the image digests,
+    and no ENGINE configuration (PROTOCOL.md section 7's last unsanctioned row,
+    CAMPAIGN section 7 row 21): the settings this benchmark overrides were
+    recorded nowhere in the artifact. `engine_config` holds, per backend of the
+    batch, the launch configuration the runner passes (the server's env and
+    command as templates, after the durability axis has patched them, with the
+    scalars they are formatted from beside them) and the keys of the registered
+    overrides that apply to it (overrides.py). `runner_env` holds the
+    campaign's own switches as set in the runner's environment. This is what
+    was ASKED; what the engine answered is on each row (fairness_check F15).
+    """
+    import overrides
+    manifest = {"ts": ts, "tier": args.tier, "scale": args.scale, "cpuset": CPUSET,
+                "workers": workers, "shards": shards,
+                "reps": args.reps, "seed": args.seed,
+                "mem": MEM_BY_SCALE[args.scale], "heap": HEAP_BY_SCALE[args.scale],
+                "server_mem_fraction": SERVER_MEM_FRACTION,
+                "client_mem": CLIENT_MEM,
+                "ncpu": _cpuset_size(CPUSET),
+                "images": {}, "engine_config": {}, "runner_env": {}}
+    cls = os.environ.get("BENCH_DURABILITY", "relaxed")
+    for j in jobs:
+        be = BACKENDS[j["backend"]]
+        for img in filter(None, [be.get("image"), be.get("server_image")]):
+            manifest["images"].setdefault(img, image_digest(img))
+        if j["backend"] in manifest["engine_config"]:
+            continue
+        patched, note = durability_server_patch(be, cls)
+        manifest["engine_config"][j["backend"]] = {
+            "topology": be.get("topology"),
+            "server_env": list(patched.get("server_env", [])),
+            "server_cmd": list(patched.get("server_cmd", [])),
+            "durability_class": cls,
+            "durability_server_flags": note,
+            "overrides": overrides.keys_for_backend(j["backend"]),
+        }
+    manifest["runner_env"] = {k: v for k, v in sorted(os.environ.items())
+                              if k.startswith(MANIFEST_ENV_PREFIXES)}
+    return manifest
+
+
 def _pagecache_for(server_mem_bytes, heap):
     """What is left for an off-heap page cache once the heap is taken out.
 
@@ -3457,16 +3508,7 @@ def main():
             print(f"    skip {_b} rep{_r}")
 
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    manifest = {"ts": ts, "tier": args.tier, "scale": args.scale, "cpuset": CPUSET,
-                "workers": workers, "shards": shards,
-                "reps": args.reps, "seed": args.seed,
-                "mem": MEM_BY_SCALE[args.scale], "heap": HEAP_BY_SCALE[args.scale],
-                "server_mem_fraction": SERVER_MEM_FRACTION,
-                "images": {}}
-    for j in jobs:
-        be = BACKENDS[j["backend"]]
-        for img in filter(None, [be.get("image"), be.get("server_image")]):
-            manifest["images"].setdefault(img, image_digest(img))
+    manifest = build_manifest(ts, args, workers, shards, jobs)
     json.dump(manifest, open(os.path.join(RESULTS, f"manifest-{ts}.json"), "w"), indent=2)
 
     rows = []

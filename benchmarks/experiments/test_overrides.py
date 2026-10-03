@@ -23,7 +23,7 @@ PROTOCOL = HERE / "PROTOCOL.md"
 # PROTOCOL section 7 rows that still say NOWHERE, by a distinctive substring of
 # their Setting cell, with the reason each is not done. Empty is the goal. A row
 # may only be added here with a reason a reader of the report can act on.
-NOT_DONE = {"the manifest records cpuset/mem/heap/images": "its override is not registered at this commit"}
+NOT_DONE = {}
 
 
 def _split_row(line):
@@ -306,3 +306,42 @@ def test_every_stamp_field_is_a_declared_not_printed_field():
 
 # ---------------------------------------------------------------------------
 # the manifest
+
+def test_the_manifest_records_engine_configuration_and_the_overrides_in_force(monkeypatch):
+    import runner
+    monkeypatch.setattr(runner, "image_digest", lambda image: "sha256:test")
+    monkeypatch.setenv("BENCH_ES_PRUNE", "1")
+    monkeypatch.setenv("TS_NUMPY", "0")
+    monkeypatch.setenv("HOME_UNRELATED", "x")
+    args = SimpleNamespace(tier="paper", scale="micro", reps=5, seed=7)
+    jobs = [{"backend": b} for b in ("elasticsearch_sparse", "neo4j_graph", "arcadedb_graph_server",
+                                      "duckdb", "elasticsearch_sparse")]
+    m = runner.build_manifest("20261003T000000Z", args, 1, ["0-11"], jobs)
+    # what it always held
+    for k in ("ts", "tier", "scale", "cpuset", "workers", "shards", "reps", "seed", "mem", "heap",
+              "server_mem_fraction", "images"):
+        assert k in m
+    assert m["images"] and set(m["images"].values()) == {"sha256:test"}
+    # what row 21 adds
+    cfg = m["engine_config"]
+    assert set(cfg) == {"elasticsearch_sparse", "neo4j_graph", "arcadedb_graph_server", "duckdb"}
+    assert "xpack.security.enabled=false" in cfg["elasticsearch_sparse"]["server_env"]
+    assert cfg["elasticsearch_sparse"]["overrides"] == ["es_replicas", "es_security"]
+    assert "NEO4J_db_checkpoint_interval_time=5s" in cfg["neo4j_graph"]["server_env"]
+    assert cfg["neo4j_graph"]["overrides"] == ["neo4j_checkpoint", "neo4j_pagecache"]
+    assert any("queryMaxHeapElementsAllowedPerOp=5000000" in e for e in cfg["arcadedb_graph_server"]["server_env"])
+    assert cfg["arcadedb_graph_server"]["overrides"] == ["arcadedb_query_cap"]
+    assert cfg["duckdb"]["overrides"] == ["duckdb_threads"] and cfg["duckdb"]["server_env"] == []
+    assert m["runner_env"]["BENCH_ES_PRUNE"] == "1" and m["runner_env"]["TS_NUMPY"] == "0"
+    assert "HOME_UNRELATED" not in m["runner_env"]
+
+
+def test_the_manifest_records_the_strict_class_patch_the_server_was_given(monkeypatch):
+    import runner
+    monkeypatch.setattr(runner, "image_digest", lambda image: "sha256:test")
+    monkeypatch.setenv("BENCH_DURABILITY", "strict")
+    args = SimpleNamespace(tier="paper", scale="micro", reps=5, seed=7)
+    m = runner.build_manifest("20261003T000000Z", args, 1, ["0-11"], [{"backend": "arcadedb_graph_server"}])
+    c = m["engine_config"]["arcadedb_graph_server"]
+    assert c["durability_class"] == "strict" and c["durability_server_flags"] == "txWalFlush=2"
+    assert any("-Darcadedb.txWalFlush=2" in e for e in c["server_env"])
