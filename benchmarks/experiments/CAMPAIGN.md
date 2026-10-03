@@ -183,9 +183,11 @@ defect of BUGS F69 verified fixed on real data rather than in principle.
 
 **The October chain on mini, at pin `417314c18`.** The stages `make_october_stages.py` generates from one table, plus the hand-written `qOL` and `qOM`, each waiting on its predecessor's `<id> ALL-DONE` marker in `~/STATUS.txt`:
 
-`qOA` -> `qOA2` -> `qOB` -> `qOC` -> `qOD` -> `qOI` -> `qOD2` -> `qOA3` -> `qOD3` -> `qOA4` -> `qOE` -> `qOF` -> `qOG` -> `qOH` -> `qOB2` -> `qOJ` -> `qOK` -> `qOL` -> `qOM` -> `qOA5` -> `qOA6`.
+`qOA` -> `qOA2` -> `qOB` -> `qOC` -> `qOD` -> `qOI` -> `qOD2` -> `qOA3` -> `qOD3` -> `qOA4` -> `qOE` -> `qOF` -> `qOG` -> `qOH` -> `qOB2` -> `qOJ` -> `qOK` -> `qOL` -> `qOM` -> `qOA5` -> `qOA6` -> `qOA7`.
 
 **`qOA6` was stopped before it started** (2026-10-02, DECISIONS #134): its process was killed in its wait loop, before its exit trap could write a marker, so the chain ends with `qOA5`'s ALL-DONE. It stays in `make_october_stages.STAGES` and in the chain above, as `qOB` does, because it was generated and queued; the SurrealDB lifecycle cells it would have re-run are re-run in the 26.10.1 measurement.
+
+**`qOA7` re-runs ArangoDB's relaxed cross-model rows with its `pid` index** (2026-10-03, BUGS F168, the user's go-ahead the same day): drawn after `qOA6` because the generator lists it there, it waits on `qOA5`'s ALL-DONE, not on `qOA6` (which never writes one), runs the relaxed class of `e2` hybrid for `arangodb_e2` alone at both catalog sizes (10 cells), and its rows supersede the 20 pre-index relaxed rows under the canonical key, so /next's withdrawn ArangoDB row returns at its landing.
 
 **`qOK` re-runs the deployment decomposition** because its rows record no durability, and F10 fails any 2026-10 row that does not.
 
