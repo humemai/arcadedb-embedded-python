@@ -169,7 +169,11 @@ def _served_envelopes():
                     newest[be] = r
     except FileNotFoundError:
         pass
-    keys = ("server_mem_cap", "server_heap", "mem_split", "client_mem_cap", "server_mem_cap_g", "role")
+    # server_query_max_heap_elements: the served ArcadeDB's query limit, which the runner
+    # reads from the engine for the campaign cell and the multipass driver cannot
+    # (CAMPAIGN section 7 row 21, overrides.py).
+    keys = ("server_mem_cap", "server_heap", "mem_split", "client_mem_cap", "server_mem_cap_g", "role",
+            "server_query_max_heap_elements")
     _served_envelopes._cache = {be: {kk: r[kk] for kk in keys if r.get(kk) is not None} for be, r in newest.items()}
     return _served_envelopes._cache
 

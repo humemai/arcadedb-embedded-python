@@ -23,7 +23,7 @@ PROTOCOL = HERE / "PROTOCOL.md"
 # PROTOCOL section 7 rows that still say NOWHERE, by a distinctive substring of
 # their Setting cell, with the reason each is not done. Empty is the goal. A row
 # may only be added here with a reason a reader of the report can act on.
-NOT_DONE = {"queryMaxHeapElementsAllowedPerOp": "its override is not registered at this commit", "wait_completion": "its override is not registered at this commit", "the manifest records cpuset/mem/heap/images": "its override is not registered at this commit"}
+NOT_DONE = {"wait_completion": "its override is not registered at this commit", "the manifest records cpuset/mem/heap/images": "its override is not registered at this commit"}
 
 
 def _split_row(line):
@@ -76,6 +76,15 @@ def test_every_carrier_is_an_arm_the_runner_registers():
             assert c.backend in runner.BACKENDS, (o.key, c)
 
 
+def test_cap_carriers_are_exactly_the_served_arcadedb_arms_the_runner_launches():
+    """A served ArcadeDB arm added by copying one of the runner's dicts must
+    join the registry, or a table that shows it would carry no sentence."""
+    from_runner = {(lane, be) for lane, be in OV.served_arcadedb_from_runner()
+                   if lane not in ("l1", "e4")}
+    assert from_runner == set(OV.CAP_CARRIERS)
+    assert OV.runner_cap() == 5000000
+
+
 def test_protocol_cites_every_key_once_and_none_of_those_rows_says_nowhere():
     rows = _section7_rows()
     cited = {}
@@ -118,6 +127,13 @@ def test_every_sentence_says_what_its_gate_asks_for_and_registers_its_digits():
         for d in digits:
             assert d in values, f"{o.key}: the sentence carries {d!r} and registers no source for it: {text}"
         assert "\u2014" not in text and "--" not in text, o.key
+
+
+def test_the_cap_sentence_quotes_the_value_the_rows_stamped_and_never_a_typed_one():
+    text, values = OV.BY_KEY["arcadedb_query_cap"].sentence([{"server_query_max_heap_elements": "7500000"}])
+    assert "7,500,000" in text and values == ["7,500,000"]
+    text, values = OV.BY_KEY["arcadedb_query_cap"].sentence([])
+    assert not re.search(r"\d", text) and values == []
 
 
 def test_the_checkpoint_sentence_takes_its_numbers_from_the_engine_and_degrades_without_them():
@@ -165,6 +181,15 @@ def test_a_table_that_shows_the_arm_must_carry_the_sentence(o, c):
 
 def test_a_table_with_no_such_arm_owes_nothing():
     assert OV.sentence_findings([_table("l3s", "qdrant_sparse", [])], LANE_OF, None) == []
+
+
+def test_the_artifact_backed_e4_table_owes_the_cap_sentence_from_the_runner_constant():
+    e4 = {"id": "e4", "instrument": "2026-10", "entries": [{"backend": "1,000 documents"}], "conditions": []}
+    assert any("arcadedb_query_cap" in f for f in OV.sentence_findings([e4], lambda tid: None, None))
+    (text, values), = [n for n in OV.notes_for_table("e4", None, [], []) if "ArcadeDB server" in n[0]]
+    assert "5,000,000" in text and values == ["5,000,000"]
+    e4["conditions"] = [text]
+    assert OV.sentence_findings([e4], lambda tid: None, None) == []
 
 
 def test_notes_for_table_follow_the_arms_on_the_table_and_its_lane():
@@ -240,6 +265,15 @@ def test_neo4j_page_cache_is_held_to_what_the_cell_passed():
     assert [f["field"] for f in found] == ["neo4j_pagecache"] and found[0]["kind"] == "WRONG"
     assert OV.size_bytes("1.50GiB") == OV.size_bytes("1.5g") == 1.5 * (1 << 30)
     assert OV.duration_words("5s") == ("5", "seconds") and OV.duration_words("1m") == ("1", "minute")
+
+
+def test_the_served_arcadedb_cap_is_the_runners_cap():
+    ok = _row(lane="l1tpc", backend="arcadedb_server", server_query_max_heap_elements=5000000)
+    assert OV.stamp_findings([ok]) == ([], 1)
+    lower = dict(ok, server_query_max_heap_elements=500000)
+    assert OV.stamp_findings([lower])[0][0]["kind"] == "WRONG"
+    # an embedded arm sets nothing, so nothing is asked of it
+    assert OV.stamp_findings([_row(lane="l1tpc", backend="arcadedb_embedded")]) == ([], 0)
 
 
 def test_hierarchy_must_say_whether_it_was_read_or_requested():

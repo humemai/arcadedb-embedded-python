@@ -21,6 +21,7 @@ Paper (serial):   python3 runner.py --lanes l1,l2,l3s,l3d,l4 --scale medium --re
 Sweep (parallel): python3 runner.py --parallel 3 --tier sweep ...
 """
 import argparse
+import base64
 import csv
 import fcntl
 import glob
@@ -35,6 +36,7 @@ import tempfile
 import threading
 import time
 import traceback
+import urllib.request
 from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -2339,7 +2341,49 @@ def observe_server(cid):
     pc = re.findall(r"pagecache[_.]size=([\d.]+)([gGmM])", envs, re.I)
     if pc:
         out["server_pagecache"] = f"{pc[-1][0]}{pc[-1][1].lower()}"
+    # THE SERVED ARCADEDB'S QUERY CAP (CAMPAIGN section 7 row 21): every served
+    # ArcadeDB arm is launched with -Darcadedb.queryMaxHeapElementsAllowedPerOp
+    # fixed, where the embedded package leaves the engine default (which scales
+    # with the heap). The engine is asked for the value it runs with.
+    cap = re.findall(r"-Darcadedb\.queryMaxHeapElementsAllowedPerOp=(\d+)", envs)
+    if cap:
+        out.update(arcadedb_cap_readback(cid, envs, int(cap[-1])))
     return out
+
+
+def arcadedb_cap_readback(cid, envs, from_env):
+    """The query cap a served ArcadeDB runs with, asked of the engine.
+
+    `SELECT FROM schema:database` returns every effective global setting with
+    its value (verified on the laptop: 5000000 under JAVA_OPTS), and the host
+    reaches the container over its bridge network. If the host cannot ask, the
+    value from the container's own JAVA_OPTS is recorded and the source field
+    says so, so a reader is never told a read-back that did not happen. Runs
+    before the client starts and outside every timer; it never ends a cell.
+    """
+    pw = re.search(r"-Darcadedb\.server\.rootPassword=(\S+)", envs)
+    db = re.search(r"-Darcadedb\.server\.defaultDatabases=(\w+)", envs)
+    ips = (sh(["docker", "inspect", "-f",
+               "{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}", cid]) or "").split()
+    key = "arcadedb.queryMaxHeapElementsAllowedPerOp"
+    for ip in ips[:1]:
+        for attempt in range(3):
+            try:
+                req = urllib.request.Request(
+                    f"http://{ip}:2480/api/v1/query/{db.group(1) if db else 'bench'}",
+                    data=json.dumps({"language": "sql", "command": "SELECT FROM schema:database"}).encode(),
+                    headers={"Content-Type": "application/json",
+                             "Authorization": "Basic " + base64.b64encode(
+                                 f"root:{pw.group(1) if pw else 'dbbenchpass'}".encode()).decode()})
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    settings = json.load(resp)["result"][0]["settings"]
+                val = next(s["value"] for s in settings if s["key"] == key)
+                return {"server_query_max_heap_elements": int(val),
+                        "server_query_max_heap_source": "read from the engine over HTTP (schema:database)"}
+            except Exception:  # noqa: BLE001 - fall through to the env value, labelled
+                time.sleep(1)
+    return {"server_query_max_heap_elements": from_env,
+            "server_query_max_heap_source": "the container's JAVA_OPTS (the engine could not be asked from the host)"}
 
 
 # --driver: run a different script inside the SAME cell envelope.

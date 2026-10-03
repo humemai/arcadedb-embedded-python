@@ -184,6 +184,16 @@ def _checkpoint_is_five_seconds(row, v):
     return None if str(v).strip() == "5s" else f"reads {v!r}, the cell sets 5s"
 
 
+def _cap_is_the_runner_cap(row, v):
+    want = runner_cap()
+    got = _int(v)
+    if got is None:
+        return f"reads {v!r}, not a count"
+    if want is None:
+        return None
+    return None if got == want else f"the server reports {got:,} where the runner launches it with {want:,}"
+
+
 def _hierarchy_is_on(row, v):
     bad = _is_true(row, v)
     if bad:
@@ -238,6 +248,67 @@ def _arcadedb_hierarchy(rows):
     return ("ArcadeDB's vector index is built as a layered graph, the structure the hnswlib family "
             "uses; the engine's own default is a single flat layer.", [])
 
+
+def _arcadedb_cap(rows, constant=None):
+    vals = _values(rows, "server_query_max_heap_elements")
+    n = vals[0] if len(vals) == 1 else (str(constant) if constant else None)
+    head = ("The ArcadeDB server is started with the limit on the records or groups that one sorting, "
+            "grouping, or distinct query may hold in memory")
+    tail = (", while the embedded package leaves that limit at the engine's default, which grows with "
+            "the heap, so the two deployments can run different limits.")
+    if n and _int(n) is not None:
+        shown = f"{_int(n):,}"
+        return f"{head} fixed at {shown}{tail}", [shown]
+    return f"{head} fixed explicitly{tail}", []
+
+
+# The cap the runner launches every served ArcadeDB arm with, read from the
+# server_env the runner itself passes, so the value cannot differ from what ran.
+CAP_PROPERTY = "arcadedb.queryMaxHeapElementsAllowedPerOp"
+
+
+def served_arcadedb_from_runner():
+    """(lane, backend) for every runner arm whose server is launched with the
+    cap. `test_overrides` holds CAP_CARRIERS equal to this, so a served arm
+    added by copying one of those dicts cannot join the page without a
+    sentence. Imports the runner, so it is for tests and gates only."""
+    import runner
+    out = []
+    for lane, spec in runner.LANES.items():
+        for be in spec[1]:
+            env = " ".join(str(x) for x in (runner.BACKENDS.get(be) or {}).get("server_env", []))
+            if f"-D{CAP_PROPERTY}=" in env:
+                out.append((lane, be))
+    return sorted(out)
+
+
+def runner_cap():
+    """The cap value the runner passes, or None when it cannot be read."""
+    try:
+        import runner
+    except Exception:  # noqa: BLE001 - the gates must still import without a docker host
+        return None
+    seen = set()
+    for cfg in runner.BACKENDS.values():
+        env = " ".join(str(x) for x in cfg.get("server_env", []))
+        seen.update(re.findall(rf"-D{re.escape(CAP_PROPERTY)}=(\d+)", env))
+    return int(next(iter(seen))) if len(seen) == 1 else None
+
+
+# Every served ArcadeDB arm of a lane that feeds a page table. Two lanes are
+# left out on purpose: `l1` (the retired tabular lane, no table) and `e4`
+# (its table is artifact-backed and takes the sentence through Override.tables).
+CAP_CARRIERS = (
+    ("l1tpc", "arcadedb_server"),
+    ("l2", "arcadedb_graph_server"),
+    ("l3s", "arcadedb_sparse_server"), ("l3s", "arcadedb_sparse_server_fp32"),
+    ("l3d", "arcadedb_dense_server"), ("l3d", "arcadedb_dense_server_int8"),
+    ("l4", "arcadedb_ts_doc_server"), ("l4", "arcadedb_ts_native_server"),
+    ("e2", "arcadedb_e2_server"),
+    ("lifecycle", "arcadedb_server"),
+    ("restart", "arcadedb_server"), ("restart", "arcadedb_graph_server"),
+    ("restart", "arcadedb_dense_server"), ("restart", "arcadedb_ts_native_server"),
+)
 
 OVERRIDES = (
     Override(
@@ -309,6 +380,14 @@ OVERRIDES = (
         check=_hierarchy_is_on, sentence=_arcadedb_hierarchy,
         says=(r"ArcadeDB", r"vector index", r"layer|hierarch"),
         companions=("arcadedb_add_hierarchy_source", "arcadedb_readback_error")),
+    Override(
+        key="arcadedb_query_cap",
+        setting=f"-D{CAP_PROPERTY}",
+        carriers=tuple(Carrier(lane, be, "server_query_max_heap_elements") for lane, be in CAP_CARRIERS),
+        check=_cap_is_the_runner_cap, sentence=_arcadedb_cap,
+        says=(r"ArcadeDB server", r"limit", r"embedded"),
+        tables=("e4",), constant=lambda: _arcadedb_cap([], runner_cap()),
+        companions=("server_query_max_heap_source",)),
 )
 
 BY_KEY = {o.key: o for o in OVERRIDES}

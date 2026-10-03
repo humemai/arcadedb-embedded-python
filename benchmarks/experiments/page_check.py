@@ -1199,6 +1199,10 @@ NOT_PRINTED = [
      "whether ArcadeDB's vector index was built with a hierarchy, and whether "
      "that was read from the engine (embedded) or recorded as the request "
      "(served, whose HTTP API returns no index metadata)"),
+    (r"^(server_query_max_heap_elements|server_query_max_heap_source)$",
+     "the served ArcadeDB's limit on records or groups one query may hold in "
+     "memory, asked of the engine over HTTP by the runner (or the container's "
+     "own setting, named as the source when the engine could not be asked)"),
     (r"^(es|duckdb|neo4j|arcadedb)_readback_error$",
      "the reason an override read-back failed on this row; fairness_check F15 "
      "reports the field it left absent, and this names why"),
