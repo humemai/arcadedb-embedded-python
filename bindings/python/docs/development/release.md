@@ -45,23 +45,6 @@ If the merge stops on conflicts, resolve them as described in
 fork-owned restore and the `.github` prune the script skips in that case. Afterwards
 `pom.xml` reads `X.Y.Z`.
 
-### 1b. Verify the Release Against What We Filed
-
-The sync brings upstream's release, not our trust in it. Before building:
-
-- **Contains every fix we depend on.** For each fix commit the notes name (the engine fixes
-  we verified and the ones a bindings workaround waits for), run
-  `git merge-base --is-ancestor <fix commit> <release commit>` and keep the output.
-- **Re-run the filed reproductions** on the release itself (the `arcadedata/arcadedb:X.Y.Z`
-  image the Linux build copies its jars from), on both JDKs, and compare with the output
-  recorded when the fix was verified. A later merge can undo an earlier one.
-- **Clean up [Known Engine Issues](../guide/known-issues.md).** Mark each entry the release
-  fixes as fixed, or remove it, together with its test. An entry with a `Tests:` line has a
-  strict `xfail` that starts failing the suite on the new wheel when the fix is in, which is
-  the cue.
-- **Resolve the conditional lines of the release notes** (a line staged "only if" a pull
-  request or an upstream fix is in the release): keep it only if it is.
-
 ### 2. Build and Test
 
 ```bash
