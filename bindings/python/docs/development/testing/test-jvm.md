@@ -32,8 +32,18 @@ query returns `[{"k": 1}]`.
 A leaked (unclosed) Database must not hang interpreter exit. A child process creates a
 database without closing it; the test asserts it prints `OK` and exits 0 within 120 s.
 
+## Ctrl-C (`test_sigint.py`)
+
+Each case starts a child process, sends it SIGINT after the JVM is up, and reads what it printed (humemai/arcadedb-embedded-python#118). JPype's default in a script is `interrupt=True`: the JVM ends the whole process with status 130 and no `KeyboardInterrupt`, `finally`, or `atexit` runs. `start_jvm()` now passes `interrupt=False`.
+
+- **a Python loop and a blocked Java call (`Thread.sleep`)**: inside `with db.transaction():` that inserted a row, Ctrl-C raises `KeyboardInterrupt`, the transaction is rolled back (the count is 0), `finally` and `atexit` run, and the exit status is 0.
+- **`interrupt=True` keeps the old behavior**: exit status 130 and no `KeyboardInterrupt`.
+
+A CPU-bound Java call that never checks for interruption (a slow query) is not interrupted: the `KeyboardInterrupt` arrives when it returns. That was measured (a 10 s query, Ctrl-C after 1.5 s, the `KeyboardInterrupt` at 10.3 s), not tested.
+
 ## Running
 
 ```bash
 uv run pytest bindings/python/tests/test_jvm.py -v
+uv run pytest bindings/python/tests/test_sigint.py -v
 ```
