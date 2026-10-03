@@ -41,16 +41,16 @@ def _java_class(name):
     return cls
 
 
-def _wrap_java_record(java_record):
+def _wrap_java_record(java_record, database=None):
     """Wrap a Java record in the matching Python class (Vertex/Edge/Document)."""
     if java_record is None:
         return None
     if isinstance(java_record, _java_class("com.arcadedb.graph.Vertex")):
-        return Vertex(java_record)
+        return Vertex(java_record, database)
     if isinstance(java_record, _java_class("com.arcadedb.graph.Edge")):
-        return Edge(java_record)
+        return Edge(java_record, database)
     if isinstance(java_record, _java_class("com.arcadedb.database.Document")):
-        return Document(java_record)
+        return Document(java_record, database)
     return java_record
 
 
@@ -114,7 +114,7 @@ class Database:
                 java_result = self._java_db.query(language, command, *converted_args)
             else:
                 java_result = self._java_db.query(language, command)
-            return ResultSet(java_result)
+            return ResultSet(java_result, self)
         except Exception as e:
             raise ArcadeDBError(f"Query failed: {e}") from e
 
@@ -129,7 +129,7 @@ class Database:
                 java_result = self._java_db.command(language, command)
 
             if java_result is not None:
-                return ResultSet(java_result)
+                return ResultSet(java_result, self)
             return None
         except Exception as e:
             raise ArcadeDBError(f"Command failed: {e}") from e
@@ -218,7 +218,7 @@ class Database:
         """Create a new vertex."""
         self._check_not_closed()
         try:
-            return Vertex(self._java_db.newVertex(type_name))
+            return Vertex(self._java_db.newVertex(type_name), self)
         except Exception as e:
             raise ArcadeDBError(
                 f"Failed to create vertex of type '{type_name}': {e}"
@@ -228,7 +228,7 @@ class Database:
         """Create a new document."""
         self._check_not_closed()
         try:
-            return Document(self._java_db.newDocument(type_name))
+            return Document(self._java_db.newDocument(type_name), self)
         except Exception as e:
             raise ArcadeDBError(
                 f"Failed to create document of type '{type_name}': {e}"
@@ -424,7 +424,7 @@ class Database:
             # Return first result wrapped, or None
             if cursor.hasNext():
                 java_record = cursor.next().getRecord()
-                return Document.wrap(java_record)
+                return Document.wrap(java_record, self)
             return None
         except Exception as e:
             raise ArcadeDBError(f"Failed to lookup by key in '{type_name}': {e}") from e
@@ -459,7 +459,7 @@ class Database:
     def _lookup_by_java_rid(self, java_rid) -> Any:
         """Lookup by an already-Java RID, skipping string parsing (hot path)."""
         java_record = self._java_db.lookupByRID(java_rid, True)
-        return _wrap_java_record(java_record)
+        return _wrap_java_record(java_record, self)
 
     def to_java_rid(self, value):
         self._check_not_closed()

@@ -349,6 +349,13 @@ read it again: the rows it had not returned are gone, so run the query again. (U
 which depended on the engine build.) To take one row and keep reading, use
 `next(iter(rs))` rather than `first()`.
 
+A result set, and each `Result` it returns, keeps its `Database` alive. Reading one
+after the database was closed (`db.close()`, or leaving the `with` block that opened it)
+raises `ArcadeDBError` ("Database is closed") unless the result set was already read to
+its end. A record row is loaded lazily from the open database, so there is nothing to
+return, and a projection is refused too, for one rule. See
+[`Database.close()`](database.md#close).
+
 Closing is not only memory hygiene: since 26.10.1's parallel scan
 (ArcadeData/arcadedb#8524) a query whose `LIMIT` is satisfied keeps its scan's producer
 threads parked until its result set is closed or
