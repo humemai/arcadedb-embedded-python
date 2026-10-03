@@ -93,12 +93,44 @@ def _present(v):
     return v not in (None, "", "None", "nan")
 
 
+def cpuset_size(cpuset):
+    """How many CPUs a docker cpuset string names ('0-11', '0-5,8-11', '3')."""
+    n = 0
+    for part in str(cpuset).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            a, b = part.split("-", 1)
+            n += int(b) - int(a) + 1
+        else:
+            n += 1
+    return n
+
+
 def _is_false(row, v):
     return None if _bool(v) is False else f"reads {v!r}, the sentence says it is off"
 
 
+def _is_true(row, v):
+    return None if _bool(v) is True else f"reads {v!r}, the sentence says it is on"
+
+
 def _is_zero(row, v):
     return None if _int(v) == 0 else f"reads {v!r}, the sentence says none"
+
+
+def _threads_are_the_cpuset(row, v):
+    """The claim is 'one thread per CPU the cell may use', so the engine's own
+    answer is held against the size of the row's own cpuset."""
+    got = _int(v)
+    if got is None:
+        return f"reads {v!r}, not a thread count"
+    cpus = row.get("cpuset")
+    if not _present(cpus):
+        return None          # a row with no cpuset cannot be compared; F1 refuses it elsewhere
+    want = cpuset_size(cpus)
+    return None if got == want else f"the engine runs {got} threads in a {want}-CPU cell"
 
 
 def _es_security(rows):
@@ -109,6 +141,17 @@ def _es_security(rows):
 def _es_replicas(rows):
     return ("Elasticsearch's index is created with no replica, because a single-node cluster has "
             "nowhere to place one and the index would otherwise stay yellow.", [])
+
+
+def _duckdb_threads(rows):
+    return ("DuckDB is given one thread for each CPU the run may use; left alone it sizes its pool "
+            "from the machine's cores and not from the CPUs the run was given.", [])
+
+
+def _duckdb_vss(rows):
+    return ("DuckDB's vector rows keep their HNSW index in the database through a persistence feature "
+            "that its vector extension still labels experimental and that has to be switched on for "
+            "the index to be stored at all.", [])
 
 
 OVERRIDES = (
@@ -131,6 +174,24 @@ OVERRIDES = (
                   Carrier("restart", "elasticsearch_dense", "es_replicas")),
         check=_is_zero, sentence=_es_replicas,
         says=(r"Elasticsearch", r"replica")),
+    Override(
+        key="duckdb_threads",
+        setting="PRAGMA threads = len(sched_getaffinity(0))",
+        carriers=(Carrier("l1tpc", "duckdb", "duckdb_threads"),
+                  Carrier("l4", "duckdb", "duckdb_threads"),
+                  Carrier("l3d", "duckdb_vss_dense", "duckdb_threads"),
+                  Carrier("l2", "duckpgq_graph", "duckpgq_threads"),
+                  Carrier("e2", "duckdb_e2", "duckdb_threads")),
+        check=_threads_are_the_cpuset, sentence=_duckdb_threads,
+        says=(r"DuckDB", r"thread", r"CPU|cpuset"),
+        companions=("duckdb_readback_error",)),
+    Override(
+        key="duckdb_vss",
+        setting="hnsw_enable_experimental_persistence=true",
+        carriers=(Carrier("l3d", "duckdb_vss_dense", "duckdb_hnsw_persistence"),
+                  Carrier("e2", "duckdb_e2", "duckdb_hnsw_persistence")),
+        check=_is_true, sentence=_duckdb_vss,
+        says=(r"DuckDB", r"experimental")),
 )
 
 BY_KEY = {o.key: o for o in OVERRIDES}

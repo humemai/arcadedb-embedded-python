@@ -438,6 +438,21 @@ def es_readback(es, index):
     return out
 
 
+def duckdb_readback(cx, vss=False):
+    """DuckDB's thread pool as the engine reports it after `PRAGMA threads`,
+    and, when the vector extension is loaded (`vss=True`), the experimental
+    HNSW persistence flag."""
+    out = {}
+    try:
+        out["duckdb_threads"] = int(cx.execute("SELECT current_setting('threads')").fetchone()[0])
+        if vss:
+            out["duckdb_hnsw_persistence"] = bool(cx.execute(
+                "SELECT current_setting('hnsw_enable_experimental_persistence')").fetchone()[0])
+    except Exception as e:  # noqa: BLE001
+        out["duckdb_readback_error"] = f"{type(e).__name__}: {e}"
+    return out
+
+
 def _host_identity():
     """Which machine this is, read rather than assumed.
 

@@ -1088,6 +1088,10 @@ class DuckVSS(Base):
         self.cx.execute(f"PRAGMA threads={len(os.sched_getaffinity(0))}")
         self.cx.execute("INSTALL vss; LOAD vss;")
         self.cx.execute("SET hnsw_enable_experimental_persistence=true;")
+        # Both settings as the engine reports them, on the row (CAMPAIGN
+        # section 7 row 21, overrides.py): the thread pool against the cell's
+        # cpuset, and the experimental persistence flag the HNSW index needs.
+        self.row_extra = bench_common.duckdb_readback(self.cx, vss=True)
 
     def build(self, vecs):
         # native bulk path: Arrow FixedSizeList -> DuckDB FLOAT[DIM] in one

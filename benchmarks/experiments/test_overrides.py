@@ -23,7 +23,7 @@ PROTOCOL = HERE / "PROTOCOL.md"
 # PROTOCOL section 7 rows that still say NOWHERE, by a distinctive substring of
 # their Setting cell, with the reason each is not done. Empty is the goal. A row
 # may only be added here with a reason a reader of the report can act on.
-NOT_DONE = {"PRAGMA threads": "its override is not registered at this commit", "hnsw_enable_experimental_persistence": "its override is not registered at this commit", "server_memory_pagecache_size": "its override is not registered at this commit", "NEO4J_db_checkpoint_interval_time": "its override is not registered at this commit", "addHierarchy": "its override is not registered at this commit", "queryMaxHeapElementsAllowedPerOp": "its override is not registered at this commit", "wait_completion": "its override is not registered at this commit", "the manifest records cpuset/mem/heap/images": "its override is not registered at this commit"}
+NOT_DONE = {"server_memory_pagecache_size": "its override is not registered at this commit", "NEO4J_db_checkpoint_interval_time": "its override is not registered at this commit", "addHierarchy": "its override is not registered at this commit", "queryMaxHeapElementsAllowedPerOp": "its override is not registered at this commit", "wait_completion": "its override is not registered at this commit", "the manifest records cpuset/mem/heap/images": "its override is not registered at this commit"}
 
 
 def _split_row(line):
@@ -200,6 +200,24 @@ def test_a_failed_read_back_is_named_on_the_finding():
 def test_september_rows_and_other_lanes_are_not_judged():
     assert OV.stamp_findings([_row(lane="l3s", backend="elasticsearch_sparse", instrument="2026-09")]) == ([], 0)
     assert OV.stamp_findings([_row(lane="l1", backend="duckdb")]) == ([], 0)
+
+
+def test_duckdb_threads_are_held_to_the_cells_own_cpuset():
+    ok = _row(lane="l4", backend="duckdb", cpuset="0-11", duckdb_threads=12)
+    assert OV.stamp_findings([ok]) == ([], 1)
+    # a PRAGMA that did not take: the host's 20 threads in a 12-CPU cell
+    bad = _row(lane="l4", backend="duckdb", cpuset="0-11", duckdb_threads=20)
+    found, _ = OV.stamp_findings([bad])
+    assert found[0]["kind"] == "WRONG" and "20 threads in a 12-CPU cell" in found[0]["text"]
+    # the cpuset spelling the page uses elsewhere
+    assert OV.cpuset_size("0-5,8-11") == 10 and OV.cpuset_size("3") == 1
+
+
+def test_the_duckpgq_arm_uses_its_own_field_name():
+    r = _row(lane="l2", backend="duckpgq_graph", cpuset="0-11")
+    assert [f["field"] for f in OV.stamp_findings([r])[0]] == ["duckpgq_threads"]
+    r["duckpgq_threads"] = "12"            # a frozen csv row carries strings
+    assert OV.stamp_findings([r]) == ([], 1)
 
 
 def test_every_stamp_field_is_a_declared_not_printed_field():

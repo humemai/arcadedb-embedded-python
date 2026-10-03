@@ -1174,8 +1174,10 @@ NOT_PRINTED = [
      "Elasticsearch's processors and heap, read back from _nodes: its pool and "
      "heap fitted to the cell (FAIRNESS F6), audited rather than printed"),
     (r"^duckdb_threads$",
-     "the DuckDB cross-model arm's thread pool, sized from the cpuset (FAIRNESS "
-     "F6, audited in FAIRNESS.md rather than printed as a column)"),
+     "a DuckDB arm's thread pool, read back from the engine and held against "
+     "the size of the cell's cpuset (FAIRNESS F6; fairness_check F15), stated "
+     "under every table that shows DuckDB by a generated sentence rather than "
+     "printed as a column"),
     # THE OVERRIDES A TABLE DISCLOSES (overrides.py, CAMPAIGN section 7 row 21):
     # each field below is a setting this benchmark overrides, read back from the
     # engine and named under every table that shows the arm by a generated
@@ -1185,6 +1187,10 @@ NOT_PRINTED = [
      "Elasticsearch's security features and replica count, read from the engine "
      "(`_xpack`, the index settings): the sentence under every table that shows "
      "Elasticsearch says both are off"),
+    (r"^duckdb_hnsw_persistence$",
+     "DuckDB's experimental HNSW persistence flag, read from the engine "
+     "(`current_setting`): the sentence under every table that shows the "
+     "vector arm says it is on"),
     (r"^(es|duckdb|neo4j|arcadedb)_readback_error$",
      "the reason an override read-back failed on this row; fairness_check F15 "
      "reports the field it left absent, and this names why"),

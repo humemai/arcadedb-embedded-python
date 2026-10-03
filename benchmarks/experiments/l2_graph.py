@@ -1374,7 +1374,10 @@ class DuckpgqGraph(Base):
             "WHERE extension_name = 'duckpgq'").fetchall()
         _ev = _ext[0][0] if _ext else "?"
         self.version = f"duckdb:{duckdb.__version__} + duckpgq:{_ev}"
-        self.row_extra = {"duckpgq_threads": self._threads,
+        # The engine's own answer, not the number passed above (CAMPAIGN
+        # section 7 row 21): fairness_check F15 holds it to the cpuset's size.
+        _rb = bench_common.duckdb_readback(self.cx)
+        self.row_extra = {"duckpgq_threads": _rb.pop("duckdb_threads", None), **_rb,
                           "duckpgq_extension_version": _ev}
         # Tables first, then the property graph over them (empty is fine: the
         # graph is a live view, so the build below fills it). Person keyed by id

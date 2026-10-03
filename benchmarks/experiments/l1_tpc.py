@@ -384,6 +384,10 @@ class DuckTPC:
         # F6: DuckDB sizes its pool from the host (20 threads) under the 12-thread
         # cpuset; only sched_getaffinity sees the cpuset. Same fix as l1_tabular.
         self.cx.execute(f"PRAGMA threads={len(os.sched_getaffinity(0))}")
+        # ...and the engine's own answer, recorded on the row (CAMPAIGN section
+        # 7 row 21, overrides.py): fairness_check F15 holds it to the size of
+        # the cell's cpuset, so a PRAGMA that did not take cannot pass.
+        self.row_extra = bench_common.duckdb_readback(self.cx)
         self.version = duckdb.__version__
 
     def build(self, li, part):
@@ -1508,6 +1512,9 @@ def main():
     out["li_batches"] = li.n_batches
     if getattr(b, "load_batch", None):
         out["served_load_batch"] = b.load_batch
+    # Settings an arm read back from its engine (the DuckDB thread pool today;
+    # CAMPAIGN section 7 row 21).
+    out.update(getattr(b, "row_extra", None) or {})
     # item 10's embedded bulk path, as the executor reported it (not as asked)
     for _k in ("lineitem_buckets", "async_writers", "async_sync", "load_call_rows"):
         if getattr(b, _k, None) is not None:

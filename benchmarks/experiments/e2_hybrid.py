@@ -1578,7 +1578,10 @@ class DuckE2:
                                    "WHERE extension_name IN ('vss', 'duckpgq')").fetchall())
         self.version = f"duckdb:{duckdb.__version__} + vss:{ext.get('vss', '?')} + duckpgq:{ext.get('duckpgq', '?')}"
         self.durability = bench_common.DURABILITY_DUCKDB
-        self.row_extra = {"duckdb_threads": self._threads,
+        # `duckdb_threads` and the VSS persistence flag are the ENGINE's answers
+        # (current_setting), not the number passed above (CAMPAIGN section 7
+        # row 21): fairness_check F15 holds the thread count to the cpuset.
+        self.row_extra = {**bench_common.duckdb_readback(self.cx, vss=True),
                           "duckdb_memory_limit": self.cx.execute(
                               "SELECT current_setting('memory_limit')").fetchone()[0]}
 

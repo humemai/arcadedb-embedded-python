@@ -713,6 +713,8 @@ class DuckTS:
         # F6: DuckDB sizes its pool from the host (20 threads) under the 12-thread
         # cpuset; only sched_getaffinity sees the cpuset. Same fix as l1_tabular.
         self.cx.execute(f"PRAGMA threads={len(os.sched_getaffinity(0))}")
+        # The engine's own answer, on the row (CAMPAIGN section 7 row 21).
+        self.row_extra = bench_common.duckdb_readback(self.cx)
 
     def version(self):
         return f"duckdb {self._duckdb.__version__}"
