@@ -726,7 +726,10 @@ class ArcadeServer(Base):
         body = {"language": language, "command": command}
         if params is not None:
             body["params"] = params
-        if str(command).lstrip().upper().startswith("CREATE INDEX"):
+        # Only the first characters are looked at: an ingest command can carry
+        # megabytes of values in its text, and upper-casing all of it on every
+        # call would sit inside the timed ingest.
+        if str(command)[:40].lstrip().upper().startswith("CREATE INDEX"):
             # The statement as sent, kept so the row can say what the index was
             # asked for (the server returns no index metadata; overrides.py).
             self._index_ddl = str(command)
