@@ -374,9 +374,8 @@ def test_graph_batch_edge_keeps_a_null_in_a_declared_property(temp_db_path, bulk
                 batch.new_edge(
                     a.get_rid(), edge_type, b.get_rid(), weight=None, note="hello"
                 )
-        rows = db.query(
-            "sql", f"SELECT weight, note FROM {edge_type}"
-        ).to_list()  # nosec B608 - fixed type names
+        query = f"SELECT weight, note FROM {edge_type}"  # nosec B608 - fixed type names
+        rows = db.query("sql", query).to_list()
         assert [(r.get("weight"), r.get("note")) for r in rows] == [(None, "hello")]
 
 
