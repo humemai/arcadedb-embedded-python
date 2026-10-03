@@ -61,6 +61,20 @@ return 0, `out()` from the source 100, and the target vertex's
 `get_in_edges()` is empty. Fails on 26.9.1, where the incoming Cypher pattern
 returned 0.
 
+### 9) a failed create_vertices leaves no transaction open
+
+`test_graph_batch_create_vertices_failure_rolls_back` (JSON-bulk and
+property-matrix paths): two rows with the same key on a unique index make
+`create_vertices` raise `ArcadeDBError`, `db.is_transaction_active()` is `False`
+afterwards, the batch still creates the next vertex, and an `INSERT` outside any
+transaction is refused. Fails before humemai/arcadedb-embedded-python#121, where
+the transaction stayed active and the insert was accepted and lost at close.
+`test_graph_batch_create_vertices_keeps_the_callers_transaction` checks the other
+half: a transaction the caller opened before the call is still active after the
+failure. `test_graph_batch_create_vertices_keyboard_interrupt_rolls_back` raises
+`KeyboardInterrupt` after the engine's transaction has begun and expects the
+rollback to run.
+
 ## Why It Matters
 
 `GraphBatch` is the repository's preferred bulk graph-ingest path from Python, so these tests protect the performance-oriented API surface and its configuration validation behavior.

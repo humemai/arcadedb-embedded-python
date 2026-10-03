@@ -447,3 +447,77 @@ def test_graph_batch_create_vertex_failure_still_wraps_and_rolls_back(
                 batch.create_vertex("Person", name="Alice")
             assert db.is_transaction_active() is False
             monkeypatch.undo()
+
+
+def _unique_person_db(db):
+    db.command("sql", "CREATE VERTEX TYPE Person")
+    db.command("sql", "CREATE PROPERTY Person.id INTEGER")
+    db.command("sql", "CREATE INDEX ON Person (id) UNIQUE")
+    db.command("sql", "CREATE DOCUMENT TYPE Note")
+
+
+@pytest.mark.parametrize("bulk", [True, False], ids=["json-bulk", "property-matrix"])
+def test_graph_batch_create_vertices_failure_rolls_back(temp_db_path, bulk):
+    """A create_vertices that fails for a reason the engine does not retry (a
+    duplicate key) must not leave its transaction open: a later write outside
+    any transaction was accepted and silently lost at close (#121)."""
+    from datetime import datetime
+
+    with arcadedb.create_database(temp_db_path) as db:
+        _unique_person_db(db)
+        # a datetime is not JSON-safe, so it routes to the property-matrix path
+        extra = {} if bulk else {"seen": datetime(2026, 10, 3)}
+        rows = [{"id": 2, **extra}, {"id": 2, **extra}]
+
+        with db.graph_batch(parallel_flush=False) as batch:
+            with pytest.raises(ArcadeDBError):
+                batch.create_vertices("Person", rows)
+            assert db.is_transaction_active() is False
+            # the failed call left nothing behind, the batch is still usable
+            assert batch.create_vertices("Person", [{"id": 3, **extra}]) != []
+
+        assert db.is_transaction_active() is False
+        with pytest.raises(Exception):  # noqa: B017 - the engine's own refusal
+            db.command("sql", "INSERT INTO Note SET text = 'outside a transaction'")
+        assert db.count_type("Person") == 1
+
+
+def test_graph_batch_create_vertices_keeps_the_callers_transaction(temp_db_path):
+    """The rollback is for a transaction create_vertices opened itself: one the
+    caller already had open is theirs, and a failure inside it leaves it
+    active."""
+    with arcadedb.create_database(temp_db_path) as db:
+        _unique_person_db(db)
+
+        with db.graph_batch(parallel_flush=False) as batch:
+            db.begin()
+            try:
+                with pytest.raises(ArcadeDBError):
+                    batch.create_vertices("Person", [{"id": 2}, {"id": 2}])
+                assert db.is_transaction_active() is True
+            finally:
+                if db.is_transaction_active():
+                    db.rollback()
+
+
+def test_graph_batch_create_vertices_keyboard_interrupt_rolls_back(
+    temp_db_path, monkeypatch
+):
+    """A KeyboardInterrupt after the engine opened its transaction is not an
+    Exception; the rollback must still run (#121, as #7882 for create_vertex)."""
+    with arcadedb.create_database(temp_db_path) as db:
+        _unique_person_db(db)
+
+        with db.graph_batch(parallel_flush=False) as batch:
+
+            def interrupt(*_args, **_kwargs):
+                db.begin()  # what the engine's createVertices has done by now
+                raise KeyboardInterrupt
+
+            monkeypatch.setattr(batch, "_create_vertices_json_bulk", interrupt)
+            with pytest.raises(KeyboardInterrupt):
+                batch.create_vertices("Person", [{"id": 1}])
+            assert db.is_transaction_active() is False
+            monkeypatch.undo()
+
+        assert db.count_type("Person") == 0

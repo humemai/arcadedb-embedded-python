@@ -81,6 +81,17 @@ Since 26.10.1's parallel scan (ArcadeData/arcadedb#8524) a query whose `LIMIT` i
 - **exhaustion, first and one close the Java result set**: `list(rs)`, `to_list()`, `first()`, and `one()` each leave the result set closed.
 - **a set closed before its end raises when read again**: after `first()`, each of `list()`, `to_list()`, `first()`, `count()`, `iter_json_batches()`, and `to_columns()` raises `ArcadeDBError` ("closed before"), and so does `to_list()` after a `with` block that took one row; a set read to its end reads as empty through `list()`, `to_list()`, `first()`, and `iter_json_batches()`.
 
+### Results and records after their database is closed (`test_results_after_close.py`)
+
+A result, a result set, or a record keeps the `Database` it came from alive and raises `ArcadeDBError` ("Database is closed") once that database is closed (humemai/arcadedb-embedded-python#117). Before, a record row read `{}`, a record property read `None`, and a plain scan raised a raw `TransactionException`.
+
+- **reads through a closed database raise**: after `db.close()`, `to_list()` and iteration of two open result sets, and `get`, `to_dict`, `to_json`, `get_vertex`, `get_element`, `get_property_names`, `has_property`, and `get_out_edges` on a row and a vertex taken earlier, each raise.
+- **a projection result set is refused, a projection or command row is not**: an unread `SELECT name ...` result set raises after `close()`, because its rows may still be read lazily; a `Result` taken from it (or from a command) before the close holds its own values and still reads (example 16 reads an `IMPORT DATABASE` result after closing its database).
+- **a set read to its end stays empty**: after `to_list()` and `close()`, `to_list()` returns `[]`.
+- **a result keeps its dropped database open**: a function that opens a database, queries it, and returns the rows and a vertex without closing anything returns real data after `gc.collect()`, where it returned `[{}, {}, {}]` and `{}`.
+- **the kept database is open for the engine**: while those results live a second `open_database()` of the path raises "already in use"; once they are deleted it opens.
+- **the reference does not leak the database**: with every result and record deleted the wrapper's `__del__` closes the database and the path opens again.
+
 ## Handy patterns from the tests
 
 ```python

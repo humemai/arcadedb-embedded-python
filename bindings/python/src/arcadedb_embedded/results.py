@@ -215,11 +215,17 @@ class ResultSet:
     A result set read to its end reads as empty afterwards. One closed before
     its end (by ``first()``, ``one()``, ``close()``, or leaving its ``with``
     block) raises ArcadeDBError when read again: the rows it had not returned
-    are gone, and returning nothing would hide that.
+    are gone, and returning nothing would hide that. So does one whose
+    ``Database`` was closed before it was read to its end: a record row is
+    loaded lazily from the open database, and an empty row would hide that.
+
+    A result set keeps its ``Database`` alive, so a function may open a
+    database, query it, and return the result without closing anything.
     """
 
-    def __init__(self, java_result_set):
+    def __init__(self, java_result_set, database=None):
         self._java_result_set = java_result_set
+        self._database = database  # strong reference, see the class docstring
         self._closed = False
         self._exhausted = False
 
@@ -229,10 +235,18 @@ class ResultSet:
     def _readable(self) -> bool:
         """True while rows can still come; False once read to the end.
 
-        Raises ArcadeDBError for a result set closed before its end. What a
-        closed Java result set returns is the engine's business and has
-        changed between builds, so it is never asked.
+        Raises ArcadeDBError for a result set closed before its end, or whose
+        database was closed before its end. What a closed Java result set
+        returns is the engine's business and has changed between builds, so it
+        is never asked.
         """
+        database = self._database
+        if database is not None and database._closed and not self._exhausted:
+            raise ArcadeDBError(
+                "Database is closed: the rows of this result set cannot be "
+                "read after their database was closed. Read them before "
+                "closing the database."
+            )
         if not self._closed:
             return True
         if self._exhausted:
@@ -249,7 +263,7 @@ class ResultSet:
 
     def __next__(self) -> "Result":
         if self._readable() and self._java_result_set.hasNext():
-            return Result(self._java_result_set.next())
+            return Result(self._java_result_set.next(), self._database)
         if not self._closed:
             self._finish()
         raise StopIteration
@@ -898,13 +912,40 @@ class ResultSet:
 
 
 class Result:
-    """Wrapper for a single result from a query."""
+    """Wrapper for a single result from a query.
 
-    def __init__(self, java_result):
+    A result keeps its ``Database`` alive. A row that is a record
+    (``SELECT FROM T``) raises ArcadeDBError when read after that database was
+    closed, like a record; a projection or a command result holds its own values
+    and stays readable.
+    """
+
+    def __init__(self, java_result, database=None):
         self._java_result = java_result
+        self._database = database  # strong reference, see the class docstring
         self._property_names_cache: Optional[Tuple[str, ...]] = None
 
+    def _check_open(self) -> None:
+        database = self._database
+        if database is not None and database._closed and self._needs_database():
+            raise ArcadeDBError(
+                "Database is closed: a record row cannot be read after its "
+                "database was closed. Read what you need before closing it."
+            )
+
+    def _needs_database(self) -> bool:
+        """True for a row that is a record (``SELECT FROM T``): the engine
+        loads its properties lazily from the open database. A projection or a
+        command result holds its own values and stays readable, as it did
+        before results held their database (an IMPORT DATABASE result is read
+        after the import's database is closed, in example 16)."""
+        try:
+            return bool(self._java_result.isElement())
+        except Exception:  # nosec B110 - an unreadable row is treated as lazy
+            return True
+
     def _property_names_tuple(self) -> Tuple[str, ...]:
+        self._check_open()
         if self._property_names_cache is None:
             self._property_names_cache = tuple(
                 str(name) for name in self._java_result.getPropertyNames()
@@ -926,6 +967,7 @@ class Result:
             >>> if result.has_property("email"):
             ...     print(result.get("email"))
         """
+        self._check_open()
         return self._java_result.hasProperty(name)
 
     def get(self, name: str, convert_types: bool = True) -> Any:
@@ -988,9 +1030,10 @@ class Result:
         Returns:
             Vertex object or None
         """
+        self._check_open()
         vertex = self._java_result.getVertex()
         if vertex.isPresent():
-            return Vertex(vertex.get())
+            return Vertex(vertex.get(), self._database)
         return None
 
     def get_edge(self) -> Optional[Edge]:
@@ -1000,9 +1043,10 @@ class Result:
         Returns:
             Edge object or None
         """
+        self._check_open()
         edge = self._java_result.getEdge()
         if edge.isPresent():
-            return Edge(edge.get())
+            return Edge(edge.get(), self._database)
         return None
 
     def get_element(self) -> Optional[Document]:
@@ -1012,9 +1056,10 @@ class Result:
         Returns:
             Document, Vertex, or Edge object or None
         """
+        self._check_open()
         element = self._java_result.getElement()
         if element.isPresent():
-            return Document.wrap(element.get())
+            return Document.wrap(element.get(), self._database)
         return None
 
     def get_property_names(self) -> List[str]:
@@ -1063,6 +1108,7 @@ class Result:
             >>> print(user_dict)
             {'name': 'Alice', 'age': 30, 'email': 'alice@example.com'}
         """
+        self._check_open()
         if convert_types:
             # One crossing for the whole row (names and values) instead of one
             # per property: a JPype call costs microseconds of dispatch, so a
@@ -1102,6 +1148,7 @@ class Result:
             >>> print(result.to_json())
             {"name": "Alice", "age": 30, "email": "alice@example.com"}
         """
+        self._check_open()
         return str(self._java_result.toJSON())
 
     def __repr__(self) -> str:

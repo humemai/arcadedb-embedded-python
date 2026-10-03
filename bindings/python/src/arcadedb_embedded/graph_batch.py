@@ -170,6 +170,10 @@ class GraphBatch:
                 without properties when passing an iterable.
         """
         self._check_not_closed()
+        # The engine opens (and commits) a transaction of its own here, but
+        # rolls it back only for a retryable error. A transaction the caller
+        # already had open is theirs and is left alone.
+        owns_transaction = not self._java_db.isTransactionActive()
         try:
             if isinstance(count_or_properties, int):
                 java_rids = self._java_graph_batch.createVertices(
@@ -187,7 +191,19 @@ class GraphBatch:
                 self._to_java_property_matrix(rows),
             )
             return [str(rid) for rid in java_rids]
-        except Exception as e:
+        except BaseException as e:
+            # As in create_vertex: a failure other than a retryable one (a
+            # duplicate key, a KeyboardInterrupt) leaves the engine's
+            # transaction open, so a later write outside any transaction is
+            # accepted and lost at close (#121).
+            if owns_transaction:
+                try:
+                    if self._java_db.isTransactionActive():
+                        self._java_db.rollback()
+                except Exception:
+                    log_swallowed_exception(_LOGGER, "during batch vertices rollback")
+            if not isinstance(e, Exception):
+                raise
             raise ArcadeDBError(
                 f"Failed to create batch vertices for type '{type_name}': {e}"
             ) from e

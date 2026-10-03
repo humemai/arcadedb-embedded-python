@@ -16,6 +16,11 @@ The Python API provides wrapper classes for database records: `Document`, `Verte
 | `Vertex` | Wrapper for graph vertices | Creating edges, traversal |
 | `Edge` | Wrapper for graph edges | Accessing source/target vertices |
 
+A record read from a database keeps that `Database` alive, and reading it after the
+database was closed raises `ArcadeDBError` ("Database is closed"). The engine loads a
+record's properties lazily from the open database, so there is nothing to return once
+it is closed. See [`Database.close()`](database.md#close).
+
 ## Document Wrapper
 
 The `Document` class is the base wrapper for all record types. Use it for documents and

@@ -987,6 +987,16 @@ Close the database connection. It also closes the async executor
 ([`async_executor`](#async_executor)) if this handle handed it out, and a `Database`
 that is garbage-collected closes itself.
 
+A result set, a result, or a record read from the database keeps its `Database` alive,
+so a function can open a database, query it, and return the result without closing
+anything: the database closes when the last of them is freed. While one is alive the
+engine refuses a second `open_database()` of the same path ("already in use"). After
+`close()`, reading a record, a record row (`SELECT FROM T`), or a result set that was not
+read to its end raises `ArcadeDBError` ("Database is closed"), as `db.query()` does; a
+projection or command `Result` that was already returned keeps its own values and stays
+readable. Earlier versions returned empty rows or `None` values and the engine logged
+`Possible corrupted record` for each read (humemai/arcadedb-embedded-python#117).
+
 A handle from `ArcadeDBServer.get_database()` or `ArcadeDBServer.create_database()`
 belongs to the server: `close()` only marks that handle closed, and the database stays open for the
 server and its other handles until `server.stop()`.

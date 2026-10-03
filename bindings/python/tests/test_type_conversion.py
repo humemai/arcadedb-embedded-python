@@ -189,6 +189,29 @@ def test_collection_conversion(temp_db_path):
         assert metadata["name"] == "test"
 
 
+def test_a_python_set_is_a_set_only_until_the_commit(temp_db_path):
+    """The engine has no set type, so a HashSet is serialized as a list when the
+    transaction commits (#122). The documented behavior: a set inside the
+    transaction, a list from every read after it. If the engine ever keeps sets,
+    this fails and api/type_conversion.md needs to change with it."""
+    with arcadedb.create_database(temp_db_path) as db:
+        db.command("sql", "CREATE VERTEX TYPE User")
+
+        with db.transaction():
+            vertex = db.new_vertex("User")
+            vertex.set("roles", {"admin", "user", "admin"})
+            vertex.save()
+            assert vertex.get("roles") == {"admin", "user"}
+            rid = vertex.get_rid()
+
+        by_rid = db.lookup_by_rid(rid).get("roles")
+        by_query = db.query("sql", "SELECT roles FROM User").first().get("roles")
+        rows = db.query("sql", "SELECT roles FROM User").to_list()
+        for value in (by_rid, by_query, rows[0]["roles"]):
+            assert isinstance(value, list)
+            assert sorted(value) == ["admin", "user"]
+
+
 def test_nested_collection_conversion(temp_db_path):
     """Test conversion of nested collections."""
     with arcadedb.create_database(temp_db_path) as db:
