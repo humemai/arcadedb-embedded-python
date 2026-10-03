@@ -50,7 +50,7 @@ that JPype performs the conversion automatically (a Python `int` reaches Java as
 |-------------|-----------|
 | `None` | `null` |
 | `Decimal` | `BigDecimal` |
-| `set` | `HashSet` |
+| `set` | `HashSet` (stored as a list, see below) |
 | `dict` | `HashMap` |
 | `list` | `ArrayList` |
 | `tuple` | `ArrayList` |
@@ -136,7 +136,7 @@ Convert Java object to Python value.
 | `LocalDateTime` | `datetime` |
 | `Instant`, `ZonedDateTime`, `OffsetDateTime` | `datetime` (UTC) |
 | `Map` | `dict` |
-| `Set` | `set` |
+| `Set` | `set` (a stored property is never a `Set`: it was written as a list) |
 | `List`, `Collection` | `list` |
 
 **Notes:**
@@ -296,9 +296,9 @@ with db.transaction():
     vertex.set("tags", ["python", "java", "database"])
     tags = vertex.get("tags")                  # list
 
-    # set → HashSet
+    # set → HashSet, stored as a list: a set is a set only until the commit
     vertex.set("roles", {"admin", "user"})
-    roles = vertex.get("roles")                # set
+    roles = vertex.get("roles")                # set, in this transaction only
 
     # Nested lists
     vertex.set("matrix", [[1, 2], [3, 4]])
@@ -362,7 +362,7 @@ with db.transaction():
     vertex.set("numbers", [3, 1, 4, 1, 5, 9])
     numbers = vertex.get("numbers")            # [3, 1, 4, 1, 5, 9]
 
-    # Sets remove duplicates
+    # Sets remove duplicates (in this transaction: see the note below)
     vertex.set("unique", {3, 1, 4, 1, 5, 9})
     unique = vertex.get("unique")              # {1, 3, 4, 5, 9}
 
@@ -370,6 +370,14 @@ with db.transaction():
     vertex.set("mapping", {"a": 1, "b": 2, "c": 3})
     mapping = vertex.get("mapping")            # {"a": 1, "b": 2, "c": 3}
 ```
+
+**A `set` reads back as a `list`.** The engine has no set type (its `Type` enum has
+`LIST` and `MAP`), so a `HashSet` is serialized as a list when the transaction
+commits. The record you set it on still holds the `HashSet` until then, which is why
+`vertex.get("roles")` returns a `set` inside the transaction. After the commit every
+read (`lookup_by_rid()`, a query row's `get()`, `to_list()`) returns a `list`, in no
+particular order. Duplicates are still removed. If your code needs a set, convert on
+read: `set(vertex.get("roles"))`.
 
 ## Complete Example
 
@@ -401,7 +409,7 @@ with db.transaction():
 
     # Collections
     product.set("tags", ["electronics", "laptop"])     # list
-    product.set("categories", {"computers", "tech"})   # set
+    product.set("categories", {"computers", "tech"})   # set, a list after the commit
 
     # Nested structures
     product.set("specs", {

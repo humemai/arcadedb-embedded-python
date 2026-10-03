@@ -247,7 +247,7 @@ numpy_array = to_python_array(java_array)
 | `None` | `null` | Automatic |
 | `list` | `ArrayList` | Converted by `convert_python_to_java()` (used by `set()`, and by a bound parameter that is one of several arguments) |
 | `tuple` | `ArrayList` | Converted by `convert_python_to_java()` |
-| `set` | `HashSet` | Converted by `convert_python_to_java()` |
+| `set` | `HashSet` | Converted by `convert_python_to_java()`; stored as a list, so it reads back as a `list` after the commit |
 | `dict` | `HashMap` | Converted by `convert_python_to_java()` |
 | `Decimal` | `BigDecimal` | Converted by `convert_python_to_java()` |
 | `datetime` | `java.util.Date` | Converted by `convert_python_to_java()` |
