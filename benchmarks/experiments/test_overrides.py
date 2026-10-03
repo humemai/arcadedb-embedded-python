@@ -23,7 +23,7 @@ PROTOCOL = HERE / "PROTOCOL.md"
 # PROTOCOL section 7 rows that still say NOWHERE, by a distinctive substring of
 # their Setting cell, with the reason each is not done. Empty is the goal. A row
 # may only be added here with a reason a reader of the report can act on.
-NOT_DONE = {"addHierarchy": "its override is not registered at this commit", "queryMaxHeapElementsAllowedPerOp": "its override is not registered at this commit", "wait_completion": "its override is not registered at this commit", "the manifest records cpuset/mem/heap/images": "its override is not registered at this commit"}
+NOT_DONE = {"queryMaxHeapElementsAllowedPerOp": "its override is not registered at this commit", "wait_completion": "its override is not registered at this commit", "the manifest records cpuset/mem/heap/images": "its override is not registered at this commit"}
 
 
 def _split_row(line):
@@ -240,6 +240,19 @@ def test_neo4j_page_cache_is_held_to_what_the_cell_passed():
     assert [f["field"] for f in found] == ["neo4j_pagecache"] and found[0]["kind"] == "WRONG"
     assert OV.size_bytes("1.50GiB") == OV.size_bytes("1.5g") == 1.5 * (1 << 30)
     assert OV.duration_words("5s") == ("5", "seconds") and OV.duration_words("1m") == ("1", "minute")
+
+
+def test_hierarchy_must_say_whether_it_was_read_or_requested():
+    r = _row(lane="l3d", backend="arcadedb_dense_embedded", arcadedb_add_hierarchy=True)
+    found, _ = OV.stamp_findings([r])
+    assert [(f["key"], f["kind"]) for f in found] == [("arcadedb_hierarchy", "WRONG")]
+    r["arcadedb_add_hierarchy_source"] = "index metadata read back from the engine"
+    assert OV.stamp_findings([r]) == ([], 1)
+    # the served arm records a request, and carries the runner's other server stamps
+    srv = _row(lane="l3d", backend="arcadedb_dense_server", arcadedb_add_hierarchy=True,
+               arcadedb_add_hierarchy_source="requested in the CREATE INDEX statement",
+               server_query_max_heap_elements=5000000)
+    assert OV.stamp_findings([srv])[0] == []
 
 
 def test_every_stamp_field_is_a_declared_not_printed_field():

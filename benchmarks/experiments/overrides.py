@@ -184,6 +184,14 @@ def _checkpoint_is_five_seconds(row, v):
     return None if str(v).strip() == "5s" else f"reads {v!r}, the cell sets 5s"
 
 
+def _hierarchy_is_on(row, v):
+    bad = _is_true(row, v)
+    if bad:
+        return bad
+    src = str(row.get("arcadedb_add_hierarchy_source") or "")
+    return None if src else "no `arcadedb_add_hierarchy_source`, so a reader cannot tell a read-back from a request"
+
+
 def _es_security(rows):
     return ("Elasticsearch runs with its security features switched off, so none of its requests pays "
             "for authentication or encryption; its image turns both on unless told otherwise.", [])
@@ -224,6 +232,11 @@ def _neo4j_checkpoint(rows):
                 f"so that the disk reading taken after a run finds the data on disk.", [a[0]])
     return ("Neo4j checkpoints its store at a short fixed interval instead of its much longer default, "
             "so that the disk reading taken after a run finds the data on disk.", [])
+
+
+def _arcadedb_hierarchy(rows):
+    return ("ArcadeDB's vector index is built as a layered graph, the structure the hnswlib family "
+            "uses; the engine's own default is a single flat layer.", [])
 
 
 OVERRIDES = (
@@ -285,6 +298,17 @@ OVERRIDES = (
         check=_checkpoint_is_five_seconds, sentence=_neo4j_checkpoint,
         says=(r"Neo4j", r"checkpoint"),
         companions=("neo4j_checkpoint_interval_default",)),
+    Override(
+        key="arcadedb_hierarchy",
+        setting='LSM_VECTOR METADATA {"addHierarchy": true}',
+        carriers=(Carrier("l3d", "arcadedb_dense_embedded", "arcadedb_add_hierarchy"),
+                  Carrier("l3d", "arcadedb_dense_embedded_int8", "arcadedb_add_hierarchy"),
+                  Carrier("l3d", "arcadedb_dense_server", "arcadedb_add_hierarchy"),
+                  Carrier("l3d", "arcadedb_dense_server_int8", "arcadedb_add_hierarchy"),
+                  Carrier("restart", "arcadedb_dense_server", "arcadedb_add_hierarchy")),
+        check=_hierarchy_is_on, sentence=_arcadedb_hierarchy,
+        says=(r"ArcadeDB", r"vector index", r"layer|hierarch"),
+        companions=("arcadedb_add_hierarchy_source", "arcadedb_readback_error")),
 )
 
 BY_KEY = {o.key: o for o in OVERRIDES}

@@ -631,6 +631,12 @@ class ArcadeEmbedded(Base):
                    "storeVectorsInGraph": false, "addHierarchy": true }}''')
         self.index_s = round(time.perf_counter() - _t1, 2)
 
+    def readbacks(self):
+        # The layered graph the CREATE INDEX statement asks for, as the engine
+        # records it for the index it built (CAMPAIGN section 7 row 21,
+        # overrides.py). Read after the build timer, not inside build().
+        return bench_common.arcadedb_hierarchy_readback(self.db, "Article[embedding]")
+
     def engine_stats(self):
         """The engine's own counters for this run.
 
@@ -720,6 +726,10 @@ class ArcadeServer(Base):
         body = {"language": language, "command": command}
         if params is not None:
             body["params"] = params
+        if str(command).lstrip().upper().startswith("CREATE INDEX"):
+            # The statement as sent, kept so the row can say what the index was
+            # asked for (the server returns no index metadata; overrides.py).
+            self._index_ddl = str(command)
         r = self.rq.post(f"{self.base}/command/bench", json=body, timeout=timeout)
         r.raise_for_status()
         return r.json().get("result", [])
@@ -766,6 +776,13 @@ class ArcadeServer(Base):
                   # cell and the cost of a too-long one is only lateness.
                   timeout=12 * 3600)
         self.index_s = round(time.perf_counter() - _t1, 2)
+
+    def readbacks(self):
+        # What the CREATE INDEX statement asked for, recorded as a REQUEST
+        # because the HTTP API returns no index metadata at this pin (CAMPAIGN
+        # section 7 row 21, overrides.py); the embedded arm reads it back from
+        # the engine. Taken after the build timer, not inside build().
+        return bench_common.arcadedb_hierarchy_requested(getattr(self, "_index_ddl", ""))
 
     def search(self, qvec, k):
         # BOUND, AS THE EMBEDDED ARM ALREADY IS (DECISIONS #116 item 2): the

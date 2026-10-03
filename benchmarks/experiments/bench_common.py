@@ -10,6 +10,7 @@ import decimal as _decimal
 import hashlib
 import json
 import os
+import re
 import socket
 import statistics as st
 import sys
@@ -470,6 +471,32 @@ def neo4j_readback(session, checkpoint=False):
     except Exception as e:  # noqa: BLE001
         out["neo4j_readback_error"] = f"{type(e).__name__}: {e}"
     return out
+
+
+def arcadedb_hierarchy_readback(db, index_name):
+    """The embedded engine's own record of the vector index it built: the
+    per-bucket LSMVectorIndex serialises every setting, `addHierarchy` among
+    them. The served engine has no such read (its schema queries carry no index
+    metadata), see arcadedb_hierarchy_requested."""
+    out = {}
+    try:
+        sub = db.schema.get_index_by_name(index_name).getIndexesOnBuckets()[0]
+        meta = json.loads(str(sub.toJSON().toString()))
+        out["arcadedb_add_hierarchy"] = bool(meta["addHierarchy"])
+        out["arcadedb_add_hierarchy_source"] = "index metadata read back from the engine"
+    except Exception as e:  # noqa: BLE001
+        out["arcadedb_readback_error"] = f"{type(e).__name__}: {e}"
+    return out
+
+
+def arcadedb_hierarchy_requested(ddl):
+    """What the CREATE INDEX statement SENT, for the served arm: the HTTP API
+    returns no index metadata at this pin, so the field says it is a request."""
+    m = re.search(r'"addHierarchy"\s*:\s*(true|false)', ddl)
+    if not m:
+        return {}
+    return {"arcadedb_add_hierarchy": m.group(1) == "true",
+            "arcadedb_add_hierarchy_source": "requested in the CREATE INDEX statement; the server returns no index metadata"}
 
 
 def _host_identity():
