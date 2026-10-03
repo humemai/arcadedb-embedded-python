@@ -777,8 +777,10 @@ class ResultSet:
 class Result:
     """Wrapper for a single result from a query.
 
-    Like a record, a result keeps its ``Database`` alive and raises
-    ArcadeDBError when read after that database was closed.
+    A result keeps its ``Database`` alive. A row that is a record
+    (``SELECT FROM T``) raises ArcadeDBError when read after that database was
+    closed, like a record; a projection or a command result holds its own values
+    and stays readable.
     """
 
     def __init__(self, java_result, database=None):
@@ -788,11 +790,22 @@ class Result:
 
     def _check_open(self) -> None:
         database = self._database
-        if database is not None and database._closed:
+        if database is not None and database._closed and self._needs_database():
             raise ArcadeDBError(
-                "Database is closed: a result cannot be read after its "
+                "Database is closed: a record row cannot be read after its "
                 "database was closed. Read what you need before closing it."
             )
+
+    def _needs_database(self) -> bool:
+        """True for a row that is a record (``SELECT FROM T``): the engine
+        loads its properties lazily from the open database. A projection or a
+        command result holds its own values and stays readable, as it did
+        before results held their database (an IMPORT DATABASE result is read
+        after the import's database is closed, in example 16)."""
+        try:
+            return bool(self._java_result.isElement())
+        except Exception:  # nosec B110 - an unreadable row is treated as lazy
+            return True
 
     def _property_names_tuple(self) -> Tuple[str, ...]:
         self._check_open()

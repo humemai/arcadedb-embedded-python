@@ -51,13 +51,26 @@ def test_reads_through_a_closed_database_raise(people_path):
 
 
 def test_a_projection_is_refused_too(people_path):
-    """A projection copies its values, so it used to survive close() by
-    accident; the contract is now one rule for every result."""
+    """An unread projection result SET is refused too: its rows may still be read
+    lazily from the engine, so none can be promised after close."""
     db = arcadedb.open_database(people_path)
     projected = db.query("sql", "SELECT name FROM Person ORDER BY name")
     db.close()
     with pytest.raises(ArcadeDBError, match="Database is closed"):
         projected.to_list()
+
+
+def test_a_projection_or_command_row_stays_readable_after_close(people_path):
+    """A row that holds its own values (a projection, a command result such as
+    IMPORT DATABASE's) is readable after close: example 16 reads one, and
+    refusing it was a regression the examples job caught."""
+    db = arcadedb.open_database(people_path)
+    projected = db.query("sql", "SELECT name FROM Person ORDER BY name").first()
+    counted = db.command("sql", "SELECT count(*) AS n FROM Person").one()
+    db.close()
+    assert projected.get("name") == "Ann"
+    assert projected.to_dict() == {"name": "Ann"}
+    assert counted.get("n") == 3
 
 
 def test_a_result_set_read_to_its_end_stays_empty_after_close(people_path):

@@ -86,7 +86,7 @@ Since 26.10.1's parallel scan (ArcadeData/arcadedb#8524) a query whose `LIMIT` i
 A result, a result set, or a record keeps the `Database` it came from alive and raises `ArcadeDBError` ("Database is closed") once that database is closed (humemai/arcadedb-embedded-python#117). Before, a record row read `{}`, a record property read `None`, and a plain scan raised a raw `TransactionException`.
 
 - **reads through a closed database raise**: after `db.close()`, `to_list()` and iteration of two open result sets, and `get`, `to_dict`, `to_json`, `get_vertex`, `get_element`, `get_property_names`, `has_property`, and `get_out_edges` on a row and a vertex taken earlier, each raise.
-- **a projection is refused too**: `SELECT name ...` copies its values and used to survive `close()` by accident; one rule now covers every result.
+- **a projection result set is refused, a projection or command row is not**: an unread `SELECT name ...` result set raises after `close()`, because its rows may still be read lazily; a `Result` taken from it (or from a command) before the close holds its own values and still reads (example 16 reads an `IMPORT DATABASE` result after closing its database).
 - **a set read to its end stays empty**: after `to_list()` and `close()`, `to_list()` returns `[]`.
 - **a result keeps its dropped database open**: a function that opens a database, queries it, and returns the rows and a vertex without closing anything returns real data after `gc.collect()`, where it returned `[{}, {}, {}]` and `{}`.
 - **the kept database is open for the engine**: while those results live a second `open_database()` of the path raises "already in use"; once they are deleted it opens.
