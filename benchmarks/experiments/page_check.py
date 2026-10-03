@@ -1203,6 +1203,10 @@ NOT_PRINTED = [
      "the served ArcadeDB's limit on records or groups one query may hold in "
      "memory, asked of the engine over HTTP by the runner (or the container's "
      "own setting, named as the source when the engine could not be asked)"),
+    (r"^ts_mutable_at_ingest_end$",
+     "the samples ArcadeDB's native time-series arms had not yet sealed when "
+     "the ingest timer stopped, from the engine's own count: the evidence "
+     "behind the sentence that says the ingest rate does not include sealing"),
     (r"^(es|duckdb|neo4j|arcadedb)_readback_error$",
      "the reason an override read-back failed on this row; fairness_check F15 "
      "reports the field it left absent, and this names why"),

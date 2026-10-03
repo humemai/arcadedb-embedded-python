@@ -23,7 +23,7 @@ PROTOCOL = HERE / "PROTOCOL.md"
 # PROTOCOL section 7 rows that still say NOWHERE, by a distinctive substring of
 # their Setting cell, with the reason each is not done. Empty is the goal. A row
 # may only be added here with a reason a reader of the report can act on.
-NOT_DONE = {"wait_completion": "its override is not registered at this commit", "the manifest records cpuset/mem/heap/images": "its override is not registered at this commit"}
+NOT_DONE = {"the manifest records cpuset/mem/heap/images": "its override is not registered at this commit"}
 
 
 def _split_row(line):
@@ -287,6 +287,13 @@ def test_hierarchy_must_say_whether_it_was_read_or_requested():
                arcadedb_add_hierarchy_source="requested in the CREATE INDEX statement",
                server_query_max_heap_elements=5000000)
     assert OV.stamp_findings([srv])[0] == []
+
+
+def test_the_ts_native_arms_must_record_what_ingest_left_unsealed():
+    assert OV.stamp_findings([_row(lane="l4", backend="arcadedb_ts_native")])[0][0]["kind"] == "NOT STAMPED"
+    assert OV.stamp_findings([_row(lane="l4", backend="arcadedb_ts_native", ts_mutable_at_ingest_end=0)]) == ([], 1)
+    # -1 is the lane's "could not read it"
+    assert OV.stamp_findings([_row(lane="l4", backend="arcadedb_ts_native", ts_mutable_at_ingest_end=-1)])[0][0]["kind"] == "WRONG"
 
 
 def test_every_stamp_field_is_a_declared_not_printed_field():

@@ -573,6 +573,13 @@ class ArcadeNativeTS(ArcadeTS):
         # catch-up, and the row records how long it took and what was left.
         t0 = time.perf_counter()
         left = self.mutable_samples()
+        # THE FIRST READ IS WHAT THE INGEST RATE LEFT OUTSTANDING (CAMPAIGN
+        # section 7 row 21, overrides.py). The ingest timer stopped when the
+        # engine accepted the last point (`wait_completion()` here, the last
+        # POST on the served arm); this is the engine's own count of the samples
+        # it had not yet sealed, taken the moment the timer was off. It was read
+        # and thrown away; keeping it moves no timer and issues no new call.
+        self._mutable_at_ingest_end = left
         while left > 0 and time.perf_counter() - t0 < self.COMPACT_WAIT_S:
             time.sleep(1)
             left = self.mutable_samples()
@@ -1575,6 +1582,8 @@ def main():
         with _beat.phase("engine-settle"):
             b.settle()
     out["engine_settle_s"] = round(time.perf_counter() - _t, 3)
+    if getattr(b, "_mutable_at_ingest_end", None) is not None:
+        out["ts_mutable_at_ingest_end"] = b._mutable_at_ingest_end
 
     # RELEASE THE CORPUS once nothing reads it (CAMPAIGN.md section 7 row 18,
     # BUGS F66). It used to stay referenced from here to the end of the cell,

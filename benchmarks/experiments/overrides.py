@@ -202,6 +202,14 @@ def _hierarchy_is_on(row, v):
     return None if src else "no `arcadedb_add_hierarchy_source`, so a reader cannot tell a read-back from a request"
 
 
+def _count_at_ingest_end(row, v):
+    n = _int(v)
+    return None if n is not None and n >= 0 else f"reads {v!r}, not a count of samples"
+
+
+# ---------------------------------------------------------------------------
+# the sentences
+
 def _es_security(rows):
     return ("Elasticsearch runs with its security features switched off, so none of its requests pays "
             "for authentication or encryption; its image turns both on unless told otherwise.", [])
@@ -261,6 +269,16 @@ def _arcadedb_cap(rows, constant=None):
         return f"{head} fixed at {shown}{tail}", [shown]
     return f"{head} fixed explicitly{tail}", []
 
+
+def _arcadedb_ts_acceptance(rows):
+    return ("ArcadeDB's native time-series ingest rate is timed until the engine has accepted every "
+            "point. The engine goes on sealing the newest points into compacted storage after that, and "
+            "the benchmark waits for the sealing to finish before the first query, outside the timer, "
+            "so the rate does not include it.", [])
+
+
+# ---------------------------------------------------------------------------
+# the registry
 
 # The cap the runner launches every served ArcadeDB arm with, read from the
 # server_env the runner itself passes, so the value cannot differ from what ran.
@@ -388,6 +406,13 @@ OVERRIDES = (
         says=(r"ArcadeDB server", r"limit", r"embedded"),
         tables=("e4",), constant=lambda: _arcadedb_cap([], runner_cap()),
         companions=("server_query_max_heap_source",)),
+    Override(
+        key="arcadedb_ts_acceptance",
+        setting="ingest timer stops at wait_completion()",
+        carriers=(Carrier("l4", "arcadedb_ts_native", "ts_mutable_at_ingest_end"),
+                  Carrier("l4", "arcadedb_ts_native_server", "ts_mutable_at_ingest_end")),
+        check=_count_at_ingest_end, sentence=_arcadedb_ts_acceptance,
+        says=(r"ArcadeDB", r"time-series", r"sealing")),
 )
 
 BY_KEY = {o.key: o for o in OVERRIDES}
