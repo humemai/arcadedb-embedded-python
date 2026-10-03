@@ -135,7 +135,7 @@ def test_server_starts_and_serves_http(temp_server_root):
         assert server.is_started()
         port = server.get_http_port()
         r = requests.get(
-            f"http://localhost:{port}/api/v1/server",
+            f"http://localhost:{port}/api/v1/server?mode=basic",
             auth=("root", TEST_PASSWORD),
             timeout=30,
         )

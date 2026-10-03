@@ -27,7 +27,7 @@ def http_server(tmp_path):
     s.auth = ("root", TEST_PASSWORD)
     for _ in range(30):
         try:
-            if s.get(f"{base}/api/v1/server", timeout=5).status_code == 200:
+            if s.get(f"{base}/api/v1/ready", timeout=5).status_code == 204:
                 break
         except Exception:  # noqa: BLE001
             # Readiness poll: the server is not listening yet; keep waiting.

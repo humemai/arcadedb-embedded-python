@@ -194,7 +194,7 @@ def http_json_request(
 
 
 def wait_for_server(base_url: str, headers: dict[str, str], timeout_sec: float) -> dict:
-    """Poll /api/v1/server until it answers.
+    """Poll /api/v1/server?mode=basic until it answers.
 
     The first HTTP request after start_up is much slower than the rest: measured
     on one developer machine it took 5.6s, the second 0.7s, and every one after
@@ -202,12 +202,16 @@ def wait_for_server(base_url: str, headers: dict[str, str], timeout_sec: float) 
     root password is verified with a deliberately expensive KDF, and both happen
     on request one. So the per-attempt timeout here is generous on purpose; a
     tight one just converts warmup into a failure.
+
+    ``mode=basic`` returns the version, server name, and languages this example
+    prints without the full form's metrics section; on 26.9.1 and earlier that
+    section made the first full call take about 20 s (ArcadeData/arcadedb#8909).
     """
     start = time.perf_counter()
     while True:
         try:
             return http_json_request(
-                f"{base_url}/api/v1/server",
+                f"{base_url}/api/v1/server?mode=basic",
                 headers=headers,
                 timeout=30.0,
             )

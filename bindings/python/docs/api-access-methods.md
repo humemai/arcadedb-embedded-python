@@ -161,9 +161,10 @@ try:
     for record in result.get("result", []):
         print(f"Name: {record.get('name')}")
 
-    # Optional: inspect server info (includes available languages)
+    # Optional: inspect server info (includes available languages).
+    # mode=basic skips the metrics section of the full answer.
     response = requests.get(
-        f"{base_url}/api/v1/server",
+        f"{base_url}/api/v1/server?mode=basic",
         auth=auth,
     )
     server_info = response.json()

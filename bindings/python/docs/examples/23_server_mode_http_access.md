@@ -8,7 +8,7 @@ Python bindings without introducing a separate remote client abstraction.
 It covers:
 
 - starting ArcadeDB server mode from the `arcadedb-embedded` package
-- reading server metadata from `/api/v1/server`
+- reading server metadata from `/api/v1/server?mode=basic`
 - creating a database through the server-managed Java API
 - creating schema through the HTTP command endpoint
 - inserting records through embedded access in the same Python process
