@@ -244,7 +244,7 @@ def wait_for_server(base_url: str, headers: dict[str, str], timeout_sec: float) 
     while True:
         try:
             http_json_request(
-                f"{base_url}/api/v1/server",
+                f"{base_url}/api/v1/server?mode=basic",
                 headers=headers,
                 timeout=5.0,
             )
