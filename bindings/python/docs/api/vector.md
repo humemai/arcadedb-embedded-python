@@ -192,6 +192,9 @@ no reason to cast before calling.
 - `vector`: Array-like object of integers. Accepts a Python list, a tuple or
   any iterable, and a NumPy array of any integer dtype.
 
+**Raises:** `OverflowError` when an element does not fit in 32 bits, for a list and for an
+integer NumPy array alike (an `int64` array used to wrap silently: `2**31` became `-2**31`).
+
 **Returns:** a Java `int[]`.
 
 ---

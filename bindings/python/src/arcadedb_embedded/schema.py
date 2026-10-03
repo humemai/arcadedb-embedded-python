@@ -301,7 +301,7 @@ class Schema:
         type_name: str,
         property_name: str,
         property_type: Union[str, PropertyType],
-        of_type: Optional[str] = None,
+        of_type: Optional[Union[str, PropertyType]] = None,
     ) -> Any:
         """Create a property on a type.
 
@@ -371,7 +371,7 @@ class Schema:
         type_name: str,
         property_name: str,
         property_type: Union[str, PropertyType],
-        of_type: Optional[str] = None,
+        of_type: Optional[Union[str, PropertyType]] = None,
     ) -> Any:
         """Get existing property or create if it doesn't exist.
 
@@ -392,6 +392,9 @@ class Schema:
         # Convert enum to string
         if isinstance(property_type, PropertyType):
             property_type = property_type.value
+
+        if isinstance(of_type, PropertyType):
+            of_type = of_type.value
 
         try:
             doc_type = self._java_schema.getType(type_name)

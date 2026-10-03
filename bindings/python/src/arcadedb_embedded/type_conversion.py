@@ -5,7 +5,7 @@ Handles automatic conversion of Java objects to native Python types for better
 developer experience and integration with Python ecosystem (pandas, numpy, etc.).
 """
 
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from typing import Any, NamedTuple
 
@@ -301,19 +301,25 @@ def _conv_local_datetime(value):
     )
 
 
-def _conv_instant(value):
-    return datetime.fromtimestamp(
-        value.getEpochSecond() + value.getNano() / 1_000_000_000.0,
-        tz=timezone.utc,
+_EPOCH_UTC = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def _utc_from_instant(instant):
+    # Integer arithmetic: a float of epoch seconds has 15 to 16 significant
+    # digits, so the microseconds were lost after the year 2262 and the last
+    # instant of year 9999 rounded up into year 10000 and raised.
+    return _EPOCH_UTC + timedelta(
+        seconds=int(instant.getEpochSecond()),
+        microseconds=int(instant.getNano()) // 1000,
     )
+
+
+def _conv_instant(value):
+    return _utc_from_instant(value)
 
 
 def _conv_zoned_datetime(value):
-    instant = value.toInstant()
-    return datetime.fromtimestamp(
-        instant.getEpochSecond() + instant.getNano() / 1_000_000_000.0,
-        tz=timezone.utc,
-    )
+    return _utc_from_instant(value.toInstant())
 
 
 # OffsetDateTime is a storable DATETIME since engine 26.7.2 (#4922); same
@@ -441,6 +447,13 @@ def _convert_and_register(value):
     return value
 
 
+def _is_numpy_bool(value: Any) -> bool:
+    """numpy.bool_ (named `bool` in numpy 2), without importing numpy. It is not
+    a subclass of `bool`, so JPype would read it as a number."""
+    kind = type(value)
+    return kind.__module__ == "numpy" and kind.__name__ in ("bool", "bool_")
+
+
 def convert_python_to_java(value: Any) -> Any:
     """
     Convert Python objects to Java types when needed.
@@ -457,6 +470,10 @@ def convert_python_to_java(value: Any) -> Any:
     """
     if value is None:
         return None
+
+    if _is_numpy_bool(value):
+        # Not a bool subclass: JPype would store it as the Double 1.0 or 0.0.
+        return bool(value)
 
     java_python_types = _get_java_python_types()
 

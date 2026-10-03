@@ -18,7 +18,7 @@ from .importer import import_documents as run_document_import
 from .jvm import start_jvm
 from .results import ResultSet
 from .transactions import TransactionContext
-from .type_conversion import convert_python_to_java
+from .type_conversion import _is_numpy_bool, convert_python_to_java
 from .vector import to_java_float_array
 
 try:  # optional; hoisted to module scope to keep it out of per-call hot paths
@@ -100,6 +100,10 @@ class Database:
                 # digits stored as 1.2345678901234567E+19), and a datetime or a
                 # date matched no overload at all (#58). datetime is a date.
                 converted_args.append(convert_python_to_java(arg))
+            elif _is_numpy_bool(arg):
+                # Not a bool subclass: left to JPype it is stored as the Double
+                # 1.0 or 0.0, and `WHERE ok = true` stops matching it.
+                converted_args.append(bool(arg))
             else:
                 converted_args.append(arg)
 
@@ -417,7 +421,11 @@ class Database:
 
             # Convert to Java arrays
             keys_array = jpype.JArray(jpype.JString)(keys)
-            values_array = jpype.JArray(jpype.JObject)(values)
+            # Converted like every other parameter: a datetime or a date key
+            # matched no Java type at all, and a numpy bool was read as a number.
+            values_array = jpype.JArray(jpype.JObject)(
+                [convert_python_to_java(value) for value in values]
+            )
 
             cursor = self._java_db.lookupByKey(type_name, keys_array, values_array)
 

@@ -82,7 +82,8 @@ one sets is in parentheses.
 
 - `source`: a local path (`str` or `os.PathLike`) or an importer URL. A path with no URL
   scheme, a relative one included, is resolved to an absolute `file://` URI, which
-  `ImportResult.source_url` reports.
+  `ImportResult.source_url` reports. The path is not percent-encoded, so a directory or file
+  name with a space or another special character works as it is.
 - `document_type`: the target document type (`documentType`).
 - `file_type`: the importer format, such as `"csv"` (`documentsFileType`).
 - `delimiter`: the field delimiter of a delimited format (`documentsDelimiter`).
