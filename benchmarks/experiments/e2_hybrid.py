@@ -1150,6 +1150,9 @@ class Neo4jE2:
         self.drv = GraphDatabase.driver(f"bolt://{host}:7687", auth=("neo4j", "dbbenchpass"))
         with self.drv.session() as s:
             v = s.run("CALL dbms.components() YIELD versions RETURN versions[0] AS v").single()["v"]
+            # The page cache the runner fitted to the cell, as the engine reports
+            # it (CAMPAIGN section 7 row 21, overrides.py).
+            self._settings = bench_common.neo4j_readback(s)
         self.version = f"neo4j:{v}"
 
     def build(self, vecs, edges):
@@ -1181,7 +1184,8 @@ class Neo4jE2:
                 raise RuntimeError(f"neo4j vector index search expansion read back "
                                    f"{cfg.get('vector.default_search_expansion_factor')!r}, not 1.0")
             self.row_extra = {"neo4j_vector_quantization": cfg.get("vector.quantization.type"),
-                              "neo4j_vector_index_config": json.dumps(cfg, sort_keys=True, default=str)}
+                              "neo4j_vector_index_config": json.dumps(cfg, sort_keys=True, default=str),
+                              **getattr(self, "_settings", {})}
 
     def hybrid_op(self, qvec, crash=False, mirror=False):
         with self.drv.session() as s:
@@ -1716,6 +1720,11 @@ class ComposedE2:
         except Exception as e:
             _nv = f"unknown ({e.__class__.__name__})"
         self.version = f"qdrant:{_qv}+neo4j:{_nv}"
+        # Two settings the runner overrides on the Neo4j half, as the engine
+        # reports them (CAMPAIGN section 7 row 21, overrides.py): the page cache
+        # fitted to the cell, and the checkpoint interval set short.
+        with self.neo.session() as _s:
+            self.row_extra = bench_common.neo4j_readback(_s, checkpoint=True)
 
     def build(self, vecs, edges):
         from qdrant_client import models as qm

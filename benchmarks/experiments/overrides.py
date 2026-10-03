@@ -108,6 +108,37 @@ def cpuset_size(cpuset):
     return n
 
 
+_UNIT = {"": 1, "b": 1, "k": 1 << 10, "kb": 1 << 10, "kib": 1 << 10, "m": 1 << 20, "mb": 1 << 20,
+         "mib": 1 << 20, "g": 1 << 30, "gb": 1 << 30, "gib": 1 << 30, "t": 1 << 40,
+         "tb": 1 << 40, "tib": 1 << 40}
+
+
+def size_bytes(text):
+    """'1.50GiB' and '1.5g' and '512m' as bytes, or None."""
+    m = re.fullmatch(r"\s*([0-9]*\.?[0-9]+)\s*([A-Za-z]*)\s*", str(text))
+    if not m or m.group(2).lower() not in _UNIT:
+        return None
+    return float(m.group(1)) * _UNIT[m.group(2).lower()]
+
+
+def duration_words(text):
+    """'5s' as ('5', 'seconds'), '15m' as ('15', 'minutes'), or None."""
+    m = re.fullmatch(r"\s*(\d+)\s*(ms|s|m|h|d)\s*", str(text))
+    if not m:
+        return None
+    n, unit = m.group(1), {"ms": "millisecond", "s": "second", "m": "minute",
+                           "h": "hour", "d": "day"}[m.group(2)]
+    return n, unit + ("" if n == "1" else "s")
+
+
+def _values(rows, field):
+    """The distinct non-blank values a field takes on these rows, sorted."""
+    return sorted({str(r.get(field)) for r in rows if _present(r.get(field))})
+
+
+# ---------------------------------------------------------------------------
+# the checks: one row's stamped value against what the sentence claims
+
 def _is_false(row, v):
     return None if _bool(v) is False else f"reads {v!r}, the sentence says it is off"
 
@@ -133,6 +164,26 @@ def _threads_are_the_cpuset(row, v):
     return None if got == want else f"the engine runs {got} threads in a {want}-CPU cell"
 
 
+def _pagecache_matches_the_cell(row, v):
+    """The engine's page cache against what the runner passed: the answer is
+    the cell's memory after the heap and a reserve, never the image's fixed
+    default, and the two spellings ('1.50GiB' and '1.5g') must agree."""
+    got = size_bytes(v)
+    if got is None:
+        return f"reads {v!r}, not a size"
+    asked = row.get("server_pagecache")
+    if not _present(asked):
+        return None
+    want = size_bytes(asked)
+    if want is None:
+        return f"the container was given {asked!r}, not a size"
+    return None if abs(got - want) <= 0.01 * want else f"the engine reports {v} where the cell passed {asked}"
+
+
+def _checkpoint_is_five_seconds(row, v):
+    return None if str(v).strip() == "5s" else f"reads {v!r}, the cell sets 5s"
+
+
 def _es_security(rows):
     return ("Elasticsearch runs with its security features switched off, so none of its requests pays "
             "for authentication or encryption; its image turns both on unless told otherwise.", [])
@@ -152,6 +203,27 @@ def _duckdb_vss(rows):
     return ("DuckDB's vector rows keep their HNSW index in the database through a persistence feature "
             "that its vector extension still labels experimental and that has to be switched on for "
             "the index to be stored at all.", [])
+
+
+def _neo4j_pagecache(rows):
+    return ("Neo4j's page cache is sized from the memory the run was given, what is left after its "
+            "heap and a fixed reserve, where its image would set one small fixed size whatever the "
+            "container holds.", [])
+
+
+def _neo4j_checkpoint(rows):
+    got = _values(rows, "neo4j_checkpoint_interval")
+    dflt = _values(rows, "neo4j_checkpoint_interval_default")
+    a = duration_words(got[0]) if len(got) == 1 else None
+    b = duration_words(dflt[0]) if len(dflt) == 1 else None
+    if a and b:
+        return (f"Neo4j checkpoints its store every {a[0]} {a[1]}, where its default is every {b[0]} "
+                f"{b[1]}, so that the disk reading taken after a run finds the data on disk.", [a[0], b[0]])
+    if a:
+        return (f"Neo4j checkpoints its store every {a[0]} {a[1]} instead of at its much longer default, "
+                f"so that the disk reading taken after a run finds the data on disk.", [a[0]])
+    return ("Neo4j checkpoints its store at a short fixed interval instead of its much longer default, "
+            "so that the disk reading taken after a run finds the data on disk.", [])
 
 
 OVERRIDES = (
@@ -192,6 +264,27 @@ OVERRIDES = (
                   Carrier("e2", "duckdb_e2", "duckdb_hnsw_persistence")),
         check=_is_true, sentence=_duckdb_vss,
         says=(r"DuckDB", r"experimental")),
+    Override(
+        key="neo4j_pagecache",
+        setting="server.memory.pagecache.size fitted to the cell",
+        carriers=(Carrier("l2", "neo4j_graph", "neo4j_pagecache"),
+                  Carrier("l3d", "neo4j_dense", "neo4j_pagecache"),
+                  Carrier("l3d", "neo4j_dense_int8", "neo4j_pagecache"),
+                  Carrier("e2", "neo4j_e2", "neo4j_pagecache"),
+                  Carrier("e2", "composed_qdrant_neo4j", "neo4j_pagecache"),
+                  Carrier("restart", "neo4j_graph", "neo4j_pagecache")),
+        check=_pagecache_matches_the_cell, sentence=_neo4j_pagecache,
+        says=(r"Neo4j", r"page cache"),
+        companions=("neo4j_readback_error",)),
+    Override(
+        key="neo4j_checkpoint",
+        setting="db.checkpoint.interval.time=5s",
+        carriers=(Carrier("l2", "neo4j_graph", "neo4j_checkpoint_interval"),
+                  Carrier("e2", "composed_qdrant_neo4j", "neo4j_checkpoint_interval"),
+                  Carrier("restart", "neo4j_graph", "neo4j_checkpoint_interval")),
+        check=_checkpoint_is_five_seconds, sentence=_neo4j_checkpoint,
+        says=(r"Neo4j", r"checkpoint"),
+        companions=("neo4j_checkpoint_interval_default",)),
 )
 
 BY_KEY = {o.key: o for o in OVERRIDES}

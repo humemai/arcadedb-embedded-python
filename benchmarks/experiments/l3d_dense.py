@@ -1304,6 +1304,9 @@ class Neo4jVector(Base):
         self.drv = GraphDatabase.driver(f"bolt://{host}:7687", auth=("neo4j", "dbbenchpass"))
         with self.drv.session() as s:
             v = s.run("CALL dbms.components() YIELD versions RETURN versions[0] AS v").single()["v"]
+            # The page cache the runner fitted to the cell, as the engine reports
+            # it (CAMPAIGN section 7 row 21, overrides.py).
+            self._settings = bench_common.neo4j_readback(s)
         self.version = f"neo4j:{v}"
 
     def build(self, vecs):
@@ -1335,7 +1338,8 @@ class Neo4jVector(Base):
                                f"{self.SEARCH_EXPANSION}: the arm would search a different candidate pool")
         self.row_extra = {"neo4j_vector_quantization": applied,
                           "neo4j_vector_search_expansion": expansion,
-                          "neo4j_vector_index_config": json.dumps(cfg, sort_keys=True, default=str)}
+                          "neo4j_vector_index_config": json.dumps(cfg, sort_keys=True, default=str),
+                          **getattr(self, "_settings", {})}
 
     def search(self, qvec, k):
         with self.drv.session() as s:

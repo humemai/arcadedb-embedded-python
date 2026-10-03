@@ -1191,6 +1191,10 @@ NOT_PRINTED = [
      "DuckDB's experimental HNSW persistence flag, read from the engine "
      "(`current_setting`): the sentence under every table that shows the "
      "vector arm says it is on"),
+    (r"^(neo4j_pagecache|neo4j_checkpoint_interval|neo4j_checkpoint_interval_default)$",
+     "Neo4j's page cache size and checkpoint interval, read from the engine "
+     "(`SHOW SETTINGS`): the sentences under every table that shows Neo4j say "
+     "how each was set"),
     (r"^(es|duckdb|neo4j|arcadedb)_readback_error$",
      "the reason an override read-back failed on this row; fairness_check F15 "
      "reports the field it left absent, and this names why"),

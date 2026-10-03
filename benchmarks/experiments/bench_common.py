@@ -453,6 +453,25 @@ def duckdb_readback(cx, vss=False):
     return out
 
 
+def neo4j_readback(session, checkpoint=False):
+    """Neo4j's page cache size from SHOW SETTINGS and, for the arms that set
+    it, the checkpoint interval with the engine's own default beside it."""
+    out = {}
+    names = ["server.memory.pagecache.size"] + (["db.checkpoint.interval.time"] if checkpoint else [])
+    try:
+        got = {r["name"]: (r["value"], r["defaultValue"]) for r in session.run(
+            "SHOW SETTINGS YIELD name, value, defaultValue WHERE name IN $names "
+            "RETURN name, value, defaultValue", names=names)}
+        out["neo4j_pagecache"] = got["server.memory.pagecache.size"][0]
+        if checkpoint:
+            out["neo4j_checkpoint_interval"] = got["db.checkpoint.interval.time"][0]
+            if got["db.checkpoint.interval.time"][1]:
+                out["neo4j_checkpoint_interval_default"] = got["db.checkpoint.interval.time"][1]
+    except Exception as e:  # noqa: BLE001
+        out["neo4j_readback_error"] = f"{type(e).__name__}: {e}"
+    return out
+
+
 def _host_identity():
     """Which machine this is, read rather than assumed.
 

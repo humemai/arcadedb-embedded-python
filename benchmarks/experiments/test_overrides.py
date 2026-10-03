@@ -23,7 +23,7 @@ PROTOCOL = HERE / "PROTOCOL.md"
 # PROTOCOL section 7 rows that still say NOWHERE, by a distinctive substring of
 # their Setting cell, with the reason each is not done. Empty is the goal. A row
 # may only be added here with a reason a reader of the report can act on.
-NOT_DONE = {"server_memory_pagecache_size": "its override is not registered at this commit", "NEO4J_db_checkpoint_interval_time": "its override is not registered at this commit", "addHierarchy": "its override is not registered at this commit", "queryMaxHeapElementsAllowedPerOp": "its override is not registered at this commit", "wait_completion": "its override is not registered at this commit", "the manifest records cpuset/mem/heap/images": "its override is not registered at this commit"}
+NOT_DONE = {"addHierarchy": "its override is not registered at this commit", "queryMaxHeapElementsAllowedPerOp": "its override is not registered at this commit", "wait_completion": "its override is not registered at this commit", "the manifest records cpuset/mem/heap/images": "its override is not registered at this commit"}
 
 
 def _split_row(line):
@@ -119,6 +119,16 @@ def test_every_sentence_says_what_its_gate_asks_for_and_registers_its_digits():
             assert d in values, f"{o.key}: the sentence carries {d!r} and registers no source for it: {text}"
         assert "\u2014" not in text and "--" not in text, o.key
 
+
+def test_the_checkpoint_sentence_takes_its_numbers_from_the_engine_and_degrades_without_them():
+    text, values = OV.BY_KEY["neo4j_checkpoint"].sentence(SAMPLE_ROWS["neo4j_checkpoint"])
+    assert "every 5 seconds" in text and "every 15 minutes" in text and values == ["5", "15"]
+    text, values = OV.BY_KEY["neo4j_checkpoint"].sentence([])
+    assert not re.search(r"\d", text.replace("Neo4j", "Neo")) and values == []
+
+
+# ---------------------------------------------------------------------------
+# page_check's half: a table that shows the arm and prints no sentence fails
 
 def _table(tid, backend, conditions):
     return {"id": tid, "instrument": "2026-10", "entries": [{"backend_key": backend}],
@@ -218,6 +228,18 @@ def test_the_duckpgq_arm_uses_its_own_field_name():
     assert [f["field"] for f in OV.stamp_findings([r])[0]] == ["duckpgq_threads"]
     r["duckpgq_threads"] = "12"            # a frozen csv row carries strings
     assert OV.stamp_findings([r]) == ([], 1)
+
+
+def test_neo4j_page_cache_is_held_to_what_the_cell_passed():
+    ok = _row(lane="l2", backend="neo4j_graph", neo4j_pagecache="1.50GiB", server_pagecache="1.5g",
+              neo4j_checkpoint_interval="5s")
+    assert OV.stamp_findings([ok]) == ([], 2)
+    # the image's fixed default where the cell passed a fitted size
+    bad = dict(ok, neo4j_pagecache="512.00MiB", server_pagecache="19.0g")
+    found, _ = OV.stamp_findings([bad])
+    assert [f["field"] for f in found] == ["neo4j_pagecache"] and found[0]["kind"] == "WRONG"
+    assert OV.size_bytes("1.50GiB") == OV.size_bytes("1.5g") == 1.5 * (1 << 30)
+    assert OV.duration_words("5s") == ("5", "seconds") and OV.duration_words("1m") == ("1", "minute")
 
 
 def test_every_stamp_field_is_a_declared_not_printed_field():
