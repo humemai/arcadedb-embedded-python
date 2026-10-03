@@ -118,6 +118,14 @@ inside its page: at 200,000 new vertices, 1,000 per transaction, saving each ver
 measured 110,000 to 120,000 per second and saving it, setting one more property, and saving again
 about 52,000 (ArcadeDB [#8735](https://github.com/ArcadeData/arcadedb/issues/8735)).
 
+Call `save()` after the last change to a record. A change made after the record was saved,
+and not saved again, is not written at commit: in one transaction,
+`d.set("k", 1); d.save(); d.set("k", 2)` commits `k = 1`, and an index on `k` agrees (checked
+on 26.10.1-SNAPSHOT). Upstream treats changing a record after its last `save()` as unsupported;
+the engine and its SQL and Cypher executors always save after the last change (ArcadeDB
+[#8989](https://github.com/ArcadeData/arcadedb/pull/8989)).
+
+
 #### `delete() -> None`
 
 Delete the document from the database.
