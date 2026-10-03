@@ -61,13 +61,10 @@ def test_integers_beyond_64_bits_are_refused_not_wrapped(temp_db_path, entry, va
             Exception
         ):  # noqa: B017 - OverflowError or ArcadeDBError, as the per-value paths raise
             _write(db, entry, value)
-        stored = [
-            r.get("v")
-            for t in ("D", "V", "E")
-            for r in db.query(
-                "sql", f"SELECT v FROM {t} WHERE v IS NOT NULL"
-            ).to_list()  # nosec B608 - fixed type names
-        ]
+        stored = []
+        for type_name in ("D", "V", "E"):
+            query = f"SELECT v FROM {type_name} WHERE v IS NOT NULL"  # nosec B608 - fixed type names
+            stored += [r.get("v") for r in db.query("sql", query).to_list()]
         assert stored == []
 
 
