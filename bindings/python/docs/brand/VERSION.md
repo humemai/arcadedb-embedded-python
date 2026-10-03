@@ -3,6 +3,6 @@
 Do not edit these files here. Change them in github.com/humemai/design-system,
 then vendor again. `./verify.sh` checks this copy against the hash below.
 
-Commit: 7178e99410a3d5df39b595569672f1a683e622dd
-Date: 2026-10-02
-Hash: c79ccf024c5572be9a0475cd8d40c7507aa85891d594cc8041e42d343b9e9037
+Commit: 11351d30716d5fa300e0d61284bf32d89f6b5ffb
+Date: 2026-10-03
+Hash: ab5ef69bb034ba333dcca18b2309476033002bea99e695f5b6645d681974ee24

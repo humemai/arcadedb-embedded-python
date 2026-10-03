@@ -6,8 +6,8 @@ cd "$(dirname "$0")"
 claimed=$(sed -n 's/^Hash:[[:space:]]*//p' VERSION.md)
 actual=$(find css logo assets export -type f | LC_ALL=C sort | xargs sha256sum | sha256sum | awk '{print $1}')
 if [ "$claimed" != "$actual" ]; then
-    echo "✗ brand files differ from VERSION.md ($claimed vs $actual)."
-    echo "  Change them in humemai/design-system and vendor again; don't edit the copy."
-    exit 1
+  echo "✗ brand files differ from VERSION.md ($claimed vs $actual)."
+  echo "  Change them in humemai/design-system and vendor again; don't edit the copy."
+  exit 1
 fi
 echo "✓ brand files match VERSION.md"
