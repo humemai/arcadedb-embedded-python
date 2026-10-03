@@ -190,7 +190,7 @@ print(df.describe())
 
 ---
 
-### `to_columns(batch_size: int = 25_000)`
+### `to_columns(batch_size: int = 25_000, columns: Optional[Sequence[str]] = None)`
 
 Bulk-materialize all rows as columns: a dict of column name to numpy array
 (`int64`/`float64`/`bool`/`datetime64[ms]`) or Python list (strings and
@@ -206,6 +206,20 @@ are promoted to float64 with NaN / datetime64 NaT; a null row in a vector
 column becomes a NaN row. Returns `None` when numpy or the bridge jar is
 unavailable (callers fall back to row-based paths).
 
+The columns are the union of the property names of every row, in order of first
+appearance, because a document is schemaless: a property the first row lacks is still
+a column, null where a row lacks it. (Before this was fixed the columns were the first
+row's, and `to_columns()`, `to_dataframe()`, and `to_arrow()` dropped the others,
+humemai/arcadedb-embedded-python#113.) The result does not depend on `batch_size`.
+Finding the columns costs one pass over each row's property names (about 25% of a
+200,000-row, twelve-property `to_columns()`, measured on the laptop, relative only);
+pass `columns=["a", "b"]` to read exactly those, as a projection would, and skip it. A
+row lacking one of them reads null, and a property not listed is left out.
+
+A `DECIMAL` column is an object array of `Decimal` (`None` for null), exact to the last
+digit; it used to arrive as JSON numbers, so a double lost digits and the dtype followed
+the data (humemai/arcadedb-embedded-python#115).
+
 **Example:**
 
 ```python
@@ -216,7 +230,7 @@ sims = emb @ query_vector      # immediately usable
 
 ---
 
-### `to_arrow(batch_size: int = 25_000)`
+### `to_arrow(batch_size: int = 25_000, columns: Optional[Sequence[str]] = None)`
 
 Bulk-materialize all rows as a `pyarrow.Table`. Requires numpy and pyarrow.
 
@@ -227,6 +241,14 @@ with NaN, losing precision above 2**53), and a nullable boolean column stays boo
 Strings are cheaper, because the buffer already holds Arrow's string layout (int32
 offsets and a UTF-8 blob), so a column is wrapped instead of decoded one `str` at a
 time.
+
+The table's columns are the union of the rows' property names, as in `to_columns()`. A
+column's type does not depend on `batch_size`: a batch whose rows lack the column, carry
+it as null, or hold only empty lists in it says nothing about its type and takes the
+type of the other batches (humemai/arcadedb-embedded-python#114). If batches really do
+disagree (an int in one row, a string in another), the column becomes strings, in one
+batch as well as across batches. A `DECIMAL` column is `decimal128` (`decimal256` above
+38 digits, strings above 76), so no digit is lost.
 
 **Parameters:**
 

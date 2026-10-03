@@ -4,7 +4,7 @@ ArcadeDB Python Bindings - Result Set Wrappers
 ResultSet and Result classes for wrapping query results.
 """
 
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
 from ._logging import get_logger
 from .exceptions import ArcadeDBError
@@ -66,6 +66,73 @@ def _cast_all_to_string(arrs: list, pa) -> list:
     return unified
 
 
+def _decode_strings(data, count: int, mask) -> list:
+    """The strings of one column buffer: int32 offsets, then the UTF-8 blob.
+
+    ``mask`` is the null mask (True = null) or None when the column has no nulls.
+    """
+    import numpy as np
+
+    offs = np.frombuffer(data[: (count + 1) * 4], dtype="<i4")
+    chars = bytes(data[(count + 1) * 4 :])
+    if mask is None:
+        return [chars[offs[i] : offs[i + 1]].decode("utf-8") for i in range(count)]
+    return [
+        None if mask[i] else chars[offs[i] : offs[i + 1]].decode("utf-8")
+        for i in range(count)
+    ]
+
+
+def _decode_decimals(data, count: int, mask) -> list:
+    """The DECIMAL values of one column buffer, as ``Decimal`` objects (None for
+    null). The bridge writes each ``BigDecimal`` in full as text, so no digit is
+    lost to a double."""
+    from decimal import Decimal
+
+    return [
+        None if s is None else Decimal(s) for s in _decode_strings(data, count, mask)
+    ]
+
+
+def _missing_column_part(count: int, template):
+    """A batch of ``count`` rows that lack a column some other batch has: nulls in
+    the shape ``to_columns`` uses for that column (NaN for numbers, NaT for
+    datetimes, None for everything else)."""
+    import numpy as np
+
+    if isinstance(template, np.ndarray):
+        if template.ndim == 2:
+            return np.full((count, template.shape[1]), np.nan, dtype=template.dtype)
+        if template.dtype.kind in "iuf":
+            return np.full(count, np.nan)
+        if template.dtype.kind == "M":
+            return np.full(count, np.datetime64("NaT", "ms"))
+        if template.dtype.kind == "O":
+            return np.full(count, None, dtype=object)
+    return [None] * count
+
+
+def _is_untyped_arrow_chunk(a, pa) -> bool:
+    """True for a chunk that says nothing about its column's type: all values
+    null (a batch whose rows lack the property, or carry it as null), or a list
+    column holding only empty lists, which Arrow types ``list<null>``."""
+    if len(a) == 0 or a.null_count == len(a) or pa.types.is_null(a.type):
+        return True
+    return pa.types.is_list(a.type) and pa.types.is_null(a.type.value_type)
+
+
+def _common_decimal_type(types: list, pa):
+    """One decimal type every given decimal type fits in (decimal128 up to 38
+    digits, decimal256 up to 76), or None when it would need more."""
+    scale = max(t.scale for t in types)
+    precision = max(t.precision - t.scale for t in types) + scale
+    if precision <= 38:
+        return pa.decimal128(precision, scale)
+    if precision <= 76:
+        return pa.decimal256(precision, scale)
+    return None
+
+
 def _unify_arrow_chunk_types(arrs: list, pa) -> list:
     """
     Unify a column's per-batch Arrow arrays onto one Arrow type.
@@ -97,11 +164,39 @@ def _unify_arrow_chunk_types(arrs: list, pa) -> list:
     if len(types) <= 1:
         return arrs
 
+    # A chunk that carries no type information (every value null, or only empty
+    # lists) takes the type the other chunks agree on, so the column's type does
+    # not depend on where the batch boundaries fall (#114).
+    untyped = [_is_untyped_arrow_chunk(a, pa) for a in arrs]
+    if any(untyped) and not all(untyped):
+        typed = _unify_arrow_chunk_types(
+            [a for a, u in zip(arrs, untyped) if not u], pa
+        )
+        target = typed[0].type
+        filled = iter(typed)
+        out = []
+        for a, u in zip(arrs, untyped):
+            if not u:
+                out.append(next(filled))
+            elif a.null_count == len(a):
+                out.append(pa.nulls(len(a), type=target))
+            else:
+                try:
+                    out.append(a.cast(target))
+                except pa.ArrowException:
+                    return _cast_all_to_string(arrs, pa)
+        return out
+
     if types <= {pa.int64(), pa.float64()}:
         try:
             return [a.cast(pa.float64()) for a in arrs]
         except pa.ArrowException:
             pass
+
+    if all(pa.types.is_decimal(t) for t in types):
+        common = _common_decimal_type(list(types), pa)
+        if common is not None:
+            return [a.cast(common) for a in arrs]
 
     return _cast_all_to_string(arrs, pa)
 
@@ -379,7 +474,9 @@ class ResultSet:
 
         return pd.DataFrame(self.to_list(convert_types=convert_types))
 
-    def to_columns(self, batch_size: int = 25_000):
+    def to_columns(
+        self, batch_size: int = 25_000, columns: Optional[Sequence[str]] = None
+    ):
         """
         Bulk-materialize all rows as columns: dict of column name -> numpy
         array (int64/float64/bool/datetime64[ms]) or Python list (strings and
@@ -388,7 +485,15 @@ class ResultSet:
 
         Null handling follows pandas conventions: int/datetime columns with
         nulls are promoted to float64 with NaN / datetime64 NaT; string and
-        JSON columns use None.
+        JSON columns use None. A DECIMAL column is an object array of exact
+        ``Decimal`` values (#115).
+
+        The columns are the union of every row's property names, in order of
+        first appearance, because a document is schemaless: a property the
+        first row lacks is still a column (#113). Finding them costs one pass
+        over each row's names; pass ``columns`` (a list of names) to read exactly
+        those, as a projection would, and skip it. A row lacking one of them
+        reads null, and properties not listed are left out.
 
         Returns None when numpy or the bridge jar is unavailable (callers
         fall back to row-based paths).
@@ -404,17 +509,19 @@ class ResultSet:
         if column_batcher is None:
             return None
 
-        # column order comes from the first row; empty result -> {}
-        first_names = None
-        merged: Dict[str, list] = {}
+        # Every batch reports the union of its own rows' property names. The
+        # result's columns are the union over the batches, in order of first
+        # appearance (#113); a batch lacking one gets nulls for it when merged.
+        names: List[str] = []
+        batches: List[Tuple[int, Dict[str, Any]]] = []
 
         def decode_batch(buf):
-            nonlocal first_names
             hlen = int.from_bytes(buf[:4], "little")
             header = json.loads(bytes(buf[4 : 4 + hlen]))
             count = header["count"]
             if count == 0:
                 return 0
+            batch_parts: Dict[str, Any] = {}
             pos = 4 + hlen
             for col in header["cols"]:
                 name, ctype = col["name"], col["type"]
@@ -459,39 +566,34 @@ class ResultSet:
                     values = np.frombuffer(data, dtype=dt).reshape(count, dim)
                 elif ctype == "json":
                     values = json.loads(bytes(data))
+                elif ctype == "dec":
+                    # an object array of Decimal (None for null): a double
+                    # would lose digits, and the dtype would follow the data
+                    values = np.empty(count, dtype=object)
+                    values[:] = _decode_decimals(
+                        data, count, mask if has_nulls else None
+                    )
                 else:  # str
-                    offs = np.frombuffer(data[: (count + 1) * 4], dtype="<i4")
-                    chars = bytes(data[(count + 1) * 4 :])
-                    if has_nulls:
-                        values = [
-                            (
-                                None
-                                if mask[i]
-                                else chars[offs[i] : offs[i + 1]].decode("utf-8")
-                            )
-                            for i in range(count)
-                        ]
-                    else:
-                        values = [
-                            chars[offs[i] : offs[i + 1]].decode("utf-8")
-                            for i in range(count)
-                        ]
-                merged.setdefault(name, []).append(values)
-            if first_names is None:
-                first_names = [c["name"] for c in header["cols"]]
+                    values = _decode_strings(data, count, mask if has_nulls else None)
+                batch_parts[name] = values
+                if name not in names:
+                    names.append(name)
+            batches.append((count, batch_parts))
             return count
 
-        # Java derives the column set from the first row (empty spec) and
-        # every batch reports it in its header
+        # An empty column spec makes Java derive the column set from the
+        # rows of each batch; a pinned one is read as given. JSON, not
+        # ";".join: a name may legally contain a semicolon, a quote or a
+        # backslash.
+        spec = json.dumps(list(columns)) if columns is not None else ""
         if not self._readable():
             return {}
-        joined = ""
         total = 0
         while True:
             buf = memoryview(
                 bytes(
                     column_batcher.nextColumnBatch(
-                        self._java_result_set, int(batch_size), joined
+                        self._java_result_set, int(batch_size), spec
                     )
                 )
             )
@@ -500,17 +602,17 @@ class ResultSet:
                 self._finish()
                 break
             total += count
-            if first_names is not None and not joined:
-                # JSON, not ";".join: a projection alias may legally contain a semicolon, a quote or a
-                # backslash, and the legacy separator split such a name into two bogus columns.
-                joined = json.dumps(first_names)  # keep column set stable
 
         if total == 0:
             return {}
 
         out = {}
-        for name in first_names or []:
-            parts = merged.get(name, [])
+        for name in names:
+            template = next(p[name] for _, p in batches if name in p)
+            parts = [
+                p[name] if name in p else _missing_column_part(c, template)
+                for c, p in batches
+            ]
             np_parts = [p for p in parts if not isinstance(p, list)]
             if parts and len(np_parts) == len(parts):
                 try:
@@ -524,7 +626,9 @@ class ResultSet:
             out[name] = column
         return out
 
-    def to_arrow(self, batch_size: int = 25_000):
+    def to_arrow(
+        self, batch_size: int = 25_000, columns: Optional[Sequence[str]] = None
+    ):
         """
         Bulk-materialize all rows as a ``pyarrow.Table``.
 
@@ -543,6 +647,10 @@ class ResultSet:
         followed by a UTF-8 blob, which is exactly Arrow's string layout, so
         the column is wrapped rather than decoded one Python str at a time.
 
+        The columns and the optional ``columns`` argument are as in
+        :meth:`to_columns`. A column's type does not depend on ``batch_size``
+        (#114), and a DECIMAL column is a decimal Arrow column (#115).
+
         Returns None when pyarrow, numpy, or the bridge jar is unavailable, so
         callers can fall back to :meth:`to_columns` the same way that method
         falls back to the row-based paths.
@@ -559,8 +667,11 @@ class ResultSet:
         if column_batcher is None:
             return None
 
-        first_names: Optional[List[str]] = None
-        chunks: Dict[str, list] = {}
+        # As in to_columns: every batch reports its own rows' union of property
+        # names, the table's columns are the union over the batches in order of
+        # first appearance (#113), and a batch lacking a column adds nulls.
+        names: List[str] = []
+        batches: List[Tuple[int, Dict[str, Any]]] = []
 
         def validity(null_bits, count, has_nulls):
             """Arrow validity is 1=valid; the bridge writes 1=null, so invert.
@@ -570,12 +681,12 @@ class ResultSet:
             return pa.py_buffer(bytes(np.invert(null_bits).tobytes()))
 
         def decode_batch(buf):
-            nonlocal first_names
             hlen = int.from_bytes(buf[:4], "little")
             header = json.loads(bytes(buf[4 : 4 + hlen]))
             count = header["count"]
             if count == 0:
                 return 0
+            batch_chunks: Dict[str, Any] = {}
             pos = 4 + hlen
             for col in header["cols"]:
                 name, ctype = col["name"], col["type"]
@@ -613,7 +724,27 @@ class ResultSet:
                     if mask is not None:
                         arr = pa.array(arr.to_pylist(), type=arr.type, mask=mask)
                 elif ctype == "json":
-                    arr = pa.array(json.loads(bytes(data)))
+                    values = json.loads(bytes(data))
+                    try:
+                        arr = pa.array(values)
+                    except pa.ArrowException:
+                        # mixed types in one column (an int in one row, a string
+                        # in the next): the same string column a mixed column
+                        # across batches ends up as, not a raw ArrowInvalid
+                        arr = pa.array(
+                            [None if v is None else str(v) for v in values],
+                            type=pa.string(),
+                        )
+                elif ctype == "dec":
+                    decimals = _decode_decimals(data, count, mask)
+                    try:
+                        arr = pa.array(decimals)
+                    except pa.ArrowException:
+                        # more than the 76 digits decimal256 holds
+                        arr = pa.array(
+                            [None if d is None else str(d) for d in decimals],
+                            type=pa.string(),
+                        )
                 else:  # str: int32 offsets + utf8 blob IS Arrow's layout
                     off_bytes = bytes(data[: (count + 1) * 4])
                     chars = bytes(data[(count + 1) * 4 :])
@@ -623,20 +754,21 @@ class ResultSet:
                         pa.py_buffer(chars),
                         validity(null_bits, count, has_nulls),
                     )
-                chunks.setdefault(name, []).append(arr)
-            if first_names is None:
-                first_names = [c["name"] for c in header["cols"]]
+                batch_chunks[name] = arr
+                if name not in names:
+                    names.append(name)
+            batches.append((count, batch_chunks))
             return count
 
+        spec = json.dumps(list(columns)) if columns is not None else ""
         if not self._readable():
             return pa.table({})
-        joined = ""
         total = 0
         while True:
             buf = memoryview(
                 bytes(
                     column_batcher.nextColumnBatch(
-                        self._java_result_set, int(batch_size), joined
+                        self._java_result_set, int(batch_size), spec
                     )
                 )
             )
@@ -645,16 +777,21 @@ class ResultSet:
                 self._finish()
                 break
             total += count
-            if first_names is not None and not joined:
-                # See to_columns: the column spec is JSON so odd-but-legal aliases survive the round trip.
-                joined = json.dumps(first_names)
 
-        if total == 0 or not first_names:
+        if total == 0 or not names:
             return pa.table({})
         return pa.table(
             {
-                n: pa.chunked_array(_unify_arrow_chunk_types(chunks[n], pa))
-                for n in first_names
+                n: pa.chunked_array(
+                    _unify_arrow_chunk_types(
+                        [
+                            chunks[n] if n in chunks else pa.nulls(c)
+                            for c, chunks in batches
+                        ],
+                        pa,
+                    )
+                )
+                for n in names
             }
         )
 
