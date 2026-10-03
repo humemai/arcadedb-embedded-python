@@ -120,8 +120,12 @@ json module. Measured ~5.5x faster than `to_list()` on a 10,000-row, nine-proper
 
 **Trade-off:** values carry JSON-native types. Numbers, strings, booleans, lists, and
 nested maps convert as expected, but `DATE` and `DATETIME` values arrive as
-epoch-millisecond integers (not `datetime`) and DECIMALs as floats. Use `to_list()` when full Python-type fidelity
-matters more than speed.
+epoch-millisecond integers (not `datetime`) and DECIMALs as floats. A `DATE` is the
+epoch milliseconds of midnight UTC, whatever the JVM's time zone, so it is the same
+integer `Result.to_json()` writes and `datetime.fromtimestamp(ms / 1000, timezone.utc)`
+gives the right day. (Before this was fixed it was midnight in the JVM's zone: the
+previous day when decoded as UTC east of UTC, humemai/arcadedb-embedded-python#116.)
+Use `to_list()` when full Python-type fidelity matters more than speed.
 
 **Parameters:**
 
