@@ -42,7 +42,8 @@ Convert Python value to Java object for ArcadeDB.
 This function only converts the types listed below explicitly. All other Python
 values (`bool`, `int`, `float`, `str`, and any Java objects) are returned as-is so
 that JPype performs the conversion automatically (a Python `int` reaches Java as a
-`Long`).
+`Long`). A `numpy.bool_` is converted to a Python `bool` first: it is not a `bool`
+subclass, and JPype would store it as the `Double` 1.0 or 0.0.
 
 **Supported Conversions:**
 

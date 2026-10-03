@@ -419,7 +419,10 @@ are epoch values in the type's precision (ms by default).
 
 numpy fast path: an `ndarray` for timestamps or for a numeric field column
 crosses the FFI as a single buffer copy (with Java-side boxing), instead of
-per-element conversion. Lists work too, converted per element.
+per-element conversion. Lists work too, converted per element. A numpy bool array is a
+0/1 numeric column on both paths; a Python list of bools is not, because the engine
+refuses a `Boolean` for a numeric field. With `primitive=True` a column whose length differs
+from the timestamps raises `ValueError` before anything is appended.
 
 `primitive=True` routes the batch through the engine's `TimeSeriesBatch`,
 which carries each column as a primitive array and so never boxes a numeric

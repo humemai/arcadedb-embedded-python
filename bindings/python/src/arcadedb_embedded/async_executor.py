@@ -468,7 +468,9 @@ class AsyncExecutor:
 
         numpy fast path: an ndarray for timestamps or a numeric field column
         crosses the FFI as one buffer copy (int/uint kinds via boxLongs,
-        float kinds via boxDoubles); other sequences convert per element.
+        float kinds via boxDoubles); other sequences convert per element. A
+        numpy bool array is a 0/1 numeric column; a Python list of bools is
+        not (the engine refuses a Boolean for a numeric field).
         Call wait_completion() before relying on visibility.
 
         primitive=True routes through the engine's TimeSeriesBatch instead,
@@ -497,7 +499,7 @@ class AsyncExecutor:
             if (
                 _np is not None
                 and isinstance(values, _np.ndarray)
-                and values.dtype.kind in "fiu"
+                and values.dtype.kind in "fiub"
             ):
                 if boxer is None:
                     boxer = jpype.JClass("com.arcadedb.python.DocumentBatcher")
@@ -551,6 +553,15 @@ class AsyncExecutor:
         else:
             timestamps_java = JLongArray([int(value) for value in timestamps])
 
+        # A column shorter than the timestamps was padded by the engine with
+        # defaults and one longer was cut, with no error.
+        for index, values in enumerate(column_values):
+            if len(values) != len(timestamps_java):
+                raise ValueError(
+                    f"column {index} has {len(values)} values for "
+                    f"{len(timestamps_java)} timestamps"
+                )
+
         batch = batcher.newBatch(self._owner._java_db, type_name, timestamps_java)
 
         for index, values in enumerate(column_values):
@@ -569,8 +580,12 @@ class AsyncExecutor:
             elif (
                 _np is not None
                 and isinstance(values, _np.ndarray)
-                and values.dtype.kind in "iu"
+                and values.dtype.kind in "iub"
             ):
+                # "b": a numpy bool array is a 0/1 numeric column here. It used
+                # to reach a numeric field as 1.0 and 0.0 only because JPype
+                # read each numpy bool as a number; this keeps that outcome now
+                # that a numpy bool converts to a boolean everywhere else.
                 batcher.setLongColumn(
                     batch,
                     index,
@@ -578,17 +593,17 @@ class AsyncExecutor:
                         _np.ascontiguousarray(values, dtype=_np.int64)
                     ),
                 )
-            elif values and all(isinstance(v, str) for v in values):
+            elif len(values) > 0 and all(isinstance(v, str) for v in values):
                 batcher.setStringColumn(
                     batch, index, jpype.JArray(jpype.JString)(list(values))
                 )
-            elif values and all(isinstance(v, float) for v in values):
+            elif len(values) > 0 and all(isinstance(v, float) for v in values):
                 batcher.setDoubleColumn(
                     batch,
                     index,
                     jpype.JArray(jpype.JDouble)([float(v) for v in values]),
                 )
-            elif values and all(
+            elif len(values) > 0 and all(
                 isinstance(v, int) and not isinstance(v, bool) for v in values
             ):
                 batcher.setLongColumn(

@@ -75,6 +75,14 @@ def to_java_int_array(vector):
         Java int array
     """
     if _np is not None and isinstance(vector, _np.ndarray):
+        if vector.dtype.kind in "iu" and vector.size:
+            bounds = _np.iinfo(_np.int32)
+            if vector.min() < bounds.min or vector.max() > bounds.max:
+                # A list raises this from JPype; an int64 array used to wrap
+                # silently (2**31 became -2**31).
+                raise OverflowError(
+                    "Cannot convert value to Java int: an element does not fit in 32 bits"
+                )
         return jtypes.JArray(jtypes.JInt)(vector)
 
     if not isinstance(vector, list):
