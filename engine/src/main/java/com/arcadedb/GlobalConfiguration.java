@@ -48,7 +48,10 @@ public enum GlobalConfiguration {
   // log while /api/v1/server correctly answered true for the same setting, and concluded the flag had been ignored.
   DUMP_CONFIG_AT_STARTUP("arcadedb.dumpConfigAtStartup", SCOPE.JVM, "Dumps the configuration at startup", Boolean.class, false,
       value -> {
-        dumpConfigurationOrDefer();
+        // Only an enabled flag dumps: reset() runs this callback too (#7121), so resetAll() would otherwise print
+        // the whole configuration on every call.
+        if (Boolean.TRUE.equals(value))
+          dumpConfigurationOrDefer();
         return value;
       }),
 
@@ -1817,8 +1820,8 @@ public enum GlobalConfiguration {
 
   SERVER_HTTP_STREAMING_KEEPALIVE_INTERVAL("arcadedb.server.httpStreamingKeepAliveInterval", SCOPE.SERVER,
       """
-      Interval in milliseconds after which a streamed query answer (Accept: application/x-ndjson on /query and \
-      /command) that has had nothing to send writes a bare newline, which every consumer of the encoding skips. \
+      Interval in milliseconds after which a streamed answer (Accept: application/x-ndjson on /query, /command and \
+      /batch) that has had nothing to send writes a bare newline, which every consumer of the encoding skips. \
       Without it a query whose next row takes a while to produce - a selective predicate over a large bucket, an \
       expensive projection, a cold cache - is silent on the wire, and a client that bounds the silence (the Java \
       remote client does, with 'arcadedb.network.socketTimeout' and a 30 second floor) cannot tell it from a \
