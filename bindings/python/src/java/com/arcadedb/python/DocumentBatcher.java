@@ -25,6 +25,7 @@ import com.arcadedb.database.async.ErrorCallback;
 import com.arcadedb.serializer.json.JSONArray;
 import com.arcadedb.serializer.json.JSONObject;
 
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -132,7 +133,9 @@ public final class DocumentBatcher {
   }
 
   private static void fill(final MutableDocument doc, final JSONObject row) {
-    for (final String key : row.keySet())
-      doc.set(key, row.isNull(key) ? null : row.get(key));
+    // toMap() turns nested objects and arrays into plain Map and List. Storing the parsed JSONArray itself reads back
+    // as a JSONArray inside the transaction that wrote it, and only becomes a list once the record is serialized.
+    for (final Map.Entry<String, Object> entry : row.toMap().entrySet())
+      doc.set(entry.getKey(), entry.getValue());
   }
 }
