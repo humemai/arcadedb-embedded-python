@@ -1127,9 +1127,11 @@ NOT_PRINTED = [
      "as conditions under the table, never as columns"),
     (r"^(settle_s|settle_s_lane|settle_s_adapter|engine_settle_s|gt_load_s|"
      r"recall_calc_s|query_gen_s|search_wall_s|phases_accounted_s|connect_s|"
-     r"import_ms|build_close_ms|close_s|mutate_n|mutate_queries|mutate_ran)$",
+     r"import_ms|build_close_ms|close_s|mutate_n|mutate_queries|mutate_ran|"
+     r"corpus_release_s)$",
      "harness bookkeeping around a timed phase: settling, loading ground "
-     "truth, computing recall, and the phase accounting"),
+     "truth, computing recall, the phase accounting, and the time-series "
+     "driver releasing its parsed corpus between ingest and the queries"),
     (r"^(mutate_deleted_hits|mutate_reinserted_hits)$",
      "correctness counters that must be zero; a non-zero one is a defect "
      "report, not a column (l3d_dense records them on the row)"),

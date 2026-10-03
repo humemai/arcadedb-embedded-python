@@ -140,7 +140,43 @@ def lp_path(scale):
 
 
 def parse_lp(path):
-    pts = []  # (host, ts_epoch_s, usage_user, usage_system, usage_idle)
+    """The whole corpus as a list of (host, ts_epoch_s, usage_user, usage_system,
+    usage_idle) tuples.
+
+    THE WHOLE CORPUS, ON PURPOSE, AND SMALL (CAMPAIGN.md section 7 row 18, BUGS
+    F66). The parse runs before the ingest timer and every arm's ingest starts
+    from this list, so the list is alive for the whole ingest: that is what
+    keeps the parse (minutes at ts100, about half an hour at ts1000) out of
+    every arm's ingest_s. `TS_CHUNK` and the arms' batch sizes only SLICE this
+    list; nothing upstream of it streams. Streaming the parse into the ingest
+    would either charge the parse to the timer or, with the timer paused around
+    it, give the arms whose engine keeps working after the call returns
+    (ArcadeDB's native async executor, the COPY arms, QuestDB's ILP socket)
+    uncharged background time, so the corpus stays whole and is made small.
+
+    It used to hold a fresh 5-tuple plus a fresh host string, a fresh
+    timestamp int, and three fresh floats for every line: 695 MiB for ts100's
+    2.59M points and 7,305 MiB for ts1000's 25.92M (RssAnon after the parse,
+    laptop, the client image's Python 3.12), which is most of the 7.6 GiB the
+    served client peaked at, and on an embedded arm the same memory came out
+    of the engine's cap. The corpus has 100 or 1,000 hosts, 25,920 instants,
+    and integer readings 0-100, so those objects repeat. Each is now built
+    once per distinct TEXT and shared, which leaves the tuple and its list
+    slot as the per-point cost: 221 MiB at ts100 and 2,186 MiB at ts1000
+    (about 89 bytes a point). Every value is the same one `float()` / `int()`
+    gave before, of the same type, in the same order, and a malformed line is
+    still skipped (checked point for point against the old parse on both
+    corpora), so what the arms send is unchanged.
+    """
+    pts = []
+    hosts, stamps, nums = {}, {}, {}
+
+    def num(s):
+        v = nums.get(s)
+        if v is None:
+            v = nums[s] = float(s.rstrip("i"))
+        return v
+
     with open(path) as f:
         for i, line in enumerate(f):
             if LIMIT and i >= LIMIT:
@@ -148,11 +184,15 @@ def parse_lp(path):
             try:
                 head, fields, ts = line.rsplit(" ", 2)
                 host = head.split("hostname=", 1)[1].split(",", 1)[0]
+                host = hosts.setdefault(host, host)
                 fd = dict(kv.split("=") for kv in fields.split(","))
-                pts.append((host, int(ts) // 1_000_000_000,
-                            float(fd["usage_user"].rstrip("i")),
-                            float(fd["usage_system"].rstrip("i")),
-                            float(fd["usage_idle"].rstrip("i"))))
+                t = stamps.get(ts)
+                if t is None:
+                    t = stamps[ts] = int(ts) // 1_000_000_000
+                pts.append((host, t,
+                            num(fd["usage_user"]),
+                            num(fd["usage_system"]),
+                            num(fd["usage_idle"])))
             except Exception:
                 continue
     return pts
@@ -706,6 +746,17 @@ class DuckTS:
         # the published tier is 25.9M rows over 1,000 hosts.
         with bench_common.index_timer(self):
             self.cx.execute("CREATE INDEX p_host_ts ON p (host, ts)")
+
+    def release_ingest_input(self):
+        """Drop the Arrow copy of the corpus that ingest registered as `src`.
+
+        A registered object stays referenced by the connection until it is
+        unregistered, so this columnar copy of every point stayed resident
+        through every query beside the table `p` it had been copied into
+        (CAMPAIGN.md section 7 row 18). main() calls this after the ingest
+        timer; below 100,000 points nothing was registered and unregistering
+        a missing name is a no-op in DuckDB."""
+        self.cx.unregister("src")
 
     def q_last(self):
         return self.cx.execute(
@@ -1523,6 +1574,24 @@ def main():
             b.settle()
     out["engine_settle_s"] = round(time.perf_counter() - _t, 3)
 
+    # RELEASE THE CORPUS once nothing reads it (CAMPAIGN.md section 7 row 18,
+    # BUGS F66). It used to stay referenced from here to the end of the cell,
+    # so every query ran with the whole parsed corpus resident, and on an
+    # embedded arm that memory is the engine's own cap. Released AFTER the
+    # ingest timer and after the engine's own settle, so neither ingest_s nor
+    # engine_settle_s nor the compaction wait covers it, and BEFORE the lane's
+    # settle floor, which absorbs it below so the time from ingest to the
+    # first query is what it was. An arm that keeps its own copy of the input
+    # (DuckDB's registered Arrow table) drops it here too, outside the timer
+    # that built it. The row records how long the release took.
+    _t = time.perf_counter()
+    with _beat.phase("corpus-release"):
+        del pts
+        _release = getattr(b, "release_ingest_input", None)
+        if _release is not None:
+            _release()
+    out["corpus_release_s"] = round(time.perf_counter() - _t, 3)
+
     # Optional settle between ingest and query, OUTSIDE the ingest timer.
     # Default 0 keeps every arm exactly as it was, because a settle given to
     # one engine and not the others is the asymmetry this lane already has to
@@ -1542,7 +1611,10 @@ def main():
     out["settle_s_lane"] = settle
     out["settle_s_adapter"] = round(float(getattr(b, "_settled_s", 0.0) or 0.0), 3)
     if settle > 0:
-        time.sleep(settle)
+        # The corpus release above already spent part of the floor; the
+        # floor is a gap between ingest and the first query, not a sleep
+        # added to whatever came before it.
+        time.sleep(max(0.0, settle - out["corpus_release_s"]))
 
     # WHAT THE FIRST TIMED QUERY SAW (DECISIONS #121): a TIMESERIES arm records
     # how many samples were still uncompacted, and how long its own settle
