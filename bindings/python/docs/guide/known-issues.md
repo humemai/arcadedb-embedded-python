@@ -5,6 +5,9 @@ the wrong rows, or refuse a read or a write. Each entry names the versions it wa
 on, what you see, a workaround that was checked on the same reproduction, and the release
 that fixes it once there is one. Entries leave this page when the fix ships in a release
 these bindings package.
+An entry with a `Tests:` line has a test of its workaround and a strict `xfail` test of the
+engine behavior; the `xfail` starts failing the suite when a fix reaches the wheel, which is
+the cue to remove the entry.
 
 ## A SQL decimal literal keeps only the digits a double holds
 
@@ -320,3 +323,86 @@ with db.transaction():
 Tests: `test_vertex_new_edge_keeps_a_null_and_refuses_an_out_of_range_short` checks this
 workaround, and the strict `xfail` tests next to it start failing the suite when an engine
 fix reaches the wheel, which is the cue to remove this entry.
+
+## `CREATE PROPERTY` with `mandatory` and `notnull` over records that lack the property makes `ORDER BY` drop them
+
+ArcadeDB [#9017](https://github.com/ArcadeData/arcadedb/issues/9017); measured through the
+bindings on a 26.10.1 snapshot. The `ORDER BY` answers are new on main: the same Java
+reproduction returns every record on 26.9.1 and on the 2026-09-17 main snapshot.
+
+`CREATE PROPERTY T.v INTEGER (mandatory true, notnull true)` is accepted over records that
+have no `v`, and the planner then trusts the two flags to mean that an index on `v` holds
+every record. With five records and a `NOTUNIQUE` index on `v`, where the fifth has no `v`,
+`SELECT id FROM T ORDER BY v` returned `[1, 2, 3, 4]` while `count(*)` was 5 and
+`ORDER BY id` returned all five. `ALTER PROPERTY ... MANDATORY true` refuses the same
+records since upstream #8956; `CREATE PROPERTY` and the openCypher `CREATE CONSTRAINT`
+statements do not.
+
+Give every record the property before you declare the constraints, or declare them on a type
+that is still empty. A type that is already declared over such records answers `ORDER BY`
+correctly again after `ALTER PROPERTY T.v MANDATORY false` and `ALTER PROPERTY T.v NOTNULL
+false`; both ways returned all five records on the same reproduction.
+
+```python
+with db.transaction():
+    db.command("sql", "UPDATE T SET v = 0 WHERE v IS NULL")
+db.command("sql", "CREATE PROPERTY T.v INTEGER (mandatory true, notnull true)")
+```
+
+Tests: `tests/test_declared_type_known_issues.py`; its strict `xfail` tests start failing the suite when an engine fix reaches the wheel, which is the cue to remove this entry.
+
+
+## An index on an `INTEGER` or `LONG` answers for a bound with a fraction as if it were rounded
+
+ArcadeDB [#9021](https://github.com/ArcadeData/arcadedb/issues/9021); measured through the
+bindings on a 26.10.1 snapshot, and in Java on 26.9.1 and the 2026-09-17 main snapshot.
+
+On an indexed `INTEGER` holding 11, 12, and 13, a bound of `12.5` (a Python `float`, as a
+parameter or a literal) gives other rows than the same query on an unindexed copy:
+`i = :b` returned `[12]` against `[]`, `i >= :b` returned `[12, 13]` against `[13]`, and
+`i < :b` returned `[11]` against `[11, 12]`. On an indexed `LONG`, a `float` of `1e19` finds
+the record holding `Long.MAX_VALUE`. Other bounds that need no rounding are not affected.
+
+Round the bound yourself, in the direction that keeps the same rows: `math.ceil(b)` for `>=`
+and `<`, `math.floor(b)` for `>` and `<=`, and do not run an equality query when
+`b != int(b)`, because no integer equals it. For all four range operators the rounded
+integer bound returned the same rows as the unindexed scan.
+
+```python
+import math
+
+b = 12.5
+rows = db.query("sql", "SELECT i FROM T WHERE i >= :b", {"b": math.ceil(b)}).to_list()
+```
+
+Tests: `tests/test_declared_type_known_issues.py`; its strict `xfail` tests start failing the suite when an engine fix reaches the wheel, which is the cue to remove this entry.
+
+
+## A value that cannot be converted is stored as `NULL`, and `''` as `0`, in a declared numeric property
+
+ArcadeDB [#9014](https://github.com/ArcadeData/arcadedb/issues/9014) and
+[#9027](https://github.com/ArcadeData/arcadedb/issues/9027); measured through the bindings
+on a 26.10.1 snapshot, and in Java on 26.9.1 and the 2026-09-17 main snapshot.
+
+Writing `True`, a `list`, or a `dict` to a declared `BYTE`, `SHORT`, `INTEGER`, `LONG`,
+`FLOAT`, or `DOUBLE` property is accepted and stores `NULL`: `doc.set("i", True)`,
+`doc.set("i", [1, 2])`, and `doc.set("i", {"a": 1})` followed by `save()` all read back
+`None`, with no error (the string `'abc'` is refused). An empty string bound as a parameter
+to a `SHORT`, `INTEGER`, `LONG`, `FLOAT`, or `DOUBLE` is stored as `0`, while `BYTE` and
+`DECIMAL` refuse it.
+
+Convert in Python before you write. `int(value)` raised `TypeError` for the list and the
+dict, gave `1` for `True` and `7` for `"7"`, and an empty string is better mapped to `None`
+explicitly than left to the engine.
+
+```python
+def to_int(value):
+    return None if value == "" else int(value)
+
+
+with db.transaction():
+    doc = db.new_document("N").set("i", to_int(user_value))
+    doc.save()
+```
+
+Tests: `tests/test_declared_type_known_issues.py`; its strict `xfail` tests start failing the suite when an engine fix reaches the wheel, which is the cue to remove this entry.
