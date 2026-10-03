@@ -18,7 +18,7 @@ from .importer import import_documents as run_document_import
 from .jvm import start_jvm
 from .results import ResultSet
 from .transactions import TransactionContext
-from .type_conversion import _is_numpy_bool, convert_python_to_java
+from .type_conversion import _is_numpy_bool, convert_python_to_java, json_bulk_dumps
 from .vector import to_java_float_array
 
 try:  # optional; hoisted to module scope to keep it out of per-call hot paths
@@ -283,17 +283,17 @@ class Database:
                 stored.
         """
         self._check_not_closed()
-        import json as _json
-
         rows = list(rows)
         if not rows:
             return 0
         try:
-            payload = _json.dumps(rows)
+            payload = json_bulk_dumps(rows)
         except (TypeError, ValueError):
-            # Non-JSON-representable values (note: numpy integer scalars land
-            # here too, since json.dumps rejects np.int64): per-row fallback,
-            # honoring commit_every batches like the fast path.
+            # Values the JSON text cannot carry unchanged (numpy integer
+            # scalars, which json.dumps rejects; an integer beyond 64 bits,
+            # NaN or Infinity, a non-str dict key, a lone surrogate, which the
+            # engine's JSON parser would store as a different value): per-row
+            # fallback, honoring commit_every batches like the fast path.
             n = 0
             was_active = self.is_transaction_active()
             try:

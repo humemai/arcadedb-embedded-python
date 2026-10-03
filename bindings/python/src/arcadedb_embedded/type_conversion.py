@@ -5,6 +5,8 @@ Handles automatic conversion of Java objects to native Python types for better
 developer experience and integration with Python ecosystem (pandas, numpy, etc.).
 """
 
+import json
+import math
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from typing import Any, NamedTuple
@@ -554,3 +556,125 @@ def convert_python_to_java(value: Any) -> Any:
 
     # Return as-is for other types (JPype will handle them)
     return value
+
+
+# ---------------------------------------------------------------------------
+# The bulk JSON paths (insert_many, GraphBatch.create_vertices, new_edges)
+#
+# They send their rows to the JVM as one JSON string, and the engine reads it
+# with its own JSON parser. That parser changes some values the per-value
+# entry points (Document.set, create_vertex, new_edge) store exactly or
+# refuse: an integer beyond 64 bits keeps only its low 64 bits, NaN and the
+# infinities become strings, a non-str dict key becomes its text, and a lone
+# surrogate becomes "?". A value the JSON text cannot carry unchanged keeps the
+# call off the bulk path: the per-value path stores it exactly or raises.
+
+_INT64_MIN = -(2**63)
+_INT64_MAX = 2**63 - 1
+
+
+def _str_survives_json(value: str) -> bool:
+    """False for a string UTF-8 cannot encode (a lone surrogate)."""
+    if value.isascii():
+        return True
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+def json_bulk_scalar_ok(value: Any) -> bool:
+    """Whether a scalar reaches the engine through a JSON bulk path unchanged.
+
+    True for None, bool, an int that fits 64 bits, a finite float, and a str
+    UTF-8 can encode. Everything else, other types included, is False: the
+    caller falls back to the per-value path. The exact types are tested first
+    because every value of a large load passes through here.
+    """
+    kind = type(value)
+    if kind is str:
+        return value.isascii() or _str_survives_json(value)
+    if kind is int:
+        return _INT64_MIN <= value <= _INT64_MAX
+    if kind is float:
+        return math.isfinite(value)
+    if kind is bool or value is None:
+        return True
+    if isinstance(value, bool):
+        return True
+    if isinstance(value, int):
+        return _INT64_MIN <= value <= _INT64_MAX
+    if isinstance(value, float):
+        return math.isfinite(value)
+    if isinstance(value, str):
+        return _str_survives_json(value)
+    return False
+
+
+def _json_bulk_check(value: Any) -> None:
+    """Raise ValueError for a value JSON would change on the way to the engine.
+
+    Walks nested lists and dicts. A type json.dumps cannot encode at all is
+    left to it (TypeError), which is what insert_many's fallback already handles.
+    """
+    if value is None or isinstance(value, bool):
+        return
+    if isinstance(value, int):
+        if not _INT64_MIN <= value <= _INT64_MAX:
+            raise ValueError(
+                f"an integer beyond 64 bits cannot go through the JSON bulk path: {value}"
+            )
+    elif isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("NaN and Infinity cannot go through the JSON bulk path")
+    elif isinstance(value, str):
+        if not _str_survives_json(value):
+            raise ValueError(
+                "a string with a lone surrogate cannot go through the JSON bulk path"
+            )
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise ValueError(
+                    "a non-str dict key cannot go through the JSON bulk path"
+                )
+            _json_bulk_check(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _json_bulk_check(item)
+
+
+def json_bulk_dumps(rows: Any) -> str:
+    """json.dumps for the bulk paths: raises ValueError (or TypeError) when
+    any value in `rows` would change on the way to the engine.
+
+    `rows` is a list of dicts (one per record). The common value types are
+    checked in this loop without a call per value, because every value of a
+    large load passes through it; floats need no check here, since
+    `allow_nan=False` makes json.dumps itself refuse NaN and the infinities.
+    """
+    int_min, int_max = _INT64_MIN, _INT64_MAX
+    for row in rows:
+        for key in row:
+            if type(key) is not str:
+                raise ValueError("a non-str key cannot go through the JSON bulk path")
+        for value in row.values():
+            kind = type(value)
+            if kind is str:
+                if not value.isascii() and not _str_survives_json(value):
+                    raise ValueError(
+                        "a string with a lone surrogate cannot go through the JSON bulk path"
+                    )
+            elif kind is int:
+                if not int_min <= value <= int_max:
+                    raise ValueError(
+                        f"an integer beyond 64 bits cannot go through the JSON bulk path: {value}"
+                    )
+            elif kind is float or kind is bool or value is None:
+                continue
+            else:
+                _json_bulk_check(
+                    value
+                )  # nested lists and dicts, and subclasses of the types above
+    return json.dumps(rows, allow_nan=False)

@@ -512,7 +512,10 @@ creation). Manages its own transactions unless one is already active.
 - `rows` (iterable of dict): One dict per document; values must be
   JSON-representable (str/int/float/bool/None, nested lists/dicts). Rows
   with other types (e.g. `datetime`, `bytes`) fall back transparently to
-  the per-row path.
+  the per-row path, and so do values the JSON text would change on the way
+  to the engine: an integer beyond 64 bits, NaN or Infinity, a dict key that
+  is not a `str`, and a string with a lone surrogate. The per-row path stores
+  such a value exactly or raises, as `Document.set` does.
 - `commit_every` (int): Transaction batch size in synchronous mode
   (0 = single transaction; ignored when a transaction is already open).
   Wheels before 26.10.1 did not ignore it on the JSON fast path: they
