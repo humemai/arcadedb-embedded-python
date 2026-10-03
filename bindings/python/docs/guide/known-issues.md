@@ -284,3 +284,39 @@ Equality lookups use the hash index and work, and SQL answers the same range by 
 Index a property that you query by range with `UNIQUE` or `NOTUNIQUE` (an `LSM_TREE` index),
 which serves both equality and ranges; a property cannot hold a hash index and an `LSM_TREE`
 index at once. Otherwise run the range in SQL.
+
+## `GraphBatch` edges with declared properties skip conversion and constraints
+
+ArcadeDB [#9018](https://github.com/ArcadeData/arcadedb/issues/9018) and
+[#9019](https://github.com/ArcadeData/arcadedb/issues/9019); measured through the bindings
+on a 26.10.1 snapshot. The Java reproductions in the two issues show the same on 26.9.1.
+
+An edge written through `GraphBatch` (`batch.new_edge(...)` with properties, or
+`batch.new_edges(..., properties=[...])`) is serialized without the declared property's
+conversion or the type's constraints. With an edge type that declares `weight INTEGER`,
+`small SHORT`, and `note STRING`:
+
+- `weight=None, note="hello"` is stored as `weight = -1`: the null is written as a type tag
+  with no value, so the bytes of the next property are read as the value. A null in the
+  last property reads back as null but logs `Possible corrupted record` when the edge is read.
+- `small=40000` is stored as `-25536`.
+- `MANDATORY`, `MIN`, and `REGEXP` are not checked and `DEFAULT` is not applied.
+
+`Vertex.new_edge(...)` converts and validates the same values: the null stays null and
+40000 is refused. A batch that also holds an edge of a second type stores the null
+correctly, which is not something to rely on.
+
+Write edges that carry declared properties through the vertex API, in a transaction. Edge
+types with no declared properties, or whose properties you give already converted and never
+`None`, are not affected, and `GraphBatch` stays the fast path for those.
+
+```python
+with db.transaction():
+    a = db.new_vertex("P").set("id", 1).save()
+    b = db.new_vertex("P").set("id", 2).save()
+    a.new_edge("Knows", b, weight=None, note="hello").save()  # null stays null
+```
+
+Tests: `test_vertex_new_edge_keeps_a_null_and_refuses_an_out_of_range_short` checks this
+workaround, and the strict `xfail` tests next to it start failing the suite when an engine
+fix reaches the wheel, which is the cue to remove this entry.

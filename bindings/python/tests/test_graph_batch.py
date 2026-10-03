@@ -1,4 +1,5 @@
 import arcadedb_embedded as arcadedb
+import pytest
 
 
 def test_graph_batch_creates_vertices_and_edges(temp_db_path):
@@ -312,3 +313,93 @@ def test_one_way_edges_are_seen_by_patterns_not_by_in(temp_db_path):
         )
         tag = db.query("sql", "SELECT FROM Tag WHERE k = 0").first().get_vertex()
         assert tag.get_in_edges("TaggedWith") == []
+
+
+def _declared_edge_types(db):
+    """Edge types that declare a nullable INTEGER, a SHORT, and a STRING, one per write path."""
+    db.command("sql", "CREATE VERTEX TYPE P")
+    for name in ("ViaRecord", "ViaBatch", "ViaBulk"):
+        db.command("sql", f"CREATE EDGE TYPE {name}")
+        db.command("sql", f"CREATE PROPERTY {name}.weight INTEGER")
+        db.command("sql", f"CREATE PROPERTY {name}.small SHORT")
+        db.command("sql", f"CREATE PROPERTY {name}.note STRING")
+
+
+def test_vertex_new_edge_keeps_a_null_and_refuses_an_out_of_range_short(temp_db_path):
+    """The workaround in known-issues.md: write edges that carry declared
+    properties through Vertex.new_edge, which converts and validates them."""
+    with arcadedb.create_database(temp_db_path) as db:
+        _declared_edge_types(db)
+        with db.transaction():
+            a = db.new_vertex("P").set("id", 1).save()
+            b = db.new_vertex("P").set("id", 2).save()
+            a.new_edge("ViaRecord", b, weight=None, note="hello").save()
+        rows = db.query("sql", "SELECT weight, note FROM ViaRecord").to_list()
+        assert [(r.get("weight"), r.get("note")) for r in rows] == [(None, "hello")]
+
+        with pytest.raises(Exception):  # noqa: B017 - a Java IllegalArgumentException
+            with db.transaction():
+                a.new_edge("ViaRecord", b, small=40000).save()
+        assert (
+            db.query("sql", "SELECT count(*) AS n FROM ViaRecord").first().get("n") == 1
+        )
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="ArcadeData/arcadedb#9018: GraphBatch writes a null in a declared edge property "
+    "as a type tag with no value, so the bytes of the next property are read as its value",
+)
+@pytest.mark.parametrize("bulk", [False, True], ids=["new_edge", "new_edges"])
+def test_graph_batch_edge_keeps_a_null_in_a_declared_property(temp_db_path, bulk):
+    """Strict xfail, as test_restore_sql.py did for #6096: when an engine fix
+    reaches the wheel this starts passing, the suite fails, and the known-issues.md
+    entry and the GraphBatch API page caution are removed. The null must be
+    followed by another property: a null written last reads back as null."""
+    with arcadedb.create_database(temp_db_path) as db:
+        _declared_edge_types(db)
+        edge_type = "ViaBulk" if bulk else "ViaBatch"
+        with db.transaction():
+            a = db.new_vertex("P").set("id", 1).save()
+            b = db.new_vertex("P").set("id", 2).save()
+        with db.graph_batch(parallel_flush=False) as batch:
+            if bulk:
+                batch.new_edges(
+                    [a.get_rid()],
+                    edge_type,
+                    [b.get_rid()],
+                    properties=[{"weight": None, "note": "hello"}],
+                )
+            else:
+                batch.new_edge(
+                    a.get_rid(), edge_type, b.get_rid(), weight=None, note="hello"
+                )
+        query = f"SELECT weight, note FROM {edge_type}"  # nosec B608 - fixed type names
+        rows = db.query("sql", query).to_list()
+        assert [(r.get("weight"), r.get("note")) for r in rows] == [(None, "hello")]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="ArcadeData/arcadedb#9019: a GraphBatch edge skips the declared property's "
+    "conversion and constraints, so 40000 in a SHORT is stored as -25536",
+)
+def test_graph_batch_edge_refuses_an_out_of_range_short(temp_db_path):
+    """Strict xfail, same reason as above. A fixed engine either refuses the value
+    or stores it as the record API does; what it must not do is wrap it."""
+    with arcadedb.create_database(temp_db_path) as db:
+        _declared_edge_types(db)
+        with db.transaction():
+            a = db.new_vertex("P").set("id", 1).save()
+            b = db.new_vertex("P").set("id", 2).save()
+        try:
+            with db.graph_batch(parallel_flush=False) as batch:
+                batch.new_edge(a.get_rid(), "ViaBatch", b.get_rid(), small=40000)
+            refused = False
+        except Exception:  # noqa: BLE001 - the engine's refusal, whatever its Java type
+            refused = True
+        stored = [
+            r.get("small")
+            for r in db.query("sql", "SELECT small FROM ViaBatch").to_list()
+        ]
+        assert refused and stored == []

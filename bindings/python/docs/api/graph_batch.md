@@ -113,6 +113,12 @@ was also slower than inserting one vector per `db.command(...)`.
 
 Buffer an edge for creation during flush/close.
 
+!!! warning "Declared edge properties"
+    An edge buffered with properties skips the declared property's conversion and the type's
+    constraints: a `None` followed by another property is stored as `-1` in an `INTEGER`, and
+    `40000` in a `SHORT` as `-25536`. Write edges with declared properties through
+    `Vertex.new_edge` instead; see [Known Engine Issues](../guide/known-issues.md).
+
 ### `new_edges(source_rids, edge_type, destination_rids, properties=None)`
 
 Buffer many edges with one JPype crossing per call: the bulk counterpart of
