@@ -135,6 +135,7 @@ Test counts evolve over time. For the latest per-file counts, run `uv run pytest
 | [`test_jvm.py`](test-jvm.md) | `start_jvm()` re-entry once the JVM is running, close and reopen in one process, and interpreter exit with an unclosed database |
 | [`test_jvm_payload.py`](test-jvm-payload.md) | A Python list must never be what crosses into the JVM |
 | [`test_resultset_arrow.py`](test-resultset-arrow.md) | Tests for ResultSet.to_arrow(). |
+| [`test_columnar_readers.py`](test-resultset-arrow.md#schemaless-and-decimal-data-test_columnar_readerspy) | `to_columns`, `to_dataframe`, and `to_arrow` on schemaless and DECIMAL data, at several batch sizes. |
 | [`test_runtime_cache.py`](test-runtime-cache.md) | The dev-mode runtime cache must follow the wheel it was extracted from |
 | [`test_server_http_endpoints.py`](test-server-http-endpoints.md) | The three server HTTP features the bindings document but do not wrap (multi-request transactions, server database commands, and line-protocol time-series writes), plus a projection read over HTTP |
 | [`test_server_packaging.py`](test-server-packaging.md) | The server stack is actually IN the wheel, and the API is reachable. |

@@ -162,6 +162,16 @@ def export_database(
             raise ArcadeDBError(f"Database export failed: {error_msg}") from e
 
 
+def _column_union(rows) -> List[str]:
+    """The keys of every row, in order of first appearance. A document is
+    schemaless, so the first row's keys say nothing about the others."""
+    names: Dict[str, None] = {}
+    for row in rows:
+        for key in row:
+            names.setdefault(key)
+    return list(names)
+
+
 def export_to_csv(
     results: Union[ResultSet, List[Dict[str, Any]]],
     file_path: str,
@@ -173,9 +183,11 @@ def export_to_csv(
     Args:
         results: ResultSet or list of dicts to export
         file_path: Output CSV file path
-        fieldnames: Header and column order (auto-detected if None). It
-            cannot rename: it must name every key of every row, or the export
-            raises (for a ResultSet, after writing the header).
+        fieldnames: Header and column order (auto-detected if None: the keys of
+            every row, in order of first appearance; for a ResultSet, of the
+            first batch of rows). It cannot rename: it must name every key of
+            every row, or the export raises (for a ResultSet, after writing the
+            header).
 
     Raises:
         ArcadeDBError: If CSV export fails
@@ -219,12 +231,29 @@ def export_to_csv(
                     writer.writeheader()
                     wrote_header = True
 
+                detected = False
                 for batch in results.iter_json_batches():
                     if not batch:
                         continue
                     if writer is None:
-                        fieldnames = list(batch[0].keys())
+                        # every row of the first batch, not only its first row
+                        # (#113): a row that carried a property the first row
+                        # lacked raised after the header was written
+                        fieldnames = _column_union(batch)
+                        detected = True
                         writer = csv.DictWriter(f, fieldnames=fieldnames)
+                    elif detected:
+                        # The header is already written, so a column that first
+                        # appears now cannot be added; say so rather than let the
+                        # writer's generic ValueError stand.
+                        known = set(fieldnames)
+                        for key in _column_union(batch):
+                            if key not in known:
+                                raise ArcadeDBError(
+                                    f"CSV export failed: column {key!r} first appears "
+                                    "after the header was written. Pass fieldnames "
+                                    "naming every column the query can return."
+                                )
                     if not wrote_header:
                         writer.writeheader()
                         wrote_header = True
@@ -246,7 +275,7 @@ def export_to_csv(
             return
 
         if fieldnames is None:
-            fieldnames = list(data[0].keys())
+            fieldnames = _column_union(data)
 
         with open(file_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
