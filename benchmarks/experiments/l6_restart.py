@@ -743,6 +743,17 @@ def main():
                 "restart_write_n": WRITE_N, "restart_poll_s": POLL_S, "stop_grace_s": GRACE_S})
     with _beat.phase("build", backend=args.backend, scale=args.scale):
         out.update(eng.build())
+    # The override settings the model's adapter read back from its engine
+    # (overrides.py, CAMPAIGN section 7 row 21). The dense and graph models
+    # build through the same adapters as their tables, so they carry the same
+    # stamps; only the registered fields are taken, because the adapters stamp
+    # a good deal more that this lane has no table for.
+    import overrides as _ov
+    _ad = getattr(eng, "adapter", None)
+    _rx = dict(getattr(_ad, "row_extra", None) or {})
+    if hasattr(_ad, "readbacks"):
+        _rx.update(_ad.readbacks())     # the dense adapters' hook, after their build timer
+    out.update({k: v for k, v in _rx.items() if k in _ov.STAMP_FIELDS})
     out["engine_version"] = eng.version
     bench_common.stamp_durability(out, eng.durability)
     out["instrument"] = bench_common.INSTRUMENT

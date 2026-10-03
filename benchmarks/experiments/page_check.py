@@ -942,8 +942,11 @@ def main() -> int:
     print("\nthe zero ages are disclosed wherever rows measured them (BUGS F146)")
     z_bad = _check_zero_age_disclosure(payload, rows)
     print(f"  {z_bad} graph table(s) missing the disclosure")
+    print("\nevery override a table meets is named under it (CAMPAIGN section 7 row 21)")
+    v_bad = _check_override_disclosures(payload)
+    print(f"  {v_bad} undisclosed override(s)")
     return 1 if (bad or d_bad or p_bad or a_bad or l_bad or h_bad or c_bad
-                 or r_bad or m_bad or not u_ok or k_bad or o_bad or z_bad) else 0
+                 or r_bad or m_bad or not u_ok or k_bad or o_bad or z_bad or v_bad) else 0
 
 
 # --------------------------------------------------------------------------
@@ -1173,6 +1176,18 @@ NOT_PRINTED = [
     (r"^duckdb_threads$",
      "the DuckDB cross-model arm's thread pool, sized from the cpuset (FAIRNESS "
      "F6, audited in FAIRNESS.md rather than printed as a column)"),
+    # THE OVERRIDES A TABLE DISCLOSES (overrides.py, CAMPAIGN section 7 row 21):
+    # each field below is a setting this benchmark overrides, read back from the
+    # engine and named under every table that shows the arm by a generated
+    # sentence. fairness_check F15 holds each row to the value the sentence
+    # claims, so a field here is a disclosure and never a column.
+    (r"^(es_security_enabled|es_replicas)$",
+     "Elasticsearch's security features and replica count, read from the engine "
+     "(`_xpack`, the index settings): the sentence under every table that shows "
+     "Elasticsearch says both are off"),
+    (r"^(es|duckdb|neo4j|arcadedb)_readback_error$",
+     "the reason an override read-back failed on this row; fairness_check F15 "
+     "reports the field it left absent, and this names why"),
     (r"^lc_affinity_cpus$",
      "the CPUs the lifecycle process could run on (sched_getaffinity), recorded "
      "beside its thread count after open so the pool can be audited against "
@@ -1880,6 +1895,29 @@ def _check_zero_age_disclosure(payload, rows):
         elif want:
             print(f"  {t['id']}: disclosed")
     return bad
+
+
+def _check_override_disclosures(payload):
+    """A table that shows an arm running a PROTOCOL section 7 override prints a
+    sentence that says so (overrides.py, CAMPAIGN section 7 row 21).
+
+    The exporter appends the sentence from the registry; this holds the payload
+    to the registry's own `says` patterns, so a refactor that stops calling the
+    generator, or a generator reworded until it no longer names the setting,
+    fails here instead of publishing a table that hides what its engine ran
+    with. The row-side half (the engine's own read-back on every row) is
+    fairness_check F15. Returns bad count."""
+    import export_web as EW
+    import overrides as OV
+    tables = [t for t in payload.get("tables", []) if t.get("instrument") == OV.INSTRUMENT]
+    lane_of = lambda tid: (EW._TABLE_LANE.get(tid) or (None,))[0]   # noqa: E731
+    found = OV.sentence_findings(tables, lane_of, None)
+    for f in found:
+        print(f"    {f}")
+    owed = sum(1 for t in tables for _ in OV.applicable(
+        lane_of(t.get("id")), [e.get("backend_key") for e in t.get("entries") or []]))
+    print(f"  {len(tables)} October table(s), {owed} override sentence(s) owed from their entries")
+    return len(found)
 
 
 def _check_off_page_names(payload):

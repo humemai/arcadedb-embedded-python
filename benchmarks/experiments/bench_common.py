@@ -412,6 +412,32 @@ def stamp_durability(out, engine_string, cls=None):
     return out["durability"]
 
 
+# ---------------------------------------------------------------------------
+# OVERRIDE READ-BACKS (CAMPAIGN section 7 row 21, overrides.py).
+#
+# PROTOCOL.md section 7 lists the settings this benchmark overrides, and until
+# row 21 the artifact recorded none of them for the engines below: the
+# inventory was the only record. Each helper asks the ENGINE for the setting
+# after the adapter has applied it, so the row carries what the engine ran with
+# and not the string we passed. A read that fails is recorded under
+# `<engine>_readback_error` and the field stays absent, which fairness_check
+# F15 reports as NOT STAMPED; a read-back must never end a cell, and it never
+# sits inside a timer (every caller reads it before the first timed call or
+# after the last).
+def es_readback(es, index):
+    """Elasticsearch's own answer: `_xpack` for the security features and the
+    index's settings for the replica count. {} entries are absent on failure."""
+    out = {}
+    try:
+        sec = ((es.xpack.info().get("features") or {}).get("security") or {}).get("enabled")
+        if isinstance(sec, bool):
+            out["es_security_enabled"] = sec
+        out["es_replicas"] = int(es.indices.get_settings(index=index)[index]["settings"]["index"]["number_of_replicas"])
+    except Exception as e:  # noqa: BLE001 - recorded, never swallowed
+        out["es_readback_error"] = f"{type(e).__name__}: {e}"
+    return out
+
+
 def _host_identity():
     """Which machine this is, read rather than assumed.
 

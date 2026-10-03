@@ -626,6 +626,15 @@ class Elastic(Base):
             "properties": {"emb": {"type": "sparse_vector",
                                    "index_options": {"prune": self.prune}}}},
             settings={"number_of_shards": 1, "number_of_replicas": 0})
+        # TWO MORE OVERRIDES, READ BACK FROM THE ENGINE (CAMPAIGN section 7
+        # row 21, overrides.py): `xpack.security.enabled=false` on the server
+        # (harness plumbing that also takes TLS and authentication out of every
+        # latency measured here) and `number_of_replicas=0` on the index (a
+        # single-node cluster has nowhere to place a replica and would sit
+        # yellow). Each is asked of Elasticsearch itself, `_xpack` and the
+        # index settings, not copied from the environment and the call above,
+        # so the row records what the engine ran with.
+        self.row_extra = bench_common.es_readback(self.es, self.IDX)
 
     @staticmethod
     def _tok(idx, vals):

@@ -420,6 +420,17 @@ class Base:
     def post_build(self):
         pass
 
+    def readbacks(self):
+        """Settings this arm reads back from its engine for the row (CAMPAIGN
+        section 7 row 21, overrides.py), as {field: value}.
+
+        Called by main() and the multipass driver AFTER the build timer has
+        stopped, never from build() or post_build(): build_s covers both, and a
+        read-back inside them would add its request to a published timer. An
+        arm that can read its settings at connect() (outside every timer) does
+        that into `row_extra` instead and leaves this empty."""
+        return {}
+
     # INGEST AND INDEX AS TWO TIMERS (DECISIONS #74 item 2, #66): an adapter
     # whose engine has the boundary sets both inside build() (or index_s in
     # post_build() where the index is waited for there); main() records them
@@ -2177,6 +2188,13 @@ class ElasticDense(Base):
         _opts = self.es.indices.get_mapping(index=self.IDX)[self.IDX]["mappings"]["properties"]["emb"].get("index_options") or {}
         self.row_extra.update({"es_index_options": json.dumps(_opts, sort_keys=True)})
 
+    def readbacks(self):
+        # The two overrides a reader meets under this table (security off on
+        # the server, no replica on the index), asked of the engine once the
+        # index exists and the build timer has stopped (CAMPAIGN section 7
+        # row 21, overrides.py).
+        return bench_common.es_readback(self.es, self.IDX)
+
     def search(self, qvec, k):
         knn = {"field": "emb", "query_vector": qvec.tolist(), "k": k,
                "num_candidates": max(k, EF_SEARCH)}
@@ -2685,6 +2703,7 @@ def main():
     # never restated from the flags we sent (FAIRNESS F3/F6; the graph lane's
     # row_extra, 2026-10-02 here).
     out.update(getattr(b, "row_extra", None) or {})
+    out.update(b.readbacks())          # after the build timer (CAMPAIGN section 7 row 21)
     # F134: how long the build waited for a background-built index, and the
     # probe latencies that showed it had caught up.
     for _k, _v in (getattr(b, "settle", None) or {}).items():

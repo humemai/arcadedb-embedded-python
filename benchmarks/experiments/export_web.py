@@ -7552,6 +7552,25 @@ def main() -> int:
             _t.setdefault("conditions", [])
             if _note not in _t["conditions"]:
                 _t["conditions"].append(_note)
+    # THE OVERRIDES A READER MEETS (CAMPAIGN section 7 row 21). PROTOCOL.md
+    # section 7 lists every default this benchmark overrides, and the rows its
+    # last column marked NOWHERE were named in no sentence under any table. One
+    # sentence per override, under every October table that shows an arm that
+    # runs it, generated from the rows (overrides.py); page_check refuses a
+    # table that shows such an arm and prints no sentence saying so, and
+    # fairness_check refuses a row that lacks the engine's own read-back.
+    import overrides as _OV
+    for _t in tables:
+        if _table_instrument(_t.get("id")) != "2026-10":
+            continue
+        _lane = (_TABLE_LANE.get(_t.get("id")) or (None,))[0]
+        for _text, _vals in _OV.notes_for_table(
+                _t.get("id"), _lane,
+                [e.get("backend_key") for e in _t.get("entries") or []], rows):
+            _note = _gen(_text, *_vals)
+            _t.setdefault("conditions", [])
+            if _note not in _t["conditions"]:
+                _t["conditions"].append(_note)
     if SKELETON:
         for _t in tables:
             _t.setdefault("conditions", [])

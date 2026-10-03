@@ -329,6 +329,7 @@ What belongs beside the pinned ratio: the view's cost per session is real. Its b
 | missing measurement | a table omits one of the standard measurements and states no reason |
 | off-page name | a page sentence names an arm the page does not print (`OFF_PAGE_ARMS`) |
 | undisclosed zero ages | a graph table is built from LDBC rows without the fixed age parse and does not carry the sentence saying their ages loaded as zero (BUGS F146, DECISIONS #119) |
+| undisclosed override | a table shows an arm that runs a PROTOCOL.md section 7 override (`overrides.py`) and prints no sentence saying so, or a 2026-10 row of such an arm lacks the engine's own read-back of the setting or carries another value (`fairness_check` F15; CAMPAIGN.md section 7, item 21) |
 
 ## What the October page may say while the campaign runs (DECISIONS #102)
 

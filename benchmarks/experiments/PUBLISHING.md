@@ -45,7 +45,7 @@ The gate scripts (`refresh_web_page.GATES`), then three structural checks. All o
 | Check | Asks |
 |---|---|
 | `provenance_check` | does every cell trace to a run |
-| `fairness_check` | F1 to F14 comparison invariants, durability class and instrument included |
+| `fairness_check` | F1 to F15 comparison invariants, durability class, instrument, and the stamps of the overrides a table discloses included |
 | `equivalence_check` | do the engines of a table agree on the answer, and is every operation an engine cannot express declared (DECISIONS #88) |
 | `page_check` | does the page agree with its own sources: its 9.99M dense cells with the generated table, the atomicity counts with the artifact, every operation of the query set a column with every engine answering or declared, no table losing its ArcadeDB row, and every number under a table traced to a source |
 | `page_check.PROSE` | do the page's hand-typed prose numbers agree with the tables and the page-derived pins |

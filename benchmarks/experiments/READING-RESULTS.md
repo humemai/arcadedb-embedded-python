@@ -129,7 +129,7 @@ that looks like it should have one does not.
 They answer different questions. `refresh_web_page.py` runs all of them (`refresh_web_page.GATES`); run them by hand after touching results or tables:
 
     BENCH_ENGINE_COMMIT=<pin> python provenance_check.py    # does a cell trace to a run
-    BENCH_ENGINE_COMMIT=<pin> python fairness_check.py      # F1 to F14
+    BENCH_ENGINE_COMMIT=<pin> python fairness_check.py      # F1 to F15
     BENCH_ENGINE_COMMIT=<pin> python page_check.py          # page cells vs generated tables, prose vs pins
     BENCH_ENGINE_COMMIT=<pin> python equivalence_check.py   # do the engines of a table agree on the answer
     BENCH_ENGINE_COMMIT=<pin> python version_consistency_check.py   # one engine, one version string, across the page

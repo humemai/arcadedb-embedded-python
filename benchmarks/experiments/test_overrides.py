@@ -1,0 +1,214 @@
+"""overrides.py and the three places it is held (CAMPAIGN section 7 row 21).
+
+Run with `python -m pytest test_overrides.py -q` from this directory.
+
+Each test names what it protects. The ones that matter most are the two that
+prove a check can fail: the page gate on a table that lost its sentence, and the
+row gate on a row that lost its stamp.
+"""
+import re
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+
+import overrides as OV  # noqa: E402
+
+PROTOCOL = HERE / "PROTOCOL.md"
+
+# PROTOCOL section 7 rows that still say NOWHERE, by a distinctive substring of
+# their Setting cell, with the reason each is not done. Empty is the goal. A row
+# may only be added here with a reason a reader of the report can act on.
+NOT_DONE = {"PRAGMA threads": "its override is not registered at this commit", "hnsw_enable_experimental_persistence": "its override is not registered at this commit", "server_memory_pagecache_size": "its override is not registered at this commit", "NEO4J_db_checkpoint_interval_time": "its override is not registered at this commit", "addHierarchy": "its override is not registered at this commit", "queryMaxHeapElementsAllowedPerOp": "its override is not registered at this commit", "wait_completion": "its override is not registered at this commit", "the manifest records cpuset/mem/heap/images": "its override is not registered at this commit"}
+
+
+def _split_row(line):
+    """Cells of one markdown table row, honouring backticks (a `|` inside code
+    is not a separator)."""
+    cells, cur, tick = [], [], False
+    for ch in line.strip().strip("|"):
+        if ch == "`":
+            tick = not tick
+        if ch == "|" and not tick:
+            cells.append("".join(cur).strip())
+            cur = []
+        else:
+            cur.append(ch)
+    cells.append("".join(cur).strip())
+    return cells
+
+
+def _section7_rows():
+    text = PROTOCOL.read_text(encoding="utf-8")
+    sec = text.split("## 7. Defaults and sanctioned overrides", 1)[1]
+    sec = re.split(r"\n## ", sec, maxsplit=1)[0]
+    rows = []
+    for line in sec.splitlines():
+        if not line.startswith("|") or line.startswith("|---") or line.startswith("| Engine |"):
+            continue
+        cells = _split_row(line)
+        if len(cells) >= 5:
+            rows.append(cells)
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# the registry, against the code that runs and the document that lists
+
+def test_keys_are_unique_and_every_override_has_a_carrier():
+    keys = [o.key for o in OV.OVERRIDES]
+    assert len(keys) == len(set(keys))
+    for o in OV.OVERRIDES:
+        assert o.carriers, o.key
+        assert o.says, o.key
+
+
+def test_every_carrier_is_an_arm_the_runner_registers():
+    import runner
+    for o in OV.OVERRIDES:
+        for c in o.carriers:
+            assert c.lane in runner.LANES, (o.key, c)
+            assert c.backend in runner.LANES[c.lane][1], (o.key, c)
+            assert c.backend in runner.BACKENDS, (o.key, c)
+
+
+def test_protocol_cites_every_key_once_and_none_of_those_rows_says_nowhere():
+    rows = _section7_rows()
+    cited = {}
+    for cells in rows:
+        for key in re.findall(r"`override: (\w+)`", cells[-1]):
+            cited.setdefault(key, []).append(cells)
+    for o in OV.OVERRIDES:
+        assert len(cited.get(o.key, [])) == 1, f"PROTOCOL.md section 7 must cite `override: {o.key}` in exactly one row"
+    for key in cited:
+        assert key in OV.BY_KEY, f"PROTOCOL.md cites `override: {key}`, which overrides.py does not register"
+    for key, hits in cited.items():
+        for cells in hits:
+            assert "NOWHERE" not in cells[-1], f"`override: {key}` is cited by a row that also says NOWHERE"
+
+
+def test_no_other_row_says_nowhere():
+    left = [cells for cells in _section7_rows() if "NOWHERE" in cells[-1]]
+    for cells in left:
+        assert any(frag in cells[1] or frag in cells[0] for frag in NOT_DONE), (
+            f"a PROTOCOL.md section 7 row says NOWHERE and is neither disclosed nor listed in NOT_DONE: {cells[0]} | {cells[1][:60]}")
+    for frag in NOT_DONE:
+        assert any(frag in c[1] or frag in c[0] for c in left), f"NOT_DONE lists {frag!r}, which no longer says NOWHERE"
+
+
+# ---------------------------------------------------------------------------
+# the sentences
+
+SAMPLE_ROWS = {
+    "arcadedb_query_cap": [{"server_query_max_heap_elements": "5000000"}],
+    "neo4j_checkpoint": [{"neo4j_checkpoint_interval": "5s", "neo4j_checkpoint_interval_default": "15m"}],
+}
+
+
+def test_every_sentence_says_what_its_gate_asks_for_and_registers_its_digits():
+    for o in OV.OVERRIDES:
+        text, values = o.sentence(SAMPLE_ROWS.get(o.key, []))
+        for pat in o.says:
+            assert re.search(pat, text), (o.key, pat, text)
+        digits = re.findall(r"\d(?:[\d,]*\d)?(?:\.\d+)?", text.replace("Neo4j", "Neo"))
+        for d in digits:
+            assert d in values, f"{o.key}: the sentence carries {d!r} and registers no source for it: {text}"
+        assert "\u2014" not in text and "--" not in text, o.key
+
+
+def _table(tid, backend, conditions):
+    return {"id": tid, "instrument": "2026-10", "entries": [{"backend_key": backend}],
+            "conditions": conditions}
+
+
+# page table id <-> lane, as export_web._TABLE_LANE has it for the tables that carry an arm
+TABLE_OF_LANE = {"l3s": "l3s", "l3d": "l3d", "l2": "l2", "l4": "l4", "e2": "e2",
+                 "l1tpc": "docs_oltp", "lifecycle": "lifecycle", "restart": "restart"}
+LANE_OF = {v: k for k, v in TABLE_OF_LANE.items()}.get
+CARRIERS = [(o, c) for o in OV.OVERRIDES for c in o.carriers]
+
+
+def _sentences_owed(lane, backend):
+    return {o.key: o.sentence(SAMPLE_ROWS.get(o.key, []))[0] for o in OV.OVERRIDES
+            if any(c.lane == lane and c.backend == backend for c in o.carriers)}
+
+
+@pytest.mark.parametrize("o,c", CARRIERS, ids=lambda x: x.key if hasattr(x, "key") else f"{x.lane}.{x.backend}")
+def test_a_table_that_shows_the_arm_must_carry_the_sentence(o, c):
+    tid = TABLE_OF_LANE[c.lane]
+    owed = _sentences_owed(c.lane, c.backend)
+    full = ["some other sentence"] + list(owed.values())
+    # with every sentence the table owes: clean
+    assert OV.sentence_findings([_table(tid, c.backend, full)], LANE_OF, None) == []
+    # without this override's: the gate fails, and it names the override
+    without = [x for x in full if x != owed[o.key]]
+    found = OV.sentence_findings([_table(tid, c.backend, without)], LANE_OF, None)
+    assert [f for f in found if f"`{o.key}`" in f], found
+    # reworded until it no longer says the thing: also fails
+    vague = without + ["This table runs some engines with settings."]
+    assert [f for f in OV.sentence_findings([_table(tid, c.backend, vague)], LANE_OF, None) if f"`{o.key}`" in f]
+
+
+def test_a_table_with_no_such_arm_owes_nothing():
+    assert OV.sentence_findings([_table("l3s", "qdrant_sparse", [])], LANE_OF, None) == []
+
+
+def test_notes_for_table_follow_the_arms_on_the_table_and_its_lane():
+    keys = lambda notes: " ".join(n[0] for n in notes)    # noqa: E731
+    es = keys(OV.notes_for_table("l3s", "l3s", ["elasticsearch_sparse", "qdrant_sparse"], []))
+    assert "Elasticsearch" in es and "replica" in es and "DuckDB" not in es
+    # the same backend on a lane it is not registered for gets nothing
+    assert OV.notes_for_table("l3s", "l3s", ["neo4j_dense"], []) == []
+    # a derived table has no lane and no entries
+    assert OV.notes_for_table("durability", None, [], []) == []
+
+
+# ---------------------------------------------------------------------------
+# fairness_check's half: a row without the engine's own answer fails
+
+def _row(**kw):
+    base = {"instrument": "2026-10", "scale": "micro", "workload": "search", "cpuset": "0-11"}
+    base.update(kw)
+    return base
+
+
+def test_rows_of_a_carrier_arm_must_carry_the_stamp():
+    r = _row(lane="l3s", backend="elasticsearch_sparse")
+    found, judged = OV.stamp_findings([r])
+    assert judged == 2 and {f["key"] for f in found} == {"es_security", "es_replicas"}
+    assert all(f["kind"] == "NOT STAMPED" for f in found)
+    r.update(es_security_enabled=False, es_replicas=0)
+    assert OV.stamp_findings([r]) == ([], 2)
+
+
+def test_a_stamp_that_contradicts_the_sentence_fails():
+    r = _row(lane="l3s", backend="elasticsearch_sparse", es_security_enabled=True, es_replicas=1)
+    found, _ = OV.stamp_findings([r])
+    assert {f["kind"] for f in found} == {"WRONG"} and len(found) == 2
+
+
+def test_a_failed_read_back_is_named_on_the_finding():
+    r = _row(lane="l3s", backend="elasticsearch_sparse", es_readback_error="ConnectionError: refused")
+    found, _ = OV.stamp_findings([r])
+    assert all("ConnectionError" in f["text"] for f in found)
+
+
+def test_september_rows_and_other_lanes_are_not_judged():
+    assert OV.stamp_findings([_row(lane="l3s", backend="elasticsearch_sparse", instrument="2026-09")]) == ([], 0)
+    assert OV.stamp_findings([_row(lane="l1", backend="duckdb")]) == ([], 0)
+
+
+def test_every_stamp_field_is_a_declared_not_printed_field():
+    """A numeric field a lane records must be printed or declared (page_check
+    A2); each field an override stamps is declared with its reason."""
+    import page_check
+    for f in sorted(OV.STAMP_FIELDS):
+        assert page_check._not_printed_reason(f), f"{f} is stamped for an override and declared nowhere in NOT_PRINTED"
+
+
+# ---------------------------------------------------------------------------
+# the manifest

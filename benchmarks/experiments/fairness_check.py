@@ -1249,6 +1249,39 @@ def check_durability(rows):
     return bad
 
 
+def check_overrides(rows):
+    """F15: every override a table discloses is stamped on the rows that ran it.
+
+    PROTOCOL.md section 7 lists the settings this benchmark overrides, and the
+    rows its last column marked NOWHERE were recorded nowhere: not on a row, not
+    under a table (CAMPAIGN section 7 row 21). overrides.py registers each one
+    with the row field its adapter (or the runner, for the served ArcadeDB
+    cap) reads back from the engine, and the value the page sentence claims.
+    A 2026-10 row of such an arm without the field, or with another value, is
+    the page saying something its artifact does not show. page_check holds the
+    sentence half. Rows measured before the stamps existed fail here by design:
+    every arm on a table is re-run at the re-pin (version_consistency_check), so
+    no frozen row survives it.
+    """
+    import overrides as OV
+    print("=== F15: every disclosed override is stamped on the rows that ran it ===")
+    bad_list, judged = OV.stamp_findings(rows)
+    if not judged:
+        print("  no 2026-10 row of an arm that runs a registered override; nothing to check yet")
+        return 0
+    groups = {}
+    for f in bad_list:
+        # where = "<lane> <scale> <workload> <backend>": one line per arm, not per row
+        lane, backend = f["where"].split()[0], f["where"].split()[-1]
+        groups.setdefault((f["kind"], f["key"], f["field"], lane, backend), []).append(f)
+    for _group, fs in sorted(groups.items()):
+        more = f"  (+{len(fs) - 1} more row(s) like it)" if len(fs) > 1 else ""
+        print(f"  FAIL {fs[0]['text']}{more}")
+    if not bad_list:
+        print(f"  ok: {judged} row-override pair(s) judged, each stamped with the value its sentence claims")
+    return len(bad_list)
+
+
 # (moved above _dense_rows: it is read there too)
 # DECISIONS #86: the laptop skeleton waives the two invariants that are about
 # the BENCH HOST and nothing else -- F1's cpuset pinning and F3's per-size
@@ -1276,6 +1309,9 @@ def main():
     bad += check_degree(rows)
     bad += check_close_cost(rows)
     bad += check_durability(rows)
+    # F15 reads the canonical rows and, where the bench host has them, the dense
+    # multipass overlay records (the dense table's cells come from those).
+    bad += check_overrides(rows + _dense_rows())
     # F14 reads the LANE ROSTER rather than the rows: an arm that declared no
     # index decision is a defect whether or not it happened to run this time.
     # The rows go in as well, for the second half (F14b): a declaration is a
