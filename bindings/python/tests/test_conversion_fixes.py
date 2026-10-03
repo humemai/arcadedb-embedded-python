@@ -141,9 +141,10 @@ def test_append_samples_accepts_numpy_tag_and_bool_columns(temp_db, primitive):
         executor = temp_db.async_executor()
         executor.append_samples(name, ts, hosts, field, primitive=primitive)
         executor.wait_completion()
-        rows = temp_db.query(
-            "sql", f"SELECT host, val FROM {name} ORDER BY ts"
-        ).to_list()  # nosec B608 - test-owned name
+        query = (
+            f"SELECT host, val FROM {name} ORDER BY ts"  # nosec B608 - test-owned name
+        )
+        rows = temp_db.query("sql", query).to_list()
         assert [r.get("host") for r in rows] == ["a", "b", "c"]
         assert [r.get("val") for r in rows] == expected
 
