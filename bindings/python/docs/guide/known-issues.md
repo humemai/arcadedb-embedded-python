@@ -5,6 +5,9 @@ the wrong rows, or refuse a read or a write. Each entry names the versions it wa
 on, what you see, a workaround that was checked on the same reproduction, and the release
 that fixes it once there is one. Entries leave this page when the fix ships in a release
 these bindings package.
+An entry with a `Tests:` line has a test of its workaround and a strict `xfail` test of the
+engine behavior; the `xfail` starts failing the suite when a fix reaches the wheel, which is
+the cue to remove the entry.
 
 ## A SQL decimal literal keeps only the digits a double holds
 
