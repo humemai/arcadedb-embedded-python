@@ -1,5 +1,6 @@
 import arcadedb_embedded as arcadedb
 import pytest
+from arcadedb_embedded.exceptions import ArcadeDBError
 
 
 def test_graph_batch_creates_vertices_and_edges(temp_db_path):
@@ -403,3 +404,46 @@ def test_graph_batch_edge_refuses_an_out_of_range_short(temp_db_path):
             for r in db.query("sql", "SELECT small FROM ViaBatch").to_list()
         ]
         assert refused and stored == []
+
+
+def test_graph_batch_create_vertex_keyboard_interrupt_rolls_back(
+    temp_db_path, monkeypatch
+):
+    """A KeyboardInterrupt between create_vertex's own begin() and commit()
+    must not leak the transaction it started: `except Exception` let it bypass
+    the rollback entirely (#7882)."""
+    with arcadedb.create_database(temp_db_path) as db:
+        db.command("sql", "CREATE VERTEX TYPE Person")
+
+        with db.graph_batch(parallel_flush=False) as batch:
+
+            def interrupt(_properties):
+                raise KeyboardInterrupt
+
+            monkeypatch.setattr(batch, "_to_java_varargs", interrupt)
+            with pytest.raises(KeyboardInterrupt):
+                batch.create_vertex("Person", name="Alice")
+            assert db.is_transaction_active() is False
+            monkeypatch.undo()
+
+        assert db.count_type("Person") == 0
+
+
+def test_graph_batch_create_vertex_failure_still_wraps_and_rolls_back(
+    temp_db_path, monkeypatch
+):
+    """An ordinary failure keeps its ArcadeDBError wrapping (#7882 widened only
+    the rollback, not the exception translation)."""
+    with arcadedb.create_database(temp_db_path) as db:
+        db.command("sql", "CREATE VERTEX TYPE Person")
+
+        with db.graph_batch(parallel_flush=False) as batch:
+
+            def fail(_properties):
+                raise TypeError("unconvertible")
+
+            monkeypatch.setattr(batch, "_to_java_varargs", fail)
+            with pytest.raises(ArcadeDBError):
+                batch.create_vertex("Person", name="Alice")
+            assert db.is_transaction_active() is False
+            monkeypatch.undo()
