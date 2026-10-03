@@ -279,6 +279,16 @@ STAGES = [
      ["lc10k", "lc100k", "lc1m", "lc10m"],
      ['grep -q "def _batched" l5_lifecycle_surreal.py || { say "$ID ABORT: the streamed build (F161) is not in this tree"; exit 1; }'],
      {}, ["BENCH_LC_ITERS=5", "BENCH_LC_WARMUP=2"], ["surrealdb_lifecycle"], None, "qOA5"),
+    # ARANGODB'S RELAXED CROSS-MODEL ROWS PREDATE ITS pid INDEX (BUGS F168, 2026-10-03). The index (299e454a8a,
+    # 2026-09-21) was said to reach the page through qOD3, but qOD3 ran only the strict class, so the 20 relaxed
+    # arangodb_e2 rows lack index_s and scanned every product (reads 2.6x to 25x slower than with the index).
+    # /next withdraws the row (export_web STALE_UNTIL_RERUN, keyed on rows without index_s). This re-runs the
+    # relaxed class only, hybrid only, both catalog sizes, ArangoDB alone; the canonical key plus the newest
+    # ts_utc supersedes the pre-index rows, as qOA5 does for LadybugDB, and the row returns by itself. It waits
+    # on qOA5 (qOA6 was stopped, DECISIONS #134). The user's go-ahead: 2026-10-03.
+    ("qOA7", "ArangoDB cross-model re-run, relaxed, with the pid index (F168)", "e2", ["hybrid"], ["e2", "e2_500k"],
+     ['grep -q "pid_idx" e2_hybrid.py || { say "$ID ABORT: the ArangoDB pid index (F168) is not in this tree"; exit 1; }'],
+     {}, [], ["arangodb_e2"], "relaxed", "qOA5"),
 ]
 
 HEAD = '''#!/bin/bash
