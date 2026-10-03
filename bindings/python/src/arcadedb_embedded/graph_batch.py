@@ -11,7 +11,7 @@ import jpype
 from ._logging import get_logger, log_swallowed_exception
 from .exceptions import ArcadeDBError
 from .graph import Document, Vertex
-from .type_conversion import convert_python_to_java
+from .type_conversion import convert_python_to_java, json_bulk_scalar_ok
 
 _LOGGER = get_logger(__name__)
 
@@ -208,7 +208,6 @@ class GraphBatch:
                 f"Failed to create batch vertices for type '{type_name}': {e}"
             ) from e
 
-    _JSON_SAFE_TYPES = (str, int, float, bool, type(None))
     _BULK_CHUNK = 100_000  # rows per boundary crossing in bulk paths
 
     def _create_vertices_json_bulk(self, type_name, rows):
@@ -221,12 +220,14 @@ class GraphBatch:
         except Exception:
             return None
 
-        json_safe = self._JSON_SAFE_TYPES
         for row in rows:
             if row:
                 for value in row.values():
-                    if not isinstance(value, json_safe):
-                        return None  # e.g. datetime/bytes: matrix path preserves types
+                    if not json_bulk_scalar_ok(value):
+                        # e.g. datetime/bytes (the matrix path preserves types), or a
+                        # value JSON would change: an integer beyond 64 bits, NaN or
+                        # Infinity, a lone surrogate
+                        return None
 
         import json
 
@@ -324,14 +325,14 @@ class GraphBatch:
                     )
                 return self
 
-            json_safe = self._JSON_SAFE_TYPES
             rows = []
             for src, dst, p in zip(source_rids, destination_rids, properties):
                 row = {"_src": str(src), "_dst": str(dst)}
                 for key, value in (p or {}).items():
-                    if key in ("_src", "_dst") or not isinstance(value, json_safe):
-                        # non-JSON value (datetime/bytes): per-edge fallback
-                        # preserves types exactly
+                    if key in ("_src", "_dst") or not json_bulk_scalar_ok(value):
+                        # non-JSON value (datetime/bytes), or one JSON would change
+                        # (an integer beyond 64 bits, NaN or Infinity, a lone
+                        # surrogate): per-edge fallback preserves types exactly
                         props_iter = properties
                         for s2, d2, p2 in zip(
                             source_rids, destination_rids, props_iter

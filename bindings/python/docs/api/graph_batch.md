@@ -100,7 +100,9 @@ properties, or an iterable of property dicts (`None` or `{}` for a vertex withou
 properties). Only rows whose values are all scalars (`str`, `int`, `float`, `bool`, or
 `None`) take the JSON bulk path, which sends them in chunks of 100,000 rows; a row with
 any other value, a list or a Java array included, sends the whole call through the
-per-value path, which converts each value on its own.
+per-value path, which converts each value on its own. So does a scalar the JSON text would
+change on the way to the engine: an integer beyond 64 bits, NaN or Infinity, or a string with
+a lone surrogate. The per-value path stores such a value exactly or raises.
 
 **Vector properties: pass `to_java_float_array(vec)`, not a Python list.** A plain
 list is converted element by element (and, on a type with no declared vector property,
@@ -126,8 +128,9 @@ Buffer many edges with one JPype crossing per call: the bulk counterpart of
 (`"#1:0"`) or objects with a string representation; `properties` is an optional
 same-length sequence of per-edge property dicts. When every value is a scalar (`str`,
 `int`, `float`, `bool`, or `None`) the call takes the bulk path; any other value,
-a list included, sends the whole call through per-edge buffering. Returns the
-batch for chaining.
+a list included, sends the whole call through per-edge buffering, and so does a scalar the
+JSON text would change (an integer beyond 64 bits, NaN or Infinity, a lone surrogate), which
+per-edge buffering stores exactly or refuses. Returns the batch for chaining.
 
 ```python
 with db.graph_batch(use_wal=False) as batch:
