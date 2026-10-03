@@ -133,6 +133,7 @@ Test counts evolve over time. For the latest per-file counts, run `uv run pytest
 | [`test_jar_provenance.py`](test-jar-provenance.md) | The wheel can say which engine it carries, not just which version it is. |
 | [`test_java_package_shadowing.py`](test-java-package-shadowing.md) | A folder named `java/` or `com/` must not change what a query returns |
 | [`test_jvm.py`](test-jvm.md) | `start_jvm()` re-entry once the JVM is running, close and reopen in one process, and interpreter exit with an unclosed database |
+| [`test_sigint.py`](test-jvm.md#ctrl-c-test_sigintpy) | Ctrl-C raises `KeyboardInterrupt` and runs cleanup once the JVM is started; `interrupt=True` keeps JPype's default |
 | [`test_jvm_payload.py`](test-jvm-payload.md) | A Python list must never be what crosses into the JVM |
 | [`test_resultset_arrow.py`](test-resultset-arrow.md) | Tests for ResultSet.to_arrow(). |
 | [`test_runtime_cache.py`](test-runtime-cache.md) | The dev-mode runtime cache must follow the wheel it was extracted from |

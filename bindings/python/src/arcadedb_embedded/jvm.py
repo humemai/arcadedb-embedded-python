@@ -20,6 +20,7 @@ import jpype.imports
 from .exceptions import ArcadeDBError
 
 _JVM_CONFIG = None
+_JVM_INTERRUPT = None  # the `interrupt` the running JVM was started with
 
 
 def _project_dir() -> Path:
@@ -268,6 +269,7 @@ def start_jvm(
     disable_xml_limits: bool = True,
     jvm_args: Optional[Union[Iterable[str], str]] = None,
     common_pool_parallelism: Optional[int] = None,
+    interrupt: Optional[bool] = None,
 ):
     """
     Start the JVM with ArcadeDB JARs if not already started.
@@ -297,6 +299,16 @@ def start_jvm(
 
         Example:
             start_jvm(heap_size="8g", common_pool_parallelism=8)
+
+    interrupt (optional)
+        What Ctrl-C (SIGINT) does. The default, False, leaves it to Python: a
+        KeyboardInterrupt is raised, so ``finally`` blocks, ``atexit`` hooks and
+        the rollback of a ``with db.transaction():`` run. A Java call in
+        progress (a slow query) is not interrupted: the KeyboardInterrupt
+        arrives when it returns (``kill -TERM`` from another terminal still
+        ends the process at once, through the JVM's shutdown hooks). Pass True
+        for JPype's script default, where the JVM handles SIGINT and ends the
+        whole process at once with exit status 130, with no Python cleanup.
 
     JVM Configuration (environment):
     --------------------------------
@@ -334,7 +346,7 @@ def start_jvm(
     Note: JVM options must be set BEFORE the first JVM start, as the JVM
           can only be configured once per Python process.
     """
-    global _JVM_CONFIG
+    global _JVM_CONFIG, _JVM_INTERRUPT
     if jpype.isJVMStarted():
         candidate_args = tuple(
             _build_jvm_args(
@@ -350,6 +362,15 @@ def start_jvm(
             or (disable_xml_limits is not True)
             or (common_pool_parallelism is not None)
         )
+        if (
+            interrupt is not None
+            and _JVM_INTERRUPT is not None
+            and interrupt != _JVM_INTERRUPT
+        ):
+            raise ArcadeDBError(
+                "JVM is already started with a different interrupt setting. "
+                "Pass interrupt to the first start_jvm() call."
+            )
         if not has_overrides:
             # No explicit configuration requested: join the running JVM
             # (e.g. open_database() after create_database(jvm_kwargs=...)).
@@ -387,7 +408,13 @@ def start_jvm(
 
     try:
         # Always use bundled JRE
-        jpype.startJVM(jvm_path, *jvm_args, classpath=classpath)
+        # JPype's own default is `not interactive()`: in a script the JVM then
+        # handles SIGINT and ends the process with status 130, bypassing Python's
+        # signal handler, KeyboardInterrupt, `finally` and `atexit` (#118).
+        _JVM_INTERRUPT = bool(interrupt)
+        jpype.startJVM(
+            jvm_path, *jvm_args, classpath=classpath, interrupt=_JVM_INTERRUPT
+        )
         _JVM_CONFIG = tuple(jvm_args)
     except Exception as e:
         raise ArcadeDBError(f"Failed to start JVM: {e}") from e
