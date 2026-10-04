@@ -112,13 +112,86 @@ def get_jar_path() -> str:
 _JAR_FINGERPRINT_CACHE = None
 
 # JARs this project compiles, as opposed to the ArcadeDB engine JARs staged
-# from the image. Excluded from engine_sha256 because they are built here and
-# are not byte-reproducible: the PyPI 26.8.1 wheel and a local build of the
-# same version differ in this JAR alone, at identical size.
+# from the image or a source build. Excluded from engine_sha256 because they
+# are built here: the PyPI 26.8.1 wheel and a local build of the same version
+# differed in this JAR alone, at identical size, and the manifest `jar` writes
+# names the JDK that compiled it, which need not be the same on every runner.
 _OUR_JARS = frozenset({"arcadedb-python-bridge.jar"})
 
+# The engine's build writes these three lines into the engine jar (and the
+# shaded HA jar): which commit was checked out, when, and on which branch.
+# They are the only content a rebuild of the same source changed. The official
+# 26.9.1 jars and a CI build of the 26.9.1 release commit held the same 75,699
+# ArcadeDB classes byte for byte and differed only here (buildNumber
+# 9cea8e848f against b6a9262355, two timestamps, branch "main" against
+# "UNKNOWN") and in the zip timestamps.
+_BUILD_PROPERTIES = "com/arcadedb/arcadedb.properties"
+_BUILD_STAMP_KEYS = frozenset({"buildNumber", "timestamp", "branch"})
 
-def jar_fingerprint(per_jar: bool = False) -> dict:
+
+def _properties_key(line: bytes) -> Optional[str]:
+    """The key of one ``.properties`` line, or None for a blank or comment line."""
+    text = line.strip()
+    if not text or text[:1] in (b"#", b"!"):
+        return None
+    for i, ch in enumerate(text):
+        if ch in b"=: \t\f":
+            return text[:i].decode("latin-1")
+    return text.decode("latin-1")
+
+
+def _properties_value(data: bytes, key: str) -> Optional[str]:
+    for line in data.splitlines():
+        if _properties_key(line) == key:
+            text = line.strip()[len(key) :].lstrip()
+            if text[:1] in (b"=", b":"):
+                text = text[1:]
+            return text.strip().decode("latin-1")
+    return None
+
+
+def _jar_content_digest(path: str):
+    """Hash a jar by what it contains, not by its file bytes.
+
+    SHA-256 over every entry in name order: the name's UTF-8 length (4 bytes,
+    big-endian), the name, and the SHA-256 of the entry's content. Zip
+    metadata (timestamps, compression, entry order) is not content and is not
+    hashed. In ``com/arcadedb/arcadedb.properties`` the buildNumber,
+    timestamp, and branch lines are dropped before hashing, and nothing else
+    anywhere is.
+
+    Returns ``(digest, build_number)``: the 32-byte digest, and the jar's
+    ``buildNumber``, or None when it has no ``arcadedb.properties``.
+    """
+    import hashlib
+
+    h = hashlib.sha256()
+    build_number = None
+    with zipfile.ZipFile(path) as zf:
+        for info in sorted(zf.infolist(), key=lambda i: i.filename):
+            entry = hashlib.sha256()
+            if info.filename == _BUILD_PROPERTIES:
+                data = zf.read(info)
+                build_number = _properties_value(data, "buildNumber")
+                entry.update(
+                    b"".join(
+                        line
+                        for line in data.splitlines(keepends=True)
+                        if _properties_key(line) not in _BUILD_STAMP_KEYS
+                    )
+                )
+            else:
+                with zf.open(info) as fh:
+                    for chunk in iter(lambda: fh.read(1 << 20), b""):
+                        entry.update(chunk)
+            name = info.filename.encode("utf-8")
+            h.update(len(name).to_bytes(4, "big"))
+            h.update(name)
+            h.update(entry.digest())
+    return h.digest(), build_number
+
+
+def jar_fingerprint(per_jar: bool = False, jar_dir: Optional[str] = None) -> dict:
     """Identify the engine this install actually carries.
 
     ``__version__`` is a *package* version. It says nothing about which JARs
@@ -133,79 +206,105 @@ def jar_fingerprint(per_jar: bool = False) -> dict:
     the release cannot reproduce, which is how a fix gets credited to the wrong
     commit (see the false null on ArcadeDB #5388).
 
-    So: hash what is actually on disk. Two installs agree iff this agrees.
+    So: hash what is actually in the JARs. Two installs agree iff they carry
+    the same code.
 
         >>> import arcadedb_embedded as adb
-        >>> adb.jar_fingerprint()["sha256"][:12]
+        >>> adb.jar_fingerprint()["engine_sha256"][:12]
         'a3f1c0d8b214'
 
-    Benchmark harnesses should record ``sha256`` next to the engine version, so
-    a results row proves which engine produced it rather than asserting it.
+    Benchmark harnesses should record ``engine_sha256`` and ``build_number``
+    next to the engine version, so a results row proves which engine produced
+    it rather than asserting it.
 
-    Args:
-        per_jar: also return the sorted (name, size, sha256) of every JAR, for
-            diffing two installs that disagree.
+    **A content fingerprint, not a file hash** (since 2026-10-04). Each JAR is
+    hashed by its entries: every entry's name and content, in name order. Zip
+    timestamps are not hashed, and in ``com/arcadedb/arcadedb.properties``
+    neither are the three lines a build writes about itself (``buildNumber``,
+    ``timestamp``, and ``branch``). Every other byte is: a changed class, a
+    changed manifest, or a changed ``version`` line changes the fingerprint.
+    The reason is measured. CI builds the engine from this repository's source,
+    while releases ship upstream's official jars, and a CI build of the
+    official 26.9.1 release commit matched ``arcadedata/arcadedb:26.9.1`` in
+    every one of its 75,699 ArcadeDB classes while every ArcadeDB jar differed
+    as a file. A file hash called the same code two engines; this one does not.
+    ``build_number`` is reported beside the hash rather than in it: it says
+    which checkout built the engine JAR (the official 26.9.1 jars say
+    ``9cea8e848f...``, a build of the release commit ``b6a9262355...``), and
+    the fingerprint says what the JARs contain.
 
     Two hashes, because they answer different questions.
 
     ``sha256`` covers every JAR: "is this the same build?" ``engine_sha256``
-    excludes our own compiled shim: "is this the same ArcadeDB?"
+    excludes our own compiled shim: "is this the same ArcadeDB?" The bridge JAR
+    is compiled during the wheel build, and its manifest names the JDK that
+    compiled it, so two builds of the same engine can still differ there (the
+    PyPI 26.8.1 wheel and a local build of it differed in that JAR alone).
+    Use ``engine_sha256`` to ask whether two installs run the same ArcadeDB.
 
-    The distinction is measured, not defensive. Comparing the released 26.8.1
-    wheel from PyPI against a local build of the same version: identical file
-    size, identical JAR count, identical total JAR bytes, and a different
-    ``sha256``. Diffing found 63 of 64 JARs byte-identical, with the only
-    difference in ``arcadedb-python-bridge.jar`` at the *same* 10907 bytes.
-    That JAR is compiled during the build, so it carries timestamps and is not
-    reproducible; the 63 engine JARs come from the ArcadeDB image and are.
-
-    So a bare ``sha256`` comparison would report "different engine" for two
-    builds of the same engine, and anyone using it that way would stop
-    believing it. Use ``engine_sha256`` to ask whether two installs are running
-    the same ArcadeDB.
+    Args:
+        per_jar: also return one dict per JAR, sorted by name, for diffing two
+            installs that disagree.
+        jar_dir: fingerprint the JARs in this directory instead of the
+            installed ones (for example a ``lib`` directory copied out of an
+            image, or a source build). Not cached.
 
     Returns:
         ``{"count", "bytes", "sha256", "engine_sha256", "engine_count",
-        "jar_dir"}``, plus ``"jars"`` when ``per_jar`` is set. Each hash covers
-        the JAR names and contents it spans, so a renamed, added, removed or
-        modified JAR all change it.
+        "build_number", "jar_dir"}``, plus ``"jars"`` when ``per_jar`` is set:
+        ``{"name", "bytes", "sha256", "file_sha256", "engine",
+        "build_number"}`` per JAR, where ``sha256`` is the JAR's content digest
+        and ``file_sha256`` the digest of the file's bytes. ``sha256`` and
+        ``engine_sha256`` hash each JAR's name and content digest in name
+        order, so a renamed, added, removed, or modified JAR all change them.
+        ``bytes`` is the total size of the files on disk. ``build_number`` is
+        the ``buildNumber`` of the ``arcadedb-engine`` JAR, or None when there
+        is no engine JAR or it records none.
     """
     global _JAR_FINGERPRINT_CACHE
-    if _JAR_FINGERPRINT_CACHE is not None and not per_jar:
+    cacheable = jar_dir is None
+    if cacheable and _JAR_FINGERPRINT_CACHE is not None and not per_jar:
         return dict(_JAR_FINGERPRINT_CACHE)
 
     import hashlib
     import os
 
-    jar_dir = get_jar_path()
+    if jar_dir is None:
+        jar_dir = get_jar_path()
     names = sorted(n for n in os.listdir(jar_dir) if n.endswith(".jar"))
     combined = hashlib.sha256()
     engine = hashlib.sha256()
     total = 0
     engine_count = 0
+    engine_build_number = None
     entries = []
     for name in names:
         path = os.path.join(jar_dir, name)
-        h = hashlib.sha256()
-        with open(path, "rb") as fh:
-            for chunk in iter(lambda: fh.read(1 << 20), b""):
-                h.update(chunk)
+        digest, build_number = _jar_content_digest(path)
+        if name.startswith("arcadedb-engine-"):
+            engine_build_number = build_number
         size = os.path.getsize(path)
         total += size
         # Name AND digest, so swapping two JARs' contents is not a collision.
         combined.update(name.encode())
-        combined.update(h.digest())
+        combined.update(digest)
         if name not in _OUR_JARS:
             engine.update(name.encode())
-            engine.update(h.digest())
+            engine.update(digest)
             engine_count += 1
         if per_jar:
+            fh_hash = hashlib.sha256()
+            with open(path, "rb") as fh:
+                for chunk in iter(lambda: fh.read(1 << 20), b""):
+                    fh_hash.update(chunk)
             entries.append(
                 {
                     "name": name,
                     "bytes": size,
-                    "sha256": h.hexdigest(),
+                    "sha256": digest.hex(),
+                    "file_sha256": fh_hash.hexdigest(),
                     "engine": name not in _OUR_JARS,
+                    "build_number": build_number,
                 }
             )
 
@@ -215,9 +314,11 @@ def jar_fingerprint(per_jar: bool = False) -> dict:
         "sha256": combined.hexdigest(),
         "engine_sha256": engine.hexdigest(),
         "engine_count": engine_count,
+        "build_number": engine_build_number,
         "jar_dir": jar_dir,
     }
-    _JAR_FINGERPRINT_CACHE = dict(out)
+    if cacheable:
+        _JAR_FINGERPRINT_CACHE = dict(out)
     if per_jar:
         out["jars"] = entries
     return out

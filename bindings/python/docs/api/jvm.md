@@ -74,22 +74,37 @@ Shuts down the JVM if it is running in the current process.
 import arcadedb_embedded as arcadedb
 
 fp = arcadedb.jar_fingerprint()
-print(fp["count"], fp["engine_sha256"][:12])
+print(fp["count"], fp["engine_sha256"][:12], fp["build_number"])
 ```
 
-Hashes the JAR files actually on disk, so a results row can record which engine
+Fingerprints the JARs this install carries, so a results row can record which engine
 produced it. `__version__` is the package version and can disagree with the JARs (for
 example, a wheel built from a locally patched Java tree).
+
+It is a **content** fingerprint: each JAR is hashed by its entries, every entry's name and
+content in name order. Zip timestamps are not hashed, and neither are the three lines the
+engine's build writes about itself into `com/arcadedb/arcadedb.properties` (`buildNumber`,
+`timestamp`, and `branch`); any other byte is. So the official JARs of a release and a
+build of the same source have the same fingerprint: for 26.9.1 the two held the same 75,699
+ArcadeDB classes and differed only in those lines and in zip timestamps. `build_number`
+reports the `buildNumber` line separately, and tells two such builds apart. Until
+2026-10-04 the hashes were taken over the JAR files, so values recorded before then are
+not comparable with these.
 
 **Parameters:**
 
 - `per_jar` (`bool`, default `False`): Also return a `jars` list with one dict per JAR:
-  `name`, `bytes`, `sha256`, and `engine` (`False` for the bindings' own bridge JAR)
+  `name`, `bytes`, `sha256` (the content digest), `file_sha256` (the digest of the file's
+  bytes), `engine` (`False` for the bindings' own bridge JAR), and `build_number` (`None`
+  for a JAR without `arcadedb.properties`)
+- `jar_dir` (`str`, default `None`): Fingerprint the JARs in this directory instead of the
+  installed ones, for example a `lib` directory copied out of an image or built from
+  source. Not cached.
 
-**Returns:** a dict with `count`, `bytes`, `sha256` (every JAR: "is this the same
-build?"), `engine_sha256` (every JAR except the bindings' own compiled bridge JAR: "is
-this the same ArcadeDB?"), `engine_count`, and `jar_dir`, plus `jars` when `per_jar` is
-set.
+**Returns:** a dict with `count`, `bytes` (total file size), `sha256` (every JAR: "is this
+the same build?"), `engine_sha256` (every JAR except the bindings' own compiled bridge JAR:
+"is this the same ArcadeDB?"), `engine_count`, `build_number` (the engine JAR's
+`buildNumber`, or `None`), and `jar_dir`, plus `jars` when `per_jar` is set.
 
 ## get_jar_path
 
