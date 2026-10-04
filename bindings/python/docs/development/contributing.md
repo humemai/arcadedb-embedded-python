@@ -259,8 +259,9 @@ A wheel built from a JAR directory carries only the JARs in that directory (less
 its wheel fails `test_server_packaging.py`.
 
 CI tests every push and pull request against the engine built from the commit's own
-source (cached, so a bindings-only change does not rebuild it), and a release ships
-upstream's official JARs after checking them against that source (see
+source (cached, so a bindings-only change does not rebuild it). A stable release ships
+upstream's official JARs after checking them against that source, and a dev release ships
+the source build itself (see
 [CI/CD Setup](ci-setup.md#where-the-engine-jars-come-from)). Locally, the image's JARs are
 the quick default for a change to the bindings; build with `--engine-from-source` to test
 an engine change or to match what CI runs. `ENGINE_BUILD_CPUSET` pins the Maven container

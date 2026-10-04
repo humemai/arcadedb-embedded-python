@@ -318,10 +318,12 @@ Gremlin). Postgres, Redis, and Bolt are bundled; see
 [Server Mode](guide/server.md#wire-protocols).
 To move data across, use [`export_database`](api/database.md) / SQL
 `IMPORT DATABASE`; the on-disk format and export archives are compatible.
-A released wheel takes its engine JARs from the `arcadedata/arcadedb` image of the
-same version: upstream's official JARs, less the optional ones the wheel leaves out, and
-checked by the release against a build of its own source. So the wheel and that server
-run the same engine.
+A stable release's wheel (`X.Y.Z` or `X.Y.Z.postN`) takes its engine JARs from the
+`arcadedata/arcadedb` image of the same version: upstream's official JARs, less the
+optional ones the wheel leaves out, and checked by the release against a build of its own
+source. So the wheel and that server run the same engine. A development release
+(`X.Y.Z.devN`) has no official image to match; its engine is built from this repository's
+source at the tagged commit.
 `arcadedb.jar_fingerprint()["build_number"]` names the commit the installed engine was
 built from.
 

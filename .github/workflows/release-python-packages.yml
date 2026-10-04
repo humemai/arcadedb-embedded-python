@@ -5,14 +5,24 @@ on:
     tags:
       - '[0-9]+.[0-9]+.[0-9]+*'  # Matches: 25.10.1, 25.10.1.dev0, 25.10.1.post1, etc.
 
-# WHICH ENGINE A RELEASE SHIPS. The wheels carry upstream's
-# official jars, the ones in /home/arcadedb/lib of arcadedata/arcadedb:<version>
-# (the artifacts Java users get), and both test workflows build and test the
-# wheels on exactly those jars (jar-source `image`). A build of this commit from
-# source exists in the release only as a gate (verify-engine-jars): publish
-# needs it to find the same classes in the image, so what CI tested on every
-# push, the engine built from this source, is the code that ships. The source
-# build never enters a wheel or a test.
+# WHICH ENGINE A RELEASE SHIPS depends on the kind of tag, which
+# validate-version decides from the validated version and names in its summary.
+#
+# STABLE (X.Y.Z, X.Y.Z.postN; pom.xml must read exactly X.Y.Z): the wheels carry
+# upstream's official jars, the ones in /home/arcadedb/lib of
+# arcadedata/arcadedb:X.Y.Z (the artifacts Java users get), and both test
+# workflows build and test the wheels on exactly those jars (jar-source
+# `image`). A build of this commit from source exists in the release only as a
+# gate (verify-engine-jars): publish needs it to find the same classes in the
+# image, so what CI tested on every push, the engine built from this source, is
+# the code that ships. The source build never enters a wheel or a test.
+#
+# DEV (X.Y.Z.devN, from main while pom.xml reads X.Y.Z-SNAPSHOT): no official
+# image exists for an unreleased version, only upstream's moving snapshot, which
+# can be newer or older than this commit. So a dev release builds, tests, and
+# ships the jars built from this commit's source (jar-source `source`, the same
+# jars every push is tested on), and the gate is skipped: there is nothing
+# official to compare with.
 
 jobs:
   # Validate version compatibility between tag and pom.xml
@@ -22,6 +32,8 @@ jobs:
     outputs:
       python-version: ${{ steps.validate.outputs.python-version }}
       base-version: ${{ steps.validate.outputs.base-version }}
+      release-kind: ${{ steps.validate.outputs.release-kind }}
+      jar-source: ${{ steps.validate.outputs.jar-source }}
       image-tag: ${{ steps.validate.outputs.image-tag }}
     steps:
       - name: Checkout code
@@ -68,50 +80,92 @@ jobs:
           echo "   Base version: $TAG_BASE"
           echo "   Full tag version: $TAG_VERSION"
 
-          # Output for later jobs. The engine image is the pom.xml version as
-          # it stands: X.Y.Z for a stable or a .postN tag (upstream's release
-          # image), X.Y.Z-SNAPSHOT for a .devN tag (upstream's moving snapshot,
-          # which the gate below fails unless it holds this commit's classes).
+          # DEV OR STABLE, from the validated version. A .devN tag ships the
+          # jars built from this commit's source and skips the official-jar
+          # gate. Every other tag is stable: it ships the official image of
+          # its version, so pom.xml must read exactly that version (the image
+          # tag), not a -SNAPSHOT for which no official image exists.
+          if [[ "$TAG_VERSION" =~ \.dev[0-9]+$ ]]; then
+            RELEASE_KIND=dev
+            JAR_SOURCE=source
+            IMAGE_TAG=""
+            ENGINE="the jars built from this commit's source ($GITHUB_SHA); the official-jar gate is skipped, since no official image exists for an unreleased version"
+          else
+            if [ "$POM_VERSION" != "$TAG_BASE" ]; then
+              echo "❌ $TAG_VERSION is a stable tag, but pom.xml reads $POM_VERSION, not $TAG_BASE."
+              echo "   A stable release ships the official arcadedata/arcadedb:$TAG_BASE jars, so it must be"
+              echo "   cut from a sync that stops at upstream's \"Set release version to $TAG_BASE\" commit."
+              echo "   A pre-release from a -SNAPSHOT pom.xml is a .devN tag."
+              exit 1
+            fi
+            RELEASE_KIND=stable
+            JAR_SOURCE=image
+            IMAGE_TAG="$POM_VERSION"
+            ENGINE="upstream's official jars from arcadedata/arcadedb:$IMAGE_TAG, published only if they match a build of this commit's source (verify-engine-jars)"
+          fi
+          echo "📌 Release kind: $RELEASE_KIND; engine jars: $ENGINE"
+
           {
             echo "python-version=$TAG_VERSION"
             echo "base-version=$TAG_BASE"
-            echo "image-tag=$POM_VERSION"
+            echo "release-kind=$RELEASE_KIND"
+            echo "jar-source=$JAR_SOURCE"
+            echo "image-tag=$IMAGE_TAG"
           } >> "$GITHUB_OUTPUT"
+          {
+            echo "## Release $TAG_VERSION"
+            echo ""
+            echo "- Release kind: **$RELEASE_KIND** (pom.xml reads \`$POM_VERSION\`)"
+            echo "- Engine jars built, tested, and shipped: $ENGINE"
+          } >> "$GITHUB_STEP_SUMMARY"
 
-  # The gate: the official jars must hold the classes of this commit's engine
-  # source, the engine every push and pull request was tested on.
+  # The gate, stable tags only: the official jars must hold the classes of this
+  # commit's engine source, the engine every push and pull request was tested
+  # on. A dev tag ships that source build itself and has no official image.
   verify-engine-jars:
     name: Official jars match this commit's source
     needs: validate-version
+    if: needs.validate-version.outputs.release-kind == 'stable'
     uses: ./.github/workflows/verify-engine-jars.yml
     with:
       image-tag: ${{ needs.validate-version.outputs.image-tag }}
 
-  # Run example tests before building (workflow_call), on the official jars
+  # Run example tests before building (workflow_call), on the jars the release
+  # ships: the official image for a stable tag, this commit's source for a dev tag
   test-examples:
     name: Run Example Tests
     needs: validate-version
     uses: ./.github/workflows/test-python-examples.yml
     with:
       build-version: ${{ needs.validate-version.outputs.python-version }}
-      jar-source: image
+      jar-source: ${{ needs.validate-version.outputs.jar-source }}
       image-tag: ${{ needs.validate-version.outputs.image-tag }}
     secrets: inherit
 
-  # Run unit tests before building, on the official jars; these wheels publish
+  # Run unit tests before building, on the jars the release ships; these wheels publish
   test:
     name: Run Unit Tests
     needs: validate-version
     uses: ./.github/workflows/test-python-bindings.yml
     with:
       build-version: ${{ needs.validate-version.outputs.python-version }}
-      jar-source: image
+      jar-source: ${{ needs.validate-version.outputs.jar-source }}
       image-tag: ${{ needs.validate-version.outputs.image-tag }}
     secrets: inherit
 
   publish:
     name: Publish arcadedb-embedded to PyPI (4 platforms)
     needs: [validate-version, verify-engine-jars, test, test-examples]
+    # The gate is skipped for a dev tag, and a skipped need would skip this job,
+    # so the condition is spelled out: a stable tag needs the gate to pass, a
+    # dev tag needs it skipped, and both need the tests to pass.
+    if: >-
+      ${{ !cancelled()
+      && needs.validate-version.result == 'success'
+      && needs.test.result == 'success'
+      && needs.test-examples.result == 'success'
+      && ((needs.validate-version.outputs.release-kind == 'stable' && needs.verify-engine-jars.result == 'success')
+      || (needs.validate-version.outputs.release-kind == 'dev' && needs.verify-engine-jars.result == 'skipped')) }}
     runs-on: ubuntu-latest
     continue-on-error: true  # Don't block GitHub Release if PyPI upload fails (size limit)
     environment: pypi
@@ -126,6 +180,10 @@ jobs:
           merge-multiple: true
 
       - name: Verify wheels
+        env:
+          RELEASE_KIND: ${{ needs.validate-version.outputs.release-kind }}
+          JAR_SOURCE: ${{ needs.validate-version.outputs.jar-source }}
+          IMAGE_TAG: ${{ needs.validate-version.outputs.image-tag }}
         run: |
           ls -lh dist/
           echo "📦 Wheels for PyPI (current platforms):"
@@ -149,11 +207,19 @@ jobs:
           sha256sum dist/*.whl
 
           # Report wheel sizes with actual component breakdown
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## 📦 Built Wheels" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Platform | Wheel Size | JRE Size | JARs Size | Installed Size | SHA256 (first 8 chars) |" >> $GITHUB_STEP_SUMMARY
-          echo "|----------|------------|----------|-----------|----------------|------------------------|" >> $GITHUB_STEP_SUMMARY
+          {
+            echo ""
+            echo "## 📦 Built Wheels"
+            echo ""
+            if [ "$RELEASE_KIND" = "dev" ]; then
+              echo "Release kind **dev**: engine jars built from this commit's source (\`$GITHUB_SHA\`); official-jar gate skipped"
+            else
+              echo "Release kind **$RELEASE_KIND**: upstream's official engine jars from \`arcadedata/arcadedb:$IMAGE_TAG\` (jar-source $JAR_SOURCE), matched against a build of this commit"
+            fi
+            echo ""
+            echo "| Platform | Wheel Size | JRE Size | JARs Size | Installed Size | SHA256 (first 8 chars) |"
+            echo "|----------|------------|----------|-----------|----------------|------------------------|"
+          } >> "$GITHUB_STEP_SUMMARY"
 
           for WHEEL_FILE in dist/*.whl; do
             WHEEL_NAME=$(basename "$WHEEL_FILE")

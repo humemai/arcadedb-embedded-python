@@ -29,7 +29,7 @@ workflows choose it with the `jar-source` input:
 | `jar-source` | JARs | Used by |
 |--------------|------|---------|
 | `source` | the full distribution built from the tested commit's engine source by `build-engine-jars.yml`, cached by that source | every push, pull request, and dispatch, by default |
-| `image` | `/home/arcadedb/lib` of `arcadedata/arcadedb:<image-tag>` (default tag: the `pom.xml` version) | the release, which passes the official image of its version; a dispatch that wants to compare |
+| `image` | `/home/arcadedb/lib` of `arcadedata/arcadedb:<image-tag>` (default tag: the `pom.xml` version) | a stable release, which passes the official image of its version; a dispatch that wants to compare |
 
 So a run tests the bindings against the engine source they sit beside. Until October
 2026 every run copied the JARs out of upstream's moving `X.Y.Z-SNAPSHOT` image, which
@@ -40,7 +40,8 @@ fired because the image had moved past our last sync.
   offers `source` (default) or `image` with an optional `image-tag`.
 - When another workflow calls a test workflow (`workflow_call`), `jar-source` is
   required and has no default, so a caller that forgets to choose fails instead of
-  silently getting `source`. The release passes `image`.
+  silently getting `source`. The release passes `image` for a stable tag and `source`
+  for a dev tag.
 - Every platform builds with the chosen JARs. The `test` matrix downloads one artifact
   (`arcadedb-jars`, or `arcadedb-jars-examples` in the examples workflow) and passes it
   to `build.sh` as `JAR_LIB_DIR`; the Linux Docker build stages it into
@@ -50,9 +51,9 @@ fired because the image had moved past our last sync.
 - The job summary of each test job names the JAR source and the engine's
   `buildNumber`, the commit recorded in `com/arcadedb/arcadedb.properties`.
 
-A release builds and tests its wheels on upstream's official JARs (`image`), and checks
-them against a build of its own source first; see
-[`release-python-packages.yml`](#release-python-packagesyml).
+A stable release builds and tests its wheels on upstream's official JARs (`image`), and
+checks them against a build of its own source; a dev release ships the build of its own
+source. See [`release-python-packages.yml`](#release-python-packagesyml).
 
 ## Workflows
 
@@ -178,14 +179,22 @@ Runs on every push to `main` and every pull request:
 
 - **Trigger**: a pushed tag matching `[0-9]+.[0-9]+.[0-9]+*` (`X.Y.Z`, `X.Y.Z.devN`, `X.Y.Z.postN`)
 - **validate-version**: the tag's base version must equal the `pom.xml` base version, or the
-  release stops. It also names the engine image: the `pom.xml` version, so
-  `arcadedata/arcadedb:X.Y.Z` for a stable or `.postN` tag
-- **verify-engine-jars**: the gate above, on the tag's commit and that image
+  release stops. It then decides the kind of release from the validated version, and names
+  it in its job summary:
+    - **stable** (`X.Y.Z`, `X.Y.Z.postN`): `pom.xml` must read exactly `X.Y.Z`; the engine
+      JARs are the official `arcadedata/arcadedb:X.Y.Z` (`jar-source: image`)
+    - **dev** (`X.Y.Z.devN`): no official image exists, so the engine JARs are built from
+      the tagged commit's source (`jar-source: source`)
+- **verify-engine-jars**: the gate above, on the tag's commit and the official image; stable
+  tags only, skipped for a dev tag
 - **test** and **test-examples**: call the two test workflows above with the tag version and
-  `jar-source: image`, so the wheels they build, which are the wheels that publish, carry
-  upstream's official JARs and are tested on exactly those
-- **publish**: needs all four, collects all 20 wheels, checks the count and the versions, and publishes to `arcadedb-embedded` on PyPI through the `pypi` environment (trusted publishing)
-- The source build exists in a release only as the gate: it never enters a wheel or a test
+  that `jar-source`, so the wheels they build, which are the wheels that publish, carry
+  exactly the JARs they were tested on
+- **publish**: needs the tests to pass and, for a stable tag, the gate (a dev tag needs it
+  skipped); collects all 20 wheels, checks the count and the versions, names the kind of
+  release and its JARs in the summary, and publishes to `arcadedb-embedded` on PyPI through
+  the `pypi` environment (trusted publishing)
+- In a stable release the source build exists only as the gate: it never enters a wheel or a test
 - The publish job has `continue-on-error: true`, so a failed upload or a failed check in it still leaves the run green. Check PyPI for every wheel the release built.
 
 ### `deploy-python-docs.yml`
@@ -280,7 +289,8 @@ Measured on the 26.10.1.dev0 linux/amd64 wheel on 2026-09-29:
 **All platforms include:**
 
 - The same JAR set (includes server/Studio; the exclusions are in `scripts/jar_exclusions.txt`):
-  upstream's official JARs for a release, the JARs built from the tested commit in other CI runs
+  upstream's official JARs for a stable release, the JARs built from the tagged or tested
+  commit in a dev release and in other CI runs
 - A platform-specific JRE
 - Native runners (no QEMU emulation anywhere)
 

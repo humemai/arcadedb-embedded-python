@@ -25,7 +25,7 @@ This document describes the build architecture for creating platform-specific Py
 - ✅ Pinned runner versions
 - ✅ One engine per run: by default the JARs are built from the tested commit's engine
   source (cached by that source), so two runs of the same commit embed the same engine;
-  a release embeds upstream's official JARs instead (see
+  a stable release embeds upstream's official JARs instead (see
   [Where the engine JARs come from](#where-the-engine-jars-come-from))
 
 ## Architecture
@@ -58,12 +58,13 @@ Every platform of a run embeds the same JAR artifact; the Linux builds receive i
 |-------|-------------|
 | CI push, pull request, or dispatch (default, `jar-source: source`) | the full distribution built from the tested commit's engine source by `.github/workflows/build-engine-jars.yml`, cached by a hash of that source |
 | CI with `jar-source: image` | `/home/arcadedb/lib` of `arcadedata/arcadedb:<image-tag>` |
-| Release (`release-python-packages.yml`) | `/home/arcadedb/lib` of `arcadedata/arcadedb:<version>`, upstream's official JARs; built and tested on those, and published only after `verify-engine-jars.yml` finds the same classes in a build of the release commit |
+| Stable release `X.Y.Z` or `X.Y.Z.postN` (`release-python-packages.yml`) | `/home/arcadedb/lib` of `arcadedata/arcadedb:X.Y.Z`, upstream's official JARs; built and tested on those, and published only after `verify-engine-jars.yml` finds the same classes in a build of the release commit |
+| Dev release `X.Y.Z.devN` | the full distribution built from the tagged commit's source, as on a push; no gate, since no official image exists |
 | Local `build.sh` (default) | `arcadedata/arcadedb:<tag>`, where the tag is `ARCADEDB_IMAGE_TAG` or the `pom.xml` version |
 | Local `build.sh --engine-from-source` | the full distribution built from the checkout in a Maven container |
 | Local `build.sh <platform> <python> <dir>` | the JARs in `<dir>` |
 
-The source build and the official image of a release hold the same code: for 26.9.1 the
+The source build and the official image of a stable release hold the same code: for 26.9.1 the
 two matched in all 86 JAR names, all 69 third-party JARs byte for byte, and all 75,699
 ArcadeDB classes byte for byte, and differed only in the `buildNumber`, `timestamp`, and
 `branch` lines of `com/arcadedb/arcadedb.properties` (and in zip timestamps). That is why
