@@ -226,18 +226,36 @@ def test_async_executor_is_pending_true_while_queued(temp_db):
     # worker for a known interval, so the rows behind it are certainly still
     # queued when is_pending() is asked, and the assertion is about the API
     # rather than about who won.
-    async_exec.command("sql", "SELECT sleep(1500) AS held")  # 1.5 s on the worker
+    #
+    # The hold is SQL script's SLEEP statement. Until 2026-10-04 this was
+    # `SELECT sleep(1500)`, but ArcadeDB SQL has no sleep() function: the
+    # command failed on the worker with "Unknown function name 'sleep'", the
+    # async executor swallowed the error, nothing was held, and the test was the
+    # race it describes (it failed on CI's macOS Python 3.13 runner, run
+    # 37199978708). So the hold is now proven below, not assumed.
+    start = time.time()
+    async_exec.command("sqlscript", "SLEEP 1500")  # 1.5 s on the worker
     for i in range(50):
         async_exec.command("sql", "INSERT INTO Msg SET id = :id", id=i)
 
-    start = time.time()
+    asked = time.time()
     pending = async_exec.is_pending()
-    elapsed = time.time() - start
+    elapsed = time.time() - asked
 
     assert (
         elapsed < 1.0
     ), "is_pending() must answer immediately, not wait for the queue to drain"
     assert pending is True
+
+    # The hold really held: the queue cannot drain before the sleep ends.
+    async_exec.wait_completion()
+    drained = time.time() - start
+    assert (
+        drained >= 1.2
+    ), f"the queue drained in {drained:.2f}s; the 1.5 s hold did not hold"
+    assert db.query("sql", "SELECT count(*) AS n FROM Msg").to_json_list() == [
+        {"n": 50}
+    ]
 
     async_exec.wait_completion()
     assert async_exec.is_pending() is False
