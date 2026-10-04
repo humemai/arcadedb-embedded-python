@@ -34,9 +34,10 @@ uv run pytest
 - A Python with a working `build` module: the script takes the first of `python3.13`,
   `python3.12`, `python3.11`, `python3`, and `python` that has one, and the version argument
   does not choose it
-- Docker, to pull the JARs from the `arcadedata/arcadedb` image, unless
-  `src/arcadedb_embedded/jars/` already holds JARs. An existing JAR directory is reused
-  whatever its version, so delete it after a version change.
+- Docker, to pull the JARs from the `arcadedata/arcadedb` image (or, with
+  `--engine-from-source`, to build them), unless `src/arcadedb_embedded/jars/` already holds
+  JARs. An existing JAR directory is reused whatever its version, so delete it after a
+  version change; a JAR directory passed to `build.sh` replaces its contents.
 
 A native build rewrites the `version`, `name`, and `description` lines of the tracked
 `bindings/python/pyproject.toml` in place, and deletes every wheel in `dist/` before it builds.
@@ -186,11 +187,12 @@ arcadedb-embedded-python/bindings/python/
 │   ├── build.sh                   # Main build entrypoint
 │   ├── build-native.sh            # Native build script
 │   ├── build_and_install_locally.sh # Engine build + wheel from the headless assembly (no Studio, Bolt, Redis, or GraphQL)
+│   ├── compare_engine_jars.py     # Release gate: an image's lib against a source build's
 │   ├── ensure-build-tools.sh      # Build tools setup
 │   ├── extract_version.py         # Version extraction
 │   ├── fix_markdown.py            # Docs formatter
 │   ├── jar_exclusions.txt         # JAR optimization list
-│   ├── list_image_jars_by_size.sh # Image JAR inspection helper
+│   ├── list_image_jars_by_size.sh # JARs by size, from an image or a lib directory
 │   ├── profile-python/            # Result-consumption profiler
 │   ├── setup_jars.py              # JAR staging script
 │   ├── verify_wheel_platform_tag.py # Wheel platform tag verifier
@@ -213,10 +215,11 @@ arcadedb-embedded-python/bindings/python/
 **What the build does:**
 
 1. Reads the ArcadeDB version from the parent `pom.xml` (`scripts/extract_version.py`)
-2. Takes the JARs from the `arcadedata/arcadedb:<version>` image or, on Linux, from the
-   directory passed as the third argument, and removes those listed in
-   `scripts/jar_exclusions.txt`; a native build reuses `src/arcadedb_embedded/jars/` when it
-   already holds JARs
+2. Takes the JARs from, in order: the engine built from this checkout's source
+   (`--engine-from-source`), the directory passed as the third argument, or the
+   `arcadedata/arcadedb:<tag>` image (tag `ARCADEDB_IMAGE_TAG`, default the `pom.xml`
+   version), and removes those listed in `scripts/jar_exclusions.txt`; without the first
+   two, a native build reuses `src/arcadedb_embedded/jars/` when it already holds JARs
 3. Compiles the bridge JAR (`arcadedb-python-bridge.jar`) from `src/java/`
 4. Builds the bundled JRE with `jlink`
 5. Builds the wheel; on Linux, `scripts/verify_wheel_platform_tag.py` checks the manylinux tag
@@ -241,16 +244,27 @@ arcadedb-embedded-python/bindings/python/
 
 # No install step needed: build.sh refreshes the repo-root uv env automatically
 
-# Embed engine JARs you built yourself instead of the image's (third argument;
-# Linux builds only, a native build ignores it)
+# Build the engine from this checkout's source first (the full distribution, in a
+# Maven container), as CI does by default
+./scripts/build.sh --engine-from-source linux/amd64
+
+# Embed engine JARs you built yourself instead of the image's (third argument)
 ./scripts/build.sh linux/amd64 3.12 ../../package/target/arcadedb-<version>.dir/arcadedb-<version>/lib
 ```
 
 A wheel built from a JAR directory carries only the JARs in that directory (less those in
-`scripts/jar_exclusions.txt`). Use the full assembly's `lib` directory, as above. The
-headless assembly, which `scripts/build_and_install_locally.sh` stages, omits Studio, Bolt,
-Redis, and GraphQL, and its wheel fails `test_server_packaging.py`. To test a change to the
-bindings, build against the image's JARs; use a JAR directory to test an engine change.
+`scripts/jar_exclusions.txt`). Use the full assembly's `lib` directory, as above;
+`--engine-from-source` selects it for you. The headless assembly, which
+`scripts/build_and_install_locally.sh` stages, omits Studio, Bolt, Redis, and GraphQL, and
+its wheel fails `test_server_packaging.py`.
+
+CI tests every push and pull request against the engine built from the commit's own
+source (cached, so a bindings-only change does not rebuild it), and a release ships
+upstream's official JARs after checking them against that source (see
+[CI/CD Setup](ci-setup.md#where-the-engine-jars-come-from)). Locally, the image's JARs are
+the quick default for a change to the bindings; build with `--engine-from-source` to test
+an engine change or to match what CI runs. `ENGINE_BUILD_CPUSET` pins the Maven container
+(for example `ENGINE_BUILD_CPUSET=12-15`); there is no pin by default.
 
 ### Development Install
 

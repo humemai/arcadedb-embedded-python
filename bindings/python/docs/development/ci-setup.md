@@ -21,6 +21,39 @@ The CI/CD workflows build and release across **4 platforms** for a total of **20
 
 **20 wheels per release**: 1 package × 4 platforms × 5 Python versions = 20 wheels
 
+## Where the Engine JARs Come From
+
+Every wheel CI builds embeds one set of ArcadeDB engine JARs, and the two test
+workflows choose it with the `jar-source` input:
+
+| `jar-source` | JARs | Used by |
+|--------------|------|---------|
+| `source` | the full distribution built from the tested commit's engine source by `build-engine-jars.yml`, cached by that source | every push, pull request, and dispatch, by default |
+| `image` | `/home/arcadedb/lib` of `arcadedata/arcadedb:<image-tag>` (default tag: the `pom.xml` version) | the release, which passes the official image of its version; a dispatch that wants to compare |
+
+So a run tests the bindings against the engine source they sit beside. Until October
+2026 every run copied the JARs out of upstream's moving `X.Y.Z-SNAPSHOT` image, which
+could be newer or older than that source: on 2026-10-04 five strict `xfail` tripwires
+fired because the image had moved past our last sync.
+
+- Push and pull request runs carry no inputs and get `source`. A manual dispatch
+  offers `source` (default) or `image` with an optional `image-tag`.
+- When another workflow calls a test workflow (`workflow_call`), `jar-source` is
+  required and has no default, so a caller that forgets to choose fails instead of
+  silently getting `source`. The release passes `image`.
+- Every platform builds with the chosen JARs. The `test` matrix downloads one artifact
+  (`arcadedb-jars`, or `arcadedb-jars-examples` in the examples workflow) and passes it
+  to `build.sh` as `JAR_LIB_DIR`; the Linux Docker build stages it into
+  `local-jars/lib`, and the macOS and Windows builds read it from
+  `src/arcadedb_embedded/jars`. With `image`, `ARCADEDB_IMAGE_TAG` also points the
+  Docker build's base stage at the same image.
+- The job summary of each test job names the JAR source and the engine's
+  `buildNumber`, the commit recorded in `com/arcadedb/arcadedb.properties`.
+
+A release builds and tests its wheels on upstream's official JARs (`image`), and checks
+them against a build of its own source first; see
+[`release-python-packages.yml`](#release-python-packagesyml).
+
 ## Workflows
 
 ### `test-python-bindings.yml`
@@ -31,12 +64,18 @@ The CI/CD workflows build and release across **4 platforms** for a total of **20
     - ubuntu-24.04-arm (Linux ARM64)
     - macos-15 (macOS Apple Silicon)
     - windows-2025 (Windows x86_64)
-- **Jobs**: `bandit`, `dependency-floors`, `download-jars`, `test` (20 matrix jobs: 4 platforms × 5 Python versions), and `test-summary`
+- **Jobs**: `bandit`, `dependency-floors`, `jar-source` (validates the input and resolves
+  the image tag), `engine-jars` (calls `build-engine-jars.yml`, for `source`) or `image-jars`
+  (for `image`), `test` (20 matrix jobs: 4 platforms × 5 Python versions), and `test-summary`
+- **Inputs** (dispatch and `workflow_call`): `jar-source` and `image-tag` (see
+  [Where the Engine JARs Come From](#where-the-engine-jars-come-from)); `workflow_call`
+  also takes `build-version`
 - **Artifacts**:
     - `wheel-<os>-<arch>-py<version>` (for example `wheel-linux-amd64-py3.12`), kept 7 days; the
       release workflow collects these with the pattern `wheel-*-py*`
     - `wheel-<os>-<arch>-test`, a second copy of each platform's Python 3.12 wheel, kept 7 days
-    - `arcadedb-jars`, the unfiltered JAR set for the native builds, kept 1 day
+    - `arcadedb-jars`, the unfiltered JAR set every platform builds with, plus a
+      `BUILD-INFO.txt`; kept 7 days when built from source, 1 day when copied from an image
     - The `test-results-*` upload names `pytest-output.txt` and `.coverage`, which the pytest
       step does not write, so it uploads nothing
 - **Triggers**: pushes to `main` and pull requests that touch `bindings/python/**` or the workflow itself, manual dispatch, and `workflow_call` from the release workflow
@@ -46,7 +85,8 @@ The CI/CD workflows build and release across **4 platforms** for a total of **20
 Builds the wheel on the same 4 × 5 matrix and runs the example scripts
 (`0[1-9]_*.py 1[0-9]_*.py 2[0-9]_*.py` by default). Example 21 runs at reduced scale
 (`--base-cities 1200 ...`, 15-minute limit).
-Same path filter and triggers as the bindings workflow. A clean exit is not the whole
+Same path filter, triggers, and `jar-source` and `image-tag` inputs as the bindings
+workflow, with its own JAR artifact, `arcadedb-jars-examples`. A clean exit is not the whole
 check for example 10: its queries are run a second time on the pure-Python reference
 backend (`--db python_memory`), and `examples/scripts/compare_query_hashes.py` fails the
 job unless every query's row count and result hash agree (#12).
@@ -68,6 +108,65 @@ What else a run does:
 - **Artifacts:** `example-logs-<os>-<arch>-py<version>` (kept 7 days), and, when the job
   fails, `example-databases-<os>-<arch>-py<version>` (kept 3 days).
 
+### `build-engine-jars.yml`
+
+The one implementation of "build the engine distribution from source". It checks out a
+repository at a commit, runs `./mvnw -B -q -DskipTests -pl package -am package` on JDK 21
+(Temurin), takes the full distribution's `lib` (not the base, headless, or minimal
+variant beside it, which lack the plugins), and uploads it with a `BUILD-INFO.txt`.
+
+- **Called by** the two test workflows (`jar-source: source`) and by
+  `verify-engine-jars.yml`. Dispatch it by hand to get any commit's JARs, for example an
+  upstream fix at its merge commit:
+  `gh workflow run build-engine-jars.yml -f repository=ArcadeData/arcadedb -f ref=<sha>`,
+  then `gh run download <run> -n arcadedb-lib`.
+- **Inputs**: `repository` and `ref` (empty in a call means this repository and the
+  calling commit), `artifact-name`, and `exclude-ha-raft-shaded` (leaves out the shaded HA
+  JAR, which bundles its own engine classes and shadows an engine swap).
+- **Cached by the engine source.** The key is a hash of `git ls-tree -r HEAD` over every
+  tracked path except the ones the Maven build cannot read: `bindings/`, `benchmarks/`,
+  `.github/`, `.claude/`, `docs/`, `examples/`, `k8s/`, `LICENSES/`, the non-Maven e2e
+  clients, top-level `*.md` and `*.cff`, and the top-level tooling files (this fork's
+  `pyproject.toml`, `uv.lock`, and sync scripts, and the git, lint, CI, and compose
+  configuration). Paths are excluded by name and never included by name, so a new module or
+  file stays in the key and the worst a stale list does is rebuild. A bindings-only change
+  restores the JARs in seconds; only an engine change (an upstream sync) runs Maven,
+  which takes 3 to 4 minutes on a GitHub runner. The key's prefix (`engine-lib-v1-temurin21-`)
+  changes when the build command or the JDK does.
+- **Outputs**: `build-number` (the engine JAR's `buildNumber`), `commit`, `cache-hit`, and
+  `source-key`. On a cache hit the JARs carry the `buildNumber` of the earlier commit that
+  first built them, which has the same engine source; `BUILD-INFO.txt` says so.
+- The cache is GitHub's per-branch cache: a pull request restores what its base branch
+  saved, and a run on `main` cannot read what a pull request saved.
+
+### `verify-engine-jars.yml`
+
+The release gate. It builds a commit with `build-engine-jars.yml` (the shaded HA JAR kept,
+as in the image), copies `/home/arcadedb/lib` out of `arcadedata/arcadedb:<image-tag>`, and
+runs `bindings/python/scripts/compare_engine_jars.py` on the two. It passes only when they
+hold the same code:
+
+- the same JAR names;
+- every third-party JAR byte-identical as a file;
+- every ArcadeDB JAR holding the same entries, each byte-identical, except
+  `com/arcadedb/arcadedb.properties`, where only the `buildNumber`, `timestamp`, and
+  `branch` lines may differ.
+
+Zip timestamps are not compared, since a rebuild always changes them. Evidence that the
+check holds for a real release: a CI build of the official 26.9.1 release commit
+(`b6a92623554b`) against `arcadedata/arcadedb:26.9.1` matched in all 86 JAR names, all 69
+third-party JARs byte for byte, and all 75,699 ArcadeDB classes byte for byte; only
+`arcadedb.properties` differed, in exactly those three lines (the official JARs record
+`9cea8e848f`, the commit before the tag).
+
+Called by the release with `image-tag` set; dispatch it with `repository`, `ref`, and
+`image-tag` to check any image against any commit:
+
+```bash
+gh workflow run verify-engine-jars.yml -f repository=ArcadeData/arcadedb \
+  -f ref=b6a92623554bb332d7564de19fbd9fdbc2d1d45e -f image-tag=26.9.1
+```
+
 ### `lint-workflows.yml`
 
 Runs on every push to `main` and every pull request:
@@ -78,9 +177,15 @@ Runs on every push to `main` and every pull request:
 ### `release-python-packages.yml`
 
 - **Trigger**: a pushed tag matching `[0-9]+.[0-9]+.[0-9]+*` (`X.Y.Z`, `X.Y.Z.devN`, `X.Y.Z.postN`)
-- **validate-version**: the tag's base version must equal the `pom.xml` base version, or the release stops
-- **test** and **test-examples**: call the two test workflows above with the tag version
-- **publish**: needs all three, collects all 20 wheels, checks the count and the versions, and publishes to `arcadedb-embedded` on PyPI through the `pypi` environment (trusted publishing)
+- **validate-version**: the tag's base version must equal the `pom.xml` base version, or the
+  release stops. It also names the engine image: the `pom.xml` version, so
+  `arcadedata/arcadedb:X.Y.Z` for a stable or `.postN` tag
+- **verify-engine-jars**: the gate above, on the tag's commit and that image
+- **test** and **test-examples**: call the two test workflows above with the tag version and
+  `jar-source: image`, so the wheels they build, which are the wheels that publish, carry
+  upstream's official JARs and are tested on exactly those
+- **publish**: needs all four, collects all 20 wheels, checks the count and the versions, and publishes to `arcadedb-embedded` on PyPI through the `pypi` environment (trusted publishing)
+- The source build exists in a release only as the gate: it never enters a wheel or a test
 - The publish job has `continue-on-error: true`, so a failed upload or a failed check in it still leaves the run green. Check PyPI for every wheel the release built.
 
 ### `deploy-python-docs.yml`
@@ -120,6 +225,8 @@ What must pass before a change is green, beyond the tests themselves:
   pipe (issue #10; the Java dump showed the main thread in `FileOutputStream.writeBytes`).
   The Windows job passes `--capture=sys`, so Java's log lines appear in that job's log.
 - **SHA-pinned actions and pre-commit** (`lint-workflows.yml`, above).
+- **Workflow lint**: run `uvx --from actionlint-py actionlint -no-color` on every workflow
+  you change; it is not a CI job.
 
 Run the same checks locally before pushing (from the repository root):
 
@@ -172,7 +279,8 @@ Measured on the 26.10.1.dev0 linux/amd64 wheel on 2026-09-29:
 
 **All platforms include:**
 
-- The same JAR set (includes server/Studio; the exclusions are in `scripts/jar_exclusions.txt`)
+- The same JAR set (includes server/Studio; the exclusions are in `scripts/jar_exclusions.txt`):
+  upstream's official JARs for a release, the JARs built from the tested commit in other CI runs
 - A platform-specific JRE
 - Native runners (no QEMU emulation anywhere)
 
@@ -197,6 +305,9 @@ cd bindings/python
 # Build for specific platform (requires Docker for Linux builds)
 ./scripts/build.sh linux/amd64
 ./scripts/build.sh darwin/arm64   # only on an Apple Silicon Mac
+
+# With the engine built from this checkout's source, as CI does by default
+./scripts/build.sh --engine-from-source linux/amd64
 
 # Check the wheels
 ls -lh dist/

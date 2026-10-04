@@ -20,6 +20,31 @@ next sync.
   sets `pom.xml` to `X.Y.Z`. A stable bindings release is built from a sync that stops
   at that commit.
 
+## Which Engine a Release Ships
+
+A release ships **upstream's official JARs**, the ones in `/home/arcadedb/lib` of
+`arcadedata/arcadedb:<version>`: the artifacts Java users of that release get. Every other
+CI run tests the engine built from this repository's source (see
+[CI/CD Setup](ci-setup.md#where-the-engine-jars-come-from)); the release connects the two:
+
+1. Both test workflows run with `jar-source: image` and the release's image, so the 20
+   wheels that publish are built and tested on exactly the official JARs.
+2. A gate, `verify-engine-jars.yml`, builds the release commit from source and compares it
+   with the image: the same JAR names, every third-party JAR byte-identical, and every
+   ArcadeDB JAR's entries byte-identical except the `buildNumber`, `timestamp`, and `branch`
+   lines of `com/arcadedb/arcadedb.properties`. Publishing needs the gate to pass, so what
+   CI tested on every push is the code that ships. The source build never enters a wheel
+   or a test.
+
+Shipping our own build of the same code was rejected: same classes, different bytes and
+build stamps, and not upstream's artifact.
+
+The gate holds for a real release. A CI build of the official 26.9.1 release commit
+(`b6a92623554b`) matched `arcadedata/arcadedb:26.9.1` in all 86 JAR names, all 69
+third-party JARs byte for byte, and all 75,699 ArcadeDB classes byte for byte; only
+`arcadedb.properties` differed, in exactly those three lines (the official JARs record
+`9cea8e848f`, the commit before the tag, as `buildNumber`).
+
 !!! warning "Upstream uses the same version numbers"
     ArcadeDB's release tags carry the same numbers as ours (`26.9.1` is both their
     engine release and our wheel release). Always fetch `upstream` with `--no-tags`
@@ -50,12 +75,16 @@ fork-owned restore and the `.github` prune the script skips in that case. Afterw
 ```bash
 cd bindings/python
 
-# Build distribution
+# Build with the official JARs this release will ship (pom.xml now reads X.Y.Z)
 ./scripts/build.sh
 
 # Test distribution (build.sh refreshed the repo-root uv env with the new wheel)
 uv run pytest
 ```
+
+Upstream publishes `arcadedata/arcadedb:X.Y.Z` with the release, so this build already
+embeds the JARs the release will ship. To build what CI tests on a push, the engine built
+from this checkout, pass `--engine-from-source`.
 
 - [ ] Full test suite passes
 - [ ] Release notes prepared (for example in `notes.md`)
@@ -68,7 +97,10 @@ git push origin main
 ```
 
 Wait for "Test Python Bindings" and "Test Python Examples" to finish, and check that
-the examples actually ran rather than skipped.
+the examples actually ran rather than skipped. These push runs test the engine built from
+the synced source. To see the official JARs pass before tagging, dispatch both workflows
+with `jar-source=image` and `image-tag=X.Y.Z`, and run the gate on its own:
+`gh workflow run verify-engine-jars.yml -f ref=main -f image-tag=X.Y.Z`.
 
 ### 4. Tag, Check, and Release
 
@@ -97,7 +129,9 @@ gh release create X.Y.Z --verify-tag \
 
 - Check the Actions tab for "Build and Release Python Packages to PyPI" (`release-python-packages.yml`) and "Deploy MkDocs to GitHub Pages" (`deploy-python-docs.yml`).
 - The release workflow first checks that the tag's base version equals the `pom.xml`
-  base version, then runs both test workflows, then publishes the wheels.
+  base version, then runs the engine JAR gate and both test workflows (on the official
+  JARs of `arcadedata/arcadedb:X.Y.Z`), then publishes the wheels. The gate's job summary
+  lists the JAR names, the third-party JARs, and the classes it compared.
 - The publish job has `continue-on-error: true`, so the run stays green even when the
   PyPI upload fails. Check PyPI for every wheel the release built.
 - Every tag push deploys its docs as `latest`, dev tags included. To publish docs
@@ -127,6 +161,13 @@ Return `main` to upstream's development line with a normal sync. It brings the n
 A dev tag is released from `main` while `pom.xml` reads `X.Y.Z-SNAPSHOT`: the release
 workflow compares only the base version (`X.Y.Z`). Tag and check it exactly as in
 step 4. A dev tag publishes to the real PyPI index and becomes the `latest` docs.
+
+There is no official image of an unreleased version, so a dev tag builds and tests on
+upstream's moving `arcadedata/arcadedb:X.Y.Z-SNAPSHOT` image, and the engine JAR gate
+compares that image with a build of the tagged commit. It passes only when the snapshot
+was built from the same engine source as the last sync, which is rare once upstream has
+moved on. Check before tagging with
+`gh workflow run verify-engine-jars.yml -f ref=main -f image-tag=X.Y.Z-SNAPSHOT`.
 
 ## Python Versioning Strategy
 
@@ -346,7 +387,22 @@ uv run --project .. --group docs mike alias --update-aliases \
 
 - Check Docker daemon is running
 - Verify scripts/Dockerfile.build syntax
-- Check that the `arcadedata/arcadedb:<version>` image exists for the `pom.xml` version: the Linux build copies its JARs from it
+- Check that the `arcadedata/arcadedb:<version>` image exists for the `pom.xml` version: a
+  release copies its JARs from it, and the Linux build's base stage pulls it
+
+### Engine JAR gate fails
+
+The `verify-engine-jars` job lists what differs between the image and the build of the
+release commit, and the release does not publish:
+
+- **JAR names differ**: the release commit is not the source of the image (check that the
+  sync stopped at upstream's "Set release version to X.Y.Z" commit), or a dependency
+  version moved.
+- **A class or other entry differs**: the image holds different code from the release
+  commit. Do not publish: find which commit the image was built from (the `buildNumber` in
+  the summary) and what changed between them.
+- **A dev tag fails**: expected when upstream's snapshot image has moved past the last
+  sync; see [Development Releases](#development-releases-xyzdevn).
 
 **Test failures:**
 

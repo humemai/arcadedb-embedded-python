@@ -318,6 +318,12 @@ Gremlin). Postgres, Redis, and Bolt are bundled; see
 [Server Mode](guide/server.md#wire-protocols).
 To move data across, use [`export_database`](api/database.md) / SQL
 `IMPORT DATABASE`; the on-disk format and export archives are compatible.
+A released wheel takes its engine JARs from the `arcadedata/arcadedb` image of the
+same version: upstream's official JARs, less the optional ones the wheel leaves out, and
+checked by the release against a build of its own source. So the wheel and that server
+run the same engine.
+`arcadedb.jar_fingerprint()["build_number"]` names the commit the installed engine was
+built from.
 
 ## Common Misconceptions
 

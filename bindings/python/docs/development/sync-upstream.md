@@ -66,10 +66,17 @@ uv run pytest
 git push origin main
 ```
 
-The build takes its engine JARs from the `arcadedata/arcadedb:<version>` image, not
-from the Java sources you just synced. To test the synced engine code itself, build the
-engine JARs and pass their directory as `build.sh`'s third argument (`JAR_LIB_DIR`); see
+A local `build.sh` takes its engine JARs from the `arcadedata/arcadedb:<version>` image,
+not from the Java sources you just synced. To test the synced engine code itself, build
+with `./scripts/build.sh --engine-from-source linux/amd64`, which builds the full
+distribution from the checkout and embeds it; see
 [Build Architecture](build-architecture.md#local-build).
+
+CI does that by default: the bindings and examples workflows build the engine from the
+pushed commit's source (cached by that source, so only a sync that changes it rebuilds)
+and test the wheels on it. A sync that changes only Java does not trigger them, since
+they are path-filtered to the bindings; dispatch them by hand on the pushed commit
+(`gh workflow run "Test Python Bindings" --ref main`, and the same for the examples).
 
 This is step one of the contribution routine. The whole order, through to regenerating the pull-request branch, is in [Contributing Back to Upstream](upstream-pr.md).
 
@@ -84,7 +91,7 @@ be undone afterwards.
 
 The verification routine:
 
-1. `./sync-upstream.sh`, then `./scripts/build.sh linux/amd64` in `bindings/python`. If the fix has not reached a published upstream image yet, pass the engine's JAR directory as `build.sh`'s third argument (`./scripts/build.sh linux/amd64 3.12 <jar dir>`); otherwise the wheel does not contain it. An environment variable named `JAR_LIB_DIR` is ignored.
+1. `./sync-upstream.sh`, then `./scripts/build.sh --engine-from-source linux/amd64` in `bindings/python`, which builds the synced engine and embeds it. Without the flag the wheel embeds the published image's JARs, which contain the fix only once upstream has published an image with it. To embed JARs you built another way, pass their directory as `build.sh`'s third argument (`./scripts/build.sh linux/amd64 3.12 <jar dir>`); an environment variable named `JAR_LIB_DIR` is ignored.
 2. Re-run the issue's own reproduction against the new build. A Java reproduction compiles against an image's `lib/*` and needs no wheel at all, which makes it the cheaper check where one exists.
 3. Compare against the same reproduction on the build the issue was filed against. A fix is "verified" when the repro that reproduced stops reproducing, on the same host, not when the issue is closed.
    **Mind the JVM.** Upstream's published images run **Java 21**; the wheel bundles a **Java 25** JRE, and the embedded JVM adds `-XX:+UseCompactObjectHeaders` unless the JVM arguments already set it, a flag Java 21 will not even start with. Verify on the image's own Java when replying upstream (that is what the issue was filed on), and, for any fix that affects the bindings, run the same repro again with that build's jars on Java 25 and the same flag. A fix confirmed on a JVM we do not ship is not yet confirmed for us.

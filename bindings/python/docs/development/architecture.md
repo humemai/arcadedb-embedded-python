@@ -53,7 +53,7 @@ arcadedb_embedded/
 - Adds default flags unless the merged arguments already set them: `--add-modules=jdk.incubator.vector`, `-Djava.awt.headless=true`, `--enable-native-access=ALL-UNNAMED`, `-Dfile.encoding=UTF8`, `--add-opens` flags (for `java.util.concurrent.atomic`, `java.nio.channels.spi`, and `java.lang`), `-Dpolyglot.engine.WarnInterpreterOnly=false`, `-XX:+UseCompactObjectHeaders`, and `-Xmx4g` when no heap is given; the `jdk.xml` entity limits are lifted while `disable_xml_limits` is true, and `-XX:ErrorFile` defaults to `./log/hs_err_pid%p.log`
 - Starts once per process: a later `start_jvm()` with no settings, or the same ones, joins the running JVM; different settings raise `ArcadeDBError`
 - From a source checkout (no `jars/` or `jre/` next to the package), extracts them from the newest wheel in `dist/` into `bindings/python/.runtime-cache/`, stamped with that wheel and re-extracted when the wheel changes
-- `jar_fingerprint()` hashes the JARs on disk (`sha256` over all of them, `engine_sha256` without the bridge JAR), so two installs can be compared by engine rather than by version string
+- `jar_fingerprint()` hashes what the JARs contain, each JAR's entries by name and content (`sha256` over all of them, `engine_sha256` without the bridge JAR), leaving out only zip timestamps and the `buildNumber`, `timestamp`, and `branch` lines of `com/arcadedb/arcadedb.properties`, and reports `buildNumber` as `build_number`. So two installs can be compared by engine rather than by version string, and a release's official JARs and a build of the same source compare equal
 - `shutdown_jvm()` closes open databases and shuts the JVM down
 - Registers an `atexit` hook that closes any database still open when the interpreter exits
 - On Windows, disables Python's `faulthandler` right after the JVM starts, because the JVM's handled access violations would otherwise print as fatal exceptions
@@ -640,11 +640,14 @@ stages produced into the package:
   from `/build/jre`
 - `main()` runs the two copies and exits non-zero if either fails
 
-The JARs themselves come from the `arcadedata/arcadedb` image, unless
-`build.sh` is given a local JAR directory (its third argument, `JAR_LIB_DIR`), and
-`jar_exclusions.txt` is applied before this script runs. Native builds
-(`scripts/build-native.sh`) do the same staging themselves and do not call it.
-See [Build Architecture](build-architecture.md).
+The JARs themselves reach the build from one of three places: the engine built from
+the checkout's source (`build.sh --engine-from-source`, and every CI run by default), a
+JAR directory (`build.sh`'s third argument, `JAR_LIB_DIR`, which is how CI hands its
+artifact over), or the `arcadedata/arcadedb` image (a local `build.sh` without either,
+and the official image of the version for a release). `jar_exclusions.txt` is applied
+before this script runs. Native builds (`scripts/build-native.sh`) do the same staging
+themselves and do not call it. See
+[Build Architecture](build-architecture.md#where-the-engine-jars-come-from).
 
 ## See Also
 

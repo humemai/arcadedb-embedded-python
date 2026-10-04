@@ -22,7 +22,11 @@ This document describes the build architecture for creating platform-specific Py
 - ✅ Full bindings suite passes on every platform build
 - ✅ About 33 MB of JARs (measured on the linux/amd64 wheel; the same JAR set on every platform; includes server/Studio)
 - ✅ All native runners (no QEMU emulation)
-- ✅ Pinned runner versions (the Docker build still pulls the moving `X.Y.Z-SNAPSHOT` image tag, so two builds of the same commit can differ)
+- ✅ Pinned runner versions
+- ✅ One engine per run: by default the JARs are built from the tested commit's engine
+  source (cached by that source), so two runs of the same commit embed the same engine;
+  a release embeds upstream's official JARs instead (see
+  [Where the engine JARs come from](#where-the-engine-jars-come-from))
 
 ## Architecture
 
@@ -38,12 +42,33 @@ We use a **hybrid build approach** to create platform-specific wheels:
 2. **macOS platform:** Native builds
     - Uses platform-specific GitHub Actions runner
     - Native `jlink` creates correct JRE for the platform
-    - JARs from the `download-jars` artifact, filtered by `scripts/build-native.sh`
+    - JARs from the run's JAR artifact, filtered by `scripts/build-native.sh`
 
 3. **Windows platform:** Native builds
     - Uses platform-specific GitHub Actions runner
     - Native `jlink` creates correct JRE for the platform
-    - JARs from the `download-jars` artifact, filtered by `scripts/build-native.sh`
+    - JARs from the run's JAR artifact, filtered by `scripts/build-native.sh`
+
+Every platform of a run embeds the same JAR artifact; the Linux builds receive it as
+`build.sh`'s `JAR_LIB_DIR`.
+
+### Where the engine JARs come from
+
+| Build | Engine JARs |
+|-------|-------------|
+| CI push, pull request, or dispatch (default, `jar-source: source`) | the full distribution built from the tested commit's engine source by `.github/workflows/build-engine-jars.yml`, cached by a hash of that source |
+| CI with `jar-source: image` | `/home/arcadedb/lib` of `arcadedata/arcadedb:<image-tag>` |
+| Release (`release-python-packages.yml`) | `/home/arcadedb/lib` of `arcadedata/arcadedb:<version>`, upstream's official JARs; built and tested on those, and published only after `verify-engine-jars.yml` finds the same classes in a build of the release commit |
+| Local `build.sh` (default) | `arcadedata/arcadedb:<tag>`, where the tag is `ARCADEDB_IMAGE_TAG` or the `pom.xml` version |
+| Local `build.sh --engine-from-source` | the full distribution built from the checkout in a Maven container |
+| Local `build.sh <platform> <python> <dir>` | the JARs in `<dir>` |
+
+The source build and the official image of a release hold the same code: for 26.9.1 the
+two matched in all 86 JAR names, all 69 third-party JARs byte for byte, and all 75,699
+ArcadeDB classes byte for byte, and differed only in the `buildNumber`, `timestamp`, and
+`branch` lines of `com/arcadedb/arcadedb.properties` (and in zip timestamps). That is why
+`jar_fingerprint()` hashes JAR contents rather than files: both give the same
+`engine_sha256`, and `build_number` tells them apart.
 
 **Critical:** All wheels are **platform-specific** (not `py3-none-any`). This is achieved by:
 
@@ -105,16 +130,25 @@ See `bindings/python/setup.py` for the complete implementation.
 
 ### Jobs
 
-`test-python-bindings.yml` runs these jobs. `download-jars` and `test` build the wheels:
+`test-python-bindings.yml` runs these jobs. `jar-source`, `engine-jars` or `image-jars`,
+and `test` build the wheels:
 
 ```yaml
 jobs:
-  download-jars:
-    runs-on: ubuntu-latest
-    # Copies the ArcadeDB JARs out of the upstream image, uploads artifact
+  jar-source:
+    # Validates the jar-source input (default: source) and resolves the image tag
+
+  engine-jars:
+    if: needs.jar-source.outputs.source == 'source'
+    uses: ./.github/workflows/build-engine-jars.yml
+    # Builds the engine from this commit (or restores it from the cache), uploads artifact
+
+  image-jars:
+    if: needs.jar-source.outputs.source == 'image'
+    # Copies the ArcadeDB JARs out of arcadedata/arcadedb:<image-tag>, uploads artifact
 
   test:
-    needs: download-jars
+    needs: [jar-source, engine-jars, image-jars]
     strategy:
       matrix:
         platform: [linux/amd64, linux/arm64, darwin/arm64, windows/amd64]
@@ -125,14 +159,19 @@ jobs:
 The others are `bandit` (security scan), `dependency-floors` (audit of the declared
 dependency floors), and `test-summary`. See [CI/CD Setup](ci-setup.md#ci-gates).
 
-### Job 1: download-jars (Ubuntu)
+### Job 1: engine-jars or image-jars (Ubuntu)
 
-**Purpose:** Give the native builds (macOS, Windows) the ArcadeDB JAR set without Docker.
+**Purpose:** Produce the one ArcadeDB JAR set every platform of the run embeds.
 
 **Steps:**
 
-1. Copy the ArcadeDB JAR set out of the upstream Docker image
-2. Upload it as an artifact for native builds
+1. `engine-jars` (`jar-source: source`): `build-engine-jars.yml` restores the JARs for this
+   commit's engine source from the cache, or builds the package module and everything it
+   needs (`./mvnw -B -q -DskipTests -pl package -am package`, JDK 21) and saves them
+2. `image-jars` (`jar-source: image`): copy `/home/arcadedb/lib` out of
+   `arcadedata/arcadedb:<image-tag>` with `docker create` and `docker cp`
+3. Upload the unfiltered set as the `arcadedb-jars` artifact, with a `BUILD-INFO.txt` that
+   names the commit or image and the engine's `buildNumber`
 
 The JARs are filtered later, by the build that packages them (see
 [JAR Exclusion System](#jar-exclusion-system)).
@@ -150,7 +189,9 @@ The JARs are filtered later, by the build that packages them (see
     - `python-builder`: Builds wheel with bundled JRE
     - `tester`: Installs the wheel in a clean image and runs a create, insert, and query
       smoke script (not pytest)
-3. Skip artifact download (Docker gets JARs directly)
+3. Download the JAR artifact and pass it to `build.sh` as `JAR_LIB_DIR`, which stages it
+   into `local-jars/lib` for the Docker build (with `jar-source: image`,
+   `ARCADEDB_IMAGE_TAG` also names the image of the base stage)
 4. `build.sh` runs the `tester` smoke stage; the full suite then runs on the runner host
    against the built wheel
 
@@ -311,7 +352,9 @@ When you run a native build by hand:
 
 - An existing, non-empty `src/arcadedb_embedded/jars` is reused whatever engine version it
   holds. Docker is needed only to fill it when it is empty; delete it to pick up another engine.
-  A JAR directory passed as `build.sh`'s third argument is not used by native builds.
+- A JAR directory passed as `build.sh`'s third argument, or built by `--engine-from-source`,
+  replaces the JARs in `src/arcadedb_embedded/jars` before `build-native.sh` runs. CI
+  downloads its artifact into that directory and passes the same path.
 - `JAVA_HOME` must be set: the script runs with `set -u` and reads `$JAVA_HOME/jmods`.
 - The Python version argument of `build.sh` is not used. The interpreter is the first match
   of the fallback list in step 0.
@@ -360,6 +403,7 @@ bindings/python/
 ├── scripts/extract_version.py  # Reads the version from pom.xml
 ├── scripts/write_version.py    # Writes src/arcadedb_embedded/_version.py
 ├── scripts/verify_wheel_platform_tag.py  # Checks the manylinux tag against the JRE's GLIBC
+├── scripts/compare_engine_jars.py  # Release gate: an image's lib against a source build's
 ├── setup.py                    # BinaryDistribution: forces a platform-specific wheel
 ├── pyproject.toml              # Package metadata, dependencies
 ├── local-jars/lib/             # JARs staged from build.sh's third argument (gitignored)
@@ -379,13 +423,15 @@ bindings/python/
 
 **Key sections:**
 
-1. **download-jars job**
-    - Copies the ArcadeDB JARs out of the upstream image
-    - Uploads artifact for native builds
+1. **jar-source, engine-jars, and image-jars jobs**
+    - Choose the engine JARs: built from this commit (default, cached by its engine
+      source) or copied out of `arcadedata/arcadedb:<image-tag>`
+    - Upload them as the artifact every platform builds with
 
 2. **test job matrix**
     - Builds 4 platforms × 5 Python versions
         - Platform-specific steps (native runners, artifact download, tests)
+    - Every platform embeds the artifact of step 1
 
 3. **Test parsing**
     - JUnit XML generation and parsing
@@ -416,20 +462,35 @@ cd bindings/python
 # Or pick the target platform and Python version
 ./scripts/build.sh linux/amd64 3.12
 
+# Or build the engine from this checkout's source first, as CI does by default
+./scripts/build.sh --engine-from-source linux/amd64
+
 # Or embed JARs you built yourself (third argument, JAR_LIB_DIR)
 ./scripts/build.sh linux/amd64 3.12 ../../package/target/arcadedb-<version>.dir/arcadedb-<version>/lib
+
+# Or embed another image's JARs, for example a release while pom.xml reads the next snapshot
+ARCADEDB_IMAGE_TAG=26.9.1 ./scripts/build.sh linux/amd64
 ```
 
 That directory is the full assembly's `lib`, the same JAR set the image ships.
 
-Without `JAR_LIB_DIR`, the Linux build copies its JARs from the
+Without `--engine-from-source` or `JAR_LIB_DIR`, the build copies its JARs from the
 `arcadedata/arcadedb:<tag>` image, so engine changes in your local checkout are **not**
-in the wheel. To test a local or freshly synced engine change, build the engine JARs
-first (the `build.sh` header shows a Docker `mvnw` command that needs no host Java)
-and pass their directory as the third argument. `build.sh` stages them into
-`local-jars/lib` and the Docker build uses them instead of the image's.
+in the wheel. To test a local or freshly synced engine change, pass `--engine-from-source`:
+`build.sh` runs `./mvnw -B -q -DskipTests -pl package -am clean package` in a
+`maven:3.9-eclipse-temurin-21` container (Docker, no host Java), takes the full
+distribution's `lib` for the `pom.xml` version, and feeds it through the `JAR_LIB_DIR`
+path. The container runs as your user, mounts `~/.m2` (`ENGINE_BUILD_M2`), and mounts the
+main repository's `.git` when you build in a worktree, so the engine records its commit as
+`buildNumber`. `ENGINE_BUILD_CPUSET` pins the container to a cpuset (no pin by default;
+`ENGINE_BUILD_CPUSET=12-15` keeps it on a laptop's low-power cores), and
+`ENGINE_BUILD_IMAGE` replaces the Maven image. The build summary prints the JAR source
+and the `buildNumber` of the engine JAR inside the wheel.
 
-`build.sh` reads the ArcadeDB tag from `pom.xml` and passes it on. If you call the lower-level
+`build.sh` stages a JAR directory into `local-jars/lib` for the Docker build, and into
+`src/arcadedb_embedded/jars` for a native build.
+
+`build.sh` reads the ArcadeDB tag from `pom.xml` (or `ARCADEDB_IMAGE_TAG`) and passes it on. If you call the lower-level
 scripts directly, `build-native.sh` needs `PLATFORM PACKAGE_NAME PACKAGE_DESCRIPTION ARCADEDB_TAG [BUILD_VERSION]`
 (the tag comes from `python3 scripts/extract_version.py --format=docker`), and `Dockerfile.build`
 needs `--build-arg ARCADEDB_TAG=<tag>`.

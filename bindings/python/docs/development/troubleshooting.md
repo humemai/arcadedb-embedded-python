@@ -61,7 +61,7 @@ uv lock --upgrade-package arcadedb-embedded && uv sync --reinstall-package arcad
 To see which engine is installed:
 
 ```bash
-uv run python -c "import arcadedb_embedded as a; print(a.__version__, a.jar_fingerprint()['engine_sha256'])"
+uv run python -c "import arcadedb_embedded as a; fp = a.jar_fingerprint(); print(a.__version__, fp['engine_sha256'], fp['build_number'])"
 ```
 
 ---
@@ -1101,8 +1101,8 @@ else:
     Include:
 
     - Python version (`python --version`)
-    - Package version and engine hash
-      (`python -c "import arcadedb_embedded as a; print(a.__version__, a.jar_fingerprint()['engine_sha256'])"`)
+    - Package version, engine hash, and engine build
+      (`python -c "import arcadedb_embedded as a; fp = a.jar_fingerprint(); print(a.__version__, fp['engine_sha256'], fp['build_number'])"`)
     - Minimal reproducible example
     - Full error message with stack trace
     - Operating system
