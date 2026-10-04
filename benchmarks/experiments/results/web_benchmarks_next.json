@@ -108,7 +108,8 @@
     "Peak memory is the largest amount an engine held in its own address space, added over every container a run used, and it leaves out the file cache the kernel keeps on the engine's behalf. That is the right number for engines that manage their own memory, and an undercount for engines that lean on the kernel instead, so compare it down one engine's rows rather than across engines that work differently.",
     "Each printed cell is the median of 5 repetitions, with min and max carried alongside; nothing here is a single sample.",
     "Defaults first. Where a default would make the comparison meaningless, it is equalized and the override is disclosed rather than hidden.",
-    "Comparators are pinned by sha256 image digest, not by a floating tag."
+    "Comparators are pinned by sha256 image digest, not by a floating tag.",
+    "The next measurement runs after this one is complete, on the next ArcadeDB release and with every other engine at its latest stable release. Both the cells marked `re-run` and the changes described in the notes under the tables are measured then."
   ],
   "provenance_note": "Some benchmarks record which machine they ran on and some record only the container, so that column is filled in where it was measured and left alone where it was not. Everything on this page ran on the same machine; this note reports what each result can actually show rather than what we know to be true of all of them.",
   "hosts_recorded": [
@@ -2511,7 +2512,7 @@
         "LadybugDB's row is marked `re-run`: it sized its thread count and buffer pool from the whole machine rather than from the cores and memory its cell was given, while every other engine here that sizes itself from the machine was fitted to its cell. It is being re-measured with both fitted.",
         "SurrealDB (server)'s write cells are marked `re-run`: the server ran at its default, a sync to disk at every commit, although it has a setting that does not wait, and every other engine on this table that has such a setting ran at it. Our harness missed that setting, and the next measurement runs its writes at it. Its read cells commit nothing and stay.",
         "In this measurement every person's age loaded as zero, through a date-parsing error in our data loader, so the 3-hop filtered read (age above 30) matched no one on any engine: its times are three hops plus a check on every end node. The next measurement parses the ages correctly.",
-        "There is no cold column on this table, and the reason is recorded on the rows themselves: no cold/warm split: each operation runs against an already-built, already-warm database by construction",
+        "Each read on this table is timed twice over the same start persons, and the table prints the first pass, so its read columns include each engine's warm-up. On ArcadeDB (embedded), ArcadeDB (server), and Neo4j, which run on a JVM, that warm-up includes the JVM compiling the query path. The next measurement gives every engine an untimed warm-up on other start persons first, prints the warm median, and adds the first query of a session as the cold column.",
         "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Each row records what it ran as `durability`, and the setting was read out of the engine rather than assumed on every engine except ArcadeDB (server) and SurrealDB (server). ArcadeDB (server) is given the setting when the server starts, and the row records it, because the server offers no way to read it back. The exceptions on this table are DuckPGQ and Neo4j, which have no setting to relax and wait for the disk at every commit; their write and transaction cells are paying for that. SurrealDB (server)'s rows record that no setting was found, and its server log shows what it ran: its default in both runs, a sync to disk at every commit (the log reads \"Sync mode: every transaction commit\" in every run), although it has a setting that does not wait; the next measurement runs both.",
         "Every engine traverses the same persons-and-KNOWS projection, with edges stored in both directions.",
         "ArcadeDB (embedded), ArcadeDB (server), and Neo4j run on a JVM, and for them this column is close to the heap they were given rather than the memory the work needed: Neo4j's 4.74 GiB here is about 119 per cent of its 4g heap. Every engine on a table gets the same memory envelope; how much of it a JVM takes is a property of the runtime, so read these cells against each other rather than against an engine that manages its own memory.",
@@ -10264,6 +10265,7 @@
         "The setting is a property of the cell, not a second measurement inside one: it lives on the database or on the server for most of these engines, so each pair of numbers is two runs.",
         "DuckDB, DuckPGQ, and Neo4j have no setting to relax: DuckDB was traced to a sync at every commit, and DuckPGQ runs on DuckDB; Neo4j forces its log at commit as it documents, and offers no setting that changes it. So each prints one number, in the column for a commit that waits. Reading it against the other column would be reading a choice the engine does not offer.",
         "SurrealDB (server) ran at its default in both runs, a sync to disk at every commit: the server log of every run reads \"Sync mode: every transaction commit\", and a trace counts one sync per commit. So the one number printed is in the waiting column. It has a setting that does not wait, which our harness missed, and the next measurement runs both.",
+        "In the runs that wait for the disk, ArcadeDB was set to sync its write-ahead log's data and metadata at every commit (`txWalFlush=2`, an fsync). The next measurement uses `txWalFlush=1` instead, a data-only sync (fdatasync) like SQLite's FULL setting, which ArcadeDB's documentation recommends for production and says recovers everything the full sync does.",
         "ArcadeDB (one transaction) shows almost no cost of waiting because of a defect in the engine build measured here, ArcadeDB issue #8129 (https://github.com/ArcadeData/arcadedb/issues/8129): after the vector index is built, later commits in the same session skip the write-ahead log, so there is nothing to wait for, and ArcadeDB 26.10.1 fixes it.",
         "SurrealDB (embedded) and SurrealDB (server) send the graph insert's person and its edge as two statements with no transaction around them, so each commits on its own: the run that waits for the disk waits twice for each insert, and the cost of waiting on that row counts both. The next measurement wraps the two in one transaction.",
         "ArangoDB, LadybugDB, Neo4j (vector index), and Qdrant + Neo4j (no shared transaction) have cells marked `re-run` here because the same writes are withheld on the tables they come from, and the note under each of those tables says why.",
@@ -17267,6 +17269,13 @@
         ]
       },
       {
+        "text": "In the runs that wait for the disk, ArcadeDB was set to sync its write-ahead log's data and metadata at every commit (`txWalFlush=2`, an fsync). The next measurement uses `txWalFlush=1` instead, a data-only sync (fdatasync) like SQLite's FULL setting, which ArcadeDB's documentation recommends for production and says recovers everything the full sync does.",
+        "values": [
+          "2",
+          "1"
+        ]
+      },
+      {
         "text": "ArcadeDB (one transaction) shows almost no cost of waiting because of a defect in the engine build measured here, ArcadeDB issue #8129 (https://github.com/ArcadeData/arcadedb/issues/8129): after the vector index is built, later commits in the same session skip the write-ahead log, so there is nothing to wait for, and ArcadeDB 26.10.1 fixes it.",
         "values": [
           "8129",
@@ -17343,6 +17352,14 @@
         ]
       },
       {
+        "text": "Each read on this table is timed twice over the same start persons, and the table prints the first pass, so its read columns include each engine's warm-up. On ArcadeDB (embedded), ArcadeDB (server), and Neo4j, which run on a JVM, that warm-up includes the JVM compiling the query path. The next measurement gives every engine an untimed warm-up on other start persons first, prints the warm median, and adds the first query of a session as the cold column.",
+        "values": [
+          "ArcadeDB (embedded)",
+          "ArcadeDB (server)",
+          "Neo4j"
+        ]
+      },
+      {
         "text": "There is no cold column on this table, and the reason is recorded on the rows themselves: no cold/warm split: each operation runs against an already-built, already-warm database by construction",
         "values": [
           "no cold/warm split: each operation runs against an already-built, already-warm database by construction"
@@ -17392,6 +17409,10 @@
         "values": [
           "5"
         ]
+      },
+      {
+        "text": "The next measurement runs after this one is complete, on the next ArcadeDB release and with every other engine at its latest stable release. Both the cells marked `re-run` and the changes described in the notes under the tables are measured then.",
+        "values": []
       },
       {
         "text": "ArcadeDB (embedded, fp32), ArcadeDB (embedded, int8), ArcadeDB (server, fp32), ArcadeDB (server, int8), and Elasticsearch run on a JVM, and for them this column is close to the heap they were given rather than the memory the work needed: Elasticsearch's 17.37 GiB here is about 109 per cent of its 16g heap. Every engine on a table gets the same memory envelope; how much of it a JVM takes is a property of the runtime, so read these cells against each other rather than against an engine that manages its own memory.",
