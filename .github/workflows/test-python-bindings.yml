@@ -169,7 +169,7 @@ jobs:
   # source they sit beside. Until 2026-10 every run pulled upstream's moving
   # X.Y.Z-SNAPSHOT image instead, which could be newer or older than that
   # source: five strict-xfail tripwires fired on 2026-10-04 because the image
-  # had moved past our sync.
+  # had moved ahead of the tested source.
   #
   # `image`: the jars of arcadedata/arcadedb:<image-tag>, copied out with
   # `docker cp`. The release uses it, so the wheels it publishes are built and
