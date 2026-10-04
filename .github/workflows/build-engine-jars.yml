@@ -1,15 +1,25 @@
 name: Build ArcadeDB engine jars
 
-# Builds the full ArcadeDB distribution (engine, server, every plugin, and their
+# The one implementation of "build the engine distribution from source". Builds
+# the full ArcadeDB distribution (engine, server, every plugin, and their
 # dependencies: the same jar set the arcadedata/arcadedb Docker image carries in
-# /home/arcadedb/lib) from source at any commit, and uploads the lib directory
-# as an artifact. Two uses:
+# /home/arcadedb/lib) at any commit, and uploads the lib directory as an
+# artifact with a BUILD-INFO.txt. Three uses:
+#   * the default jars of the bindings and examples workflows (jar-source
+#     `source`, the default for push, pull_request, and workflow_dispatch):
+#     every run tests the engine source of the commit it tests, not upstream's
+#     moving snapshot image, which can be newer or older than that source;
+#   * the release gate (verify-engine-jars.yml), which builds the release
+#     commit and compares it with the official image the release ships;
 #   * verifying an upstream fix at its merge commit without building on the
-#     laptop, whose cores are kept for timing work (repository ArcadeData/arcadedb,
-#     ref the merge SHA; download with `gh run download <run> -n arcadedb-lib`);
-#   * the bindings and examples workflows' `engine-from-source` option, which
-#     tests a branch (an upstream sync, for example) against the engine source on
-#     that branch instead of upstream's moving snapshot image.
+#     laptop (dispatch with repository ArcadeData/arcadedb and the merge SHA;
+#     download with `gh run download <run> -n arcadedb-lib`).
+#
+# CACHED BY THE ENGINE SOURCE. The built lib directory is cached under a hash
+# of the engine source tree of the commit being built, so a bindings-only
+# change restores the jars in seconds and only a change to the engine source
+# (an upstream sync) runs Maven. The cached jars carry the buildNumber of the
+# commit that first built them; BUILD-INFO.txt says so on a hit.
 
 on:
   workflow_dispatch:
@@ -41,7 +51,7 @@ on:
         default: ""
         type: string
       artifact-name:
-        description: "Name of the uploaded artifact"
+        description: "Name of the uploaded artifact (unique within the calling run)"
         required: false
         default: "arcadedb-lib"
         type: string
@@ -50,19 +60,38 @@ on:
         required: false
         default: false
         type: boolean
+    outputs:
+      build-number:
+        description: "buildNumber of the engine jar (com/arcadedb/arcadedb.properties): the commit that built it, which on a cache hit is an earlier commit with the same engine source"
+        value: ${{ jobs.build.outputs.build-number }}
+      commit:
+        description: "The commit this call was asked to build"
+        value: ${{ jobs.build.outputs.commit }}
+      cache-hit:
+        description: "true when the jars came from the cache rather than from Maven"
+        value: ${{ jobs.build.outputs.cache-hit }}
+      source-key:
+        description: "Cache key: a hash of the engine source tree"
+        value: ${{ jobs.build.outputs.source-key }}
 
 permissions:
   contents: read
 
-concurrency:
-  group: build-engine-jars-${{ inputs.repository }}-${{ inputs.ref || github.sha }}
-  cancel-in-progress: true
+# NO WORKFLOW-LEVEL CONCURRENCY GROUP. A called workflow's group is enforced
+# across runs, and the bindings and examples runs of one push both call this
+# workflow for the same commit: a shared group with cancel-in-progress made one
+# of them cancel the other.
 
 jobs:
   build:
     name: Build the distribution (${{ inputs.repository || github.repository }} @ ${{ inputs.ref || github.sha }})
     runs-on: ubuntu-24.04
     timeout-minutes: 75
+    outputs:
+      build-number: ${{ steps.stage.outputs.build-number }}
+      commit: ${{ steps.key.outputs.commit }}
+      cache-hit: ${{ steps.stage.outputs.cache-hit }}
+      source-key: ${{ steps.key.outputs.key }}
     steps:
       - name: Checkout the source to build
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -71,7 +100,49 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
 
+      # WHAT COUNTS AS ENGINE SOURCE. Every tracked path of the commit, less the
+      # ones the Maven build of the package module cannot read:
+      #   * directories outside the Maven reactor: bindings/ (the Python
+      #     bindings), benchmarks/, .github/, .claude/, docs/, examples/, k8s/,
+      #     LICENSES/, and the non-Maven e2e clients (e2e-csharp, e2e-go,
+      #     e2e-js, e2e-python, e2e-studio);
+      #   * top-level documentation (*.md, *.cff) and the top-level files that
+      #     are tooling, not build input: this fork's pyproject.toml, uv.lock,
+      #     .python-version, sync-upstream.sh, and make-upstream-pr-branch.sh,
+      #     and the git, lint, CI, and compose configuration.
+      # Excluded by name, never included by name: a path nobody listed (a new
+      # module, a new top-level file) stays in the key, so the worst a stale
+      # list does is rebuild. The package assembly copies README.md, LICENSE,
+      # NOTICE, and ATTRIBUTIONS.md into the distribution's root, not into lib/,
+      # and only lib/ is cached; LICENSE and NOTICE stay in the key anyway.
+      # Reactor modules that the package module does not depend on (e2e,
+      # e2e-ha, load-tests, gremlin-it, coverage) also stay in: they change
+      # only with an upstream sync, which rebuilds regardless.
+      # The key's prefix names the build itself: bump the version when the
+      # Maven command, the JDK, or the lib selection below changes.
+      - name: Key the cache on the engine source tree
+        id: key
+        shell: bash
+        run: |
+          set -euo pipefail
+          TREE_HASH=$(git ls-tree -r HEAD | awk -F'\t' '
+            $2 ~ /^(bindings|benchmarks|\.github|\.claude|docs|examples|k8s|LICENSES|e2e-(csharp|go|js|python|studio))\// { next }
+            $2 !~ /\// && $2 ~ /(\.md|\.cff)$/ { next }
+            $2 ~ /^(pyproject\.toml|uv\.lock|\.python-version|sync-upstream\.sh|make-upstream-pr-branch\.sh|\.gitignore|\.gitattributes|\.pre-commit-config\.yaml|\.prettierrc\.yml|\.codacy\.yml|REUSE\.toml|glama\.json|server\.json|docker-compose\.yml|Jenkinsfile)$/ { next }
+            { print }' | sha256sum | cut -d' ' -f1)
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "key=engine-lib-v1-temurin21-${TREE_HASH}" >> "$GITHUB_OUTPUT"
+          echo "engine source key: engine-lib-v1-temurin21-${TREE_HASH}"
+
+      - name: Restore the built distribution
+        id: cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/engine-lib-full
+          key: ${{ steps.key.outputs.key }}
+
       - name: Set up JDK 21
+        if: steps.cache.outputs.cache-hit != 'true'
         uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
@@ -79,36 +150,88 @@ jobs:
           cache: maven
 
       - name: Build the package module and everything it needs
+        if: steps.cache.outputs.cache-hit != 'true'
         shell: bash
-        env:
-          EXCLUDE_HA_RAFT_SHADED: ${{ inputs.exclude-ha-raft-shaded }}
         run: |
+          set -euo pipefail
           ./mvnw -B -q -DskipTests -pl package -am package
           # The FULL distribution. The base, headless, and minimal variants are
           # written beside it as arcadedb-<version>-<variant>.dir, and "-" sorts
           # before ".", so `ls | head -1` picked base, which has no plugins (no
           # Gremlin, Bolt, wire protocols, GraphQL, metrics, or tracing).
-          LIB=$(ls -d package/target/arcadedb-*.dir/arcadedb-*/lib | grep -vE -- '-(base|headless|minimal)\.dir/' || true)
+          LIB=$(find package/target -mindepth 3 -maxdepth 3 -type d -path 'package/target/arcadedb-*.dir/arcadedb-*/lib' | grep -vE -- '-(base|headless|minimal)\.dir/' || true)
           if [ "$(printf '%s\n' "$LIB" | grep -c .)" != 1 ] || [ ! -d "$LIB" ]; then
             echo "::error::expected one full-distribution lib under package/target, got: $LIB"; exit 1
           fi
-          if ! ls "$LIB"/arcadedb-gremlin-*.jar > /dev/null 2>&1; then
+          if ! compgen -G "$LIB/arcadedb-gremlin-*.jar" > /dev/null; then
             echo "::error::$LIB has no Gremlin plugin jar, so it is not the full distribution"; exit 1
           fi
-          mkdir -p "$RUNNER_TEMP/arcadedb-lib"
-          cp "$LIB"/*.jar "$RUNNER_TEMP/arcadedb-lib/"
+          # The whole lib, HA jar included: the exclusion is applied per call
+          # below, so one cache entry serves both kinds of caller.
+          mkdir -p "$RUNNER_TEMP/engine-lib-full"
+          cp "$LIB"/*.jar "$RUNNER_TEMP/engine-lib-full/"
+          {
+            echo "built from: $(git rev-parse HEAD)"
+            echo "distribution: $LIB"
+          } > "$RUNNER_TEMP/engine-lib-full/BUILT-FROM.txt"
+
+      - name: Stage the lib directory and write BUILD-INFO.txt
+        id: stage
+        shell: bash
+        env:
+          EXCLUDE_HA_RAFT_SHADED: ${{ inputs.exclude-ha-raft-shaded }}
+          CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
+          SOURCE_KEY: ${{ steps.key.outputs.key }}
+          COMMIT: ${{ steps.key.outputs.commit }}
+        run: |
+          set -euo pipefail
+          FULL="$RUNNER_TEMP/engine-lib-full"
+          OUT="$RUNNER_TEMP/arcadedb-lib"
+          if ! compgen -G "$FULL/arcadedb-gremlin-*.jar" > /dev/null; then
+            echo "::error::$FULL has no Gremlin plugin jar (cache-hit=$CACHE_HIT)"; exit 1
+          fi
+          mkdir -p "$OUT"
+          cp "$FULL"/*.jar "$OUT/"
           HA_NOTE="ha-raft shaded jar: kept (as in the image)"
           if [ "$EXCLUDE_HA_RAFT_SHADED" = "true" ]; then
-            rm -f "$RUNNER_TEMP"/arcadedb-lib/arcadedb-ha-raft-*-shaded.jar
+            rm -f "$OUT"/arcadedb-ha-raft-*-shaded.jar
             HA_NOTE="ha-raft shaded jar: left out (it bundles engine classes)"
           fi
-          echo "commit: $(git rev-parse HEAD)" | tee "$RUNNER_TEMP/arcadedb-lib/BUILD-INFO.txt"
-          echo "distribution: $LIB" | tee -a "$RUNNER_TEMP/arcadedb-lib/BUILD-INFO.txt"
-          echo "$HA_NOTE" | tee -a "$RUNNER_TEMP/arcadedb-lib/BUILD-INFO.txt"
-          echo "jars: $(ls -1 "$RUNNER_TEMP"/arcadedb-lib/*.jar | wc -l)" | tee -a "$RUNNER_TEMP/arcadedb-lib/BUILD-INFO.txt"
-          ls -1 "$RUNNER_TEMP"/arcadedb-lib/*.jar | xargs -n1 basename >> "$RUNNER_TEMP/arcadedb-lib/BUILD-INFO.txt"
-          ENGINE=$(ls "$RUNNER_TEMP"/arcadedb-lib/arcadedb-engine-*.jar | head -1)
-          unzip -p "$ENGINE" META-INF/MANIFEST.MF | tr -d '\r' | tee -a "$RUNNER_TEMP/arcadedb-lib/BUILD-INFO.txt"
+          mapfile -t ENGINES < <(find "$OUT" -maxdepth 1 -name 'arcadedb-engine-*.jar' | sort)
+          if [ "${#ENGINES[@]}" != 1 ]; then
+            echo "::error::expected one engine jar, found ${#ENGINES[@]}"; exit 1
+          fi
+          BUILD_NUMBER=$(unzip -p "${ENGINES[0]}" com/arcadedb/arcadedb.properties | tr -d '\r' | sed -n 's/^buildNumber[[:space:]]*[=:][[:space:]]*//p' | head -n 1)
+          if [ -z "$BUILD_NUMBER" ]; then
+            echo "::error::${ENGINES[0]} records no buildNumber"; exit 1
+          fi
+          if [ "$CACHE_HIT" = "true" ]; then
+            CACHE_NOTE="cache: hit (jars built earlier from the same engine source; $(sed -n 's/^built from: //p' "$FULL/BUILT-FROM.txt"))"
+          else
+            CACHE_NOTE="cache: miss (built by this job)"
+          fi
+          JARS=$(find "$OUT" -maxdepth 1 -name '*.jar' -printf '%f\n' | sort)
+          {
+            echo "commit: $COMMIT"
+            echo "engine source key: $SOURCE_KEY"
+            echo "$CACHE_NOTE"
+            echo "buildNumber: $BUILD_NUMBER"
+            echo "$HA_NOTE"
+            echo "jars: $(printf '%s\n' "$JARS" | grep -c .)"
+            printf '%s\n' "$JARS"
+            unzip -p "${ENGINES[0]}" META-INF/MANIFEST.MF | tr -d '\r'
+          } > "$OUT/BUILD-INFO.txt"
+          cat "$OUT/BUILD-INFO.txt"
+          echo "build-number=$BUILD_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "cache-hit=${CACHE_HIT:-false}" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Engine jars built from source"
+            echo ""
+            echo "- commit: \`$COMMIT\`"
+            echo "- $CACHE_NOTE"
+            echo "- buildNumber: \`$BUILD_NUMBER\`"
+            echo "- $HA_NOTE; $(printf '%s\n' "$JARS" | grep -c .) jars"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload the lib directory
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

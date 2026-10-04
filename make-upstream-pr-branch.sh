@@ -70,6 +70,10 @@ INCLUDE_PATHS=(
     #                             fixed, so their exclusion targets a name
     #                             that no longer exists
     ".github/workflows/test-python-examples.yml"
+    # Both test workflows above build their default jars with it (jar-source
+    # `source`, the engine built from the tested commit, since 2026-10), so
+    # they do not run without it. Nothing in it names this fork.
+    ".github/workflows/build-engine-jars.yml"
 )
 
 # NOT shipped, and each for a reason: the AUDIT/REFACTOR plans are internal
@@ -86,6 +90,8 @@ EXCLUDE_PATHS=(
     "bindings/python/scripts/fix_markdown.py"
     "bindings/python/scripts/list_image_jars_by_size.sh"
     "bindings/python/scripts/build_and_install_locally.sh"
+    # The fork's release gate (verify-engine-jars.yml), which does not cross.
+    "bindings/python/scripts/compare_engine_jars.py"
 )
 
 PUSH=1

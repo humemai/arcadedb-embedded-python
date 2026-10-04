@@ -29,11 +29,18 @@ on:
         description: "Override package version (PEP 440) for build.sh"
         required: false
         type: string
-      engine-from-source:
-        description: "Build the engine jars from this commit's source (the package module) instead of downloading upstream's snapshot image"
+      # REQUIRED, with no default, on purpose: a calling workflow that forgets
+      # to choose fails here instead of silently getting the `source` default
+      # that push and pull_request runs use. The release passes `image`.
+      jar-source:
+        description: "Engine jars to build and test with: 'source' (build this commit's engine with build-engine-jars.yml) or 'image' (the jars in /home/arcadedb/lib of arcadedata/arcadedb:<image-tag>)"
+        required: true
+        type: string
+      image-tag:
+        description: "arcadedata/arcadedb tag for jar-source 'image'; empty means the pom.xml version"
         required: false
-        type: boolean
-        default: false
+        type: string
+        default: ""
 
   # Allow manual trigger
   workflow_dispatch:
@@ -42,11 +49,19 @@ on:
         description: "Glob pattern(s) for examples to run (space-separated, relative to bindings/python/examples)."
         required: false
         default: "0[1-9]_*.py 1[0-9]_*.py 2[0-9]_*.py"
-      engine-from-source:
-        description: "Build the engine jars from this commit's source (the package module) instead of downloading upstream's snapshot image"
+      jar-source:
+        description: "Engine jars: 'source' builds this commit's engine; 'image' copies them from arcadedata/arcadedb:<image-tag>"
         required: false
-        type: boolean
-        default: false
+        type: choice
+        options:
+          - source
+          - image
+        default: source
+      image-tag:
+        description: "arcadedata/arcadedb tag for jar-source 'image' (for example 26.9.1); empty means the pom.xml version"
+        required: false
+        type: string
+        default: ""
 
 # SUPERSEDE, do not race.
 #
@@ -72,90 +87,119 @@ permissions:
   contents: read
 
 jobs:
-  # First job: Download ArcadeDB JARs (platform-agnostic)
-  download-jars:
-    name: Download ArcadeDB JARs
+  # WHICH ENGINE JARS THIS RUN BUILDS AND TESTS WITH. The same
+  # three jobs as test-python-bindings.yml, which explains them: `source` (the
+  # default for push, pull_request, and workflow_dispatch) builds this commit's
+  # engine with build-engine-jars.yml, cached by the engine source tree;
+  # `image` copies the jars of arcadedata/arcadedb:<image-tag>, which is what
+  # the release uses. Every platform builds with the chosen jars.
+  jar-source:
+    name: Choose the engine jars
     runs-on: ubuntu-24.04
+    outputs:
+      source: ${{ steps.pick.outputs.source }}
+      image-tag: ${{ steps.pick.outputs.image-tag }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-
-      # ENGINE FROM SOURCE (workflow_dispatch or workflow_call with engine-from-source):
-      # test a branch (an upstream sync, for example) against the engine source on
-      # that branch, not upstream's moving snapshot image, which can be newer or older
-      # than the merge being tested. Push and pull_request runs never take this path.
-      - name: Set up JDK 21 (engine from source)
-        if: inputs.engine-from-source == true
-        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
-          distribution: temurin
-          java-version: "21"
-          cache: maven
+          persist-credentials: false
 
-      - name: Build the engine jars from source
-        if: inputs.engine-from-source == true
+      - name: Resolve the jar source
+        id: pick
         shell: bash
+        env:
+          JAR_SOURCE: ${{ inputs.jar-source || 'source' }}
+          IMAGE_TAG: ${{ inputs.image-tag }}
         run: |
-          ./mvnw -B -q -DskipTests -pl package -am package
-          # The FULL distribution. The base, headless, and minimal variants are
-          # written beside it as arcadedb-<version>-<variant>.dir, and "-" sorts
-          # before ".", so `ls | head -1` picked base, which has no plugins (no
-          # Gremlin, Bolt, wire protocols, GraphQL, metrics, or tracing).
-          LIB=$(ls -d package/target/arcadedb-*.dir/arcadedb-*/lib | grep -vE -- '-(base|headless|minimal)\.dir/' || true)
-          if [ "$(printf '%s\n' "$LIB" | grep -c .)" != 1 ] || [ ! -d "$LIB" ]; then
-            echo "::error::expected one full-distribution lib under package/target, got: $LIB"; exit 1
-          fi
-          if ! ls "$LIB"/arcadedb-gremlin-*.jar > /dev/null 2>&1; then
-            echo "::error::$LIB has no Gremlin plugin jar, so it is not the full distribution"; exit 1
-          fi
-          mkdir -p bindings/python/src/arcadedb_embedded/jars
-          cp "$LIB"/*.jar bindings/python/src/arcadedb_embedded/jars/
-          ENGINE=$(ls bindings/python/src/arcadedb_embedded/jars/arcadedb-engine-*.jar | head -1)
-          echo "Built from $(git rev-parse HEAD): $(ls -1 bindings/python/src/arcadedb_embedded/jars/*.jar | wc -l) JARs"
-          unzip -p "$ENGINE" META-INF/MANIFEST.MF | tr -d '\r' | grep -i -E "build|version" || true
+          set -euo pipefail
+          case "$JAR_SOURCE" in
+            source)
+              if [ -n "$IMAGE_TAG" ]; then
+                echo "::warning::image-tag '$IMAGE_TAG' is ignored: jar-source is 'source'"
+              fi
+              IMAGE_TAG=""
+              ;;
+            image)
+              if [ -z "$IMAGE_TAG" ]; then
+                IMAGE_TAG=$(python3 bindings/python/scripts/extract_version.py --format=docker)
+              fi
+              ;;
+            *)
+              echo "::error::jar-source must be 'source' or 'image', got '$JAR_SOURCE'"
+              exit 1
+              ;;
+          esac
+          echo "source=$JAR_SOURCE" >> "$GITHUB_OUTPUT"
+          echo "image-tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+          echo "Engine jars: $JAR_SOURCE${IMAGE_TAG:+ (arcadedata/arcadedb:$IMAGE_TAG)}"
 
-      - name: Download JARs from ArcadeDB Docker image
-        if: inputs.engine-from-source != true
+  engine-jars:
+    name: Engine jars from source
+    needs: jar-source
+    if: needs.jar-source.outputs.source == 'source'
+    uses: ./.github/workflows/build-engine-jars.yml
+    with:
+      artifact-name: arcadedb-jars-examples
+
+  image-jars:
+    name: Engine jars from the image
+    needs: jar-source
+    if: needs.jar-source.outputs.source == 'image'
+    runs-on: ubuntu-24.04
+    outputs:
+      build-number: ${{ steps.copy.outputs.build-number }}
+    steps:
+      - name: Copy /home/arcadedb/lib out of the image
+        id: copy
         shell: bash
+        env:
+          IMAGE: arcadedata/arcadedb:${{ needs.jar-source.outputs.image-tag }}
         run: |
-          cd bindings/python
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/arcadedb-lib"
+          mkdir -p "$OUT"
+          CONTAINER_ID=$(docker create "$IMAGE")
+          docker cp "$CONTAINER_ID:/home/arcadedb/lib/." "$OUT/"
+          docker rm "$CONTAINER_ID" > /dev/null
+          mapfile -t ENGINES < <(find "$OUT" -maxdepth 1 -name 'arcadedb-engine-*.jar' | sort)
+          if [ "${#ENGINES[@]}" != 1 ]; then
+            echo "::error::expected one engine jar in $IMAGE, found ${#ENGINES[@]}"; exit 1
+          fi
+          BUILD_NUMBER=$(unzip -p "${ENGINES[0]}" com/arcadedb/arcadedb.properties | tr -d '\r' | sed -n 's/^buildNumber[[:space:]]*[=:][[:space:]]*//p' | head -n 1)
+          JARS=$(find "$OUT" -maxdepth 1 -name '*.jar' -printf '%f\n' | sort)
+          {
+            echo "image: $IMAGE ($(docker image inspect --format '{{index .RepoDigests 0}}' "$IMAGE"))"
+            echo "buildNumber: ${BUILD_NUMBER:-none recorded}"
+            echo "jars: $(printf '%s\n' "$JARS" | grep -c .)"
+            printf '%s\n' "$JARS"
+          } > "$OUT/BUILD-INFO.txt"
+          cat "$OUT/BUILD-INFO.txt"
+          echo "build-number=${BUILD_NUMBER:-none recorded}" >> "$GITHUB_OUTPUT"
 
-          # Detect ArcadeDB version from pom.xml (Docker format: X.Y.Z-SNAPSHOT)
-          ARCADEDB_TAG=$(python3 scripts/extract_version.py --format=docker)
-          echo "📌 ArcadeDB version: $ARCADEDB_TAG"
-
-          # Download JARs from official Docker image
-          echo "📦 Downloading JARs from arcadedata/arcadedb:$ARCADEDB_TAG..."
-
-          # Create output directory
-          mkdir -p src/arcadedb_embedded/jars
-
-          # Create a temporary container and copy JARs from it
-          CONTAINER_ID=$(docker create arcadedata/arcadedb:$ARCADEDB_TAG)
-          docker cp $CONTAINER_ID:/home/arcadedb/lib/. src/arcadedb_embedded/jars/
-          docker rm $CONTAINER_ID
-
-          echo "✅ Downloaded $(ls -1 src/arcadedb_embedded/jars/*.jar | wc -l) JARs"
-
-      # Unfiltered on purpose: build-native.sh applies scripts/jar_exclusions.txt
-      # to whatever lands in the jars directory, so the list lives in one place.
+      # Unfiltered on purpose: build-native.sh and Dockerfile.build apply
+      # scripts/jar_exclusions.txt to whatever they are given, so the list
+      # lives in one place.
       - name: Upload JARs as artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: arcadedb-jars-examples
-          path: bindings/python/src/arcadedb_embedded/jars/*.jar
+          path: ${{ runner.temp }}/arcadedb-lib/
           retention-days: 1
 
   # Second job: Test examples on each platform
   test-examples:
     name: Test Python Examples (${{ matrix.platform }}, Python ${{ matrix.python-version }})
     runs-on: ${{ matrix.runs-on }}
-    needs: download-jars
+    needs: [jar-source, engine-jars, image-jars]
+    # One of engine-jars and image-jars is always skipped, and a skipped need
+    # skips this job unless the condition says otherwise.
+    if: ${{ !cancelled() && needs.jar-source.result == 'success' && (needs.engine-jars.result == 'success' || needs.image-jars.result == 'success') }}
     env:
       BUILD_VERSION: ${{ inputs.build-version }}
+      JAR_SOURCE: ${{ needs.jar-source.outputs.source }}
+      IMAGE_TAG: ${{ needs.jar-source.outputs.image-tag }}
+      ENGINE_BUILD_NUMBER: ${{ needs.engine-jars.outputs.build-number || needs.image-jars.outputs.build-number }}
       # Pin the Hugging Face cache inside the workspace so it is cacheable with
       # one path on every platform (the default differs per OS). The examples
       # embed with sentence-transformers, and this matrix is 20 jobs, so
@@ -243,20 +287,19 @@ jobs:
 
       - name: Build arcadedb-embedded (${{ matrix.platform }})
         shell: bash
-        env:
-          ENGINE_FROM_SOURCE: ${{ inputs.engine-from-source }}
         run: |
           cd bindings/python
           echo "🔨 Building arcadedb-embedded for ${{ matrix.platform }} with Python ${{ matrix.python-version }}..."
-          # ENGINE FROM SOURCE: hand the jars built from this commit to build.sh on
-          # every platform. Without JAR_LIB_DIR the Linux (Docker) build pulls the
-          # snapshot image's jars itself, so the option silently did nothing there
-          # while the native builds used the artifact (2026-10-04, run 37193748490).
-          if [ "${ENGINE_FROM_SOURCE}" = "true" ]; then
-            ./scripts/build.sh ${{ matrix.platform }} ${{ matrix.python-version }} src/arcadedb_embedded/jars
-          else
-            ./scripts/build.sh ${{ matrix.platform }} ${{ matrix.python-version }}
+          echo "Engine jars: $JAR_SOURCE${IMAGE_TAG:+ (arcadedata/arcadedb:$IMAGE_TAG)}, buildNumber $ENGINE_BUILD_NUMBER"
+          # THE DOWNLOADED JARS, ON EVERY PLATFORM. Without JAR_LIB_DIR the Linux
+          # (Docker) build copies an image's jars itself, so the engine-from-source
+          # option once did nothing there while the native builds used the artifact
+          # (2026-10-04, run 37193748490). With `image`, ARCADEDB_IMAGE_TAG also
+          # points the Docker build's base stage at the same image.
+          if [ "$JAR_SOURCE" = "image" ]; then
+            export ARCADEDB_IMAGE_TAG="$IMAGE_TAG"
           fi
+          ./scripts/build.sh ${{ matrix.platform }} ${{ matrix.python-version }} src/arcadedb_embedded/jars
 
       # Note: Java is NOT required - arcadedb-embedded has bundled JRE!
 
@@ -691,6 +734,8 @@ jobs:
           cd bindings/python/examples
 
           echo "## 🎮 Python Examples Test Results (${{ matrix.platform }})" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Engine jars: $JAR_SOURCE${IMAGE_TAG:+ (arcadedata/arcadedb:$IMAGE_TAG)}, buildNumber \`$ENGINE_BUILD_NUMBER\`" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> $GITHUB_STEP_SUMMARY
 
           total="${{ steps.run_examples.outputs.total || '0' }}"

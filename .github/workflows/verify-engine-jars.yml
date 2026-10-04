@@ -1,0 +1,111 @@
+name: Verify engine jars against an image
+
+# THE RELEASE GATE. A release ships upstream's official jars,
+# the ones in /home/arcadedb/lib of arcadedata/arcadedb:<version>, while CI
+# tests the engine built from this repository's source. This workflow builds a
+# commit from source with build-engine-jars.yml (the shaded HA jar kept, as in
+# the image) and compares the two lib directories with
+# bindings/python/scripts/compare_engine_jars.py: the same jar names, every
+# third-party jar byte-identical, and every ArcadeDB jar's entries
+# byte-identical except com/arcadedb/arcadedb.properties, where only the
+# buildNumber, timestamp, and branch lines may differ. Any other difference
+# fails the job, and the release workflow publishes only when it passes. The
+# source build never enters a wheel or a test.
+#
+# Evidence that the check holds for a real release: a CI build of the official
+# 26.9.1 release commit (ArcadeData/arcadedb b6a92623554b) matched
+# arcadedata/arcadedb:26.9.1 in all 86 jar names, all 69 third-party jars, and
+# all 75,699 ArcadeDB classes; only arcadedb.properties differed, in exactly
+# those three lines.
+#
+# Dispatch it to check any image against any commit, for example:
+#   gh workflow run verify-engine-jars.yml -f repository=ArcadeData/arcadedb \
+#     -f ref=b6a92623554bb332d7564de19fbd9fdbc2d1d45e -f image-tag=26.9.1
+
+on:
+  workflow_call:
+    inputs:
+      repository:
+        description: "Repository to build (owner/name); empty means this repository"
+        required: false
+        default: ""
+        type: string
+      ref:
+        description: "Commit to build; empty means the calling commit"
+        required: false
+        default: ""
+        type: string
+      image-tag:
+        description: "arcadedata/arcadedb tag whose /home/arcadedb/lib must match the build"
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: "Repository to build (owner/name); empty means this repository"
+        required: false
+        default: ""
+        type: string
+      ref:
+        description: "Commit SHA, branch, or tag to build"
+        required: true
+        type: string
+      image-tag:
+        description: "arcadedata/arcadedb tag whose /home/arcadedb/lib must match the build (for example 26.9.1)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build from source
+    uses: ./.github/workflows/build-engine-jars.yml
+    with:
+      repository: ${{ inputs.repository }}
+      ref: ${{ inputs.ref }}
+      artifact-name: engine-jars-verify
+      exclude-ha-raft-shaded: false
+
+  compare:
+    name: Compare with arcadedata/arcadedb:${{ inputs.image-tag }}
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      # This repository at the workflow's own commit, for the comparison script.
+      - name: Checkout the comparison script
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download the source build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: engine-jars-verify
+          path: ${{ runner.temp }}/source-lib
+
+      - name: Copy /home/arcadedb/lib out of the image
+        shell: bash
+        env:
+          IMAGE: arcadedata/arcadedb:${{ inputs.image-tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/image-lib"
+          CONTAINER_ID=$(docker create "$IMAGE")
+          docker cp "$CONTAINER_ID:/home/arcadedb/lib/." "$RUNNER_TEMP/image-lib/"
+          docker rm "$CONTAINER_ID" > /dev/null
+          echo "$IMAGE is $(docker image inspect --format '{{index .RepoDigests 0}}' "$IMAGE")"
+
+      - name: Compare the two lib directories
+        shell: bash
+        env:
+          IMAGE: arcadedata/arcadedb:${{ inputs.image-tag }}
+          SOURCE_LABEL: ${{ inputs.repository || github.repository }}@${{ needs.build.outputs.commit }}
+        run: |
+          set -euo pipefail
+          sed -n '1,4p' "$RUNNER_TEMP/source-lib/BUILD-INFO.txt"
+          python3 bindings/python/scripts/compare_engine_jars.py \
+            "$RUNNER_TEMP/image-lib" "$RUNNER_TEMP/source-lib" \
+            --image-label "$IMAGE" --source-label "$SOURCE_LABEL" \
+            --summary "$GITHUB_STEP_SUMMARY"

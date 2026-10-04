@@ -5,6 +5,15 @@ on:
     tags:
       - '[0-9]+.[0-9]+.[0-9]+*'  # Matches: 25.10.1, 25.10.1.dev0, 25.10.1.post1, etc.
 
+# WHICH ENGINE A RELEASE SHIPS. The wheels carry upstream's
+# official jars, the ones in /home/arcadedb/lib of arcadedata/arcadedb:<version>
+# (the artifacts Java users get), and both test workflows build and test the
+# wheels on exactly those jars (jar-source `image`). A build of this commit from
+# source exists in the release only as a gate (verify-engine-jars): publish
+# needs it to find the same classes in the image, so what CI tested on every
+# push, the engine built from this source, is the code that ships. The source
+# build never enters a wheel or a test.
+
 jobs:
   # Validate version compatibility between tag and pom.xml
   validate-version:
@@ -13,6 +22,7 @@ jobs:
     outputs:
       python-version: ${{ steps.validate.outputs.python-version }}
       base-version: ${{ steps.validate.outputs.base-version }}
+      image-tag: ${{ steps.validate.outputs.image-tag }}
     steps:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -58,31 +68,50 @@ jobs:
           echo "   Base version: $TAG_BASE"
           echo "   Full tag version: $TAG_VERSION"
 
-          # Output for later jobs
-          echo "python-version=$TAG_VERSION" >> $GITHUB_OUTPUT
-          echo "base-version=$TAG_BASE" >> $GITHUB_OUTPUT
+          # Output for later jobs. The engine image is the pom.xml version as
+          # it stands: X.Y.Z for a stable or a .postN tag (upstream's release
+          # image), X.Y.Z-SNAPSHOT for a .devN tag (upstream's moving snapshot,
+          # which the gate below fails unless it holds this commit's classes).
+          {
+            echo "python-version=$TAG_VERSION"
+            echo "base-version=$TAG_BASE"
+            echo "image-tag=$POM_VERSION"
+          } >> "$GITHUB_OUTPUT"
 
-  # Run example tests before building (workflow_call)
+  # The gate: the official jars must hold the classes of this commit's engine
+  # source, the engine every push and pull request was tested on.
+  verify-engine-jars:
+    name: Official jars match this commit's source
+    needs: validate-version
+    uses: ./.github/workflows/verify-engine-jars.yml
+    with:
+      image-tag: ${{ needs.validate-version.outputs.image-tag }}
+
+  # Run example tests before building (workflow_call), on the official jars
   test-examples:
     name: Run Example Tests
     needs: validate-version
     uses: ./.github/workflows/test-python-examples.yml
     with:
       build-version: ${{ needs.validate-version.outputs.python-version }}
+      jar-source: image
+      image-tag: ${{ needs.validate-version.outputs.image-tag }}
     secrets: inherit
 
-  # Run unit tests before building
+  # Run unit tests before building, on the official jars; these wheels publish
   test:
     name: Run Unit Tests
     needs: validate-version
     uses: ./.github/workflows/test-python-bindings.yml
     with:
       build-version: ${{ needs.validate-version.outputs.python-version }}
+      jar-source: image
+      image-tag: ${{ needs.validate-version.outputs.image-tag }}
     secrets: inherit
 
   publish:
     name: Publish arcadedb-embedded to PyPI (4 platforms)
-    needs: [validate-version, test, test-examples]
+    needs: [validate-version, verify-engine-jars, test, test-examples]
     runs-on: ubuntu-latest
     continue-on-error: true  # Don't block GitHub Release if PyPI upload fails (size limit)
     environment: pypi

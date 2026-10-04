@@ -67,6 +67,11 @@ FORK_GITHUB_ALLOWLIST=(
     ".github/workflows/release-python-packages.yml"  # ours; not upstream
     ".github/workflows/test-python-bindings.yml"     # ours; upstream has a copy, we diverge
     ".github/workflows/test-python-examples.yml"     # ours; upstream has a copy, we diverge
+    # Ours. The two test workflows above call it for their default jars (the
+    # engine built from source), so the pull-request branch ships it with them.
+    ".github/workflows/build-engine-jars.yml"
+    # Fork-only: the release gate of release-python-packages.yml.
+    ".github/workflows/verify-engine-jars.yml"
     # Fork-only: upstream runs the same SHA-pin check in mvn-test.yml, so this
     # is deliberately NOT in make-upstream-pr-branch.sh's INCLUDE_PATHS.
     ".github/workflows/lint-workflows.yml"
