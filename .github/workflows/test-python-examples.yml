@@ -100,9 +100,16 @@ jobs:
         shell: bash
         run: |
           ./mvnw -B -q -DskipTests -pl package -am package
-          LIB=$(ls -d package/target/arcadedb-*.dir/arcadedb-*/lib | head -1)
-          if [ -z "$LIB" ] || [ ! -d "$LIB" ]; then
-            echo "::error::no lib directory under package/target"; exit 1
+          # The FULL distribution. The base, headless, and minimal variants are
+          # written beside it as arcadedb-<version>-<variant>.dir, and "-" sorts
+          # before ".", so `ls | head -1` picked base, which has no plugins (no
+          # Gremlin, Bolt, wire protocols, GraphQL, metrics, or tracing).
+          LIB=$(ls -d package/target/arcadedb-*.dir/arcadedb-*/lib | grep -vE -- '-(base|headless|minimal)\.dir/' || true)
+          if [ "$(printf '%s\n' "$LIB" | grep -c .)" != 1 ] || [ ! -d "$LIB" ]; then
+            echo "::error::expected one full-distribution lib under package/target, got: $LIB"; exit 1
+          fi
+          if ! ls "$LIB"/arcadedb-gremlin-*.jar > /dev/null 2>&1; then
+            echo "::error::$LIB has no Gremlin plugin jar, so it is not the full distribution"; exit 1
           fi
           mkdir -p bindings/python/src/arcadedb_embedded/jars
           cp "$LIB"/*.jar bindings/python/src/arcadedb_embedded/jars/

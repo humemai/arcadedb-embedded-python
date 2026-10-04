@@ -23,6 +23,11 @@ on:
         description: "Commit SHA, branch, or tag to build"
         required: true
         type: string
+      exclude-ha-raft-shaded:
+        description: "Leave out arcadedb-ha-raft-*-shaded.jar, which bundles its own copy of the engine classes and shadows an engine swap (verification A/Bs)"
+        required: false
+        default: false
+        type: boolean
   workflow_call:
     inputs:
       repository:
@@ -40,6 +45,11 @@ on:
         required: false
         default: "arcadedb-lib"
         type: string
+      exclude-ha-raft-shaded:
+        description: "Leave out arcadedb-ha-raft-*-shaded.jar, which bundles its own copy of the engine classes and shadows an engine swap (verification A/Bs)"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -70,16 +80,33 @@ jobs:
 
       - name: Build the package module and everything it needs
         shell: bash
+        env:
+          EXCLUDE_HA_RAFT_SHADED: ${{ inputs.exclude-ha-raft-shaded }}
         run: |
           ./mvnw -B -q -DskipTests -pl package -am package
-          LIB=$(ls -d package/target/arcadedb-*.dir/arcadedb-*/lib | head -1)
-          if [ -z "$LIB" ] || [ ! -d "$LIB" ]; then
-            echo "::error::no lib directory under package/target"; exit 1
+          # The FULL distribution. The base, headless, and minimal variants are
+          # written beside it as arcadedb-<version>-<variant>.dir, and "-" sorts
+          # before ".", so `ls | head -1` picked base, which has no plugins (no
+          # Gremlin, Bolt, wire protocols, GraphQL, metrics, or tracing).
+          LIB=$(ls -d package/target/arcadedb-*.dir/arcadedb-*/lib | grep -vE -- '-(base|headless|minimal)\.dir/' || true)
+          if [ "$(printf '%s\n' "$LIB" | grep -c .)" != 1 ] || [ ! -d "$LIB" ]; then
+            echo "::error::expected one full-distribution lib under package/target, got: $LIB"; exit 1
+          fi
+          if ! ls "$LIB"/arcadedb-gremlin-*.jar > /dev/null 2>&1; then
+            echo "::error::$LIB has no Gremlin plugin jar, so it is not the full distribution"; exit 1
           fi
           mkdir -p "$RUNNER_TEMP/arcadedb-lib"
           cp "$LIB"/*.jar "$RUNNER_TEMP/arcadedb-lib/"
+          HA_NOTE="ha-raft shaded jar: kept (as in the image)"
+          if [ "$EXCLUDE_HA_RAFT_SHADED" = "true" ]; then
+            rm -f "$RUNNER_TEMP"/arcadedb-lib/arcadedb-ha-raft-*-shaded.jar
+            HA_NOTE="ha-raft shaded jar: left out (it bundles engine classes)"
+          fi
           echo "commit: $(git rev-parse HEAD)" | tee "$RUNNER_TEMP/arcadedb-lib/BUILD-INFO.txt"
+          echo "distribution: $LIB" | tee -a "$RUNNER_TEMP/arcadedb-lib/BUILD-INFO.txt"
+          echo "$HA_NOTE" | tee -a "$RUNNER_TEMP/arcadedb-lib/BUILD-INFO.txt"
           echo "jars: $(ls -1 "$RUNNER_TEMP"/arcadedb-lib/*.jar | wc -l)" | tee -a "$RUNNER_TEMP/arcadedb-lib/BUILD-INFO.txt"
+          ls -1 "$RUNNER_TEMP"/arcadedb-lib/*.jar | xargs -n1 basename >> "$RUNNER_TEMP/arcadedb-lib/BUILD-INFO.txt"
           ENGINE=$(ls "$RUNNER_TEMP"/arcadedb-lib/arcadedb-engine-*.jar | head -1)
           unzip -p "$ENGINE" META-INF/MANIFEST.MF | tr -d '\r' | tee -a "$RUNNER_TEMP/arcadedb-lib/BUILD-INFO.txt"
 
