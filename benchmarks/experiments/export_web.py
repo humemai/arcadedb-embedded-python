@@ -1688,8 +1688,8 @@ def _partial_q1_words(rows):
     ran, spec = part
     cols = (f"with {ran} of its {spec} output columns" if ran
             else "with some of its output columns")
-    words = (f"TPC-H Q1, the pricing summary, {cols}. It groups and aggregates every line "
-             f"item, so it measures a full scan. It leaves out the average price, the average "
+    words = (f"TPC-H Q1, the pricing summary, {cols}. It groups and aggregates nearly every "
+             f"line item, so it measures a full scan. It leaves out the average price, the average "
              f"discount, and the total charge with tax, which needs the tax column this "
              f"measurement did not load. The next measurement runs the full Q1")
     return _next_item("q1", words), ([ran, spec] if ran else [])
@@ -5363,8 +5363,12 @@ QUERY_WORDS = {
         "LSQB Q9": "LSQB's ninth query, the sixth where the two people at the ends are not themselves friends",
     }),
     "docs_olap": ("analytical queries, each over the whole line-item table", "All times are milliseconds.", {
-        "Q1": "TPC-H's own Q1, the pricing summary: it groups and aggregates every line item, so it measures a full scan",
-        "Q6": "TPC-H's own Q6, the forecasting revenue change: it sums one column under a narrow filter, so it measures how well an engine skips what it does not need",
+        # "Nearly every": Q1 keeps the line items shipped on or before its
+        # cutoff date, which is almost all of them, not all of them.
+        "Q1": "TPC-H's own Q1, the pricing summary: it groups and aggregates nearly every line item, so it measures a full scan",
+        # The lane's Q6 also returns `count(*) AS n` (l1_tpc.OLAP_DIGEST,
+        # DECISIONS #94), so it is TPC-H Q6 plus a row count, not Q6 itself.
+        "Q6": "TPC-H Q6, the forecasting revenue change, with a row count added: it sums one column under a narrow filter, so it measures how well an engine skips what it does not need",
         "top parts": "the ten parts with the highest revenue, a group-by over every line item with a sort and a limit",
         "ship mode": "how many line items went by each ship mode, a group-by over the whole table",
         "by month": "revenue by month of shipment, a group-by on a date expression",
@@ -7016,7 +7020,9 @@ def _counts_note(table_id, entries):
             q = {sc: (q[sc] or getattr(ldbc_snb, "SCALE_OLTP_QUERIES", {}).get(sc)) for sc in scales}
         except Exception:  # noqa: BLE001
             pass
-        parts = ", ".join(f"{scale_label('l2', sc)}: {n:,}" for sc, n in q.items() if n)
+        # "500 at SF1 (10k people, ...) and 200 at SF10 (...)": the scale
+        # labels carry their own parentheses, so the counts lead.
+        parts = _join_and([f"{n:,} at {scale_label('l2', sc)}" for sc, n in q.items() if n])
         if not parts:
             return []
         # The write count from the rows (write_ops, update_ops, delete_ops),
@@ -7033,15 +7039,15 @@ def _counts_note(table_id, entries):
         # every repetition and every engine reads the same ids and one person
         # can be drawn twice. That is what makes the answer digests
         # comparable. The sentence said "a fresh set of start persons".
-        reads = f"Every repetition, on every engine, runs each read against the same start persons ({parts})"
+        reads = f"Every repetition, on every engine, runs each read against the same start persons, {parts}"
         picked = ("The start persons are picked at random with a fixed seed and with replacement, "
                   "so one person can be picked more than once.")
         if writes and len(set(writes.values())) == 1 and len(writes) == 3:
             w = f"{writes['write_ops']:,}"
-            return [_gen(f"{reads} and {w} each of the insert, update, and delete; the p50 and p99 are over those. {picked}", parts, w)]
+            return [_gen(f"{reads}, plus {w} each of the insert, update, and delete; the p50 and p99 are over those. {picked}", parts, w)]
         w = f"{writes.get('write_ops', 0):,}" if writes.get("write_ops") else None
         if w:
-            return [_gen(f"{reads} and commits up to {w} writes; the p50 and p99 are over those. {picked}", parts, w)]
+            return [_gen(f"{reads}, and commits up to {w} writes; the p50 and p99 are over those. {picked}", parts, w)]
         return [_gen(f"{reads}; the p50 and p99 are over those. {picked}", parts)]
     if table_id == "l2olap":
         n = str(L['graph_common'].OLAP_ITERATIONS)
