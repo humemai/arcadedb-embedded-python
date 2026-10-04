@@ -115,11 +115,13 @@ was also slower than inserting one vector per `db.command(...)`.
 
 Buffer an edge for creation during flush/close.
 
-!!! warning "Declared edge properties"
-    An edge buffered with properties skips the declared property's conversion and the type's
-    constraints: a `None` followed by another property is stored as `-1` in an `INTEGER`, and
-    `40000` in a `SHORT` as `-25536`. Write edges with declared properties through
-    `Vertex.new_edge` instead; see [Known Engine Issues](../guide/known-issues.md).
+!!! note "Declared edge properties before 26.10.1"
+    Up to engine 26.9.1 an edge buffered with properties skipped the declared property's
+    conversion and the type's constraints: a `None` followed by another property was stored as
+    `-1` in an `INTEGER`, and `40000` in a `SHORT` as `-25536`. From 26.10.1 a batched edge
+    stores a null as null and converts or refuses a declared value as `Vertex.new_edge` does;
+    on an older engine, write edges with declared properties through `Vertex.new_edge`. See
+    [Known Engine Issues](../guide/known-issues.md).
 
 ### `new_edges(source_rids, edge_type, destination_rids, properties=None)`
 
