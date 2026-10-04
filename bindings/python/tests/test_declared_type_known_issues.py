@@ -1,14 +1,16 @@
 """Engine findings about declared properties that reach Python users (known-issues.md).
 
-Each finding has a test of its documented workaround, which must keep passing, and a
-strict `xfail` for the engine behavior itself. The strict `xfail` is a tripwire, as
-`test_restore_sql.py` used for #6096: when an engine fix reaches the wheel the test starts
-passing, the suite fails, and the known-issues.md entry is removed.
+Each finding has a test of its documented workaround, which must keep passing, and a test
+of the engine behavior itself. While the engine bug is open that test is a strict `xfail`, a
+tripwire as `test_restore_sql.py` used for #6096: when the fix reaches the wheel it starts
+passing and the suite fails. Once the fix is in the engine the wheel packages, the `xfail`
+comes off and the test asserts the fixed behavior.
 
-Upstream: ArcadeData/arcadedb #9014 and #9027 (a value that cannot be converted is stored
-as NULL, and '' as 0), #9017 (CREATE PROPERTY mandatory + notnull over records that lack
-the property, then ORDER BY drops them), #9021 (an index on INTEGER answers for a fractional
-bound as if it were rounded).
+Upstream: ArcadeData/arcadedb #9014 and #9027 (a value that cannot be converted was stored
+as NULL, and '' as 0; fixed in 26.10.1 by PR #9121), #9017 (CREATE PROPERTY mandatory +
+notnull was accepted over records that lack the property, then ORDER BY dropped them; fixed
+in 26.10.1 by PR #9116, which refuses the declaration), #9021 (an index on INTEGER answers
+for a fractional bound as if it were rounded; open).
 """
 
 import math
@@ -32,25 +34,24 @@ def _ids_by_v(db, name):
     return sorted(r.get("id") for r in db.query("sql", query))
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="ArcadeData/arcadedb#9017: CREATE PROPERTY (mandatory, notnull) is accepted over records "
-    "that lack the property, and an index-ordered ORDER BY then drops them",
-)
-def test_order_by_keeps_records_after_constraints_declared_over_missing_values(
-    temp_db_path,
-):
+def test_constraints_over_missing_values_are_refused(temp_db_path):
+    """#9017, fixed in 26.10.1: CREATE PROPERTY (mandatory, notnull) over records that lack
+    the property is refused, and no property is left behind."""
     with arcadedb.create_database(temp_db_path) as db:
         _five_records_one_without_v(db, "Declared")
-        db.command(
-            "sql", "CREATE PROPERTY Declared.v INTEGER (mandatory true, notnull true)"
-        )
-        db.command("sql", "CREATE INDEX ON Declared (v) NOTUNIQUE")
+        with pytest.raises(
+            Exception
+        ):  # noqa: B017 - the engine's CommandExecutionException
+            db.command(
+                "sql",
+                "CREATE PROPERTY Declared.v INTEGER (mandatory true, notnull true)",
+            )
+        assert not db.schema.get_type("Declared").existsProperty("v")
         assert _ids_by_v(db, "Declared") == [1, 2, 3, 4, 5]
 
 
-def test_order_by_workarounds_for_constraints_over_missing_values(temp_db_path):
-    """known-issues.md: give every record the property first, or relax the constraints."""
+def test_give_every_record_the_property_before_declaring_constraints(temp_db_path):
+    """known-issues.md: fill the missing values first, then declare the constraints."""
     with arcadedb.create_database(temp_db_path) as db:
         _five_records_one_without_v(db, "Repaired")
         with db.transaction():
@@ -60,15 +61,6 @@ def test_order_by_workarounds_for_constraints_over_missing_values(temp_db_path):
         )
         db.command("sql", "CREATE INDEX ON Repaired (v) NOTUNIQUE")
         assert _ids_by_v(db, "Repaired") == [1, 2, 3, 4, 5]
-
-        _five_records_one_without_v(db, "Relaxed")
-        db.command(
-            "sql", "CREATE PROPERTY Relaxed.v INTEGER (mandatory true, notnull true)"
-        )
-        db.command("sql", "CREATE INDEX ON Relaxed (v) NOTUNIQUE")
-        db.command("sql", "ALTER PROPERTY Relaxed.v MANDATORY false")
-        db.command("sql", "ALTER PROPERTY Relaxed.v NOTNULL false")
-        assert _ids_by_v(db, "Relaxed") == [1, 2, 3, 4, 5]
 
 
 def _indexed_and_plain_integers(db):
@@ -134,11 +126,6 @@ def _stored_integer(db, value):
     return row.get("i")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="ArcadeData/arcadedb#9014: a bool, list, or dict written to a declared INTEGER is stored as NULL "
-    "instead of being refused",
-)
 @pytest.mark.parametrize(
     "value", [True, [1, 2], {"a": 1}], ids=["bool", "list", "dict"]
 )
@@ -152,10 +139,6 @@ def test_an_inconvertible_value_is_refused_not_stored_as_null(temp_db_path, valu
             _stored_integer(db, value)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="ArcadeData/arcadedb#9027: an empty string bound to a declared INTEGER is stored as 0",
-)
 def test_an_empty_string_is_not_stored_as_zero(temp_db_path):
     with arcadedb.create_database(temp_db_path) as db:
         db.command("sql", "CREATE DOCUMENT TYPE N")

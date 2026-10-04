@@ -346,17 +346,12 @@ def test_vertex_new_edge_keeps_a_null_and_refuses_an_out_of_range_short(temp_db_
         )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="ArcadeData/arcadedb#9018: GraphBatch writes a null in a declared edge property "
-    "as a type tag with no value, so the bytes of the next property are read as its value",
-)
 @pytest.mark.parametrize("bulk", [False, True], ids=["new_edge", "new_edges"])
 def test_graph_batch_edge_keeps_a_null_in_a_declared_property(temp_db_path, bulk):
-    """Strict xfail, as test_restore_sql.py did for #6096: when an engine fix
-    reaches the wheel this starts passing, the suite fails, and the known-issues.md
-    entry and the GraphBatch API page caution are removed. The null must be
-    followed by another property: a null written last reads back as null."""
+    """ArcadeData/arcadedb#9018, fixed in 26.10.1 (upstream PR #9107): a null in a
+    declared edge property used to be written as a type tag with no value, so the bytes
+    of the next property were read as its value. The null must be followed by another
+    property: a null written last read back as null even before the fix."""
     with arcadedb.create_database(temp_db_path) as db:
         _declared_edge_types(db)
         edge_type = "ViaBulk" if bulk else "ViaBatch"
@@ -380,14 +375,11 @@ def test_graph_batch_edge_keeps_a_null_in_a_declared_property(temp_db_path, bulk
         assert [(r.get("weight"), r.get("note")) for r in rows] == [(None, "hello")]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="ArcadeData/arcadedb#9019: a GraphBatch edge skips the declared property's "
-    "conversion and constraints, so 40000 in a SHORT is stored as -25536",
-)
 def test_graph_batch_edge_refuses_an_out_of_range_short(temp_db_path):
-    """Strict xfail, same reason as above. A fixed engine either refuses the value
-    or stores it as the record API does; what it must not do is wrap it."""
+    """ArcadeData/arcadedb#9019, fixed in 26.10.1 (upstream PR #9108): a GraphBatch edge
+    skipped the declared property's conversion, so 40000 in a SHORT was stored as -25536.
+    The engine may refuse the value or store it as the record API does; it must not wrap it.
+    """
     with arcadedb.create_database(temp_db_path) as db:
         _declared_edge_types(db)
         with db.transaction():
