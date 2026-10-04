@@ -573,3 +573,82 @@ rows = db.query(
 ```
 
 Tests: `tests/test_null_index_known_issues.py` checks the workaround and asserts the fixed behavior (it was a strict `xfail` tripwire until the fix reached the engine these tests run on).
+
+
+## `GraphBatch` commits a transaction you opened, and its retry can roll yours back
+
+ArcadeDB [#9242](https://github.com/ArcadeData/arcadedb/issues/9242); measured through the
+bindings on 26.9.1 and on two 26.10.1 snapshots, with the same results on each. Open.
+
+`GraphBatch.create_vertices()`, `flush()`, and `close()` join a transaction that is already
+open on the thread and commit it together with the batch's own work. So do `new_edge()` and
+`new_edges()` when the buffer reaches `batch_size` and they flush, and so does leaving a
+`with db.graph_batch()` block, which calls `close()`. After `db.begin()`, saving a document,
+and `batch.create_vertices("V", 2)`:
+
+- no transaction is active, and `db.rollback()` returns normally and leaves the document in
+  place, also after the database is closed and reopened;
+- `db.commit()`, or the end of a `with db.transaction():` block, raises `ArcadeDBError`
+  (`Transaction not begun`), after the document has been committed;
+- the document is committed with the batch's WAL setting, so with the default
+  `use_wal=False` its commit writes no WAL record.
+
+When the first commit attempt of `create_vertices()` fails with an error the engine retries,
+such as a concurrent modification, the engine rolls back the open transaction, yours
+included, then retries in a transaction of its own and commits only the vertices. The call
+returns normally and your document is gone.
+
+`create_vertex()` is not affected: inside your transaction it saves the vertex without
+committing, and your `rollback()` undoes both.
+
+Commit your own writes before the batch's first call, or write them after it closes, and
+call the batch outside any transaction of yours. That way each rollback undoes only its own
+writes, and a retried vertex commit loses nothing of yours:
+
+```python
+with db.transaction():
+    db.new_document("Note").set("text", "mine").save()
+
+with db.graph_batch() as batch:
+    rids = batch.create_vertices("Person", [{"id": i} for i in range(1000)])
+    batch.new_edges(rids[:-1], "Knows", rids[1:])
+```
+
+Tests: `test_graph_batch_outside_the_callers_transactions` in `tests/test_graph_batch.py`
+checks this workaround, and the three tests after it are strict `xfail` tests of the engine
+behavior.
+
+
+## A vector search misses recently added records while `COMPACT INDEX` runs
+
+ArcadeDB [#9241](https://github.com/ArcadeData/arcadedb/issues/9241); measured through the
+bindings on a 26.10.1 snapshot of 2026-10-04. It affects 26.10.1 snapshots from upstream
+PR #9132 (2026-10-03) on. 26.9.1 is not affected, and neither are snapshots before that PR:
+the same run on 26.9.1 and on a snapshot of 2026-10-03 from before it missed nothing.
+
+While `COMPACT INDEX` rebuilds an `LSM_VECTOR` index, a search with a record's own vector does
+not return that record when it was added after the index's graph was last built. With 20,000
+vectors in the graph and 300 more added one per transaction, `vectorNeighbors(..., 10)` found
+all 300 before the compaction and after it, and during the 8.4 s compaction it missed up to
+all 300 of them in 47 of 48 search passes. Nothing is lost: once `COMPACT INDEX` returns,
+every search finds them again. In the issue's reproduction, records deleted before the
+compaction also make most of the older records unfindable for part of it.
+
+The engine also runs this compaction on its own, through the same code, once an index's data
+file is about three times the size its live vectors need
+(`arcadedb.vectorIndex.compactionBloatFactor`, 3); repeated updates and deletes of vectors
+get there. The graph rebuilds that run after a number of writes or a pause in writing, and
+`build_graph_now()`, do not rewrite the file and are not affected.
+
+Run `COMPACT INDEX` on a vector index while nothing searches it. To keep the engine from
+starting the compaction on its own, set the bloat factor to 0 when the JVM starts; the index
+then compacts only when you run `COMPACT INDEX`:
+
+```python
+db = arcadedb.create_database(
+    "./mydb", jvm_kwargs={"jvm_args": "-Darcadedb.vectorIndex.compactionBloatFactor=0"}
+)
+```
+
+There is no test of this entry: the miss needs a compaction that runs for seconds and
+searches that land inside it, too slow and too timing-dependent for the suite.

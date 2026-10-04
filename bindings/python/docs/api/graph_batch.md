@@ -81,6 +81,34 @@ with db.graph_batch(use_wal=True, expected_edge_count=50000) as batch:
     batch.new_edge(alice, "Knows", bob, since=2024)
 ```
 
+## Transactions
+
+Call the batch outside your own transactions. `create_vertices()`, `flush()`, and `close()`
+commit the transaction that is open on the thread, yours included, and so do `new_edge()`
+and `new_edges()` when the buffer reaches `batch_size` and flushes. Leaving a
+`with db.graph_batch()` block calls `close()`. This is ArcadeDB
+[#9242](https://github.com/ArcadeData/arcadedb/issues/9242), open; see
+[Known Engine Issues](../guide/known-issues.md) for what it does to a transaction of yours.
+Commit your own writes before the batch's first call, or write them after it closes:
+
+```python
+with db.transaction():
+    db.new_document("Note").set("text", "mine").save()
+
+with db.graph_batch() as batch:
+    rids = batch.create_vertices("Person", [{"id": i} for i in range(1000)])
+    batch.new_edges(rids[:-1], "Knows", rids[1:])
+```
+
+`create_vertex()` and `new_vertex()` are the exceptions. Inside your transaction,
+`create_vertex()` saves the vertex in it and does not commit, so your `rollback()` undoes
+both; outside one, it commits its own. `new_edge()` and `new_edges()` with room left in the
+buffer only buffer.
+
+While a batch is open, from its first call until `close()`, every commit on that thread uses
+the batch's WAL setting, yours too: with the default `use_wal=False`, a transaction of yours
+committed in that time writes no WAL record. `close()` restores the previous setting.
+
 ## Common Operations
 
 ### `create_vertex(type_name, **properties)`
@@ -90,11 +118,14 @@ Create and persist a single vertex.
 ### `new_vertex(type_name)`
 
 Return an unsaved `Vertex` of that type from the batch; set its properties and call
-`save()` inside a transaction.
+`save()` inside a transaction, and end that transaction before the batch's next call that
+commits (see [Transactions](#transactions)).
 
 ### `create_vertices(type_name, count_or_properties)`
 
-Create many vertices efficiently and return their RIDs as strings.
+Create many vertices efficiently and return their RIDs as strings. The call commits, in
+the transaction open on the thread if there is one: call it outside your own transactions
+(see [Transactions](#transactions)).
 `count_or_properties` is either an `int`, the number of vertices to create without
 properties, or an iterable of property dicts (`None` or `{}` for a vertex without
 properties). Only rows whose values are all scalars (`str`, `int`, `float`, `bool`, or
@@ -142,11 +173,13 @@ with db.graph_batch(use_wal=False) as batch:
 
 ### `flush()`
 
-Force buffered edge work to disk early.
+Force buffered edge work to disk early. Commits the transaction open on the thread, yours
+included (see [Transactions](#transactions)).
 
 ### `close()`
 
-Flush remaining work and finalize the batch. A second `close()` does nothing.
+Flush remaining work and finalize the batch. A second `close()` does nothing. Commits the
+transaction open on the thread, yours included (see [Transactions](#transactions)).
 
 ### Counters
 

@@ -243,7 +243,9 @@ per chunk of writes, not one per row (`insert_many`, or the chunked pattern abov
 
 **Bulk imports are the exception:** `db.graph_batch()` and the server's `/api/v1/batch` turn the WAL off by default
 for speed. Pass `use_wal=True` (served: `wal=true`) unless you would rather delete the database and re-run the import
-after a crash; see [GraphBatch](../../api/graph_batch.md).
+after a crash; see [GraphBatch](../../api/graph_batch.md). Call the batch outside your own transactions: its
+`create_vertices()`, `flush()`, and `close()` commit the transaction open on the thread, yours included
+(`ArcadeData/arcadedb#9242`; see [GraphBatch transactions](../../api/graph_batch.md#transactions)).
 
 **The async writers ignore `txWalFlush`.** `insert_many(..., parallel=True)`, and anything else that goes through
 `db.async_executor()`, commits with the executor's own flush setting, which defaults to no flush whatever
