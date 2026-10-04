@@ -933,8 +933,13 @@ def main() -> int:
           "questions (BUGS F169)")
     w_bad = _check_one_way_knows_disclosure(payload, rows)
     print(f"  {w_bad} graph table(s) missing the one-way disclosure")
+    print("\nthe LSQB queries that compared ids are disclosed wherever rows ran them "
+          "(BUGS F174)")
+    q_bad = _check_lsqb_id_form_disclosure(payload, rows)
+    print(f"  {q_bad} graph table(s) missing the LSQB id-form disclosure")
     return 1 if (bad or d_bad or p_bad or a_bad or l_bad or h_bad or c_bad
-                 or r_bad or m_bad or not u_ok or k_bad or o_bad or z_bad or w_bad) else 0
+                 or r_bad or m_bad or not u_ok or k_bad or o_bad or z_bad or w_bad
+                 or q_bad) else 0
 
 
 # --------------------------------------------------------------------------
@@ -1825,6 +1830,26 @@ def _check_one_way_knows_disclosure(payload, rows):
         want = EW._knows_one_way_note(t.get("id"), rows)
         if want and want not in (t.get("conditions") or []):
             print(f"    MISSING {t['id']}: rows asked the directed questions and no sentence says so")
+            bad += 1
+        elif want:
+            print(f"  {t['id']}: disclosed")
+    return bad
+
+
+def _check_lsqb_id_form_disclosure(payload, rows):
+    """A graph analytics table built from rows that ran LSQB's q5, q6, q8, or
+    q9 with the node inequality on the id property carries the sentence that
+    says so (BUGS F174, DECISIONS #154 item 2): the id form keeps ArcadeDB off
+    the operators it has for those queries. Re-decided from the same rows as
+    the exporter, as _check_one_way_knows_disclosure does for F169. A pending
+    table is not in the payload and is checked when it lands. Returns bad
+    count."""
+    import export_web as EW
+    bad = 0
+    for t in payload.get("tables", []):
+        want = EW._lsqb_id_form_note(t.get("id"), rows)
+        if want and want not in (t.get("conditions") or []):
+            print(f"    MISSING {t['id']}: rows ran LSQB queries in the id form and no sentence says so")
             bad += 1
         elif want:
             print(f"  {t['id']}: disclosed")

@@ -2177,6 +2177,157 @@ def _knows_one_way_note(table_id, rows):
     return _next_item("knows", _gen(text))
 
 
+# LSQB'S NODE INEQUALITY RAN ON THE ID PROPERTY (BUGS F174, DECISIONS #154
+# items 1 and 2). LSQB's q5, q6, q8, and q9 ask that two matched nodes be
+# different (`tag1 <> tag2`, `person1 <> person3`). From 2026-09-18
+# (`d1fe3183a0`) graph_common.LSQB_QUERIES and the other dialects' spellings
+# compared their ids instead (`tag1.id <> tag2.id`, `person1.id <> person3.id`),
+# on the belief that ArcadeDB's openCypher needed the property form. It does
+# not, and its planner recognises only the inequality between two node
+# variables for the count operators it has for these queries, so the id form
+# sent all four to the row pipeline; the rewrite costs Neo4j time too. The
+# answers are identical either way, so every digest agreed. The timings stand
+# and the text is disclosed, the way F146's zero ages and F169's one-way
+# friendships are. The re-pin runs LSQB's own text on every engine and writes
+# `lsqb_text` into every graph analytics row (CAMPAIGN section 7 row 60); a row
+# without it ran the id form, and the sentence stays until no such row is left
+# behind the table. The queries are named the way the table's columns name
+# them, and only the ones such a row measured (q6 and q9 do not run at the
+# full-network tier, DECISIONS #109). No ratio is quoted: the costs were
+# measured on the laptop (`.notes/bench/repros/perf-lsqb-q9-20261004`), not by
+# anything the rows carry.
+_LSQB_TEXT_FIELD = "lsqb_text"
+_LSQB_ID_FORM_QUERIES = ("lsqb_q5", "lsqb_q6", "lsqb_q8", "lsqb_q9")
+
+
+def _lsqb_id_form_queries(rows):
+    """The graph analytics table's names ("LSQB Q5", ...) for the id-form
+    queries that an October graph analytics row without `lsqb_text`
+    measured, in query order; empty when no such row is left."""
+    stale = [r for r in rows
+             if r.get("lane") == "l2" and r.get("workload") == "olap"
+             and str(r.get("instrument") or "") == "2026-10"
+             and not str(r.get(_LSQB_TEXT_FIELD) or "").strip()]
+    labels = {f: str(lbl) for f, lbl in OCT_TABLE_METRICS["l2olap"] if isinstance(f, str)}
+    out = []
+    for q in _LSQB_ID_FORM_QUERIES:
+        field = f"{q}_p50_ms"
+        if field in labels and any(_num(r.get(field)) is not None for r in stale):
+            out.append(re.sub(r" p50 ms$", "", labels[field]))
+    return out
+
+
+def _lsqb_id_form_note(table_id, rows):
+    """The id-form sentence for the graph analytics table, or None when
+    every graph analytics row behind it ran LSQB's own text."""
+    if table_id != "l2olap" or not _OCTOBER_ENV:
+        return None
+    names = _lsqb_id_form_queries(rows)
+    if not names:
+        return None
+    these = "this query" if len(names) == 1 else "these queries"
+    text = (f"In {_join_and(names)}, the check that two matched nodes are different compared "
+            f"their id properties, where LSQB's own text compares the nodes themselves. The "
+            f"answers are the same either way, but the id form keeps ArcadeDB off the operators "
+            f"it has for {these} and slows other engines too. The next measurement runs LSQB's "
+            f"own text.")
+    return _next_item("lsqb_text", _gen(text, *names))
+
+
+# ARCADEDB'S GRAPH ANALYTICAL VIEW COVERS PERSON AND KNOWS ONLY (DECISIONS
+# #154 item 3, found with F174). Both ArcadeDB adapters in l2_graph.py build
+# the view with `VERTEX TYPES (Person) EDGE TYPES (KNOWS)`, and every LSQB
+# query reads types outside it, so the view serves none of them; the table's
+# own sentence calls the view "a copy of the graph". The re-pin builds it over
+# every type, as ArcadeDB's documentation and upstream's own LSQB runner do,
+# keeps the no-view arm as the like-for-like row, and writes `gav_types` (the
+# types the view covers) into every ArcadeDB with-view graph analytics row
+# (CAMPAIGN section 7 row 61); a with-view row without it built the narrow view.
+_GAV_TYPES_FIELD = "gav_types"
+
+
+def _gav_narrow_rows(rows):
+    """The October ArcadeDB graph analytics rows that built the view over
+    Person and KNOWS only, i.e. with-view rows without `gav_types`."""
+    return [r for r in rows
+            if r.get("lane") == "l2" and r.get("workload") == "olap"
+            and str(r.get("instrument") or "") == "2026-10"
+            and str(r.get("backend") or "").startswith("arcadedb")
+            and str(r.get("gav")) != "False"
+            and not str(r.get(_GAV_TYPES_FIELD) or "").strip()]
+
+
+def _gav_scope_note(table_id, rows):
+    """The narrow-view sentence for the graph analytics table, or None when
+    every ArcadeDB with-view row behind it recorded the types its view covers."""
+    if table_id != "l2olap" or not _OCTOBER_ENV or not _gav_narrow_rows(rows):
+        return None
+    return _next_item("gav_types", _gen(
+        "In this measurement ArcadeDB's Graph Analytical View covers only the persons and their "
+        "friendships. Every LSQB query reads kinds of node the view leaves out, so none of them "
+        "can use it. The next measurement builds the view over every type in the graph and "
+        "keeps the rows without the view beside it."))
+
+
+# ARCADEDB'S SPARSE SEARCH RETURNS WHOLE RECORDS (DECISIONS #153 item 1). The
+# timed ArcadeDB search, embedded and served, is `SELECT expand(
+# vector.sparseNeighbors(...))`, which returns each hit's whole record (and
+# its properties again), while every comparator is told to return ids
+# (Qdrant `with_payload=False`, Elasticsearch `_source=False`, Milvus no output
+# fields, pgvector `SELECT id`). The table said nothing about what each engine
+# returns. The re-pin projects ArcadeDB to `SELECT id, score FROM (...)` and
+# writes `sparse_result` into every ArcadeDB sparse row (CAMPAIGN section 7
+# row 62); a row without it returned whole records. Off-page arms do not hold
+# the sentence up.
+_SPARSE_RESULT_FIELD = "sparse_result"
+
+
+def _sparse_whole_record_rows(rows):
+    """The October ArcadeDB sparse rows on the page that returned whole
+    records, i.e. that do not record `sparse_result`."""
+    return [r for r in rows
+            if r.get("lane") == "l3s"
+            and str(r.get("instrument") or "") == "2026-10"
+            and str(r.get("backend") or "").startswith("arcadedb")
+            and str(r.get("backend")) not in OFF_PAGE_ARMS
+            and not str(r.get(_SPARSE_RESULT_FIELD) or "").strip()]
+
+
+def _sparse_whole_record_note(table_id, rows):
+    """The whole-record sentence for the sparse table, or None when every
+    ArcadeDB sparse row behind it returned ids."""
+    if table_id != "l3s" or not _OCTOBER_ENV or not _sparse_whole_record_rows(rows):
+        return None
+    return _next_item("sparse_ids", _gen(
+        "On this table each ArcadeDB search returns every hit's whole record, while every other "
+        "engine returns the ids of its hits, not the records. The next measurement has ArcadeDB "
+        "return ids as well."))
+
+
+# ARCADEDB EMBEDDED'S DOCUMENTS LOAD GOES ROW BY ROW (DECISIONS #153 item 2,
+# the user's choice). The documents tables' ingest-path sentence already says
+# what ran (insert_many, one JSON payload per batch, beside DuckDB's in-memory
+# frames), so there is no table sentence; only the page-level list says what
+# changes. The re-pin loads ArcadeDB embedded through the bindings' columnar
+# insert once it ships (own issue #150) and writes `columnar_insert` into
+# every ArcadeDB embedded documents row (CAMPAIGN section 7 row 63); a row
+# without it loaded through insert_many.
+_COLUMNAR_INSERT_FIELD = "columnar_insert"
+_DOCS_TABLE_WORKLOAD = {"docs_oltp": "oltp", "docs_olap": "olap"}
+
+
+def _docs_row_load_tables(tables, rows):
+    """The titles of the documents tables on the page whose ArcadeDB
+    (embedded) rows loaded through insert_many, i.e. lack `columnar_insert`."""
+    stale = {str(r.get("workload")) for r in rows
+             if r.get("lane") == "l1tpc"
+             and str(r.get("instrument") or "") == "2026-10"
+             and str(r.get("backend")) == "arcadedb_embedded"
+             and not str(r.get(_COLUMNAR_INSERT_FIELD) or "").strip()}
+    return [str(t.get("title") or t.get("id")) for t in tables
+            if _DOCS_TABLE_WORKLOAD.get(t.get("id")) in stale]
+
+
 def _equivalence_notes(rows):
     """table id -> one sentence about what its answer check could not compare."""
     import bench_common
@@ -2901,7 +3052,10 @@ def _next_measurement_note(tables):
     the page are a development build, which is what this campaign measured,
     and while a table still defers something. Rows from a release take it off
     the page, and so does a page with nothing left to re-measure. Each line
-    after the first is keyed on what its table sentence is keyed on.
+    after the first is keyed on what its table sentence is keyed on. The one
+    change no table sentence describes, ArcadeDB embedded's documents load
+    (the tables' ingest-path sentence already says what ran), is keyed on its
+    rows directly (_docs_row_load_tables).
     """
     if not _OCTOBER_ENV or SKELETON:
         return []
@@ -2935,9 +3089,31 @@ def _next_measurement_note(tables):
                           f"(`txWalFlush={nxt}`) instead of a full sync.", nxt))
     if carried_by("knows"):
         items.append(_gen("Every graph question is asked in both directions of a friendship."))
+    lsqb = carried_by("lsqb_text")
+    names = _lsqb_id_form_queries(_FROZEN_ROWS) if lsqb else []
+    if lsqb and names:
+        items.append(_gen(f"On the {_join_and(lsqb)} table, {_join_and(names)} "
+                          f"{'runs' if len(names) == 1 else 'run'} LSQB's own text, which "
+                          f"compares the matched nodes themselves rather than their ids.",
+                          *lsqb, *names))
+    gav = carried_by("gav_types")
+    if gav:
+        items.append(_gen(f"On the {_join_and(gav)} table, ArcadeDB's Graph Analytical View "
+                          f"covers every type in the graph, not only the persons and their "
+                          f"friendships, and the rows without the view stay.", *gav))
     q1 = carried_by("q1")
     if q1:
         items.append(_gen(f"The {_join_and(q1)} table runs the full TPC-H Q1.", *q1))
+    docs = _docs_row_load_tables(tables, _FROZEN_ROWS)
+    if docs:
+        items.append(_gen(f"On the {_join_and(docs)} {'table' if len(docs) == 1 else 'tables'}, "
+                          f"ArcadeDB (embedded) loads its data through the Python package's "
+                          f"columnar insert, which takes whole columns at a time, as DuckDB "
+                          f"takes whole frames.", *docs))
+    sparse = carried_by("sparse_ids")
+    if sparse:
+        items.append(_gen(f"On the {_join_and(sparse)} table, ArcadeDB returns the ids of its "
+                          f"hits, not the records, as every other engine does.", *sparse))
     if rerun:
         items.append(_gen("The cells marked `re-run` are measured again."))
     if not (items or other):
@@ -7994,6 +8170,16 @@ def main() -> int:
             _t.setdefault("conditions", [])
             if _one_way not in _t["conditions"]:
                 _t["conditions"].append(_one_way)
+        # The rest of what the next measurement changes about a table, each
+        # keyed on a field its rows will record (BUGS F174, DECISIONS #153,
+        # #154).
+        for _note in (_lsqb_id_form_note(_t.get("id"), rows),
+                      _gav_scope_note(_t.get("id"), rows),
+                      _sparse_whole_record_note(_t.get("id"), rows)):
+            if _note:
+                _t.setdefault("conditions", [])
+                if _note not in _t["conditions"]:
+                    _t["conditions"].append(_note)
     for _t in tables:
         _cold = _cold_note(_t.get("id"), rows, _t.get("columns") or [])
         if _cold:

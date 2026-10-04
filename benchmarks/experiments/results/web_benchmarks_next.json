@@ -115,6 +115,8 @@
     "ArcadeDB's runs that wait for the disk use a data-only sync (`txWalFlush=1`) instead of a full sync.",
     "Every graph question is asked in both directions of a friendship.",
     "The Document OLAP table runs the full TPC-H Q1.",
+    "On the Document OLTP and Document OLAP tables, ArcadeDB (embedded) loads its data through the Python package's columnar insert, which takes whole columns at a time, as DuckDB takes whole frames.",
+    "On the Sparse vector search table, ArcadeDB returns the ids of its hits, not the records, as every other engine does.",
     "The cells marked `re-run` are measured again.",
     "The notes under the tables describe the next measurement's other changes."
   ],
@@ -617,6 +619,7 @@
       "conditions": [
         "Cold p50 and p99 are the first timed pass after the build, median of five builds. Warm and gain come from a separate run of the same arms: one build per engine, then five more passes over a different half of the query set, so a warm number cannot be explained by the engine having already answered that exact query; gain is that run's cold over its warm.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint.",
+        "On this table each ArcadeDB search returns every hit's whole record, while every other engine returns the ids of its hits, not the records. The next measurement has ArcadeDB return ids as well.",
         "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Each row records what it ran as `durability`, and the setting was read out of the engine rather than assumed on every engine except Elasticsearch, Milvus, and Qdrant. Elasticsearch, Milvus, and Qdrant run at their defaults, and their rows say so without reading a setting back, because this table times no transactional write.",
         "Recall is reported beside every latency: ArcadeDB quantizes posting weights to int8 by default, so a latency number without its recall is not comparable.",
         "ingest+index total s is one timer around inserting the documents and building the index; on this lane every engine builds its sparse index as it ingests, so there is no boundary to time separately. ingest+index vectors/s divides the document count by it.",
@@ -17354,6 +17357,10 @@
         ]
       },
       {
+        "text": "On this table each ArcadeDB search returns every hit's whole record, while every other engine returns the ids of its hits, not the records. The next measurement has ArcadeDB return ids as well.",
+        "values": []
+      },
+      {
         "text": "In this measurement every person's age loaded as zero, through a date-parsing error in our data loader, so the 3-hop filtered read (age above 30) matched no one on any engine: its times are three hops plus a check on every end node. The next measurement parses the ages correctly.",
         "values": [
           "30"
@@ -17771,6 +17778,19 @@
         "text": "The Document OLAP table runs the full TPC-H Q1.",
         "values": [
           "Document OLAP"
+        ]
+      },
+      {
+        "text": "On the Document OLTP and Document OLAP tables, ArcadeDB (embedded) loads its data through the Python package's columnar insert, which takes whole columns at a time, as DuckDB takes whole frames.",
+        "values": [
+          "Document OLTP",
+          "Document OLAP"
+        ]
+      },
+      {
+        "text": "On the Sparse vector search table, ArcadeDB returns the ids of its hits, not the records, as every other engine does.",
+        "values": [
+          "Sparse vector search"
         ]
       },
       {
