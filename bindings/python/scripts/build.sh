@@ -1,15 +1,19 @@
 #!/bin/bash
 # ArcadeDB Python Package Build Script
 # Builds arcadedb-embedded with a bundled JRE (no Java install needed).
-# JAR sourcing is explicit: provide a JAR directory to embed those artifacts;
-# otherwise JARs are pulled from the arcadedata/arcadedb image.
 #
-# Quick local-jar workflow (no host Java install required):
-#   1) Build ArcadeDB JARs in Docker:
-#        docker run --rm -v "$PWD":/src -w /src maven:3.9-amazoncorretto-25 \
-#          sh -c "git config --global --add safe.directory /src && ./mvnw -DskipTests -pl package -am package"
-#   2) Point the build at the full assembly's lib directory:
-#        cd bindings/python && ./scripts/build.sh linux/amd64 3.12 ../../package/target/arcadedb-<version>.dir/arcadedb-<version>/lib
+# Where the engine JARs come from, in order:
+#   1) --engine-from-source: build the full distribution from this checkout's
+#      engine source in a Maven container (maven:3.9-eclipse-temurin-21, the
+#      JDK upstream's images are built with), then embed its lib directory.
+#      This is what CI tests by default. ENGINE_BUILD_CPUSET pins the
+#      container to a cpuset (none by default; the maintainer's laptop builds
+#      on its low-power cores with ENGINE_BUILD_CPUSET=12-15).
+#   2) A JAR directory (third argument, JAR_LIB_DIR): embed those JARs, for
+#      example the full assembly's lib directory of an engine you built:
+#        ./scripts/build.sh linux/amd64 3.12 ../../package/target/arcadedb-<version>.dir/arcadedb-<version>/lib
+#   3) Neither: copy the JARs out of the arcadedata/arcadedb image, tagged with
+#      the pom.xml version or ARCADEDB_IMAGE_TAG (the local default).
 
 set -euo pipefail
 
@@ -33,10 +37,32 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
-# Parse command line arguments
-PLATFORM="${1:-}"
-PYTHON_VERSION="${2:-3.12}"
-JAR_LIB_DIR="${3:-}"
+# Parse command line arguments: options anywhere, then up to three positionals.
+# Kept to bash 3.2, which macOS runs this under as /bin/bash.
+PLATFORM=""
+PYTHON_VERSION=""
+JAR_LIB_DIR=""
+ENGINE_FROM_SOURCE=0
+SHOW_HELP=0
+BAD_ARG=""
+POSITIONAL_COUNT=0
+for arg in "$@"; do
+    case "$arg" in
+        --engine-from-source) ENGINE_FROM_SOURCE=1 ;;
+        -h | --help) SHOW_HELP=1 ;;
+        -*) BAD_ARG="$arg" ;;
+        *)
+            POSITIONAL_COUNT=$((POSITIONAL_COUNT + 1))
+            case "$POSITIONAL_COUNT" in
+                1) PLATFORM="$arg" ;;
+                2) PYTHON_VERSION="$arg" ;;
+                3) JAR_LIB_DIR="$arg" ;;
+                *) BAD_ARG="$arg" ;;
+            esac
+            ;;
+    esac
+done
+PYTHON_VERSION="${PYTHON_VERSION:-3.12}"
 
 print_header() {
     echo -e "${BLUE}╔════════════════════════════════════════════════════════════╗${NC}"
@@ -46,7 +72,7 @@ print_header() {
 }
 
 print_usage() {
-    echo "Usage: $0 [PLATFORM] [PYTHON_VERSION] [JAR_LIB_DIR]"
+    echo "Usage: $0 [--engine-from-source] [PLATFORM] [PYTHON_VERSION] [JAR_LIB_DIR]"
     echo ""
     echo "Builds arcadedb-embedded package with bundled JRE"
     echo "No external Java installation required!"
@@ -64,7 +90,16 @@ print_usage() {
     echo ""
     echo "JAR_LIB_DIR (optional):"
     echo "  Directory containing ArcadeDB JARs to embed"
-    echo "  If omitted, JARs are pulled from arcadedata/arcadedb:<version>"
+    echo "  If omitted (and no --engine-from-source), JARs are copied from"
+    echo "  arcadedata/arcadedb:<tag>, where <tag> is ARCADEDB_IMAGE_TAG or the pom.xml version"
+    echo ""
+    echo "--engine-from-source:"
+    echo "  Build the full ArcadeDB distribution from this checkout's engine source"
+    echo "  (./mvnw -DskipTests -pl package -am clean package in maven:3.9-eclipse-temurin-21,"
+    echo "  needs Docker) and embed its lib directory. This is what CI tests by default."
+    echo "  ENGINE_BUILD_CPUSET=<cpus>  pin the Maven container (default: no pin)"
+    echo "  ENGINE_BUILD_IMAGE=<image>  Maven image (default: maven:3.9-eclipse-temurin-21)"
+    echo "  ENGINE_BUILD_M2=<dir>       Maven repository to mount (default: ~/.m2)"
     echo ""
     echo "Build Methods:"
     echo "  Native: macOS/Windows build on matching native host architecture"
@@ -75,6 +110,8 @@ print_usage() {
     echo "  $0 linux/amd64                        # Build for Linux x86_64 with Python 3.12 (Docker)"
     echo "  $0 linux/amd64 3.11                   # Build for Linux x86_64 with Python 3.11 (Docker)"
     echo "  $0 linux/amd64 3.12 /path/to/jars     # Build using JARs from /path/to/jars"
+    echo "  $0 --engine-from-source linux/amd64   # Build the engine from source, then the wheel"
+    echo "  ARCADEDB_IMAGE_TAG=26.9.1 $0          # Build with the official 26.9.1 image's JARs"
     echo "  $0 darwin/arm64                       # Build for macOS ARM64 (native; uses the first Python with a working build module)"
     echo ""
     echo "Package features:"
@@ -100,10 +137,19 @@ normalize_arch() {
 }
 
 # Check for help flag
-if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+if [[ "$SHOW_HELP" == 1 ]]; then
     print_header
     print_usage
     exit 0
+fi
+if [[ -n "$BAD_ARG" ]]; then
+    echo -e "${RED}❌ Unexpected argument: ${BAD_ARG}${NC}"
+    print_usage
+    exit 1
+fi
+if [[ "$ENGINE_FROM_SOURCE" == 1 && -n "$JAR_LIB_DIR" ]]; then
+    echo -e "${RED}❌ --engine-from-source and JAR_LIB_DIR both name the JARs; pass one${NC}"
+    exit 1
 fi
 
 print_header
@@ -148,17 +194,79 @@ if [[ -z "$PLATFORM" ]]; then
     echo ""
 fi
 
-# Auto-detect Docker tag from pom.xml
+# Auto-detect the version from pom.xml. POM_TAG names the version this source
+# tree builds (and the wheel); DOCKER_TAG names the arcadedata/arcadedb image the
+# build reads, which is the same unless ARCADEDB_IMAGE_TAG picks another (for
+# example the official release image while pom.xml reads the next -SNAPSHOT).
 echo -e "${CYAN}🔍 Detecting version from pom.xml...${NC}"
-DOCKER_TAG=$(python3 "$SCRIPT_DIR/extract_version.py" --format=docker)
+POM_TAG=$(python3 "$SCRIPT_DIR/extract_version.py" --format=docker)
+DOCKER_TAG="${ARCADEDB_IMAGE_TAG:-$POM_TAG}"
+echo -e "${CYAN}📌 pom.xml version: ${YELLOW}${POM_TAG}${NC}"
 echo -e "${CYAN}📌 Docker tag: ${YELLOW}${DOCKER_TAG}${NC}"
 echo ""
+
+# --engine-from-source: build the full distribution from this checkout, then
+# hand its lib directory to the JAR_LIB_DIR path below, exactly as a directory
+# passed by hand. The same build CI runs (.github/workflows/build-engine-jars.yml):
+# the package module and everything it needs, tests skipped, on JDK 21.
+if [[ "$ENGINE_FROM_SOURCE" == 1 ]]; then
+    REPO_ROOT="$(cd "$PY_BINDINGS_DIR/../.." && pwd)"
+    if [[ ! -f "$REPO_ROOT/pom.xml" || ! -x "$REPO_ROOT/mvnw" ]]; then
+        echo -e "${RED}❌ No pom.xml and mvnw at ${REPO_ROOT}; --engine-from-source needs the full repository${NC}"
+        exit 1
+    fi
+    if ! command -v docker &> /dev/null; then
+        echo -e "${RED}❌ --engine-from-source builds in a Maven container and needs Docker${NC}"
+        exit 1
+    fi
+    ENGINE_BUILD_IMAGE="${ENGINE_BUILD_IMAGE:-maven:3.9-eclipse-temurin-21}"
+    ENGINE_BUILD_M2="${ENGINE_BUILD_M2:-$HOME/.m2}"
+    mkdir -p "$ENGINE_BUILD_M2"
+    ENGINE_DOCKER_ARGS="--rm --user $(id -u):$(id -g) -e HOME=/tmp/h -e MAVEN_OPTS=-Duser.home=/tmp/h"
+    if [[ -n "${ENGINE_BUILD_CPUSET:-}" ]]; then
+        ENGINE_DOCKER_ARGS="$ENGINE_DOCKER_ARGS --cpuset-cpus ${ENGINE_BUILD_CPUSET}"
+    fi
+    # The engine stamps its build with the checked-out commit (buildNumber in
+    # com/arcadedb/arcadedb.properties). In a git worktree the commit lives in
+    # the main repository's .git, so that is mounted too.
+    GIT_COMMON_DIR=$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-common-dir 2> /dev/null || true)
+    GIT_MOUNT=()
+    if [[ -n "$GIT_COMMON_DIR" && "$GIT_COMMON_DIR" != "$REPO_ROOT"/* ]]; then
+        GIT_MOUNT=(-v "$GIT_COMMON_DIR:$GIT_COMMON_DIR")
+    fi
+    ENGINE_COMMIT=$(git -C "$REPO_ROOT" rev-parse --short=10 HEAD 2> /dev/null || echo "unknown commit")
+    echo -e "${CYAN}🔨 Building the engine distribution from source (${ENGINE_COMMIT}) in ${YELLOW}${ENGINE_BUILD_IMAGE}${CYAN}${ENGINE_BUILD_CPUSET:+ on cpus ${ENGINE_BUILD_CPUSET}}...${NC}"
+    # shellcheck disable=SC2086 # ENGINE_DOCKER_ARGS is a list of options
+    docker run $ENGINE_DOCKER_ARGS \
+        -v "$ENGINE_BUILD_M2:/tmp/h/.m2" \
+        -v "$REPO_ROOT:$REPO_ROOT" \
+        ${GIT_MOUNT[@]+"${GIT_MOUNT[@]}"} \
+        -w "$REPO_ROOT" \
+        "$ENGINE_BUILD_IMAGE" \
+        ./mvnw -B -q -DskipTests -pl package -am clean package
+    # The FULL distribution, for this pom.xml version. The base, headless, and
+    # minimal variants sit beside it as arcadedb-<version>-<variant>.dir and
+    # lack the plugins (no Gremlin, Bolt, wire protocols, GraphQL, metrics, or
+    # tracing), so the lib is named exactly rather than globbed.
+    ENGINE_LIB="$REPO_ROOT/package/target/arcadedb-${POM_TAG}.dir/arcadedb-${POM_TAG}/lib"
+    if [[ ! -d "$ENGINE_LIB" ]]; then
+        echo -e "${RED}❌ The build left no full-distribution lib at ${ENGINE_LIB}${NC}"
+        exit 1
+    fi
+    if ! ls "$ENGINE_LIB"/arcadedb-gremlin-*.jar > /dev/null 2>&1; then
+        echo -e "${RED}❌ ${ENGINE_LIB} has no Gremlin plugin jar, so it is not the full distribution${NC}"
+        exit 1
+    fi
+    JAR_LIB_DIR="$ENGINE_LIB"
+    echo -e "${GREEN}✅ Engine built: $(find "$ENGINE_LIB" -maxdepth 1 -name '*.jar' | wc -l | tr -d ' ') JARs in ${ENGINE_LIB}${NC}"
+    echo ""
+fi
 
 # Select jar source: explicit directory when provided; otherwise pull from ArcadeDB image
 LOCAL_JARS_DIR="$PY_BINDINGS_DIR/local-jars/lib"
 USE_LOCAL_JARS_ARG=""
 LOCAL_JARS_HASH_ARG=""
-JAR_SOURCE_DESC="ArcadeDB image"
+JAR_SOURCE_DESC="arcadedata/arcadedb:${DOCKER_TAG} image"
 mkdir -p "$LOCAL_JARS_DIR"
 
 if [[ -n "$JAR_LIB_DIR" ]]; then
@@ -184,6 +292,9 @@ if [[ -n "$JAR_LIB_DIR" ]]; then
         mkdir -p "$LOCAL_JARS_DIR"
         cp -a "$JAR_LIB_DIR"/*.jar "$LOCAL_JARS_DIR"/
         JAR_SOURCE_DESC="${JAR_LIB_DIR} (staged into local-jars)"
+    fi
+    if [[ "$ENGINE_FROM_SOURCE" == 1 ]]; then
+        JAR_SOURCE_DESC="engine built from source at ${ENGINE_COMMIT} (${JAR_LIB_DIR})"
     fi
 
     USE_LOCAL_JARS_ARG="--build-arg USE_LOCAL_JARS=1"
@@ -276,7 +387,20 @@ echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━�
 echo ""
 
 if [[ "$USE_NATIVE" == true ]]; then
-    # Native build
+    # Native build. build-native.sh packages whatever src/arcadedb_embedded/jars
+    # holds (and fills it from the image only when it is empty), so a JAR
+    # directory reaches a native build only by being staged there. CI downloads
+    # its JAR artifact into that directory and passes the same path, which
+    # needs no copy.
+    if [[ -n "$JAR_LIB_DIR" ]]; then
+        NATIVE_JARS_DIR="$PY_BINDINGS_DIR/src/arcadedb_embedded/jars"
+        mkdir -p "$NATIVE_JARS_DIR"
+        if [[ "$(realpath "$JAR_LIB_DIR")" != "$(realpath "$NATIVE_JARS_DIR")" ]]; then
+            echo -e "${CYAN}📦 Staging ${JAR_LIB_DIR} into src/arcadedb_embedded/jars for the native build${NC}"
+            find "$NATIVE_JARS_DIR" -maxdepth 1 -name '*.jar' -type f -exec rm -f {} +
+            cp "$JAR_LIB_DIR"/*.jar "$NATIVE_JARS_DIR"/
+        fi
+    fi
     echo -e "${YELLOW} Building natively on ${PLATFORM}...${NC}"
     "$SCRIPT_DIR/build-native.sh" "$PLATFORM" "$PACKAGE_NAME" "$DESCRIPTION" "$DOCKER_TAG" "${BUILD_VERSION:-}"
 else
@@ -401,7 +525,7 @@ else
 
     if [[ -n "$JAR_LIB_DIR" ]]; then
         echo -e "${CYAN}🔎 Verifying embedded local integration JAR...${NC}"
-        ARCADEDB_VERSION="$DOCKER_TAG" python3 - << 'PY'
+        ARCADEDB_VERSION="$POM_TAG" python3 - << 'PY'
 import hashlib
 import os
 import sys
@@ -427,12 +551,15 @@ if not wheel.name.startswith(f"arcadedb_embedded-{_want}"):
     print(f"❌ newest wheel is {wheel.name}, which is not the "
           f"{ARCADEDB_VERSION} build this run produced", file=sys.stderr)
     sys.exit(1)
-local_jar_name = f"arcadedb-integration-{ARCADEDB_VERSION}.jar"
-local_jar = Path(f"local-jars/lib/{local_jar_name}")
-
-if not local_jar.exists():
-    print(f"❌ Local integration JAR not found: {local_jar}", file=sys.stderr)
+# The staged JARs' own version, NOT pom.xml's: the JARs can come from another
+# version than this source tree (an official release image's lib, for one).
+local_jars = sorted(Path("local-jars/lib").glob("arcadedb-integration-*.jar"))
+if len(local_jars) != 1:
+    print(f"❌ expected one local integration JAR, found {[p.name for p in local_jars]}",
+          file=sys.stderr)
     sys.exit(1)
+local_jar = local_jars[0]
+local_jar_name = local_jar.name
 
 with zipfile.ZipFile(wheel) as zf:
     matches = [name for name in zf.namelist() if name.endswith(local_jar_name)]
@@ -482,6 +609,38 @@ echo -e "${CYAN}📦 Built package:${NC}"
 if [ -d "dist" ]; then
     ls -lh dist/*.whl 2> /dev/null | awk '{print "   " $9 " (" $5 ")"}'
 fi
+# Read from the engine JAR inside the wheel, which is the evidence; the wheel's
+# version string says nothing about the engine it carries. A function, not a
+# heredoc inside $(...), which bash 3.2 parses badly.
+read_engine_build_number() {
+    python3 - "$1" << 'PY'
+import io
+import sys
+import zipfile
+
+with zipfile.ZipFile(sys.argv[1]) as wheel:
+    engines = [n for n in wheel.namelist() if "/jars/arcadedb-engine-" in n]
+    if len(engines) != 1:
+        print(f"no single engine JAR in the wheel ({len(engines)} found)")
+        sys.exit(0)
+    with zipfile.ZipFile(io.BytesIO(wheel.read(engines[0]))) as jar:
+        try:
+            props = jar.read("com/arcadedb/arcadedb.properties").decode("latin-1")
+        except KeyError:
+            print("none recorded")
+            sys.exit(0)
+for line in props.splitlines():
+    key, sep, value = line.partition("=")
+    if sep and key.strip() == "buildNumber":
+        print(value.strip())
+        break
+else:
+    print("none recorded")
+PY
+}
+ENGINE_BUILD_NUMBER=$(read_engine_build_number "$NEWEST_WHEEL" || echo "unreadable")
+echo -e "${CYAN}🧩 JAR source: ${YELLOW}${JAR_SOURCE_DESC}${NC}"
+echo -e "${CYAN}🧩 Engine buildNumber: ${YELLOW}${ENGINE_BUILD_NUMBER}${NC}"
 
 echo ""
 
