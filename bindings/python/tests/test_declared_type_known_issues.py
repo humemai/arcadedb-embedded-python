@@ -9,8 +9,8 @@ comes off and the test asserts the fixed behavior.
 Upstream: ArcadeData/arcadedb #9014 and #9027 (a value that cannot be converted was stored
 as NULL, and '' as 0; fixed in 26.10.1 by PR #9121), #9017 (CREATE PROPERTY mandatory +
 notnull was accepted over records that lack the property, then ORDER BY dropped them; fixed
-in 26.10.1 by PR #9116, which refuses the declaration), #9021 (an index on INTEGER answers
-for a fractional bound as if it were rounded; open).
+in 26.10.1 by PR #9116, which refuses the declaration), #9021 (an index on INTEGER answered
+for a fractional bound as if it were rounded; fixed in 26.10.1 by PR #9126).
 """
 
 import math
@@ -83,18 +83,23 @@ def _matching(db, name, condition, bound):
     return sorted(r.get("i") for r in db.query("sql", query, {"b": bound}))
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="ArcadeData/arcadedb#9021: an index on an INTEGER answers for a bound with a fraction as if "
-    "it were rounded (i = 12.5 returns 12, i < 12.5 misses 12)",
+@pytest.mark.parametrize(
+    "condition, expected",
+    [("i = :b", []), ("i >= :b", [13]), ("i < :b", [11, 12])],
 )
-@pytest.mark.parametrize("condition", ["i = :b", "i >= :b", "i < :b"])
-def test_index_agrees_with_scan_for_a_fractional_bound(temp_db_path, condition):
+def test_index_agrees_with_scan_for_a_fractional_bound(
+    temp_db_path, condition, expected
+):
+    """#9021, fixed in 26.10.1: an index on an INTEGER answers for the exact bound, so a
+    float bound of 12.5 returns the rows the unindexed scan returns. The plan check keeps
+    the query on the index, so the test cannot pass by comparing a scan with a scan."""
     with arcadedb.create_database(temp_db_path) as db:
         _indexed_and_plain_integers(db)
-        assert _matching(db, "Indexed", condition, 12.5) == _matching(
-            db, "Plain", condition, 12.5
-        )
+        query = f"EXPLAIN SELECT i FROM Indexed WHERE {condition}"  # nosec B608
+        plan = db.query("sql", query, {"b": 12.5}).first().get("executionPlanAsString")
+        assert "FETCH FROM INDEX" in plan
+        assert _matching(db, "Indexed", condition, 12.5) == expected
+        assert _matching(db, "Plain", condition, 12.5) == expected
 
 
 def test_rounded_bound_workaround_for_a_fractional_bound(temp_db_path):
