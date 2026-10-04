@@ -2184,11 +2184,11 @@ def _knows_one_way_note(table_id, rows):
 # compared their ids instead (`tag1.id <> tag2.id`, `person1.id <> person3.id`),
 # on the belief that ArcadeDB's openCypher needed the property form. It does
 # not, and its planner recognises only the inequality between two node
-# variables for the count operators it has for these queries, so the id form
-# sent all four to the row pipeline; the rewrite costs Neo4j time too. The
-# answers are identical either way, so every digest agreed. The timings stand
-# and the text is disclosed, the way F146's zero ages and F169's one-way
-# friendships are. The re-pin runs LSQB's own text on every engine and writes
+# variables for the count operators it has for q5, q6, and q9, and at the pin
+# LSQB's text ran faster than the id form on all four; the rewrite cost Neo4j
+# time too on q9. The answers are identical either way, so every digest
+# agreed. The timings stand and the text is disclosed, the way F146's zero
+# ages and F169's one-way friendships are. The re-pin runs LSQB's own text on every engine and writes
 # `lsqb_text` into every graph analytics row (CAMPAIGN section 7 row 60); a row
 # without it ran the id form, and the sentence stays until no such row is left
 # behind the table. The queries are named the way the table's columns name
@@ -2225,12 +2225,19 @@ def _lsqb_id_form_note(table_id, rows):
     names = _lsqb_id_form_queries(rows)
     if not names:
         return None
-    these = "this query" if len(names) == 1 else "these queries"
+    # Only what holds for every query the sentence can name, on the build the
+    # rows measured: at the pin (417314c18, config A, laptop) LSQB's text ran
+    # faster on ArcadeDB than the id form for each of q5, q6, q8, and q9, with
+    # and without the lane's view (perf-lsqb-q9-20261004 out/summary-all-runs.md,
+    # recA1-oct and recA2-oct). Not "the operators it has": the hunt found
+    # dedicated count operators for q5, q6, and q9, not for q8. Not "slows other
+    # engines": that was measured on Neo4j and on q9 only. On newer main q5's
+    # order reverses, hence "the build measured here".
     text = (f"In {_join_and(names)}, the check that two matched nodes are different compared "
             f"their id properties, where LSQB's own text compares the nodes themselves. The "
-            f"answers are the same either way, but the id form keeps ArcadeDB off the operators "
-            f"it has for {these} and slows other engines too. The next measurement runs LSQB's "
-            f"own text.")
+            f"answers are the same either way, but on the build measured here the id form "
+            f"keeps ArcadeDB on a slower plan than LSQB's own text gets. The next measurement "
+            f"runs LSQB's own text.")
     return _next_item("lsqb_text", _gen(text, *names))
 
 

@@ -1839,8 +1839,8 @@ def _check_one_way_knows_disclosure(payload, rows):
 def _check_lsqb_id_form_disclosure(payload, rows):
     """A graph analytics table built from rows that ran LSQB's q5, q6, q8, or
     q9 with the node inequality on the id property carries the sentence that
-    says so (BUGS F174, DECISIONS #154 item 2): the id form keeps ArcadeDB off
-    the operators it has for those queries. Re-decided from the same rows as
+    says so (BUGS F174, DECISIONS #154 item 2): the id form keeps ArcadeDB on
+    a slower plan than LSQB's own text gets. Re-decided from the same rows as
     the exporter, as _check_one_way_knows_disclosure does for F169. A pending
     table is not in the payload and is checked when it lands. Returns bad
     count."""
