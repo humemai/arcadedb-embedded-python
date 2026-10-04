@@ -191,8 +191,8 @@ The JARs are filtered later, by the build that packages them (see
     - `tester`: Installs the wheel in a clean image and runs a create, insert, and query
       smoke script (not pytest)
 3. Download the JAR artifact and pass it to `build.sh` as `JAR_LIB_DIR`, which stages it
-   into `local-jars/lib` for the Docker build (with `jar-source: image`,
-   `ARCADEDB_IMAGE_TAG` also names the image of the base stage)
+   into `local-jars/lib` for the Docker build and sets `USE_LOCAL_JARS=1`, so the Docker
+   build pulls no `arcadedata/arcadedb` image
 4. `build.sh` runs the `tester` smoke stage; the full suite then runs on the runner host
    against the built wheel
 
@@ -276,14 +276,21 @@ errors=$(grep -oE 'errors="[0-9]+"' test-results.xml | grep -oE '[0-9]+')
 ### Stages
 
 ```dockerfile
-# Stage 1: java-builder (the ArcadeDB image; ARCADEDB_TAG is a required build arg)
-FROM arcadedata/arcadedb:${ARCADEDB_TAG} AS java-builder
+# Stage 1: java-builder, chosen by USE_LOCAL_JARS (0 or 1). BuildKit builds only the
+# stages the target needs, so with local JARs the ArcadeDB image is never pulled.
+# The image's JARs
+FROM arcadedata/arcadedb:${ARCADEDB_TAG} AS upstream-jars-0
+# An empty /home/arcadedb/lib
+FROM amazoncorretto:25 AS upstream-jars-1
+RUN mkdir -p /home/arcadedb/lib
+FROM upstream-jars-${USE_LOCAL_JARS} AS java-builder
 
 # Stage 2: jre-builder (filters JARs, compiles the bridge JAR, creates JRE)
 FROM amazoncorretto:25 AS jre-builder
 COPY --from=java-builder /home/arcadedb/lib /build/upstream-jars/
 COPY bindings/python/local-jars/lib/ /build/local-jars/
-# Uses /build/local-jars instead of the image's JARs when USE_LOCAL_JARS=1
+# Uses /build/local-jars instead of the image's JARs when USE_LOCAL_JARS=1, and stops
+# when that directory is empty rather than fall back to an image
 # Reads jar_exclusions.txt
 # Filters out excluded JARs before packaging
 # Compiles arcadedb-python-bridge.jar from bindings/python/src/java with javac
@@ -489,7 +496,11 @@ main repository's `.git` when you build in a worktree, so the engine records its
 and the `buildNumber` of the engine JAR inside the wheel.
 
 `build.sh` stages a JAR directory into `local-jars/lib` for the Docker build, and into
-`src/arcadedb_embedded/jars` for a native build.
+`src/arcadedb_embedded/jars` for a native build. Given JARs, the Docker build does not pull
+the `arcadedata/arcadedb` image (`USE_LOCAL_JARS=1` selects an empty first stage instead),
+so a build from source works whether or not upstream has published an image for the
+`pom.xml` version. That needs BuildKit, the default builder of current Docker; the legacy
+builder builds every stage and still pulls it.
 
 `build.sh` reads the ArcadeDB tag from `pom.xml` (or `ARCADEDB_IMAGE_TAG`) and passes it on. If you call the lower-level
 scripts directly, `build-native.sh` needs `PLATFORM PACKAGE_NAME PACKAGE_DESCRIPTION ARCADEDB_TAG [BUILD_VERSION]`

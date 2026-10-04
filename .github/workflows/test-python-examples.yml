@@ -294,11 +294,9 @@ jobs:
           # THE DOWNLOADED JARS, ON EVERY PLATFORM. Without JAR_LIB_DIR the Linux
           # (Docker) build copies an image's jars itself, so the engine-from-source
           # option once did nothing there while the native builds used the artifact
-          # (2026-10-04, run 37193748490). With `image`, ARCADEDB_IMAGE_TAG also
-          # points the Docker build's base stage at the same image.
-          if [ "$JAR_SOURCE" = "image" ]; then
-            export ARCADEDB_IMAGE_TAG="$IMAGE_TAG"
-          fi
+          # (2026-10-04, run 37193748490). Given jars, the Docker build pulls no
+          # arcadedata/arcadedb image at all (Dockerfile.build, stage 1), so a
+          # source run does not depend on a snapshot image existing.
           ./scripts/build.sh ${{ matrix.platform }} ${{ matrix.python-version }} src/arcadedb_embedded/jars
 
       # Note: Java is NOT required - arcadedb-embedded has bundled JRE!

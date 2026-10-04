@@ -407,8 +407,10 @@ uv run --project .. --group docs mike alias --update-aliases \
 
 - Check Docker daemon is running
 - Verify scripts/Dockerfile.build syntax
-- Check that the `arcadedata/arcadedb:<version>` image exists for the `pom.xml` version: a
-  release copies its JARs from it, and the Linux build's base stage pulls it
+- With `jar-source: image` (a stable release), check that the `arcadedata/arcadedb:<version>`
+  image exists: the `image-jars` job copies the JARs out of it. A build given JARs (every CI
+  build, and `build.sh` with a JAR directory or `--engine-from-source`) pulls no image; a
+  local `build.sh` without either copies its JARs from the image of the `pom.xml` version
 
 **Test failures:**
 

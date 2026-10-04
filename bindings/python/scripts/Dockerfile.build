@@ -14,16 +14,31 @@ ARG PACKAGE_DESCRIPTION="ArcadeDB embedded multi-model database with bundled JRE
 # Deterministic placeholder. The wrapper build script must pass the real ArcadeDB tag.
 ARG ARCADEDB_TAG=build-arg-required
 ARG TARGET_PLATFORM=linux-x64
-# When set to 1, prefer jars provided in bindings/python/local-jars/lib from the build context.
+# When set to 1, use the jars provided in bindings/python/local-jars/lib from the build
+# context (build.sh sets it when it is given a JAR directory, or builds one with
+# --engine-from-source), and do not pull the ArcadeDB image at all.
 # If no local jars are present, the build fails fast to avoid silently falling back.
+# Only 0 and 1 are valid: the value names the stage below.
 ARG USE_LOCAL_JARS=0
 ARG LOCAL_JARS_HASH=none
 
-# Stage 1: Use prebuilt ArcadeDB image to obtain compiled JARs
-# JARs are filtered based on scripts/jar_exclusions.txt in later stages
-FROM arcadedata/arcadedb:${ARCADEDB_TAG} AS java-builder
+# Stage 1: the ArcadeDB image's JARs, or nothing.
+#
+# USE_LOCAL_JARS picks one of the two stages below by name, and BuildKit builds
+# only the stages the target needs, so a build from local jars never pulls
+# arcadedata/arcadedb:<ARCADEDB_TAG>. A build from source therefore does not
+# depend on upstream having published a snapshot image for this pom.xml version.
+# (The legacy builder, DOCKER_BUILDKIT=0, builds every stage and still pulls it.)
+# JARs are filtered based on scripts/jar_exclusions.txt in later stages.
+FROM arcadedata/arcadedb:${ARCADEDB_TAG} AS upstream-jars-0
+# nothing to do here; jars will be copied from /home/arcadedb/lib in the jre-builder stage
 
-# nothing to do here; jars will be copied from /home/arcadedb/lib in the python-builder stage
+# The same path, empty: the jre-builder stage below then takes the local jars, or
+# stops if there are none.
+FROM amazoncorretto:25 AS upstream-jars-1
+RUN mkdir -p /home/arcadedb/lib
+
+FROM upstream-jars-${USE_LOCAL_JARS} AS java-builder
 
 # Stage 2: Build minimal JRE with jlink
 # Docker builds are Linux-only. macOS/Windows JREs must be created on matching native hosts.
@@ -43,7 +58,7 @@ RUN case "$TARGET_PLATFORM" in \
 
 WORKDIR /build
 
-# Stash upstream jars from the ArcadeDB image
+# Stash upstream jars from the ArcadeDB image (an empty directory with USE_LOCAL_JARS=1)
 RUN mkdir -p /build/upstream-jars /build/jars /build/local-jars
 COPY --from=java-builder /home/arcadedb/lib /build/upstream-jars/
 

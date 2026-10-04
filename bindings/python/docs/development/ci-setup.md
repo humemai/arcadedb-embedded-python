@@ -46,8 +46,9 @@ fired because the image had moved past our last sync.
   (`arcadedb-jars`, or `arcadedb-jars-examples` in the examples workflow) and passes it
   to `build.sh` as `JAR_LIB_DIR`; the Linux Docker build stages it into
   `local-jars/lib`, and the macOS and Windows builds read it from
-  `src/arcadedb_embedded/jars`. With `image`, `ARCADEDB_IMAGE_TAG` also points the
-  Docker build's base stage at the same image.
+  `src/arcadedb_embedded/jars`. Given JARs, the Docker build pulls no
+  `arcadedata/arcadedb` image at all, so a `source` run does not depend on upstream having
+  published a snapshot image for the `pom.xml` version.
 - The job summary of each test job names the JAR source and the engine's
   `buildNumber`, the commit recorded in `com/arcadedb/arcadedb.properties`.
 
