@@ -219,6 +219,16 @@ if [[ "$ENGINE_FROM_SOURCE" == 1 ]]; then
         echo -e "${RED}❌ --engine-from-source builds in a Maven container and needs Docker${NC}"
         exit 1
     fi
+    # The container runs as you, so it cannot clean a target directory an
+    # earlier container left owned by root (build_and_install_locally.sh runs
+    # Maven as root). Say so before Maven fails halfway through a clean.
+    for target_dir in "$REPO_ROOT"/*/target; do
+        if [[ -d "$target_dir" && ! -w "$target_dir" ]]; then
+            echo -e "${RED}❌ ${target_dir} is not writable by you (left by a container that ran as root?)${NC}"
+            echo -e "${YELLOW}💡 Remove the root-owned build output first: sudo rm -rf ${REPO_ROOT}/*/target${NC}"
+            exit 1
+        fi
+    done
     ENGINE_BUILD_IMAGE="${ENGINE_BUILD_IMAGE:-maven:3.9-eclipse-temurin-21}"
     ENGINE_BUILD_M2="${ENGINE_BUILD_M2:-$HOME/.m2}"
     mkdir -p "$ENGINE_BUILD_M2"
