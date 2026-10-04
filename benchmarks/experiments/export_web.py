@@ -2496,6 +2496,72 @@ def _graph_first_pass_note(rows):
     return _next_item("warmup", _gen(" ".join(parts), *jvm))
 
 
+# THE DOCUMENT OPERATIONS ARE TIMED FROM THE FIRST ONE AFTER THE LOAD
+# (DECISIONS #157, found by the commit-cost hunt, `.notes/bench/repros/
+# perf-commit-20261004/`). l1_tpc times its 1,000 new-orders right after the
+# cell's load, then the payments and the four single-record operations, each
+# leaving out only its first 20 from the percentiles, so the statements run
+# for the first time inside the timed window. Its rows still stamp
+# NA_COLD_WARM_TXN, "already-built, already-warm database by construction",
+# and on the JVM engines that is not true: on the October rows ArcadeDB
+# embedded's new-order is 2.34x (SF1) and 2.56x (SF10) its own payment, timed
+# right after it, against 0.94x to 1.30x for every engine that is not on a
+# JVM. No ratio is quoted on the page (narrative about the numbers is written
+# at the freeze, with pins); the sentence says what the columns include. The
+# durability table prints the same operations from the same rows, both
+# classes, so it carries the sentence too.
+#
+# KEYED ON THE ROWS: the re-pin gives every engine an untimed warm-up on keys
+# disjoint from and below the timed ones and writes `oltp_warmup` (the
+# warm-up count) into every documents OLTP row (CAMPAIGN section 7 row 65); a
+# row without it was timed from the first operation after the load, and the
+# sentence stays until no such row is behind the table. The JVM engines are
+# named from the rows, by the heap they recorded, as _graph_first_pass_note
+# does; off-page arms are never named.
+_OLTP_WARMUP_FIELD = "oltp_warmup"
+
+
+def _docs_cold_window_rows(rows):
+    """The October documents OLTP rows on the page timed from the first
+    operation after the load, i.e. that do not record `oltp_warmup`."""
+    return [r for r in rows
+            if r.get("lane") == "l1tpc" and r.get("workload") == "oltp"
+            and str(r.get("instrument") or "") == "2026-10"
+            and str(r.get("backend")) not in OFF_PAGE_ARMS
+            and not str(r.get(_OLTP_WARMUP_FIELD) or "").strip()]
+
+
+def _docs_warmup_note(table_id, rows):
+    """The warm-up sentence for the documents OLTP table and the durability
+    table, or None when every documents OLTP row behind it recorded its
+    untimed warm-up."""
+    if table_id not in ("docs_oltp", "durability") or not _OCTOBER_ENV:
+        return None
+    stale = _docs_cold_window_rows(rows)
+    if not stale:
+        return None
+    jvm = sorted({display_name(str(r.get("backend"))) for r in stale
+                  if str(r.get("heap") or r.get("server_heap") or "").strip()})
+    if table_id == "docs_oltp":
+        parts = ["The operations on this table are timed from the first one after the data is "
+                 "loaded, so its columns include each engine's warm-up."]
+    else:
+        parts = ["The document operations here are timed from the first one after the data is "
+                 "loaded, so their cells include each engine's warm-up."]
+    if jvm:
+        _one = len(jvm) == 1
+        parts.append(f"On {_join_and(jvm)}, which {'runs' if _one else 'run'} on a JVM, that "
+                     f"warm-up includes the JVM compiling the statement path.")
+    if table_id == "docs_oltp":
+        parts.append("The next measurement gives every engine an untimed warm-up on separate "
+                     "keys first, prints the warm median, and adds the first operation as the "
+                     "cold column.")
+    else:
+        parts.append("The next measurement gives every engine an untimed warm-up on separate "
+                     "keys first, and this table prints their warm median.")
+    return _next_item("docs_warmup", _gen(" ".join(parts), *jvm))
+
+
 def _cold_note(table_id, rows, columns=()):
     """The one clause this table owes about its cold column."""
     src = OCT_COLD_SOURCE.get(table_id)
@@ -2512,6 +2578,12 @@ def _cold_note(table_id, rows, columns=()):
         _first = _graph_first_pass_note(rs)
         if _first:
             return _first
+    # So do the documents OLTP table's, and its operations are timed from the
+    # first one after the load (_docs_warmup_note, DECISIONS #157).
+    if table_id == "docs_oltp":
+        _window = _docs_warmup_note(table_id, rs)
+        if _window:
+            return _window
     na = sorted({str(r["cold_warm_na"]) for r in rs if r.get("cold_warm_na")})
     if na:
         # A table whose cold columns come from elsewhere (the dense table's
@@ -3090,6 +3162,23 @@ def _next_measurement_note(tables):
         items.append(_gen(f"The {_join_and(warm)} reads get an untimed warm-up on other start "
                           f"persons, the table prints their warm median, and a cold column is "
                           f"added.", *warm))
+    docs_warm = carried_by("docs_warmup")
+    if docs_warm:
+        # The cold column is the documents OLTP table's; the durability table
+        # prints warm medians only. Its title is a phrase ("What waiting for
+        # the disk costs"), so the line names it as the table on that phrase.
+        titles = {t.get("id"): str(t.get("title") or t.get("id")) for t in tables}
+        oltp = titles.get("docs_oltp") if titles.get("docs_oltp") in docs_warm else None
+        dur = titles.get("durability") if titles.get("durability") in docs_warm else None
+        dur_words = f"the table on {dur[:1].lower()}{dur[1:]}" if dur else None
+        if oltp:
+            text = (f"The {oltp} operations get an untimed warm-up on separate keys, the table "
+                    f"prints their warm median and adds the first operation as a cold column"
+                    + (f", and {dur_words} prints warm medians too" if dur else "") + ".")
+        else:
+            text = (f"The document operations on {dur_words} get an untimed warm-up on separate "
+                    f"keys, and the table prints their warm median.")
+        items.append(_gen(text, *docs_warm))
     if carried_by("full_sync"):
         nxt = str(_ARCADEDB_STRICT_NEXT)
         items.append(_gen(f"ArcadeDB's runs that wait for the disk use a data-only sync "
@@ -4575,7 +4664,10 @@ MULTIMODEL_KINDS = {"censored": "censored", "withheld": "withheld",
                     # "withdrawn" is not "withheld": a withheld cell is one
                     # number pulled from a row that stands, a withdrawn one is
                     # the whole row taken down until it is measured again.
-                    "withdrawn": "withdrawn"}
+                    "withdrawn": "withdrawn",
+                    # A row a defect in the engine's own release decided
+                    # (_not_comparable_entries), marked `n/c` on its table.
+                    "not comparable": "not comparable"}
 
 
 def engine_family(backend, is_arcadedb=False):
@@ -4708,6 +4800,8 @@ def _multimodel_table(finished):
                      "came down until it is measured again",
         "unrun": "not run, the placeholder run did not cover this "
                  "workload for that engine",
+        "not comparable": "not comparable, a defect in the engine's own release decided "
+                          "the result, and the note under that table names it",
     }
     # ITERATE THE KINDS THAT ARE PRESENT, not a list typed beside the legend.
     # The tuple this replaces named three, so "failed" -- a kind
@@ -5416,7 +5510,6 @@ OCT_PROSE = {
                    "latencies comparable at all.", []),
         "cold": ("Cold p50 and p99 are the first timed pass over the query set after the index is built; the lane runs a short untimed warm-up on held-out queries before it, so cold means an index that has not yet answered the timed queries, not a process that has done nothing. Warm columns, where present, are the passes after it from the multipass driver.", []),
         "degree": ("ArcadeDB's maxConnections is a Vamana per-layer degree, not hnswlib's M. Matching the parameter names would compare a half-degree graph against a full-degree one, so the graphs are matched by effect instead.", []),
-        "arango_ivf": ("ArangoDB's vector index is FAISS IVF (inverted lists over trained centroids), not HNSW, so the degree match above does not apply to it; its rows record nLists (about the square root of the corpus) and nProbe (an eighth of the lists) instead.", []),
         "milvus": ("Milvus's dense rows run with segments sealed at 50% of the maximum segment size, where the image default is 12%, so a large ingest lands in the few-large-segments layout that Milvus's own compaction otherwise reaches at an unpredictable moment. One line changed from the image's configuration; sparse rows are at the default.",
                    [(r"sealed at (\d+)%", lambda P, rows: _milvus_seal_proportion() * 100, "const"),
                     (r"image default is (\d+)%", lambda P, rows: _const("runner", "MILVUS_IMAGE_SEAL_PROPORTION") * 100, "const")]),
@@ -6029,6 +6122,101 @@ def _filtered_modes():
     return out
 
 
+# ARANGODB'S IVF OPERATING POINT, READ FROM ITS ROWS. The registered sentence
+# this replaces said its rows record nLists "about the square root of the
+# corpus" and nProbe "an eighth of the lists", and neither is what the harness
+# does. arango_common.ivf_params builds round(4 * sqrt(n)) lists, the low end
+# of FAISS's guideline for 1M to 10M vectors (4 * sqrt(n) to 16 * sqrt(n));
+# NPROBE_FRAC, the eighth, is only the cross-model lane's setting and the
+# search's first guess. On the dense lane calibrate_nprobe picks the smallest
+# nProbe in [1, nLists] whose recall@10 on a held-out slice of the fixture
+# queries (never the timed ones) reaches arango_common.recall_target: the
+# median frozen recall@10 of ArcadeDB embedded fp32 at the same size, read
+# from runs_paper.csv, the previous published measurement's freeze.
+#
+# Every number comes from the rows behind the table's ArangoDB entries:
+# ivf_nlists against n_docs (the multiplier is said only when every row agrees
+# with ivf_params, and in words), ivf_calibration_queries, ivf_recall_target
+# and ivf_recall_target_source, and ivf_nprobe. A size whose ArangoDB row is
+# not on the table (the 10M cell, withheld, _one_list_note) is not described.
+_RECALL_TARGET_SOURCE = re.compile(
+    r"^(runs_paper(?:_oct)?\.csv) (arcadedb_dense_embedded) (fp32) (\S+) median of (\d+)$")
+
+
+def _arango_ivf_note(table, rows):
+    """The ArangoDB IVF sentence for the dense table, or None when no
+    ArangoDB row with an IVF operating point is behind it."""
+    shown = {str(e.get("scale")) for e in table.get("entries") or []
+             if str(e.get("backend_key") or "").startswith("arangodb") and not e.get("outcome")}
+    rs = [r for r in rows
+          if r.get("lane") == "l3d" and str(r.get("backend") or "").startswith("arangodb")
+          and str(r.get("instrument") or "") == "2026-10" and str(r.get("scale")) in shown
+          and _num(r.get("ivf_nlists")) and _num(r.get("n_docs"))]
+    if not rs:
+        return None
+    import arango_common
+    by = {}
+    for r in rs:
+        by.setdefault(str(r.get("scale")), []).append(r)
+    order = sorted(by, key=lambda sc: SCALE_ORDER.index(sc) if sc in SCALE_ORDER else len(SCALE_ORDER))
+    values = []
+    parts = ["ArangoDB's vector index is FAISS IVF (inverted lists over trained centroids), not "
+             "HNSW, so the degree match above does not apply to it, and its rows record its "
+             "operating point instead."]
+    lists = []
+    for sc in order:
+        got = sorted({int(_num(r.get("ivf_nlists"))) for r in by[sc]})
+        size = scale_label("l3d", sc)
+        lists.append(f"{_join_and(f'{n:,}' for n in got)} lists at {size}")
+        values += [f"{n:,}" for n in got] + [size]
+    mults = {round(_num(r.get("ivf_nlists")) / _num(r.get("n_docs")) ** 0.5) for r in rs}
+    follows = all(arango_common.ivf_params(int(_num(r.get("n_docs"))))[0] == int(_num(r.get("ivf_nlists")))
+                  for r in rs)
+    if follows and len(mults) == 1:
+        parts.append(f"Its number of lists is {_count_word(mults.pop())} times the square root "
+                     f"of the vector count, the low end of the range FAISS's own guidelines give, "
+                     f"which makes {_join_and(lists)}.")
+    else:
+        parts.append(f"Its index has {_join_and(lists)}.")
+    probed = [r for r in rs if _num(r.get("ivf_nprobe"))]
+    if probed:
+        queries = {int(_num(r.get("ivf_calibration_queries"))) for r in probed
+                   if _num(r.get("ivf_calibration_queries"))}
+        held = (f"{next(iter(queries)):,} queries held out from the timed ones" if len(queries) == 1
+                else "queries held out from the timed ones")
+        values += [f"{q:,}" for q in queries if len(queries) == 1]
+        srcs = {str(r.get("ivf_recall_target_source") or "") for r in probed}
+        m = _RECALL_TARGET_SOURCE.match(next(iter(srcs))) if len(srcs) == 1 else None
+        if m:
+            arc = f"{display_name(m.group(2))[:-1]}, {m.group(3)})"
+            when = ("in the previous published measurement" if m.group(1) == "runs_paper.csv"
+                    else "in this measurement")
+            target = f"the median recall@10 of {arc} at the same size {when}"
+            values.append(arc)
+        else:
+            target = "the recall target its rows record"
+        parts.append(f"The number of lists each query probes is calibrated, not set: after the "
+                     f"build and before any timed pass, the benchmark picks the smallest number "
+                     f"whose recall@10 on {held} reaches {target}.")
+        per = []
+        for sc in order:
+            here = [r for r in probed if str(r.get("scale")) == sc]
+            if not here:
+                continue
+            size = scale_label("l3d", sc)
+            nps = sorted(int(_num(r.get("ivf_nprobe"))) for r in here)
+            chose = f"{nps[0]:,}" if nps[0] == nps[-1] else f"{nps[0]:,} to {nps[-1]:,}"
+            builds = (f" across {_count_word(len(here))} builds" if len(here) > 1 else "")
+            tg = {str(r.get("ivf_recall_target")) for r in here if _num(r.get("ivf_recall_target"))}
+            lead = (f"At {size} that target is {next(iter(tg))} and the calibration chose"
+                    if len(tg) == 1 else f"At {size} the calibration chose")
+            per.append(f"{lead} {chose} lists{builds}")
+            values += [size, f"{nps[0]:,}", f"{nps[-1]:,}"] + list(tg if len(tg) == 1 else [])
+        if per:
+            parts.append("; ".join(per) + ".")
+    return _gen(" ".join(parts), *dict.fromkeys(values))
+
+
 def _oct_conditions(table):
     """The registered and generated sentences an October table carries beyond
     what its builder and main() already put there: (head, tail). The head
@@ -6051,8 +6239,9 @@ def _oct_conditions(table):
             head.append(split)
         if any(c.startswith("cold ") for c in table.get("columns") or []):
             tail.insert(0, _R("l3d", "cold"))
-        if any(n.startswith("ArangoDB") for n in names):
-            tail.append(_R("l3d", "arango_ivf"))
+        _ivf = _arango_ivf_note(table, _FROZEN_ROWS)
+        if _ivf:
+            tail.append(_ivf)
         if any(n.startswith("Milvus") for n in names):
             tail.append(_R("l3d", "milvus"))
     if tid == "l3s":
@@ -6343,6 +6532,10 @@ _MARK_MEANINGS = {
     # Not "is being measured again": some marked cells are re-measured in this campaign and some only in the
     # next measurement, and each note says which.
     "re-run": "the cell was measured before a fix to our harness and stays off the table until it is measured again; the note says what was wrong",
+    # Not `re-run`: nothing was wrong with our harness, and the cell is not
+    # measured again at this release. Not `err`: the cell finished. A defect in
+    # the engine's own release decided what it returned (_one_list_note).
+    "n/c": "not comparable, because a defect in the engine's release decided the cell's result; none of its numbers is printed, and the note names the defect",
 }
 
 
@@ -6445,6 +6638,45 @@ def _censored_entries(table):
                     "outcome": kind,
                     "metrics": {c: {"text": mark} for c in cols}})
     return out, marks
+
+
+def _not_comparable_entries(table, held=frozenset()):
+    """Rows for the cells a known engine defect decided (_one_list_groups).
+
+    The same shape as a measured row, as _censored_entries builds, with
+    `outcome` and an `n/c` mark in every cell: the engine stays on the table at
+    that size, and nothing that counts, ranks, or averages a measurement reads
+    the row as one. Only at a size the table prints measured rows at, for the
+    reason _censored_entries gives, and not where `held`, the (backend key,
+    size) pairs a censored row already stands for, has one. The whole row is
+    declared absent with the sentence that explains it, which is what the
+    coverage gate reads.
+    """
+    groups = _one_list_groups(table.get("id"))
+    if not groups:
+        return [], set()
+    measured_scales = {str(e.get("scale")) for e in table.get("entries") or []
+                       if not e.get("outcome")}
+    cols = list(table.get("columns") or [])
+    out = []
+    for (backend, scale), items in sorted(groups.items()):
+        if scale not in measured_scales or (backend, scale) in held:
+            continue
+        name = display_name(backend)
+        prec = DENSE_PRECISION.get(backend)
+        label = f"{name[:-1]}, {prec})" if prec and name.endswith(")") else (
+            f"{name} ({prec})" if prec else name)
+        out.append({"backend": label, "backend_key": backend,
+                    "is_arcadedb": "arcadedb" in backend,
+                    "precision": prec, "scale": scale,
+                    "scale_label": scale_label("l3d", scale), "workload": "search",
+                    "n_docs": None, "deployment": deployment_of(backend),
+                    "image": None, "version_name": None, "host": None,
+                    "outcome": "not comparable",
+                    "metrics": {c: {"text": "n/c"} for c in cols}})
+        _declare_absence(table.get("id"), label, None, "not comparable",
+                         _one_list_note(backend, scale, items))
+    return out, ({"n/c"} if out else set())
 
 
 def _phase_split_notes(table):
@@ -7299,18 +7531,112 @@ def _counts_note(table_id, entries):
     return []
 
 
-def _withheld_recall_notes(table_id):
-    """One sentence per approximate-search cell the freeze withheld for a recall
-    below make_paper_tables.RECALL_FLOOR (the sidecar it writes). The cell's
-    absence is said under the table rather than left as a missing row."""
-    if table_id not in ("l3d", "l3s"):
-        return []
+def _withheld_recall_items():
+    """The freeze's record of the approximate-search rows it withheld for a
+    recall below make_paper_tables.RECALL_FLOOR (its sidecar), or []."""
     path = GENERATED / "withheld_recall.json"
     try:
         items = json.loads(path.read_text())
     except (OSError, ValueError):
         return []
+    return items if isinstance(items, list) else []
+
+
+# ARANGODB 3.12.11 ANSWERS FROM ONE LIST (BUGS F175, DECISIONS #156). On that
+# release, once an IVF index has 10,000 or more lists, every multithreaded
+# query probes the same single list, so its top 10 is one document repeated.
+# The October rep 1 at 9.99M vectors (12,643 lists) finished with recall 0.0,
+# while the 1M size (4,000 lists) answers correctly. The threshold is exact
+# (9,999 lists pass, 10,000 fail, whatever the data), the stored index is sound
+# (single-threaded queries on it answer with recall 1.0), and 3.12.12 passes
+# the minimal repro (`.notes/bench/repros/arango-recall-20261004/`); it is also
+# the cause of September's withheld 10M cell (F55). So this is no longer an
+# unexplained broken index: the row stays on the table marked `n/c`, none of
+# its numbers is printed, and the sentence says why and that the next
+# measurement runs ArangoDB at its latest stable release (CAMPAIGN section 7
+# rows 66 and 67). No re-run at this pin with fewer lists (#156 item 2).
+#
+# KEYED ON THE ROWS, not on the engine's name alone: an ArangoDB dense row the
+# freeze withheld, whose recall is below the floor below, whose index had
+# 10,000 or more lists, and whose engine version is a release with the defect.
+# The freeze records the list count and the version beside each withheld row
+# (make_paper_tables.WITHHELD_RECALL). A repeat on 3.12.11 is caught the same
+# way, and rows from a new release, or a sidecar written before those two
+# fields, keep the unexplained sentence below, so the declaration retires when
+# the version changes. October only: September's page stays as it was frozen.
+#
+# The floor is the defect's own signature, one list of about 800 vectors out
+# of ten million, so recall near 0 (0.0 in October, 0.0001 in September), well
+# under the freeze's 0.5; a withheld row between the two is some other failure
+# and keeps the unexplained sentence.
+_ONE_LIST_MIN_NLISTS = 10_000
+_ONE_LIST_RELEASES = ("3.12.11",)
+_ONE_LIST_RECALL_BELOW = 0.01
+
+
+def _one_list_release(engine_version):
+    """The x.y.z release in an ArangoDB row's engine_version ("arangodb:3.12.11")."""
+    m = re.search(r"(\d+\.\d+\.\d+)", str(engine_version or ""))
+    return m.group(1) if m else None
+
+
+def _one_list_groups(table_id):
+    """(backend, scale) -> the withheld rows behind this table that the
+    one-list defect decided, as the freeze recorded them; {} when none is."""
+    if table_id != "l3d" or not _OCTOBER_ENV:
+        return {}
+    out = {}
+    for it in _withheld_recall_items():
+        try:
+            rec = float(it.get("recall_at_10"))
+            nlists = int(it.get("ivf_nlists"))
+        except (TypeError, ValueError):
+            continue
+        if (it.get("lane") == "l3d"
+                and str(it.get("backend") or "").startswith("arangodb")
+                and rec < _ONE_LIST_RECALL_BELOW
+                and nlists >= _ONE_LIST_MIN_NLISTS
+                and _one_list_release(it.get("engine_version")) in _ONE_LIST_RELEASES):
+            out.setdefault((str(it.get("backend")), str(it.get("scale"))), []).append(it)
+    return out
+
+
+def _one_list_note(backend, scale, items):
+    """The not-comparable sentence for one ArangoDB dense cell the one-list
+    defect decided. No recall or latency is printed: they are what the defect
+    produced, not what the engine's search does."""
+    label = display_name(backend)
+    size = scale_label("l3d", scale)
+    releases = sorted({_one_list_release(it.get("engine_version")) for it in items})
+    lists = sorted({int(it.get("ivf_nlists")) for it in items})
+    floor = f"{_ONE_LIST_MIN_NLISTS:,}"
+    has = (f"The index at this size has {lists[0]:,} lists" if len(lists) == 1
+           else "The index at this size has at least that many")
+    found = ("none" if all(float(it.get("recall_at_10")) == 0.0 for it in items)
+             else "almost none")
+    text = (f"{label} at {size} is not comparable. On the release measured here, "
+            f"{_join_and(releases)}, an IVF index with {floor} or more lists answers every "
+            f"query from one fixed list. {has}, so the search returned {found} of the true "
+            f"neighbours, and the cell is not a measurement of {label}'s search. The next "
+            f"measurement runs {label} at its latest stable release.")
+    # Filed under the release move, which the page's list of changes already
+    # states for every engine other than ArcadeDB, so this sentence adds no
+    # line of its own and is not counted as a change no line covers.
+    return _next_item("release", _gen(text, label, size, *releases, floor,
+                                      *(f"{n:,}" for n in lists[:1] if len(lists) == 1)))
+
+
+def _withheld_recall_notes(table_id):
+    """One sentence per approximate-search cell the freeze withheld for a recall
+    below make_paper_tables.RECALL_FLOOR (the sidecar it writes). The cell's
+    absence is said under the table rather than left as a missing row; a cell
+    a known engine defect decided gets the sentence that names it instead
+    (_one_list_note)."""
+    if table_id not in ("l3d", "l3s"):
+        return []
+    items = _withheld_recall_items()
     lane = table_id
+    known = _one_list_groups(table_id)
     seen = {}
     for it in items:
         if it.get("lane") != lane:
@@ -7319,6 +7645,9 @@ def _withheld_recall_notes(table_id):
         seen.setdefault(key, []).append(float(it.get("recall_at_10") or 0.0))
     notes = []
     for (backend, scale), recs in sorted(seen.items()):
+        if (backend, scale) in known:
+            notes.append(_one_list_note(backend, scale, known[(backend, scale)]))
+            continue
         label = display_name(backend)
         try:
             size = scale_label(lane, scale)
@@ -7429,6 +7758,12 @@ def _finish_table(table: dict) -> dict:
     # DECISIONS #111. Added AFTER every note and number is computed, so
     # nothing that averages, ranks or counts a measurement can see them.
     _marked, _marks = _censored_entries(table)
+    # A cell a known engine defect decided keeps its row, marked `n/c` (BUGS
+    # F175): unless a censored row already stands for the same engine and size.
+    _nc, _nc_marks = _not_comparable_entries(
+        table, {(str(m.get("backend_key")), str(m.get("scale"))) for m in _marked})
+    _marked = _marked + _nc
+    _marks = set(_marks) | _nc_marks
     # ONE LEGEND for every mark on the table: the censored rows' and the
     # `re-run` cells the #117 withholding placed on rows that stand.
     _marks = set(_marks) | {st["text"] for e in table.get("entries", [])
@@ -8179,10 +8514,13 @@ def main() -> int:
                 _t["conditions"].append(_one_way)
         # The rest of what the next measurement changes about a table, each
         # keyed on a field its rows will record (BUGS F174, DECISIONS #153,
-        # #154).
+        # #154, #157). The documents OLTP table carries its warm-up sentence
+        # in place of the cold-column one (_cold_note); the durability table
+        # has no cold column and carries it here.
         for _note in (_lsqb_id_form_note(_t.get("id"), rows),
                       _gav_scope_note(_t.get("id"), rows),
-                      _sparse_whole_record_note(_t.get("id"), rows)):
+                      _sparse_whole_record_note(_t.get("id"), rows),
+                      _docs_warmup_note(_t.get("id"), rows) if _t.get("id") == "durability" else None):
             if _note:
                 _t.setdefault("conditions", [])
                 if _note not in _t["conditions"]:
