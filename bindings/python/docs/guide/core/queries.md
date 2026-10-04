@@ -177,6 +177,11 @@ result = db.query(
 )
 ```
 
+Positional values bind one per `?`, from the extra arguments or from one list or tuple
+(`db.query("sql", q, ["Alice", 25])`). `None` binds as null in `query()`, `command()`,
+and `async_executor()`. Before 26.10.1, `command()` with a lone `None` (or `[None]`, or
+`(None, 1)`) raised `Ambiguous overloads` instead.
+
 ### SQLScript (multi-statement)
 
 Use `sqlscript` to run multiple statements in one call. When there is no

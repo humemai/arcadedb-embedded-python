@@ -4,7 +4,7 @@ The `ArcadeDBError` exception is the base class for all errors raised by the Arc
 
 ## Overview
 
-Most errors from ArcadeDB operations raise `ArcadeDBError` (there are no subclasses yet). From 26.10.1, when it is raised from a Java exception, its `str()` ends with `(caused by <Java class>: <message>)` naming the Java root cause, unless that message is already in the text. Earlier wheels often showed only the engine's generic outer message. Some calls raise other exceptions:
+Most errors from ArcadeDB operations raise `ArcadeDBError` (there are no subclasses yet). From 26.10.1, when it is raised from a Java exception, its `str()` ends with `(caused by <Java class>: <message>)` naming the Java root cause, unless that message is already in the text. Earlier wheels often showed only the engine's generic outer message. The engine computes rows lazily, so a statement's error can come while its result set is read rather than from `query()`; from 26.10.1 every way of reading a result set raises it as `ArcadeDBError` too, where earlier wheels let the Java exception through. Some calls raise other exceptions:
 
 - `ValueError`: invalid arguments, for example `ResultSet.one()` with zero or several rows, an unknown `set_wal_flush()` mode, or `AsyncExecutor.set_commit_every()` with a count below 1
 - `AttributeError`: `set()` on an immutable record, such as one returned by a query; call `.modify()` first

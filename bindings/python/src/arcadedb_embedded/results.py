@@ -6,6 +6,8 @@ ResultSet and Result classes for wrapping query results.
 
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
+from jpype import JException
+
 from ._logging import get_logger
 from .exceptions import ArcadeDBError
 from .graph import Document, Edge, Vertex
@@ -39,6 +41,16 @@ def _bridge_class(name):
         )
     _BRIDGE_CLASSES[name] = cls
     return cls
+
+
+def _read_error(exc: BaseException) -> ArcadeDBError:
+    """The ArcadeDBError for a Java exception raised while rows were read.
+
+    The engine plans lazily, so a statement's error can surface on the first
+    or any later row, after ``query()`` or ``command()`` returned (#173). Raise
+    it ``from`` the Java exception, which ``str()`` then names as the cause.
+    """
+    return ArcadeDBError(f"Reading the result set failed: {exc}")
 
 
 def _java_class_name(value: Any) -> str:
@@ -221,6 +233,12 @@ class ResultSet:
 
     A result set keeps its ``Database`` alive, so a function may open a
     database, query it, and return the result without closing anything.
+
+    The engine plans and computes rows lazily, so an error in the statement
+    can surface while its rows are read rather than in ``query()``. Every way
+    of reading them (iteration, ``to_list()``, ``to_json_list()``, the
+    columnar readers, ``first()``, ``one()``, ``count()``) raises it as
+    ArcadeDBError, with the Java exception as its cause.
     """
 
     def __init__(self, java_result_set, database=None):
@@ -262,8 +280,12 @@ class ResultSet:
         self.close()
 
     def __next__(self) -> "Result":
-        if self._readable() and self._java_result_set.hasNext():
-            return Result(self._java_result_set.next(), self._database)
+        if self._readable():
+            try:
+                if self._java_result_set.hasNext():
+                    return Result(self._java_result_set.next(), self._database)
+            except JException as exc:
+                raise _read_error(exc) from exc
         if not self._closed:
             self._finish()
         raise StopIteration
@@ -315,7 +337,10 @@ class ResultSet:
                 if not self._readable():
                     return out
                 while True:
-                    batch = row_access.nextRows(self._java_result_set, 512)
+                    try:
+                        batch = row_access.nextRows(self._java_result_set, 512)
+                    except JException as exc:
+                        raise _read_error(exc) from exc
                     if len(batch) == 0:
                         self._finish()
                         return out
@@ -439,9 +464,11 @@ class ResultSet:
             return
         size = int(batch_size)
         while True:
-            batch = json.loads(
-                str(row_batcher.nextJsonBatch(self._java_result_set, size))
-            )
+            try:
+                java_batch = row_batcher.nextJsonBatch(self._java_result_set, size)
+            except JException as exc:
+                raise _read_error(exc) from exc
+            batch = json.loads(str(java_batch))
             if len(batch) < size:
                 # nextJsonBatch stops short only when the result set is drained, so a
                 # short batch is the last one: no second call (a JVM crossing, a
@@ -612,13 +639,13 @@ class ResultSet:
             return {}
         total = 0
         while True:
-            buf = memoryview(
-                bytes(
-                    column_batcher.nextColumnBatch(
-                        self._java_result_set, int(batch_size), spec
-                    )
+            try:
+                java_buf = column_batcher.nextColumnBatch(
+                    self._java_result_set, int(batch_size), spec
                 )
-            )
+            except JException as exc:
+                raise _read_error(exc) from exc
+            buf = memoryview(bytes(java_buf))
             count = decode_batch(buf)
             if count == 0:
                 self._finish()
@@ -787,13 +814,13 @@ class ResultSet:
             return pa.table({})
         total = 0
         while True:
-            buf = memoryview(
-                bytes(
-                    column_batcher.nextColumnBatch(
-                        self._java_result_set, int(batch_size), spec
-                    )
+            try:
+                java_buf = column_batcher.nextColumnBatch(
+                    self._java_result_set, int(batch_size), spec
                 )
-            )
+            except JException as exc:
+                raise _read_error(exc) from exc
+            buf = memoryview(bytes(java_buf))
             count = decode_batch(buf)
             if count == 0:
                 self._finish()

@@ -92,6 +92,15 @@ A result, a result set, or a record keeps the `Database` it came from alive and 
 - **the kept database is open for the engine**: while those results live a second `open_database()` of the path raises "already in use"; once they are deleted it opens.
 - **the reference does not leak the database**: with every result and record deleted the wrapper's `__del__` closes the database and the path opens again.
 
+### Errors raised while rows are read (`test_resultset_read_errors.py`)
+
+The engine computes rows lazily, so `query()` returns and a statement's error surfaces on the first or a later row (humemai/arcadedb-embedded-python#173). Before, it reached Python as the raw Java exception. Type `E` has one bucket, so rows come in insertion order.
+
+- **the engine raises these errors while rows are read**: `SELECT 1 / (i - 1)` returns its first row, then raises on the second; checks the premise that the errors come from reading, not from `query()`.
+- **every reader raises ArcadeDBError**: a division by zero (an ArcadeDB `ArithmeticErrorException`) and a `format()` that cannot apply `%d` (a JDK `IllegalArgumentException`), each on the first row and on the second, through iteration, `next()`, `to_list()` with and without type conversion, `iter_dicts()`, `iter_chunks()`, `count()`, `to_json_list()`, `iter_json_batches()`, `to_columns()` (also one row per batch), `to_arrow()`, and `to_dataframe()`. Each raises `ArcadeDBError` whose text holds the Java message and whose `__cause__` is the Java `RuntimeException`.
+- **first() and one()**: `first()` on the first-row errors, and `one()` on all four, where the second-row error, not "multiple results", is what it raises.
+- **a command result**: the same through `command()`.
+
 ## Handy patterns from the tests
 
 ```python

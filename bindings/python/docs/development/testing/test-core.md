@@ -81,6 +81,16 @@ Tests validate:
 - **test_to_dataframe_fast_path**: `to_dataframe()` returns 50 rows with an integer dtype for `n` and the expected `name` in row 3 (skips without pandas). The test does not check which path built it
 - **test_resultset_close_and_context_manager**: `ResultSet` supports `close()` and the context-manager protocol
 
+### Parameter Binding (`test_parameter_binding.py`)
+
+`query()`, `command()`, and the async executor hand the engine one typed argument: an `Object[]` for positional parameters and a `java.util.Map` for named ones (humemai/arcadedb-embedded-python#172). Before, `command()` with a lone `None` raised `Ambiguous overloads`.
+
+- **a lone null binds**: `None`, `[None]`, and `(None,)` on `command()` insert and update a property to null, select records in an `UPDATE ... WHERE v <=> ?`, and on `query()` select the record whose `v` is null
+- **null then a value**: `(None, 1)` on both binds both
+- **named parameters**: a dict on both binds `:v` (null) and `:w`; a list holding one dict is still the named map, in SQL and in openCypher
+- **async**: `args=[None]`, `(None,)`, and `[None, 1]` store a null without an error
+- **one Java overload per shape**: a JPype proxy of the `Database` interface, and of `DatabaseAsyncExecutor`, records the argument each shape arrives as
+
 ### Other Features
 
 - **test_error_handling**: `arcadedb.open_database()` on an invalid path raises `ArcadeDBError`
