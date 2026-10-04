@@ -293,6 +293,9 @@ index at once. Otherwise run the range in SQL.
 ArcadeDB [#9018](https://github.com/ArcadeData/arcadedb/issues/9018) and
 [#9019](https://github.com/ArcadeData/arcadedb/issues/9019); measured through the bindings
 on a 26.10.1 snapshot. The Java reproductions in the two issues show the same on 26.9.1.
+**Fixed in 26.10.1** (#9018 by PR #9107, #9019 by PR #9108, both verified on their merges): a
+`GraphBatch` edge now stores a null as null and refuses or converts a declared value as
+`Vertex.new_edge(...)` does.
 
 An edge written through `GraphBatch` (`batch.new_edge(...)` with properties, or
 `batch.new_edges(..., properties=[...])`) is serialized without the declared property's
@@ -321,14 +324,18 @@ with db.transaction():
 ```
 
 Tests: `test_vertex_new_edge_keeps_a_null_and_refuses_an_out_of_range_short` checks this
-workaround, and the strict `xfail` tests next to it start failing the suite when an engine
-fix reaches the wheel, which is the cue to remove this entry.
+workaround, and the two `GraphBatch` tests next to it assert the fixed behavior (they were
+strict `xfail` tripwires until the fix reached the engine these tests run on).
 
 ## `CREATE PROPERTY` with `mandatory` and `notnull` over records that lack the property makes `ORDER BY` drop them
 
 ArcadeDB [#9017](https://github.com/ArcadeData/arcadedb/issues/9017); measured through the
 bindings on a 26.10.1 snapshot. The `ORDER BY` answers are new on main: the same Java
 reproduction returns every record on 26.9.1 and on the 2026-09-17 main snapshot.
+**Fixed in 26.10.1** (PR #9116, verified on its merge): `CREATE PROPERTY` and `ALTER PROPERTY`
+with `MANDATORY`, `NOTNULL`, `MIN`, `MAX`, or `REGEXP`, and the openCypher `NOT NULL` and
+`NODE KEY` constraints, are refused over records that violate them, naming the first such
+record, and leave no property behind.
 
 `CREATE PROPERTY T.v INTEGER (mandatory true, notnull true)` is accepted over records that
 have no `v`, and the planner then trusts the two flags to mean that an index on `v` holds
@@ -339,9 +346,10 @@ records since upstream #8956; `CREATE PROPERTY` and the openCypher `CREATE CONST
 statements do not.
 
 Give every record the property before you declare the constraints, or declare them on a type
-that is still empty. A type that is already declared over such records answers `ORDER BY`
-correctly again after `ALTER PROPERTY T.v MANDATORY false` and `ALTER PROPERTY T.v NOTNULL
-false`; both ways returned all five records on the same reproduction.
+that is still empty; from 26.10.1 this is the only way, since the declaration over such
+records is refused. On an earlier engine, a type already declared over such records answers
+`ORDER BY` correctly again after `ALTER PROPERTY T.v MANDATORY false` and `ALTER PROPERTY T.v
+NOTNULL false`; both ways returned all five records on the same reproduction.
 
 ```python
 with db.transaction():
@@ -349,13 +357,16 @@ with db.transaction():
 db.command("sql", "CREATE PROPERTY T.v INTEGER (mandatory true, notnull true)")
 ```
 
-Tests: `tests/test_declared_type_known_issues.py`; its strict `xfail` tests start failing the suite when an engine fix reaches the wheel, which is the cue to remove this entry.
+Tests: `tests/test_declared_type_known_issues.py` checks the workaround and asserts the fixed behavior (it was a strict `xfail` tripwire until the fix reached the engine these tests run on).
 
 
 ## An index on an `INTEGER` or `LONG` answers for a bound with a fraction as if it were rounded
 
 ArcadeDB [#9021](https://github.com/ArcadeData/arcadedb/issues/9021); measured through the
 bindings on a 26.10.1 snapshot, and in Java on 26.9.1 and the 2026-09-17 main snapshot.
+**Fixed in 26.10.1** (PR #9121, verified on its merge): a write to a declared property now
+refuses a value the type cannot hold, with an error naming the property, instead of storing
+`NULL`, `0`, or a wrapped number.
 
 On an indexed `INTEGER` holding 11, 12, and 13, a bound of `12.5` (a Python `float`, as a
 parameter or a literal) gives other rows than the same query on an unindexed copy:
@@ -405,4 +416,4 @@ with db.transaction():
     doc.save()
 ```
 
-Tests: `tests/test_declared_type_known_issues.py`; its strict `xfail` tests start failing the suite when an engine fix reaches the wheel, which is the cue to remove this entry.
+Tests: `tests/test_declared_type_known_issues.py` checks the workaround and asserts the fixed behavior (it was a strict `xfail` tripwire until the fix reached the engine these tests run on).
