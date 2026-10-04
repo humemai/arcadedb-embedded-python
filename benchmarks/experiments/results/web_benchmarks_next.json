@@ -112,6 +112,7 @@
     "The next measurement runs after this one is complete, and it makes the changes listed below.",
     "ArcadeDB moves from the development build of 2026-09-17 to its next release, and every other engine to its latest stable release.",
     "The Graph OLTP reads get an untimed warm-up on other start persons, the table prints their warm median, and a cold column is added.",
+    "The Document OLTP operations get an untimed warm-up on separate keys, the table prints their warm median and adds the first operation as a cold column, and the table on what waiting for the disk costs prints warm medians too.",
     "ArcadeDB's runs that wait for the disk use a data-only sync (`txWalFlush=1`) instead of a full sync.",
     "Every graph question is asked in both directions of a friendship.",
     "The Document OLAP table runs the full TPC-H Q1.",
@@ -10281,6 +10282,7 @@
         "SurrealDB (embedded) and SurrealDB (server) send the graph insert's person and its edge as two statements with no transaction around them, so each commits on its own: the run that waits for the disk waits twice for each insert, and the cost of waiting on that row counts both. The next measurement wraps the two in one transaction.",
         "ArangoDB, LadybugDB, Neo4j (vector index), and Qdrant + Neo4j (no shared transaction) have cells marked `re-run` here because the same writes are withheld on the tables they come from, and the note under each of those tables says why.",
         "The ratio is what the strict setting costs on that engine for that operation. The document and graph operations write the same few records whatever the corpus holds, so each row pools every corpus size its lane ran it at; the cross-model transaction searches and expands over the whole catalog, so it has one row per catalog size and its ratio holds at that size. It is not a claim about any other write. A large ratio is not a slow engine: it is an engine whose relaxed path was fast, measured against a flush that costs what a flush costs.",
+        "The document operations here are timed from the first one after the data is loaded, so their cells include each engine's warm-up. On ArcadeDB (embedded) and ArcadeDB (server), which run on a JVM, that warm-up includes the JVM compiling the statement path. The next measurement gives every engine an untimed warm-up on separate keys first, and this table prints their warm median.",
         "In the cells: `re-run` means the cell was measured before a fix to our harness and stays off the table until it is measured again; the note says what was wrong. A dash is an operation the engine cannot express, never a slow one."
       ],
       "columns": [
@@ -13494,7 +13496,7 @@
         "Six transactional operations. New-order: TPC-C's checkout transaction: it reads a customer and a warehouse, inserts an order with its line items, and updates stock, all in one transaction. Payment: TPC-C's payment against one of the orders new-order just placed, chosen at random: the order is read, marked paid, and the payment inserted, in one transaction. Insert: one record inserted by key. Read: one record read back by key. Update: one record's quantity updated by key. Delete: one record deleted by key. OLTP ops/s is the rate of the two TPC-C transactions together; the four single-record operations are timed one at a time.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint.",
         "SurrealDB (server)'s write cells are marked `re-run`: the server ran at its default, a sync to disk at every commit, although it has a setting that does not wait, and every other engine on this table that has such a setting ran at it. Our harness missed that setting, and the next measurement runs its writes at it. Its read cells commit nothing and stay.",
-        "There is no cold column on this table, and the reason is recorded on the rows themselves: no cold/warm split: each operation runs against an already-built, already-warm database by construction",
+        "The operations on this table are timed from the first one after the data is loaded, so its columns include each engine's warm-up. On ArcadeDB (embedded) and ArcadeDB (server), which run on a JVM, that warm-up includes the JVM compiling the statement path. The next measurement gives every engine an untimed warm-up on separate keys first, prints the warm median, and adds the first operation as the cold column.",
         "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Each row records what it ran as `durability`, and the setting was read out of the engine rather than assumed on every engine except ArcadeDB (server) and SurrealDB (server). ArcadeDB (server) is given the setting when the server starts, and the row records it, because the server offers no way to read it back. The exception on this table is DuckDB, which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that. SurrealDB (server)'s rows record that no setting was found, and its server log shows what it ran: its default in both runs, a sync to disk at every commit (the log reads \"Sync mode: every transaction commit\" in every run), although it has a setting that does not wait; the next measurement runs both.",
         "PostgreSQL's memory cell is not comparable to the others: this column counts memory an engine holds in its own address space, and PostgreSQL holds its data in shared memory and the kernel's file cache instead. At TPC-H SF10 (60.0M line items), of the 1.54 GiB shown, 1.464 GiB is our Python client and 0.070 GiB is the database.",
         "ArcadeDB (embedded) and ArcadeDB (server) run on a JVM, and for them this column is close to the heap they were given rather than the memory the work needed: ArcadeDB (server)'s 6.42 GiB here is about 80 per cent of its 8g heap. Every engine on a table gets the same memory envelope; how much of it a JVM takes is a property of the runtime, so read these cells against each other rather than against an engine that manages its own memory.",
@@ -17371,6 +17373,13 @@
         "values": []
       },
       {
+        "text": "The document operations here are timed from the first one after the data is loaded, so their cells include each engine's warm-up. On ArcadeDB (embedded) and ArcadeDB (server), which run on a JVM, that warm-up includes the JVM compiling the statement path. The next measurement gives every engine an untimed warm-up on separate keys first, and this table prints their warm median.",
+        "values": [
+          "ArcadeDB (embedded)",
+          "ArcadeDB (server)"
+        ]
+      },
+      {
         "text": "Each read on this table is timed twice over the same start persons, and the table prints the first pass, so its read columns include each engine's warm-up. On ArcadeDB (embedded), ArcadeDB (server), and Neo4j, which run on a JVM, that warm-up includes the JVM compiling the query path. The next measurement gives every engine an untimed warm-up on other start persons first, prints the warm median, and adds the first query of a session as the cold column.",
         "values": [
           "ArcadeDB (embedded)",
@@ -17382,6 +17391,13 @@
         "text": "There is no cold column on this table, and the reason is recorded on the rows themselves: no cold/warm split: each operation runs against an already-built, already-warm database by construction",
         "values": [
           "no cold/warm split: each operation runs against an already-built, already-warm database by construction"
+        ]
+      },
+      {
+        "text": "The operations on this table are timed from the first one after the data is loaded, so its columns include each engine's warm-up. On ArcadeDB (embedded) and ArcadeDB (server), which run on a JVM, that warm-up includes the JVM compiling the statement path. The next measurement gives every engine an untimed warm-up on separate keys first, prints the warm median, and adds the first operation as the cold column.",
+        "values": [
+          "ArcadeDB (embedded)",
+          "ArcadeDB (server)"
         ]
       },
       {
@@ -17762,6 +17778,13 @@
         "text": "The Graph OLTP reads get an untimed warm-up on other start persons, the table prints their warm median, and a cold column is added.",
         "values": [
           "Graph OLTP"
+        ]
+      },
+      {
+        "text": "The Document OLTP operations get an untimed warm-up on separate keys, the table prints their warm median and adds the first operation as a cold column, and the table on what waiting for the disk costs prints warm medians too.",
+        "values": [
+          "What waiting for the disk costs",
+          "Document OLTP"
         ]
       },
       {

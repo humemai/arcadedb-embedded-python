@@ -937,9 +937,17 @@ def main() -> int:
           "(BUGS F174)")
     q_bad = _check_lsqb_id_form_disclosure(payload, rows)
     print(f"  {q_bad} graph table(s) missing the LSQB id-form disclosure")
+    print("\nthe document operations' warm-up is disclosed wherever rows were timed from "
+          "the first operation after the load (DECISIONS #157)")
+    v_bad = _check_docs_warmup_disclosure(payload, rows)
+    print(f"  {v_bad} table(s) missing the warm-up disclosure")
+    print("\na dense cell ArangoDB's one-list defect decided is marked not comparable "
+          "(BUGS F175)")
+    n_bad = _check_one_list_not_comparable(payload)
+    print(f"  {n_bad} not-comparable finding(s)")
     return 1 if (bad or d_bad or p_bad or a_bad or l_bad or h_bad or c_bad
                  or r_bad or m_bad or not u_ok or k_bad or o_bad or z_bad or w_bad
-                 or q_bad) else 0
+                 or q_bad or v_bad or n_bad) else 0
 
 
 # --------------------------------------------------------------------------
@@ -1853,6 +1861,63 @@ def _check_lsqb_id_form_disclosure(payload, rows):
             bad += 1
         elif want:
             print(f"  {t['id']}: disclosed")
+    return bad
+
+
+def _check_docs_warmup_disclosure(payload, rows):
+    """The documents OLTP and durability tables, built from documents OLTP
+    rows timed from the first operation after the load (no `oltp_warmup`),
+    carry the sentence that says their columns include each engine's warm-up
+    (DECISIONS #157), the documents OLTP table in place of the "already-warm
+    by construction" one. Re-decided from the same rows as the exporter, as
+    _check_lsqb_id_form_disclosure does for F174. Returns bad count."""
+    import export_web as EW
+    bad = 0
+    for t in payload.get("tables", []):
+        want = EW._docs_warmup_note(t.get("id"), rows)
+        if want and want not in (t.get("conditions") or []):
+            print(f"    MISSING {t['id']}: rows timed from the first operation after the load "
+                  f"and no sentence says so")
+            bad += 1
+        elif want:
+            print(f"  {t['id']}: disclosed")
+    return bad
+
+
+def _check_one_list_not_comparable(payload):
+    """A dense cell the freeze withheld and that ArangoDB's one-list defect
+    decided (BUGS F175, DECISIONS #156: recall below the floor, 10,000 or more
+    IVF lists, a release with the defect) carries the sentence that names the
+    defect, and its row, where the table prints the size, is marked `n/c` with
+    no number in any cell: neither its recall nor a latency may read as a
+    result. Re-decided from the freeze's sidecar, as the exporter decides it.
+    A pending table is not in the payload and is checked when it lands.
+    Returns bad count."""
+    import export_web as EW
+    bad = 0
+    for t in payload.get("tables", []):
+        groups = EW._one_list_groups(t.get("id"))
+        for (backend, scale), items in sorted(groups.items()):
+            want = EW._one_list_note(backend, scale, items)
+            if want not in (t.get("conditions") or []):
+                print(f"    MISSING {t['id']}: {backend} at {scale} ran on a release with the "
+                      f"one-list defect and no sentence says so")
+                bad += 1
+                continue
+            rows_here = [e for e in t.get("entries") or []
+                         if str(e.get("backend_key")) == backend and str(e.get("scale")) == scale]
+            numbered = [e for e in rows_here
+                        if any(isinstance(v, dict) and v.get("median") is not None
+                               for v in (e.get("metrics") or {}).values())]
+            if numbered:
+                print(f"    NUMBERED {t['id']}: {backend} at {scale} prints a number the defect decided")
+                bad += 1
+            elif rows_here and not all(e.get("outcome") == "not comparable" for e in rows_here):
+                print(f"    UNMARKED {t['id']}: {backend} at {scale} has a row not marked not comparable")
+                bad += 1
+            else:
+                print(f"  {t['id']}: {backend} at {scale} disclosed"
+                      + (", row marked n/c" if rows_here else ", size not on the table"))
     return bad
 
 

@@ -491,8 +491,15 @@ def load_canonical(apply_corpus=True):
             except (TypeError, ValueError):
                 _rec = None
             if _rec is not None and _rec < RECALL_FLOOR:
+                # The IVF list count and the engine's version ride along: the
+                # exporter tells a known engine defect from an unexplained
+                # broken index by them (ArangoDB 3.12.11 at 10,000 or more
+                # lists, BUGS F175, DECISIONS #156), and a sidecar without
+                # them keeps the unexplained sentence.
                 WITHHELD_RECALL.append({"lane": r["lane"], "backend": r["backend"], "scale": r["scale"],
-                                        "rep": r.get("rep"), "recall_at_10": _rec})
+                                        "rep": r.get("rep"), "recall_at_10": _rec,
+                                        "ivf_nlists": r.get("ivf_nlists"),
+                                        "engine_version": r.get("engine_version")})
                 continue
         # AN UNSETTLED DISK READING IS NOT A MEASUREMENT (PAGE-SPEC 4a rule 3:
         # "settled=False blocks publication"). `container_disk()` samples until
