@@ -421,6 +421,8 @@ class ResultSet:
         """
         import json
 
+        if int(batch_size) < 1:
+            raise ValueError(f"batch_size must be at least 1, got {batch_size}")
         row_batcher = _bridge_class("RowBatcher")
         if row_batcher is None:
             chunk: List[Dict[str, Any]] = []
@@ -435,12 +437,18 @@ class ResultSet:
 
         if not self._readable():
             return
+        size = int(batch_size)
         while True:
             batch = json.loads(
-                str(row_batcher.nextJsonBatch(self._java_result_set, int(batch_size)))
+                str(row_batcher.nextJsonBatch(self._java_result_set, size))
             )
-            if not batch:
+            if len(batch) < size:
+                # nextJsonBatch stops short only when the result set is drained, so a
+                # short batch is the last one: no second call (a JVM crossing, a
+                # str(), and a json.loads) just to see "[]".
                 self._finish()
+                if batch:
+                    yield batch
                 return
             yield batch
 
