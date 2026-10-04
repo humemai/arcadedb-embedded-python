@@ -1642,6 +1642,59 @@ COLD_QUERY_NAMES = {
 }
 
 
+# THE LANE'S Q1 IS PART OF TPC-H Q1 (BUGS F170, DECISIONS #151 item 3). TPC-H
+# Q1, the pricing summary report, returns the ten columns below. The October
+# lane's Q1, on every engine, returns seven of them: it never loads `l_tax`, so
+# it cannot compute sum_charge, and it leaves out avg_price and avg_disc too.
+# The page called it "TPC-H's own Q1". Until the documents analytics rows are
+# the full query, the Q1 words and the cold-column sentence say what ran. The
+# re-pin loads `l_tax`, runs the full Q1 on every engine, and writes `tpch_q1`
+# into every documents analytics row (CAMPAIGN section 7 row 57); a row without
+# it ran the partial Q1. The count of columns that ran is read from the rows'
+# own answer sample, not typed.
+_TPCH_Q1_COLUMNS = ("l_returnflag", "l_linestatus", "sum_qty", "sum_base_price",
+                    "sum_disc_price", "sum_charge", "avg_qty", "avg_price", "avg_disc",
+                    "count_order")
+_TPCH_Q1_FIELD = "tpch_q1"
+
+
+def _partial_q1(rows):
+    """(columns the rows' Q1 returned, TPC-H Q1's column count), as words,
+    while any October documents analytics row ran the partial Q1; else None.
+    The first count is None when the rows' answer samples disagree on it."""
+    rs = [r for r in rows
+          if r.get("lane") == "l1tpc" and r.get("workload") == "olap"
+          and str(r.get("instrument") or "") == "2026-10"
+          and not str(r.get(_TPCH_Q1_FIELD) or "").strip()]
+    if not rs:
+        return None
+    widths = set()
+    for r in rs:
+        m = re.match(r"\(([^)]*)\)", str(r.get("res_q1_sample") or ""))
+        if m:
+            widths.add(len(m.group(1).split(",")))
+    ran = None
+    if len(widths) == 1 and next(iter(widths)) in _WORDS:
+        ran = _WORDS[next(iter(widths))].lower()
+    return ran, _WORDS[len(_TPCH_Q1_COLUMNS)].lower()
+
+
+def _partial_q1_words(rows):
+    """What the documents analytics table's Q1 is, while it is the partial Q1:
+    (words, the values inserted), or None."""
+    part = _partial_q1(rows)
+    if not part:
+        return None
+    ran, spec = part
+    cols = (f"with {ran} of its {spec} output columns" if ran
+            else "with some of its output columns")
+    words = (f"TPC-H Q1, the pricing summary, {cols}. It groups and aggregates nearly every "
+             f"line item, so it measures a full scan. It leaves out the average price, the average "
+             f"discount, and the total charge with tax, which needs the tax column this "
+             f"measurement did not load. The next measurement runs the full Q1")
+    return _next_item("q1", words), ([ran, spec] if ran else [])
+
+
 # WHAT THE ANSWER CHECK COULD NOT COMPARE, ON THE TABLE IT APPLIES TO
 # (DECISIONS #88). The gate refuses a publish whose engines disagree, so a
 # published table's engines agree -- but "agree" has two holes the gate itself
@@ -2069,6 +2122,61 @@ def _ldbc_age_note(table_id, rows):
                 "correctly.")
 
 
+# THE FRIENDSHIPS ARE STORED ONE WAY (BUGS F169, DECISIONS #151 items 1 and 2).
+# LDBC's person_knows_person file lists each friendship once, always from the
+# smaller person id to the larger (180,623 of 180,623 rows at SF1), the lane
+# loads each row as one KNOWS edge, and every graph question the October rows
+# answer follows `-[:KNOWS]->`. So 1-hop counts only the friends with a larger
+# id, 2-hop and 3-hop reach along rising ids, "most friends" and "degree
+# distribution" count friends with a larger id, and the triangle count is 0 on
+# every engine by construction (a directed 3-cycle needs a < b < c < a). The
+# timings stand (identical work on every engine); the meaning is disclosed, the
+# way F146's zero ages are. The re-pin asks every question in each dialect's
+# undirected form and writes `knows_direction` into every graph row (CAMPAIGN
+# section 7 row 56); a row without it asked the directed questions, and the
+# sentence stays until no such row is left behind the table. LDBC rows only: the
+# synthetic generator's edges point either way. No share is quoted: the share
+# of a start person's friends 1-hop sees was measured on the laptop
+# (`.notes/bench/repros/validity-20261004`), not by anything the rows carry.
+_KNOWS_DIRECTION_FIELD = "knows_direction"
+
+
+def _knows_one_way_rows(rows, workload):
+    """The October LDBC graph rows of this workload that asked the directed
+    questions, i.e. that do not record `knows_direction`."""
+    return [r for r in rows
+            if r.get("lane") == "l2" and r.get("workload") == workload
+            and str(r.get("instrument") or "") == "2026-10"
+            and str(r.get("graph_source") or "").startswith("ldbc")
+            and not str(r.get(_KNOWS_DIRECTION_FIELD) or "").strip()]
+
+
+def _knows_one_way_note(table_id, rows):
+    """The one-way friendship sentence for the graph table or the graph
+    analytics table, or None when every LDBC row behind it asked undirected."""
+    workload = {"l2": "oltp", "l2olap": "olap"}.get(table_id)
+    if workload is None or not _OCTOBER_ENV:
+        return None
+    if not _knows_one_way_rows(rows, workload):
+        return None
+    lead = ("Each friendship is one edge, pointing from the person with the smaller id to "
+            "the person with the larger.")
+    if table_id == "l2":
+        text = (f"{lead} The engines can follow an edge from either end, but the 1-hop, 2-hop, "
+                "and 3-hop reads follow it only the way it points, so 1-hop counts only the "
+                "friends with a larger id than the start person, and 2-hop and 3-hop reach only "
+                "people along a chain of rising ids. The next measurement asks the same "
+                "questions in both directions of a friendship.")
+    else:
+        text = (f"{lead} The triangle count follows edges only the way they point, so it looks "
+                "for three people whose ids rise all the way round a cycle, which cannot "
+                "happen: it finds no triangle on any engine, by construction. For the same "
+                "reason, most friends and degree distribution count only the friends with a "
+                "larger id. The next measurement asks these questions in both directions of a "
+                "friendship.")
+    return _next_item("knows", _gen(text))
+
+
 def _equivalence_notes(rows):
     """table id -> one sentence about what its answer check could not compare."""
     import bench_common
@@ -2227,7 +2335,7 @@ def _graph_first_pass_note(rows):
     parts.append("The next measurement gives every engine an untimed warm-up on other start "
                  "persons first, prints the warm median, and adds the first query of a session "
                  "as the cold column.")
-    return _gen(" ".join(parts), *jvm)
+    return _next_item("warmup", _gen(" ".join(parts), *jvm))
 
 
 def _cold_note(table_id, rows, columns=()):
@@ -2256,8 +2364,13 @@ def _cold_note(table_id, rows, columns=()):
             return None
         return _gen("There is no cold column on this table, and the reason is "
                     "recorded on the rows themselves: " + na[0], na[0])
-    names = sorted({COLD_QUERY_NAMES.get(str(r.get("cold_first_query_name")),
-                                         str(r.get("cold_first_query_name")))
+    # The documents Q1 is not all of TPC-H Q1 until its rows are (BUGS F170):
+    # the cold column names it as the table's own "Q1", which its query words
+    # describe, rather than as TPC-H Q1.
+    cold_names = (dict(COLD_QUERY_NAMES, q1="Q1")
+                  if table_id == "docs_olap" and _partial_q1(rs) else COLD_QUERY_NAMES)
+    names = sorted({cold_names.get(str(r.get("cold_first_query_name")),
+                                   str(r.get("cold_first_query_name")))
                     for r in rs if r.get("cold_first_query_name")})
     if not names:
         return None
@@ -2741,39 +2854,105 @@ def _thermal_note():
 _DEV_BUILD = re.compile(r"(dev\d*|SNAPSHOT)\b", re.I)
 
 
+# WHAT THE NEXT MEASUREMENT CHANGES, ONE LINE PER CHANGE, on the page itself
+# (the user, 2026-10-04: "let's write what'll change in the October page").
+# Each line stands for a sentence under a table, and is printed only while that
+# sentence is on the page: the helper that writes the table sentence (keyed on
+# the rows) files it here under the line's key, and _next_measurement_note
+# looks for it in the tables' conditions. So a line leaves the page on the same
+# rows, and in the same publish, as the table sentence it summarises.
+_NEXT_ITEM_SENTENCES = {}
+
+
+def _next_item(key, text):
+    """File `text`, a table sentence, under the page-level line `key`."""
+    _NEXT_ITEM_SENTENCES.setdefault(key, set()).add(text)
+    return text
+
+
+def _arcadedb_dev_build_date(rows):
+    """The date of the development build the ArcadeDB rows measured, read
+    from the build timestamp the server stamps into `engine_version`
+    ("26.10.1-SNAPSHOT (build <sha>/<epoch ms>/main)"), or None when the rows
+    carry no timestamp or more than one date."""
+    import datetime as _dt
+    dates = set()
+    for r in rows:
+        ev = str(r.get("engine_version") or "")
+        if not str(r.get("backend") or "").startswith("arcadedb") or not _DEV_BUILD.search(ev):
+            continue
+        m = re.search(r"/(\d{13})/", ev)
+        if m:
+            dates.add(_dt.datetime.fromtimestamp(int(m.group(1)) / 1000, _dt.timezone.utc)
+                      .date().isoformat())
+    return dates.pop() if len(dates) == 1 else None
+
+
 def _next_measurement_note(tables):
-    """WHEN "the next measurement" is, said once for the page.
+    """WHEN "the next measurement" is and WHAT it changes, said for the page:
+    a list of sentences, the first saying when and one per change after it.
 
-    The notes under the tables say what the next measurement changes and the
-    `re-run` cells say what it re-measures, and nothing said when it happens:
-    after this campaign, on the next ArcadeDB release, with every comparator
-    at its latest stable release (CAMPAIGN section 7, row 9). No date, because
-    none is fixed.
+    When: after this campaign (CAMPAIGN section 7, row 9). No date, because
+    none is fixed. What: the release move, then one line per change a table
+    sentence describes (_NEXT_ITEM_SENTENCES), then the `re-run` cells, then,
+    when a table describes a change no line covers, a pointer to the notes.
 
-    KEYED ON THE ROWS: shown while the ArcadeDB rows behind the page are a
-    development build, which is what this campaign measured, and while a table
-    still defers something. Rows from a release take it off the page, and so
-    does a page with nothing left to re-measure.
+    KEYED ON THE ROWS: the whole list is shown while the ArcadeDB rows behind
+    the page are a development build, which is what this campaign measured,
+    and while a table still defers something. Rows from a release take it off
+    the page, and so does a page with nothing left to re-measure. Each line
+    after the first is keyed on what its table sentence is keyed on.
     """
     if not _OCTOBER_ENV or SKELETON:
-        return None
+        return []
     dev = any(_DEV_BUILD.search(str(r.get("engine_version") or ""))
               for r in _FROZEN_ROWS if str(r.get("backend") or "").startswith("arcadedb"))
     if not dev:
-        return None
+        return []
+    conds = [(t, str(c)) for t in tables for c in t.get("conditions") or []]
+    filed = [s for ss in _NEXT_ITEM_SENTENCES.values() for s in ss]
+
+    def carried_by(key):
+        """The titles of the tables that carry a sentence filed under `key`."""
+        ss = _NEXT_ITEM_SENTENCES.get(key) or ()
+        return list(dict.fromkeys(str(t.get("title") or t.get("id"))
+                                  for t, c in conds if any(s in c for s in ss)))
+
     rerun = any((cell or {}).get("text") == "re-run"
                 for t in tables for e in t.get("entries") or []
                 for cell in (e.get("metrics") or {}).values() if isinstance(cell, dict))
-    notes = any("the next measurement" in str(c).lower()
-                for t in tables for c in t.get("conditions") or [])
-    if not (rerun or notes):
-        return None
-    what = ("Both the cells marked `re-run` and the changes described in the notes under "
-            "the tables are measured then." if rerun and notes
-            else "The cells marked `re-run` are measured then." if rerun
-            else "The changes described in the notes under the tables are measured then.")
-    return _gen("The next measurement runs after this one is complete, on the next ArcadeDB "
-                "release and with every other engine at its latest stable release. " + what)
+    other = any("the next measurement" in c.lower() and not any(s in c for s in filed)
+                for _t, c in conds)
+    items = []
+    warm = carried_by("warmup")
+    if warm:
+        items.append(_gen(f"The {_join_and(warm)} reads get an untimed warm-up on other start "
+                          f"persons, the table prints their warm median, and a cold column is "
+                          f"added.", *warm))
+    if carried_by("full_sync"):
+        nxt = str(_ARCADEDB_STRICT_NEXT)
+        items.append(_gen(f"ArcadeDB's runs that wait for the disk use a data-only sync "
+                          f"(`txWalFlush={nxt}`) instead of a full sync.", nxt))
+    if carried_by("knows"):
+        items.append(_gen("Every graph question is asked in both directions of a friendship."))
+    q1 = carried_by("q1")
+    if q1:
+        items.append(_gen(f"The {_join_and(q1)} table runs the full TPC-H Q1.", *q1))
+    if rerun:
+        items.append(_gen("The cells marked `re-run` are measured again."))
+    if not (items or other):
+        return []
+    date = _arcadedb_dev_build_date(_FROZEN_ROWS)
+    build = f"the development build of {date}" if date else "the development build measured here"
+    out = [_gen("The next measurement runs after this one is complete, and it makes the "
+                "changes listed below."),
+           _gen(f"ArcadeDB moves from {build} to its next release, and every other engine "
+                f"to its latest stable release.", *([date] if date else []))]
+    out += items
+    if other:
+        out.append(_gen("The notes under the tables describe the next measurement's other "
+                        "changes."))
+    return out
 
 
 def _global_conditions(tables, october):
@@ -2783,9 +2962,8 @@ def _global_conditions(tables, october):
         if reps:
             out.append(reps)
         out += [_R("GLOBAL", "defaults"), _R("GLOBAL", "digest")]
-        _next = _next_measurement_note(tables)
-        if _next:
-            out.append(_next)
+        # The next measurement's list goes last, and is appended in main()
+        # once _finish_table has run: it reads the finished tables' sentences.
         return out
     out = []
     for c in GLOBAL_CONDITIONS:
@@ -2873,12 +3051,12 @@ def _arcadedb_full_sync_note(rows):
     # "Was set to", not "synced": on this table a defect note says one
     # ArcadeDB arm's later commits skipped the log, and the setting is what
     # every arm's row records either way.
-    return (f"In the runs that wait for the disk, ArcadeDB was set to sync its write-ahead "
+    text = (f"In the runs that wait for the disk, ArcadeDB was set to sync its write-ahead "
             f"log's data and metadata at every commit (`txWalFlush={measured}`, an fsync). "
             f"The next measurement uses `txWalFlush={nxt}` instead, a data-only sync "
             f"(fdatasync) like SQLite's FULL setting, which ArcadeDB's documentation "
-            f"recommends for production and says recovers everything the full sync does.",
-            [measured, nxt])
+            f"recommends for production and says recovers everything the full sync does.")
+    return _next_item("full_sync", text), [measured, nxt]
 
 
 def _durability_note(entries, rows, table_lane=None):
@@ -5185,8 +5363,12 @@ QUERY_WORDS = {
         "LSQB Q9": "LSQB's ninth query, the sixth where the two people at the ends are not themselves friends",
     }),
     "docs_olap": ("analytical queries, each over the whole line-item table", "All times are milliseconds.", {
-        "Q1": "TPC-H's own Q1, the pricing summary: it groups and aggregates every line item, so it measures a full scan",
-        "Q6": "TPC-H's own Q6, the forecasting revenue change: it sums one column under a narrow filter, so it measures how well an engine skips what it does not need",
+        # "Nearly every": Q1 keeps the line items shipped on or before its
+        # cutoff date, which is almost all of them, not all of them.
+        "Q1": "TPC-H's own Q1, the pricing summary: it groups and aggregates nearly every line item, so it measures a full scan",
+        # The lane's Q6 also returns `count(*) AS n` (l1_tpc.OLAP_DIGEST,
+        # DECISIONS #94), so it is TPC-H Q6 plus a row count, not Q6 itself.
+        "Q6": "TPC-H Q6, the forecasting revenue change, with a row count added: it sums one column under a narrow filter, so it measures how well an engine skips what it does not need",
         "top parts": "the ten parts with the highest revenue, a group-by over every line item with a sort and a limit",
         "ship mode": "how many line items went by each ship mode, a group-by over the whole table",
         "by month": "revenue by month of shipment, a group-by on a date expression",
@@ -5207,6 +5389,15 @@ def _query_words_note(table):
     if not spec:
         return None
     kind, tail, words = spec
+    values = []
+    # The documents Q1 is described as what ran while the rows are the
+    # partial Q1 (_partial_q1_words, BUGS F170); "TPC-H's own Q1" comes back
+    # with the rows of the full query.
+    if table.get("id") == "docs_olap" and _OCTOBER_ENV:
+        _q1 = _partial_q1_words(_FROZEN_ROWS)
+        if _q1:
+            words = {**words, "Q1": _q1[0]}
+            values = _q1[1]
     labels = []
     for c in table.get("columns") or []:
         base = re.sub(r" p(50|99) ms$", "", str(c))
@@ -5215,7 +5406,7 @@ def _query_words_note(table):
     if not labels:
         return None
     body = " ".join(f"{lbl[0].upper() + lbl[1:]}: {words[lbl]}." for lbl in labels)
-    return _gen(f"{_WORDS.get(len(labels), str(len(labels)))} {kind}. {body} {tail}")
+    return _gen(f"{_WORDS.get(len(labels), str(len(labels)))} {kind}. {body} {tail}", *values)
 
 
 def _surreal_pair_note(table):
@@ -6829,7 +7020,9 @@ def _counts_note(table_id, entries):
             q = {sc: (q[sc] or getattr(ldbc_snb, "SCALE_OLTP_QUERIES", {}).get(sc)) for sc in scales}
         except Exception:  # noqa: BLE001
             pass
-        parts = ", ".join(f"{scale_label('l2', sc)}: {n:,}" for sc, n in q.items() if n)
+        # "500 at SF1 (10k people, ...) and 200 at SF10 (...)": the scale
+        # labels carry their own parentheses, so the counts lead.
+        parts = _join_and([f"{n:,} at {scale_label('l2', sc)}" for sc, n in q.items() if n])
         if not parts:
             return []
         # The write count from the rows (write_ops, update_ops, delete_ops),
@@ -6840,13 +7033,22 @@ def _counts_note(table_id, entries):
                     if r.get("lane") == "l2" and r.get("workload") == "oltp" and _num(r.get(f)) is not None]
             if vals:
                 writes[f] = int(max(vals))
+        # THE SAME START PERSONS EVERYWHERE (BUGS F171). The ids come from
+        # pick_query_ids (ldbc_snb's for LDBC, graph_common's for the
+        # synthetic graph), one fixed seed and draws with replacement, so
+        # every repetition and every engine reads the same ids and one person
+        # can be drawn twice. That is what makes the answer digests
+        # comparable. The sentence said "a fresh set of start persons".
+        reads = f"Every repetition, on every engine, runs each read against the same start persons, {parts}"
+        picked = ("The start persons are picked at random with a fixed seed and with replacement, "
+                  "so one person can be picked more than once.")
         if writes and len(set(writes.values())) == 1 and len(writes) == 3:
             w = f"{writes['write_ops']:,}"
-            return [_gen(f"Each repetition runs every read against a fresh set of start persons ({parts}) and {w} each of the insert, update, and delete; the p50 and p99 are over those.", parts, w)]
+            return [_gen(f"{reads}, plus {w} each of the insert, update, and delete; the p50 and p99 are over those. {picked}", parts, w)]
         w = f"{writes.get('write_ops', 0):,}" if writes.get("write_ops") else None
         if w:
-            return [_gen(f"Each repetition runs every read against a fresh set of start persons ({parts}) and commits up to {w} writes; the p50 and p99 are over those.", parts, w)]
-        return [_gen(f"Each repetition runs every read against a fresh set of start persons ({parts}); the p50 and p99 are over those.", parts)]
+            return [_gen(f"{reads}, and commits up to {w} writes; the p50 and p99 are over those. {picked}", parts, w)]
+        return [_gen(f"{reads}; the p50 and p99 are over those. {picked}", parts)]
     if table_id == "l2olap":
         n = str(L['graph_common'].OLAP_ITERATIONS)
         return [_gen(f"Each repetition runs every query {n} times; the p50 and p99 are over those runs.", n)]
@@ -7787,6 +7989,11 @@ def main() -> int:
             _t.setdefault("conditions", [])
             if _ages not in _t["conditions"]:
                 _t["conditions"].append(_ages)
+        _one_way = _knows_one_way_note(_t.get("id"), rows)
+        if _one_way:
+            _t.setdefault("conditions", [])
+            if _one_way not in _t["conditions"]:
+                _t["conditions"].append(_one_way)
     for _t in tables:
         _cold = _cold_note(_t.get("id"), rows, _t.get("columns") or [])
         if _cold:
@@ -7918,6 +8125,12 @@ def main() -> int:
                 "page will compare on each workload, not anything measured yet."))
         tables.append(_mm)
         payload["tables"].append(_mm)
+    # WHAT THE NEXT MEASUREMENT CHANGES, last among the page's conditions and
+    # read off the FINISHED tables: _finish_table adds the query words and the
+    # repetition sentences, so the list cannot be built with the global
+    # conditions above, which are computed before it runs.
+    if _october:
+        payload["conditions"] += _next_measurement_note(payload["tables"])
 
     # A table can draw on more than one artifact, so this is a LIST. It was a
     # single string, and on 2026-08-13 that made the page lie: the DEEP-10M

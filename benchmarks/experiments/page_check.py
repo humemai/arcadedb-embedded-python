@@ -929,8 +929,12 @@ def main() -> int:
     print("\nthe zero ages are disclosed wherever rows measured them (BUGS F146)")
     z_bad = _check_zero_age_disclosure(payload, rows)
     print(f"  {z_bad} graph table(s) missing the disclosure")
+    print("\nthe one-way friendships are disclosed wherever rows asked the directed "
+          "questions (BUGS F169)")
+    w_bad = _check_one_way_knows_disclosure(payload, rows)
+    print(f"  {w_bad} graph table(s) missing the one-way disclosure")
     return 1 if (bad or d_bad or p_bad or a_bad or l_bad or h_bad or c_bad
-                 or r_bad or m_bad or not u_ok or k_bad or o_bad or z_bad) else 0
+                 or r_bad or m_bad or not u_ok or k_bad or o_bad or z_bad or w_bad) else 0
 
 
 # --------------------------------------------------------------------------
@@ -1802,6 +1806,25 @@ def _check_zero_age_disclosure(payload, rows):
         want = EW._ldbc_age_note(t.get("id"), rows)
         if want and want not in (t.get("conditions") or []):
             print(f"    MISSING {t['id']}: rows measured on the zero ages and no sentence says so")
+            bad += 1
+        elif want:
+            print(f"  {t['id']}: disclosed")
+    return bad
+
+
+def _check_one_way_knows_disclosure(payload, rows):
+    """A graph table built from rows that asked the directed questions carries
+    the sentence that says so (BUGS F169, DECISIONS #151 item 2): each LDBC
+    friendship is one edge from the smaller id to the larger, so the hop reads
+    see only friends with a larger id and the triangle count is 0 by
+    construction. Re-decided from the same rows as the exporter, as
+    _check_zero_age_disclosure does for F146. Returns bad count."""
+    import export_web as EW
+    bad = 0
+    for t in payload.get("tables", []):
+        want = EW._knows_one_way_note(t.get("id"), rows)
+        if want and want not in (t.get("conditions") or []):
+            print(f"    MISSING {t['id']}: rows asked the directed questions and no sentence says so")
             bad += 1
         elif want:
             print(f"  {t['id']}: disclosed")
