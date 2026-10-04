@@ -364,9 +364,9 @@ Tests: `tests/test_declared_type_known_issues.py` checks the workaround and asse
 
 ArcadeDB [#9021](https://github.com/ArcadeData/arcadedb/issues/9021); measured through the
 bindings on a 26.10.1 snapshot, and in Java on 26.9.1 and the 2026-09-17 main snapshot.
-**Fixed in 26.10.1** (PR #9121, verified on its merge): a write to a declared property now
-refuses a value the type cannot hold, with an error naming the property, instead of storing
-`NULL`, `0`, or a wrapped number.
+**Fixed in 26.10.1** (PR #9126, verified on its merge): an index on an `INTEGER`, `LONG`, or
+`SHORT` key answers for the exact bound, so SQL, openCypher, and the Java `select()` API return
+the rows the unindexed scan returns.
 
 On an indexed `INTEGER` holding 11, 12, and 13, a bound of `12.5` (a Python `float`, as a
 parameter or a literal) gives other rows than the same query on an unindexed copy:
@@ -374,10 +374,10 @@ parameter or a literal) gives other rows than the same query on an unindexed cop
 `i < :b` returned `[11]` against `[11, 12]`. On an indexed `LONG`, a `float` of `1e19` finds
 the record holding `Long.MAX_VALUE`. Other bounds that need no rounding are not affected.
 
-Round the bound yourself, in the direction that keeps the same rows: `math.ceil(b)` for `>=`
-and `<`, `math.floor(b)` for `>` and `<=`, and do not run an equality query when
-`b != int(b)`, because no integer equals it. For all four range operators the rounded
-integer bound returned the same rows as the unindexed scan.
+Before 26.10.1, round the bound yourself, in the direction that keeps the same rows:
+`math.ceil(b)` for `>=` and `<`, `math.floor(b)` for `>` and `<=`, and do not run an equality
+query when `b != int(b)`, because no integer equals it. For all four range operators the
+rounded integer bound returned the same rows as the unindexed scan.
 
 ```python
 import math
@@ -386,7 +386,7 @@ b = 12.5
 rows = db.query("sql", "SELECT i FROM T WHERE i >= :b", {"b": math.ceil(b)}).to_list()
 ```
 
-Tests: `tests/test_declared_type_known_issues.py`; its strict `xfail` tests start failing the suite when an engine fix reaches the wheel, which is the cue to remove this entry.
+Tests: `tests/test_declared_type_known_issues.py` checks the workaround and asserts the fixed behavior (it was a strict `xfail` tripwire until the fix reached the engine these tests run on).
 
 
 ## A value that cannot be converted is stored as `NULL`, and `''` as `0`, in a declared numeric property
@@ -394,6 +394,9 @@ Tests: `tests/test_declared_type_known_issues.py`; its strict `xfail` tests star
 ArcadeDB [#9014](https://github.com/ArcadeData/arcadedb/issues/9014) and
 [#9027](https://github.com/ArcadeData/arcadedb/issues/9027); measured through the bindings
 on a 26.10.1 snapshot, and in Java on 26.9.1 and the 2026-09-17 main snapshot.
+**Fixed in 26.10.1** (PR #9121, verified on its merge): a write to a declared property now
+refuses a value the type cannot hold, with an error naming the property, instead of storing
+`NULL`, `0`, or a wrapped number.
 
 Writing `True`, a `list`, or a `dict` to a declared `BYTE`, `SHORT`, `INTEGER`, `LONG`,
 `FLOAT`, or `DOUBLE` property is accepted and stores `NULL`: `doc.set("i", True)`,
