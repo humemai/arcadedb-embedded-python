@@ -174,9 +174,16 @@ jobs:
         shell: bash
         run: |
           ./mvnw -B -q -DskipTests -pl package -am package
-          LIB=$(ls -d package/target/arcadedb-*.dir/arcadedb-*/lib | head -1)
-          if [ -z "$LIB" ] || [ ! -d "$LIB" ]; then
-            echo "::error::no lib directory under package/target"; exit 1
+          # The FULL distribution. The base, headless, and minimal variants are
+          # written beside it as arcadedb-<version>-<variant>.dir, and "-" sorts
+          # before ".", so `ls | head -1` picked base, which has no plugins (no
+          # Gremlin, Bolt, wire protocols, GraphQL, metrics, or tracing).
+          LIB=$(ls -d package/target/arcadedb-*.dir/arcadedb-*/lib | grep -vE -- '-(base|headless|minimal)\.dir/' || true)
+          if [ "$(printf '%s\n' "$LIB" | grep -c .)" != 1 ] || [ ! -d "$LIB" ]; then
+            echo "::error::expected one full-distribution lib under package/target, got: $LIB"; exit 1
+          fi
+          if ! ls "$LIB"/arcadedb-gremlin-*.jar > /dev/null 2>&1; then
+            echo "::error::$LIB has no Gremlin plugin jar, so it is not the full distribution"; exit 1
           fi
           mkdir -p bindings/python/src/arcadedb_embedded/jars
           cp "$LIB"/*.jar bindings/python/src/arcadedb_embedded/jars/
@@ -276,9 +283,10 @@ jobs:
           uv --version
 
       - name: Download ArcadeDB JARs artifact
-        # Skip for Linux: Docker build downloads JARs from ArcadeDB image directly
-        # Only needed for native builds (macOS/Windows)
-        if: matrix.platform != 'linux/amd64' && matrix.platform != 'linux/arm64'
+        # Native builds (macOS/Windows) always take the jars from this artifact. The
+        # Linux Docker build pulls the image's jars itself, except with
+        # engine-from-source, where the artifact holds the jars built from this commit.
+        if: (matrix.platform != 'linux/amd64' && matrix.platform != 'linux/arm64') || inputs.engine-from-source == true
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: arcadedb-jars
@@ -318,10 +326,20 @@ jobs:
 
       - name: Build and test arcadedb-embedded (${{ matrix.platform }})
         shell: bash
+        env:
+          ENGINE_FROM_SOURCE: ${{ inputs.engine-from-source }}
         run: |
           cd bindings/python
           echo "🔨 Building arcadedb-embedded for ${{ matrix.platform }} with Python ${{ matrix.python-version }}..."
-          ./scripts/build.sh ${{ matrix.platform }} ${{ matrix.python-version }}
+          # ENGINE FROM SOURCE: hand the jars built from this commit to build.sh on
+          # every platform. Without JAR_LIB_DIR the Linux (Docker) build pulls the
+          # snapshot image's jars itself, so the option silently did nothing there
+          # while the native builds used the artifact (2026-10-04, run 37193748490).
+          if [ "${ENGINE_FROM_SOURCE}" = "true" ]; then
+            ./scripts/build.sh ${{ matrix.platform }} ${{ matrix.python-version }} src/arcadedb_embedded/jars
+          else
+            ./scripts/build.sh ${{ matrix.platform }} ${{ matrix.python-version }}
+          fi
 
       - name: Extract wheel for additional testing
         shell: bash
