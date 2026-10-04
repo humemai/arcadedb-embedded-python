@@ -522,11 +522,12 @@ creation). Manages its own transactions unless one is already active.
   committed the caller's open transaction every `commit_every` rows
   (fixed 2026-09-27).
 - `parallel` (bool): Route rows through the async executor's parallel
-  bucket writers and wait for completion (out-of-order writes). Each bucket
-  is owned by one writer, so this is faster only on a type created with
-  several buckets (`CREATE DOCUMENT TYPE T BUCKETS n`): on the default single
-  bucket it measured no faster than the synchronous mode, and 2.5x faster at
-  8 buckets on 4 cores (2026-09-27). The maintainers' rule
+  bucket writers and wait for completion (out-of-order writes). On a laptop
+  (4 performance cores, parallel level 3, 1,000,000 rows, 6 runs per arm,
+  engine `b22b5e9954`, 2026-10-04) it was 1.11x to 1.14x faster than the
+  synchronous mode at 1, 3, 4, and 8 buckets alike
+  (`CREATE DOCUMENT TYPE T BUCKETS n`); 8 buckets were no faster than 1.
+  The maintainers' rule
   (ArcadeData/arcadedb#8478): a bucket count equal to, or a multiple of, the
   executor's parallel level (`async_executor().get_parallel_level()`, default
   cores - 1), decided when the type is created. Each writer commits every
@@ -535,9 +536,10 @@ creation). Manages its own transactions unless one is already active.
   multi-bucket type every index lookup, and every unique-key check on insert,
   runs once per bucket; for a type you load or look up by a key, route records
   by that key with the partitioned strategy (it needs a UNIQUE index on the
-  key): ``ALTER TYPE T BucketSelectionStrategy `partitioned('id')` ``. Laptop,
-  400,000 rows, 4 buckets, UNIQUE `id`: the parallel load 7.8 s against 3.4 s
-  partitioned, a keyed lookup 62 against 53 us (2026-09-28).
+  key): ``ALTER TYPE T BucketSelectionStrategy `partitioned('id')` ``. The
+  same laptop, 400,000 rows, 4 buckets, UNIQUE `id`, 6 runs per arm: the
+  parallel load 3.15 s against 2.53 s partitioned, a keyed lookup 16.2
+  against 14.6 us.
 
 **Returns:**
 
