@@ -243,10 +243,20 @@ jobs:
 
       - name: Build arcadedb-embedded (${{ matrix.platform }})
         shell: bash
+        env:
+          ENGINE_FROM_SOURCE: ${{ inputs.engine-from-source }}
         run: |
           cd bindings/python
           echo "🔨 Building arcadedb-embedded for ${{ matrix.platform }} with Python ${{ matrix.python-version }}..."
-          ./scripts/build.sh ${{ matrix.platform }} ${{ matrix.python-version }}
+          # ENGINE FROM SOURCE: hand the jars built from this commit to build.sh on
+          # every platform. Without JAR_LIB_DIR the Linux (Docker) build pulls the
+          # snapshot image's jars itself, so the option silently did nothing there
+          # while the native builds used the artifact (2026-10-04, run 37193748490).
+          if [ "${ENGINE_FROM_SOURCE}" = "true" ]; then
+            ./scripts/build.sh ${{ matrix.platform }} ${{ matrix.python-version }} src/arcadedb_embedded/jars
+          else
+            ./scripts/build.sh ${{ matrix.platform }} ${{ matrix.python-version }}
+          fi
 
       # Note: Java is NOT required - arcadedb-embedded has bundled JRE!
 
