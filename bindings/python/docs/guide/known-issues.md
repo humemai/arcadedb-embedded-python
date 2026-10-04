@@ -420,3 +420,105 @@ with db.transaction():
 ```
 
 Tests: `tests/test_declared_type_known_issues.py` checks the workaround and asserts the fixed behavior (it was a strict `xfail` tripwire until the fix reached the engine these tests run on).
+
+## SQL `p = ?` with `None` bound returns the records without a value through an index that stores null keys
+
+ArcadeDB [#9238](https://github.com/ArcadeData/arcadedb/issues/9238); measured through the
+bindings on 26.9.1 and a 26.10.1 snapshot, and in Java on the 2026-09-17 main snapshot and
+on main of 2026-10-05.
+
+In SQL an equality with a null value matches no record, and on a type without an index
+`p = ?` with `None` returns none. Through an index that stores null keys it returns the
+records whose `p` is null or absent instead. Over three records with `p = 1`, `p = null`,
+and no `p`, all with `q = 7`, the last two came back for `p = ?` bound to `None` (and for
+`p = :x` with `{"x": None}`):
+
+- through a `NOTUNIQUE` or `NOTUNIQUE_HASH` index on `p` created with `NULL_STRATEGY INDEX`;
+  through a `UNIQUE` or `UNIQUE_HASH` one, only one of them;
+- for `q = 7 AND p = ?`, through a composite index on `(q, p)` or `(p, q)`, `LSM_TREE` or
+  hash, and for `p = ?` alone through an `LSM_TREE` one on `(p, q)`. This includes indexes
+  created with the default null strategy (`SKIP`), which keeps a key unless all of its
+  properties are null.
+
+`DELETE ... WHERE p = :x` and `UPDATE ... WHERE q = 7 AND p = :x` with `{"x": None}` delete
+and update those records. Through an `LSM_TREE` index with `NULL_STRATEGY ERROR` the query
+raises `ArcadeDBError` (`Indexed key ... cannot be NULL`) instead of matching nothing. The
+literal `p = null` and openCypher `n.p = $x` with `None` match nothing, as they should.
+
+Do not bind `None` to `=`. When `None` means "no value" and you want those records, ask for
+them with `p IS NULL`, or with the null-safe `p <=> ?`, which takes a value or `None`; both
+returned what the type without an index returns. An index on `p` does not serve `<=>`, so it
+reads the whole type. When `None` should match nothing, as SQL defines it, do not run the
+query, the `DELETE`, or the `UPDATE`.
+
+```python
+def children_of(parent):
+    if parent is None:
+        return db.query("sql", "SELECT FROM T WHERE parent IS NULL").to_list()
+    return db.query("sql", "SELECT FROM T WHERE parent = ?", parent).to_list()
+
+
+# One query for a value or None; it reads every record of T
+rows = db.query("sql", "SELECT FROM T WHERE parent <=> ?", parent).to_list()
+```
+
+On a `UNIQUE` or `UNIQUE_HASH` index with `NULL_STRATEGY INDEX`, `p IS NULL` has an issue of
+its own (the next entry); use `p <=> ?` there.
+
+Tests: `tests/test_null_index_known_issues.py`; its strict `xfail` tests start failing the suite when an engine fix reaches the wheel, which is the cue to remove this entry.
+
+## SQL `p IS NULL` through a `UNIQUE` or `UNIQUE_HASH` index with `NULL_STRATEGY INDEX` returns one record
+
+ArcadeDB [#9237](https://github.com/ArcadeData/arcadedb/issues/9237); measured through the
+bindings on 26.9.1 and a 26.10.1 snapshot, and in Java on the 2026-09-17 main snapshot and
+on main of 2026-10-05.
+
+A unique index created with `NULL_STRATEGY INDEX` accepts any number of records whose key
+is null, since a null key is exempt from uniqueness, and keeps an entry for each of them.
+SQL `p IS NULL` answered through that index returns one of them, and `count(*)` counts one.
+Over four records written in four transactions, with `p = 1`, `p = null`, no `p`, and
+`p = null`, `SELECT id FROM T WHERE p IS NULL` returned `[4]` and `count(*)` returned 1,
+where a `NOTUNIQUE` index and the type without an index return `[2, 3, 4]` and 3. Another
+condition next to it (`p IS NULL AND id > 0`) returned the same one record.
+
+Use the null-safe `p <=> null`, which returned all three records and counted 3. The index
+does not serve it, so it reads the whole type. openCypher `n.p IS NULL` also returned all
+three.
+
+```python
+rows = db.query("sql", "SELECT FROM T WHERE p <=> null").to_list()
+n = db.query("sql", "SELECT count(*) AS n FROM T WHERE p <=> null").first().get("n")
+```
+
+Tests: `tests/test_null_index_known_issues.py`; its strict `xfail` tests start failing the suite when an engine fix reaches the wheel, which is the cue to remove this entry.
+
+## An openCypher equality on the first property of a composite hash index fails
+
+ArcadeDB [#9236](https://github.com/ArcadeData/arcadedb/issues/9236); measured through the
+bindings on 26.9.1 and a 26.10.1 snapshot, and in Java on the 2026-09-17 main snapshot and
+on main of 2026-10-05.
+
+With a `NOTUNIQUE_HASH` or `UNIQUE_HASH` index on `(p, q)`, an openCypher `MATCH` that gives
+only `p` (`WHERE n.p = 1`, `{p: 1}`, or `WHERE n.p IN [1, 2]`), or gives `q` as a parameter
+bound to `None`, fails when its rows are read with
+`java.lang.UnsupportedOperationException: Index '...' does not support ordered iterations`.
+The exception is the Java one that JPype raises, not `ArcadeDBError`. The planner seeks the
+hash index with a part of its key, which only an ordered index can read. With both properties
+given (`n.p = 1 AND n.q = 5`) the hash index answers, and SQL `WHERE p = 1` answers on the
+same type. 26.10.1 fixes the same failure for a range on a property whose only index is a
+hash index (ArcadeDB [#8835](https://github.com/ArcadeData/arcadedb/issues/8835)), not this one.
+
+Run the query in SQL, give every property of the key, or index the properties with
+`NOTUNIQUE` (an `LSM_TREE` index), which serves a part of the key in openCypher.
+A `None` for `q` makes the equality match nothing; do not run the query (see the #9238 entry).
+
+```python
+rows = db.query("sql", "SELECT FROM T WHERE p = ?", 1).to_list()
+rows = db.query(
+    "opencypher",
+    "MATCH (n:T) WHERE n.p = $p AND n.q = $q RETURN n",
+    {"p": 1, "q": 5},
+).to_list()
+```
+
+Tests: `tests/test_null_index_known_issues.py`; its strict `xfail` tests start failing the suite when an engine fix reaches the wheel, which is the cue to remove this entry.
