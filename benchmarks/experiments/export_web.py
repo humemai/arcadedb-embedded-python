@@ -2185,6 +2185,51 @@ def _lifecycle_answer_note(groups):
     return _gen(" ".join(parts), *[phrase(k) for k in sits], *alone, *served)
 
 
+def _graph_first_pass_note(rows):
+    """The graph table's read columns are the FIRST of two passes, said so.
+
+    The graph lane times every read twice over the same start persons and the
+    table prints the first pass (`point_p50_ms`; the second is
+    `warm_point_p50_ms`, l2_graph's `_read_pass("warm_")`). Its rows still
+    carry NA_COLD_WARM_TXN, "each operation runs against an already-built,
+    already-warm database by construction", and for the engines on a JVM that
+    is not true of the reads: the first pass includes the JIT compiling the
+    query path. October's SF1 point p50 is 3.59x the second pass for ArcadeDB
+    embedded, 1.46x served, and 2.13x for Neo4j, against 0.89x to 1.10x for
+    every other engine. No ratio is quoted on the page (narrative about the
+    numbers is written at the freeze, with pins); the sentence says what the
+    column is. It says "includes" on purpose: at this pin the reads format the
+    id into the query text, so a cache keyed on that text can also favour the
+    second pass over the same ids, and the sentence holds either way.
+
+    KEYED ON THE ROWS: a row without `read_warmup` was measured without the
+    untimed warm-up on other start persons that the next measurement's lane
+    records, and the sentence stays until no such row is behind the table. The
+    JVM engines are named from the rows, by the heap they recorded, the same
+    test _jvm_memory_note uses.
+    """
+    if not _OCTOBER_ENV:
+        return None
+    stale = [r for r in rows
+             if r.get("lane") == "l2" and r.get("workload") == "oltp"
+             and str(r.get("instrument") or "") == "2026-10"
+             and not str(r.get("read_warmup") or "").strip()]
+    if not stale:
+        return None
+    jvm = sorted({display_name(str(r.get("backend"))) for r in stale
+                  if str(r.get("heap") or r.get("server_heap") or "").strip()})
+    parts = ["Each read on this table is timed twice over the same start persons, and the "
+             "table prints the first pass, so its read columns include each engine's warm-up."]
+    if jvm:
+        _one = len(jvm) == 1
+        parts.append(f"On {_join_and(jvm)}, which {'runs' if _one else 'run'} on a JVM, that "
+                     f"warm-up includes the JVM compiling the query path.")
+    parts.append("The next measurement gives every engine an untimed warm-up on other start "
+                 "persons first, prints the warm median, and adds the first query of a session "
+                 "as the cold column.")
+    return _gen(" ".join(parts), *jvm)
+
+
 def _cold_note(table_id, rows, columns=()):
     """The one clause this table owes about its cold column."""
     src = OCT_COLD_SOURCE.get(table_id)
@@ -2195,6 +2240,12 @@ def _cold_note(table_id, rows, columns=()):
           and str(r.get("instrument") or "") == "2026-10"]
     if not rs:
         return None
+    # The graph table's rows say "already warm by construction", and its read
+    # columns are a first pass that is not (_graph_first_pass_note).
+    if table_id == "l2":
+        _first = _graph_first_pass_note(rs)
+        if _first:
+            return _first
     na = sorted({str(r["cold_warm_na"]) for r in rs if r.get("cold_warm_na")})
     if na:
         # A table whose cold columns come from elsewhere (the dense table's
@@ -2687,6 +2738,44 @@ def _thermal_note():
         len(ms), f"{med:.1f}", f"{worst:.0f}")
 
 
+_DEV_BUILD = re.compile(r"(dev\d*|SNAPSHOT)\b", re.I)
+
+
+def _next_measurement_note(tables):
+    """WHEN "the next measurement" is, said once for the page.
+
+    The notes under the tables say what the next measurement changes and the
+    `re-run` cells say what it re-measures, and nothing said when it happens:
+    after this campaign, on the next ArcadeDB release, with every comparator
+    at its latest stable release (CAMPAIGN section 7, row 9). No date, because
+    none is fixed.
+
+    KEYED ON THE ROWS: shown while the ArcadeDB rows behind the page are a
+    development build, which is what this campaign measured, and while a table
+    still defers something. Rows from a release take it off the page, and so
+    does a page with nothing left to re-measure.
+    """
+    if not _OCTOBER_ENV or SKELETON:
+        return None
+    dev = any(_DEV_BUILD.search(str(r.get("engine_version") or ""))
+              for r in _FROZEN_ROWS if str(r.get("backend") or "").startswith("arcadedb"))
+    if not dev:
+        return None
+    rerun = any((cell or {}).get("text") == "re-run"
+                for t in tables for e in t.get("entries") or []
+                for cell in (e.get("metrics") or {}).values() if isinstance(cell, dict))
+    notes = any("the next measurement" in str(c).lower()
+                for t in tables for c in t.get("conditions") or [])
+    if not (rerun or notes):
+        return None
+    what = ("Both the cells marked `re-run` and the changes described in the notes under "
+            "the tables are measured then." if rerun and notes
+            else "The cells marked `re-run` are measured then." if rerun
+            else "The changes described in the notes under the tables are measured then.")
+    return _gen("The next measurement runs after this one is complete, on the next ArcadeDB "
+                "release and with every other engine at its latest stable release. " + what)
+
+
 def _global_conditions(tables, october):
     reps = _reps_note(tables)
     if october:
@@ -2694,6 +2783,9 @@ def _global_conditions(tables, october):
         if reps:
             out.append(reps)
         out += [_R("GLOBAL", "defaults"), _R("GLOBAL", "digest")]
+        _next = _next_measurement_note(tables)
+        if _next:
+            out.append(_next)
         return out
     out = []
     for c in GLOBAL_CONDITIONS:
@@ -2752,6 +2844,43 @@ def _loaded_wal_off(r):
     return ts < fix
 
 
+# ARCADEDB'S STRICT CLASS IS AN FSYNC, AND THE NEXT MEASUREMENT'S IS AN
+# FDATASYNC. `txWalFlush=2` is FileChannel.force(true) (WALFile.YES_FULL): the
+# log's data and metadata at every commit. SQLite's FULL in WAL mode is one
+# fdatasync per commit, which is `txWalFlush=1` (force(false)), and upstream's
+# own transactions documentation recommends 1 for production and says 2 adds
+# no recovery value over it. The strict class moves to 1 at the re-pin
+# (CAMPAIGN section 7, row 5, the user's decision of 2026-10-04), and the page
+# says so beside the rows measured at 2. Keyed on the text those rows record,
+# not on bench_common.DURABILITY_ARCADEDB_STRICT, which changes at the re-pin:
+# the sentence goes when the last row recording the full sync does.
+_ARCADEDB_FULL_SYNC = "txWalFlush=2: the WAL is flushed and synced at every commit"
+_ARCADEDB_STRICT_NEXT = 1     # the re-pin's txWalFlush for the strict class
+
+
+def _arcadedb_full_sync_note(rows):
+    """(sentence, the values it inserted) for a table that shows ArcadeDB rows
+    run at the full sync, or None. `rows` are the rows behind its cells."""
+    if not _OCTOBER_ENV:
+        return None
+    full = [str(r.get("durability")) for r in rows
+            if str(r.get("backend") or "").startswith("arcadedb")
+            and str(r.get("durability") or "").startswith(_ARCADEDB_FULL_SYNC)]
+    if not full:
+        return None
+    measured = re.match(r"txWalFlush=(\d+)", full[0]).group(1)
+    nxt = str(_ARCADEDB_STRICT_NEXT)
+    # "Was set to", not "synced": on this table a defect note says one
+    # ArcadeDB arm's later commits skipped the log, and the setting is what
+    # every arm's row records either way.
+    return (f"In the runs that wait for the disk, ArcadeDB was set to sync its write-ahead "
+            f"log's data and metadata at every commit (`txWalFlush={measured}`, an fsync). "
+            f"The next measurement uses `txWalFlush={nxt}` instead, a data-only sync "
+            f"(fdatasync) like SQLite's FULL setting, which ArcadeDB's documentation "
+            f"recommends for production and says recovers everything the full sync does.",
+            [measured, nxt])
+
+
 def _durability_note(entries, rows, table_lane=None):
     """The durability sentence THIS table needs, from the engines it shows.
 
@@ -2768,6 +2897,7 @@ def _durability_note(entries, rows, table_lane=None):
     want = {str(e.get("backend")) for e in entries if e.get("outcome") != "withdrawn"}
     seen = {}
     not_read_back, defaults, wal_off = set(), set(), set()
+    shown = []
     for r in rows:
         if str(r.get("instrument") or "") != "2026-10":
             continue
@@ -2776,6 +2906,7 @@ def _durability_note(entries, rows, table_lane=None):
         lbl = display_name(str(r.get("backend") or ""))
         if lbl not in want:
             continue
+        shown.append(r)
         cls = ("synced_default" if _SURREAL_SERVED_SYNCED(r)
                else bench_common.durability_class(r.get("durability")))
         if cls:
@@ -2837,8 +2968,16 @@ def _durability_note(entries, rows, table_lane=None):
                      f"so {'its' if _one else 'their'} ingest figures had less durability than the relaxed "
                      f"setting; {'its' if _one else 'their'} timed operations ran with the log on. The next "
                      f"measurement loads with the log on.")
+    # Today no table reaches this with an ArcadeDB strict row: main() sets a
+    # strict row aside wherever its cell has a relaxed one, and the durability
+    # table, which shows them, says it in its own conditions. Here for a table
+    # that ever shows one.
+    _full_sync = _arcadedb_full_sync_note(shown)
+    if _full_sync:
+        parts.append(_full_sync[0])
     return _gen(" ".join(parts), *sorted(_strict_only | seen.get("unverified", set())
-                                         | seen.get("synced_default", set()) | unread | wal_off))
+                                         | seen.get("synced_default", set()) | unread | wal_off),
+                *(_full_sync[1] if _full_sync else ()))
 
 
 # _pinned_dir cannot be used here: it is defined below and this is module scope.
@@ -3815,6 +3954,7 @@ def _durability_table(all_rows):
     import bench_common
     entries = []
     withdrawn = {}        # display name -> [operation label, ...]
+    waiting_rows = []     # the rows behind the printed waiting-column cells
     for lane, workload, field, op_key, op_label in DURABILITY_WRITES:
         rows = [r for r in all_rows
                 if r.get("lane") == lane and r.get("workload") == workload
@@ -3955,6 +4095,8 @@ def _durability_table(all_rows):
                 withdrawn.setdefault(entry["backend"], []).append(op_label_s)
             if entry["metrics"]:
                 entries.append(entry)
+                if not entry.get("outcome") and "waits for the disk ms" in entry["metrics"]:
+                    waiting_rows.extend(rs if no_setting else strict)
     if not entries:
         return None
     # The sentences below explain the numbers a row PRINTS, so a row taken
@@ -4016,6 +4158,8 @@ def _durability_table(all_rows):
             f"it is indistinguishable from a setting that failed to take. Stamp the "
             f"engine's `durability` on its rows, or add the sentence that says how "
             f"its behaviour at commit was established.")
+    # ArcadeDB's waiting column is a full sync until the re-pin's rows arrive.
+    _full_sync = _arcadedb_full_sync_note(waiting_rows)
 
     return {
         "id": "durability",
@@ -4041,6 +4185,7 @@ def _durability_table(all_rows):
                     f"{'They have' if len(_synced_default) > 1 else 'It has'} a setting that does not "
                     f"wait, which our harness missed, and the next measurement runs both.",
                     *_synced_default)] if _synced_default else []),
+            *([_gen(_full_sync[0], *_full_sync[1])] if _full_sync else []),
             *_engine_defect_notes("durability", _shown),
             *([_two_txn_note] if _two_txn_note else []),
             *([_gone_note] if _gone_note else []),
