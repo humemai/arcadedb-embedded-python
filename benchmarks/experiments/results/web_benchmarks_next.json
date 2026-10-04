@@ -109,7 +109,14 @@
     "Each printed cell is the median of 5 repetitions, with min and max carried alongside; nothing here is a single sample.",
     "Defaults first. Where a default would make the comparison meaningless, it is equalized and the override is disclosed rather than hidden.",
     "Comparators are pinned by sha256 image digest, not by a floating tag.",
-    "The next measurement runs after this one is complete, on the next ArcadeDB release and with every other engine at its latest stable release. Both the cells marked `re-run` and the changes described in the notes under the tables are measured then."
+    "The next measurement runs after this one is complete, and it makes the changes listed below.",
+    "ArcadeDB moves from the development build of 2026-09-17 to its next release, and every other engine to its latest stable release.",
+    "The Graph OLTP reads get an untimed warm-up on other start persons, the table prints their warm median, and a cold column is added.",
+    "ArcadeDB's runs that wait for the disk use a data-only sync (`txWalFlush=1`) instead of a full sync.",
+    "Every graph question is asked in both directions of a friendship.",
+    "The Document OLAP table runs the full TPC-H Q1.",
+    "The cells marked `re-run` are measured again.",
+    "The notes under the tables describe the next measurement's other changes."
   ],
   "provenance_note": "Some benchmarks record which machine they ran on and some record only the container, so that column is filled in where it was measured and left alone where it was not. Everything on this page ran on the same machine; this note reports what each result can actually show rather than what we know to be true of all of them.",
   "hosts_recorded": [
@@ -2512,11 +2519,12 @@
         "LadybugDB's row is marked `re-run`: it sized its thread count and buffer pool from the whole machine rather than from the cores and memory its cell was given, while every other engine here that sizes itself from the machine was fitted to its cell. It is being re-measured with both fitted.",
         "SurrealDB (server)'s write cells are marked `re-run`: the server ran at its default, a sync to disk at every commit, although it has a setting that does not wait, and every other engine on this table that has such a setting ran at it. Our harness missed that setting, and the next measurement runs its writes at it. Its read cells commit nothing and stay.",
         "In this measurement every person's age loaded as zero, through a date-parsing error in our data loader, so the 3-hop filtered read (age above 30) matched no one on any engine: its times are three hops plus a check on every end node. The next measurement parses the ages correctly.",
+        "Each friendship is one edge, pointing from the person with the smaller id to the person with the larger. The engines can follow an edge from either end, but the 1-hop, 2-hop, and 3-hop reads follow it only the way it points, so 1-hop counts only the friends with a larger id than the start person, and 2-hop and 3-hop reach only people along a chain of rising ids. The next measurement asks the same questions in both directions of a friendship.",
         "Each read on this table is timed twice over the same start persons, and the table prints the first pass, so its read columns include each engine's warm-up. On ArcadeDB (embedded), ArcadeDB (server), and Neo4j, which run on a JVM, that warm-up includes the JVM compiling the query path. The next measurement gives every engine an untimed warm-up on other start persons first, prints the warm median, and adds the first query of a session as the cold column.",
         "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Each row records what it ran as `durability`, and the setting was read out of the engine rather than assumed on every engine except ArcadeDB (server) and SurrealDB (server). ArcadeDB (server) is given the setting when the server starts, and the row records it, because the server offers no way to read it back. The exceptions on this table are DuckPGQ and Neo4j, which have no setting to relax and wait for the disk at every commit; their write and transaction cells are paying for that. SurrealDB (server)'s rows record that no setting was found, and its server log shows what it ran: its default in both runs, a sync to disk at every commit (the log reads \"Sync mode: every transaction commit\" in every run), although it has a setting that does not wait; the next measurement runs both.",
         "Every engine traverses the same persons-and-KNOWS projection, with edges stored in both directions.",
         "ArcadeDB (embedded), ArcadeDB (server), and Neo4j run on a JVM, and for them this column is close to the heap they were given rather than the memory the work needed: Neo4j's 4.74 GiB here is about 119 per cent of its 4g heap. Every engine on a table gets the same memory envelope; how much of it a JVM takes is a property of the runtime, so read these cells against each other rather than against an engine that manages its own memory.",
-        "Each repetition runs every read against a fresh set of start persons (SF1 (10k people, 181k friendships): 500, SF10 (66k people, 1.9M friendships): 200) and 1,000 each of the insert, update, and delete; the p50 and p99 are over those.",
+        "Every repetition, on every engine, runs each read against the same start persons (SF1 (10k people, 181k friendships): 500, SF10 (66k people, 1.9M friendships): 200) and 1,000 each of the insert, update, and delete; the p50 and p99 are over those. The start persons are picked at random with a fixed seed and with replacement, so one person can be picked more than once.",
         "FalkorDB at SF1 (10k people, 181k friendships) and SF10 (66k people, 1.9M friendships): its disk cells are 0.0 because the server container did not grow over its empty footprint during the run: at the relaxed setting FalkorDB persists only by timed snapshots, with no append-only file, and none had been taken when disk was measured, so the graph was held in memory only; read them as a floor under 0.01 GiB, not as a size.",
         "In the cells: `re-run` means the cell was measured before a fix to our harness and stays off the table until it is measured again; the note says what was wrong. A dash is an operation the engine cannot express, never a slow one.",
         "Ingest paths: ArcadeDB embedded loads through the Java API (newVertex, newEdge) in 5,000-record transactions; served sends CREATE VERTEX and CREATE EDGE statements as sqlscript batches over HTTP; Neo4j and Memgraph UNWIND batches over bolt; FalkorDB the same UNWIND batches over the Redis protocol; LadybugDB COPY from CSV, its native bulk path; DuckPGQ registers each batch as an Arrow table and INSERT ... SELECTs from it into the Person and knows tables, then defines the property graph over them; ArangoDB import_bulk; MongoDB insert_many; SurrealDB inserts the persons through its Python SDK and the KNOWS edges as bulk relation inserts."
@@ -15311,9 +15319,9 @@
       "title": "Document OLAP",
       "dataset": "TPC-H Q1, Q6, top parts, ship mode, and by month (SF1, SF10)",
       "conditions": [
-        "Five analytical queries, each over the whole line-item table. Q1: TPC-H's own Q1, the pricing summary: it groups and aggregates every line item, so it measures a full scan. Q6: TPC-H's own Q6, the forecasting revenue change: it sums one column under a narrow filter, so it measures how well an engine skips what it does not need. Top parts: the ten parts with the highest revenue, a group-by over every line item with a sort and a limit. Ship mode: how many line items went by each ship mode, a group-by over the whole table. By month: revenue by month of shipment, a group-by on a date expression. All times are milliseconds.",
+        "Five analytical queries, each over the whole line-item table. Q1: TPC-H Q1, the pricing summary, with seven of its ten output columns. It groups and aggregates every line item, so it measures a full scan. It leaves out the average price, the average discount, and the total charge with tax, which needs the tax column this measurement did not load. The next measurement runs the full Q1. Q6: TPC-H's own Q6, the forecasting revenue change: it sums one column under a narrow filter, so it measures how well an engine skips what it does not need. Top parts: the ten parts with the highest revenue, a group-by over every line item with a sort and a limit. Ship mode: how many line items went by each ship mode, a group-by over the whole table. By month: revenue by month of shipment, a group-by on a date expression. All times are milliseconds.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint.",
-        "The cold column is the very first query of a session, TPC-H Q1, timed once on a database that has just been opened; every other latency column is the warm median of the iterations that follow it. It answers what the first query of a session costs against the hundredth, which is a different question from the steady-state one and is the one an application that opens a database per request actually asks.",
+        "The cold column is the very first query of a session, Q1, timed once on a database that has just been opened; every other latency column is the warm median of the iterations that follow it. It answers what the first query of a session costs against the hundredth, which is a different question from the steady-state one and is the one an application that opens a database per request actually asks.",
         "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Each row records what it ran as `durability`, and the setting was read out of the engine rather than assumed on every engine except ArcadeDB (server) and SurrealDB (server). ArcadeDB (server) is given the setting when the server starts, and the row records it, because the server offers no way to read it back. The exception on this table is DuckDB, which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that. SurrealDB (server)'s rows record that no setting was found, and its server log shows what it ran: its default in both runs, a sync to disk at every commit (the log reads \"Sync mode: every transaction commit\" in every run), although it has a setting that does not wait; the next measurement runs both.",
         "PostgreSQL's memory cell is not comparable to the others: this column counts memory an engine holds in its own address space, and PostgreSQL holds its data in shared memory and the kernel's file cache instead. At TPC-H SF10 (60.0M line items), of the 1.54 GiB shown, 1.464 GiB is our Python client and 0.070 GiB is the database.",
         "ArcadeDB (embedded) and ArcadeDB (server) run on a JVM, and for them this column is close to the heap they were given rather than the memory the work needed: ArcadeDB (server)'s 6.42 GiB here is about 80 per cent of its 8g heap. Every engine on a table gets the same memory envelope; how much of it a JVM takes is a property of the runtime, so read these cells against each other rather than against an engine that manages its own memory.",
@@ -17352,6 +17360,10 @@
         ]
       },
       {
+        "text": "Each friendship is one edge, pointing from the person with the smaller id to the person with the larger. The engines can follow an edge from either end, but the 1-hop, 2-hop, and 3-hop reads follow it only the way it points, so 1-hop counts only the friends with a larger id than the start person, and 2-hop and 3-hop reach only people along a chain of rising ids. The next measurement asks the same questions in both directions of a friendship.",
+        "values": []
+      },
+      {
         "text": "Each read on this table is timed twice over the same start persons, and the table prints the first pass, so its read columns include each engine's warm-up. On ArcadeDB (embedded), ArcadeDB (server), and Neo4j, which run on a JVM, that warm-up includes the JVM compiling the query path. The next measurement gives every engine an untimed warm-up on other start persons first, prints the warm median, and adds the first query of a session as the cold column.",
         "values": [
           "ArcadeDB (embedded)",
@@ -17366,9 +17378,9 @@
         ]
       },
       {
-        "text": "The cold column is the very first query of a session, TPC-H Q1, timed once on a database that has just been opened; every other latency column is the warm median of the iterations that follow it. It answers what the first query of a session costs against the hundredth, which is a different question from the steady-state one and is the one an application that opens a database per request actually asks.",
+        "text": "The cold column is the very first query of a session, Q1, timed once on a database that has just been opened; every other latency column is the warm median of the iterations that follow it. It answers what the first query of a session costs against the hundredth, which is a different question from the steady-state one and is the one an application that opens a database per request actually asks.",
         "values": [
-          "TPC-H Q1"
+          "Q1"
         ]
       },
       {
@@ -17411,10 +17423,6 @@
         ]
       },
       {
-        "text": "The next measurement runs after this one is complete, on the next ArcadeDB release and with every other engine at its latest stable release. Both the cells marked `re-run` and the changes described in the notes under the tables are measured then.",
-        "values": []
-      },
-      {
         "text": "ArcadeDB (embedded, fp32), ArcadeDB (embedded, int8), ArcadeDB (server, fp32), ArcadeDB (server, int8), and Elasticsearch run on a JVM, and for them this column is close to the heap they were given rather than the memory the work needed: Elasticsearch's 17.37 GiB here is about 109 per cent of its 16g heap. Every engine on a table gets the same memory envelope; how much of it a JVM takes is a property of the runtime, so read these cells against each other rather than against an engine that manages its own memory.",
         "values": [
           "ArcadeDB (embedded, fp32), ArcadeDB (embedded, int8), ArcadeDB (server, fp32), ArcadeDB (server, int8), and Elasticsearch",
@@ -17441,7 +17449,7 @@
         ]
       },
       {
-        "text": "Each repetition runs every read against a fresh set of start persons (SF1 (10k people, 181k friendships): 500, SF10 (66k people, 1.9M friendships): 200) and 1,000 each of the insert, update, and delete; the p50 and p99 are over those.",
+        "text": "Every repetition, on every engine, runs each read against the same start persons (SF1 (10k people, 181k friendships): 500, SF10 (66k people, 1.9M friendships): 200) and 1,000 each of the insert, update, and delete; the p50 and p99 are over those. The start persons are picked at random with a fixed seed and with replacement, so one person can be picked more than once.",
         "values": [
           "SF1 (10k people, 181k friendships): 500, SF10 (66k people, 1.9M friendships): 200",
           "1,000"
@@ -17633,8 +17641,11 @@
         ]
       },
       {
-        "text": "Five analytical queries, each over the whole line-item table. Q1: TPC-H's own Q1, the pricing summary: it groups and aggregates every line item, so it measures a full scan. Q6: TPC-H's own Q6, the forecasting revenue change: it sums one column under a narrow filter, so it measures how well an engine skips what it does not need. Top parts: the ten parts with the highest revenue, a group-by over every line item with a sort and a limit. Ship mode: how many line items went by each ship mode, a group-by over the whole table. By month: revenue by month of shipment, a group-by on a date expression. All times are milliseconds.",
-        "values": []
+        "text": "Five analytical queries, each over the whole line-item table. Q1: TPC-H Q1, the pricing summary, with seven of its ten output columns. It groups and aggregates every line item, so it measures a full scan. It leaves out the average price, the average discount, and the total charge with tax, which needs the tax column this measurement did not load. The next measurement runs the full Q1. Q6: TPC-H's own Q6, the forecasting revenue change: it sums one column under a narrow filter, so it measures how well an engine skips what it does not need. Top parts: the ten parts with the highest revenue, a group-by over every line item with a sort and a limit. Ship mode: how many line items went by each ship mode, a group-by over the whole table. By month: revenue by month of shipment, a group-by on a date expression. All times are milliseconds.",
+        "values": [
+          "seven",
+          "ten"
+        ]
       },
       {
         "text": "Each repetition runs every query 100 times; the p50 and p99 are over those runs.",
@@ -17739,6 +17750,46 @@
         "values": [
           "nine"
         ]
+      },
+      {
+        "text": "The Graph OLTP reads get an untimed warm-up on other start persons, the table prints their warm median, and a cold column is added.",
+        "values": [
+          "Graph OLTP"
+        ]
+      },
+      {
+        "text": "ArcadeDB's runs that wait for the disk use a data-only sync (`txWalFlush=1`) instead of a full sync.",
+        "values": [
+          "1"
+        ]
+      },
+      {
+        "text": "Every graph question is asked in both directions of a friendship.",
+        "values": []
+      },
+      {
+        "text": "The Document OLAP table runs the full TPC-H Q1.",
+        "values": [
+          "Document OLAP"
+        ]
+      },
+      {
+        "text": "The cells marked `re-run` are measured again.",
+        "values": []
+      },
+      {
+        "text": "The next measurement runs after this one is complete, and it makes the changes listed below.",
+        "values": []
+      },
+      {
+        "text": "ArcadeDB moves from the development build of 2026-09-17 to its next release, and every other engine to its latest stable release.",
+        "values": [
+          "2026-09-17"
+        ]
+      },
+      {
+        "text": "The notes under the tables describe the next measurement's other changes.",
+        "values": []
       }
     ]
   },
