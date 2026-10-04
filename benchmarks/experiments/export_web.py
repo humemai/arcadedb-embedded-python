@@ -5510,7 +5510,6 @@ OCT_PROSE = {
                    "latencies comparable at all.", []),
         "cold": ("Cold p50 and p99 are the first timed pass over the query set after the index is built; the lane runs a short untimed warm-up on held-out queries before it, so cold means an index that has not yet answered the timed queries, not a process that has done nothing. Warm columns, where present, are the passes after it from the multipass driver.", []),
         "degree": ("ArcadeDB's maxConnections is a Vamana per-layer degree, not hnswlib's M. Matching the parameter names would compare a half-degree graph against a full-degree one, so the graphs are matched by effect instead.", []),
-        "arango_ivf": ("ArangoDB's vector index is FAISS IVF (inverted lists over trained centroids), not HNSW, so the degree match above does not apply to it; its rows record nLists (about the square root of the corpus) and nProbe (an eighth of the lists) instead.", []),
         "milvus": ("Milvus's dense rows run with segments sealed at 50% of the maximum segment size, where the image default is 12%, so a large ingest lands in the few-large-segments layout that Milvus's own compaction otherwise reaches at an unpredictable moment. One line changed from the image's configuration; sparse rows are at the default.",
                    [(r"sealed at (\d+)%", lambda P, rows: _milvus_seal_proportion() * 100, "const"),
                     (r"image default is (\d+)%", lambda P, rows: _const("runner", "MILVUS_IMAGE_SEAL_PROPORTION") * 100, "const")]),
@@ -6123,6 +6122,101 @@ def _filtered_modes():
     return out
 
 
+# ARANGODB'S IVF OPERATING POINT, READ FROM ITS ROWS. The registered sentence
+# this replaces said its rows record nLists "about the square root of the
+# corpus" and nProbe "an eighth of the lists", and neither is what the harness
+# does. arango_common.ivf_params builds round(4 * sqrt(n)) lists, the low end
+# of FAISS's guideline for 1M to 10M vectors (4 * sqrt(n) to 16 * sqrt(n));
+# NPROBE_FRAC, the eighth, is only the cross-model lane's setting and the
+# search's first guess. On the dense lane calibrate_nprobe picks the smallest
+# nProbe in [1, nLists] whose recall@10 on a held-out slice of the fixture
+# queries (never the timed ones) reaches arango_common.recall_target: the
+# median frozen recall@10 of ArcadeDB embedded fp32 at the same size, read
+# from runs_paper.csv, the previous published measurement's freeze.
+#
+# Every number comes from the rows behind the table's ArangoDB entries:
+# ivf_nlists against n_docs (the multiplier is said only when every row agrees
+# with ivf_params, and in words), ivf_calibration_queries, ivf_recall_target
+# and ivf_recall_target_source, and ivf_nprobe. A size whose ArangoDB row is
+# not on the table (the 10M cell, withheld, _one_list_note) is not described.
+_RECALL_TARGET_SOURCE = re.compile(
+    r"^(runs_paper(?:_oct)?\.csv) (arcadedb_dense_embedded) (fp32) (\S+) median of (\d+)$")
+
+
+def _arango_ivf_note(table, rows):
+    """The ArangoDB IVF sentence for the dense table, or None when no
+    ArangoDB row with an IVF operating point is behind it."""
+    shown = {str(e.get("scale")) for e in table.get("entries") or []
+             if str(e.get("backend_key") or "").startswith("arangodb") and not e.get("outcome")}
+    rs = [r for r in rows
+          if r.get("lane") == "l3d" and str(r.get("backend") or "").startswith("arangodb")
+          and str(r.get("instrument") or "") == "2026-10" and str(r.get("scale")) in shown
+          and _num(r.get("ivf_nlists")) and _num(r.get("n_docs"))]
+    if not rs:
+        return None
+    import arango_common
+    by = {}
+    for r in rs:
+        by.setdefault(str(r.get("scale")), []).append(r)
+    order = sorted(by, key=lambda sc: SCALE_ORDER.index(sc) if sc in SCALE_ORDER else len(SCALE_ORDER))
+    values = []
+    parts = ["ArangoDB's vector index is FAISS IVF (inverted lists over trained centroids), not "
+             "HNSW, so the degree match above does not apply to it, and its rows record its "
+             "operating point instead."]
+    lists = []
+    for sc in order:
+        got = sorted({int(_num(r.get("ivf_nlists"))) for r in by[sc]})
+        size = scale_label("l3d", sc)
+        lists.append(f"{_join_and(f'{n:,}' for n in got)} lists at {size}")
+        values += [f"{n:,}" for n in got] + [size]
+    mults = {round(_num(r.get("ivf_nlists")) / _num(r.get("n_docs")) ** 0.5) for r in rs}
+    follows = all(arango_common.ivf_params(int(_num(r.get("n_docs"))))[0] == int(_num(r.get("ivf_nlists")))
+                  for r in rs)
+    if follows and len(mults) == 1:
+        parts.append(f"Its number of lists is {_count_word(mults.pop())} times the square root "
+                     f"of the vector count, the low end of the range FAISS's own guidelines give, "
+                     f"which makes {_join_and(lists)}.")
+    else:
+        parts.append(f"Its index has {_join_and(lists)}.")
+    probed = [r for r in rs if _num(r.get("ivf_nprobe"))]
+    if probed:
+        queries = {int(_num(r.get("ivf_calibration_queries"))) for r in probed
+                   if _num(r.get("ivf_calibration_queries"))}
+        held = (f"{next(iter(queries)):,} queries held out from the timed ones" if len(queries) == 1
+                else "queries held out from the timed ones")
+        values += [f"{q:,}" for q in queries if len(queries) == 1]
+        srcs = {str(r.get("ivf_recall_target_source") or "") for r in probed}
+        m = _RECALL_TARGET_SOURCE.match(next(iter(srcs))) if len(srcs) == 1 else None
+        if m:
+            arc = f"{display_name(m.group(2))[:-1]}, {m.group(3)})"
+            when = ("in the previous published measurement" if m.group(1) == "runs_paper.csv"
+                    else "in this measurement")
+            target = f"the median recall@10 of {arc} at the same size {when}"
+            values.append(arc)
+        else:
+            target = "the recall target its rows record"
+        parts.append(f"The number of lists each query probes is calibrated, not set: after the "
+                     f"build and before any timed pass, the benchmark picks the smallest number "
+                     f"whose recall@10 on {held} reaches {target}.")
+        per = []
+        for sc in order:
+            here = [r for r in probed if str(r.get("scale")) == sc]
+            if not here:
+                continue
+            size = scale_label("l3d", sc)
+            nps = sorted(int(_num(r.get("ivf_nprobe"))) for r in here)
+            chose = f"{nps[0]:,}" if nps[0] == nps[-1] else f"{nps[0]:,} to {nps[-1]:,}"
+            builds = (f" across {_count_word(len(here))} builds" if len(here) > 1 else "")
+            tg = {str(r.get("ivf_recall_target")) for r in here if _num(r.get("ivf_recall_target"))}
+            lead = (f"At {size} that target is {next(iter(tg))} and the calibration chose"
+                    if len(tg) == 1 else f"At {size} the calibration chose")
+            per.append(f"{lead} {chose} lists{builds}")
+            values += [size, f"{nps[0]:,}", f"{nps[-1]:,}"] + list(tg if len(tg) == 1 else [])
+        if per:
+            parts.append("; ".join(per) + ".")
+    return _gen(" ".join(parts), *dict.fromkeys(values))
+
+
 def _oct_conditions(table):
     """The registered and generated sentences an October table carries beyond
     what its builder and main() already put there: (head, tail). The head
@@ -6145,8 +6239,9 @@ def _oct_conditions(table):
             head.append(split)
         if any(c.startswith("cold ") for c in table.get("columns") or []):
             tail.insert(0, _R("l3d", "cold"))
-        if any(n.startswith("ArangoDB") for n in names):
-            tail.append(_R("l3d", "arango_ivf"))
+        _ivf = _arango_ivf_note(table, _FROZEN_ROWS)
+        if _ivf:
+            tail.append(_ivf)
         if any(n.startswith("Milvus") for n in names):
             tail.append(_R("l3d", "milvus"))
     if tid == "l3s":
