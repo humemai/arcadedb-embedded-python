@@ -5508,7 +5508,7 @@ OCT_PROSE = {
                    "against the dataset's own published neighbours, unchanged, while every engine "
                    "runs one metric rather than each running its own -- which is what makes the "
                    "latencies comparable at all.", []),
-        "cold": ("Cold p50 and p99 are the first timed pass over the query set after the index is built; the lane runs a short untimed warm-up on held-out queries before it, so cold means an index that has not yet answered the timed queries, not a process that has done nothing. Warm columns, where present, are the passes after it from the multipass driver.", []),
+        "cold": ("Cold p50 and p99 are the first timed pass over the query set after the index is built; a short untimed warm-up on held-out queries runs before it, so cold means an index that has not yet answered the timed queries, not a process that has done nothing. Warm columns, where present, are the passes after it.", []),
         "degree": ("ArcadeDB's maxConnections is a Vamana per-layer degree, not hnswlib's M. Matching the parameter names would compare a half-degree graph against a full-degree one, so the graphs are matched by effect instead.", []),
         "milvus": ("Milvus's dense rows run with segments sealed at 50% of the maximum segment size, where the image default is 12%, so a large ingest lands in the few-large-segments layout that Milvus's own compaction otherwise reaches at an unpredictable moment. One line changed from the image's configuration; sparse rows are at the default.",
                    [(r"sealed at (\d+)%", lambda P, rows: _milvus_seal_proportion() * 100, "const"),
@@ -7128,33 +7128,43 @@ def _query_budget_notes(table_id):
 def _mutation_note(rows):
     """Which dense tiers ran the two maintenance operations, and which did not.
 
-    #82d runs them at one tier, so on any other tier the four maintenance
-    columns are blank. A blank with no sentence beside it is what #89 forbids,
-    and it is also how a reader concludes an engine failed the operation when
-    the operation was never asked for. Read from the rows' own mutate_ran and
-    mutate_reason rather than from the tier list here, so a forced run
-    (BENCH_DENSE_MUTATE=1) describes itself.
+    The pass runs at one tier, so on any other tier the six maintenance columns
+    (the search after each operation, the cost of each per vector, and the
+    recall after each) are blank. A blank with no sentence beside it is also
+    how a reader concludes an engine failed the operation when the operation
+    was never asked for. Read from the rows' own mutate_ran rather than from
+    the tier list here, so a forced run (BENCH_DENSE_MUTATE=1) describes itself.
+
+    The rows' mutate_reason is NOT quoted. It is the harness's own note to
+    itself (it names a decision number and the tier by its internal key), and
+    it printed on the page as "(scale deep10m is not the one-million tier;
+    #82d runs the two mutation operations at small only)" the first time a
+    dense table reached the preview (2026-10-06). The tiers are named the way
+    the table names them, and the sentence says the one fact.
     """
-    ran, skipped = {}, {}
+    ran, skipped = set(), set()
     for r in rows:
         if r.get("lane") != "l3d":
             continue
         sc = str(r.get("scale"))
         flag = str(r.get("mutate_ran")).lower() in ("true", "1")
-        why = str(r.get("mutate_reason") or "").strip()
-        (ran if flag else skipped)[sc] = why
+        (ran if flag else skipped).add(sc)
+    # A tier that ran for any engine is a tier the pass runs at: an engine that
+    # declined it there (it cannot express the operation) is a declared absence
+    # on that engine's cells, not a tier where the pass was not run.
+    skipped -= ran
     if not ran and not skipped:
         return None
     parts = []
     if ran:
-        parts.append("The insert and delete into a built index, and the recall "
-                     "after each, run at " + _join_and(scale_label("l3d", s) for s in sorted(ran))
-                     + " (" + "; ".join(sorted(set(ran.values()))) + ").")
+        parts.append("The insert and delete into a built index, the search after each, "
+                     "and the recall after each are measured at "
+                     + _join_and(scale_label("l3d", s) for s in sorted(ran))
+                     + (" only." if skipped else "."))
     if skipped:
-        parts.append("They do not run at " + _join_and(scale_label("l3d", s) for s in sorted(skipped))
-                     + ", where those four columns are blank because the pass was "
-                       "not asked for rather than because an engine failed it ("
-                     + "; ".join(sorted(set(w for w in skipped.values() if w))) + ").")
+        parts.append("At " + _join_and(scale_label("l3d", s) for s in sorted(skipped))
+                     + " those columns are blank because the pass is not run there, "
+                       "not because an engine failed it.")
     # WHAT THE MUTATION COLUMNS ARE COMPARING, which is not one thing. Most
     # dense engines patch their graph incrementally on insert; ArcadeDB's
     # LSM_VECTOR buffers into a delta and rebuilds the WHOLE graph from
@@ -7169,17 +7179,30 @@ def _mutation_note(rows):
     # when no row carries the counter -- rows measured before
     # engine_stats_after_mutate existed, or engines exposing no such metric --
     # so silence means "not recorded", never "did not rebuild".
+    #
+    # Each arm is named as its row is (name and precision), and arms whose
+    # counters agree share one clause: ArcadeDB's fp32 and int8 embedded arms
+    # were both printed as "ArcadeDB (embedded)", each with its own count, which
+    # read as one engine saying two different things.
     _rb = _mutation_rebuilds(rows)
+    _tokens = []
     if _rb:
-        _said = []
+        _by_count = collections.OrderedDict()
         for _b, _n, _d in _rb:
+            _by_count.setdefault((_n, _d if _n == 0 else 0), []).append(_dense_row_label(_b))
+        _said = []
+        for (_n, _d), _names in _by_count.items():
+            _who, _many = _join_and(_names), len(_names) > 1
             if _n > 0:
-                _said.append("%s rebuilt its whole graph %d time%s to absorb them"
-                             % (display_name(_b), _n, "" if _n == 1 else "s"))
+                _said.append("%s rebuilt %s whole graph %d time%s to absorb the changes"
+                             % (_who, "their" if _many else "its", _n, "" if _n == 1 else "s"))
+                _tokens.append(str(_n))
             else:
-                _said.append("%s left %s of them in its delta buffer, to be merged by a "
-                             "later full rebuild this cell does not pay for"
-                             % (display_name(_b), f"{_d:,}"))
+                _said.append("%s left %s vectors in %s, to be merged by a later full "
+                             "rebuild this cell does not pay for"
+                             % (_who, f"{_d:,}",
+                                "their delta buffers" if _many else "its delta buffer"))
+                _tokens.append(f"{_d:,}")
         parts.append(
             "These engines do not all maintain an index the same way: "
             + "; ".join(_said)
@@ -7187,9 +7210,8 @@ def _mutation_note(rows):
               "insert touches only the new ones, so the per-vector costs here price "
               "different amounts of work and are not a straight speed comparison.")
     return _gen(" ".join(parts),
-                *[scale_label("l3d", s) for s in sorted(set(ran) | set(skipped))],
-                *sorted(set(ran.values()) | set(skipped.values())),
-                *[str(v) for _b, _n, _d in (_rb or ()) for v in (_n, f"{_d:,}") if v])
+                *[scale_label("l3d", s) for s in sorted(ran | skipped)],
+                *_tokens)
 
 
 def _stats_int(row, field, key):
@@ -7228,8 +7250,13 @@ def _mutation_rebuilds(rows):
     pending. An engine appears if either is positive; an engine whose counters
     are absent does not appear at all, because silence must read as "not
     recorded" rather than "nothing happened".
+
+    THE MEDIAN OVER REPETITIONS, like every other number on the page. This took
+    the maximum, so one build in five that ended with a stray extra vector in
+    the buffer (1,001 and 1,002 against 1,000 in the other four) printed as the
+    arm's count and made two arms that agree read as two different results.
     """
-    best = {}
+    seen = {}
     for r in rows:
         if r.get("lane") != "l3d":
             continue
@@ -7242,8 +7269,11 @@ def _mutation_rebuilds(rows):
             continue
         rebuilds = (after - before) if (before is not None and after is not None) else 0
         b = str(r.get("backend"))
-        prev = best.get(b, (0, 0))
-        best[b] = (max(rebuilds, prev[0]), max(delta or 0, prev[1]))
+        per = seen.setdefault(b, ([], []))
+        per[0].append(rebuilds)
+        per[1].append(delta or 0)
+    best = {b: (int(statistics.median(n)), int(statistics.median(d)))
+            for b, (n, d) in seen.items()}
     return sorted((b, n, d) for b, (n, d) in best.items() if n > 0 or d > 0)
 
 
@@ -7626,6 +7656,18 @@ def _one_list_note(backend, scale, items):
                                       *(f"{n:,}" for n in lists[:1] if len(lists) == 1)))
 
 
+def _dense_row_label(backend):
+    """The label the dense table prints for this arm: the name and the
+    precision it stores, as the entries are labelled (ArcadeDB's two embedded
+    arms and sqlite-vec's two arms differ in nothing else). A sentence that
+    names an arm has to name it the way its row is named."""
+    label = display_name(backend)
+    prec = DENSE_PRECISION.get(backend)
+    if not prec:
+        return label
+    return f"{label[:-1]}, {prec})" if label.endswith(")") else f"{label} ({prec})"
+
+
 def _withheld_recall_cells(table_id):
     """[(backend, scale, note, known)] for every approximate-search cell the
     freeze withheld for a recall below make_paper_tables.RECALL_FLOOR (the
@@ -7649,15 +7691,13 @@ def _withheld_recall_cells(table_id):
         if (backend, scale) in known:
             notes.append((backend, scale, _one_list_note(backend, scale, known[(backend, scale)]), True))
             continue
-        label = display_name(backend)
         # THE PRECISION, WHERE THE LANE HAS ARMS THAT DIFFER IN IT. This named
         # sqlite-vec's int8 arm "sqlite-vec" while the table prints its fp32 arm
         # at the same size, with a good recall, so the sentence read as a
         # statement about the row beside it (the first October dense landing,
         # 2026-10-06). The table's own label for the arm is the name to use.
-        if lane == "l3d" and _OCTOBER_ENV and DENSE_PRECISION.get(backend):
-            label = (f"{label[:-1]}, {DENSE_PRECISION[backend]})" if label.endswith(")")
-                     else f"{label} ({DENSE_PRECISION[backend]})")
+        label = (_dense_row_label(backend) if lane == "l3d" and _OCTOBER_ENV
+                 else display_name(backend))
         try:
             size = scale_label(lane, scale)
         except Exception:  # noqa: BLE001
