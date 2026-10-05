@@ -306,9 +306,15 @@ def start_jvm(
         the rollback of a ``with db.transaction():`` run. A Java call in
         progress (a slow query) is not interrupted: the KeyboardInterrupt
         arrives when it returns (``kill -TERM`` from another terminal still
-        ends the process at once, through the JVM's shutdown hooks). Pass True
-        for JPype's script default, where the JVM handles SIGINT and ends the
-        whole process at once with exit status 130, with no Python cleanup.
+        ends the process at once, through the JVM's shutdown hooks). A Java call
+        that waits in an interruptible way (``Thread.sleep``, ``Object.wait``,
+        the engine's async ``wait_completion()``) is woken by Ctrl-C, and JPype
+        1.7.1 can then raise ``java.lang.InterruptedException`` or
+        ``RuntimeError`` and deliver the ``KeyboardInterrupt`` late; "Known
+        Engine Issues" in the documentation has the workaround.
+        Pass True for JPype's script default, where the JVM handles SIGINT and
+        ends the whole process at once with exit status 130, with no Python
+        cleanup.
 
     JVM Configuration (environment):
     --------------------------------

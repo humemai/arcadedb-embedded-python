@@ -1,10 +1,11 @@
 # Known Engine Issues
 
 These are ArcadeDB engine bugs that can return a wrong answer, store a wrong value, change
-the wrong rows, or refuse a read or a write. Each entry names the versions it was measured
-on, what you see, a workaround that was checked on the same reproduction, and the release
-that fixes it once there is one. Entries leave this page when the fix ships in a release
-these bindings package.
+the wrong rows, or refuse a read or a write. The last entry is not an engine bug: it is a
+race in JPype, the library that connects Python to the engine. Each entry names the versions
+it was measured on, what you see, a workaround that was checked on the same reproduction, and
+the release that fixes it once there is one. Entries leave this page when the fix ships in a
+release these bindings package.
 An entry with a `Tests:` line has a test of its workaround and a strict `xfail` test of the
 engine behavior; the `xfail` starts failing the suite when a fix reaches the wheel, which is
 the cue to remove the entry.
@@ -708,3 +709,51 @@ db = arcadedb.create_database(
 
 There is no test of this entry: the miss needs a compaction that runs for seconds and
 searches that land inside it, too slow and too timing-dependent for the suite.
+
+
+## Ctrl-C during an interruptible Java wait can raise `InterruptedException`, not `KeyboardInterrupt`
+
+JPype 1.7.1, the version the wheel installs; measured through the bindings with a 26.10.1
+snapshot of the engine. Open. This is a race in JPype, not in ArcadeDB.
+
+With the default `interrupt=False`, JPype handles SIGINT in Java. Its handler first interrupts
+the main thread with `Thread.interrupt()` and only then tells Python that Ctrl-C arrived. A
+Java call that waits in an interruptible way wakes up between the two steps, and JPype finds
+no Python interrupt yet. `Thread.sleep()` and `Object.wait()` do, and so does the engine's
+`wait_completion()` on an async executor (its Java source handles `InterruptedException`;
+this one was not measured). Instead of a `KeyboardInterrupt` from the call you see one of:
+
+- `java.lang.InterruptedException` raised from the call, and the `KeyboardInterrupt` a
+  moment later in whatever statement runs next: a `finally` block, an `atexit` hook such as
+  the bindings' own close of open databases. The program ends with exit status 1 or by
+  SIGINT, with a traceback that names `InterruptedException`.
+- `RuntimeError: Fatal error occurred`, with `Fatal error in exception handling` and
+  `Handling: java.lang.InterruptedException: sleep interrupted` on stderr. `finally` blocks
+  and `atexit` hooks still ran.
+
+SIGINT at a random moment of a 1.5 s `Thread.sleep()` on two pinned cores gave one of these in
+14 of 400 interrupts (3.5%) with the cores idle, and in 26 of 200 (13%) with two busy loops
+sharing the two cores. `Object.wait()` with the busy loops: 42 of 200 (21%). A Python loop,
+and a Java call that ignores `Thread.interrupt()` (a socket `accept()` with a timeout, which
+returns with its `KeyboardInterrupt` when it times out), had no failure in 150 interrupts each
+with the busy loops.
+
+Wait in Python instead, so the main thread is never inside the Java wait: run the call in a
+daemon thread and poll it with `join`. Ctrl-C then raises `KeyboardInterrupt` in the main
+thread within the poll interval, and 150 of 150 interrupts with the busy loops did, with a
+`Thread.sleep()` in the worker:
+
+```python
+import threading
+
+worker = threading.Thread(target=async_exec.wait_completion, daemon=True)
+worker.start()
+while worker.is_alive():
+    worker.join(0.1)  # Ctrl-C raises KeyboardInterrupt here, never inside the Java wait
+```
+
+The worker keeps waiting after Ctrl-C and ends with the process. A Python wait loop such as
+`while True: time.sleep(1)`, as in the server examples, is not affected.
+
+Tests: `tests/test_sigint.py` covers a Python loop and a Java call that Ctrl-C cannot wake.
+It has no test of the waits above, because the failure is random (humemai/arcadedb-embedded-python#179).
