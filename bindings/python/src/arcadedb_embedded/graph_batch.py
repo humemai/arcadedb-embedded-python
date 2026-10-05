@@ -20,9 +20,11 @@ class GraphBatch:
     """Wrapper for Java GraphBatch with builder-backed configuration.
 
     create_vertices(), flush() and close(), and new_edge()/new_edges() when the
-    buffer fills, commit the transaction open on the thread, a caller's
-    included (ArcadeData/arcadedb#9242). Call them outside your own
-    transactions; see docs/api/graph_batch.md.
+    buffer fills, manage their own transactions. From engine 26.10.1 they refuse
+    to run inside a transaction you opened (an ArcadeDBError) and leave it
+    untouched; on 26.9.1 and earlier they commit it (ArcadeData/arcadedb#9242).
+    Call them outside your own transactions either way; see
+    docs/api/graph_batch.md.
     """
 
     _VALID_WAL_FLUSH_MODES = {
@@ -169,8 +171,10 @@ class GraphBatch:
         """
         Create multiple vertices efficiently and return their RIDs.
 
-        Call it outside your own transactions: it commits the transaction open
-        on this thread, yours included (ArcadeData/arcadedb#9242).
+        Call it outside your own transactions: from engine 26.10.1 it raises
+        ArcadeDBError inside one and leaves it untouched; on 26.9.1 and earlier
+        it commits the transaction open on this thread, yours included
+        (ArcadeData/arcadedb#9242).
 
         Args:
             type_name: Vertex type name.
@@ -179,13 +183,12 @@ class GraphBatch:
                 without properties when passing an iterable.
         """
         self._check_not_closed()
-        # The engine begins a transaction here when none is open, and joins one
-        # the caller already has open. Either way, on success it commits that
-        # transaction, the caller's earlier writes with it; on a retryable error
-        # it rolls it back, the caller's writes too, then retries in a
-        # transaction of its own and commits that (ArcadeData/arcadedb#9242).
-        # Only the failure path below leaves a caller's transaction alone: its
-        # rollback is for a transaction this call began.
+        # From engine 26.10.1 the engine refuses to run inside a transaction the
+        # caller opened and leaves it untouched, so the rollback below is only
+        # ever for a transaction this call began. On 26.9.1 and earlier it
+        # joined the caller's transaction, committed it with the vertices, and
+        # on a retryable error rolled it back before retrying in one of its own
+        # (ArcadeData/arcadedb#9242).
         owns_transaction = not self._java_db.isTransactionActive()
         try:
             if isinstance(count_or_properties, int):
@@ -372,9 +375,12 @@ class GraphBatch:
     def flush(self) -> "GraphBatch":
         """Flush buffered edges to disk.
 
-        Commits the transaction open on this thread, yours included
-        (ArcadeData/arcadedb#9242). So does new_edge()/new_edges() when the
-        buffer fills and flushes.
+        Call it outside your own transactions: from engine 26.10.1 it raises
+        ArcadeDBError inside one when edges are buffered, leaving the
+        transaction and the buffer as they were, and so do new_edge() and
+        new_edges() when the buffer fills and flushes. On 26.9.1 and earlier
+        they commit the transaction open on this thread, yours included
+        (ArcadeData/arcadedb#9242).
         """
         self._check_not_closed()
         try:
@@ -386,17 +392,35 @@ class GraphBatch:
     def close(self):
         """Flush remaining work and finalize deferred incoming edges.
 
-        Commits the transaction open on this thread, yours included
-        (ArcadeData/arcadedb#9242); leaving a ``with`` block calls this.
+        Leaving a ``with`` block calls this. Call it outside your own
+        transactions: from engine 26.10.1, inside one with work still pending,
+        it raises ArcadeDBError and the batch stays open, so a later close()
+        after your transaction ends writes that work. On 26.9.1 and earlier it
+        commits the transaction open on this thread, yours included
+        (ArcadeData/arcadedb#9242).
         """
         if self._closed:
             return
+        refused = False
         try:
             self._java_graph_batch.close()
         except Exception as e:
+            # A close the engine refused because of the caller's transaction
+            # released nothing: the batch is still open with its work pending,
+            # and marking the wrapper closed would make the retry a no-op that
+            # drops that work and keeps the database's batch guard held.
+            refused = self._is_callers_transaction_refusal(e)
             raise ArcadeDBError(f"Failed to close GraphBatch: {e}") from e
         finally:
-            self._closed = True
+            if not refused:
+                self._closed = True
+
+    def _is_callers_transaction_refusal(self, error: Exception) -> bool:
+        """True when the engine refused a call because the caller has a
+        transaction open (IllegalStateException, ArcadeData/arcadedb#9242)."""
+        return isinstance(
+            error, jpype.JClass("java.lang.IllegalStateException")
+        ) and bool(self._java_db.isTransactionActive())
 
     def get_total_edges_created(self) -> int:
         self._check_not_closed()

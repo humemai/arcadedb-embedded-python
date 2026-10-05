@@ -600,13 +600,17 @@ Tests: `tests/test_null_index_known_issues.py` checks the workaround and asserts
 ## `GraphBatch` commits a transaction you opened, and its retry can roll yours back
 
 ArcadeDB [#9242](https://github.com/ArcadeData/arcadedb/issues/9242); measured through the
-bindings on 26.9.1 and on two 26.10.1 snapshots, with the same results on each. Open.
+bindings on 26.9.1 and on two 26.10.1 snapshots, with the same results on each.
+**Fixed in 26.10.1** (PR #9270, verified through the bindings on upstream 5a90b0f52a, on
+JDK 25): the calls below now refuse to run inside a transaction you opened and leave it
+untouched. On 26.9.1 and earlier, and on a snapshot before 5a90b0f52a, they behave as
+described next.
 
-`GraphBatch.create_vertices()`, `flush()`, and `close()` join a transaction that is already
-open on the thread and commit it together with the batch's own work. So do `new_edge()` and
-`new_edges()` when the buffer reaches `batch_size` and they flush, and so does leaving a
-`with db.graph_batch()` block, which calls `close()`. After `db.begin()`, saving a document,
-and `batch.create_vertices("V", 2)`:
+`GraphBatch.create_vertices()`, `flush()`, and `close()` joined a transaction that was
+already open on the thread and committed it together with the batch's own work. So did
+`new_edge()` and `new_edges()` when the buffer reached `batch_size` and they flushed, and so
+did leaving a `with db.graph_batch()` block, which calls `close()`. After `db.begin()`,
+saving a document, and `batch.create_vertices("V", 2)`:
 
 - no transaction is active, and `db.rollback()` returns normally and leaves the document in
   place, also after the database is closed and reopened;
@@ -620,12 +624,35 @@ such as a concurrent modification, the engine rolls back the open transaction, y
 included, then retries in a transaction of its own and commits only the vertices. The call
 returns normally and your document is gone.
 
+From 26.10.1 each of those calls raises `ArcadeDBError` (the cause is a
+`java.lang.IllegalStateException`: `manages its own transactions and cannot run inside a
+transaction the caller opened`) and your transaction stays open with your writes in it:
+`db.rollback()` undoes them and `db.commit()` commits them. The rules the refusal follows:
+
+- `flush()` with nothing buffered and `close()` with nothing pending still run inside your
+  transaction, since there is nothing to commit.
+- A `close()` that is refused releases nothing. The batch stays open with its edges pending,
+  and the same `close()` after your transaction ends writes them. Until then
+  `db.graph_batch()` on that database raises `A GraphBatch is already in progress`. Leaving a
+  `with db.graph_batch()` block inside your transaction raises the refusal out of the block
+  for the same reason: end your transaction before the block exits.
+- `new_edges()` buffers the edges that fit before the one that fills the buffer, and the
+  refusal comes at that edge, so a refused call may have buffered some of its edges. They
+  stay buffered and the next flush outside your transaction writes them.
+- The batch's WAL setting applies to the transaction of the batch's own call only, so a
+  transaction of yours between two calls commits with the setting you chose.
+
+Before this version of the bindings, a refused `close()` marked the `GraphBatch` closed,
+which made the retry a no-op that wrote nothing and kept the database's batch guard held.
+It is fixed here, and `close()` leaves the object open after a refusal.
+
 `create_vertex()` is not affected: inside your transaction it saves the vertex without
 committing, and your `rollback()` undoes both.
 
-Commit your own writes before the batch's first call, or write them after it closes, and
-call the batch outside any transaction of yours. That way each rollback undoes only its own
-writes, and a retried vertex commit loses nothing of yours:
+On 26.9.1 and earlier, commit your own writes before the batch's first call, or write them
+after it closes, and call the batch outside any transaction of yours. That way each rollback
+undoes only its own writes, and a retried vertex commit loses nothing of yours. It is the
+right order on every version:
 
 ```python
 with db.transaction():
@@ -636,9 +663,10 @@ with db.graph_batch() as batch:
     batch.new_edges(rids[:-1], "Knows", rids[1:])
 ```
 
-Tests: `test_graph_batch_outside_the_callers_transactions` in `tests/test_graph_batch.py`
-checks this workaround, and the three tests after it are strict `xfail` tests of the engine
-behavior.
+Tests: `tests/test_graph_batch.py` asserts the refusal for each call, the retry of a refused
+`close()`, and the WAL setting; `test_graph_batch_outside_the_callers_transactions` checks the
+order above (it was strict `xfail` tripwires for the engine behavior until the fix reached the
+engine these tests run on).
 
 
 ## A vector search misses recently added records while `COMPACT INDEX` runs
