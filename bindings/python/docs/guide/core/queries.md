@@ -385,11 +385,11 @@ When you create indexes through SQL, the index keyword controls both the index
 structure and uniqueness.
 
 ```python
-# General-purpose ordered index (LSM_TREE)
-db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
+# Ordered index (LSM_TREE): ranges and ORDER BY on the key
+db.command("sql", "CREATE INDEX ON Invoice (number) UNIQUE")
 db.command("sql", "CREATE INDEX ON Event (createdAt) NOTUNIQUE")
 
-# Exact-match hash index
+# Exact-match hash index: an id that is only read, updated and deleted by equality
 db.command("sql", "CREATE INDEX ON User (email) UNIQUE_HASH")
 db.command("sql", "CREATE INDEX ON Order (customerId) NOTUNIQUE_HASH")
 
@@ -418,6 +418,32 @@ Examples:
 
 - `email = ?`, `userId = ?`, `movieId = ?`: usually `UNIQUE_HASH` or `NOTUNIQUE_HASH`
 - `createdAt BETWEEN ? AND ?`, `price > ?`, ordered scans: usually `UNIQUE` or `NOTUNIQUE`
+
+**Index choice for an id.** If an id is only read, updated and deleted by equality
+(SQL `WHERE id = ?`, openCypher `{id: $id}`), index it with `UNIQUE_HASH`, or
+`NOTUNIQUE_HASH` when several records share a value. SQL and openCypher both answer those
+statements from the hash index, and `EXPLAIN` shows `FETCH FROM INDEX`. From 26.10.1 hash
+inserts are as fast as `LSM_TREE` inserts or faster, and a point lookup is about 3 times
+faster (ArcadeDB [#9169](https://github.com/ArcadeData/arcadedb/issues/9169), fixed in
+PR #9222: the hash buckets keep their entries unordered; 200,000 entries). Keep
+`UNIQUE` (`LSM_TREE`) when you also read the key by range or `ORDER BY`, and keep an
+`LSM_TREE` index on a non-unique column with few distinct values (tracked in
+[#9228](https://github.com/ArcadeData/arcadedb/issues/9228)).
+
+```python
+db.command("sql", "CREATE INDEX ON Item (id) UNIQUE_HASH")  # id: equality only
+with db.transaction():
+    db.command("sql", "UPDATE Item SET label = :label WHERE id = :id", {"label": "new", "id": 42})
+    db.command("sql", "DELETE FROM Item WHERE id = :id", {"id": 43})
+rows = db.query("opencypher", "MATCH (n:Item {id: $id}) RETURN n.label AS label", {"id": 42})
+```
+
+On 26.9.1 the hash buckets still keep their entries sorted, and loading ids into a
+`UNIQUE_HASH` index was 2.5 to 6 times slower than into `UNIQUE` (200,000 `LONG` ids through
+`insert_many`, laptop, 1.3 to 2.6 s against 6.5 to 7.7 s); lookups were still faster, by less
+than the engine's 3x because the Python call dominates. On 26.9.1, index an id you load in
+bulk with `UNIQUE`. Both index kinds reject a duplicate key with the same
+`DuplicatedKeyException`.
 
 An index on a range column is not free when the range matches most of the rows. From
 26.10.1 a scan runs on several workers, while the index entries are read by one thread,

@@ -620,7 +620,8 @@ Lookup a record by an indexed key (O(1) index-based lookup).
 ```python
 db.command("sql", "CREATE VERTEX TYPE User")
 db.command("sql", "CREATE PROPERTY User.email STRING")
-db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
+# lookup_by_key is an equality lookup, so a hash index serves it (see "Index choice" in the queries guide)
+db.command("sql", "CREATE INDEX ON User (email) UNIQUE_HASH")
 
 with db.transaction():
     db.new_vertex("User").set("email", "alice@example.com").save()

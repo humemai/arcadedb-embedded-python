@@ -533,7 +533,7 @@ for row in result:
 
 1. **Create indexes:**
 ```python
-db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
+db.command("sql", "CREATE INDEX ON User (email) UNIQUE_HASH")
 ```
 
 2. **Use LIMIT:**
@@ -583,7 +583,7 @@ db.command(
 )
 
 # Recreate indexes
-db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
+db.command("sql", "CREATE INDEX ON User (email) UNIQUE_HASH")
 ```
 
 3. **Use transactions efficiently:**
@@ -1053,7 +1053,7 @@ except Exception:
     pass  # Index doesn't exist
 
 # Create new index
-db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
+db.command("sql", "CREATE INDEX ON User (email) UNIQUE_HASH")
 ```
 
 ---

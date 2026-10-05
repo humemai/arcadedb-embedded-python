@@ -365,7 +365,7 @@ def safe_database_operation():
             db.command("sql", "CREATE DOCUMENT TYPE Person")
             db.command("sql", "CREATE PROPERTY Person.name STRING")
             db.command("sql", "CREATE PROPERTY Person.email STRING")
-            db.command("sql", "CREATE INDEX ON Person (email) UNIQUE")
+            db.command("sql", "CREATE INDEX ON Person (email) UNIQUE_HASH")
         else:
             db = arcadedb.open_database("./mydb")
 

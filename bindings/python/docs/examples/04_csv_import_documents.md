@@ -244,11 +244,11 @@ The script first calls `wait_for_compaction()`, then creates these indexes via t
 
 ```python
 indexes = [
-    ("Movie", "movieId", "UNIQUE"),
+    ("Movie", "movieId", "UNIQUE"),     # ordered LSM_TREE: the queries ORDER BY movieId
     ("Movie", "genres", "FULL_TEXT"),   # Lucene full-text search on genres
     ("Rating", "userId", "NOTUNIQUE"),
     ("Rating", "movieId", "NOTUNIQUE"),
-    ("Link", "movieId", "UNIQUE"),
+    ("Link", "movieId", "UNIQUE_HASH"), # equality only: a hash index (ArcadeData/arcadedb#9169)
     ("Tag", "movieId", "NOTUNIQUE"),
 ]
 success_count, failed_indexes = create_indexes(db, indexes)
@@ -322,7 +322,7 @@ values are printed on a dedicated `NULL` line in the rating distribution.
 ## Index Architecture
 
 ArcadeDB exposes multiple index engines (LSM_TREE, HASH, FULL_TEXT, VECTOR). The
-default `UNIQUE` / `NOTUNIQUE` indexes use the **LSM-Tree (Log-Structured Merge Tree)**
+`UNIQUE` / `NOTUNIQUE` indexes (the ones that serve ranges and ordering) use the **LSM-Tree (Log-Structured Merge Tree)**
 backend, while the `genres` index in this example uses the Lucene-backed `FULL_TEXT`
 engine.
 
@@ -454,7 +454,7 @@ up by `movieId`), and the top 10 most common tags.
 
 - **CREATE INDEXES AFTER IMPORT** (avoids per-insert index maintenance)
 - Wait for background compaction first (`wait_for_compaction()`)
-- Use `UNIQUE` / `NOTUNIQUE` (LSM-tree) indexes and a `FULL_TEXT` index on `genres`
+- Use `UNIQUE` (LSM-tree) where the key is also ordered (`Movie.movieId`), `UNIQUE_HASH` for an id read only by equality (`Link.movieId`), `NOTUNIQUE` for the ratings and tags, and a `FULL_TEXT` index on `genres`
 - Retry index creation on compaction/index conflicts (`create_indexes()` helper)
 
 ### ✅ Performance Measurement

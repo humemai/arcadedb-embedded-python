@@ -211,8 +211,9 @@ with arcadedb.create_database("./mydb") as db:
     db.command("sql", "CREATE DOCUMENT TYPE User")
     db.command("sql", "CREATE PROPERTY User.id LONG")
     db.command("sql", "CREATE PROPERTY User.email STRING")
-    db.command("sql", "CREATE INDEX ON User (id) UNIQUE")
-    db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
+    # id and email are read by equality only, so hash indexes (see "Index choice" in the queries guide)
+    db.command("sql", "CREATE INDEX ON User (id) UNIQUE_HASH")
+    db.command("sql", "CREATE INDEX ON User (email) UNIQUE_HASH")
 
     db.command(
         "sql",
@@ -252,7 +253,7 @@ db.command(
     "IMPORT DATABASE file:///data/users.csv WITH documentType = 'User', commitEvery = 50000",
 )
 
-db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
+db.command("sql", "CREATE INDEX ON User (email) UNIQUE_HASH")
 ```
 
 ### Validate the Input Up Front

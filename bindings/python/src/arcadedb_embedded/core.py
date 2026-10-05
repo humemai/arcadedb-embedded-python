@@ -1097,8 +1097,8 @@ class Database:
             >>> db.schema.create_property("User", "name", PropertyType.STRING)
             >>> db.schema.create_property("User", "age", PropertyType.INTEGER)
             >>>
-            >>> # Create an index
-            >>> db.schema.create_index("User", ["name"], unique=True)
+            >>> # Create an index (HASH: "name" is only looked up by equality)
+            >>> db.schema.create_index("User", ["name"], unique=True, index_type="HASH")
             >>>
             >>> # Create edge type
             >>> db.schema.create_edge_type("Follows")
