@@ -328,6 +328,34 @@ DENSE_10M = {
 }
 
 
+def _dense_cache_set_by_campaign():
+    """The graph build cache sizes the campaign SET on ArcadeDB's dense rows.
+
+    graph_build_cache_configured is what the harness handed the engine: 0 is
+    the engine's own sizing (DECISIONS #52), anything above is a pinned cache
+    (DECISIONS #56 was 9,990,000). Read from the frozen rows the page is built
+    from, so the answer follows the data and not a constant written for one
+    campaign. The multipass overlay files do not record the field; the
+    campaign's single-pass rows of the same arms do, and one stage environment
+    runs both. An empty set means nothing was pinned.
+    """
+    import csv as _csv
+    frozen = HERE / "results" / _frozen_name()
+    out = set()
+    if not frozen.exists():
+        return out
+    for r in _csv.DictReader(frozen.open()):
+        if r.get("lane") != "l3d" or not str(r.get("backend", "")).startswith("arcadedb"):
+            continue
+        try:
+            v = int(float(r.get("graph_build_cache_configured") or 0))
+        except ValueError:
+            continue
+        if v > 0:
+            out.add(v)
+    return out
+
+
 def _check_dense_10m(payload):
     """Page's 10M cells vs the paper's, at the precision the paper prints."""
     import claims_check as C
@@ -385,11 +413,42 @@ def _check_dense_10m(payload):
     # DECISIONS #56: when the 10M rows come from the pinned multipass re-run,
     # the table must say the fp32 build cache was pinned to the corpus. A
     # disclosure that can silently drop off the page is not a disclosure.
+    #
+    # THAT DECISION IS SEPTEMBER'S. It pinned graphBuildCacheSize for the
+    # 8d6af9475 re-run, and the sentence it requires is written into September's
+    # l3d spec alone: an October table starts from no conditions and gets its
+    # sentences from the generators, so this check demanded a sentence the
+    # October page cannot carry, and demanded it unconditionally because
+    # _dense_overlay_is_pinned() answers "is the overlay pinned to a COMMIT"
+    # (always, since 2026-09-08) and not "was the cache pinned". The first
+    # October dense landing (2026-10-06) was refused on exactly that. October
+    # asks the rows instead (DECISIONS #59: the engine's own defaults): the
+    # disclosure is required when a row records a cache that was SET, and a
+    # sentence saying one was set is a false statement when none was.
     import export_web as _EW
-    if _EW._dense_overlay_is_pinned():
-        conds = " ".join(next((t.get("conditions", []) for t in payload.get("tables", [])
-                               if t["id"] == "l3d"), []))
-        if "graphBuildCacheSize pinned to the corpus size" in conds:
+    _l3d = next((t for t in payload.get("tables", []) if t["id"] == "l3d"), {})
+    conds = " ".join(_l3d.get("conditions", []))
+    said = "graphBuildCacheSize pinned to the corpus size" in conds
+    if _l3d.get("instrument") == "2026-10":
+        set_to = _dense_cache_set_by_campaign()
+        if set_to and said:
+            checked += 1
+            print(f"  #56 disclosure present on the dense table (cache set to {sorted(set_to)})")
+        elif set_to:
+            print(f"  MISSING the build-cache disclosure on the dense table: rows record the "
+                  f"cache set to {sorted(set_to)} and the table does not say so")
+            bad += 1
+        elif said:
+            print("  FALSE build-cache disclosure on the dense table: it says the cache was "
+                  "pinned and no row records one (graph_build_cache_configured is 0, the "
+                  "engine default, on every ArcadeDB dense row)")
+            bad += 1
+        else:
+            checked += 1
+            print("  build cache: every ArcadeDB dense row ran the engine default "
+                  "(graph_build_cache_configured 0), so there is no pinned setting to disclose")
+    elif _EW._dense_overlay_is_pinned():
+        if said:
             checked += 1
             print("  #56 disclosure present on the dense table")
         else:
@@ -1136,6 +1195,23 @@ NOT_PRINTED = [
      r"import_ms|build_close_ms|close_s|mutate_n|mutate_queries|mutate_ran)$",
      "harness bookkeeping around a timed phase: settling, loading ground "
      "truth, computing recall, and the phase accounting"),
+    # The first October dense landing (2026-10-06) met these four fields for
+    # the first time and A2 refused the page for them: no earlier landing had
+    # dense rows from the comparators that record them.
+    (r"^settle_(probes|first_ms|last_ms)$",
+     "the evidence behind a settle wait (SurrealDB's HNSW index builds in the "
+     "background, so the adapter probes until the latency is flat): how many "
+     "probes it took and the first and last probe's latency. settle_s, the wait "
+     "itself, is already declared above; these show that the index had caught "
+     "up before any query was timed, which is an audit of a cell and not a "
+     "column of it (BUGS F134)"),
+    (r"^setup_s$",
+     "the residue that makes the build's three timers partition its total "
+     "(build_s less ingest_s less index_s, BUGS F101): schema DDL before the "
+     "load and the settle after the index. Derived arithmetic over three "
+     "numbers the table already prints, and a few seconds at most in builds "
+     "of minutes to hours, so the page prints the total and the two phases "
+     "and a reader can read the residue off them"),
     (r"^(mutate_deleted_hits|mutate_reinserted_hits)$",
      "correctness counters that must be zero; a non-zero one is a defect "
      "report, not a column (l3d_dense records them on the row)"),
