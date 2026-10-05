@@ -382,6 +382,12 @@ read it again: the rows it had not returned are gone, so run the query again. (U
 which depended on the engine build.) To take one row and keep reading, use
 `next(iter(rs))` rather than `first()`.
 
+The engine computes rows lazily, so an error in the statement can come while the rows are
+read, after `query()` returned: a division by zero on the tenth row, say. Iteration,
+`first()`, `one()`, `count()`, and every `to_*` and `iter_*` method raise it as
+`ArcadeDBError`, with the Java exception as its `__cause__`. (Before 26.10.1 the Java
+exception reached Python as it was.)
+
 A result set, and each `Result` it returns, keeps its `Database` alive. Reading a result
 set after the database was closed (`db.close()`, or leaving the `with` block that opened
 it) raises `ArcadeDBError` ("Database is closed") unless it was already read to its end,

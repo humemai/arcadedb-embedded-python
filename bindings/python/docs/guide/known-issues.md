@@ -150,6 +150,49 @@ with db.transaction():
     db.command("sql", "INSERT INTO T SET t = :t", {"t": datetime.now(timezone.utc)})
 ```
 
+## An `UPDATE` or `DELETE` with positional parameters can read its `WHERE` from the wrong parameter
+
+ArcadeDB [#9245](https://github.com/ArcadeData/arcadedb/issues/9245); measured through the
+bindings on a 26.10.1 snapshot (engine `ad42f5f32e`), and in Java on upstream main from the
+merge of #9218 (`1addb51950`) on.
+**Fixed in 26.10.1** (PR #9252, verified on upstream main 354396071e): the engine keys the
+plan of the records an `UPDATE` or `DELETE` reads by the text of its statement, so statements
+that differ only in the position of a `?` no longer share one. It affected only the 26.10.1
+snapshots between #9218 and #9252. Named parameters were never affected, and neither were
+26.9.1 and the snapshots before #9218.
+
+Since #9218 the engine plans the records an `UPDATE` or `DELETE` reads as a `SELECT` with the
+same `WHERE`, and keeps that plan in the plan cache for every statement whose `WHERE` reads
+the same. A positional `?` reads the same at every position, so a statement whose `?` sits
+at another position reads its `WHERE` from the wrong parameter, and the count it reports
+does not show it. `UPDATE A SET brand = ? WHERE sku = ?` with `"NEW", "S2"`, run after
+`SELECT FROM A WHERE sku = ?`, changed the record whose sku is `NEW`, left `S2` as it was,
+and reported a count of 1. An earlier `UPDATE` or `DELETE` with the same type and `WHERE`
+does the same, with or without an index on the property. In the other direction the
+statement reads a parameter it does not have: after `UPDATE D SET brand = ? WHERE sku = ?`,
+`DELETE FROM D WHERE sku = ?` with `"S2"` deleted nothing and reported a count of 0. The
+same plan was shared by the statements of one SQL script (`UPDATE A SET brand = 'x1' WHERE
+sku = ?; UPDATE A SET brand = 'x2' WHERE sku = ?;` with `"S1", "S2"` updated `S1` twice and
+`S2` not at all), by `UPDATE ... UPSERT` after a `SELECT` with the same `WHERE` (it updated
+the record named by the SET value instead of inserting), and by `:name` parameters given as
+positional values.
+
+On a snapshot between #9218 and #9252, bind the parameters of an `UPDATE` or `DELETE` by
+name. A named parameter is read by its name, so a shared plan reads the right value:
+
+```python
+with db.transaction():
+    db.command(
+        "sql",
+        "UPDATE A SET brand = :brand WHERE sku = :sku",
+        {"brand": "NEW", "sku": "S2"},
+    )
+```
+
+Tests: `tests/test_dml_plan_cache_known_issues.py` checks the workaround and asserts the
+right answer on every engine (the test of the first case was a strict `xfail` tripwire,
+keyed on the engine having #9218, until the fix reached the engine these tests run on).
+
 ## A unique composite index read by its first property returns part of the rows
 
 ArcadeDB [#8806](https://github.com/ArcadeData/arcadedb/issues/8806); measured on 26.8.1,

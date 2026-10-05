@@ -36,6 +36,7 @@ Example:
     100000
 """
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Callable, Optional, Sequence, Union
 
 import jpype
@@ -666,7 +667,7 @@ class AsyncExecutor:
                 language,
                 query_text,
                 java_callback,
-                *[convert_python_to_java(arg) for arg in positional_args],
+                self._positional_parameters(positional_args),
             )
         else:
             self._java_async.query(language, query_text, java_callback)
@@ -737,7 +738,7 @@ class AsyncExecutor:
                 language,
                 command_text,
                 java_callback,
-                *[convert_python_to_java(arg) for arg in positional_args],
+                self._positional_parameters(positional_args),
             )
         else:
             self._java_async.command(language, command_text, java_callback)
@@ -1074,12 +1075,28 @@ class AsyncExecutor:
         java_document = getattr(record, "_java_document", None)
         return java_document if java_document is not None else record
 
+    def _positional_parameters(self, values):
+        """The one typed Java argument that carries ``args`` (#172).
+
+        An ``Object[]`` with one element per ``?``. Splatted, a lone ``None``
+        reached the engine as a null in place of the whole parameter array, so
+        nothing was bound. A lone mapping stays the named map it was before,
+        as in ``Database.query()``.
+        """
+        if len(values) == 1 and isinstance(values[0], Mapping):
+            return self._to_java_map(values[0])
+        return jpype.JArray(jpype.JObject)(
+            [convert_python_to_java(value) for value in values]
+        )
+
     def _to_java_map(self, params):
         HashMap = jpype.JClass("java.util.HashMap")
         java_params = HashMap()
         for key, value in params.items():
             java_params.put(key, convert_python_to_java(value))
-        return java_params
+        # Typed as the interface, so the Map overload is an exact match rather
+        # than one JPype picks over Object... (#172).
+        return jpype.JObject(java_params, jpype.JClass("java.util.Map"))
 
     def _to_java_varargs(self, properties):
         varargs = []

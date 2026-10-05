@@ -10,6 +10,8 @@ from decimal import Decimal
 from os import PathLike
 from typing import Any, List, Optional
 
+import jpype
+
 from .exceptions import ArcadeDBError
 from .graph import Document, Edge, Vertex
 from .graph_batch import GraphBatch
@@ -109,13 +111,48 @@ class Database:
 
         return converted_args
 
+    @staticmethod
+    def _java_parameters(args):
+        """The one Java argument that carries the parameters of query()/command().
+
+        A lone mapping is the named-parameter map and goes to the ``Map``
+        overload; anything else is the positional list and goes to the
+        ``Object...`` overload as an explicit ``Object[]``. Splatting the
+        values instead left the choice of overload to JPype, which cannot make
+        it for a lone ``None``: ``command(str, str, None)`` matches
+        ``Object...``, ``Map``, and ``ContextConfiguration, Object...`` alike
+        and raised "Ambiguous overloads" (#172), and so did ``(None, 1)``.
+
+        A mapping alone in a lone list or tuple (``[{...}]``) is still the
+        named map, as JPype chose before; SQL reads an ``Object[]`` holding
+        only a map that way too, but openCypher would refuse it.
+        """
+        values = (
+            args[0] if len(args) == 1 and isinstance(args[0], (list, tuple)) else args
+        )
+        if len(values) == 1 and isinstance(values[0], Mapping):
+            java_map = _java_class("java.util.Map")
+            params = values[0]
+            if not isinstance(params, java_map):
+                params = convert_python_to_java(
+                    params if isinstance(params, dict) else dict(params)
+                )
+            return jpype.JObject(params, java_map)
+        return jpype.JArray(jpype.JObject)(Database._convert_args(args))
+
     def query(self, language: str, command: str, *args) -> ResultSet:
-        """Execute a query and return results."""
+        """Execute a query and return results.
+
+        Parameters bind positionally (``?``) from the extra arguments, or by
+        name (``:name``, ``$name``) from a single dict. A single list or tuple
+        is the positional list itself; ``None`` binds as null.
+        """
         self._check_not_closed()
         try:
             if args:
-                converted_args = self._convert_args(args)
-                java_result = self._java_db.query(language, command, *converted_args)
+                java_result = self._java_db.query(
+                    language, command, self._java_parameters(args)
+                )
             else:
                 java_result = self._java_db.query(language, command)
             return ResultSet(java_result, self)
@@ -123,12 +160,16 @@ class Database:
             raise ArcadeDBError(f"Query failed: {e}") from e
 
     def command(self, language: str, command: str, *args) -> Optional[ResultSet]:
-        """Execute a command (non-idempotent operation)."""
+        """Execute a command (non-idempotent operation).
+
+        Parameters bind as in :meth:`query`.
+        """
         self._check_not_closed()
         try:
             if args:
-                converted_args = self._convert_args(args)
-                java_result = self._java_db.command(language, command, *converted_args)
+                java_result = self._java_db.command(
+                    language, command, self._java_parameters(args)
+                )
             else:
                 java_result = self._java_db.command(language, command)
 
