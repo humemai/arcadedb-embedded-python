@@ -622,9 +622,12 @@ behavior.
 ## A vector search misses recently added records while `COMPACT INDEX` runs
 
 ArcadeDB [#9241](https://github.com/ArcadeData/arcadedb/issues/9241); measured through the
-bindings on a 26.10.1 snapshot of 2026-10-04. It affects 26.10.1 snapshots from upstream
-PR #9132 (2026-10-03) on. 26.9.1 is not affected, and neither are snapshots before that PR:
-the same run on 26.9.1 and on a snapshot of 2026-10-03 from before it missed nothing.
+bindings on a 26.10.1 snapshot of 2026-10-04.
+**Fixed in 26.10.1** (PR #9252, verified in Java on upstream main 354396071e, on JDK 21 and
+25: no search pass missed a record during a compaction of about 45 s). It affected only the
+26.10.1 snapshots between upstream PR #9132 (2026-10-03), which introduced it, and PR #9252.
+26.9.1 is not affected, and neither are snapshots before #9132: the same run on 26.9.1 and
+on a snapshot of 2026-10-03 from before it missed nothing.
 
 While `COMPACT INDEX` rebuilds an `LSM_VECTOR` index, a search with a record's own vector does
 not return that record when it was added after the index's graph was last built. With 20,000
@@ -640,9 +643,9 @@ file is about three times the size its live vectors need
 get there. The graph rebuilds that run after a number of writes or a pause in writing, and
 `build_graph_now()`, do not rewrite the file and are not affected.
 
-Run `COMPACT INDEX` on a vector index while nothing searches it. To keep the engine from
-starting the compaction on its own, set the bloat factor to 0 when the JVM starts; the index
-then compacts only when you run `COMPACT INDEX`:
+On a snapshot between #9132 and #9252, run `COMPACT INDEX` on a vector index while nothing
+searches it. To keep the engine from starting the compaction on its own, set the bloat factor
+to 0 when the JVM starts; the index then compacts only when you run `COMPACT INDEX`:
 
 ```python
 db = arcadedb.create_database(
