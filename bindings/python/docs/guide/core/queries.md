@@ -487,9 +487,10 @@ skipped when the `WHERE` clause excludes nulls on `p` (`p IS NOT NULL`, `p = ?`,
 not a record that leaves `p` out (ArcadeDB [#8701](https://github.com/ArcadeData/arcadedb/issues/8701)).
 Otherwise, create the index with `NULL_STRATEGY INDEX` so the nulls are in it. Through such an
 index, SQL `p = ?` with `None` bound returned the records without a value instead of none
-(ArcadeDB [#9238](https://github.com/ArcadeData/arcadedb/issues/9238)); 26.10.1 fixes that for a
-statement planned with the `None`, but not when an earlier run of the same statement with a value
-cached its plan. Write `p IS NULL` when you mean those records and do not bind `None` to `=`
+(ArcadeDB [#9238](https://github.com/ArcadeData/arcadedb/issues/9238), and
+[#9274](https://github.com/ArcadeData/arcadedb/issues/9274) when an earlier run of the same
+statement with a value had cached its plan); 26.10.1 fixes both. Write `p IS NULL` when you
+mean those records, and on 26.9.1 do not bind `None` to `=`
 (see [Known Engine Issues](../known-issues.md)). Before 26.10.1,
 a SQL range with only an upper bound (`p < ?`, `p <= ?`) on such an index also returned the
 records without a value (ArcadeDB [#8833](https://github.com/ArcadeData/arcadedb/issues/8833));
