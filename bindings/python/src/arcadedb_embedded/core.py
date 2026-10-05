@@ -260,17 +260,18 @@ class Database:
             commit_every: Transaction batch size for the synchronous mode.
             parallel: If True, route rows through the async executor's
                 parallel bucket writers and wait for completion before
-                returning (out-of-order writes). Each bucket is owned by one
-                writer, so this is faster only on a type with several
-                buckets. The maintainers' rule (ArcadeData/arcadedb#8478):
-                a bucket count equal to, or a multiple of, the executor's
-                parallel level (``async_executor().get_parallel_level()``,
-                default cores - 1), set when the type is created
-                (``CREATE DOCUMENT TYPE T BUCKETS n``). On the default single
-                bucket it measured no faster than the synchronous mode, and
-                2.5x faster at 8 buckets on 4 cores. Each writer commits
-                every ``arcadedb.asyncTxBatchSize`` records (default 10,240);
-                ``commit_every`` does not apply to this mode.
+                returning (out-of-order writes). The maintainers' rule
+                (ArcadeData/arcadedb#8478): a bucket count equal to, or a
+                multiple of, the executor's parallel level
+                (``async_executor().get_parallel_level()``, default
+                cores - 1), set when the type is created
+                (``CREATE DOCUMENT TYPE T BUCKETS n``). Measured on a laptop
+                (4 performance cores, parallel level 3, 1,000,000 rows,
+                6 runs per arm, engine ``b22b5e9954``, 2026-10-04): 1.11x to
+                1.14x faster than the synchronous mode at 1, 3, 4, and 8
+                buckets alike (8 buckets no faster than 1). Each writer
+                commits every ``arcadedb.asyncTxBatchSize`` records (default
+                10,240); ``commit_every`` does not apply to this mode.
 
         Returns:
             Number of documents inserted.
