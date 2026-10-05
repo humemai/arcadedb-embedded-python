@@ -602,7 +602,8 @@ except ArcadeDBError:
 db.lookup_by_key(type_name: str, keys: List[str], values: List[Any]) -> Optional[Document]
 ```
 
-Lookup a record by an indexed key (O(1) index-based lookup).
+Lookup a record by an indexed key (index-based: O(1) for a hash index, O(log n) for an
+`LSM_TREE` index).
 
 **Parameters:**
 

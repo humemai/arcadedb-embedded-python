@@ -400,7 +400,8 @@ class Database:
 
     def lookup_by_key(self, type_name: str, keys: List[str], values: List[Any]):
         """
-        Lookup records by indexed key (O(1) index-based lookup).
+        Lookup records by indexed key (index-based: O(1) for a hash index, O(log n)
+        for an LSM_TREE index).
 
         Args:
             type_name: Type name

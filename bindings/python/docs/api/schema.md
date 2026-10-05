@@ -413,11 +413,13 @@ schema.create_index("Article", ["content"], index_type="FULL_TEXT")
 
 **Index choice rules of thumb:**
 
-- Use `HASH` for an id that is only read, updated and deleted by equality. From 26.10.1
-  a unique hash index inserts as fast as `LSM_TREE` or faster and answers a point lookup
-  about 3 times faster (ArcadeDB [#9169](https://github.com/ArcadeData/arcadedb/issues/9169),
-  200,000 entries). It cannot serve a range or an `ORDER BY`. On 26.9.1 its inserts are
-  several times slower than `LSM_TREE`.
+- Use `HASH` for an id that is only read, updated and deleted by equality and is not
+  bulk-loaded in key order. From 26.10.1 a unique hash index answers SQL `id = ?` 1.5 to
+  2.3 times faster than `LSM_TREE` and an `Index.get()` hit 1.9 to 3.1 times faster. Its
+  insert is 1.14 to 1.23 times faster for shuffled ids but 9% to 16% slower for ids loaded
+  in ascending order (ArcadeDB [#9169](https://github.com/ArcadeData/arcadedb/issues/9169),
+  200,000 and 2,000,000 entries). It cannot serve a range or an `ORDER BY`. On 26.9.1 its
+  inserts are several times slower than `LSM_TREE`.
 - Use `LSM_TREE` when you need ranges, sorting, or a safe general-purpose default, and for
   a non-unique column with few distinct values.
 - Use `FULL_TEXT`, `LSM_VECTOR`, and `GEOSPATIAL` only for their specialized query

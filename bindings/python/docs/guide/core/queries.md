@@ -409,6 +409,7 @@ work, pass `"buildGraphNow": false` inside `METADATA`.
 Rules of thumb:
 
 - Use `UNIQUE_HASH` or `NOTUNIQUE_HASH` for exact-match lookups only: a range on a property whose only index is a hash index scans the type (in openCypher from 26.10.1; before it the query failed, ArcadeDB [#8835](https://github.com/ArcadeData/arcadedb/issues/8835)).
+- `NULL_STRATEGY ERROR` on a hash index is enforced only from 26.10.1 (ArcadeDB [#9074](https://github.com/ArcadeData/arcadedb/issues/9074), PR #9222): on 26.9.1 a hash index created with it still accepted null and missing keys, and on 26.10.1 such an index over rows that hold a null or missing key cannot be rebuilt: `REBUILD INDEX` fails and leaves the type without that index, so delete those rows before rebuilding.
 - Use `UNIQUE` or `NOTUNIQUE` for `LSM_TREE` indexes when you need ranges, ordering, or a safe general-purpose default.
 - Use `FULL_TEXT` for tokenized text search, not normal equality lookups.
 - Use `LSM_VECTOR` for embeddings and nearest-neighbor search.
@@ -420,15 +421,20 @@ Examples:
 - `createdAt BETWEEN ? AND ?`, `price > ?`, ordered scans: usually `UNIQUE` or `NOTUNIQUE`
 
 **Index choice for an id.** If an id is only read, updated and deleted by equality
-(SQL `WHERE id = ?`, openCypher `{id: $id}`), index it with `UNIQUE_HASH`, or
-`NOTUNIQUE_HASH` when several records share a value. SQL and openCypher both answer those
-statements from the hash index, and `EXPLAIN` shows `FETCH FROM INDEX`. From 26.10.1 hash
-inserts are as fast as `LSM_TREE` inserts or faster, and a point lookup is about 3 times
-faster (ArcadeDB [#9169](https://github.com/ArcadeData/arcadedb/issues/9169), fixed in
-PR #9222: the hash buckets keep their entries unordered; 200,000 entries). Keep
-`UNIQUE` (`LSM_TREE`) when you also read the key by range or `ORDER BY`, and keep an
-`LSM_TREE` index on a non-unique column with few distinct values (tracked in
-[#9228](https://github.com/ArcadeData/arcadedb/issues/9228)).
+(SQL `WHERE id = ?`, openCypher `{id: $id}`) and is not bulk-loaded in key order, index it
+with `UNIQUE_HASH`, or `NOTUNIQUE_HASH` when several records share a value. SQL and
+openCypher both answer those statements from the hash index, and `EXPLAIN` shows
+`FETCH FROM INDEX`. From 26.10.1 the hash index is faster for every read (ArcadeDB
+[#9169](https://github.com/ArcadeData/arcadedb/issues/9169), fixed in PR #9222: the hash
+buckets keep their entries unordered), measured against `UNIQUE` on 200,000 and 2,000,000
+`LONG` ids with the same answers: SQL `id = ?` 1.5 to 2.3 times faster, an `Index.get()` hit
+1.9 to 3.1 times, an UPDATE by id 1.04 to 1.13 times, a DELETE by id level. The insert
+depends on the key order: 1.14 to 1.23 times faster for shuffled ids, but 9% to 16% slower
+for ids loaded in ascending order, which is the best case of `LSM_TREE`. So the rule is
+equality only and not loaded in key order; an id you number as you load pays that on the
+insert and gains on every read. Keep `UNIQUE` (`LSM_TREE`) when you also read the key by
+range or `ORDER BY`, and keep an `LSM_TREE` index on a non-unique column with few distinct
+values (tracked in [#9228](https://github.com/ArcadeData/arcadedb/issues/9228)).
 
 ```python
 db.command("sql", "CREATE INDEX ON Item (id) UNIQUE_HASH")  # id: equality only

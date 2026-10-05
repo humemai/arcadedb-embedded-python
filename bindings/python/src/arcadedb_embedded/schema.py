@@ -470,8 +470,9 @@ class Schema:
             The type, or None if it doesn't exist or index creation fails
 
         Example:
-            >>> # Unique id read only by equality: a hash index (26.10.1 and later
-            >>> # insert as fast as LSM_TREE and answer a point lookup faster)
+            >>> # Unique id read only by equality and not loaded in key order: a
+            >>> # hash index (26.10.1 and later: faster lookups; the insert is faster
+            >>> # for shuffled ids, 9% to 16% slower for ascending ids)
             >>> db.schema.create_index("User", ["email"], unique=True,
             ...                     index_type=IndexType.HASH)
             >>>
