@@ -17,7 +17,13 @@ _LOGGER = get_logger(__name__)
 
 
 class GraphBatch:
-    """Wrapper for Java GraphBatch with builder-backed configuration."""
+    """Wrapper for Java GraphBatch with builder-backed configuration.
+
+    create_vertices(), flush() and close(), and new_edge()/new_edges() when the
+    buffer fills, commit the transaction open on the thread, a caller's
+    included (ArcadeData/arcadedb#9242). Call them outside your own
+    transactions; see docs/api/graph_batch.md.
+    """
 
     _VALID_WAL_FLUSH_MODES = {
         "no": "NO",
@@ -163,6 +169,9 @@ class GraphBatch:
         """
         Create multiple vertices efficiently and return their RIDs.
 
+        Call it outside your own transactions: it commits the transaction open
+        on this thread, yours included (ArcadeData/arcadedb#9242).
+
         Args:
             type_name: Vertex type name.
             count_or_properties: Either an integer vertex count or an iterable of
@@ -170,9 +179,13 @@ class GraphBatch:
                 without properties when passing an iterable.
         """
         self._check_not_closed()
-        # The engine opens (and commits) a transaction of its own here, but
-        # rolls it back only for a retryable error. A transaction the caller
-        # already had open is theirs and is left alone.
+        # The engine begins a transaction here when none is open, and joins one
+        # the caller already has open. Either way, on success it commits that
+        # transaction, the caller's earlier writes with it; on a retryable error
+        # it rolls it back, the caller's writes too, then retries in a
+        # transaction of its own and commits that (ArcadeData/arcadedb#9242).
+        # Only the failure path below leaves a caller's transaction alone: its
+        # rollback is for a transaction this call began.
         owns_transaction = not self._java_db.isTransactionActive()
         try:
             if isinstance(count_or_properties, int):
@@ -357,7 +370,12 @@ class GraphBatch:
             ) from e
 
     def flush(self) -> "GraphBatch":
-        """Flush buffered edges to disk."""
+        """Flush buffered edges to disk.
+
+        Commits the transaction open on this thread, yours included
+        (ArcadeData/arcadedb#9242). So does new_edge()/new_edges() when the
+        buffer fills and flushes.
+        """
         self._check_not_closed()
         try:
             self._java_graph_batch.flush()
@@ -366,7 +384,11 @@ class GraphBatch:
             raise ArcadeDBError(f"Failed to flush GraphBatch: {e}") from e
 
     def close(self):
-        """Flush remaining work and finalize deferred incoming edges."""
+        """Flush remaining work and finalize deferred incoming edges.
+
+        Commits the transaction open on this thread, yours included
+        (ArcadeData/arcadedb#9242); leaving a ``with`` block calls this.
+        """
         if self._closed:
             return
         try:

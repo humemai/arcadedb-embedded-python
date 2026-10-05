@@ -34,7 +34,11 @@ whole graph from scratch: there is no incremental patch.
 *and* scans the delta buffer exhaustively, merges the two, drops duplicates, and
 filters anything deleted. Because the buffer is scanned by brute force rather
 than traversed approximately, a vector sitting in it is found **exactly**, if
-anything more reliably than one already in the graph.
+anything more reliably than one already in the graph. One exception, on the
+26.10.1 snapshots between ArcadeDB PR #9132 (2026-10-03) and PR #9252, fixed in
+26.10.1: while `COMPACT INDEX` ran on the index, a vector added since the last graph
+build was not found (ArcadeDB #9241, see
+[Known Engine Issues](../guide/known-issues.md)).
 
 What you pay for that is a linear per-query cost proportional to the buffer's
 size. On a 5,000-vector index at 16 dimensions, 900 buffered entries cost about

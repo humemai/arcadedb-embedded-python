@@ -1,3 +1,6 @@
+import contextlib
+from datetime import datetime
+
 import arcadedb_embedded as arcadedb
 import pytest
 from arcadedb_embedded.exceptions import ArcadeDBError
@@ -453,8 +456,6 @@ def test_graph_batch_create_vertices_failure_rolls_back(temp_db_path, bulk):
     """A create_vertices that fails for a reason the engine does not retry (a
     duplicate key) must not leave its transaction open: a later write outside
     any transaction was accepted and silently lost at close (#121)."""
-    from datetime import datetime
-
     with arcadedb.create_database(temp_db_path) as db:
         _unique_person_db(db)
         # a datetime is not JSON-safe, so it routes to the property-matrix path
@@ -477,7 +478,8 @@ def test_graph_batch_create_vertices_failure_rolls_back(temp_db_path, bulk):
 def test_graph_batch_create_vertices_keeps_the_callers_transaction(temp_db_path):
     """The rollback is for a transaction create_vertices opened itself: one the
     caller already had open is theirs, and a failure inside it leaves it
-    active."""
+    active. A call that succeeds commits it instead (#9242, the tests after
+    test_graph_batch_outside_the_callers_transactions)."""
     with arcadedb.create_database(temp_db_path) as db:
         _unique_person_db(db)
 
@@ -513,3 +515,179 @@ def test_graph_batch_create_vertices_keyboard_interrupt_rolls_back(
             monkeypatch.undo()
 
         assert db.count_type("Person") == 0
+
+
+# ArcadeData/arcadedb#9242 (known-issues.md): createVertices, flush() and close() commit a
+# transaction the caller opened. The first test checks the documented workaround and must keep
+# passing. The other three are strict xfail tripwires that assert what a fix gives: either the
+# call leaves the caller's transaction open, or it refuses to run inside it (an ArcadeDBError),
+# and in both cases the caller's rollback undoes the caller's write. When a fix reaches the
+# engine these tests run on, they pass and the suite fails: then the xfail comes off.
+_COMMITS_THE_CALLERS_TRANSACTION = pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="ArcadeData/arcadedb#9242: GraphBatch.createVertices, flush() and close() commit a "
+    "transaction the caller opened, so the caller's rollback() undoes nothing",
+)
+
+
+def _vertex_edge_note_types(db):
+    db.command("sql", "CREATE VERTEX TYPE V")
+    db.command("sql", "CREATE EDGE TYPE E")
+    db.command("sql", "CREATE DOCUMENT TYPE Note")
+
+
+def _save_note(db, text):
+    db.new_document("Note").set("text", text).save()
+
+
+def _notes(db):
+    return sorted(r.get("text") for r in db.query("sql", "SELECT text FROM Note"))
+
+
+@contextlib.contextmanager
+def _first_vertex_commit_attempt_fails(attempts):
+    """Through the engine's own test hook, fail the first commit attempt of each
+    createVertices with a ConcurrentModificationException, which it retries.
+    Every attempt number the hook sees is appended to `attempts`."""
+    import jpype
+
+    graph_batch_class = jpype.JClass("com.arcadedb.graph.GraphBatch")
+    retryable = jpype.JClass("com.arcadedb.exception.ConcurrentModificationException")
+
+    @jpype.JImplements("java.util.function.IntConsumer")
+    class FailFirstAttempt:
+        @jpype.JOverride
+        def accept(self, attempt):
+            attempts.append(int(attempt))
+            if attempt == 1:
+                raise retryable("first vertex commit attempt fails (test hook)")
+
+    graph_batch_class.TEST_BEFORE_VERTEX_COMMIT_HOOK = FailFirstAttempt()
+    try:
+        yield
+    finally:
+        graph_batch_class.TEST_BEFORE_VERTEX_COMMIT_HOOK = None
+
+
+def _call_inside_the_callers_transaction(db, call):
+    """Begin, save the caller's Note, make the call, then roll back. Returns whether a
+    transaction was still active after the call, the Notes left after the rollback, and the
+    refusal the call raised, if any."""
+    refusal = None
+    db.begin()
+    try:
+        _save_note(db, "caller")
+        try:
+            call()
+        except ArcadeDBError as e:
+            refusal = e
+        active = db.is_transaction_active()
+    finally:
+        if db.is_transaction_active():
+            db.rollback()
+    return active, _notes(db), refusal
+
+
+def test_graph_batch_outside_the_callers_transactions(temp_db_path):
+    """known-issues.md (#9242): commit your own writes before the batch and call it outside
+    any transaction of yours. Each rollback then undoes only its own writes, and a retried
+    vertex commit loses nothing of yours."""
+    with arcadedb.create_database(temp_db_path) as db:
+        _vertex_edge_note_types(db)
+        with db.transaction():
+            _save_note(db, "before")
+
+        attempts = []
+        with db.graph_batch(parallel_flush=False, commit_retry_delay_ms=1) as batch:
+            with _first_vertex_commit_attempt_fails(attempts):
+                rids = batch.create_vertices("V", 3)
+            batch.new_edges(rids[:-1], "E", rids[1:])
+            assert db.is_transaction_active() is False
+
+        db.begin()
+        _save_note(db, "rolled back")
+        db.rollback()
+
+        # the hook failed the first attempt and the retry committed: the path this covers ran
+        assert attempts == [1, 2]
+        assert _notes(db) == ["before"]
+        assert db.count_type("V") == 3
+        assert db.count_type("E") == 2
+
+
+@_COMMITS_THE_CALLERS_TRANSACTION
+@pytest.mark.parametrize(
+    "rows",
+    [2, [{"x": 1}, {"x": 2}], [{"seen": datetime(2026, 10, 5)}, None]],
+    ids=["count", "json-bulk", "property-matrix"],
+)
+def test_graph_batch_create_vertices_leaves_the_callers_transaction(temp_db_path, rows):
+    """#9242: create_vertices inside the caller's transaction must leave it to the caller.
+    Today it commits it, the caller's Note with it, and no transaction is active after.
+    """
+    with arcadedb.create_database(temp_db_path) as db:
+        _vertex_edge_note_types(db)
+        with db.graph_batch(parallel_flush=False) as batch:
+            active, notes, refusal = _call_inside_the_callers_transaction(
+                db, lambda: batch.create_vertices("V", rows)
+            )
+        assert (active, notes) == (True, []), f"refusal: {refusal}"
+
+
+@_COMMITS_THE_CALLERS_TRANSACTION
+@pytest.mark.parametrize("step", ["flush", "full-buffer", "close"])
+def test_graph_batch_flush_and_close_leave_the_callers_transaction(temp_db_path, step):
+    """#9242: a flush, explicit or by a new_edges that fills the buffer, and close(), inside
+    the caller's transaction must leave it to the caller. Today each commits it."""
+    with arcadedb.create_database(temp_db_path) as db:
+        _vertex_edge_note_types(db)
+        batch = db.graph_batch(parallel_flush=False, batch_size=2)
+        try:
+            rids = batch.create_vertices("V", 4)
+            if step == "flush":
+                batch.new_edge(rids[0], "E", rids[1])
+                call = batch.flush
+            elif step == "full-buffer":
+                # three edges into a buffer of two: new_edges flushes on its own
+                def call():
+                    batch.new_edges(rids[:3], "E", rids[1:])
+
+            else:
+                batch.new_edge(rids[0], "E", rids[1])
+                call = batch.close
+            active, notes, refusal = _call_inside_the_callers_transaction(db, call)
+        finally:
+            batch.close()
+        assert (active, notes) == (True, []), f"refusal: {refusal}"
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="ArcadeData/arcadedb#9242: on a retryable commit failure createVertices rolls back "
+    "the caller's transaction, then commits only its own vertices",
+)
+def test_graph_batch_create_vertices_retry_keeps_the_callers_write(temp_db_path):
+    """#9242: a retried vertex commit must not roll back the caller's transaction. Today the
+    retry rolls it back, commits only the vertices, and returns normally: the caller's Note is
+    gone, and nothing says so. Surfacing the failure (an ArcadeDBError) would be a fix too.
+    """
+    with arcadedb.create_database(temp_db_path) as db:
+        _vertex_edge_note_types(db)
+        attempts = []
+        with db.graph_batch(parallel_flush=False, commit_retry_delay_ms=1) as batch:
+            db.begin()
+            try:
+                _save_note(db, "caller")
+                with _first_vertex_commit_attempt_fails(attempts):
+                    try:
+                        batch.create_vertices("V", 2)
+                    except ArcadeDBError as e:
+                        attempts.append(f"refused: {e}")
+                if db.is_transaction_active():
+                    db.commit()
+            finally:
+                if db.is_transaction_active():
+                    db.rollback()
+        assert _notes(db) == ["caller"], f"hook attempts: {attempts}"
