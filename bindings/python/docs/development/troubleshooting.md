@@ -274,6 +274,23 @@ start_jvm(heap_size="16g", jvm_args="-Xms16g -XX:MaxDirectMemorySize=16g")
 start_jvm(heap_size="8g", jvm_args="-Xms8g -XX:MaxDirectMemorySize=8g")
 ```
 
+!!! tip "Page cache share (ArcadeDB 26.10.1 and later)"
+    `arcadedb.maxPageRAM`, the page cache, defaults to a quarter of the heap, which is a
+    safe baseline. For a dedicated process whose database is larger than the cache, the
+    maintainers recommend 40-50% of the heap (a value above 80% is reduced to half of the
+    heap), for example `start_jvm(heap_size="16g", jvm_args="-Xms16g -Darcadedb.maxPageRAM=7000")`
+    (megabytes, here about 45%). Leave it alone when the database fits in the default share
+    (ArcadeData/arcadedb#9168).
+
+!!! tip "Index page size (ArcadeDB 26.10.1 and later)"
+    A one-record insert copies the whole page of each LSM index it touches into its
+    transaction, 256 KB by default. `arcadedb.indexDefaultPageSize` (bytes, default 262144,
+    minimum 8192) sets the page size of new plain LSM-tree indexes created by SQL
+    `CREATE INDEX`; with 16384, a one-record insert allocated about 97.7 KB per insert instead
+    of 339 KB and ran about 1.7x faster in the maintainers' repro and ours, at the price of
+    slower point lookups through that index (about 1.1x, measured with too few runs to
+    state firmly). Measure your own workload before changing it (ArcadeData/arcadedb#9175).
+
 !!! warning "Configuration Timing"
     JVM options are locked after the JVM starts. Configure `start_jvm(...)` or pass
     `jvm_kwargs` before the first database or server is created. To change settings,
