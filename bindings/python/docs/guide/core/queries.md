@@ -448,7 +448,10 @@ skipped when the `WHERE` clause excludes nulls on `p` (`p IS NOT NULL`, `p = ?`,
 `p > ?`; not `>=` or `<=`, which two nulls satisfy), or when `p` is declared both
 `MANDATORY` and `NOTNULL`. `NOTNULL` alone is not enough: it rejects an explicit null but
 not a record that leaves `p` out (ArcadeDB [#8701](https://github.com/ArcadeData/arcadedb/issues/8701)).
-Otherwise, create the index with `NULL_STRATEGY INDEX` so the nulls are in it. Before 26.10.1,
+Otherwise, create the index with `NULL_STRATEGY INDEX` so the nulls are in it. Through such an
+index, SQL `p = ?` with `None` bound returns the records without a value instead of none
+(ArcadeDB [#9238](https://github.com/ArcadeData/arcadedb/issues/9238)), so write `p IS NULL` when
+you mean them and do not bind `None` to `=` (see [Known Engine Issues](../known-issues.md)). Before 26.10.1,
 a SQL range with only an upper bound (`p < ?`, `p <= ?`) on such an index also returned the
 records without a value (ArcadeDB [#8833](https://github.com/ArcadeData/arcadedb/issues/8833));
 on 26.9.1, add `AND p IS NOT NULL` to it (see [Known Engine Issues](../known-issues.md)). Descending
