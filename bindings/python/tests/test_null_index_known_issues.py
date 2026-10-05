@@ -2,23 +2,26 @@
 
 Each finding has a test of its documented workaround, which must keep passing, and a test
 of the engine behavior itself that asserts the answer a type without an index gives. While
-the engine bug is open that test is a strict `xfail`, a tripwire as in
+an engine bug is open that test is a strict `xfail`, a tripwire as in
 `test_declared_type_known_issues.py`: when the fix reaches the wheel it starts passing and
-the suite fails, and the test is then converted to a plain one.
+the suite fails, and the test is then converted to a plain one, as the tests of #9237 and
+#9236 were when PR #9252 fixed them.
 
-Each tripwire first checks that the query it asserts on is planned through the index
+Each test first checks that the query it asserts on is planned through the index
 (`FETCH FROM INDEX` in SQL, `NodeIndexSeek` in openCypher), so it cannot pass by comparing a
 scan with a scan, and that the type without an index still gives the expected answer. These
 checks call `pytest.fail`, which the `xfail` marks do not absorb (`raises=AssertionError`): a
-plan that stops reading the index fails the suite instead of staying an expected failure. An exception the issue reports is turned into an answer that
-fails the comparison; any other exception fails the suite too.
+plan that stops reading the index fails the suite instead of staying an expected failure. An
+exception the issue reports is turned into an answer that fails the comparison; any other
+exception fails the suite too.
 
 Upstream: ArcadeData/arcadedb #9238 (SQL `p = ?` with the parameter bound to null returns the
 records whose `p` is null or absent through an index that stores null keys, and an
-`LSM_TREE` index with `NULL_STRATEGY ERROR` raises; open), #9237 (`p IS NULL` through a
-`UNIQUE` or `UNIQUE_HASH` index with `NULL_STRATEGY INDEX` returns one of the records; open),
-#9236 (an openCypher equality on the first property of a composite `HASH` index raises
-"does not support ordered iterations"; open).
+`LSM_TREE` index with `NULL_STRATEGY ERROR` raises; open, PR #9246 pending), #9237 (`p IS NULL`
+through a `UNIQUE` or `UNIQUE_HASH` index with `NULL_STRATEGY INDEX` returned one of the
+records; fixed in 26.10.1 by PR #9252), #9236 (an openCypher equality on the first property
+of a composite `HASH` index raised "does not support ordered iterations"; fixed in 26.10.1
+by PR #9252, which plans such a query as a scan of the type).
 """
 
 import arcadedb_embedded as arcadedb
@@ -212,15 +215,11 @@ def test_is_null_or_null_safe_equality_workaround_for_a_null_parameter(
 FOUR_RECORDS = ("id = 1, p = 1", "id = 2, p = null", "id = 3", "id = 4, p = null")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="ArcadeData/arcadedb#9237: p IS NULL through a UNIQUE or UNIQUE_HASH index with "
-    "NULL_STRATEGY INDEX returns one of the records whose p is null, and count(*) counts one",
-)
 @pytest.mark.parametrize("kind", ["UNIQUE", "UNIQUE_HASH"])
 def test_is_null_through_a_unique_index_returns_every_null_record(temp_db_path, kind):
-    """#9237: `p IS NULL` returns ids 2, 3, and 4 through the index as in the scan."""
+    """#9237, fixed in 26.10.1: `p IS NULL` returns ids 2, 3, and 4 through the index as in
+    the scan, and `count(*)` counts 3. The plan check keeps the query on the index, so the
+    test cannot pass by comparing a scan with a scan."""
     with arcadedb.create_database(temp_db_path) as db:
         index = f"(p) {kind} NULL_STRATEGY INDEX"
         _vertex_type(db, "Scan", records=FOUR_RECORDS, one_tx_each=True)
@@ -260,40 +259,50 @@ PREFIX_QUERIES = [
     pytest.param(
         "MATCH (n:{t}) WHERE n.p IN [1, 2] RETURN n.id AS id", (), [1, 2], id="in"
     ),
-    pytest.param(
-        "MATCH (n:{t}) WHERE n.p = $p AND n.q = $q RETURN n.id AS id",
-        ({"p": 1, "q": None},),
-        [],
-        id="null-second-parameter",
-    ),
 ]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="ArcadeData/arcadedb#9236: an openCypher equality on the first property of a "
-    "composite HASH index raises 'does not support ordered iterations'",
-)
 @pytest.mark.parametrize("kind", ["NOTUNIQUE_HASH", "UNIQUE_HASH"])
 @pytest.mark.parametrize("query, args, expected", PREFIX_QUERIES)
 def test_cypher_equality_on_the_first_property_of_a_composite_hash_index(
     temp_db_path, kind, query, args, expected
 ):
-    """#9236: the MATCH returns what it returns on the type without an index."""
+    """#9236, fixed in 26.10.1: the MATCH returns what it returns on the type without an
+    index. A hash index answers an exact key only, so the planner reads the type for a
+    query that gives a part of the key (`NodeByLabelScan`, no index seek); before 26.10.1
+    it sought the hash index and the read raised "does not support ordered iterations".
+    """
     with arcadedb.create_database(temp_db_path) as db:
         _vertex_type(db, "Scan", records=TWO_RECORDS)
         _vertex_type(db, "Hashed", f"(p, q) {kind}", records=TWO_RECORDS)
-        _require_cypher_index(db, query.format(t="Hashed"), args, "Hashed")
         _require_scan_answer(db, "opencypher", query.format(t="Scan"), args, expected)
-        answer = _answer(
-            db,
-            "opencypher",
-            query.format(t="Hashed"),
-            args,
-            "does not support ordered iterations",
+        assert _ids(db, "opencypher", query.format(t="Hashed"), *args) == expected
+
+
+@pytest.mark.parametrize("kind", ["NOTUNIQUE_HASH", "UNIQUE_HASH"])
+@pytest.mark.parametrize(
+    "args, expected",
+    [
+        pytest.param({"p": 1, "q": 5}, [1], id="value"),
+        pytest.param({"p": 1, "q": None}, [], id="null-second-parameter"),
+    ],
+)
+def test_cypher_equality_on_every_property_of_a_composite_hash_index(
+    temp_db_path, kind, args, expected
+):
+    """#9236, fixed in 26.10.1: with every property of the key given, openCypher still seeks
+    the hash index, and a `None` for the second property matches nothing, as in the scan. The
+    plan check keeps the query on the index, so the test cannot pass by comparing a scan
+    with a scan."""
+    query = "MATCH (n:{t}) WHERE n.p = $p AND n.q = $q RETURN n.id AS id"
+    with arcadedb.create_database(temp_db_path) as db:
+        _vertex_type(db, "Scan", records=TWO_RECORDS)
+        _vertex_type(db, "Hashed", f"(p, q) {kind}", records=TWO_RECORDS)
+        _require_cypher_index(db, query.format(t="Hashed"), (args,), "Hashed")
+        _require_scan_answer(
+            db, "opencypher", query.format(t="Scan"), (args,), expected
         )
-        assert answer == expected
+        assert _ids(db, "opencypher", query.format(t="Hashed"), args) == expected
 
 
 @pytest.mark.parametrize("kind", ["NOTUNIQUE_HASH", "UNIQUE_HASH"])
