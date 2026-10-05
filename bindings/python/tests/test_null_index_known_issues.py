@@ -5,7 +5,7 @@ of the engine behavior itself that asserts the answer a type without an index gi
 an engine bug is open that test is a strict `xfail`, a tripwire as in
 `test_declared_type_known_issues.py`: when the fix reaches the wheel it starts passing and
 the suite fails, and the test is then converted to a plain one, as the tests of #9237 and
-#9236 were when PR #9252 fixed them.
+#9236 were when PR #9252 fixed them, and those of #9238 when PR #9246 fixed them.
 
 Each test first checks that the query it asserts on is planned through the index
 (`FETCH FROM INDEX` in SQL, `NodeIndexSeek` in openCypher), so it cannot pass by comparing a
@@ -15,13 +15,19 @@ plan that stops reading the index fails the suite instead of staying an expected
 exception the issue reports is turned into an answer that fails the comparison; any other
 exception fails the suite too.
 
-Upstream: ArcadeData/arcadedb #9238 (SQL `p = ?` with the parameter bound to null returns the
+Since PR #9246 the SQL planner leaves an equality with a null value to a scan of the type, so
+for #9238 the plan check is made on the same query with a value, and the null query is
+asserted to answer as the type without an index does.
+
+Upstream: ArcadeData/arcadedb #9238 (SQL `p = ?` with the parameter bound to null returned the
 records whose `p` is null or absent through an index that stores null keys, and an
-`LSM_TREE` index with `NULL_STRATEGY ERROR` raises; open, PR #9246 pending), #9237 (`p IS NULL`
-through a `UNIQUE` or `UNIQUE_HASH` index with `NULL_STRATEGY INDEX` returned one of the
-records; fixed in 26.10.1 by PR #9252), #9236 (an openCypher equality on the first property
-of a composite `HASH` index raised "does not support ordered iterations"; fixed in 26.10.1
-by PR #9252, which plans such a query as a scan of the type).
+`LSM_TREE` index with `NULL_STRATEGY ERROR` raised; fixed in 26.10.1 by PR #9246 for a
+statement planned with the null, and still open when the plan was cached by an earlier run
+with a value, see the `xfail` tests of that section), #9237 (`p IS NULL` through a `UNIQUE` or
+`UNIQUE_HASH` index with `NULL_STRATEGY INDEX` returned one of the records; fixed in 26.10.1
+by PR #9252), #9236 (an openCypher equality on the first property of a composite `HASH` index
+raised "does not support ordered iterations"; fixed in 26.10.1 by PR #9252, which plans such a
+query as a scan of the type).
 """
 
 import arcadedb_embedded as arcadedb
@@ -78,7 +84,7 @@ def _require_sql_index(db, query, args, index_name):
     if f"FETCH FROM INDEX {index_name}[" not in plan:
         pytest.fail(
             f"{query!r} is no longer planned through index {index_name}; if the engine "
-            f"now answers it another way, check the answer and convert the test:\n{plan}"
+            f"now answers it another way, check the answer and update the test:\n{plan}"
         )
 
 
@@ -88,17 +94,13 @@ def _require_cypher_index(db, query, args, index_name):
     if f"NodeIndexSeek(n:{index_name}) [index={index_name}[" not in plan:
         pytest.fail(
             f"{query!r} is no longer planned as a seek of index {index_name}; if the "
-            f"engine now answers it another way, check the answer and convert the "
+            f"engine now answers it another way, check the answer and update the "
             f"test:\n{plan}"
         )
 
 
 # #9238 ------------------------------------------------------------------------------
 
-NULL_EQUALITY_REASON = (
-    "ArcadeData/arcadedb#9238: SQL p = ? bound to null returns the records whose p is "
-    "null or absent through an index that stores null keys"
-)
 NULL_EQUALITY_SHAPES = [
     pytest.param("(p) NOTUNIQUE NULL_STRATEGY INDEX", "p = :x", id="lsm-index-named"),
     pytest.param(
@@ -110,37 +112,34 @@ NULL_EQUALITY_SHAPES = [
 ]
 
 
-def _bound_to_none(condition):
-    return ({"x": None},) if ":x" in condition else (None,)
+def _bound_to(condition, value):
+    return ({"x": value},) if ":x" in condition else (value,)
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=NULL_EQUALITY_REASON)
 @pytest.mark.parametrize("index, condition", NULL_EQUALITY_SHAPES)
 def test_null_parameter_equality_through_an_index_matches_nothing(
     temp_db_path, index, condition
 ):
-    """#9238: an equality with a null value matches no record, through the index as in
-    the scan."""
-    args = _bound_to_none(condition)
+    """#9238, fixed in 26.10.1 (PR #9246): an equality with a null value matches no record,
+    on a type with an index as on one without. The planner now leaves that equality to a
+    scan, so the plan check is on the same query with the value 1: it is planned through
+    the index, which is what the null query used to read."""
+    null_args, one_args = _bound_to(condition, None), _bound_to(condition, 1)
     with arcadedb.create_database(temp_db_path) as db:
         _vertex_type(db, "Scan")
         _vertex_type(db, "Indexed", index)
         query = f"SELECT id FROM Indexed WHERE {condition}"  # nosec B608 - fixed names
-        _require_sql_index(db, query, args, "Indexed")
+        _require_sql_index(db, query, one_args, "Indexed")
         scan = f"SELECT id FROM Scan WHERE {condition}"  # nosec B608 - fixed names
-        _require_scan_answer(db, "sql", scan, args, [])
-        assert _ids(db, "sql", query, *args) == []
+        _require_scan_answer(db, "sql", scan, null_args, [])
+        assert _ids(db, "sql", query, *null_args) == []
+        assert _ids(db, "sql", query, *one_args) == [1]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="ArcadeData/arcadedb#9238: through an LSM_TREE index with NULL_STRATEGY ERROR, "
-    "p = ? bound to null raises 'Indexed key ... cannot be NULL' instead of matching nothing",
-)
 def test_null_parameter_equality_through_an_error_index_matches_nothing(temp_db_path):
-    """#9238: the refusal of a null key is for writes; a lookup with null matches nothing.
-    The type holds only the record with p = 1, the only one such an index can store."""
+    """#9238, fixed in 26.10.1 (PR #9246): the refusal of a null key is for writes; a lookup
+    with null matches nothing instead of raising `Indexed key ... cannot be NULL`. The type
+    holds only the record with p = 1, the only one such an index can store."""
     with arcadedb.create_database(temp_db_path) as db:
         _vertex_type(
             db,
@@ -149,13 +148,11 @@ def test_null_parameter_equality_through_an_error_index_matches_nothing(temp_db_
             records=THREE_RECORDS[:1],
         )
         query = "SELECT id FROM Indexed WHERE p = :x"
-        _require_sql_index(db, query, ({"x": None},), "Indexed")
-        assert (
-            _answer(db, "sql", query, ({"x": None},), "cannot be NULL") == []
-        ), "the lookup raised instead of matching nothing"
+        _require_sql_index(db, query, ({"x": 1},), "Indexed")
+        assert _ids(db, "sql", query, {"x": None}) == []
+        assert _ids(db, "sql", query, {"x": 1}) == [1]
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=NULL_EQUALITY_REASON)
 @pytest.mark.parametrize(
     "index, condition",
     [
@@ -166,14 +163,122 @@ def test_null_parameter_equality_through_an_error_index_matches_nothing(temp_db_
 def test_delete_with_a_null_parameter_through_an_index_deletes_nothing(
     temp_db_path, index, condition
 ):
-    """#9238: the DELETE removes the records the SELECT with the same WHERE returns."""
+    """#9238, fixed in 26.10.1 (PR #9246): the DELETE removes the records the SELECT with the
+    same WHERE returns, none for a null value, and reports a count of 0."""
     with arcadedb.create_database(temp_db_path) as db:
         _vertex_type(db, "Indexed", index)
         query = f"SELECT id FROM Indexed WHERE {condition}"  # nosec B608 - fixed names
-        _require_sql_index(db, query, ({"x": None},), "Indexed")
+        _require_sql_index(db, query, ({"x": 1},), "Indexed")
         with db.transaction():
             delete = f"DELETE FROM Indexed WHERE {condition}"  # nosec B608
-            db.command("sql", delete, {"x": None})
+            result = db.command("sql", delete, {"x": None})
+            assert result.first().get("count") == 0
+        assert _ids(db, "sql", "SELECT id FROM Indexed") == [1, 2, 3]
+
+
+# The fix of #9238 is made when the statement is planned. A plan is cached by the text of its
+# statement, so a statement first run with a value keeps a plan through the index, and its
+# next run with None, through an index on one property, still returns the records without a
+# value, raises for NULL_STRATEGY ERROR, and a DELETE still removes them. An index on several
+# properties is not affected. Filed upstream as ArcadeData/arcadedb#9274; the tests below are tripwires for it.
+CACHED_PLAN_REASON = (
+    "ArcadeData/arcadedb#9274 (follow-up to #9238, PR #9246): a plan cached by a run with a value "
+    "is reused for None, through an index on one property, and answers with the records "
+    "whose p is null or absent"
+)
+cached_plan_bug = pytest.mark.xfail(
+    strict=True, raises=AssertionError, reason=CACHED_PLAN_REASON
+)
+
+
+@pytest.mark.parametrize(
+    "index, condition",
+    [
+        pytest.param(
+            "(p) NOTUNIQUE NULL_STRATEGY INDEX",
+            "p = :x",
+            id="lsm-index-named",
+            marks=cached_plan_bug,
+        ),
+        pytest.param(
+            "(p) NOTUNIQUE NULL_STRATEGY INDEX",
+            "p = ?",
+            id="lsm-index-positional",
+            marks=cached_plan_bug,
+        ),
+        pytest.param(
+            "(p) NOTUNIQUE_HASH NULL_STRATEGY INDEX",
+            "p = :x",
+            id="hash-index",
+            marks=cached_plan_bug,
+        ),
+        pytest.param(
+            "(q, p) NOTUNIQUE", "q = 7 AND p = :x", id="composite-default-skip"
+        ),
+        pytest.param("(p, q) NOTUNIQUE", "p = :x", id="composite-first-property"),
+    ],
+)
+def test_null_parameter_after_a_value_through_an_index_matches_nothing(
+    temp_db_path, index, condition
+):
+    """#9238 follow-up: the same statement run with the value 1, then None, then 1 answers
+    [1], [], and [1] (the null query first would be planned as a scan, see above)."""
+    null_args, one_args = _bound_to(condition, None), _bound_to(condition, 1)
+    with arcadedb.create_database(temp_db_path) as db:
+        _vertex_type(db, "Indexed", index)
+        query = f"SELECT id FROM Indexed WHERE {condition}"  # nosec B608 - fixed names
+        _require_sql_index(db, query, one_args, "Indexed")
+        assert _ids(db, "sql", query, *one_args) == [1]
+        assert _ids(db, "sql", query, *null_args) == []
+        assert _ids(db, "sql", query, *one_args) == [1]
+
+
+@cached_plan_bug
+def test_null_parameter_after_a_value_through_an_error_index_matches_nothing(
+    temp_db_path,
+):
+    """#9238 follow-up: through an `LSM_TREE` index with NULL_STRATEGY ERROR, the statement
+    run with the value 1 and then with None raises `Indexed key ... cannot be NULL`."""
+    with arcadedb.create_database(temp_db_path) as db:
+        _vertex_type(
+            db,
+            "Indexed",
+            "(p) NOTUNIQUE NULL_STRATEGY ERROR",
+            records=THREE_RECORDS[:1],
+        )
+        query = "SELECT id FROM Indexed WHERE p = :x"
+        _require_sql_index(db, query, ({"x": 1},), "Indexed")
+        assert _ids(db, "sql", query, {"x": 1}) == [1]
+        assert (
+            _answer(db, "sql", query, ({"x": None},), "cannot be NULL") == []
+        ), "the lookup raised instead of matching nothing"
+
+
+@pytest.mark.parametrize(
+    "index, condition",
+    [
+        pytest.param(
+            "(p) NOTUNIQUE NULL_STRATEGY INDEX",
+            "p = :x",
+            id="lsm-index",
+            marks=cached_plan_bug,
+        ),
+        pytest.param("(q, p) NOTUNIQUE", "q = 7 AND p = :x", id="composite"),
+    ],
+)
+def test_delete_with_a_null_parameter_after_a_value_deletes_nothing(
+    temp_db_path, index, condition
+):
+    """#9238 follow-up: the DELETE run with the value 99, which matches nothing, and then
+    with None deletes the records whose p is null or absent."""
+    with arcadedb.create_database(temp_db_path) as db:
+        _vertex_type(db, "Indexed", index)
+        query = f"SELECT id FROM Indexed WHERE {condition}"  # nosec B608 - fixed names
+        _require_sql_index(db, query, ({"x": 1},), "Indexed")
+        delete = f"DELETE FROM Indexed WHERE {condition}"  # nosec B608
+        for value in (99, None):
+            with db.transaction():
+                db.command("sql", delete, {"x": value})
         assert _ids(db, "sql", "SELECT id FROM Indexed") == [1, 2, 3]
 
 
@@ -188,9 +293,9 @@ def test_delete_with_a_null_parameter_through_an_index_deletes_nothing(
 def test_is_null_or_null_safe_equality_workaround_for_a_null_parameter(
     temp_db_path, index, prefix
 ):
-    """known-issues.md: do not bind None to `=`. `p IS NULL`, and `p <=> :x` with None or a
-    value, return what the scan returns; so does the literal `p = null`, which matches
-    nothing, as does skipping the query."""
+    """known-issues.md: on engines before 26.10.1 do not bind None to `=`. `p IS NULL`, and
+    `p <=> :x` with None or a value, return what the scan returns; so does the literal
+    `p = null`, which matches nothing, as does skipping the query."""
     with arcadedb.create_database(temp_db_path) as db:
         _vertex_type(db, "Scan")
         _vertex_type(db, "Indexed", index)
@@ -204,7 +309,7 @@ def test_is_null_or_null_safe_equality_workaround_for_a_null_parameter(
             scan = f"SELECT id FROM Scan WHERE {condition}"  # nosec B608 - fixed names
             assert _ids(db, "sql", scan, *args) == expected, condition
             if condition.endswith("p = :x"):
-                continue  # the bug itself; the tripwires above cover it
+                continue  # fixed in 26.10.1 (PR #9246), not before; the tests above cover it
             query = f"SELECT id FROM Indexed WHERE {condition}"  # nosec B608
             assert _ids(db, "sql", query, *args) == expected, condition
 
