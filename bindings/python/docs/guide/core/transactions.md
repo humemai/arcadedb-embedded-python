@@ -90,7 +90,7 @@ with arcadedb.create_database(temp_db_path) as db:
         for i in range(10):
             db.command("sql", f"CREATE DOCUMENT TYPE Part{i}")
             db.command("sql", f"CREATE PROPERTY Part{i}.id LONG")
-            db.command("sql", f"CREATE INDEX ON Part{i} (id) UNIQUE")
+            db.command("sql", f"CREATE INDEX ON Part{i} (id) UNIQUE_HASH")
     assert all(db.schema.exists_type(f"Part{i}") for i in range(10))
 
     # Data writes do

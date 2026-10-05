@@ -217,7 +217,7 @@ This approach is actually **cleaner and more maintainable** than direct API expo
 
 ```python
 # Python way (clean):
-db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
+db.command("sql", "CREATE INDEX ON User (email) UNIQUE_HASH")
 db.query("opencypher", "MATCH (a)-[:Follows]->(b) RETURN b")
 
 # vs. hypothetical direct API (complex):

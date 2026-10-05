@@ -474,7 +474,7 @@ try:
     if not db.schema.exists_type("User"):
         db.command("sql", "CREATE DOCUMENT TYPE User")
         db.command("sql", "CREATE PROPERTY User.email STRING")
-        db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
+        db.command("sql", "CREATE INDEX ON User (email) UNIQUE_HASH")
 finally:
     db.close()
 

@@ -395,10 +395,13 @@ Create an index on a type.
 
 ```python
 # Schema statements apply immediately (no transaction needed)
-# Unique index on username
-schema.create_index("User", ["username"], unique=True)
+# Unique id read only by equality: a unique hash index (ArcadeData/arcadedb#9169)
+schema.create_index("User", ["username"], unique=True, index_type="HASH")
 
-# Exact-match lookup index
+# Unique key you also range over or sort by: the default LSM_TREE
+schema.create_index("Ticket", ["number"], unique=True)
+
+# Non-unique exact-match lookup index
 schema.create_index("Order", ["customerId"], index_type="HASH")
 
 # Composite index
@@ -410,8 +413,15 @@ schema.create_index("Article", ["content"], index_type="FULL_TEXT")
 
 **Index choice rules of thumb:**
 
-- Use `HASH` for exact-match lookups when you do not need ranges or ordered scans.
-- Use `LSM_TREE` when you need ranges, sorting, or a safe general-purpose default.
+- Use `HASH` for an id that is only read, updated and deleted by equality and is not
+  bulk-loaded in key order. From 26.10.1 a unique hash index answers SQL `id = ?` 1.5 to
+  2.3 times faster than `LSM_TREE` and an `Index.get()` hit 1.9 to 3.1 times faster. Its
+  insert is 1.14 to 1.23 times faster for shuffled ids but 9% to 16% slower for ids loaded
+  in ascending order (ArcadeDB [#9169](https://github.com/ArcadeData/arcadedb/issues/9169),
+  200,000 and 2,000,000 entries). It cannot serve a range or an `ORDER BY`. On 26.9.1 its
+  inserts are several times slower than `LSM_TREE`.
+- Use `LSM_TREE` when you need ranges, sorting, or a safe general-purpose default, and for
+  a non-unique column with few distinct values.
 - Use `FULL_TEXT`, `LSM_VECTOR`, and `GEOSPATIAL` only for their specialized query
   types.
 - `HASH` can be unique or non-unique. The index structure and uniqueness constraint are
@@ -419,9 +429,9 @@ schema.create_index("Article", ["content"], index_type="FULL_TEXT")
 
 **SQL DSL equivalents:**
 
-- `CREATE INDEX ON User (email) UNIQUE` -> unique `LSM_TREE`
+- `CREATE INDEX ON User (email) UNIQUE` -> unique `LSM_TREE` (ranges and `ORDER BY`)
 - `CREATE INDEX ON User (email) NOTUNIQUE` -> non-unique `LSM_TREE`
-- `CREATE INDEX ON User (email) UNIQUE_HASH` -> unique `HASH`
+- `CREATE INDEX ON User (email) UNIQUE_HASH` -> unique `HASH` (equality only, the choice for an id)
 - `CREATE INDEX ON Order (customerId) NOTUNIQUE_HASH` -> non-unique `HASH`
 - `CREATE INDEX ON Article (content) FULL_TEXT` -> `FULL_TEXT`
 - `CREATE INDEX ON Doc (embedding) LSM_VECTOR ...` -> `LSM_VECTOR`
@@ -804,7 +814,7 @@ with db.transaction():
     for name in ("Author", "Book", "Review", "Shelf"):
         db.command("sql", f"CREATE DOCUMENT TYPE {name}")
         db.command("sql", f"CREATE PROPERTY {name}.id LONG")
-        db.command("sql", f"CREATE INDEX ON {name} (id) UNIQUE")
+        db.command("sql", f"CREATE INDEX ON {name} (id) UNIQUE_HASH")
 ```
 
 A schema statement is not transactional: a rollback does not undo it, so a failed block can

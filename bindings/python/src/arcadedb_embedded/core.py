@@ -442,7 +442,8 @@ class Database:
 
     def lookup_by_key(self, type_name: str, keys: List[str], values: List[Any]):
         """
-        Lookup records by indexed key (O(1) index-based lookup).
+        Lookup records by indexed key (index-based: O(1) for a hash index, O(log n)
+        for an LSM_TREE index).
 
         Args:
             type_name: Type name
@@ -1139,8 +1140,8 @@ class Database:
             >>> db.schema.create_property("User", "name", PropertyType.STRING)
             >>> db.schema.create_property("User", "age", PropertyType.INTEGER)
             >>>
-            >>> # Create an index
-            >>> db.schema.create_index("User", ["name"], unique=True)
+            >>> # Create an index (HASH: "name" is only looked up by equality)
+            >>> db.schema.create_index("User", ["name"], unique=True, index_type="HASH")
             >>>
             >>> # Create edge type
             >>> db.schema.create_edge_type("Follows")

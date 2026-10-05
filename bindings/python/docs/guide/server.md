@@ -358,6 +358,9 @@ After a bulk write, `COMPACT TIMESERIES TYPE Reading` through `/api/v1/command` 
 samples still in the mutable tail and returns `mutableSamples` (0 once everything is
 sealed), rather than waiting for the 60-second background pass (26.10.1,
 `ArcadeData/arcadedb#8574`). See [`append_samples`](../api/async_executor.md#append_samples).
+If the type's main query is an hourly aggregate, create it with `COMPACTION_INTERVAL 1 HOURS`
+and leave `SHARDS` at its default (the `CREATE TIMESERIES TYPE` above takes both clauses
+after `FIELDS`).
 
 ## Bulk Loading over the Server
 

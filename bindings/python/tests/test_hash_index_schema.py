@@ -108,3 +108,72 @@ def test_indexed_in_named_list_parameter_returns_rows(temp_db_path):
         )
 
         assert [row.get("code") for row in rows] == [1, 2, 3]
+
+
+def test_unique_hash_index_serves_id_lookup_update_and_delete(temp_db_path):
+    """The recommended path for an id that is only read, updated and deleted by equality
+    (ArcadeData/arcadedb#9169): UNIQUE_HASH. Insert, a point lookup in SQL and in Cypher,
+    an update and a delete by id, and a plan that reads the index."""
+    with arcadedb.create_database(temp_db_path) as db:
+        db.command("sql", "CREATE VERTEX TYPE Item")
+        db.command("sql", "CREATE PROPERTY Item.id LONG")
+        db.command("sql", "CREATE PROPERTY Item.label STRING")
+        db.command("sql", "CREATE INDEX ON Item (id) UNIQUE_HASH")
+
+        index = db.schema.get_index_by_name("Item[id]")
+        assert str(index.getType()) == "HASH"
+        assert index.isUnique()
+
+        with db.transaction():
+            for i in range(1, 201):
+                db.command(
+                    "sql",
+                    "INSERT INTO Item SET id = :id, label = :label",
+                    {"id": i, "label": f"n{i}"},
+                )
+
+        plan = (
+            db.query("sql", "EXPLAIN SELECT FROM Item WHERE id = :id", {"id": 42})
+            .first()
+            .get("executionPlanAsString")
+        )
+        assert "FETCH FROM INDEX" in plan
+
+        rows = list(db.query("sql", "SELECT FROM Item WHERE id = :id", {"id": 42}))
+        assert [r.get("label") for r in rows] == ["n42"]
+
+        try:
+            cypher = list(
+                db.query(
+                    "opencypher",
+                    "MATCH (n:Item {id: $id}) RETURN n.label AS label",
+                    {"id": 42},
+                )
+            )
+        except arcadedb.ArcadeDBError as e:
+            if "Query engine 'opencypher' was not found" not in str(e):
+                raise
+            cypher = None
+        if cypher is not None:
+            assert [r.get("label") for r in cypher] == ["n42"]
+
+        with db.transaction():
+            db.command(
+                "sql",
+                "UPDATE Item SET label = :label WHERE id = :id",
+                {"label": "renamed", "id": 42},
+            )
+        rows = list(db.query("sql", "SELECT FROM Item WHERE id = :id", {"id": 42}))
+        assert [r.get("label") for r in rows] == ["renamed"]
+
+        with db.transaction():
+            db.command("sql", "DELETE FROM Item WHERE id = :id", {"id": 42})
+        assert (
+            list(db.query("sql", "SELECT FROM Item WHERE id = :id", {"id": 42})) == []
+        )
+        assert db.query("sql", "SELECT count(*) AS c FROM Item").first().get("c") == 199
+
+        # The index still rejects a duplicate key.
+        with pytest.raises(arcadedb.ArcadeDBError):
+            with db.transaction():
+                db.command("sql", "INSERT INTO Item SET id = :id", {"id": 43})

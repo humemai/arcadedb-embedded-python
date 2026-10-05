@@ -9,7 +9,8 @@ demonstrates.
 
 It covers:
 
-- creating a `TIMESERIES TYPE` with multiple tags and numeric fields
+- creating a `TIMESERIES TYPE` with multiple tags and numeric fields and
+  `COMPACTION_INTERVAL 1 HOURS`, the bucket of the hourly aggregates it runs
 - generating deterministic telemetry for six building sensors
 - inserting hundreds of samples transactionally
 - sealing the mutable tail with `COMPACT TIMESERIES TYPE` before reading, embedded and
@@ -41,6 +42,17 @@ It covers:
     turns a mis-declared high-cardinality TAG into a clear error rather than
     unbounded growth. High-cardinality text belongs in a STRING *field*, which
     stays inline.
+
+!!! tip "Match COMPACTION_INTERVAL to your aggregation"
+
+    A type whose main query is an hourly aggregate declares `COMPACTION_INTERVAL 1 HOURS`
+    and leaves `SHARDS` at its default (the number of cores minus one, not the CPU
+    count). Sealed blocks are then cut at the hour boundary, which gave the engine
+    maintainers a 12-hour hourly average of 1.8 ms against 0.9 ms on 2.59 million
+    samples (100 hosts, 4 shards), with ingest no slower. The price is more and smaller
+    blocks (40 became 173), so pick the bucket of your most frequent aggregation
+    (ArcadeDB [#9166](https://github.com/ArcadeData/arcadedb/issues/9166)). More
+    shards means more fragmentation and one more stream to merge.
 
 ## Run
 

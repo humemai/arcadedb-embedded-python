@@ -271,8 +271,11 @@ over 1,000 key values, about 300 per key, 8 of 30 transactions of 1,000 deletes 
 about 30 per key, all 30 failed. Keys holding about 3 records each were not affected.
 
 Index a property with few distinct values, such as a status or a country, with `NOTUNIQUE`
-(an `LSM_TREE` index) instead of `NOTUNIQUE_HASH`; the same deletes commit there. Hash
-indexes remain a good fit for keys that hold one or a few records each, such as identifiers.
+(an `LSM_TREE` index) instead of `NOTUNIQUE_HASH`; the same deletes commit there. A key that
+holds one or a few records, such as an identifier, is not affected; whether a hash index is
+the right choice for it is a separate question, answered by
+[Index choice for an id](core/queries.md#choosing-index-types-in-sql-dsl): a hash index
+fits an id that is read by equality only and is not bulk-loaded in key order.
 
 ## With `NULL_STRATEGY INDEX`, a SQL range with only an upper bound returns records with no value
 

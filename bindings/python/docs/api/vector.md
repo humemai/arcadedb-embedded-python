@@ -330,7 +330,7 @@ db.command("sql", "CREATE VERTEX TYPE Document")
 db.command("sql", "CREATE PROPERTY Document.id STRING")
 db.command("sql", "CREATE PROPERTY Document.text STRING")
 db.command("sql", "CREATE PROPERTY Document.embedding ARRAY_OF_FLOATS")
-db.command("sql", "CREATE INDEX ON Document (id) UNIQUE")
+db.command("sql", "CREATE INDEX ON Document (id) UNIQUE_HASH")
 
 # Secondary option: create vector index from Python
 index = db.create_vector_index(
@@ -706,7 +706,7 @@ db.command("sql", "CREATE PROPERTY Document.id STRING")
 db.command("sql", "CREATE PROPERTY Document.title STRING")
 db.command("sql", "CREATE PROPERTY Document.content STRING")
 db.command("sql", "CREATE PROPERTY Document.embedding ARRAY_OF_FLOATS")
-db.command("sql", "CREATE INDEX ON Document (id) UNIQUE")
+db.command("sql", "CREATE INDEX ON Document (id) UNIQUE_HASH")
 
 # Preferred: create vector index in SQL
 db.command(

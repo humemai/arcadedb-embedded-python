@@ -390,11 +390,11 @@ When you create indexes through SQL, the index keyword controls both the index
 structure and uniqueness.
 
 ```python
-# General-purpose ordered index (LSM_TREE)
-db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
+# Ordered index (LSM_TREE): ranges and ORDER BY on the key
+db.command("sql", "CREATE INDEX ON Invoice (number) UNIQUE")
 db.command("sql", "CREATE INDEX ON Event (createdAt) NOTUNIQUE")
 
-# Exact-match hash index
+# Exact-match hash index: an id that is only read, updated and deleted by equality
 db.command("sql", "CREATE INDEX ON User (email) UNIQUE_HASH")
 db.command("sql", "CREATE INDEX ON Order (customerId) NOTUNIQUE_HASH")
 
@@ -414,6 +414,7 @@ work, pass `"buildGraphNow": false` inside `METADATA`.
 Rules of thumb:
 
 - Use `UNIQUE_HASH` or `NOTUNIQUE_HASH` for exact-match lookups only: a range on a property whose only index is a hash index scans the type (in openCypher from 26.10.1; before it the query failed, ArcadeDB [#8835](https://github.com/ArcadeData/arcadedb/issues/8835)).
+- `NULL_STRATEGY ERROR` on a hash index is enforced only from 26.10.1 (ArcadeDB [#9074](https://github.com/ArcadeData/arcadedb/issues/9074), PR #9222): on 26.9.1 a hash index created with it still accepted null and missing keys, and on 26.10.1 such an index over rows that hold a null or missing key cannot be rebuilt: `REBUILD INDEX` fails and leaves the type without that index, so delete those rows before rebuilding.
 - Use `UNIQUE` or `NOTUNIQUE` for `LSM_TREE` indexes when you need ranges, ordering, or a safe general-purpose default.
 - Use `FULL_TEXT` for tokenized text search, not normal equality lookups.
 - Use `LSM_VECTOR` for embeddings and nearest-neighbor search.
@@ -423,6 +424,37 @@ Examples:
 
 - `email = ?`, `userId = ?`, `movieId = ?`: usually `UNIQUE_HASH` or `NOTUNIQUE_HASH`
 - `createdAt BETWEEN ? AND ?`, `price > ?`, ordered scans: usually `UNIQUE` or `NOTUNIQUE`
+
+**Index choice for an id.** If an id is only read, updated and deleted by equality
+(SQL `WHERE id = ?`, openCypher `{id: $id}`) and is not bulk-loaded in key order, index it
+with `UNIQUE_HASH`, or `NOTUNIQUE_HASH` when several records share a value. SQL and
+openCypher both answer those statements from the hash index, and `EXPLAIN` shows
+`FETCH FROM INDEX`. From 26.10.1 the hash index is faster for every read (ArcadeDB
+[#9169](https://github.com/ArcadeData/arcadedb/issues/9169), fixed in PR #9222: the hash
+buckets keep their entries unordered), measured against `UNIQUE` on 200,000 and 2,000,000
+`LONG` ids with the same answers: SQL `id = ?` 1.5 to 2.3 times faster, an `Index.get()` hit
+1.9 to 3.1 times, an UPDATE by id 1.04 to 1.13 times, a DELETE by id level. The insert
+depends on the key order: 1.14 to 1.23 times faster for shuffled ids, but 9% to 16% slower
+for ids loaded in ascending order, which is the best case of `LSM_TREE`. So the rule is
+equality only and not loaded in key order; an id you number as you load pays that on the
+insert and gains on every read. Keep `UNIQUE` (`LSM_TREE`) when you also read the key by
+range or `ORDER BY`, and keep an `LSM_TREE` index on a non-unique column with few distinct
+values (tracked in [#9228](https://github.com/ArcadeData/arcadedb/issues/9228)).
+
+```python
+db.command("sql", "CREATE INDEX ON Item (id) UNIQUE_HASH")  # id: equality only
+with db.transaction():
+    db.command("sql", "UPDATE Item SET label = :label WHERE id = :id", {"label": "new", "id": 42})
+    db.command("sql", "DELETE FROM Item WHERE id = :id", {"id": 43})
+rows = db.query("opencypher", "MATCH (n:Item {id: $id}) RETURN n.label AS label", {"id": 42})
+```
+
+On 26.9.1 the hash buckets still keep their entries sorted, and loading ids into a
+`UNIQUE_HASH` index was 2.5 to 6 times slower than into `UNIQUE` (200,000 `LONG` ids through
+`insert_many`, laptop, 1.3 to 2.6 s against 6.5 to 7.7 s); lookups were still faster, by less
+than the engine's 3x because the Python call dominates. On 26.9.1, index an id you load in
+bulk with `UNIQUE`. Both index kinds reject a duplicate key with the same
+`DuplicatedKeyException`.
 
 An index on a range column is not free when the range matches most of the rows. From
 26.10.1 a scan runs on several workers, while the index entries are read by one thread,

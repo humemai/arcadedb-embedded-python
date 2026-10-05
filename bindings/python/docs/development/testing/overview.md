@@ -18,7 +18,7 @@ The test suite covers:
 - ✅ **Time series SQL** - `CREATE TIMESERIES TYPE`, range queries, bucketing
 - ✅ **Materialized views** - create, refresh, alter, drop lifecycle
 - ✅ **Graph algorithms** - `shortestPath`, `dijkstra`, `astar`
-- ✅ **HASH schema indexes** - create, discover, idempotent `get_or_create_index`, and force drop
+- ✅ **HASH schema indexes** - create, discover, idempotent `get_or_create_index`, force drop, and the `UNIQUE_HASH` id path
 - ✅ **Unicode support** - International characters, emoji
 - ✅ **Schema introspection** - Querying database metadata
 - ✅ **Type conversions** - Python/Java type mapping
@@ -121,7 +121,7 @@ Test counts evolve over time. For the latest per-file counts, run `uv run pytest
 | [`test_materialized_view_sql.py`](test-materialized-view-sql.md) | Materialized view lifecycle and refresh behavior |
 | [`test_restore_sql.py`](test-restore-sql.md) | RESTORE DOCUMENT/VERTEX record-count and record integrity |
 | [`test_graph_algorithms_sql.py`](test-graph-algorithms-sql.md) | SQL graph algorithm runtime coverage |
-| [`test_hash_index_schema.py`](test-hash-index-schema.md) | HASH index schema API behavior, plus a named-list IN parameter on an LSM_TREE index |
+| [`test_hash_index_schema.py`](test-hash-index-schema.md) | HASH index schema API behavior, the `UNIQUE_HASH` id path end to end, plus a named-list IN parameter on an LSM_TREE index |
 | [`test_jvm_args.py`](test-jvm-args.md) | JVM args handling |
 | [`test_transaction_config.py`](test-transaction-config.md) | WAL flush, read-your-writes, and auto-transaction settings |
 | [`test_type_conversion.py`](test-type-conversion.md) | Python/Java type conversion coverage |
