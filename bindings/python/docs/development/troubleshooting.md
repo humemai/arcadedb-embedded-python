@@ -287,9 +287,10 @@ start_jvm(heap_size="8g", jvm_args="-Xms8g -XX:MaxDirectMemorySize=8g")
     transaction, 256 KB by default. `arcadedb.indexDefaultPageSize` (bytes, default 262144,
     minimum 8192) sets the page size of new plain LSM-tree indexes created by SQL
     `CREATE INDEX`; with 16384, a one-record insert allocated about 97.7 KB per insert instead
-    of 339 KB and ran about 1.7x faster in the maintainers' repro and ours, at the price of
-    slower point lookups through that index (about 1.1x, measured with too few runs to
-    state firmly). Measure your own workload before changing it (ArcadeData/arcadedb#9175).
+    of 339 KB and ran about 2x faster in our repro (10 runs per side on both JDKs, 1.96x to
+    2.01x), at the price of slower point lookups through that index (1.11x, interval 1.06x to
+    1.18x on JDK 25 and 1.07x to 1.15x on JDK 21). Measure your own workload before changing
+    it (ArcadeData/arcadedb#9175).
 
 !!! warning "Configuration Timing"
     JVM options are locked after the JVM starts. Configure `start_jvm(...)` or pass
