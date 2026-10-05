@@ -84,12 +84,17 @@ with db.graph_batch(use_wal=True, expected_edge_count=50000) as batch:
 ## Transactions
 
 Call the batch outside your own transactions. `create_vertices()`, `flush()`, and `close()`
-commit the transaction that is open on the thread, yours included, and so do `new_edge()`
-and `new_edges()` when the buffer reaches `batch_size` and flushes. Leaving a
-`with db.graph_batch()` block calls `close()`. This is ArcadeDB
-[#9242](https://github.com/ArcadeData/arcadedb/issues/9242), open; see
-[Known Engine Issues](../guide/known-issues.md) for what it does to a transaction of yours.
-Commit your own writes before the batch's first call, or write them after it closes:
+manage their own transactions, and so do `new_edge()` and `new_edges()` when the buffer
+reaches `batch_size` and flushes. Leaving a `with db.graph_batch()` block calls `close()`.
+
+From engine 26.10.1 (ArcadeDB
+[#9242](https://github.com/ArcadeData/arcadedb/issues/9242), fixed) each of them raises
+`ArcadeDBError` when you have a transaction open, and your transaction stays open with your
+writes in it. A refused `close()` leaves the batch open with its edges pending: end your
+transaction and call `close()` again. On 26.9.1 and earlier they commit the transaction open
+on the thread, yours included; see [Known Engine Issues](../guide/known-issues.md) for the
+details of both. Commit your own writes before the batch's first call, or write them after it
+closes, which is right on every version:
 
 ```python
 with db.transaction():
@@ -105,9 +110,10 @@ with db.graph_batch() as batch:
 both; outside one, it commits its own. `new_edge()` and `new_edges()` with room left in the
 buffer only buffer.
 
-While a batch is open, from its first call until `close()`, every commit on that thread uses
-the batch's WAL setting, yours too: with the default `use_wal=False`, a transaction of yours
-committed in that time writes no WAL record. `close()` restores the previous setting.
+While a batch is open, the batch's WAL setting (`use_wal=False` by default) applies to the
+batch's own calls only. On 26.9.1 and earlier it stayed on the thread from the batch's first
+call until `close()`, and every commit on that thread used it, yours too: a transaction of
+yours committed in that time wrote no WAL record.
 
 ## Common Operations
 

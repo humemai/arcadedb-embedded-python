@@ -472,13 +472,14 @@ Tests: `tests/test_declared_type_known_issues.py` checks the workaround and asse
 ArcadeDB [#9238](https://github.com/ArcadeData/arcadedb/issues/9238); measured through the
 bindings on 26.9.1 and a 26.10.1 snapshot, and in Java on the 2026-09-17 main snapshot and
 on main of 2026-10-05.
-**Fixed in 26.10.1** (PR #9246, verified on upstream main 111aa40457) for a statement that
-is planned with the null: an equality with a null value is no longer left to the index, so
-the planner reads the type and the equality matches no record, as on a type without an
-index. A `DELETE` or `UPDATE` with it changes nothing and reports a count of 0, and an
-`LSM_TREE` index with `NULL_STRATEGY ERROR` no longer raises. `p IS NULL` and `p <=> ?` are
-unchanged. **Still open** when an earlier run of the same statement bound a value (the
-last paragraphs of this entry).
+**Fixed in 26.10.1**, in two steps: PR #9246 (verified on upstream main 111aa40457) for a
+statement that is planned with the null, and PR #9276 (ArcadeData/arcadedb#9274, verified
+on upstream main d36b4ca3ae) for a statement whose plan was cached by an earlier run with a
+value. An equality with a null value now matches no record, as on a type without an
+index, whichever run planned the statement. A `DELETE` or `UPDATE` with it changes nothing
+and reports a count of 0, and an `LSM_TREE` index with `NULL_STRATEGY ERROR` no longer
+raises. `p IS NULL` and `p <=> ?` are unchanged. The entry describes what earlier engines
+and snapshots did.
 
 In SQL an equality with a null value matches no record, and on a type without an index
 `p = ?` with `None` returns none. Through an index that stores null keys it returned the
@@ -498,23 +499,25 @@ and updated those records. Through an `LSM_TREE` index with `NULL_STRATEGY ERROR
 raised `ArcadeDBError` (`Indexed key ... cannot be NULL`) instead of matching nothing. The
 literal `p = null` and openCypher `n.p = $x` with `None` matched nothing, as they should.
 
-The fix is made when the statement is planned, and the engine keeps the plan by the text of
-the statement. A statement whose first run binds a value is planned through the index, and
-its next run with `None` reuses that plan. Through an index on one property (`NOTUNIQUE`,
-`NOTUNIQUE_HASH`, or `UNIQUE`, positional or named) that run still returned the records
-whose `p` is null or absent (`[1]`, then `[2, 3]` over the three records), and through an
-`LSM_TREE` index with `NULL_STRATEGY ERROR` it raised again. A `DELETE ... WHERE p = :x` run
-first with a value that matched nothing and then with `None` removed those records. Indexes
-on several properties were not affected, and neither was a statement whose first run bound
-`None`. Measured on upstream main 111aa40457. With `arcadedb.sqlStatementCache` set to 0 the
-`SELECT` answered `[1]`, `[]`, `[1]`, so the cache of plans is the cause; a service that runs
-one statement text with values and with `None` meets it (ArcadeData/arcadedb#9274; the workaround stays: `p IS NULL` or `p <=> ?` for a null, or `arcadedb.sqlStatementCache` set to 0).
+The first fix was made when the statement is planned, and the engine keeps the plan by the
+text of the statement. A statement whose first run bound a value was planned through the
+index, and its next run with `None` reused that plan. Through an index on one property
+(`NOTUNIQUE`, `NOTUNIQUE_HASH`, or `UNIQUE`, positional or named) that run still returned
+the records whose `p` is null or absent (`[1]`, then `[2, 3]` over the three records), and
+through an `LSM_TREE` index with `NULL_STRATEGY ERROR` it raised again. A
+`DELETE ... WHERE p = :x` run first with a value that matched nothing and then with `None`
+removed those records. Indexes on several properties were not affected, and neither was a
+statement whose first run bound `None`. Measured on upstream main 111aa40457; with
+`arcadedb.sqlStatementCache` set to 0 the `SELECT` answered `[1]`, `[]`, `[1]`, so the cache
+of plans was the cause (ArcadeData/arcadedb#9274). PR #9276 removes the dependence of the
+plan on the parameter: the index lookup is skipped at execution when an equality slot is
+null, as it already was for a null `IN` element and a null range bound.
 
-Do not bind `None` to `=`, on any engine. When `None` means "no value" and you want those
+On 26.9.1 and earlier, and on a snapshot before PR #9276, do not bind `None` to `=`. When `None` means "no value" and you want those
 records, ask for them with `p IS NULL`, or with the null-safe `p <=> ?`, which takes a value
 or `None`; both returned what the type without an index returns. An index on `p` does not
 serve `<=>`, so it reads the whole type. When `None` should match nothing, as SQL defines
-it, do not run the query, the `DELETE`, or the `UPDATE`.
+it, do not run the query, the `DELETE`, or the `UPDATE`. On 26.10.1 binding `None` to `=` is safe and matches nothing, but `p IS NULL` or `p <=> ?` is still the way to ask for the records without a value.
 
 ```python
 def children_of(parent):
@@ -530,7 +533,7 @@ rows = db.query("sql", "SELECT FROM T WHERE parent <=> ?", parent).to_list()
 On a `UNIQUE` or `UNIQUE_HASH` index with `NULL_STRATEGY INDEX`, `p IS NULL` had an issue of
 its own before 26.10.1 (the next entry); use `p <=> ?` there on those engines.
 
-Tests: `tests/test_null_index_known_issues.py` checks the workaround and asserts the fixed behavior (the cases of PR #9246 were strict `xfail` tripwires until the fix reached the engine these tests run on). The cases of a plan cached by an earlier run with a value are strict `xfail` tripwires; they start failing the suite when the engine fixes them, which is the cue to remove this entry.
+Tests: `tests/test_null_index_known_issues.py` checks the workaround and asserts the fixed behavior, including the statement run with a value, then `None`, then the value (the cases of PR #9246 and PR #9276 were strict `xfail` tripwires until the fixes reached the engine these tests run on).
 
 ## SQL `p IS NULL` through a `UNIQUE` or `UNIQUE_HASH` index with `NULL_STRATEGY INDEX` returns one record
 
@@ -600,13 +603,17 @@ Tests: `tests/test_null_index_known_issues.py` checks the workaround and asserts
 ## `GraphBatch` commits a transaction you opened, and its retry can roll yours back
 
 ArcadeDB [#9242](https://github.com/ArcadeData/arcadedb/issues/9242); measured through the
-bindings on 26.9.1 and on two 26.10.1 snapshots, with the same results on each. Open.
+bindings on 26.9.1 and on two 26.10.1 snapshots, with the same results on each.
+**Fixed in 26.10.1** (PR #9270, verified through the bindings on upstream 5a90b0f52a, on
+JDK 25): the calls below now refuse to run inside a transaction you opened and leave it
+untouched. On 26.9.1 and earlier, and on a snapshot before 5a90b0f52a, they behave as
+described next.
 
-`GraphBatch.create_vertices()`, `flush()`, and `close()` join a transaction that is already
-open on the thread and commit it together with the batch's own work. So do `new_edge()` and
-`new_edges()` when the buffer reaches `batch_size` and they flush, and so does leaving a
-`with db.graph_batch()` block, which calls `close()`. After `db.begin()`, saving a document,
-and `batch.create_vertices("V", 2)`:
+`GraphBatch.create_vertices()`, `flush()`, and `close()` joined a transaction that was
+already open on the thread and committed it together with the batch's own work. So did
+`new_edge()` and `new_edges()` when the buffer reached `batch_size` and they flushed, and so
+did leaving a `with db.graph_batch()` block, which calls `close()`. After `db.begin()`,
+saving a document, and `batch.create_vertices("V", 2)`:
 
 - no transaction is active, and `db.rollback()` returns normally and leaves the document in
   place, also after the database is closed and reopened;
@@ -620,12 +627,35 @@ such as a concurrent modification, the engine rolls back the open transaction, y
 included, then retries in a transaction of its own and commits only the vertices. The call
 returns normally and your document is gone.
 
+From 26.10.1 each of those calls raises `ArcadeDBError` (the cause is a
+`java.lang.IllegalStateException`: `manages its own transactions and cannot run inside a
+transaction the caller opened`) and your transaction stays open with your writes in it:
+`db.rollback()` undoes them and `db.commit()` commits them. The rules the refusal follows:
+
+- `flush()` with nothing buffered and `close()` with nothing pending still run inside your
+  transaction, since there is nothing to commit.
+- A `close()` that is refused releases nothing. The batch stays open with its edges pending,
+  and the same `close()` after your transaction ends writes them. Until then
+  `db.graph_batch()` on that database raises `A GraphBatch is already in progress`. Leaving a
+  `with db.graph_batch()` block inside your transaction raises the refusal out of the block
+  for the same reason: end your transaction before the block exits.
+- `new_edges()` buffers the edges that fit before the one that fills the buffer, and the
+  refusal comes at that edge, so a refused call may have buffered some of its edges. They
+  stay buffered and the next flush outside your transaction writes them.
+- The batch's WAL setting applies to the transaction of the batch's own call only, so a
+  transaction of yours between two calls commits with the setting you chose.
+
+Before this version of the bindings, a refused `close()` marked the `GraphBatch` closed,
+which made the retry a no-op that wrote nothing and kept the database's batch guard held.
+It is fixed here, and `close()` leaves the object open after a refusal.
+
 `create_vertex()` is not affected: inside your transaction it saves the vertex without
 committing, and your `rollback()` undoes both.
 
-Commit your own writes before the batch's first call, or write them after it closes, and
-call the batch outside any transaction of yours. That way each rollback undoes only its own
-writes, and a retried vertex commit loses nothing of yours:
+On 26.9.1 and earlier, commit your own writes before the batch's first call, or write them
+after it closes, and call the batch outside any transaction of yours. That way each rollback
+undoes only its own writes, and a retried vertex commit loses nothing of yours. It is the
+right order on every version:
 
 ```python
 with db.transaction():
@@ -636,9 +666,10 @@ with db.graph_batch() as batch:
     batch.new_edges(rids[:-1], "Knows", rids[1:])
 ```
 
-Tests: `test_graph_batch_outside_the_callers_transactions` in `tests/test_graph_batch.py`
-checks this workaround, and the three tests after it are strict `xfail` tests of the engine
-behavior.
+Tests: `tests/test_graph_batch.py` asserts the refusal for each call, the retry of a refused
+`close()`, and the WAL setting; `test_graph_batch_outside_the_callers_transactions` checks the
+order above (it was strict `xfail` tripwires for the engine behavior until the fix reached the
+engine these tests run on).
 
 
 ## A vector search misses recently added records while `COMPACT INDEX` runs

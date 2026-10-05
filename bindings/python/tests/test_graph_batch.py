@@ -478,8 +478,8 @@ def test_graph_batch_create_vertices_failure_rolls_back(temp_db_path, bulk):
 def test_graph_batch_create_vertices_keeps_the_callers_transaction(temp_db_path):
     """The rollback is for a transaction create_vertices opened itself: one the
     caller already had open is theirs, and a failure inside it leaves it
-    active. A call that succeeds commits it instead (#9242, the tests after
-    test_graph_batch_outside_the_callers_transactions)."""
+    active (a call the engine refuses for that transaction does too, #9242, the
+    tests after test_graph_batch_outside_the_callers_transactions)."""
     with arcadedb.create_database(temp_db_path) as db:
         _unique_person_db(db)
 
@@ -517,18 +517,18 @@ def test_graph_batch_create_vertices_keyboard_interrupt_rolls_back(
         assert db.count_type("Person") == 0
 
 
-# ArcadeData/arcadedb#9242 (known-issues.md): createVertices, flush() and close() commit a
-# transaction the caller opened. The first test checks the documented workaround and must keep
-# passing. The other three are strict xfail tripwires that assert what a fix gives: either the
-# call leaves the caller's transaction open, or it refuses to run inside it (an ArcadeDBError),
-# and in both cases the caller's rollback undoes the caller's write. When a fix reaches the
-# engine these tests run on, they pass and the suite fails: then the xfail comes off.
-_COMMITS_THE_CALLERS_TRANSACTION = pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="ArcadeData/arcadedb#9242: GraphBatch.createVertices, flush() and close() commit a "
-    "transaction the caller opened, so the caller's rollback() undoes nothing",
-)
+# ArcadeData/arcadedb#9242 (known-issues.md): createVertices, flush() and close() committed a
+# transaction the caller opened. Fixed in 26.10.1 (PR #9270): they refuse to run inside it
+# (IllegalStateException, an ArcadeDBError here) and leave it untouched, so the caller's
+# rollback undoes the caller's write. The tests below assert the refusal itself, not only the
+# untouched transaction, so a change that commits quietly again, or one that stops refusing
+# without leaving the transaction alone, fails them.
+def _is_the_engines_refusal(error):
+    import jpype
+
+    return isinstance(error, ArcadeDBError) and isinstance(
+        error.__cause__, jpype.JClass("java.lang.IllegalStateException")
+    )
 
 
 def _vertex_edge_note_types(db):
@@ -590,9 +590,10 @@ def _call_inside_the_callers_transaction(db, call):
 
 
 def test_graph_batch_outside_the_callers_transactions(temp_db_path):
-    """known-issues.md (#9242): commit your own writes before the batch and call it outside
-    any transaction of yours. Each rollback then undoes only its own writes, and a retried
-    vertex commit loses nothing of yours."""
+    """The order that works on every engine, and the only one that does on 26.9.1 and earlier
+    (#9242): commit your own writes before the batch and call it outside any transaction of
+    yours. Each rollback then undoes only its own writes, and a retried vertex commit loses
+    nothing of yours."""
     with arcadedb.create_database(temp_db_path) as db:
         _vertex_edge_note_types(db)
         with db.transaction():
@@ -616,15 +617,15 @@ def test_graph_batch_outside_the_callers_transactions(temp_db_path):
         assert db.count_type("E") == 2
 
 
-@_COMMITS_THE_CALLERS_TRANSACTION
 @pytest.mark.parametrize(
     "rows",
     [2, [{"x": 1}, {"x": 2}], [{"seen": datetime(2026, 10, 5)}, None]],
     ids=["count", "json-bulk", "property-matrix"],
 )
 def test_graph_batch_create_vertices_leaves_the_callers_transaction(temp_db_path, rows):
-    """#9242: create_vertices inside the caller's transaction must leave it to the caller.
-    Today it commits it, the caller's Note with it, and no transaction is active after.
+    """#9242: create_vertices inside the caller's transaction refuses to run and leaves it to
+    the caller. Before the fix it committed it, the caller's Note with it, and no transaction
+    was active after.
     """
     with arcadedb.create_database(temp_db_path) as db:
         _vertex_edge_note_types(db)
@@ -632,14 +633,16 @@ def test_graph_batch_create_vertices_leaves_the_callers_transaction(temp_db_path
             active, notes, refusal = _call_inside_the_callers_transaction(
                 db, lambda: batch.create_vertices("V", rows)
             )
-        assert (active, notes) == (True, []), f"refusal: {refusal}"
+        assert _is_the_engines_refusal(refusal), f"refusal: {refusal!r}"
+        assert (active, notes) == (True, [])
+        assert db.count_type("V") == 0
 
 
-@_COMMITS_THE_CALLERS_TRANSACTION
 @pytest.mark.parametrize("step", ["flush", "full-buffer", "close"])
 def test_graph_batch_flush_and_close_leave_the_callers_transaction(temp_db_path, step):
     """#9242: a flush, explicit or by a new_edges that fills the buffer, and close(), inside
-    the caller's transaction must leave it to the caller. Today each commits it."""
+    the caller's transaction refuse to run and leave it to the caller. Before the fix each
+    committed it."""
     with arcadedb.create_database(temp_db_path) as db:
         _vertex_edge_note_types(db)
         batch = db.graph_batch(parallel_flush=False, batch_size=2)
@@ -659,20 +662,15 @@ def test_graph_batch_flush_and_close_leave_the_callers_transaction(temp_db_path,
             active, notes, refusal = _call_inside_the_callers_transaction(db, call)
         finally:
             batch.close()
-        assert (active, notes) == (True, []), f"refusal: {refusal}"
+        assert _is_the_engines_refusal(refusal), f"refusal: {refusal!r}"
+        assert (active, notes) == (True, [])
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="ArcadeData/arcadedb#9242: on a retryable commit failure createVertices rolls back "
-    "the caller's transaction, then commits only its own vertices",
-)
-def test_graph_batch_create_vertices_retry_keeps_the_callers_write(temp_db_path):
-    """#9242: a retried vertex commit must not roll back the caller's transaction. Today the
-    retry rolls it back, commits only the vertices, and returns normally: the caller's Note is
-    gone, and nothing says so. Surfacing the failure (an ArcadeDBError) would be a fix too.
-    """
+def test_graph_batch_create_vertices_refuses_before_any_commit_attempt(temp_db_path):
+    """#9242: the retry that rolled the caller's transaction back needs a commit attempt, and
+    the call now refuses before making one. The caller's Note survives and commits as theirs,
+    and the retry path itself still runs outside the caller's transaction
+    (test_graph_batch_outside_the_callers_transactions)."""
     with arcadedb.create_database(temp_db_path) as db:
         _vertex_edge_note_types(db)
         attempts = []
@@ -681,13 +679,68 @@ def test_graph_batch_create_vertices_retry_keeps_the_callers_write(temp_db_path)
             try:
                 _save_note(db, "caller")
                 with _first_vertex_commit_attempt_fails(attempts):
-                    try:
+                    with pytest.raises(ArcadeDBError) as refused:
                         batch.create_vertices("V", 2)
-                    except ArcadeDBError as e:
-                        attempts.append(f"refused: {e}")
-                if db.is_transaction_active():
-                    db.commit()
+                assert _is_the_engines_refusal(refused.value), repr(refused.value)
+                db.commit()
             finally:
                 if db.is_transaction_active():
                     db.rollback()
-        assert _notes(db) == ["caller"], f"hook attempts: {attempts}"
+        assert attempts == []
+        assert _notes(db) == ["caller"]
+        assert db.count_type("V") == 0
+
+
+def test_graph_batch_close_refused_in_the_callers_transaction_can_be_retried(
+    temp_db_path,
+):
+    """#9242: a close() the engine refuses inside the caller's transaction releases nothing:
+    the batch stays open with its edges pending, so the same close() after the caller's
+    transaction ends writes them, and only then is a new batch on the database allowed.
+    """
+    with arcadedb.create_database(temp_db_path) as db:
+        _vertex_edge_note_types(db)
+        batch = db.graph_batch(parallel_flush=False)
+        rids = batch.create_vertices("V", 3)
+        batch.new_edge(rids[0], "E", rids[1])
+        batch.new_edge(rids[1], "E", rids[2])
+        try:
+            active, notes, refusal = _call_inside_the_callers_transaction(
+                db, batch.close
+            )
+            assert _is_the_engines_refusal(refusal), f"refusal: {refusal!r}"
+            assert (active, notes) == (True, [])
+            assert db.count_type("E") == 0
+            # the wrapper is still open and the edges are still pending
+            assert (
+                batch.get_buffered_edge_count()
+                + batch.get_deferred_incoming_edge_count()
+                > 0
+            )
+            with pytest.raises(ArcadeDBError, match="already in progress"):
+                db.graph_batch(parallel_flush=False)
+        finally:
+            batch.close()
+        assert db.count_type("E") == 2
+        db.graph_batch(parallel_flush=False).close()
+
+
+def test_graph_batch_leaves_the_callers_wal_setting_alone(temp_db_path):
+    """#9242: with the batch open, a transaction of the caller's commits with the caller's
+    WAL setting. Before the fix the batch's own setting (no WAL, by default) stayed on the
+    thread between its calls, so the caller's commit wrote no WAL record."""
+    with arcadedb.create_database(temp_db_path) as db:
+        _vertex_edge_note_types(db)
+
+        def caller_transaction_uses_the_wal():
+            db.begin()
+            try:
+                return bool(db._java_db.getTransaction().isUseWAL())
+            finally:
+                db.rollback()
+
+        assert caller_transaction_uses_the_wal() is True
+        with db.graph_batch(parallel_flush=False) as batch:
+            batch.create_vertices("V", 2)
+            assert caller_transaction_uses_the_wal() is True
+        assert caller_transaction_uses_the_wal() is True
