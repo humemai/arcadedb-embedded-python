@@ -1063,11 +1063,23 @@ MP_ARMS_SMALL = ("fp32", "int8", "arcsrv", "arcsrv_int8", "milvus",
 # the runner writes mp_mongo_b*.json and export_web has its row, but without it
 # here the arm was filtered out of the table silently (docs audit, 2026-09-26).
 MP_ARMS_OPTIONAL = ("neo4jvec", "pgvector", "surreal", "surrealsrv", "arango", "mongo")
+# THE INT8 COMPARATORS AT 1M (2026-10-06). MP_ARMS_SMALL above says they "exist
+# only at 10M", which was true of September's re-run and stopped being true in
+# October: the dense stage runs every registered arm at both sizes, so the
+# overlay at 1M holds their files and the campaign holds their 1M rows. The
+# exporter only reads the arms this module names, so the 1M table dropped all
+# three, and the maintenance columns (which exist only at 1M) read as blank
+# for them in page_check's A1. Optional rather than required, like the other
+# arms that joined later: September's 1M overlay has none of them, and a
+# required arm would make that directory refuse. A separate tuple, not an
+# addition to MP_ARMS_OPTIONAL, because make_paper_figures reads that one for
+# the figure's arm list and the figures were not asked to change.
+MP_ARMS_SMALL_OPTIONAL = ("milvus_int8", "qdrant_int8", "sqlitevec_int8")
 
 
-def _optional_arms_present(cand, label):
+def _optional_arms_present(cand, label, arms=MP_ARMS_OPTIONAL):
     present = []
-    for a in MP_ARMS_OPTIONAL:
+    for a in arms:
         have = [b for b in range(1, MP_BUILDS + 1) if os.path.isfile(os.path.join(cand, f"mp_{a}_b{b}.json"))]
         if len(have) == MP_BUILDS:
             present.append(a)
@@ -1083,12 +1095,14 @@ def mp_arms_present(small=False):
     if small:
         cand = dense_mp_small_dir()
         base = MP_ARMS_SMALL
+        optional = MP_ARMS_OPTIONAL + MP_ARMS_SMALL_OPTIONAL
     else:
         cand = dense_mp_dir()
         base = MP_ARMS
+        optional = MP_ARMS_OPTIONAL
     if not os.path.isdir(cand):
         return base
-    return base + _optional_arms_present(cand, os.path.basename(cand))
+    return base + _optional_arms_present(cand, os.path.basename(cand), optional)
 
 
 def dense_mp_dir():
@@ -1325,6 +1339,7 @@ def dense_ts_table(rows):
           if r.get("lane") == "l4" and str(r.get("scale")) == _T5_TIER]
     from l4_tsbs import SCALE_POINTS as _L4_POINTS
     _pts = _L4_POINTS[_T5_TIER]
+    _ts_block_at = len(lines)
     lines += [r"\midrule",
               r"\multicolumn{6}{l}{\textit{Time series, TSBS cpu-only "
               + f"({_pts / 1e6:.2f}M points)}}}} \\\\",
@@ -1380,6 +1395,18 @@ def dense_ts_table(rows):
         if _ONLY_LANES and "l4" not in _ONLY_LANES:
             print("t5: the time-series block is omitted, l4 is not in this "
                   f"landing's lanes ({','.join(sorted(_ONLY_LANES))})")
+            # WRITE THE HALF THAT HAS DATA. This returned here, which dropped
+            # the dense block along with the time-series one, and the previous
+            # file (a rehearsal's, time series only) stayed on disk as if it
+            # were this landing's table. page_check then compared the page's
+            # DEEP-10M cells against it and failed 24 of them as ABSENT: the
+            # dense stage's first October landing (2026-10-06). The mirror
+            # image of the omission above, which keeps the time-series half
+            # when the dense arm has not run.
+            if dense:
+                del lines[_ts_block_at:]
+                lines += [r"\bottomrule", r"\end{tabular}"]
+                write("t5_dense_ts.tex", "\n".join(lines) + "\n")
             return
         raise SystemExit("no arcadedb_ts_native rows at the pin; no fallback (ts_2681 retired 2026-09-08)")
     # The lane's native arm records the unbounded last-point under q_last_ms

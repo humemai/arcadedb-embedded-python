@@ -7626,12 +7626,13 @@ def _one_list_note(backend, scale, items):
                                       *(f"{n:,}" for n in lists[:1] if len(lists) == 1)))
 
 
-def _withheld_recall_notes(table_id):
-    """One sentence per approximate-search cell the freeze withheld for a recall
-    below make_paper_tables.RECALL_FLOOR (the sidecar it writes). The cell's
-    absence is said under the table rather than left as a missing row; a cell
-    a known engine defect decided gets the sentence that names it instead
-    (_one_list_note)."""
+def _withheld_recall_cells(table_id):
+    """[(backend, scale, note, known)] for every approximate-search cell the
+    freeze withheld for a recall below make_paper_tables.RECALL_FLOOR (the
+    sidecar it writes), in the order the sentences are printed. `known` is True
+    for a cell a known engine defect decided (_one_list_note), whose row stays
+    on the table marked `n/c`; the others are gone from the table and are
+    declared as absences by _declare_withheld_tier_absences."""
     if table_id not in ("l3d", "l3s"):
         return []
     items = _withheld_recall_items()
@@ -7646,9 +7647,17 @@ def _withheld_recall_notes(table_id):
     notes = []
     for (backend, scale), recs in sorted(seen.items()):
         if (backend, scale) in known:
-            notes.append(_one_list_note(backend, scale, known[(backend, scale)]))
+            notes.append((backend, scale, _one_list_note(backend, scale, known[(backend, scale)]), True))
             continue
         label = display_name(backend)
+        # THE PRECISION, WHERE THE LANE HAS ARMS THAT DIFFER IN IT. This named
+        # sqlite-vec's int8 arm "sqlite-vec" while the table prints its fp32 arm
+        # at the same size, with a good recall, so the sentence read as a
+        # statement about the row beside it (the first October dense landing,
+        # 2026-10-06). The table's own label for the arm is the name to use.
+        if lane == "l3d" and _OCTOBER_ENV and DENSE_PRECISION.get(backend):
+            label = (f"{label[:-1]}, {DENSE_PRECISION[backend]})" if label.endswith(")")
+                     else f"{label} ({DENSE_PRECISION[backend]})")
         try:
             size = scale_label(lane, scale)
         except Exception:  # noqa: BLE001
@@ -7659,14 +7668,57 @@ def _withheld_recall_notes(table_id):
         # unregistered sentence as typed and fails every number in it as
         # UNPINNED, which is what it did the moment this generator (main) met
         # the condition-source rule (october-instrument) in one tree.
-        notes.append(_gen(
+        notes.append((backend, scale, _gen(
             f"{label} at {size} is withheld: its search answered with a recall@10 of "
             f"{max(recs):.4f} across {len(recs)} repetition(s), which is not a measurement of "
             f"search but of a broken index, so its latency is not printed beside engines "
             f"answering correctly. The cause is investigated on the benchmark machine before anything "
             f"is claimed about it (BUGS F55).",
-            label, size, f"{max(recs):.4f}", str(len(recs))))
+            label, size, f"{max(recs):.4f}", str(len(recs))), False))
     return notes
+
+
+def _withheld_recall_notes(table_id):
+    """One sentence per approximate-search cell the freeze withheld for a recall
+    below make_paper_tables.RECALL_FLOOR (the sidecar it writes). The cell's
+    absence is said under the table rather than left as a missing row; a cell
+    a known engine defect decided gets the sentence that names it instead
+    (_one_list_note)."""
+    return [note for _b, _s, note, _known in _withheld_recall_cells(table_id)]
+
+
+def _declare_withheld_tier_absences(table):
+    """Declare, as data, the columns a withheld cell would have carried.
+
+    A cell the freeze withheld for its recall leaves the table with no entry
+    for that engine at that size, and the sentence under the table says so, but
+    the page's coverage gate reads declarations and not sentences (page_check
+    A1). Where the withheld size is the only one that carries a column -- the
+    insert and delete maintenance pass runs at the 1M tier alone -- the
+    engine's cells in it are absent BECAUSE the cell was withheld, which is the
+    `withheld` kind of declared absence. Columns another size also carries are
+    left alone: a blank there has some other reason, and this one would be
+    claiming it.
+    """
+    tid = table.get("id")
+    entries = table.get("entries", [])
+    if not _OCTOBER_ENV:
+        return   # September's page stays as it was frozen (DECISIONS #83)
+    for backend, scale, note, known in _withheld_recall_cells(tid):
+        if known:
+            continue
+        mine = [e for e in entries if str(e.get("backend_key")) == backend]
+        if not mine:
+            continue
+        label = str(mine[0].get("backend"))
+        for col in table.get("columns") or []:
+            carried = {str(e.get("scale")) for e in entries
+                       if isinstance((e.get("metrics") or {}).get(col), dict)
+                       and (e["metrics"][col] or {}).get("median") is not None}
+            has = any(isinstance((e.get("metrics") or {}).get(col), dict)
+                      and (e["metrics"][col] or {}).get("median") is not None for e in mine)
+            if carried == {scale} and not has:
+                _declare_absence(tid, label, col, "withheld", note)
 
 
 def _finish_table(table: dict) -> dict:
@@ -7687,6 +7739,7 @@ def _finish_table(table: dict) -> dict:
                      _dense_cold_warm_note(table) if table.get("id") == "l3d" else None):
             if note:
                 base.append(note)
+    _declare_withheld_tier_absences(table)
     table["conditions"] = (base
                            + _counts_note(table.get("id"), table.get("entries", []))
                            + _index_note(table.get("id"), table)
@@ -8383,6 +8436,26 @@ def main() -> int:
             # single-pass rows, cold only.
             _mps = _dense_overlay_entries("small")
             if _mps:
+                # THE MAINTENANCE COLUMNS LIVE ON THE CAMPAIGN ROW, NOT IN THE
+                # OVERLAY. The insert and delete pass runs once per engine, in
+                # the single-pass cell at the 1M tier (l3d_dense.MUTATE_SCALES),
+                # and the multipass overlay's files carry only the five query
+                # passes. Replacing the 1M entries with the overlay's dropped
+                # the six #82d columns from the table, and the page's own
+                # sentence about them ("run at 1M vectors") stood over columns
+                # that were not there (the first October dense landing,
+                # 2026-10-06; page_check A1 caught it). They are carried over
+                # the way peak memory and disk already are: from the campaign
+                # cell of the same arm at the same size. An overlay row keeps
+                # its own value where it has one.
+                _campaign_small = {e["backend_key"]: e for e in entries if e["scale"] == "small"}
+                _mutate_cols = [lbl for fld, lbl in OCT_TABLE_METRICS["l3d"]
+                                if isinstance(fld, str) and fld.startswith("mutate_")]
+                for _e in _mps:
+                    _src = (_campaign_small.get(_e["backend_key"]) or {}).get("metrics", {})
+                    for _col in _mutate_cols:
+                        if _col in _src and _col not in _e["metrics"]:
+                            _e["metrics"][_col] = _src[_col]
                 entries = [e for e in entries if e["scale"] != "small"]
                 entries.extend(_mps)
         if entries:
