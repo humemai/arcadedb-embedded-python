@@ -464,10 +464,6 @@ class TestVectorSQL:
         metadata = self._get_primary_sql_vector_index(
             test_db, "SqlNativeInt8Doc[vec]"
         ).getMetadata()
-        if not hasattr(metadata, "encoding"):
-            pytest.skip(
-                "Current embedded engine build does not expose encoding metadata"
-            )
         assert str(metadata.encoding) == "INT8"
         assert str(metadata.quantizationType) == "NONE"
 
@@ -490,33 +486,25 @@ class TestVectorSQL:
             """,
         )
 
-        try:
-            with test_db.transaction():
-                test_db.command(
-                    "sql",
-                    "INSERT INTO SqlNativeInt8SearchDoc SET id = ?, vec = ?",
-                    "doc_a",
-                    arcadedb.to_java_byte_array([127, 0, 0, 0]),
-                )
-                test_db.command(
-                    "sql",
-                    "INSERT INTO SqlNativeInt8SearchDoc SET id = ?, vec = ?",
-                    "doc_b",
-                    arcadedb.to_java_byte_array([120, 10, 0, 0]),
-                )
-                test_db.command(
-                    "sql",
-                    "INSERT INTO SqlNativeInt8SearchDoc SET id = ?, vec = ?",
-                    "doc_c",
-                    arcadedb.to_java_byte_array([0, 127, 0, 0]),
-                )
-        except arcadedb.ArcadeDBError as exc:
-            if "Expected float array or ComparableVector as key" in str(exc):
-                pytest.skip(
-                    "Current embedded engine build does not support byte[] ingest "
-                    "for INT8-encoded vectors"
-                )
-            raise
+        with test_db.transaction():
+            test_db.command(
+                "sql",
+                "INSERT INTO SqlNativeInt8SearchDoc SET id = ?, vec = ?",
+                "doc_a",
+                arcadedb.to_java_byte_array([127, 0, 0, 0]),
+            )
+            test_db.command(
+                "sql",
+                "INSERT INTO SqlNativeInt8SearchDoc SET id = ?, vec = ?",
+                "doc_b",
+                arcadedb.to_java_byte_array([120, 10, 0, 0]),
+            )
+            test_db.command(
+                "sql",
+                "INSERT INTO SqlNativeInt8SearchDoc SET id = ?, vec = ?",
+                "doc_c",
+                arcadedb.to_java_byte_array([0, 127, 0, 0]),
+            )
 
         rows = test_db.query(
             "sql",
@@ -537,23 +525,16 @@ class TestVectorSQL:
         test_db.command("sql", "CREATE PROPERTY SparseDoc.id STRING")
         test_db.command("sql", "CREATE PROPERTY SparseDoc.tokens ARRAY_OF_INTEGERS")
         test_db.command("sql", "CREATE PROPERTY SparseDoc.weights ARRAY_OF_FLOATS")
-        try:
-            test_db.command(
-                "sql",
-                """
-                CREATE INDEX ON SparseDoc (tokens, weights)
-                LSM_SPARSE_VECTOR
-                METADATA {
-                    "dimensions": 128
-                }
-                """,
-            )
-        except arcadedb.ArcadeDBError as exc:
-            if "LSM_SPARSE_VECTOR' is not supported" in str(exc):
-                pytest.skip(
-                    "Current embedded engine build does not support LSM_SPARSE_VECTOR"
-                )
-            raise
+        test_db.command(
+            "sql",
+            """
+            CREATE INDEX ON SparseDoc (tokens, weights)
+            LSM_SPARSE_VECTOR
+            METADATA {
+                "dimensions": 128
+            }
+            """,
+        )
 
         with test_db.transaction():
             test_db.command(
@@ -684,12 +665,7 @@ class TestVectorSQL:
     def test_vector_neighbors_by_key_opencypher(self, test_db):
         """OpenCypher should expose vector.neighbors with key-based lookup."""
 
-        try:
-            _ = list(test_db.query("opencypher", "RETURN 1 AS one"))
-        except Exception as exc:
-            if "Query engine 'opencypher' was not found" in str(exc):
-                pytest.skip("OpenCypher not available")
-            raise
+        _ = list(test_db.query("opencypher", "RETURN 1 AS one"))
 
         test_db.command("sql", "CREATE VERTEX TYPE Doc")
         test_db.command("sql", "CREATE PROPERTY Doc.name STRING")

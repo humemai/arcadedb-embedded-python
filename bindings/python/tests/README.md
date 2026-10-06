@@ -40,12 +40,13 @@ uv run pytest -k "transaction" -v
 
 ### A note on the server tests
 
-`test_server.py` and `test_server_patterns.py` skip themselves when server
-support is absent, which is convenient but has a failure mode: in 26.7.2 the
-server JARs were dropped from the wheel and those tests **skipped instead of
-failing**, so the suite stayed green while the feature was gone. That is what
-`test_server_packaging.py` is for. It never skips. If you deliberately want a
-slim wheel, delete that file on purpose rather than letting the suite go quiet.
+`test_server.py` and `test_server_patterns.py` do not skip when the server stack is absent: the
+wheel always ships it, and a test that skips on a missing feature cannot notice the feature
+going missing (in 26.7.2 the server JARs were dropped from the wheel and the guarded tests
+skipped, so the suite stayed green while the feature was gone). `test_server_packaging.py`
+states the packaging requirement and fails without the JARs. CI also fails any skip that
+`scripts/check_test_skips.py` does not list. If you deliberately want a slim wheel, delete
+that file on purpose rather than letting the suite go quiet.
 
 ```bash
 uv run pytest -m server -v      # only the server tests

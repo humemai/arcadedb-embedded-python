@@ -22,7 +22,7 @@ Covers JVM argument construction for the embedded runtime.
 - `ARCADEDB_JVM_ERROR_FILE` handling via `-XX:ErrorFile=...`.
 - `common_pool_parallelism`: injecting `-Djava.util.concurrent.ForkJoinPool.common.parallelism=<n>`, overriding any env-provided value, and rejecting values below 1.
 - `conftest.py` defines each `pytest_*` hook once (counted from its AST).
-- On Windows, faulthandler is off while the tests run (skipped elsewhere).
+- The conftest hook turns faulthandler off on Windows only: the test runs the hook for `win32`, `linux`, and `darwin` on every platform, and on Windows it also checks the session's real state.
 - `conftest.dump_java_threads()` lists the JVM's threads with their states and stacks; the conftest timer calls it for a test still running after `ARCADEDB_TEST_JAVA_DUMP_AFTER_S` seconds (540 by default), so a hang inside a Java call leaves the Java side in the CI log (humemai/arcadedb-embedded-python#10).
 
 ## Run

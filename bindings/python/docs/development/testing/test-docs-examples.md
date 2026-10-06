@@ -36,7 +36,7 @@ The file uses a few complementary approaches:
 - extract Python fences from Markdown pages
 - execute standalone snippets in subprocesses
 - wrap progressive guide snippets with seeded database setup when the page assumes prior context
-- keep server-specific cases behind the existing server support checks
+- mark server-specific cases `server`
 
 This is intentionally broader than a smoke test, but it does not try to execute every Python fence in the docs tree.
 
@@ -48,7 +48,7 @@ Page paths are relative to `bindings/python/docs/`.
 
 - `test_docs_installation_and_distribution_examples`: blocks from `getting-started/installation.md` and `getting-started/distributions.md`.
 - `test_docs_index_and_quickstart_examples`: blocks from `index.md` and `getting-started/quickstart.md`. The batch-insert snippet it also runs is a copy of the quickstart's, written in the test rather than extracted from the page, so an edit to that quickstart block is not caught.
-- `test_docs_api_access_examples`: the access-path blocks from `api-access-methods.md`. It is marked `server`, and it skips without server support or without `requests`.
+- `test_docs_api_access_examples`: the access-path blocks from `api-access-methods.md`. It is marked `server`, and it skips without `requests` (`importorskip`).
 - `test_docs_transaction_examples`: blocks from `guide/core/transactions.md`.
 - `test_docs_example_pages`: the `INSERT INTO Task SET` block from `examples/01_simple_document_store.md`, run against a seeded `Task` schema. The social-network script in the same test is written in the test itself, not read from `examples/02_social_network_graph.md`, so an edit to that page is not caught; the script asserts the rows returned by one SQL `MATCH` query and one OpenCypher query.
 - `test_docs_core_query_examples`: blocks from `guide/core/queries.md`, several of them run inside a database seeded with the data the page assumes.

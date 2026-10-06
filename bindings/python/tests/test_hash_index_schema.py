@@ -16,17 +16,12 @@ def test_hash_index_schema_create_discover_and_query(temp_db_path):
             db.command("sql", "INSERT INTO Product SET sku = 'A-002', price = 20")
             db.command("sql", "INSERT INTO Product SET sku = 'A-003', price = 30")
 
-        try:
-            created_index = schema.create_index(
-                "Product",
-                ["sku"],
-                unique=False,
-                index_type=arcadedb.IndexType.HASH,
-            )
-        except arcadedb.ArcadeDBError as e:
-            if "Invalid index type 'HASH'" in str(e):
-                pytest.skip("HASH index type is not available in this packaged runtime")
-            raise
+        created_index = schema.create_index(
+            "Product",
+            ["sku"],
+            unique=False,
+            index_type=arcadedb.IndexType.HASH,
+        )
         assert created_index is not None
 
         indexes = schema.get_indexes()
@@ -55,23 +50,18 @@ def test_hash_index_schema_get_or_create_and_force_drop(temp_db_path):
         schema.create_document_type("Inventory")
         schema.create_property("Inventory", "code", arcadedb.PropertyType.STRING)
 
-        try:
-            idx1 = schema.get_or_create_index(
-                "Inventory",
-                ["code"],
-                unique=False,
-                index_type=arcadedb.IndexType.HASH,
-            )
-            idx2 = schema.get_or_create_index(
-                "Inventory",
-                ["code"],
-                unique=False,
-                index_type=arcadedb.IndexType.HASH,
-            )
-        except arcadedb.ArcadeDBError as e:
-            if "Invalid index type 'HASH'" in str(e):
-                pytest.skip("HASH index type is not available in this packaged runtime")
-            raise
+        idx1 = schema.get_or_create_index(
+            "Inventory",
+            ["code"],
+            unique=False,
+            index_type=arcadedb.IndexType.HASH,
+        )
+        idx2 = schema.get_or_create_index(
+            "Inventory",
+            ["code"],
+            unique=False,
+            index_type=arcadedb.IndexType.HASH,
+        )
 
         assert idx1 is not None
         assert idx2 is not None

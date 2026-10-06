@@ -443,6 +443,12 @@ jobs:
               exit 1
             fi
 
+            # Any other skip must be one somebody accepted (scripts/check_test_skips.py
+            # names each, with the platform it applies to and why). A skip because the
+            # runtime "lacks" a feature the wheel always ships is how a wrong empty answer
+            # once passed as a skip; the import grep above is the special case.
+            python scripts/check_test_skips.py test-results.xml --platform "${{ matrix.platform }}" || exit 1
+
             # Force failure if there are failures or errors
             if [ "$FAILED" -gt 0 ] || [ "$ERRORS" -gt 0 ]; then
               echo "❌ Tests failed (failures=$FAILED, errors=$ERRORS)"

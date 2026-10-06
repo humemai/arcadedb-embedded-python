@@ -315,17 +315,16 @@ uv run pytest -m "not server"
 uv run pytest -k cypher
 ```
 
-The markers in use are `server`, `server_wire`, and `graph_export`; `integration` is registered
+The markers in use are `server` and `server_wire`; `integration` is registered
 but unused. See [Test Markers](testing/overview.md#test-markers) for which tests each one covers
 and how to leave out every server-starting test.
 
 ### Writing Tests
 
 Use the shared fixtures in `tests/conftest.py` rather than your own temporary directories. A
-server test carries `@pytest.mark.server` and
-`@pytest.mark.skipif(not has_server_support(), reason=...)`. One JVM serves the whole session,
+server test carries `@pytest.mark.server` and does not skip. One JVM serves the whole session,
 and engine-wide settings carry from one test to the next, so run the full suite after adding a
-test. The fixtures, feature guards, optional dependencies, hang diagnostics, and the Bandit rule
+test. The fixtures, what may skip, optional dependencies, hang diagnostics, and the Bandit rule
 are in [Writing a Test for This Suite](testing/best-practices.md#writing-a-test-for-this-suite).
 
 ```python

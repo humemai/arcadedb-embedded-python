@@ -24,7 +24,7 @@ All the tests are in `TestVectorParams`.
 - **test_quantization_none**, **test_quantization_binary**, **test_quantization_product**: the same two checks for `NONE`, `BINARY`, and `PRODUCT`.
 - **test_store_vectors_in_graph_param**: `store_vectors_in_graph=True` shows up as `storeVectorsInGraph` true in the index metadata.
 - **test_add_hierarchy_param**: `add_hierarchy=True` shows up as `addHierarchy` true in the index metadata.
-- **test_encoding_param**: an index on a `BINARY` property with `quantization="NONE", encoding="INT8"` has metadata `encoding == INT8` and `quantizationType == NONE`. It skips if the engine build does not support or expose encoding.
+- **test_encoding_param**: an index on a `BINARY` property with `quantization="NONE", encoding="INT8"` has metadata `encoding == INT8` and `quantizationType == NONE`.
 - **test_encoding_int8_rejects_default_int8_quantization**: `encoding="INT8"` without an explicit quantization raises `ArcadeDBError` naming `encoding='INT8'` and `quantization='INT8'`.
 - **test_per_index_cache_params**: `location_cache_size=123` raises `ValueError` ("no longer supported", removed by the engine in #5559 and #5568); `graph_build_cache_size=456` and `mutations_before_rebuild=789` reach the index metadata as `graphBuildCacheSize == 456` and `mutationsBeforeRebuild == 789`.
 - **test_wrapper_default_matches_engine_default**: the default of `create_vector_index(max_connections=...)` equals `maxConnections` on a freshly constructed engine `LSMVectorIndexMetadata`.

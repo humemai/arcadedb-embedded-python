@@ -2,7 +2,7 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_exporter.py){ .md-button }
 
-The test classes cover JSONL (with type/edge filters), GraphML/GraphSON (skipped if GraphSON support is unavailable), CSV, round-trip (export→import), bulk insert (chunked transactions), and all data types.
+The test classes cover JSONL (with type/edge filters), the error GraphML/GraphSON raise (the wheel has no gremlin module), CSV, round-trip (export→import), bulk insert (chunked transactions), and all data types.
 
 ## Test Classes & Cases
 
@@ -20,9 +20,7 @@ Fixture `sample_db` creates 20 users, 15 movies, 10 actors, 50 Rated edges, 30 A
 
 - **export_invalid_format**: Passes `format="invalid_format"`; asserts raises `ArcadeDBError` with "invalid" or "format".
 
-- **export_graphml/export_graphson**: Both attempt export; if GraphSON support is missing, skip with `pytest.skip(...)`. The wheel excludes the `arcadedb-gremlin` jar that provides these formats (`scripts/jar_exclusions.txt`), and the `skipif` guard looks for an `arcadedb-gremlin` jar, so on a packaged build both tests are skipped.
-
-- **graph_formats_without_gremlin_raise_and_name_jsonl** (parametrized over `graphml` and `graphson`, runs only when `arcadedb-gremlin` is absent, which is the packaged wheel): asserts `export_database` raises `ArcadeDBError` saying the format "requires additional modules" and naming `jsonl`.
+- **graph_formats_without_gremlin_raise_and_name_jsonl** (parametrized over `graphml` and `graphson`; the wheel excludes `arcadedb-gremlin`, which provides both exporters, and Cypher is the supported graph language): asserts `export_database` raises `ArcadeDBError` saying the format "requires additional modules" and naming `jsonl`.
 
 - **export_verbose_levels**: Tests `verbose` parameter (0, 1, 2); asserts `"totalRecords"` in stats for each.
 
@@ -76,7 +74,7 @@ db.command("sql", "IMPORT DATABASE file:///path/to/export.jsonl.tgz")
 ## Key Observations
 
 - Export paths use `exports/` subdirectory relative to cwd
-- Stats keys asserted: `totalRecords`, `vertices`, `edges`, and `documents` (JSONL), and `elapsedInSecs` (GraphML/GraphSON)
-- GraphML/GraphSON skip when GraphSON support is unavailable, which is the case for the packaged wheel; others raise on bad format
+- Stats keys asserted: `totalRecords`, `vertices`, `edges`, and `documents` (JSONL)
+- An unknown or gremlin-only format raises `ArcadeDBError`
 - CSV export supports custom fieldnames and header row
 - Round-trip: file path must use `file://` URL format and forward slashes (cross-platform compat)

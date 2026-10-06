@@ -28,4 +28,4 @@ Ensures disconnected `shortestPath(...)` queries do not produce a misleading mul
 
 ## Runtime Guard
 
-If the packaged runtime does not include `shortestPath`, `dijkstra`, or `astar`, these tests skip instead of reporting a false regression.
+The wheel always ships `shortestPath`, `dijkstra`, and `astar`; a missing one fails these tests.

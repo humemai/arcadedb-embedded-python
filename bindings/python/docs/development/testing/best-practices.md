@@ -213,9 +213,13 @@ except Exception:
 2. **A teardown warns; it never swallows.** A teardown that hides its own failure hides the
    bug with it. `temp_db` shows the pattern: it closes the database if it is still open and
    turns a failed close into a warning.
-3. **Guard optional features** with `has_server_support()` and `has_graph_export_support()`
-   from `tests/conftest.py`, and keep a test that never skips beside the guard, as
-   `test_server_packaging.py` does for the server stack. A server test also carries
+3. **Do not skip on what the wheel ships.** A test for the server stack, OpenCypher, or any
+   other bundled feature runs and fails when the feature is missing: a guard that skips
+   cannot notice the feature going missing (the server JARs left the wheel in 26.7.2 and
+   the guarded tests skipped into a green suite). Skip only for an optional Python package,
+   through `pytest.importorskip` without a custom reason, and leave a file that a platform
+   cannot run out of collection (`collect_ignore` in `tests/conftest.py`); CI fails every
+   skip (`scripts/check_test_skips.py`). A server test carries
    `@pytest.mark.server`.
 4. **One JVM serves the whole session.** A `start_jvm()` call with a different configuration
    raises "already started", and engine-wide settings carry from one test to the next, so
@@ -237,7 +241,7 @@ except Exception:
 import pytest
 
 import arcadedb_embedded as arcadedb
-from tests.conftest import TEST_PASSWORD, has_server_support
+from tests.conftest import TEST_PASSWORD
 
 
 def test_insert_is_visible(temp_db):
@@ -248,7 +252,6 @@ def test_insert_is_visible(temp_db):
 
 
 @pytest.mark.server
-@pytest.mark.skipif(not has_server_support(), reason="Requires server support")
 def test_server_starts(temp_server_root):
     with arcadedb.create_server(temp_server_root, root_password=TEST_PASSWORD) as server:
         assert server.is_started()
