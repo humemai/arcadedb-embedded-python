@@ -405,7 +405,9 @@ jobs:
             ERRORS=$(grep -oE 'errors="[0-9]+"' test-results.xml | grep -oE '[0-9]+' | head -1)
             # JUnit counts an expected failure (a strict xfail: an open upstream bug the suite tracks)
             # as skipped, so a run with 14 of them read "14 skipped". Count them apart from real skips.
-            XFAILED=$(grep -oE 'type="pytest.xfail"' test-results.xml | wc -l | tr -d ' ')
+            # grep exits 1 when nothing matches, and this shell runs with pipefail and -e: a suite with no expected failures
+            # (every upstream bug fixed, no strict xfail left) used to abort the step here, silently, after all tests passed.
+            XFAILED=$({ grep -oE 'type="pytest.xfail"' test-results.xml || true; } | wc -l | tr -d ' ')
 
             # Default to 0 if not found
             TOTAL=${TOTAL:-0}
