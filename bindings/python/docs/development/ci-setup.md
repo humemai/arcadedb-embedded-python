@@ -101,13 +101,16 @@ What must pass before a change is green, beyond the tests themselves:
   `bindings/python/pyproject.toml` (with the `test`, `vector`, `examples`, `arrow`,
   and `pandas` extras) are resolved to their lowest allowed versions for every
   Python version in the classifiers, and `pip-audit` checks the result.
-- **No skips for missing imports** (`test` job): the job fails when a skip reason in the
-  JUnit XML contains `could not import`, which is the reason a `pytest.importorskip` call
-  without its own `reason=` gives. A custom `reason=` or a hand-written `pytest.skip` is not
-  caught, so a test for an optional dependency should call `importorskip` without one. A
-  new test dependency must be added both to the `test` extra in `bindings/python/pyproject.toml`
-  and to the "Install wheel and test dependencies" step of `test-python-bindings.yml`.
-  The repo-root `pyproject.toml` carries the same packages for local runs.
+- **No unaccepted skips** (`test` job): a skipped test did not run, so the job fails when
+  any skip in the JUnit XML has a reason that `scripts/check_test_skips.py` does not list.
+  The list is short and each entry says why the test cannot run on that platform: the
+  Windows file name and SIGINT tests, and the docs-example tests on the upstream pull
+  request branch, which has no `docs/`. A skip for a missing package (`could not import`, which is what
+  `pytest.importorskip` gives, so call it without its own `reason=`) or for a feature the
+  wheel always ships is therefore a failure, and a new test dependency must be added both
+  to the `test` extra in `bindings/python/pyproject.toml` and to the "Install wheel and
+  test dependencies" step of `test-python-bindings.yml`. The repo-root `pyproject.toml`
+  carries the same packages for local runs.
 - **Timeouts**: the pytest step has a 30-minute limit, and `faulthandler_timeout = 600`
   in the pytest configuration dumps every Python thread's stack when a single test runs
   past 10 minutes. A minute earlier, `tests/conftest.py` writes every Java thread's

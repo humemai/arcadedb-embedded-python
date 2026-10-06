@@ -174,14 +174,13 @@ uv run pytest -vv -s
 ## Test Markers
 
 The markers are registered in `bindings/python/pyproject.toml` (`server`, `server_wire`,
-`integration`, and `graph_export`); the repo-root `pyproject.toml` mirrors that block. These are
+and `integration`); the repo-root `pyproject.toml` mirrors that block. These are
 the ones the suite uses:
 
 | Marker | Tests |
 | ------ | ----- |
 | `server` | `test_server_creation`, `test_server_database_operations`, `test_server_custom_config`, and `test_server_context_manager` in `test_server.py`, `test_server_starts_and_serves_http` in `test_server_packaging.py`, and `test_docs_api_access_examples` in `test_docs_examples.py` |
 | `server_wire` | Every test in `test_server_wire_protocols.py` (module-level `pytestmark`) |
-| `graph_export` | `test_export_graphml` and `test_export_graphson` in `test_exporter.py` |
 
 `integration` is registered, but no test uses it.
 
@@ -208,37 +207,29 @@ uv run pytest -m "not server and not server_wire" \
 
 ## Expected Output
 
-A passing run ends with a summary of the form `N passed, M skipped`, with no failures or
-errors. On the shipped wheel some tests always skip: `test_export_graphml` and
-`test_export_graphson` (the wheel excludes arcadedb-gremlin), and, everywhere except Windows,
-`test_faulthandler_is_off_on_windows`. Run with `-rs` to see why each test skipped.
+A passing run ends with a summary of the form `N passed, M skipped, K xfailed`, with no
+failures or errors. The strict xfails are the engine bugs listed on the Known Engine Issues
+page; on Linux and macOS nothing skips. Run with `-rs` to see why a test skipped.
 
 ## Skips
 
-Beyond the tests above, a test skips when what it needs is missing:
+A skip is a test that did not run, so the suite keeps them to what cannot run:
 
+- **The platform**: on Windows, `test_importer_api.py` skips a file name with a question mark and
+  `test_sigint.py` skips its child-process interrupts.
+- **The upstream pull request branch has no `docs/`**: `test_docs_examples.py` skips there.
 - **An optional Python package**: numpy, pandas, pyarrow, requests, psycopg,
-  adbc-driver-postgresql, or neo4j.
-- **Server support**: the tests marked `server` in `test_server.py` and
-  `test_docs_api_access_examples` skip when the wheel carries no Studio JAR.
-  `test_server_packaging.py` fails instead, so a wheel without the server stack cannot pass
-  quietly.
-- **An engine feature the runtime lacks**: OpenCypher and some of its clauses, the geo and
-  graph-algorithm SQL functions, `CREATE TIMESERIES TYPE`, the HASH index type, some vector
-  index options, and the Neo4j, Word2Vec, and RDF importers. Most of these skip on the error
-  the engine raises. The OpenCypher `collect`/`UNWIND` and pattern-comprehension tests skip
-  when the query returns no rows or a null, so a wrong empty answer shows up as a skip.
-- **A file outside the package**: `bindings/python/docs` (the docs-example tests),
-  `examples/11_vector_index_build.py`, the importer fixtures under
-  `integration/src/test/resources/`, and `benchmarks/experiments` (the JVM-payload check).
-- **The platform**: the XML and RDF import tests skip on their known Windows parse failures.
+  adbc-driver-postgresql, or neo4j, through `pytest.importorskip`, so a missing one is
+  visible to the CI gate below.
 
-CI fails the job when a skip reason contains "could not import", the default reason of
-`pytest.importorskip`, so most missing packages are caught. A skip with its own reason (the
-pyarrow module skip in `test_resultset_arrow.py`, the numpy `skipif` in
-`test_numpy_support.py`) or a hand-written `pytest.skip` (the requests check in
-`test_server_patterns.py`) is not caught, and none of the other conditions above fails the
-job. See [CI Gates](../ci-setup.md#ci-gates).
+A test never skips because the engine or the wheel lacks a feature it ships (OpenCypher,
+geo and graph-algorithm SQL functions, time series, the HASH index, vector encodings, the
+importers, the server stack): that is a failure. Earlier versions of these tests skipped on
+the engine's error or on an empty answer, which let a wrong empty answer pass as a skip.
+
+CI enforces this: the `test` job runs `scripts/check_test_skips.py` over the JUnit XML and
+fails on any skip whose reason is not on its short list (`tests/test_check_test_skips.py`
+tests the gate). See [CI Gates](../ci-setup.md#ci-gates).
 
 ## Next Steps
 

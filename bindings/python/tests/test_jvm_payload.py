@@ -20,26 +20,21 @@ workflow of its own.
 import os
 import sys
 
-import pytest
-
 _REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 _CHECK_DIR = os.path.join(_REPO, "benchmarks", "experiments")
 
 
 def _load():
-    """Import the checker, or skip when the benchmark tree is not checked out.
+    """Import the checker from benchmarks/experiments.
 
-    The bindings are distributed without benchmarks/, so a user running the
-    suite from an sdist must not see a failure for a file they do not have.
+    This file stays in the fork (make-upstream-pr-branch.sh excludes it), and the
+    fork's checkout always has benchmarks/, so a missing checker is a failure.
     """
-    if not os.path.isdir(_CHECK_DIR):
-        pytest.skip("benchmarks/experiments is not checked out")
+    assert os.path.isdir(_CHECK_DIR), f"{_CHECK_DIR} is not checked out"
     if _CHECK_DIR not in sys.path:
         sys.path.insert(0, _CHECK_DIR)
-    try:
-        import jvm_payload_check
-    except ImportError:  # pragma: no cover
-        pytest.skip("jvm_payload_check.py is not present")
+    import jvm_payload_check
+
     return jvm_payload_check
 
 

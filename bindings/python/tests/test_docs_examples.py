@@ -7,7 +7,6 @@ import textwrap
 from pathlib import Path
 
 import pytest
-from tests.conftest import has_server_support
 
 DOCS_ROOT = Path(__file__).resolve().parents[1] / "docs"
 PYTHON_BLOCK_RE = re.compile(r"```python\n(.*?)```", re.DOTALL)
@@ -372,7 +371,6 @@ def test_docs_index_and_quickstart_examples(temp_dir_factory):
 
 
 @pytest.mark.server
-@pytest.mark.skipif(not has_server_support(), reason="Requires server support")
 def test_docs_api_access_examples(temp_dir_factory):
     """Every access path documented in api-access-methods.md actually runs.
 

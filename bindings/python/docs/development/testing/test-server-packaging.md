@@ -14,15 +14,11 @@ A JAR is present for each of `arcadedb-server`, `arcadedb-studio`, `undertow-cor
 
 create_server / ArcadeDBServer are importable AND in __all__.
 
-### 3) has server support agrees with reality
-
-`has_server_support()`, the skip guard the other server tests rely on, returns True exactly when a studio JAR is present.
-
-### 4) studio jar carries no classes
+### 3) studio jar carries no classes
 
 The studio JAR is present and contains no `.class` entries: Studio is static assets only, which is why bundling it is cheap.
 
-### 5) server starts and serves http
+### 4) server starts and serves http
 
 Marked `server`; skips without `requests`. The bundled server starts, and `GET /api/v1/server` returns 200 with a `version` field.
 
