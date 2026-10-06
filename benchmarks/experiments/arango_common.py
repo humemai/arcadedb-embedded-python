@@ -136,17 +136,50 @@ def recall_target(scale: str) -> tuple[float, str]:
     return FALLBACK_RECALL_TARGET, "fallback constant (no frozen row at this scale)"
 
 
+# THE EXHAUSTIVE-PROBE CHECK (CAMPAIGN section 7 row 66, DECISIONS #156, BUGS F175). On ArangoDB
+# 3.12.11, once an IVF index had 10,000 or more lists every multithreaded query probed ONE list,
+# so a probe of all lists answered at recall 0.0. The calibration escalated to nProbe = nLists,
+# the row finished "ok", and each repetition probed every list for 1.5 h to record nothing.
+# Recall at nProbe = nLists is the one number an index that answers at all must clear, so it is
+# read FIRST, on a few held-out queries, before the search and before any timed pass.
+#
+# The floor is FIXED at 0.5, not the calibration target: a healthy exhaustive probe reads 0.995
+# against a 0.9886 target (one miss of margin; the shipped ground truth has ties), so a floor at
+# the target would stop a sound index. 0.5 is far below any working IVF and far above the 0.0
+# of the defect. The check reads 20 queries because a probe of every list is the slow call.
+EXHAUSTIVE_RECALL_FLOOR = 0.5
+EXHAUSTIVE_CHECK_QUERIES = 20
+
+
+class IndexNotAnswering(RuntimeError):
+    """The vector index answers below the floor even when every list is probed."""
+
+
 def calibrate_nprobe(search_fn, queries, gt, target: float, nlists: int, k: int = 10):
     """Smallest nProbe in [1, nlists] whose recall@k on `queries` reaches
     `target`, by binary search (recall is monotone in nProbe for IVF). Returns
     (nprobe, recall at it). If even nlists misses the target, returns nlists
-    and its recall, and the row shows the shortfall."""
-    def recall(np_):
+    and its recall, and the row shows the shortfall.
+
+    Raises IndexNotAnswering, before the search, when recall at nProbe = nlists
+    on the first EXHAUSTIVE_CHECK_QUERIES queries is below EXHAUSTIVE_RECALL_FLOOR:
+    that is an index that does not answer, and no nProbe repairs it."""
+    def recall(np_, qs=queries, gs=gt):
         hit = 0
-        for q, g in zip(queries, gt):
+        for q, g in zip(qs, gs):
             ids = search_fn(q, k, np_)
             hit += len(set(ids[:k]) & set(int(x) for x in g[:k]))
-        return hit / (k * len(queries))
+        return hit / (k * len(qs))
+    probe_q = list(queries)[:EXHAUSTIVE_CHECK_QUERIES]
+    probe_g = list(gt)[:EXHAUSTIVE_CHECK_QUERIES]
+    if probe_q:
+        r_all = recall(nlists, probe_q, probe_g)
+        if r_all < EXHAUSTIVE_RECALL_FLOOR:
+            raise IndexNotAnswering(
+                f"arangodb: recall@{k} is {r_all:.4f} at nProbe = nLists = {nlists} on "
+                f"{len(probe_q)} held-out queries, below the floor {EXHAUSTIVE_RECALL_FLOOR}: the index "
+                f"does not answer (3.12.11 probed one list per query from 10,000 lists), so the cell "
+                f"stops here instead of probing every list for each timed query")
     lo, hi = 1, nlists
     best = (nlists, None)
     while lo <= hi:
@@ -170,7 +203,7 @@ def vector_index(col, field: str, dim: int, n: int, metric: str = "l2",
     `factory`, when given, is a FAISS index factory string formatted with
     `nlists` (the int8 arm's "IVF{nlists},SQ8"): the same IVF partitioning,
     with the inverted lists holding 8-bit scalar-quantized codes instead of the
-    floats. Accepted, trained and answering on the pinned 3.12.11 (laptop probe
+    floats. Accepted, trained and answering on 3.12.11 (laptop probe
     2026-10-02, 20,000 SIFT vectors at nLists 566: plain IVF recall@10 0.9985
     at nProbe 64, SQ8 0.9905); the server keeps the string in the index's
     params, which index_readback returns."""

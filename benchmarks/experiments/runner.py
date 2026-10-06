@@ -940,7 +940,7 @@ BACKENDS = {
     # Python SDK (core 2.3.10 through SDK 2.0.0, on its SurrealKV disk store, in the client
     # container) and served (3.2.4 on RocksDB). One engine, both modes, like
     # ArcadeDB.
-    # ArangoDB 3.12.11 (2026-09-13, DECISIONS #78), served only: python-arango
+    # ArangoDB (3.12.11 from 2026-09-13, DECISIONS #78; 3.12.12 from the 26.10.1 measurement, DECISIONS #156), served only: python-arango
     # is an HTTP client and the engine has no in-process mode, so one row per
     # table, like MongoDB. Root password through the image's own env;
     # --vector-index true is the 3.12 opt-in for the vector (FAISS IVF) index
@@ -950,7 +950,7 @@ BACKENDS = {
     "arangodb_tpc": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "arangodb@sha256:563cb2c07af0aead37fd688b58f51d6eb534a3da6163621e130e67d7a55176c4",  # 3.12.11
+        "server_image": "arangodb@sha256:4bc086d5050ca7ea11c6d00a36d8b910c838bb54ad553f8c1b715769d3499bcf",  # 3.12.12
         "server_env": ["-e", "ARANGO_ROOT_PASSWORD=dbbenchpass"],
         "server_cmd": ["arangod", "--vector-index", "true"],
         "server_port": 8529,
@@ -959,7 +959,7 @@ BACKENDS = {
     "arangodb_graph": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "arangodb@sha256:563cb2c07af0aead37fd688b58f51d6eb534a3da6163621e130e67d7a55176c4",  # 3.12.11
+        "server_image": "arangodb@sha256:4bc086d5050ca7ea11c6d00a36d8b910c838bb54ad553f8c1b715769d3499bcf",  # 3.12.12
         "server_env": ["-e", "ARANGO_ROOT_PASSWORD=dbbenchpass"],
         "server_cmd": ["arangod", "--vector-index", "true"],
         "server_port": 8529,
@@ -968,7 +968,7 @@ BACKENDS = {
     "arangodb_dense": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "arangodb@sha256:563cb2c07af0aead37fd688b58f51d6eb534a3da6163621e130e67d7a55176c4",  # 3.12.11
+        "server_image": "arangodb@sha256:4bc086d5050ca7ea11c6d00a36d8b910c838bb54ad553f8c1b715769d3499bcf",  # 3.12.12
         "server_env": ["-e", "ARANGO_ROOT_PASSWORD=dbbenchpass"],
         "server_cmd": ["arangod", "--vector-index", "true"],
         "server_port": 8529,
@@ -978,7 +978,7 @@ BACKENDS = {
     "arangodb_dense_int8": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "arangodb@sha256:563cb2c07af0aead37fd688b58f51d6eb534a3da6163621e130e67d7a55176c4",  # 3.12.11
+        "server_image": "arangodb@sha256:4bc086d5050ca7ea11c6d00a36d8b910c838bb54ad553f8c1b715769d3499bcf",  # 3.12.12
         "server_env": ["-e", "ARANGO_ROOT_PASSWORD=dbbenchpass"],
         "server_cmd": ["arangod", "--vector-index", "true"],
         "server_port": 8529,
@@ -987,7 +987,7 @@ BACKENDS = {
     "arangodb_e2": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "arangodb@sha256:563cb2c07af0aead37fd688b58f51d6eb534a3da6163621e130e67d7a55176c4",  # 3.12.11
+        "server_image": "arangodb@sha256:4bc086d5050ca7ea11c6d00a36d8b910c838bb54ad553f8c1b715769d3499bcf",  # 3.12.12
         "server_env": ["-e", "ARANGO_ROOT_PASSWORD=dbbenchpass"],
         "server_cmd": ["arangod", "--vector-index", "true"],
         "server_port": 8529,
@@ -1098,7 +1098,7 @@ BACKENDS = {
     "arangodb_ts": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "arangodb@sha256:563cb2c07af0aead37fd688b58f51d6eb534a3da6163621e130e67d7a55176c4",  # 3.12.11
+        "server_image": "arangodb@sha256:4bc086d5050ca7ea11c6d00a36d8b910c838bb54ad553f8c1b715769d3499bcf",  # 3.12.12
         "server_env": ["-e", "ARANGO_ROOT_PASSWORD=dbbenchpass"],
         "server_cmd": ["arangod", "--vector-index", "true"],
         "server_port": 8529,

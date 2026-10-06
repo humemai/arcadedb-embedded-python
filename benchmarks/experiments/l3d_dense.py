@@ -1794,8 +1794,9 @@ class ArangoDenseInt8(ArangoDense):
     The lists hold SQ8 codes and FAISS ranks by the distance to them; nothing
     re-ranks against the stored floats. ArangoDB forwards `factory` to FAISS
     and validates it at creation only from 3.12.12 (its 3.12 vector-index
-    docs), so on the 3.12.11 pin the training state and the read-back factory
-    string are the only evidence the server built what the row says."""
+    docs; the 26.10.1 measurement runs 3.12.12, before it 3.12.11 did not), so
+    the training state and the read-back factory string stay the evidence that
+    the server built what the row says."""
     quantization = "INT8"
     name = "arangodb_dense_int8"
     FACTORY = "IVF{nlists},SQ8"
