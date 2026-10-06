@@ -1472,8 +1472,18 @@ class ArangoTPC:
         arango_common.close(self.cl)
 
 
+# THE SENSITIVITY ARM AT THE IMAGE'S OWN JVM DEFAULTS (CAMPAIGN 7 row 69). The
+# adapter is the served arm's, unchanged: only the SERVER container differs (it is
+# started without ARCADEDB_OPTS_MEMORY and ARCADEDB_OPTS_GC, runner.py
+# `_at_image_jvm_defaults`), so the heap and the collector are the image's and
+# nothing on this side of the wire changes. A subclass, like the tuned PostgreSQL
+# arm above, so argparse's --backend choices stay honest.
+class ArcadeServerImgDefaultsTPC(ArcadeServerTPC):
+    name = "arcadedb_imgdefaults_server"
+
+
 BACKENDS = {c.name: c for c in (DuckTPC, SQLiteTPC, MongoTPC, SurrealTPC, SurrealServedTPC, ArangoTPC, PostgresTPC, PostgresTunedTPC,
-                                ArcadeTPC, ArcadeServerTPC)}
+                                ArcadeTPC, ArcadeServerTPC, ArcadeServerImgDefaultsTPC)}
 
 
 def main():

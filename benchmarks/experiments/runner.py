@@ -1550,6 +1550,44 @@ BACKENDS["arcadedb_ts_native_server"] = dict(BACKENDS["arcadedb_server"])
 # client is the wheel image and the server the pinned one.
 BACKENDS["arcadedb_e4"] = dict(BACKENDS["arcadedb_server"], image="dbbench:arcadedb")
 
+
+# THE SENSITIVITY ARM AT THE IMAGE'S OWN JVM DEFAULTS (CAMPAIGN 7 row 69, DECISIONS
+# #159). Every served ArcadeDB arm above sets ARCADEDB_OPTS_MEMORY to
+# `-Xms{heap} -Xmx{heap}` and clears ARCADEDB_OPTS_GC, so that the embedded-versus-
+# served comparison isolates transport: one JVM configuration on both deployments
+# (G1, a heap half the cell's memory, -Xms equal to -Xmx). ArcadeDB's maintainers
+# answered (ArcadeData/arcadedb#9167) that the image's own defaults are a heap of
+# 75% of the container limit, generational ZGC, and no -Xms. This arm is started
+# WITHOUT those two variables, so the image applies exactly that, and it is printed
+# beside the main arm on one lane (documents OLTP, served, the 2M-part cell, three
+# repetitions; ARM_WORKLOADS keeps it off the analytics workload). It is DERIVED
+# from arcadedb_server rather than copied, so every other setting (the root
+# password, the default database, the query cap, the build cache, the compact
+# object headers, the strict-class flag) is the main arm's by construction and the
+# only differences are the heap and the collector. `jvm_defaults` tells the cell to
+# read the JVM's flags back from the running process (server_jvm_readback) and to
+# stop claiming the tier heap on the row.
+def _at_image_jvm_defaults(cfg):
+    out = dict(cfg)
+    env, kept, dropped, i = list(cfg["server_env"]), [], [], 0
+    while i < len(env):
+        if (env[i] == "-e" and i + 1 < len(env)
+                and str(env[i + 1]).startswith(("ARCADEDB_OPTS_MEMORY=", "ARCADEDB_OPTS_GC="))):
+            dropped.append(str(env[i + 1]).split("=", 1)[0])
+            i += 2
+            continue
+        kept.append(env[i])
+        i += 1
+    if sorted(dropped) != ["ARCADEDB_OPTS_GC", "ARCADEDB_OPTS_MEMORY"]:
+        raise SystemExit("arcadedb_server no longer sets ARCADEDB_OPTS_MEMORY and ARCADEDB_OPTS_GC, so the "
+                         f"image-defaults arm cannot be derived from it (dropped {dropped})")
+    out["server_env"] = kept
+    out["jvm_defaults"] = True
+    return out
+
+
+BACKENDS["arcadedb_imgdefaults_server"] = _at_image_jvm_defaults(BACKENDS["arcadedb_server"])
+
 # ---------------------------------------------------------------- local engine
 # FAST-ITERATION MODE. The project page is no longer pinned to a PyPI release: the
 # embedded arm can be a wheel built from a specific commit of this fork. When it is,
@@ -1712,8 +1750,8 @@ LANES = {
             "mongodb_graph", "memgraph_graph", "falkordb_graph", "duckpgq_graph", "pgage_graph"],
            ["oltp", "olap"]),
     "l1tpc": ("l1_tpc.py",
-              ["arcadedb_embedded", "arcadedb_server", "duckdb", "sqlite", "mongodb", "surrealdb_tpc",
-               "surrealdb_tpc_server", "arangodb_tpc", "postgres", "postgres_tuned"],
+              ["arcadedb_embedded", "arcadedb_server", "arcadedb_imgdefaults_server", "duckdb", "sqlite", "mongodb",
+               "surrealdb_tpc", "surrealdb_tpc_server", "arangodb_tpc", "postgres", "postgres_tuned"],
               ["oltp", "olap"]),
     "e2": ("e2_hybrid.py",
            ["arcadedb_e2", "arcadedb_e2_server", "surrealdb_e2", "surrealdb_e2_server",
@@ -2402,6 +2440,68 @@ def observe_server(cid):
     return out
 
 
+def server_jvm_readback(cid):
+    """The JVM flags a served ArcadeDB is RUNNING with, read from the running
+    process and from the JVM itself (CAMPAIGN 7 row 69).
+
+    The container's environment says what the launcher passed; the image's own
+    defaults fill in what it did not (ARCADEDB_OPTS_MEMORY and ARCADEDB_OPTS_GC
+    are ENV entries of the image, and `bin/server.sh` execs java, so PID 1 is the
+    JVM). Two reads, both outside every timer and before the client starts:
+    `/proc/1/cmdline` is what the JVM was launched with, and `jcmd 1 VM.flags` is
+    what it settled on (its maximum and initial heap in bytes, its collector).
+    Anything unreadable is recorded as a reason and never ends a cell; the cell
+    that needs the answer (the image-defaults arm) checks it where it is used.
+    """
+    out = {}
+    try:
+        cmd = subprocess.run(["docker", "exec", cid, "sh", "-c", "tr '\\0' ' ' < /proc/1/cmdline"],
+                             capture_output=True, text=True, timeout=30).stdout.strip()
+        # the JVM's own option flags only, in launch order (not -D properties, which carry the password)
+        out["server_jvm_flags"] = " ".join(t for t in cmd.split() if re.match(r"-X[a-zA-Z]|-XX:", t))
+        vm = subprocess.run(["docker", "exec", cid, "jcmd", "1", "VM.flags"],
+                            capture_output=True, text=True, timeout=30).stdout
+        mx = re.search(r"-XX:MaxHeapSize=(\d+)", vm)
+        ms = re.search(r"-XX:InitialHeapSize=(\d+)", vm)
+        if mx:
+            out["server_jvm_max_heap_bytes"] = int(mx.group(1))
+        if ms:
+            out["server_jvm_initial_heap_bytes"] = int(ms.group(1))
+        if "-XX:+UseZGC" in vm:
+            out["server_jvm_gc"] = "ZGC generational" if "-XX:+ZGenerational" in vm else "ZGC"
+        elif "-XX:+UseG1GC" in vm:
+            out["server_jvm_gc"] = "G1"
+        elif "-XX:+UseParallelGC" in vm:
+            out["server_jvm_gc"] = "Parallel"
+        elif "-XX:+UseSerialGC" in vm:
+            out["server_jvm_gc"] = "Serial"
+        if not mx or "server_jvm_gc" not in out:
+            out["server_jvm_readback_error"] = "jcmd VM.flags did not report the heap and the collector"
+    except Exception as e:  # noqa: BLE001 - recorded, never swallowed
+        out["server_jvm_readback_error"] = f"{type(e).__name__}: {e}"
+    return out
+
+
+def image_defaults_findings(row, server_mem):
+    """What the image-defaults arm must show for the cell to be the one asked for:
+    a heap of 75% of the container limit, generational ZGC, and no -Xms. Returns
+    [] when it does, else the reasons. Held to the JVM's own answer, not to the
+    environment the launcher built."""
+    bad = []
+    mx = row.get("server_jvm_max_heap_bytes")
+    want = server_mem * 0.75
+    if mx is None:
+        bad.append("no heap read back from the JVM")
+    elif abs(mx - want) > 0.02 * want:
+        bad.append(f"max heap {mx} bytes where 75% of the {server_mem}-byte limit is {int(want)}")
+    if row.get("server_jvm_gc") != "ZGC generational":
+        bad.append(f"collector {row.get('server_jvm_gc')!r}, expected 'ZGC generational'")
+    flags = str(row.get("server_jvm_flags") or "")
+    if re.search(r"-Xm[sx]", flags):
+        bad.append(f"-Xms/-Xmx on the command line ({flags[:120]!r})")
+    return bad
+
+
 def arcadedb_cap_readback(cid, envs, from_env):
     """The query cap a served ArcadeDB runs with, asked of the engine.
 
@@ -2550,8 +2650,8 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
            # Deliberately keyed on the backend NAME rather than a flag, so
            # adding a JVM comparator without listing it here fails loudly as a
            # missing heap rather than quietly as an unchecked one.
-           **({"heap": heap} if any(t in job["backend"] for t in JVM_BACKENDS)
-              else {}),
+           **({"heap": (None if be.get("jvm_defaults") else heap)}
+              if any(t in job["backend"] for t in JVM_BACKENDS) else {}),
            "mem_cap": MEM_BY_SCALE[scale],
            "ts_utc": datetime.now(timezone.utc).isoformat()}
 
@@ -2656,6 +2756,18 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             # container was created with something else, which is the failure
             # mode behind "server:latest" and the dev22-stamped dev20 run.
             row.update(observe_server(server_cid))
+            # THE JVM FLAGS THE SERVED ARCADEDB RUNS, read from the process (CAMPAIGN 7
+            # row 69): on every served ArcadeDB arm, so the main arms' G1 and fixed heap
+            # are evidence beside the image-defaults arm's ZGC and 75%.
+            if "arcadedb" in job["backend"]:
+                row.update(server_jvm_readback(server_cid))
+            if be.get("jvm_defaults"):
+                row["server_jvm_defaults"] = True
+                _bad = image_defaults_findings(row, server_mem)
+                if _bad:
+                    row["error"] = ("image-defaults arm is not at the image's defaults: " + "; ".join(_bad)
+                                    + "; the cell is not the one we specified")
+                    return row
             if row.get("server_heap") and row["server_heap"] != heap:
                 row["error"] = (f"server heap {row['server_heap']} != requested "
                                 f"{heap}; the cell is not the one we specified")
@@ -2842,8 +2954,11 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                # they were reporting ArcadeDB's tier heap instead, so its
                # "engines that have a heap" carve-out never fired and the JVM
                # count it prints was not a count of anything.
+               # NOT FOR THE IMAGE-DEFAULTS ARM (CAMPAIGN 7 row 69): its JVM takes 75% of
+               # the container limit, so the tier heap is not its heap, and the driver
+               # stamps `heap` from this variable over the runner's row.
                + (["-e", f"ARCADEDB_HEAP={heap}"]
-                  if "arcadedb" in job["backend"] else [])
+                  if "arcadedb" in job["backend"] and not be.get("jvm_defaults") else [])
                + ["-e", f"RUN_LABEL={run_id}",
                   "-v", f"{HERE}:/work", "-w", "/work", "-v", f"{DATA}:/data:ro"]
                # The lifecycle lane's database must live on a real filesystem
@@ -3253,6 +3368,22 @@ def split_cpuset(cpuset, n):
     return shards
 
 
+# ARMS THAT RUN ON ONE WORKLOAD OF THEIR LANE ONLY (CAMPAIGN 7 row 69). A lane
+# registers its arms once, for every workload it defines, and the stage generator,
+# the page's roster gate, and the runner all read that. The image-defaults arm is a
+# sensitivity arm for the documents transaction workload and must not run (or be
+# expected) on the analytics one. {backend: {lane: workloads}}; an arm absent from
+# the map runs on every workload of its lane, as before.
+ARM_WORKLOADS = {"arcadedb_imgdefaults_server": {"l1tpc": ("oltp",)}}
+
+
+def arm_runs(lane, workload, backend):
+    """Does this arm run this workload of this lane? True for every arm not in
+    ARM_WORKLOADS."""
+    only = ARM_WORKLOADS.get(backend, {}).get(lane)
+    return only is None or workload in only
+
+
 def build_jobs(lanes, workloads_arg):
     """Jobs for these lanes, optionally narrowed to some workloads.
 
@@ -3277,6 +3408,8 @@ def build_jobs(lanes, workloads_arg):
         for be in backends:
             for wl in workloads:
                 if want and wl not in want:
+                    continue
+                if not arm_runs(lane, wl, be):
                     continue
                 jobs.append({"lane": lane, "backend": be, "workload": wl,
                              "script": script,

@@ -55,6 +55,86 @@ SERVER_MEM_FRACTION_DEFAULT = 0.75
 # not there and invites them to distrust the rest.
 DISCLOSED = {}
 
+# THE ONE ARM THAT DIFFERS FROM THE OTHERS ON PURPOSE (CAMPAIGN 7 row 69). Every
+# served ArcadeDB arm runs ONE JVM configuration so that the embedded-versus-served
+# comparison isolates transport: the JVM's default collector (G1) and a heap of half
+# the cell's memory with -Xms equal to -Xmx. The arm below is started without those
+# settings and runs the vendor image's own defaults instead (ArcadeDB's maintainers,
+# ArcadeData/arcadedb#9167): a heap of 75% of the container limit, the generational
+# ZGC collector, and no -Xms. It changes the heap, the collector, and the warm-up
+# of the heap together, so it is NOT comparable with the main arm's heap column and
+# it is not an F3 envelope violation: the memory CAP is the same, only the heap the
+# JVM takes inside it differs. It is declared, printed beside the main arm on one lane
+# (documents OLTP, served, the 2M-part cell), and checked against what the JVM itself
+# reports. A backend runner.BACKENDS marks `jvm_defaults` and this map does not name
+# (or the reverse) fails the gate, so an arm cannot join without saying so.
+JVM_DEFAULTS_ARMS = {
+    "arcadedb_imgdefaults_server": "the vendor image's own JVM settings (a heap of 75% of the "
+                                   "container limit, generational ZGC, no -Xms) beside the main "
+                                   "arm's G1 and fixed half-memory heap, documents OLTP, 2M parts",
+}
+
+
+def check_jvm_defaults_arms(rows=None):
+    """The image-defaults arm is declared, and where rows exist its JVM is what it says.
+
+    Static half (needs no rows): runner.BACKENDS marks an arm `jvm_defaults` exactly
+    when JVM_DEFAULTS_ARMS names it, and that arm's server_env sets neither
+    ARCADEDB_OPTS_MEMORY nor ARCADEDB_OPTS_GC (the whole point: the image applies its
+    own). Row half: every row of the arm carries the stamp `server_jvm_defaults` and
+    the JVM's own report of a heap of 75% of the server's cap, the generational ZGC
+    collector, and no -Xms/-Xmx on its command line; no other row claims the stamp.
+    Returns the failure count."""
+    import runner
+    print("=== F3b: the image-defaults arm is declared, and ran at the image's defaults ===")
+    bad = 0
+    marked = {n for n, c in runner.BACKENDS.items() if c.get("jvm_defaults")}
+    for n in sorted(marked - set(JVM_DEFAULTS_ARMS)):
+        print(f"  FAIL {n}: runner.BACKENDS marks it jvm_defaults and fairness_check.JVM_DEFAULTS_ARMS "
+              f"does not declare it; an arm that runs other settings than its siblings says so here")
+        bad += 1
+    for n in sorted(set(JVM_DEFAULTS_ARMS) - marked):
+        print(f"  FAIL {n}: declared in JVM_DEFAULTS_ARMS and not marked jvm_defaults in runner.BACKENDS")
+        bad += 1
+    for n in sorted(marked & set(JVM_DEFAULTS_ARMS)):
+        env = " ".join(str(x) for x in runner.BACKENDS[n].get("server_env", []))
+        leaked = [k for k in ("ARCADEDB_OPTS_MEMORY", "ARCADEDB_OPTS_GC") if k in env]
+        if leaked:
+            print(f"  FAIL {n}: sets {leaked}, so the image's defaults do not apply")
+            bad += 1
+    judged = 0
+    for r in rows or []:
+        be = str(r.get("backend"))
+        stamped = str(r.get("server_jvm_defaults")).lower() in ("true", "1")
+        if be in JVM_DEFAULTS_ARMS:
+            judged += 1
+            where = f"{r.get('lane')} {r.get('scale')} {r.get('workload')} {be} rep {r.get('rep')}"
+            if not stamped:
+                print(f"  FAIL {where}: no `server_jvm_defaults` stamp")
+                bad += 1
+                continue
+            mx, cap = r.get("server_jvm_max_heap_bytes"), _gib(r.get("server_mem_cap"))
+            try:
+                mx = float(mx)
+            except (TypeError, ValueError):
+                mx = None
+            if mx is None or cap is None or abs(mx - 0.75 * cap * (1 << 30)) > 0.02 * 0.75 * cap * (1 << 30):
+                print(f"  FAIL {where}: the JVM reports a heap of {r.get('server_jvm_max_heap_bytes')} bytes in a "
+                      f"{r.get('server_mem_cap')} container; the image default is 75% of the limit")
+                bad += 1
+            if r.get("server_jvm_gc") != "ZGC generational":
+                print(f"  FAIL {where}: collector {r.get('server_jvm_gc')!r}, the image default is generational ZGC")
+                bad += 1
+            if re.search(r"-Xm[sx]", str(r.get("server_jvm_flags") or "")):
+                print(f"  FAIL {where}: -Xms or -Xmx on the command line, so the image's defaults do not apply")
+                bad += 1
+        elif stamped:
+            print(f"  FAIL {r.get('lane')} {be}: claims `server_jvm_defaults` and is not a declared arm")
+            bad += 1
+    if not bad:
+        print(f"  ok   {len(marked)} arm(s) declared; {judged} row(s) held to the JVM's own report")
+    return bad
+
 
 # DECISIONS #86. Declared here because _dense_rows() below reads it: a laptop
 # skeleton has no bench-host overlay to open.
@@ -337,6 +417,13 @@ def check_envelope(rows):
     noheap = collections.defaultdict(set)
     for r in rows:
         h, m = _total_envelope(r)
+        # THE DECLARED IMAGE-DEFAULTS ARM (JVM_DEFAULTS_ARMS): the memory CAP is judged
+        # with everyone else's, its heap is not (it is 75% of the cap on purpose, and
+        # F3b holds it to that against the JVM's own report), so it is not a "no
+        # witness" gap either.
+        if str(r.get("backend")) in JVM_DEFAULTS_ARMS:
+            g[(r["lane"], r["scale"])][r["backend"]].add(("n/a", m))
+            continue
         # A JVM heap is only comparable between engines that HAVE one. Qdrant,
         # Milvus, LanceDB and sqlite-vec are Rust/Go/C and report heap=None;
         # calling that a mismatched envelope against ArcadeDB's 24g compares a
@@ -882,6 +969,7 @@ INDEX_DECISIONS = {
     "l1tpc": {
         "arcadedb_embedded":    "l_shipdate: 870.7 -> 141.7 ms, 6.1x",
         "arcadedb_server":      "l_shipdate: the embedded arm's measurement, same engine and schema",
+        "arcadedb_imgdefaults_server": "l_shipdate: the main served arm's measurement, same adapter and schema",
         "postgres":             "l_shipdate: 726 -> 290 ms, 2.5x (added 2026-09-22)",
         "postgres_tuned":       "l_shipdate: inherits PostgresTPC",
         "surrealdb_tpc":        "l_shipdate before the load: 4016 -> 1062 ms, 3.8x",
@@ -1343,6 +1431,7 @@ def main():
         bad = 0
     else:
         bad = check_cpuset(rows) + check_envelope(rows)
+    bad += check_jvm_defaults_arms(rows)
     bad += check_degree(rows)
     bad += check_close_cost(rows)
     bad += check_durability(rows)

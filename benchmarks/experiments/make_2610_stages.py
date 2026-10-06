@@ -95,6 +95,12 @@ import l6_restart as _RS  # noqa: E402
 RESTART_BY_MODEL = {m: tuple(b for b in runner.LANES["restart"][1] if _RS.MODEL[b] == m)
                     for m in ("docs", "graph", "dense", "ts")}
 RESTART_ENV = ("BENCH_RS_ITERS=5", "BENCH_RS_WARMUP=1", "BENCH_RS_WRITE_N=1000")
+# THE SENSITIVITY ARM (CAMPAIGN 7 row 69): the arms runner.ARM_WORKLOADS restricts to one
+# workload. The main documents stage leaves them out, and a stage of their own runs them
+# where the row says: documents OLTP, served, the 2M-part cell (tpch10), three repetitions,
+# the relaxed class only (the page prints the arm beside the main arm on the relaxed table).
+SENSITIVITY_ARMS = tuple(sorted(runner.ARM_WORKLOADS))
+DOCS_MAIN_ARMS = [b for b in runner.LANES["l1tpc"][1] if b not in SENSITIVITY_ARMS]
 # id, title, lane, workloads, scales, guards, extra, stage_env, only, dur_mode, after
 STAGES = [
     ("qRA", "graph INTERACTIVE at both sizes, both durability classes", "l2", ["oltp"], ["sf1", "sf10"],
@@ -104,7 +110,7 @@ STAGES = [
     ("qRC", "cross-model at both sizes, both durability classes", "e2", ["hybrid", "atomicity"],
      ["e2", "e2_500k"], _october("qOD")[5], {}, []),
     ("qRD", "documents, both tables, at both sizes", "l1tpc", ["oltp", "olap"], ["tpch1", "tpch10"],
-     _october("qOE")[5], {}, []),
+     _october("qOE")[5], {}, [], DOCS_MAIN_ARMS),
     ("qRE", "dense vector at both sizes, with the multipass overlay", "l3d", ["search"],
      ["small", "deep10m"], [], {}, []),
     ("qRF", "sparse vector at three sizes, with the second pass", "l3s", ["search"],
@@ -131,6 +137,12 @@ STAGES = [
      [_october("qOJ")[5][0]], {}, list(RESTART_ENV), list(RESTART_BY_MODEL["ts"])),
     # The lifecycle expansion stage (the single-model embedded engines) was
     # dropped (DECISIONS #139); the lane's roster is ArcadeDB and SurrealDB.
+    # LAST, because it is a sensitivity arm that no table waits for: ONE served
+    # ArcadeDB arm at the image's own JVM settings, on the documents transaction
+    # workload at the 2M-part tier, three repetitions (REPS=3, set after the
+    # template's default of five), the relaxed class only (CAMPAIGN 7 row 69).
+    ("qRO", "documents OLTP, served ArcadeDB at the image's own JVM defaults, the 2M-part cell", "l1tpc",
+     ["oltp"], ["tpch10"], _october("qOE")[5], {}, ["REPS=3"], list(SENSITIVITY_ARMS), "relaxed"),
 ]
 
 
@@ -165,6 +177,7 @@ def check_coverage(stages=STAGES):
     page = _page_lanes()
     seen = collections.Counter()
     stage_wls = collections.defaultdict(set)
+    problems = []
     for spec in stages:
         lane = spec[2]
         if lane == "pycost":
@@ -173,7 +186,9 @@ def check_coverage(stages=STAGES):
             stage_wls[lane].add(wl)
             for be in stage_backends(spec):
                 seen[(lane, wl, be)] += 1
-    problems, excluded, counts = [], [], {}
+                if not runner.arm_runs(lane, wl, be):
+                    problems.append(f"{lane}/{wl}/{be}: staged, but runner.ARM_WORKLOADS keeps it off this workload")
+    excluded, counts = [], {}
     for lane, spec_l in runner.LANES.items():
         backends = spec_l[1]
         if lane not in page:
@@ -187,6 +202,8 @@ def check_coverage(stages=STAGES):
                 problems.append(f"{lane}/{wl}: on the page, in no stage")
                 continue
             for be in backends:
+                if not runner.arm_runs(lane, wl, be):
+                    continue
                 c = seen[(lane, wl, be)]
                 if c != 1:
                     problems.append(f"{lane}/{wl}/{be}: in {c} stages, expected exactly 1")

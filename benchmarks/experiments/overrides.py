@@ -317,7 +317,7 @@ def runner_cap():
 # left out on purpose: `l1` (the retired tabular lane, no table) and `e4`
 # (its table is artifact-backed and takes the sentence through Override.tables).
 CAP_CARRIERS = (
-    ("l1tpc", "arcadedb_server"),
+    ("l1tpc", "arcadedb_server"), ("l1tpc", "arcadedb_imgdefaults_server"),
     ("l2", "arcadedb_graph_server"),
     ("l3s", "arcadedb_sparse_server"), ("l3s", "arcadedb_sparse_server_fp32"),
     ("l3d", "arcadedb_dense_server"), ("l3d", "arcadedb_dense_server_int8"),
