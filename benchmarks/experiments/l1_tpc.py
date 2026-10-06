@@ -1033,16 +1033,21 @@ class ArcadeTPC:
             t = ("STRING" if c in ("l_returnflag", "l_linestatus", "l_shipdate", "l_shipmode")
                  else ("LONG" if c.endswith("key") else "DOUBLE"))
             db.command("sql", f"CREATE PROPERTY LineItem.{c} {t}")
+        # THE THREE ID INDEXES ARE HASH INDEXES: this lane reads, updates, and
+        # deletes by these ids with equality and nothing else, which is the use
+        # ArcadeDB's maintainers name for UNIQUE_HASH (ArcadeData/arcadedb#9169;
+        # CAMPAIGN 7 row 68). The l_shipdate index below stays sorted: Q6 ranges
+        # over it. tests (test_index_kinds.py) pin every statement.
         db.command("sql", "CREATE DOCUMENT TYPE Part")
         db.command("sql", "CREATE PROPERTY Part.p_partkey LONG")
-        db.command("sql", "CREATE INDEX ON Part (p_partkey) UNIQUE")
+        db.command("sql", "CREATE INDEX ON Part (p_partkey) UNIQUE_HASH")
         db.command("sql", "CREATE DOCUMENT TYPE OrderNew")
         db.command("sql", "CREATE PROPERTY OrderNew.okey LONG")
-        db.command("sql", "CREATE INDEX ON OrderNew (okey) UNIQUE")
+        db.command("sql", "CREATE INDEX ON OrderNew (okey) UNIQUE_HASH")
         db.command("sql", "CREATE DOCUMENT TYPE Payment")
         db.command("sql", "CREATE DOCUMENT TYPE Crud")
         db.command("sql", "CREATE PROPERTY Crud.ckey LONG")
-        db.command("sql", "CREATE INDEX ON Crud (ckey) UNIQUE")
+        db.command("sql", "CREATE INDEX ON Crud (ckey) UNIQUE_HASH")
         # THE ENGINE'S BULK PATH, not one SQL statement per row.
         #
         # This block used to issue a parameterised INSERT per row and call
@@ -1198,6 +1203,8 @@ class ArcadeServerTPC(ArcadeTPC):
         return r.json().get("result", [])
 
     def build(self, li, part):
+        # Hash indexes on the three equality-only ids, as the embedded arm
+        # (CAMPAIGN 7 row 68); l_shipdate is created below and stays sorted.
         for ddl in ("CREATE DOCUMENT TYPE LineItem",
                     "CREATE PROPERTY LineItem.l_shipdate STRING",
                     "CREATE PROPERTY LineItem.l_returnflag STRING",
@@ -1210,14 +1217,14 @@ class ArcadeServerTPC(ArcadeTPC):
                     "CREATE PROPERTY LineItem.l_shipmode STRING",
                     "CREATE DOCUMENT TYPE Part",
                     "CREATE PROPERTY Part.p_partkey LONG",
-                    "CREATE INDEX ON Part (p_partkey) UNIQUE",
+                    "CREATE INDEX ON Part (p_partkey) UNIQUE_HASH",
                     "CREATE DOCUMENT TYPE OrderNew",
                     "CREATE PROPERTY OrderNew.okey LONG",
-                    "CREATE INDEX ON OrderNew (okey) UNIQUE",
+                    "CREATE INDEX ON OrderNew (okey) UNIQUE_HASH",
                     "CREATE DOCUMENT TYPE Payment",
                     "CREATE DOCUMENT TYPE Crud",
                     "CREATE PROPERTY Crud.ckey LONG",
-                    "CREATE INDEX ON Crud (ckey) UNIQUE"):
+                    "CREATE INDEX ON Crud (ckey) UNIQUE_HASH"):
             self._cmd(ddl)
         # THE SERVED BULK PATH THE MAINTAINERS RECOMMEND (ArcadeData/arcadedb#8337,
         # DECISIONS #116): one `INSERT ... CONTENT :rows` per batch with the rows

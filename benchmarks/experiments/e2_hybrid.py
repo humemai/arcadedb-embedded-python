@@ -228,8 +228,10 @@ class ArcadeE2:
         db.command("sql", "CREATE PROPERTY Product.pid INTEGER")
         db.command("sql", "CREATE PROPERTY Product.views INTEGER")
         db.command("sql", "CREATE PROPERTY Product.embedding ARRAY_OF_FLOATS")
+        # A hash index: every read here asks for pid by equality or IN, and
+        # no query ranges over it or orders by it (CAMPAIGN 7 row 68).
         with bench_common.index_timer(self):
-            db.command("sql", "CREATE INDEX ON Product (pid) UNIQUE")
+            db.command("sql", "CREATE INDEX ON Product (pid) UNIQUE_HASH")
         db.command("sql", "CREATE EDGE TYPE RELATED")
         # KEEP THE WRITE-AHEAD LOG ON, against graph_batch's own default.
         #
@@ -431,7 +433,7 @@ class ArcadeE2Server(ArcadeE2):
         for ddl in ("CREATE VERTEX TYPE Product", "CREATE PROPERTY Product.pid INTEGER",
                     "CREATE PROPERTY Product.views INTEGER",
                     "CREATE PROPERTY Product.embedding ARRAY_OF_FLOATS",
-                    "CREATE INDEX ON Product (pid) UNIQUE", "CREATE EDGE TYPE RELATED"):
+                    "CREATE INDEX ON Product (pid) UNIQUE_HASH", "CREATE EDGE TYPE RELATED"):
             self._post("command", ddl)
         # ArcadeDB's served bulk graph path (DECISIONS #116 items 1 and 4; the
         # maintainers' recommendation on #8287): POST /api/v1/batch, GraphBatch
@@ -756,7 +758,7 @@ class ArangoE2:
         #
         # An index rather than rewriting the query to DOCUMENT('product', k),
         # which is marginally faster still at 2.74 ms: every other engine
-        # reaches this step through an index on pid -- ArcadeDB a UNIQUE index,
+        # reaches this step through an index on pid -- ArcadeDB a UNIQUE_HASH index,
         # PostgreSQL+AGE a primary key, Neo4j an index, MongoDB the vector
         # index's own filter path, SurrealDB its record id -- so an index is
         # the equivalent configuration and keeps one query text across arms.

@@ -899,8 +899,10 @@ INDEX_DECISIONS = {
     # scanning the whole collection for it, 22.52 ms against 3.21 ms indexed
     # (BUGS F98). A scoping judgement is a claim like any other.
     "e2": {
-        "arcadedb_e2":            "Product(pid) UNIQUE",
-        "arcadedb_e2_server":     "Product(pid) UNIQUE",
+        # A hash index since the 26.10.1 re-pin (CAMPAIGN 7 row 68): every read of
+        # pid is an equality or an IN, and nothing ranges over it or orders by it.
+        "arcadedb_e2":            "Product(pid) UNIQUE_HASH",
+        "arcadedb_e2_server":     "Product(pid) UNIQUE_HASH",
         "pg_age_e2":              "product(pid) PRIMARY KEY",
         "neo4j_e2":               "index on :Product(pid)",
         "memgraph_e2":            "label-property index on :Product(pid)",
@@ -942,6 +944,37 @@ INDEX_DECISIONS = {
                                       "needed 35 ms unindexed",
     },
 }
+
+
+# ARCADEDB'S ID INDEXES THAT ARE HASH INDEXES (CAMPAIGN 7 row 68, DECISIONS #158).
+#
+# The maintainers' rule (ArcadeData/arcadedb#9169): an id that is only read,
+# updated, and deleted by equality gets `UNIQUE_HASH`; a key that is also ranged
+# over or ordered stays `UNIQUE`. This is the ONE place the lanes' choice is
+# written down for the readers that must not drift from the DDL: the sentence
+# export_web prints under each table (`_arcadedb_hash_index_notes`) and
+# test_index_kinds.py, which holds this registry equal to the CREATE INDEX text
+# in each lane's source. Each entry is (lane, the workload whose table prints it
+# or None for every workload of the lane, ((type, property), ...)).
+#
+# `l1` is the retired tabular lane: its DDL moves with the others, but it feeds
+# no page table, so no sentence is printed for it. The graph lane's entry is the
+# LDBC message half only, built by the analytics workload.
+ARCADEDB_HASH_ID_INDEXES = (
+    ("l1tpc", None, (("Part", "p_partkey"), ("OrderNew", "okey"), ("Crud", "ckey"))),
+    ("l1", None, (("orders", "id"),)),
+    ("e2", None, (("Product", "pid"),)),
+    ("l2", "olap", tuple((label, "id") for label in
+                         ("Country", "City", "Forum", "Post", "Comment", "Tag", "TagClass"))),
+)
+
+# WHAT STAYS SORTED, and why, so the next reader does not "finish" the change.
+# `Person(id)` on the graph lane: the untimed `person_scan` ranges over it
+# (`q.id >= ...`), and under a hash index that becomes a full label scan. The
+# other sorted ArcadeDB indexes are not id indexes at all: `l_shipdate` and
+# `customer_id` (NOTUNIQUE, ranged or grouped), the time-series `Point(host, ts)`,
+# and the lifecycle and recovery indexes.
+ARCADEDB_SORTED_ID_INDEXES = (("l2", "Person", "id"),)
 
 
 # INDEX DDL A "NONE" ARM STILL TIMES (BUGS F122). index_timer covers every index

@@ -549,7 +549,9 @@ class ArcadeEmbedded(Base):
                           ("amount", "DOUBLE"), ("quantity", "INTEGER"),
                           ("ts_epoch", "LONG"), ("note", "STRING")]:
             self.db.command("sql", f"CREATE PROPERTY orders.{prop} {typ}")
-        self.db.command("sql", "CREATE INDEX ON orders (id) UNIQUE")
+        # The id is only read and updated by equality here, so a hash index
+        # (CAMPAIGN 7 row 68); customer_id is grouped and stays sorted.
+        self.db.command("sql", "CREATE INDEX ON orders (id) UNIQUE_HASH")
         self.db.command("sql", "CREATE INDEX ON orders (customer_id) NOTUNIQUE")
 
     def begin_batch(self):
@@ -635,7 +637,7 @@ class ArcadeServer(Base):
                           ("amount", "DOUBLE"), ("quantity", "INTEGER"),
                           ("ts_epoch", "LONG"), ("note", "STRING")]:
             self.exec(f"CREATE PROPERTY orders.{prop} {typ}")
-        self.exec("CREATE INDEX ON orders (id) UNIQUE")
+        self.exec("CREATE INDEX ON orders (id) UNIQUE_HASH")   # as the embedded arm
         self.exec("CREATE INDEX ON orders (customer_id) NOTUNIQUE")
 
     def ingest(self, n, batch=500):

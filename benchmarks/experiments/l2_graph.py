@@ -235,7 +235,10 @@ class ArcadeGraphEmbedded(Base):
             else:
                 ddl.append(f"CREATE VERTEX TYPE {label}")
             ddl.append(f"CREATE PROPERTY {label}.id LONG")
-            ddl.append(f"CREATE INDEX ON {label} (id) UNIQUE")
+            # The message half's ids are only looked up by equality (the
+            # analytics are structural counts), so a hash index (CAMPAIGN 7
+            # row 68). Person(id) is NOT here: the person_scan ranges over it.
+            ddl.append(f"CREATE INDEX ON {label} (id) UNIQUE_HASH")
         for rel in self.MSG_EDGE_TYPES:
             ddl.append(f"CREATE EDGE TYPE {rel}")
         return ddl
