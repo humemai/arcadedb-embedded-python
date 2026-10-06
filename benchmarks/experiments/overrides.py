@@ -195,6 +195,27 @@ def _cap_is_the_runner_cap(row, v):
     return None if got == want else f"the server reports {got:,} where the runner launches it with {want:,}"
 
 
+def _body_limit_is_the_runner_limit(row, v):
+    want = runner_body_limit()
+    got = _int(v)
+    if got is None:
+        return f"reads {v!r}, not a size in bytes"
+    if want is not None and got != want:
+        return f"the server reports {got:,} bytes where the runner launches it with {want:,}"
+    src = str(row.get("server_http_body_max_source") or "")
+    return None if src else "no `server_http_body_max_source`, so a reader cannot tell a read-back from a request"
+
+
+# The pins measured BEFORE the limit existed (CAMPAIGN section 7 row 75): the October pin is a September commit, and a server built from it
+# has no `arcadedb.server.httpBodyContentMaxSize`, so the override is not in force for its rows and no sentence about it may stand under
+# a table built from them.
+PRE_BODY_LIMIT_PINS = ("417314c18",)
+
+
+def _body_limit_in_force(row):
+    return not str(row.get("engine_commit") or "").startswith(PRE_BODY_LIMIT_PINS)
+
+
 def _hierarchy_is_on(row, v):
     bad = _is_true(row, v)
     if bad:
@@ -291,6 +312,37 @@ def _arcadedb_cap(rows, constant=None):
     return f"{head} fixed explicitly{tail}", []
 
 
+def _bytes_text(n):
+    """68719476736 as ('64', 'GiB'), 104857600 as ('100', 'MiB'); None when it is not a whole number of KiB, MiB, GiB, or TiB."""
+    n = _int(n)
+    if n is None or n <= 0:
+        return None
+    for unit, size in (("TiB", 1 << 40), ("GiB", 1 << 30), ("MiB", 1 << 20), ("KiB", 1 << 10)):
+        if n % size == 0:
+            return str(n // size), unit
+    return None
+
+
+def _arcadedb_body_limit(rows):
+    got = _values(rows, "server_http_body_max_bytes")
+    dflt = _values(rows, "server_http_body_max_default")
+    a = _bytes_text(got[0]) if len(got) == 1 else None
+    b = _bytes_text(dflt[0]) if len(dflt) == 1 else None
+    head = "The ArcadeDB server that loads its data through the bulk endpoint is started with the limit on one HTTP request body raised "
+    if a and b:
+        lead = f"{head}to {a[0]} {a[1]}, where the engine's default is {b[0]} {b[1]}. The default"
+        values = [a[0], b[0]]
+    elif a:
+        lead = f"{head}to {a[0]} {a[1]}, above the engine's default. That default"
+        values = [a[0]]
+    else:
+        lead = f"{head}above the engine's default. That default"
+        values = []
+    return (f"{lead} refuses the single streamed request that carries the larger graph and cross-model loads (the engine's own message "
+            "says to raise the limit or split the payload), so the load stays one request, as the embedded arm's is one call. The limit "
+            "caps how much one request may carry and is no speed setting; the embedded arms have no HTTP body.", values)
+
+
 def _arcadedb_ts_compaction(rows):
     return ("ArcadeDB's native time-series type is created with a one-hour compaction interval, the bucket of "
             "the hourly aggregate on this table, so compaction cuts its sealed blocks at the boundaries of the "
@@ -354,6 +406,45 @@ CAP_CARRIERS = (
     ("lifecycle", "arcadedb_server"),
     ("restart", "arcadedb_server"), ("restart", "arcadedb_graph_server"),
     ("restart", "arcadedb_dense_server"), ("restart", "arcadedb_ts_native_server"),
+)
+
+# THE HTTP BODY LIMIT (CAMPAIGN section 7 row 75): raised only on the arms whose loader POSTs to /api/v1/batch, in one streamed request.
+BODY_PROPERTY = "arcadedb.server.httpBodyContentMaxSize"
+
+
+def batch_arcadedb_from_runner():
+    """(lane, backend) for every runner arm whose server is launched with the body limit. `test_overrides` holds BODY_LIMIT_CARRIERS equal
+    to this and to the arms whose lane code reaches the batch endpoint. Imports the runner, so it is for tests and gates only."""
+    import runner
+    out = []
+    for lane, spec in runner.LANES.items():
+        for be in spec[1]:
+            env = " ".join(str(x) for x in (runner.BACKENDS.get(be) or {}).get("server_env", []))
+            if f"-D{BODY_PROPERTY}=" in env:
+                out.append((lane, be))
+    return sorted(out)
+
+
+def runner_body_limit():
+    """The body limit (bytes) the runner passes, or None when it cannot be read or the arms disagree."""
+    try:
+        import runner
+    except Exception:  # noqa: BLE001 - the gates must still import without a docker host
+        return None
+    seen = set()
+    for cfg in runner.BACKENDS.values():
+        env = " ".join(str(x) for x in cfg.get("server_env", []))
+        seen.update(re.findall(rf"-D{re.escape(BODY_PROPERTY)}=(\d+)", env))
+    return int(next(iter(seen))) if len(seen) == 1 else None
+
+
+# Every served ArcadeDB arm of a lane that feeds a page table AND loads through the batch endpoint: the graph table's served arm
+# (l2_graph.ArcadeGraphServer), the restart lane's graph model (it loads through the same adapter), and the cross-model table's
+# (e2_hybrid.ArcadeE2Server). Every other served arm loads through the command endpoint in requests of a few thousand rows.
+BODY_LIMIT_CARRIERS = (
+    ("l2", "arcadedb_graph_server"),
+    ("e2", "arcadedb_e2_server"),
+    ("restart", "arcadedb_graph_server"),
 )
 
 OVERRIDES = (
@@ -431,9 +522,17 @@ OVERRIDES = (
         setting=f"-D{CAP_PROPERTY}",
         carriers=tuple(Carrier(lane, be, "server_query_max_heap_elements") for lane, be in CAP_CARRIERS),
         check=_cap_is_the_runner_cap, sentence=_arcadedb_cap,
-        says=(r"ArcadeDB server", r"limit", r"embedded"),
+        says=(r"ArcadeDB server", r"limit", r"embedded", r"query"),     # `query`: the body-limit sentence also names a limit and the embedded arm
         tables=("e4",), constant=lambda: _arcadedb_cap([], runner_cap()),
         companions=("server_query_max_heap_source",)),
+    Override(
+        key="arcadedb_http_body_limit",
+        setting=f"-D{BODY_PROPERTY}",
+        carriers=tuple(Carrier(lane, be, "server_http_body_max_bytes") for lane, be in BODY_LIMIT_CARRIERS),
+        check=_body_limit_is_the_runner_limit, sentence=_arcadedb_body_limit,
+        says=(r"ArcadeDB server", r"request body", r"embedded"),
+        companions=("server_http_body_max_source", "server_http_body_max_default"),
+        applies=_body_limit_in_force),
     Override(
         key="arcadedb_ts_acceptance",
         setting="ingest timer stops at wait_completion()",

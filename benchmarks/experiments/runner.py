@@ -394,6 +394,19 @@ DENSE_BUILD_CACHE_PCT = os.environ.get("BENCH_DENSE_BUILD_CACHE_PCT", "").strip(
 _PCT_OPT = (" -Darcadedb.vectorIndex.graphBuildCacheMaxHeapPercent=" + DENSE_BUILD_CACHE_PCT
             if DENSE_BUILD_CACHE_PCT else "")
 
+# THE SERVED ARCADEDB'S LIMIT ON ONE HTTP REQUEST BODY, raised on the arms that bulk-load through POST /api/v1/batch (CAMPAIGN section 7
+# row 75, PROTOCOL.md section 7, overrides.py `arcadedb_http_body_limit`). 26.10.1 added `arcadedb.server.httpBodyContentMaxSize` (default
+# 104,857,600 bytes = 100 MiB, measured on the wire; the October pin, a September commit, had no limit) and refuses a batch load whose
+# body passes it: "Batch load on database 'bench' was refused after 65645 vertices and 915591 edges because the request body exceeded ...
+# Raise that setting or split the payload". The graph lane loads ONE streamed request per load (l2_graph.ArcadeGraphServer._batch):
+# persons plus KNOWS at sf10 is about 202 MiB, the sf1full message half 1.46 GiB (3,163,871 vertices and 13,581,644 edges, measured from
+# the lane's own lines on the SF1 corpus), the cross-model lane's 500k-product load about 812 MiB. 64 GiB is a value that never binds
+# (-1 also works but the engine's own description says it "removes DoS protection"); it changes no result and no performance knob.
+# ONE constant, applied by _with_http_body_limit below to exactly the arms that reach the batch endpoint (test_overrides.py holds that set).
+HTTP_BODY_MAX_PROPERTY = "arcadedb.server.httpBodyContentMaxSize"
+HTTP_BODY_MAX_BYTES = 64 << 30        # 68,719,476,736
+HTTP_BODY_MAX_OPT = f"-D{HTTP_BODY_MAX_PROPERTY}={HTTP_BODY_MAX_BYTES}"
+
 # WHERE THE LIFECYCLE LANE PUTS ITS DATABASE, and why it is a host path.
 #
 # A cold open is measured by evicting the database from the page cache with
@@ -1552,6 +1565,31 @@ BACKENDS["arcadedb_ts_native_server"] = dict(BACKENDS["arcadedb_server"])
 BACKENDS["arcadedb_e4"] = dict(BACKENDS["arcadedb_server"], image="dbbench:arcadedb")
 
 
+# The arms whose loader POSTs to /api/v1/batch: the graph lane's served arm (l2, and the restart lane's graph model, which loads through
+# the same adapter) and the cross-model lane's (e2). Every other served ArcadeDB arm loads through the SQL command endpoint in requests
+# of a few thousand rows, far under the default limit, and carries no flag.
+BATCH_ENDPOINT_BACKENDS = ("arcadedb_graph_server", "arcadedb_e2_server")
+
+
+def _with_http_body_limit(cfg):
+    """A copy of a served ArcadeDB arm's launch configuration whose JAVA_OPTS also carries HTTP_BODY_MAX_OPT. Derived from the arm's own
+    dict, like _at_image_jvm_defaults, so every other setting stays the arm's by construction; refuses an arm with no JAVA_OPTS entry."""
+    out = dict(cfg)
+    env, hits = list(cfg["server_env"]), 0
+    for i, e in enumerate(env):
+        if isinstance(e, str) and e.startswith("JAVA_OPTS="):
+            env[i] = e + " " + HTTP_BODY_MAX_OPT
+            hits += 1
+    if hits != 1:
+        raise SystemExit(f"a served ArcadeDB arm must carry exactly one JAVA_OPTS entry to take {HTTP_BODY_MAX_OPT} (found {hits})")
+    out["server_env"] = env
+    return out
+
+
+for _be in BATCH_ENDPOINT_BACKENDS:
+    BACKENDS[_be] = _with_http_body_limit(BACKENDS[_be])
+
+
 # THE SENSITIVITY ARM AT THE IMAGE'S OWN JVM DEFAULTS (CAMPAIGN 7 row 69, DECISIONS
 # #159). Every served ArcadeDB arm above sets ARCADEDB_OPTS_MEMORY to
 # `-Xms{heap} -Xmx{heap}` and clears ARCADEDB_OPTS_GC, so that the embedded-versus-
@@ -2470,6 +2508,10 @@ def observe_server(cid):
     cap = re.findall(r"-Darcadedb\.queryMaxHeapElementsAllowedPerOp=(\d+)", envs)
     if cap:
         out.update(arcadedb_cap_readback(cid, envs, int(cap[-1])))
+    # THE SERVED ARCADEDB'S HTTP BODY LIMIT (CAMPAIGN section 7 row 75): only the arms that bulk-load through /api/v1/batch carry the flag.
+    body = re.findall(rf"-D{re.escape(HTTP_BODY_MAX_PROPERTY)}=(\d+)", envs)
+    if body:
+        out.update(arcadedb_body_limit_readback(cid, envs, int(body[-1])))
     return out
 
 
@@ -2616,6 +2658,48 @@ def arcadedb_cap_readback(cid, envs, from_env):
                 time.sleep(1)
     return {"server_query_max_heap_elements": from_env,
             "server_query_max_heap_source": "the container's JAVA_OPTS (the engine could not be asked from the host)"}
+
+
+def arcadedb_body_limit_readback(cid, envs, from_env):
+    """The HTTP request-body limit a served ArcadeDB runs with, asked of the engine.
+
+    `GET /api/v1/server?mode=default` lists every server setting with its effective value (verified on arcadedb-c25:26.10.1: the key
+    `arcadedb.server.httpBodyContentMaxSize` reads 104857600 at the default and the value passed under JAVA_OPTS otherwise); the cap's
+    `schema:database` listing does not carry server-scoped settings. If the host cannot ask, or the engine does not list the setting
+    (a build before 26.10.1 has none and ignores the flag), the value from the container's own JAVA_OPTS is recorded as the REQUEST and the
+    source field says so, so a reader is never told a read-back that did not happen. Runs before the client starts and outside every timer;
+    it never ends a cell.
+    """
+    pw = re.search(r"-Darcadedb\.server\.rootPassword=(\S+)", envs)
+    ips = (sh(["docker", "inspect", "-f",
+               "{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}", cid]) or "").split()
+    listed = True
+    for ip in ips[:1]:
+        for attempt in range(3):
+            try:
+                req = urllib.request.Request(
+                    f"http://{ip}:2480/api/v1/server?mode=default",
+                    headers={"Authorization": "Basic " + base64.b64encode(
+                        f"root:{pw.group(1) if pw else 'dbbenchpass'}".encode()).decode()})
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    settings = json.load(resp)["settings"]
+                found = [s for s in settings if s.get("key") == HTTP_BODY_MAX_PROPERTY]
+                if found:
+                    out = {"server_http_body_max_bytes": int(found[0]["value"]),
+                           "server_http_body_max_source": "read from the engine over HTTP (server?mode=default)"}
+                    if found[0].get("default") is not None:
+                        out["server_http_body_max_default"] = int(found[0]["default"])    # the engine's own default, for the sentence
+                    return out
+                listed = False
+                break
+            except Exception:  # noqa: BLE001 - fall through to the env value, labelled
+                time.sleep(1)
+        if not listed:
+            break
+    why = ("the engine lists no such setting, so the build predates it and the flag is the request"
+           if not listed else "the engine could not be asked from the host")
+    return {"server_http_body_max_bytes": from_env,
+            "server_http_body_max_source": f"requested in the container's JAVA_OPTS ({why})"}
 
 
 # --driver: run a different script inside the SAME cell envelope.

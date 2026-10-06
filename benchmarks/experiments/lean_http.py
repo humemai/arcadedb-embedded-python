@@ -24,7 +24,9 @@ WHAT DIFFERS ON PURPOSE: the exceptions are this module's (`HTTPError`, `Connect
 Exception`, `BaseException`, or none). There are no redirects, cookies, proxies, or TLS verification options: the lanes need none of them, and a 3xx
 is returned as it is. A request that dies after it was sent on a reused connection (the server closed it at the same moment) is retried once ONLY
 when it is a read (a GET, or a POST to a `/query/` or `/server` endpoint); a write raises `ConnectionError`, as requests' does, so a statement is
-never run twice.
+never run twice. A request that dies while it is still being SENT (`BrokenPipeError`, `ConnectionResetError`: a server that refuses early answers and
+closes) raises a `ConnectionError` that carries the status and the first 500 bytes of the answer the server had already sent, so a refusal
+says why (ArcadeDB 26.10.1's 100 MiB request-body limit looked like `[Errno 32] Broken pipe` until this).
 
 A session is for one thread. `BENCH_ARCADEDB_HTTP_CLIENT=requests` restores the October client (`Session()` then returns a `requests.Session`), so
 the October behaviour stays reproducible; the default is `lean`. `row_fields(session)` is what a row records.
@@ -153,6 +155,31 @@ def _decode_body(raw, encoding):
     return raw
 
 
+# How much of an early answer goes into a ConnectionError, and how long the client waits for one (bytes, seconds).
+EARLY_ANSWER_BYTES = 500
+EARLY_ANSWER_WAIT_S = 5.0
+
+
+def _early_answer(conn):
+    """What the server already answered to a request it stopped reading, as `"413 Request Entity Too Large: <first 500 bytes of the body>"`, or None.
+
+    A server that refuses a request early (ArcadeDB 26.10.1 refuses a bulk load whose body passes `arcadedb.server.httpBodyContentMaxSize`)
+    sends its answer and closes the connection while the client is still writing, so the client's next write fails with BrokenPipeError or
+    ConnectionResetError and its own message says nothing about why. The answer is usually already in the socket's receive buffer, so one
+    guarded read of it turns "[Errno 32] Broken pipe" into the server's own words. It waits at most EARLY_ANSWER_WAIT_S, never raises, and
+    leaves the connection to the caller to drop.
+    """
+    try:
+        if conn.sock is None:
+            return None
+        conn.sock.settimeout(EARLY_ANSWER_WAIT_S)
+        resp = conn.getresponse()
+        text = resp.read(EARLY_ANSWER_BYTES).decode("utf-8", "replace").strip()
+        return f"{resp.status} {resp.reason}" + (f": {text}" if text else "")
+    except Exception:  # noqa: BLE001 - a read that fails says nothing more than the error it was asked to explain
+        return None
+
+
 # --------------------------------------------------------------------------------------------------------- session
 def _is_read(method, path):
     return method == "GET" or "/query/" in path or path.rstrip("/").endswith("/server") or "/server?" in path
@@ -273,13 +300,19 @@ class LeanSession:
                 raise Timeout(f"{method} {url} timed out after {timeout} s") from e
             except (http.client.RemoteDisconnected, ConnectionResetError, BrokenPipeError,
                     http.client.CannotSendRequest, http.client.NotConnected, http.client.BadStatusLine) as e:
-                self._drop(key)
                 sent_but_unanswered = isinstance(e, (http.client.RemoteDisconnected, ConnectionResetError, http.client.BadStatusLine))
                 safe = replayable and (not sent_but_unanswered or _is_read(method, path))
                 if reused and not retried and safe:
+                    self._drop(key)
                     retried = True
                     continue
-                raise ConnectionError(f"{method} {url}: {e}") from e
+                # Raising: first read the answer the server may already have given to a request that died while it was being SENT
+                # (see _early_answer). RemoteDisconnected and BadStatusLine come from the read itself, so there is nothing more to read.
+                early = None
+                if isinstance(e, (BrokenPipeError, ConnectionResetError)) and not isinstance(e, http.client.RemoteDisconnected):
+                    early = _early_answer(conn)
+                self._drop(key)
+                raise ConnectionError(f"{method} {url}: {e}" + (f" (the server had already answered {early})" if early else "")) from e
             except OSError as e:
                 self._drop(key)
                 raise ConnectionError(f"{method} {url}: {e}") from e

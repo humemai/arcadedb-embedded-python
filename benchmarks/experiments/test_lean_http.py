@@ -405,6 +405,89 @@ def test_a_call_may_use_a_different_timeout_than_the_one_before(server):
         lean.get(server.base + "/sleep?t=1", timeout=0.1)
 
 
+# ------------------------------------------------------------------------------- a server that refuses while the client is still sending
+def _refusing_server(status_line, body, close=True):
+    """A bare TCP server that reads the request line and the headers, answers `status_line` with a text body, and closes while the
+    client is still writing its body: what ArcadeDB 26.10.1 does to a bulk load past `arcadedb.server.httpBodyContentMaxSize`.
+    Returns (port, thread, the request lines it saw)."""
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    seen = []
+
+    def run():
+        conn, _ = srv.accept()
+        buf = b""
+        while b"\r\n\r\n" not in buf:
+            part = conn.recv(65536)
+            if not part:
+                break
+            buf += part
+        seen.append(buf.split(b"\r\n", 1)[0].decode("latin-1"))
+        raw = body.encode()
+        conn.sendall(f"{status_line}\r\nContent-Type: text/plain\r\nContent-Length: {len(raw)}\r\nConnection: close\r\n\r\n".encode() + raw)
+        if close:
+            conn.close()
+        srv.close()
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    return srv.getsockname()[1], t, seen
+
+
+def _big_body(mib=64):
+    """An iterator body of `mib` MiB in 1 MiB chunks (sent chunked, not replayable), far more than any socket buffer holds."""
+    for _ in range(mib):
+        yield b"x" * (1 << 20)
+
+
+def test_a_refusal_sent_while_the_client_is_still_sending_is_in_the_error():
+    """The 26.10.1 campaign's served graph load died as `[Errno 32] Broken pipe` with the reason (a 413-style refusal naming
+    httpBodyContentMaxSize) in the socket the client never read. The error now carries the server's status and the first 500 bytes."""
+    reason = ("Batch load on database 'bench' was refused after 65645 vertices because the request body exceeded "
+              "'arcadedb.server.httpBodyContentMaxSize' (currently 104857600 bytes). Raise that setting or split the payload")
+    port, t, seen = _refusing_server("HTTP/1.1 413 Request Entity Too Large", reason)
+    lean = LH.LeanSession()
+    with pytest.raises(LH.ConnectionError) as e:
+        lean.post(f"http://127.0.0.1:{port}/api/v1/batch/bench?wal=true", data=_big_body(),
+                  headers={"Content-Type": "application/x-ndjson"}, timeout=20)
+    t.join(10)
+    msg = str(e.value)
+    assert isinstance(e.value, OSError)
+    assert "413" in msg and "httpBodyContentMaxSize" in msg and "Raise that setting or split the payload" in msg, msg
+    assert seen and seen[0].startswith("POST /api/v1/batch/bench?wal=true"), seen
+    assert not lean._conns                                                # the dead connection is dropped
+
+
+def test_only_the_first_500_bytes_of_an_early_answer_go_into_the_error():
+    port, t, _ = _refusing_server("HTTP/1.1 413 Payload Too Large", "A" * 400 + "B" * 4000)
+    with pytest.raises(LH.ConnectionError) as e:
+        LH.LeanSession().post(f"http://127.0.0.1:{port}/batch", data=_big_body(), timeout=20)
+    t.join(10)
+    msg = str(e.value)
+    assert "413" in msg and "A" * 400 in msg and "B" * 100 in msg and "B" * 101 not in msg, len(msg)
+
+
+def test_a_connection_that_dies_while_sending_with_no_answer_keeps_the_plain_message():
+    """A server that closes without a word: the error is the old one, with nothing invented after it."""
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+
+    def run():
+        conn, _ = srv.accept()
+        conn.recv(65536)
+        conn.close()
+        srv.close()
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    with pytest.raises(LH.ConnectionError) as e:
+        LH.LeanSession().post(f"http://127.0.0.1:{srv.getsockname()[1]}/batch", data=_big_body(), timeout=20)
+    t.join(10)
+    assert "already answered" not in str(e.value) and "POST http://127.0.0.1:" in str(e.value)
+
+
 # ------------------------------------------------------------------------------------------- the switch and the record
 def test_the_factory_follows_BENCH_ARCADEDB_HTTP_CLIENT(monkeypatch):
     monkeypatch.delenv(LH.CLIENT_ENV, raising=False)
