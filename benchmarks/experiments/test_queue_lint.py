@@ -123,9 +123,37 @@ def test_container_path_through_a_helper():
            len(probs["qGB"]) > 0, True)
 
 
+def test_allow_dev_follows_the_baked_wheel():
+    """BENCH_ALLOW_DEV is judged against the wheel the script bakes, as build_images.sh judges it.
+
+    The generator writes 0 for a stable release and 1 for a pre-release. The
+    lint used to demand 1 everywhere, so the first stable-wheel chain (26.10.1)
+    failed fourteen lines on a correct script; and a pre-release stage that
+    lost its 1 must still fail, because that is the qDJ abort the rule exists for.
+    """
+    stable = 'W=dist/arcadedb_embedded-26.10.1-cp312-cp312-manylinux_2_34_x86_64.whl\n'
+    dev = 'W=dist/arcadedb_embedded-26.10.1.dev0-cp312-cp312-manylinux_2_34_x86_64.whl\n'
+
+    def probs(head, line):
+        return [p for p in queue_lint.check_paths_and_python("qZ", HEAD + head + line + "\n")
+                if "build_images.sh" in p[1]]
+
+    _check("stable wheel with BENCH_ALLOW_DEV=0 holds", probs(stable, "BENCH_ALLOW_DEV=0 ./build_images.sh client"), [])
+    _check("stable wheel with BENCH_ALLOW_DEV=1 holds", probs(stable, "BENCH_ALLOW_DEV=1 ./build_images.sh client"), [])
+    _check("stable wheel with no assignment is flagged",
+           len(probs(stable, "./build_images.sh client")), 1)
+    _check("pre-release wheel with BENCH_ALLOW_DEV=1 holds", probs(dev, "BENCH_ALLOW_DEV=1 ./build_images.sh client"), [])
+    _check("pre-release wheel with BENCH_ALLOW_DEV=0 is flagged",
+           len(probs(dev, "BENCH_ALLOW_DEV=0 ./build_images.sh client")), 1)
+    _check("pre-release wheel with no assignment is flagged", len(probs(dev, "./build_images.sh client")), 1)
+    _check("no wheel named: only 1 holds",
+           (len(probs("", "BENCH_ALLOW_DEV=0 ./build_images.sh client")),
+            len(probs("", "BENCH_ALLOW_DEV=1 ./build_images.sh client"))), (1, 0))
+
+
 def main():
     for t in (test_marker_wait, test_pgrep_wait, test_pgrep_wait_is_flagged, test_cycle_is_visible,
-              test_container_path_through_a_helper):
+              test_container_path_through_a_helper, test_allow_dev_follows_the_baked_wheel):
         print(f"\n== {t.__name__}")
         t()
     if FAILURES:
