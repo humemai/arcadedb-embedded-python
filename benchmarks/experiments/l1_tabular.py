@@ -741,6 +741,9 @@ def main():
     b.close()
     out["close_s"] = round(time.perf_counter() - _t, 3)
 
+    # THE JPYPE THIS PROCESS RAN (CAMPAIGN 7 row 73): empty when the arm never imported it.
+    from bench_common import jpype_fields as _jpype_fields
+    out.update(_jpype_fields())
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     json.dump(out, open(args.out, "w"), indent=1)
     print(f"RESULT {json.dumps(out)[:400]}")

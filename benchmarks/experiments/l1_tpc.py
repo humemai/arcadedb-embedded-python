@@ -1879,6 +1879,9 @@ def main():
     # (DECISIONS #91): a dropped connection has to be visible as a number on
     # the row, not as a traceback in a log nobody reads until a cell dies.
     surreal_common.stamp_reconnects(out, b)
+    # THE JPYPE THIS PROCESS RAN (CAMPAIGN 7 row 73): empty when the arm never imported it
+    # (every comparator, every served ArcadeDB client), read after the arm has run.
+    out.update(bench_common.jpype_fields())
     with open(args.out, "w") as f:
         json.dump(out, f)
     print("RESULT " + json.dumps(out), flush=True)

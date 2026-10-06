@@ -1158,6 +1158,9 @@ NOT_PRINTED = [
      "which HTTP client an ArcadeDB served arm ran with (CAMPAIGN 7 row 72, lean_http.py): a condition of the served arms, read from "
      "the session that ran, never a column. The e4 decomposition's row lists the two clients it measured (`arcadedb_http_clients`); its table "
      "names the client in each HTTP column instead (export_web._e4_arms)"),
+    (r"^jpype_version$",
+     "which JPype the process that ran the cell had loaded (CAMPAIGN 7 row 73, bench_common.jpype_version): a condition of the embedded "
+     "ArcadeDB arms, read from the process (`jpype.__version__`), empty for every arm that never imports it, never a column"),
     (r"^(tpch_sf|n_docs|n_docs_ingested|n_lineitem|n_part|n_persons|"
      r"n_persons_in_corpus|n_persons_ingested|n_edges|n_edges_ingested|"
      r"n_points|n_products|n_rows|dim|dims|ts_chunk|ts_shards|last_window_s|"

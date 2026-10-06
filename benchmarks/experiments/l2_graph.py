@@ -3939,6 +3939,9 @@ def main():
                 f"{_short} (loaded, expected); the row would publish an inflated "
                 f"ingest rate under the full network's label.")
 
+    # THE JPYPE THIS PROCESS RAN (CAMPAIGN 7 row 73): empty when the arm never imported it
+    # (every comparator, every served ArcadeDB client), read after the arm has run.
+    out.update(bench_common.jpype_fields())
     with open(args.out, "w") as f:
         json.dump(out, f)
     print(json.dumps(out))

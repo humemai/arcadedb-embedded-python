@@ -1990,7 +1990,34 @@ def build_manifest(ts, args, workers, shards, jobs):
     # ran with (`arcadedb_http_client`, read from the session).
     import lean_http
     manifest["arcadedb_http_client"] = lean_http.client_choice()
+    # THE JPYPE THE EMBEDDED ARMS OF THIS BATCH RUN WITH (CAMPAIGN 7 row 73), read back out of the bench image they run in by
+    # importing it there: what the image holds, not what the pin says. Each row records what its own process imported
+    # (`jpype_version`). Empty when the batch has no arm that runs in the ArcadeDB bench image, or the image cannot be read.
+    manifest["jpype_version"] = _batch_jpype_version(jobs)
     return manifest
+
+
+# The image the embedded ArcadeDB arms run in (BACKENDS "image"): the only bench image whose wheel pulls JPype in.
+ARCADEDB_BENCH_IMAGE = "dbbench:arcadedb"
+
+
+def jpype_version_in_image(image, timeout=180):
+    """The JPype version a bench image holds (`jpype.__version__`, read by importing it there), or "" when it
+    cannot be read: docker absent, the image missing, JPype not installed. Never a guess."""
+    try:
+        r = subprocess.run(["docker", "run", "--rm", "--entrypoint", "python3", image, "-c",
+                            "import jpype; print(jpype.__version__)"],
+                           capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    out = r.stdout.strip().splitlines()
+    return out[-1].strip() if r.returncode == 0 and out else ""
+
+
+def _batch_jpype_version(jobs):
+    if not any(BACKENDS[j["backend"]].get("image") == ARCADEDB_BENCH_IMAGE for j in jobs):
+        return ""
+    return jpype_version_in_image(ARCADEDB_BENCH_IMAGE)
 
 
 def _pagecache_for(server_mem_bytes, heap):

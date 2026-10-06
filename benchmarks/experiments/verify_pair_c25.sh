@@ -89,4 +89,15 @@ else
   fail "no $EMBEDDED_IMAGE image; the embedded arm has nothing to run"
 fi
 
-echo "PAIR VERIFIED $SHORT  jars=image+wheel+embedded-image  jvm=$IJ  image=$IMG  embedded=$EMBEDDED_IMAGE  repo=$REPO  wheel=$W"
+# 5. THE JPYPE THE EMBEDDED ARM ACTUALLY RUNS (CAMPAIGN 7 row 73). The wheel declares jpype1>=1.5.0
+# with no upper bound, so an image built after a new JPype release holds the new one while every check
+# above still passes, and the embedded arm's per-call cost is not the one the campaign measures. The pin
+# is Dockerfile.bench's ARG default, read from this script's own directory like REPO above, never from
+# the environment.
+HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+WANT_J=$(sed -n 's/^ARG JPYPE_VERSION=//p' "$HERE/Dockerfile.bench")
+[ -n "$WANT_J" ] || fail "no 'ARG JPYPE_VERSION=<x.y.z>' default in $HERE/Dockerfile.bench"
+HAVE_J=$(docker run --rm --entrypoint python3 "$EMBEDDED_IMAGE" -c 'import jpype; print(jpype.__version__)' 2>/dev/null | tr -dc '0-9a-zA-Z.-')
+[ "$HAVE_J" = "$WANT_J" ] || fail "$EMBEDDED_IMAGE runs JPype '$HAVE_J', the pin is $WANT_J (rebuild it: ./build_images.sh arcadedb)"
+
+echo "PAIR VERIFIED $SHORT  jars=image+wheel+embedded-image  jvm=$IJ  jpype=$HAVE_J  image=$IMG  embedded=$EMBEDDED_IMAGE  repo=$REPO  wheel=$W"

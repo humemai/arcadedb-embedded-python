@@ -24,6 +24,38 @@ import time
 # ingest/index timer split, and bench_host.
 INSTRUMENT = "2026-10"
 
+# THE JPYPE VERSION THE CAMPAIGN MEASURES (CAMPAIGN 7 row 73). The embedded
+# ArcadeDB arms cross from Python into the JVM through JPype, so its per-call
+# cost is part of every embedded number: a laptop A/B of JPype 1.7.1 against its
+# master (240 commits ahead, unreleased) moved raw call costs by 15 to 25
+# percent and removed a leak of one Python object per boxed number returned
+# from Java. The wheel declares `jpype1>=1.5.0` with no upper bound, so an image
+# built on the day of the next release would have changed the instrument in the
+# middle of a run and split its rows. Dockerfile.bench installs
+# `jpype1==${JPYPE_VERSION}` with this default; make_2610_stages.py --check
+# refuses a Dockerfile whose default is not this constant, and every stage
+# refuses an image or a repo venv that runs another one.
+JPYPE_PIN = "1.7.1"
+
+
+def jpype_version():
+    """The JPype version THIS process ran with, or "" when it never imported JPype.
+
+    Read from the loaded module (`jpype.__version__`), not from package metadata
+    and not from the pin: the row is evidence of what ran, and a process that
+    never imported JPype (every comparator arm, every served ArcadeDB client)
+    records an empty value rather than a guess. Never imports JPype itself, so
+    asking cannot start the thing it reports on or change what a comparator
+    process loads.
+    """
+    mod = sys.modules.get("jpype")
+    return str(getattr(mod, "__version__", "") or "") if mod is not None else ""
+
+
+def jpype_fields():
+    """What a result row records about JPype: {"jpype_version": ...}. Stamp it after the arm has run."""
+    return {"jpype_version": jpype_version()}
+
 # DECISIONS #81: the matched durability class is "relaxed" (a commit returns
 # without waiting for the disk). An engine that cannot be relaxed declares a
 # `durability` string starting with this prefix and is the named exception on
@@ -710,6 +742,8 @@ def run_conditions(**extra):
         out["engine_version"] = _v("arcadedb-embedded")
     except Exception as e:
         out["engine_version"] = f"unknown ({e.__class__.__name__})"
+    # THE JPYPE THIS PROCESS RAN (CAMPAIGN 7 row 73): empty unless the process imported it.
+    out.update(jpype_fields())
     out.update(extra)
     return out
 

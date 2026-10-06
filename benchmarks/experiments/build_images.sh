@@ -97,6 +97,20 @@ case "$_pin" in
 esac
 echo "arcadedb pin: $_pin"
 
+# JPYPE IS PART OF THE INSTRUMENT, SO IT IS PINNED TOO (CAMPAIGN 7 row 73). The
+# wheel declares jpype1>=1.5.0 with no upper bound, and an image built on the day
+# of a new JPype release would resolve the new one and change every embedded
+# ArcadeDB call's cost in the middle of a run. The version is read from
+# Dockerfile.bench's ARG default (bench_common.JPYPE_PIN is checked against it by
+# make_2610_stages.py --check) and passed down explicitly, so a JPYPE_VERSION left
+# in the caller's environment cannot move it.
+JPYPE_VERSION=$(sed -n 's/^ARG JPYPE_VERSION=//p' Dockerfile.bench)
+case "$JPYPE_VERSION" in
+  [0-9]*.[0-9]*.[0-9]*) ;;
+  *) echo "REFUSING: Dockerfile.bench has no usable 'ARG JPYPE_VERSION=<x.y.z>' default (read '$JPYPE_VERSION')" >&2; exit 1 ;;
+esac
+echo "jpype pin: $JPYPE_VERSION"
+
 targets=("$@"); [ ${#targets[@]} -eq 0 ] && targets=(arcadedb duckdb client dense pg-age mongo-search composed)
 for be in "${targets[@]}"; do
   if [ "$be" = "composed" ]; then
@@ -131,5 +145,6 @@ for be in "${targets[@]}"; do
   [ -n "${PKGS[$be]+set}" ] || { echo "  unknown target '$be' (not a PKGS key and not a special case)" >&2; exit 1; }
   echo "=== dbbench:$be (${PKGS[$be]})"
   docker build -q -t "dbbench:$be" --build-arg PIP_PACKAGES="${PKGS[$be]}" \
+    --build-arg JPYPE_VERSION="$JPYPE_VERSION" \
     -f Dockerfile.bench . >/dev/null && echo "  ok"
 done

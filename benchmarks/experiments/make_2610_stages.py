@@ -24,6 +24,13 @@ loudly instead of emitting a script with the old text:
     before the campaign; one line of development). Each stage carries the digests
     its arms had when the chain was generated and refuses to start if runner.py
     now says otherwise.
+  * JPYPE IS PINNED, NOT RESOLVED (CAMPAIGN 7 row 73). The wheel declares jpype1>=1.5.0
+    with no upper bound, so an image or a venv built on the day of a new JPype release
+    would change what every embedded ArcadeDB call costs mid-run. bench_common.JPYPE_PIN
+    is the version; Dockerfile.bench installs jpype1==<it> with the wheel; every stage
+    reads JPype back out of dbbench:arcadedb (the host-side stage out of the repo venv)
+    and aborts, naming both versions, when it is another; `--check` refuses a
+    Dockerfile whose default is not the pin.
   * cell_cost_check reads October's rows as well as this pin's, so a tier this pin
     has not measured yet is still scored from the nearest measured engine
     (rc=2 stays non-blocking, as October's rule says).
@@ -237,6 +244,39 @@ def check_coverage(stages=STAGES):
     return problems, excluded, counts
 
 
+# ------------------------------------------------------------------- the JPype pin
+JPYPE_DOCKERFILE = os.path.join(HERE, "Dockerfile.bench")
+_JPYPE_ARG = re.compile(r"^ARG JPYPE_VERSION=(\S*)[ \t]*$", re.M)
+
+
+def check_jpype_pin(dockerfile_text=None, pin=None):
+    """Problems with the JPype pin, [] when the image recipe and the stage checks agree on one hard version.
+
+    The stages compare the image's (and the repo venv's) JPype to `pin`, which is baked into each script at
+    generation; the image holds whatever Dockerfile.bench's ARG default says. Two copies of one number, so
+    they are compared here, and every install line must be a hard `==` on the ARG, because a `>=` or a bare
+    `jpype1` is how a release made on some other day reaches the image."""
+    pin = bench_common.JPYPE_PIN if pin is None else pin
+    if dockerfile_text is None:
+        with open(JPYPE_DOCKERFILE, encoding="utf-8") as fh:
+            dockerfile_text = fh.read()
+    problems = []
+    if not re.fullmatch(r"\d+\.\d+\.\d+", pin or ""):
+        problems.append(f"bench_common.JPYPE_PIN is {pin!r}, not one release (x.y.z)")
+    defaults = _JPYPE_ARG.findall(dockerfile_text)
+    if len(defaults) != 1:
+        problems.append(f"Dockerfile.bench has {len(defaults)} `ARG JPYPE_VERSION=` lines, expected exactly 1")
+    elif defaults[0] != pin:
+        problems.append(f"Dockerfile.bench builds JPype {defaults[0]} and bench_common.JPYPE_PIN is {pin}: the image "
+                        f"would hold one version and every stage would demand the other")
+    code = "\n".join(l for l in dockerfile_text.splitlines() if not l.lstrip().startswith("#"))
+    if "jpype1==${JPYPE_VERSION}" not in code:
+        problems.append("Dockerfile.bench never installs `jpype1==${JPYPE_VERSION}`")
+    for m in re.finditer(r"jpype1(?!==\$\{JPYPE_VERSION\})\S*", code):
+        problems.append(f"Dockerfile.bench installs `{m.group(0)}`, which is not a hard `jpype1==${{JPYPE_VERSION}}`")
+    return problems
+
+
 # ------------------------------------------------------------------- the template
 def _sub(text, old, new):
     if text.count(old) != 1:
@@ -285,6 +325,14 @@ W="$REPO/bindings/python/dist/{wheel_name}"
              '''[ "$(sha256sum "$W" | cut -d' ' -f1)" = "{wheel_sha256}" ] || {{ say "$ID ABORT: dist/{wheel_name} is not the wheel this chain was generated for (sha256)"; exit 1; }}
 export ARCADEDB_WHEEL="$W" ARCADEDB_SERVER_IMAGE="{server_image}"
 docker image inspect "$ARCADEDB_SERVER_IMAGE" >/dev/null 2>&1 || {{ say "$ID ABORT: no server image $ARCADEDB_SERVER_IMAGE"; exit 1; }}''')
+    # JPYPE IS PART OF THE INSTRUMENT (CAMPAIGN 7 row 73): the wheel declares jpype1>=1.5.0 with no upper bound, so an
+    # image built after a new JPype release holds the new one while the wheel check above still passes. Read it out of
+    # the image the embedded arms run in, as the wheel is, and refuse any version but the pin baked in at generation.
+    h = _sub(h, '''say "$ID: dbbench:arcadedb carries wheel $IV, matching dist"''',
+             '''say "$ID: dbbench:arcadedb carries wheel $IV, matching dist"
+IJ=$(docker run --rm --entrypoint python3 dbbench:arcadedb -c 'import jpype; print(jpype.__version__)' 2>/dev/null | tr -dc "0-9a-zA-Z.-")
+[ "$IJ" = "{jpype_version}" ] || {{ say "$ID ABORT: dbbench:arcadedb runs JPype '$IJ', the pin is {jpype_version} (Dockerfile.bench, ARG JPYPE_VERSION); rebuild dbbench:arcadedb, which installs the pin"; exit 1; }}
+say "$ID: dbbench:arcadedb runs JPype $IJ, the pin"''')
     h = _sub(h, "BENCH_ALLOW_DEV=1 ./build_images.sh {images}", "BENCH_ALLOW_DEV={allow_dev} ./build_images.sh {images}")
     h = _sub(h, '''./verify_pair_c25.sh "$SHA" >> "$S" 2>&1 || {{ say "$ID ABORT: pair unverified at the October pin"; exit 1; }}''',
              '''PAIR_IMAGE="$ARCADEDB_SERVER_IMAGE" ./verify_pair_c25.sh "$SHA" >> "$S" 2>&1 || {{ say "$ID ABORT: pair unverified at the pin"; exit 1; }}''')
@@ -351,7 +399,11 @@ D=$REPO/benchmarks/python-bindings/jpype_overhead
 grep -q 'ONLY_STEPS' "$D/run_bench.sh" || {{ say "$ID ABORT: run_bench.sh has no ONLY_STEPS (pre-2026-10-02 tree)"; exit 1; }}
 WANT=$(basename "{wheel_name}" | cut -d- -f2)
 HAVE=$("$REPO"/.venv/bin/python -c 'import importlib.metadata as m; print(m.version("arcadedb-embedded"))' 2>/dev/null)
-[ "$HAVE" = "$WANT" ] || {{ say "$ID ABORT: the repo venv runs arcadedb-embedded '$HAVE', the pin is $WANT; install it first: uv pip install --python $REPO/.venv $REPO/bindings/python/dist/{wheel_name}"; exit 1; }}
+[ "$HAVE" = "$WANT" ] || {{ say "$ID ABORT: the repo venv runs arcadedb-embedded '$HAVE', the pin is $WANT; install it first: uv pip install --python $REPO/.venv $REPO/bindings/python/dist/{wheel_name} jpype1=={jpype_version}"; exit 1; }}
+# JPYPE TOO (CAMPAIGN 7 row 73): the wheel's own requirement is jpype1>=1.5.0, so a venv built after a new release
+# holds the new one while the wheel check above passes. The version is the one this chain was generated with.
+HAVE_J=$("$REPO"/.venv/bin/python -c 'import jpype; print(jpype.__version__)' 2>/dev/null)
+[ "$HAVE_J" = "{jpype_version}" ] || {{ say "$ID ABORT: the repo venv runs JPype '$HAVE_J', the pin is {jpype_version}; install it first: uv pip install --python $REPO/.venv jpype1=={jpype_version}"; exit 1; }}
 OUT=$HOME/pycost/mini_results_${{PIN}}.csv
 mkdir -p "$HOME/pycost"
 trap 'echo "$ID ALL-DONE" >> "$S"' EXIT
@@ -402,7 +454,7 @@ def emit_all(out, pins, first_after, allow_dev):
             if spec[2] == "pycost":
                 body = HOST.format(id=spec[0], n=i + 1, total=len(STAGES), title=spec[1], sha=sha,
                                    wait=_wait(after), wheel_name=wheel_name, runs=PYCOST_RUNS,
-                                   steps=PYCOST_STEPS)
+                                   steps=PYCOST_STEPS, jpype_version=bench_common.JPYPE_PIN)
             else:
                 guards = list(spec[5]) + _pin_guard(stage_backends(spec))
                 # THE ROSTER IS stage_backends(spec), never the template's own default (every arm the
@@ -413,6 +465,7 @@ def emit_all(out, pins, first_after, allow_dev):
                 O.HEAD = head.replace("{prior}", PRIOR_PIN).replace("{wheel_name}", wheel_name) \
                     .replace("{wheel_sha256}", wheel_sha).replace("{server_image}", server) \
                     .replace("{allow_dev}", "1" if allow_dev else "0") \
+                    .replace("{jpype_version}", bench_common.JPYPE_PIN) \
                     .replace("{instrument}", bench_common.INSTRUMENT)
                 body = O.emit(i, full)
             p = os.path.join(out, f"{spec[0]}.sh")
@@ -473,7 +526,7 @@ def project(cells_tsv):
     return rows, total_m, total_e
 
 
-def main() -> int:
+def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", help="directory for the generated scripts (not the repo)")
     ap.add_argument("--after", default=OCTOBER_LAST_STAGE, type=_after_arg,
@@ -483,8 +536,17 @@ def main() -> int:
                     help="emit for a dev/rc wheel (a page measurement; the paper cites releases, #42)")
     ap.add_argument("--check", action="store_true", help="coverage only")
     ap.add_argument("--project", metavar="CELLS_TSV", help="per-stage hours from October's measured cells")
-    a = ap.parse_args()
+    a = ap.parse_args(argv)
 
+    # THE JPYPE PIN FIRST, in every mode: a Dockerfile that disagrees with the constant the stages check against
+    # would build an image every stage then refuses, hours into a chain.
+    jp_problems = check_jpype_pin()
+    if jp_problems:
+        for p in jp_problems:
+            print(f"  PROBLEM jpype pin: {p}")
+        return 1
+    print(f"jpype pin: {bench_common.JPYPE_PIN} (bench_common.JPYPE_PIN = Dockerfile.bench's ARG default, a hard == "
+          f"install; every stage reads JPype back out of the image or the repo venv)")
     problems, excluded, counts = check_coverage()
     print("coverage: every registered arm of every page lane in exactly one stage per workload")
     for lane, n in sorted(counts.items()):

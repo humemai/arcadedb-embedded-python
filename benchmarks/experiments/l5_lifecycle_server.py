@@ -276,6 +276,9 @@ def main(args):
             f"situation {args.workload!r} issues no read in the modes this cell ran")
     out["close_over_budget"] = out.get("clean_close_ms", 0) > 100.0
     server_cmd(rq, root, f"open database {DB}")
+    # THE JPYPE THIS PROCESS RAN (CAMPAIGN 7 row 73): empty when the arm never imported it
+    # (every comparator, every served ArcadeDB client), read after the arm has run.
+    out.update(bench_common.jpype_fields())
     with open(args.out, "w") as f:
         json.dump(out, f)
     print(json.dumps({k: v for k, v in out.items() if k.endswith("_session_ms") or k in ("build_s", "first_open_server_ms")}), flush=True)
