@@ -1293,7 +1293,36 @@ def record_result(out, name, rows, **kw):
     out[f"res_{name}_digest"] = d["digest"]
     out[f"res_{name}_sample"] = d["sample"]
     out[f"res_{name}_n"] = d["n"]
+    out[f"res_{name}_profile"] = answer_profile(rows, columns=kw.get("columns"),
+                                                coerce=kw.get("coerce"),
+                                                float_digits=kw.get("float_digits", 6))
     return d
+
+
+def answer_profile(rows, columns=None, coerce=None, float_digits=6):
+    """Per declared column: how many distinct values the answer holds, and how
+    many of them are zero or null, over EVERY row (the sample shows three).
+
+    WHY. A digest proves engines agree; it cannot say the agreed answer means
+    anything. Every LDBC age loaded as 0 for two months and nine engines agreed
+    on it (BUGS F146); the triangle count on the LDBC projection is 0 on every
+    engine because each friendship is stored once, from the smaller id to the
+    larger, so a directed 3-cycle cannot exist (validity hunt 2026-10-04). Both
+    are a column with one value across hundreds of rows, or a single answer of
+    zero, which this records on the row so degenerate_check.py can flag it
+    without re-running anything. Canonical values, so the counts mean the same
+    thing on every engine.
+    """
+    canon = canonical_rows(rows, columns=columns, float_digits=float_digits, coerce=coerce)
+    names = [c[0] if isinstance(c, (tuple, list)) else str(c) for c in (columns or ())]
+    if not names and canon:
+        names = [f"c{i}" for i in range(len(canon[0]))]
+    prof = {}
+    for i, nm in enumerate(names):
+        vals = [r[i] for r in canon if i < len(r)]
+        prof[nm] = {"distinct": len(set(vals)),
+                    "zero_or_null": sum(1 for v in vals if v in ("0", NULL_TOKEN))}
+    return prof
 
 
 def record_unexpressible(out, name, reason):

@@ -212,8 +212,15 @@ def test_record_fields():
     print("the fields a row carries")
     out = {}
     r = B.record_result(out, "q1", [(1, 2.5)], columns=("a", "b"))
-    eq("digest field", sorted(out), ["res_q1_digest", "res_q1_n", "res_q1_sample"])
+    eq("digest field", sorted(out), ["res_q1_digest", "res_q1_n", "res_q1_profile", "res_q1_sample"])
     eq("n is the row count", out["res_q1_n"], 1)
+    # The profile counts distinct and zero-or-null CANONICAL values per declared
+    # column over every row, which is what degenerate_check reads (F146: 500
+    # agreed ages, every one of them 0).
+    eq("profile per declared column", out["res_q1_profile"],
+       {"a": {"distinct": 1, "zero_or_null": 0}, "b": {"distinct": 1, "zero_or_null": 0}})
+    p = B.answer_profile([{"a": 0}, {"a": None}, {"a": 0.0}, {"a": 3}], columns=("a",))
+    eq("zero, null, and 0.0 are counted alike", p, {"a": {"distinct": 3, "zero_or_null": 3}})
     eq("returned dict matches the row", out["res_q1_digest"], r["digest"])
     check("digest is 16 hex characters",
           len(out["res_q1_digest"]) == 16 and all(c in "0123456789abcdef" for c in out["res_q1_digest"]),

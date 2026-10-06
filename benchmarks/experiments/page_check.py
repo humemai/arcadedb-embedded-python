@@ -1200,6 +1200,10 @@ NOT_PRINTED = [
     (r"^res_\w+_n$|^\w+_rows$",
      "the answer check's own record (DECISIONS #88): how many rows an answer "
      "held, compared across engines and not published as a latency"),
+    (r"^res_\w+_profile$",
+     "the answer profile (CAMPAIGN section 7 row 59): per declared column, how many distinct "
+     "canonical values the answer holds and how many are 0 or null, read by degenerate_check.py "
+     "to flag an agreed answer that cannot mean anything; a record of the answer, not a column"),
     (r"^(client|server)_(peak|end|io|disk|cpu)_\w+$|^server_(mem_cap_g|shm_size)$|"
      r"^(peak_mib_sum|peak_owned_mib_sum|peak_shmem_mib_sum|end_anon_mib_sum|"
      r"io_read_mib_sum|io_write_mib_sum|disk_mb_sum|cpu_usec_sum|client_mem_cap|"
