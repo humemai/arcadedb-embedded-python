@@ -80,7 +80,7 @@ workaround was removed and the exit-hang regression test now guards the engine f
 
 ## What changed in the bindings
 
-New/changed public API (all with fallbacks and regression tests; suite 352 passed after the embedded-only cut):
+New/changed public API (all with fallbacks and regression tests; the suite passed, 352 tests, when this report was written):
 
 - `ResultSet.to_json_list(batch_size=)` / `iter_json_batches()` — bulk
   materialization via batched Java-side JSON serialization: one JPype crossing per
@@ -121,7 +121,7 @@ isinstance chain runs once per *type*, not per value); cached JClass/java.time
 handles; Java-RID fast path in vector search (no string round-trip + re-fetch per
 hit); per-wrapper index/PQ-check caching; `export_to_csv` streams JSON batches.
 
-**The bridge jar.** `RowBatcher`/`EdgeBatcher`/`VertexBatcher`/`ColumnBatcher` (~450 lines,
+**The bridge jar.** `RowBatcher`/`EdgeBatcher`/`VertexBatcher`/`ColumnBatcher` (~450 lines when this report was written; the bridge has grown since,
 `bindings/python/src/java/com/arcadedb/python/`) compile into
 `arcadedb-python-bridge.jar` during both wheel builds (`Dockerfile.build` and
 `build-native.sh`) and ship inside the wheel next to the engine JARs. They are
@@ -166,35 +166,6 @@ Python side falls back to pure-JPype paths if the jar is absent.
 - Candidate fixes were probed before implementation (`probe_round2.py`,
   `probe_round3.py`); two plausible designs measured slower and were rejected
   (`Result.toMap()`, string-array marshaling).
-
-## Wheel-size audit (2026-07-05)
-
-Same quarantine-and-gate method applied to the wheel contents (82MB → **70.8MB**):
-
-- **Cut (~11MB, feature-preserving; verified by full suite incl. server tests +
-  examples run)**: `arcadedb-tracing` (4.4MB), `snappy-java` (2.4MB, engine uses
-  LZ4 not snappy), `jackson-*` (2.1MB), `commons-math3` (2.0MB, zero users),
-  `jline` (0.4MB, console-only). `micrometer` must stay — server startup
-  requires it (found by bisection).
-- **Kept deliberately**: Lucene stack (~7.5MB — FULL_TEXT tokenization +
-  geospatial genuinely use it), JTS (geospatial).
-- **Server mode removed (follow-up decision, 2026-07-05)**: the
-  server/studio/undertow/xnio/micrometer set (~7.7MB uncompressed) was
-  initially kept under the "small fraction" bar, then cut when the maintainer
-  opted for an embedded-only package: wheel **70.8MB → 63.5MB**, 51 JARs.
-  The official ArcadeDB server distribution is the supported client-server
-  path. (micrometer's only consumer was server startup, so it went too.)
-- **JRE lever**: initially judged dead — with the server jars present, the
-  jdeps-detected module set measured within 1MB of the `java.se` umbrella.
-  The audit also found the jdeps detection had been **silently broken** —
-  `lucene-spatial-extras` declares a missing module and aborted the whole scan,
-  so builds always used the fallback. Fixed in both build scripts (excluded from
-  the scan, like jboss/wildfly). After the server removal the detected set
-  shrank well below `java.se`, so the umbrella was dropped (2026-07-05):
-  jlink now builds from the detected 16 modules — wheel **63.5MB → 61.6MB**,
-  gated by the full suite + examples. Floor reached: the remaining candidates
-  (java.desktop is statically required by jts-core/commons-lang3; native-symbol
-  stripping; Lucene sub-jar bisection) are crumbs or rule-violations.
 
 ## Paper-grade verification on the benchmark host (2026-07-05)
 
