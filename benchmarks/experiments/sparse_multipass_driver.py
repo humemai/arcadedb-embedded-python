@@ -59,6 +59,18 @@ SCALE = os.environ.get("BENCH_MP_SCALE", "small")
 PASSES = int(os.environ.get("BENCH_MP_PASSES", "5"))
 
 
+def lib_version_of(backend, version):
+    """The adapter's own version string, kept on the pass as `lib_version` (CAMPAIGN section 7 row 64,
+    BUGS F173), and guaranteed to start with the engine's name: Elasticsearch's adapter reports the bare
+    number ("9.5.4"), the others prefix it ("qdrant:1.19.1"), and a reader of a pass file should not have
+    to know which. None when the adapter reported nothing."""
+    if not version:
+        return None
+    family = str(backend).split("_")[0].lower()
+    v = str(version)
+    return v if v.lower().startswith(family) else f"{family}:{v}"
+
+
 def _timed_pass(b, queries, gt, offset):
     """One timed sweep. Returns (percentiles, recall).
 
@@ -134,6 +146,10 @@ def main():
                "k": K, "n_queries": len(qs),
                "queries": "first half" if cold else "second half",
                "engine_version": getattr(b, "version", "?"),
+               # The BACKEND's own version. run_conditions() below overwrites engine_version with the
+               # arcadedb-embedded package's, so every comparator pass at the pin read "26.10.1.dev0"
+               # (BUGS F173); lib_version keeps what the adapter reported, as the dense driver does.
+               "lib_version": lib_version_of(BACKEND, getattr(b, "version", None)),
                # What the search returned, on every ArcadeDB pass (row 62): ids, like the comparators.
                **({"sparse_result": b.SPARSE_RESULT} if getattr(b, "SPARSE_RESULT", None) else {}),
                # Only Elasticsearch has it, and the 9.0-vs-9.4 recall gap was
@@ -144,6 +160,11 @@ def main():
                "recall_at_10": recall}
         rec.update({f"query_{k2}": v for k2, v in p.items()})
         rec.update(run_conditions(lane="l3s_mp"))
+        # AFTER run_conditions, which stamps engine_version from the package in this container: for the
+        # served ArcadeDB arm that reads "unknown" and for the embedded arm it is the wheel, while the
+        # adapter learned the real build on connect() (the dense driver does the same, BUGS F173).
+        if "arcadedb" in BACKEND and getattr(b, "version", None):
+            rec["engine_version"] = b.version
         out_reps.append(rec)
         print("RESULT " + json.dumps(rec), flush=True)
 
