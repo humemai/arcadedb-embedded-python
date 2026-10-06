@@ -27,6 +27,7 @@ import fcntl
 import glob
 import json
 import os
+import pwd
 import random
 import re
 import subprocess
@@ -2777,7 +2778,7 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             # ceiling moves. Applied to every server, recorded on the row.
             row["server_shm_size"] = str(server_mem)
             server_cid = sh(["docker", "run", "-d", "--network", net_name,
-                             "--label", "dbbench=1",
+                             *RUNNER_LABELS,
                              "--name", f"srv-{run_id}",
                              "--cpuset-cpus", cpuset,
                              "--memory", str(server_mem), "--memory-swap", str(server_mem),
@@ -2999,7 +3000,7 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             bench_env += ["-e", f"BENCH_SERVER_IMAGE={be['server_image']}"]
 
         cmd = (["docker", "run", "-d", "--network", net_name,
-                "--label", "dbbench=1",
+                *RUNNER_LABELS,
                 "--name", f"cli-{run_id}", "--cpuset-cpus", cpuset]
                + client_caps + bench_env
                # ARCADEDB_HEAP ONLY WHERE IT MEANS SOMETHING. It used to be
@@ -3366,10 +3367,28 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
     return row
 
 
-def acquire_host_lock():
-    """Enforce one-runner-per-host. Returns the held lock file object.
+# EVERY CONTAINER A RUNNER STARTS CARRIES `dbbench=1` AND THE PID OF THE RUNNER THAT STARTED IT, so a
+# sweep can tell a crashed runner's orphan from a live runner's cell (re-pin rehearsal defect 2).
+RUNNER_LABELS = ("--label", "dbbench=1", "--label", f"dbbench.runner={os.getpid()}")
 
-    sweep_orphans() force-removes every dbbench container, so a second
+
+def lock_paths():
+    """The host-wide runner locks, in the order they are taken.
+
+    The first does NOT depend on the environment: it sits in the account's home, found from the
+    password database rather than $HOME, $TMPDIR or $XDG_CACHE_HOME, so two sessions with different
+    TMPDIR (an agent working in a private scratch directory is exactly that) cannot hold different
+    locks. The second is the legacy path under the temporary directory, still taken so that an older
+    runner, which holds only that one, excludes this one and is excluded by it."""
+    home = pwd.getpwuid(os.getuid()).pw_dir
+    return [os.path.join(home, ".cache", "dbbench-runner.lock"),
+            os.path.join(tempfile.gettempdir(), "dbbench-runner.lock")]
+
+
+def acquire_host_lock(paths=None):
+    """Enforce one-runner-per-host. Returns the held lock file objects (keep them alive).
+
+    sweep_orphans() force-removes dbbench containers, so a second
     runner would destroy a live campaign's in-flight cells (this happened
     2026-07-10: a micro smoke wiped an L1 medium cell mid-run). The lock is
     advisory but process-wide; it dies with the process, so a crashed runner
@@ -3382,31 +3401,74 @@ def acquire_host_lock():
     # build (l2_neo4j_graph_olap_sf1_r1, rc 137, an error row with no
     # digests), and did the same to a cross-model cell in the other
     # direction. The protocol is one runner per HOST; the lock has to be
-    # where every checkout on the host finds it (BUGS F58).
-    lock_path = os.path.join(tempfile.gettempdir(), "dbbench-runner.lock")
-    fh = open(lock_path, "w")
+    # where every checkout on the host finds it (BUGS F58). And since the
+    # re-pin rehearsal (2026-10-06) where every SESSION finds it: it was under
+    # tempfile.gettempdir(), which follows $TMPDIR.
+    held = []
+    for lock_path in (paths if paths is not None else lock_paths()):
+        os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+        fh = open(lock_path, "a+")
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise SystemExit(
+                f"another runner already holds {lock_path} on this host. "
+                "The protocol allows exactly one runner per bench host: a second "
+                "one would sweep the first's containers. Wait for it, or kill it."
+            )
+        fh.seek(0)
+        fh.truncate()
+        fh.write(f"{os.getpid()}\n")
+        fh.flush()
+        held.append(fh)
+    return held
+
+
+def owner_is_alive(pid_text, proc_root="/proc"):
+    """Is the runner whose pid a container's `dbbench.runner` label names still running? Judged by
+    /proc/<pid>/cmdline naming runner.py, so a recycled pid of some other process does not keep an
+    orphan alive."""
     try:
-        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        raise SystemExit(
-            f"another runner already holds {lock_path} on this host. "
-            "The protocol allows exactly one runner per bench host: a second "
-            "one would sweep the first's containers. Wait for it, or kill it."
-        )
-    fh.write(f"{os.getpid()}\n")
-    fh.flush()
-    return fh
+        pid = int(str(pid_text).strip())
+        with open(os.path.join(proc_root, str(pid), "cmdline"), "rb") as fh:
+            return b"runner.py" in fh.read()
+    except (ValueError, OSError):
+        return False
 
 
-def sweep_orphans():
+def split_orphans(listing, own_pid, proc_root="/proc"):
+    """([container ids to remove], [(name, owner pid) left alone]) from the lines of
+    `docker ps -a --filter label=dbbench=1 --format '{{.ID}} {{.Names}} {{.Label "dbbench.runner"}}'`.
+
+    A container is another live runner's, and left alone, when its owner label names a running runner
+    that is not this process. One with no owner label predates the label (an older runner's) and is an
+    orphan only because the caller holds every host lock, which excludes any live older runner."""
+    gone, kept = [], []
+    for line in listing.splitlines():
+        parts = line.split()
+        if not parts:
+            continue
+        cid, name = parts[0], (parts[1] if len(parts) > 1 else parts[0])
+        owner = parts[2] if len(parts) > 2 else ""
+        if owner and str(owner) != str(own_pid) and owner_is_alive(owner, proc_root):
+            kept.append((name, owner))
+        else:
+            gone.append((cid, name))
+    return gone, kept
+
+
+def sweep_orphans(proc_root="/proc"):
     """Reap containers left by a previous crashed/killed runner. Only safe to
-    call while holding the host lock (see acquire_host_lock)."""
-    ids = sh(["docker", "ps", "-aq", "--filter", "label=dbbench=1"]).split()
-    if ids:
-        print(f"sweeping {len(ids)} orphaned bench container(s): "
-              + sh(["docker", "ps", "-a", "--filter", "label=dbbench=1",
-                    "--format", "{{.Names}}"]).replace("\n", " "))
-        subprocess.run(["docker", "rm", "-f"] + ids, capture_output=True)
+    call while holding the host locks (see acquire_host_lock), and it removes
+    only what no live runner owns (split_orphans)."""
+    listing = sh(["docker", "ps", "-a", "--filter", "label=dbbench=1", "--format",
+                  '{{.ID}} {{.Names}} {{.Label "dbbench.runner"}}'])
+    gone, kept = split_orphans(listing, os.getpid(), proc_root)
+    for name, owner in kept:
+        print(f"leaving {name} alone: it belongs to the live runner {owner}")
+    if gone:
+        print(f"sweeping {len(gone)} orphaned bench container(s): " + " ".join(n for _, n in gone))
+        subprocess.run(["docker", "rm", "-f"] + [c for c, _ in gone], capture_output=True)
 
 
 def split_cpuset(cpuset, n):
