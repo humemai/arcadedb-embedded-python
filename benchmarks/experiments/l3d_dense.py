@@ -1258,15 +1258,22 @@ class PgVector(Base):
             ev = c.fetchone()[0]
             c.execute("SELECT version()")
             pv = c.fetchone()[0].split(" (")[0]
+        # pgvector-python's psycopg adapters, for the binary COPY in build() (the pgvector README's bulk-loading path). Imported here, not at
+        # module level, so a stage that never touches pgvector never needs the package (G3c, repros/postgres-roundtrips-ab-20261007; DECISIONS #174).
+        from pgvector.psycopg import register_vector
+        register_vector(self.cx)
         self.version = f"pgvector:{ev} on {pv}"
 
     def build(self, vecs):
         with self.cx.cursor() as c:
             _t0 = time.perf_counter()
             c.execute(f"CREATE TABLE articles (vid INTEGER, embedding vector({DIM}))")
-            with c.copy("COPY articles (vid, embedding) FROM STDIN") as cp:
+            # BINARY COPY WITH pgvector-python's TYPES (G3c: 11.6x on the ingest column at 200,000 SIFT vectors, 13.2x on DEEP-shaped ones,
+            # identical stored rows); the text path formatted every float with "%.9g" in Python inside this timer
+            with c.copy("COPY articles (vid, embedding) FROM STDIN WITH (FORMAT BINARY)") as cp:
+                cp.set_types(["int4", "vector"])
                 for i in range(len(vecs)):
-                    cp.write_row((i, "[" + ",".join("%.9g" % x for x in vecs[i]) + "]"))
+                    cp.write_row((i, vecs[i]))
             self.ingest_s = round(time.perf_counter() - _t0, 2)
             _t1 = time.perf_counter()
             c.execute(f"CREATE INDEX ON articles USING hnsw (embedding vector_l2_ops) "

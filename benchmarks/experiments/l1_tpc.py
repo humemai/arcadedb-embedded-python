@@ -963,59 +963,56 @@ class PostgresTPC:
             cur.execute("CREATE INDEX li_shipdate ON lineitem (l_shipdate)")
             cur.execute("ANALYZE lineitem")
         self.cx.commit()
+        # THE TIMED CALLS RUN IN AUTOCOMMIT (G3a, repros/postgres-roundtrips-ab-20261007; DECISIONS #174): psycopg sends
+        # BEGIN as its own round trip, so a one-statement call was three (BEGIN, statement, COMMIT) and is one now; the
+        # vendor's psycopg page says autocommit "has a beneficial performance effect, because less queries are sent".
+        # build() above stays one transaction: the flag is set after its final commit.
+        self.cx.autocommit = True
 
     def olap(self, which):
         q = DUCK_OLAP[which]
         cur = self.cx.cursor()
         cur.execute(q)
-        r = cur.fetchall()
-        self.cx.commit()
-        return r
+        return cur.fetchall()
 
     def new_order(self, i, pkey):
-        cur = self.cx.cursor()
-        cur.execute("SELECT p_retailprice, stock FROM part WHERE p_partkey=%s",
-                    (pkey,))
-        cur.fetchone()
-        cur.execute("INSERT INTO orders_new VALUES (%s, %s, %s, 0)", (i, pkey, 1))
-        cur.execute("UPDATE part SET stock = stock - 1 WHERE p_partkey=%s",
-                    (pkey,))
-        self.cx.commit()
+        # new-order is a transaction: BEGIN, three statements, COMMIT (five sends, the same as before autocommit)
+        with self.cx.transaction():
+            cur = self.cx.cursor()
+            cur.execute("SELECT p_retailprice, stock FROM part WHERE p_partkey=%s",
+                        (pkey,))
+            cur.fetchone()
+            cur.execute("INSERT INTO orders_new VALUES (%s, %s, %s, 0)", (i, pkey, 1))
+            cur.execute("UPDATE part SET stock = stock - 1 WHERE p_partkey=%s",
+                        (pkey,))
 
     def payment(self, okey):
-        cur = self.cx.cursor()
-        cur.execute("SELECT okey, pkey, qty FROM orders_new WHERE okey=%s", (okey,))
-        r = cur.fetchone()
-        cur.execute("UPDATE orders_new SET paid = 1 WHERE okey=%s", (okey,))
-        cur.execute("INSERT INTO payments VALUES (%s, %s, %s)", (okey, r[1] if r else 0, 1.0))
-        self.cx.commit()
+        with self.cx.transaction():
+            cur = self.cx.cursor()
+            cur.execute("SELECT okey, pkey, qty FROM orders_new WHERE okey=%s", (okey,))
+            r = cur.fetchone()
+            cur.execute("UPDATE orders_new SET paid = 1 WHERE okey=%s", (okey,))
+            cur.execute("INSERT INTO payments VALUES (%s, %s, %s)", (okey, r[1] if r else 0, 1.0))
 
-    # The four single-record operations (#82a), each one committed transaction.
+    # The four single-record operations (#82a), each one statement committed on its own (autocommit).
     def crud_insert(self, i, pkey):
         self.cx.cursor().execute("INSERT INTO crud VALUES (%s, %s, 1, 9.99)", (i, pkey))
-        self.cx.commit()
 
     def crud_read(self, i):
         cur = self.cx.cursor()
         cur.execute("SELECT ckey, pkey, qty FROM crud WHERE ckey=%s", (i,))
-        r = cur.fetchall()
-        self.cx.commit()
-        return r
+        return cur.fetchall()
 
     def crud_update(self, i):
         self.cx.cursor().execute("UPDATE crud SET qty = 2 WHERE ckey=%s", (i,))
-        self.cx.commit()
 
     def crud_delete(self, i):
         self.cx.cursor().execute("DELETE FROM crud WHERE ckey=%s", (i,))
-        self.cx.commit()
 
     def _all(self, sql):
         cur = self.cx.cursor()
         cur.execute(sql)
-        r = cur.fetchall()
-        self.cx.commit()
-        return r
+        return cur.fetchall()
 
     def crud_scan(self):
         return self._all("SELECT ckey, pkey, qty FROM crud")
