@@ -5,15 +5,9 @@ Tests for NumPy support in ArcadeDB Python bindings.
 import arcadedb_embedded as arcadedb
 import pytest
 
-try:
-    import numpy as np
-
-    HAS_NUMPY = True
-except ImportError:
-    HAS_NUMPY = False
+np = pytest.importorskip("numpy")
 
 
-@pytest.mark.skipif(not HAS_NUMPY, reason="NumPy not installed")
 def test_numpy_array_conversion_in_command(temp_db):
     """Test automatic conversion of NumPy arrays in db.command()."""
     db = temp_db
@@ -39,7 +33,6 @@ def test_numpy_array_conversion_in_command(temp_db):
     assert abs(stored_vec[2] - 0.3) < 0.0001
 
 
-@pytest.mark.skipif(not HAS_NUMPY, reason="NumPy not installed")
 def test_numpy_array_conversion_in_query(temp_db):
     """Test automatic conversion of NumPy arrays in db.query()."""
     db = temp_db
@@ -68,7 +61,6 @@ def test_numpy_array_conversion_in_query(temp_db):
         pytest.fail(f"Query with NumPy array failed: {e}")
 
 
-@pytest.mark.skipif(not HAS_NUMPY, reason="NumPy not installed")
 def test_numpy_array_conversion_in_transaction(temp_db):
     """Test NumPy array conversion in regular transactions (no batch context)."""
     db = temp_db

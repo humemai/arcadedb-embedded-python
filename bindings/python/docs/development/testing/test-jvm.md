@@ -34,7 +34,7 @@ database without closing it; the test asserts it prints `OK` and exits 0 within 
 
 ## Ctrl-C (`test_sigint.py`)
 
-Each case starts a child process, sends it SIGINT after the JVM is up, and reads what it printed (humemai/arcadedb-embedded-python#118). JPype's default in a script is `interrupt=True`: the JVM ends the whole process with status 130 and no `KeyboardInterrupt`, `finally`, or `atexit` runs. `start_jvm()` now passes `interrupt=False`.
+Each case starts a child process, sends it SIGINT after the JVM is up, and reads what it printed (humemai/arcadedb-embedded-python#118). Windows cannot deliver SIGINT to a child process, so `tests/conftest.py` leaves this file out of collection there (`collect_ignore`) rather than reporting skips. JPype's default in a script is `interrupt=True`: the JVM ends the whole process with status 130 and no `KeyboardInterrupt`, `finally`, or `atexit` runs. `start_jvm()` now passes `interrupt=False`.
 
 - **a Python loop and a blocked Java call that Ctrl-C cannot wake (a socket `accept()` that times out after 4 s)**: inside `with db.transaction():` that inserted a row, Ctrl-C raises `KeyboardInterrupt` (in the Java case when the call returns), the transaction is rolled back (the count is 0), `finally` and `atexit` run, and the exit status is 0.
 - **`interrupt=True` keeps the old behavior**: exit status 130 and no `KeyboardInterrupt`.

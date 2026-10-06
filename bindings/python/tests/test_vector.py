@@ -436,8 +436,7 @@ class TestLSMVectorIndex:
             pq_clusters=2,
         )
 
-        if "TypeIndex" not in index._java_index.getClass().getName():
-            pytest.skip("TypeIndex wrapper not returned by this build")
+        assert "TypeIndex" in index._java_index.getClass().getName()
 
         vectors = [
             [1.0, 0.0, 0.0],
@@ -1424,10 +1423,7 @@ class TestLSMVectorIndex:
 
     def test_lsm_cosine_distance_high_dimensional(self, test_db):
         """Test cosine distance in high dimensions (128D)."""
-        try:
-            import numpy as np
-        except ImportError:
-            pytest.skip("NumPy required for high-dimensional test")
+        np = pytest.importorskip("numpy")
 
         test_db.command("sql", "CREATE VERTEX TYPE VectorTestHD")
         test_db.command("sql", "CREATE PROPERTY VectorTestHD.name STRING")

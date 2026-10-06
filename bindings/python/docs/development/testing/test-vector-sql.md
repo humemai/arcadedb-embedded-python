@@ -52,8 +52,8 @@ Tests validate:
 - **test_int8_quantization_boundary_condition_sql**: INT8 quantized `LSM_VECTOR` index (Dim=16, N=10) builds and accepts a `vectorNeighbors` query without error; the test asserts only that the projection returns a row, not that it holds a neighbour.
 - **test_create_index_with_quantization_int8_sql**: Creates an `INT8` quantized `LSM_VECTOR` index, inserts N=50 vectors, and verifies `vectorNeighbors` returns one neighbour (the returned vector's values are not checked).
 - **test_create_index_with_quantization_binary_sql**: Creates a `BINARY` quantized `LSM_VECTOR` index (Dim=128) with `storeVectorsInGraph` and verifies search.
-- **test_create_index_with_native_int8_encoding_sql**: Creates an `LSM_VECTOR` index on a `BINARY` property with `"quantization": "NONE", "encoding": "INT8"` and verifies the metadata (skips if the build does not expose `encoding`).
-- **test_vector_neighbors_on_native_int8_storage_sql**: Verifies `vectorNeighbors` works against native INT8-encoded storage ingested as byte arrays (skips if unsupported).
+- **test_create_index_with_native_int8_encoding_sql**: Creates an `LSM_VECTOR` index on a `BINARY` property with `"quantization": "NONE", "encoding": "INT8"` and verifies the metadata.
+- **test_vector_neighbors_on_native_int8_storage_sql**: Verifies `vectorNeighbors` works against native INT8-encoded storage ingested as byte arrays.
 
 ### Index Creation & Metadata
 
@@ -65,9 +65,9 @@ Tests validate:
 - **test_vector_neighbors**: `vectorNeighbors(indexName, vector, k)` on a basic `LSM_VECTOR` index.
 - **test_vector_neighbors_accepts_parameterized_index_and_vector**: `vectorNeighbors(?, ?, ?)` accepts bound index name, vector, and k parameters.
 - **test_vector_neighbors_by_key_sql**: `vectorNeighbors('Word[vector]', 'docA', 3)` searches from an existing record key.
-- **test_vector_neighbors_by_key_opencypher**: OpenCypher exposes `CALL vector.neighbors(...)` with key-based lookup (skips if OpenCypher is unavailable).
+- **test_vector_neighbors_by_key_opencypher**: OpenCypher exposes `CALL vector.neighbors(...)` with key-based lookup.
 - **test_vector_neighbors_group_by_sql**: `vector.neighbors` supports `{ groupBy, groupSize }` options.
-- **test_sparse_vector_neighbors_sql**: `LSM_SPARSE_VECTOR` index plus `vector.sparseNeighbors` top-K retrieval (skips if `LSM_SPARSE_VECTOR` is unsupported).
+- **test_sparse_vector_neighbors_sql**: `LSM_SPARSE_VECTOR` index plus `vector.sparseNeighbors` top-K retrieval.
 
 ### End-to-End Search
 

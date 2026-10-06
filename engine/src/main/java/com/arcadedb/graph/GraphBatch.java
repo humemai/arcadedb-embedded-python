@@ -108,6 +108,12 @@ import java.util.logging.Level;
  * {@code arcadedb.graph.supernodeThreshold=0} database-wide to disable promotion entirely if a bulk-loaded
  * super-node's degraded traversal performance is a concern.
  * <p>
+ * <b>Transactions (issue #9242):</b> the batch manages its own transactions (every flush is several durable steps), so
+ * {@code createVertices}, {@code flush} and {@code close} refuse to run inside a transaction the caller opened. For
+ * {@code close()} that means nothing is dropped or released (a WARNING says how much is still pending): the batch stays
+ * open and a later {@code close()}, outside the caller's transaction, writes the pending work. In a try-with-resources
+ * the refusal is thrown out of the block, so end the caller's transaction before it exits.
+ * <p>
  * Usage:
  * <pre>
  * try (final GraphBatch batch = database.batch()
@@ -309,6 +315,7 @@ public class GraphBatch implements AutoCloseable {
   private final Map<String, Integer> edgeTypeFirstBucketCache = new ConcurrentHashMap<>();
   private final Map<String, Boolean> lightweightTypeCache     = new ConcurrentHashMap<>();
   private final Map<String, Boolean> bidirectionalTypeCache   = new ConcurrentHashMap<>();
+  private final Map<String, Boolean> emptyEdgeSchemaCache     = new ConcurrentHashMap<>();
 
   // --- Head chunk RID cache: avoids vertex loads when chunk is already known ---
   // Bounded LRU wrapped in synchronizedMap (issue #5664): getOrCreate*EdgeChunk() is called from parallel async
@@ -578,6 +585,7 @@ public class GraphBatch implements AutoCloseable {
     }
 
     vertex.save();
+    evictStaleChunkCache(vertex.getIdentity());
 
     if (preAllocateEdgeChunks) {
       getOrCreateOutEdgeChunk(vertex);
@@ -590,10 +598,21 @@ public class GraphBatch implements AutoCloseable {
   }
 
   /**
+   * A NEW VERTEX CANNOT OWN A SEGMENT YET: ANY ENTRY CACHED FOR ITS POSITION BELONGS TO A VERTEX WHOSE TRANSACTION WAS ROLLED BACK AND
+   * WHOSE POSITION WAS REUSED (#9039).
+   */
+  private void evictStaleChunkCache(final RID vertexRID) {
+    final long key = packVertexKey(vertexRID.getBucketId(), vertexRID.getPosition());
+    outChunkRIDCache.remove(key);
+    inChunkRIDCache.remove(key);
+  }
+
+  /**
    * Creates multiple vertices in a single transaction. Edge segments are NOT pre-allocated;
    * they will be created on-demand at flush time with exactly the right size based on the
    * actual edges buffered for each vertex.
-   * Handles transaction begin/commit internally.
+   * Handles transaction begin/commit internally, so it must NOT be called inside a transaction the caller opened
+   * (an {@link IllegalStateException} is thrown and that transaction is left untouched, issue #9242).
    *
    * @param typeName vertex type name
    * @param count    number of vertices to create
@@ -605,6 +624,7 @@ public class GraphBatch implements AutoCloseable {
         final MutableVertex vertex = database.newVertex(typeName);
         vertex.save();
         rids[i] = vertex.getIdentity();
+        evictStaleChunkCache(rids[i]);
       }
     });
   }
@@ -612,6 +632,7 @@ public class GraphBatch implements AutoCloseable {
   /**
    * Creates multiple vertices with properties in a single transaction. Edge segments are NOT
    * pre-allocated; they will be created on-demand at flush time with the exact size needed.
+   * Like {@link #createVertices(String, int)} it manages its own transaction and refuses to run inside the caller's.
    *
    * @param typeName   vertex type name
    * @param properties per-vertex properties, may contain nulls for vertices with no properties
@@ -629,6 +650,7 @@ public class GraphBatch implements AutoCloseable {
         }
         vertex.save();
         rids[i] = vertex.getIdentity();
+        evictStaleChunkCache(rids[i]);
       }
     });
   }
@@ -655,6 +677,20 @@ public class GraphBatch implements AutoCloseable {
    * @return RIDs of the durably-committed vertices
    */
   private RID[] createVerticesWithRetry(final int count, final Consumer<RID[]> filler) {
+    // Refused BEFORE anything is touched, so the caller's transaction keeps every setting it has (#9242)
+    requireNoCallerTransaction("createVertices");
+    final WALFile.FlushType walFlushBefore = threadWalFlush();
+    try {
+      return createVerticesWithRetryInternal(count, filler);
+    } finally {
+      restoreThreadWalFlush(walFlushBefore);
+    }
+  }
+
+  private RID[] createVerticesWithRetryInternal(final int count, final Consumer<RID[]> filler) {
+    // THE UNIT BELOW COMMITS AND, ON A RETRYABLE FAILURE, ROLLS BACK: IT ONLY RUNS IN A TRANSACTION IT BEGAN ITSELF (#9242)
+    // From here on every transaction in this loop is one the batch began itself (checked above), so rolling back
+    // whatever is active never touches the caller's: keep it that way when editing
     int attempt = 0;
     while (true) {
       final RID[] rids = new RID[count];
@@ -687,6 +723,16 @@ public class GraphBatch implements AutoCloseable {
             null, attempt, commitRetries, e.getMessage());
 
         backoffBeforeRetry(attempt);
+      } catch (final RuntimeException | Error e) {
+        // NOT RETRYABLE: DO NOT LEAVE THE TRANSACTION THIS METHOD BEGAN OPEN (#9040)
+        if (database.isTransactionActive()) {
+          try {
+            database.rollback();
+          } catch (final RuntimeException rollbackError) {
+            e.addSuppressed(rollbackError);
+          }
+        }
+        throw e;
       }
     }
   }
@@ -751,6 +797,11 @@ public class GraphBatch implements AutoCloseable {
       throw new IllegalArgumentException(GraphEngine.unidirectionalEdgeOnBidirectionalTypeMessage(edgeTypeName)
           + ". Build the batch with withBidirectional(true), or declare the type UNIDIRECTIONAL");
 
+    // The edge that fills the buffer flushes it, which a caller's transaction forbids: refuse BEFORE buffering it, so a
+    // rejected call leaves nothing behind for a later flush or close() to commit (#9242)
+    if (edgeCount + 1 >= batchSize)
+      requireNoCallerTransaction("newEdge");
+
     final int idx = edgeCount;
     edgeSrcBucketIds[idx] = sourceVertexRID.getBucketId();
     edgeSrcPositions[idx] = sourceVertexRID.getPosition();
@@ -766,16 +817,49 @@ public class GraphBatch implements AutoCloseable {
           + "needs to carry data");
 
     edgeHasProperties[idx] = hasProps;
-    this.edgeProperties[idx] = hasProps ? edgeProperties : null;
+    this.edgeProperties[idx] = hasProps ? propertyPairs(edgeProperties) : null;
     // A LIGHTWEIGHT type is stored lightweight whatever the builder was told: the storage shape belongs to the
     // schema, and withLightEdges() is only the legacy per-batch override for types that do not declare one.
-    edgeIsLightweight[idx] = typeIsLightweight || (lightEdges && !hasProps);
+    // An edge type with a default or a MANDATORY property is never stored lightweight by that override: those apply to an
+    // edge without properties too (issue #9019). Types with only optional properties keep their compact property-less edges.
+    edgeIsLightweight[idx] = typeIsLightweight || (lightEdges && !hasProps && !typeAppliesSchemaToEmptyEdge(edgeTypeName));
     edgeIsBidirectional[idx] = typeIsBidirectional;
 
     edgeCount++;
 
     if (edgeCount >= batchSize)
       flush();
+  }
+
+  /**
+   * The properties as the flat {@code [name, value, name, value, ...]} array the bulk writer reads. A single {@link Map}
+   * is how a caller hands over a property map, as on {@code Vertex.newEdge()}: it is flattened here, because read as
+   * name/value pairs it would hold none and its properties would be dropped without a word (issue #9020).
+   */
+  private static Object[] propertyPairs(final Object[] properties) {
+    if (properties.length == 1 && properties[0] instanceof Map<?, ?> map) {
+      final Object[] pairs = new Object[map.size() * 2];
+      int i = 0;
+      for (final Map.Entry<?, ?> entry : map.entrySet()) {
+        if (entry.getKey() == null)
+          throw new IllegalArgumentException("Property names cannot be null");
+        pairs[i++] = entry.getKey().toString();
+        pairs[i++] = entry.getValue();
+      }
+      return pairs;
+    }
+    if (properties.length % 2 != 0)
+      throw new IllegalArgumentException("Properties must be an even number as pairs of name, value");
+    return properties;
+  }
+
+  private boolean typeAppliesSchemaToEmptyEdge(final String edgeTypeName) {
+    return emptyEdgeSchemaCache.computeIfAbsent(edgeTypeName, name -> {
+      for (final Property property : edgeType(name).getPolymorphicProperties())
+        if (property.isMandatory() || property.getDefaultValueDefinition() != null)
+          return true;
+      return false;
+    });
   }
 
   /** The edge type {@code name}, or a clear refusal for a name that is missing or not an edge type. */
@@ -791,15 +875,24 @@ public class GraphBatch implements AutoCloseable {
    * and will be connected at {@link #close()}.
    */
   public void flush() {
+    // Nothing buffered means nothing to commit: a no-op flush is harmless inside a caller's transaction, so it is the one
+    // call that does not refuse it (issue #9242)
     if (edgeCount == 0)
       return;
 
-    final long startNs = System.nanoTime();
+    // Refused BEFORE anything is touched, so the caller's transaction keeps every setting it has (#9242)
+    requireNoCallerTransaction("flush");
+    final WALFile.FlushType walFlushBefore = threadWalFlush();
+    try {
+      flushInternal();
+    } finally {
+      restoreThreadWalFlush(walFlushBefore);
+    }
+  }
 
-    // Track whether this flush started the transaction so a failure (e.g. DuplicatedKeyException
-    // surfaced by the bulk-edge index update introduced for issue #4113) doesn't leave the
-    // database with the half-written batch visible to the next caller.
-    final boolean startedTx = !database.isTransactionActive();
+  private void flushInternal() {
+    // A FLUSH COMMITS SEVERAL TIMES BY DESIGN: flush() has already refused a transaction the caller opened (#9242)
+    final long startNs = System.nanoTime();
 
     // Number of buffered edges this flush is about to write. Read after the buffer is reset below, so it cannot
     // be replaced by edgeCount there.
@@ -903,7 +996,9 @@ public class GraphBatch implements AutoCloseable {
       // Clear property references to allow GC
       Arrays.fill(edgeProperties, 0, edgeProperties.length, null);
     } catch (final RuntimeException e) {
-      if (startedTx && database.isTransactionActive())
+      // A failure (e.g. DuplicatedKeyException surfaced by the bulk-edge index update introduced for issue #4113)
+      // must not leave the half-written batch of the transaction this flush began visible to the next caller.
+      if (database.isTransactionActive())
         database.rollback();
 
       // A flush that died after PHASE 3 (in the deferred-incoming drain) still created every edge it counted:
@@ -1103,7 +1198,7 @@ public class GraphBatch implements AutoCloseable {
   private EdgeSerializationTemplate getOrCreateTemplate(final Object[] props, final int edgeTypeBucketId) {
     // Build signature from property names
     final int propCount = props.length / 2;
-    final StringBuilder sig = new StringBuilder(edgeTypeBucketId);
+    final StringBuilder sig = new StringBuilder().append(edgeTypeBucketId).append(':');
     for (int p = 0; p < propCount; p++) {
       if (p > 0)
         sig.append(',');
@@ -1209,7 +1304,8 @@ public class GraphBatch implements AutoCloseable {
 
       // Resolve type
       final Object value = props[p * 2 + 1];
-      byte type = template.typeFlags[p];
+      // A null carries the null tag: the declared tag would promise bytes that never follow
+      byte type = value == null ? BinaryTypes.TYPE_NULL : template.typeFlags[p];
       if (type == -1)
         type = BinaryTypes.getTypeFromValue(value, null);
 
@@ -1256,7 +1352,8 @@ public class GraphBatch implements AutoCloseable {
       buffer.putNumber(Double.doubleToLongBits(((Number) value).doubleValue()));
       break;
     case BinaryTypes.TYPE_BYTE:
-      buffer.putByte((Byte) value);
+      // already converted to the declared type by applySchema()
+      buffer.putByte(((Number) value).byteValue());
       break;
     case BinaryTypes.TYPE_BOOLEAN:
       buffer.putByte((byte) ((Boolean) value ? 1 : 0));
@@ -1283,7 +1380,8 @@ public class GraphBatch implements AutoCloseable {
    * Bulk-creates edge records using template-based serialization and sequential page writes.
    * For each unique set of property names, a template is created once that pre-resolves
    * dictionary IDs and type tags. Edges are then serialized directly into Binary buffers
-   * without MutableEdge allocation or HashMap operations.
+   * without MutableEdge allocation or HashMap operations, except for an edge of a type with declared properties, which goes
+   * through {@link #applySchema} once for the conversion, defaults and constraints (issue #9019).
    */
   private void createEdgeRecordsBulk(final RID[] edgeRIDs, final int nonLightCount) {
     // Collect indices of non-light edges
@@ -1292,6 +1390,18 @@ public class GraphBatch implements AutoCloseable {
     for (int i = 0; i < edgeCount; i++)
       if (edgeRIDs[i] == null)
         nonLightIndices[nlIdx++] = i;
+
+    // An edge type with declared properties gets what every other write path gives it: the value converted to the declared
+    // type, the defaults, and the constraints (issue #9019). The bulk writer casts raw values to the declared binary type,
+    // which wraps a SHORT, throws on a BYTE and never runs a validation.
+    final Map<Integer, Boolean> declaresProperties = new HashMap<>();
+    for (int k = 0; k < nonLightCount; k++) {
+      final int i = nonLightIndices[k];
+      final Boolean declared = declaresProperties.computeIfAbsent(edgeTypeBucketIds[i],
+          bucketId -> !database.getSchema().getTypeByBucketId(bucketId).getPolymorphicProperties().isEmpty());
+      if (declared)
+        applySchema(i);
+    }
 
     // Serialize all edge records using templates
     final Binary[] serializedBuffers = new Binary[nonLightCount];
@@ -1366,6 +1476,31 @@ public class GraphBatch implements AutoCloseable {
   }
 
   /**
+   * Replaces the buffered properties of edge {@code i} with what {@code Vertex.newEdge()} would store: converted to the
+   * declared types, completed with the defaults and validated against the constraints (issue #9019). The edge is built
+   * only to run that logic and is never saved.
+   */
+  private void applySchema(final int i) {
+    final EdgeType edgeType = (EdgeType) database.getSchema().getTypeByBucketId(edgeTypeBucketIds[i]);
+    final MutableEdge edge = new MutableEdge(database, edgeType, new RID(edgeSrcBucketIds[i], edgeSrcPositions[i]),
+        new RID(edgeDstBucketIds[i], edgeDstPositions[i]));
+    if (edgeProperties[i] != null)
+      GraphEngine.setProperties(edge, edgeProperties[i]);
+    edgeType.applyDefaultValues(edge);
+    edge.validate();
+
+    final Set<String> names = edge.getPropertyNames();
+    final Object[] pairs = new Object[names.size() * 2];
+    int p = 0;
+    for (final String name : names) {
+      pairs[p++] = name;
+      pairs[p++] = edge.get(name);
+    }
+    edgeProperties[i] = pairs.length > 0 ? pairs : null;
+    edgeHasProperties[i] = pairs.length > 0;
+  }
+
+  /**
    * Registers a freshly bulk-created edge into the indexes defined on its bucket.
    * Mirrors the relevant portion of {@link com.arcadedb.database.DocumentIndexer#createDocument}
    * but reads property values straight from the flat edge buffer instead of materializing
@@ -1409,6 +1544,17 @@ public class GraphBatch implements AutoCloseable {
 
   @Override
   public void close() {
+    // Refused BEFORE anything is released or discarded (#9242): the work still buffered, including the deferred incoming
+    // edges and head pointers of edges already committed, can only be written in transactions of the batch's own, and a
+    // batch that gave up its guard and settings here could never write it. The batch stays open: end the caller's
+    // transaction and call close() again.
+    if (database.isTransactionActive() && hasPendingWork()) {
+      LogManager.instance().log(this, Level.WARNING,
+          "GraphBatch.close() was called inside a transaction the caller opened: %d buffered edge(s), %d deferred incoming edge(s) and the head pointers of %d vertices are kept, the batch stays open until close() is called again outside it",
+          null, edgeCount, inEdgeCount, deferredOutHead.size() + deferredInHead.size());
+      throw callerTransactionRefusal("close");
+    }
+
     // The guard release sits in the outermost finally on purpose: every other exit of this method throws,
     // and a guard left behind locks the database out of batching until the process restarts (issue #5666).
     try {
@@ -1692,9 +1838,47 @@ public class GraphBatch implements AutoCloseable {
   private void beginTx() {
     if (!database.isTransactionActive())
       database.begin();
-    // Apply WAL settings to the current transaction
-    database.getTransaction().setUseWAL(useWAL);
-    database.getTransaction().setWALFlush(walFlush);
+    // Apply WAL settings to the current transaction. The WAL switch is a one-transaction override: the thread's own
+    // setting, which a later transaction of the caller would inherit, is left alone (#9242)
+    final TransactionContext tx = database.getTransaction();
+    tx.setUseWALForThisTransaction(useWAL);
+    tx.setWALFlush(walFlush);
+  }
+
+  /**
+   * Puts back the thread's WAL flush strategy as it was when the call began, which {@link #beginTx()} relaxed, so a
+   * transaction the caller runs between two calls of the batch commits with whatever the caller selected (#9242).
+   */
+  private void restoreThreadWalFlush(final WALFile.FlushType before) {
+    final TransactionContext tx = database.getTransactionIfExists();
+    if (tx != null)
+      tx.setWALFlush(before);
+  }
+
+  /** The thread's own WAL flush strategy as it stands now (null: it follows the database's), to put back after a call. */
+  private WALFile.FlushType threadWalFlush() {
+    final TransactionContext tx = database.getTransactionIfExists();
+    return tx != null ? tx.getThreadWALFlush() : null;
+  }
+
+  /**
+   * The batch commits internally (every flush is several durable steps, and a retried vertex commit rolls back), so it
+   * can only run in a transaction it began itself. A transaction the caller opened would be committed together with
+   * the batch's writes, under the batch's WAL policy, or rolled back on a retry (#9242).
+   */
+  private void requireNoCallerTransaction(final String operation) {
+    if (database.isTransactionActive())
+      throw callerTransactionRefusal(operation);
+  }
+
+  private IllegalStateException callerTransactionRefusal(final String operation) {
+    return new IllegalStateException(
+        "GraphBatch." + operation + "() manages its own transactions and cannot run inside a transaction the caller opened: "
+            + "commit or roll back that transaction first");
+  }
+
+  private boolean hasPendingWork() {
+    return edgeCount > 0 || inEdgeCount > 0 || !deferredOutHead.isEmpty() || !deferredInHead.isEmpty();
   }
 
   /**

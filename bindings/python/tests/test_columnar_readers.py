@@ -15,8 +15,8 @@ from decimal import Decimal
 import arcadedb_embedded as arcadedb
 import pytest
 
-pa = pytest.importorskip("pyarrow", reason="to_arrow() requires pyarrow")
-pd = pytest.importorskip("pandas", reason="to_dataframe() requires pandas")
+pa = pytest.importorskip("pyarrow")
+pd = pytest.importorskip("pandas")
 
 BATCH_SIZES = [25_000, 2, 1]
 

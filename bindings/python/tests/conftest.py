@@ -10,6 +10,16 @@ import threading
 
 import pytest
 
+# A test file that cannot run here is not collected, so nothing is reported as skipped: a skip means
+# a test that should have run, and scripts/check_test_skips.py fails the CI job on any skip.
+collect_ignore = []
+if sys.platform == "win32":
+    # test_sigint.py sends SIGINT to a child process, which Windows cannot deliver
+    collect_ignore.append("test_sigint.py")
+if not os.path.isdir(os.path.join(os.path.dirname(os.path.dirname(__file__)), "docs")):
+    # the upstream pull request branch has no docs/ directory
+    collect_ignore.append("test_docs_examples.py")
+
 
 @pytest.hookimpl(trylast=True)
 def pytest_configure(config):
@@ -104,25 +114,6 @@ def temp_server_root():
         shutil.rmtree(temp_dir)
 
 
-def has_server_support():
-    """Is the server stack bundled in this wheel?
-
-    The server JARs (arcadedb-server, studio, undertow, xnio, wildfly, jboss,
-    micrometer) are shipped by default, but a slim build can exclude them via
-    scripts/jar_exclusions.txt. Probing for the studio JAR keeps the suite
-    honest either way: server tests skip rather than fail on a slim wheel.
-    """
-    try:
-        from arcadedb_embedded.jvm import get_jar_path
-
-        jar_dir = get_jar_path()
-        if not os.path.exists(jar_dir):
-            return False
-        return any("studio" in j.lower() for j in os.listdir(jar_dir))
-    except Exception:
-        return False
-
-
 @pytest.fixture
 def temp_db_path():
     """Create a temporary database path."""
@@ -215,20 +206,6 @@ def temp_dir_factory():
     for temp_dir in temp_dirs:
         if os.path.exists(temp_dir):
             shutil.rmtree(temp_dir, ignore_errors=True)
-
-
-def has_graph_export_support():
-    """Check if GraphML/GraphSON export support is available."""
-    try:
-        # GraphML and GraphSON exporters live in the engine's optional
-        # arcadedb-gremlin module, which the wheel excludes.
-        from arcadedb_embedded.jvm import get_jar_path
-
-        jar_dir = get_jar_path()
-        jar_files = os.listdir(jar_dir) if os.path.exists(jar_dir) else []
-        return any("arcadedb-gremlin" in jar.lower() for jar in jar_files)
-    except Exception:
-        return False
 
 
 def pytest_unconfigure(config):

@@ -474,8 +474,7 @@ without the index when most of your ranges are wide.
 value that a few records share. Before 26.10.1, which fixes ArcadeDB
 [#8829](https://github.com/ArcadeData/arcadedb/issues/8829), deleting some of the records of a
 value that holds a few dozen or more, such as a `status`, a `country`, or a customer with many
-orders, could fail at commit; on 26.9.1, index such a property with `NOTUNIQUE` instead (see
-[Known Engine Issues](../known-issues.md)).
+orders, could fail at commit; on 26.9.1, index such a property with `NOTUNIQUE` instead.
 
 **Ordered reads over an optional property.** A SQL `ORDER BY p LIMIT k` reads an `LSM_TREE`
 index on `p` in order, but nulls sort first in ascending order, and an index created with
@@ -490,11 +489,10 @@ index, SQL `p = ?` with `None` bound returned the records without a value instea
 (ArcadeDB [#9238](https://github.com/ArcadeData/arcadedb/issues/9238), and
 [#9274](https://github.com/ArcadeData/arcadedb/issues/9274) when an earlier run of the same
 statement with a value had cached its plan); 26.10.1 fixes both. Write `p IS NULL` when you
-mean those records, and on 26.9.1 do not bind `None` to `=`
-(see [Known Engine Issues](../known-issues.md)). Before 26.10.1,
+mean those records, and on 26.9.1 do not bind `None` to `=`. Before 26.10.1,
 a SQL range with only an upper bound (`p < ?`, `p <= ?`) on such an index also returned the
 records without a value (ArcadeDB [#8833](https://github.com/ArcadeData/arcadedb/issues/8833));
-on 26.9.1, add `AND p IS NOT NULL` to it (see [Known Engine Issues](../known-issues.md)). Descending
+on 26.9.1, add `AND p IS NOT NULL` to it. Descending
 SQL reads are not affected. At 1,000,000 rows the ascending top 10 measured about 290 ms
 with the scan and about 1 ms without it (ArcadeDB [#8664](https://github.com/ArcadeData/arcadedb/issues/8664)).
 SQL reads the index in order whether the query projects `p` under its own name, under an
@@ -547,9 +545,17 @@ snapshot the `OR` forms measured 0.5 to 0.9 ms against 340 to 430 ms before
 several cores, from 26.10.1 in both SQL and Cypher
 (ArcadeDB [#8725](https://github.com/ArcadeData/arcadedb/issues/8725)), but only when no
 transaction is open: inside `db.begin()` or `with db.transaction():` it runs on one thread,
-because the workers would not see the transaction's own changes. At 1,000,000 records on 12
-cores the same filtered count measured 43 to 57 ms with no transaction open and 255 to 291 ms
-inside one, in both languages. Run analytical reads outside an explicit transaction.
+even when the transaction has written nothing, because the workers read committed pages and
+would not see the transaction's own changes. This is a decision, not a gap: ArcadeDB closed the
+change that lifted it for a transaction with no writes without merging it
+([#8775](https://github.com/ArcadeData/arcadedb/issues/8775),
+[#8779](https://github.com/ArcadeData/arcadedb/pull/8779)), so the sentence "a transaction
+that has written nothing still scans in parallel" in the 26.10.1 release notes does not
+describe the shipped engine. At 1,000,000 records on 12 cores the same filtered count measured
+43 to 57 ms with no transaction open and 255 to 291 ms inside one, in both languages. Run
+analytical reads outside an explicit transaction: `db.query()` and `db.command("sql",
+"SELECT ...")` need no `begin()`, and the engine checks whether a transaction is open, not
+whether it has written.
 
 **Whole-type aggregates.** In 26.10.1 a SQL aggregate over a type scan is computed in the
 parallel workers, and so are openCypher `count`, `sum`, `avg`, `min`, and `max` over a label,
@@ -588,8 +594,10 @@ per_country = db.query(
 records runs like the `GROUP BY` over the same property, in the parallel workers, and returns
 the same rows in the same order: at 2,000,000 records 94 ms, against 1,185 ms before ArcadeDB
 [#8799](https://github.com/ArcadeData/arcadedb/issues/8799). It is not rewritten when it has a
-`LIMIT`, an `ORDER BY`, a computed expression, or `*`, or inside a transaction; there,
-`SELECT p FROM Type GROUP BY p` returns the same rows from the workers.
+`LIMIT`, an `ORDER BY`, a computed expression, or `*`, or inside a transaction. Outside a
+transaction, `SELECT p FROM Type GROUP BY p` returns the same rows from the workers; inside one
+it runs on one thread (like the `DISTINCT`, but about twice as fast at 500,000 records), so
+run it outside the transaction.
 
 ```python
 # Sorted distinct values: the ORDER BY keeps SELECT DISTINCT off the parallel path, GROUP BY is on it

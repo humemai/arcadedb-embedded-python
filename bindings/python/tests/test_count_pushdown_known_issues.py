@@ -15,7 +15,10 @@ an expected failure, so the tripwire cannot pass by comparing the row pipeline w
 Upstream: ArcadeData/arcadedb #9277 (the push-down counts the wrong vertices when the far end of the
 chain has another label than the first hop's target; the change for #9203 let `id(a) <> id(b)` reach
 it), #9278 (the push-down ignores the property map of the negated pattern's relationship), #9281
-(`sum()` and `avg()` over a `BYTE` property raise `IllegalArgumentException`).
+(`sum()` and `avg()` over a `BYTE` property raise `IllegalArgumentException`), #9290 (the push-down
+counts wrong for chains with more than two hops of one type, an inequality between other nodes, no
+inequality, a negated pattern away from the first node, or an unlabelled node with the first node as
+the target).
 """
 
 import arcadedb_embedded as arcadedb
@@ -326,3 +329,116 @@ def test_converting_a_byte_to_an_integer_before_the_aggregate_works(
     with arcadedb.create_database(temp_db_path) as db:
         _byte_types(db)
         assert _result_or_error(db, language, query) == expected
+
+
+# ---------------------------------------------------------------------------------------------
+# #9290: other shapes of the chain
+# ---------------------------------------------------------------------------------------------
+
+SHAPES_REASON = (
+    "ArcadeData/arcadedb#9290: the COUNT ANTI-JOIN CHAIN push-down counts more than the row "
+    "pipeline for chains with more than two hops of one type, an inequality between other nodes "
+    "than the negated pattern's, no inequality, a negated pattern away from the first node, or an "
+    "unlabelled node with the first node as the target"
+)
+shapes_bug = pytest.mark.xfail(strict=True, raises=AssertionError, reason=SHAPES_REASON)
+
+_P3 = "MATCH (p0:Person)-[:KNOWS]-(p1:Person)-[:KNOWS]-(p2:Person)-[:HAS_INTEREST]->(t:Tag) "
+_P4 = (
+    "MATCH (p0:Person)-[:KNOWS]-(p1:Person)-[:KNOWS]-(p2:Person)-[:KNOWS]-(p3:Person) "
+)
+_P3_UNLABELLED = (
+    "MATCH (p0:Person)-[:KNOWS]-(p1)-[:KNOWS]-(p2:Person)-[:HAS_INTEREST]->(t:Tag) "
+)
+
+
+def _shapes_graph(db):
+    """Four Person a, b, c, d and one Tag t; KNOWS a-b, b-c, c-d, a-c (stored one way, matched both
+    ways); every Person has HAS_INTEREST to t. The expected counts below enumerate the walks with
+    distinct relationships (Cypher semantics) over this edge list."""
+    for ddl in (
+        "CREATE VERTEX TYPE Person",
+        "CREATE VERTEX TYPE Tag",
+        "CREATE EDGE TYPE KNOWS",
+        "CREATE EDGE TYPE HAS_INTEREST",
+    ):
+        db.command("sql", ddl)
+    with db.transaction():
+        people = [db.new_vertex("Person").set("id", i).save() for i in range(4)]
+        tag = db.new_vertex("Tag").save()
+        for a, b in ((0, 1), (1, 2), (2, 3), (0, 2)):
+            people[a].new_edge("KNOWS", people[b]).save()
+        for person in people:
+            person.new_edge("HAS_INTEREST", tag).save()
+
+
+# (match, variables kept by the WITH, where, expected count)
+_SHAPES = [
+    pytest.param(
+        _P4,
+        "p0, p1, p2, p3",
+        "NOT (p0)-[:KNOWS]-(p2) AND p0 <> p2",
+        2,
+        id="three-hops-of-one-type",
+    ),
+    pytest.param(
+        _P3,
+        "p0, p1, p2, t",
+        "NOT (p0)-[:KNOWS]-(p2) AND p1 <> p2",
+        4,
+        id="inequality-between-other-nodes",
+    ),
+    pytest.param(_P3, "p0, p1, p2, t", "NOT (p0)-[:KNOWS]-(p2)", 4, id="no-inequality"),
+    pytest.param(
+        _P4,
+        "p0, p1, p2, p3",
+        "NOT (p1)-[:KNOWS]-(p3) AND p1 <> p3",
+        2,
+        id="negated-pattern-away-from-the-first-node",
+    ),
+    pytest.param(
+        _P3_UNLABELLED,
+        "p0, p1, p2, t",
+        "NOT (p2)-[:KNOWS]-(p0) AND p2 <> p0",
+        4,
+        id="unlabelled-node-and-first-node-as-target",
+    ),
+]
+
+
+@pytest.mark.parametrize("match, variables, where, expected", _SHAPES)
+@shapes_bug
+def test_the_push_down_counts_the_other_shapes_like_the_row_pipeline(
+    temp_db_path, match, variables, where, expected
+):
+    """#9290: each shape is answered by the push-down with a larger count than the row pipeline's."""
+    with arcadedb.create_database(temp_db_path) as db:
+        _shapes_graph(db)
+        written = f"{match}WHERE {where} RETURN count(*) AS n"  # nosec B608
+        _require_anti_join_plan(db, written)
+        assert _count(db, written) == expected
+
+
+@pytest.mark.parametrize("match, variables, where, expected", _SHAPES)
+def test_with_before_the_where_gives_the_row_pipeline_count_for_the_other_shapes(
+    temp_db_path, match, variables, where, expected
+):
+    """known-issues.md (#9290): `WITH <the chain's variables>` before the WHERE keeps the query
+    off the push-down and gives the right count."""
+    with arcadedb.create_database(temp_db_path) as db:
+        _shapes_graph(db)
+        row_pipeline = (
+            f"{match}WITH {variables} WHERE {where} RETURN count(*) AS n"  # nosec B608
+        )
+        assert _count(db, row_pipeline) == expected
+
+
+def test_the_two_hop_shape_the_push_down_is_written_for_is_not_affected(temp_db_path):
+    """#9290: two hops, the negated pattern between the first and third node, the inequality between
+    the same two, and a label on every node (the LSQB Q9 shape) counts right through the push-down.
+    """
+    with arcadedb.create_database(temp_db_path) as db:
+        _shapes_graph(db)
+        written = f"{_P3}WHERE NOT (p0)-[:KNOWS]-(p2) AND p0 <> p2 RETURN count(*) AS n"  # nosec B608
+        _require_anti_join_plan(db, written)
+        assert _count(db, written) == 4

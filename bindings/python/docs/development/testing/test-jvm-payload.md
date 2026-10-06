@@ -16,7 +16,7 @@ Runs the checker's self-test first: a check that quietly stops matching looks ex
 
 No file under `benchmarks/experiments`, `bindings/python/src`, `bindings/python/examples`, or `bindings/python/tests` carries a site where a `.tolist()` flows into a call that crosses into the JVM.
 
-Each test skips when `benchmarks/experiments` is not checked out, because the bindings are distributed without it.
+Each test fails when `benchmarks/experiments` is not checked out. The file stays in the fork (`make-upstream-pr-branch.sh` excludes it from the upstream pull request).
 
 ## Running
 

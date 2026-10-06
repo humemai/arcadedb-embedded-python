@@ -32,6 +32,10 @@ except ImportError:  # pragma: no cover - numpy is an optional dependency
 # free and used to run per record in wrapper dispatch).
 _JAVA_CLASSES = {}
 
+# Parameter values that cross as they are (exact types, not subclasses): see
+# Database._java_parameters.
+_SCALAR_PARAM_TYPES = frozenset((int, float, str, bool, type(None)))
+
 
 def _java_class(name):
     cls = _JAVA_CLASSES.get(name)
@@ -204,6 +208,25 @@ class Database:
         values = (
             args[0] if len(args) == 1 and isinstance(args[0], (list, tuple)) else args
         )
+        # THE COMMON CASE, WITHOUT THE GENERAL MACHINERY: parameters that are all
+        # plain scalars (a dict of str keys, or positional values) need no
+        # per-value conversion, and JPype boxes them exactly as the general path's
+        # unchanged values are boxed. The general path costs 6.5 to 9 us a call on
+        # the laptop, the fast one 4.3 to 5.7 us, on a statement that is 15 to
+        # 60 us in all. Exact types only: a bool is a bool, and a numpy scalar, a
+        # Decimal, or a date is anything else and takes the general path.
+        scalars = _SCALAR_PARAM_TYPES
+        if len(values) == 1:
+            first = values[0]
+            if type(first) is dict and all(
+                type(k) is str and type(v) in scalars for k, v in first.items()
+            ):
+                params = _java_class("java.util.HashMap")()
+                for key, item in first.items():
+                    params.put(key, item)
+                return jpype.JObject(params, _java_class("java.util.Map"))
+        if all(type(a) in scalars for a in values):
+            return jpype.JArray(jpype.JObject)(values)
         if len(values) == 1 and isinstance(values[0], Mapping):
             java_map = _java_class("java.util.Map")
             params = values[0]

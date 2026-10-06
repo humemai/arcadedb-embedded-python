@@ -213,12 +213,13 @@ def test_import_documents_rejects_unknown_on_row_error(temp_db_path, tmp_path):
     [
         "with space",
         "hash#1",
-        "what?",
         "50%off",
         "semi;colon",
         "plus+and&amp",
         "caf\u00e9",
-    ],
+    ]
+    # Windows cannot create a file name with a question mark, so it is not generated there
+    + ([] if os.name == "nt" else ["what?"]),
 )
 def test_import_documents_path_with_special_characters(
     temp_db_path, tmp_path, directory_name
@@ -226,8 +227,6 @@ def test_import_documents_path_with_special_characters(
     """Path.as_uri() percent-encodes a space, `#`, `%`, and non-ASCII characters, and the engine opens
     what follows `file://` as a plain path without decoding it, so such a directory name failed.
     """
-    if os.name == "nt" and "?" in directory_name:
-        pytest.skip("a question mark is not allowed in a Windows file name")
     directory = tmp_path / directory_name
     directory.mkdir()
     csv_path = directory / "people.csv"

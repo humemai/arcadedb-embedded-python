@@ -6,7 +6,7 @@ Example 11 compares ArcadeDB against hnswlib-derived vector backends. ArcadeDB a
 `maxConnections` to every graph layer, while hnswlib-derived indexes allocate `2*M`
 links at the base layer, so the example converts one to the other. These tests check
 that conversion, `hnsw_m_from_max_connections()`, loaded from
-`examples/11_vector_index_build.py`. The module skips when that file is absent.
+`examples/11_vector_index_build.py`. The tests fail when that file is absent.
 
 ## Test Cases
 

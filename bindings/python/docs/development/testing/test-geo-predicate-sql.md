@@ -16,4 +16,4 @@ Asserts that `geo.within` returns `true` for a point inside a polygon on two con
 
 ## Runtime Guard
 
-If the packaged runtime does not include the geo SQL functions, these tests skip cleanly.
+The wheel always ships the geo SQL functions; a missing one fails these tests.

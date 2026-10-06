@@ -136,7 +136,6 @@ markers = [
     "server: tests that require server/studio support",
     "server_wire: speaks a bundled wire protocol with its real client",
     "integration: tests that require external components",
-    "graph_export: tests that require GraphML/GraphSON support (the arcadedb-gremlin module)",
 ]
 
 [tool.bandit]

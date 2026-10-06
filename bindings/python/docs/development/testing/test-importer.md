@@ -37,16 +37,16 @@ with arcadedb.create_database("./mydb") as db:
 
 - **test_import_database_csv_documents**: `IMPORT DATABASE file://...csv` stores 3 `Document` records.
 - **test_import_database_csv_documents_with_quoted_parallel_setting**: the same CSV through ``IMPORT DATABASE WITH documents = ..., documentsFileType = 'csv', documentType = 'Document', `parallel` = 1`` (a quoted `parallel` setting) stores 3 records.
-- **test_import_database_csv_graph_vertices_and_edges**: the vertex and edge CSV fixtures import at least 6 vertices and 3 edges (skips if the fixtures are missing).
+- **test_import_database_csv_graph_vertices_and_edges**: the vertex and edge CSV fixtures import at least 6 vertices and 3 edges (asserts the fixtures exist).
 - **test_import_database_csv_graph_vertices_and_edges_with_quoted_parallel**: the same with a quoted `parallel` setting.
-- **test_import_database_xml_vertices**: an XML file imported with `entityType = 'VERTEX'` stores 2 `v_user` vertices (skips on the Windows runtime, where the engine-side XML path fails).
+- **test_import_database_xml_vertices**: an XML file imported with `entityType = 'VERTEX'` stores 2 `v_user` vertices.
 - **test_import_database_neo4j_fixture**: a Neo4j export imports and leaves at least one type in the schema.
 - **test_import_database_word2vec_vectors**: a Word2Vec file imports at least 10 `Word` records.
-- **test_import_database_rdf_fixture**: an RDF fixture imports, and `schema:types` is non-empty afterwards (it counts types, not records); it skips without an RDF importer and on the Windows parse failure.
+- **test_import_database_rdf_fixture**: an RDF fixture imports, and `schema:types` is non-empty afterwards (it counts types, not records).
 - **test_import_database_into_timeseries_type**: `IMPORT DATABASE ... WITH documentType = 'Telemetry'` into a TIMESERIES type raises an `ArcadeDBError` mentioning "importing database", and the type still has 0 rows. The importer cannot place a document in a TIMESERIES type, so this pins the failure rather than an import path.
 - **test_import_database_with_missing_file_fails**: a missing file raises `ArcadeDBError`.
 
-The Neo4j, Word2Vec, and RDF tests skip when their fixture is missing or the runtime lacks that importer. The fixtures come from `integration/src/test/resources/` in the repository checkout (`importer-vertices.csv`, `importer-edges.csv`, `neo4j-export-mini.jsonl`, `importer-word2vec.txt`, and `importer-rdf.xml`). `test_import_database_into_timeseries_type` skips if `CREATE TIMESERIES TYPE` is rejected.
+The Neo4j, Word2Vec, and RDF tests assert that their fixture exists and fail when the runtime lacks the importer. The fixtures come from `integration/src/test/resources/` in the repository checkout (`importer-vertices.csv`, `importer-edges.csv`, `neo4j-export-mini.jsonl`, `importer-word2vec.txt`, and `importer-rdf.xml`). `test_import_database_into_timeseries_type` skips if `CREATE TIMESERIES TYPE` is rejected.
 
 `test_importer_api.py`:
 

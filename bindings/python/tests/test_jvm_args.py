@@ -187,15 +187,41 @@ def test_conftest_binds_each_pytest_hook_once():
     assert [n for n, c in names.items() if c > 1] == []
 
 
-def test_faulthandler_is_off_on_windows():
+def test_faulthandler_is_off_on_windows_only():
+    # The conftest hook is a function of sys.platform, so every platform can check it for all
+    # three. It runs in a child process: calling faulthandler.enable() or disable() in the test
+    # process after the JVM started replaces HotSpot's SIGSEGV handler (the JVM raises SIGSEGV
+    # on purpose for safepoints and implicit null checks), and the next one kills the run with
+    # exit 139 and no hs_err file. On Windows the session's real state is read as well.
     import faulthandler
+    import subprocess  # nosec B404 - test-controlled child process
     import sys
+    from pathlib import Path
 
-    import pytest
+    code = """
+import faulthandler, sys
+sys.path.insert(0, sys.argv[1])
+from tests import conftest
 
-    if sys.platform != "win32":
-        pytest.skip("the conftest hook disables it on Windows only")
-    assert not faulthandler.is_enabled()
+for platform, expect_enabled in (("win32", False), ("linux", True), ("darwin", True)):
+    faulthandler.enable()
+    sys.platform = platform
+    conftest.pytest_configure(None)
+    assert faulthandler.is_enabled() is expect_enabled, platform
+print("ok")
+"""
+    root = str(Path(__file__).resolve().parents[1])
+    result = subprocess.run(  # nosec B603 - fixed argument list, no shell
+        [sys.executable, "-c", code, root],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+    if sys.platform == "win32":
+        assert not faulthandler.is_enabled()
 
 
 def test_java_thread_dump_lists_the_jvm_threads(temp_db):

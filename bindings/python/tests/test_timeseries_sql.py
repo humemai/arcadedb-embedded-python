@@ -3,19 +3,13 @@
 from datetime import datetime, timezone
 
 import arcadedb_embedded as arcadedb
-import pytest
 
 
-def _create_timeseries_or_skip(db):
-    try:
-        db.command(
-            "sql",
-            "CREATE TIMESERIES TYPE TempData TIMESTAMP ts TAGS (sensor_id STRING) FIELDS (value DOUBLE)",
-        )
-    except arcadedb.ArcadeDBError as e:
-        if "CREATE TIMESERIES" in str(e) or "no viable alternative" in str(e):
-            pytest.skip("TIMESERIES SQL is not available in this packaged runtime")
-        raise
+def _create_timeseries(db):
+    db.command(
+        "sql",
+        "CREATE TIMESERIES TYPE TempData TIMESTAMP ts TAGS (sensor_id STRING) FIELDS (value DOUBLE)",
+    )
 
 
 def _to_epoch_millis(value):
@@ -44,7 +38,7 @@ def _assert_epoch_set(actual_values, expected_values):
 def test_timeseries_sql_insert_between_and_bucket(temp_db_path):
     """Create timeseries type, insert records, query by range, and aggregate by bucket."""
     with arcadedb.create_database(temp_db_path) as db:
-        _create_timeseries_or_skip(db)
+        _create_timeseries(db)
 
         with db.transaction():
             db.command(
@@ -92,7 +86,7 @@ def test_timeseries_sql_insert_between_and_bucket(temp_db_path):
 def test_timeseries_sql_tag_filter_and_empty_range(temp_db_path):
     """Timeseries supports tag filtering and returns no rows for non-overlapping ranges."""
     with arcadedb.create_database(temp_db_path) as db:
-        _create_timeseries_or_skip(db)
+        _create_timeseries(db)
 
         with db.transaction():
             db.command(
@@ -128,7 +122,7 @@ def test_compact_timeseries_type_seals_the_tail(temp_db_path):
     import numpy as np
 
     with arcadedb.create_database(temp_db_path) as db:
-        _create_timeseries_or_skip(db)
+        _create_timeseries(db)
         n = 5_000
         ex = db.async_executor()
         ex.append_samples(
