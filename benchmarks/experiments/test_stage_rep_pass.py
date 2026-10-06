@@ -138,7 +138,7 @@ def test_the_overlay_follows_the_pass(stages):
 def test_every_stage_declares_its_pass_and_the_ids_are_new(stages):
     first, default, _tmp = stages
     ids = sorted(p.stem for p in first.glob("*.sh"))
-    assert ids == [f"qP{i:02d}" for i in range(1, 38)]
+    assert ids == [f"qP{i:02d}" for i in range(1, len(G.tiered_stages()) + 1)]
     assert not set(ids) & {p.stem for p in default.glob("*.sh")}
     for p in first.glob("*.sh"):
         t = p.read_text()

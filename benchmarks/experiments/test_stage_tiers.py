@@ -1,5 +1,6 @@
-"""`make_2610_stages.py --order tiers` (DECISIONS #163): every ArcadeDB arm first, the other engines already run second,
-new versions and new arms last.
+"""`make_2610_stages.py --order tiers` (DECISIONS #163, #165): every ArcadeDB arm first, the other engines already run second
+(the moved-version engines included), new arms last, and ArcadeDB's lifecycle, restart and image-defaults arms behind the core
+tier-2 stages.
 
 Run with `python -m pytest test_stage_tiers.py -q -rs` from this directory.
 
@@ -31,11 +32,12 @@ def test_every_registered_arm_has_exactly_one_tier_and_the_lists_name_real_arms(
         for be in spec[1]:
             assert G.tier_of(be) in (1, 2, 3), (lane, be)
     assert all(G.tier_of(b) == 1 for spec in runner.LANES.values() for b in spec[1] if b.startswith("arcadedb"))
-    assert not set(G.TIER3_MOVED) & set(G.TIER3_NEW)
+    assert not set(G.TIER2_MOVED) & set(G.TIER3_NEW)
+    assert all(G.tier_of(b) == 2 for b in G.TIER2_MOVED), "a moved-version arm runs in tier 2 (DECISIONS #165)"
 
 
 def test_a_typo_in_the_tier_list_is_a_problem(monkeypatch):
-    monkeypatch.setattr(G, "TIER3", G.TIER3 + ("arangodb_graf",))
+    monkeypatch.setattr(G, "TIER3_NEW", G.TIER3_NEW + ("arangodb_graf",))
     assert any("arangodb_graf" in p for p in G.check_tiers())
 
 
@@ -44,28 +46,42 @@ def test_the_tiered_stages_still_cover_every_arm_exactly_once():
     assert problems == []
 
 
-def test_every_stage_holds_one_tier_and_the_tiers_come_in_order():
-    seen = []
-    for spec in G.tiered_stages():
-        if spec[2] == "pycost":
-            seen.append(1)
-            continue
-        tiers = _tiers_of(spec)
-        assert len(tiers) == 1, (spec[0], spec[2], tiers)
-        seen.append(tiers.pop())
-    assert seen == sorted(seen), "a tier-2 stage ahead of a tier-1 stage, or tier 3 ahead of tier 2"
-    assert {1, 2, 3} <= set(seen)
+def _phase(spec):
+    if spec[2] == "pycost":
+        return G.phase_of(1, False)
+    tiers = _tiers_of(spec)
+    assert len(tiers) == 1, (spec[0], spec[2], tiers)
+    return G.phase_of(tiers.pop(), G.is_extra(spec))
 
 
-def test_no_arcadedb_arm_runs_behind_a_comparator():
-    first_other = None
-    for i, spec in enumerate(G.tiered_stages()):
-        names = [] if spec[2] == "pycost" else G.stage_backends(spec)
-        if any(not b.startswith("arcadedb") for b in names) and first_other is None:
-            first_other = i
-        if first_other is not None:
-            assert not any(b.startswith("arcadedb") for b in names), (spec[0], names)
-            assert spec[2] != "pycost", "the host-side Python-cost stage belongs to tier 1"
+def test_every_stage_holds_one_tier_and_the_phases_come_in_order():
+    phases = [_phase(spec) for spec in G.tiered_stages()]
+    assert phases == sorted(phases), "tier 1 core, tier 2 core, tier 1 extras, tier 2 extras, tier 3"
+    assert set(phases) == {0, 1, 2, 3, 4}
+
+
+def test_no_arcadedb_core_arm_runs_behind_a_comparator_and_the_extras_sit_behind_tier_2_core():
+    stages = G.tiered_stages()
+    names = [[] if s[2] == "pycost" else G.stage_backends(s) for s in stages]
+    first_other = next(i for i, n in enumerate(names) if any(not b.startswith("arcadedb") for b in n))
+    core2 = [i for i, s in enumerate(stages) if _phase(s) == 1]
+    extras1 = [i for i, s in enumerate(stages) if _phase(s) == 2]
+    for i, s in enumerate(stages):
+        if _phase(s) == 0:
+            assert i < first_other and (s[2] == "pycost" or all(b.startswith("arcadedb") for b in names[i])), s[0]
+    assert extras1 and max(core2) < min(extras1), "ArcadeDB lifecycle, restart and image-defaults come after the core comparisons"
+    got = {(s[2], b) for s, n in zip(stages, names) for b in n if _phase(s) == 2}
+    assert ("lifecycle", "arcadedb_embedded") in got and ("restart", "arcadedb_server") in got
+    assert ("l1tpc", "arcadedb_imgdefaults_server") in got
+
+
+def test_the_moved_version_engines_are_in_the_core_tier_2_stages_and_tier_3_holds_only_new_arms():
+    stages = G.tiered_stages()
+    core2 = {b for s in stages if _phase(s) == 1 for b in G.stage_backends(s)}
+    for be in ("arangodb_graph", "arangodb_e2", "arangodb_tpc", "arangodb_dense", "arangodb_ts", "falkordb_graph", "ladybug_graph"):
+        assert be in core2, be
+    tier3 = {b for s in stages if _phase(s) == 4 for b in G.stage_backends(s)}
+    assert tier3 == set(G.TIER3_NEW)
 
 
 def test_ids_are_new_unique_and_numbered():
@@ -95,9 +111,10 @@ def test_the_restricted_arm_keeps_its_repetitions_and_durability_class():
     assert G.stage_backends(piece) == ["arcadedb_imgdefaults_server"]
 
 
-def test_the_server_restart_comparators_of_moved_engines_are_tier_3():
-    for be in ("arangodb_tpc", "falkordb_graph", "elasticsearch_dense"):
-        assert G.tier_of(be) == 3
+def test_the_server_restart_comparators_follow_their_engine_tier():
+    for be in ("arangodb_tpc", "falkordb_graph"):
+        assert G.tier_of(be) == 2
+    assert G.tier_of("elasticsearch_dense") == 3
     for be in ("arcadedb_server", "arcadedb_graph_server", "arcadedb_dense_server", "arcadedb_ts_native_server"):
         assert G.tier_of(be) == 1
     for be in ("postgres", "mongodb", "neo4j_graph", "qdrant_dense", "questdb"):
