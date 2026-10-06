@@ -56,11 +56,12 @@ def bulk_documents(db, n_rows: int) -> None:
         f"({inserted / dt:,.0f} rows/s)"
     )
 
-    # Each bucket is owned by one async writer, so the parallel mode needs a
-    # type with several buckets: on the default single bucket it is no faster.
-    # The maintainers' rule (ArcadeData/arcadedb#8478): as many buckets as the
-    # executor has writers (default cores - 1), or a multiple of that, set when
-    # the type is created. A rejected record raises after the load.
+    # The parallel mode hands the rows to the async executor's writers. On a
+    # laptop (4 performance cores, engine b22b5e9954, 6 runs per arm) it was
+    # 1.11x to 1.14x faster than synchronous batches at 1, 3, 4, and 8 buckets
+    # alike. The maintainers' rule (ArcadeData/arcadedb#8478): as many buckets
+    # as the executor has writers (default cores - 1), or a multiple of that,
+    # set when the type is created. A rejected record raises after the load.
     buckets = max(2, db.async_executor().get_parallel_level())
     db.command("sql", f"CREATE DOCUMENT TYPE BulkOrderP BUCKETS {buckets}")
     t0 = time.perf_counter()

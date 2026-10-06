@@ -25,6 +25,7 @@ import com.arcadedb.database.async.ErrorCallback;
 import com.arcadedb.serializer.json.JSONArray;
 import com.arcadedb.serializer.json.JSONObject;
 
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -41,23 +42,34 @@ public final class DocumentBatcher {
       insertManyJsonParallel(db, typeName, rows);
       return n;
     }
+    // A caller's own transaction is the caller's to commit or roll back: batch
+    // commits and the failure rollback apply only to the transactions opened
+    // here, matching the Python per-row fallback (#7882).
     final boolean wasActive = db.isTransactionActive();
     if (!wasActive)
       db.begin();
-    for (int i = 0; i < n; i++) {
-      final MutableDocument doc = db.newDocument(typeName);
-      fill(doc, rows.getJSONObject(i));
-      doc.save();
-      // Batches commit only a transaction this call opened: inside the
-      // caller's transaction the caller's commit or rollback decides the whole
-      // load, as the Python fallback path and the documentation already had it.
-      if (!wasActive && commitEvery > 0 && (i + 1) % commitEvery == 0) {
-        db.commit();
-        db.begin();
+    try {
+      for (int i = 0; i < n; i++) {
+        final MutableDocument doc = db.newDocument(typeName);
+        fill(doc, rows.getJSONObject(i));
+        doc.save();
+        if (!wasActive && commitEvery > 0 && (i + 1) % commitEvery == 0) {
+          db.commit();
+          db.begin();
+        }
       }
+      if (!wasActive)
+        db.commit();
+    } catch (final Throwable e) {
+      if (!wasActive && db.isTransactionActive()) {
+        try {
+          db.rollback();
+        } catch (final Throwable rollbackError) {
+          e.addSuppressed(rollbackError);
+        }
+      }
+      throw e;
     }
-    if (!wasActive)
-      db.commit();
     return n;
   }
 
@@ -121,7 +133,9 @@ public final class DocumentBatcher {
   }
 
   private static void fill(final MutableDocument doc, final JSONObject row) {
-    for (final String key : row.keySet())
-      doc.set(key, row.isNull(key) ? null : row.get(key));
+    // toMap() turns nested objects and arrays into plain Map and List. Storing the parsed JSONArray itself reads back
+    // as a JSONArray inside the transaction that wrote it, and only becomes a list once the record is serialized.
+    for (final Map.Entry<String, Object> entry : row.toMap().entrySet())
+      doc.set(entry.getKey(), entry.getValue());
   }
 }

@@ -105,6 +105,13 @@ export_to_csv(
 Export query results (or a list of dictionaries) to CSV. This is a Python-side
 helper and does not use the Java exporter.
 
+Without `fieldnames` the header is the keys of every row, in order of first appearance
+(for a `ResultSet`, of its first batch of 10,000 rows): a property the first row lacks
+is a column, empty where a row lacks it. A column that first appears after the first
+batch cannot be added to a header already written, so the export raises `ArcadeDBError`
+naming it and leaves the part written; pass `fieldnames` naming every column the query
+can return.
+
 `fieldnames` sets the header and the column order; it cannot rename columns. It must
 name every key of every row (a name a row lacks is written empty): a missing one raises
 `ArcadeDBError` ("dict contains fields not in fieldnames"), and for a `ResultSet` the

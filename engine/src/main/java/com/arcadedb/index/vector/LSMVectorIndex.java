@@ -128,6 +128,7 @@ import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.logging.Level;
@@ -263,6 +264,16 @@ public class LSMVectorIndex implements Index, IndexInternal {
   private volatile boolean                       materializedUnderWriteLock;
   private final    AtomicInteger                 nextId;
   private final    AtomicReference<INDEX_STATUS> status;
+  /**
+   * Set once a graph build left records out because they share a vector id. A compaction of such an index declines
+   * (it would erase the shared ids from the pages), so the garbage-ratio trigger must stop asking: each ask is a
+   * full graph build that reclaims nothing, repeated after every commit. Cleared only by a new index instance,
+   * which is what the rebuild of CHECK DATABASE FIX produces, or by a later build that finds nothing left out. In
+   * memory only: after a restart the first build sets it again, at the cost of one build.
+   */
+  private volatile boolean compactionBlockedBySharedIds;
+  /** Records the last build left out of the graph for sharing a vector id; in memory only, like the block above. */
+  private volatile int     recordsLeftOutBySharedIds;
   // Set once the ignored location-cache limit has been reported, so a rebuild does not repeat the warning.
   // compareAndSet, not a plain flag: two threads racing the first call would otherwise both log it.
   private final    AtomicBoolean                 locationCacheCapReported = new AtomicBoolean();
@@ -908,6 +919,13 @@ public class LSMVectorIndex implements Index, IndexInternal {
     // so on that path the two operands are equal and the max is a no-op - the dense count IS the carried sequence.
     rebuilt.setNextId(Math.max(rebuilt.getNextId(), nextId.get()));
     residentLocations = rebuilt;
+    // The search vector cache is keyed by vector id, and a renumbering compaction (issue #5870) hands every id to a
+    // different record: a surviving entry would score graph nodes against the vector of whichever record held that
+    // id before (issue #8957). Cleared in the same critical section that publishes the new ids. Every publish clears, not only the
+    // renumbering one: rebuilds are rare and heavy, and a single rule is easier to keep correct than a per-caller flag.
+    final VectorCache staleCache = searchVectorCache;
+    if (staleCache != null)
+      staleCache.clear();
     // The replacement is the complete live set, read from the pages by the caller that built it, so it satisfies
     // the deferred load of issue #6722 outright - materialising afterwards would parse the same pages a second
     // time and then overwrite this instance with the result. Ordered after the swap: a reader that sees the flag
@@ -1896,7 +1914,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
           try {
             final float[] vector = readVectorFromOffset(VectorLocationIndex.offsetOf(offsetAndFlag),
                 VectorLocationIndex.isCompactedOf(offsetAndFlag));
-            return vector != null && vector.length == metadata.dimensions && !VectorUtils.isZeroVector(vector);
+            return vector != null && vector.length == metadata.dimensions && !isUnscorable(vector);
           } catch (final Exception e) {
             return false;
           }
@@ -1914,7 +1932,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
             if (vectorObj == null)
               return false;
             final float[] vector = VectorUtils.toFloatArray(vectorObj, metadata.encoding);
-            return vector.length == metadata.dimensions && !VectorUtils.isZeroVector(vector);
+            return vector.length == metadata.dimensions && !isUnscorable(vector);
           } catch (final Exception e) {
             return false;
           }
@@ -3100,7 +3118,8 @@ public class LSMVectorIndex implements Index, IndexInternal {
     // CRITICAL FIX: Collect vectors DIRECTLY from pages instead of from vectorIndex.
     // This avoids race conditions where concurrent replication adds entries to vectorIndex
     // that don't yet exist on disk pages. We iterate pages and read what's actually persisted.
-    final Map<RID, VectorEntryForGraphBuild> ridToLatestVector = new HashMap<>(Math.max(16, vectorIndex().size() * 4 / 3));
+    final LiveSetReplay replay = new LiveSetReplay(Math.max(16, vectorIndex().size() * 4 / 3));
+    final Map<RID, VectorEntryForGraphBuild> ridToLatestVector = replay.byRid;
     final int[] totalEntriesRead = { 0 };
     final int[] filteredDeletedVectors = { 0 };
 
@@ -3122,7 +3141,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
             totalEntriesRead[0]++;
             if (entry.deleted)
               filteredDeletedVectors[0]++;
-            mergeEntryIntoLiveSet(ridToLatestVector, entry, true);
+            replay.accept(entry, true);
           });
     }
 
@@ -3132,7 +3151,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
       totalEntriesRead[0]++;
       if (entry.deleted)
         filteredDeletedVectors[0]++;
-      mergeEntryIntoLiveSet(ridToLatestVector, entry, false);
+      replay.accept(entry, false);
     });
 
     // Build ordinal mapping from deduplicated vectors read directly from pages
@@ -3171,7 +3190,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
               if (vectorObj != null) {
                 try {
                   final float[] vector = VectorUtils.toFloatArray(vectorObj, metadata.encoding);
-                  if (vector.length == metadata.dimensions && !VectorUtils.isZeroVector(vector)) {
+                  if (vector.length == metadata.dimensions && !isUnscorable(vector)) {
                     final int syntheticId = allocateVectorId();
                     ridToLatestVector.put(rid, new VectorEntryForGraphBuild(syntheticId, rid, false, -1));
                   }
@@ -3222,6 +3241,8 @@ public class LSMVectorIndex implements Index, IndexInternal {
       }
     }
 
+    final boolean leftRecordsOut = collapseToWhatALoadKeeps(replay);
+
     // COMPACTION (issue #5516 follow-up): the live set just computed IS the compacted content of this index, so
     // when the caller asked for a compaction the data file is rewritten here, from the very same set the graph is
     // about to be built on. Doing it in the rebuild instead of in a separate compactor is what keeps the two from
@@ -3229,7 +3250,14 @@ public class LSMVectorIndex implements Index, IndexInternal {
     // (validation, preload, vectorIndex re-sync, graph build) transparently uses the compacted file.
     // A completed rewrite already re-published the location index against the new file, inside the critical section
     // that swapped it - re-publishing an identical copy below would only reopen the window it closed (issue #5568).
-    final boolean locationIndexAlreadyPublished = compactDataFile && rewriteDataFileWithLiveEntries(
+    // Not when records were just left out: rewriting the data file from the collapsed set would erase the losers'
+    // entries from the pages, and with them the only evidence of how two records came to share an id.
+    if (compactDataFile && leftRecordsOut)
+      LogManager.instance().log(this, Level.WARNING,
+          "Compaction of index %s did not rewrite its data file: records were left out for sharing a vector id, and "
+              + "rewriting would erase them from the pages. Run CHECK DATABASE FIX to rebuild the index",
+          indexName);
+    final boolean locationIndexAlreadyPublished = compactDataFile && !leftRecordsOut && rewriteDataFileWithLiveEntries(
         ridToLatestVector.values());
 
     // Rebuild ordinal mapping (may have changed after document scan fallback)
@@ -3383,7 +3411,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
             try {
               final float[] vector = readVectorFromOffset(locationOffset, locationIsCompacted);
               if (vector != null && vector.length == metadata.dimensions) {
-                if (!VectorUtils.isZeroVector(vector)) {
+                if (!isUnscorable(vector)) {
                   vectorLocationSnapshot.addOrUpdate(vectorId, locationIsCompacted, locationOffset, vectorRid, false);
                   validVectorIds.add(vectorId);
                   // Only warm the cache up to the budget; the rest are re-read from index pages
@@ -3419,7 +3447,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
             // the old entry and adds a new id, so a hit here can never be a stale version of the vector.
             final VectorFloat<?> fromDelta = deltaSnapshotById.get(vectorId);
             if (fromDelta != null) {
-              if (fromDelta.length() == metadata.dimensions && !VectorUtils.isZeroVector(fromDelta)) {
+              if (fromDelta.length() == metadata.dimensions && !isUnscorable(fromDelta)) {
                 vectorLocationSnapshot.addOrUpdate(vectorId, locationIsCompacted, locationOffset, vectorRid, false);
                 validVectorIds.add(vectorId);
                 if (preloadedVectorCount < preloadBudget) {
@@ -3438,7 +3466,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
                 if (vectorObj != null) {
                   final float[] vector = VectorUtils.toFloatArray(vectorObj, metadata.encoding);
 
-                  if (vector.length == metadata.dimensions && !VectorUtils.isZeroVector(vector)) {
+                  if (vector.length == metadata.dimensions && !isUnscorable(vector)) {
                     vectorLocationSnapshot.addOrUpdate(vectorId, locationIsCompacted, locationOffset, vectorRid, false);
                     validVectorIds.add(vectorId);
                     if (preloadedVectorCount < preloadBudget) {
@@ -5708,6 +5736,21 @@ public class LSMVectorIndex implements Index, IndexInternal {
       }
     }
 
+    // All bits set is how a CONSTANT vector (the all-zero one included) is stored. A vector that is not constant but
+    // sits on its minimum for at least half of its components (median == minimum, e.g. [0, 0, 0, 5]) would collide with
+    // it and read back as the origin, so its minimum components are put below the median instead.
+    float min = vector[0];
+    float max = vector[0];
+    for (final float v : vector) {
+      min = Math.min(min, v);
+      max = Math.max(max, v);
+    }
+    if (min != max && median == min) {
+      for (int i = 0; i < vector.length; i++)
+        if (vector[i] == min)
+          packed[i / 8] &= ~(1 << (i % 8));
+    }
+
     return new VectorQuantizationMetadata.BinaryQuantizationMetadata(packed, median, vector.length);
   }
 
@@ -5790,17 +5833,30 @@ public class LSMVectorIndex implements Index, IndexInternal {
    */
   private float[] dequantizeFromBinary(final byte[] packed,
       final VectorQuantizationMetadata.BinaryQuantizationMetadata qmeta) {
-    final float[] result = new float[qmeta.originalLength];
+    final int length = qmeta.originalLength;
+    final float[] result = new float[length];
 
-    for (int i = 0; i < qmeta.originalLength; i++) {
-      final int byteIndex = i / 8;
-      final int bitIndex = i % 8;
-      final boolean bitSet = (packed[byteIndex] & (1 << bitIndex)) != 0;
+    // One bit per dimension says "at or above the vector's own median" or "below it", i.e. the SIGN of the component
+    // once the vector is centred on its median. The reconstruction is that sign at unit norm, so scoring it with
+    // COSINE is a Hamming distance over the bits (cos = 1 - 2 * hamming / dimensions) and with EUCLIDEAN or DOT_PRODUCT
+    // it ranks the same way. Reconstructing as `bit ? median : 0` instead lost the sign of any data centred on zero
+    // and placed a record on the far side of the sphere from its own vector (issue #8960).
+    final float magnitude = (float) (1.0 / Math.sqrt(length));
 
-      // Reconstruct value based on bit: 1 -> above median, 0 -> below median
-      // This is a lossy approximation - we just use median or 0 as the values
-      result[i] = bitSet ? qmeta.median : 0.0f;
+    int ones = 0;
+    for (int i = 0; i < length; i++)
+      if ((packed[i / 8] & (1 << (i % 8))) != 0)
+        ones++;
+
+    if (ones == length) {
+      // Every component is at or above the median: the vector was constant, so there is nothing to centre. Keep what
+      // is known, the sign of the constant, which also gives the all-zero vector back as the origin.
+      Arrays.fill(result, Math.signum(qmeta.median) * magnitude);
+      return result;
     }
+
+    for (int i = 0; i < length; i++)
+      result[i] = (packed[i / 8] & (1 << (i % 8))) != 0 ? magnitude : -magnitude;
 
     return result;
   }
@@ -5990,7 +6046,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
       final float[] vector = VectorUtils.toFloatArray(raw, metadata.encoding);
       // Same validity rule as readPersistedVectorArray: a vector of the wrong arity, or an all-zero one, is not
       // something this index can score against and must be skipped rather than scored as if it were at the origin.
-      if (vector.length == metadata.dimensions && !VectorUtils.isZeroVector(vector))
+      if (vector.length == metadata.dimensions && !isUnscorable(vector))
         return vector;
     } catch (final Exception e) {
       LogManager.instance().log(this, Level.FINE,
@@ -6069,7 +6125,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
         }
       }
 
-      if (vector != null && vector.length == metadata.dimensions && !VectorUtils.isZeroVector(vector))
+      if (vector != null && vector.length == metadata.dimensions && !isUnscorable(vector))
         return vector;
     } catch (final Exception e) {
       LogManager.instance().log(this, Level.FINE,
@@ -6236,6 +6292,19 @@ public class LSMVectorIndex implements Index, IndexInternal {
   }
 
   /**
+   * True for a vector this index cannot score against: an all-zero one under COSINE (the similarity is undefined) and
+   * DOT_PRODUCT (which requires unit vectors). Under EUCLIDEAN the origin is a regular point with a well-defined
+   * distance, so it is indexed and returned like any other (issue #8962).
+   */
+  boolean isUnscorable(final float[] vector) {
+    return metadata.similarityFunction != VectorSimilarityFunction.EUCLIDEAN && VectorUtils.isZeroVector(vector);
+  }
+
+  boolean isUnscorable(final VectorFloat<?> vector) {
+    return metadata.similarityFunction != VectorSimilarityFunction.EUCLIDEAN && VectorUtils.isZeroVector(vector);
+  }
+
+  /**
    * The similarity handed to a graph node whose vector can no longer be read. Every JVector similarity function has
    * {@code 0} as its floor: {@code (1 + cosine) / 2} bottoms out there at {@code cosine = -1}, {@code 1 / (1 + d^2)}
    * approaches it from above, and {@code (1 + dot) / 2} bottoms out there for the unit-length vectors JVector
@@ -6243,6 +6312,9 @@ public class LSMVectorIndex implements Index, IndexInternal {
    * behind every real candidate.
    */
   private static final float UNREADABLE_NODE_SCORE = 0.0f;
+
+  /** How many candidates a BINARY search fetches per requested neighbour before reranking them on the stored vectors. */
+  private static final int   BINARY_RERANK_OVERSAMPLE = 4;
 
   /**
    * The scoring function used to walk the graph: the configured similarity for a vector that can be read, and
@@ -6286,6 +6358,286 @@ public class LSMVectorIndex implements Index, IndexInternal {
   /** Visible for tests: the ordinal-to-vector-id map the next search would capture. */
   int[] getOrdinalToVectorIdForTest() {
     return ordinalToVectorId;
+  }
+
+  /**
+   * Which record holds each vector id after a replay of the pages, in primitives.
+   * <p>
+   * Ids are dense in the usual case, so they index arrays directly; the arrays only grow while the id stays within
+   * twice the number of entries seen, and a stray larger id goes to an open-addressing table. Memory therefore
+   * follows the entries replayed, never the largest id: 12 bytes per slot, so about 12-24 bytes per entry when ids
+   * are dense and up to about 48 in the worst case, against the ~100 bytes per record of the RID map held beside it.
+   */
+  static final class IdOwners {
+    /** The bucket value of an id whose last page entry is a tombstone. */
+    static final int DELETED = -1;
+
+    private int[]  denseBucket    = new int[1024];
+    private long[] densePosition  = new long[1024];
+    private int    entries;
+    /** Open addressing, keys stored as id + 1 so 0 means empty. */
+    private int[]  keys           = new int[64];
+    private int[]  sparseBucket   = new int[64];
+    private long[] sparsePosition = new long[64];
+    private int    sparseSize;
+
+    /** Bucket id + 1 of the record that holds the id, {@link #DELETED}, or 0 when no page entry named it. */
+    int bucket(final int id) {
+      if (id < denseBucket.length)
+        return denseBucket[id];
+      final int slot = find(id);
+      return keys[slot] != 0 ? sparseBucket[slot] : 0;
+    }
+
+    long position(final int id) {
+      if (id < denseBucket.length)
+        return densePosition[id];
+      final int slot = find(id);
+      return keys[slot] != 0 ? sparsePosition[slot] : 0L;
+    }
+
+    void put(final int id, final int bucket, final long position) {
+      ++entries;
+      if (id >= denseBucket.length && id <= 2L * entries + 1024) {
+        final int grown = (int) Math.max(id + 1L, denseBucket.length * 2L);
+        denseBucket = Arrays.copyOf(denseBucket, grown);
+        densePosition = Arrays.copyOf(densePosition, grown);
+        migrateSparseIntoDense();
+      }
+      if (id < denseBucket.length) {
+        denseBucket[id] = bucket;
+        densePosition[id] = position;
+        return;
+      }
+      if (2 * (sparseSize + 1) > keys.length)
+        growSparse();
+      final int slot = find(id);
+      if (keys[slot] == 0) {
+        keys[slot] = id + 1;
+        ++sparseSize;
+      }
+      sparseBucket[slot] = bucket;
+      sparsePosition[slot] = position;
+    }
+
+    private int find(final int id) {
+      final int mask = keys.length - 1;
+      int slot = (id * 0x9E3779B9) >>> (32 - Integer.numberOfTrailingZeros(keys.length));
+      while (keys[slot] != 0 && keys[slot] != id + 1)
+        slot = slot + 1 & mask;
+      return slot;
+    }
+
+    /** Ids stored sparse before the dense arrays grew past them now belong in the arrays, which are read first. */
+    private void migrateSparseIntoDense() {
+      if (sparseSize == 0)
+        return;
+      final int[] oldKeys = keys;
+      final int[] oldBucket = sparseBucket;
+      final long[] oldPosition = sparsePosition;
+      keys = new int[oldKeys.length];
+      sparseBucket = new int[keys.length];
+      sparsePosition = new long[keys.length];
+      sparseSize = 0;
+      for (int i = 0; i < oldKeys.length; i++) {
+        if (oldKeys[i] == 0)
+          continue;
+        final int id = oldKeys[i] - 1;
+        if (id < denseBucket.length) {
+          denseBucket[id] = oldBucket[i];
+          densePosition[id] = oldPosition[i];
+        } else {
+          final int slot = find(id);
+          keys[slot] = oldKeys[i];
+          sparseBucket[slot] = oldBucket[i];
+          sparsePosition[slot] = oldPosition[i];
+          ++sparseSize;
+        }
+      }
+    }
+
+    private void growSparse() {
+      final int[] oldKeys = keys;
+      final int[] oldBucket = sparseBucket;
+      final long[] oldPosition = sparsePosition;
+      keys = new int[oldKeys.length * 2];
+      sparseBucket = new int[keys.length];
+      sparsePosition = new long[keys.length];
+      for (int i = 0; i < oldKeys.length; i++)
+        if (oldKeys[i] != 0) {
+          final int slot = find(oldKeys[i] - 1);
+          keys[slot] = oldKeys[i];
+          sparseBucket[slot] = oldBucket[i];
+          sparsePosition[slot] = oldPosition[i];
+        }
+    }
+  }
+
+  /**
+   * The live set of a page replay in the two shapes a build and a load disagree on: {@link #byRid} keeps one entry
+   * per record (what a build wants), {@link #owners} is the id-keyed state a load ends up with. A tombstone deletes
+   * the id whoever holds it, so a stale one for record A also removes record B holding the same id. The opposite
+   * mismatch, one record with two live ids and no tombstone, is not judged: a build counts it once and a load twice.
+   */
+  private static final class LiveSetReplay {
+    final Map<RID, VectorEntryForGraphBuild> byRid;
+    private final IdOwners                   owners = new IdOwners();
+
+    LiveSetReplay(final int expectedSize) {
+      byRid = new HashMap<>(expectedSize);
+    }
+
+    void accept(final LSMVectorIndexPageParser.VectorEntry entry, final boolean isCompacted) {
+      mergeEntryIntoLiveSet(byRid, entry, isCompacted);
+      if (entry.vectorId >= 0)
+        owners.put(entry.vectorId, entry.deleted ? IdOwners.DELETED : entry.rid.getBucketId() + 1,
+            entry.deleted ? 0L : entry.rid.getPosition());
+    }
+
+    /** The entries in {@link #byRid} whose id belongs to another record or a tombstone, ordered by (bucket, position). */
+    List<VectorEntryForGraphBuild> losers() {
+      List<VectorEntryForGraphBuild> losers = null;
+      for (final VectorEntryForGraphBuild entry : byRid.values()) {
+        final int id = entry.vectorId;
+        final int bucket = id >= 0 ? owners.bucket(id) : 0;
+        // Not judged: an id no page entry named (recovered from memory or a document scan).
+        if (bucket == 0)
+          continue;
+        if (bucket == IdOwners.DELETED || bucket != entry.rid.getBucketId() + 1
+            || owners.position(id) != entry.rid.getPosition()) {
+          if (losers == null)
+            losers = new ArrayList<>();
+          losers.add(entry);
+        }
+      }
+      if (losers == null)
+        return Collections.emptyList();
+      losers.sort(Comparator.comparingInt((VectorEntryForGraphBuild e) -> e.rid.getBucketId())
+          .thenComparingLong(e -> e.rid.getPosition()));
+      return losers;
+    }
+
+    /** The first few losers with the record that took their id, so a later run has the pairing directly. */
+    String describeFirst(final List<VectorEntryForGraphBuild> losers) {
+      final StringBuilder detail = new StringBuilder();
+      for (int i = 0; i < Math.min(5, losers.size()); i++) {
+        final VectorEntryForGraphBuild loser = losers.get(i);
+        final int owner = owners.bucket(loser.vectorId);
+        detail.append(i > 0 ? ", " : "").append(loser.rid).append(loser.isCompacted ? " (compacted" : " (mutable")
+            .append(", id ").append(loser.vectorId).append(owner == IdOwners.DELETED ? ", tombstoned)" :
+                " lost to #" + (owner - 1) + ":" + owners.position(loser.vectorId) + ")");
+      }
+      return detail.toString();
+    }
+  }
+
+  /**
+   * Drops the records a load of the same pages would not keep (same id given to another record, or tombstoned), or
+   * the graph is larger than the load's live set and is rejected and rebuilt on every query. The losers are logged,
+   * not repaired: a build also runs on followers and must not write, so CHECK DATABASE FIX does that. The caller
+   * skips compaction in such a pass, which would erase the pages' evidence.
+   *
+   * @return whether any record was left out
+   */
+  private boolean collapseToWhatALoadKeeps(final LiveSetReplay replay) {
+    final List<VectorEntryForGraphBuild> losers = replay.losers();
+    if (losers.isEmpty()) {
+      // A clean pass proves the condition cleared (the losers were deleted or the index was repaired in place).
+      recordsLeftOutBySharedIds = 0;
+      compactionBlockedBySharedIds = false;
+      return false;
+    }
+
+    for (final VectorEntryForGraphBuild loser : losers)
+      replay.byRid.remove(loser.rid);
+    compactionBlockedBySharedIds = true;
+    recordsLeftOutBySharedIds = losers.size();
+    LogManager.instance().log(this, Level.WARNING,
+        "Graph build for index %s left out %d records whose vector id a load of the same pages gives to another record or "
+            + "deletes: they are not in the graph until the index is rebuilt (CHECK DATABASE FIX or REBUILD INDEX), and the "
+            + "data file is not compacted in this pass. First: %s",
+        indexName, losers.size(), replay.describeFirst(losers));
+    return true;
+  }
+
+  /** Reports records whose vector id a load gives to another record or deletes; CHECK DATABASE FIX rebuilds the index. */
+  @Override
+  public List<String> checkIntegrity() {
+    final LiveSetReplay replay;
+    // Under the read lock end to end, like LSMTreeIndex.checkIntegrity: a compaction swapping the files must not
+    // land between the page count and the read, and a write must not raise a finding that is not there (under FIX
+    // that is a full rebuild). Writers to this index wait for the duration of the parse.
+    lock.readLock().lock();
+    try {
+      // Pass 1 keeps only the owner of each id: does any id carry two different records? A record and the
+      // tombstone that deletes it name the same one, so a healthy index never fires, and without it there is
+      // nothing for a load to give to another record.
+      if (!anyVectorIdWrittenByTwoRecords())
+        return Collections.emptyList();
+
+      replay = new LiveSetReplay(16);
+      replayPages(getDatabase(), replay);
+    } finally {
+      lock.readLock().unlock();
+    }
+
+    final List<VectorEntryForGraphBuild> losers = replay.losers();
+    if (losers.isEmpty())
+      return Collections.emptyList();
+
+    return List.of(("%d records have a vector id that a load gives to another record or deletes, so a persisted graph "
+        + "is rejected on every load and these records are missing from search (first: %s). "
+        + "Rebuild the index (CHECK DATABASE FIX)").formatted(losers.size(), replay.describeFirst(losers)));
+  }
+
+  private void replayPages(final DatabaseInternal database, final LiveSetReplay replay) {
+    if (compactedSubIndex != null)
+      LSMVectorIndexPageParser.parsePages(database, compactedSubIndex.getFileId(), compactedSubIndex.getTotalPages(),
+          getPageSize(), true, false, entry -> replay.accept(entry, true));
+    LSMVectorIndexPageParser.parsePages(database, getFileId(), getTotalPages(), getPageSize(), false, false,
+        entry -> replay.accept(entry, false));
+  }
+
+  private boolean anyVectorIdWrittenByTwoRecords() {
+    final IdOwners owners = new IdOwners();
+    final boolean[] shared = { false };
+    final Consumer<LSMVectorIndexPageParser.VectorEntry> consumer = entry -> {
+      final int id = entry.vectorId;
+      if (shared[0] || id < 0)
+        return;
+      final int bucket = entry.rid.getBucketId() + 1;
+      final int previous = owners.bucket(id);
+      if (previous == 0)
+        owners.put(id, bucket, entry.rid.getPosition());
+      else
+        shared[0] = previous != bucket || owners.position(id) != entry.rid.getPosition();
+    };
+    final DatabaseInternal database = getDatabase();
+    if (compactedSubIndex != null)
+      LSMVectorIndexPageParser.parsePages(database, compactedSubIndex.getFileId(), compactedSubIndex.getTotalPages(),
+          getPageSize(), true, false, consumer);
+    LSMVectorIndexPageParser.parsePages(database, getFileId(), getTotalPages(), getPageSize(), false, false, consumer);
+    return shared[0];
+  }
+
+  /**
+   * Visible for tests, never to be called from production code: appends one page entry carrying an explicit vector id,
+   * which can create exactly the damage CHECK DATABASE repairs. Runs inside the caller's transaction, exactly
+   * as a commit replay does. Lets a test place two different records on the SAME vector id, the page state the
+   * RID-keyed graph build and the id-keyed location load read differently.
+   */
+  public void persistEntryForTest(final int id, final RID rid, final float[] vector) {
+    persistVectorWithLocation(id, rid, vector);
+  }
+
+  /** Visible for tests: whether a build left records out, which stops the compaction trigger. */
+  boolean compactionBlockedBySharedIdsForTest() {
+    return compactionBlockedBySharedIds;
+  }
+
+  /** Visible for tests: appends a tombstone for an explicit vector id, inside the caller's transaction. */
+  void persistTombstoneForTest(final int id, final RID rid) {
+    persistDeletionTombstones(List.of(id), rid);
   }
 
   /** Visible for tests: where this index's persisted graph lives, for a test that has to tamper with its sidecars. */
@@ -6903,7 +7255,43 @@ public class LSMVectorIndex implements Index, IndexInternal {
    *         negative (DOT_PRODUCT) or {@code Float.MAX_VALUE} (a EUCLIDEAN score at or below zero), and
    *         sorting it descending returns the furthest neighbours first (issue #7140).
    */
-  public List<Pair<RID, Float>> findNeighborsFromVector(final float[] queryVector, int k, final int efSearch,
+  public List<Pair<RID, Float>> findNeighborsFromVector(final float[] queryVector, final int k, final int efSearch,
+      final Set<RID> allowedRIDs) {
+    if (metadata.quantizationType != VectorQuantizationType.BINARY || k <= 0 || queryVector == null)
+      return searchNeighbors(queryVector, k, efSearch, allowedRIDs);
+
+    // BINARY keeps one bit per dimension, which cannot tell apart two vectors that share their bits (a record queried
+    // by its own vector ties with every other record of the same signs). The graph answers with the oversampled
+    // candidates and the stored float vectors put them in order, which is the "approximate search with reranking"
+    // the quantization promises (issue #8960).
+    final int candidatesToFetch = k > Integer.MAX_VALUE / BINARY_RERANK_OVERSAMPLE ? Integer.MAX_VALUE : k * BINARY_RERANK_OVERSAMPLE;
+    final List<Pair<RID, Float>> candidates = searchNeighbors(queryVector, candidatesToFetch, efSearch, allowedRIDs);
+    return rerankOnStoredVectors(queryVector, candidates, k);
+  }
+
+  /**
+   * Re-scores {@code candidates} with the similarity function against the vectors the records store, nearest first,
+   * truncated to {@code k}. A candidate whose record is gone or carries no usable vector is dropped: its approximate
+   * distance is on another scale and cannot be ordered against the exact ones.
+   */
+  private List<Pair<RID, Float>> rerankOnStoredVectors(final float[] queryVector, final List<Pair<RID, Float>> candidates, final int k) {
+    if (candidates.isEmpty())
+      return candidates;
+
+    final VectorFloat<?> query = vts.createFloatVector(queryVector);
+    final List<Pair<RID, Float>> reranked = new ArrayList<>(candidates.size());
+    for (final Pair<RID, Float> candidate : candidates) {
+      final float[] stored = readRecordVectorArray(candidate.getFirst());
+      if (stored == null)
+        continue;
+      reranked.add(new Pair<>(candidate.getFirst(),
+          scoreToDistance(metadata.similarityFunction, metadata.similarityFunction.compare(query, vts.createFloatVector(stored)))));
+    }
+    reranked.sort(Comparator.comparingDouble(Pair::getSecond));
+    return reranked.size() > k ? new ArrayList<>(reranked.subList(0, k)) : reranked;
+  }
+
+  private List<Pair<RID, Float>> searchNeighbors(final float[] queryVector, int k, final int efSearch,
       final Set<RID> allowedRIDs) {
     // Track search metrics
     final long startTime = System.currentTimeMillis();
@@ -6918,6 +7306,10 @@ public class LSMVectorIndex implements Index, IndexInternal {
       if (queryVector.length != metadata.dimensions)
         throw new IllegalArgumentException(
             "Query vector dimension " + queryVector.length + " does not match index dimension " + metadata.dimensions);
+
+      for (final float component : queryVector)
+        if (!Float.isFinite(component))
+          throw new IllegalArgumentException("Query vector components must be finite numbers: got " + component);
 
       // Check if query vector is all zeros (would cause NaN with cosine similarity)
       if (metadata.similarityFunction == VectorSimilarityFunction.COSINE && VectorUtils.isZeroVector(queryVector))
@@ -8391,6 +8783,14 @@ public class LSMVectorIndex implements Index, IndexInternal {
             "Vector dimension does not match index dimension " + metadata.dimensions + ": got "
                 + keys[0].getClass().getSimpleName() + " of length " + vector.length);
 
+      // No similarity can rank a NaN or an Infinity: it would be indexed and returned with a NaN or infinite distance, and
+      // under DOT_PRODUCT ahead of every finite record (issue #8962). Not checked on replay, so that a vector accepted before
+      // this check existed cannot block recovery, rebuild or compaction.
+      if (!replay)
+        for (final float component : vector)
+          if (!Float.isFinite(component))
+            throw new IllegalArgumentException("Vector components must be finite numbers: got " + component);
+
       final RID rid = values[0];
 
       if (!replay && isTransactionalCall()) {
@@ -9015,7 +9415,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
    * the number of resident locations, two settings read live - and never touches a page.
    */
   private boolean isCompactionDue() {
-    if (!isCompactionAllowedOnThisNode(getDatabase()))
+    if (compactionBlockedBySharedIds || !isCompactionAllowedOnThisNode(getDatabase()))
       return false;
 
     final ContextConfiguration configuration = getDatabase().getConfiguration();
@@ -9947,6 +10347,8 @@ public class LSMVectorIndex implements Index, IndexInternal {
     // persistedGraphNodeCount above is read from there: "how many are only reachable by scan" is a question an
     // operator has to be able to ask on a freshly reopened index too.
     final int[] unreachableOrdinals = graphUnreachableOrdinals;
+    stats.put("compactionBlockedBySharedIds", compactionBlockedBySharedIds ? 1L : 0L);
+    stats.put("recordsLeftOutBySharedIds", (long) recordsLeftOutBySharedIds);
     stats.put("unreachableGraphNodes", unreachableOrdinals != null ?
         (long) unreachableOrdinals.length :
         manifestContent != null ? (long) manifestContent.unreachableOrdinals().length : 0L);

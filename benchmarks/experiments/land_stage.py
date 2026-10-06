@@ -55,8 +55,8 @@ REMOTE = os.environ.get("BENCH_LAND_REMOTE",
                         "~/repos/humemai/arcadedb-embedded-python/benchmarks/experiments/results")
 PY = str(REPO / ".venv" / "bin" / "python")
 SCRATCH = Path(os.environ.get("BENCH_LAND_SCRATCH", "/tmp/claude-1000/land_stage"))
-TRAILER = ("\n\nCo-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>\n"
-           "Claude-Session: https://claude.ai/code/session_01M8NdUMbUoCLwNJEWPir4YL")
+TRAILER = ("\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n"
+           "Claude-Session: https://claude.ai/code/session_01Ubz3m6QXHESerCkehC1qgi")
 
 
 def sh(cmd, cwd=None, check=True, capture=False, env=None, quiet=False):
@@ -502,7 +502,12 @@ def main():
         old = {t["id"]: t for t in json.loads(before).get("tables", [])}
     except json.JSONDecodeError:
         old = {}
-    new = {t["id"]: t for t in json.loads(SITE_PAYLOAD.read_text())["tables"]}
+    new_payload = json.loads(SITE_PAYLOAD.read_text())
+    new = {t["id"]: t for t in new_payload["tables"]}
+
+    def _differs(a, b):
+        return json.dumps(a, sort_keys=True) != json.dumps(b, sort_keys=True)
+
     changed = 0
     for tid, t in new.items():
         n_old = len(old.get(tid, {}).get("entries", []))
@@ -510,9 +515,31 @@ def main():
         rows_old = {(e["backend"], str(e.get("scale"))) for e in old.get(tid, {}).get("entries", [])}
         rows_new = {(e["backend"], str(e.get("scale"))) for e in t["entries"]}
         added = sorted(rows_new - rows_old)
-        if n_new != n_old or added or json.dumps(t, sort_keys=True) != json.dumps(old.get(tid), sort_keys=True):
+        if n_new != n_old or added or _differs(t, old.get(tid)):
             changed += 1
-            print(f"  {tid}: {n_old} -> {n_new} rows" + (f", new: {added[:6]}" if added else ", cells changed"))
+            # SAY WHAT CHANGED. This printed "cells changed" for any difference
+            # in the table's JSON, so a landing that only rewrote the notes
+            # under two tables (2026-10-04) read as if their numbers had moved.
+            o = old.get(tid) or {}
+            what = sorted(k for k in set(t) | set(o) if _differs(t.get(k), o.get(k)))
+            if added:
+                tail = f", new: {added[:6]}"
+            elif "entries" in what:
+                rest = [k for k in what if k != "entries"]
+                tail = ", cells changed" + (f"; also {', '.join(rest)}" if rest else "")
+            else:
+                tail = f", no cell changed; {', '.join(what)} changed"
+            print(f"  {tid}: {n_old} -> {n_new} rows{tail}")
+    # The page-level fields (the notes above every table, the provenance of
+    # generated sentences) are part of what a landing publishes too.
+    try:
+        old_payload = json.loads(before)
+    except json.JSONDecodeError:
+        old_payload = {}
+    page_level = sorted(k for k in set(old_payload) | set(new_payload)
+                        if k != "tables" and _differs(old_payload.get(k), new_payload.get(k)))
+    if page_level:
+        print(f"  page level: {', '.join(page_level)} changed")
     # A TABLE THAT VANISHES IS THE CHANGE MOST WORTH PRINTING, and this loop
     # walked the NEW payload only, so it could not see one. A scoped landing
     # used to rebuild the page as if no other lane existed; that is fixed
@@ -527,7 +554,7 @@ def main():
               file=sys.stderr)
         _restore_this_runs_writes(_dirty_before, site_files)
         return 1
-    if not changed:
+    if not changed and not page_level:
         print("  no table changed; the stage was not page material or its rows were excluded")
 
     if not args.apply:

@@ -589,7 +589,8 @@ def create_indexes(db, indexes, verbose=True):
     Args:
         db: Database instance
         indexes: List of (table, column, uniqueness) tuples
-            uniqueness can be: "UNIQUE", "NOTUNIQUE", "FULL_TEXT"
+            uniqueness can be: "UNIQUE", "UNIQUE_HASH", "NOTUNIQUE",
+            "NOTUNIQUE_HASH", "FULL_TEXT"
         verbose: If True, print progress messages
 
     Returns:
@@ -1452,11 +1453,13 @@ wait_for_compaction(db, max_wait_seconds=600, verbose=True)
 
 # Define indexes to create
 indexes = [
+    # Ordered LSM_TREE: the test queries ORDER BY movieId. An id read only by
+    # equality would be UNIQUE_HASH (ArcadeData/arcadedb#9169), as Link.movieId is.
     ("Movie", "movieId", "UNIQUE"),
     ("Movie", "genres", "FULL_TEXT"),  # Full-text search for genre queries
     ("Rating", "userId", "NOTUNIQUE"),
     ("Rating", "movieId", "NOTUNIQUE"),
-    ("Link", "movieId", "UNIQUE"),
+    ("Link", "movieId", "UNIQUE_HASH"),  # never read by range or order
     ("Tag", "movieId", "NOTUNIQUE"),
 ]
 

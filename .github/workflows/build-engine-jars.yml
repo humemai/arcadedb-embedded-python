@@ -1,0 +1,118 @@
+name: Build ArcadeDB engine jars
+
+# Builds the full ArcadeDB distribution (engine, server, every plugin, and their
+# dependencies: the same jar set the arcadedata/arcadedb Docker image carries in
+# /home/arcadedb/lib) from source at any commit, and uploads the lib directory
+# as an artifact. Two uses:
+#   * verifying an upstream fix at its merge commit without building on the
+#     laptop, whose cores are kept for timing work (repository ArcadeData/arcadedb,
+#     ref the merge SHA; download with `gh run download <run> -n arcadedb-lib`);
+#   * the bindings and examples workflows' `engine-from-source` option, which
+#     tests a branch (an upstream sync, for example) against the engine source on
+#     that branch instead of upstream's moving snapshot image.
+
+on:
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: "Repository to build (owner/name)"
+        required: false
+        default: "ArcadeData/arcadedb"
+        type: string
+      ref:
+        description: "Commit SHA, branch, or tag to build"
+        required: true
+        type: string
+      exclude-ha-raft-shaded:
+        description: "Leave out arcadedb-ha-raft-*-shaded.jar, which bundles its own copy of the engine classes and shadows an engine swap (verification A/Bs)"
+        required: false
+        default: false
+        type: boolean
+  workflow_call:
+    inputs:
+      repository:
+        description: "Repository to build (owner/name); empty means this repository"
+        required: false
+        default: ""
+        type: string
+      ref:
+        description: "Commit to build; empty means the calling commit"
+        required: false
+        default: ""
+        type: string
+      artifact-name:
+        description: "Name of the uploaded artifact"
+        required: false
+        default: "arcadedb-lib"
+        type: string
+      exclude-ha-raft-shaded:
+        description: "Leave out arcadedb-ha-raft-*-shaded.jar, which bundles its own copy of the engine classes and shadows an engine swap (verification A/Bs)"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-engine-jars-${{ inputs.repository }}-${{ inputs.ref || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build the distribution (${{ inputs.repository || github.repository }} @ ${{ inputs.ref || github.sha }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - name: Checkout the source to build
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.repository || github.repository }}
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Build the package module and everything it needs
+        shell: bash
+        env:
+          EXCLUDE_HA_RAFT_SHADED: ${{ inputs.exclude-ha-raft-shaded }}
+        run: |
+          ./mvnw -B -q -DskipTests -pl package -am package
+          # The FULL distribution. The base, headless, and minimal variants are
+          # written beside it as arcadedb-<version>-<variant>.dir, and "-" sorts
+          # before ".", so `ls | head -1` picked base, which has no plugins (no
+          # Gremlin, Bolt, wire protocols, GraphQL, metrics, or tracing).
+          LIB=$(ls -d package/target/arcadedb-*.dir/arcadedb-*/lib | grep -vE -- '-(base|headless|minimal)\.dir/' || true)
+          if [ "$(printf '%s\n' "$LIB" | grep -c .)" != 1 ] || [ ! -d "$LIB" ]; then
+            echo "::error::expected one full-distribution lib under package/target, got: $LIB"; exit 1
+          fi
+          if ! ls "$LIB"/arcadedb-gremlin-*.jar > /dev/null 2>&1; then
+            echo "::error::$LIB has no Gremlin plugin jar, so it is not the full distribution"; exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/arcadedb-lib"
+          cp "$LIB"/*.jar "$RUNNER_TEMP/arcadedb-lib/"
+          HA_NOTE="ha-raft shaded jar: kept (as in the image)"
+          if [ "$EXCLUDE_HA_RAFT_SHADED" = "true" ]; then
+            rm -f "$RUNNER_TEMP"/arcadedb-lib/arcadedb-ha-raft-*-shaded.jar
+            HA_NOTE="ha-raft shaded jar: left out (it bundles engine classes)"
+          fi
+          echo "commit: $(git rev-parse HEAD)" | tee "$RUNNER_TEMP/arcadedb-lib/BUILD-INFO.txt"
+          echo "distribution: $LIB" | tee -a "$RUNNER_TEMP/arcadedb-lib/BUILD-INFO.txt"
+          echo "$HA_NOTE" | tee -a "$RUNNER_TEMP/arcadedb-lib/BUILD-INFO.txt"
+          echo "jars: $(ls -1 "$RUNNER_TEMP"/arcadedb-lib/*.jar | wc -l)" | tee -a "$RUNNER_TEMP/arcadedb-lib/BUILD-INFO.txt"
+          ls -1 "$RUNNER_TEMP"/arcadedb-lib/*.jar | xargs -n1 basename >> "$RUNNER_TEMP/arcadedb-lib/BUILD-INFO.txt"
+          ENGINE=$(ls "$RUNNER_TEMP"/arcadedb-lib/arcadedb-engine-*.jar | head -1)
+          unzip -p "$ENGINE" META-INF/MANIFEST.MF | tr -d '\r' | tee -a "$RUNNER_TEMP/arcadedb-lib/BUILD-INFO.txt"
+
+      - name: Upload the lib directory
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ inputs.artifact-name || 'arcadedb-lib' }}
+          path: ${{ runner.temp }}/arcadedb-lib/
+          retention-days: 7

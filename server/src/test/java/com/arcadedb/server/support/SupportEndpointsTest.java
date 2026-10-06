@@ -134,6 +134,33 @@ class SupportEndpointsTest extends BaseGraphServerTest {
   }
 
   @Test
+  void aServerOutsideAClusterHasNoPeersToAsk() throws Exception {
+    final Resp peers = call("GET", "/api/v1/server/support/peers", null);
+    assertThat(peers.status()).isEqualTo(200);
+    assertThat(peers.json().getBoolean("ha")).isFalse();
+    assertThat(peers.json().getJSONArray("peers").length()).isZero();
+
+    final Resp run = call("POST", "/api/v1/server/support/peer-query",
+        new JSONObject().put("database", "x").put("language", "sql").put("statement", "SELECT 1").put("nodes", "all").toString());
+    assertThat(run.status()).isEqualTo(200);
+    assertThat(run.json().getBoolean("ha")).isFalse();
+    assertThat(run.json().getJSONArray("nodes").length()).isZero();
+  }
+
+  @Test
+  void aBadPeerQueryIsRefusedBeforeAnythingIsSent() throws Exception {
+    for (final JSONObject bad : new JSONObject[] {
+        new JSONObject().put("database", "../x").put("language", "sql").put("statement", "SELECT 1"),
+        new JSONObject().put("database", "x").put("language", "gremlin").put("statement", "g.V()"),
+        new JSONObject().put("database", "x").put("language", "sql").put("statement", ""),
+        new JSONObject().put("database", "x").put("language", "sql").put("statement", "SELECT 1").put("nodes", "a\nb") }) {
+      final Resp r = call("POST", "/api/v1/server/support/peer-query", bad.toString());
+      assertThat(r.status()).as(bad.toString()).isEqualTo(400);
+      assertThat(r.json().getString("error")).isEqualTo("bad_request");
+    }
+  }
+
+  @Test
   void verifyOnlyChecksWithThePortalWithoutStoring() throws Exception {
     final Resp ok = call("POST", "/api/v1/server/support/register",
         new JSONObject().put("clientId", MockPortal.CLIENT_ID).put("key", MockPortal.KEY).put("verifyOnly", true).toString());
@@ -227,7 +254,9 @@ class SupportEndpointsTest extends BaseGraphServerTest {
         { "POST", "/api/v1/server/support/issues/1/requests/rq_0123abcd/response" },
         { "POST", "/api/v1/server/support/issues/1/responses" },
         { "POST", "/api/v1/server/support/screenshots" }, { "DELETE", "/api/v1/server/support/screenshots/shot_x" },
-        { "POST", "/api/v1/server/support/bundle" }, { "POST", "/api/v1/server/support/installation" } };
+        { "POST", "/api/v1/server/support/bundle" }, { "POST", "/api/v1/server/support/installation" },
+        { "POST", "/api/v1/server/support/connect" }, { "GET", "/api/v1/server/support/connect" }, { "DELETE", "/api/v1/server/support/connect" },
+        { "GET", "/api/v1/server/support/peers" }, { "POST", "/api/v1/server/support/peer-query" } };
 
     // a user that is not root
     assertThat(call("POST", "/api/v1/server/users", new JSONObject().put("name", "bob").put("password", "bobs-password-1234").toString())
@@ -402,6 +431,10 @@ class SupportEndpointsTest extends BaseGraphServerTest {
     assertThat(diagnostics.getJSONObject("runtime").getString("container")).isIn("none", "docker", "kubernetes", "unknown");
     final JSONObject configuration = diagnostics.getJSONObject("configuration");
     assertThat(configuration.getJSONArray("nonDefault")).isNotNull();
+    assertThat(configuration.getJSONArray("computed")).isNotNull();
+    // the server adds AutoBackupSchedulerPlugin to its own plugin list at startup: that is not the operator's choice
+    for (final Object entry : configuration.getJSONArray("nonDefault").toList())
+      assertThat(String.valueOf(entry)).doesNotContain(GlobalConfiguration.SERVER_PLUGINS.getKey());
     // the root password of the test server is set, so it is listed as masked and its value is nowhere
     assertThat(configuration.getJSONArray("masked").toList()).contains("arcadedb.server.rootPassword");
     for (final Object entry : configuration.getJSONArray("nonDefault").toList())

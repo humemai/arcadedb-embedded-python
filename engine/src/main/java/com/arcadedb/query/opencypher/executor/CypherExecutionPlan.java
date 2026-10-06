@@ -155,6 +155,7 @@ import com.arcadedb.query.opencypher.optimizer.plan.PhysicalPlan;
 import com.arcadedb.query.opencypher.procedures.CypherProcedure;
 import com.arcadedb.query.opencypher.procedures.CypherProcedureRegistry;
 import com.arcadedb.query.opencypher.rewriter.ExpressionRewriter;
+import com.arcadedb.index.IndexException;
 import com.arcadedb.index.RangeIndex;
 import com.arcadedb.index.TypeIndex;
 import com.arcadedb.index.lsm.LSMTreeIndexAbstract;
@@ -2850,22 +2851,27 @@ public class CypherExecutionPlan {
     // type is inherited by this one, and a relationship pattern already matches every subtype of the type it
     // names. MatchEdgeByIndexStep filters an inherited index's cursor back down to that same rule.
     TypeIndex bestIndex = null;
+    List<String> bestKeyProps = null;
     int bestPrefix = 0;
-    for (final TypeIndex index : edgeType.getAllIndexes(true)) {
-      if (index.getType() != Schema.INDEX_TYPE.LSM_TREE)
-        continue; // a full-text or vector index does not answer an equality on its key
-      final List<String> keyProps = index.getPropertyNames();
-      int prefix = 0;
-      while (prefix < keyProps.size() && predicates.containsKey(keyProps.get(prefix)))
-        prefix++;
-      if (prefix == 0)
-        continue;
-      if (prefix < keyProps.size() && !index.supportsOrderedIterations())
-        continue; // a prefix seek needs the range cursor
-      if (bestIndex == null || prefix > bestPrefix
-          || (prefix == bestPrefix && keyProps.size() < bestIndex.getPropertyNames().size())) {
-        bestIndex = index;
-        bestPrefix = prefix;
+    for (final TypeIndex index : TypeIndex.filterReadyForQueries(edgeType.getAllIndexes(true))) {
+      try {
+        if (index.getType() != Schema.INDEX_TYPE.LSM_TREE)
+          continue; // a full-text or vector index does not answer an equality on its key
+        final List<String> keyProps = index.getPropertyNames();
+        int prefix = 0;
+        while (prefix < keyProps.size() && predicates.containsKey(keyProps.get(prefix)))
+          prefix++;
+        if (prefix == 0)
+          continue;
+        if (prefix < keyProps.size() && !index.supportsOrderedIterations())
+          continue; // a prefix seek needs the range cursor
+        if (bestIndex == null || prefix > bestPrefix || (prefix == bestPrefix && keyProps.size() < bestKeyProps.size())) {
+          bestIndex = index;
+          bestKeyProps = keyProps;
+          bestPrefix = prefix;
+        }
+      } catch (final IndexException e) {
+        // dropped or rebuilt by a concurrent DDL while being read: not a candidate (issue #8918)
       }
     }
     if (bestIndex == null)
@@ -2874,7 +2880,7 @@ public class CypherExecutionPlan {
     final String[] propertyNames = new String[bestPrefix];
     final Object[] keyValues = new Object[bestPrefix];
     for (int i = 0; i < bestPrefix; i++) {
-      propertyNames[i] = bestIndex.getPropertyNames().get(i);
+      propertyNames[i] = bestKeyProps.get(i);
       keyValues[i] = predicates.get(propertyNames[i]);
     }
 
@@ -6770,6 +6776,20 @@ public class CypherExecutionPlan {
     return false;
   }
 
+  /** Whether two positions of the path bind the same node variable, i.e. the path closes on a vertex it already visited. */
+  private static boolean repeatsNodeVariable(final PathPattern pathPattern) {
+    final int nodeCount = pathPattern.getRelationshipCount() + 1;
+    for (int i = 0; i < nodeCount; i++) {
+      final String variable = pathPattern.getNode(i).getVariable();
+      if (variable == null || variable.isEmpty())
+        continue;
+      for (int j = i + 1; j < nodeCount; j++)
+        if (variable.equals(pathPattern.getNode(j).getVariable()))
+          return true;
+    }
+    return false;
+  }
+
   private CountOp tryDetectChainCountStar(final Database db, final SeedCorrelation correlation) {
     // Exactly one MATCH clause
     if (statement.getMatchClauses() == null || statement.getMatchClauses().size() != 1)
@@ -6835,6 +6855,11 @@ public class CypherExecutionPlan {
         directions[i] = Vertex.DIRECTION.BOTH;
     }
 
+    // A node variable named twice is one vertex, a constraint the operator cannot express: it counts the chain as if
+    // every position were free, so (x)-[:K]->(x) would count every K edge instead of the self-loops (issue #8941)
+    if (repeatsNodeVariable(pathPattern))
+      return null;
+
     // Resolve inequality variable positions in the chain
     int inequalityIdxA = -1;
     int inequalityIdxB = -1;
@@ -6854,7 +6879,7 @@ public class CypherExecutionPlan {
     }
 
     // Count-push-down does NOT enforce edge uniqueness, so it's only safe when no two hops can bind the same edge
-    if (!chainHopsAreUnique(db, edgeTypes, inequalityIdxA, inequalityIdxB))
+    if (!chainHopsAreUnique(db, edgeTypes, directions, inequalityIdxA, inequalityIdxB))
       return null;
 
     if (!correlation.isCorrelated())
@@ -6868,33 +6893,63 @@ public class CypherExecutionPlan {
    * paths (issues #6322, #8426). Two hops can share an edge only when their types overlap, and overlap is
    * inheritance-aware: a {@code KC} edge matches both {@code [:K]} and {@code [:KC]} when {@code KC EXTENDS K}.
    * <p>
-   * The one thing that rescues an overlapping pair is an inequality between the vertices two hops apart: hops
-   * {@code i} and {@code i + 1} bind the same edge only when the vertices around them coincide, {@code v(i) = v(i + 2)}.
-   * It protects that pair alone. A pair further apart, or a second overlapping pair, is not protected by any single
-   * inequality (a three-hop chain with {@code WHERE a <> d} still lets its first and third hop bind one edge), so the
-   * chain is declined.
+   * An overlapping pair is rescued by an inequality between two nodes that binding the same edge would force equal: hop
+   * {@code i} runs between nodes {@code i} and {@code i + 1}, so the same edge for hops {@code i} and {@code j} means the
+   * source of one is the source of the other and likewise the targets. For adjacent hops that is {@code v(i) = v(i + 2)}
+   * (the self-loop case), for {@code (a)<-[:T]-(m)<-[:R]-(c)-[:T]->(b)} it is {@code m = c} and {@code a = b}, so
+   * {@code WHERE a <> b} protects the two {@code T} hops although they are not adjacent (LSQB Q5). An undirected hop can
+   * be traversed either way, so the inequality has to hold under every orientation of such hops. A three-hop chain
+   * with {@code WHERE a <> d} still lets its first and third hop bind one edge when they overlap, because only the
+   * middle nodes would have to coincide with the ends, and no inequality names the nodes that are forced equal, so
+   * that chain is declined. Every overlapping pair must be protected by the one inequality the operator carries.
    */
-  private static boolean chainHopsAreUnique(final Database db, final String[] edgeTypes, final int inequalityIdxA,
-      final int inequalityIdxB) {
-    int overlappingPairs = 0;
-    int overlapFirstHop = -1;
-    int overlapSecondHop = -1;
+  private static boolean chainHopsAreUnique(final Database db, final String[] edgeTypes, final Vertex.DIRECTION[] directions,
+      final int inequalityIdxA, final int inequalityIdxB) {
     for (int i = 0; i < edgeTypes.length; i++)
       for (int j = i + 1; j < edgeTypes.length; j++)
-        if (CypherOptimizer.edgeTypesMayOverlap(db.getSchema(), edgeTypes[i], edgeTypes[j])) {
-          ++overlappingPairs;
-          overlapFirstHop = i;
-          overlapSecondHop = j;
-        }
+        if (CypherOptimizer.edgeTypesMayOverlap(db.getSchema(), edgeTypes[i], edgeTypes[j])
+            && !inequalityForcedBySharedEdge(directions, i, j, inequalityIdxA, inequalityIdxB))
+          return false;
+    return true;
+  }
 
-    if (overlappingPairs == 0)
-      return true;
-    if (overlappingPairs > 1 || overlapSecondHop != overlapFirstHop + 1 || inequalityIdxA < 0)
+  /**
+   * Whether hops {@code i < j} binding one edge forces nodes {@code a} and {@code b} to be the same vertex, under every
+   * orientation the hops' directions allow. Source and target of a hop are the nodes it joins, ordered by direction.
+   */
+  private static boolean inequalityForcedBySharedEdge(final Vertex.DIRECTION[] directions, final int i, final int j,
+      final int a, final int b) {
+    if (a < 0 || b < 0 || a == b)
       return false;
 
-    final int low = Math.min(inequalityIdxA, inequalityIdxB);
-    final int high = Math.max(inequalityIdxA, inequalityIdxB);
-    return low == overlapFirstHop && high == overlapFirstHop + 2;
+    // forward: node k is the source, node k + 1 the target; reversed: the other way round
+    final boolean[] orientationsI = directions[i] == Vertex.DIRECTION.BOTH ? new boolean[] { true, false } :
+        new boolean[] { directions[i] == Vertex.DIRECTION.OUT };
+    final boolean[] orientationsJ = directions[j] == Vertex.DIRECTION.BOTH ? new boolean[] { true, false } :
+        new boolean[] { directions[j] == Vertex.DIRECTION.OUT };
+
+    for (final boolean forwardI : orientationsI)
+      for (final boolean forwardJ : orientationsJ) {
+        // union-find over node positions, a chain has few of them
+        final int[] parent = new int[Math.max(Math.max(i, j) + 2, Math.max(a, b) + 1)];
+        for (int n = 0; n < parent.length; n++)
+          parent[n] = n;
+        sharedEdgeUnion(parent, forwardI ? i : i + 1, forwardJ ? j : j + 1);
+        sharedEdgeUnion(parent, forwardI ? i + 1 : i, forwardJ ? j + 1 : j);
+        if (sharedEdgeFind(parent, a) != sharedEdgeFind(parent, b))
+          return false;
+      }
+    return true;
+  }
+
+  private static int sharedEdgeFind(final int[] parent, int n) {
+    while (parent[n] != n)
+      n = parent[n] = parent[parent[n]];
+    return n;
+  }
+
+  private static void sharedEdgeUnion(final int[] parent, final int x, final int y) {
+    parent[sharedEdgeFind(parent, x)] = sharedEdgeFind(parent, y);
   }
 
   /**
@@ -7120,20 +7175,26 @@ public class CypherExecutionPlan {
         if (centralNodeIdx < 0)
           return null;
 
+        // The arm walks from ONE position of the central node, so the same variable at a second position of the
+        // arm (a path closing on the central vertex) is a constraint the degree product drops (issue #8941)
+        for (int i = centralNodeIdx + 1; i <= pathPattern.getRelationshipCount(); i++)
+          if (centralVar.equals(pathPattern.getNode(i).getVariable()))
+            return null;
+
         final int totalHops = pathPattern.getRelationshipCount();
 
-        // Every non-central node of the arm - the far endpoint and any interior node of a multi-hop
-        // arm alike - is a label, inline property filter, or dynamic label the degree product cannot
-        // enforce: it counts degree off the arm's edge types and directions alone, with no field on
-        // Arm for a per-hop endpoint type or filter, so (:Author), (:Author {status:'active'}) and ()
-        // built the same operator and the same, over-counted, answer. Decline the push-down rather
-        // than silently drop the filter, exactly as the central variable's own check already does
-        // above (issue #6337 for labels, #6431 for properties/dynamic labels, both siblings of #6322).
+        // A label on a non-central node (the far endpoint or an interior node of a multi-hop arm) is a filter on what the
+        // hop reaches: the operator carries it per hop and enforces it (#6337), so (:Author) and () no longer build the
+        // same operator. An inline property filter, a dynamic label or a label set one name cannot stand for is still
+        // something the operator has no way to check, so it declines the push-down rather than silently drop it
+        // (#6431, #6322).
         for (int i = 0; i <= totalHops; i++) {
           if (i == centralNodeIdx)
             continue;
           final NodePattern node = pathPattern.getNode(i);
-          if (node.hasLabels() || node.hasProperties() || node.hasDynamicLabels())
+          if (node.hasProperties() || node.hasDynamicLabels())
+            return null;
+          if (node.hasLabels() && !hasPushDownRepresentableLabel(node))
             return null;
         }
 
@@ -7817,12 +7878,24 @@ public class CypherExecutionPlan {
    * Builds a star-join arm going forward from centralIdx toward endIdx in the path pattern.
    * Direction is preserved as-is from the pattern.
    */
+  /**
+   * The one label a star-join arm carries for the node a hop reaches, or null when it has none. Relies on
+   * {@link #hasPushDownRepresentableLabel} having declined every other label shape (a label set, a dynamic label) in
+   * {@code tryDetectStarCountStar} before an arm is built, so taking the first label is taking the only one.
+   */
+  private static String endpointLabelOf(final NodePattern node) {
+    assert !node.hasLabels() || node.getLabels().size() == 1 : "a multi-label endpoint must have declined the push-down";
+    return node.hasLabels() ? node.getLabels().get(0) : null;
+  }
+
   private DegreeProductOp.Arm buildArmForward(final PathPattern pathPattern, final int centralIdx,
       final int endIdx, final boolean optional) {
     final int hops = endIdx - centralIdx;
     final String[] edgeTypes = new String[hops];
+    final String[] endpointLabels = new String[hops];
     final Vertex.DIRECTION[] directions = new Vertex.DIRECTION[hops];
     for (int i = 0; i < hops; i++) {
+      endpointLabels[i] = endpointLabelOf(pathPattern.getNode(centralIdx + i + 1));
       final RelationshipPattern rel = pathPattern.getRelationship(centralIdx + i);
       if (rel.isVariableLength() || (rel.getVariable() != null && !rel.getVariable().isEmpty())
           || rel.hasProperties() || !rel.hasTypes() || rel.getTypes().size() != 1)
@@ -7832,7 +7905,7 @@ public class CypherExecutionPlan {
       directions[i] = dir == Direction.OUT ? Vertex.DIRECTION.OUT
           : dir == Direction.IN ? Vertex.DIRECTION.IN : Vertex.DIRECTION.BOTH;
     }
-    return new DegreeProductOp.Arm(edgeTypes, directions, optional);
+    return new DegreeProductOp.Arm(edgeTypes, directions, optional, endpointLabels);
   }
 
   /**
@@ -7843,8 +7916,10 @@ public class CypherExecutionPlan {
       final int endIdx, final boolean optional) {
     final int hops = centralIdx - endIdx;
     final String[] edgeTypes = new String[hops];
+    final String[] endpointLabels = new String[hops];
     final Vertex.DIRECTION[] directions = new Vertex.DIRECTION[hops];
     for (int i = 0; i < hops; i++) {
+      endpointLabels[i] = endpointLabelOf(pathPattern.getNode(centralIdx - 1 - i));
       // Walk backward from centralIdx: rel at (centralIdx-1), (centralIdx-2), ...
       final RelationshipPattern rel = pathPattern.getRelationship(centralIdx - 1 - i);
       if (rel.isVariableLength() || (rel.getVariable() != null && !rel.getVariable().isEmpty())
@@ -7856,7 +7931,7 @@ public class CypherExecutionPlan {
       directions[i] = dir == Direction.OUT ? Vertex.DIRECTION.OUT
           : dir == Direction.IN ? Vertex.DIRECTION.IN : Vertex.DIRECTION.BOTH;
     }
-    return new DegreeProductOp.Arm(edgeTypes, directions, optional);
+    return new DegreeProductOp.Arm(edgeTypes, directions, optional, endpointLabels);
   }
 
   private String extractIdFilter(final WhereClause whereClause, final String variable) {

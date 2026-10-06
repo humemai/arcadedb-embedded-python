@@ -120,12 +120,22 @@ json module. Measured ~5.5x faster than `to_list()` on a 10,000-row, nine-proper
 
 **Trade-off:** values carry JSON-native types. Numbers, strings, booleans, lists, and
 nested maps convert as expected, but `DATE` and `DATETIME` values arrive as
-epoch-millisecond integers (not `datetime`) and DECIMALs as floats. Use `to_list()` when full Python-type fidelity
-matters more than speed.
+epoch-millisecond integers (not `datetime`) and DECIMALs as floats. A `DATE` is the
+epoch milliseconds of midnight UTC, whatever the JVM's time zone, so it is the same
+integer `Result.to_json()` writes and `datetime.fromtimestamp(ms / 1000, timezone.utc)`
+gives the right day. (Before this was fixed it was midnight in the JVM's zone: the
+previous day when decoded as UTC east of UTC, humemai/arcadedb-embedded-python#116.)
+Use `to_list()` when full Python-type fidelity matters more than speed.
+
+It is also the fast path for a small result: a one-row read through `to_json_list()` takes
+one Java crossing (a short batch ends the read) and allocates only what the row needs,
+about 0.022 ms for a bound openCypher point lookup against 0.037 ms before this was fixed
+(laptop, relative only, 2026-10-04).
 
 **Parameters:**
 
-- `batch_size` (int): Rows serialized per Java crossing (default: `10_000`)
+- `batch_size` (int): Rows serialized per Java crossing (default: `10_000`); must be at
+  least 1 (`ValueError` otherwise)
 
 **Returns:**
 
@@ -149,7 +159,8 @@ jar is unavailable.
 
 **Parameters:**
 
-- `batch_size` (int): Rows serialized per Java crossing (default: `10_000`)
+- `batch_size` (int): Rows serialized per Java crossing (default: `10_000`); must be at
+  least 1 (`ValueError` otherwise)
 
 **Yields:**
 
@@ -190,7 +201,7 @@ print(df.describe())
 
 ---
 
-### `to_columns(batch_size: int = 25_000)`
+### `to_columns(batch_size: int = 25_000, columns: Optional[Sequence[str]] = None)`
 
 Bulk-materialize all rows as columns: a dict of column name to numpy array
 (`int64`/`float64`/`bool`/`datetime64[ms]`) or Python list (strings and
@@ -206,6 +217,20 @@ are promoted to float64 with NaN / datetime64 NaT; a null row in a vector
 column becomes a NaN row. Returns `None` when numpy or the bridge jar is
 unavailable (callers fall back to row-based paths).
 
+The columns are the union of the property names of every row, in order of first
+appearance, because a document is schemaless: a property the first row lacks is still
+a column, null where a row lacks it. (Before this was fixed the columns were the first
+row's, and `to_columns()`, `to_dataframe()`, and `to_arrow()` dropped the others,
+humemai/arcadedb-embedded-python#113.) The result does not depend on `batch_size`.
+Finding the columns costs one pass over each row's property names (about 25% of a
+200,000-row, twelve-property `to_columns()`, measured on the laptop, relative only);
+pass `columns=["a", "b"]` to read exactly those, as a projection would, and skip it. A
+row lacking one of them reads null, and a property not listed is left out.
+
+A `DECIMAL` column is an object array of `Decimal` (`None` for null), exact to the last
+digit; it used to arrive as JSON numbers, so a double lost digits and the dtype followed
+the data (humemai/arcadedb-embedded-python#115).
+
 **Example:**
 
 ```python
@@ -216,7 +241,7 @@ sims = emb @ query_vector      # immediately usable
 
 ---
 
-### `to_arrow(batch_size: int = 25_000)`
+### `to_arrow(batch_size: int = 25_000, columns: Optional[Sequence[str]] = None)`
 
 Bulk-materialize all rows as a `pyarrow.Table`. Requires numpy and pyarrow.
 
@@ -227,6 +252,14 @@ with NaN, losing precision above 2**53), and a nullable boolean column stays boo
 Strings are cheaper, because the buffer already holds Arrow's string layout (int32
 offsets and a UTF-8 blob), so a column is wrapped instead of decoded one `str` at a
 time.
+
+The table's columns are the union of the rows' property names, as in `to_columns()`. A
+column's type does not depend on `batch_size`: a batch whose rows lack the column, carry
+it as null, or hold only empty lists in it says nothing about its type and takes the
+type of the other batches (humemai/arcadedb-embedded-python#114). If batches really do
+disagree (an int in one row, a string in another), the column becomes strings, in one
+batch as well as across batches. A `DECIMAL` column is `decimal128` (`decimal256` above
+38 digits, strings above 76), so no digit is lost.
 
 **Parameters:**
 
@@ -348,6 +381,22 @@ read it again: the rows it had not returned are gone, so run the query again. (U
 2026-09-29 such a read returned whatever the closed Java result set still handed out,
 which depended on the engine build.) To take one row and keep reading, use
 `next(iter(rs))` rather than `first()`.
+
+The engine computes rows lazily, so an error in the statement can come while the rows are
+read, after `query()` returned: a division by zero on the tenth row, say. Iteration,
+`first()`, `one()`, `count()`, and every `to_*` and `iter_*` method raise it as
+`ArcadeDBError`, with the Java exception as its `__cause__`. (Before 26.10.1 the Java
+exception reached Python as it was.)
+
+A result set, and each `Result` it returns, keeps its `Database` alive. Reading a result
+set after the database was closed (`db.close()`, or leaving the `with` block that opened
+it) raises `ArcadeDBError` ("Database is closed") unless it was already read to its end,
+because the rows it has not returned may still be read lazily from the engine. A `Result`
+that is a record row (`SELECT FROM T`) raises too: its properties are loaded lazily from
+the open database, so there is nothing to return. A `Result` that is a projection
+(`SELECT name FROM T`) or a command result (for example the one `IMPORT DATABASE`
+returns) holds its own values and stays readable, so it can be read after the database
+is closed. See [`Database.close()`](database.md#close).
 
 Closing is not only memory hygiene: since 26.10.1's parallel scan
 (ArcadeData/arcadedb#8524) a query whose `LIMIT` is satisfied keeps its scan's producer

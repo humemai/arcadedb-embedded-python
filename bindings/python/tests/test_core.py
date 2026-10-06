@@ -988,6 +988,41 @@ def test_to_json_list_empty_result(temp_db_path):
         assert db.query("sql", "SELECT FROM Empty").to_json_list() == []
 
 
+def test_json_batches_end_on_a_short_batch_and_on_an_exact_multiple(temp_db_path):
+    """The JSON batch path stops after a short batch (no extra call to see "[]"),
+    still ends cleanly when the row count is an exact multiple of the batch size,
+    and leaves the result set drained either way."""
+    with arcadedb.create_database(temp_db_path) as db:
+        db.command("sql", "CREATE DOCUMENT TYPE B")
+        with db.transaction():
+            for i in range(5):
+                db.command("sql", "INSERT INTO B SET n = ?", i)
+
+        def sizes(limit, batch_size):
+            rs = db.query(
+                "sql",
+                f"SELECT n FROM B ORDER BY n LIMIT {limit}",  # nosec B608 - an int
+            )
+            out = [len(b) for b in rs.iter_json_batches(batch_size=batch_size)]
+            assert list(rs.iter_json_batches(batch_size=batch_size)) == []
+            return out
+
+        assert sizes(5, 2) == [2, 2, 1]
+        assert sizes(4, 2) == [2, 2]
+        assert sizes(1, 10_000) == [1]
+        assert db.query("sql", "SELECT n FROM B WHERE n = 3").to_json_list() == [
+            {"n": 3}
+        ]
+
+
+def test_json_batch_size_must_be_at_least_one(temp_db_path):
+    """A batch size below one used to return no rows at all; it is refused."""
+    with arcadedb.create_database(temp_db_path) as db:
+        db.command("sql", "CREATE DOCUMENT TYPE B")
+        with pytest.raises(ValueError):
+            db.query("sql", "SELECT FROM B").to_json_list(batch_size=0)
+
+
 def test_resultset_close_and_context_manager(temp_db_path):
     """ResultSet supports close() and the context-manager protocol."""
     with arcadedb.create_database(temp_db_path) as db:

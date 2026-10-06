@@ -76,4 +76,6 @@ The source data comes from the timestamps already present on:
 
 That means the example stays faithful to the Stack Overflow domain model while also
 demonstrating how ArcadeDB can project graph/document events into a time-series view
-for trend analysis.
+for trend analysis. Its queries aggregate by day, so the type is declared without a
+`COMPACTION_INTERVAL`; a type whose main query is a daily or hourly aggregate can declare the
+matching interval (see [example 17](17_timeseries_end_to_end.md)).

@@ -237,7 +237,11 @@ for HA, gRPC, or Mongo-protocol access.
 ## Server Info Endpoint
 
 The server exposes `/api/v1/server` for metadata such as version, server name,
-and supported query languages:
+and supported query languages. Add `?mode=basic` when that is all you need: the
+full form also computes a metrics section, which on 26.9.1 and earlier made the
+first call after a start take about 20 s (ArcadeData/arcadedb#8909). To wait for
+a server to come up, poll `/api/v1/ready`, which answers 204 without
+authentication once the server accepts requests:
 
 ```python
 import requests
@@ -246,7 +250,8 @@ from requests.auth import HTTPBasicAuth
 base_url = f"http://localhost:{server.get_http_port()}"
 auth = HTTPBasicAuth("root", "password123")
 
-info = requests.get(f"{base_url}/api/v1/server", auth=auth).json()
+requests.get(f"{base_url}/api/v1/ready").raise_for_status()  # 204 once it is up
+info = requests.get(f"{base_url}/api/v1/server?mode=basic", auth=auth).json()
 print("Server version:", info.get("version"))
 print("Languages:", info.get("languages"))
 ```
@@ -353,6 +358,9 @@ After a bulk write, `COMPACT TIMESERIES TYPE Reading` through `/api/v1/command` 
 samples still in the mutable tail and returns `mutableSamples` (0 once everything is
 sealed), rather than waiting for the 60-second background pass (26.10.1,
 `ArcadeData/arcadedb#8574`). See [`append_samples`](../api/async_executor.md#append_samples).
+If the type's main query is an hourly aggregate, create it with `COMPACTION_INTERVAL 1 HOURS`
+and leave `SHARDS` at its default (the `CREATE TIMESERIES TYPE` above takes both clauses
+after `FIELDS`).
 
 ## Bulk Loading over the Server
 

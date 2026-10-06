@@ -30,12 +30,14 @@ import com.arcadedb.database.RID;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.query.sql.executor.MultiValue;
 import com.arcadedb.query.sql.executor.Result;
+import com.arcadedb.serializer.BinaryComparator;
 import com.arcadedb.serializer.BinaryTypes;
 import com.arcadedb.serializer.json.JSONArray;
 import com.arcadedb.utility.DateUtils;
 import com.arcadedb.utility.FileUtils;
 import com.arcadedb.utility.MultiIterator;
 
+import java.lang.reflect.Array;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.text.ParsePosition;
@@ -1606,28 +1608,46 @@ public enum Type {
     final Number[] pair = castComparableNumber(left, right);
     if (pair[0].equals(pair[1]))
       return true;
+    // Double.equals separates the two zeros; IEEE 754 and openCypher do not (issue #8920)
+    if (pair[0] instanceof Double a && pair[1] instanceof Double b && a == 0.0d && b == 0.0d)
+      return true;
 
     if (left instanceof Float f)
       return narrowsTo(f, right);
     if (right instanceof Float f)
       return narrowsTo(f, left);
     if (left instanceof Double d && right instanceof BigDecimal bd)
-      return Double.isFinite(d) && Double.compare(d, bd.doubleValue()) == 0;
+      return Double.isFinite(d) && BinaryComparator.compareDoubles(d, bd.doubleValue()) == 0;
     if (left instanceof BigDecimal bd && right instanceof Double d)
-      return Double.isFinite(d) && Double.compare(d, bd.doubleValue()) == 0;
+      return Double.isFinite(d) && BinaryComparator.compareDoubles(d, bd.doubleValue()) == 0;
     return false;
   }
 
   // Deliberately as loose as the index key: Type.convert narrows the operand, so 1e-50 reads as 0.0f and finds it (#8882)
   private static boolean floatEqualsDouble(final float f, final double d) {
     // same answer as the castComparableNumber path: the decimal reading of f, else the double that narrows to f
-    return Double.compare(widenFloat(f), d) == 0 || narrowsTo(f, d);
+    return BinaryComparator.compareDoubles(widenFloat(f), d) == 0 || narrowsTo(f, d);
+  }
+
+  /**
+   * True when one operand is a {@code Float} and the other a {@code Double} or {@code BigDecimal} that narrows to it: the pair
+   * {@link #numbersEqual} calls equal and the index, which converts a bound to its FLOAT key, finds together (issue #8882).
+   * The ordering operators ask it first, so a value is never equal to a bound and less than it at once (issue #8919). Allocates
+   * nothing. Equality through narrowing is not transitive (0.1f equals the double 0.1 but is below 0.10000000149011612), so this
+   * is for comparing a value with a bound, never for sorting.
+   */
+  public static boolean floatNarrowsToOperand(final Number left, final Number right) {
+    if (left instanceof Float f)
+      return narrowsTo(f, right);
+    if (right instanceof Float f)
+      return narrowsTo(f, left);
+    return false;
   }
 
   private static boolean narrowsTo(final float f, final Number other) {
     if (other instanceof Double || other instanceof BigDecimal)
-      // Float.compare, not ==: negative zero is not zero, as Double.equals reads it
-      return Float.isFinite(f) && Float.compare(f, other.floatValue()) == 0;
+      // + 0.0f maps negative zero onto zero, which is one value (issue #8920); Float.compare is for the NaN-free total order
+      return Float.isFinite(f) && Float.compare(f + 0.0f, other.floatValue() + 0.0f) == 0;
     return false;
   }
 
@@ -1901,6 +1921,110 @@ public enum Type {
       return BigDecimal.valueOf(((Number) value).longValue()).stripTrailingZeros();
     }
     return value;
+  }
+
+  /**
+   * Deep variant of {@link #normalizeNumberForKey}: canonicalizes the numbers held inside a list, a set, a map or a Java
+   * array too, so {@code [1]}, {@code [1L]} and {@code [1.0]}, or {@code {a: 1}} and {@code {a: 1L}}, key the same way the
+   * scalars do (issue #8977). The keys of a map are kept as they are, they are rarely numbers. A list and an object array
+   * key as lists, a set as a set (it compares without order), a map as a map. A primitive array (a vector, a byte buffer)
+   * is wrapped by content without boxing its elements, and a list, set or map that holds no number, collection, map or
+   * array is returned as it is, so the common case copies nothing, and the returned collection is then the caller's own instance, which
+   * the key must not outlive a mutation of. A String returns at once; a list of numbers (an embedding) is copied and boxed, so
+   * DISTINCT or GROUP BY over such a column allocates per row.
+   *
+   * @param value the value to normalise (may be {@code null})
+   *
+   * @return the canonical key for the value
+   */
+  public static Object normalizeForKey(final Object value) {
+    if (value instanceof String)
+      return value;
+    if (value == null || value instanceof Number)
+      return normalizeNumberForKey(value);
+    if (value instanceof Set<?> set) {
+      if (holdsOnlyPlainValues(set))
+        return set;
+      final Set<Object> items = new HashSet<>((int) (set.size() / 0.75f) + 1);
+      for (final Object item : set)
+        items.add(normalizeForKey(item));
+      return items;
+    }
+    if (value instanceof Collection<?> collection) {
+      if (collection instanceof List<?> && holdsOnlyPlainValues(collection))
+        return collection;
+      final List<Object> items = new ArrayList<>(collection.size());
+      for (final Object item : collection)
+        items.add(normalizeForKey(item));
+      return items;
+    }
+    if (value instanceof Map<?, ?> map) {
+      if (holdsOnlyPlainValues(map.values()))
+        return map;
+      final Map<Object, Object> entries = new HashMap<>((int) (map.size() / 0.75f) + 1);
+      for (final Map.Entry<?, ?> entry : map.entrySet())
+        entries.put(entry.getKey(), normalizeForKey(entry.getValue()));
+      return entries;
+    }
+    if (value.getClass().isArray()) {
+      if (value instanceof Object[] objects) {
+        final List<Object> items = new ArrayList<>(objects.length);
+        for (final Object item : objects)
+          items.add(normalizeForKey(item));
+        return items;
+      }
+      return new PrimitiveArrayKey(value);
+    }
+    return value;
+  }
+
+  private static boolean holdsOnlyPlainValues(final Collection<?> values) {
+    for (final Object item : values)
+      if (item instanceof Number || item instanceof Collection || item instanceof Map || (item != null && item.getClass().isArray()))
+        return false;
+    return true;
+  }
+
+  /**
+   * A primitive array as a hash key: two arrays of the same type with the same content are equal, which the array itself does
+   * not do (it compares by identity).
+   * Floating point content compares by bits (as {@link Arrays#equals(float[], float[])}): NaN equals NaN, which is what grouping
+   * wants, while 0.0 and -0.0 are different keys, unlike the numeric canonicalization of a scalar.
+   */
+  private record PrimitiveArrayKey(Object array) {
+    @Override
+    public boolean equals(final Object other) {
+      if (this == other)
+        return true;
+      if (!(other instanceof PrimitiveArrayKey that) || !array.getClass().equals(that.array.getClass()))
+        return false;
+      return switch (array) {
+        case byte[] a -> Arrays.equals(a, (byte[]) that.array);
+        case short[] a -> Arrays.equals(a, (short[]) that.array);
+        case int[] a -> Arrays.equals(a, (int[]) that.array);
+        case long[] a -> Arrays.equals(a, (long[]) that.array);
+        case float[] a -> Arrays.equals(a, (float[]) that.array);
+        case double[] a -> Arrays.equals(a, (double[]) that.array);
+        case char[] a -> Arrays.equals(a, (char[]) that.array);
+        case boolean[] a -> Arrays.equals(a, (boolean[]) that.array);
+        default -> false;
+      };
+    }
+
+    @Override
+    public int hashCode() {
+      return switch (array) {
+        case byte[] a -> Arrays.hashCode(a);
+        case short[] a -> Arrays.hashCode(a);
+        case int[] a -> Arrays.hashCode(a);
+        case long[] a -> Arrays.hashCode(a);
+        case float[] a -> Arrays.hashCode(a);
+        case double[] a -> Arrays.hashCode(a);
+        case char[] a -> Arrays.hashCode(a);
+        case boolean[] a -> Arrays.hashCode(a);
+        default -> 0;
+      };
+    }
   }
 
   /**

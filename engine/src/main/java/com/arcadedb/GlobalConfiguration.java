@@ -48,7 +48,10 @@ public enum GlobalConfiguration {
   // log while /api/v1/server correctly answered true for the same setting, and concluded the flag had been ignored.
   DUMP_CONFIG_AT_STARTUP("arcadedb.dumpConfigAtStartup", SCOPE.JVM, "Dumps the configuration at startup", Boolean.class, false,
       value -> {
-        dumpConfigurationOrDefer();
+        // Only an enabled flag dumps: reset() runs this callback too (#7121), so resetAll() would otherwise print
+        // the whole configuration on every call.
+        if (Boolean.TRUE.equals(value))
+          dumpConfigurationOrDefer();
         return value;
       }),
 
@@ -205,7 +208,9 @@ public enum GlobalConfiguration {
   DATE_TIME_FORMAT("arcadedb.dateTimeFormat", SCOPE.DATABASE, "Default date time format using Java SimpleDateFormat syntax",
       String.class, "yyyy-MM-dd HH:mm:ss"),
 
-  TX_WAL("arcadedb.txWAL", SCOPE.DATABASE, "Uses the WAL", Boolean.class, true),
+  TX_WAL("arcadedb.txWAL", SCOPE.DATABASE,
+      "Uses the WAL. Not honored for replicated transactions on an HA node: replication ships the WAL, so every replicated commit writes it",
+      Boolean.class, true),
 
   TX_WAL_FLUSH("arcadedb.txWalFlush", SCOPE.DATABASE,
       "Flushes the WAL on disk at commit time. It can be 0 = no flush, 1 = flush without metadata and 2 = full flush (fsync)",
@@ -1462,10 +1467,17 @@ public enum GlobalConfiguration {
 
   INSTANCE_ID("arcadedb.instance.id", SCOPE.DATABASE,
       "Optional instance id (format 'adb-' followed by a lowercase UUID) to use instead of the one ArcadeDB generates and "
-          + "persists in the file 'instance.id' of the server configuration directory. Set it when that directory is read-only "
-          + "or is copied between nodes. The id identifies this instance (standalone server, HA node or embedded engine) to "
-          + "ArcadeData support. It is NOT a credential and is never used for authentication. Empty means generated. "
-          + "A malformed value is ignored with a warning", String.class, ""),
+          + "persists in the file '.instance.id' of the databases directory (or, where older versions kept it, 'instance.id' of "
+          + "the server configuration directory). Set it when no directory is writable or persistent. The id identifies this "
+          + "instance (standalone server, HA node or embedded engine) to ArcadeData support. It is NOT a credential and is "
+          + "never used for authentication. Empty means generated. A malformed value is ignored with a warning", String.class,
+      ""),
+
+  INSTANCE_DERIVED("arcadedb.instance.derived", SCOPE.SERVER,
+      "Computes the instance id from the cluster name (arcadedb.ha.clusterName) and the server name (arcadedb.server.name) "
+          + "instead of generating and persisting it, so a server with no persistent directory (a container without a volume, "
+          + "a Kubernetes StatefulSet pod) keeps the same id on every restart. The names must be unique per node and stable "
+          + "(a StatefulSet pod name is). Ignored when arcadedb.instance.id is set", Boolean.class, false),
 
   SUPPORT_URL("arcadedb.support.url", SCOPE.SERVER,
       "Base URL of the ArcadeData customer portal used by the Support tab of Studio. Must be HTTPS (plain HTTP is accepted only "
@@ -1481,6 +1493,13 @@ public enum GlobalConfiguration {
       "Client key (a 'wsk_...' workspace key) of the ArcadeData customer portal used by the Support tab of Studio. It is a "
           + "credential: it is masked when settings are listed or dumped, never returned by any API and never logged. "
           + "Empty means not set", String.class, ""),
+
+  SUPPORT_AUTO_REGISTER("arcadedb.support.autoRegister", SCOPE.SERVER,
+      "Registers the server as an installation of its workspace in the ArcadeData customer portal without anybody opening "
+          + "Studio: once shortly after the start of a server that holds a support key (arcadedb.support.clientKey or the file "
+          + "'support.json'), and then once a day. It sends the same redacted diagnostics Studio sends (never logs, never "
+          + "database contents) and only fills fields the portal has blank. Set it to false to register only from Studio or the "
+          + "console", Boolean.class, true),
 
   SERVER_ROOT_PASSWORD("arcadedb.server.rootPassword", SCOPE.SERVER,
       "Password for root user to use at first startup of the server. Set this to avoid asking the password to the user",
@@ -1801,8 +1820,8 @@ public enum GlobalConfiguration {
 
   SERVER_HTTP_STREAMING_KEEPALIVE_INTERVAL("arcadedb.server.httpStreamingKeepAliveInterval", SCOPE.SERVER,
       """
-      Interval in milliseconds after which a streamed query answer (Accept: application/x-ndjson on /query and \
-      /command) that has had nothing to send writes a bare newline, which every consumer of the encoding skips. \
+      Interval in milliseconds after which a streamed answer (Accept: application/x-ndjson on /query, /command and \
+      /batch) that has had nothing to send writes a bare newline, which every consumer of the encoding skips. \
       Without it a query whose next row takes a while to produce - a selective predicate over a large bucket, an \
       expensive projection, a cold cache - is silent on the wire, and a client that bounds the silence (the Java \
       remote client does, with 'arcadedb.network.socketTimeout' and a 30 second floor) cannot tell it from a \
@@ -1933,7 +1952,8 @@ public enum GlobalConfiguration {
       is not the operator's own. When it is false and the transport is unprotected the mint is still logged at WARNING. \
       A TLS-terminating reverse proxy in front of a cleartext listener presents as a remote cleartext peer unless the \
       operator lists it in `arcadedb.server.apiTokenTrustedProxies`: this setting reads the live connection, and the \
-      X-Forwarded-Proto header only from a peer on that list, never from an arbitrary client (issues #7372, #7804). \
+      X-Forwarded-Proto and RFC 7239 Forwarded headers only from a peer on that list, never from an arbitrary client \
+      (issues #7372, #7804, #7822). \
       The default flips to true in 27.1.1. Until then an unprotected mint is allowed and logged; from 27.1.1 it is \
       refused unless this is explicitly set back to false""",
       Boolean.class, false),
@@ -1941,20 +1961,25 @@ public enum GlobalConfiguration {
   SERVER_API_TOKEN_TRUSTED_PROXIES("arcadedb.server.apiTokenTrustedProxies", SCOPE.SERVER,
       """
       Comma-separated list of literal IP addresses or CIDR ranges (IPv4 and IPv6) of the reverse proxies allowed to \
-      vouch for the transport of an API token mint through the X-Forwarded-Proto header: `POST \
-      /api/v1/server/api-tokens` over HTTP, and the gRPC `CreateApiToken` RPC, where the proxy reports it as the \
-      `x-forwarded-proto` metadata key (Envoy adds it on its own; nginx with `grpc_set_header X-Forwarded-Proto \
-      $scheme`). List only an L7 proxy that sets or overwrites the header: an L4 balancer (nginx `stream`, HAProxy \
-      `mode tcp`) passes the client's own header through untouched, so listing one lets any client vouch for itself. \
-      Empty by default, which trusts no proxy and leaves the header unread. \
-      When the request's direct peer matches an entry AND the header reports https for every hop, the mint is treated \
+      vouch for the transport of an API token mint through the X-Forwarded-Proto header or the standard RFC 7239 \
+      Forwarded header (its proto= parameter): `POST /api/v1/server/api-tokens` over HTTP, and the gRPC \
+      `CreateApiToken` RPC, where the proxy reports them as the `x-forwarded-proto` and `forwarded` metadata keys \
+      (Envoy adds `x-forwarded-proto` on its own; nginx with `grpc_set_header X-Forwarded-Proto $scheme`). List only \
+      an L7 proxy that sets or overwrites the header it reports in: an L4 balancer (nginx `stream`, HAProxy \
+      `mode tcp`) passes the client's own headers through untouched, so listing one lets any client vouch for itself. \
+      Empty by default, which trusts no proxy and leaves both headers unread. \
+      When the request's direct peer matches an entry AND every scheme reported in either header is https - one per \
+      hop, so a Forwarded element without proto= counts as a hop that reported nothing - the mint is treated \
       as protected even though the proxy-to-server leg is cleartext - that leg is on the network the operator owns, \
       and by listing the proxy they state where their trust boundary is. A peer that is not on the list can send the \
-      same header and gain nothing: the header is otherwise ignored, because the caller asking for a token is exactly \
+      same headers and gain nothing: they are otherwise ignored, because the caller asking for a token is exactly \
       the caller who would forge it. \
+      That rule fails closed: a Forwarded header carrying an element without proto= refuses the mint even when \
+      X-Forwarded-Proto reports https, so a proxy that appends Forwarded must include proto=, and one that does not \
+      use Forwarded should strip any it receives. \
       Entries must be literal addresses - a hostname is rejected rather than resolved, since a DNS answer is not a \
       trust decision. An unparseable list is treated as empty, so a typo denies rather than opening the gate \
-      (issues #7804, #7821)""",
+      (issues #7804, #7821, #7822)""",
       String.class, ""),
 
   SERVER_SECURITY_IMPORT_BLOCK_LOCAL_NETWORKS("arcadedb.server.security.importBlockLocalNetworks", SCOPE.SERVER,
@@ -2556,6 +2581,13 @@ public enum GlobalConfiguration {
       the health monitor escalates after this many non-sticking restarts (reformat + rejoin once, then give \
       up with a SEVERE alert) instead of restarting forever (issue #5291).""",
       Integer.class, 10),
+
+  HA_JVM_PAUSE_CLOSE_THRESHOLD_MS("arcadedb.ha.jvmPauseCloseThresholdMs", SCOPE.SERVER,
+      """
+      JVM-pause length in milliseconds above which Ratis closes this node's Raft division (Ratis default: \
+      60000). 0 or a negative value disables the close: a long pause still steps a leader down, and ArcadeDB's \
+      health monitor decides whether the node needs recovery. Set a positive value to restore the Ratis behavior.""",
+      Long.class, 0L),
 
   HA_STOP_SERVER_ON_REPLICATION_FAILURE("arcadedb.ha.stopServerOnReplicationFailure", SCOPE.SERVER,
       """

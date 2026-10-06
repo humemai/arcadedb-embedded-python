@@ -39,13 +39,23 @@ public class BinaryCondition extends BooleanExpression {
 
   @Override
   public Boolean evaluate(final Identifiable currentRecord, final CommandContext context) {
-    return operator.execute(context.getDatabase(), left.execute(currentRecord, context), right.execute(currentRecord, context));
+    return compare(context, left.execute(currentRecord, context), right.execute(currentRecord, context));
   }
 
   @Override
   public Boolean evaluate(final Result currentRecord, final CommandContext context) {
     final Object leftVal = left.execute(currentRecord, context);
     final Object rightVal = right.execute(currentRecord, context);
+    return compare(context, leftVal, rightVal);
+  }
+
+  /**
+   * A comparison with a null operand is unknown (null), not false, so {@code NOT (k = 5)} and {@code k <> 5} leave out a record
+   * with no {@code k}, as {@code k NOT IN [5]} does (issue #8979).
+   */
+  private Boolean compare(final CommandContext context, final Object leftVal, final Object rightVal) {
+    if ((leftVal == null || rightVal == null) && operator.isUnknownOnNull())
+      return null;
     return operator.execute(context != null ? context.getDatabase() : null, leftVal, rightVal);
   }
 
@@ -250,7 +260,11 @@ public class BinaryCondition extends BooleanExpression {
               && info.isMap()
               && info.isIndexByKey()) {
             return true;
-          } else return info.allowsRange() && operator.isRangeOperator();
+          } else
+            // A CI index keeps lower-cased keys and probes with the lower-cased bound, which is not the case sensitive
+            // range the plain property asks for, so only a scan answers it. field.toLowerCase() <op> X is the spelling
+            // that a CI index serves (issue #8932)
+            return info.allowsRange() && operator.isRangeOperator() && !info.isCaseInsensitive();
         }
       }
     }

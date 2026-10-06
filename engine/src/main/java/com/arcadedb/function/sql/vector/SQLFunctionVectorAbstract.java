@@ -27,6 +27,7 @@ import com.arcadedb.function.sql.SQLFunctionAbstract;
 import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.parser.Identifier;
+import com.arcadedb.schema.DocumentType;
 import com.arcadedb.utility.IntHashSet;
 
 import java.util.ArrayList;
@@ -206,7 +207,7 @@ public abstract class SQLFunctionVectorAbstract extends SQLFunctionAbstract {
 
   /**
    * Narrows {@code allowedBucketIds} (the per-type bucket allow-list assembled from
-   * {@code DocumentType.getBuckets(false)}) to the partition-pruned subset stashed on the
+   * {@code DocumentType.getBuckets(true)}) to the partition-pruned subset stashed on the
    * {@link CommandContext} by {@code SelectExecutionPlanner.derivePartitionPrunedClusters}.
    * <p>
    * Returns the input unchanged when the planner did not stash a hint, when the hint was
@@ -225,6 +226,11 @@ public abstract class SQLFunctionVectorAbstract extends SQLFunctionAbstract {
       return allowedBucketIds;
     final Object hintTypeName = context.getVariable(CommandContext.PARTITION_PRUNED_TYPE_NAME_VAR);
     if (!(hintTypeName instanceof String hintType) || !hintType.equals(typeName))
+      return allowedBucketIds;
+    // The hint is derived from the buckets of the FROM type alone, while the allow-list now covers its sub-types too (issue #8958):
+    // intersecting would drop their records, so a type with sub-types is not narrowed
+    final DocumentType type = context.getDatabase().getSchema().getType(typeName);
+    if (!type.getSubTypes().isEmpty())
       return allowedBucketIds;
     final Object hintIds = context.getVariable(CommandContext.PARTITION_PRUNED_BUCKET_FILE_IDS_VAR);
     if (!(hintIds instanceof IntHashSet hintSet) || hintSet.isEmpty())
@@ -316,9 +322,13 @@ public abstract class SQLFunctionVectorAbstract extends SQLFunctionAbstract {
    * {@link Result} that wraps a record, or that projects exactly one RID-valued column such as {@code SELECT @rid}. One
    * level of nesting is flattened, so {@code (SELECT list(@rid) AS l ...).l} is accepted as well. Anything else keeps
    * throwing, so a typo in the subquery projection stays loud rather than silently filtering nothing.
+   * <p>
+   * Returns {@code null} only when the option is absent (no filter). A filter that resolves to no RIDs returns an EMPTY set,
+   * which callers must answer with an empty result: no record can satisfy it, and handing it to the index as-is would read as
+   * "no filter" and return records outside it (issue #8959).
    */
   protected static Set<RID> parseRidFilter(final List<?> items, final String functionName, final CommandContext context) {
-    if (items == null || items.isEmpty())
+    if (items == null)
       return null;
 
     final BasicDatabase db = context.getDatabase();

@@ -295,7 +295,7 @@ try:
     with arcadedb.create_database("./mydb") as db:
         db.command("sql", "CREATE DOCUMENT TYPE User")
         db.command("sql", "CREATE PROPERTY User.email STRING")
-        db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
+        db.command("sql", "CREATE INDEX ON User (email) UNIQUE_HASH")
 
         # Data operations require an explicit transaction
         with db.transaction():

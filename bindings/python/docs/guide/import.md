@@ -44,8 +44,8 @@ not something we currently encourage as the default Python import story.
 + Example 15 plus the larger table examples are the basis for the current repository
     guidance.
 + For bulk document ingest from Python, `db.insert_many(...)` is the recommended
-    default: it batches rows across the FFI boundary; see Example 22. Add
-    `parallel=True` on a type created with several buckets (`CREATE DOCUMENT TYPE T BUCKETS n`); on the default single bucket it is no faster. The maintainers' rule (ArcadeData/arcadedb#8478): as many buckets as the async executor has writers (`async_executor().get_parallel_level()`, default cores - 1), or a multiple of that, decided when the type is created; create indexes after the load where you can; a record the writers reject raises `ArcadeDBError` once the load completes. Each bucket has its own sub-index, so on a type with a key (a UNIQUE index) route records by it, ``ALTER TYPE T BucketSelectionStrategy `partitioned('id')` ``: then an insert's unique check and a keyed lookup touch one sub-index instead of every bucket's (laptop, 400,000 rows, 4 buckets: load 7.8 s against 3.4 s).
+    default: it batches rows across the FFI boundary; see Example 22.
+    `parallel=True` hands the rows to the async executor's writers; on a laptop (4 performance cores, parallel level 3, 1,000,000 rows, 6 runs per arm, engine `b22b5e9954`, 2026-10-04) it loaded 1.11x to 1.14x faster than the synchronous mode at 1, 3, 4, and 8 buckets alike (`CREATE DOCUMENT TYPE T BUCKETS n`). The maintainers' rule (ArcadeData/arcadedb#8478): as many buckets as the async executor has writers (`async_executor().get_parallel_level()`, default cores - 1), or a multiple of that, decided when the type is created; create indexes after the load where you can; a record the writers reject raises `ArcadeDBError` once the load completes. Each bucket has its own sub-index, so on a type with a key (a UNIQUE index) route records by it, ``ALTER TYPE T BucketSelectionStrategy `partitioned('id')` ``: then an insert's unique check and a keyed lookup touch one sub-index instead of every bucket's (the same laptop, 400,000 rows, 4 buckets, 6 runs per arm: the parallel load 3.15 s against 2.53 s partitioned, and a keyed lookup 16.2 against 14.6 us).
 + The async executor's SQL command path (`db.async_executor().command(...)`) is not a
     bulk-write path at any parallel level. Above parallel level 1 it silently discarded
     records before 26.10.1 (`ArcadeData/arcadedb#7615`, fixed in #7625: a failed
@@ -211,8 +211,9 @@ with arcadedb.create_database("./mydb") as db:
     db.command("sql", "CREATE DOCUMENT TYPE User")
     db.command("sql", "CREATE PROPERTY User.id LONG")
     db.command("sql", "CREATE PROPERTY User.email STRING")
-    db.command("sql", "CREATE INDEX ON User (id) UNIQUE")
-    db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
+    # id and email are read by equality only, so hash indexes (see "Index choice" in the queries guide)
+    db.command("sql", "CREATE INDEX ON User (id) UNIQUE_HASH")
+    db.command("sql", "CREATE INDEX ON User (email) UNIQUE_HASH")
 
     db.command(
         "sql",
@@ -252,7 +253,7 @@ db.command(
     "IMPORT DATABASE file:///data/users.csv WITH documentType = 'User', commitEvery = 50000",
 )
 
-db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
+db.command("sql", "CREATE INDEX ON User (email) UNIQUE_HASH")
 ```
 
 ### Validate the Input Up Front

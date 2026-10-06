@@ -473,7 +473,7 @@ with db.transaction():
 # Schema constraints enforced in transactions
 db.command("sql", "CREATE DOCUMENT TYPE User")
 db.command("sql", "CREATE PROPERTY User.email STRING (mandatory true)")
-db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
+db.command("sql", "CREATE INDEX ON User (email) UNIQUE_HASH")  # a hash index enforces uniqueness too
 
 # This will fail - email is mandatory
 try:

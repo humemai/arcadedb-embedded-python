@@ -301,7 +301,10 @@ def main() -> int:
                 "TIMESTAMP ts "
                 "TAGS (sensor_id STRING, region STRING, building STRING, zone STRING) "
                 "FIELDS (temperature DOUBLE, humidity DOUBLE, power_kw DOUBLE, "
-                "co2_ppm DOUBLE, occupancy LONG)",
+                "co2_ppm DOUBLE, occupancy LONG) "
+                # Every query below aggregates by the hour, so blocks are cut at the
+                # hour boundary (ArcadeData/arcadedb#9166); SHARDS stays at its default.
+                "COMPACTION_INTERVAL 1 HOURS",
             )
         except arcadedb.ArcadeDBError as exc:
             print("TimeSeries SQL is not available in this packaged runtime.")
@@ -506,7 +509,7 @@ def server_mode_demo(samples: list[tuple], db_dir: str) -> None:
                 "command": "CREATE TIMESERIES TYPE SensorReading TIMESTAMP ts "
                 "TAGS (sensor_id STRING, region STRING, building STRING, zone STRING) "
                 "FIELDS (temperature DOUBLE, humidity DOUBLE, power_kw DOUBLE, "
-                "co2_ppm DOUBLE, occupancy LONG)",
+                "co2_ppm DOUBLE, occupancy LONG) COMPACTION_INTERVAL 1 HOURS",
             },
         )
         lines = "\n".join(

@@ -438,7 +438,13 @@ TEMPLATE = r'''<title>ArcadeDB Bottlenecks</title>
 '''
 
 
-def triage():
+PAYLOADS = {
+    "live": PAYLOAD,
+    "next": os.path.join(HERE, "results", "web_benchmarks_next.json"),
+}
+
+
+def triage(payload_path):
     """Rank every cell by how far ArcadeDB trails, as candidates to investigate.
 
     THE MEMO IS CURATED; THIS IS NOT. The memo above is a written argument with
@@ -456,46 +462,57 @@ def triage():
     The bar is deliberately harsh -- our best arm against the single BEST
     comparator in that column -- so most lines are "not the category leader"
     rather than a defect. The gap is a place to LOOK, never a finding.
+
+    READ THE PAYLOAD THE LANDINGS WRITE, AND COMPARE WITHIN ONE SCALE (#136).
+    The memo renders the live page (`web_benchmarks.json`), but a landing writes
+    the preview payload (`web_benchmarks_next.json`), so in October a triage of
+    the live page described the September engine. And pooling scales compared
+    our best value at one scale with the field at another, which hid ArcadeDB
+    being last of six at TPC-H scale 10 (Q1 32x the median engine). Every line
+    therefore names its scale, and the header names the payload and the engine.
     """
-    T, payload = load()
+    with open(payload_path, encoding="utf-8") as fh:
+        payload = json.load(fh)
     out = []
-    for tid, t in T.items():
-        ours = [e for e in t.get("entries", []) if e.get("is_arcadedb")]
-        others = [e for e in t.get("entries", []) if not e.get("is_arcadedb")]
-        if not ours or not others:
-            continue
+    for t in payload["tables"]:
+        tid = t["id"]
+        entries_all = t.get("entries", [])
         for col in t.get("columns", []):
             if not any(k in col for k in ("ms", "GiB", "/s", " s")):
                 continue
             low = ("ms" in col) or ("GiB" in col) or col.endswith(" s")
-            ov = [(cell(e, col), e["backend"]) for e in ours if cell(e, col)]
-            cv = [(cell(e, col), e["backend"]) for e in others if cell(e, col)]
-            if not ov or not cv:
-                continue
-            (bo, ob), (bc, cb) = (min(ov), min(cv)) if low else (max(ov), max(cv))
-            gap = (bo / bc) if low else (bc / bo)
-            # RANK BY THE MEDIAN COMPARATOR, NOT THE BEST ONE. Gap-to-best puts
-            # category differences on top -- SQLite's in-process B-tree seek at
-            # 2 us, an in-process C library's memory against a JVM's -- and
-            # buries a cell where we are genuinely behind the field. On
-            # 2026-09-22 the gap-to-best list ranked the time-series last-point
-            # query first, where we are mid-pack with MongoDB and QuestDB, and
-            # put the point lookup where we are 6th of 8 further down. Two dead
-            # ends were investigated in that order before the ranking was fixed.
-            vals = sorted(v for v, _ in cv)
-            med = vals[len(vals) // 2]
-            vs_med = (bo / med) if low else (med / bo)
-            rank = sum(1 for v in vals if (v < bo if low else v > bo)) + 1
-            if gap > 1.0:
-                out.append((vs_med, gap, tid, col, ob, bo, cb, bc, rank, len(vals) + 1))
+            for scale in sorted({str(e.get("scale")) for e in entries_all}):
+                es = [e for e in entries_all if str(e.get("scale")) == scale]
+                ov = [(cell(e, col), e["backend"]) for e in es if e.get("is_arcadedb") and cell(e, col)]
+                cv = [(cell(e, col), e["backend"]) for e in es if not e.get("is_arcadedb") and cell(e, col)]
+                if not ov or not cv:
+                    continue
+                (bo, ob), (bc, cb) = (min(ov), min(cv)) if low else (max(ov), max(cv))
+                gap = (bo / bc) if low else (bc / bo)
+                # RANK BY THE MEDIAN COMPARATOR, NOT THE BEST ONE. Gap-to-best puts
+                # category differences on top -- SQLite's in-process B-tree seek at
+                # 2 us, an in-process C library's memory against a JVM's -- and
+                # buries a cell where we are genuinely behind the field. On
+                # 2026-09-22 the gap-to-best list ranked the time-series last-point
+                # query first, where we are mid-pack with MongoDB and QuestDB, and
+                # put the point lookup where we are 6th of 8 further down. Two dead
+                # ends were investigated in that order before the ranking was fixed.
+                vals = sorted(v for v, _ in cv)
+                med = vals[len(vals) // 2]
+                vs_med = (bo / med) if low else (med / bo)
+                rank = sum(1 for v in vals if (v < bo if low else v > bo)) + 1
+                if gap > 1.0:
+                    out.append((vs_med, gap, tid, col, scale, ob, bo, rank, len(vals) + 1))
     out.sort(reverse=True)
-    print("Cells where ArcadeDB trails the BEST comparator, worst first.")
+    commits = payload.get("arcadedb_commits") or payload.get("arcadedb_version")
+    print(f"payload {os.path.relpath(payload_path, HERE)}, ArcadeDB {commits}, instrument {payload.get('instrument')}")
+    print("Cells where ArcadeDB trails the BEST comparator AT THE SAME SCALE, worst first.")
     print("A gap is a place to look, not a finding: audit the harness before the engine,")
     print("and see CAMPAIGN.md 'Filing an engine weakness upstream' before writing anything.\n")
-    print("%8s %7s  %-9s %-30s %-7s %9s" % ("vs med", "vs best", "table", "column", "rank", "ours"))
-    for vs_med, gap, tid, col, ob, bo, cb, bc, rank, n in out[:25]:
-        print("%7.1fx %6.1fx  %-9s %-30s %2d/%-4d %9.4g" % (vs_med, gap, tid, col[:30], rank, n, bo))
-    print(f"\n{len(out)} cell(s) where ArcadeDB trails the best comparator; "
+    print("%8s %7s  %-9s %-28s %-10s %-7s %9s  %s" % ("vs med", "vs best", "table", "column", "scale", "rank", "ours", "our arm"))
+    for vs_med, gap, tid, col, scale, ob, bo, rank, n in out[:25]:
+        print("%7.1fx %6.1fx  %-9s %-28s %-10s %2d/%-4d %9.4g  %s" % (vs_med, gap, tid, col[:28], scale[:10], rank, n, bo, ob))
+    print(f"\n{len(out)} cell(s) where ArcadeDB trails the best comparator at its scale; "
           f"{sum(1 for x in out if x[0] >= 2)} are also 2x or more behind the MEDIAN one.")
     print("Read the 'vs med' column first: behind the field is a weakness, behind one")
     print("outlier is usually a category difference (an in-process B-tree, a C library's memory).")
@@ -504,7 +521,13 @@ def triage():
 
 def main():
     if "--triage" in sys.argv:
-        return triage()
+        # --payload next (default: the rows the landings write), live (the page
+        # the memo renders), or a path.
+        choice = sys.argv[sys.argv.index("--payload") + 1] if "--payload" in sys.argv else "next"
+        path = PAYLOADS.get(choice, choice)
+        if not os.path.exists(path):
+            raise SystemExit(f"memo: no payload at {path}")
+        return triage(path)
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     body = build()
     with open(OUT, "w", encoding="utf-8") as fh:

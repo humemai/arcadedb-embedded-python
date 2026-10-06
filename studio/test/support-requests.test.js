@@ -191,3 +191,116 @@ test("only open requests can be run, and the Run all bar appears from two open o
   assert.equal(run(`supportReqAllOpen(one).length`), 1);
   assert.ok(!run(`supportRequestsHtml(one.timeline[0])`).match(/rq_00000002[\s\S]*sp-rq-run/));
 });
+
+test("a cluster answer is ONE table: a leading node column, the union of the columns, a failed node is its own row", () => {
+  const { run } = load();
+  const merged = JSON.parse(run(`JSON.stringify(supportReqMergeTables([
+    { node: "a", table: supportReqTable([{ c: 112914 }], "", 1000) },
+    { node: "b", table: supportReqTable([{ c: 112623, extra: "x" }], "", 1000) },
+    { node: "c", error: "timed out" } ], 1000))`));
+  assert.deepEqual(merged.columns.map((c) => c.name), ["node", "c", "extra", "error"]);
+  assert.deepEqual(merged.rows, [["a", 112914, null, null], ["b", 112623, "x", null], ["c", null, null, "timed out"]]);
+  assert.equal(merged.columns[1].type, "LONG");
+  assert.equal(merged.truncated, false);
+});
+
+test("without a failure there is no error column, and a result column named node or error does not clash with ours", () => {
+  const { run } = load();
+  const merged = JSON.parse(run(`JSON.stringify(supportReqMergeTables([
+    { node: "a", table: supportReqTable([{ node: "x", error: "y" }], "", 1000) },
+    { node: "b", table: supportReqTable([{ node: "z", error: "w" }], "", 1000) } ], 1000))`));
+  assert.deepEqual(merged.columns.map((c) => c.name), ["node", "node_value", "error_value"]);
+  assert.deepEqual(merged.rows, [["a", "x", "y"], ["b", "z", "w"]]);
+});
+
+test("the rows are cut evenly per node so a wide cluster cannot make an answer too large", () => {
+  const { run } = load();
+  const merged = JSON.parse(run(`(function () {
+    var rows = []; for (var i = 0; i < 50; i++) rows.push({ n: i });
+    var parts = [];
+    for (var k = 0; k < 4; k++) parts.push({ node: "n" + k, table: supportReqTable(rows, "", 1000) });
+    return JSON.stringify(supportReqMergeTables(parts, 100));
+  })()`));
+  assert.equal(merged.rows.length, 100);
+  assert.equal(merged.rows.filter((r) => r[0] === "n3").length, 25);
+  assert.equal(merged.truncated, true);
+});
+
+test("where a request runs: what support asked for unless the user chose another place", () => {
+  const { run } = load();
+  assert.equal(run(`supportReqTarget({ nodes: "all" }, {})`), "all");
+  assert.equal(run(`supportReqTarget({ nodes: "current" }, {})`), "current");
+  assert.equal(run(`supportReqTarget({}, {})`), "current");
+  assert.equal(run(`supportReqTarget({ nodes: "node:arcadedb-1" }, {})`), "node:arcadedb-1");
+  assert.equal(run(`supportReqTarget({ nodes: "all" }, { nodes: "current" })`), "current");
+  assert.equal(run(`supportReqTarget({ nodes: "current" }, { nodes: "node:arcadedb-2" })`), "node:arcadedb-2");
+});
+
+test("a value this Studio does not understand is never run on the local node", () => {
+  const { run } = load();
+  // an older platform value, a typo, a bare name, a non-string: all "unknown", none silently "current"
+  for (const bad of ['"some"', '"arcadedb-1"', '"node:"', '"Node:a"', "3", "{}", '"node:" + "a".repeat(101)'])
+    assert.equal(run(`supportReqTarget({ nodes: ${bad} }, {})`), "unknown", bad);
+  assert.match(run(`supportReqTargetProblem("unknown")`), /does not understand/);
+});
+
+test("a named node must be this server or a member of the cluster, else nothing runs and the card says so", () => {
+  const { run } = load();
+  const problem = (setup, target) => run(`(function () { ${setup}; return supportReqTargetProblem(${JSON.stringify(target)}); })()`);
+  const cluster = 'supportReqNode = "arcadedb-0"; supportReqPeers = { loaded: true, ha: true, peers: ["arcadedb-1", "arcadedb-2"] }';
+  assert.equal(problem(cluster, "current"), "");
+  assert.equal(problem(cluster, "all"), "");
+  assert.equal(problem(cluster, "node:arcadedb-1"), "");
+  assert.equal(problem(cluster, "node:arcadedb-0"), "");
+  assert.match(problem(cluster, "node:arcadedb-9"), /not a member of this cluster/);
+  const solo = 'supportReqNode = "solo"; supportReqPeers = { loaded: true, ha: false, peers: [] }';
+  assert.equal(problem(solo, "node:solo"), "");
+  assert.match(problem(solo, "node:arcadedb-1"), /not in a cluster/);
+  assert.match(problem('supportReqNode = ""; supportReqPeers = { loaded: false, ha: false, peers: [] }', "node:arcadedb-1"), /still checking/);
+});
+
+test("the card for a node that is not a member refuses to run and offers running here on purpose", () => {
+  const { run } = load();
+  const html = run(`(function () {
+    supportReqNode = "arcadedb-0";
+    supportReqPeers = { loaded: true, ha: true, peers: ["arcadedb-1"] };
+    var request = { id: "rq_1", kind: "query", label: "l", language: "sql", statement: "SELECT 1", nodes: "node:<b>x</b>", status: "open" };
+    return supportRequestBodyHtml(request);
+  })()`);
+  assert.match(html, /not a member of this cluster/);
+  assert.match(html, /sp-rq-here/);
+  assert.ok(!html.includes("<b>x</b>"), "the node name is text");
+  const ok = run(`(function () {
+    var request = { id: "rq_2", kind: "query", label: "l", language: "sql", statement: "SELECT 1", nodes: "node:arcadedb-1", status: "open" };
+    return supportRequestBodyHtml(request);
+  })()`);
+  assert.match(ok, /Support asked for the node <b>arcadedb-1<\/b>/);
+  assert.ok(!ok.includes("sp-rq-here"));
+});
+
+test("the node selector exists only in a cluster, offers this node, all nodes and each peer, and node names are text", () => {
+  const { run } = load();
+  assert.equal(run(`supportReqNodeSelectHtml({ id: "rq_1", nodes: "all" }, {})`), "");
+  const html = run(`(function () {
+    supportReqNode = "arcadedb-0";
+    supportReqPeers = { loaded: true, ha: true, peers: ["arcadedb-1", "<img src=x onerror=alert(1)>"] };
+    return supportReqNodeSelectHtml({ id: "rq_1", nodes: "all" }, {});
+  })()`);
+  assert.match(html, /<option value="current">This node \(arcadedb-0\)<\/option>/);
+  assert.match(html, /<option value="node:arcadedb-1">arcadedb-1<\/option>/);
+  assert.match(html, /<option value="all" selected>All nodes<\/option>/);
+  assert.match(html, /arcadedb-1/);
+  assert.ok(!html.includes("<img"), html);
+});
+
+test("a request for every node on a server that is not in a cluster says it runs here only", () => {
+  const { run } = load();
+  const html = run(`(function () {
+    supportReqNode = "solo";
+    supportReqPeers = { loaded: true, ha: false, peers: [] };
+    var request = { id: "rq_1", kind: "query", label: "l", language: "sql", statement: "SELECT 1", nodes: "all", status: "open" };
+    return supportRequestBodyHtml(request);
+  })()`);
+  assert.match(html, /not part of a cluster/);
+  assert.match(html, /this server only/);
+});

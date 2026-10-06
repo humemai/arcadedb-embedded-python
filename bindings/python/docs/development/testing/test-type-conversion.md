@@ -126,6 +126,12 @@ assert record.get("metadata")["version"] == 1
 
 ---
 
+### test_a_python_set_is_a_set_only_until_the_commit
+
+A Python `set` set on a vertex reads back as a `set` inside the transaction, and as a `list` from `lookup_by_rid()`, a query row's `get()`, and `to_list()` after the commit: the engine has no set type and serializes the `HashSet` as a list (humemai/arcadedb-embedded-python#122). The duplicate in `{"admin", "user", "admin"}` is gone either way. If the engine ever keeps sets this fails, and [Type Conversion](../../api/type_conversion.md) changes with it.
+
+---
+
 ### test_nested_collection_conversion
 
 Tests conversion of nested collections.
@@ -374,7 +380,7 @@ assert result.get("null_val") is None
 | `Decimal` | `BigDecimal` | High precision |
 | `list` | `ArrayList` | Ordered |
 | `tuple` | `ArrayList` | Becomes list |
-| `set` | `HashSet` | Unique items |
+| `set` | `HashSet` | Unique items; stored as a list, so it reads back as a `list` after the commit |
 | `dict` | `HashMap` | Key-value |
 
 ## Key Takeaways

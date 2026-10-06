@@ -44,7 +44,7 @@ def build(db, n: int) -> None:
         "CREATE PROPERTY Product.pid INTEGER",
         "CREATE PROPERTY Product.views INTEGER",
         "CREATE PROPERTY Product.embedding ARRAY_OF_FLOATS",
-        "CREATE INDEX ON Product (pid) UNIQUE",
+        "CREATE INDEX ON Product (pid) UNIQUE_HASH",  # pid: equality only (#9169)
         "CREATE EDGE TYPE RELATED",
     ):
         db.command("sql", ddl)

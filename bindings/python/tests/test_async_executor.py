@@ -103,7 +103,14 @@ def test_async_executor_bulk_command_is_exact_at_parallel_four(temp_db):
     async_exec.close()
 
     stored = int(db.query("sql", "SELECT count(*) AS c FROM Bulk4").one().get("c"))
-    assert stored == LOSS_REPRO_ROWS
+    # Says which failure it is: a batch dropped with no callback (#7615 back) or a
+    # batch rolled back and reported after its retries (#7625's design, under load).
+    # A darwin/arm64 runner stored 8742 of 9742 once on 2026-10-02 and the old
+    # message could not tell the two apart.
+    reported = [str(e)[:200] for e in errors[:3]]
+    assert (
+        stored == LOSS_REPRO_ROWS
+    ), f"stored {stored} of {LOSS_REPRO_ROWS}; on_error {len(errors)}x: {reported}"
     assert errors == []
 
 
@@ -219,18 +226,36 @@ def test_async_executor_is_pending_true_while_queued(temp_db):
     # worker for a known interval, so the rows behind it are certainly still
     # queued when is_pending() is asked, and the assertion is about the API
     # rather than about who won.
-    async_exec.command("sql", "SELECT sleep(1500) AS held")  # 1.5 s on the worker
+    #
+    # The hold is SQL script's SLEEP statement. Until 2026-10-04 this was
+    # `SELECT sleep(1500)`, but ArcadeDB SQL has no sleep() function: the
+    # command failed on the worker with "Unknown function name 'sleep'", the
+    # async executor swallowed the error, nothing was held, and the test was the
+    # race it describes (it failed on CI's macOS Python 3.13 runner, run
+    # 37199978708). So the hold is now proven below, not assumed.
+    start = time.time()
+    async_exec.command("sqlscript", "SLEEP 1500")  # 1.5 s on the worker
     for i in range(50):
         async_exec.command("sql", "INSERT INTO Msg SET id = :id", id=i)
 
-    start = time.time()
+    asked = time.time()
     pending = async_exec.is_pending()
-    elapsed = time.time() - start
+    elapsed = time.time() - asked
 
     assert (
         elapsed < 1.0
     ), "is_pending() must answer immediately, not wait for the queue to drain"
     assert pending is True
+
+    # The hold really held: the queue cannot drain before the sleep ends.
+    async_exec.wait_completion()
+    drained = time.time() - start
+    assert (
+        drained >= 1.2
+    ), f"the queue drained in {drained:.2f}s; the 1.5 s hold did not hold"
+    assert db.query("sql", "SELECT count(*) AS n FROM Msg").to_json_list() == [
+        {"n": 50}
+    ]
 
     async_exec.wait_completion()
     assert async_exec.is_pending() is False
@@ -339,3 +364,100 @@ def test_create_record_reports_a_rejected_record_to_its_error_callback(temp_db):
     assert len(created) == 3
     assert len(errors) == 2
     assert all("Duplicate" in str(e) or "duplicate" in str(e) for e in errors), errors
+
+
+def _block_async_worker(async_exec):
+    """Park the executor's worker inside a query callback until the returned event is set.
+
+    Returns ``(started, release)``. Once ``started`` is set the executor is provably busy
+    and stays busy until ``release`` is set, so a "not done yet" answer does not depend on
+    racing the worker against the clock.
+    """
+    started = threading.Event()
+    release = threading.Event()
+
+    def on_row(_row):
+        started.set()
+        release.wait(30)
+
+    async_exec.query("sql", "SELECT 1 AS one", on_row)
+    assert started.wait(30), "the async query callback never ran"
+    return started, release
+
+
+def test_async_executor_wait_completion_zero_does_not_block_while_busy(temp_db):
+    """Regression test for #7883: wait_completion(0) must poll, not block.
+
+    The engine's waitCompletion(long) clamps any timeout <= 0 to an infinite wait,
+    so passing 0 through blocked until the queue drained and then returned normally,
+    never raising TimeoutError.
+    """
+    async_exec = temp_db.async_executor().set_parallel_level(1)
+    _, release = _block_async_worker(async_exec)
+
+    outcome = {}
+
+    def call():
+        try:
+            async_exec.wait_completion(0)
+            outcome["result"] = "returned"
+        except TimeoutError:
+            outcome["result"] = "timeout"
+        except Exception as exc:  # pragma: no cover - reported by the assertion below
+            outcome["result"] = repr(exc)
+
+    caller = threading.Thread(target=call, daemon=True)
+    try:
+        caller.start()
+        # The worker is parked until `release` is set, so a wait_completion(0) that still
+        # reached the engine's clamped infinite wait would never come back from this join.
+        caller.join(10)
+        blocked = caller.is_alive()
+    finally:
+        release.set()
+        async_exec.wait_completion()
+        caller.join(10)
+        async_exec.close()
+
+    assert blocked is False, "wait_completion(0) blocked on a busy executor"
+    assert outcome.get("result") == "timeout"
+
+
+def test_async_executor_wait_completion_zero_returns_when_idle(temp_db):
+    async_exec = temp_db.async_executor()
+    try:
+        async_exec.wait_completion()
+
+        assert async_exec.wait_completion(0) is None
+    finally:
+        async_exec.close()
+
+
+def test_async_executor_wait_completion_rejects_negative_timeout(temp_db):
+    async_exec = temp_db.async_executor().set_parallel_level(1)
+    _, release = _block_async_worker(async_exec)
+
+    try:
+        with pytest.raises(ValueError):
+            async_exec.wait_completion(-1)
+    finally:
+        release.set()
+        async_exec.wait_completion()
+        async_exec.close()
+
+
+def test_async_executor_wait_completion_positive_timeout_still_times_out(temp_db):
+    async_exec = temp_db.async_executor().set_parallel_level(1)
+    _, release = _block_async_worker(async_exec)
+
+    try:
+        try:
+            with pytest.raises(TimeoutError):
+                async_exec.wait_completion(50)
+        finally:
+            release.set()
+            async_exec.wait_completion()
+
+        assert async_exec.wait_completion(30000) is None
+    finally:
+        async_exec.close()

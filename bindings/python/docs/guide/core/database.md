@@ -293,7 +293,7 @@ def init_database(path: str):
             with db.transaction():
                 db.command("sql", "CREATE VERTEX TYPE User")
                 db.command("sql", "CREATE PROPERTY User.email STRING")
-                db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
+                db.command("sql", "CREATE INDEX ON User (email) UNIQUE_HASH")
 
                 db.command("sql", "CREATE VERTEX TYPE Post")
                 db.command("sql", "CREATE PROPERTY Post.title STRING")

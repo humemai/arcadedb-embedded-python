@@ -1,1 +1,56 @@
-[]
+[
+ {
+  "lane": "l3d",
+  "backend": "arangodb_dense",
+  "scale": "deep10m",
+  "rep": 1,
+  "recall_at_10": 0.0,
+  "ivf_nlists": 12643,
+  "engine_version": "arangodb:3.12.11"
+ },
+ {
+  "lane": "l3d",
+  "backend": "sqlite_vec_dense_int8",
+  "scale": "small",
+  "rep": 1,
+  "recall_at_10": 0.0229,
+  "ivf_nlists": null,
+  "engine_version": "0.1.9"
+ },
+ {
+  "lane": "l3d",
+  "backend": "sqlite_vec_dense_int8",
+  "scale": "small",
+  "rep": 2,
+  "recall_at_10": 0.0229,
+  "ivf_nlists": null,
+  "engine_version": "0.1.9"
+ },
+ {
+  "lane": "l3d",
+  "backend": "sqlite_vec_dense_int8",
+  "scale": "small",
+  "rep": 3,
+  "recall_at_10": 0.0229,
+  "ivf_nlists": null,
+  "engine_version": "0.1.9"
+ },
+ {
+  "lane": "l3d",
+  "backend": "sqlite_vec_dense_int8",
+  "scale": "small",
+  "rep": 4,
+  "recall_at_10": 0.0229,
+  "ivf_nlists": null,
+  "engine_version": "0.1.9"
+ },
+ {
+  "lane": "l3d",
+  "backend": "sqlite_vec_dense_int8",
+  "scale": "small",
+  "rep": 5,
+  "recall_at_10": 0.0229,
+  "ivf_nlists": null,
+  "engine_version": "0.1.9"
+ }
+]

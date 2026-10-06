@@ -10,6 +10,8 @@ from decimal import Decimal
 from os import PathLike
 from typing import Any, List, Optional
 
+import jpype
+
 from .exceptions import ArcadeDBError
 from .graph import Document, Edge, Vertex
 from .graph_batch import GraphBatch
@@ -18,7 +20,7 @@ from .importer import import_documents as run_document_import
 from .jvm import start_jvm
 from .results import ResultSet
 from .transactions import TransactionContext
-from .type_conversion import convert_python_to_java
+from .type_conversion import _is_numpy_bool, convert_python_to_java, json_bulk_dumps
 from .vector import to_java_float_array
 
 try:  # optional; hoisted to module scope to keep it out of per-call hot paths
@@ -41,16 +43,16 @@ def _java_class(name):
     return cls
 
 
-def _wrap_java_record(java_record):
+def _wrap_java_record(java_record, database=None):
     """Wrap a Java record in the matching Python class (Vertex/Edge/Document)."""
     if java_record is None:
         return None
     if isinstance(java_record, _java_class("com.arcadedb.graph.Vertex")):
-        return Vertex(java_record)
+        return Vertex(java_record, database)
     if isinstance(java_record, _java_class("com.arcadedb.graph.Edge")):
-        return Edge(java_record)
+        return Edge(java_record, database)
     if isinstance(java_record, _java_class("com.arcadedb.database.Document")):
-        return Document(java_record)
+        return Document(java_record, database)
     return java_record
 
 
@@ -100,36 +102,79 @@ class Database:
                 # digits stored as 1.2345678901234567E+19), and a datetime or a
                 # date matched no overload at all (#58). datetime is a date.
                 converted_args.append(convert_python_to_java(arg))
+            elif _is_numpy_bool(arg):
+                # Not a bool subclass: left to JPype it is stored as the Double
+                # 1.0 or 0.0, and `WHERE ok = true` stops matching it.
+                converted_args.append(bool(arg))
             else:
                 converted_args.append(arg)
 
         return converted_args
 
+    @staticmethod
+    def _java_parameters(args):
+        """The one Java argument that carries the parameters of query()/command().
+
+        A lone mapping is the named-parameter map and goes to the ``Map``
+        overload; anything else is the positional list and goes to the
+        ``Object...`` overload as an explicit ``Object[]``. Splatting the
+        values instead left the choice of overload to JPype, which cannot make
+        it for a lone ``None``: ``command(str, str, None)`` matches
+        ``Object...``, ``Map``, and ``ContextConfiguration, Object...`` alike
+        and raised "Ambiguous overloads" (#172), and so did ``(None, 1)``.
+
+        A mapping alone in a lone list or tuple (``[{...}]``) is still the
+        named map, as JPype chose before; SQL reads an ``Object[]`` holding
+        only a map that way too, but openCypher would refuse it.
+        """
+        values = (
+            args[0] if len(args) == 1 and isinstance(args[0], (list, tuple)) else args
+        )
+        if len(values) == 1 and isinstance(values[0], Mapping):
+            java_map = _java_class("java.util.Map")
+            params = values[0]
+            if not isinstance(params, java_map):
+                params = convert_python_to_java(
+                    params if isinstance(params, dict) else dict(params)
+                )
+            return jpype.JObject(params, java_map)
+        return jpype.JArray(jpype.JObject)(Database._convert_args(args))
+
     def query(self, language: str, command: str, *args) -> ResultSet:
-        """Execute a query and return results."""
+        """Execute a query and return results.
+
+        Parameters bind positionally (``?``) from the extra arguments, or by
+        name (``:name``, ``$name``) from a single dict. A single list or tuple
+        is the positional list itself; ``None`` binds as null.
+        """
         self._check_not_closed()
         try:
             if args:
-                converted_args = self._convert_args(args)
-                java_result = self._java_db.query(language, command, *converted_args)
+                java_result = self._java_db.query(
+                    language, command, self._java_parameters(args)
+                )
             else:
                 java_result = self._java_db.query(language, command)
-            return ResultSet(java_result)
+            return ResultSet(java_result, self)
         except Exception as e:
             raise ArcadeDBError(f"Query failed: {e}") from e
 
     def command(self, language: str, command: str, *args) -> Optional[ResultSet]:
-        """Execute a command (non-idempotent operation)."""
+        """Execute a command (non-idempotent operation).
+
+        Parameters bind as in :meth:`query`.
+        """
         self._check_not_closed()
         try:
             if args:
-                converted_args = self._convert_args(args)
-                java_result = self._java_db.command(language, command, *converted_args)
+                java_result = self._java_db.command(
+                    language, command, self._java_parameters(args)
+                )
             else:
                 java_result = self._java_db.command(language, command)
 
             if java_result is not None:
-                return ResultSet(java_result)
+                return ResultSet(java_result, self)
             return None
         except Exception as e:
             raise ArcadeDBError(f"Command failed: {e}") from e
@@ -218,7 +263,7 @@ class Database:
         """Create a new vertex."""
         self._check_not_closed()
         try:
-            return Vertex(self._java_db.newVertex(type_name))
+            return Vertex(self._java_db.newVertex(type_name), self)
         except Exception as e:
             raise ArcadeDBError(
                 f"Failed to create vertex of type '{type_name}': {e}"
@@ -228,7 +273,7 @@ class Database:
         """Create a new document."""
         self._check_not_closed()
         try:
-            return Document(self._java_db.newDocument(type_name))
+            return Document(self._java_db.newDocument(type_name), self)
         except Exception as e:
             raise ArcadeDBError(
                 f"Failed to create document of type '{type_name}': {e}"
@@ -256,17 +301,18 @@ class Database:
             commit_every: Transaction batch size for the synchronous mode.
             parallel: If True, route rows through the async executor's
                 parallel bucket writers and wait for completion before
-                returning (out-of-order writes). Each bucket is owned by one
-                writer, so this is faster only on a type with several
-                buckets. The maintainers' rule (ArcadeData/arcadedb#8478):
-                a bucket count equal to, or a multiple of, the executor's
-                parallel level (``async_executor().get_parallel_level()``,
-                default cores - 1), set when the type is created
-                (``CREATE DOCUMENT TYPE T BUCKETS n``). On the default single
-                bucket it measured no faster than the synchronous mode, and
-                2.5x faster at 8 buckets on 4 cores. Each writer commits
-                every ``arcadedb.asyncTxBatchSize`` records (default 10,240);
-                ``commit_every`` does not apply to this mode.
+                returning (out-of-order writes). The maintainers' rule
+                (ArcadeData/arcadedb#8478): a bucket count equal to, or a
+                multiple of, the executor's parallel level
+                (``async_executor().get_parallel_level()``, default
+                cores - 1), set when the type is created
+                (``CREATE DOCUMENT TYPE T BUCKETS n``). Measured on a laptop
+                (4 performance cores, parallel level 3, 1,000,000 rows,
+                6 runs per arm, engine ``b22b5e9954``, 2026-10-04): 1.11x to
+                1.14x faster than the synchronous mode at 1, 3, 4, and 8
+                buckets alike (8 buckets no faster than 1). Each writer
+                commits every ``arcadedb.asyncTxBatchSize`` records (default
+                10,240); ``commit_every`` does not apply to this mode.
 
         Returns:
             Number of documents inserted.
@@ -279,33 +325,50 @@ class Database:
                 stored.
         """
         self._check_not_closed()
-        import json as _json
-
         rows = list(rows)
         if not rows:
             return 0
         try:
-            payload = _json.dumps(rows)
+            payload = json_bulk_dumps(rows)
         except (TypeError, ValueError):
-            # Non-JSON-representable values (note: numpy integer scalars land
-            # here too, since json.dumps rejects np.int64): per-row fallback,
-            # honoring commit_every batches like the fast path.
+            # Values the JSON text cannot carry unchanged (numpy integer
+            # scalars, which json.dumps rejects; an integer beyond 64 bits,
+            # NaN or Infinity, a non-str dict key, a lone surrogate, which the
+            # engine's JSON parser would store as a different value): per-row
+            # fallback, honoring commit_every batches like the fast path.
             n = 0
             was_active = self.is_transaction_active()
-            if not was_active:
-                self.begin()
-            for row in rows:
-                doc = self.new_document(type_name)
-                for k, v in row.items():
-                    doc.set(k, v)
-                doc.save()
-                n += 1
-                if not was_active and commit_every > 0 and n % commit_every == 0:
-                    self.commit()
+            try:
+                # begin() inside the try: a ^C landing right after it must
+                # still reach the rollback below.
+                if not was_active:
                     self.begin()
-            if not was_active:
-                self.commit()
-            return n
+                for row in rows:
+                    doc = self.new_document(type_name)
+                    for k, v in row.items():
+                        doc.set(k, v)
+                    doc.save()
+                    n += 1
+                    if not was_active and commit_every > 0 and n % commit_every == 0:
+                        self.commit()
+                        self.begin()
+                if not was_active:
+                    self.commit()
+                return n
+            except BaseException:
+                # Any exit other than the final commit must roll back the
+                # transaction this method opened, as run_in_transaction does
+                # (#7108, #7882): this branch runs precisely for values the
+                # fast path could not serialise, the likeliest to make set()
+                # raise. BaseException so ^C/SystemExit cannot leak it either.
+                # A caller's own transaction (was_active) is left to the caller.
+                if not was_active:
+                    try:
+                        if self.is_transaction_active():
+                            self.rollback()
+                    except Exception:  # nosec B110 - best-effort rollback
+                        pass
+                raise
         try:
             batcher = _java_class("com.arcadedb.python.DocumentBatcher")
             if not parallel:
@@ -379,7 +442,8 @@ class Database:
 
     def lookup_by_key(self, type_name: str, keys: List[str], values: List[Any]):
         """
-        Lookup records by indexed key (O(1) index-based lookup).
+        Lookup records by indexed key (index-based: O(1) for a hash index, O(log n)
+        for an LSM_TREE index).
 
         Args:
             type_name: Type name
@@ -400,14 +464,18 @@ class Database:
 
             # Convert to Java arrays
             keys_array = jpype.JArray(jpype.JString)(keys)
-            values_array = jpype.JArray(jpype.JObject)(values)
+            # Converted like every other parameter: a datetime or a date key
+            # matched no Java type at all, and a numpy bool was read as a number.
+            values_array = jpype.JArray(jpype.JObject)(
+                [convert_python_to_java(value) for value in values]
+            )
 
             cursor = self._java_db.lookupByKey(type_name, keys_array, values_array)
 
             # Return first result wrapped, or None
             if cursor.hasNext():
                 java_record = cursor.next().getRecord()
-                return Document.wrap(java_record)
+                return Document.wrap(java_record, self)
             return None
         except Exception as e:
             raise ArcadeDBError(f"Failed to lookup by key in '{type_name}': {e}") from e
@@ -442,7 +510,7 @@ class Database:
     def _lookup_by_java_rid(self, java_rid) -> Any:
         """Lookup by an already-Java RID, skipping string parsing (hot path)."""
         java_record = self._java_db.lookupByRID(java_rid, True)
-        return _wrap_java_record(java_record)
+        return _wrap_java_record(java_record, self)
 
     def to_java_rid(self, value):
         self._check_not_closed()
@@ -1072,8 +1140,8 @@ class Database:
             >>> db.schema.create_property("User", "name", PropertyType.STRING)
             >>> db.schema.create_property("User", "age", PropertyType.INTEGER)
             >>>
-            >>> # Create an index
-            >>> db.schema.create_index("User", ["name"], unique=True)
+            >>> # Create an index (HASH: "name" is only looked up by equality)
+            >>> db.schema.create_index("User", ["name"], unique=True, index_type="HASH")
             >>>
             >>> # Create edge type
             >>> db.schema.create_edge_type("Follows")

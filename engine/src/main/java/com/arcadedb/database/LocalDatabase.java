@@ -114,6 +114,7 @@ import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.io.UncheckedIOException;
 import java.nio.BufferUnderflowException;
+import java.nio.channels.ClosedByInterruptException;
 import java.nio.channels.ClosedChannelException;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
@@ -228,6 +229,8 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
   protected          LocalSchema                               schema;
   protected          TransactionManager                        transactionManager;
   protected volatile DatabaseAsyncExecutorImpl                 async                     = null;
+  // Held only for short, non-blocking sections: setWrappedDatabaseInstance() takes it from the HA wrapper's constructor,
+  // so nothing may ever wait for the async workers while holding it.
   protected final    Lock                                      asyncLock                 = new ReentrantLock();
   protected          boolean                                   autoTransaction           = false;
   protected volatile boolean                                   open                      = false;
@@ -1392,20 +1395,34 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
       final Throwable cause) {
     final RID rid = record.getIdentity();
     try {
+      // The body write also externalised the EXTERNAL properties into the paired bucket: take those back first, while the
+      // record still holds its pointers (issue #8922). Isolated, so a failure here never skips the retraction of the body
+      if (record instanceof Document document)
+        cascadeDeleteExternalValues(document, true);
+    } catch (final Exception e) {
+      takeBackFailed(cause, transaction, rid, "its external values", e);
+    }
+
+    try {
       bucket.retractRecord(rid);
     } catch (final Exception e) {
-      cause.addSuppressed(e);
-      transaction.setRollbackOnly(
-          "record " + rid + " could not be taken back after its indexing refused it (" + e.getMessage() + ")");
-      LogManager.instance().log(this, Level.SEVERE,
-          "Cannot take back record %s after its indexing refused it: the transaction is marked rollback-only, "
-              + "because committing it would publish a record no index entry points at. %s", rid, e.getMessage());
+      takeBackFailed(cause, transaction, rid, "the record body", e);
     }
 
     transaction.updateBucketRecordDelta(bucket.getFileId(), -1);
     transaction.removeRecordFromCache(rid);
     transaction.unregisterNewRecord(record);
     ((RecordInternal) record).setIdentity(null);
+  }
+
+  private void takeBackFailed(final Throwable cause, final TransactionContext transaction, final RID rid, final String what,
+      final Exception e) {
+    cause.addSuppressed(e);
+    transaction.setRollbackOnly(
+        "record " + rid + " could not be taken back after its indexing refused it (" + e.getMessage() + "), failed to take back " + what);
+    LogManager.instance().log(this, Level.SEVERE,
+        "Cannot take back %s of record %s after its indexing refused it: the transaction is marked rollback-only, "
+            + "because committing it would publish what the index never accepted. %s", what, rid, e.getMessage());
   }
 
   @Override
@@ -1911,19 +1928,44 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
    * a buffer.
    */
   private void cascadeDeleteExternalValues(final Document document) {
+    cascadeDeleteExternalValues(document, false);
+  }
+
+  /**
+   * @param retract true when the engine undoes its own write (a refused create): the external records are retracted
+   *                without the user-delete permission check, like the primary body (issue #8922)
+   */
+  private void cascadeDeleteExternalValues(final Document document, final boolean retract) {
     if (!(document.getType() instanceof LocalDocumentType localType))
       return;
     if (!localType.hasExternalProperties())
       return;
     final Map<String, RID> externalRids = serializer.findExistingExternalRids(this, document);
+    RuntimeException failure = null;
     for (final RID extRid : externalRids.values()) {
       final LocalBucket externalBucket = schema.getBucketById(extRid.getBucketId(), false);
       if (externalBucket != null) {
-        externalBucket.deleteRecord(extRid);
+        try {
+          if (retract)
+            externalBucket.retractRecord(extRid);
+          else
+            externalBucket.deleteRecord(extRid);
+        } catch (final RuntimeException e) {
+          // A retraction takes back as many external records as it can, so one failure does not strand the others
+          if (!retract)
+            throw e;
+          if (failure == null)
+            failure = e;
+          else
+            failure.addSuppressed(e);
+          continue;
+        }
         // Keep the external bucket's count consistent (mirrors the +1 in BinarySerializer.writeExternalPropertyValue).
         getTransaction().updateBucketRecordDelta(externalBucket.getFileId(), -1);
       }
     }
+    if (failure != null)
+      throw failure;
   }
 
   @Override
@@ -2511,8 +2553,13 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
       return callable.call();
 
     } catch (final ClosedChannelException e) {
-      LogManager.instance().log(this, Level.SEVERE, "Database '%s' has some files that are closed", e, name);
-      close();
+      // NEVER close() HERE: THIS THREAD HOLDS THE READ LOCK AND close() WAITS FOR THE WRITE LOCK, WHICH A
+      // ReentrantReadWriteLock NEVER GRANTS TO A READER, SO THE DATABASE WOULD NEVER CLOSE AGAIN (#8944). THE CALLER
+      // GETS THE EXCEPTION AND DECIDES
+      if (e instanceof ClosedByInterruptException)
+        LogManager.instance().log(this, Level.WARNING, "Database '%s' has a file closed by an interrupt", e, name);
+      else
+        LogManager.instance().log(this, Level.SEVERE, "Database '%s' has some files that are closed", e, name);
       throw new DatabaseOperationException("Database '" + name + "' has some files that are closed", e);
 
     } catch (final RuntimeException e) {
@@ -2537,8 +2584,13 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
       return callable.call();
 
     } catch (final ClosedChannelException e) {
-      LogManager.instance().log(this, Level.SEVERE, "Database '%s' has some files that are closed", e, name);
-      close();
+      // A CHANNEL CLOSED BY AN INTERRUPT (A CANCELLED QUERY) IS NOT A FAILING DISK: PaginatedComponentFile REOPENS IT
+      if (e instanceof ClosedByInterruptException)
+        LogManager.instance().log(this, Level.WARNING, "Database '%s' has a file closed by an interrupt", e, name);
+      else {
+        LogManager.instance().log(this, Level.SEVERE, "Database '%s' has some files that are closed", e, name);
+        close();
+      }
       throw new DatabaseOperationException("Database '" + name + "' has some files that are closed", e);
 
     } catch (final RuntimeException e) {
@@ -2666,8 +2718,23 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
     return wrappedDatabaseInstance;
   }
 
+  /**
+   * Installs the instance this database is served through - under HA the Raft-replicated wrapper - and points the async
+   * executor at it too (issue #8292). The executor is created lazily and bound to the wrapper as it stood at that
+   * moment, so one created before the HA wrap, or before a plugin restart replaced the wrapper, kept committing every
+   * async write on an instance that does not replicate. Under {@link #asyncLock}, the lock {@link #async()} creates the
+   * executor under, so the executor is either created after this assignment or rebound by it - never neither.
+   */
   public void setWrappedDatabaseInstance(final DatabaseInternal wrappedDatabaseInstance) {
-    this.wrappedDatabaseInstance = wrappedDatabaseInstance;
+    asyncLock.lock();
+    try {
+      this.wrappedDatabaseInstance = wrappedDatabaseInstance;
+      final DatabaseAsyncExecutorImpl executor = async;
+      if (executor != null)
+        executor.rebindDatabase(wrappedDatabaseInstance);
+    } finally {
+      asyncLock.unlock();
+    }
   }
 
   public void registerReusableQueryEngine(final QueryEngine queryEngine) {

@@ -18,7 +18,7 @@ The test suite covers:
 - ✅ **Time series SQL** - `CREATE TIMESERIES TYPE`, range queries, bucketing
 - ✅ **Materialized views** - create, refresh, alter, drop lifecycle
 - ✅ **Graph algorithms** - `shortestPath`, `dijkstra`, `astar`
-- ✅ **HASH schema indexes** - create, discover, idempotent `get_or_create_index`, and force drop
+- ✅ **HASH schema indexes** - create, discover, idempotent `get_or_create_index`, force drop, and the `UNIQUE_HASH` id path
 - ✅ **Unicode support** - International characters, emoji
 - ✅ **Schema introspection** - Querying database metadata
 - ✅ **Type conversions** - Python/Java type mapping
@@ -121,7 +121,7 @@ Test counts evolve over time. For the latest per-file counts, run `uv run pytest
 | [`test_materialized_view_sql.py`](test-materialized-view-sql.md) | Materialized view lifecycle and refresh behavior |
 | [`test_restore_sql.py`](test-restore-sql.md) | RESTORE DOCUMENT/VERTEX record-count and record integrity |
 | [`test_graph_algorithms_sql.py`](test-graph-algorithms-sql.md) | SQL graph algorithm runtime coverage |
-| [`test_hash_index_schema.py`](test-hash-index-schema.md) | HASH index schema API behavior, plus a named-list IN parameter on an LSM_TREE index |
+| [`test_hash_index_schema.py`](test-hash-index-schema.md) | HASH index schema API behavior, the `UNIQUE_HASH` id path end to end, plus a named-list IN parameter on an LSM_TREE index |
 | [`test_jvm_args.py`](test-jvm-args.md) | JVM args handling |
 | [`test_transaction_config.py`](test-transaction-config.md) | WAL flush, read-your-writes, and auto-transaction settings |
 | [`test_type_conversion.py`](test-type-conversion.md) | Python/Java type conversion coverage |
@@ -133,8 +133,10 @@ Test counts evolve over time. For the latest per-file counts, run `uv run pytest
 | [`test_jar_provenance.py`](test-jar-provenance.md) | The wheel can say which engine it carries, not just which version it is. |
 | [`test_java_package_shadowing.py`](test-java-package-shadowing.md) | A folder named `java/` or `com/` must not change what a query returns |
 | [`test_jvm.py`](test-jvm.md) | `start_jvm()` re-entry once the JVM is running, close and reopen in one process, and interpreter exit with an unclosed database |
+| [`test_sigint.py`](test-jvm.md#ctrl-c-test_sigintpy) | Ctrl-C raises `KeyboardInterrupt` and runs cleanup once the JVM is started; `interrupt=True` keeps JPype's default |
 | [`test_jvm_payload.py`](test-jvm-payload.md) | A Python list must never be what crosses into the JVM |
 | [`test_resultset_arrow.py`](test-resultset-arrow.md) | Tests for ResultSet.to_arrow(). |
+| [`test_columnar_readers.py`](test-resultset-arrow.md#schemaless-and-decimal-data-test_columnar_readerspy) | `to_columns`, `to_dataframe`, and `to_arrow` on schemaless and DECIMAL data, at several batch sizes. |
 | [`test_runtime_cache.py`](test-runtime-cache.md) | The dev-mode runtime cache must follow the wheel it was extracted from |
 | [`test_server_http_endpoints.py`](test-server-http-endpoints.md) | The three server HTTP features the bindings document but do not wrap (multi-request transactions, server database commands, and line-protocol time-series writes), plus a projection read over HTTP |
 | [`test_server_packaging.py`](test-server-packaging.md) | The server stack is actually IN the wheel, and the API is reachable. |

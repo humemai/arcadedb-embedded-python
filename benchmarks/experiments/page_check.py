@@ -328,6 +328,34 @@ DENSE_10M = {
 }
 
 
+def _dense_cache_set_by_campaign():
+    """The graph build cache sizes the campaign SET on ArcadeDB's dense rows.
+
+    graph_build_cache_configured is what the harness handed the engine: 0 is
+    the engine's own sizing (DECISIONS #52), anything above is a pinned cache
+    (DECISIONS #56 was 9,990,000). Read from the frozen rows the page is built
+    from, so the answer follows the data and not a constant written for one
+    campaign. The multipass overlay files do not record the field; the
+    campaign's single-pass rows of the same arms do, and one stage environment
+    runs both. An empty set means nothing was pinned.
+    """
+    import csv as _csv
+    frozen = HERE / "results" / _frozen_name()
+    out = set()
+    if not frozen.exists():
+        return out
+    for r in _csv.DictReader(frozen.open()):
+        if r.get("lane") != "l3d" or not str(r.get("backend", "")).startswith("arcadedb"):
+            continue
+        try:
+            v = int(float(r.get("graph_build_cache_configured") or 0))
+        except ValueError:
+            continue
+        if v > 0:
+            out.add(v)
+    return out
+
+
 def _check_dense_10m(payload):
     """Page's 10M cells vs the paper's, at the precision the paper prints."""
     import claims_check as C
@@ -385,11 +413,42 @@ def _check_dense_10m(payload):
     # DECISIONS #56: when the 10M rows come from the pinned multipass re-run,
     # the table must say the fp32 build cache was pinned to the corpus. A
     # disclosure that can silently drop off the page is not a disclosure.
+    #
+    # THAT DECISION IS SEPTEMBER'S. It pinned graphBuildCacheSize for the
+    # 8d6af9475 re-run, and the sentence it requires is written into September's
+    # l3d spec alone: an October table starts from no conditions and gets its
+    # sentences from the generators, so this check demanded a sentence the
+    # October page cannot carry, and demanded it unconditionally because
+    # _dense_overlay_is_pinned() answers "is the overlay pinned to a COMMIT"
+    # (always, since 2026-09-08) and not "was the cache pinned". The first
+    # October dense landing (2026-10-06) was refused on exactly that. October
+    # asks the rows instead (DECISIONS #59: the engine's own defaults): the
+    # disclosure is required when a row records a cache that was SET, and a
+    # sentence saying one was set is a false statement when none was.
     import export_web as _EW
-    if _EW._dense_overlay_is_pinned():
-        conds = " ".join(next((t.get("conditions", []) for t in payload.get("tables", [])
-                               if t["id"] == "l3d"), []))
-        if "graphBuildCacheSize pinned to the corpus size" in conds:
+    _l3d = next((t for t in payload.get("tables", []) if t["id"] == "l3d"), {})
+    conds = " ".join(_l3d.get("conditions", []))
+    said = "graphBuildCacheSize pinned to the corpus size" in conds
+    if _l3d.get("instrument") == "2026-10":
+        set_to = _dense_cache_set_by_campaign()
+        if set_to and said:
+            checked += 1
+            print(f"  #56 disclosure present on the dense table (cache set to {sorted(set_to)})")
+        elif set_to:
+            print(f"  MISSING the build-cache disclosure on the dense table: rows record the "
+                  f"cache set to {sorted(set_to)} and the table does not say so")
+            bad += 1
+        elif said:
+            print("  FALSE build-cache disclosure on the dense table: it says the cache was "
+                  "pinned and no row records one (graph_build_cache_configured is 0, the "
+                  "engine default, on every ArcadeDB dense row)")
+            bad += 1
+        else:
+            checked += 1
+            print("  build cache: every ArcadeDB dense row ran the engine default "
+                  "(graph_build_cache_configured 0), so there is no pinned setting to disclose")
+    elif _EW._dense_overlay_is_pinned():
+        if said:
             checked += 1
             print("  #56 disclosure present on the dense table")
         else:
@@ -942,11 +1001,31 @@ def main() -> int:
     print("\nthe zero ages are disclosed wherever rows measured them (BUGS F146)")
     z_bad = _check_zero_age_disclosure(payload, rows)
     print(f"  {z_bad} graph table(s) missing the disclosure")
+    print("\nthe one-way friendships are disclosed wherever rows asked the directed "
+          "questions (BUGS F169)")
+    w_bad = _check_one_way_knows_disclosure(payload, rows)
+    print(f"  {w_bad} graph table(s) missing the one-way disclosure")
+    print("\nthe LSQB queries that compared ids are disclosed wherever rows ran them "
+          "(BUGS F174)")
+    q_bad = _check_lsqb_id_form_disclosure(payload, rows)
+    print(f"  {q_bad} graph table(s) missing the LSQB id-form disclosure")
+    print("\nthe document operations' warm-up is disclosed wherever rows were timed from "
+          "the first operation after the load (DECISIONS #157)")
+    v_bad = _check_docs_warmup_disclosure(payload, rows)
+    print(f"  {v_bad} table(s) missing the warm-up disclosure")
+    print("\na dense cell ArangoDB's one-list defect decided is marked not comparable "
+          "(BUGS F175)")
+    n_bad = _check_one_list_not_comparable(payload)
+    print(f"  {n_bad} not-comparable finding(s)")
+    print("\nthe dense table's ArangoDB IVF sentence says what the harness does, from the rows")
+    i_bad = _check_arango_ivf_sentence(payload, rows)
+    print(f"  {i_bad} IVF sentence finding(s)")
     print("\nevery override a table meets is named under it (CAMPAIGN section 7 row 21)")
-    v_bad = _check_override_disclosures(payload)
-    print(f"  {v_bad} undisclosed override(s)")
+    ov_bad = _check_override_disclosures(payload)
+    print(f"  {ov_bad} undisclosed override(s)")
     return 1 if (bad or d_bad or p_bad or a_bad or l_bad or h_bad or c_bad
-                 or r_bad or m_bad or not u_ok or k_bad or o_bad or z_bad or v_bad) else 0
+                 or r_bad or m_bad or not u_ok or k_bad or o_bad or z_bad or w_bad
+                 or q_bad or v_bad or n_bad or i_bad or ov_bad) else 0
 
 
 # --------------------------------------------------------------------------
@@ -1135,6 +1214,23 @@ NOT_PRINTED = [
      "harness bookkeeping around a timed phase: settling, loading ground "
      "truth, computing recall, the phase accounting, and the time-series "
      "driver releasing its parsed corpus between ingest and the queries"),
+    # The first October dense landing (2026-10-06) met these four fields for
+    # the first time and A2 refused the page for them: no earlier landing had
+    # dense rows from the comparators that record them.
+    (r"^settle_(probes|first_ms|last_ms)$",
+     "the evidence behind a settle wait (SurrealDB's HNSW index builds in the "
+     "background, so the adapter probes until the latency is flat): how many "
+     "probes it took and the first and last probe's latency. settle_s, the wait "
+     "itself, is already declared above; these show that the index had caught "
+     "up before any query was timed, which is an audit of a cell and not a "
+     "column of it (BUGS F134)"),
+    (r"^setup_s$",
+     "the residue that makes the build's three timers partition its total "
+     "(build_s less ingest_s less index_s, BUGS F101): schema DDL before the "
+     "load and the settle after the index. Derived arithmetic over three "
+     "numbers the table already prints, and a few seconds at most in builds "
+     "of minutes to hours, so the page prints the total and the two phases "
+     "and a reader can read the residue off them"),
     (r"^(mutate_deleted_hits|mutate_reinserted_hits)$",
      "correctness counters that must be zero; a non-zero one is a defect "
      "report, not a column (l3d_dense records them on the row)"),
@@ -1940,6 +2036,162 @@ def _check_override_disclosures(payload):
         lane_of(t.get("id")), [e.get("backend_key") for e in t.get("entries") or []]))
     print(f"  {len(tables)} October table(s), {owed} override sentence(s) owed from their entries")
     return len(found)
+
+
+def _check_one_way_knows_disclosure(payload, rows):
+    """A graph table built from rows that asked the directed questions carries
+    the sentence that says so (BUGS F169, DECISIONS #151 item 2): each LDBC
+    friendship is one edge from the smaller id to the larger, so the hop reads
+    see only friends with a larger id and the triangle count is 0 by
+    construction. Re-decided from the same rows as the exporter, as
+    _check_zero_age_disclosure does for F146. Returns bad count."""
+    import export_web as EW
+    bad = 0
+    for t in payload.get("tables", []):
+        want = EW._knows_one_way_note(t.get("id"), rows)
+        if want and want not in (t.get("conditions") or []):
+            print(f"    MISSING {t['id']}: rows asked the directed questions and no sentence says so")
+            bad += 1
+        elif want:
+            print(f"  {t['id']}: disclosed")
+    return bad
+
+
+def _check_lsqb_id_form_disclosure(payload, rows):
+    """A graph analytics table built from rows that ran LSQB's q5, q6, q8, or
+    q9 with the node inequality on the id property carries the sentence that
+    says so (BUGS F174, DECISIONS #154 item 2): the id form keeps ArcadeDB on
+    a slower plan than LSQB's own text gets. Re-decided from the same rows as
+    the exporter, as _check_one_way_knows_disclosure does for F169. A pending
+    table is not in the payload and is checked when it lands. Returns bad
+    count."""
+    import export_web as EW
+    bad = 0
+    for t in payload.get("tables", []):
+        want = EW._lsqb_id_form_note(t.get("id"), rows)
+        if want and want not in (t.get("conditions") or []):
+            print(f"    MISSING {t['id']}: rows ran LSQB queries in the id form and no sentence says so")
+            bad += 1
+        elif want:
+            print(f"  {t['id']}: disclosed")
+    return bad
+
+
+def _check_docs_warmup_disclosure(payload, rows):
+    """The documents OLTP and durability tables, built from documents OLTP
+    rows timed from the first operation after the load (no `oltp_warmup`),
+    carry the sentence that says their columns include each engine's warm-up
+    (DECISIONS #157), the documents OLTP table in place of the "already-warm
+    by construction" one. Re-decided from the same rows as the exporter, as
+    _check_lsqb_id_form_disclosure does for F174. Returns bad count."""
+    import export_web as EW
+    bad = 0
+    for t in payload.get("tables", []):
+        want = EW._docs_warmup_note(t.get("id"), rows)
+        if want and want not in (t.get("conditions") or []):
+            print(f"    MISSING {t['id']}: rows timed from the first operation after the load "
+                  f"and no sentence says so")
+            bad += 1
+        elif want:
+            print(f"  {t['id']}: disclosed")
+    return bad
+
+
+def _check_one_list_not_comparable(payload):
+    """A dense cell the freeze withheld and that ArangoDB's one-list defect
+    decided (BUGS F175, DECISIONS #156: recall below the floor, 10,000 or more
+    IVF lists, a release with the defect) carries the sentence that names the
+    defect, and its row, where the table prints the size, is marked `n/c` with
+    no number in any cell: neither its recall nor a latency may read as a
+    result. Re-decided from the freeze's sidecar, as the exporter decides it.
+    A pending table is not in the payload and is checked when it lands.
+    Returns bad count."""
+    import export_web as EW
+    bad = 0
+    for t in payload.get("tables", []):
+        groups = EW._one_list_groups(t.get("id"))
+        for (backend, scale), items in sorted(groups.items()):
+            want = EW._one_list_note(backend, scale, items)
+            if want not in (t.get("conditions") or []):
+                print(f"    MISSING {t['id']}: {backend} at {scale} ran on a release with the "
+                      f"one-list defect and no sentence says so")
+                bad += 1
+                continue
+            rows_here = [e for e in t.get("entries") or []
+                         if str(e.get("backend_key")) == backend and str(e.get("scale")) == scale]
+            numbered = [e for e in rows_here
+                        if any(isinstance(v, dict) and v.get("median") is not None
+                               for v in (e.get("metrics") or {}).values())]
+            if numbered:
+                print(f"    NUMBERED {t['id']}: {backend} at {scale} prints a number the defect decided")
+                bad += 1
+            elif rows_here and not all(e.get("outcome") == "not comparable" for e in rows_here):
+                print(f"    UNMARKED {t['id']}: {backend} at {scale} has a row not marked not comparable")
+                bad += 1
+            else:
+                print(f"  {t['id']}: {backend} at {scale} disclosed"
+                      + (", row marked n/c" if rows_here else ", size not on the table"))
+    return bad
+
+
+# The wording the October dense table's ArangoDB sentence carried until
+# 2026-10-04. Neither is what the harness does: arango_common.ivf_params
+# builds round(4 * sqrt(n)) lists, and the dense lane calibrates nProbe
+# (calibrate_nprobe) rather than probing an eighth of the lists.
+_ARANGO_IVF_OLD = ("about the square root of the corpus", "an eighth of the lists")
+
+
+def _check_arango_ivf_sentence(payload, rows):
+    """The October dense table's ArangoDB sentence says what the harness does
+    with its IVF index and takes its numbers from the rows: it never carries
+    the old wording, it is the sentence the exporter derives from the same
+    rows, and, independently of the exporter, every "N lists at <size>" in it
+    is both what the rows record and what arango_common.ivf_params builds
+    for that size's vector count. September's frozen sentence is not held to
+    it. A pending table is not in the payload and is checked when it lands.
+    Returns bad count."""
+    import export_web as EW
+    import arango_common
+    bad = 0
+    for t in payload.get("tables", []):
+        if t.get("id") != "l3d" or t.get("instrument") != "2026-10":
+            continue
+        conds = t.get("conditions") or []
+        for c in conds:
+            for old in _ARANGO_IVF_OLD:
+                if old in c:
+                    print(f"    WRONG {t['id']}: a sentence says {old!r}; the harness builds "
+                          f"round(4 * sqrt(n)) lists and calibrates the probe count")
+                    bad += 1
+        shown = [e for e in t.get("entries") or []
+                 if str(e.get("backend_key") or "").startswith("arangodb") and not e.get("outcome")]
+        want = EW._arango_ivf_note(t, rows)
+        if want is None:
+            if shown:
+                print(f"    MISSING {t['id']}: ArangoDB has a row and no IVF operating point is said")
+                bad += 1
+            continue
+        if want not in conds:
+            print(f"    MISSING {t['id']}: the ArangoDB IVF sentence is not the one its rows give")
+            bad += 1
+            continue
+        before = bad
+        for m in re.finditer(r"([\d,]+) lists at ([^.;,]+? vectors)", want):
+            n_lists, size = int(m.group(1).replace(",", "")), m.group(2)
+            rs = [r for r in rows
+                  if r.get("lane") == "l3d" and str(r.get("backend") or "").startswith("arangodb")
+                  and str(r.get("instrument") or "") == "2026-10"
+                  and EW.scale_label("l3d", str(r.get("scale"))) == size]
+            ok = bool(rs) and all(
+                int(float(r["ivf_nlists"])) == n_lists
+                == arango_common.ivf_params(int(float(r["n_docs"])))[0] for r in rs)
+            if not ok:
+                print(f"    DIFFER {t['id']}: the sentence says {n_lists:,} lists at {size}; "
+                      f"the rows or ivf_params say otherwise")
+                bad += 1
+        if bad == before:
+            print(f"  {t['id']}: the ArangoDB IVF sentence matches its rows and the harness")
+    return bad
 
 
 def _check_off_page_names(payload):

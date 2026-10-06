@@ -44,6 +44,10 @@ public class SupportApiSpec implements OpenApiContributor {
   public void contribute(final OpenAPI openAPI) {
     openAPI.getPaths().addPathItem("/api/v1/server/support", createStatusPath());
     openAPI.getPaths().addPathItem("/api/v1/server/support/register", createRegisterPath());
+    openAPI.getPaths().addPathItem("/api/v1/server/support/installation", createInstallationPath());
+    openAPI.getPaths().addPathItem("/api/v1/server/support/connect", createConnectPath());
+    openAPI.getPaths().addPathItem("/api/v1/server/support/peers", createPeersPath());
+    openAPI.getPaths().addPathItem("/api/v1/server/support/peer-query", createPeerQueryPath());
     openAPI.getPaths().addPathItem("/api/v1/server/support/preview", createPreviewPath());
     openAPI.getPaths().addPathItem("/api/v1/server/support/bundle", createBundlePath());
     openAPI.getPaths().addPathItem("/api/v1/server/support/issues", createIssuesPath());
@@ -66,6 +70,7 @@ public class SupportApiSpec implements OpenApiContributor {
 
     openAPI.getComponents().addSchemas("SupportStatus", createStatusSchema());
     openAPI.getComponents().addSchemas("SupportRegisterRequest", createRegisterRequestSchema());
+    openAPI.getComponents().addSchemas("SupportPeerQueryRequest", createPeerQueryRequestSchema());
     openAPI.getComponents().addSchemas("SupportPreviewRequest", createPreviewRequestSchema());
     openAPI.getComponents().addSchemas("SupportPreview", createPreviewSchema());
     openAPI.getComponents().addSchemas("SupportBundleRequest", createBundleRequestSchema());
@@ -114,6 +119,100 @@ public class SupportApiSpec implements OpenApiContributor {
     item.setPost(post);
     item.setDelete(delete);
     return item;
+  }
+
+  private PathItem createInstallationPath() {
+    final Operation post = SpecBuilders.operation("registerSupportInstallation", TAG, "Register this server as an installation in the portal",
+        "Sends the redacted diagnostics of this server to the portal, which creates the installation in the workspace of the "
+            + "Client key, or completes the blank fields of the one it already has. Answers {status: created|updated|unchanged, "
+            + "installationId, name, filled, differs}. Restricted to the root user." + ERRORS);
+    final ApiResponses responses = new ApiResponses();
+    responses.addApiResponse("200", SpecBuilders.emptyResponse("What the portal did with the installation"));
+    responses.addApiResponse("403", SpecBuilders.errorResponse("Forbidden: only the root user may register"));
+    responses.addApiResponse("409", SpecBuilders.errorResponse("The server is not registered, or the portal refused the identity "
+        + "it reported"));
+    responses.addApiResponse("503", SpecBuilders.errorResponse("The portal cannot be reached"));
+    post.setResponses(responses);
+    final PathItem item = new PathItem();
+    item.setPost(post);
+    return item;
+  }
+
+  private PathItem createConnectPath() {
+    final Operation post = SpecBuilders.operation("startSupportConnect", TAG, "Start connecting this server to the portal",
+        "Asks the portal for a code ('device authorization'): answers {userCode, verifyUrl, expiresIn}. Studio shows the code and "
+            + "opens verifyUrl in a new tab; once a workspace owner or admin approves it there, the server receives the workspace "
+            + "key (never shown to the browser), stores it as a registration and registers itself as an installation. One "
+            + "connection waits at a time. Restricted to the root user (HTTP Basic). Without Studio, from a shell or the console "
+            + "('connect portal'): `curl -s -u root:PASSWORD -X POST -H 'Content-Type: application/json' -d '{\"label\":\"prod-1\"}' "
+            + "http://localhost:2480/api/v1/server/support/connect` answers {\"userCode\":\"WDJB-MJHT\",\"verifyUrl\":"
+            + "\"https://portal.arcadedb.com/#/connect?code=WDJB-MJHT\",\"expiresIn\":600}; open verifyUrl in any browser, check "
+            + "that the code matches and approve; then `curl -s -u root:PASSWORD http://localhost:2480/api/v1/server/support/connect` "
+            + "until status is no longer 'pending' (every 2 seconds is plenty); `curl -s -u root:PASSWORD -X DELETE "
+            + "http://localhost:2480/api/v1/server/support/connect` stops waiting (204). The optional body field 'label' (up to 60 "
+            + "characters) names the key in the portal." + ERRORS);
+    final ApiResponses created = new ApiResponses();
+    created.addApiResponse("200", SpecBuilders.emptyResponse("The code to show: {userCode, verifyUrl, expiresIn}"));
+    created.addApiResponse("403", SpecBuilders.errorResponse("Forbidden: only the root user may connect"));
+    created.addApiResponse("404", SpecBuilders.errorResponse("The portal cannot connect servers from Studio yet"));
+    created.addApiResponse("409", SpecBuilders.errorResponse("A connection is already waiting (connect_in_progress), the registration "
+        + "comes from the settings, or the configuration directory is not writable"));
+    created.addApiResponse("429", SpecBuilders.errorResponse("The portal refuses too many attempts from this server"));
+    created.addApiResponse("503", SpecBuilders.errorResponse("The portal cannot be reached"));
+    post.setResponses(created);
+
+    final Operation get = SpecBuilders.operation("getSupportConnect", TAG, "State of the connection to the portal",
+        "{status: none|pending|connected|expired|denied|error|cancelled}; pending carries userCode, verifyUrl and expiresOn; "
+            + "connected carries workspaceName and registration (the outcome of registering the installation); error carries "
+            + "{error, message}. Restricted to the root user.");
+    get.setResponses(SpecBuilders.standardResponses("200", SpecBuilders.emptyResponse("The state of the last connection"), "403"));
+
+    final Operation delete = SpecBuilders.operation("cancelSupportConnect", TAG, "Stop waiting for the approval",
+        "Ends the wait. A key that was already received stays registered. Restricted to the root user.");
+    delete.setResponses(SpecBuilders.standardResponses("204", SpecBuilders.emptyResponse("Stopped"), "403"));
+
+    final PathItem item = new PathItem();
+    item.setPost(post);
+    item.setGet(get);
+    item.setDelete(delete);
+    return item;
+  }
+
+  private PathItem createPeersPath() {
+    final Operation get = SpecBuilders.operation("getSupportPeers", TAG, "The other members of the cluster, by name",
+        "{ha: boolean, peers: [name]}: the names Studio offers as targets of a support request. No addresses are returned. "
+            + "Empty and ha=false when this server is not part of a cluster. Restricted to the root user.");
+    get.setResponses(SpecBuilders.standardResponses("200", SpecBuilders.emptyResponse("The peer names"), "403"));
+    final PathItem item = new PathItem();
+    item.setGet(get);
+    return item;
+  }
+
+  private PathItem createPeerQueryPath() {
+    final Operation post = SpecBuilders.operation("runSupportPeerQuery", TAG, "Run a read-only support query on other cluster nodes",
+        "Runs the statement of a support request on the OTHER members of the cluster ('all' or one named node) and answers "
+            + "{ha, nodes: [{node, status: ok, records, truncated} | {node, status: failed, error}]}: a peer that cannot be "
+            + "reached, times out or refuses is its own row and never fails the request. The node that receives this call does "
+            + "not run the query on itself: Studio does that through the ordinary query endpoint. Each peer runs the statement "
+            + "through its ordinary idempotent query endpoint, so the engine of EACH peer refuses anything that is not "
+            + "read-only; peers are chosen from the cluster configuration by name, never by address, and the query runs on "
+            + "the peer with the permissions of the calling user. At most 16 peers, 8 at a time, 35 seconds and 4 MB each; "
+            + "SQL and OpenCypher only. Restricted to the root user." + ERRORS);
+    post.setRequestBody(SpecBuilders.jsonBody("What to run and where", "SupportPeerQueryRequest", true));
+    post.setResponses(SpecBuilders.standardResponses("200", SpecBuilders.emptyResponse("The result of every node asked"), "400",
+        "403"));
+    final PathItem item = new PathItem();
+    item.setPost(post);
+    return item;
+  }
+
+  private Schema<?> createPeerQueryRequestSchema() {
+    final Schema<Object> schema = SpecBuilders.object("A read-only query to run on other cluster nodes");
+    schema.addProperty("database", SpecBuilders.string("The database name"));
+    schema.addProperty("language", SpecBuilders.string("sql or opencypher"));
+    schema.addProperty("statement", SpecBuilders.string("The statement (1 to 2000 characters)"));
+    schema.addProperty("nodes", SpecBuilders.string("'all' or the name of one cluster node (default all)"));
+    return schema;
   }
 
   private PathItem createPreviewPath() {

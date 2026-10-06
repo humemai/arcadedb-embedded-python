@@ -148,6 +148,28 @@ nothing was stored.
 
 The same load committed: asserts the call returns 25 and 25 are stored.
 
+## Bridge Fixes (`test_bridge_fixes.py`)
+
+These two hold only with the bridge jar built from the tree, which the wheel build does; a
+wheel older than the fix fails them.
+
+### test_insert_many_nested_values_read_as_python_in_the_same_transaction
+
+`insert_many` stored the parsed `JSONArray` itself, so inside the transaction that ran it a
+list property read back as a Java `JSONArray` and became a list only once the record was
+serialized (humemai/arcadedb-embedded-python#112). Rows with a list, an empty list, a nested
+map holding a list and a `None`, and an empty map read back equal to the input inside the
+transaction and after the commit, and the list is a plain `list`.
+
+### test_to_json_list_writes_a_date_as_midnight_utc_in_any_jvm_zone
+
+`to_json_list()` wrote a `DATE` as the epoch milliseconds of midnight in the JVM's zone, so it
+disagreed with `Result.to_json()` and decoded to the previous day east of UTC (#116). One child
+JVM per zone (`UTC`, `Asia/Seoul`, `America/Los_Angeles`) writes a `DATE`, a list of two, and a
+map holding one: each is midnight UTC (1704153600000 for 2024-01-02), and the top-level value
+equals `Result.to_json()`'s. On the old jar the Seoul run read 1704121200000 and the Los Angeles
+run 1704182400000.
+
 ## Running
 
 ```bash

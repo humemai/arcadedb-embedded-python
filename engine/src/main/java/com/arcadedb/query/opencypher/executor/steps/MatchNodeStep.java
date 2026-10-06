@@ -42,6 +42,7 @@ import com.arcadedb.query.opencypher.ast.PropertyAccessExpression;
 import com.arcadedb.query.opencypher.ast.VariableExpression;
 import com.arcadedb.query.opencypher.executor.ExpressionEvaluator;
 import com.arcadedb.query.opencypher.executor.CypherFunctionFactory;
+import com.arcadedb.query.opencypher.temporal.TemporalUtil;
 import com.arcadedb.query.sql.executor.AbstractExecutionStep;
 import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.query.sql.executor.Result;
@@ -129,7 +130,7 @@ public class MatchNodeStep extends AbstractExecutionStep {
   // supertype - so a chained MATCH that re-opens this scan per outer row was allocating one per row from
   // the moment issue #7021 made this lookup polymorphic. Same write-once-per-execution contract as the
   // fields above, and cleared with them.
-  private       Collection<TypeIndex> polymorphicIndexes;
+  private       List<TypeIndex>     polymorphicIndexes;
   /** Context variable the plan sets to TRUE for a read-only statement; the scan hash below is only ever built for one. */
   public static final String READ_ONLY_STATEMENT_KEY = "cypherReadOnlyStatement";
   /**
@@ -788,9 +789,9 @@ public class MatchNodeStep extends AbstractExecutionStep {
     List<String> bestMatchedProperties = null;
 
     for (final TypeIndex index : polymorphicIndexesOf(type)) {
-      if (!index.getType().isExactKeyLookup())
-        continue; // a FULL_TEXT index answers by token, and misses a value with none (issue #8439)
-      final List<String> indexProperties = index.getPropertyNames();
+      final List<String> indexProperties = index.getPropertyNamesIfExactKeyLookup();
+      if (indexProperties == null)
+        continue; // not a key index (a FULL_TEXT index answers by token, and misses a value with none, issue #8439) or dropped meanwhile
 
       // Check how many properties match as a leftmost prefix
       // For composite indexes, we can only use a partial key if we have values for all
@@ -825,7 +826,7 @@ public class MatchNodeStep extends AbstractExecutionStep {
       final Object[] propertyValues = new Object[propertyNames.length];
 
       for (int i = 0; i < propertyNames.length; i++)
-        propertyValues[i] = properties.get(propertyNames[i]);
+        propertyValues[i] = TemporalUtil.toIndexKey(properties.get(propertyNames[i]));
 
       // Track which index was used for profiling output, named after the type that DECLARES it: an inherited
       // index reported under the queried type would name an index that does not exist (issue #7021).
@@ -848,10 +849,12 @@ public class MatchNodeStep extends AbstractExecutionStep {
    * Memoized because the answer is built rather than viewed (see {@link #polymorphicIndexes}) and this runs
    * once per input row on a chained MATCH.
    */
-  private Collection<TypeIndex> polymorphicIndexesOf(final DocumentType type) {
+  private List<TypeIndex> polymorphicIndexesOf(final DocumentType type) {
     if (polymorphicIndexes == null || indexesResolvedForType != type) {
       indexesResolvedForType = type;
-      polymorphicIndexes = type.getAllIndexes(true);
+      // A filtered snapshot, not the live view of the schema map: an index being created or dropped by a concurrent DDL has no
+      // type yet, or is invalid, and is not a candidate (issue #8918)
+      polymorphicIndexes = TypeIndex.filterReadyForQueries(type.getAllIndexes(true));
     }
     return polymorphicIndexes;
   }
@@ -890,9 +893,9 @@ public class MatchNodeStep extends AbstractExecutionStep {
     List<String> bestMatchedProperties = null;
 
     for (final TypeIndex index : polymorphicIndexesOf(type)) {
-      if (!index.getType().isExactKeyLookup())
-        continue; // a FULL_TEXT index answers by token, and misses a value with none (issue #8439)
-      final List<String> indexProperties = index.getPropertyNames();
+      final List<String> indexProperties = index.getPropertyNamesIfExactKeyLookup();
+      if (indexProperties == null)
+        continue; // not a key index (a FULL_TEXT index answers by token, and misses a value with none, issue #8439) or dropped meanwhile
       int matchCount = 0;
       final List<String> matchedProperties = new ArrayList<>();
 
@@ -916,7 +919,7 @@ public class MatchNodeStep extends AbstractExecutionStep {
       final String[] propertyNames = bestMatchedProperties.toArray(new String[0]);
       final Object[] propertyValues = new Object[propertyNames.length];
       for (int i = 0; i < propertyNames.length; i++)
-        propertyValues[i] = equalityPredicates.get(propertyNames[i]);
+        propertyValues[i] = TemporalUtil.toIndexKey(equalityPredicates.get(propertyNames[i]));
 
       usedIndexName = bestIndex.getTypeName() + "[" + String.join(", ", propertyNames) + "]";
 

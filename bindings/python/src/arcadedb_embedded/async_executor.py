@@ -36,6 +36,7 @@ Example:
     100000
 """
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Callable, Optional, Sequence, Union
 
 import jpype
@@ -468,7 +469,9 @@ class AsyncExecutor:
 
         numpy fast path: an ndarray for timestamps or a numeric field column
         crosses the FFI as one buffer copy (int/uint kinds via boxLongs,
-        float kinds via boxDoubles); other sequences convert per element.
+        float kinds via boxDoubles); other sequences convert per element. A
+        numpy bool array is a 0/1 numeric column; a Python list of bools is
+        not (the engine refuses a Boolean for a numeric field).
         Call wait_completion() before relying on visibility.
 
         primitive=True routes through the engine's TimeSeriesBatch instead,
@@ -497,7 +500,7 @@ class AsyncExecutor:
             if (
                 _np is not None
                 and isinstance(values, _np.ndarray)
-                and values.dtype.kind in "fiu"
+                and values.dtype.kind in "fiub"
             ):
                 if boxer is None:
                     boxer = jpype.JClass("com.arcadedb.python.DocumentBatcher")
@@ -551,6 +554,15 @@ class AsyncExecutor:
         else:
             timestamps_java = JLongArray([int(value) for value in timestamps])
 
+        # A column shorter than the timestamps was padded by the engine with
+        # defaults and one longer was cut, with no error.
+        for index, values in enumerate(column_values):
+            if len(values) != len(timestamps_java):
+                raise ValueError(
+                    f"column {index} has {len(values)} values for "
+                    f"{len(timestamps_java)} timestamps"
+                )
+
         batch = batcher.newBatch(self._owner._java_db, type_name, timestamps_java)
 
         for index, values in enumerate(column_values):
@@ -569,8 +581,12 @@ class AsyncExecutor:
             elif (
                 _np is not None
                 and isinstance(values, _np.ndarray)
-                and values.dtype.kind in "iu"
+                and values.dtype.kind in "iub"
             ):
+                # "b": a numpy bool array is a 0/1 numeric column here. It used
+                # to reach a numeric field as 1.0 and 0.0 only because JPype
+                # read each numpy bool as a number; this keeps that outcome now
+                # that a numpy bool converts to a boolean everywhere else.
                 batcher.setLongColumn(
                     batch,
                     index,
@@ -578,17 +594,17 @@ class AsyncExecutor:
                         _np.ascontiguousarray(values, dtype=_np.int64)
                     ),
                 )
-            elif values and all(isinstance(v, str) for v in values):
+            elif len(values) > 0 and all(isinstance(v, str) for v in values):
                 batcher.setStringColumn(
                     batch, index, jpype.JArray(jpype.JString)(list(values))
                 )
-            elif values and all(isinstance(v, float) for v in values):
+            elif len(values) > 0 and all(isinstance(v, float) for v in values):
                 batcher.setDoubleColumn(
                     batch,
                     index,
                     jpype.JArray(jpype.JDouble)([float(v) for v in values]),
                 )
-            elif values and all(
+            elif len(values) > 0 and all(
                 isinstance(v, int) and not isinstance(v, bool) for v in values
             ):
                 batcher.setLongColumn(
@@ -651,7 +667,7 @@ class AsyncExecutor:
                 language,
                 query_text,
                 java_callback,
-                *[convert_python_to_java(arg) for arg in positional_args],
+                self._positional_parameters(positional_args),
             )
         else:
             self._java_async.query(language, query_text, java_callback)
@@ -722,7 +738,7 @@ class AsyncExecutor:
                 language,
                 command_text,
                 java_callback,
-                *[convert_python_to_java(arg) for arg in positional_args],
+                self._positional_parameters(positional_args),
             )
         else:
             self._java_async.command(language, command_text, java_callback)
@@ -796,16 +812,35 @@ class AsyncExecutor:
         Args:
             timeout_ms: Optional timeout in milliseconds.
                        None = wait indefinitely (default)
+                       0 = do not wait: return if everything is done,
+                       otherwise raise TimeoutError at once
+                       negative = rejected with ValueError
+
+        The engine's waitCompletion() clamps any timeout <= 0 to an infinite
+        wait, so 0 is never handed to it: it is answered off isProcessing(),
+        the same non-blocking poll is_pending() uses. Like is_pending(), it is
+        a point-in-time snapshot, not the barrier a positive timeout or no
+        argument gives: work a running task schedules after the snapshot is
+        not covered by a successful poll.
 
         Raises:
             TimeoutError: If timeout is reached before completion
+            ValueError: If timeout_ms is negative
 
         Example:
             >>> async_exec.wait_completion()  # Wait forever
             >>> async_exec.wait_completion(30000)  # Wait max 30 seconds
+            >>> async_exec.wait_completion(0)  # Poll: raise if not done yet
         """
         if timeout_ms is None:
             self._java_async.waitCompletion()
+        elif timeout_ms < 0:
+            raise ValueError(f"timeout_ms must be None or >= 0, got {timeout_ms}")
+        elif timeout_ms == 0:
+            # Not is_processing(): that swallows engine errors as "idle", which
+            # here would report completion that never happened.
+            if self._java_async.isProcessing():
+                raise TimeoutError("Async operations have not completed (0ms poll)")
         else:
             success = self._java_async.waitCompletion(timeout_ms)
             if not success:
@@ -1040,12 +1075,28 @@ class AsyncExecutor:
         java_document = getattr(record, "_java_document", None)
         return java_document if java_document is not None else record
 
+    def _positional_parameters(self, values):
+        """The one typed Java argument that carries ``args`` (#172).
+
+        An ``Object[]`` with one element per ``?``. Splatted, a lone ``None``
+        reached the engine as a null in place of the whole parameter array, so
+        nothing was bound. A lone mapping stays the named map it was before,
+        as in ``Database.query()``.
+        """
+        if len(values) == 1 and isinstance(values[0], Mapping):
+            return self._to_java_map(values[0])
+        return jpype.JArray(jpype.JObject)(
+            [convert_python_to_java(value) for value in values]
+        )
+
     def _to_java_map(self, params):
         HashMap = jpype.JClass("java.util.HashMap")
         java_params = HashMap()
         for key, value in params.items():
             java_params.put(key, convert_python_to_java(value))
-        return java_params
+        # Typed as the interface, so the Map overload is an exact match rather
+        # than one JPype picks over Object... (#172).
+        return jpype.JObject(java_params, jpype.JClass("java.util.Map"))
 
     def _to_java_varargs(self, properties):
         varargs = []

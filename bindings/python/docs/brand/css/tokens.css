@@ -77,7 +77,7 @@
   --hm-leading-body: 1.65;   /* running text */
   --hm-tracking-display: -0.015em;
   --hm-tracking-label: 0.08em;
-  --hm-measure: 68ch;        /* prose column: 60-75 characters per line */
+  --hm-measure: 68ch;        /* prose cap: about 80 characters per line in Schibsted Grotesk, not 68; see docs/decisions.md */
 
   /* Space: a 4px grid. */
   --hm-space-1: 0.25rem;

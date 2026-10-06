@@ -4,11 +4,11 @@ The `ArcadeDBError` exception is the base class for all errors raised by the Arc
 
 ## Overview
 
-Most errors from ArcadeDB operations raise `ArcadeDBError` (there are no subclasses yet). From 26.10.1, when it is raised from a Java exception, its `str()` ends with `(caused by <Java class>: <message>)` naming the Java root cause, unless that message is already in the text. Earlier wheels often showed only the engine's generic outer message. Some calls raise other exceptions:
+Most errors from ArcadeDB operations raise `ArcadeDBError` (there are no subclasses yet). From 26.10.1, when it is raised from a Java exception, its `str()` ends with `(caused by <Java class>: <message>)` naming the Java root cause, unless that message is already in the text. Earlier wheels often showed only the engine's generic outer message. The engine computes rows lazily, so a statement's error can come while its result set is read rather than from `query()`; from 26.10.1 every way of reading a result set raises it as `ArcadeDBError` too, where earlier wheels let the Java exception through. Some calls raise other exceptions:
 
 - `ValueError`: invalid arguments, for example `ResultSet.one()` with zero or several rows, an unknown `set_wal_flush()` mode, or `AsyncExecutor.set_commit_every()` with a count below 1
 - `AttributeError`: `set()` on an immutable record, such as one returned by a query; call `.modify()` first
-- `TimeoutError`: `AsyncExecutor.wait_completion(timeout_ms)` when the timeout expires
+- `TimeoutError`: `AsyncExecutor.wait_completion(timeout_ms)` when the timeout expires (at once for `timeout_ms=0` while work is pending)
 - `TypeError`: a value that JPype cannot convert, for example a `datetime.time` passed to `set()`
 - Java exceptions, not wrapped: `Schema` calls that go directly to Java, such as `exists_type()`, `get_types()`, `get_indexes()`, and `exists_index()`; a wrapper's `save()` outside a transaction (`com.arcadedb.exception.TransactionException: Transaction not begun`; `db.new_vertex()` and `db.new_document()` themselves work outside one); and a vector of the wrong dimension saved to an indexed property (`java.lang.IllegalArgumentException`, raised by `save()`)
 
@@ -365,7 +365,7 @@ def safe_database_operation():
             db.command("sql", "CREATE DOCUMENT TYPE Person")
             db.command("sql", "CREATE PROPERTY Person.name STRING")
             db.command("sql", "CREATE PROPERTY Person.email STRING")
-            db.command("sql", "CREATE INDEX ON Person (email) UNIQUE")
+            db.command("sql", "CREATE INDEX ON Person (email) UNIQUE_HASH")
         else:
             db = arcadedb.open_database("./mydb")
 

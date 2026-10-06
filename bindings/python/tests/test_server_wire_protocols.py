@@ -40,6 +40,23 @@ def _free_port():
         return s.getsockname()[1]
 
 
+def _free_ports(*names):
+    """Distinct free ports, one per name. Each socket stays bound until all are
+    chosen, so the OS cannot hand the same port out twice (one port per call,
+    closed before the next, let the Postgres plugin find its port taken on a
+    macOS runner on 2026-10-02)."""
+    socks = []
+    try:
+        for _ in names:
+            s = socket.socket()
+            s.bind(("127.0.0.1", 0))
+            socks.append(s)
+        return {n: s.getsockname()[1] for n, s in zip(names, socks)}
+    finally:
+        for s in socks:
+            s.close()
+
+
 def _wait(port, timeout=60.0):
     """Wait for a listener, then give the plugin a moment to finish binding."""
     deadline = time.time() + timeout
@@ -57,7 +74,7 @@ def wire_server(tmp_path):
     """A server with all three bundled wire plugins enabled."""
     from arcadedb_embedded import create_server
 
-    ports = {k: _free_port() for k in ("http", "postgres", "redis", "bolt")}
+    ports = _free_ports("http", "postgres", "redis", "bolt")
     server = create_server(
         root_path=str(tmp_path / "databases"),
         root_password=ROOT_PASSWORD,

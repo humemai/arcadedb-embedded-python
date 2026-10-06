@@ -16,6 +16,11 @@ The Python API provides wrapper classes for database records: `Document`, `Verte
 | `Vertex` | Wrapper for graph vertices | Creating edges, traversal |
 | `Edge` | Wrapper for graph edges | Accessing source/target vertices |
 
+A record read from a database keeps that `Database` alive, and reading it after the
+database was closed raises `ArcadeDBError` ("Database is closed"). The engine loads a
+record's properties lazily from the open database, so there is nothing to return once
+it is closed. See [`Database.close()`](database.md#close).
+
 ## Document Wrapper
 
 The `Document` class is the base wrapper for all record types. Use it for documents and
@@ -117,6 +122,14 @@ changed in the same transaction is written a second time, and the second write g
 inside its page: at 200,000 new vertices, 1,000 per transaction, saving each vertex once
 measured 110,000 to 120,000 per second and saving it, setting one more property, and saving again
 about 52,000 (ArcadeDB [#8735](https://github.com/ArcadeData/arcadedb/issues/8735)).
+
+Call `save()` after the last change to a record. A change made after the record was saved,
+and not saved again, is not written at commit: in one transaction,
+`d.set("k", 1); d.save(); d.set("k", 2)` commits `k = 1`, and an index on `k` agrees (checked
+on 26.10.1-SNAPSHOT). Upstream treats changing a record after its last `save()` as unsupported;
+the engine and its SQL and Cypher executors always save after the last change (ArcadeDB
+[#8989](https://github.com/ArcadeData/arcadedb/pull/8989)).
+
 
 #### `delete() -> None`
 

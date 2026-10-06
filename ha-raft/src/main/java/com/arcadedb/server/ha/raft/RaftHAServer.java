@@ -2284,10 +2284,19 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
         LogManager.instance().log(this, Level.FINE, "Error closing old client: %s", t, t.getMessage());
       }
       try {
-        if (oldServer != null)
+        if (oldServer != null) {
           oldServer.close();
+          // Issue #8898: a close that returns with the server not CLOSED means a second server is about to start
+          // beside one that may still answer the leader. This does not see a close that Ratis already performed
+          // itself (close() is then a no-op that reports CLOSED), nor a gRPC shutdown that close() swallowed.
+          final LifeCycle.State afterClose = oldServer.getLifeCycleState();
+          if (afterClose != LifeCycle.State.CLOSED)
+            LogManager.instance().log(this, Level.WARNING,
+                "Old Ratis server is %s after close(); restart proceeds anyway",
+                afterClose);
+        }
       } catch (final Throwable t) {
-        LogManager.instance().log(this, Level.FINE, "Error closing old server: %s", t, t.getMessage());
+        LogManager.instance().log(this, Level.WARNING, "Error closing old Ratis server before restart: %s", t, t.getMessage());
       }
 
       try {
@@ -2341,7 +2350,7 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
             offerTimeout, grpcMessageSizeMax, maxQueuedBytes, this::refreshRaftClient);
 
         restartFailureCount = 0;
-        HALog.log(this, HALog.BASIC, "Ratis recovered successfully");
+        LogManager.instance().log(this, Level.INFO, "Ratis restarted in place (%s storage)", formatStorage ? "reformatted" : "recovered");
       } catch (final Throwable t) {
         restartFailureCount++;
         LogManager.instance().log(this, Level.SEVERE,
@@ -3625,6 +3634,23 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
 
   public RaftPeerId getLocalPeerId() {
     return localPeerId;
+  }
+
+  /**
+   * Whether this node is the only voter of the live Raft configuration: there is no peer to hand the leadership to and
+   * none to install a database from (issue #8940). Non-voting listeners are not counted, so a single voter with
+   * listeners is a sole voter. When the live configuration cannot be read this falls back to the declared server list,
+   * which may name non-voting peers: a declared multi-node list answers false, the safe side. During a membership
+   * change that leaves this node as the only committed voter it answers true, which only affects the one replay
+   * of a missing-database install entry at startup.
+   */
+  public boolean isSoleVoter() {
+    return isSoleVoter(getLivePeers(), localPeerId);
+  }
+
+  // @VisibleForTesting
+  static boolean isSoleVoter(final Collection<RaftPeer> voters, final RaftPeerId localPeerId) {
+    return voters.size() == 1 && voters.iterator().next().getId().equals(localPeerId);
   }
 
   public Collection<RaftPeer> getLivePeers() {

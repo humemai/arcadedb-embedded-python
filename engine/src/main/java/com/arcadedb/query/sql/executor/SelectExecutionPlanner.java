@@ -104,6 +104,7 @@ import com.arcadedb.utility.IntHashSet;
 import com.arcadedb.utility.Pair;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
@@ -599,6 +600,10 @@ public class SelectExecutionPlanner {
         || info.projection.getItems().size() != 1) {
       return false;
     }
+    // THE PROJECTION MUST BE THE AGGREGATE ITSELF: count(*) + 1 SPLITS INTO count(*) PLUS A "+ 1" PROJECTED AFTER IT (ISSUE #8976)
+    final MathExpression projectionMath = info.projection.getItems().getFirst().getExpression().getMathExpression();
+    if (!(projectionMath instanceof BaseExpression projectionBase) || projectionBase.getModifier() != null)
+      return false;
     final ProjectionItem item = info.aggregateProjection.getItems().getFirst();
     return "count(*)".equalsIgnoreCase(item.getExpression().toString());
   }
@@ -855,7 +860,8 @@ public class SelectExecutionPlanner {
     if (preAggExp.getMathExpression() == null || !(preAggExp.getMathExpression() instanceof BaseExpression preAggBase))
       return null;
 
-    if (preAggBase.getIdentifier() == null)
+    // A MODIFIER (s.length(), s.toUpperCase()) MEANS THE INDEXED VALUE IS NOT WHAT IS AGGREGATED (ISSUE #8976)
+    if (preAggBase.getIdentifier() == null || preAggBase.getModifier() != null)
       return null;
 
     // For simple properties like "value", the identifier is in suffix, not levelZero
@@ -2077,23 +2083,9 @@ public class SelectExecutionPlanner {
       tsType.requireEngine();
 
       // Extract time range from WHERE clause (if available)
-      long fromTs = Long.MIN_VALUE;
-      long toTs = Long.MAX_VALUE;
-
-      if (info.flattenedWhereClause != null) {
-        for (final AndBlock andBlock : info.flattenedWhereClause) {
-          for (final BooleanExpression expr : andBlock.getSubBlocks()) {
-            final long[] range = extractTimeRange(expr, tsType.getTimestampColumn(), context);
-            if (range != null) {
-              // Tighten bounds: take the most restrictive range
-              if (range[0] != Long.MIN_VALUE)
-                fromTs = Math.max(fromTs, range[0]);
-              if (range[1] != Long.MAX_VALUE)
-                toTs = Math.min(toTs, range[1]);
-            }
-          }
-        }
-      }
+      final long[] timeRange = extractTimeRangeUnion(info.flattenedWhereClause, tsType.getTimestampColumn(), context);
+      final long fromTs = timeRange[0];
+      final long toTs = timeRange[1];
 
       // Extract tag filter from WHERE clause
       final TagFilter tagFilter = extractTagFilter(info.flattenedWhereClause, tsType.getTsColumns(),
@@ -2886,11 +2878,50 @@ public class SelectExecutionPlanner {
   }
 
   /**
+   * Scan range of a flattened (DNF) WHERE: the UNION of the ranges of its AND blocks (issue #8916). Inside a block the
+   * time predicates are AND'ed, so they tighten the block's range; across blocks they are OR'ed, so the scan has to
+   * cover every block's range, and a block with no bound on a side leaves the scan unbounded on that side. A block
+   * whose own predicates contradict each other matches nothing and adds nothing to the union. When no block can match,
+   * the answer is the empty range {@code [Long.MAX_VALUE, Long.MIN_VALUE]}.
+   * The range is only a superset of the matching rows when there is more than one block: the residual filter, or
+   * {@link #isTimeSeriesWhereFullyPushedDown}, is what keeps the answer exact.
+   */
+  private static long[] extractTimeRangeUnion(final List<AndBlock> flattenedWhere, final String timestampColumn,
+      final CommandContext context) {
+    if (flattenedWhere == null || flattenedWhere.isEmpty())
+      return new long[] { Long.MIN_VALUE, Long.MAX_VALUE };
+
+    long from = Long.MAX_VALUE;
+    long to = Long.MIN_VALUE;
+    boolean anyBlock = false;
+    for (final AndBlock andBlock : flattenedWhere) {
+      long blockFrom = Long.MIN_VALUE;
+      long blockTo = Long.MAX_VALUE;
+      for (final BooleanExpression expr : andBlock.getSubBlocks()) {
+        final long[] range = extractTimeRange(expr, timestampColumn, context);
+        if (range != null) {
+          // Tighten bounds: take the most restrictive range
+          if (range[0] != Long.MIN_VALUE)
+            blockFrom = Math.max(blockFrom, range[0]);
+          if (range[1] != Long.MAX_VALUE)
+            blockTo = Math.min(blockTo, range[1]);
+        }
+      }
+      if (blockFrom > blockTo)
+        continue; // contradictory block: matches nothing
+      anyBlock = true;
+      from = Math.min(from, blockFrom);
+      to = Math.max(to, blockTo);
+    }
+    return anyBlock ? new long[] { from, to } : new long[] { Long.MAX_VALUE, Long.MIN_VALUE };
+  }
+
+  /**
    * Extracts a time range from a BETWEEN or comparison expression on the timestamp column.
    * Returns [fromTs, toTs] or null if not a matching expression.
    * Supports: BETWEEN, >, >=, <, <=, = operators.
    */
-  private long[] extractTimeRange(final BooleanExpression expr, final String timestampColumn, final CommandContext context) {
+  private static long[] extractTimeRange(final BooleanExpression expr, final String timestampColumn, final CommandContext context) {
     if (expr instanceof BetweenCondition between) {
       final String fieldName = between.getFirst() != null ? between.getFirst().toString().trim() : null;
       if (timestampColumn.equals(fieldName)) {
@@ -2983,6 +3014,9 @@ public class SelectExecutionPlanner {
    * <p>
    * If even one block has no equality on a given tag column, that block could match a row with any
    * tag value, so push-down on that column would be unsound and is skipped.
+   * <p>
+   * Inside one block the equalities are AND'ed, so the values of a repeated tag are intersected; an empty
+   * intersection is a block that matches nothing and contributes no value to the union (issue #8917).
    */
   private static TagFilter extractTagFilter(final List<AndBlock> flattenedWhere, final List<ColumnDefinition> columns,
       final String timestampColumn, final CommandContext context) {
@@ -3021,7 +3055,16 @@ public class SelectExecutionPlanner {
           final int nonTsIdx = nonTsIndexOf(columns, i);
           // Coerce to the tag's declared type: both storage layers hand the value back in that type
           // now, so a stringified literal would never match (issue #5475).
-          blockMap.computeIfAbsent(nonTsIdx, k -> new HashSet<>()).add(col.coerceValue(value));
+          // Equalities inside one block are AND'ed, so their values are INTERSECTED (issue #8917); an empty
+          // intersection is a block that matches nothing and contributes no value to the union below
+          final Object coerced = col.coerceValue(value);
+          final Set<Object> existing = blockMap.get(nonTsIdx);
+          if (existing == null) {
+            final Set<Object> values = new HashSet<>();
+            values.add(coerced);
+            blockMap.put(nonTsIdx, values);
+          } else if (!existing.contains(coerced))
+            existing.clear();
           break;
         }
       }
@@ -3040,11 +3083,11 @@ public class SelectExecutionPlanner {
       boolean inEveryBlock = true;
       for (final Map<Integer, Set<Object>> blockMap : perBlockEqualities) {
         final Set<Object> values = blockMap.get(nonTsIdx);
-        if (values == null || values.isEmpty()) {
+        if (values == null) {
           inEveryBlock = false;
           break;
         }
-        unionValues.addAll(values);
+        unionValues.addAll(values); // empty: a contradictory block, which matches nothing
       }
       if (!inEveryBlock || unionValues.isEmpty())
         continue;
@@ -3060,44 +3103,6 @@ public class SelectExecutionPlanner {
       if (columns.get(j).getRole() != ColumnDefinition.ColumnRole.TIMESTAMP)
         nonTsIdx++;
     return nonTsIdx;
-  }
-
-  /**
-   * Returns true if the WHERE clause contains conditions that are NOT consumed by time-series
-   * push-down (i.e., not time-range predicates and not tag equality filters).
-   */
-  private static boolean hasNonPushDownConditions(final List<AndBlock> flattenedWhere,
-      final List<ColumnDefinition> columns, final String timestampColumn) {
-    for (final AndBlock andBlock : flattenedWhere) {
-      for (final BooleanExpression expr : andBlock.getSubBlocks()) {
-        if (expr instanceof BetweenCondition between) {
-          final String fieldName = between.getFirst() != null ? between.getFirst().toString().trim() : null;
-          if (timestampColumn.equals(fieldName))
-            continue; // consumed by time-range extraction
-          return true; // BETWEEN on a non-timestamp field — not consumed
-        }
-        if (!(expr instanceof BinaryCondition binary))
-          return true; // unknown condition type — not consumed
-        final String leftStr = binary.left != null ? binary.left.toString().trim() : null;
-        final String rightStr = binary.right != null ? binary.right.toString().trim() : null;
-        // Time range predicate on timestamp column
-        if (timestampColumn.equals(leftStr) || timestampColumn.equals(rightStr))
-          continue;
-        // Tag equality predicate
-        if (binary.operator instanceof EqualsCompareOperator) {
-          boolean isTagPredicate = false;
-          for (final ColumnDefinition col : columns)
-            if (col.getRole() == ColumnDefinition.ColumnRole.TAG && (col.getName().equals(leftStr) || col.getName().equals(rightStr))) {
-              isTagPredicate = true;
-              break;
-            }
-          if (isTagPredicate)
-            continue;
-        }
-        return true; // anything else is not consumed by push-down
-      }
-    }
-    return false;
   }
 
   /**
@@ -3337,9 +3342,8 @@ public class SelectExecutionPlanner {
    * Returns true when the time range and tag filter handed to the engine reproduce the WHERE clause
    * <em>exactly</em>, so the residual {@link FilterStep} cannot discard any row the engine returns.
    * <p>
-   * This is stricter than {@link #hasNonPushDownConditions} on purpose: that check treats <b>any</b>
-   * predicate mentioning the timestamp column as consumed, while only the forms
-   * {@link #extractTimeRange} actually understands become bounds. A row cap must not be pushed down
+   * Only the time predicates {@link #extractTimeRange} actually understands become bounds: any other predicate
+   * mentioning the timestamp column (e.g. {@code ts != 5}) is NOT consumed. A row cap must not be pushed down
    * on the strength of a predicate the engine never saw - the newest row could be filtered out
    * afterwards and the query would return nothing.
    */
@@ -3363,19 +3367,71 @@ public class SelectExecutionPlanner {
       if (!(expr instanceof BinaryCondition binary) || !(binary.operator instanceof EqualsCompareOperator))
         return false;
 
-      final String leftStr = binary.left != null ? binary.left.toString().trim() : null;
-      final String rightStr = binary.right != null ? binary.right.toString().trim() : null;
-      final String tagName = isTimeSeriesTagColumn(columns, leftStr) ? leftStr
-          : isTimeSeriesTagColumn(columns, rightStr) ? rightStr : null;
-      // Two equalities on the same tag are pushed down as an IN of both values, again a superset.
+      final String tagName = tagOfNonNullEquality(binary, columns, context);
+      // Two equalities on the same tag are an intersection (an empty one when the values differ) that the extracted
+      // tag filter does not model as an exact filter, so they are left to the residual filter.
       if (tagName == null || !constrainedTags.add(tagName))
-        return false;
-
-      final Expression valueExpr = tagName.equals(leftStr) ? binary.right : binary.left;
-      if (valueExpr == null || valueExpr.execute((Identifiable) null, context) == null)
         return false;
     }
     return true;
+  }
+
+  /**
+   * True for {@code tag = x OR tag = y ...}, optionally under a shared time range ({@code ts >= X AND (tag = x OR tag = y)}
+   * flattens to {@code (ts >= X AND tag = x) OR (ts >= X AND tag = y)}): every AND block carries the SAME time predicates plus
+   * ONE equality, on the same TAG column, with a non-null value. The union of the blocks' ranges is then each block's range
+   * and the union of the values is an exact {@code IN}, so the aggregation push-down answers it with no residual filter,
+   * which keeps the common dashboard shape on the fast path (issue #8916 made every other OR decline).
+   */
+  private static boolean isOrOfEqualitiesOnOneTag(final LocalTimeSeriesType tsType, final QueryPlanningInfo info,
+      final CommandContext context) {
+    final List<AndBlock> blocks = info.flattenedWhereClause;
+    if (blocks == null || blocks.size() < 2)
+      return false;
+    final List<ColumnDefinition> columns = tsType.getTsColumns();
+    String sharedTag = null;
+    Set<List<Long>> sharedTimePredicates = null;
+    for (final AndBlock block : blocks) {
+      final Set<List<Long>> timePredicates = new HashSet<>();
+      String tag = null;
+      for (final BooleanExpression expr : block.getSubBlocks()) {
+        final long[] range = extractTimeRange(expr, tsType.getTimestampColumn(), context);
+        if (range != null) {
+          // compared by the EVALUATED bounds: a positional parameter prints as "?" whatever it is bound to
+          timePredicates.add(List.of(range[0], range[1]));
+          continue;
+        }
+        if (tag != null || !(expr instanceof BinaryCondition binary))
+          return false;
+        tag = tagOfNonNullEquality(binary, columns, context);
+        if (tag == null)
+          return false;
+      }
+      if (tag == null || (sharedTag != null && !sharedTag.equals(tag)))
+        return false;
+      if (sharedTimePredicates != null && !sharedTimePredicates.equals(timePredicates))
+        return false;
+      sharedTag = tag;
+      sharedTimePredicates = timePredicates;
+    }
+    return true;
+  }
+
+  /**
+   * The TAG column an equality constrains to a non-null value, or null when it is not such an equality. A null value
+   * is never an exact filter: {@code tag = null} matches nothing, and {@link #extractTagFilter} skips it.
+   */
+  private static String tagOfNonNullEquality(final BinaryCondition binary, final List<ColumnDefinition> columns,
+      final CommandContext context) {
+    if (!(binary.operator instanceof EqualsCompareOperator))
+      return null;
+    final String leftStr = binary.left != null ? binary.left.toString().trim() : null;
+    final String rightStr = binary.right != null ? binary.right.toString().trim() : null;
+    final String tag = isTimeSeriesTagColumn(columns, leftStr) ? leftStr : isTimeSeriesTagColumn(columns, rightStr) ? rightStr : null;
+    if (tag == null)
+      return null;
+    final Expression valueExpr = tag.equals(leftStr) ? binary.right : binary.left;
+    return valueExpr == null || valueExpr.execute((Identifiable) null, context) == null ? null : tag;
   }
 
   private static boolean isTimeSeriesTagColumn(final List<ColumnDefinition> columns, final String name) {
@@ -3490,9 +3546,14 @@ public class SelectExecutionPlanner {
           return false; // unsupported aggregate
 
         // COUNT is the one aggregate this push-down never resolves a column for: it counts rows on both
-        // halves, and COUNT(*) names no field to resolve (issue #8140).
+        // halves, and COUNT(*) names no field to resolve (issue #8140). That is right for COUNT(*) only: COUNT(field)
+        // skips the rows where the field is null, which the row counter cannot tell, so it is the generic path's
+        // (issue #8915)
         int schemaIndex = -1;
-        if (aggType != AggregationType.COUNT) {
+        if (aggType == AggregationType.COUNT) {
+          if (funcCall.getParams().size() != 1 || !"*".equals(funcCall.getParams().get(0).toString().trim()))
+            return false;
+        } else {
           // Extract field name from first parameter
           if (funcCall.getParams().isEmpty())
             return false;
@@ -3557,7 +3618,9 @@ public class SelectExecutionPlanner {
     // Verify all WHERE conditions are consumed by push-down (time-range or tag equality).
     // If any field-value predicate remains (e.g., WHERE value > 100), bail out to avoid
     // silently dropping it — the standard filter step will handle it instead.
-    if (info.flattenedWhereClause != null && hasNonPushDownConditions(info.flattenedWhereClause, columns, tsType.getTimestampColumn()))
+    final boolean whereFullyConsumed = isTimeSeriesWhereFullyPushedDown(tsType, info, context)
+        || isOrOfEqualitiesOnOneTag(tsType, info, context);
+    if (info.flattenedWhereClause != null && !whereFullyConsumed)
       return false;
 
     // Chain the push-down step
@@ -3954,13 +4017,17 @@ public class SelectExecutionPlanner {
           final SelectExecutionPlan nullPlan = new SelectExecutionPlan(context, 0);
           nullPlan.chain(new FetchFromTypeExecutionStep(queryTarget.getStringValue(), filterClusters, context, true));
 
-          // Create IS NULL filter for the first indexed property
-          final String propertyName = indexFields.getFirst();
-          final IsNullCondition isNullCondition = new IsNullCondition();
-          final Expression expr = new Expression(new Identifier(propertyName));
-          isNullCondition.setExpression(expr);
+          // A SKIP index drops a key only when EVERY indexed property is null, so a composite one holds the records whose
+          // first property is null and a later one is not: the null scan is limited to the records the index does not hold,
+          // or those would come back twice (#8978). For a single-property index that is just IS NULL on the property
+          final AndBlock allNull = new AndBlock();
+          for (final String propertyName : indexFields) {
+            final IsNullCondition isNullCondition = new IsNullCondition();
+            isNullCondition.setExpression(new Expression(new Identifier(propertyName)));
+            allNull.getSubBlocks().add(isNullCondition);
+          }
           final WhereClause nullWhereClause = new WhereClause();
-          nullWhereClause.setBaseExpression(isNullCondition);
+          nullWhereClause.setBaseExpression(allNull);
           nullPlan.chain(new FilterStep(nullWhereClause, context));
 
           // Combine: for ASC, NULL records come first; for DESC, NULL records come last
@@ -4049,9 +4116,8 @@ public class SelectExecutionPlanner {
 
     if (conjunct instanceof BinaryCondition binary) {
       final BinaryCompareOperator operator = binary.getOperator();
-      // >= and <= are left out: they answer true for two nulls (WHERE x >= x), so a null row can satisfy them
-      return (operator instanceof EqualsCompareOperator || operator instanceof GtOperator || operator instanceof LtOperator)
-          && isPropertyReference(binary.getLeft(), propertyName);
+      // A comparison with a null operand is unknown, so a null row can never satisfy it (#8979)
+      return operator.isUnknownOnNull() && isPropertyReference(binary.getLeft(), propertyName);
     }
     return false;
   }
@@ -4641,12 +4707,7 @@ public class SelectExecutionPlanner {
    * index metadata must do the same.
    */
   private static List<TypeIndex> plannableIndexes(final Collection<TypeIndex> indexes) {
-    final List<TypeIndex> result = new ArrayList<>(indexes.size());
-    for (final TypeIndex index : indexes) {
-      if (isPlannable(index))
-        result.add(index);
-    }
-    return result;
+    return TypeIndex.filterReadyForQueries(indexes);
   }
 
   /**
@@ -5036,42 +5097,56 @@ public class SelectExecutionPlanner {
   }
 
   /**
-   * True when a comparison against a property that is not a DECIMAL has a literal BigDecimal bound, a decimal literal a
-   * double cannot hold (issue #8872). A key index converts the bound to its key type, so on a DOUBLE key it would answer for
-   * the rounded bound, and neither the rows it returns nor the ones it leaves out follow the exact comparison a scan makes.
-   * Such a condition is left to the scan, so the indexed and the unindexed query agree.
+   * True when a comparison against a property has a literal bound its key type cannot hold: a BigDecimal on a property that is
+   * not a DECIMAL (issue #8872), or an integer above the range a DOUBLE (2^53) or a FLOAT (2^24) holds exactly (issue #8919). A
+   * key index converts the bound to its key type, so it would answer for the rounded bound, and neither the rows it returns nor
+   * the ones it leaves out follow the exact comparison a scan makes. Such a condition is left to the scan, so the indexed and
+   * the unindexed query agree. A double bound on a FLOAT key is not one of them: the FLOAT reads as equal to the double that
+   * narrows to it on both sides (issue #8882), and the ordering operators follow that rule too.
    */
   private static boolean hasLossyDecimalLiteralBound(final BooleanExpression expression, final DocumentType type, final String field,
       final CommandContext context) {
-    final boolean decimalBound;
-    if (expression instanceof BinaryCondition condition)
-      decimalBound = isDecimalLiteral(condition.getRight(), context);
-    else if (expression instanceof BetweenCondition between)
-      decimalBound = isDecimalLiteral(between.getSecond(), context) || isDecimalLiteral(between.getThird(), context);
-    else if (expression instanceof InCondition in)
-      decimalBound = hasDecimalLiteralElement(in, context);
-    else
-      return false;
-    if (!decimalBound)
-      return false;
-    // a null property is unreachable (an index needs a declared property); treated as lossy to stay on the safe scan path
-    // any non-DECIMAL key type (DOUBLE, FLOAT, INTEGER, LONG) would round or truncate the bound; the scan is slower but exact
     final Property property = type.getPropertyIfExists(field);
-    return property == null || property.getType() != Type.DECIMAL;
-  }
-
-  private static boolean hasDecimalLiteralElement(final InCondition in, final CommandContext context) {
-    final MathExpression right = in.getRightMathExpression();
-    if (right == null || !right.isLiteral() || !(right.execute((Result) null, context) instanceof Collection<?> values))
-      return false;
-    for (final Object value : values)
-      if (value instanceof BigDecimal)
-        return true;
+    if (expression instanceof BinaryCondition condition)
+      return isLossyBound(literalValue(condition.getRight(), context), property);
+    if (expression instanceof BetweenCondition between)
+      return isLossyBound(literalValue(between.getSecond(), context), property)
+          || isLossyBound(literalValue(between.getThird(), context), property);
+    if (expression instanceof InCondition in) {
+      final MathExpression right = in.getRightMathExpression();
+      if (right == null || !right.isLiteral() || !(right.execute((Result) null, context) instanceof Collection<?> values))
+        return false;
+      for (final Object value : values)
+        if (isLossyBound(value, property))
+          return true;
+    }
     return false;
   }
 
-  private static boolean isDecimalLiteral(final Expression expression, final CommandContext context) {
-    return expression != null && expression.isLiteral() && expression.execute((Result) null, context) instanceof BigDecimal;
+  private static Object literalValue(final Expression expression, final CommandContext context) {
+    return expression != null && expression.isLiteral() ? expression.execute((Result) null, context) : null;
+  }
+
+  private static boolean isLossyBound(final Object bound, final Property property) {
+    if (bound instanceof BigDecimal)
+      // a null property is unreachable (an index needs a declared property); treated as lossy to stay on the safe scan path
+      // any non-DECIMAL key type (DOUBLE, FLOAT, INTEGER, LONG) would round or truncate the bound; the scan is slower but exact
+      return property == null || property.getType() != Type.DECIMAL;
+    if (property == null || !(bound instanceof Byte || bound instanceof Short || bound instanceof Integer || bound instanceof Long
+        || bound instanceof BigInteger))
+      return false;
+    final long exactLimit;
+    switch (property.getType()) {
+    case DOUBLE -> exactLimit = 1L << 53;
+    case FLOAT -> exactLimit = 1L << 24;
+    default -> {
+      return false;
+    }
+    }
+    if (bound instanceof BigInteger bigInteger)
+      return bigInteger.abs().compareTo(BigInteger.valueOf(exactLimit)) > 0;
+    final long value = ((Number) bound).longValue();
+    return value > exactLimit || value < -exactLimit;
   }
 
   /**
@@ -5235,7 +5310,7 @@ public class SelectExecutionPlanner {
    * stand in for a sort nor answer min() / max() with a key. Deliberately conservative for a composite index with one
    * folded column: it is refused even when the ORDER BY only reads a column that is not folded.
    */
-  private static boolean holdsFoldedKeys(final Index index) {
+  public static boolean holdsFoldedKeys(final Index index) {
     return index instanceof IndexInternal internal && internal.getMetadata() != null && internal.getMetadata().hasAnyCaseInsensitive();
   }
 

@@ -81,6 +81,26 @@ Since 26.10.1's parallel scan (ArcadeData/arcadedb#8524) a query whose `LIMIT` i
 - **exhaustion, first and one close the Java result set**: `list(rs)`, `to_list()`, `first()`, and `one()` each leave the result set closed.
 - **a set closed before its end raises when read again**: after `first()`, each of `list()`, `to_list()`, `first()`, `count()`, `iter_json_batches()`, and `to_columns()` raises `ArcadeDBError` ("closed before"), and so does `to_list()` after a `with` block that took one row; a set read to its end reads as empty through `list()`, `to_list()`, `first()`, and `iter_json_batches()`.
 
+### Results and records after their database is closed (`test_results_after_close.py`)
+
+A result, a result set, or a record keeps the `Database` it came from alive and raises `ArcadeDBError` ("Database is closed") once that database is closed (humemai/arcadedb-embedded-python#117). Before, a record row read `{}`, a record property read `None`, and a plain scan raised a raw `TransactionException`.
+
+- **reads through a closed database raise**: after `db.close()`, `to_list()` and iteration of two open result sets, and `get`, `to_dict`, `to_json`, `get_vertex`, `get_element`, `get_property_names`, `has_property`, and `get_out_edges` on a row and a vertex taken earlier, each raise.
+- **a projection result set is refused, a projection or command row is not**: an unread `SELECT name ...` result set raises after `close()`, because its rows may still be read lazily; a `Result` taken from it (or from a command) before the close holds its own values and still reads (example 16 reads an `IMPORT DATABASE` result after closing its database).
+- **a set read to its end stays empty**: after `to_list()` and `close()`, `to_list()` returns `[]`.
+- **a result keeps its dropped database open**: a function that opens a database, queries it, and returns the rows and a vertex without closing anything returns real data after `gc.collect()`, where it returned `[{}, {}, {}]` and `{}`.
+- **the kept database is open for the engine**: while those results live a second `open_database()` of the path raises "already in use"; once they are deleted it opens.
+- **the reference does not leak the database**: with every result and record deleted the wrapper's `__del__` closes the database and the path opens again.
+
+### Errors raised while rows are read (`test_resultset_read_errors.py`)
+
+The engine computes rows lazily, so `query()` returns and a statement's error surfaces on the first or a later row (humemai/arcadedb-embedded-python#173). Before, it reached Python as the raw Java exception. Type `E` has one bucket, so rows come in insertion order.
+
+- **the engine raises these errors while rows are read**: `SELECT 1 / (i - 1)` returns its first row, then raises on the second; checks the premise that the errors come from reading, not from `query()`.
+- **every reader raises ArcadeDBError**: a division by zero (an ArcadeDB `ArithmeticErrorException`) and a `format()` that cannot apply `%d` (a JDK `IllegalArgumentException`), each on the first row and on the second, through iteration, `next()`, `to_list()` with and without type conversion, `iter_dicts()`, `iter_chunks()`, `count()`, `to_json_list()`, `iter_json_batches()`, `to_columns()` (also one row per batch), `to_arrow()`, and `to_dataframe()`. Each raises `ArcadeDBError` whose text holds the Java message and whose `__cause__` is the Java `RuntimeException`.
+- **first() and one()**: `first()` on the first-row errors, and `one()` on all four, where the second-row error, not "multiple results", is what it raises.
+- **a command result**: the same through `command()`.
+
 ## Handy patterns from the tests
 
 ```python

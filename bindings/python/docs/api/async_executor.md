@@ -351,7 +351,7 @@ Execute an async command (INSERT/UPDATE/DELETE/DDL). The callback is optional.
 async_exec = db.async_executor().set_parallel_level(1)
 
 # Async DDL
-async_exec.command("sql", "CREATE INDEX ON User (userId) UNIQUE")
+async_exec.command("sql", "CREATE INDEX ON User (userId) UNIQUE_HASH")  # id read by equality only
 
 # Async update
 async_exec.command("sql", "UPDATE User SET active = true WHERE active = false")
@@ -419,7 +419,10 @@ are epoch values in the type's precision (ms by default).
 
 numpy fast path: an `ndarray` for timestamps or for a numeric field column
 crosses the FFI as a single buffer copy (with Java-side boxing), instead of
-per-element conversion. Lists work too, converted per element.
+per-element conversion. Lists work too, converted per element. A numpy bool array is a
+0/1 numeric column on both paths; a Python list of bools is not, because the engine
+refuses a `Boolean` for a numeric field. With `primitive=True` a column whose length differs
+from the timestamps raises `ValueError` before anything is appended.
 
 `primitive=True` routes the batch through the engine's `TimeSeriesBatch`,
 which carries each column as a primitive array and so never boxes a numeric
@@ -456,6 +459,14 @@ assert row.get("mutableSamples") == 0
 
 The newest reading for one tag measured about 0.16 ms sealed against 0.7 to 1.0 ms on
 the tail (2.6 million samples, 100 tags, 4 shards, 26.10.1, laptop).
+
+**Declare the bucket of your main aggregation.** A type whose most frequent query is an
+hourly aggregate should be created with `COMPACTION_INTERVAL 1 HOURS` and `SHARDS` at its
+default (cores minus one, not the CPU count): sealed blocks are cut at every hour, and a
+12-hour hourly average measured 1.8 ms without it and 0.9 ms with it, ingest not slower, at
+the cost of more and smaller blocks (ArcadeDB
+[#9166](https://github.com/ArcadeData/arcadedb/issues/9166)). See
+[Time Series End to End](../examples/17_timeseries_end_to_end.md).
 
 ---
 
@@ -678,11 +689,12 @@ Wait for all pending operations to complete.
 
 **Parameters:**
 
-- `timeout_ms` (Optional[int]): Max wait time in milliseconds (None = forever)
+- `timeout_ms` (Optional[int]): Max wait time in milliseconds. `None` waits forever. `0` does not wait: it returns if everything is done and raises `TimeoutError` at once otherwise, a point-in-time check like `is_pending()` (the engine would treat a timeout of 0 as an infinite wait, so it is never passed through). Negative values are rejected.
 
 **Raises:**
 
-- `TimeoutError`: If the timeout elapses before completion
+- `TimeoutError`: If the timeout elapses before completion, or at once for `0` while work is pending
+- `ValueError`: If `timeout_ms` is negative
 
 **Note:** Always call before closing executor or database.
 
@@ -815,7 +827,7 @@ db.command("sql", "CREATE DOCUMENT TYPE Product")
 db.command("sql", "CREATE PROPERTY Product.productId LONG")
 db.command("sql", "CREATE PROPERTY Product.name STRING")
 db.command("sql", "CREATE PROPERTY Product.price DECIMAL")
-db.command("sql", "CREATE INDEX ON Product (productId) UNIQUE")
+db.command("sql", "CREATE INDEX ON Product (productId) UNIQUE_HASH")  # id read by equality only
 
 # Load the rows with insert_many, not with the async executor
 inserted = db.insert_many(

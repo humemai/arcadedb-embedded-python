@@ -81,6 +81,40 @@ with db.graph_batch(use_wal=True, expected_edge_count=50000) as batch:
     batch.new_edge(alice, "Knows", bob, since=2024)
 ```
 
+## Transactions
+
+Call the batch outside your own transactions. `create_vertices()`, `flush()`, and `close()`
+manage their own transactions, and so do `new_edge()` and `new_edges()` when the buffer
+reaches `batch_size` and flushes. Leaving a `with db.graph_batch()` block calls `close()`.
+
+From engine 26.10.1 (ArcadeDB
+[#9242](https://github.com/ArcadeData/arcadedb/issues/9242), fixed) each of them raises
+`ArcadeDBError` when you have a transaction open, and your transaction stays open with your
+writes in it. A refused `close()` leaves the batch open with its edges pending: end your
+transaction and call `close()` again. On 26.9.1 and earlier they commit the transaction open
+on the thread, yours included; see [Known Engine Issues](../guide/known-issues.md) for the
+details of both. Commit your own writes before the batch's first call, or write them after it
+closes, which is right on every version:
+
+```python
+with db.transaction():
+    db.new_document("Note").set("text", "mine").save()
+
+with db.graph_batch() as batch:
+    rids = batch.create_vertices("Person", [{"id": i} for i in range(1000)])
+    batch.new_edges(rids[:-1], "Knows", rids[1:])
+```
+
+`create_vertex()` and `new_vertex()` are the exceptions. Inside your transaction,
+`create_vertex()` saves the vertex in it and does not commit, so your `rollback()` undoes
+both; outside one, it commits its own. `new_edge()` and `new_edges()` with room left in the
+buffer only buffer.
+
+While a batch is open, the batch's WAL setting (`use_wal=False` by default) applies to the
+batch's own calls only. On 26.9.1 and earlier it stayed on the thread from the batch's first
+call until `close()`, and every commit on that thread used it, yours too: a transaction of
+yours committed in that time wrote no WAL record.
+
 ## Common Operations
 
 ### `create_vertex(type_name, **properties)`
@@ -90,17 +124,22 @@ Create and persist a single vertex.
 ### `new_vertex(type_name)`
 
 Return an unsaved `Vertex` of that type from the batch; set its properties and call
-`save()` inside a transaction.
+`save()` inside a transaction, and end that transaction before the batch's next call that
+commits (see [Transactions](#transactions)).
 
 ### `create_vertices(type_name, count_or_properties)`
 
-Create many vertices efficiently and return their RIDs as strings.
+Create many vertices efficiently and return their RIDs as strings. The call commits, in
+the transaction open on the thread if there is one: call it outside your own transactions
+(see [Transactions](#transactions)).
 `count_or_properties` is either an `int`, the number of vertices to create without
 properties, or an iterable of property dicts (`None` or `{}` for a vertex without
 properties). Only rows whose values are all scalars (`str`, `int`, `float`, `bool`, or
 `None`) take the JSON bulk path, which sends them in chunks of 100,000 rows; a row with
 any other value, a list or a Java array included, sends the whole call through the
-per-value path, which converts each value on its own.
+per-value path, which converts each value on its own. So does a scalar the JSON text would
+change on the way to the engine: an integer beyond 64 bits, NaN or Infinity, or a string with
+a lone surrogate. The per-value path stores such a value exactly or raises.
 
 **Vector properties: pass `to_java_float_array(vec)`, not a Python list.** A plain
 list is converted element by element (and, on a type with no declared vector property,
@@ -113,6 +152,14 @@ was also slower than inserting one vector per `db.command(...)`.
 
 Buffer an edge for creation during flush/close.
 
+!!! note "Declared edge properties before 26.10.1"
+    Up to engine 26.9.1 an edge buffered with properties skipped the declared property's
+    conversion and the type's constraints: a `None` followed by another property was stored as
+    `-1` in an `INTEGER`, and `40000` in a `SHORT` as `-25536`. From 26.10.1 a batched edge
+    stores a null as null and converts or refuses a declared value as `Vertex.new_edge` does;
+    on an older engine, write edges with declared properties through `Vertex.new_edge`. See
+    [Known Engine Issues](../guide/known-issues.md).
+
 ### `new_edges(source_rids, edge_type, destination_rids, properties=None)`
 
 Buffer many edges with one JPype crossing per call: the bulk counterpart of
@@ -120,8 +167,9 @@ Buffer many edges with one JPype crossing per call: the bulk counterpart of
 (`"#1:0"`) or objects with a string representation; `properties` is an optional
 same-length sequence of per-edge property dicts. When every value is a scalar (`str`,
 `int`, `float`, `bool`, or `None`) the call takes the bulk path; any other value,
-a list included, sends the whole call through per-edge buffering. Returns the
-batch for chaining.
+a list included, sends the whole call through per-edge buffering, and so does a scalar the
+JSON text would change (an integer beyond 64 bits, NaN or Infinity, a lone surrogate), which
+per-edge buffering stores exactly or refuses. Returns the batch for chaining.
 
 ```python
 with db.graph_batch(use_wal=False) as batch:
@@ -131,11 +179,13 @@ with db.graph_batch(use_wal=False) as batch:
 
 ### `flush()`
 
-Force buffered edge work to disk early.
+Force buffered edge work to disk early. Commits the transaction open on the thread, yours
+included (see [Transactions](#transactions)).
 
 ### `close()`
 
-Flush remaining work and finalize the batch. A second `close()` does nothing.
+Flush remaining work and finalize the batch. A second `close()` does nothing. Commits the
+transaction open on the thread, yours included (see [Transactions](#transactions)).
 
 ### Counters
 
