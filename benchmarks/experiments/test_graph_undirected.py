@@ -137,3 +137,16 @@ def test_surrealql_mean_age_on_the_real_engine_is_not_truncated():
     # the friendships count for both of their people: the ages seen are 43 and 42 (person 1), 40 (person 2), 40 (person 3)
     assert len(rows) == 1 and rows[0]["n"] == 4
     assert rows[0]["a"] == pytest.approx(165 / 4)          # 41.25; the integer division gave 41
+
+
+def test_mongodb_lookup_local_fields_are_field_names_never_expressions():
+    """The first run of the 2-hop and 3-hop reads on mongod failed with "FieldPath field names may not start with '$'":
+    $lookup's localField is a field name ("f"), and the hop builders had passed the expression form ("$f"). The unit tests
+    that read the pipelines' structure could not see it, a real mongod rejects it."""
+    M = L.MongoGraph
+    stages = M._second_hop(7) + M._third_hop(7)
+    lookups = [st["$lookup"] for st in stages if "$lookup" in st]
+    assert len(lookups) == 6      # two per step: the 2-hop has one step, the 3-hop two (and the 2-hop's own)
+    for lk in lookups:
+        assert not lk["localField"].startswith("$"), lk
+        assert lk["localField"] in ("f", "f2"), lk

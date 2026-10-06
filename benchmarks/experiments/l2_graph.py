@@ -2889,9 +2889,13 @@ class MongoGraph(Base):
         `<into>_e`, beside the `carry` fields of the walk so far. One output document per
         (walk so far, next edge)."""
         keep = {"$not": {"$in": ["$$this._id", edges_seen]}}
+        # $lookup's localField is a field NAME ("f"), not an aggregation expression ("$f"): mongod refuses the second with
+        # "FieldPath field names may not start with '$'". `frm` arrives as the expression form because the callers also use it
+        # as a path elsewhere, so the sigil is dropped here (found by the first run of the 2-hop and 3-hop reads on mongod).
+        local = frm.lstrip("$")
         return [
-            {"$lookup": {"from": "knows", "localField": frm, "foreignField": "src", "as": "_o"}},
-            {"$lookup": {"from": "knows", "localField": frm, "foreignField": "dst", "as": "_i"}},
+            {"$lookup": {"from": "knows", "localField": local, "foreignField": "src", "as": "_o"}},
+            {"$lookup": {"from": "knows", "localField": local, "foreignField": "dst", "as": "_i"}},
             {"$project": {**{c: 1 for c in carry}, "nxt": {"$concatArrays": [
                 {"$map": {"input": {"$filter": {"input": "$_o", "cond": keep}},
                           "in": {"v": "$$this.dst", "e": "$$this._id"}}},
