@@ -26,6 +26,7 @@ import graph_common
 from graph_common import (HOP3_VISITED, HOP3F_MIN_AGE, LSQB_QUERIES, NA_LSQB_NO_MESSAGE_HALF,
                           OLAP_BUDGET_S, OLAP_DIGEST, OLAP_ITERATIONS, OLAP_QUERIES,
                           OLTP_READ_BUDGET_S, OLTP_READS, OLTP_WRITE, OLTP_DELETE, OLTP_UPDATE,
+                          EDGE_SCAN, EDGE_STATE_DIGEST,
                           PERSON_STATE_DIGEST, READ_DIGEST, READ_WARMUP_BUDGET_SHARE,
                           READ_WARMUP_IDS, SCALE_OLTP_QUERIES,
                           SCALE_PERSONS, UPDATE_AGE, VISITED_DIGEST, VISITED_SAMPLE,
@@ -157,6 +158,11 @@ class Base:
         return self.run_cypher(
             "MATCH (q:Person) WHERE q.id >= $f "
             "RETURN q.id AS id, q.name AS name, q.age AS age, q.city AS city", {"f": int(id_from)})
+
+    def edge_scan(self, id_from):
+        """Untimed read-back of the KNOWS edges into the persons the write phase created (row 58): one per
+        written person after the insert, none after the delete."""
+        return self.run_cypher(EDGE_SCAN, {"f": int(id_from)})
 
     def run_olap(self, qname):
         return self.run_cypher(OLAP_QUERIES[qname])
@@ -1653,6 +1659,9 @@ class DuckpgqGraph(Base):
             "SELECT id, name, age, city FROM Person WHERE id >= ? "
             "ORDER BY id", [int(id_from)]).fetchall()
 
+    def edge_scan(self, id_from):
+        return self.cx.execute("SELECT src, dst FROM knows WHERE dst >= ? ORDER BY dst", [int(id_from)]).fetchall()
+
     def run_write(self, pid, new_id):
         # One transaction, the Cypher's CREATE-and-link: the person and the edge
         # either both exist or neither does.
@@ -2084,6 +2093,10 @@ class SurrealGraph(Base):
     def person_scan(self, id_from):
         return self._rows(self.db.query(
             "SELECT pid, name, age, city FROM person WHERE pid >= $f", {"f": int(id_from)}))
+
+    def edge_scan(self, id_from):
+        return self._rows(self.db.query(
+            "SELECT in.pid AS src, out.pid AS dst FROM knows WHERE out.pid >= $f", {"f": int(id_from)}))
 
     def run_write(self, pid, new_id):
         # ONE TRANSACTION, as on every other engine. Until the re-pin the two
@@ -2702,6 +2715,11 @@ class ArangoGraph(Base):
         return self._n("FOR p IN person FILTER p.id >= @f "
                        "RETURN {id: p.id, name: p.name, age: p.age, city: p.city}", f=id_from)
 
+    def edge_scan(self, id_from):
+        # the edges INTO the written persons: the edge collection's _to index, from the persons read back
+        return self._n("FOR p IN person FILTER p.id >= @f "
+                       "FOR a IN 1..1 INBOUND p knows RETURN {src: a.id, dst: p.id}", f=id_from)
+
     def run_write(self, pid, new_id):
         # THE ANCHOR IS LOOKED UP FIRST, as the Cypher's MATCH does, and
         # nothing is written when it is absent (2026-10-02, the same fix as
@@ -2942,6 +2960,9 @@ class MongoGraph(Base):
         return self._agg(self.person, [
             {"$match": {"_id": {"$gte": id_from}}},
             {"$project": {"_id": 0, "id": "$_id", "name": 1, "age": 1, "city": 1}}])
+
+    def edge_scan(self, id_from):
+        return list(self.knows.find({"dst": {"$gte": id_from}}, {"_id": 0, "src": 1, "dst": 1}))
 
     # ---- analytics ---------------------------------------------------
     # UNDIRECTED (row 56). A friendship is one `knows` document and counts for BOTH
@@ -3641,6 +3662,9 @@ def main():
         # back untimed. A create that silently wrote nothing fails the gate.
         bench_common.record_result(out, "graph_insert", ad.person_scan(write_id_base),
                                    **PERSON_STATE_DIGEST)
+        # ...and the edge into each of them (row 58): the other half of the write transaction.
+        bench_common.record_result(out, "graph_insert_edges", ad.edge_scan(write_id_base),
+                                   **EDGE_STATE_DIGEST)
         # UPDATE, the third of the four (DECISIONS #82a): one property of one
         # record, set to a fixed value, over the same ids the writes created.
         ulat = []
@@ -3680,6 +3704,9 @@ def main():
         # over a graph that still holds the rows (#82a).
         bench_common.record_result(out, "graph_delete", ad.person_scan(write_id_base),
                                    **PERSON_STATE_DIGEST)
+        # DETACH DELETE removed the edges too (row 58): none may be left into a deleted person.
+        bench_common.record_result(out, "graph_delete_edges", ad.edge_scan(write_id_base),
+                                   **EDGE_STATE_DIGEST)
         # DECISIONS #89: where a split does not apply the row says why. Not on this lane any more
         # (row 55): its reads are timed warm and the first query of the session is the cold
         # column, so the "already warm by construction" reason would be false, and

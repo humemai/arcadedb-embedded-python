@@ -442,4 +442,12 @@ READ_DIGEST = {
 # ("id", "pid") because SurrealDB records carry their own `id` and aliasing
 # the person key onto that name would collide with the record id.
 PERSON_STATE_DIGEST = dict(columns=(("id", "pid"), "name", "age", "city"))
+# THE EDGE HALF OF THE WRITE (CAMPAIGN section 7 row 58, BUGS F172). OLTP_WRITE creates a person AND the KNOWS edge into
+# them, and OLTP_DELETE removes the person AND their edge (DETACH DELETE); the person digests above read the persons only,
+# so an engine that skipped the edge write, or left the edge behind on delete, printed a faster write and passed every
+# gate. Read back untimed after the insert (one edge into every written person) and after the delete (none): the KNOWS
+# edges whose far end is a written person, as (source person id, written person id).
+EDGE_STATE_DIGEST = dict(columns=("src", "dst"))
+EDGE_SCAN = ("MATCH (a:Person)-[:KNOWS]->(q:Person) WHERE q.id >= $f "
+             "RETURN a.id AS src, q.id AS dst")
 VISITED_DIGEST = dict(columns=("id", "n"))

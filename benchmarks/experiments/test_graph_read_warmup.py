@@ -91,6 +91,9 @@ class _Recorder(L.Base):
     def person_scan(self, id_from):
         return []
 
+    def edge_scan(self, id_from):
+        return []
+
 
 @pytest.fixture
 def lane(monkeypatch, tmp_path):

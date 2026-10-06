@@ -129,9 +129,14 @@ LANES_CHECKED_OTHERWISE = {
 _AGE_2587 = ("returns every person the write phase created but the first: the read-back's "
              "`q.id >= $f` goes through the Person id index, and AGE's btree scan starting at a "
              "`>=` bound skips the key equal to it (apache/age#2587, open)")
+# The edge read-back (CAMPAIGN row 58) filters on the written person's id the same way, so it meets the same scan.
+_AGE_2587_EDGES = ("returns every edge into the persons the write phase created but the first: the read-back's "
+                   "`q.id >= $f` goes through the Person id index, and AGE's btree scan starting at a `>=` bound "
+                   "skips the key equal to it (apache/age#2587, open)")
 KNOWN_DISAGREEMENTS = {
     ("l2", "graph_insert"): {"pgage_graph": _AGE_2587},
     ("l2", "graph_update"): {"pgage_graph": _AGE_2587},
+    ("l2", "graph_insert_edges"): {"pgage_graph": _AGE_2587_EDGES},
 }
 
 # NOT ONE GROUP, TWO (2026-10-02). The lifecycle read was declared NOT_COMPARABLE
