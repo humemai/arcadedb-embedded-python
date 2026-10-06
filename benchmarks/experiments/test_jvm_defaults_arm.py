@@ -21,6 +21,7 @@ would cause:
 What it cannot test is that the image applies the defaults at all: that is the rehearsal's
 evidence (the running process's command line and `jcmd VM.flags`, read from a container).
 """
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -270,9 +271,10 @@ def EW():
 
 def _frozen(heap_main=8 * GIB, heap_arm=12 * GIB, gc_main="G1"):
     base = {"lane": "l1tpc", "workload": "oltp", "scale": "tpch10", "server_mem_cap": "16g"}
-    return [dict(base, backend="arcadedb_server", server_jvm_max_heap_bytes=heap_main, server_jvm_gc=gc_main),
+    return [dict(base, backend="arcadedb_server", server_jvm_max_heap_bytes=heap_main, server_jvm_gc=gc_main,
+                 server_jvm_initial_heap_bytes=heap_main),          # -Xms equal to -Xmx
             dict(base, backend=ARM, server_jvm_defaults=True, server_jvm_max_heap_bytes=heap_arm,
-                 server_jvm_gc="ZGC generational")]
+                 server_jvm_initial_heap_bytes=48 << 20, server_jvm_gc="ZGC generational")]
 
 
 def _table(*backends):
@@ -368,15 +370,49 @@ def test_the_skeleton_does_not_declare_the_arm_absent_where_it_is_not_owed(EW):
     assert "docs_olap" not in EW.ARM_TABLES[ARM] and EW.ARM_TABLES[ARM] == ("docs_oltp",)
 
 
-def test_memory_and_index_notes_leave_the_arm_to_its_own_sentence(EW, monkeypatch):
-    rows = [dict(r, heap="1g") for r in _frozen()[:1]] + _frozen()[1:]
-    monkeypatch.setattr(EW, "_FROZEN_ROWS", rows)
-    t = {"id": "docs_oltp", "entries": [
-        {"backend_key": "arcadedb_server", "backend": "ArcadeDB (server)", "scale": "tpch10",
-         "metrics": {"peak memory GiB": {"median": 0.9}}},
-        {"backend_key": ARM, "backend": EW.display_name(ARM), "scale": "tpch10",
-         "metrics": {"peak memory GiB": {"median": 0.3}}}]}
-    text = EW._jvm_memory_note(t)
-    assert text and EW.display_name(ARM) not in text and "ArcadeDB (server)" in text
+def _mem_table(*backends):
+    return {"id": "docs_oltp", "entries": [
+        {"backend_key": k, "backend": EW_NAMES[k], "scale": "tpch10", "metrics": {"peak memory GiB": {"median": m}}}
+        for k, m in backends]}
+
+
+EW_NAMES = {"arcadedb_server": "ArcadeDB (server)", ARM: "ArcadeDB (server, image JVM defaults)"}
+
+
+def test_memory_note_is_true_of_each_arm(EW, monkeypatch):
+    """The arm is not "close to the heap it was given": it started with no heap. The note says that of it,
+    from the JVM's own report of its initial heap, and keeps the fixed-heap sentence for the arm that has one."""
+    monkeypatch.setattr(EW, "_FROZEN_ROWS", [dict(r, heap="8g") if r["backend"] == "arcadedb_server" else r
+                                              for r in _frozen()])
+    text = EW._jvm_memory_note(_mem_table(("arcadedb_server", 7.5), (ARM, 0.3)))
+    fixed, _, clause = text.partition(" ArcadeDB (server, image JVM defaults) runs on a JVM too")
+    assert "ArcadeDB (server) runs on a JVM" in fixed and "close to the heap it was given" in fixed
+    assert "image JVM defaults" not in fixed                              # not in the list that claims it
+    assert clause.startswith(", but it starts with no initial heap size") or ", but it starts with no initial heap size" in clause
+    assert "follows what the work needed" in clause
+    assert not re.search(r"\d", clause)                                   # no number invented for it
+    # alone on a table: the clause is the whole note
+    alone = EW._jvm_memory_note(_mem_table((ARM, 0.3)))
+    assert alone.startswith("ArcadeDB (server, image JVM defaults) runs on a JVM too") and "close to the heap" not in alone
+    # and every number the combined sentence carries is registered with it
+    vals = {v for rec in EW._GENERATED if rec["text"] == text for v in rec["values"]}
+    assert "7.50" in vals
+
+
+def test_memory_note_leaves_an_arm_with_no_readback_as_it_was(EW, monkeypatch):
+    rows = [{k: v for k, v in r.items() if not k.startswith("server_jvm_initial")} for r in _frozen()]
+    monkeypatch.setattr(EW, "_FROZEN_ROWS", [dict(r, heap="8g") for r in rows])
+    text = EW._jvm_memory_note(_mem_table(("arcadedb_server", 7.5), (ARM, 0.3)))
+    assert "too, but" not in text and "ArcadeDB (server, image JVM defaults)" in text.split(" run on a JVM")[0]
+
+
+def test_the_arms_own_sentence_no_longer_makes_the_memory_claim(EW, monkeypatch):
+    monkeypatch.setattr(EW, "_FROZEN_ROWS", _frozen())
+    (text,) = EW._jvm_defaults_notes(_table("arcadedb_server", ARM))
+    assert "peak memory" not in text
+    assert text.endswith("not any one of them.")
+
+
+def test_the_index_note_leaves_the_arm_to_the_analytics_table_rules(EW):
     notes = EW._index_note("docs_olap", {"id": "docs_olap", "entries": []})
     assert notes and all(EW.display_name(ARM) not in n for n in notes)

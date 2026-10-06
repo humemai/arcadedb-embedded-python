@@ -5937,7 +5937,58 @@ def _entry_heaps(e, lane, wl, exact_only=False):
     return heaps
 
 
+def _heap_not_pinned(e, lane, wl):
+    """True when every row behind this table entry records a JVM that started with far less heap
+    than it may take (`server_jvm_initial_heap_bytes` below half of `server_jvm_max_heap_bytes`):
+    no -Xms, as ArcadeDB's image defaults run (CAMPAIGN 7 row 69). Read from the JVM's own
+    report, never from the arm's name; an entry whose rows recorded neither field is not
+    this and gets the fixed-heap sentence as before."""
+    rs = [r for r in _FROZEN_ROWS
+          if r.get("lane") == lane and (not wl or r.get("workload") == wl)
+          and display_name(str(r.get("backend"))) == e.get("backend")
+          and str(r.get("scale")) == str(e.get("scale"))]
+    if not rs:
+        return False
+    for r in rs:
+        try:
+            init, mx = float(r["server_jvm_initial_heap_bytes"]), float(r["server_jvm_max_heap_bytes"])
+        except (KeyError, TypeError, ValueError):
+            return False
+        if not (mx > 0 and init < 0.5 * mx):
+            return False
+    return True
+
+
 def _jvm_memory_note(table):
+    """The memory sentence for the JVM arms on this table: the fixed-heap one for arms that were
+    given a heap, and one clause for an arm that starts with none (it is true of each and of no
+    other; CAMPAIGN 7 row 69)."""
+    base = _jvm_memory_note_fixed_heap(table)
+    lw = _TABLE_LANE.get(table.get("id"))
+    unpinned = []
+    if lw:
+        lane, wl = lw
+        if lane == "l1tpc":
+            wl = "oltp"
+        for e in table.get("entries", []):
+            cell = (e.get("metrics") or {}).get("peak memory GiB")
+            if (cell and not e.get("outcome") and cell.get("median") is not None
+                    and e.get("backend") not in unpinned and _heap_not_pinned(e, lane, wl)):
+                unpinned.append(e.get("backend"))
+    if not unpinned:
+        return base
+    names = _join_and(sorted(unpinned))
+    one = len(unpinned) == 1
+    clause = (f"{names} {'runs' if one else 'run'} on a JVM too, but {'it starts' if one else 'they start'} with "
+              f"no initial heap size, so {'its' if one else 'their'} column follows what the work needed and not "
+              f"the heap the JVM was allowed to grow into.")
+    if base is None:
+        return _gen(clause, names)
+    vals = [v for rec in _GENERATED if rec["text"] == base for v in rec["values"]]
+    return _gen(f"{base} {clause}", *vals, names)
+
+
+def _jvm_memory_note_fixed_heap(table):
     """What the memory column measures for an engine running on a JVM.
 
     THE COLUMN IS NOT ONE MEASUREMENT, and it is the column ArcadeDB looks
@@ -5978,10 +6029,9 @@ def _jvm_memory_note(table):
         # row carries text where the median would be.
         if not cell or e.get("outcome") or cell.get("median") is None:
             continue
-        # THE IMAGE-DEFAULTS ARM HAS ITS OWN SENTENCE (CAMPAIGN 7 row 69): it sets no initial
-        # heap, so its peak follows the work, and "close to the heap it was given" would be
-        # false of it. _jvm_defaults_notes says what its column follows.
-        if e.get("backend_key") == JVM_DEFAULTS_ARM:
+        # AN ARM THAT STARTED WITH NO HEAP is not "close to the heap it was given" (CAMPAIGN 7
+        # row 69): _jvm_memory_note says what its column follows, from the JVM's own report.
+        if _heap_not_pinned(e, lane, wl):
             continue
         heaps = _entry_heaps(e, lane, wl)
         if not heaps:
@@ -7227,8 +7277,7 @@ def _jvm_defaults_notes(table):
     took += ", and no initial heap size"
     text = (f"{display_name(JVM_DEFAULTS_ARM)} is the one row here that runs the ArcadeDB image's own JVM "
             f"settings. {other}; {took}. Its difference from the main served row is the heap, the collector, "
-            f"and the heap's warm-up together, not any one of them. Because the main rows fix the initial "
-            f"heap at the maximum, their peak memory follows that setting; this row's follows the work done.")
+            f"and the heap's warm-up together, not any one of them.")
     return [_gen(text, *values)]
 
 
