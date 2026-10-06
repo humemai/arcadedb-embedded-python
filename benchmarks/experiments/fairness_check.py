@@ -75,6 +75,31 @@ JVM_DEFAULTS_ARMS = {
 }
 
 
+def check_heap_witnesses(rows):
+    """F3c: the two witnesses of a served ArcadeDB's heap agree.
+
+    The container's environment says what the launcher passed (`server_heap`, parsed from -Xmx); the
+    running JVM says what it settled on (`server_jvm_max_heap_bytes`). Where a row has both they must be
+    the same heap (within 1%), or the setting written is not the setting in force. A row with only one
+    is judged by the other gates (the image-defaults arm has no -Xmx and only the JVM's word). Returns
+    the failure count."""
+    print("=== F3c: the heap in the container's environment is the heap the JVM runs ===")
+    bad = judged = 0
+    for r in rows:
+        env, jvm = _gib(r.get("server_heap")), jvm_reported_heap(r)
+        if not str(r.get("backend")).startswith("arcadedb") or env is None or jvm is None or r.get("error"):
+            continue
+        judged += 1
+        got = _gib(jvm)
+        if abs(got - env) > 0.01 * env:
+            print(f"  FAIL {r.get('lane')} {r.get('scale')} {r.get('workload')} {r.get('backend')} rep {r.get('rep')}: "
+                  f"the container's environment sets {r.get('server_heap')} and the running JVM reports {jvm}")
+            bad += 1
+    if not bad:
+        print(f"  ok   {judged} row(s) where both witnesses exist agree")
+    return bad
+
+
 def check_jvm_defaults_arms(rows=None):
     """The image-defaults arm is declared, and where rows exist its JVM is what it says.
 
@@ -302,6 +327,16 @@ def _is_jvm(backend):
                                            "elasticsearch", "questdb"))
 
 
+def jvm_reported_heap(r):
+    """The heap the running JVM reported for a served row, as '12g' / '2.25g', or None.
+    `server_jvm_max_heap_bytes` is MaxHeapSize from `jcmd VM.flags` (runner.server_jvm_readback)."""
+    try:
+        gib = float(r.get("server_jvm_max_heap_bytes")) / (1 << 30)
+    except (TypeError, ValueError):
+        return None
+    return (f"{gib:.2f}".rstrip("0").rstrip(".") if gib != int(gib) else str(int(gib))) + "g"
+
+
 def _total_envelope(r):
     """The envelope the CELL got, normalised across topologies.
 
@@ -328,6 +363,12 @@ def _total_envelope(r):
     # envelope is server + client, both measured. Rows written before that
     # still fall back to the arithmetic below.
     srv_cap, srv_heap = _gib(r.get("server_mem_cap")), r.get("server_heap")
+    if not srv_heap:
+        # A JVM started WITHOUT -Xmx (the image-defaults arm, CAMPAIGN 7 row 69) has no heap in its
+        # container environment, but the runner read what the running JVM settled on
+        # (`server_jvm_max_heap_bytes`, from jcmd VM.flags): that is a witness too, and the only
+        # honest one for such an arm. A row with neither is still "NO-WITNESS" below.
+        srv_heap = jvm_reported_heap(r)
     if srv_cap is not None:
         # DERIVE THE TOTAL FROM THE SERVER SIDE ALONE, never by addition.
         # Adding mem_cap was wrong and failed five compliant tiers: runner.py
@@ -1485,6 +1526,7 @@ def main():
     else:
         bad = check_cpuset(rows) + check_envelope(rows)
     bad += check_jvm_defaults_arms(rows)
+    bad += check_heap_witnesses(rows)
     bad += check_index_kinds(rows)
     bad += check_degree(rows)
     bad += check_close_cost(rows)

@@ -2512,6 +2512,44 @@ def image_defaults_findings(row, server_mem):
     return bad
 
 
+def _gib_text(n_bytes):
+    """12884901888 -> '12g'; 2415919104 -> '2.25g'."""
+    gib = n_bytes / float(1 << 30)
+    return (str(int(gib)) if gib == int(gib) else f"{gib:.2f}".rstrip("0").rstrip(".")) + "g"
+
+
+def heap_witness(row):
+    """Reconcile the two witnesses of a served JVM's heap and record where the answer came from.
+
+    `observe_server` reads the heap from the container's environment, and only from `-Xmx`
+    (or a heap-size setting a comparator takes), so a JVM started without one (the image-defaults
+    arm) had no witness and every gate called its heap "unverifiable". The runner also reads the
+    running JVM (`server_jvm_readback`: MaxHeapSize from `jcmd VM.flags`), and that is the truer
+    witness. Rules, for a row that has the JVM's answer:
+
+      * the container's environment names a heap (`server_heap`): it must be the heap the JVM runs
+        (within 1%), or the setting written is not the setting in force; the row keeps its value and
+        says `server_heap_source` is the environment, confirmed by the JVM;
+      * it names none: the JVM's heap becomes `server_heap`, and the source says so.
+
+    A row with no JVM answer is left exactly as it was (every arm keeps its current witness).
+    Returns the findings, [] when the witnesses agree or only one exists."""
+    mx = row.get("server_jvm_max_heap_bytes")
+    if not isinstance(mx, (int, float)) or not mx:
+        return []
+    env = row.get("server_heap")
+    if not env:
+        row["server_heap"] = _gib_text(mx)
+        row["server_heap_source"] = "the running JVM (jcmd VM.flags); the container's environment sets no -Xmx"
+        return []
+    m = re.fullmatch(r"([\d.]+)([gGmM])", str(env))
+    want = float(m.group(1)) * ((1 << 30) if m.group(2) in "gG" else (1 << 20)) if m else None
+    if want and abs(mx - want) > 0.01 * want:
+        return [f"the container's environment sets a heap of {env} and the running JVM reports {_gib_text(mx)}"]
+    row["server_heap_source"] = "the container's environment (-Xmx), confirmed by the running JVM"
+    return []
+
+
 def arcadedb_cap_readback(cid, envs, from_env):
     """The query cap a served ArcadeDB runs with, asked of the engine.
 
@@ -2781,6 +2819,13 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             if row.get("server_heap") and row["server_heap"] != heap:
                 row["error"] = (f"server heap {row['server_heap']} != requested "
                                 f"{heap}; the cell is not the one we specified")
+                return row
+            # THE RUNNING JVM IS A HEAP WITNESS TOO (re-pin rehearsal): where the container's
+            # environment names a heap the JVM must agree, and where it names none (the
+            # image-defaults arm) the JVM's own answer is the witness instead of "no witness".
+            _hw = heap_witness(row)
+            if _hw:
+                row["error"] = "; ".join(_hw) + "; the cell is not the one we specified"
                 return row
             # SURREALDB'S SYNC MODE, READ BACK (BUGS F165). For a month the
             # served arm ran at the engine default, a sync at every commit, in

@@ -416,3 +416,75 @@ def test_the_arms_own_sentence_no_longer_makes_the_memory_claim(EW, monkeypatch)
 def test_the_index_note_leaves_the_arm_to_the_analytics_table_rules(EW):
     notes = EW._index_note("docs_olap", {"id": "docs_olap", "entries": []})
     assert notes and all(EW.display_name(ARM) not in n for n in notes)
+
+
+# ------------------------------------------------------------------ the heap witness
+
+def test_the_running_jvm_is_the_witness_for_an_arm_with_no_xmx():
+    row = {"server_jvm_max_heap_bytes": 12 * GIB}
+    assert RN.heap_witness(row) == []
+    assert row["server_heap"] == "12g" and "running JVM" in row["server_heap_source"]
+    odd = {"server_jvm_max_heap_bytes": 2415919104}
+    RN.heap_witness(odd)
+    assert odd["server_heap"] == "2.25g"
+
+
+def test_an_arm_with_an_xmx_keeps_it_and_the_jvm_must_agree():
+    ok = {"server_heap": "8g", "server_jvm_max_heap_bytes": 8 * GIB}
+    assert RN.heap_witness(ok) == [] and ok["server_heap"] == "8g"
+    assert "environment" in ok["server_heap_source"] and "confirmed" in ok["server_heap_source"]
+    bad = {"server_heap": "8g", "server_jvm_max_heap_bytes": 6 * GIB}
+    (finding,) = RN.heap_witness(bad)
+    assert "8g" in finding and "6g" in finding
+    assert bad["server_heap"] == "8g"                      # never overwritten by the JVM's disagreement
+    mb = {"server_heap": "512m", "server_jvm_max_heap_bytes": 512 << 20}
+    assert RN.heap_witness(mb) == []
+
+
+def test_a_row_with_no_jvm_answer_is_left_exactly_as_it_was():
+    for row in ({}, {"server_heap": "8g"}, {"server_jvm_max_heap_bytes": None, "server_jvm_readback_error": "x"},
+                {"server_jvm_max_heap_bytes": 0}):
+        before = dict(row)
+        assert RN.heap_witness(row) == [] and row == before
+
+
+def test_the_cell_runs_the_witness_after_the_tier_heap_check():
+    src = (HERE / "runner.py").read_text()
+    assert src.index("!= requested") < src.index("_hw = heap_witness(row)")
+
+
+def _served(**kw):
+    r = {"lane": "l1tpc", "scale": "tpch10", "backend": "arcadedb_server", "mem_split": "full+client",
+         "server_mem_cap": "16g"}
+    r.update(kw)
+    return r
+
+
+def test_f3_takes_the_jvm_as_a_witness_when_there_is_no_xmx():
+    # the image-defaults arm: no -Xmx, the JVM's answer stands in (so it is not "NO-WITNESS")
+    assert FC._total_envelope(_served(server_jvm_max_heap_bytes=12 * GIB)) == ("12g", "16g")
+    # a row with both keeps the environment's witness, as every other arm does
+    assert FC._total_envelope(_served(server_heap="8g", server_jvm_max_heap_bytes=8 * GIB)) == ("8g", "16g")
+    # a JVM with neither is still a witness gap
+    assert FC._total_envelope(_served()) == ("NO-WITNESS", "16g")
+    # and a non-JVM server legitimately has none
+    assert FC._total_envelope(_served(backend="qdrant_dense")) == ("n/a", "16g")
+
+
+def test_f3c_fails_a_jvm_that_does_not_run_the_heap_it_was_given(capsys):
+    agree = _served(server_heap="8g", server_jvm_max_heap_bytes=8 * GIB)
+    assert FC.check_heap_witnesses([agree]) == 0
+    assert FC.check_heap_witnesses([_served(server_heap="8g", server_jvm_max_heap_bytes=6 * GIB, rep=1)]) == 1
+    assert "the running JVM reports 6g" in capsys.readouterr().out
+    # a row with one witness only, an error row, and another engine are not judged here
+    assert FC.check_heap_witnesses([_served(server_jvm_max_heap_bytes=12 * GIB), _served(server_heap="8g"),
+                                    dict(agree, error="x", server_jvm_max_heap_bytes=1),
+                                    _served(backend="neo4j_graph", server_heap="8g",
+                                            server_jvm_max_heap_bytes=1)]) == 0
+
+
+def test_f3_still_judges_every_other_arms_heap(monkeypatch):
+    monkeypatch.setattr(FC, "_dense_rows", lambda: [])
+    a = _served(server_heap="8g", server_jvm_max_heap_bytes=8 * GIB)
+    b = _served(backend="arcadedb_e4", server_heap="4g", server_jvm_max_heap_bytes=4 * GIB)
+    assert FC.check_envelope([a, b]) == 1                  # two different heaps at one cap still fail
