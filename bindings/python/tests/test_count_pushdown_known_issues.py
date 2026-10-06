@@ -92,7 +92,10 @@ def test_negated_pattern_in_a_chain_with_another_label_at_the_far_end_counts_the
     with arcadedb.create_database(temp_db_path) as db:
         _cross_label_graph(db)
         written = f"{CROSS_CHAIN}WHERE {where} RETURN count(*) AS n"  # nosec B608
-        _require_anti_join_plan(db, written)
+        if "<>" in where:
+            # Since #9299 the push-down needs the inequality between the negated pattern's nodes;
+            # without it the engine answers through the row pipeline, and the count is the test.
+            _require_anti_join_plan(db, written)
         assert _count(db, written) == 1
 
 
@@ -220,14 +223,13 @@ def test_with_before_the_where_honours_the_property_map(temp_db_path, where, exp
 )
 def test_negated_pattern_the_map_does_not_change_is_counted_right(temp_db_path, where):
     """Where the property map does not change the answer (the direct edge has w = 0, or there is
-    no map) the count is 0, as the row pipeline gives. Without a map the push-down still answers
-    it; with one, the engine declines the push-down since #9288 and the row pipeline answers.
+    no map) the count is 0, as the row pipeline gives. Since #9299 the push-down needs an inequality
+    between the negated pattern's nodes, which neither case has, so the row pipeline answers both
+    and there is no plan check.
     """
     with arcadedb.create_database(temp_db_path) as db:
         _edge_property_graph(db)
         written = f"{EDGE_CHAIN}WHERE {where} RETURN count(*) AS n"  # nosec B608
-        if where == "NOT (x)-[:K]->(z)":
-            _require_anti_join_plan(db, written)
         assert _count(db, written) == 0
 
 
