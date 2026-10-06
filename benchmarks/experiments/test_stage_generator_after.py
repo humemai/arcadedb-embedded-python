@@ -32,7 +32,8 @@ def _generate(tmp_path, after):
     env = dict(os.environ, ARCADEDB_WHEEL=str(wheel), ARCADEDB_SERVER_IMAGE="arcadedb-c25:26.10.1",
                ARCADEDB_ENGINE_COMMIT="d36b4ca3ae4c170abc73598e0dffa2bb58e06621")
     out = tmp_path / "stages"
-    cmd = [sys.executable, str(HERE / "make_2610_stages.py"), "--out", str(out)] + (["--after", after] if after is not None else [])
+    # --order paper: these tests are about the ids qRA..qRO and their chain; the tier order has its own tests
+    cmd = [sys.executable, str(HERE / "make_2610_stages.py"), "--out", str(out), "--order", "paper"] + (["--after", after] if after is not None else [])
     r = subprocess.run(cmd, cwd=HERE, env=env, capture_output=True, text=True)
     assert r.returncode == 0, r.stdout[-400:] + r.stderr[-400:]
     return out, r.stdout

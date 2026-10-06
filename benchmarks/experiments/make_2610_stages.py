@@ -166,6 +166,67 @@ def _derived_stages(static):
 STAGES = STATIC_STAGES + _derived_stages(STATIC_STAGES)
 
 
+# ------------------------------------------------------------------- the tiers (DECISIONS #163)
+# The user's queue priority for the 26.10.1 measurement: every ArcadeDB arm (embedded and served) first, the
+# other engines already in the harness at the version October's rows carry second, and what is new about the
+# others last. Tier 3 is deferred, never dropped: its arms stay in the coverage proof, so a later chain runs
+# them with no code change.
+#   moved  : the version in runner.py is not the one October's rows carry (ArangoDB 3.12.11 -> 3.12.12,
+#            FalkorDB 4.20.6 -> 6.0.1, LadybugDB 0.20.4 -> 0.21.2)
+#   new    : no October rows at all (a new arm: CAMPAIGN rows 26, 37 to 39, 41, 44, 49, 50)
+TIER3_MOVED = ("arangodb_dense", "arangodb_e2", "arangodb_graph", "arangodb_tpc", "arangodb_ts",
+               "falkordb_graph", "ladybug_graph")
+TIER3_NEW = ("arangodb_dense_int8", "elasticsearch_dense", "elasticsearch_dense_int8", "falkordb_dense",
+             "ladybug_dense", "ladybug_e2", "memgraph_dense", "memgraph_dense_int8", "memgraph_e2",
+             "neo4j_dense_int8", "postgres_ts", "qdrant_sparse_uint8", "duckdb_e2", "lancedb_dense_fp32",
+             "mongodb_dense_int8", "pgage_graph")
+TIER3 = TIER3_MOVED + TIER3_NEW
+TIER_NAMES = {1: "ArcadeDB", 2: "other engines already run", 3: "new versions and new arms"}
+
+
+def tier_of(backend):
+    """1 for every ArcadeDB arm (embedded or served), 3 for a moved or new comparator arm, else 2."""
+    if backend.startswith("arcadedb"):
+        return 1
+    return 3 if backend in TIER3 else 2
+
+
+def check_tiers():
+    """Problems with the tier lists: a name that is no registered arm (a typo is a tier nobody asked for)
+    or one listed twice."""
+    registered = {b for spec in runner.LANES.values() for b in spec[1]}
+    problems = [f"TIER3 names {b}, which no lane registers" for b in TIER3 if b not in registered]
+    problems += [f"TIER3 lists {b} twice" for b, c in collections.Counter(TIER3).items() if c > 1]
+    return problems
+
+
+def tiered_stages(stages=None):
+    """The stage list in tier order: tier 1's pieces in the paper's lane order (#133), then tier 2's, then
+    tier 3's. A stage whose roster spans tiers is split into one stage per tier it touches (same lane,
+    workloads, scales, guards and environment; only the roster differs), the host-side Python-cost stage
+    is tier 1, and the ids are NEW (qT01, qT02, ...): a killed stage writes its ALL-DONE marker through the
+    EXIT trap, and a chain that reused qRA..qRO would find the old chain's markers already in the
+    append-only STATUS.txt and start every stage at once."""
+    stages = STAGES if stages is None else stages
+    pieces = {1: [], 2: [], 3: []}
+    for spec in stages:
+        s = list(spec) + [None] * (10 - len(spec))
+        if s[2] == "pycost":
+            pieces[1].append(s)
+            continue
+        by = collections.defaultdict(list)
+        for be in stage_backends(spec):
+            by[tier_of(be)].append(be)
+        for t in (1, 2, 3):
+            if by[t]:
+                p = list(s)
+                p[1] = f"{s[1]} (tier {t}, {TIER_NAMES[t]})"
+                p[8] = by[t]
+                pieces[t].append(p)
+    flat = [p for t in (1, 2, 3) for p in pieces[t]]
+    return [tuple([f"qT{i + 1:02d}"] + p[1:]) for i, p in enumerate(flat)]
+
+
 # --------------------------------------------------------------------- coverage
 def _page_lanes():
     """(lane -> set of workloads, or None for any) the published tables read, from
@@ -437,9 +498,10 @@ def _wait(after):
             f'say "$ID: {after} finished, taking the machine"\n')
 
 
-def emit_all(out, pins, first_after, allow_dev):
+def emit_all(out, pins, first_after, allow_dev, stages=None):
     """Write every stage. October's emit() is reused for the runner stages, with its
     template and SHA swapped for the duration of the call."""
+    stages = STAGES if stages is None else stages
     head = _head()
     sha, wheel, server = pins["ARCADEDB_ENGINE_COMMIT"], pins["ARCADEDB_WHEEL"], pins["ARCADEDB_SERVER_IMAGE"]
     wheel_name = os.path.basename(wheel)
@@ -447,11 +509,11 @@ def emit_all(out, pins, first_after, allow_dev):
     saved = (O.HEAD, O.SHA, O.STAGES)
     try:
         O.SHA = sha
-        O.STAGES = STAGES
-        for i, spec in enumerate(STAGES):
-            after = first_after if i == 0 else STAGES[i - 1][0]
+        O.STAGES = stages
+        for i, spec in enumerate(stages):
+            after = first_after if i == 0 else stages[i - 1][0]
             if spec[2] == "pycost":
-                body = HOST.format(id=spec[0], n=i + 1, total=len(STAGES), title=spec[1], sha=sha,
+                body = HOST.format(id=spec[0], n=i + 1, total=len(stages), title=spec[1], sha=sha,
                                    wait=_wait(after), wheel_name=wheel_name, runs=PYCOST_RUNS,
                                    steps=PYCOST_STEPS, jpype_version=bench_common.JPYPE_PIN)
             else:
@@ -478,7 +540,7 @@ def emit_all(out, pins, first_after, allow_dev):
 
 
 # ------------------------------------------------------------------- projection
-def project(cells_tsv):
+def project(cells_tsv, stages=None):
     """Per-stage hours from October's measured cells (.notes projection-2026-10-02/
     cells_by_arm.tsv: lane, workload, scale, backend, class, rows, hours, ...). A cell
     with no October measurement (a new arm) is estimated as the median of the measured
@@ -492,8 +554,9 @@ def project(cells_tsv):
     by_group = collections.defaultdict(list)
     for (lane, wl, sc, _be, cls), h in meas.items():
         by_group[(lane, wl, sc, cls)].append(h)
+    stages = STAGES if stages is None else stages
     rows, total_m, total_e = [], 0.0, 0.0
-    for spec in STAGES:
+    for spec in stages:
         lane = spec[2]
         if lane == "pycost":
             rows.append((spec[0], spec[1], 0.0, 0.0, [], "1-3 h (September's re-measure: six steps, five runs)"))
@@ -533,6 +596,10 @@ def main(argv=None) -> int:
                          "cancelled, or the host is idle): the first stage then starts when launched")
     ap.add_argument("--allow-prerelease", action="store_true",
                     help="emit for a dev/rc wheel (a page measurement; the paper cites releases, #42)")
+    ap.add_argument("--order", choices=("tiers", "paper"), default="tiers",
+                    help="tiers (default, DECISIONS #163): every ArcadeDB arm first, then the other engines already "
+                         "run, then new versions and new arms; paper: #133's lane order with every engine in each "
+                         "lane's stage (the chain launched 2026-10-06 11:22Z)")
     ap.add_argument("--check", action="store_true", help="coverage only")
     ap.add_argument("--project", metavar="CELLS_TSV", help="per-stage hours from October's measured cells")
     a = ap.parse_args(argv)
@@ -546,7 +613,10 @@ def main(argv=None) -> int:
         return 1
     print(f"jpype pin: {bench_common.JPYPE_PIN} (bench_common.JPYPE_PIN = Dockerfile.bench's ARG default, a hard == "
           f"install; every stage reads JPype back out of the image or the repo venv)")
-    problems, excluded, counts = check_coverage()
+    stages = tiered_stages() if a.order == "tiers" else STAGES
+    problems, excluded, counts = check_coverage(stages)
+    problems += check_tiers()
+    print(f"order: {a.order}, {len(stages)} stages")
     print("coverage: every registered arm of every page lane in exactly one stage per workload")
     for lane, n in sorted(counts.items()):
         print(f"  {lane:10} {n:2} arms")
@@ -557,10 +627,12 @@ def main(argv=None) -> int:
     if problems:
         return 1
     if a.project:
-        rows, tm, te = project(a.project)
+        rows, tm, te = project(a.project, stages)
         print("\nprojection from October's measured cells (h):")
+        cum = 0.0
         for sid, title, m, e, new, note in rows:
-            print(f"  {sid}  measured {m:6.1f}  + new-arm estimate {e:6.1f}  {title}"
+            cum += m + e
+            print(f"  {sid}  measured {m:6.1f}  + new-arm estimate {e:6.1f}  cum {cum:6.1f}  {title}"
                   + (f"  [{note}]" if note else ""))
             if new:
                 print(f"         estimated: {', '.join(new[:14])}{' ...' if len(new) > 14 else ''}")
@@ -587,7 +659,7 @@ def main(argv=None) -> int:
         raise SystemExit(f"REFUSING to emit: wheel {ver} is a pre-release; the paper cites stable releases "
                          f"(DECISIONS #42). --allow-prerelease emits for a page-only measurement.")
     os.makedirs(a.out, exist_ok=True)
-    emit_all(a.out, pins, a.after, allow_dev=pre)
+    emit_all(a.out, pins, a.after, allow_dev=pre, stages=stages)
     return 0
 
 
