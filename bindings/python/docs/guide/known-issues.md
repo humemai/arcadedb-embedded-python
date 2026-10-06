@@ -823,6 +823,48 @@ that are not affected, and has strict `xfail` tests of the wrong counts; they st
 suite when the engine fixes them, which is the cue to remove this entry.
 
 
+## An openCypher count with a negated pattern is wrong for other shapes of the chain
+
+ArcadeDB [#9290](https://github.com/ArcadeData/arcadedb/issues/9290); measured through the
+bindings on the 26.10.1 wheel, and in Java on 26.10.1, on upstream main cbf701d66e, and on the
+head of the upstream fix for the entry above (7d69d5f534), on Temurin 21 and 25, with the same
+answers. Open.
+
+The count push-down of the entry above (`EXPLAIN` lists `COUNT ANTI-JOIN CHAIN`) is also wrong
+for chains that are not the two-hop shape it is written for. On four people with `KNOWS` a-b,
+b-c, c-d, and a-c, each interested in one tag, these counted more than the right number, with
+the push-down in the plan:
+
+| Chain and `WHERE` | Counted | Right |
+| --- | --- | --- |
+| three `KNOWS` hops, `NOT (p0)-[:KNOWS]-(p2) AND p0 <> p2` | 6 | 2 |
+| two hops and a tag, `NOT (p0)-[:KNOWS]-(p2) AND p1 <> p2` (an inequality between other nodes) | 12 | 4 |
+| the same chain, `NOT (p0)-[:KNOWS]-(p2)` (no inequality) | 12 | 4 |
+| three `KNOWS` hops, `NOT (p1)-[:KNOWS]-(p3) AND p1 <> p3` (the pattern not at the first node) | 10 | 2 |
+| an unlabelled middle node, `NOT (p2)-[:KNOWS]-(p0) AND p2 <> p0` | 18 | 4 |
+
+The two-hop chain with a label on every node, the negated pattern between its first and third
+node, and the inequality between the same two (the shape of the LSQB benchmark's Q9) counted
+right (4). Put the variables through a `WITH` before the `WHERE`, as above; the row pipeline
+counted the right number for every shape in the table:
+
+```python
+chain = "MATCH (p0:Person)-[:KNOWS]-(p1:Person)-[:KNOWS]-(p2:Person)-[:HAS_INTEREST]->(t:Tag) "
+n = (
+    db.query(
+        "opencypher",
+        chain + "WITH p0, p1, p2, t WHERE NOT (p0)-[:KNOWS]-(p2) RETURN count(*) AS n",
+    )
+    .first()
+    .get("n")
+)
+```
+
+Tests: `tests/test_count_pushdown_known_issues.py` checks the `WITH` workaround and the unaffected
+shape, and has strict `xfail` tests of the wrong counts; they start failing the suite when the
+engine fixes them, which is the cue to remove this entry.
+
+
 ## `sum()` and `avg()` over a `BYTE` property raise `IllegalArgumentException`
 
 ArcadeDB [#9281](https://github.com/ArcadeData/arcadedb/issues/9281); measured through the
