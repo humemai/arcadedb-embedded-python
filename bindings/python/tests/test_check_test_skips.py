@@ -40,16 +40,23 @@ def test_a_run_with_no_skips_passes(tmp_path, capsys):
     assert "OK" in capsys.readouterr().out
 
 
+# The ids are explicit on purpose: CI greps the JUnit file for the importorskip reason text, and a
+# parameter id that contained it would trip that gate on a run in which nothing is missing.
 @pytest.mark.parametrize(
     "message",
     [
-        "OpenCypher not available",
-        "Requires GraphML/GraphSON support",
-        "Requires server support",
-        "the test sends SIGINT to a child process",
-        "bindings/python/docs is not present on this branch",
-        "could not import 'pyarrow': No module named 'pyarrow'",
-        "NumPy not installed",
+        pytest.param("OpenCypher not available", id="missing-feature"),
+        pytest.param("Requires GraphML/GraphSON support", id="gremlin"),
+        pytest.param("Requires server support", id="server"),
+        pytest.param("the test sends SIGINT to a child process", id="sigint"),
+        pytest.param(
+            "bindings/python/docs is not present on this branch", id="docs-branch"
+        ),
+        pytest.param(
+            "could not import 'pyarrow': No module named 'pyarrow'",
+            id="missing-package",
+        ),
+        pytest.param("NumPy not installed", id="numpy"),
     ],
 )
 def test_every_skip_fails_by_default(tmp_path, message, capsys):
