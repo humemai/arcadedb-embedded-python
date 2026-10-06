@@ -49,7 +49,8 @@ def test_the_embedded_arm_creates_its_type_with_the_interval(monkeypatch):
     arm.ingest([("host_0", 1_700_000_000, 1.0, 2.0, 3.0)])
     assert len(seen) == 1
     assert seen[0].startswith("CREATE TIMESERIES TYPE Point TIMESTAMP ts")
-    assert seen[0].endswith(f"SHARDS {T.ArcadeNativeTS.SHARDS} COMPACTION_INTERVAL 1 HOURS")
+    assert seen[0].endswith("FIELDS (uu DOUBLE, us DOUBLE, ui DOUBLE) COMPACTION_INTERVAL 1 HOURS")
+    assert "SHARDS" not in seen[0]      # the engine default: no clause (DECISIONS #168)
 
 
 def test_the_served_arm_creates_its_type_with_the_interval_over_http():
@@ -66,7 +67,33 @@ def test_the_served_arm_creates_its_type_with_the_interval_over_http():
     arm.ingest([("host_0", 1_700_000_000, 1.0, 2.0, 3.0)])
     kind, command = posted[0]
     assert kind == "command" and command.startswith("CREATE TIMESERIES TYPE Point TIMESTAMP ts")
-    assert command.endswith(f"SHARDS {T.ArcadeNativeTSServer.SHARDS} COMPACTION_INTERVAL 1 HOURS")
+    assert command.endswith("FIELDS (uu DOUBLE, us DOUBLE, ui DOUBLE) COMPACTION_INTERVAL 1 HOURS")
+    assert "SHARDS" not in command
+
+
+def test_the_shard_count_is_the_engine_default_unless_the_env_asks_for_one(monkeypatch):
+    assert T.ArcadeNativeTS.SHARDS == 0 and T.ArcadeNativeTS.SHARDS_CLAUSE == ""
+    assert T.ArcadeNativeTSServer.SHARDS == 0 and T.ArcadeNativeTSServer.SHARDS_CLAUSE == ""
+    # TS_SHARDS=4 reproduces the harness's old fixed arm: the clause comes back, recorded as ts_shards
+    monkeypatch.setenv("TS_SHARDS", "4")
+    import importlib
+    T4 = importlib.reload(T)
+    try:
+        assert T4.ArcadeNativeTS.SHARDS == 4 and T4.ArcadeNativeTS.SHARDS_CLAUSE == "SHARDS 4 "
+    finally:
+        monkeypatch.delenv("TS_SHARDS")
+        importlib.reload(T)
+
+
+@pytest.mark.parametrize("rows,want", [
+    ([{"name": "Point", "shardCount": 11}], 11),
+    ([{"shardCount": "3"}], 3),                                                # over HTTP
+    ([{"name": "Point"}], None),                                               # the engine reports nothing
+    ([], None),
+    ([{"shardCount": "n/a"}], None),
+])
+def test_the_effective_shard_count_is_read_from_the_schema_report(rows, want):
+    assert T._shard_count(rows) == want
 
 
 @pytest.mark.parametrize("rows,want", [
@@ -83,8 +110,9 @@ def test_the_interval_is_read_from_the_schema_report(rows, want):
 
 def test_the_row_stamp_is_the_engines_answer_and_a_failed_read_is_named():
     arm = object.__new__(T.ArcadeNativeTS)
-    arm._type_report = lambda: [{"compactionBucketIntervalMs": 3_600_000}]
-    assert arm.compaction_readback() == {"ts_compaction_interval": "1 HOURS", "ts_compaction_interval_ms": 3_600_000}
+    arm._type_report = lambda: [{"compactionBucketIntervalMs": 3_600_000, "shardCount": 11}]
+    assert arm.compaction_readback() == {"ts_compaction_interval": "1 HOURS", "ts_compaction_interval_ms": 3_600_000,
+                                         "ts_shard_count_effective": 11}
 
     arm._type_report = lambda: [{"name": "Point"}]
     got = arm.compaction_readback()
