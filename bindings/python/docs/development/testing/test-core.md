@@ -90,6 +90,7 @@ Tests validate:
 - **named parameters**: a dict on both binds `:v` (null) and `:w`; a list holding one dict is still the named map, in SQL and in openCypher
 - **async**: `args=[None]`, `(None,)`, and `[None, 1]` store a null without an error
 - **one Java overload per shape**: a JPype proxy of the `Database` interface, and of `DatabaseAsyncExecutor`, records the argument each shape arrives as
+- **scalar parameters take the short path** (`TestScalarParametersTakeTheShortPath`): a dict of `str` keys with `int`, `float`, `str`, `bool`, or `None` values, and positional scalars, are bound without `convert_python_to_java` (a spy on it sees no call); the answers equal the general path's, for every scalar type including a 2**40 integer and a null. A `Decimal`, a list value, a subclass of `int`, and a numpy scalar still take the general path
 
 ### Other Features
 
