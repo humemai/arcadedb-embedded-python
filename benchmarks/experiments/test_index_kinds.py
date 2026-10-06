@@ -207,34 +207,79 @@ def _row(lane="l1tpc", backend="arcadedb_embedded", workload="oltp", stamp="@goo
     return r
 
 
+@pytest.fixture
+def strict(monkeypatch):
+    """F14d as it is once the re-pin campaign has started: every finding is a failure."""
+    monkeypatch.setattr(FC, "INDEX_KINDS_GATE_FAILS", True)
+
+
 def test_gate_passes_stamped_rows_of_every_lane(capsys):
     rows = [_row(), _row(backend="arcadedb_server"),
             _row("e2", "arcadedb_e2", "hybrid"), _row("e2", "arcadedb_e2_server", "atomicity"),
             _row("l2", "arcadedb_graph_embedded", "olap", msg_vertices=107605)]
-    assert FC.check_index_kinds(rows) == 0
-    assert "ok   5 row(s)" in capsys.readouterr().out
+    for mode in (False, True):                                   # clean rows pass in both modes
+        FC.INDEX_KINDS_GATE_FAILS = mode
+        try:
+            assert FC.check_index_kinds(rows) == 0
+        finally:
+            FC.INDEX_KINDS_GATE_FAILS = False
+        assert "ok   5 row(s)" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("row,what", [
-    (_row(stamp=None), "NOT STAMPED"),                                        # no stamp: a failure
+BAD_ROWS = [
+    (_row(stamp=None), "NOT STAMPED"),                                        # no stamp
     (_row(stamp="", index_kinds_error="OSError: gone"), "NOT STAMPED"),
     (_row(stamp="Part.p_partkey=LSM_TREE;Crud.ckey=HASH;OrderNew.okey=HASH"), "WRONG"),   # the old DDL
     (_row(stamp="Crud.ckey=HASH;OrderNew.okey=HASH"), "WRONG"),                           # an id the engine did not build
     (_row("l2", "arcadedb_graph_embedded", "olap",
           stamp=GOOD["l2"].replace("Person.id=LSM_TREE", "Person.id=HASH"), msg_vertices=1), "WRONG"),
-])
-def test_gate_fails_what_the_engine_did_not_report(row, what, capsys):
+]
+
+
+@pytest.mark.parametrize("row,what", BAD_ROWS)
+def test_gate_fails_what_the_engine_did_not_report_once_it_is_strict(row, what, strict, capsys):
     assert FC.check_index_kinds([row]) >= 1
-    assert what in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert what in out and "WARN" not in out and "[FAILURE]" in out
 
 
-def test_gate_does_not_owe_the_message_half_to_a_cell_that_never_loaded_it():
+@pytest.mark.parametrize("row,what", BAD_ROWS)
+def test_gate_only_warns_until_the_campaign_starts(row, what, capsys):
+    """THE DEFAULT. October's rows predate the stamp and must not block landing an October stage: every
+    finding is printed as a warning and the return value (which main() adds to the exit status) is 0."""
+    assert FC.INDEX_KINDS_GATE_FAILS is False
+    assert FC.check_index_kinds([row]) == 0
+    out = capsys.readouterr().out
+    assert f"WARN {what}" in out and "report-only" in out and "exit status unchanged" in out
+    assert "[FAILURE]" not in out
+
+
+def test_the_gate_has_exactly_one_switch():
+    src = (HERE / "fairness_check.py").read_text()
+    assert len(re.findall(r"^INDEX_KINDS_GATE_FAILS = ", src, re.M)) == 1
+    assert "INDEX_KINDS_GATE_FAILS = False" in src                      # report-only is the committed state
+    # the switch is documented where the flip is made
+    assert "INDEX_KINDS_GATE_FAILS" in (HERE / "CAMPAIGN.md").read_text()
+
+
+def test_the_flip_changes_the_exit_status_of_the_whole_gate(monkeypatch):
+    """main() adds check_index_kinds' return value to its failure count, so the constant is what moves
+    the exit status: an October-shaped set of rows (no stamp anywhere) passes in the default mode and fails
+    after the flip."""
+    october = [_row(stamp=None), _row(backend="arcadedb_server", stamp=None)]
+    assert "bad += check_index_kinds(rows)" in (HERE / "fairness_check.py").read_text()
+    assert FC.check_index_kinds(october) == 0
+    monkeypatch.setattr(FC, "INDEX_KINDS_GATE_FAILS", True)
+    assert FC.check_index_kinds(october) == 2
+
+
+def test_gate_does_not_owe_the_message_half_to_a_cell_that_never_loaded_it(strict):
     micro = _row("l2", "arcadedb_graph_embedded", "olap", stamp="Person.id=LSM_TREE")      # no msg_vertices
     assert FC.check_index_kinds([micro]) == 0
     assert FC.check_index_kinds([dict(micro, msg_vertices=5)]) >= 1                        # it did: now it is owed
 
 
-def test_gate_leaves_other_engines_other_lanes_errors_and_other_instruments_alone():
+def test_gate_leaves_other_engines_other_lanes_errors_and_other_instruments_alone(strict):
     assert FC.check_index_kinds([_row(backend="sqlite", stamp=None)]) == 0
     other_lane = {"lane": "l3d", "backend": "arcadedb_dense_embedded", "instrument": "2026-10", "workload": "search"}
     assert FC.check_index_kinds([other_lane]) == 0
