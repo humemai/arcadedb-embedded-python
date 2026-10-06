@@ -7084,6 +7084,55 @@ def _index_note(table_id, table=None):
         *(have + none))]
 
 
+def _hash_ids_phrase(ids):
+    """`Part.p_partkey`, `OrderNew.okey`, and `Crud.ckey`; or, when every id
+    is one property on several types, "`id` of Country, City, and Forum"."""
+    props = {p for _, p in ids}
+    if len(ids) > 1 and len(props) == 1:
+        return f"`{next(iter(props))}` of {_join_and(t for t, _ in ids)}"
+    return _join_and(f"`{t}.{p}`" for t, p in ids)
+
+
+def _arcadedb_hash_index_notes(table):
+    """The index kind ArcadeDB's id indexes carry on this table, and what it
+    costs (CAMPAIGN section 7 row 68).
+
+    READ FROM fairness_check.ARCADEDB_HASH_ID_INDEXES, the registry that
+    test_index_kinds.py holds equal to the CREATE INDEX text in the lanes, so
+    the sentence cannot name an id the DDL does not make a hash index and the
+    DDL cannot move without the sentence. Only a table that prints an ArcadeDB
+    arm AND an ingest or index column gets it, for the lane (and, for the graph
+    lane's message half, the workload) the registry names. No digit: how much the lookups gain and the
+    loads lose is in the cells beside it, measured, and a typed ratio would be
+    a number nothing checks.
+    """
+    lane_wl = _TABLE_LANE.get(table.get("id"))
+    if not lane_wl or not any(e.get("is_arcadedb") and not e.get("outcome")
+                              for e in table.get("entries") or []):
+        return []
+    # A table that prints no ingest or index time (the cross-model atomicity
+    # table counts trials) has nowhere for the cost to show, so it says nothing.
+    if not any("ingest" in str(c) or "index" in str(c) for c in table.get("columns") or []):
+        return []
+    try:
+        import fairness_check
+        registry = fairness_check.ARCADEDB_HASH_ID_INDEXES
+    except Exception:  # noqa: BLE001 - the page must still build without it
+        return []
+    lane, workload = lane_wl
+    ids = [pair for ln, wl, pairs in registry if ln == lane and wl in (None, workload) for pair in pairs]
+    if not ids:
+        return []
+    many = len(ids) > 1
+    return [_gen(
+        f"ArcadeDB's {'indexes' if many else 'index'} on {_hash_ids_phrase(ids)} "
+        f"{'are hash indexes' if many else 'is a hash index'} (`UNIQUE_HASH`), because this table only "
+        f"looks {'those ids' if many else 'that id'} up by equality. A hash index keeps no key order: an equality "
+        f"lookup goes straight to its bucket instead of walking a sorted tree, and building it can cost "
+        f"more than building a sorted index when the ids arrive in ascending order, which is the order "
+        f"this loader sends them. Any such cost is in ArcadeDB's ingest and index times on this table.")]
+
+
 def _censored_notes(table_id):
     lane_wl = _TABLE_LANE.get(table_id)
     if not lane_wl:
@@ -7985,6 +8034,7 @@ def _finish_table(table: dict) -> dict:
     table["conditions"] = (base
                            + _counts_note(table.get("id"), table.get("entries", []))
                            + _index_note(table.get("id"), table)
+                           + _arcadedb_hash_index_notes(table)
                            + _split_note(table)
                            + _phase_split_notes(table)
                            + _delete_settle_notes(table)
