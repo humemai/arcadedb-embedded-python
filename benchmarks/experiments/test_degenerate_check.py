@@ -121,3 +121,16 @@ def test_a_frozen_csv_row_is_read_too(tmp_path):
     finally:
         sys.argv = argv
     assert "column 'age' is 0 or null in all 40 rows" in buf.getvalue()
+
+
+def test_the_edge_read_back_after_a_delete_is_empty_by_design_and_not_a_flag(tmp_path):
+    """CAMPAIGN row 58: the graph lane reads the KNOWS edges into the written persons after the insert and again after the
+    delete; the second answer is empty because the delete removed them, which is the point of reading it."""
+    text = _run(tmp_path, [_row("l2", "oltp", "sf1", "graph_delete_edges", [], columns=("src", "dst"))])
+    assert "0 flag(s)" in text and "EMPTY" not in text
+
+
+def test_the_edge_read_back_after_an_insert_is_still_flagged_when_it_is_empty(tmp_path):
+    """The allowance is for the delete only: an insert that left no edge behind is a defect the check must still name."""
+    text = _run(tmp_path, [_row("l2", "oltp", "sf1", "graph_insert_edges", [], columns=("src", "dst"))])
+    assert "EMPTY" in text

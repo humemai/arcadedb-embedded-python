@@ -39,6 +39,7 @@ BY_DESIGN = {
     ("e2", "filtered_candidates", "n_candidates"): "three hops of three out-edges: at most 3 + 9 + 27 = 39 candidates",
     ("l1tpc", "crud_delete", None): "the post-delete state is empty by definition",
     ("l2", "graph_delete", None): "the post-delete state is empty by definition",
+    ("l2", "graph_delete_edges", None): "the KNOWS edges into the deleted persons are gone, so the read-back is empty by definition",
     ("l1tpc", "crud_insert", "qty"): "every insert writes qty 1",
     ("l1tpc", "crud_read", "qty"): "every insert writes qty 1",
     ("l1tpc", "crud_update", "qty"): "every update writes qty 2",
@@ -54,7 +55,7 @@ BY_DESIGN = {
 KEYLIKE = {"id", "pid", "start", "okey", "ckey", "pkey", "name", "l_partkey", "l_returnflag", "l_linestatus",
            "l_shipmode", "m", "h", "host", "ts", "c", "deg"}
 WRITE_STATES = {"crud_insert", "crud_read", "crud_update", "crud_delete", "neworder", "payment",
-                "graph_insert", "graph_update", "graph_delete"}
+                "graph_insert", "graph_update", "graph_delete", "graph_insert_edges", "graph_delete_edges"}
 
 
 def load(path, instrument):
