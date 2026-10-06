@@ -21,11 +21,13 @@ Paper (serial):   python3 runner.py --lanes l1,l2,l3s,l3d,l4 --scale medium --re
 Sweep (parallel): python3 runner.py --parallel 3 --tier sweep ...
 """
 import argparse
+import base64
 import csv
 import fcntl
 import glob
 import json
 import os
+import pwd
 import random
 import re
 import subprocess
@@ -34,6 +36,8 @@ import sys
 import tempfile
 import threading
 import time
+import traceback
+import urllib.request
 from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -407,6 +411,19 @@ _PCT_OPT = (" -Darcadedb.vectorIndex.graphBuildCacheMaxHeapPercent=" + DENSE_BUI
 LC_HOST_DIR = os.path.abspath(os.environ.get(
     "BENCH_LC_HOST_DIR", "/var/tmp/arcadedb-lifecycle"))
 
+# THE POSTGRESQL QUERY POOLS, FITTED TO THE CELL (FAIRNESS F3/F6; measured on
+# PG+AGE 2026-10-02, repros/age-dialect/resource_fit_probe.py; extended to every
+# PostgreSQL arm but `postgres`, which is the defaults arm by design). The
+# placeholders are filled per cell beside {sb}/{ecs}/{mwm} below: parallel
+# workers per query = cpuset - 1 (the leader is the last core), the cluster's
+# parallel pool = cpuset, and work_mem = the cap left after shared_buffers over
+# the cpuset's processes, sixteen buffers each. BENCH_PG_FIT=off formats them to
+# PostgreSQL's own defaults (2 workers, a pool of 8, 4 MB) for a same-run A/B
+# and nothing else; the row's `server_cmd` records which ran.
+PG_FIT_CMD = ["-c", "max_worker_processes={pg_procs}", "-c", "max_parallel_workers={pg_par}",
+              "-c", "max_parallel_workers_per_gather={pg_workers}",
+              "-c", "max_parallel_maintenance_workers={pg_workers}", "-c", "work_mem={pg_work_mem}"]
+
 BACKENDS = {
     "arcadedb_embedded": {
         "topology": "embedded",
@@ -502,7 +519,20 @@ BACKENDS = {
         "server_image": "timescale/timescaledb@sha256:f7036933154c52dbc500f7b08ff8e28404a8ccabbf8ce3528142cde6ab253eef",  # 2.30.1-pg18
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
         "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
-                       "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=4GB"],
+                       "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=4GB"] + PG_FIT_CMD,
+        "server_port": 5432,
+        "ready_regex": r"(?s)PostgreSQL init process complete.*"
+                       r"database system is ready to accept connections",
+    },
+    # Plain PostgreSQL on the time-series lane (DECISIONS #131 item 6): the
+    # default arm's image, TimescaleDB's memory fit, and the pool fit.
+    "postgres_ts": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "postgres@sha256:7341002d2b8c7c5bdd7542a671a95b36196c0b5b888daf454ae4fc33ba5346d7",  # 18.6, the `postgres` arm's digest
+        "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
+        "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
+                       "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=4GB"] + PG_FIT_CMD,
         "server_port": 5432,
         "ready_regex": r"(?s)PostgreSQL init process complete.*"
                        r"database system is ready to accept connections",
@@ -546,6 +576,15 @@ BACKENDS = {
     # NO --replSet HERE: the entrypoint owns it, because mongot cannot sync
     # from a standalone and the set has to be initiated before mongot starts.
     "mongodb_dense": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "dbbench:mongo-search",
+        "server_port": 27017,
+        "ready_regex": r"DBBENCH mongod\+mongot ready",
+    },
+    # The int8 arm (DECISIONS #135): cloned rather than referenced, so a digest
+    # bump cannot move one arm of an ablation without the other (as qdrant_dense_int8).
+    "mongodb_dense_int8": {
         "topology": "client_server",
         "image": "dbbench:client",
         "server_image": "dbbench:mongo-search",
@@ -653,11 +692,12 @@ BACKENDS = {
         # tpch1), so a literal 6GB would be a quarter of one and a half of the
         # other. {sb} and {ecs} are filled in below from the memory this
         # container is actually given.
+        # work_mem was a constant 64MB until 2026-10-02; it is fitted to the
+        # cell now, with the parallel pools, as on every PostgreSQL arm (PG_FIT_CMD).
         "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}",
                        "-c", "effective_cache_size={ecs}",
-                       "-c", "work_mem=64MB",
                        "-c", "maintenance_work_mem=1GB",
-                       "-c", "max_wal_size=4GB"],
+                       "-c", "max_wal_size=4GB"] + PG_FIT_CMD,
         "server_port": 5432,
         "ready_regex": r"(?s)PostgreSQL init process complete.*"
                        r"database system is ready to accept connections",
@@ -776,8 +816,9 @@ BACKENDS = {
         "server_port": 7687,
         "ready_regex": r"Bolt server is fully armed and operational",
     },
-    # FALKORDB 4.20.6 on Redis 8.6.3 (2026-09-17), served, the falkordb Python
-    # client over the Redis protocol and the lane's Cypher verbatim
+    # FALKORDB 6.0.1 (2026-10-02, #129; 4.20.6 on Redis 8.6.3 from 2026-09-17
+    # until then), served, the falkordb Python client over the Redis protocol
+    # and the lane's Cypher verbatim
     # (l2_graph.FalkorGraph). The image's own FALKORDB_ARGS is
     # "MAX_QUEUED_QUERIES 25 TIMEOUT 1000 RESULTSET_SIZE 10000": a one-second
     # query timeout that aborts the triangle count at MICRO (1.2 s) and would
@@ -796,7 +837,7 @@ BACKENDS = {
     "falkordb_graph": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "falkordb/falkordb@sha256:0a9fe4d1ee0bdda8e0a85ff36d3f03ca9ab91cd9441c4a836afae32e4014e2f7",  # v4.20.6
+        "server_image": "falkordb/falkordb@sha256:2756fdea96acff753e49c459dc279a21a50915d7b2b38bff8a3950d10f984fd8",  # 6.0.1, amd64
         "server_env": ["-e", "BROWSER=0",
                        "-e", "FALKORDB_ARGS=THREAD_COUNT {ncpu} RESULTSET_SIZE -1"],
         "server_port": 6379,
@@ -813,6 +854,22 @@ BACKENDS = {
     "duckpgq_graph": {
         "topology": "embedded",
         "image": "dbbench:duckdb",
+    },
+    # PostgreSQL + Apache AGE on the graph tables (DECISIONS #128): the
+    # cross-model lane's image and its memory fit, every statement the lane's
+    # own Cypher through AGE's cypher(). Parallel workers and work_mem are
+    # fitted to the cell like every other engine's pools (see {pg_workers}
+    # and {pg_work_mem} below); the adapter reads each setting back.
+    "pgage_graph": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "dbbench:pg-age",  # PostgreSQL 18 + pgvector 0.8.6 + AGE 1.8.0, built from Dockerfile.pgage
+        "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
+        "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
+                       "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=4GB"] + PG_FIT_CMD,
+        "server_port": 5432,
+        "ready_regex": r"(?s)PostgreSQL init process complete.*"
+                       r"database system is ready to accept connections",
     },
     # ---- E2 hybrid-ACID lane ----
     "arcadedb_e2": {
@@ -836,10 +893,37 @@ BACKENDS = {
         "server_image": "dbbench:pg-age",  # PostgreSQL 18 + pgvector 0.8.6 + AGE 1.8.0, built from Dockerfile.pgage
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
         "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
-                       "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=4GB"],
+                       "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=4GB"] + PG_FIT_CMD,
         "server_port": 5432,
         "ready_regex": r"(?s)PostgreSQL init process complete.*"
                        r"database system is ready to accept connections",
+    },
+    # MEMGRAPH AND LADYBUGDB ON THE CROSS-MODEL TABLE (DECISIONS #131 item 4,
+    # from the 26.10.1 measurement): Memgraph served at the graph arm's digest
+    # and pools, LadybugDB embedded in the client image with its `vector`
+    # extension downloaded at connect.
+    "memgraph_e2": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "memgraph/memgraph@sha256:4710bee1ab5b47599876e30f17ae1679d0bbb2262d84dc06641521fecb7c89ce",  # 3.13.1
+        "server_cmd": ["--log-level=INFO", "--also-log-to-stderr=true",
+                       "--bolt-num-workers={ncpu}",
+                       "--storage-snapshot-thread-count={ncpu}",
+                       "--memory-limit={mem90_mib}",
+                       "--query-execution-timeout-sec=0",
+                       "--telemetry-enabled=false"],
+        "server_port": 7687,
+        "ready_regex": r"Bolt server is fully armed and operational",
+    },
+    "ladybug_e2": {
+        "topology": "embedded",
+        "image": "dbbench:client",
+    },
+    # DuckDB with vss and DuckPGQ in one engine (DECISIONS #131 item 4: tested,
+    # then added), embedded in the DuckDB image the other DuckDB arms run.
+    "duckdb_e2": {
+        "topology": "embedded",
+        "image": "dbbench:duckdb",
     },
     "neo4j_e2": {
         "topology": "client_server",
@@ -856,7 +940,7 @@ BACKENDS = {
     # Python SDK (core 2.3.10 through SDK 2.0.0, on its SurrealKV disk store, in the client
     # container) and served (3.2.4 on RocksDB). One engine, both modes, like
     # ArcadeDB.
-    # ArangoDB 3.12.11 (2026-09-13, DECISIONS #78), served only: python-arango
+    # ArangoDB (3.12.11 from 2026-09-13, DECISIONS #78; 3.12.12 from the 26.10.1 measurement, DECISIONS #156), served only: python-arango
     # is an HTTP client and the engine has no in-process mode, so one row per
     # table, like MongoDB. Root password through the image's own env;
     # --vector-index true is the 3.12 opt-in for the vector (FAISS IVF) index
@@ -866,7 +950,7 @@ BACKENDS = {
     "arangodb_tpc": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "arangodb@sha256:563cb2c07af0aead37fd688b58f51d6eb534a3da6163621e130e67d7a55176c4",  # 3.12.11
+        "server_image": "arangodb@sha256:4bc086d5050ca7ea11c6d00a36d8b910c838bb54ad553f8c1b715769d3499bcf",  # 3.12.12
         "server_env": ["-e", "ARANGO_ROOT_PASSWORD=dbbenchpass"],
         "server_cmd": ["arangod", "--vector-index", "true"],
         "server_port": 8529,
@@ -875,7 +959,7 @@ BACKENDS = {
     "arangodb_graph": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "arangodb@sha256:563cb2c07af0aead37fd688b58f51d6eb534a3da6163621e130e67d7a55176c4",  # 3.12.11
+        "server_image": "arangodb@sha256:4bc086d5050ca7ea11c6d00a36d8b910c838bb54ad553f8c1b715769d3499bcf",  # 3.12.12
         "server_env": ["-e", "ARANGO_ROOT_PASSWORD=dbbenchpass"],
         "server_cmd": ["arangod", "--vector-index", "true"],
         "server_port": 8529,
@@ -884,7 +968,17 @@ BACKENDS = {
     "arangodb_dense": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "arangodb@sha256:563cb2c07af0aead37fd688b58f51d6eb534a3da6163621e130e67d7a55176c4",  # 3.12.11
+        "server_image": "arangodb@sha256:4bc086d5050ca7ea11c6d00a36d8b910c838bb54ad553f8c1b715769d3499bcf",  # 3.12.12
+        "server_env": ["-e", "ARANGO_ROOT_PASSWORD=dbbenchpass"],
+        "server_cmd": ["arangod", "--vector-index", "true"],
+        "server_port": 8529,
+        "ready_regex": r"is ready for business",
+    },
+    # The SQ8 arm (DECISIONS #135): cloned, as every precision arm is.
+    "arangodb_dense_int8": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "arangodb@sha256:4bc086d5050ca7ea11c6d00a36d8b910c838bb54ad553f8c1b715769d3499bcf",  # 3.12.12
         "server_env": ["-e", "ARANGO_ROOT_PASSWORD=dbbenchpass"],
         "server_cmd": ["arangod", "--vector-index", "true"],
         "server_port": 8529,
@@ -893,7 +987,7 @@ BACKENDS = {
     "arangodb_e2": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "arangodb@sha256:563cb2c07af0aead37fd688b58f51d6eb534a3da6163621e130e67d7a55176c4",  # 3.12.11
+        "server_image": "arangodb@sha256:4bc086d5050ca7ea11c6d00a36d8b910c838bb54ad553f8c1b715769d3499bcf",  # 3.12.12
         "server_env": ["-e", "ARANGO_ROOT_PASSWORD=dbbenchpass"],
         "server_cmd": ["arangod", "--vector-index", "true"],
         "server_port": 8529,
@@ -914,7 +1008,7 @@ BACKENDS = {
         # as relaxed while changing nothing -- the BENCH_GAV=0 shape. The
         # embedded twin's SURREAL_SYNC_DATA is real and its default is
         # verified; see the DURABILITY maps in the lanes.
-        "server_cmd": ["start", "--user", "root", "--pass", "root", "--log", "info", "rocksdb:/tmp/surreal/db"],
+        "server_cmd": ["start", "--user", "root", "--pass", "root", "--log", "info", "rocksdb:/tmp/surreal/db?sync=never"],
         "server_port": 8000,
         "ready_regex": r"Started web server",
     },
@@ -933,7 +1027,7 @@ BACKENDS = {
         # as relaxed while changing nothing -- the BENCH_GAV=0 shape. The
         # embedded twin's SURREAL_SYNC_DATA is real and its default is
         # verified; see the DURABILITY maps in the lanes.
-        "server_cmd": ["start", "--user", "root", "--pass", "root", "--log", "info", "rocksdb:/tmp/surreal/db"],
+        "server_cmd": ["start", "--user", "root", "--pass", "root", "--log", "info", "rocksdb:/tmp/surreal/db?sync=never"],
         "server_port": 8000,
         "ready_regex": r"Started web server",
     },
@@ -941,6 +1035,16 @@ BACKENDS = {
     # The lifecycle comparator (2026-09-16): SurrealDB embedded through its SDK
     # on SurrealKV, under the lane's /lcdb bind mount like the ArcadeDB arm.
     "surrealdb_lifecycle": {"topology": "embedded", "image": "dbbench:client"},
+    # The in-process SQL engines on the lifecycle table (DECISIONS #131 item 5,
+    # queued last by #133): SQLite in the client image, DuckDB in its pinned one.
+    "sqlite_lifecycle": {"topology": "embedded", "image": "dbbench:client"},
+    "duckdb_lifecycle": {"topology": "embedded", "image": "dbbench:duckdb"},
+    # The other in-process engines on the page (row 40, 2026-10-02,
+    # l5_lifecycle_embedded): each in the image its other arms run in.
+    "ladybug_lifecycle": {"topology": "embedded", "image": "dbbench:client"},
+    "chroma_lifecycle": {"topology": "embedded", "image": "dbbench:dense"},
+    "lancedb_lifecycle": {"topology": "embedded", "image": "dbbench:dense"},
+    "sqlite_vec_lifecycle": {"topology": "embedded", "image": "dbbench:dense"},
     "surrealdb_dense_server": {
         "topology": "client_server",
         "image": "dbbench:client",
@@ -955,7 +1059,7 @@ BACKENDS = {
         # as relaxed while changing nothing -- the BENCH_GAV=0 shape. The
         # embedded twin's SURREAL_SYNC_DATA is real and its default is
         # verified; see the DURABILITY maps in the lanes.
-        "server_cmd": ["start", "--user", "root", "--pass", "root", "--log", "info", "rocksdb:/tmp/surreal/db"],
+        "server_cmd": ["start", "--user", "root", "--pass", "root", "--log", "info", "rocksdb:/tmp/surreal/db?sync=never"],
         "server_port": 8000,
         "ready_regex": r"Started web server",
     },
@@ -973,7 +1077,7 @@ BACKENDS = {
         # as relaxed while changing nothing -- the BENCH_GAV=0 shape. The
         # embedded twin's SURREAL_SYNC_DATA is real and its default is
         # verified; see the DURABILITY maps in the lanes.
-        "server_cmd": ["start", "--user", "root", "--pass", "root", "--log", "info", "rocksdb:/tmp/surreal/db"],
+        "server_cmd": ["start", "--user", "root", "--pass", "root", "--log", "info", "rocksdb:/tmp/surreal/db?sync=never"],
         "server_port": 8000,
         "ready_regex": r"Started web server",
     },
@@ -987,14 +1091,14 @@ BACKENDS = {
         "image": "dbbench:client",
         "server_image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",  # v3.2.4
         # No durability flag: 3.2.4 has none to set (see surrealdb_graph_server).
-        "server_cmd": ["start", "--user", "root", "--pass", "root", "--log", "info", "rocksdb:/tmp/surreal/db"],
+        "server_cmd": ["start", "--user", "root", "--pass", "root", "--log", "info", "rocksdb:/tmp/surreal/db?sync=never"],
         "server_port": 8000,
         "ready_regex": r"Started web server",
     },
     "arangodb_ts": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "arangodb@sha256:563cb2c07af0aead37fd688b58f51d6eb534a3da6163621e130e67d7a55176c4",  # 3.12.11
+        "server_image": "arangodb@sha256:4bc086d5050ca7ea11c6d00a36d8b910c838bb54ad553f8c1b715769d3499bcf",  # 3.12.12
         "server_env": ["-e", "ARANGO_ROOT_PASSWORD=dbbenchpass"],
         "server_cmd": ["arangod", "--vector-index", "true"],
         "server_port": 8529,
@@ -1104,6 +1208,14 @@ BACKENDS = {
         "ready_regex": r"HTTP Server started",
     },
     "qdrant_sparse": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "qdrant/qdrant@sha256:0699e7733a6fa7fa7f6b95dcbed84ebb04584110da525cdfdef9f305c4f57738",  # v1.19.1
+        "server_port": 6333,
+        "ready_regex": r"Qdrant (HTTP|gRPC) listening|Actix runtime found",
+    },
+    # The uint8-weight arm (DECISIONS #135): cloned, as every precision arm is.
+    "qdrant_sparse_uint8": {
         "topology": "client_server",
         "image": "dbbench:client",
         "server_image": "qdrant/qdrant@sha256:0699e7733a6fa7fa7f6b95dcbed84ebb04584110da525cdfdef9f305c4f57738",  # v1.19.1
@@ -1234,6 +1346,8 @@ BACKENDS = {
                                      "image": "dbbench:arcadedb"},
     "chroma_dense": {"topology": "embedded", "image": "dbbench:dense"},
     "lancedb_dense": {"topology": "embedded", "image": "dbbench:dense"},
+    # LanceDB's unquantized IVF_HNSW_FLAT, the fp32 counterpart of its int8 arm.
+    "lancedb_dense_fp32": {"topology": "embedded", "image": "dbbench:dense"},
     "sqlite_vec_dense": {"topology": "embedded", "image": "dbbench:dense"},
     "sqlite_vec_dense_int8": {"topology": "embedded", "image": "dbbench:dense"},
     "duckdb_vss_dense": {"topology": "embedded", "image": "dbbench:dense"},
@@ -1266,7 +1380,7 @@ BACKENDS = {
         "server_image": "pgvector/pgvector@sha256:1d50c689b0a6511b9ea0a15615281c81a59fd04a08eb35057ec8646fb3a2118a",  # 0.8.6-pg18
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
         "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
-                       "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=8GB"],
+                       "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=8GB"] + PG_FIT_CMD,
         "server_port": 5432,
         "ready_regex": r"(?s)PostgreSQL init process complete.*"
                        r"database system is ready to accept connections",
@@ -1277,7 +1391,7 @@ BACKENDS = {
         "server_image": "pgvector/pgvector@sha256:1d50c689b0a6511b9ea0a15615281c81a59fd04a08eb35057ec8646fb3a2118a",  # 0.8.6-pg18
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
         "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
-                       "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=8GB"],
+                       "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=8GB"] + PG_FIT_CMD,
         "server_port": 5432,
         "ready_regex": r"(?s)PostgreSQL init process complete.*"
                        r"database system is ready to accept connections",
@@ -1294,6 +1408,85 @@ BACKENDS = {
         "server_port": 7687,
         "ready_regex": r"Started\.",
     },
+    "neo4j_dense_int8": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "neo4j@sha256:e702d6b535d9d3ae01ee7b132ec87aa40e23d3f0ace82fbfc344e2048cb81960",  # 2026.08.1-community
+        "server_env": ["-e", "NEO4J_AUTH=neo4j/dbbenchpass",
+                       "-e", "NEO4J_server_memory_heap_initial__size={heap}",
+                       "-e", "NEO4J_server_memory_heap_max__size={heap}",
+                       "-e", "NEO4J_server_memory_pagecache_size={pagecache}"],
+        "server_port": 7687,
+        "ready_regex": r"Started\.",
+    },
+    # THE #131 ITEM 3 ARMS (2026-10-02, CAMPAIGN section 7 rows 37-38). Each
+    # reuses its engine's pinned image and fitted flags from the lane where
+    # it already runs, so one engine wears one configuration on the page.
+    # Elasticsearch: the sparse arm's image and heap (-Xms=-Xmx at the tier
+    # heap, F3); the adapter reads heap_max and the processor count back.
+    "elasticsearch_dense": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "docker.elastic.co/elasticsearch/elasticsearch@sha256:33178ff49e06da93e3c51c5d87401b26e7a6dea0ef9bb26539cfddc46478b420",  # 9.5.4, the sparse arm's
+        "server_env": ["-e", "discovery.type=single-node", "-e", "xpack.security.enabled=false",
+                       "-e", "ES_JAVA_OPTS=-Xms{heap} -Xmx{heap}"],
+        "server_port": 9200,
+        "ready_regex": r'"message":"started|current.health=\"GREEN\"',
+    },
+    # The int8 arm: cloned rather than referenced, so a digest bump cannot
+    # move one arm of an ablation without the other (as qdrant_dense_int8).
+    "elasticsearch_dense_int8": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "docker.elastic.co/elasticsearch/elasticsearch@sha256:33178ff49e06da93e3c51c5d87401b26e7a6dea0ef9bb26539cfddc46478b420",  # 9.5.4, the sparse arm's
+        "server_env": ["-e", "discovery.type=single-node", "-e", "xpack.security.enabled=false",
+                       "-e", "ES_JAVA_OPTS=-Xms{heap} -Xmx{heap}"],
+        "server_port": 9200,
+        "ready_regex": r'"message":"started|current.health=\"GREEN\"',
+    },
+    # Memgraph: the graph arm's image and every fitted flag (F6).
+    "memgraph_dense": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "memgraph/memgraph@sha256:4710bee1ab5b47599876e30f17ae1679d0bbb2262d84dc06641521fecb7c89ce",  # 3.13.1, the graph arm's
+        "server_cmd": ["--log-level=INFO", "--also-log-to-stderr=true",
+                       "--bolt-num-workers={ncpu}",
+                       "--storage-snapshot-thread-count={ncpu}",
+                       "--memory-limit={mem90_mib}",
+                       "--query-execution-timeout-sec=0",
+                       "--telemetry-enabled=false"],
+        "server_port": 7687,
+        "ready_regex": r"Bolt server is fully armed and operational",
+    },
+    # The i8 arm (DECISIONS #135): cloned, as every precision arm is.
+    "memgraph_dense_int8": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "memgraph/memgraph@sha256:4710bee1ab5b47599876e30f17ae1679d0bbb2262d84dc06641521fecb7c89ce",  # 3.13.1, the graph arm's
+        "server_cmd": ["--log-level=INFO", "--also-log-to-stderr=true",
+                       "--bolt-num-workers={ncpu}",
+                       "--storage-snapshot-thread-count={ncpu}",
+                       "--memory-limit={mem90_mib}",
+                       "--query-execution-timeout-sec=0",
+                       "--telemetry-enabled=false"],
+        "server_port": 7687,
+        "ready_regex": r"Bolt server is fully armed and operational",
+    },
+    # FalkorDB 6.0.1: 4.x crashes on a write inside a vector statement
+    # (repros/falkordb-vector-write/). The graph arm moved to the same digest
+    # on 2026-10-02 (#129), so one FalkorDB wears the page; its flags (F6).
+    "falkordb_dense": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "falkordb/falkordb@sha256:2756fdea96acff753e49c459dc279a21a50915d7b2b38bff8a3950d10f984fd8",  # 6.0.1
+        "server_env": ["-e", "BROWSER=0",
+                       "-e", "FALKORDB_ARGS=THREAD_COUNT {ncpu} RESULTSET_SIZE -1"],
+        "server_port": 6379,
+        "ready_regex": r"Ready to accept connections",
+    },
+    # LadybugDB: embedded in the client image, as the graph arm is; the
+    # adapter fits its threads and buffer pool to the cell (F160).
+    "ladybug_dense": {"topology": "embedded", "image": "dbbench:client"},
     "milvus_dense": {
         "topology": "client_server",
         "image": "dbbench:client",
@@ -1357,6 +1550,44 @@ BACKENDS["arcadedb_ts_native_server"] = dict(BACKENDS["arcadedb_server"])
 # E4's decomposition needs the wheel (in-process arms) AND a served arm, so its
 # client is the wheel image and the server the pinned one.
 BACKENDS["arcadedb_e4"] = dict(BACKENDS["arcadedb_server"], image="dbbench:arcadedb")
+
+
+# THE SENSITIVITY ARM AT THE IMAGE'S OWN JVM DEFAULTS (CAMPAIGN 7 row 69, DECISIONS
+# #159). Every served ArcadeDB arm above sets ARCADEDB_OPTS_MEMORY to
+# `-Xms{heap} -Xmx{heap}` and clears ARCADEDB_OPTS_GC, so that the embedded-versus-
+# served comparison isolates transport: one JVM configuration on both deployments
+# (G1, a heap half the cell's memory, -Xms equal to -Xmx). ArcadeDB's maintainers
+# answered (ArcadeData/arcadedb#9167) that the image's own defaults are a heap of
+# 75% of the container limit, generational ZGC, and no -Xms. This arm is started
+# WITHOUT those two variables, so the image applies exactly that, and it is printed
+# beside the main arm on one lane (documents OLTP, served, the 2M-part cell, three
+# repetitions; ARM_RUNS keeps it to that workload, size, and rep count). It is DERIVED
+# from arcadedb_server rather than copied, so every other setting (the root
+# password, the default database, the query cap, the build cache, the compact
+# object headers, the strict-class flag) is the main arm's by construction and the
+# only differences are the heap and the collector. `jvm_defaults` tells the cell to
+# read the JVM's flags back from the running process (server_jvm_readback) and to
+# stop claiming the tier heap on the row.
+def _at_image_jvm_defaults(cfg):
+    out = dict(cfg)
+    env, kept, dropped, i = list(cfg["server_env"]), [], [], 0
+    while i < len(env):
+        if (env[i] == "-e" and i + 1 < len(env)
+                and str(env[i + 1]).startswith(("ARCADEDB_OPTS_MEMORY=", "ARCADEDB_OPTS_GC="))):
+            dropped.append(str(env[i + 1]).split("=", 1)[0])
+            i += 2
+            continue
+        kept.append(env[i])
+        i += 1
+    if sorted(dropped) != ["ARCADEDB_OPTS_GC", "ARCADEDB_OPTS_MEMORY"]:
+        raise SystemExit("arcadedb_server no longer sets ARCADEDB_OPTS_MEMORY and ARCADEDB_OPTS_GC, so the "
+                         f"image-defaults arm cannot be derived from it (dropped {dropped})")
+    out["server_env"] = kept
+    out["jvm_defaults"] = True
+    return out
+
+
+BACKENDS["arcadedb_imgdefaults_server"] = _at_image_jvm_defaults(BACKENDS["arcadedb_server"])
 
 # ---------------------------------------------------------------- local engine
 # FAST-ITERATION MODE. The project page is no longer pinned to a PyPI release: the
@@ -1517,15 +1748,16 @@ LANES = {
     "l2": ("l2_graph.py",
            ["arcadedb_graph_embedded", "arcadedb_graph_server",
             "neo4j_graph", "ladybug_graph", "surrealdb_graph", "surrealdb_graph_server", "arangodb_graph",
-            "mongodb_graph", "memgraph_graph", "falkordb_graph", "duckpgq_graph"],
+            "mongodb_graph", "memgraph_graph", "falkordb_graph", "duckpgq_graph", "pgage_graph"],
            ["oltp", "olap"]),
     "l1tpc": ("l1_tpc.py",
-              ["arcadedb_embedded", "arcadedb_server", "duckdb", "sqlite", "mongodb", "surrealdb_tpc",
-               "surrealdb_tpc_server", "arangodb_tpc", "postgres", "postgres_tuned"],
+              ["arcadedb_embedded", "arcadedb_server", "arcadedb_imgdefaults_server", "duckdb", "sqlite", "mongodb",
+               "surrealdb_tpc", "surrealdb_tpc_server", "arangodb_tpc", "postgres", "postgres_tuned"],
               ["oltp", "olap"]),
     "e2": ("e2_hybrid.py",
            ["arcadedb_e2", "arcadedb_e2_server", "surrealdb_e2", "surrealdb_e2_server",
-            "arangodb_e2", "mongodb_e2", "pg_age_e2", "neo4j_e2", "composed_qdrant_neo4j"],
+            "arangodb_e2", "mongodb_e2", "pg_age_e2", "neo4j_e2", "memgraph_e2", "ladybug_e2",
+            "duckdb_e2", "composed_qdrant_neo4j"],
            ["hybrid", "atomicity"]),
     # L5 measures OPEN and CLOSE, which every embedded deployment does and no
     # benchmark measures. Situations ride the WORKLOAD axis, so each is its own
@@ -1534,26 +1766,64 @@ LANES = {
     # 2026-09-16 (DECISIONS #95a) against the one other engine on the page
     # that a process can open and close in-process: SurrealDB embedded, whose
     # situations it cannot build are declared on the row (l5_lifecycle_surreal).
+    #
+    # THE SINGLE-MODEL EMBEDDED ENGINES ARE NOT ON THIS LANE (DECISIONS #139,
+    # amending #131 item 5). sqlite_lifecycle, duckdb_lifecycle,
+    # ladybug_lifecycle, chroma_lifecycle, lancedb_lifecycle, and
+    # sqlite_vec_lifecycle stay registered in BACKENDS and runnable by name
+    # (`--lanes lifecycle --backends sqlite_lifecycle`), but the lane's roster,
+    # which the stage generator and page_check's coverage read, is the
+    # embeddable multi-model engines: a single-model specialist runs only on
+    # its own model's tables (#131 item 1), and lifecycle is a cross-model one.
     "lifecycle": ("l5_lifecycle.py",
                   ["arcadedb_embedded", "arcadedb_server", "surrealdb_lifecycle"],
                   ["empty", "doc", "doc_idx10", "graph", "graph_gav",
                    "vector", "sparse", "ts"]),
+    # L6, the server restart (DECISIONS #139 item 2): every served engine on
+    # the page, one model each through its own lane's loader, restarted in
+    # place by the lane (it stops and starts its own server container through
+    # the Docker socket, mounted for this lane alone, below). The scale names
+    # the model: tpch*/micro documents, sf*/micro graph, small/deep10m/micro
+    # dense, ts* time series, so each cell gets its source lane's envelope.
+    # PostgreSQL stands for pgvector, PG+AGE, and TimescaleDB (one server
+    # binary); MongoDB appears twice because its search arm runs a second
+    # process, mongot, that a restart must bring back too.
+    # ArcadeDB's server runs all four models, so every group has the engine
+    # under test beside it (a page table publishes a tier only where ArcadeDB
+    # has a row).
+    "restart": ("l6_restart.py",
+                ["arcadedb_server", "surrealdb_tpc_server", "arangodb_tpc", "mongodb", "postgres",
+                 "arcadedb_graph_server", "neo4j_graph", "memgraph_graph", "falkordb_graph",
+                 "arcadedb_dense_server", "qdrant_dense", "milvus_dense", "elasticsearch_dense",
+                 "mongodb_dense",
+                 "arcadedb_ts_native_server", "questdb"],
+                ["restart"]),
     "l3s": ("l3_sparse.py",
             ["arcadedb_sparse_embedded", "arcadedb_sparse_embedded_fp32",
              "arcadedb_sparse_embedded_nocompact", "arcadedb_sparse_server",
              "arcadedb_sparse_server_fp32", "pgvector_sparse",
-             "qdrant_sparse", "milvus_sparse", "elasticsearch_sparse"],
+             "qdrant_sparse", "milvus_sparse", "elasticsearch_sparse",
+             # Qdrant's uint8 weights, the sparse lane's int8-class comparator
+             # arm (DECISIONS #135, 2026-10-02)
+             "qdrant_sparse_uint8"],
             ["search"]),
     "l3d": ("l3d_dense.py",
             ["arcadedb_dense_embedded", "arcadedb_dense_server", "chroma_dense", "lancedb_dense",
              "sqlite_vec_dense", "duckdb_vss_dense", "qdrant_dense",
-             "milvus_dense", "pgvector_dense", "neo4j_dense", "surrealdb_dense", "surrealdb_dense_server",
+             "milvus_dense", "pgvector_dense", "neo4j_dense", "neo4j_dense_int8", "surrealdb_dense", "surrealdb_dense_server",
              "arangodb_dense", "mongodb_dense",
-             # int8 arms for every dense engine that ships a quantized index.
-             # Chroma, DuckDB-VSS and sqlite-vec have none; LanceDB is int8
-             # already (IVF_HNSW_SQ is its only HNSW offering).
+             # #131 item 3 (2026-10-02): Elasticsearch, Memgraph, FalkorDB,
+             # LadybugDB; Elasticsearch's int8 arm with the int8 arms below.
+             "elasticsearch_dense", "memgraph_dense", "falkordb_dense", "ladybug_dense",
+             # int8 arms for every dense engine that ships a quantized index
+             # (QUANTIZATION.md). Chroma, DuckDB-VSS, pgvector and SurrealDB
+             # ship no int8 mode; FalkorDB and LadybugDB document none.
+             # LanceDB's int8 arm is lancedb_dense (IVF_HNSW_SQ), and its fp32
+             # arm the suffixed one.
              "arcadedb_dense_embedded_int8", "qdrant_dense_int8",
-             "milvus_dense_int8",
+             "milvus_dense_int8", "elasticsearch_dense_int8",
+             # DECISIONS #135 (2026-10-02)
+             "mongodb_dense_int8", "memgraph_dense_int8", "lancedb_dense_fp32", "arangodb_dense_int8",
              # added 2026-08-30 under DECISIONS #53: every engine at every
              # precision it ships. The server arm is ours and was the one the
              # decision owed first.
@@ -1588,7 +1858,9 @@ LANES = {
            ["arcadedb_ts_doc", "arcadedb_ts_doc_server", "arcadedb_ts_native", "arcadedb_ts_native_server", "questdb", "duckdb", "sqlite", "mongodb", "timescaledb",
             # The plain-table comparators (2026-09-15): no time-series type,
             # SQLite's footing, see l4_tsbs.SurrealTS / ArangoTS.
-            "surrealdb_ts", "surrealdb_ts_server", "arangodb_ts"],
+            "surrealdb_ts", "surrealdb_ts_server", "arangodb_ts",
+            # Plain PostgreSQL beside TimescaleDB (DECISIONS #131 item 6).
+            "postgres_ts"],
            ["ingest"]),
 }
 
@@ -1636,8 +1908,8 @@ def durability_server_patch(cfg, cls):
     # own JVM, appended to JAVA_OPTS.
     for i, e in enumerate(env):
         if isinstance(e, str) and e.startswith("JAVA_OPTS="):
-            env[i] = e + " -Darcadedb.txWalFlush=2"
-            notes.append("txWalFlush=2")
+            env[i] = e + f" -Darcadedb.txWalFlush={bench_common.ARCADE_STRICT_TX_WAL_FLUSH}"
+            notes.append(f"txWalFlush={bench_common.ARCADE_STRICT_TX_WAL_FLUSH}")
     # QuestDB: its commit mode is a server setting.
     if "questdb" in str(cfg.get("server_image", "")):
         env += ["-e", "QDB_CAIRO_COMMIT_MODE=sync"]
@@ -1653,9 +1925,99 @@ def durability_server_patch(cfg, cls):
     if "falkordb" in str(cfg.get("server_image", "")):
         env += ["-e", "REDIS_ARGS=--appendonly yes --appendfsync always"]
         notes.append("appendonly=yes, appendfsync=always")
+    # SurrealDB served (BUGS F165): the sync mode is a query parameter on the
+    # storage path, `sync=never|every|<interval>`; the relaxed path carries
+    # never, and every is a sync at each commit (strace: one fdatasync per
+    # commit). The runner reads the mode back from the startup log.
+    if "surrealdb/surrealdb" in str(cfg.get("server_image", "")):
+        cmd = [c.replace("?sync=never", "?sync=every") if isinstance(c, str) else c for c in cmd]
+        notes.append("sync=every")
     cfg["server_cmd"] = cmd
     cfg["server_env"] = env
     return cfg, (", ".join(notes) if notes else None)
+
+
+# The environment variables a campaign sets to choose an operating point or an
+# ablation. The manifest records the ones the runner was started with; the
+# forwarding allowlist in run_cell decides which of them reach a lane.
+MANIFEST_ENV_PREFIXES = ("BENCH_", "TS_", "E2_", "ARCADEDB_")
+
+
+def build_manifest(ts, args, workers, shards, jobs):
+    """What this runner invocation was asked to run, written once before the
+    first cell and named by every row it produces (`manifest`).
+
+    It recorded the cpuset, the memory caps, the heap, and the image digests,
+    and no ENGINE configuration (PROTOCOL.md section 7's last unsanctioned row,
+    CAMPAIGN section 7 row 21): the settings this benchmark overrides were
+    recorded nowhere in the artifact. `engine_config` holds, per backend of the
+    batch, the launch configuration the runner passes (the server's env and
+    command as templates, after the durability axis has patched them, with the
+    scalars they are formatted from beside them) and the keys of the registered
+    overrides that apply to it (overrides.py). `runner_env` holds the
+    campaign's own switches as set in the runner's environment. This is what
+    was ASKED; what the engine answered is on each row (fairness_check F15).
+    """
+    import overrides
+    manifest = {"ts": ts, "tier": args.tier, "scale": args.scale, "cpuset": CPUSET,
+                "workers": workers, "shards": shards,
+                "reps": args.reps, "seed": args.seed,
+                "mem": MEM_BY_SCALE[args.scale], "heap": HEAP_BY_SCALE[args.scale],
+                "server_mem_fraction": SERVER_MEM_FRACTION,
+                "client_mem": CLIENT_MEM,
+                "ncpu": _cpuset_size(CPUSET),
+                "images": {}, "engine_config": {}, "runner_env": {}}
+    cls = os.environ.get("BENCH_DURABILITY", "relaxed")
+    for j in jobs:
+        be = BACKENDS[j["backend"]]
+        for img in filter(None, [be.get("image"), be.get("server_image")]):
+            manifest["images"].setdefault(img, image_digest(img))
+        if j["backend"] in manifest["engine_config"]:
+            continue
+        patched, note = durability_server_patch(be, cls)
+        manifest["engine_config"][j["backend"]] = {
+            "topology": be.get("topology"),
+            "server_env": list(patched.get("server_env", [])),
+            "server_cmd": list(patched.get("server_cmd", [])),
+            "durability_class": cls,
+            "durability_server_flags": note,
+            "overrides": overrides.keys_for_backend(j["backend"]),
+        }
+    manifest["runner_env"] = {k: v for k, v in sorted(os.environ.items())
+                              if k.startswith(MANIFEST_ENV_PREFIXES)}
+    # THE ARCADEDB SERVED ARMS' HTTP CLIENT, resolved (CAMPAIGN 7 row 72): the environment above says what was SET, which is
+    # nothing at the default, so the choice that applies is recorded by name beside it. Each served row records what its own session
+    # ran with (`arcadedb_http_client`, read from the session).
+    import lean_http
+    manifest["arcadedb_http_client"] = lean_http.client_choice()
+    # THE JPYPE THE EMBEDDED ARMS OF THIS BATCH RUN WITH (CAMPAIGN 7 row 73), read back out of the bench image they run in by
+    # importing it there: what the image holds, not what the pin says. Each row records what its own process imported
+    # (`jpype_version`). Empty when the batch has no arm that runs in the ArcadeDB bench image, or the image cannot be read.
+    manifest["jpype_version"] = _batch_jpype_version(jobs)
+    return manifest
+
+
+# The image the embedded ArcadeDB arms run in (BACKENDS "image"): the only bench image whose wheel pulls JPype in.
+ARCADEDB_BENCH_IMAGE = "dbbench:arcadedb"
+
+
+def jpype_version_in_image(image, timeout=180):
+    """The JPype version a bench image holds (`jpype.__version__`, read by importing it there), or "" when it
+    cannot be read: docker absent, the image missing, JPype not installed. Never a guess."""
+    try:
+        r = subprocess.run(["docker", "run", "--rm", "--entrypoint", "python3", image, "-c",
+                            "import jpype; print(jpype.__version__)"],
+                           capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    out = r.stdout.strip().splitlines()
+    return out[-1].strip() if r.returncode == 0 and out else ""
+
+
+def _batch_jpype_version(jobs):
+    if not any(BACKENDS[j["backend"]].get("image") == ARCADEDB_BENCH_IMAGE for j in jobs):
+        return ""
+    return jpype_version_in_image(ARCADEDB_BENCH_IMAGE)
 
 
 def _pagecache_for(server_mem_bytes, heap):
@@ -2101,7 +2463,159 @@ def observe_server(cid):
     pc = re.findall(r"pagecache[_.]size=([\d.]+)([gGmM])", envs, re.I)
     if pc:
         out["server_pagecache"] = f"{pc[-1][0]}{pc[-1][1].lower()}"
+    # THE SERVED ARCADEDB'S QUERY CAP (CAMPAIGN section 7 row 21): every served
+    # ArcadeDB arm is launched with -Darcadedb.queryMaxHeapElementsAllowedPerOp
+    # fixed, where the embedded package leaves the engine default (which scales
+    # with the heap). The engine is asked for the value it runs with.
+    cap = re.findall(r"-Darcadedb\.queryMaxHeapElementsAllowedPerOp=(\d+)", envs)
+    if cap:
+        out.update(arcadedb_cap_readback(cid, envs, int(cap[-1])))
     return out
+
+
+def server_jvm_readback(cid):
+    """The JVM flags a served ArcadeDB is RUNNING with, read from the running
+    process and from the JVM itself (CAMPAIGN 7 row 69).
+
+    The container's environment says what the launcher passed; the image's own
+    defaults fill in what it did not (ARCADEDB_OPTS_MEMORY and ARCADEDB_OPTS_GC
+    are ENV entries of the image, and `bin/server.sh` execs java, so PID 1 is the
+    JVM). Two reads, both outside every timer and before the client starts:
+    `/proc/1/cmdline` is what the JVM was launched with, and `jcmd 1 VM.flags` is
+    what it settled on (its maximum and initial heap in bytes, its collector).
+    Anything unreadable is recorded as a reason and never ends a cell; the cell
+    that needs the answer (the image-defaults arm) checks it where it is used.
+    """
+    out = {}
+    try:
+        cmd = subprocess.run(["docker", "exec", cid, "sh", "-c", "tr '\\0' ' ' < /proc/1/cmdline"],
+                             capture_output=True, text=True, timeout=30).stdout.strip()
+        # the JVM's own option flags only, in launch order (not -D properties, which carry the password)
+        out["server_jvm_flags"] = " ".join(t for t in cmd.split() if re.match(r"-X[a-zA-Z]|-XX:", t))
+        vm = subprocess.run(["docker", "exec", cid, "jcmd", "1", "VM.flags"],
+                            capture_output=True, text=True, timeout=30).stdout
+        mx = re.search(r"-XX:MaxHeapSize=(\d+)", vm)
+        ms = re.search(r"-XX:InitialHeapSize=(\d+)", vm)
+        if mx:
+            out["server_jvm_max_heap_bytes"] = int(mx.group(1))
+        if ms:
+            out["server_jvm_initial_heap_bytes"] = int(ms.group(1))
+        ver = subprocess.run(["docker", "exec", cid, "jcmd", "1", "VM.version"],
+                             capture_output=True, text=True, timeout=30).stdout
+        major = re.search(r"VM version (\d+)", ver)
+        if major:
+            out["server_jvm_major"] = int(major.group(1))
+        if "-XX:+UseZGC" in vm:
+            # JDK 24 removed the non-generational ZGC and the ZGenerational flag with it, so on 24 and
+            # later `-XX:+UseZGC` IS the generational collector and VM.flags no longer lists the flag
+            # (the first rehearsal cell of the image-defaults arm was refused for exactly that).
+            gen = ("-XX:+ZGenerational" in vm
+                   or ("-XX:-ZGenerational" not in vm and out.get("server_jvm_major", 0) >= 24))
+            out["server_jvm_gc"] = "ZGC generational" if gen else "ZGC"
+        elif "-XX:+UseG1GC" in vm:
+            out["server_jvm_gc"] = "G1"
+        elif "-XX:+UseParallelGC" in vm:
+            out["server_jvm_gc"] = "Parallel"
+        elif "-XX:+UseSerialGC" in vm:
+            out["server_jvm_gc"] = "Serial"
+        if not mx or "server_jvm_gc" not in out:
+            out["server_jvm_readback_error"] = "jcmd VM.flags did not report the heap and the collector"
+    except Exception as e:  # noqa: BLE001 - recorded, never swallowed
+        out["server_jvm_readback_error"] = f"{type(e).__name__}: {e}"
+    return out
+
+
+def image_defaults_findings(row, server_mem):
+    """What the image-defaults arm must show for the cell to be the one asked for:
+    a heap of 75% of the container limit, generational ZGC, and no -Xms. Returns
+    [] when it does, else the reasons. Held to the JVM's own answer, not to the
+    environment the launcher built."""
+    bad = []
+    mx = row.get("server_jvm_max_heap_bytes")
+    want = server_mem * 0.75
+    if mx is None:
+        bad.append("no heap read back from the JVM")
+    elif abs(mx - want) > 0.02 * want:
+        bad.append(f"max heap {mx} bytes where 75% of the {server_mem}-byte limit is {int(want)}")
+    if row.get("server_jvm_gc") != "ZGC generational":
+        bad.append(f"collector {row.get('server_jvm_gc')!r}, expected 'ZGC generational'")
+    flags = str(row.get("server_jvm_flags") or "")
+    if re.search(r"-Xm[sx]", flags):
+        bad.append(f"-Xms/-Xmx on the command line ({flags[:120]!r})")
+    return bad
+
+
+def _gib_text(n_bytes):
+    """12884901888 -> '12g'; 2415919104 -> '2.25g'."""
+    gib = n_bytes / float(1 << 30)
+    return (str(int(gib)) if gib == int(gib) else f"{gib:.2f}".rstrip("0").rstrip(".")) + "g"
+
+
+def heap_witness(row):
+    """Reconcile the two witnesses of a served JVM's heap and record where the answer came from.
+
+    `observe_server` reads the heap from the container's environment, and only from `-Xmx`
+    (or a heap-size setting a comparator takes), so a JVM started without one (the image-defaults
+    arm) had no witness and every gate called its heap "unverifiable". The runner also reads the
+    running JVM (`server_jvm_readback`: MaxHeapSize from `jcmd VM.flags`), and that is the truer
+    witness. Rules, for a row that has the JVM's answer:
+
+      * the container's environment names a heap (`server_heap`): it must be the heap the JVM runs
+        (within 1%), or the setting written is not the setting in force; the row keeps its value and
+        says `server_heap_source` is the environment, confirmed by the JVM;
+      * it names none: the JVM's heap becomes `server_heap`, and the source says so.
+
+    A row with no JVM answer is left exactly as it was (every arm keeps its current witness).
+    Returns the findings, [] when the witnesses agree or only one exists."""
+    mx = row.get("server_jvm_max_heap_bytes")
+    if not isinstance(mx, (int, float)) or not mx:
+        return []
+    env = row.get("server_heap")
+    if not env:
+        row["server_heap"] = _gib_text(mx)
+        row["server_heap_source"] = "the running JVM (jcmd VM.flags); the container's environment sets no -Xmx"
+        return []
+    m = re.fullmatch(r"([\d.]+)([gGmM])", str(env))
+    want = float(m.group(1)) * ((1 << 30) if m.group(2) in "gG" else (1 << 20)) if m else None
+    if want and abs(mx - want) > 0.01 * want:
+        return [f"the container's environment sets a heap of {env} and the running JVM reports {_gib_text(mx)}"]
+    row["server_heap_source"] = "the container's environment (-Xmx), confirmed by the running JVM"
+    return []
+
+
+def arcadedb_cap_readback(cid, envs, from_env):
+    """The query cap a served ArcadeDB runs with, asked of the engine.
+
+    `SELECT FROM schema:database` returns every effective global setting with
+    its value (verified on the laptop: 5000000 under JAVA_OPTS), and the host
+    reaches the container over its bridge network. If the host cannot ask, the
+    value from the container's own JAVA_OPTS is recorded and the source field
+    says so, so a reader is never told a read-back that did not happen. Runs
+    before the client starts and outside every timer; it never ends a cell.
+    """
+    pw = re.search(r"-Darcadedb\.server\.rootPassword=(\S+)", envs)
+    db = re.search(r"-Darcadedb\.server\.defaultDatabases=(\w+)", envs)
+    ips = (sh(["docker", "inspect", "-f",
+               "{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}", cid]) or "").split()
+    key = "arcadedb.queryMaxHeapElementsAllowedPerOp"
+    for ip in ips[:1]:
+        for attempt in range(3):
+            try:
+                req = urllib.request.Request(
+                    f"http://{ip}:2480/api/v1/query/{db.group(1) if db else 'bench'}",
+                    data=json.dumps({"language": "sql", "command": "SELECT FROM schema:database"}).encode(),
+                    headers={"Content-Type": "application/json",
+                             "Authorization": "Basic " + base64.b64encode(
+                                 f"root:{pw.group(1) if pw else 'dbbenchpass'}".encode()).decode()})
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    settings = json.load(resp)["result"][0]["settings"]
+                val = next(s["value"] for s in settings if s["key"] == key)
+                return {"server_query_max_heap_elements": int(val),
+                        "server_query_max_heap_source": "read from the engine over HTTP (schema:database)"}
+            except Exception:  # noqa: BLE001 - fall through to the env value, labelled
+                time.sleep(1)
+    return {"server_query_max_heap_elements": from_env,
+            "server_query_max_heap_source": "the container's JAVA_OPTS (the engine could not be asked from the host)"}
 
 
 # --driver: run a different script inside the SAME cell envelope.
@@ -2122,10 +2636,15 @@ MP_LABELS = {
     "qdrant_dense": "qdrant", "qdrant_dense_int8": "qdrant_int8",
     "chroma_dense": "chroma", "duckdb_vss_dense": "duckvss",
     "lancedb_dense": "lancedb",
-    "pgvector_dense": "pgvector", "neo4j_dense": "neo4jvec",
+    "pgvector_dense": "pgvector", "neo4j_dense": "neo4jvec", "neo4j_dense_int8": "neo4jvec_int8",
     "surrealdb_dense": "surreal", "surrealdb_dense_server": "surrealsrv",
     "arangodb_dense": "arango", "mongodb_dense": "mongo",
     "sqlite_vec_dense": "sqlitevec", "sqlite_vec_dense_int8": "sqlitevec_int8",
+    "elasticsearch_dense": "elastic", "elasticsearch_dense_int8": "elastic_int8",
+    "memgraph_dense": "memgraph", "falkordb_dense": "falkordb", "ladybug_dense": "ladybug",
+    # DECISIONS #135 (2026-10-02)
+    "mongodb_dense_int8": "mongo_int8", "memgraph_dense_int8": "memgraph_int8",
+    "lancedb_dense_fp32": "lancedb_fp32", "arangodb_dense_int8": "arango_int8",
 }
 
 
@@ -2138,7 +2657,7 @@ MP_LABELS.update({
     "arcadedb_sparse_server": "arc_srv",
     "arcadedb_sparse_server_fp32": "arc_srv_fp32", "qdrant_sparse": "qdrant",
     "milvus_sparse": "milvus", "elasticsearch_sparse": "elastic",
-    "pgvector_sparse": "pgvector",
+    "pgvector_sparse": "pgvector", "qdrant_sparse_uint8": "qdrant_uint8",
 })
 
 
@@ -2212,8 +2731,8 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
            # Deliberately keyed on the backend NAME rather than a flag, so
            # adding a JVM comparator without listing it here fails loudly as a
            # missing heap rather than quietly as an unchecked one.
-           **({"heap": heap} if any(t in job["backend"] for t in JVM_BACKENDS)
-              else {}),
+           **({"heap": (None if be.get("jvm_defaults") else heap)}
+              if any(t in job["backend"] for t in JVM_BACKENDS) else {}),
            "mem_cap": MEM_BY_SCALE[scale],
            "ts_utc": datetime.now(timezone.utc).isoformat()}
 
@@ -2221,7 +2740,11 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
     # finally block reads it, and a server that fails to start returns
     # before the client is ever created. Leaving it unbound turns a
     # recorded server_not_ready row into a NameError that loses the cell.
-    server_cid, cli_cid, samplers = None, None, []
+    # `_therm0` for the same reason (BUGS F150): the finally block reads it
+    # since dea7115710 moved the thermal reading out of the two-container
+    # branch, and it is only taken once the client starts, so from then
+    # until this line every server_not_ready became an UnboundLocalError.
+    server_cid, cli_cid, samplers, _therm0 = None, None, [], {}
     try:
         if be["topology"] == "client_server":
             if SERVER_MEM_FRACTION:
@@ -2246,8 +2769,30 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             # (FAIRNESS F6: FalkorDB's THREAD_COUNT, Memgraph's Bolt workers);
             # {mem90_mib} is 90% of the server's cap in MiB, Memgraph's own
             # memory-limit rule applied to the container rather than the host.
-            _fit = dict(ncpu=_cpuset_size(cpuset),
-                        mem90_mib=int(server_mem * 0.9) >> 20)
+            # {pg_workers}, {pg_procs} and {pg_work_mem} fit PostgreSQL + AGE's
+            # query pools to the cell as every other engine's pools are fitted
+            # (FAIRNESS F3/F6, measured 2026-10-02, repros/age-dialect/
+            # resource_fit_probe.py): parallel workers per query = cpuset - 1,
+            # the leader being the cpuset's last core (PostgreSQL's fixed
+            # default of 2 used 3 of a 12-core cell; fitted, LSQB q2 ran 1.8x
+            # faster and q4, q5, q7 1.1-1.25x); and work_mem = what the cap
+            # leaves after shared_buffers, over the cpuset's processes, each
+            # allowed sixteen buffers (eight sort or hash nodes x
+            # hash_mem_multiplier 2), so a deep plan cannot sum past the cap.
+            # At 16 GiB over 8 cores that is 96 MB: the full SF1 network's
+            # analytics spilled 42 GB of temp files per pass at the 4 MB
+            # default and 0.7 GB at 96 MB, with no OOM kill, and four times
+            # more bought nothing.
+            _ncpu = _cpuset_size(cpuset)
+            _fit = dict(ncpu=_ncpu,
+                        mem90_mib=int(server_mem * 0.9) >> 20,
+                        pg_workers=max(1, _ncpu - 1),
+                        pg_par=_ncpu,
+                        pg_procs=_ncpu + 2,
+                        pg_work_mem=f"{max(4, int((server_mem >> 20) * 0.75 / (_ncpu * 16)))}MB")
+            if os.environ.get("BENCH_PG_FIT", "").lower() == "off":
+                # PostgreSQL's own defaults, for a same-run A/B only (PG_FIT_CMD).
+                _fit.update(pg_workers=2, pg_par=8, pg_procs=8, pg_work_mem="4MB")
             server_cmd = [c.format(sb=f"{max(1, srv_gb // 4)}GB",
                                    ecs=f"{max(1, srv_gb * 3 // 4)}GB",
                                    mwm=f"{max(1, srv_gb // 2)}GB", **_fit)
@@ -2265,7 +2810,7 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             # ceiling moves. Applied to every server, recorded on the row.
             row["server_shm_size"] = str(server_mem)
             server_cid = sh(["docker", "run", "-d", "--network", net_name,
-                             "--label", "dbbench=1",
+                             *RUNNER_LABELS,
                              "--name", f"srv-{run_id}",
                              "--cpuset-cpus", cpuset,
                              "--memory", str(server_mem), "--memory-swap", str(server_mem),
@@ -2292,10 +2837,45 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             # container was created with something else, which is the failure
             # mode behind "server:latest" and the dev22-stamped dev20 run.
             row.update(observe_server(server_cid))
+            # THE JVM FLAGS THE SERVED ARCADEDB RUNS, read from the process (CAMPAIGN 7
+            # row 69): on every served ArcadeDB arm, so the main arms' G1 and fixed heap
+            # are evidence beside the image-defaults arm's ZGC and 75%.
+            if "arcadedb" in job["backend"]:
+                row.update(server_jvm_readback(server_cid))
+            if be.get("jvm_defaults"):
+                row["server_jvm_defaults"] = True
+                _bad = image_defaults_findings(row, server_mem)
+                if _bad:
+                    row["error"] = ("image-defaults arm is not at the image's defaults: " + "; ".join(_bad)
+                                    + "; the cell is not the one we specified")
+                    return row
             if row.get("server_heap") and row["server_heap"] != heap:
                 row["error"] = (f"server heap {row['server_heap']} != requested "
                                 f"{heap}; the cell is not the one we specified")
                 return row
+            # THE RUNNING JVM IS A HEAP WITNESS TOO (re-pin rehearsal): where the container's
+            # environment names a heap the JVM must agree, and where it names none (the
+            # image-defaults arm) the JVM's own answer is the witness instead of "no witness".
+            _hw = heap_witness(row)
+            if _hw:
+                row["error"] = "; ".join(_hw) + "; the cell is not the one we specified"
+                return row
+            # SURREALDB'S SYNC MODE, READ BACK (BUGS F165). For a month the
+            # served arm ran at the engine default, a sync at every commit, in
+            # both durability classes, while its rows said the behaviour could
+            # not be established; the server had been printing
+            # "Sync mode: every transaction commit" at INFO in every
+            # serverlog we kept. The path asks for a mode; the log is the
+            # evidence, and a cell whose server did not take it does not run.
+            if "surrealdb/surrealdb" in str(be.get("server_image", "")):
+                _sm = re.search(r"Sync mode: ([^\n(]+)", docker_logs(server_cid) or "")
+                _got = _sm.group(1).strip() if _sm else None
+                _want = "every transaction commit" if _dcls == "strict" else "never"
+                row["surreal_sync_mode"] = _got
+                if _got != _want:
+                    row["error"] = (f"SurrealDB sync mode {_got!r} != {_want!r} for the "
+                                    f"{_dcls} class; the cell is not the one we specified")
+                    return row
             # Before any of our data exists: the engine's own startup cost.
             # No settle loop here, the engine is idle and just booted.
             row["server_disk_baseline_mb"] = container_disk(
@@ -2330,6 +2910,10 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                    "BENCH_DENSE_BUILD_CACHE", "BENCH_DENSE_BUILD_CACHE_PCT",
                    "BENCH_SKIP_CLOSE",
                    "BENCH_TPC_DATA", "BENCH_TPC_SF", "BENCH_GAV",
+                   # CAMPAIGN item 10: LineItem's buckets per async writer
+                   # (the re-pin sweeps 1 and 2) and an explicit count for
+                   # control runs; both recorded on the row as lineitem_buckets
+                   "BENCH_ARCADE_BUCKETS_PER_WRITER", "BENCH_ARCADE_LINEITEM_BUCKETS",
                    # The graph analytics message-half caps (ldbc_snb), for a
                    # laptop smoke of the full-network loader only. Default
                    # unset = the whole SF1 network; the campaign never sets
@@ -2423,7 +3007,18 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                    # ArangoDB into waitForSync, SurrealDB embedded into
                    # SURREAL_SYNC_DATA. The served engines are set below, on
                    # their own containers.
-                   "BENCH_DURABILITY", "SURREAL_SYNC_DATA"):
+                   "BENCH_DURABILITY", "SURREAL_SYNC_DATA",
+                   # The restart lane's protocol knobs (l6_restart.py): cycles,
+                   # warm-up, the write batch, the stop grace, the poll interval,
+                   # the start deadline, and the laptop-only shutdown trace.
+                   "BENCH_RS_ITERS", "BENCH_RS_WARMUP", "BENCH_RS_WRITE_N",
+                   "BENCH_RS_GRACE_S", "BENCH_RS_POLL_S", "BENCH_RS_START_TIMEOUT_S",
+                   "BENCH_RS_TRACE", "BENCH_RS_VERIFY_S",
+                   # The HTTP client every ArcadeDB served arm uses (lean_http.py, CAMPAIGN 7
+                   # row 72): unset or "lean" is the persistent http.client connection,
+                   # "requests" restores the October client. CLOSED tuple: a campaign that set it
+                   # without this line would have run the default while believing otherwise.
+                   "BENCH_ARCADEDB_HTTP_CLIENT"):
             if os.environ.get(_k):
                 bench_env += ["-e", f"{_k}={os.environ[_k]}"]
 
@@ -2442,7 +3037,7 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             bench_env += ["-e", f"BENCH_SERVER_IMAGE={be['server_image']}"]
 
         cmd = (["docker", "run", "-d", "--network", net_name,
-                "--label", "dbbench=1",
+                *RUNNER_LABELS,
                 "--name", f"cli-{run_id}", "--cpuset-cpus", cpuset]
                + client_caps + bench_env
                # ARCADEDB_HEAP ONLY WHERE IT MEANS SOMETHING. It used to be
@@ -2452,14 +3047,23 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                # they were reporting ArcadeDB's tier heap instead, so its
                # "engines that have a heap" carve-out never fired and the JVM
                # count it prints was not a count of anything.
+               # NOT FOR THE IMAGE-DEFAULTS ARM (CAMPAIGN 7 row 69): its JVM takes 75% of
+               # the container limit, so the tier heap is not its heap, and the driver
+               # stamps `heap` from this variable over the runner's row.
                + (["-e", f"ARCADEDB_HEAP={heap}"]
-                  if "arcadedb" in job["backend"] else [])
+                  if "arcadedb" in job["backend"] and not be.get("jvm_defaults") else [])
                + ["-e", f"RUN_LABEL={run_id}",
                   "-v", f"{HERE}:/work", "-w", "/work", "-v", f"{DATA}:/data:ro"]
                # The lifecycle lane's database must live on a real filesystem
                # so a cold open can be produced by evicting it. See LC_HOST_DIR.
                + (["-v", f"{LC_HOST_DIR}:/lcdb"]
                   if job["lane"] == "lifecycle" else [])
+               # The restart lane stops and starts its own server container
+               # (l6_restart.py through docker_api.py), so the same container
+               # comes back with the same data, flags, cpuset, and cap. Its
+               # client alone gets the Docker socket.
+               + (["-v", "/var/run/docker.sock:/var/run/docker.sock"]
+                  if job["lane"] == "restart" else [])
                + _client_tail(job, be, scale, run_id))
         cli_cid = sh(cmd)
         if len(cli_cid) < 12:
@@ -2777,8 +3381,8 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
         # THE HOST THROTTLES FOR EVERY CELL, NOT ONLY TWO-CONTAINER ONES.
         # This sat inside `if len(samplers) == 2`, a branch about summing a
         # client's and a server's memory, which has nothing to do with the
-        # host's thermal state. `_therm0` is snapshotted for every cell at the
-        # top of run_cell, so an EMBEDDED cell took the reading and threw it
+        # host's thermal state. `_therm0` is snapshotted for every cell once
+        # its client starts, so an EMBEDDED cell took the reading and threw it
         # away: every client_server row in the campaign carries
         # host_throttled_ms and every embedded row carries none.
         #
@@ -2800,10 +3404,28 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
     return row
 
 
-def acquire_host_lock():
-    """Enforce one-runner-per-host. Returns the held lock file object.
+# EVERY CONTAINER A RUNNER STARTS CARRIES `dbbench=1` AND THE PID OF THE RUNNER THAT STARTED IT, so a
+# sweep can tell a crashed runner's orphan from a live runner's cell (re-pin rehearsal defect 2).
+RUNNER_LABELS = ("--label", "dbbench=1", "--label", f"dbbench.runner={os.getpid()}")
 
-    sweep_orphans() force-removes every dbbench container, so a second
+
+def lock_paths():
+    """The host-wide runner locks, in the order they are taken.
+
+    The first does NOT depend on the environment: it sits in the account's home, found from the
+    password database rather than $HOME, $TMPDIR or $XDG_CACHE_HOME, so two sessions with different
+    TMPDIR (an agent working in a private scratch directory is exactly that) cannot hold different
+    locks. The second is the legacy path under the temporary directory, still taken so that an older
+    runner, which holds only that one, excludes this one and is excluded by it."""
+    home = pwd.getpwuid(os.getuid()).pw_dir
+    return [os.path.join(home, ".cache", "dbbench-runner.lock"),
+            os.path.join(tempfile.gettempdir(), "dbbench-runner.lock")]
+
+
+def acquire_host_lock(paths=None):
+    """Enforce one-runner-per-host. Returns the held lock file objects (keep them alive).
+
+    sweep_orphans() force-removes dbbench containers, so a second
     runner would destroy a live campaign's in-flight cells (this happened
     2026-07-10: a micro smoke wiped an L1 medium cell mid-run). The lock is
     advisory but process-wide; it dies with the process, so a crashed runner
@@ -2816,31 +3438,74 @@ def acquire_host_lock():
     # build (l2_neo4j_graph_olap_sf1_r1, rc 137, an error row with no
     # digests), and did the same to a cross-model cell in the other
     # direction. The protocol is one runner per HOST; the lock has to be
-    # where every checkout on the host finds it (BUGS F58).
-    lock_path = os.path.join(tempfile.gettempdir(), "dbbench-runner.lock")
-    fh = open(lock_path, "w")
+    # where every checkout on the host finds it (BUGS F58). And since the
+    # re-pin rehearsal (2026-10-06) where every SESSION finds it: it was under
+    # tempfile.gettempdir(), which follows $TMPDIR.
+    held = []
+    for lock_path in (paths if paths is not None else lock_paths()):
+        os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+        fh = open(lock_path, "a+")
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise SystemExit(
+                f"another runner already holds {lock_path} on this host. "
+                "The protocol allows exactly one runner per bench host: a second "
+                "one would sweep the first's containers. Wait for it, or kill it."
+            )
+        fh.seek(0)
+        fh.truncate()
+        fh.write(f"{os.getpid()}\n")
+        fh.flush()
+        held.append(fh)
+    return held
+
+
+def owner_is_alive(pid_text, proc_root="/proc"):
+    """Is the runner whose pid a container's `dbbench.runner` label names still running? Judged by
+    /proc/<pid>/cmdline naming runner.py, so a recycled pid of some other process does not keep an
+    orphan alive."""
     try:
-        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        raise SystemExit(
-            f"another runner already holds {lock_path} on this host. "
-            "The protocol allows exactly one runner per bench host: a second "
-            "one would sweep the first's containers. Wait for it, or kill it."
-        )
-    fh.write(f"{os.getpid()}\n")
-    fh.flush()
-    return fh
+        pid = int(str(pid_text).strip())
+        with open(os.path.join(proc_root, str(pid), "cmdline"), "rb") as fh:
+            return b"runner.py" in fh.read()
+    except (ValueError, OSError):
+        return False
 
 
-def sweep_orphans():
+def split_orphans(listing, own_pid, proc_root="/proc"):
+    """([container ids to remove], [(name, owner pid) left alone]) from the lines of
+    `docker ps -a --filter label=dbbench=1 --format '{{.ID}} {{.Names}} {{.Label "dbbench.runner"}}'`.
+
+    A container is another live runner's, and left alone, when its owner label names a running runner
+    that is not this process. One with no owner label predates the label (an older runner's) and is an
+    orphan only because the caller holds every host lock, which excludes any live older runner."""
+    gone, kept = [], []
+    for line in listing.splitlines():
+        parts = line.split()
+        if not parts:
+            continue
+        cid, name = parts[0], (parts[1] if len(parts) > 1 else parts[0])
+        owner = parts[2] if len(parts) > 2 else ""
+        if owner and str(owner) != str(own_pid) and owner_is_alive(owner, proc_root):
+            kept.append((name, owner))
+        else:
+            gone.append((cid, name))
+    return gone, kept
+
+
+def sweep_orphans(proc_root="/proc"):
     """Reap containers left by a previous crashed/killed runner. Only safe to
-    call while holding the host lock (see acquire_host_lock)."""
-    ids = sh(["docker", "ps", "-aq", "--filter", "label=dbbench=1"]).split()
-    if ids:
-        print(f"sweeping {len(ids)} orphaned bench container(s): "
-              + sh(["docker", "ps", "-a", "--filter", "label=dbbench=1",
-                    "--format", "{{.Names}}"]).replace("\n", " "))
-        subprocess.run(["docker", "rm", "-f"] + ids, capture_output=True)
+    call while holding the host locks (see acquire_host_lock), and it removes
+    only what no live runner owns (split_orphans)."""
+    listing = sh(["docker", "ps", "-a", "--filter", "label=dbbench=1", "--format",
+                  '{{.ID}} {{.Names}} {{.Label "dbbench.runner"}}'])
+    gone, kept = split_orphans(listing, os.getpid(), proc_root)
+    for name, owner in kept:
+        print(f"leaving {name} alone: it belongs to the live runner {owner}")
+    if gone:
+        print(f"sweeping {len(gone)} orphaned bench container(s): " + " ".join(n for _, n in gone))
+        subprocess.run(["docker", "rm", "-f"] + [c for c, _ in gone], capture_output=True)
 
 
 def split_cpuset(cpuset, n):
@@ -2855,6 +3520,33 @@ def split_cpuset(cpuset, n):
         chunk = cpus[w * size:(w + 1) * size] if w < n - 1 else cpus[(n - 1) * size:]
         shards.append(f"{chunk[0]}-{chunk[-1]}")
     return shards
+
+
+# ARMS THAT RUN ONLY PART OF THEIR LANE (CAMPAIGN 7 row 69). A lane registers its arms once,
+# for every workload and every size it defines, and the stage generator, the page's roster
+# gate, and the runner all read that. A sensitivity arm is declared here instead, once, and
+# every reader takes it from here: {backend: {lane: {workloads, scales, reps, durability,
+# title}}}. The stage generator gives each entry a stage of its own (so the lane's main stage
+# leaves the arm out) and its coverage check expects the arm on exactly these workloads and
+# sizes; page_check does not owe the arm on another workload's table; build_jobs does not
+# make its other workloads. An arm absent from the map runs the whole lane, as before.
+ARM_RUNS = {
+    "arcadedb_imgdefaults_server": {
+        "l1tpc": {"workloads": ("oltp",), "scales": ("tpch10",), "reps": 3, "durability": "relaxed",
+                  "title": "documents OLTP, served ArcadeDB at the image's own JVM defaults, the 2M-part cell"},
+    },
+}
+
+
+def arm_runs(lane, workload, backend):
+    """Does this arm run this workload of this lane? True for every arm not in ARM_RUNS."""
+    cfg = ARM_RUNS.get(backend, {}).get(lane)
+    return cfg is None or workload in cfg["workloads"]
+
+
+def restricted_arms(lane):
+    """{backend: its ARM_RUNS entry} for the arms of this lane that run only part of it."""
+    return {be: ARM_RUNS[be][lane] for be in LANES[lane][1] if lane in ARM_RUNS.get(be, {})}
 
 
 def build_jobs(lanes, workloads_arg):
@@ -2881,6 +3573,8 @@ def build_jobs(lanes, workloads_arg):
         for be in backends:
             for wl in workloads:
                 if want and wl not in want:
+                    continue
+                if not arm_runs(lane, wl, be):
                     continue
                 jobs.append({"lane": lane, "backend": be, "workload": wl,
                              "script": script,
@@ -3112,16 +3806,7 @@ def main():
             print(f"    skip {_b} rep{_r}")
 
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    manifest = {"ts": ts, "tier": args.tier, "scale": args.scale, "cpuset": CPUSET,
-                "workers": workers, "shards": shards,
-                "reps": args.reps, "seed": args.seed,
-                "mem": MEM_BY_SCALE[args.scale], "heap": HEAP_BY_SCALE[args.scale],
-                "server_mem_fraction": SERVER_MEM_FRACTION,
-                "images": {}}
-    for j in jobs:
-        be = BACKENDS[j["backend"]]
-        for img in filter(None, [be.get("image"), be.get("server_image")]):
-            manifest["images"].setdefault(img, image_digest(img))
+    manifest = build_manifest(ts, args, workers, shards, jobs)
     json.dump(manifest, open(os.path.join(RESULTS, f"manifest-{ts}.json"), "w"), indent=2)
 
     rows = []
@@ -3153,8 +3838,20 @@ def main():
                 job, rep = pending.pop(idx)
                 active_backends.add(job["backend"])
             t0 = time.time()
+            # AN EXCEPTION OUT OF run_cell MUST NOT END THE WORKER (BUGS F150).
+            # It used to propagate: the thread died, every cell still pending
+            # on it never ran, the main thread's join() returned, and with no
+            # error ROW written the runner exited 0, so a queue script read a
+            # truncated batch as success. Now the cell is counted as raised,
+            # the traceback printed, the batch goes on, and the exit is 1.
             try:
                 row = run_cell(job, rep, args.scale, shard, args.tier, net_name)
+            except Exception:
+                with cv:
+                    raised.append(f"{job['lane']}_{job['backend']}_r{rep}")
+                    print(f"  RAISED {raised[-1]} ({shard}):\n"
+                          + traceback.format_exc(), flush=True)
+                continue
             finally:
                 with cv:
                     active_backends.discard(job["backend"])
@@ -3172,6 +3869,7 @@ def main():
                 print(f"  [{done[0]}/{total}] {row['run_id']} "
                       f"{time.time()-t0:.1f}s ({shard}) -> {status}")
 
+    raised = []
     threads = [threading.Thread(target=worker, args=(s,)) for s in shards]
     for t in threads:
         t.start()
@@ -3190,7 +3888,12 @@ def main():
     # A queue script reads the exit code, so a lane that produced no usable
     # cells must not report success. "wrote 30 rows" was true and meaningless
     # when all thirty were OOM-killed shells.
+    if raised:
+        print(f"\n{len(raised)} cell-run(s) RAISED instead of returning a row "
+              f"(nothing recorded for them): {', '.join(raised[:10])}")
     failed = [r for r in rows if r.get("error")]
+    if raised and not failed:
+        sys.exit(1)
     if failed:
         print(f"\n{len(failed)} of {len(rows)} cell-runs FAILED:")
         for r in failed[:10]:

@@ -85,6 +85,11 @@ def main():
     out_reps = []
     WARM = 20
     timed_n = len(test) - WARM
+    # The settings the adapter reads back from its engine (CAMPAIGN section 7
+    # row 21, overrides.py), read once here: after the build timer has stopped
+    # and before the first query, so it sits in no timer and asks the engine
+    # nothing about the data.
+    _readbacks = b.readbacks()
     for rep in range(1, PASSES + 1):
         # HELD OUT, not the head of the timed set. This warmed on test[:20] and
         # then timed range(len(test)), so the first 20 queries of every pass -
@@ -144,6 +149,10 @@ def main():
                # lane row (DECISIONS #74 item 2, #81, #84).
                **{_k: getattr(b, _k) for _k in ("ingest_s", "index_s")
                   if getattr(b, _k, None) is not None},
+               # The engine's own settings, read back (FAIRNESS F3/F6), as the
+               # lane records them (l3d_dense.main, 2026-10-02).
+               **(getattr(b, "row_extra", None) or {}),
+               **_readbacks,
                "durability": DURABILITY.get(BACKEND, DURABILITY_INGEST_ONLY),
                "instrument": INSTRUMENT,
                "p50": round(lats[len(lats) // 2], 3),

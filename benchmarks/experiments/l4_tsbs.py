@@ -8,6 +8,8 @@ questdb (server; ILP ingest on 9009, SQL over pg-wire). InfluxDB3 omitted
 SurrealDB (embedded core 2.3.10 through the SDK, and the served 3.2.4) and
 ArangoDB 3.12.11 joined 2026-09-15 on SQLite's footing: a plain table with a
 datetime field and a composite (host, ts) index, no time-series type.
+Plain PostgreSQL 18.6 (`postgres_ts`) joins at the 26.10.1 measurement on the
+same footing (DECISIONS #131 item 6), beside TimescaleDB on the same engine.
 
 Queries (TSBS-flavored):
   q_last    last point for one host
@@ -138,7 +140,43 @@ def lp_path(scale):
 
 
 def parse_lp(path):
-    pts = []  # (host, ts_epoch_s, usage_user, usage_system, usage_idle)
+    """The whole corpus as a list of (host, ts_epoch_s, usage_user, usage_system,
+    usage_idle) tuples.
+
+    THE WHOLE CORPUS, ON PURPOSE, AND SMALL (CAMPAIGN.md section 7 row 18, BUGS
+    F66). The parse runs before the ingest timer and every arm's ingest starts
+    from this list, so the list is alive for the whole ingest: that is what
+    keeps the parse (minutes at ts100, about half an hour at ts1000) out of
+    every arm's ingest_s. `TS_CHUNK` and the arms' batch sizes only SLICE this
+    list; nothing upstream of it streams. Streaming the parse into the ingest
+    would either charge the parse to the timer or, with the timer paused around
+    it, give the arms whose engine keeps working after the call returns
+    (ArcadeDB's native async executor, the COPY arms, QuestDB's ILP socket)
+    uncharged background time, so the corpus stays whole and is made small.
+
+    It used to hold a fresh 5-tuple plus a fresh host string, a fresh
+    timestamp int, and three fresh floats for every line: 695 MiB for ts100's
+    2.59M points and 7,305 MiB for ts1000's 25.92M (RssAnon after the parse,
+    laptop, the client image's Python 3.12), which is most of the 7.6 GiB the
+    served client peaked at, and on an embedded arm the same memory came out
+    of the engine's cap. The corpus has 100 or 1,000 hosts, 25,920 instants,
+    and integer readings 0-100, so those objects repeat. Each is now built
+    once per distinct TEXT and shared, which leaves the tuple and its list
+    slot as the per-point cost: 221 MiB at ts100 and 2,186 MiB at ts1000
+    (about 89 bytes a point). Every value is the same one `float()` / `int()`
+    gave before, of the same type, in the same order, and a malformed line is
+    still skipped (checked point for point against the old parse on both
+    corpora), so what the arms send is unchanged.
+    """
+    pts = []
+    hosts, stamps, nums = {}, {}, {}
+
+    def num(s):
+        v = nums.get(s)
+        if v is None:
+            v = nums[s] = float(s.rstrip("i"))
+        return v
+
     with open(path) as f:
         for i, line in enumerate(f):
             if LIMIT and i >= LIMIT:
@@ -146,11 +184,15 @@ def parse_lp(path):
             try:
                 head, fields, ts = line.rsplit(" ", 2)
                 host = head.split("hostname=", 1)[1].split(",", 1)[0]
+                host = hosts.setdefault(host, host)
                 fd = dict(kv.split("=") for kv in fields.split(","))
-                pts.append((host, int(ts) // 1_000_000_000,
-                            float(fd["usage_user"].rstrip("i")),
-                            float(fd["usage_system"].rstrip("i")),
-                            float(fd["usage_idle"].rstrip("i"))))
+                t = stamps.get(ts)
+                if t is None:
+                    t = stamps[ts] = int(ts) // 1_000_000_000
+                pts.append((host, t,
+                            num(fd["usage_user"]),
+                            num(fd["usage_system"]),
+                            num(fd["usage_idle"])))
             except Exception:
                 continue
     return pts
@@ -249,14 +291,16 @@ class ArcadeTSServer(ArcadeTS):
     name = "arcadedb_ts_doc_server"
 
     def connect(self):
-        import requests
-        self.rq = requests.Session()
+        import lean_http
+        self.rq = lean_http.Session()
         self.rq.auth = ("root", "dbbenchpass")
+        # WHICH HTTP CLIENT ran, read from the session (CAMPAIGN 7 row 72), on every row this arm writes
+        self.row_extra = {**(getattr(self, "row_extra", None) or {}), **lean_http.row_fields(self.rq)}
         host = os.environ["BENCH_SERVER_HOST"]
         port = os.environ.get("BENCH_SERVER_PORT", "2480")
         self.base = f"http://{host}:{port}/api/v1"
         try:
-            info = self.rq.get(f"http://{host}:{port}/api/v1/server", timeout=30)
+            info = self.rq.get(f"http://{host}:{port}/api/v1/server?mode=basic", timeout=30)
             self._ver = "server:" + (info.json().get("version") or "?")
         except Exception:  # noqa: BLE001
             self._ver = "server:unknown"
@@ -338,6 +382,50 @@ class ArcadeTSServer(ArcadeTS):
         self.rq.close()
 
 
+def _mutable_samples(rows):
+    """Mutable (not yet compacted) samples in a TIMESERIES type, from the rows of
+    `SELECT FROM schema:types WHERE name = ...`: the sum of every shard's
+    `mutableSamples`. A type the engine reports no shards for counts as -1, so a
+    missing field can never read as 'compacted'."""
+    import json as _json
+    import re as _re
+    total, seen = 0, False
+    for r in rows or []:
+        for sh in (r.get("shards") or []):
+            # A MAP, OR ITS TEXT. Over HTTP each shard arrives as a JSON object; the
+            # embedded to_json_list() of the October wheel renders a nested result
+            # as a string (the laptop smoke's AttributeError, 2026-09-28). Both are
+            # read; anything else leaves the count at -1, never at 0.
+            if isinstance(sh, str):
+                try:
+                    sh = _json.loads(sh)
+                except ValueError:
+                    m = _re.search(r'"?mutableSamples"?\s*[:=]\s*(\d+)', sh)
+                    if not m:
+                        return -1
+                    sh = {"mutableSamples": int(m.group(1))}
+            if not isinstance(sh, dict) or "mutableSamples" not in sh:
+                return -1
+            seen = True
+            total += int(sh["mutableSamples"] or 0)
+    return total if seen else -1
+
+
+def _compaction_interval_ms(rows):
+    """The compaction bucket interval the ENGINE reports for the type, in milliseconds, from the rows of
+    `SELECT FROM schema:types WHERE name = ...` (`compactionBucketIntervalMs`: 3600000 for
+    `COMPACTION_INTERVAL 1 HOURS`, 0 for a type declared without one). None when the engine reports no
+    such field, so a missing answer can never read as "declared"."""
+    for r in rows or []:
+        v = r.get("compactionBucketIntervalMs")
+        if v is not None:
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
 class ArcadeNativeTS(ArcadeTS):
     """ArcadeDB's native TIMESERIES type, promoted from l4_native_probe.py into the lane.
 
@@ -366,6 +454,26 @@ class ArcadeNativeTS(ArcadeTS):
     NUMPY_COLS = os.environ.get("TS_NUMPY", "1") == "1"
     CHUNK = int(os.environ.get("TS_CHUNK", "100000"))
     SHARDS = int(os.environ.get("TS_SHARDS", "4"))
+    # THE HOURLY AGGREGATE'S BUCKET (CAMPAIGN section 7 row 54, DECISIONS #147; upstream's answer on
+    # ArcadeData/arcadedb#9166, 2026-10-05, is that this is the declaration for a type whose main query is an
+    # hourly aggregate). Compaction then cuts sealed blocks at hour boundaries, so the 12-hour hourly average
+    # answers from block statistics instead of decoding every block. ArcadeDB's own knob: no comparator has an
+    # equivalent, which is why the page discloses it beside the table. SHARDS stays at 4 (row 54: no
+    # measurable effect on the laptop), recorded as ts_shards.
+    COMPACTION_INTERVAL = "1 HOURS"
+
+    def compaction_readback(self):
+        """The engine's own answer for the type's compaction interval, for the row (an override stamp)."""
+        try:
+            ms = _compaction_interval_ms(self._type_report())
+        except Exception as e:  # noqa: BLE001
+            return {"ts_compaction_interval_readback_error": f"{e.__class__.__name__}: {e}"}
+        if ms is None:
+            return {"ts_compaction_interval_readback_error": "schema:types reports no compactionBucketIntervalMs"}
+        return {"ts_compaction_interval": self.COMPACTION_INTERVAL, "ts_compaction_interval_ms": ms}
+
+    def _type_report(self):
+        return self.db.query("sql", "SELECT FROM schema:types WHERE name = 'Point'").to_json_list()
 
     def declared(self):
         """What this arm turned on, for the row. The page must be able to say that this
@@ -384,7 +492,7 @@ class ArcadeNativeTS(ArcadeTS):
                    "CREATE TIMESERIES TYPE Point TIMESTAMP ts "
                    "TAGS (host STRING) "
                    "FIELDS (uu DOUBLE, us DOUBLE, ui DOUBLE) "
-                   f"SHARDS {self.SHARDS}")
+                   f"SHARDS {self.SHARDS} COMPACTION_INTERVAL {self.COMPACTION_INTERVAL}")
         ex = db.async_executor()
         for lo in range(0, len(pts), self.CHUNK):
             chunk = pts[lo:lo + self.CHUNK]
@@ -487,20 +595,43 @@ class ArcadeNativeTS(ArcadeTS):
         ArcadeDB and in the direction that flatters us.
         """
         import time
-        # DEFAULT 0, and the name is one the runner delivers.
+        # BY THE ENGINE'S OWN STATE, NOT A GUESSED SLEEP (DECISIONS #121). A
+        # TIMESERIES type holds new samples in a mutable tail until the
+        # maintenance scheduler (every 60 s, not configurable) compacts them, and
+        # a query on the tail can cost 100x the compacted one (ArcadeData/arcadedb
+        # #8574: 21 ms against 0.13 ms for the newest reading). So this waits until
+        # `schema:types` reports no mutable sample on any shard, the way QuestDB's
+        # arm waits for its WAL to apply, bounded by BENCH_TS_COMPACT_WAIT_S.
         #
-        # This defaulted to 5 and read TS_SETTLE_S, which is on no passthrough
-        # list, so it could be neither turned off nor turned on from a campaign:
-        # every published row gave THIS arm five seconds of extra sealing that
-        # questdb, duckdb and the document arm never got, while the page asserted
-        # in prose that no engine settled. An asymmetry that only one engine
-        # receives, and that the caller cannot control, is the same defect this
-        # class's own docstring says it exists not to re-create.
-        _s = float(os.environ.get("BENCH_TS_SETTLE_S")
-                   or os.environ.get("TS_SETTLE_S", "0"))
-        self._settled_s = _s
-        if _s > 0:
-            time.sleep(_s)
+        # This used to sleep BENCH_TS_SETTLE_S itself, and the driver then slept
+        # the same value again for every arm, so this arm alone waited twice
+        # (180 s at October's 90 s) while its served twin's settle was empty. The
+        # symmetric floor is the driver's; what is left here is the engine's own
+        # catch-up, and the row records how long it took and what was left.
+        t0 = time.perf_counter()
+        left = self.mutable_samples()
+        # THE FIRST READ IS WHAT THE INGEST RATE LEFT OUTSTANDING (CAMPAIGN
+        # section 7 row 21, overrides.py). The ingest timer stopped when the
+        # engine accepted the last point (`wait_completion()` here, the last
+        # POST on the served arm); this is the engine's own count of the samples
+        # it had not yet sealed, taken the moment the timer was off. It was read
+        # and thrown away; keeping it moves no timer and issues no new call.
+        self._mutable_at_ingest_end = left
+        while left > 0 and time.perf_counter() - t0 < self.COMPACT_WAIT_S:
+            time.sleep(1)
+            left = self.mutable_samples()
+        self._compaction_wait_s = round(time.perf_counter() - t0, 3)
+        self._mutable_after_settle = left
+        self._settled_s = self._compaction_wait_s
+
+    # Bounded, so a scheduler that never runs cannot hang a cell; a row that hit
+    # the bound says so through a nonzero ts_mutable_at_query.
+    COMPACT_WAIT_S = float(os.environ.get("BENCH_TS_COMPACT_WAIT_S") or 300.0)
+
+    def mutable_samples(self):
+        """Samples still in the mutable tail, summed over every shard."""
+        return _mutable_samples(self.db.query(
+            "sql", "SELECT FROM schema:types WHERE name = 'Point'").to_json_list())
 
 
 class ArcadeNativeTSServer(ArcadeNativeTS):
@@ -514,14 +645,16 @@ class ArcadeNativeTSServer(ArcadeNativeTS):
     CHUNK = int(os.environ.get("TS_CHUNK", "100000"))
 
     def connect(self):
-        import requests
-        self.rq = requests.Session()
+        import lean_http
+        self.rq = lean_http.Session()
         self.rq.auth = ("root", "dbbenchpass")
+        # WHICH HTTP CLIENT ran, read from the session (CAMPAIGN 7 row 72), on every row this arm writes
+        self.row_extra = {**(getattr(self, "row_extra", None) or {}), **lean_http.row_fields(self.rq)}
         host = os.environ["BENCH_SERVER_HOST"]
         port = os.environ.get("BENCH_SERVER_PORT", "2480")
         self.base = f"http://{host}:{port}/api/v1"
         try:
-            info = self.rq.get(f"http://{host}:{port}/api/v1/server", timeout=30)
+            info = self.rq.get(f"http://{host}:{port}/api/v1/server?mode=basic", timeout=30)
             self._ver = "server:" + (info.json().get("version") or "?")
         except Exception:  # noqa: BLE001
             self._ver = "server:unknown"
@@ -546,7 +679,7 @@ class ArcadeNativeTSServer(ArcadeNativeTS):
     def ingest(self, pts):
         self._post("command", "CREATE TIMESERIES TYPE Point TIMESTAMP ts "
                               "TAGS (host STRING) FIELDS (uu DOUBLE, us DOUBLE, ui DOUBLE) "
-                              f"SHARDS {self.SHARDS}")
+                              f"SHARDS {self.SHARDS} COMPACTION_INTERVAL {self.COMPACTION_INTERVAL}")
         url = f"{self.base}/ts/bench/write?precision=s"
         # WHICH SIDE OF THE WIRE THE TIME IS ON. `ingest_s` is the whole of
         # this method and keeps that meaning, but a served arm that posts line
@@ -607,8 +740,13 @@ class ArcadeNativeTSServer(ArcadeNativeTS):
                                    f"WHERE ts >= {T0 * 1000} AND ts < {(T0 + 43200) * 1000} "
                                    f"GROUP BY h ORDER BY h DESC LIMIT {ORDERLIMIT_N}")
 
-    def settle(self):
-        self._settled_s = 0.0
+    # settle() is ArcadeNativeTS's: the same wait on the same engine state,
+    # read over HTTP (DECISIONS #121). It used to be empty here.
+    def mutable_samples(self):
+        return _mutable_samples(self._post("query", "SELECT FROM schema:types WHERE name = 'Point'"))
+
+    def _type_report(self):
+        return self._post("query", "SELECT FROM schema:types WHERE name = 'Point'")
 
     def close(self):
         self.rq.close()
@@ -624,6 +762,8 @@ class DuckTS:
         # F6: DuckDB sizes its pool from the host (20 threads) under the 12-thread
         # cpuset; only sched_getaffinity sees the cpuset. Same fix as l1_tabular.
         self.cx.execute(f"PRAGMA threads={len(os.sched_getaffinity(0))}")
+        # The engine's own answer, on the row (CAMPAIGN section 7 row 21).
+        self.row_extra = bench_common.duckdb_readback(self.cx)
 
     def version(self):
         return f"duckdb {self._duckdb.__version__}"
@@ -657,6 +797,17 @@ class DuckTS:
         # the published tier is 25.9M rows over 1,000 hosts.
         with bench_common.index_timer(self):
             self.cx.execute("CREATE INDEX p_host_ts ON p (host, ts)")
+
+    def release_ingest_input(self):
+        """Drop the Arrow copy of the corpus that ingest registered as `src`.
+
+        A registered object stays referenced by the connection until it is
+        unregistered, so this columnar copy of every point stayed resident
+        through every query beside the table `p` it had been copied into
+        (CAMPAIGN.md section 7 row 18). main() calls this after the ingest
+        timer; below 100,000 points nothing was registered and unregistering
+        a missing name is a no-op in DuckDB."""
+        self.cx.unregister("src")
 
     def q_last(self):
         return self.cx.execute(
@@ -847,8 +998,9 @@ class MongoTS:
 
 class TimescaleTS:
     """TimescaleDB 2.28 on PostgreSQL 17 (2026-09-11): a hypertable on ts,
-    COPY ingest, time_bucket for the two aggregates; server memory fitted to
-    the cap like the PostgreSQL tuned arm."""
+    COPY ingest, then the (host, ts DESC) index and ANALYZE, both inside the
+    ingest timer exactly as PostgresTS has them; time_bucket for the two
+    aggregates; server memory fitted to the cap like the PostgreSQL tuned arm."""
     name = "timescaledb"
 
     def connect(self):
@@ -863,6 +1015,11 @@ class TimescaleTS:
             self._pv = c.fetchone()[0].split(" (")[0]
             c.execute("SHOW synchronous_commit")   # read, not asserted (#81, #90)
             _sc = c.fetchone()[0]
+            # The pools the runner fits to the cell (FAIRNESS F6), read back.
+            self.row_extra = {}
+            for k in PostgresTS._SHOW:
+                c.execute(f"SHOW {k}")
+                self.row_extra[f"pg_{k}"] = c.fetchone()[0]
         self.durability = bench_common.pg_durability_string(_sc)
 
     def version(self):
@@ -877,6 +1034,11 @@ class TimescaleTS:
                     cp.write_row((h, _dt.datetime.fromtimestamp(t, _dt.timezone.utc), uu, us, ui))
             with bench_common.index_timer(self):
                 c.execute("CREATE INDEX p_host_ts ON p (host, ts DESC)")
+            # ANALYZE AFTER THE INDEX, INSIDE THE INGEST TIMER, as PostgresTS does (the same
+            # PostgreSQL step after a bulk load, and the planner needs the statistics for the hypertable
+            # as much as for a plain table). Until the 26.10.1 re-pin this arm had none while the plain
+            # PostgreSQL arm paid for one; the re-pin re-runs every arm, so no published row is split.
+            c.execute("ANALYZE p")
 
     def _t(self, s):
         return _dt.datetime.fromtimestamp(s, _dt.timezone.utc)
@@ -913,6 +1075,97 @@ class TimescaleTS:
     def q_orderlimit(self):
         with self.cx.cursor() as c:
             c.execute("SELECT time_bucket('1 hour', ts) AS h, max(uu) FROM p WHERE ts >= %s AND ts < %s "
+                      "GROUP BY h ORDER BY h DESC LIMIT %s",
+                      (self._t(T0), self._t(T0 + 43200), ORDERLIMIT_N))
+            return c.fetchall()
+
+    def close(self):
+        self.cx.close()
+
+
+class PostgresTS:
+    """Plain PostgreSQL 18.6 on a plain table (DECISIONS #131 item 6, CAMPAIGN.md
+    section 7 row 41): no time-series type, on the same footing as SQLite,
+    DuckDB, SurrealDB, and ArangoDB, so the table shows what the time-series
+    extension buys over the engine it extends (TimescaleDB, same PostgreSQL,
+    same COPY path, same index).
+
+    COPY ingest, then the (host, ts DESC) btree TimescaleDB's arm carries,
+    timed by index_timer, then ANALYZE, PostgreSQL's documented step after a
+    bulk load. Buckets are date_trunc in UTC (set on the session, never
+    inherited), the plain-PostgreSQL spelling of time_bucket for minute and
+    hour buckets. Memory and parallel query are fitted to the cell by the
+    runner (FAIRNESS F6), and every setting is read back onto the row
+    (`pg_*`); durability is the server's own answer (#81, #90).
+    """
+    name = "postgres_ts"
+    _SHOW = ("shared_buffers", "effective_cache_size", "work_mem", "hash_mem_multiplier",
+             "maintenance_work_mem", "max_parallel_workers_per_gather", "max_parallel_workers",
+             "max_parallel_maintenance_workers", "max_worker_processes", "jit")
+
+    def connect(self):
+        import psycopg
+        host = os.environ.get("BENCH_SERVER_HOST", "localhost")
+        self.cx = psycopg.connect(f"host={host} dbname=bench user=postgres password=dbbenchpass", autocommit=True)
+        with self.cx.cursor() as c:
+            c.execute("SET TIME ZONE 'UTC'")
+            c.execute("SELECT version()")
+            self._pv = c.fetchone()[0].split(" (")[0]
+            c.execute("SHOW synchronous_commit")   # read, not asserted (#81, #90)
+            self.durability = bench_common.pg_durability_string(c.fetchone()[0])
+            self.row_extra = {}
+            for k in self._SHOW:
+                c.execute(f"SHOW {k}")
+                self.row_extra[f"pg_{k}"] = c.fetchone()[0]
+
+    def version(self):
+        return f"postgresql {self._pv}"
+
+    def ingest(self, pts):
+        with self.cx.cursor() as c:
+            c.execute("CREATE TABLE p (host TEXT, ts TIMESTAMPTZ NOT NULL, uu DOUBLE PRECISION, us DOUBLE PRECISION, ui DOUBLE PRECISION)")
+            with c.copy("COPY p (host, ts, uu, us, ui) FROM STDIN") as cp:
+                for h, t, uu, us, ui in pts:
+                    cp.write_row((h, _dt.datetime.fromtimestamp(t, _dt.timezone.utc), uu, us, ui))
+            with bench_common.index_timer(self):
+                c.execute("CREATE INDEX p_host_ts ON p (host, ts DESC)")
+            c.execute("ANALYZE p")
+
+    def _t(self, s):
+        return _dt.datetime.fromtimestamp(s, _dt.timezone.utc)
+
+    def q_last(self):
+        with self.cx.cursor() as c:
+            c.execute("SELECT ts, uu FROM p WHERE host = %s ORDER BY ts DESC LIMIT 1", (HOST,))
+            return c.fetchall()
+
+    def q_range(self):
+        with self.cx.cursor() as c:
+            c.execute("SELECT date_trunc('minute', ts) AS m, max(uu) FROM p WHERE host = %s AND ts >= %s AND ts < %s "
+                      "GROUP BY m ORDER BY m", (HOST, self._t(T0), self._t(T0 + 3600)))
+            return c.fetchall()
+
+    def q_global(self):
+        with self.cx.cursor() as c:
+            c.execute("SELECT date_trunc('hour', ts) AS h, avg(uu) FROM p WHERE ts >= %s AND ts < %s GROUP BY h ORDER BY h",
+                      (self._t(T0), self._t(T0 + 43200)))
+            return c.fetchall()
+
+    def q_groupby(self):
+        with self.cx.cursor() as c:
+            c.execute("SELECT host, date_trunc('hour', ts) AS h, avg(uu) FROM p WHERE ts >= %s AND ts < %s "
+                      "GROUP BY host, h ORDER BY host, h", (self._t(T0), self._t(T0 + 43200)))
+            return c.fetchall()
+
+    def q_high(self):
+        with self.cx.cursor() as c:
+            c.execute("SELECT host, ts, uu FROM p WHERE ts >= %s AND ts < %s AND uu > %s",
+                      (self._t(T0), self._t(T0 + 43200), HIGH))
+            return c.fetchall()
+
+    def q_orderlimit(self):
+        with self.cx.cursor() as c:
+            c.execute("SELECT date_trunc('hour', ts) AS h, max(uu) FROM p WHERE ts >= %s AND ts < %s "
                       "GROUP BY h ORDER BY h DESC LIMIT %s",
                       (self._t(T0), self._t(T0 + 43200), ORDERLIMIT_N))
             return c.fetchall()
@@ -1175,6 +1428,7 @@ class SurrealTSServer(SurrealTS):
 
     def _open(self):
         self.db = surreal_common.served_client()
+        self.durability = surreal_common.served_durability()
         self._ver = "surrealdb-server:" + str(self.db.version()).replace("surrealdb-", "")
 
 
@@ -1280,7 +1534,7 @@ class ArangoTS:
 _CLIENT_SERVER = {"questdb", "surrealdb_ts_server", "arangodb_ts"}
 
 BACKENDS = {c.name: c for c in (ArcadeTS, ArcadeTSServer, ArcadeNativeTS, ArcadeNativeTSServer, DuckTS, SQLiteTS, MongoTS, TimescaleTS, QuestTS,
-                                SurrealTS, SurrealTSServer, ArangoTS)}
+                                SurrealTS, SurrealTSServer, ArangoTS, PostgresTS)}
 
 # DECISIONS #81: what each arm runs at commit, recorded on the row. DuckDB is
 # the named exception here; TimescaleDB reads the server's own
@@ -1301,6 +1555,8 @@ DURABILITY = {
     "surrealdb_ts": bench_common.DURABILITY_SURREAL_EMBEDDED,
     "surrealdb_ts_server": bench_common.DURABILITY_SURREAL_SERVER,
     "arangodb_ts": arango_common.DURABILITY,
+    # Read back with SHOW at connect (the adapter's own answer wins).
+    "postgres_ts": bench_common.DURABILITY_PG_OFF,
 }
 
 
@@ -1374,6 +1630,29 @@ def main():
         with _beat.phase("engine-settle"):
             b.settle()
     out["engine_settle_s"] = round(time.perf_counter() - _t, 3)
+    if getattr(b, "_mutable_at_ingest_end", None) is not None:
+        out["ts_mutable_at_ingest_end"] = b._mutable_at_ingest_end
+    # WHAT THE ENGINE SAYS THE TYPE WAS CREATED WITH (row 54): read back, never the string we sent.
+    if hasattr(b, "compaction_readback"):
+        out.update(b.compaction_readback())
+
+    # RELEASE THE CORPUS once nothing reads it (CAMPAIGN.md section 7 row 18,
+    # BUGS F66). It used to stay referenced from here to the end of the cell,
+    # so every query ran with the whole parsed corpus resident, and on an
+    # embedded arm that memory is the engine's own cap. Released AFTER the
+    # ingest timer and after the engine's own settle, so neither ingest_s nor
+    # engine_settle_s nor the compaction wait covers it, and BEFORE the lane's
+    # settle floor, which absorbs it below so the time from ingest to the
+    # first query is what it was. An arm that keeps its own copy of the input
+    # (DuckDB's registered Arrow table) drops it here too, outside the timer
+    # that built it. The row records how long the release took.
+    _t = time.perf_counter()
+    with _beat.phase("corpus-release"):
+        del pts
+        _release = getattr(b, "release_ingest_input", None)
+        if _release is not None:
+            _release()
+    out["corpus_release_s"] = round(time.perf_counter() - _t, 3)
 
     # Optional settle between ingest and query, OUTSIDE the ingest timer.
     # Default 0 keeps every arm exactly as it was, because a settle given to
@@ -1394,7 +1673,20 @@ def main():
     out["settle_s_lane"] = settle
     out["settle_s_adapter"] = round(float(getattr(b, "_settled_s", 0.0) or 0.0), 3)
     if settle > 0:
-        time.sleep(settle)
+        # The corpus release above already spent part of the floor; the
+        # floor is a gap between ingest and the first query, not a sleep
+        # added to whatever came before it.
+        time.sleep(max(0.0, settle - out["corpus_release_s"]))
+
+    # WHAT THE FIRST TIMED QUERY SAW (DECISIONS #121): a TIMESERIES arm records
+    # how many samples were still uncompacted, and how long its own settle
+    # waited, so a row proves its state instead of inheriting it from a sleep.
+    if hasattr(b, "mutable_samples"):
+        try:
+            out["ts_mutable_at_query"] = int(b.mutable_samples())
+        except Exception as e:  # noqa: BLE001
+            out["ts_mutable_at_query_error"] = f"{type(e).__name__}: {e}"
+        out["ts_compaction_wait_s"] = getattr(b, "_compaction_wait_s", None)
 
     out["query_iters"] = QITER
     for qn in QUERIES:
@@ -1525,6 +1817,9 @@ def main():
     # under so a reader never has to infer it.
     bench_common.stamp_durability(out, getattr(b, "durability", None)
                                   or DURABILITY.get(args.backend))
+    # What a served engine reported about its own settings at connect (the
+    # PostgreSQL arms' pools, FAIRNESS F6), read back rather than restated.
+    out.update(getattr(b, "row_extra", None) or {})
     out["instrument"] = bench_common.INSTRUMENT
     # DECISIONS #89: the queries carry a cold/warm split; the ingest does not,
     # and the row says why rather than leaving the pair blank.

@@ -569,8 +569,10 @@ def _page_index(payload):
 # comparator that joins (ArangoDB, qDV) is checked the day it lands.
 E2_SINGLE_ENGINE = ("arcadedb_e2", "arcadedb_e2_server", "surrealdb_e2",
                     "surrealdb_e2_server", "neo4j_e2", "pg_age_e2", "arangodb_e2",
-                    "mongodb_e2")
-E2_OPTIONAL = ("arangodb_e2", "mongodb_e2")
+                    "mongodb_e2", "memgraph_e2", "ladybug_e2", "duckdb_e2")
+# Optional until a campaign has measured them (Memgraph, LadybugDB, and DuckDB join at
+# the 26.10.1 measurement, DECISIONS #131 item 4).
+E2_OPTIONAL = ("arangodb_e2", "mongodb_e2", "memgraph_e2", "ladybug_e2", "duckdb_e2")
 E2_BACKENDS = E2_SINGLE_ENGINE + ("composed_qdrant_neo4j",)
 
 
@@ -820,6 +822,17 @@ def _check_no_arcadedb_row_lost(payload):
             # the E2 table published with only comparators), and that still
             # fails. No mode flag: at the switch every lane has rows, so the
             # check tightens back to strict on its own.
+            # A SKELETON'S DECLARED ABSENCE IS NOT A LOSS. The placeholder
+            # names the tables it does not build (`skeleton_absent_tables`:
+            # e4, the second sparse pass, pycost), each with its reason, and
+            # once the live preview carried e4 every skeleton publish failed
+            # here on a table it had already said it leaves out (found
+            # rehearsing the 26.10.1 publish, 2026-10-02). A campaign payload
+            # carries no such list, so this never excuses a real one.
+            if payload.get("skeleton") and tid in (payload.get("skeleton_absent_tables") or {}):
+                print(f"  skeleton: table {tid} is declared absent from the placeholder "
+                      f"({payload['skeleton_absent_tables'][tid][:80]})")
+                continue
             lane = _table_lanes().get(tid, (None,))[0]
             if lane and lane not in _lanes_with_rows():
                 print(f"  not yet measured: table {tid} is on the live page and "
@@ -1007,9 +1020,16 @@ def main() -> int:
     print("\nthe dense table's ArangoDB IVF sentence says what the harness does, from the rows")
     i_bad = _check_arango_ivf_sentence(payload, rows)
     print(f"  {i_bad} IVF sentence finding(s)")
+    print("\nevery override a table meets is named under it (CAMPAIGN section 7 row 21)")
+    ov_bad = _check_override_disclosures(payload, rows)
+    print(f"  {ov_bad} undisclosed override(s)")
+    print("\nthe ArcadeDB row at the image's own JVM settings is explained wherever it is printed "
+          "(CAMPAIGN section 7 row 69)")
+    j_bad = _check_jvm_defaults_disclosure(payload)
+    print(f"  {j_bad} table(s) missing the sentence")
     return 1 if (bad or d_bad or p_bad or a_bad or l_bad or h_bad or c_bad
                  or r_bad or m_bad or not u_ok or k_bad or o_bad or z_bad or w_bad
-                 or q_bad or v_bad or n_bad or i_bad) else 0
+                 or q_bad or v_bad or n_bad or i_bad or ov_bad or j_bad) else 0
 
 
 # --------------------------------------------------------------------------
@@ -1134,6 +1154,13 @@ NOT_PRINTED = [
      "beside it, which is itself a diagnostic and not a column"),
     (r"^(rep|rc|trials|seed)$",
      "provenance: which repetition this row is and whether it exited clean"),
+    (r"^arcadedb_http_clients?$",
+     "which HTTP client an ArcadeDB served arm ran with (CAMPAIGN 7 row 72, lean_http.py): a condition of the served arms, read from "
+     "the session that ran, never a column. The e4 decomposition's row lists the two clients it measured (`arcadedb_http_clients`); its table "
+     "names the client in each HTTP column instead (export_web._e4_arms)"),
+    (r"^jpype_version$",
+     "which JPype the process that ran the cell had loaded (CAMPAIGN 7 row 73, bench_common.jpype_version): a condition of the embedded "
+     "ArcadeDB arms, read from the process (`jpype.__version__`), empty for every arm that never imports it, never a column"),
     (r"^(tpch_sf|n_docs|n_docs_ingested|n_lineitem|n_part|n_persons|"
      r"n_persons_in_corpus|n_persons_ingested|n_edges|n_edges_ingested|"
      r"n_points|n_products|n_rows|dim|dims|ts_chunk|ts_shards|last_window_s|"
@@ -1180,6 +1207,10 @@ NOT_PRINTED = [
     (r"^res_\w+_n$|^\w+_rows$",
      "the answer check's own record (DECISIONS #88): how many rows an answer "
      "held, compared across engines and not published as a latency"),
+    (r"^res_\w+_profile$",
+     "the answer profile (CAMPAIGN section 7 row 59): per declared column, how many distinct "
+     "canonical values the answer holds and how many are 0 or null, read by degenerate_check.py "
+     "to flag an agreed answer that cannot mean anything; a record of the answer, not a column"),
     (r"^(client|server)_(peak|end|io|disk|cpu)_\w+$|^server_(mem_cap_g|shm_size)$|"
      r"^(peak_mib_sum|peak_owned_mib_sum|peak_shmem_mib_sum|end_anon_mib_sum|"
      r"io_read_mib_sum|io_write_mib_sum|disk_mb_sum|cpu_usec_sum|client_mem_cap|"
@@ -1187,14 +1218,17 @@ NOT_PRINTED = [
      "the page prints the summed peak memory and the workload's disk; these "
      "are the per-side splits those two are computed from"),
     (r"^(hnsw_M|m|k|ef_construction|ef_search|ivf_\w+|degree_param|"
-     r"graph_build_cache_\w+|qps)$",
+     r"graph_build_cache_\w+|qps|neo4j_vector_search_expansion|ladybug_ml|ladybug_mu|"
+     r"lance_nprobes|es_num_candidates|es_rescore_oversample)$",
      "index parameters and their calibration: matched by effect and printed "
      "as conditions under the table, never as columns"),
     (r"^(settle_s|settle_s_lane|settle_s_adapter|engine_settle_s|gt_load_s|"
      r"recall_calc_s|query_gen_s|search_wall_s|phases_accounted_s|connect_s|"
-     r"import_ms|build_close_ms|close_s|mutate_n|mutate_queries|mutate_ran)$",
+     r"import_ms|build_close_ms|close_s|mutate_n|mutate_queries|mutate_ran|"
+     r"corpus_release_s)$",
      "harness bookkeeping around a timed phase: settling, loading ground "
-     "truth, computing recall, and the phase accounting"),
+     "truth, computing recall, the phase accounting, and the time-series "
+     "driver releasing its parsed corpus between ingest and the queries"),
     # The first October dense landing (2026-10-06) met these four fields for
     # the first time and A2 refused the page for them: no earlier landing had
     # dense rows from the comparators that record them.
@@ -1239,6 +1273,90 @@ NOT_PRINTED = [
      "the LadybugDB graph arm's thread pool (read back from the engine) and "
      "buffer pool, fitted to the cpuset and to the cgroup memory limit (FAIRNESS "
      "F6, BUGS F160; audited in FAIRNESS.md rather than printed as a column)"),
+    # THE 26.10.1 ARMS' READ-BACKS (found rehearsing that publish, 2026-10-02):
+    # each is a setting or a check a new arm records about itself, and none is
+    # a measurement of the work a table compares.
+    (r"^pg_\w+$",
+     "a PostgreSQL arm's server settings read back with SHOW: the pool fit "
+     "(parallel workers, worker processes, work_mem, hash_mem_multiplier) sized "
+     "from the cell's cpuset and cap (FAIRNESS F3/F6), audited in FAIRNESS.md "
+     "rather than printed as a column"),
+    (r"^es_(allocated_processors|available_processors|heap_max_mib)$",
+     "Elasticsearch's processors and heap, read back from _nodes: its pool and "
+     "heap fitted to the cell (FAIRNESS F6), audited rather than printed"),
+    (r"^duckdb_threads$",
+     "a DuckDB arm's thread pool, read back from the engine and held against "
+     "the size of the cell's cpuset (FAIRNESS F6; fairness_check F15), stated "
+     "under every table that shows DuckDB by a generated sentence rather than "
+     "printed as a column"),
+    # THE OVERRIDES A TABLE DISCLOSES (overrides.py, CAMPAIGN section 7 row 21):
+    # each field below is a setting this benchmark overrides, read back from the
+    # engine and named under every table that shows the arm by a generated
+    # sentence. fairness_check F15 holds each row to the value the sentence
+    # claims, so a field here is a disclosure and never a column.
+    (r"^(es_security_enabled|es_replicas)$",
+     "Elasticsearch's security features and replica count, read from the engine "
+     "(`_xpack`, the index settings): the sentence under every table that shows "
+     "Elasticsearch says both are off"),
+    (r"^duckdb_hnsw_persistence$",
+     "DuckDB's experimental HNSW persistence flag, read from the engine "
+     "(`current_setting`): the sentence under every table that shows the "
+     "vector arm says it is on"),
+    (r"^(neo4j_pagecache|neo4j_checkpoint_interval|neo4j_checkpoint_interval_default)$",
+     "Neo4j's page cache size and checkpoint interval, read from the engine "
+     "(`SHOW SETTINGS`): the sentences under every table that shows Neo4j say "
+     "how each was set"),
+    (r"^(arcadedb_add_hierarchy|arcadedb_add_hierarchy_source)$",
+     "whether ArcadeDB's vector index was built with a hierarchy, and whether "
+     "that was read from the engine (embedded) or recorded as the request "
+     "(served, whose HTTP API returns no index metadata)"),
+    (r"^index_kinds(_error)?$",
+     "the index kinds an ArcadeDB arm's engine reports after its schema is built (SELECT FROM "
+     "schema:indexes, type-level entries), or why it could not be asked: the evidence the "
+     "sentence about hash indexes is generated from, and fairness_check F14d holds against "
+     "the lanes' registry"),
+    (r"^server_jvm_\w+$",
+     "what a served ArcadeDB's JVM was running, read from the process (its flags, its maximum and initial "
+     "heap in bytes, its collector, its JDK major, and the image-defaults stamp): the sentence under a table "
+     "that prints the image-defaults arm is generated from them, and the JVM heap column prints the heap"),
+    (r"^(server_query_max_heap_elements|server_query_max_heap_source)$",
+     "the served ArcadeDB's limit on records or groups one query may hold in "
+     "memory, asked of the engine over HTTP by the runner (or the container's "
+     "own setting, named as the source when the engine could not be asked)"),
+    (r"^ts_compaction_interval(_ms|_readback_error)?$",
+     "the compaction interval ArcadeDB's native time-series arms created the type with, as the engine "
+     "reports it (milliseconds), or why it could not be asked: the evidence behind the sentence that "
+     "names the one-hour interval"),
+    (r"^ts_mutable_at_ingest_end$",
+     "the samples ArcadeDB's native time-series arms had not yet sealed when "
+     "the ingest timer stopped, from the engine's own count: the evidence "
+     "behind the sentence that says the ingest rate does not include sealing"),
+    (r"^(es|duckdb|neo4j|arcadedb)_readback_error$",
+     "the reason an override read-back failed on this row; fairness_check F15 "
+     "reports the field it left absent, and this names why"),
+    (r"^lc_affinity_cpus$",
+     "the CPUs the lifecycle process could run on (sched_getaffinity), recorded "
+     "beside its thread count after open so the pool can be audited against "
+     "them (FAIRNESS F6); it describes the cell, not the session it times"),
+    (r"^vector_index_size$",
+     "a build check: the entries the vector index holds after the build, and "
+     "the cell is refused unless that equals the products loaded; it qualifies "
+     "the build rather than measures it"),
+    (r"^qdrant_(points_at_first_green|settle_after_green_s)$",
+     "the Qdrant sparse settle (BUGS F166): how many points the collection held "
+     "at its first green status and how long the build then waited for the "
+     "rest, both inside the build timer, so they explain the build column "
+     "rather than add one"),
+    (r"^(async_writers|lineitem_buckets|served_load_batch|load_call_rows)$",
+     "the ArcadeDB documents loader's configuration: async writers, LineItem "
+     "buckets (CAMPAIGN section 7 item 10), rows per load call, and the served "
+     "batch size, recorded so the load can be reproduced; it sets the build up "
+     "rather than measures it"),
+    (r"^setup_s$",
+     "the part of a dense build that is neither the ingest nor the index timer "
+     "(schema, collection, connection), derived from three numbers the row "
+     "carries; the table states its range in a sentence computed from the "
+     "printed columns (BUGS F101) rather than a column of its own"),
     (r"^duckpgq_threads$",
      "the DuckPGQ graph arm's DuckDB thread pool, sized from the cpuset via "
      "PRAGMA threads=sched_getaffinity (FAIRNESS F6, audited in FAIRNESS.md "
@@ -1255,6 +1373,26 @@ NOT_PRINTED = [
      "PRAGMA threads=sched_getaffinity (FAIRNESS F6, audited in FAIRNESS.md "
      "rather than printed as a column), and the community build id the row "
      "carries beside the DuckDB version the page prints"),
+    # THE SERVER-RESTART LANE (l6_restart.py, DECISIONS #139 item 2).
+    (r"^(restart_iters|restart_warmup|restart_write_n|restart_poll_s|stop_grace_s|"
+     r"restart_read_key|n_points)$",
+     "the restart lane's protocol (cycles, warm-up, the write batch, the poll "
+     "interval, the stop grace) and its fixed read's key, stated on every row and "
+     "described under the table, never a column"),
+    (r"^(restart_load_s|shutdown_after_load_s|write_batch_s|restart_read_recall_at_10)$",
+     "the restart lane's parts that are not what it measures: the load (its own "
+     "table's ingest column), the first stop (it flushes the whole load, a "
+     "different question from a stop after a session), the write session that "
+     "gives the next stop something to flush, and the vector read's recall (the "
+     "read is held against the same engine's own answer before the stop)"),
+    (r"^(stop_killed_after_grace|stop_oom_killed|restart_writes_survived|restart_writes_visible_s)$",
+     "the restart lane's checks on its own stops and restarts: whether Docker had "
+     "to kill an engine that did not stop, an out-of-memory kill, and that every "
+     "batch written before a stop read back after the restart (and how long it "
+     "took to reappear); a check, not a column"),
+    (r"^shutdown_sync_(calls|s)$",
+     "the laptop shutdown trace (BENCH_RS_TRACE=1): which syncs a stop issued, "
+     "evidence for the durability notes, never run in a campaign cell"),
     (r"^driver_version$",
      "the client library a served arm was reached through; the page prints "
      "the engine's version, and the driver stays on the row for an audit"),
@@ -1357,7 +1495,7 @@ def _check_multimodel(payload):
         print(f"  ROWS    multimodel: {list(rows)} != {list(EW.MULTIMODEL_ENGINES)}")
         bad += 1
     for engine in EW.MULTIMODEL_ENGINES:
-        anywhere = any(EW.engine_family(e.get("backend"), e.get("is_arcadedb")) == engine
+        anywhere = any(EW.multimodel_engine(EW.engine_family(e.get("backend"), e.get("is_arcadedb"))) == engine
                        for t in tables for e in t.get("entries", []))
         if not anywhere:
             print(f"  ROSTER  multimodel: {engine} is on no table in the payload")
@@ -1553,6 +1691,10 @@ def _check_lane_roster(payload):
         absent = {str(a.get("backend")) for a in (t.get("declared_absences") or [])
                   if not a.get("column")}
         for key in registered:
+            # An arm that runs one workload of its lane only (runner.ARM_RUNS) is not owed
+            # on the other workload's table: not a row, not a declared absence.
+            if not RN.arm_runs(lane, _wl, key):
+                continue
             checked += 1
             label = EW.display_name(key)
             if key in keyed:
@@ -1631,6 +1773,7 @@ CONDITION_ALLOWED = [
     (r"\bv\d+\b", "an API path version"),
     (r"\bsha256\b", "the digest algorithm"),
     (r"\bNeo4j\b", "an engine name"),
+    (r"\bvec0\b", "sqlite-vec's virtual-table module name"),
     (r"\b[A-Za-z_]+=\d+\b", "a configuration assignment (txWalFlush=0)"),
     (r"\bcpuset \d+(?:-\d+)?\b", "the cpuset, checked by the setup section"),
     (r"\bTPC-[CH]\b", "a benchmark name"),
@@ -1740,7 +1883,7 @@ SEPT_CONDITION_PINS = [
     ("l3d", r"sealed at (\d+)%", lambda P, rows: _const("export_web", "_milvus_seal_proportion")() * 100, "const"),
     ("l3d", r"image default is (\d+)%", lambda P, rows: _const("runner", "MILVUS_IMAGE_SEAL_PROPORTION") * 100, "const"),
     ("l3d", r"in ([\d,]+)-row transactions", lambda P, rows: _const("l3d_dense", "BATCH"), "const"),
-    ("l3d", r"sends (\d+)-statement", lambda P, rows: _const("l3d_dense", "SERVER_BATCH"), "const"),
+    ("l3d", r"binds ([\d,]+)-row INSERT", lambda P, rows: _const("l3d_dense", "ArcadeServer").load_batch, "const"),
     ("l3d", r"batches of ([\d,]+); LanceDB", lambda P, rows: _const("l3d_dense", "CHROMA_BATCH"), "const"),
     ("l3d", r"corpus size \(([\d,]+)\)", lambda P, rows: _const("l3d_dense", "SCALE_DOCS")["deep10m"], "const"),
     ("l2", r"SF1 \(11k people\): (\d+)", _oltp_queries("sf1"), "const"),
@@ -1901,6 +2044,51 @@ def _check_zero_age_disclosure(payload, rows):
             bad += 1
         elif want:
             print(f"  {t['id']}: disclosed")
+    return bad
+
+
+def _check_override_disclosures(payload, rows=None):
+    """A table that shows an arm running a PROTOCOL section 7 override prints a
+    sentence that says so (overrides.py, CAMPAIGN section 7 row 21).
+
+    The exporter appends the sentence from the registry; this holds the payload
+    to the registry's own `says` patterns, so a refactor that stops calling the
+    generator, or a generator reworded until it no longer names the setting,
+    fails here instead of publishing a table that hides what its engine ran
+    with. The row-side half (the engine's own read-back on every row) is
+    fairness_check F15. Returns bad count."""
+    import export_web as EW
+    import overrides as OV
+    tables = [t for t in payload.get("tables", []) if t.get("instrument") == OV.INSTRUMENT]
+    lane_of = lambda tid: (EW._TABLE_LANE.get(tid) or (None,))[0]   # noqa: E731
+    found = OV.sentence_findings(tables, lane_of, rows)
+    for f in found:
+        print(f"    {f}")
+    owed = sum(1 for t in tables for _ in OV.applicable(
+        lane_of(t.get("id")), [e.get("backend_key") for e in t.get("entries") or []], rows))
+    print(f"  {len(tables)} October table(s), {owed} override sentence(s) owed from their entries")
+    return len(found)
+
+
+def _check_jvm_defaults_disclosure(payload):
+    """A table that prints the image-defaults ArcadeDB row says what that row runs (CAMPAIGN
+    section 7 row 69): the sentence export_web generates from the cells' recorded JVM flags,
+    held here to the words that make it say it (the image's own settings, the heap, the
+    collector, no initial heap). A table that prints the arm and lost the sentence fails.
+    Returns bad count."""
+    import export_web as EW
+    bad = 0
+    for t in payload.get("tables", []):
+        if not any(e.get("backend_key") == EW.JVM_DEFAULTS_ARM and not e.get("outcome")
+                   for e in t.get("entries") or []):
+            continue
+        conds = [str(c) for c in (t.get("conditions") or [])]
+        if any(all(re.search(p, c) for p in (r"image's own JVM settings", r"\bheap\b", r"collector",
+                                              r"initial heap")) for c in conds):
+            print(f"  {t['id']}: the image-defaults row is explained")
+        else:
+            print(f"    MISSING {t['id']}: prints the image-defaults ArcadeDB row and no sentence says what it runs")
+            bad += 1
     return bad
 
 

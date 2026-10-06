@@ -14,8 +14,16 @@
 set -uo pipefail
 SHA="${1:?usage: verify_pair_c25.sh <full-40-char-sha>}"
 SHORT=${SHA:0:9}
-IMG="arcadedb-c25:${SHORT}"
-REPO=$HOME/repos/humemai/arcadedb-embedded-python
+# PAIR_IMAGE names the server image when it is not the c25 build of this commit
+# (the 26.10.1 stages pass the release pair they were generated for).
+IMG="${PAIR_IMAGE:-arcadedb-c25:${SHORT}}"
+# THE CHECKOUT THIS SCRIPT LIVES IN, not a fixed path. It was $HOME/repos/humemai/arcadedb-embedded-python,
+# the main checkout, so run from a worktree it built from, wrote into, and verified against main's
+# bindings/python/dist and .venv: the pair it reported was another tree's. BENCH_PRINT_REPO=1 prints the
+# tree and exits (test_pair_scripts.py holds this).
+REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../.." && pwd)"
+[ -z "${BENCH_PRINT_REPO:-}" ] || { echo "REPO=$REPO"; exit 0; }
+EMBEDDED_IMAGE="${EMBEDDED_IMAGE:-dbbench:arcadedb}"   # the image the embedded arm runs (the runner names dbbench:arcadedb)
 fail() { echo "PAIR UNVERIFIED: $*"; exit 1; }
 
 command -v docker >/dev/null || fail "no docker"
@@ -45,8 +53,18 @@ print(next(l.split('=',1)[1].strip() for l in p.splitlines() if l.strip().starts
 
 # 3. THE JVMs. Same major on both sides or the deployment axis is not transport.
 IJ=$(docker run --rm --entrypoint sh "$IMG" -c 'java -version 2>&1' | head -1 | grep -oE '"[0-9]+' | tr -d '"')
-EJ=$("$REPO"/.venv/lib/python3.12/site-packages/arcadedb_embedded/jre/bin/java -version 2>&1 \
-      | head -1 | grep -oE '"[0-9]+' | tr -d '"')
+# The venv's JRE when this checkout has one (the bench host does); otherwise the JRE inside the
+# embedded image, which is the JVM the embedded arm actually runs (a worktree has no .venv).
+VENV_JAVA="$REPO/.venv/lib/python3.12/site-packages/arcadedb_embedded/jre/bin/java"
+if [ -x "$VENV_JAVA" ]; then
+  EJ=$("$VENV_JAVA" -version 2>&1 | head -1 | grep -oE '"[0-9]+' | tr -d '"')
+else
+  EJ=$(docker run --rm --entrypoint python3 "$EMBEDDED_IMAGE" -c "
+import importlib.metadata as m, pathlib, subprocess
+d = pathlib.Path(m.distribution('arcadedb-embedded').locate_file('arcadedb_embedded'))
+print(subprocess.run([str(d / 'jre' / 'bin' / 'java'), '-version'], capture_output=True, text=True).stderr.splitlines()[0])" \
+        2>/dev/null | grep -oE '"[0-9]+' | tr -d '"')
+fi
 [ -n "$IJ" ] && [ -n "$EJ" ] || fail "could not read a JVM version (image='$IJ' embedded='$EJ')"
 [ "$IJ" = "$EJ" ] || fail "JVM major differs: image=$IJ embedded=$EJ"
 
@@ -58,17 +76,28 @@ EJ=$("$REPO"/.venv/lib/python3.12/site-packages/arcadedb_embedded/jre/bin/java -
 # served arm ran 26.9.1-SNAPSHOT, and the whole l4 table compared two
 # ArcadeDB versions with this script reporting PAIR VERIFIED. A wheel FILE on
 # disk is not the engine a cell ran; the image is.
-if docker image inspect dbbench:arcadedb >/dev/null 2>&1; then
-  BSHA=$(docker run --rm --entrypoint python3 dbbench:arcadedb -c "
+if docker image inspect "$EMBEDDED_IMAGE" >/dev/null 2>&1; then
+  BSHA=$(docker run --rm --entrypoint python3 "$EMBEDDED_IMAGE" -c "
 import importlib.metadata as m, pathlib, zipfile, io, sys
 d = pathlib.Path(m.distribution('arcadedb-embedded').locate_file('arcadedb_embedded'))
 j = next(x for x in (d / 'jars').glob('arcadedb-engine-*.jar'))
 z = zipfile.ZipFile(j)
 p = z.read('com/arcadedb/arcadedb.properties').decode()
 print(next(l.split('=',1)[1].strip() for l in p.splitlines() if l.strip().startswith('buildNumber')))" 2>/dev/null)
-  [ "$BSHA" = "$SHA" ] || fail "dbbench:arcadedb bakes jars ${BSHA:0:9}, expected $SHORT (rebuild it with ARCADEDB_WHEEL set)"
+  [ "$BSHA" = "$SHA" ] || fail "$EMBEDDED_IMAGE bakes jars ${BSHA:0:9}, expected $SHORT (rebuild it with ARCADEDB_WHEEL set)"
 else
-  fail "no dbbench:arcadedb image; the embedded arm has nothing to run"
+  fail "no $EMBEDDED_IMAGE image; the embedded arm has nothing to run"
 fi
 
-echo "PAIR VERIFIED $SHORT  jars=image+wheel+embedded-image  jvm=$IJ  image=$IMG"
+# 5. THE JPYPE THE EMBEDDED ARM ACTUALLY RUNS (CAMPAIGN 7 row 73). The wheel declares jpype1>=1.5.0
+# with no upper bound, so an image built after a new JPype release holds the new one while every check
+# above still passes, and the embedded arm's per-call cost is not the one the campaign measures. The pin
+# is Dockerfile.bench's ARG default, read from this script's own directory like REPO above, never from
+# the environment.
+HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+WANT_J=$(sed -n 's/^ARG JPYPE_VERSION=//p' "$HERE/Dockerfile.bench")
+[ -n "$WANT_J" ] || fail "no 'ARG JPYPE_VERSION=<x.y.z>' default in $HERE/Dockerfile.bench"
+HAVE_J=$(docker run --rm --entrypoint python3 "$EMBEDDED_IMAGE" -c 'import jpype; print(jpype.__version__)' 2>/dev/null | tr -dc '0-9a-zA-Z.-')
+[ "$HAVE_J" = "$WANT_J" ] || fail "$EMBEDDED_IMAGE runs JPype '$HAVE_J', the pin is $WANT_J (rebuild it: ./build_images.sh arcadedb)"
+
+echo "PAIR VERIFIED $SHORT  jars=image+wheel+embedded-image  jvm=$IJ  jpype=$HAVE_J  image=$IMG  embedded=$EMBEDDED_IMAGE  repo=$REPO  wheel=$W"

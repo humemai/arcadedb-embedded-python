@@ -4,14 +4,29 @@
 FROM python:3.12-slim
 
 ARG PIP_PACKAGES=""
+# JPYPE IS PINNED WITH THE WHEEL (CAMPAIGN 7 row 73). The wheel declares
+# `jpype1>=1.5.0` with no upper bound, so an image built on the day of a new
+# JPype release would have resolved the new one and changed what every embedded
+# ArcadeDB call costs in the middle of a run. A hard `==`, installed in the same
+# pip command as the wheel, so the resolver has no room to pick another. The
+# default is bench_common.JPYPE_PIN; `make_2610_stages.py --check` refuses a
+# default that differs, and every stage reads the version back out of the image.
+ARG JPYPE_VERSION=1.7.1
 # Local wheels (e.g. a not-yet-released arcadedb-embedded) placed in
 # docker/wheels/ are installed first; the dir ships empty (.gitkeep).
 COPY docker-wheels/ /tmp/wheels/
 RUN set -e; \
     if ls /tmp/wheels/*.whl >/dev/null 2>&1; then \
-      pip install --no-cache-dir /tmp/wheels/*.whl; \
+      pip install --no-cache-dir /tmp/wheels/*.whl "jpype1==${JPYPE_VERSION}"; \
     fi; \
-    if [ -n "${PIP_PACKAGES}" ]; then pip install --no-cache-dir ${PIP_PACKAGES}; fi; \
+    if [ -n "${PIP_PACKAGES}" ]; then \
+      _jp=""; \
+      case " ${PIP_PACKAGES} " in *" arcadedb-embedded"*) _jp="jpype1==${JPYPE_VERSION}";; esac; \
+      pip install --no-cache-dir ${PIP_PACKAGES} ${_jp}; \
+    fi; \
+    if python -c "import jpype" 2>/dev/null; then \
+      python -c "import jpype, sys; sys.exit(0 if jpype.__version__ == sys.argv[1] else 'JPype ' + jpype.__version__ + ' is installed, the pin is ' + sys.argv[1])" "${JPYPE_VERSION}"; \
+    fi; \
     rm -rf /tmp/wheels
 
 WORKDIR /work

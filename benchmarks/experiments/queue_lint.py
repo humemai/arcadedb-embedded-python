@@ -115,8 +115,41 @@ def logical_lines(body):
     return out
 
 
+_PRE_TOKENS = re.compile(r"dev|rc[0-9]|a[0-9]|b[0-9]|SNAPSHOT")
+
+
+def wheel_is_prerelease(body):
+    """True when the wheel NAME a script bakes is a pre-release, None when it names no wheel.
+
+    The same token test build_images.sh applies to the wheel's basename (its
+    version field), so the lint and the guard cannot disagree. A stage generated
+    for a stable release (make_2610_stages, a stable wheel) sets
+    BENCH_ALLOW_DEV=0 on purpose; the lint used to demand 1 on every
+    build_images.sh line and rejected all fourteen stages of the 26.10.1 chain
+    the first time they were linted against the official wheel.
+    """
+    m = re.search(r"arcadedb_embedded-([^-\s\"']+)-", body)
+    if not m:
+        return None
+    return bool(_PRE_TOKENS.search(m.group(1)))
+
+
+def _allow_dev_problem(line, wheel_pre):
+    """The BENCH_ALLOW_DEV rule for one build_images.sh line, or None when it holds."""
+    m = re.search(r"BENCH_ALLOW_DEV=(\S+)", line)
+    if not m:
+        return "build_images.sh without BENCH_ALLOW_DEV: a commit-pinned (pre-release) wheel is refused"
+    if m.group(1) == "1":
+        return None
+    if wheel_pre is False:
+        return None  # a stable wheel passes the guard whatever the variable says; the generator writes 0
+    return (f"build_images.sh with BENCH_ALLOW_DEV={m.group(1)} refuses a pre-release wheel "
+            f"(this script's wheel is {'a pre-release' if wheel_pre else 'not named, so assumed one'}); needs 1")
+
+
 def check_paths_and_python(name, body):
     problems = []
+    wheel_pre = wheel_is_prerelease(body)
     # SHELL FUNCTIONS THAT WRAP A CELL RUNNER are cell-bound, and so are their
     # call sites. Without this the container-path rule cannot see through a
     # helper: October's stages call run_cell/run_overlay, which invoke
@@ -169,8 +202,10 @@ def check_paths_and_python(name, body):
             problems.append((i, "process-name wait (pgrep -x -f) holds only if the predecessor was launched "
                                 "as exactly `/bin/bash /home/tk/qXX.sh`; wait on its ALL-DONE marker instead "
                                 "(BUGS F59)"))
-        if "build_images.sh" in line and "BENCH_ALLOW_DEV=1" not in line:
-            problems.append((i, "build_images.sh without BENCH_ALLOW_DEV=1 refuses the commit-pinned wheel"))
+        if "build_images.sh" in line:
+            msg = _allow_dev_problem(line, wheel_pre)
+            if msg:
+                problems.append((i, msg))
         in_cell = any(r in line for r in CELL_RUNNERS) or any(
             re.search(rf"(?:^|\s|\|\||&&)\s*{re.escape(fn)}\b", line) for fn in cell_fns)
         if not in_cell:

@@ -33,7 +33,7 @@ import os
 # Everything that turns a row into a published number, a gate verdict, or a
 # figure. A field read by none of these is read by nothing that ships.
 CONSUMERS = [
-    "export_web.py", "make_paper_tables.py", "page_check.py", "fairness_check.py",
+    "export_web.py", "make_paper_tables.py", "page_check.py", "fairness_check.py", "overrides.py",
     "provenance_check.py", "equivalence_check.py", "make_paper_figures.py",
     "memo_bottlenecks.py", "version_consistency_check.py", "claims_check.py",
     "publish_results_asset.py", "refresh_web_page.py", "campaign_switch_check.py",

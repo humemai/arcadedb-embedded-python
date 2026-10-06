@@ -10,6 +10,7 @@ import decimal as _decimal
 import hashlib
 import json
 import os
+import re
 import socket
 import statistics as st
 import sys
@@ -23,17 +24,48 @@ import time
 # ingest/index timer split, and bench_host.
 INSTRUMENT = "2026-10"
 
+# THE JPYPE VERSION THE CAMPAIGN MEASURES (CAMPAIGN 7 row 73). The embedded
+# ArcadeDB arms cross from Python into the JVM through JPype, so its per-call
+# cost is part of every embedded number: a laptop A/B of JPype 1.7.1 against its
+# master (240 commits ahead, unreleased) moved raw call costs by 15 to 25
+# percent and removed a leak of one Python object per boxed number returned
+# from Java. The wheel declares `jpype1>=1.5.0` with no upper bound, so an image
+# built on the day of the next release would have changed the instrument in the
+# middle of a run and split its rows. Dockerfile.bench installs
+# `jpype1==${JPYPE_VERSION}` with this default; make_2610_stages.py --check
+# refuses a Dockerfile whose default is not this constant, and every stage
+# refuses an image or a repo venv that runs another one.
+JPYPE_PIN = "1.7.1"
+
+
+def jpype_version():
+    """The JPype version THIS process ran with, or "" when it never imported JPype.
+
+    Read from the loaded module (`jpype.__version__`), not from package metadata
+    and not from the pin: the row is evidence of what ran, and a process that
+    never imported JPype (every comparator arm, every served ArcadeDB client)
+    records an empty value rather than a guess. Never imports JPype itself, so
+    asking cannot start the thing it reports on or change what a comparator
+    process loads.
+    """
+    mod = sys.modules.get("jpype")
+    return str(getattr(mod, "__version__", "") or "") if mod is not None else ""
+
+
+def jpype_fields():
+    """What a result row records about JPype: {"jpype_version": ...}. Stamp it after the arm has run."""
+    return {"jpype_version": jpype_version()}
+
 # DECISIONS #81: the matched durability class is "relaxed" (a commit returns
 # without waiting for the disk). An engine that cannot be relaxed declares a
 # `durability` string starting with this prefix and is the named exception on
 # its tables; fairness_check F8 refuses anything else.
 STRICT_PREFIX = "fsync at commit"
 
-# A THIRD ANSWER, because two were not enough. SurrealDB 3.2.4 has no sync
-# setting and its behaviour at commit could not be established (see the
-# evidence block below), and calling that "relaxed" would be the assertion
-# #81 exists to forbid. A string carrying this mark is its own class, and
-# fairness_check refuses it on any backend not named as an exception.
+# A THIRD ANSWER: an engine whose behaviour at commit could not be
+# established carries this mark rather than a class, and fairness_check refuses
+# it on any backend not named as an exception. None is named since BUGS F165
+# (SurrealDB served, the one engine that carried it, has a setting after all).
 UNVERIFIED_MARK = "not verified"
 
 
@@ -42,10 +74,10 @@ UNVERIFIED_MARK = "not verified"
 # asked for; this classifies what the ENGINE reported, and fairness_check
 # compares the two. A mismatch is a cell that asked for one setting and got
 # another, which is the failure mode a flag the server ignores produces.
-STRICT_MARKS = ("txWalFlush=2", "synchronous=FULL", "j=true", "commit.mode=sync",
+STRICT_MARKS = ("txWalFlush=2", "txWalFlush=1:", "synchronous=FULL", "j=true", "commit.mode=sync",
                 "SURREAL_SYNC_DATA=true", "waitForSync=true", "synchronous_commit=on",
                 # the colon keeps "=1:" from matching the relaxed "=100000"
-                "flush-every-n-tx=1:", "appendfsync=always")
+                "flush-every-n-tx=1:", "appendfsync=always", "sync=every")
 
 
 def durability_class(text):
@@ -93,12 +125,17 @@ def durability_class(text):
 #   SurrealDB   embedded (SDK 2.0.0, core 2.3.10) strace A/B: with
 #   embedded    SURREAL_SYNC_DATA unset, 6 fsync at both 50 and 250 commits;
 #               with it true, 56 and 256. The default is no sync at commit.
-#   SurrealDB   3.2.4 has NO sync setting: its binary holds no "SYNC_DATA"
-#   served      and no "SURREAL_DATASTORE" token, and none of its 110
-#               SURREAL_* variables names sync, WAL, fsync, or durability.
-#               The env var this harness used to set was inert and is gone
-#               (runner.py). What it does at commit is NOT verified, and
-#               DURABILITY_SURREAL_SERVER says exactly that.
+#   SurrealDB   3.2.4 RocksDB: `sync=never|every|<interval>` on the storage
+#   served      path (rocksdb:/path?sync=never). Its startup log prints the
+#               mode at INFO; the default is "Sync mode: every transaction
+#               commit" (BUGS F165: what this block said until 2026-10-02,
+#               "no sync setting" and "not verified", came from searching the
+#               SURREAL_* variable names; the setting is not one of them, and
+#               every October serverlog carried the default's line). strace
+#               on the laptop, 1,000 writes: one fdatasync per commit at the
+#               default (5.3 ms each, wall clock), none at sync=never; a
+#               read-only BEGIN/COMMIT also syncs. The runner reads the mode
+#               back before the client starts (surreal_sync_mode).
 #   Neo4j       2026.08.1 SHOW SETTINGS: no durability or sync setting exists
 #               (the tx_log settings are buffer, preallocation, and rotation
 #               only), so it cannot be relaxed; that it forces the log at
@@ -116,11 +153,28 @@ def durability_class(text):
 #               defaults); strace on the pinned image, build plus 3,009
 #               commits: 1 fsync at the default, 3,012 with
 #               --storage-wal-file-flush-every-n-tx=1 (laptop, 2026-09-17).
-#   FalkorDB    4.20.6 on Redis 8.6.3, CONFIG GET: appendonly no, save
+#   FalkorDB    6.0.1 on Redis 8.10.2 (2026-10-02): the same defaults and the same
+#               trace, 1,000 writes: 0 fsync at the default, 1,000 fdatasync
+#               with AOF always (.notes repros/falkordb-601-durability).
+#               4.20.6 on Redis 8.6.3, CONFIG GET: appendonly no, save
 #               "3600 1 300 100 60 10000" (the image's defaults, RDB only);
 #               strace, build plus 3,011 writes: 0 fsync at the default,
 #               3,011 fdatasync with --appendonly yes --appendfsync always
 #               (laptop, 2026-09-17).
+#   Chroma      chromadb 1.5.9 PersistentClient: its SQLite (chroma.sqlite3)
+#               reads back journal_mode=delete, and Settings offer no sync
+#               option; strace, one add() per commit: 436 fsync at 50 adds
+#               and 2,036 at 250, i.e. 8 per add (laptop, 2026-10-02). It
+#               syncs at every write and cannot be relaxed.
+#   LanceDB     lancedb 0.39.0, a local directory: each add() commits a new
+#               table version (252 versions after 250 adds) and strace counts
+#               0 fsync, fdatasync, msync, or sync_file_range over 50 and 250
+#               adds (a positive control, one os.fsync, counted 1); no sync
+#               option on connect() or the table (laptop, 2026-10-02). Nothing
+#               is synced at commit, and nothing makes it so.
+#   LadybugDB   RE-MEASURED at 0.21.2 (laptop, 2026-10-02) after the move from
+#               0.20.4: 56 fdatasync at 50 auto-commit writes and 256 at 250,
+#               one per commit, as before.
 #
 # One string per engine, defined here, so two lanes cannot describe the same
 # engine differently and a re-check lands in one place.
@@ -131,8 +185,7 @@ DURABILITY_LADYBUG = "fsync at commit, not configurable (LadybugDB WAL)"
 DURABILITY_MONGODB = "write concern w=1, j=false (journal flushed every 100 ms)"
 DURABILITY_QUESTDB = "cairo.commit.mode=nosync (default): no fsync at commit"
 DURABILITY_SURREAL_EMBEDDED = "SurrealKV, SURREAL_SYNC_DATA unset (the default): no sync at commit"
-DURABILITY_SURREAL_SERVER = ("RocksDB at the engine default; SurrealDB 3.2.4 exposes no sync "
-                             "setting and the behaviour at commit is not verified")
+DURABILITY_SURREAL_SERVER = "RocksDB, sync=never: no sync at commit (the OS flushes)"
 DURABILITY_NEO4J = ("fsync at commit, not configurable (no durability setting in "
                     "SHOW SETTINGS at 2026.08.1)")
 DURABILITY_PG_OFF = "synchronous_commit=off"
@@ -143,6 +196,8 @@ DURABILITY_MEMGRAPH = ("storage-wal-enabled=true, storage-wal-file-flush-every-n
                        "(image default): the WAL is fsynced every 100,000 transactions, not at commit")
 DURABILITY_FALKORDB = ("appendonly=no, RDB save '3600 1 300 100 60 10000' (image default): "
                        "nothing is synced at commit")
+DURABILITY_CHROMA = "fsync at commit, not configurable (Chroma's SQLite in rollback-journal mode)"
+DURABILITY_LANCEDB = "no sync at commit, not configurable (LanceDB writes each table version unsynced)"
 
 # ---------------------------------------------------------------------------
 # BOTH DURABILITY SETTINGS, ON THE WRITES (DECISIONS #90, superseding the
@@ -167,11 +222,22 @@ DURABILITY_CLASS = os.environ.get("BENCH_DURABILITY", CLASS_RELAXED).strip() or 
 if DURABILITY_CLASS not in (CLASS_RELAXED, CLASS_STRICT):
     raise SystemExit(f"BENCH_DURABILITY must be 'relaxed' or 'strict', not {DURABILITY_CLASS!r}")
 
-DURABILITY_ARCADEDB_STRICT = "txWalFlush=2: the WAL is flushed and synced at every commit"
+# ARCADEDB'S STRICT CLASS IS txWalFlush=1 FROM THE 26.10.1 MEASUREMENT (CAMPAIGN section 7 row 5, the user's decision of
+# 2026-10-04). `2` is FileChannel.force(true), the log's data AND metadata at every commit, one fsync; SQLite's FULL in WAL
+# mode is one fdatasync, which is `1` (force(false)). Upstream's own transactions documentation (concepts/transactions.adoc,
+# docs commit c52695ba66) calls `1` "Safe against power loss. Recommended for production." and says `2` has "No additional
+# recovery value over `1`", with no measurable difference in performance; the server's production mode defaults to 1. So 1 is
+# the setting matched BY EFFECT to SQLite's, not the flattering choice the knob-free-for-them rule guards against. The October
+# rows were measured at 2 and say so (DURABILITY_ARCADEDB_STRICT_FULL_SYNC); the page keeps the sentence that names the change
+# for as long as such a row stands behind a table (export_web._ARCADEDB_FULL_SYNC).
+ARCADE_STRICT_TX_WAL_FLUSH = 1
+DURABILITY_ARCADEDB_STRICT = "txWalFlush=1: the WAL is flushed with a data-only sync (fdatasync) at every commit"
+DURABILITY_ARCADEDB_STRICT_FULL_SYNC = "txWalFlush=2: the WAL is flushed and synced at every commit"   # the October rows
 DURABILITY_SQLITE_STRICT = "WAL, synchronous=FULL: synced at every commit"
 DURABILITY_MONGODB_STRICT = "write concern w=1, j=true (the journal is synced before the ack)"
 DURABILITY_QUESTDB_STRICT = "cairo.commit.mode=sync: fsync at commit"
 DURABILITY_SURREAL_EMBEDDED_STRICT = "SurrealKV, SURREAL_SYNC_DATA=true: sync at commit"
+DURABILITY_SURREAL_SERVER_STRICT = "RocksDB, sync=every (the engine default): synced at every commit"
 DURABILITY_ARANGO_STRICT = "waitForSync=true: the commit waits for the WAL sync"
 DURABILITY_PG_ON = "synchronous_commit=on"
 DURABILITY_MEMGRAPH_STRICT = "storage-wal-file-flush-every-n-tx=1: the WAL is fsynced at every commit"
@@ -185,19 +251,18 @@ DURABILITY_FALKORDB_STRICT = "appendonly=yes, appendfsync=always: the AOF is fda
 # case rests on SHOW SETTINGS offering no durability setting and on its documented
 # sync at commit, and the page now says so (export_web._no_knob_sentence).
 #
-# A FOURTH BELONGS HERE and the decision's list does not name it, so the reason
-# is written down rather than assumed: SurrealDB 3.2.4 SERVED has no sync
-# setting either. Its binary holds no "SYNC_DATA" and no "SURREAL_DATASTORE"
-# token and none of its 110 SURREAL_* variables names sync, WAL, fsync or
-# durability (#81's evidence block above). Setting an invented flag would label
-# the rows as strict while changing nothing, which is the exact failure #81 was
-# written after. It runs once and declares no setting, like the other three,
-# and its string keeps saying its behaviour at commit is not verified.
+# SurrealDB served stood here as a fourth until 2026-10-02, on the claim that
+# 3.2.4 had no sync setting. It has one, on the storage path, and its default
+# syncs at every commit (BUGS F165, the evidence block above); it is in
+# STRICT_OF below now, like every engine with a knob.
 NO_DURABILITY_SETTING = {
     DURABILITY_NEO4J,
     DURABILITY_DUCKDB,
     DURABILITY_LADYBUG,
-    DURABILITY_SURREAL_SERVER,
+    # The lifecycle arms (2026-10-02): Chroma always syncs and LanceDB never
+    # does, and neither has a setting, so each prints one number.
+    DURABILITY_CHROMA,
+    DURABILITY_LANCEDB,
 }
 
 # relaxed string -> strict string, for the engines that HAVE the knob.
@@ -207,6 +272,7 @@ STRICT_OF = {
     DURABILITY_MONGODB: DURABILITY_MONGODB_STRICT,
     DURABILITY_QUESTDB: DURABILITY_QUESTDB_STRICT,
     DURABILITY_SURREAL_EMBEDDED: DURABILITY_SURREAL_EMBEDDED_STRICT,
+    DURABILITY_SURREAL_SERVER: DURABILITY_SURREAL_SERVER_STRICT,
     DURABILITY_PG_OFF: DURABILITY_PG_ON,
     DURABILITY_ARANGO: DURABILITY_ARANGO_STRICT,
     DURABILITY_MEMGRAPH: DURABILITY_MEMGRAPH_STRICT,
@@ -257,9 +323,21 @@ def arcade_jvm_args(base="", cls=None):
     passed EXPLICITLY at the relaxed class too, so the row's claim is a flag
     this process set rather than a default someone remembered.
     """
-    flush = "2" if (cls or DURABILITY_CLASS) == CLASS_STRICT else "0"
+    flush = str(ARCADE_STRICT_TX_WAL_FLUSH) if (cls or DURABILITY_CLASS) == CLASS_STRICT else "0"
     arg = f"-Darcadedb.txWalFlush={flush}"
     return f"{base} {arg}".strip() if base else arg
+
+
+def arcade_async_sync(cls=None):
+    """The async executor's WAL flush at this class ("no" or "yes_full").
+
+    The executor's writers stamp their own flush on every transaction they
+    open and do not read txWalFlush, so a load through it must be told the
+    class separately (ArcadeData/arcadedb#8478): yes_nometadata is the executor's
+    spelling of txWalFlush=1 (the strict class since the 26.10.1 measurement,
+    row 5; yes_full is txWalFlush=2), no of txWalFlush=0.
+    """
+    return "yes_nometadata" if (cls or DURABILITY_CLASS) == CLASS_STRICT else "no"
 
 
 # The served twin's txWalFlush is a JAVA_OPTS entry on its container, set by
@@ -292,8 +370,10 @@ def arcade_durability_readback(fallback_cls=None):
         return want + f" (asserted: the engine could not be asked, {e.__class__.__name__})"
     if value == 0:
         return DURABILITY_ARCADEDB
-    if value == 2:
+    if value == ARCADE_STRICT_TX_WAL_FLUSH:
         return DURABILITY_ARCADEDB_STRICT
+    if value == 2:
+        return DURABILITY_ARCADEDB_STRICT_FULL_SYNC     # the October class; no lane asks for it any more
     return f"txWalFlush={value}, which is neither class (DECISIONS #90)"
 
 
@@ -379,6 +459,138 @@ def stamp_durability(out, engine_string, cls=None):
     out["durability_class"] = cls
     out["durability_no_setting"] = bool(engine_string) and has_no_setting(engine_string)
     return out["durability"]
+
+
+# ---------------------------------------------------------------------------
+# OVERRIDE READ-BACKS (CAMPAIGN section 7 row 21, overrides.py).
+#
+# PROTOCOL.md section 7 lists the settings this benchmark overrides, and until
+# row 21 the artifact recorded none of them for the engines below: the
+# inventory was the only record. Each helper asks the ENGINE for the setting
+# after the adapter has applied it, so the row carries what the engine ran with
+# and not the string we passed. A read that fails is recorded under
+# `<engine>_readback_error` and the field stays absent, which fairness_check
+# F15 reports as NOT STAMPED; a read-back must never end a cell, and it never
+# sits inside a timer (every caller reads it before the first timed call or
+# after the last).
+def es_readback(es, index):
+    """Elasticsearch's own answer: `_xpack` for the security features and the
+    index's settings for the replica count. {} entries are absent on failure."""
+    out = {}
+    try:
+        sec = ((es.xpack.info().get("features") or {}).get("security") or {}).get("enabled")
+        if isinstance(sec, bool):
+            out["es_security_enabled"] = sec
+        out["es_replicas"] = int(es.indices.get_settings(index=index)[index]["settings"]["index"]["number_of_replicas"])
+    except Exception as e:  # noqa: BLE001 - recorded, never swallowed
+        out["es_readback_error"] = f"{type(e).__name__}: {e}"
+    return out
+
+
+def duckdb_readback(cx, vss=False):
+    """DuckDB's thread pool as the engine reports it after `PRAGMA threads`,
+    and, when the vector extension is loaded (`vss=True`), the experimental
+    HNSW persistence flag."""
+    out = {}
+    try:
+        out["duckdb_threads"] = int(cx.execute("SELECT current_setting('threads')").fetchone()[0])
+        if vss:
+            out["duckdb_hnsw_persistence"] = bool(cx.execute(
+                "SELECT current_setting('hnsw_enable_experimental_persistence')").fetchone()[0])
+    except Exception as e:  # noqa: BLE001
+        out["duckdb_readback_error"] = f"{type(e).__name__}: {e}"
+    return out
+
+
+def neo4j_readback(session, checkpoint=False):
+    """Neo4j's page cache size from SHOW SETTINGS and, for the arms that set
+    it, the checkpoint interval with the engine's own default beside it."""
+    out = {}
+    names = ["server.memory.pagecache.size"] + (["db.checkpoint.interval.time"] if checkpoint else [])
+    try:
+        got = {r["name"]: (r["value"], r["defaultValue"]) for r in session.run(
+            "SHOW SETTINGS YIELD name, value, defaultValue WHERE name IN $names "
+            "RETURN name, value, defaultValue", names=names)}
+        out["neo4j_pagecache"] = got["server.memory.pagecache.size"][0]
+        if checkpoint:
+            out["neo4j_checkpoint_interval"] = got["db.checkpoint.interval.time"][0]
+            if got["db.checkpoint.interval.time"][1]:
+                out["neo4j_checkpoint_interval_default"] = got["db.checkpoint.interval.time"][1]
+    except Exception as e:  # noqa: BLE001
+        out["neo4j_readback_error"] = f"{type(e).__name__}: {e}"
+    return out
+
+
+def arcadedb_hierarchy_readback(db, index_name):
+    """The embedded engine's own record of the vector index it built: the
+    per-bucket LSMVectorIndex serialises every setting, `addHierarchy` among
+    them. The served engine has no such read (its schema queries carry no index
+    metadata), see arcadedb_hierarchy_requested."""
+    out = {}
+    try:
+        sub = db.schema.get_index_by_name(index_name).getIndexesOnBuckets()[0]
+        meta = json.loads(str(sub.toJSON().toString()))
+        out["arcadedb_add_hierarchy"] = bool(meta["addHierarchy"])
+        out["arcadedb_add_hierarchy_source"] = "index metadata read back from the engine"
+    except Exception as e:  # noqa: BLE001
+        out["arcadedb_readback_error"] = f"{type(e).__name__}: {e}"
+    return out
+
+
+def parse_index_kinds(stamp):
+    """`index_kinds` as a dict: 'Part.p_partkey=HASH;LineItem.l_shipdate=LSM_TREE' ->
+    {'Part.p_partkey': 'HASH', 'LineItem.l_shipdate': 'LSM_TREE'}. An absent, blank, or NaN
+    stamp parses to {} (a row that never recorded one asserts nothing)."""
+    if stamp is None or str(stamp).strip().lower() in ("", "none", "nan"):
+        return {}
+    out = {}
+    for part in str(stamp).split(";"):
+        key, _, kind = part.partition("=")
+        if key.strip() and kind.strip():
+            out[key.strip()] = kind.strip()
+    return out
+
+
+def arcadedb_index_kinds(index_rows):
+    """The kinds of the indexes the ENGINE built, from the rows of `SELECT FROM
+    schema:indexes` (CAMPAIGN 7 row 68): one `Type.property=KIND` per type-level index,
+    sorted, joined by `;`. The engine lists each index twice, once per bucket
+    (`Part_0_381...`) and once for the type (`Part[p_partkey]`); only the type-level
+    entry names the type and its properties, so only those are kept. `indexType` is the
+    engine's own word: HASH, LSM_TREE, LSM_VECTOR."""
+    kinds = {}
+    for r in index_rows or []:
+        name = str(r.get("name"))
+        if "[" not in name or not name.endswith("]"):
+            continue
+        type_name, _, props = name[:-1].partition("[")
+        kinds[f"{type_name}.{props}"] = str(r.get("indexType"))
+    return ";".join(f"{k}={v}" for k, v in sorted(kinds.items()))
+
+
+def arcadedb_index_readback(query):
+    """The `index_kinds` stamp, asked of the engine through `query()` (a callable that
+    returns the rows of `SELECT FROM schema:indexes` as dicts), or the reason it could not
+    be asked. Called after the schema is built and OUTSIDE every timer, and it never ends a
+    cell: a failed read is `index_kinds_error` and the gates say what a row without the
+    stamp may not claim."""
+    try:
+        stamp = arcadedb_index_kinds(query())
+        if not stamp:
+            return {"index_kinds_error": "schema:indexes returned no type-level index"}
+        return {"index_kinds": stamp}
+    except Exception as e:  # noqa: BLE001 - recorded, never swallowed
+        return {"index_kinds_error": f"{type(e).__name__}: {e}"}
+
+
+def arcadedb_hierarchy_requested(ddl):
+    """What the CREATE INDEX statement SENT, for the served arm: the HTTP API
+    returns no index metadata at this pin, so the field says it is a request."""
+    m = re.search(r'"addHierarchy"\s*:\s*(true|false)', ddl)
+    if not m:
+        return {}
+    return {"arcadedb_add_hierarchy": m.group(1) == "true",
+            "arcadedb_add_hierarchy_source": "requested in the CREATE INDEX statement; the server returns no index metadata"}
 
 
 def _host_identity():
@@ -530,6 +742,8 @@ def run_conditions(**extra):
         out["engine_version"] = _v("arcadedb-embedded")
     except Exception as e:
         out["engine_version"] = f"unknown ({e.__class__.__name__})"
+    # THE JPYPE THIS PROCESS RAN (CAMPAIGN 7 row 73): empty unless the process imported it.
+    out.update(jpype_fields())
     out.update(extra)
     return out
 
@@ -849,7 +1063,15 @@ def _fmt_number(v, float_digits):
         return "inf"
     if x == float("-inf"):
         return "-inf"
-    s = f"{x:.{float_digits}g}"
+    # ROUNDED TWICE, 12 SIGNIFICANT DIGITS THEN `float_digits` (2026-09-28).
+    # Rounded once, a value on a six-digit tie splits on its last bit:
+    # 41.15625 (a mean of 32 ages, exact in binary) printed "41.1562" while its
+    # neighbour an ulp above printed "41.1563", which split Neo4j's running
+    # mean from eight engines on the graph lane's hop1 once real ages loaded.
+    # The first rounding absorbs noise below the twelfth digit (summation
+    # order, a running mean); two numbers can only newly collide if they
+    # already agree to twelve digits, far past the six compared.
+    s = f"{float(f'{x:.12g}'):.{float_digits}g}"
     return "0" if s in ("-0", "-0.0") else s
 
 
@@ -1118,7 +1340,36 @@ def record_result(out, name, rows, **kw):
     out[f"res_{name}_digest"] = d["digest"]
     out[f"res_{name}_sample"] = d["sample"]
     out[f"res_{name}_n"] = d["n"]
+    out[f"res_{name}_profile"] = answer_profile(rows, columns=kw.get("columns"),
+                                                coerce=kw.get("coerce"),
+                                                float_digits=kw.get("float_digits", 6))
     return d
+
+
+def answer_profile(rows, columns=None, coerce=None, float_digits=6):
+    """Per declared column: how many distinct values the answer holds, and how
+    many of them are zero or null, over EVERY row (the sample shows three).
+
+    WHY. A digest proves engines agree; it cannot say the agreed answer means
+    anything. Every LDBC age loaded as 0 for two months and nine engines agreed
+    on it (BUGS F146); the triangle count on the LDBC projection is 0 on every
+    engine because each friendship is stored once, from the smaller id to the
+    larger, so a directed 3-cycle cannot exist (validity hunt 2026-10-04). Both
+    are a column with one value across hundreds of rows, or a single answer of
+    zero, which this records on the row so degenerate_check.py can flag it
+    without re-running anything. Canonical values, so the counts mean the same
+    thing on every engine.
+    """
+    canon = canonical_rows(rows, columns=columns, float_digits=float_digits, coerce=coerce)
+    names = [c[0] if isinstance(c, (tuple, list)) else str(c) for c in (columns or ())]
+    if not names and canon:
+        names = [f"c{i}" for i in range(len(canon[0]))]
+    prof = {}
+    for i, nm in enumerate(names):
+        vals = [r[i] for r in canon if i < len(r)]
+        prof[nm] = {"distinct": len(set(vals)),
+                    "zero_or_null": sum(1 for v in vals if v in ("0", NULL_TOKEN))}
+    return prof
 
 
 def record_unexpressible(out, name, reason):
@@ -1137,6 +1388,29 @@ def record_unexpressible(out, name, reason):
 
 def is_unexpressible(value):
     return isinstance(value, str) and value.startswith(UNEXPRESSIBLE_PREFIX)
+
+
+# AN ANSWER CUT SHORT BY A BUDGET IS DECLARED, NOT DIGESTED (DECISIONS #120).
+# A per-read budget stops a read partway through its start set, so the rows it
+# collected answer fewer starts than every other engine's and a digest of them
+# could only disagree. The engine CAN ask the question, so this is not
+# unexpressible, and the page must not say "cannot express"; it is a declared
+# absence of a different kind, and the gate lists it as one rather than as a
+# failure or as silence.
+CENSORED_ANSWER_PREFIX = "censored: "
+
+
+def record_censored_answer(out, name, reason):
+    """This engine's answer to this query was cut short, and the row says so."""
+    text = CENSORED_ANSWER_PREFIX + str(reason)
+    out[f"res_{name}_digest"] = text
+    out[f"res_{name}_sample"] = text
+    out[f"res_{name}_n"] = None
+    return text
+
+
+def is_censored_answer(value):
+    return isinstance(value, str) and value.startswith(CENSORED_ANSWER_PREFIX)
 
 
 # WHERE A MEASUREMENT DOES NOT APPLY, THE ROW SAYS SO (DECISIONS #89). "A

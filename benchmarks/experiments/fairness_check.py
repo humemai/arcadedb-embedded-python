@@ -55,6 +55,111 @@ SERVER_MEM_FRACTION_DEFAULT = 0.75
 # not there and invites them to distrust the rest.
 DISCLOSED = {}
 
+# THE ONE ARM THAT DIFFERS FROM THE OTHERS ON PURPOSE (CAMPAIGN 7 row 69). Every
+# served ArcadeDB arm runs ONE JVM configuration so that the embedded-versus-served
+# comparison isolates transport: the JVM's default collector (G1) and a heap of half
+# the cell's memory with -Xms equal to -Xmx. The arm below is started without those
+# settings and runs the vendor image's own defaults instead (ArcadeDB's maintainers,
+# ArcadeData/arcadedb#9167): a heap of 75% of the container limit, the generational
+# ZGC collector, and no -Xms. It changes the heap, the collector, and the warm-up
+# of the heap together, so it is NOT comparable with the main arm's heap column and
+# it is not an F3 envelope violation: the memory CAP is the same, only the heap the
+# JVM takes inside it differs. It is declared, printed beside the main arm on one lane
+# (documents OLTP, served, the 2M-part cell), and checked against what the JVM itself
+# reports. A backend runner.BACKENDS marks `jvm_defaults` and this map does not name
+# (or the reverse) fails the gate, so an arm cannot join without saying so.
+JVM_DEFAULTS_ARMS = {
+    "arcadedb_imgdefaults_server": "the vendor image's own JVM settings (a heap of 75% of the "
+                                   "container limit, generational ZGC, no -Xms) beside the main "
+                                   "arm's G1 and fixed half-memory heap, documents OLTP, 2M parts",
+}
+
+
+def check_heap_witnesses(rows):
+    """F3c: the two witnesses of a served ArcadeDB's heap agree.
+
+    The container's environment says what the launcher passed (`server_heap`, parsed from -Xmx); the
+    running JVM says what it settled on (`server_jvm_max_heap_bytes`). Where a row has both they must be
+    the same heap (within 1%), or the setting written is not the setting in force. A row with only one
+    is judged by the other gates (the image-defaults arm has no -Xmx and only the JVM's word). Returns
+    the failure count."""
+    print("=== F3c: the heap in the container's environment is the heap the JVM runs ===")
+    bad = judged = 0
+    for r in rows:
+        env, jvm = _gib(r.get("server_heap")), jvm_reported_heap(r)
+        if not str(r.get("backend")).startswith("arcadedb") or env is None or jvm is None or r.get("error"):
+            continue
+        judged += 1
+        got = _gib(jvm)
+        if abs(got - env) > 0.01 * env:
+            print(f"  FAIL {r.get('lane')} {r.get('scale')} {r.get('workload')} {r.get('backend')} rep {r.get('rep')}: "
+                  f"the container's environment sets {r.get('server_heap')} and the running JVM reports {jvm}")
+            bad += 1
+    if not bad:
+        print(f"  ok   {judged} row(s) where both witnesses exist agree")
+    return bad
+
+
+def check_jvm_defaults_arms(rows=None):
+    """The image-defaults arm is declared, and where rows exist its JVM is what it says.
+
+    Static half (needs no rows): runner.BACKENDS marks an arm `jvm_defaults` exactly
+    when JVM_DEFAULTS_ARMS names it, and that arm's server_env sets neither
+    ARCADEDB_OPTS_MEMORY nor ARCADEDB_OPTS_GC (the whole point: the image applies its
+    own). Row half: every row of the arm carries the stamp `server_jvm_defaults` and
+    the JVM's own report of a heap of 75% of the server's cap, the generational ZGC
+    collector, and no -Xms/-Xmx on its command line; no other row claims the stamp.
+    Returns the failure count."""
+    import runner
+    print("=== F3b: the image-defaults arm is declared, and ran at the image's defaults ===")
+    bad = 0
+    marked = {n for n, c in runner.BACKENDS.items() if c.get("jvm_defaults")}
+    for n in sorted(marked - set(JVM_DEFAULTS_ARMS)):
+        print(f"  FAIL {n}: runner.BACKENDS marks it jvm_defaults and fairness_check.JVM_DEFAULTS_ARMS "
+              f"does not declare it; an arm that runs other settings than its siblings says so here")
+        bad += 1
+    for n in sorted(set(JVM_DEFAULTS_ARMS) - marked):
+        print(f"  FAIL {n}: declared in JVM_DEFAULTS_ARMS and not marked jvm_defaults in runner.BACKENDS")
+        bad += 1
+    for n in sorted(marked & set(JVM_DEFAULTS_ARMS)):
+        env = " ".join(str(x) for x in runner.BACKENDS[n].get("server_env", []))
+        leaked = [k for k in ("ARCADEDB_OPTS_MEMORY", "ARCADEDB_OPTS_GC") if k in env]
+        if leaked:
+            print(f"  FAIL {n}: sets {leaked}, so the image's defaults do not apply")
+            bad += 1
+    judged = 0
+    for r in rows or []:
+        be = str(r.get("backend"))
+        stamped = str(r.get("server_jvm_defaults")).lower() in ("true", "1")
+        if be in JVM_DEFAULTS_ARMS:
+            judged += 1
+            where = f"{r.get('lane')} {r.get('scale')} {r.get('workload')} {be} rep {r.get('rep')}"
+            if not stamped:
+                print(f"  FAIL {where}: no `server_jvm_defaults` stamp")
+                bad += 1
+                continue
+            mx, cap = r.get("server_jvm_max_heap_bytes"), _gib(r.get("server_mem_cap"))
+            try:
+                mx = float(mx)
+            except (TypeError, ValueError):
+                mx = None
+            if mx is None or cap is None or abs(mx - 0.75 * cap * (1 << 30)) > 0.02 * 0.75 * cap * (1 << 30):
+                print(f"  FAIL {where}: the JVM reports a heap of {r.get('server_jvm_max_heap_bytes')} bytes in a "
+                      f"{r.get('server_mem_cap')} container; the image default is 75% of the limit")
+                bad += 1
+            if r.get("server_jvm_gc") != "ZGC generational":
+                print(f"  FAIL {where}: collector {r.get('server_jvm_gc')!r}, the image default is generational ZGC")
+                bad += 1
+            if re.search(r"-Xm[sx]", str(r.get("server_jvm_flags") or "")):
+                print(f"  FAIL {where}: -Xms or -Xmx on the command line, so the image's defaults do not apply")
+                bad += 1
+        elif stamped:
+            print(f"  FAIL {r.get('lane')} {be}: claims `server_jvm_defaults` and is not a declared arm")
+            bad += 1
+    if not bad:
+        print(f"  ok   {len(marked)} arm(s) declared; {judged} row(s) held to the JVM's own report")
+    return bad
+
 
 # DECISIONS #86. Declared here because _dense_rows() below reads it: a laptop
 # skeleton has no bench-host overlay to open.
@@ -169,7 +274,11 @@ def _served_envelopes():
                     newest[be] = r
     except FileNotFoundError:
         pass
-    keys = ("server_mem_cap", "server_heap", "mem_split", "client_mem_cap", "server_mem_cap_g", "role")
+    # server_query_max_heap_elements: the served ArcadeDB's query limit, which the runner
+    # reads from the engine for the campaign cell and the multipass driver cannot
+    # (CAMPAIGN section 7 row 21, overrides.py).
+    keys = ("server_mem_cap", "server_heap", "mem_split", "client_mem_cap", "server_mem_cap_g", "role",
+            "server_query_max_heap_elements")
     _served_envelopes._cache = {be: {kk: r[kk] for kk in keys if r.get(kk) is not None} for be, r in newest.items()}
     return _served_envelopes._cache
 
@@ -218,6 +327,16 @@ def _is_jvm(backend):
                                            "elasticsearch", "questdb"))
 
 
+def jvm_reported_heap(r):
+    """The heap the running JVM reported for a served row, as '12g' / '2.25g', or None.
+    `server_jvm_max_heap_bytes` is MaxHeapSize from `jcmd VM.flags` (runner.server_jvm_readback)."""
+    try:
+        gib = float(r.get("server_jvm_max_heap_bytes")) / (1 << 30)
+    except (TypeError, ValueError):
+        return None
+    return (f"{gib:.2f}".rstrip("0").rstrip(".") if gib != int(gib) else str(int(gib))) + "g"
+
+
 def _total_envelope(r):
     """The envelope the CELL got, normalised across topologies.
 
@@ -244,6 +363,12 @@ def _total_envelope(r):
     # envelope is server + client, both measured. Rows written before that
     # still fall back to the arithmetic below.
     srv_cap, srv_heap = _gib(r.get("server_mem_cap")), r.get("server_heap")
+    if not srv_heap:
+        # A JVM started WITHOUT -Xmx (the image-defaults arm, CAMPAIGN 7 row 69) has no heap in its
+        # container environment, but the runner read what the running JVM settled on
+        # (`server_jvm_max_heap_bytes`, from jcmd VM.flags): that is a witness too, and the only
+        # honest one for such an arm. A row with neither is still "NO-WITNESS" below.
+        srv_heap = jvm_reported_heap(r)
     if srv_cap is not None:
         # DERIVE THE TOTAL FROM THE SERVER SIDE ALONE, never by addition.
         # Adding mem_cap was wrong and failed five compliant tiers: runner.py
@@ -333,6 +458,13 @@ def check_envelope(rows):
     noheap = collections.defaultdict(set)
     for r in rows:
         h, m = _total_envelope(r)
+        # THE DECLARED IMAGE-DEFAULTS ARM (JVM_DEFAULTS_ARMS): the memory CAP is judged
+        # with everyone else's, its heap is not (it is 75% of the cap on purpose, and
+        # F3b holds it to that against the JVM's own report), so it is not a "no
+        # witness" gap either.
+        if str(r.get("backend")) in JVM_DEFAULTS_ARMS:
+            g[(r["lane"], r["scale"])][r["backend"]].add(("n/a", m))
+            continue
         # A JVM heap is only comparable between engines that HAVE one. Qdrant,
         # Milvus, LanceDB and sqlite-vec are Rust/Go/C and report heap=None;
         # calling that a mismatched envelope against ArcadeDB's 24g compares a
@@ -643,7 +775,7 @@ def _known_matches(known, rows):
 
 
 def check_close_cost(rows):
-    """F11: close must be O(what was written), not O(what is stored).
+    """F13: close must be O(what was written), not O(what is stored).
 
     DECISIONS #50. This is a REGRESSION gate rather than a fairness one, and it
     lives here because this is where the numbered invariants are. Two ways to
@@ -662,7 +794,7 @@ def check_close_cost(rows):
     was ours, #5872), which is why a number that can slide between releases
     with nobody watching gets a gate instead of a column.
     """
-    # THE SESSION, not just the close. F11 originally watched clean_close alone,
+    # THE SESSION, not just the close. F13 originally watched clean_close alone,
     # and PR #6588 upstream is the proof that this is not enough: persisting the
     # analytical view's CSR moved its cost from close to open, 4032 -> 5.95 ms
     # closing and 4.94 -> 241.84 ms opening at a million vertices. A close-only
@@ -692,7 +824,7 @@ def check_close_cost(rows):
         # A gate whose only failure mode is "I saw nothing" has to treat seeing
         # nothing as the failure.
         any_lifecycle = any(r.get("lane") == "lifecycle" for r in rows)
-        print("\n== F11 session cost ==\n  NO LIFECYCLE ROWS REACHED THIS GATE.")
+        print("\n== F13 session cost ==\n  NO LIFECYCLE ROWS REACHED THIS GATE.")
         if any_lifecycle:
             print("  Rows exist but none carry clean_close_ms; the lane wrote them "
                   "without the column this gate reads.")
@@ -724,7 +856,7 @@ def check_close_cost(rows):
         print("  Check PAPER_SCALES in make_paper_tables.py: a lane absent from "
               "it is deleted by load_canonical before any gate runs.")
         return 1
-    print("\n== F11 session cost (open+close): O(written), not O(stored), under 100 ms ==")
+    print("\n== F13 session cost (open+close): O(written), not O(stored), under 100 ms ==")
     for (be, sit, scale), vals in sorted(_others.items(), key=str):
         print(f"  info: {be} {sit}/{scale} clean session (open+close) "
               f"{statistics.median(vals):.1f} ms median of {len(vals)} (comparator, not judged)")
@@ -802,20 +934,25 @@ def check_close_cost(rows):
 # a row whose engine reports a class other than the one its cell asked for in
 # `durability_class` (DECISIONS #90), or a PostgreSQL row whose server did not
 # answer its class's synchronous_commit (off relaxed, on strict).
-STRICT_ALLOWED = {"neo4j_graph", "neo4j_dense", "neo4j_e2", "composed_qdrant_neo4j",
-                  "ladybug_graph", "duckdb", "duckdb_vss_dense", "duckpgq_graph"}
+STRICT_ALLOWED = {"neo4j_graph", "neo4j_dense", "neo4j_dense_int8", "neo4j_e2", "composed_qdrant_neo4j",
+                  "ladybug_graph", "ladybug_e2", "duckdb", "duckdb_vss_dense", "duckpgq_graph", "duckdb_e2",
+                  # The lifecycle table's in-process arms (DECISIONS #131 item 5): DuckDB and LadybugDB as on
+                  # their other tables, and Chroma, which syncs at every add with no setting (bench_common).
+                  "duckdb_lifecycle", "ladybug_lifecycle", "chroma_lifecycle"}
 
-# THE THIRD CLASS, and the only backends allowed to be in it. SurrealDB 3.2.4
-# served has no sync setting at all -- no SYNC_DATA and no SURREAL_DATASTORE
-# token in its binary, and none of its 110 SURREAL_* variables names sync, WAL,
-# fsync, or durability -- so its behaviour at commit could not be established
-# (evidence in bench_common). Its string says "not verified" rather than
-# claiming a class, and these five arms are the only ones permitted to carry
-# such a string. Any other backend that starts saying "not verified" is an
-# engine whose default nobody checked, which is exactly what #81 forbids.
-UNVERIFIED_ALLOWED = {"surrealdb_tpc_server", "surrealdb_graph_server",
-                      "surrealdb_dense_server", "surrealdb_e2_server",
-                      "surrealdb_ts_server"}
+# NO SETTING THE OTHER WAY: an engine that never syncs at commit and has no
+# setting that would make it. It runs the relaxed class by construction and
+# cannot run the strict one, so it prints one number like the engines above.
+# LanceDB 0.39.0: 0 sync calls over 250 commits under strace (bench_common).
+RELAXED_ONLY_ALLOWED = {"lancedb_lifecycle"}
+
+# THE THIRD CLASS, and the backends allowed to be in it: none since BUGS F165.
+# The five SurrealDB served arms were, on the claim that 3.2.4 had no sync
+# setting; it has one on its storage path, and its default syncs at every
+# commit, which the October rows ran under a "not verified" label in both
+# classes. Any backend that says "not verified" is an engine whose default
+# nobody checked, which is exactly what #81 forbids.
+UNVERIFIED_ALLOWED = set()
 
 # THE CELLS THAT MUST EXIST IN BOTH DURABILITY CLASSES (DECISIONS #90): the six
 # document operations, the three graph writes, and the cross-model transaction.
@@ -846,8 +983,10 @@ WRITE_CELLS = {("l1tpc", "oltp"), ("l2", "oltp"), ("e2", "hybrid")}
 # queries scan knows, and `same_city_edges`'s only WHERE compares an edge's two
 # endpoints to each other rather than to a value); LSQB's nine are pure
 # structural counts over labels with no property predicate at all; and `hop3f`'s
-# `age > 30` filters a vertex set the traversal has already reached, which no
-# index can narrow. So there is no selective filter on this lane to get wrong.
+# `age > HOP3F_MIN_AGE` (graph_common; 41 from the re-pin, keeping about half;
+# 30 through October, when every loaded age was 0 and it kept no one, BUGS
+# F146) filters a vertex set the traversal has already reached, which no index
+# can narrow. So there is no selective filter on this lane to get wrong.
 #
 # The lane DOES build indexes, and they are matched by effect rather than by
 # rule -- which is why this note names them instead of stopping at "no
@@ -857,7 +996,10 @@ WRITE_CELLS = {("l1tpc", "oltp"), ("l2", "oltp"), ("e2", "hybrid")}
 # `knows` and all nine LSQB edge collections with `edge=True`, which is what
 # earns it the automatic _from/_to edge index; DuckPGQ and MongoDB, having
 # neither adjacency nor an edge collection, index the edge endpoints
-# explicitly (k_src/k_dst, s/d). Checked BY EFFECT too: every engine's 1-hop
+# explicitly (k_src/k_dst, s/d); PostgreSQL + AGE gets a primary key on every
+# vertex label's graphid and btree indexes on every edge label's start_id and
+# end_id from AGE itself, and adds a btree on the Person `id` property
+# expression for the reads' `WHERE p.id = $id`. Checked BY EFFECT too: every engine's 1-hop
 # p50 is under 2 ms, none of them showing the scan signature that gave e2's
 # ArangoDB row away (22.52 ms against 3.21 ms indexed).
 #
@@ -868,6 +1010,7 @@ INDEX_DECISIONS = {
     "l1tpc": {
         "arcadedb_embedded":    "l_shipdate: 870.7 -> 141.7 ms, 6.1x",
         "arcadedb_server":      "l_shipdate: the embedded arm's measurement, same engine and schema",
+        "arcadedb_imgdefaults_server": "l_shipdate: the main served arm's measurement, same adapter and schema",
         "postgres":             "l_shipdate: 726 -> 290 ms, 2.5x (added 2026-09-22)",
         "postgres_tuned":       "l_shipdate: inherits PostgresTPC",
         "surrealdb_tpc":        "l_shipdate before the load: 4016 -> 1062 ms, 3.8x",
@@ -885,10 +1028,15 @@ INDEX_DECISIONS = {
     # scanning the whole collection for it, 22.52 ms against 3.21 ms indexed
     # (BUGS F98). A scoping judgement is a claim like any other.
     "e2": {
-        "arcadedb_e2":            "Product(pid) UNIQUE",
-        "arcadedb_e2_server":     "Product(pid) UNIQUE",
+        # A hash index since the 26.10.1 re-pin (CAMPAIGN 7 row 68): every read of
+        # pid is an equality or an IN, and nothing ranges over it or orders by it.
+        "arcadedb_e2":            "Product(pid) UNIQUE_HASH",
+        "arcadedb_e2_server":     "Product(pid) UNIQUE_HASH",
         "pg_age_e2":              "product(pid) PRIMARY KEY",
         "neo4j_e2":               "index on :Product(pid)",
+        "memgraph_e2":            "label-property index on :Product(pid)",
+        "ladybug_e2":             "pid is the node table's primary key (a hash index)",
+        "duckdb_e2":              "unique index on product(pid), built after the load",
         "mongodb_e2":             "pid as the vector index's filter path",
         # Every read now ADDRESSES the record id, including the candidate
         # ranking, which scanned `WHERE pid INSIDE [...]` until DECISIONS #117
@@ -909,6 +1057,12 @@ INDEX_DECISIONS = {
         "sqlite":                     "(host, ts): 35.36 -> 0.01 ms last-point",
         "duckdb":                     "(host, ts): 7.06 -> 6.20 ms last-point (added 2026-09-22)",
         "timescaledb":                "(host, ts DESC)",
+        # Plain PostgreSQL (DECISIONS #131 item 6), measured 2026-10-02 on ts100
+        # (repros/pg-ts-index/index_probe.py): the host-filtered queries need it,
+        # and the scan-wide 12 h aggregate pays for it (the planner reads through
+        # the index), stated rather than tuned away: the same index as TimescaleDB.
+        "postgres_ts":                "(host, ts DESC): 108.95 -> 0.48 ms last-point, 92.91 -> 1.08 ms windowed; "
+                                      "12 h aggregate 136 -> 217 ms with it present",
         "surrealdb_ts":               "(host, ts) before the load",
         "surrealdb_ts_server":        "(host, ts)",
         "arangodb_ts":                "persistent (host, ts)",
@@ -919,6 +1073,113 @@ INDEX_DECISIONS = {
                                       "needed 35 ms unindexed",
     },
 }
+
+
+# ARCADEDB'S ID INDEXES THAT ARE HASH INDEXES (CAMPAIGN 7 row 68, DECISIONS #158).
+#
+# The maintainers' rule (ArcadeData/arcadedb#9169): an id that is only read,
+# updated, and deleted by equality gets `UNIQUE_HASH`; a key that is also ranged
+# over or ordered stays `UNIQUE`. This is the ONE place the lanes' choice is
+# written down for the readers that must not drift from the DDL: the sentence
+# export_web prints under each table (`_arcadedb_hash_index_notes`) and
+# test_index_kinds.py, which holds this registry equal to the CREATE INDEX text
+# in each lane's source. Each entry is (lane, the workload whose table prints it
+# or None for every workload of the lane, ((type, property), ...)).
+#
+# `l1` is the retired tabular lane: its DDL moves with the others, but it feeds
+# no page table, so no sentence is printed for it. The graph lane's entry is the
+# LDBC message half only, built by the analytics workload.
+ARCADEDB_HASH_ID_INDEXES = (
+    ("l1tpc", None, (("Part", "p_partkey"), ("OrderNew", "okey"), ("Crud", "ckey"))),
+    ("l1", None, (("orders", "id"),)),
+    ("e2", None, (("Product", "pid"),)),
+    ("l2", "olap", tuple((label, "id") for label in
+                         ("Country", "City", "Forum", "Post", "Comment", "Tag", "TagClass"))),
+)
+
+# WHAT STAYS SORTED, and why, so the next reader does not "finish" the change.
+# `Person(id)` on the graph lane: the untimed `person_scan` ranges over it
+# (`q.id >= ...`), and under a hash index that becomes a full label scan. The
+# other sorted ArcadeDB indexes are not id indexes at all: `l_shipdate` and
+# `customer_id` (NOTUNIQUE, ranged or grouped), the time-series `Point(host, ts)`,
+# and the lifecycle and recovery indexes.
+ARCADEDB_SORTED_ID_INDEXES = (("l2", "Person", "id"),)
+
+
+# WHAT THE ENGINE SAID IT BUILT (CAMPAIGN 7 row 68, F14d). `index_kinds` on a row is the
+# engine's own answer to `SELECT FROM schema:indexes`, asked after the schema was built and
+# outside every timer (bench_common.arcadedb_index_readback). The registry above is the
+# claim, this is the evidence: a row of an ArcadeDB arm on those lanes must carry the stamp,
+# every registered id must read HASH in it, and a key that stays sorted must not. An id
+# whose type the row never built is not owed: the graph lane's message half exists only in a
+# cell that loaded it, which the row says with `msg_vertices`.
+ARCADEDB_HASH_ID_REQUIRES = {("l2", "olap"): "msg_vertices"}
+
+# THE UNSTAMPED ROW IS REPORT-ONLY UNTIL THE RE-PIN CAMPAIGN STARTS, THEN A FAILURE. October's own
+# rows predate the stamp, so a gate that failed an UNSTAMPED row would block landing an October stage
+# (or the freeze's consistency pass) whenever this branch's gates are run over October's rows. While
+# this is False, a row with no `index_kinds` is printed as a WARNING and the exit status is left alone.
+# The commit that starts the re-pin campaign sets it to True (CAMPAIGN section 7, row 68), and from
+# then on an unstamped row fails too. This is the ONLY switch, and it does not touch the other case: a
+# STAMPED row whose kind disagrees with the registry is a failure from the first day (see below).
+INDEX_KINDS_GATE_FAILS = True
+
+
+def check_index_kinds(rows):
+    """F14d: every 2026-10 row of an ArcadeDB arm on a lane that has a changed index records
+    the kinds the engine built, and they are the kinds the registry says (a setting written is
+    not a setting in force). Returns the failure count.
+
+    TWO CASES, TWO RULES. A STAMPED row whose kind disagrees with the registry (an id the
+    engine reports as sorted, a registered id it did not build, Person(id) as HASH) is ALWAYS a
+    failure: only a row this harness wrote can carry the stamp, so it is evidence that the setting
+    did not take, and there is no old row for it to block. A row with NO stamp is a WARNING and
+    counts as a failure only once INDEX_KINDS_GATE_FAILS is True. Either way the unstamped row is
+    also the row the page makes no claim about (export_web)."""
+    from bench_common import parse_index_kinds
+    mode = ("an unstamped row FAILS" if INDEX_KINDS_GATE_FAILS else
+            "an unstamped row is a WARNING until INDEX_KINDS_GATE_FAILS is set; a wrong stamped kind always fails")
+    print(f"=== F14d: the engine reports the index kinds the lanes asked for [{mode}] ===")
+    bad = warned = judged = 0
+    lanes = {lane for lane, _wl, _pairs in ARCADEDB_HASH_ID_INDEXES}
+    for r in rows:
+        be, lane = str(r.get("backend")), str(r.get("lane"))
+        if (not be.startswith("arcadedb") or lane not in lanes or r.get("error")
+                or str(r.get("instrument") or "") != "2026-10"):
+            continue
+        wl = str(r.get("workload"))
+        judged += 1
+        where = f"{lane} {r.get('scale')} {wl} {be} rep {r.get('rep')}"
+        kinds = parse_index_kinds(r.get("index_kinds"))
+        if not kinds:
+            why = f" ({r.get('index_kinds_error')})" if r.get("index_kinds_error") else ""
+            print(f"  {'' if INDEX_KINDS_GATE_FAILS else 'WARN '}NOT STAMPED {where}: no `index_kinds`{why}")
+            if INDEX_KINDS_GATE_FAILS:
+                bad += 1
+            else:
+                warned += 1
+            continue
+        for ln, w, pairs in ARCADEDB_HASH_ID_INDEXES:
+            if ln != lane or w not in (None, wl):
+                continue
+            need = ARCADEDB_HASH_ID_REQUIRES.get((ln, w))
+            if need and not r.get(need):
+                continue
+            for t, p in pairs:
+                got = kinds.get(f"{t}.{p}")
+                if got != "HASH":
+                    print(f"  WRONG {where}: the engine reports {t}.{p} as {got!r}, the registry says HASH")
+                    bad += 1
+        for ln, t, p in ARCADEDB_SORTED_ID_INDEXES:
+            if ln == lane and kinds.get(f"{t}.{p}") == "HASH":
+                print(f"  WRONG {where}: {t}.{p} is a hash index, and the graph lane's person_scan ranges over it")
+                bad += 1
+    if not bad and not warned:
+        print(f"  ok   {judged} row(s) judged against the engine's own report")
+    if warned:
+        print(f"  {warned} unstamped row(s) warned over {judged} row(s); they do not change the exit status "
+              f"(INDEX_KINDS_GATE_FAILS is True from the re-pin campaign on: an unstamped row fails)")
+    return bad
 
 
 # INDEX DDL A "NONE" ARM STILL TIMES (BUGS F122). index_timer covers every index
@@ -1054,11 +1315,16 @@ PHASE_SPLIT_DECLARED = {
     ("l3d", "sqlite_vec_dense"): "has no separate index: `vec0` is a brute-force table",
     ("l3d", "sqlite_vec_dense_int8"): "has no separate index: `vec0` is a brute-force table",
     ("l3d", "surrealdb_dense"): "defines its index before the load, which builds it as rows arrive",
+    # #131 item 3 (2026-10-02). Lucene builds a graph per segment while
+    # documents are indexed and the force-merge rebuilds it into one.
+    ("l3d", "elasticsearch_dense"): "builds its HNSW per segment as documents are indexed, and the refresh and the force-merge into one segment, which rebuilds the graph, are inside the build timer",
+    ("l3d", "elasticsearch_dense_int8"): "builds its HNSW per segment as documents are indexed, and the refresh and the force-merge into one segment, which rebuilds the graph, are inside the build timer",
 }
-PHASE_SPLIT_DISCLOSED = {
-    ("l3d", "duckdb_vss_dense"): "builds its HNSW index after the load, inside the same timer",
-    ("l3d", "arangodb_dense"): "builds its vector index after the load, inside the same timer",
-}
+# EMPTY SINCE 2026-10-02 (CAMPAIGN section 7 row 44): DuckDB VSS and ArangoDB
+# now time their load and their index as two timers, as the split arms do,
+# so neither needs a disclosure. An arm added here again is one whose index
+# phase exists and is timed inside one timer.
+PHASE_SPLIT_DISCLOSED = {}
 
 
 def check_phase_split(rows):
@@ -1125,6 +1391,15 @@ def check_phase_split(rows):
     return bad
 
 
+def _durability_classes_required(lane, backend):
+    """The classes a timed write cell of this arm must exist in: both (DECISIONS #90), except for an arm that
+    runner.ARM_RUNS declares runs one class of this lane (CAMPAIGN row 69: the image-defaults arm runs the relaxed
+    class only, so asking it for a strict cell would fail the landing of the last stage for a cell nobody queued)."""
+    import runner
+    declared = (runner.ARM_RUNS.get(backend, {}).get(lane) or {}).get("durability")
+    return {declared} if declared in ("relaxed", "strict") else {"relaxed", "strict"}
+
+
 def check_durability(rows):
     import bench_common
     print("=== F10: durability class and instrument per table ===")
@@ -1160,7 +1435,7 @@ def check_durability(rows):
             # by construction; #90 puts it on an equal footing by printing that
             # one number in both columns rather than comparing its strict
             # number against everyone else's relaxed one.
-            if r.get("backend") not in STRICT_ALLOWED | UNVERIFIED_ALLOWED:
+            if r.get("backend") not in STRICT_ALLOWED | UNVERIFIED_ALLOWED | RELAXED_ONLY_ALLOWED:
                 print(f"  FAIL {where}: declares no durability setting but is not "
                       f"one of the named exceptions"); bad += 1
             if got == "unverified":
@@ -1186,7 +1461,7 @@ def check_durability(rows):
             continue
         if "no-setting" in classes:
             continue
-        missing = {"relaxed", "strict"} - classes
+        missing = _durability_classes_required(lane, backend) - classes
         if missing:
             print(f"  FAIL {lane} {scale} {workload} {backend}: a timed write cell "
                   f"in only the {sorted(classes)} class; #90 runs it at both "
@@ -1225,6 +1500,39 @@ def check_durability(rows):
     return bad
 
 
+def check_overrides(rows):
+    """F15: every override a table discloses is stamped on the rows that ran it.
+
+    PROTOCOL.md section 7 lists the settings this benchmark overrides, and the
+    rows its last column marked NOWHERE were recorded nowhere: not on a row, not
+    under a table (CAMPAIGN section 7 row 21). overrides.py registers each one
+    with the row field its adapter (or the runner, for the served ArcadeDB
+    cap) reads back from the engine, and the value the page sentence claims.
+    A 2026-10 row of such an arm without the field, or with another value, is
+    the page saying something its artifact does not show. page_check holds the
+    sentence half. Rows measured before the stamps existed fail here by design:
+    every arm on a table is re-run at the re-pin (version_consistency_check), so
+    no frozen row survives it.
+    """
+    import overrides as OV
+    print("=== F15: every disclosed override is stamped on the rows that ran it ===")
+    bad_list, judged = OV.stamp_findings(rows)
+    if not judged:
+        print("  no 2026-10 row of an arm that runs a registered override; nothing to check yet")
+        return 0
+    groups = {}
+    for f in bad_list:
+        # where = "<lane> <scale> <workload> <backend>": one line per arm, not per row
+        lane, backend = f["where"].split()[0], f["where"].split()[-1]
+        groups.setdefault((f["kind"], f["key"], f["field"], lane, backend), []).append(f)
+    for _group, fs in sorted(groups.items()):
+        more = f"  (+{len(fs) - 1} more row(s) like it)" if len(fs) > 1 else ""
+        print(f"  FAIL {fs[0]['text']}{more}")
+    if not bad_list:
+        print(f"  ok: {judged} row-override pair(s) judged, each stamped with the value its sentence claims")
+    return len(bad_list)
+
+
 # (moved above _dense_rows: it is read there too)
 # DECISIONS #86: the laptop skeleton waives the two invariants that are about
 # the BENCH HOST and nothing else -- F1's cpuset pinning and F3's per-size
@@ -1249,9 +1557,15 @@ def main():
         bad = 0
     else:
         bad = check_cpuset(rows) + check_envelope(rows)
+    bad += check_jvm_defaults_arms(rows)
+    bad += check_heap_witnesses(rows)
+    bad += check_index_kinds(rows)
     bad += check_degree(rows)
     bad += check_close_cost(rows)
     bad += check_durability(rows)
+    # F15 reads the canonical rows and, where the bench host has them, the dense
+    # multipass overlay records (the dense table's cells come from those).
+    bad += check_overrides(rows + _dense_rows())
     # F14 reads the LANE ROSTER rather than the rows: an arm that declared no
     # index decision is a defect whether or not it happened to run this time.
     # The rows go in as well, for the second half (F14b): a declaration is a
@@ -1296,6 +1610,7 @@ LANE_SCRIPT = {
     "e2": {"e2_hybrid.py"},
     "e4": {"e4_decomp.py"},
     "lifecycle": {"l5_lifecycle.py"},
+    "restart": {"l6_restart.py"},
     "e4_decomp": {"deployment_decomp_probe.py"},
 }
 

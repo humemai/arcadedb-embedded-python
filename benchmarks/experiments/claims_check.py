@@ -510,6 +510,15 @@ def _comparator_engines():
                "milvus_sparse": "milvus", "milvus_dense": "milvus",
                "chroma_dense": "chroma", "lancedb_dense": "lancedb",
                "elasticsearch_sparse": "elasticsearch",
+               "elasticsearch_dense": "elasticsearch", "elasticsearch_dense_int8": "elasticsearch",
+               "memgraph_dense": "memgraph", "falkordb_dense": "falkordb", "ladybug_dense": "ladybug",
+               # a precision arm is its engine (DECISIONS #135, 2026-10-02); the two
+               # whose fp32 sibling has no alias count as that sibling does
+               "memgraph_dense_int8": "memgraph", "lancedb_dense_fp32": "lancedb",
+               "qdrant_sparse_uint8": "qdrant", "mongodb_dense_int8": "mongodb_dense",
+               "arangodb_dense_int8": "arangodb_dense", "neo4j_dense_int8": "neo4j_dense",
+               # one engine, one name, whichever table it ran on (2026-10-02)
+               "memgraph_graph": "memgraph", "falkordb_graph": "falkordb",
                "neo4j_graph": "neo4j", "ladybug_graph": "ladybug",
                "surrealdb_e2": "surrealdb",
                # THE BUFFER-POOL ABLATION IS NOT A TWELFTH ENGINE. It is

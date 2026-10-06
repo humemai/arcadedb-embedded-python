@@ -590,18 +590,32 @@ def main():
     ap.add_argument("--scale", default="lc10k", choices=list(SCALE_ROWS))
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
-    if args.backend.endswith("_server"):
-        # The served twin (2026-09-07): same situations, same generators, the
-        # server's open/close database commands over HTTP. No filesystem
-        # assertion: the database lives in the server container.
-        import l5_lifecycle_server
-        return l5_lifecycle_server.main(args)
+    # THE ENGINE IS CHECKED BEFORE THE DEPLOYMENT (2026-10-02). The served
+    # branch below matched any name ending in "_server", so a served SurrealDB
+    # lifecycle arm (#131 item 5) would have run ArcadeDB's served module.
     if args.backend.startswith("surrealdb"):
         # The comparator arm (2026-09-16, DECISIONS #95a): SurrealDB embedded
         # through its SDK on SurrealKV, same situations, same sizes, same
         # session and mode set, the reads digested against this arm's.
         import l5_lifecycle_surreal
         return l5_lifecycle_surreal.main(args)
+    if args.backend in ("sqlite_lifecycle", "duckdb_lifecycle"):
+        # The in-process SQL engines (DECISIONS #131 item 5): same situations,
+        # sizes, session, and mode set; each declares what its model lacks.
+        import l5_lifecycle_sql
+        return l5_lifecycle_sql.main(args)
+    if args.backend in ("ladybug_lifecycle", "chroma_lifecycle", "lancedb_lifecycle",
+                        "sqlite_vec_lifecycle"):
+        # The other in-process engines on the page (row 40, 2026-10-02): the
+        # same session, each declaring what its model lacks.
+        import l5_lifecycle_embedded
+        return l5_lifecycle_embedded.main(args)
+    if args.backend.endswith("_server"):
+        # The served twin (2026-09-07): same situations, same generators, the
+        # server's open/close database commands over HTTP. No filesystem
+        # assertion: the database lives in the server container.
+        import l5_lifecycle_server
+        return l5_lifecycle_server.main(args)
 
     fs = _assert_fs()
     n = SCALE_ROWS[args.scale]

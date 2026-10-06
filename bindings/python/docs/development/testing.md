@@ -204,6 +204,7 @@ tests/
 ├── conftest.py                         # Shared fixtures
 ├── test_async_executor.py              # Async execution tests
 ├── test_bulk_insert.py                 # insert_many / create_record bulk ingest tests
+├── test_insert_columns.py              # insert_columns: typed columns, parallel mode, rollback, bad input
 ├── test_concurrency.py                 # Concurrency tests
 ├── test_core.py                        # Core operations
 ├── test_cross_model_atomicity.py       # Search, hop, and update in one transaction

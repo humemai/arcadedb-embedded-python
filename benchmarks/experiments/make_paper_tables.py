@@ -121,7 +121,10 @@ PAPER_SCALES = {"l1": ["medium"], "l1tpc": ["tpch1"], "l2": ["sf1", "sf10"], "e4
                 "l3s": ["tiny", "small", "medium"], "l3d": ["small", "deep10m"],
                 "e2": ["e2"],
                 "l4": ["ts100"],
-                "lifecycle": ["lc10k", "lc100k", "lc1m", "lc10m"]}
+                "lifecycle": ["lc10k", "lc100k", "lc1m", "lc10m"],
+                # The server restart (DECISIONS #139 item 2): each model at its
+                # own lane's tiers, the scale naming the model (l6_restart.py).
+                "restart": ["tpch1", "tpch10", "sf1", "sf10", "small", "deep10m", "ts100", "ts1000"]}
 # OCTOBER'S LARGE SIZES, WHICH #108 MAKES ROW GROUPS RATHER THAN REPLACEMENTS.
 # Dense and sparse always carried two (l3d small+deep10m, l3s three), so the
 # multi-size rendering has worked all along; these four lanes were simply
@@ -168,7 +171,7 @@ OCTOBER_LARGE_SCALES = {"l1tpc": "tpch10", "l2": "sf1full",
 # skeleton stays the micro generator.
 SKELETON_SCALES = {"l1tpc": ["micro"], "l2": ["micro", "sf1"], "l3s": ["micro"],
                    "l3d": ["micro"], "e2": ["e2"], "l4": ["ts100"],
-                   "lifecycle": ["lc10k"]}
+                   "lifecycle": ["lc10k"], "restart": ["micro", "ts100"]}
 SKELETON = os.environ.get("BENCH_SKELETON") == "1"
 # Set by land_stage --only-lanes; empty means every lane this freeze knows.
 _ONLY_LANES = {l.strip() for l in os.environ.get("BENCH_ONLY_LANES", "").split(",") if l.strip()}
@@ -273,7 +276,8 @@ NAMES = {
     # DENSE ROWS STATE WHAT THEY STORE, all of them. T5 labelled only our two
     # arms "(emb, fp32)" and "(emb, int8)", so quantization read as an ArcadeDB
     # peculiarity and every unlabelled row read as full precision. LanceDB is
-    # not: it builds IVF_HNSW_SQ, int8 scalar-quantized, its only HNSW offering.
+    # not: lancedb_dense builds IVF_HNSW_SQ, int8 scalar-quantized (and since
+    # 2026-10-02 lancedb_dense_fp32 builds its unquantized IVF_HNSW_FLAT).
     # That makes its 0.932 recall the same kind of number as our int8 arm's
     # 0.943, where Chroma's 0.934 at fp32 is a different kind. Read from the
     # adapters in l3d_dense.py, never from the rows' `quantization` field, which
@@ -287,6 +291,11 @@ NAMES = {
     "qdrant_dense_int8": "Qdrant (int8)", "milvus_dense_int8": "Milvus (int8)",
     "arcadedb_dense_server_int8": "ArcadeDB (srv, int8)", "sqlite_vec_dense_int8": "sqlite-vec (int8)",
     "chroma_dense": "Chroma (fp32)", "lancedb_dense": "LanceDB (int8)",
+    # DECISIONS #135 (2026-10-02): LanceDB's fp32 arm (IVF_HNSW_FLAT) and three
+    # more int8 counterparts
+    "lancedb_dense_fp32": "LanceDB (fp32)", "mongodb_dense_int8": "MongoDB (int8)",
+    "memgraph_dense_int8": "Memgraph (int8)", "arangodb_dense_int8": "ArangoDB (int8)",
+    "qdrant_sparse_uint8": "Qdrant (uint8)",
     "sqlite_vec_dense": "sqlite-vec (fp32)",
     "duckdb_vss_dense": "DuckDB-VSS (fp32)",
     "arcadedb_e2": "ArcadeDB (one txn)", "surrealdb_e2": "SurrealDB (one txn)",

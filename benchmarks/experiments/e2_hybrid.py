@@ -198,6 +198,13 @@ def gen_data():
 
 class ArcadeE2:
     name = "arcadedb_e2"
+
+    def index_readback(self):
+        """The index kinds the engine built (CAMPAIGN 7 row 68), asked after build() and outside
+        every timer; the lane puts it on the row as `index_kinds`."""
+        return bench_common.arcadedb_index_readback(
+            lambda: self.db.query("sql", "SELECT FROM schema:indexes").to_list())
+
     # WHAT THE TIMED TRANSACTION HOLDS (DECISIONS #118): the vector search, the
     # hop, and the update, all inside one transaction.
     TXN_SCOPE = "whole"
@@ -228,8 +235,10 @@ class ArcadeE2:
         db.command("sql", "CREATE PROPERTY Product.pid INTEGER")
         db.command("sql", "CREATE PROPERTY Product.views INTEGER")
         db.command("sql", "CREATE PROPERTY Product.embedding ARRAY_OF_FLOATS")
+        # A hash index: every read here asks for pid by equality or IN, and
+        # no query ranges over it or orders by it (CAMPAIGN 7 row 68).
         with bench_common.index_timer(self):
-            db.command("sql", "CREATE INDEX ON Product (pid) UNIQUE")
+            db.command("sql", "CREATE INDEX ON Product (pid) UNIQUE_HASH")
         db.command("sql", "CREATE EDGE TYPE RELATED")
         # KEEP THE WRITE-AHEAD LOG ON, against graph_batch's own default.
         #
@@ -285,14 +294,18 @@ class ArcadeE2:
                 "Product[embedding]", a.to_java_float_array(qvec), K, 100
             ).to_list()
             pids = [int(r["pid"]) for r in rows]
+            # BOUND (DECISIONS #116 item 2): every statement of the
+            # transaction is one text whatever the ids.
             rel = db.query(
                 "sql",
-                f"SELECT expand(out('RELATED')) FROM Product WHERE pid = {pids[0]}"
+                "SELECT expand(out('RELATED')) FROM Product WHERE pid = :p", {"p": pids[0]}
             ).to_list()
             touched = pids[:3] + [int(r["pid"]) for r in rel[:3]]
-            for p in set(touched):
-                db.command("sql",
-                           f"UPDATE Product SET views = views + 1 WHERE pid = {p}")
+            # ONE SET-BASED UPDATE, as every other engine sends (PostgreSQL
+            # `pid = ANY(%s)`, Neo4j UNWIND, ArangoDB FOR, MongoDB update_many);
+            # it was one UPDATE per product until the re-pin (BUGS F131).
+            db.command("sql", "UPDATE Product SET views = views + 1 WHERE pid IN :ids",
+                       {"ids": sorted(set(int(p) for p in touched))})
             if crash:
                 raise RuntimeError("injected-crash")  # txn context rolls back
         return len(touched)
@@ -336,28 +349,39 @@ class ArcadeE2:
             "Product[embedding]", self._a.to_java_float_array(qvec), k, max(ef, k)).to_list()
         return [int(r["pid"]) for r in rows]
 
+    # BOUND ID LISTS (DECISIONS #116 item 2): `pid IN :ids` still reads the
+    # unique index (EXPLAIN: FETCH FROM INDEX Product[pid]), with the same
+    # answers as the pasted list and faster (50k products, 30 ids, laptop
+    # 2026-09-26: documents 1.26 against 1.50 ms p50, one hop 0.41 against
+    # 0.56 ms). k is constant in a cell, so LIMIT stays in the text.
     def _hop(self, pids):
         if not pids:
             return []
-        lst = ",".join(str(int(p)) for p in pids)
-        rows = self.db.query("sql", f"SELECT pid FROM (SELECT expand(out('RELATED')) "
-                                    f"FROM Product WHERE pid IN [{lst}])").to_list()
+        rows = self.db.query("sql", "SELECT pid FROM (SELECT expand(out('RELATED')) "
+                                    "FROM Product WHERE pid IN :ids)",
+                             {"ids": [int(p) for p in pids]}).to_list()
         return [int(r["pid"]) for r in rows]
 
     def _docs(self, pids):
         if not pids:
             return []
-        lst = ",".join(str(int(p)) for p in pids)
-        return self.db.query("sql", f"SELECT pid, views FROM Product WHERE pid IN [{lst}]").to_list()
+        return self.db.query("sql", "SELECT pid, views FROM Product WHERE pid IN :ids",
+                             {"ids": [int(p) for p in pids]}).to_list()
 
     def _rank_candidates(self, qvec, cands, k):
         if not cands:
             return []
-        lst = ",".join(str(int(p)) for p in cands)
+        # THE QUERY VECTOR AS A JAVA float[], as _vec_topk and hybrid_op already
+        # pass it (BUGS F145, 2026-09-27). A Python list crosses JPype one
+        # element at a time and reaches the function as a List<Double>; the
+        # array crosses once. Laptop, this lane's 50,000 products, 39
+        # candidates, measured with the October statement (ids in the text):
+        # 1.42 ms -> 1.00 ms p50; with the ids bound too, 0.80 ms. The same
+        # top ten on 300 of 300 queries (`.notes` repros/filtered-search).
         rows = self.db.query(
             "sql", f"SELECT pid, vector.l2Distance(embedding, :q) AS d FROM Product "
-                   f"WHERE pid IN [{lst}] ORDER BY d ASC LIMIT {k}",
-            {"q": [float(x) for x in qvec]}).to_list()
+                   f"WHERE pid IN :ids ORDER BY d ASC LIMIT {int(k)}",
+            {"q": self._a.to_java_float_array(qvec), "ids": [int(p) for p in cands]}).to_list()
         return [int(r["pid"]) for r in rows]
 
     def total_views(self):
@@ -389,17 +413,22 @@ class ArcadeE2Server(ArcadeE2):
     def __init__(self):
         self.durability = (bench_common.at_class(bench_common.DURABILITY_ARCADEDB)
                            + bench_common.ARCADE_SERVER_DURABILITY_NOTE)
-        import requests
-        self.rq = requests.Session()
+        import lean_http
+        self.rq = lean_http.Session()
         self.rq.auth = ("root", "dbbenchpass")
+        # WHICH HTTP CLIENT ran, read from the session (CAMPAIGN 7 row 72), on every row this arm writes
+        self.row_extra = {**(getattr(self, "row_extra", None) or {}), **lean_http.row_fields(self.rq)}
         host = os.environ["BENCH_SERVER_HOST"]
         port = os.environ.get("BENCH_SERVER_PORT", "2480")
         self.base = f"http://{host}:{port}/api/v1"
         try:
-            info = self.rq.get(f"http://{host}:{port}/api/v1/server", timeout=30)
+            info = self.rq.get(f"http://{host}:{port}/api/v1/server?mode=basic", timeout=30)
             self.version = "server:" + (info.json().get("version") or "?")
         except Exception:  # noqa: BLE001
             self.version = "server:unknown"
+
+    def index_readback(self):
+        return bench_common.arcadedb_index_readback(lambda: self._post("query", "SELECT FROM schema:indexes"))
 
     def _post(self, kind, command, params=None, language="sql", sid=None, timeout=600):
         payload = {"language": language, "command": command}
@@ -412,30 +441,48 @@ class ArcadeE2Server(ArcadeE2):
         r.raise_for_status()
         return r.json().get("result", [])
 
-    def _script(self, statements, sid=None):
-        return self._post("command", ";".join(statements), language="sqlscript", sid=sid)
-
     def build(self, vecs, edges):
         for ddl in ("CREATE VERTEX TYPE Product", "CREATE PROPERTY Product.pid INTEGER",
                     "CREATE PROPERTY Product.views INTEGER",
                     "CREATE PROPERTY Product.embedding ARRAY_OF_FLOATS",
-                    "CREATE INDEX ON Product (pid) UNIQUE", "CREATE EDGE TYPE RELATED"):
+                    "CREATE INDEX ON Product (pid) UNIQUE_HASH", "CREATE EDGE TYPE RELATED"):
             self._post("command", ddl)
-        buf = []
-        for i in range(len(vecs)):
-            emb = ",".join(f"{x:.6g}" for x in vecs[i].tolist())
-            buf.append(f"CREATE VERTEX Product SET pid = {i}, views = 0, embedding = [{emb}]")
-            if len(buf) >= 1000:
-                self._script(buf); buf = []
-        if buf:
-            self._script(buf); buf = []
-        for sidx, didx in edges:
-            buf.append(f"CREATE EDGE RELATED FROM (SELECT FROM Product WHERE pid = {sidx}) "
-                       f"TO (SELECT FROM Product WHERE pid = {didx})")
-            if len(buf) >= 1000:
-                self._script(buf); buf = []
-        if buf:
-            self._script(buf)
+        # ArcadeDB's served bulk graph path (DECISIONS #116 items 1 and 4; the
+        # maintainers' recommendation on #8287): POST /api/v1/batch, GraphBatch
+        # under the hood, with the WAL on and the edge count given, as the
+        # graph lane's served arm loads. JSONL, products first, each embedding
+        # as a JSON array of the float32 values' exact doubles; edges name
+        # their endpoints by the products' @id. It replaces CREATE VERTEX and
+        # CREATE EDGE ... FROM (SELECT ...) statements with every value pasted
+        # into sqlscript, where the embeddings went across at six significant
+        # digits, so the served arm stored different vectors than the
+        # embedded one.
+        def lines():
+            for i in range(len(vecs)):
+                yield json.dumps({"@type": "vertex", "@class": "Product", "@id": f"p{i}",
+                                  "pid": i, "views": 0,
+                                  "embedding": np.asarray(vecs[i], dtype=np.float32).tolist()})
+            for sidx, didx in edges:
+                yield json.dumps({"@type": "edge", "@class": "RELATED",
+                                  "@from": f"p{sidx}", "@to": f"p{didx}"})
+
+        def body():
+            buf = []
+            for ln in lines():
+                buf.append(ln)
+                if len(buf) >= BATCH:
+                    yield ("\n".join(buf) + "\n").encode()
+                    buf = []
+            if buf:
+                yield ("\n".join(buf) + "\n").encode()
+
+        r = self.rq.post(f"{self.base}/batch/bench?wal=true&expectedEdgeCount={len(edges)}",
+                         data=body(), headers={"Content-Type": "application/x-ndjson"}, timeout=36000)
+        r.raise_for_status()
+        res = r.json()
+        if res.get("verticesCreated") != len(vecs) or res.get("edgesCreated") != len(edges):
+            raise RuntimeError(f"/batch loaded {res.get('verticesCreated')} products and "
+                               f"{res.get('edgesCreated')} edges of {len(vecs)} and {len(edges)}")
         with bench_common.index_timer(self):
             self._post("command", f'''CREATE INDEX ON Product (embedding) LSM_VECTOR
                        METADATA {{ "dimensions": {DIM}, "similarity": "EUCLIDEAN",
@@ -449,10 +496,14 @@ class ArcadeE2Server(ArcadeE2):
             rows = self._post("query", "SELECT pid FROM (SELECT expand(vectorNeighbors(:idx, :q, :k, :ef)))",
                               {"idx": "Product[embedding]", "q": [float(x) for x in qvec], "k": K, "ef": 100}, sid=sid)
             pids = [int(r["pid"]) for r in rows]
-            rel = self._post("query", f"SELECT expand(out('RELATED')) FROM Product WHERE pid = {pids[0]}", sid=sid)
+            rel = self._post("query", "SELECT expand(out('RELATED')) FROM Product WHERE pid = :p",
+                             {"p": pids[0]}, sid=sid)
             touched = pids[:3] + [int(r["pid"]) for r in rel[:3]]
-            for p_ in set(touched):
-                self._post("command", f"UPDATE Product SET views = views + 1 WHERE pid = {p_}", sid=sid)
+            # ONE REQUEST for the update, as every other engine sends one
+            # set-based statement; it was one HTTP round trip per product (up
+            # to six) until the re-pin (BUGS F131).
+            self._post("command", "UPDATE Product SET views = views + 1 WHERE pid IN :ids",
+                       {"ids": sorted(set(int(p) for p in touched))}, sid=sid)
             if crash:
                 raise RuntimeError("injected-crash")
             self.rq.post(f"{self.base}/commit/bench", headers={"arcadedb-session-id": sid}, timeout=60).raise_for_status()
@@ -478,25 +529,23 @@ class ArcadeE2Server(ArcadeE2):
     def _hop(self, pids):
         if not pids:
             return []
-        lst = ",".join(str(int(p)) for p in pids)
-        rows = self._post("query", f"SELECT pid FROM (SELECT expand(out('RELATED')) "
-                                   f"FROM Product WHERE pid IN [{lst}])")
+        rows = self._post("query", "SELECT pid FROM (SELECT expand(out('RELATED')) "
+                                   "FROM Product WHERE pid IN :ids)", {"ids": [int(p) for p in pids]})
         return [int(r["pid"]) for r in rows]
 
     def _docs(self, pids):
         if not pids:
             return []
-        lst = ",".join(str(int(p)) for p in pids)
-        return self._post("query", f"SELECT pid, views FROM Product WHERE pid IN [{lst}]")
+        return self._post("query", "SELECT pid, views FROM Product WHERE pid IN :ids",
+                          {"ids": [int(p) for p in pids]})
 
     def _rank_candidates(self, qvec, cands, k):
         if not cands:
             return []
-        lst = ",".join(str(int(p)) for p in cands)
         rows = self._post("query",
                           f"SELECT pid, vector.l2Distance(embedding, :q) AS d FROM Product "
-                          f"WHERE pid IN [{lst}] ORDER BY d ASC LIMIT {k}",
-                          {"q": [float(x) for x in qvec]})
+                          f"WHERE pid IN :ids ORDER BY d ASC LIMIT {int(k)}",
+                          {"q": [float(x) for x in qvec], "ids": [int(p) for p in cands]})
         return [int(r["pid"]) for r in rows]
 
     def total_views(self):
@@ -579,23 +628,29 @@ class SurrealE2:
                     self.db, "product", "embedding", DIM,
                     log=lambda m: print(m, file=sys.stderr, flush=True))
 
+    # BOUND VALUES (DECISIONS #116 item 2): the query vector as $q, record ids
+    # as RecordID objects. K and ef stay in the KNN operator's text, which
+    # takes only integer literals there; both are constants.
     def hybrid_op(self, qvec, crash=False, mirror=False):
+        from surrealdb import RecordID
         q = self.db.query
-        vec = json.dumps([float(x) for x in qvec])
-        res = q(f"SELECT pid FROM product WHERE embedding <|{K},100|> {vec}")
+        res = q(f"SELECT pid FROM product WHERE embedding <|{K},100|> $q", {"q": [float(x) for x in qvec]})
         rows = _srows(res)
         pids = [r["pid"] for r in rows][:K]
         best = pids[0]
-        rel = q(f"SELECT VALUE ->related->product.pid FROM product:{best}")
+        rel = q("SELECT VALUE ->related->product.pid FROM $b", {"b": RecordID("product", int(best))})
         relp = _srows(rel)
         flat = relp[0] if relp and isinstance(relp[0], list) else relp
         touched = list(pids[:3]) + list(flat[:3] if flat else [])
-        upd = ";".join(f"UPDATE product:{p} SET views += 1" for p in set(touched))
+        # One set-based UPDATE over the touched records, as every engine on
+        # the table now sends (BUGS F131); it was one UPDATE per record in the
+        # same request.
+        vars_ = {"ids": [RecordID("product", p) for p in sorted(set(int(p) for p in touched))]}
         if crash:
             # injected failure inside the transaction -> CANCEL (rollback)
-            q(f"BEGIN; {upd}; THROW 'injected-crash'; COMMIT;")
+            q("BEGIN; UPDATE $ids SET views += 1; THROW 'injected-crash'; COMMIT;", vars_)
         else:
-            q(f"BEGIN; {upd}; COMMIT;")
+            q("BEGIN; UPDATE $ids SET views += 1; COMMIT;", vars_)
         return len(touched)
 
     FILTER_MODE = ("pre-filter: the candidate set is restricted first and ranked by "
@@ -603,24 +658,27 @@ class SurrealE2:
     FILTER_ACCESS = "record ids"   # F132: the candidates are read by record id, not scanned for
 
     def _vec_topk(self, qvec, k, ef=100):
-        vec = json.dumps([float(x) for x in qvec])
-        rows = _srows(self.db.query(f"SELECT pid FROM product WHERE embedding <|{k},{max(ef, k)}|> {vec}"))
+        rows = _srows(self.db.query(f"SELECT pid FROM product WHERE embedding <|{int(k)},{int(max(ef, k))}|> $q",
+                                    {"q": [float(x) for x in qvec]}))
         return [int(r["pid"]) for r in rows]
+
+    @staticmethod
+    def _rids(pids):
+        from surrealdb import RecordID
+        return [RecordID("product", int(p)) for p in pids]
 
     def _hop(self, pids):
         if not pids:
             return []
-        lst = ",".join(f"product:{int(p)}" for p in pids)
         out = []
-        for r in _srows(self.db.query(f"SELECT VALUE ->related->product.pid FROM [{lst}]")):
+        for r in _srows(self.db.query("SELECT VALUE ->related->product.pid FROM $ids", {"ids": self._rids(pids)})):
             out.extend(r if isinstance(r, list) else [r])
         return [int(x) for x in out if x is not None]
 
     def _docs(self, pids):
         if not pids:
             return []
-        lst = ",".join(f"product:{int(p)}" for p in pids)
-        return _srows(self.db.query(f"SELECT pid, views FROM [{lst}]"))
+        return _srows(self.db.query("SELECT pid, views FROM $ids", {"ids": self._rids(pids)}))
 
     def _rank_candidates(self, qvec, cands, k):
         # OVER THE CANDIDATES' RECORD IDS, as _docs and _hop address them
@@ -630,13 +688,15 @@ class SurrealE2:
         # engine reaches this step through an index on pid in 1-15 ms. Record
         # ids ARE SurrealDB's primary-key path, which is what F98's rule names
         # for it. Same answers; laptop 50k, 200 candidates: 3,638 -> 15.7 ms.
+        # BOUND on the re-pin (DECISIONS #116 item 2): the vector as $q, the
+        # candidates as RecordID objects; k is a constant in a cell. Same
+        # answers and the same record-id path (laptop 50k: 15.7 ms).
         if not cands:
             return []
-        vec = json.dumps([float(x) for x in qvec])
-        lst = ",".join(f"product:{int(p)}" for p in cands)
         rows = _srows(self.db.query(
-            f"SELECT pid, vector::distance::euclidean(embedding, {vec}) AS d FROM [{lst}] "
-            f"ORDER BY d ASC LIMIT {k}"))
+            f"SELECT pid, vector::distance::euclidean(embedding, $q) AS d FROM $ids "
+            f"ORDER BY d ASC LIMIT {int(k)}",
+            {"q": [float(x) for x in qvec], "ids": self._rids(cands)}))
         return [int(r["pid"]) for r in rows]
 
     def total_views(self):
@@ -672,6 +732,7 @@ class SurrealServedE2(SurrealE2):
         # reconnects, re-authenticates and re-selects the namespace once when
         # the socket dies mid-query.
         self.db = surreal_common.served_client()
+        self.durability = surreal_common.served_durability()
         self.version = "surrealdb-server:" + str(self.db.version()).replace("surrealdb-", "")
 
 
@@ -709,7 +770,7 @@ class ArangoE2:
         #
         # An index rather than rewriting the query to DOCUMENT('product', k),
         # which is marginally faster still at 2.74 ms: every other engine
-        # reaches this step through an index on pid -- ArcadeDB a UNIQUE index,
+        # reaches this step through an index on pid -- ArcadeDB a UNIQUE_HASH index,
         # PostgreSQL+AGE a primary key, Neo4j an index, MongoDB the vector
         # index's own filter path, SurrealDB its record id -- so an index is
         # the equivalent configuration and keeps one query text across arms.
@@ -1008,7 +1069,10 @@ class PgAgeE2:
         pids = [int(r[0]) for r in c.fetchall()]
         # WHERE a.pid = x, not {pid: x}: the map form scanned (17 ms), the
         # WHERE form uses the expression index on pid (1.0 ms), same probe.
-        c.execute(f"SELECT * FROM cypher('e2graph', $$ MATCH (a:Product)-[:RELATED]->(b) WHERE a.pid = {pids[0]} RETURN b.pid $$) AS (pid agtype)")
+        # BOUND through cypher()'s third argument (DECISIONS #116 item 2), the
+        # agtype map the ingest already passes.
+        c.execute("SELECT * FROM cypher('e2graph', $$ MATCH (a:Product)-[:RELATED]->(b) WHERE a.pid = $pid RETURN b.pid $$, %s) AS (pid agtype)",
+                  (json.dumps({"pid": int(pids[0])}),))
         rel = [int(str(r[0])) for r in c.fetchall()]
         touched = pids[:3] + rel[:3]
         c.execute("UPDATE product SET views = views + 1 WHERE pid = ANY(%s)", (list(set(touched)),))
@@ -1037,6 +1101,17 @@ class PgAgeE2:
         if not pids:
             return []
         c = self._cur()
+        # THE ONE LIST THIS ARM KEEPS IN THE TEXT (DECISIONS #116 item 2, the
+        # DuckPGQ treatment). AGE drops the expression index on pid for any
+        # BOUND list: 30 ids over 20k products, pasted `IN [..]` 2.0 ms, bound
+        # `IN $pids` 26.4 ms, bound `UNWIND $pids ... WHERE a.pid = p` 12.0 ms,
+        # answers identical (laptop 2026-09-26, repros/bound-values/
+        # age_list_param_probe.py); the lane smoke saw retrieval 10.4 -> 76.2
+        # ms. Binding exists to take a harness-made parse off the timed path,
+        # not to put an engine on a path 6-13x slower, so the list stays in the
+        # text. A single pid binds and is faster for it (0.77 -> 0.15 ms).
+        # Reported upstream as apache/age#2582 (2026-09-27): bind the list
+        # once a pinned AGE release plans a list parameter as `= ANY`.
         lst = ",".join(str(int(p)) for p in pids)
         c.execute(f"SELECT * FROM cypher('e2graph', $$ MATCH (a:Product)-[:RELATED]->(b) "
                   f"WHERE a.pid IN [{lst}] RETURN b.pid $$) AS (pid agtype)")
@@ -1089,6 +1164,9 @@ class Neo4jE2:
         self.drv = GraphDatabase.driver(f"bolt://{host}:7687", auth=("neo4j", "dbbenchpass"))
         with self.drv.session() as s:
             v = s.run("CALL dbms.components() YIELD versions RETURN versions[0] AS v").single()["v"]
+            # The page cache the runner fitted to the cell, as the engine reports
+            # it (CAMPAIGN section 7 row 21, overrides.py).
+            self._settings = bench_common.neo4j_readback(s)
         self.version = f"neo4j:{v}"
 
     def build(self, vecs, edges):
@@ -1101,10 +1179,27 @@ class Neo4jE2:
             for b0 in range(0, len(eb), BATCH):
                 s.run("UNWIND $rows AS r MATCH (a:Product {pid: r.s}), (b:Product {pid: r.d}) CREATE (a)-[:RELATED]->(b)",
                       rows=eb[b0:b0 + BATCH]).consume()
+            # `vector.quantization.type` set, never left to the default: Neo4j
+            # 2026.08.1 builds BINARY when the definition names none, which this
+            # one did until 2026-10-02 (BUGS F164, DECISIONS #135). Read back.
             s.run(f"CREATE VECTOR INDEX prod_emb IF NOT EXISTS FOR (p:Product) ON (p.embedding) "
                   f"OPTIONS {{indexConfig: {{`vector.dimensions`: {DIM}, `vector.similarity_function`: 'euclidean', "
+                  f"`vector.quantization.type`: 'NONE', `vector.default_search_expansion_factor`: 1.0, "
                   f"`vector.hnsw.m`: 16, `vector.hnsw.ef_construction`: 100}}}}").consume()
             s.run("CALL db.awaitIndexes(36000)").consume()
+            cfg = s.run("SHOW VECTOR INDEXES YIELD name, options WHERE name = 'prod_emb' "
+                        "RETURN options.indexConfig AS c").single()["c"]
+            if cfg.get("vector.quantization.type") != "NONE":
+                raise RuntimeError(f"neo4j vector index quantization read back "
+                                   f"{cfg.get('vector.quantization.type')!r}, not 'NONE' (BUGS F164)")
+            # NONE's own default is 1.0 (2026.08.1, 2026.09.0); set and checked so
+            # a release that moves it cannot widen the candidate pool unseen.
+            if float(cfg.get("vector.default_search_expansion_factor") or 0) != 1.0:
+                raise RuntimeError(f"neo4j vector index search expansion read back "
+                                   f"{cfg.get('vector.default_search_expansion_factor')!r}, not 1.0")
+            self.row_extra = {"neo4j_vector_quantization": cfg.get("vector.quantization.type"),
+                              "neo4j_vector_index_config": json.dumps(cfg, sort_keys=True, default=str),
+                              **getattr(self, "_settings", {})}
 
     def hybrid_op(self, qvec, crash=False, mirror=False):
         with self.drv.session() as s:
@@ -1168,6 +1263,431 @@ class Neo4jE2:
         self.drv.close()
 
 
+class MemgraphE2:
+    """Memgraph 3.13.1 alone, served (DECISIONS #131 item 4, from the 26.10.1
+    measurement): Product nodes carrying their embedding under Memgraph's
+    vector index, RELATED edges, the views counter on the node; the hit, the
+    hop, and the update run in one explicit Bolt transaction, and the injected
+    crash rolls it back (laptop probe 2026-10-02: a rollback leaves the
+    counters untouched, a commit applies them).
+
+    THE VECTOR INDEX TAKES NO HNSW PARAMETERS. `CREATE VECTOR INDEX ... WITH
+    CONFIG` accepts dimension, capacity, metric, resize_coefficient, and
+    scalar_kind (f32 here, its default), so the graph's degree and its build
+    breadth stay at the engine's own defaults where the other arms on this
+    table set m 16 and ef_construction 100. Disclosed, not matched: there is
+    no knob to match. The SEARCH breadth is matched the way the Neo4j arm
+    matches it: ask the index for 100 candidates and keep the nearest k (the
+    index's search expands at least as wide as the count it is asked for).
+    Asking for k alone, the first smoke's retrieval recall was 0.58 against
+    0.70-0.84 for every other arm; that was our request, not the engine. The
+    index is built over the loaded nodes when it is created, and build()
+    checks that it holds every product before any query runs.
+
+    RANKING A CANDIDATE SET uses `vector_search.cosine_similarity`, the only
+    vector function the image ships; every vector and query on this lane is
+    normalised to unit length (gen_data), and on unit vectors cosine order is
+    L2 order, so the ranking answers the same question as the arms that rank
+    by L2 distance.
+
+    RESOURCES AND DURABILITY as the graph arm (`l2_graph.MemgraphGraph`): the
+    runner fits the Bolt workers and snapshot threads to the cpuset and the
+    memory limit to 90% of the cap, and the adapter reads them and the WAL
+    settings back from SHOW CONFIG (FAIRNESS F6, DECISIONS #81/#90)."""
+    name = "memgraph_e2"
+    # WHAT THE TIMED TRANSACTION HOLDS (DECISIONS #118): the vector search, the
+    # hop, and the update, all inside one transaction.
+    TXN_SCOPE = "whole"
+    FILTER_MODE = ("pre-filter: WHERE p.pid IN $ids then ORDER BY "
+                   "vector_search.cosine_similarity (L2 order on the lane's unit vectors)")
+
+    def __init__(self):
+        from neo4j import GraphDatabase
+        from l2_graph import MemgraphGraph, _int_or
+        host = os.environ.get("BENCH_SERVER_HOST", "localhost")
+        port = os.environ.get("BENCH_SERVER_PORT", "7687")
+        self.drv = GraphDatabase.driver(f"bolt://{host}:{port}", auth=None)
+        self.drv.verify_connectivity()
+        with self.drv.session() as s:
+            v = s.run("SHOW VERSION").single()["version"]
+            cfg = {r["name"]: r["current_value"] for r in s.run("SHOW CONFIG")}
+        self.version = f"memgraph:{v}"
+        self.durability = MemgraphGraph._durability_readback(cfg)
+        self.row_extra = {
+            "memgraph_storage_mode": cfg.get("storage_mode"),
+            "memgraph_bolt_workers": _int_or(cfg.get("bolt_num_workers")),
+            "memgraph_memory_limit_mib": _int_or(cfg.get("memory_limit")),
+            "memgraph_wal_flush_every_n_tx": _int_or(cfg.get("storage_wal_file_flush_every_n_tx")),
+        }
+
+    def build(self, vecs, edges):
+        with self.drv.session() as s:
+            # The pid index first, as Neo4j's uniqueness constraint is: the edge
+            # load finds both ends of every edge by pid.
+            s.run("CREATE INDEX ON :Product(pid)").consume()
+            for b0 in range(0, len(vecs), BATCH):
+                rows = [{"pid": i, "e": vecs[i].tolist()} for i in range(b0, min(b0 + BATCH, len(vecs)))]
+                s.run("UNWIND $rows AS r CREATE (:Product {pid: r.pid, views: 0, embedding: r.e})", rows=rows).consume()
+            eb = [{"s": a, "d": b} for a, b in edges]
+            for b0 in range(0, len(eb), BATCH):
+                s.run("UNWIND $rows AS r MATCH (a:Product {pid: r.s}), (b:Product {pid: r.d}) "
+                      "CREATE (a)-[:RELATED]->(b)", rows=eb[b0:b0 + BATCH]).consume()
+            with bench_common.index_timer(self):
+                s.run(f'CREATE VECTOR INDEX prod_emb ON :Product(embedding) WITH CONFIG '
+                      f'{{"dimension": {DIM}, "capacity": {len(vecs)}, "metric": "l2sq"}}').consume()
+            info = s.run("SHOW VECTOR INDEX INFO").data()
+        size = next((int(r.get("size") or 0) for r in info if r.get("index_name") == "prod_emb"), 0)
+        self.settle = {"vector_index_size": size}
+        if size != len(vecs):
+            raise RuntimeError(f"memgraph_e2: the vector index holds {size} of {len(vecs)} products after its build")
+
+    def hybrid_op(self, qvec, crash=False, mirror=False):
+        with self.drv.session() as s:
+            tx = s.begin_transaction()
+            try:
+                hits = tx.run("CALL vector_search.search('prod_emb', $ef, $q) YIELD node, distance "
+                              "RETURN node.pid AS pid ORDER BY distance LIMIT $k",
+                              ef=100, k=K, q=[float(x) for x in qvec]).data()
+                pids = [int(h["pid"]) for h in hits]
+                rel = tx.run("MATCH (p:Product {pid: $p})-[:RELATED]->(q) RETURN q.pid AS pid LIMIT 3", p=pids[0]).data()
+                touched = pids[:3] + [int(r["pid"]) for r in rel]
+                tx.run("UNWIND $ps AS p MATCH (n:Product {pid: p}) SET n.views = n.views + 1",
+                       ps=list(set(touched))).consume()
+                if crash:
+                    tx.rollback()
+                    raise RuntimeError("injected-crash")
+                tx.commit()
+            finally:
+                tx.close()
+        return len(touched)
+
+    def _vec_topk(self, qvec, k, ef=100):
+        # The breadth as the Neo4j arm sets it: ef candidates, the nearest k kept.
+        with self.drv.session() as s:
+            hits = s.run("CALL vector_search.search('prod_emb', $ef, $q) YIELD node, distance "
+                         "RETURN node.pid AS pid ORDER BY distance LIMIT $k",
+                         ef=max(ef, k), k=k, q=[float(x) for x in qvec]).data()
+        return [int(h["pid"]) for h in hits]
+
+    def _hop(self, pids):
+        if not pids:
+            return []
+        with self.drv.session() as s:
+            return [int(r["pid"]) for r in s.run(
+                "MATCH (p:Product)-[:RELATED]->(q) WHERE p.pid IN $ps RETURN q.pid AS pid",
+                ps=[int(p) for p in pids]).data()]
+
+    def _docs(self, pids):
+        if not pids:
+            return []
+        with self.drv.session() as s:
+            return s.run("MATCH (p:Product) WHERE p.pid IN $ids RETURN p.pid AS pid, p.views AS views",
+                         ids=[int(p) for p in pids]).data()
+
+    def _rank_candidates(self, qvec, cands, k):
+        if not cands:
+            return []
+        with self.drv.session() as s:
+            return [int(r["pid"]) for r in s.run(
+                "MATCH (p:Product) WHERE p.pid IN $ids RETURN p.pid AS pid "
+                "ORDER BY vector_search.cosine_similarity(p.embedding, $q) DESC LIMIT $k",
+                ids=[int(p) for p in cands], q=[float(x) for x in qvec], k=k).data()]
+
+    def total_views(self):
+        with self.drv.session() as s:
+            return int(s.run("MATCH (n:Product) RETURN sum(n.views) AS s").single()["s"] or 0)
+
+    def close(self):
+        self.drv.close()
+
+
+class LadybugE2:
+    """LadybugDB 0.21.2 alone, embedded (DECISIONS #131 item 4, from the
+    26.10.1 measurement): a Product node table holding a FLOAT[64] embedding
+    under the official `vector` extension's HNSW index, a RELATED rel table,
+    the views counter on the node; the hit, the hop, and the update run in one
+    `BEGIN TRANSACTION`, and the injected crash rolls it back (laptop probe
+    2026-10-02: a rollback leaves the counters untouched, a commit applies
+    them).
+
+    THE EXTENSION IS DOWNLOADED AT CONNECT, as DuckPGQ's is on the graph
+    table: `INSTALL vector` fetches it from extension.ladybugdb.com for the
+    pinned package, so the cell needs the network the DuckPGQ cells already
+    use.
+
+    THE INDEX IS MATCHED TO THE TABLE'S HNSW SETTINGS (m 16, ef_construction
+    100, search breadth 100): `mu := 16` for the upper layers, `ml := 32` for
+    the bottom layer (twice m, as hnswlib sizes its base layer), `efc := 100`,
+    `efs := 100`. The engine's defaults are mu 30, ml 60, efc 200, which would
+    have built a denser graph than its neighbours on this table. Loaded by
+    COPY from CSV, the engine's bulk path, as the graph arm loads; candidate
+    sets are ranked by `array_distance` (L2).
+
+    RESOURCES FITTED as the graph arm (BUGS F160, FAIRNESS F6): threads from
+    `sched_getaffinity` (the engine reads the host's count otherwise: 16 on the
+    laptop under a 2-CPU mask) and the buffer pool at 0.8 of the cgroup's cap,
+    both read back onto the row. Durability is LadybugDB's own and cannot be
+    relaxed (fsync at commit; the named exception, DECISIONS #90)."""
+    name = "ladybug_e2"
+    TXN_SCOPE = "whole"
+    FILTER_MODE = "pre-filter: WHERE p.pid IN $ids then ORDER BY array_distance (L2)"
+    PATH = "/tmp/e2_ladybug"
+
+    def __init__(self):
+        import shutil
+        import ladybug
+        from l2_graph import _ladybug_fit
+        threads, pool = _ladybug_fit()
+        kw = {"max_num_threads": threads}
+        if pool:
+            kw["buffer_pool_size"] = pool
+        shutil.rmtree(self.PATH, ignore_errors=True)
+        self.db = ladybug.Database(self.PATH, **kw)
+        self.conn = ladybug.Connection(self.db)
+        self._prepared = {}
+        self._rows("INSTALL vector")
+        self._rows("LOAD vector")
+        got = self._rows('CALL current_setting("threads") RETURN *')[0][0]
+        self.version = f"ladybug:{getattr(ladybug, '__version__', '?')}"
+        self.durability = bench_common.DURABILITY_LADYBUG
+        self.row_extra = {"ladybug_threads": int(got),
+                          "ladybug_buffer_pool_mib": (pool >> 20) if pool else None}
+
+    def _rows(self, text, params=None):
+        if not params:
+            res = self.conn.execute(text)
+        else:
+            # PREPARED ONCE PER TEXT, as the graph arm does.
+            stmt = self._prepared.get(text)
+            if stmt is None:
+                stmt = self._prepared[text] = self.conn.prepare(text)
+            res = self.conn.execute(stmt, params)
+        out = []
+        while res.has_next():
+            out.append(res.get_next())
+        return out
+
+    def build(self, vecs, edges):
+        import csv as _csv
+        self._rows(f"CREATE NODE TABLE Product(pid INT64, views INT64, embedding FLOAT[{DIM}], PRIMARY KEY(pid))")
+        self._rows("CREATE REL TABLE RELATED(FROM Product TO Product)")
+        pcsv, rcsv = "/tmp/e2_products.csv", "/tmp/e2_related.csv"
+        with open(pcsv, "w", newline="") as f:
+            w = _csv.writer(f)
+            for i in range(len(vecs)):
+                w.writerow([i, 0, "[" + ",".join("%.9g" % x for x in vecs[i]) + "]"])
+        with open(rcsv, "w", newline="") as f:
+            w = _csv.writer(f)
+            for a, b in edges:
+                w.writerow([a, b])
+        self._rows(f"COPY Product FROM '{pcsv}'")
+        self._rows(f"COPY RELATED FROM '{rcsv}'")
+        os.unlink(pcsv)
+        os.unlink(rcsv)
+        with bench_common.index_timer(self):
+            self._rows("CALL CREATE_VECTOR_INDEX('Product', 'prod_emb', 'embedding', "
+                       "mu := 16, ml := 32, efc := 100, metric := 'l2')")
+
+    _TOPK = ("CALL QUERY_VECTOR_INDEX('Product', 'prod_emb', $q, $k, efs := 100) "
+             "RETURN node.pid AS pid ORDER BY distance")
+
+    def hybrid_op(self, qvec, crash=False, mirror=False):
+        self._rows("BEGIN TRANSACTION")
+        try:
+            pids = [int(r[0]) for r in self._rows(self._TOPK, {"q": [float(x) for x in qvec], "k": K})]
+            rel = self._rows("MATCH (p:Product)-[:RELATED]->(r:Product) WHERE p.pid = $p "
+                             "RETURN r.pid LIMIT 3", {"p": pids[0]})
+            touched = pids[:3] + [int(r[0]) for r in rel]
+            self._rows("UNWIND $ps AS p MATCH (n:Product) WHERE n.pid = p SET n.views = n.views + 1",
+                       {"ps": list(set(touched))})
+            if crash:
+                self._rows("ROLLBACK")
+                raise RuntimeError("injected-crash")
+            self._rows("COMMIT")
+        except BaseException as e:
+            # Any failure but the injected one leaves the transaction open on
+            # this connection; close it before the next operation begins one.
+            if not (isinstance(e, RuntimeError) and str(e) == "injected-crash"):
+                try:
+                    self._rows("ROLLBACK")
+                except Exception:  # noqa: BLE001 - the original error is the one to raise
+                    pass
+            raise
+        return len(touched)
+
+    def _vec_topk(self, qvec, k, ef=100):
+        # efs is fixed at 100 in the text, the table's search breadth; the
+        # harness asks at most k = 10.
+        return [int(r[0]) for r in self._rows(self._TOPK, {"q": [float(x) for x in qvec], "k": k})]
+
+    def _hop(self, pids):
+        if not pids:
+            return []
+        return [int(r[0]) for r in self._rows(
+            "MATCH (p:Product)-[:RELATED]->(q:Product) WHERE p.pid IN $ps RETURN q.pid",
+            {"ps": [int(p) for p in pids]})]
+
+    def _docs(self, pids):
+        if not pids:
+            return []
+        return [{"pid": int(r[0]), "views": int(r[1])} for r in self._rows(
+            "MATCH (p:Product) WHERE p.pid IN $ids RETURN p.pid, p.views", {"ids": [int(p) for p in pids]})]
+
+    def _rank_candidates(self, qvec, cands, k):
+        if not cands:
+            return []
+        return [int(r[0]) for r in self._rows(
+            f"MATCH (p:Product) WHERE p.pid IN $ids RETURN p.pid "
+            f"ORDER BY array_distance(p.embedding, CAST($q AS FLOAT[{DIM}])) LIMIT $k",
+            {"ids": [int(p) for p in cands], "q": [float(x) for x in qvec], "k": k})]
+
+    def total_views(self):
+        return int(self._rows("MATCH (n:Product) RETURN sum(n.views)")[0][0] or 0)
+
+    def close(self):
+        self.conn.close()
+        self.db.close()
+
+
+class DuckE2:
+    """DuckDB 1.5.4 alone, embedded (DECISIONS #131 item 4: tested before it
+    was added, and it ran the whole transaction): the products in one table
+    with a FLOAT[64] embedding under the `vss` extension's HNSW index, RELATED
+    in an edge table, a DuckPGQ property graph over the two, and the views
+    counter on the product row. The vector search, the hop (a DuckPGQ
+    GRAPH_TABLE MATCH), and the update run in one transaction, and the
+    injected crash rolls it back (laptop probe 2026-10-02: a rollback leaves
+    the counters untouched, a commit applies them, the plan still reads the
+    HNSW index after updates and after a reopen).
+
+    THE HOP CANNOT BIND ITS VALUES: DuckPGQ takes no parameter inside a graph
+    query (cwida/duckpgq-extension#75), so the pid list is written into the
+    text, as on the graph table's DuckPGQ arm; every other statement binds
+    (DECISIONS #116 item 2).
+
+    THE INDEX IS PERSISTED UNDER DuckDB's EXPERIMENTAL FLAG
+    (`hnsw_enable_experimental_persistence`), as the dense table's DuckDB VSS
+    arm runs it, with M 16, ef_construction 100, and a search breadth of 100
+    (`hnsw_ef_search`), the table's HNSW settings. Loaded through Arrow, the
+    dense arm's bulk path.
+
+    RESOURCES: `PRAGMA threads` from `sched_getaffinity` (FAIRNESS F6; DuckDB
+    reads the host's count under a cpuset), `memory_limit` left at DuckDB's
+    default, which it derives from the cgroup (80% of a 3 GB cap read 2.3 GiB
+    on the laptop), both read back onto the row. Durability is DuckDB's own,
+    fsync at commit with no knob (DECISIONS #90)."""
+    name = "duckdb_e2"
+    TXN_SCOPE = "whole"
+    FILTER_MODE = "pre-filter: WHERE pid IN (bound list) then ORDER BY array_distance (L2)"
+    PATH = "/tmp/e2_duck.db"
+
+    def __init__(self):
+        import duckdb
+        for p in (self.PATH, self.PATH + ".wal"):
+            if os.path.exists(p):
+                os.remove(p)
+        self.cx = duckdb.connect(self.PATH)
+        self._threads = len(os.sched_getaffinity(0))
+        self.cx.execute(f"PRAGMA threads={self._threads}")
+        self.cx.execute("INSTALL vss; LOAD vss;")
+        self.cx.execute("INSTALL duckpgq FROM community; LOAD duckpgq;")
+        self.cx.execute("SET hnsw_enable_experimental_persistence=true;")
+        ext = dict(self.cx.execute("SELECT extension_name, extension_version FROM duckdb_extensions() "
+                                   "WHERE extension_name IN ('vss', 'duckpgq')").fetchall())
+        self.version = f"duckdb:{duckdb.__version__} + vss:{ext.get('vss', '?')} + duckpgq:{ext.get('duckpgq', '?')}"
+        self.durability = bench_common.DURABILITY_DUCKDB
+        # `duckdb_threads` and the VSS persistence flag are the ENGINE's answers
+        # (current_setting), not the number passed above (CAMPAIGN section 7
+        # row 21): fairness_check F15 holds the thread count to the cpuset.
+        self.row_extra = {**bench_common.duckdb_readback(self.cx, vss=True),
+                          "duckdb_memory_limit": self.cx.execute(
+                              "SELECT current_setting('memory_limit')").fetchone()[0]}
+
+    def build(self, vecs, edges):
+        import pyarrow as pa
+        flat = pa.array(vecs.astype("float32").reshape(-1), type=pa.float32())
+        tbl = pa.table({"pid": pa.array(range(len(vecs)), type=pa.int64()),
+                        "emb": pa.FixedSizeListArray.from_arrays(flat, DIM)})
+        self.cx.register("src", tbl)
+        self.cx.execute(f"CREATE TABLE product AS SELECT pid, 0::INTEGER AS views, emb::FLOAT[{DIM}] AS embedding FROM src")
+        self.cx.unregister("src")
+        # The primary key as an index over the loaded rows: the point reads and
+        # the update find a product by pid.
+        self.cx.execute("CREATE UNIQUE INDEX product_pid ON product (pid)")
+        etbl = pa.table({"src": pa.array([a for a, _ in edges], type=pa.int64()),
+                         "dst": pa.array([b for _, b in edges], type=pa.int64())})
+        self.cx.register("esrc", etbl)
+        self.cx.execute("CREATE TABLE related AS SELECT src, dst FROM esrc")
+        self.cx.unregister("esrc")
+        self.cx.execute("CREATE PROPERTY GRAPH pg VERTEX TABLES (product) EDGE TABLES (related "
+                        "SOURCE KEY (src) REFERENCES product (pid) DESTINATION KEY (dst) REFERENCES product (pid) "
+                        "LABEL rel)")
+        with bench_common.index_timer(self):
+            self.cx.execute("CREATE INDEX prod_emb ON product USING HNSW (embedding) "
+                            "WITH (metric = 'l2sq', M = 16, ef_construction = 100)")
+        self.cx.execute("SET hnsw_ef_search = 100")
+
+    _TOPK = f"SELECT pid FROM product ORDER BY array_distance(embedding, ?::FLOAT[{DIM}]) LIMIT ?"
+
+    @staticmethod
+    def _hop_sql(pids):
+        # Pasted: DuckPGQ cannot bind (see the class docstring). Integers only.
+        lst = ",".join(str(int(p)) for p in pids)
+        return (f"FROM GRAPH_TABLE (pg MATCH (a:product)-[r:rel]->(b:product) "
+                f"WHERE a.pid IN ({lst}) COLUMNS (b.pid AS pid))")
+
+    def hybrid_op(self, qvec, crash=False, mirror=False):
+        self.cx.execute("BEGIN TRANSACTION")
+        try:
+            pids = [int(r[0]) for r in self.cx.execute(self._TOPK, [[float(x) for x in qvec], K]).fetchall()]
+            rel = self.cx.execute(self._hop_sql([pids[0]]) + " LIMIT 3").fetchall()
+            touched = pids[:3] + [int(r[0]) for r in rel]
+            self.cx.execute("UPDATE product SET views = views + 1 WHERE pid IN (SELECT unnest(?::BIGINT[]))",
+                            [list(set(touched))])
+            if crash:
+                self.cx.execute("ROLLBACK")
+                raise RuntimeError("injected-crash")
+            self.cx.execute("COMMIT")
+        except BaseException as e:
+            if not (isinstance(e, RuntimeError) and str(e) == "injected-crash"):
+                try:
+                    self.cx.execute("ROLLBACK")
+                except Exception:  # noqa: BLE001 - the original error is the one to raise
+                    pass
+            raise
+        return len(touched)
+
+    def _vec_topk(self, qvec, k, ef=100):
+        self.cx.execute(f"SET hnsw_ef_search = {int(max(ef, k))}")
+        return [int(r[0]) for r in self.cx.execute(self._TOPK, [[float(x) for x in qvec], k]).fetchall()]
+
+    def _hop(self, pids):
+        if not pids:
+            return []
+        return [int(r[0]) for r in self.cx.execute(self._hop_sql(pids)).fetchall()]
+
+    def _docs(self, pids):
+        if not pids:
+            return []
+        return [{"pid": int(r[0]), "views": int(r[1])} for r in self.cx.execute(
+            "SELECT pid, views FROM product WHERE pid IN (SELECT unnest(?::BIGINT[]))",
+            [[int(p) for p in pids]]).fetchall()]
+
+    def _rank_candidates(self, qvec, cands, k):
+        if not cands:
+            return []
+        return [int(r[0]) for r in self.cx.execute(
+            f"SELECT pid FROM product WHERE pid IN (SELECT unnest(?::BIGINT[])) "
+            f"ORDER BY array_distance(embedding, ?::FLOAT[{DIM}]) LIMIT ?",
+            [[int(p) for p in cands], [float(x) for x in qvec], k]).fetchall()]
+
+    def total_views(self):
+        return int(self.cx.execute("SELECT sum(views) FROM product").fetchone()[0] or 0)
+
+    def close(self):
+        self.cx.close()
+
+
 class ComposedE2:
     """Qdrant server (vector) + Neo4j server (graph+doc) with glue code, both in
     one container (Dockerfile.composed, dbbench:composed).
@@ -1214,6 +1734,11 @@ class ComposedE2:
         except Exception as e:
             _nv = f"unknown ({e.__class__.__name__})"
         self.version = f"qdrant:{_qv}+neo4j:{_nv}"
+        # Two settings the runner overrides on the Neo4j half, as the engine
+        # reports them (CAMPAIGN section 7 row 21, overrides.py): the page cache
+        # fitted to the cell, and the checkpoint interval set short.
+        with self.neo.session() as _s:
+            self.row_extra = bench_common.neo4j_readback(_s, checkpoint=True)
 
     def build(self, vecs, edges):
         from qdrant_client import models as qm
@@ -1363,7 +1888,7 @@ class ComposedE2:
 
 
 BACKENDS = {c.name: c for c in (ArcadeE2, ArcadeE2Server, SurrealE2, SurrealServedE2, ArangoE2,
-                                MongoE2, PgAgeE2, Neo4jE2, ComposedE2)}
+                                MongoE2, PgAgeE2, Neo4jE2, MemgraphE2, LadybugE2, DuckE2, ComposedE2)}
 
 
 # DECISIONS #81, recorded on every row. PG+AGE reads the server's
@@ -1378,6 +1903,12 @@ DURABILITY = {
     "arangodb_e2": arango_common.DURABILITY,
     "mongodb_e2": mongo_common.DURABILITY,
     "neo4j_e2": bench_common.DURABILITY_NEO4J,
+    # Memgraph reads its WAL settings back at connect (the adapter's answer
+    # wins); this is the relaxed string it is compared against. LadybugDB
+    # cannot be relaxed.
+    "memgraph_e2": bench_common.DURABILITY_MEMGRAPH,
+    "ladybug_e2": bench_common.DURABILITY_LADYBUG,
+    "duckdb_e2": bench_common.DURABILITY_DUCKDB,
     # The composed stack's document and graph half is Neo4j, so the whole
     # operation waits for Neo4j's log; Qdrant's WAL runs at its own default.
     "composed_qdrant_neo4j": bench_common.DURABILITY_NEO4J + "; Qdrant WAL at its default",
@@ -1415,10 +1946,20 @@ def main():
         b = BACKENDS[args.backend]()
     out["engine_version"] = b.version
     out["instrument"] = bench_common.INSTRUMENT
+    # What a served engine reported about itself at connect (Memgraph's pools,
+    # LadybugDB's fitted threads): read from the engine, not restated from the
+    # flags the runner sent.
+    out.update(getattr(b, "row_extra", None) or {})
     t0 = time.perf_counter()
     with _beat.phase("build", n=PRODUCTS, n_edges=len(edges)):
         b.build(vecs, edges)
     out["build_s"] = round(time.perf_counter() - t0, 2)
+    # And again after the build: what an adapter can only read once its index
+    # exists (Neo4j's applied vector quantization, BUGS F164) joins the row here, and so
+    # do the index kinds an ArcadeDB arm's engine reports (CAMPAIGN 7 row 68).
+    if hasattr(b, "index_readback"):
+        b.row_extra = {**(getattr(b, "row_extra", None) or {}), **b.index_readback()}
+    out.update(getattr(b, "row_extra", None) or {})
     # THE SPLIT (FAIRNESS F14). This lane builds the page's most expensive
     # indexes -- LSM_VECTOR, HNSW, FAISS IVF, a MongoDB vector search index --
     # and every one of them was inside `ingest total s` with the load, so the
@@ -1635,6 +2176,9 @@ def main():
     # (DECISIONS #91): a dropped connection has to be visible as a number on
     # the row, not as a traceback in a log nobody reads until a cell dies.
     surreal_common.stamp_reconnects(out, b)
+    # THE JPYPE THIS PROCESS RAN (CAMPAIGN 7 row 73): empty when the arm never imported it
+    # (every comparator, every served ArcadeDB client), read after the arm has run.
+    out.update(bench_common.jpype_fields())
     with open(args.out, "w") as f:
         json.dump(out, f)
     print("RESULT " + json.dumps(out))

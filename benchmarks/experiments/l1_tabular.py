@@ -498,6 +498,11 @@ class ArcadeEmbedded(Base):
     name = "arcadedb_embedded"
     insert_cols = COLS_SQL
 
+    def index_readback(self):
+        import bench_common      # this retired lane imports nothing else from it
+        return bench_common.arcadedb_index_readback(
+            lambda: self.db.query("sql", "SELECT FROM schema:indexes").to_list())
+
     def connect(self):
         import arcadedb_embedded as arcadedb
         heap = os.environ.get("ARCADEDB_HEAP", "4g")
@@ -549,7 +554,9 @@ class ArcadeEmbedded(Base):
                           ("amount", "DOUBLE"), ("quantity", "INTEGER"),
                           ("ts_epoch", "LONG"), ("note", "STRING")]:
             self.db.command("sql", f"CREATE PROPERTY orders.{prop} {typ}")
-        self.db.command("sql", "CREATE INDEX ON orders (id) UNIQUE")
+        # The id is only read and updated by equality here, so a hash index
+        # (CAMPAIGN 7 row 68); customer_id is grouped and stays sorted.
+        self.db.command("sql", "CREATE INDEX ON orders (id) UNIQUE_HASH")
         self.db.command("sql", "CREATE INDEX ON orders (customer_id) NOTUNIQUE")
 
     def begin_batch(self):
@@ -590,9 +597,11 @@ class ArcadeServer(Base):
     insert_cols = COLS_SQL
 
     def connect(self):
-        import requests
-        self.rq = requests.Session()
+        import lean_http
+        self.rq = lean_http.Session()
         self.rq.auth = ("root", "dbbenchpass")
+        # WHICH HTTP CLIENT ran, read from the session (CAMPAIGN 7 row 72), on every row this arm writes
+        self.row_extra = {**(getattr(self, "row_extra", None) or {}), **lean_http.row_fields(self.rq)}
         host = os.environ["BENCH_SERVER_HOST"]
         port = os.environ.get("BENCH_SERVER_PORT", "2480")
         self.base = f"http://{host}:{port}/api/v1"
@@ -603,7 +612,7 @@ class ArcadeServer(Base):
         # makes every version check on this lane vacuous, and f8 silently
         # divided a 26.8.1 embedded row by a "latest" server row for weeks.
         try:
-            info = self.rq.get(f"http://{host}:{port}/api/v1/server", timeout=30)
+            info = self.rq.get(f"http://{host}:{port}/api/v1/server?mode=basic", timeout=30)
             self.version = "server:" + (info.json().get("version") or "?")
         except Exception:
             self.version = "server:unknown"
@@ -628,6 +637,10 @@ class ArcadeServer(Base):
                 sql = sql.replace("?", f":p{i}", 1)
         return self._post("query", sql, params)
 
+    def index_readback(self):
+        import bench_common
+        return bench_common.arcadedb_index_readback(lambda: self.query_all("SELECT FROM schema:indexes"))
+
     def schema(self):
         self.exec("CREATE DOCUMENT TYPE orders")
         for prop, typ in [("id", "LONG"), ("customer_id", "LONG"),
@@ -635,7 +648,7 @@ class ArcadeServer(Base):
                           ("amount", "DOUBLE"), ("quantity", "INTEGER"),
                           ("ts_epoch", "LONG"), ("note", "STRING")]:
             self.exec(f"CREATE PROPERTY orders.{prop} {typ}")
-        self.exec("CREATE INDEX ON orders (id) UNIQUE")
+        self.exec("CREATE INDEX ON orders (id) UNIQUE_HASH")   # as the embedded arm
         self.exec("CREATE INDEX ON orders (customer_id) NOTUNIQUE")
 
     def ingest(self, n, batch=500):
@@ -691,6 +704,7 @@ def main():
     b.connect()
     out["connect_s"] = round(time.perf_counter() - t0, 3)
     out["engine_version"] = getattr(b, "version", "?")
+    out.update(getattr(b, "row_extra", None) or {})
     # F6 provenance: what the engine's pool was actually sized to, and what the
     # cpuset allowed. A cell where these differ is oversubscribed; recording it
     # means a later reader does not have to reconstruct it from the run script.
@@ -701,6 +715,10 @@ def main():
     t0 = time.perf_counter()
     b.schema()
     out["schema_s"] = round(time.perf_counter() - t0, 3)
+    # The index kinds the engine built (an ArcadeDB arm; CAMPAIGN 7 row 68), after the schema
+    # exists and before the timed ingest.
+    if hasattr(b, "index_readback"):
+        out.update(b.index_readback())
 
     t0 = time.perf_counter()
     b.ingest(n)
@@ -723,6 +741,9 @@ def main():
     b.close()
     out["close_s"] = round(time.perf_counter() - _t, 3)
 
+    # THE JPYPE THIS PROCESS RAN (CAMPAIGN 7 row 73): empty when the arm never imported it.
+    from bench_common import jpype_fields as _jpype_fields
+    out.update(_jpype_fields())
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     json.dump(out, open(args.out, "w"), indent=1)
     print(f"RESULT {json.dumps(out)[:400]}")

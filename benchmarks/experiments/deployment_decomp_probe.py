@@ -42,6 +42,21 @@ visible instead of asserting it.
 
 The Docker arm is optional (--docker URL). Without it the probe still answers
 the protocol half, which is the half the new server mode unlocks.
+
+THE CLIENT AXIS (CAMPAIGN section 7 row 72, 2026-10-06). "Protocol" above was never only the protocol: the HTTP arms are timed
+through a Python client, and the client is a cost of its own. The served lanes moved from requests.Session to one persistent
+http.client connection (lean_http.py), which costs about a quarter of what requests does for a small call, so a decomposition
+that kept describing the old client would put a number on the table that no served cell pays any more. Every HTTP arm is
+therefore measured under BOTH clients, in the same interleave and against the same server:
+
+    inproc_http, docker_http            the probe's own session, as it always was: requests when it imports, and the urllib
+                                        shim e4_decomp.py installs when the client image has none (the e4 cell's image, dbbench:arcadedb,
+                                        has none, so the cell's `legacy` client is the shim, which opens a connection per call)
+    inproc_http_lean, docker_http_lean  lean_http.LeanSession, one persistent connection
+
+and the artifact names the client of every arm (`meta.arm_clients`, `meta.client_names`) and records it on the measurement
+(`arcadedb_http_client`), so engine (embedded), client (legacy minus lean at the same wire), protocol (in-process HTTP minus embedded,
+per client) and boundary (container minus in-process, per client) each come from a pair of arms that differ in that one thing.
 """
 
 from __future__ import annotations
@@ -52,6 +67,7 @@ import os
 import statistics as st
 import time
 
+import lean_http
 from bench_common import latstats, result_digest, run_conditions
 
 SIZES = [int(x) for x in os.environ.get("SIZES", "1,10,100,1000,10000,100000").split(",")]
@@ -154,10 +170,15 @@ def timeit_paired(fns: dict, n: int, reps: int, warmup: int) -> dict:
             fn(n)
     lat = {k: [] for k in fns}
     got = {k: -1 for k in fns}
-    for _ in range(reps):
-        for k, fn in fns.items():          # one rep of each, round-robin
+    keys = list(fns)
+    for rnd in range(reps):
+        # ONE REP OF EACH, ROUND-ROBIN, STARTING ONE ARM LATER EACH ROUND (row 72). With five arms in a fixed order, the arm that
+        # always ran right after the 100,000-row embedded call inherited its garbage and its cache state; rotating the start gives every
+        # arm every position, so the legacy-versus-lean comparison cannot be a position effect.
+        order = keys[rnd % len(keys):] + keys[:rnd % len(keys)]
+        for k in order:
             t0 = time.perf_counter()
-            got[k] = fn(n)
+            got[k] = fns[k](n)
             lat[k].append((time.perf_counter() - t0) * 1000.0)
     return {k: (lat[k], got[k]) for k in fns}
 
@@ -188,8 +209,46 @@ def http_runner(session, base_url: str, auth, db_name: str):
     return run
 
 
+# THE CLIENT AXIS. The arm names `inproc_http` and `docker_http` keep their meaning (the probe's own session); `_lean` is the same arm
+# through lean_http.LeanSession.
+LEAN_SUFFIX = "_lean"
+LEAN_KEY = "lean"
+
+
+def legacy_client(session):
+    """(short key, full name) of the probe's own session: real requests, or the urllib shim e4_decomp installs when the client
+    image has no requests (the shim names itself)."""
+    key = getattr(session, "client_key", None)
+    if key:
+        return key, getattr(session, "client_name", key)
+    import requests
+    return "requests", f"requests {requests.__version__}"
+
+
+def arm_clients(legacy_key: str, with_docker: bool) -> dict:
+    """arm -> the short key of the client it was measured through. The embedded arm has no HTTP client and is absent."""
+    arms = ["inproc_http"] + (["docker_http"] if with_docker else [])
+    return {**{a: legacy_key for a in arms}, **{a + LEAN_SUFFIX: LEAN_KEY for a in arms}}
+
+
+def client_decomposition(results: dict, sizes) -> list:
+    """The client rows of the decomposition, per size: how much of each HTTP arm is the client. client = legacy arm minus the lean
+    arm at the same place (in-process server, container), the same server answering both. Only where both exist."""
+    out = []
+    for n in sizes:
+        row = {"rows": n}
+        for place in ("inproc_http", "docker_http"):
+            a, b = results.get(place, {}).get(n), results.get(place + LEAN_SUFFIX, {}).get(n)
+            if a and b:
+                row[place] = {"legacy_ms": a["p50_ms"], "lean_ms": b["p50_ms"], "client_ms": round(a["p50_ms"] - b["p50_ms"], 4),
+                              "ratio": round(a["p50_ms"] / b["p50_ms"], 3)}
+        if len(row) > 1:
+            out.append(row)
+    return out
+
+
 def report(results: dict) -> None:
-    arms = [a for a in ("embedded", "inproc_http", "docker_http") if a in results]
+    arms = [a for a in ("embedded", "inproc_http", "inproc_http" + LEAN_SUFFIX, "docker_http", "docker_http" + LEAN_SUFFIX) if a in results]
     print()
     print(f"{'rows':>8}  " + "  ".join(f"{a:>16}" for a in arms))
     for n in SIZES:
@@ -223,6 +282,12 @@ def report(results: dict) -> None:
         if "docker_http" in results:
             print("boundary = in-process HTTP -> Docker (second process/JVM/page cache)")
             print("total    = what E4 reports today, now split into its two parts")
+    cd = client_decomposition(results, SIZES)
+    if cd:
+        print("\nCLIENT (ms the legacy client adds over the lean client, same server, same wire; and the ratio):")
+        for row in cd:
+            cells = "  ".join(f"{p}: {row[p]['client_ms']:>+9.3f} ({row[p]['ratio']:.2f}x)" for p in ("inproc_http", "docker_http") if p in row)
+            print(f"{row['rows']:>8}  {cells}")
 
 
 # THE COLUMNS EVERY PATH IS ASKED FOR, so metadata a path adds to a row (an
@@ -310,12 +375,16 @@ def main() -> int:
         # The first request after start() pays a one-time warmup (lazy class
         # loading plus the password KDF); WARMUP absorbs it, but poke it once
         # here so the first sweep entry is not the one that eats it.
-        sess.get(f"{base}/api/v1/server", auth=auth, timeout=120)
+        sess.get(f"{base}/api/v1/server?mode=basic", auth=auth, timeout=120)
 
         run_http = http_runner(sess, base, auth, DB_NAME)
+        lsess = lean_http.LeanSession()          # the lean client, whatever BENCH_ARCADEDB_HTTP_CLIENT says: both are measured
+        lsess.get(f"{base}/api/v1/server?mode=basic", auth=auth, timeout=120)
+        legacy_key, legacy_name = legacy_client(sess)
         arms = {
             "embedded": lambda k: len(db.query("sql", query(k)).to_json_list()),
             "inproc_http": run_http,
+            "inproc_http" + LEAN_SUFFIX: http_runner(lsess, base, auth, DB_NAME),
         }
         # The Docker arm joins the SAME interleave. Running it in its own loop
         # afterwards would repeat the bias just removed, and worse here: the
@@ -329,7 +398,10 @@ def main() -> int:
             print(f"loaded {ROWS:,} rows into the served database at {args.docker}", flush=True)
             arms["docker_http"] = http_runner(dsess, args.docker.rstrip("/"),
                                               dauth, DB_NAME)
+            dlsess = lean_http.LeanSession()
+            arms["docker_http" + LEAN_SUFFIX] = http_runner(dlsess, args.docker.rstrip("/"), dauth, DB_NAME)
             results["docker_http"] = {}
+            results["docker_http" + LEAN_SUFFIX] = {}
             # run_conditions reads THIS process's cgroup, which is the client,
             # not the server container. Recorded as client_* so no reader takes
             # it for the engine's envelope (the #109 lesson).
@@ -338,6 +410,11 @@ def main() -> int:
             meta["docker_url"] = args.docker
         results["embedded"] = {}
         results["inproc_http"] = {}
+        results["inproc_http" + LEAN_SUFFIX] = {}
+        clients = arm_clients(legacy_key, bool(args.docker))
+        meta["arm_clients"] = clients
+        meta["client_names"] = {legacy_key: legacy_name, LEAN_KEY: lean_http.LEAN_NAME}
+        meta["arm_order"] = "rotated one place each round, every arm warmed at every size first"
         for n in SIZES:
             paired = timeit_paired(arms, n, REPS, WARMUP)
             line = f"  {n:>7} rows "
@@ -345,6 +422,8 @@ def main() -> int:
                 st = latstats("x", lat)
                 results[arm][n] = {"p50_ms": st["x_p50_ms"], "rows_returned": got,
                                    **{k[2:]: v for k, v in st.items()}}
+                if arm in clients:          # THE CLIENT, ON THE MEASUREMENT (row 72): read from the session this arm ran with
+                    results[arm][n]["arcadedb_http_client"] = meta["client_names"][clients[arm]]
                 line += f"  {arm} {st['x_p50_ms']:8.3f} ms"
             print(line, flush=True)
 
@@ -355,9 +434,11 @@ def main() -> int:
         # per size AFTER the timed sweep, so no timed call changes; digested the
         # way every lane digests (order-free: the query defines no order).
         fetch = {"embedded": lambda k: db.query("sql", query(k)).to_json_list(),
-                 "inproc_http": http_rows(sess, base, auth, DB_NAME)}
+                 "inproc_http": http_rows(sess, base, auth, DB_NAME),
+                 "inproc_http" + LEAN_SUFFIX: http_rows(lsess, base, auth, DB_NAME)}
         if args.docker:
             fetch["docker_http"] = http_rows(dsess, args.docker.rstrip("/"), dauth, DB_NAME)
+            fetch["docker_http" + LEAN_SUFFIX] = http_rows(dlsess, args.docker.rstrip("/"), dauth, DB_NAME)
         answers = {n: {arm: result_digest(f(n), columns=ANSWER_COLUMNS) for arm, f in fetch.items()}
                    for n in SIZES}
 
@@ -380,6 +461,7 @@ def main() -> int:
         print(f"\n!! ARMS RETURNED DIFFERENT ROWS, comparison is void: {answer_mismatch}")
 
     report(results)
+    meta["client_decomposition"] = client_decomposition(results, SIZES)
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     with open(args.out, "w") as f:

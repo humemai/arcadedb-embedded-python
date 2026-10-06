@@ -45,6 +45,17 @@ def recall_at_k(result_ids, gt_row):
     return len(truth.intersection(int(x) for x in result_ids)) / len(truth)
 
 
+# WHAT A SEARCH RETURNS (CAMPAIGN section 7 row 62, DECISIONS #153 item 1). Every comparator's timed search
+# returns the ids of its hits (Qdrant with_payload=False, Elasticsearch _source=False, Milvus no output
+# fields, pgvector SELECT id); ArcadeDB's returned each hit's WHOLE record, about 46 KB of JSON per query,
+# and mapped record ids to ordinals in an untimed pass. Both ArcadeDB adapters now project `id` (and the
+# score) inside the timed query, so the arms differ in the engine and not in what comes back, and every
+# ArcadeDB sparse row, the lane's and the multipass driver's, records `sparse_result`. The projection returns
+# the same ids in the same order as the whole-record form (50 of 50 queries, the pin and main, laptop).
+SPARSE_RESULT = "id"
+ARCADE_SPARSE_SEARCH_SQL = "SELECT id, score FROM (SELECT expand(`vector.sparseNeighbors`({a})))"
+
+
 class Base:
     # VERSION IS A MEASUREMENT INPUT, not a label.
     #
@@ -111,6 +122,7 @@ class Base:
 
 class ArcadeEmbedded(Base):
     name = "arcadedb_sparse_embedded"
+    SPARSE_RESULT = SPARSE_RESULT      # stamped on the row; see the note above Base
     quant = None  # None = engine default (INT8); "FP32"/"FP16" per engine #5143
 
     def _index_metadata(self):
@@ -203,31 +215,16 @@ class ArcadeEmbedded(Base):
         ji = jpype.JArray(jpype.JInt)(idx)
         jv = jpype.JArray(jpype.JFloat)(vals)
         rows = self.db.query(
-            "sql", "SELECT expand(`vector.sparseNeighbors`(?, ?, ?, ?))",
+            "sql", ARCADE_SPARSE_SEARCH_SQL.format(a="?, ?, ?, ?"),
             self.idx_name, ji, jv, k).to_json_list()
-        self._last_rids = [r["@rid"] for r in rows]
-        return self._last_rids  # RIDs; resolved to ordinals untimed
+        return [int(r["id"]) for r in rows]   # ids, as every comparator returns them
 
-    def resolve(self, rids):
-        # RID list as the query TARGET, not as a WHERE predicate. Engine #5824:
-        # `WHERE @rid IN [list]` is planned as FetchFromTypeWithFilterStep, a
-        # full bucket scan whose cost is linear in the TYPE and independent of
-        # k, while `FROM [list]` plans as FETCH FROM RIDs and is flat. Measured
-        # 1143x at 400k docs; at this lane 8.84M it was ~4.7s per resolve call,
-        # 82% of a cell wall clock.
-        #
-        # THIS CHANGES NO RECORDED NUMBER. resolve() runs in the UNTIMED recall
-        # pass; only search() is timed. Both forms verified to return identical
-        # rows, identical projection shape, and identical -1 handling for a
-        # dangling RID.
-        if not rids:
-            return []
-        in_list = ",".join(rids)
-        rows = self.db.query(
-            "sql", f"SELECT id, @rid AS r FROM [{in_list}]"
-        ).to_json_list()
-        by_rid = {r["r"]: r["id"] for r in rows}
-        return [by_rid.get(x, -1) for x in rids]
+    def resolve(self, ids):
+        # THE IDENTITY, as it is for every comparator (Qdrant, pgvector, Milvus, Elasticsearch):
+        # the search returns the lane's own ids, so there is nothing to look up. Until the re-pin
+        # this mapped each hit's record id to its ordinal in the untimed recall pass (a RID list
+        # as the query TARGET, because `WHERE @rid IN [list]` is a full bucket scan, engine #5824).
+        return ids
 
     def close(self):
         self.db.close()
@@ -258,16 +255,18 @@ class ArcadeServer(ArcadeEmbedded):
     name = "arcadedb_sparse_server"
 
     def connect(self):
-        import requests
-        self.rq = requests.Session()
+        import lean_http
+        self.rq = lean_http.Session()
         self.rq.auth = ("root", "dbbenchpass")
+        # WHICH HTTP CLIENT ran, read from the session (CAMPAIGN 7 row 72), on every row this arm writes
+        self.row_extra = {**(getattr(self, "row_extra", None) or {}), **lean_http.row_fields(self.rq)}
         host = os.environ["BENCH_SERVER_HOST"]
         port = os.environ.get("BENCH_SERVER_PORT", "2480")
         self.base = f"http://{host}:{port}/api/v1"
         # report the real server version, not a hardcoded guess (the image is
         # digest-pinned in runner.py; keep the results row honest)
         try:
-            info = self.rq.get(f"http://{host}:{port}/api/v1/server", timeout=30)
+            info = self.rq.get(f"http://{host}:{port}/api/v1/server?mode=basic", timeout=30)
             self.version = "server:" + (info.json().get("version") or "?")
         except Exception:
             self.version = "server:unknown"
@@ -303,35 +302,41 @@ class ArcadeServer(ArcadeEmbedded):
         r.raise_for_status()
         return r.json().get("result", [])
 
+    # The served bulk path the maintainers recommend (#8337; DECISIONS #116
+    # items 2 and 4): each batch is one INSERT ... CONTENT :rows request with
+    # the rows bound as a JSON array, one transaction per request, instead of
+    # INSERT statements with every weight written into the text. The weights
+    # travel as the float32 values' exact doubles, so ingest still equals the
+    # ground truth's weights. The size is swept on mini at the re-pin.
+    #
+    # THE ROWS ARE THE GENERATOR'S LISTS, AS THEY COME (BUGS F151). Both
+    # sources already yield Python lists: bigann_sparse `.tolist()`s the CSR's
+    # float32 slices (the exact float32 values as Python floats) and
+    # sparse_common draws Python floats, which the server rounds to float32
+    # exactly as the embedded arm's float[] does. A per-element pass through
+    # np.asarray(..., float32) and back changed no value (the rows compare
+    # equal) and cost 5.3 s of this arm's 20.7 s build at 100k on the laptop.
+    load_batch = int(os.environ.get("BENCH_SERVED_LOAD_BATCH") or 2000)
+
     def build(self, n_docs):
-        buf = []
+        rows = []
         for i, idx, vals in gen_docs(n_docs):
-            t = ",".join(map(str, idx))
-            # 9 decimals: exact float32 round-trip, keeps ingest == GT weights
-            w = ",".join(f"{v:.9f}" for v in vals)
-            buf.append(f"INSERT INTO Doc SET id = {i}, tokens = [{t}], "
-                       f"weights = [{w}]")
-            if len(buf) >= INGEST_BATCH:
-                self._cmd("sqlscript", ";".join(buf))
-                buf = []
-        if buf:
-            self._cmd("sqlscript", ";".join(buf))
+            rows.append({"id": i, "tokens": idx, "weights": vals})
+            if len(rows) >= self.load_batch:
+                self._cmd("sql", "INSERT INTO Doc CONTENT :rows", {"rows": rows})
+                rows = []
+        if rows:
+            self._cmd("sql", "INSERT INTO Doc CONTENT :rows", {"rows": rows})
 
     def search(self, idx, vals, k):
         rows = self._query(
-            "SELECT expand(`vector.sparseNeighbors`(:i, :t, :w, :k))",
+            ARCADE_SPARSE_SEARCH_SQL.format(a=":i, :t, :w, :k"),
             {"i": self.idx_name, "t": idx, "w": vals, "k": k})
-        self._last_rids = [r["@rid"] for r in rows]
-        return self._last_rids
+        return [int(r["id"]) for r in rows]
 
-    def resolve(self, rids):
-        if not rids:
-            return []
-        in_list = ",".join(rids)
-        rows = self._query(
-            f"SELECT id, @rid AS r FROM [{in_list}]")
-        by_rid = {r["r"]: r["id"] for r in rows}
-        return [by_rid.get(x, -1) for x in rids]
+    def resolve(self, ids):
+        return ids       # the identity, as for every comparator (see ArcadeEmbedded.resolve)
+
     def close(self):
         # Served arm: the database lives in another container. Closing here
         # releases the HTTP session only, which is why a served arm's
@@ -344,6 +349,11 @@ class ArcadeServer(ArcadeEmbedded):
 class Qdrant(Base):
     name = "qdrant_sparse"
     COLL = "docs"
+    # THE WEIGHT TYPE IS SET AND READ BACK (BUGS F164, DECISIONS #135): float32
+    # here, Qdrant's default, now named in the definition; uint8 on the int8-class
+    # arm below. The applied type is read from the collection after the build
+    # and a mismatch refuses the cell.
+    DATATYPE = "float32"
 
     def connect(self):
         from qdrant_client import QdrantClient, models
@@ -363,26 +373,60 @@ class Qdrant(Base):
             vectors_config={},
             sparse_vectors_config={
                 "text": models.SparseVectorParams(
-                    index=models.SparseIndexParams(on_disk=False))})
+                    index=models.SparseIndexParams(
+                        on_disk=False, datatype=models.Datatype(self.DATATYPE)))})
 
     def build(self, n_docs):
-        m, batch = self.models, []
+        m, batch, self._sent = self.models, [], 0
         for i, idx, vals in gen_docs(n_docs):
             batch.append(m.PointStruct(
                 id=i, vector={"text": m.SparseVector(indices=idx, values=vals)}))
+            self._sent += 1
             if len(batch) >= INGEST_BATCH:
                 self.cl.upsert(self.COLL, batch, wait=False)
                 batch = []
         if batch:
             self.cl.upsert(self.COLL, batch, wait=True)
 
+    # Bound on the settle below; a collection that never holds every point sent
+    # refuses the cell instead of answering from part of the corpus.
+    SETTLE_S = float(os.environ.get("BENCH_QDRANT_SETTLE_S", "3600"))
+
     def post_build(self):
-        # wait for indexing/optimizer to settle
+        # WAIT FOR EVERY POINT, NOT ONLY FOR GREEN (2026-10-02). The batches go
+        # in with wait=False and only the last with wait=True, and on the laptop
+        # neither that last ack nor a green status meant the collection held the
+        # corpus: at the Big-ANN 100k slice the lane searched a collection whose
+        # points_count read 62,384 and returned recall@10 0.936 against exact
+        # ground truth, where the same ingest with wait=True on every batch
+        # returned 1.0 (repin-prep probe, qdrant v1.19.1). So the settle polls the
+        # EXACT count until it equals what was sent, and green again after it,
+        # inside the build timer, as the Milvus and MongoDB arms wait for their
+        # index to hold what they were given. The row records what the
+        # collection held at the first green and how long the rest took.
+        deadline = time.time() + self.SETTLE_S
+        at_green = t_green = None
         while True:
             info = self.cl.get_collection(self.COLL)
-            if str(info.status).lower().endswith("green"):
-                return
+            green = str(info.status).lower().endswith("green")
+            held = self.cl.count(self.COLL, exact=True).count if green else None
+            if green and at_green is None:
+                at_green, t_green = held, time.perf_counter()
+            if green and held == self._sent:
+                break
+            if time.time() > deadline:
+                raise RuntimeError(f"qdrant: the collection holds {held} of {self._sent} points "
+                                   f"{self.SETTLE_S:.0f} s after the last upsert; refusing to search part of the corpus")
             time.sleep(0.5)
+        self.settle = {"qdrant_points_at_first_green": at_green,
+                       "qdrant_settle_after_green_s": round(time.perf_counter() - t_green, 2)}
+        # The engine's own answer, never the option we sent (F164).
+        idx = info.config.params.sparse_vectors["text"].index
+        applied = getattr(getattr(idx, "datatype", None), "value", getattr(idx, "datatype", None))
+        if applied != self.DATATYPE:
+            raise RuntimeError(f"qdrant sparse index datatype read back {applied!r}, not {self.DATATYPE!r}: "
+                               f"the row would describe a different index (BUGS F164)")
+        self.row_extra = {"qdrant_sparse_datatype": applied, **self.settle}
 
     def search(self, idx, vals, k):
         m = self.models
@@ -394,6 +438,16 @@ class Qdrant(Base):
 
     def resolve(self, ids):
         return ids
+
+
+class QdrantUint8(Qdrant):
+    """Qdrant's sparse index with uint8 weights, its int8-class arm on the
+    sparse lane (#131, the quantization survey, DECISIONS #135): the same
+    collection, ingest and query, with `datatype: uint8` on the sparse index,
+    read back like the float32 arm's type. The query is the float32 arm's,
+    unchanged."""
+    name = "qdrant_sparse_uint8"
+    DATATYPE = "uint8"
 
 
 class PgVectorSparse(Base):
@@ -565,6 +619,15 @@ class Elastic(Base):
             "properties": {"emb": {"type": "sparse_vector",
                                    "index_options": {"prune": self.prune}}}},
             settings={"number_of_shards": 1, "number_of_replicas": 0})
+        # TWO MORE OVERRIDES, READ BACK FROM THE ENGINE (CAMPAIGN section 7
+        # row 21, overrides.py): `xpack.security.enabled=false` on the server
+        # (harness plumbing that also takes TLS and authentication out of every
+        # latency measured here) and `number_of_replicas=0` on the index (a
+        # single-node cluster has nowhere to place a replica and would sit
+        # yellow). Each is asked of Elasticsearch itself, `_xpack` and the
+        # index settings, not copied from the environment and the call above,
+        # so the row records what the engine ran with.
+        self.row_extra = bench_common.es_readback(self.es, self.IDX)
 
     @staticmethod
     def _tok(idx, vals):
@@ -604,7 +667,9 @@ class ArcadeServerFP32(ArcadeServer):
 
 BACKENDS = {c.name: c for c in
             [ArcadeEmbedded, ArcadeEmbeddedFP32, ArcadeEmbeddedNoCompact, ArcadeServerFP32,
-             ArcadeServer, Qdrant, Milvus, PgVectorSparse, Elastic]}
+             ArcadeServer, Qdrant, Milvus, PgVectorSparse, Elastic,
+             # the quantization survey's sparse int8-class arm (DECISIONS #135)
+             QdrantUint8]}
 
 
 # DECISIONS #81, recorded on every row. The sparse lane times an ingest and
@@ -699,6 +764,10 @@ def main():
     bench_common.stamp_durability(out, getattr(b, "durability", None)
                                   or DURABILITY.get(args.backend, DURABILITY_INGEST_ONLY))
     out["instrument"] = bench_common.INSTRUMENT
+    # WHAT THE SEARCH RETURNS, on every ArcadeDB row (row 62); the page's whole-record sentence
+    # (export_web._sparse_whole_record_note) retires per row from this field.
+    if getattr(b, "SPARSE_RESULT", None):
+        out["sparse_result"] = b.SPARSE_RESULT
     # DECISIONS #89: where the split does not apply, the reason, not a blank.
     out["cold_warm_na"] = bench_common.NA_COLD_WARM_SPARSE_LANE
     # Only Elasticsearch sets this. A row must say which operating point it
@@ -716,6 +785,9 @@ def main():
     build = time.perf_counter() - t0
     out["build_s"] = round(build, 2)
     out["build_docs_per_s"] = round(n_docs / build, 1)
+    # What the engine reported about the index it built, and any settle it
+    # waited for, as the dense lane records it.
+    out.update(getattr(b, "row_extra", None) or {})
 
     # timed warm search
     _search_t0 = time.perf_counter()

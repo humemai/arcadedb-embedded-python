@@ -98,6 +98,7 @@ Test counts evolve over time. For the latest per-file counts, run `uv run pytest
 | --------- | ----------- |
 | [`test_async_executor.py`](test-async-executor.md) | Async command/query execution, callback behavior, and exact command-path counts at parallel levels 1 and 4 |
 | [`test_bulk_insert.py`](test-bulk-insert.md) | Recommended bulk paths land every row, plus `Database.insert_many`, `AsyncExecutor.create_record`, vector columns, and numpy `append_samples` bulk ingest |
+| `test_insert_columns.py` | `Database.insert_columns`: LONG, DOUBLE, BOOLEAN, STRING, and null values land with their declared types, the rows equal `insert_many`'s, the parallel mode, the rollback contract, and bad input refused before anything is written |
 | [`test_core.py`](test-core.md) | Core database operations, CRUD, transactions, queries |
 | [`test_database_utils.py`](test-database-utils.md) | `count_type`, `is_transaction_active`, and `drop`, plus error handling on a closed database |
 | [`test_docs_examples.py`](test-docs-examples.md) | Executes representative Python snippets from the documentation site |

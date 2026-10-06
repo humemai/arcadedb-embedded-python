@@ -10,11 +10,18 @@ cd "$(dirname "$0")"
 # reject every ArcadeDB row in the campaign: a green build producing rows no
 # table can admit. The docker server pin has been 26.8.1 by digest all along,
 # so this was also the one place the two deployments disagreed.
-ARCADE_PKGS="arcadedb-embedded==26.8.1 numpy pandas pyarrow"
+# THE HARNESS'S OWN LIBRARIES, PINNED TOO (2026-10-02). numpy, pandas, pyarrow,
+# requests, and psycopg were bare in every line below, so an image rebuilt on a
+# different day resolved them differently: dbbench:duckdb carried pandas 3.0.5
+# while the other three carried 3.0.6. They convert every vector and every
+# result set, so they are part of the instrument. Pinned at what the October
+# images on mini and the laptop resolved (2026-09-19); move them deliberately.
+HARNESS_PKGS="numpy==2.5.3 pandas==3.0.6 pyarrow==25.0.1"
+ARCADE_PKGS="arcadedb-embedded==26.8.1 $HARNESS_PKGS"
 mkdir -p docker-wheels && rm -f docker-wheels/*.whl
 if [ -n "${ARCADEDB_WHEEL:-}" ]; then
   cp "$ARCADEDB_WHEEL" docker-wheels/
-  ARCADE_PKGS="numpy pandas pyarrow"
+  ARCADE_PKGS="$HARNESS_PKGS"
   echo "using local wheel: $(basename "$ARCADEDB_WHEEL")"
 fi
 
@@ -40,9 +47,13 @@ declare -A PKGS=(
   # and the DuckPGQ graph arm all pin here, and September's DuckDB rows are
   # re-measured at it. The client and dense lines carry the OCTOBER RE-PIN of
   # 2026-09-19 (COMPARATORS.md, "The October re-pin").
-  [duckdb]="duckdb==1.5.4 pandas pyarrow"
-  [client]="requests psycopg[binary] pandas pyarrow numpy surrealdb==2.0.0 qdrant-client==1.19.1 pymilvus==3.0.1 elasticsearch==9.5.1 neo4j==6.3.1 ladybug==0.20.4 pymongo==4.18.1 python-arango==8.3.5 falkordb==1.7.1 redis==8.1.0"
-  [dense]="chromadb==1.5.9 lancedb==0.39.0 sqlite-vec==0.1.9 duckdb==1.5.4 numpy pandas pyarrow"
+  [duckdb]="duckdb==1.5.4 $HARNESS_PKGS"
+  # ladybug 0.21.2, not 0.20.4 (2026-10-02, #129): 0.20.4 crashes the dense
+  # arm's mutation phase after a deleted vector key is re-inserted, and 0.21.1
+  # carries #1074 (COPY linear for compressible columns) and #1075 (the pool
+  # sized from the cgroup limit). 0.21.2 (2026-10-01) is the newest stable.
+  [client]="requests==2.34.2 psycopg[binary]==3.3.6 $HARNESS_PKGS surrealdb==2.0.0 qdrant-client==1.19.1 pymilvus==3.0.1 elasticsearch==9.5.1 neo4j==6.3.1 ladybug==0.21.2 pymongo==4.18.1 python-arango==8.3.5 falkordb==1.7.1 redis==8.1.0"
+  [dense]="chromadb==1.5.9 lancedb==0.39.0 sqlite-vec==0.1.9 duckdb==1.5.4 $HARNESS_PKGS"
 )
 # A GUARD, not a comment. The dev pin above survived because nothing checked
 # it. BENCH_ALLOW_DEV=1 is the deliberate escape hatch for engine debugging.
@@ -86,6 +97,20 @@ case "$_pin" in
 esac
 echo "arcadedb pin: $_pin"
 
+# JPYPE IS PART OF THE INSTRUMENT, SO IT IS PINNED TOO (CAMPAIGN 7 row 73). The
+# wheel declares jpype1>=1.5.0 with no upper bound, and an image built on the day
+# of a new JPype release would resolve the new one and change every embedded
+# ArcadeDB call's cost in the middle of a run. The version is read from
+# Dockerfile.bench's ARG default (bench_common.JPYPE_PIN is checked against it by
+# make_2610_stages.py --check) and passed down explicitly, so a JPYPE_VERSION left
+# in the caller's environment cannot move it.
+JPYPE_VERSION=$(sed -n 's/^ARG JPYPE_VERSION=//p' Dockerfile.bench)
+case "$JPYPE_VERSION" in
+  [0-9]*.[0-9]*.[0-9]*) ;;
+  *) echo "REFUSING: Dockerfile.bench has no usable 'ARG JPYPE_VERSION=<x.y.z>' default (read '$JPYPE_VERSION')" >&2; exit 1 ;;
+esac
+echo "jpype pin: $JPYPE_VERSION"
+
 targets=("$@"); [ ${#targets[@]} -eq 0 ] && targets=(arcadedb duckdb client dense pg-age mongo-search composed)
 for be in "${targets[@]}"; do
   if [ "$be" = "composed" ]; then
@@ -120,5 +145,6 @@ for be in "${targets[@]}"; do
   [ -n "${PKGS[$be]+set}" ] || { echo "  unknown target '$be' (not a PKGS key and not a special case)" >&2; exit 1; }
   echo "=== dbbench:$be (${PKGS[$be]})"
   docker build -q -t "dbbench:$be" --build-arg PIP_PACKAGES="${PKGS[$be]}" \
+    --build-arg JPYPE_VERSION="$JPYPE_VERSION" \
     -f Dockerfile.bench . >/dev/null && echo "  ok"
 done

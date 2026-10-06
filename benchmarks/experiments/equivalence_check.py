@@ -115,7 +115,29 @@ LANES_CHECKED_OTHERWISE = {
 # (100 x 12 = 1200 pairs), which is what every other engine has always
 # returned. Removed together with the export_web.WITHHELD_CELLS entry that
 # kept the cell off the page while this stood; neither is any use alone.
-KNOWN_DISAGREEMENTS = {}
+#
+# PostgreSQL + AGE's two CRUD read-backs (2026-10-02, apache/age#2587). The
+# read-back is `MATCH (q:Person) WHERE q.id >= $f`, $f the first id the write
+# phase created, and a btree index scan on agtype that starts at a `>=` bound
+# skips the keys equal to it, on every AGE release tried (1.6.0 on PG16 to
+# master on PG18; repros/age-index-range/). So AGE returns every written person
+# but the first, and both state digests split from the other engines. The
+# writes themselves landed (an equality read finds that person), and the timed
+# cells time the right work; WHETHER TO WITHHOLD AGE's write and update cells
+# while this stands is the landing's call (HANDOFF). Remove both entries when
+# the pin carries AGE's fix.
+_AGE_2587 = ("returns every person the write phase created but the first: the read-back's "
+             "`q.id >= $f` goes through the Person id index, and AGE's btree scan starting at a "
+             "`>=` bound skips the key equal to it (apache/age#2587, open)")
+# The edge read-back (CAMPAIGN row 58) filters on the written person's id the same way, so it meets the same scan.
+_AGE_2587_EDGES = ("returns every edge into the persons the write phase created but the first: the read-back's "
+                   "`q.id >= $f` goes through the Person id index, and AGE's btree scan starting at a `>=` bound "
+                   "skips the key equal to it (apache/age#2587, open)")
+KNOWN_DISAGREEMENTS = {
+    ("l2", "graph_insert"): {"pgage_graph": _AGE_2587},
+    ("l2", "graph_update"): {"pgage_graph": _AGE_2587},
+    ("l2", "graph_insert_edges"): {"pgage_graph": _AGE_2587_EDGES},
+}
 
 # NOT ONE GROUP, TWO (2026-10-02). The lifecycle read was declared NOT_COMPARABLE
 # here because the embedded and served arms run different mode sets, so their
@@ -131,7 +153,22 @@ SPLIT_BY_DEPLOYMENT = {
                  "their post-state record counts differ by construction",
 }
 
-NOT_COMPARABLE = {}
+# THE SAME SPLIT BY A FIELD THE ROW CARRIES. The server-restart lane runs each
+# engine on ONE model's data, and its campaign tiers already keep the models
+# apart (the scale names the model), but its laptop skeleton runs every model
+# at one tier: a document read and a graph read must not be one group there.
+SPLIT_BY_FIELD = {
+    "restart": "restart_model",
+}
+
+NOT_COMPARABLE = {
+    # The server-restart lane's vector read (l6_restart.py): each engine's top 10
+    # through its own approximate index, which the lane holds against the SAME
+    # engine's answer before every stop; two engines' approximate top 10s are
+    # not expected to be equal, so there is no cross-engine question here.
+    ("restart", "restart_knn"): "an approximate index's top 10; each engine's is held against its own answer "
+                                "before the stop, inside the lane",
+}
 # (lane, backend) -> "embedded" or "served", filled by collect() for the lanes
 # above, so E3 does not count an embedded arm as silent on the served group.
 _DEPLOYMENT = {}
@@ -212,6 +249,10 @@ def collect(rows):
                 _dep = "served" if r.get("topology") == "client_server" else "embedded"
                 _DEPLOYMENT[(r.get("lane"), r.get("backend"))] = _dep
                 q = f"{q}@{_dep}"
+            elif r.get("lane") in SPLIT_BY_FIELD:
+                _dep = str(r.get(SPLIT_BY_FIELD[r.get("lane")]))
+                _DEPLOYMENT[(r.get("lane"), r.get("backend"))] = _dep
+                q = f"{q}@{_dep}"
             entry = groups[key0 + (q,)][r.get("backend")]
             entry.setdefault(str(val), []).append(
                 (r.get("rep"), str(r.get(f"res_{q}_sample") or ""), r.get(f"res_{q}_n"),
@@ -264,6 +305,7 @@ def report(groups, seen_backends, out=print, list_groups=False):
     silent = []            # (key, backend) -- ran the cell, recorded no digest
     not_comparable = []    # (key, reason, backends) -- declared not like for like
     known_disagreements = []  # (key, backends, reasons) -- wrong, named, withheld
+    censored = []          # (key, backend, reason) -- cut short by a budget (#120)
 
     for key in sorted(groups, key=lambda k: tuple(str(x) for x in k)):
         lane, scale, workload, query = key
@@ -272,10 +314,14 @@ def report(groups, seen_backends, out=print, list_groups=False):
         # the thing #88 says must never be silent, so they are always printed.
         real = {}
         for be, digests in per_backend.items():
-            expressed = {d: v for d, v in digests.items() if not bench_common.is_unexpressible(d)}
+            expressed = {d: v for d, v in digests.items()
+                         if not bench_common.is_unexpressible(d)
+                         and not bench_common.is_censored_answer(d)}
             for d in digests:
                 if bench_common.is_unexpressible(d):
                     absences.append((key, be, d[len(bench_common.UNEXPRESSIBLE_PREFIX):]))
+                elif bench_common.is_censored_answer(d):
+                    censored.append((key, be, d[len(bench_common.CENSORED_ANSWER_PREFIX):]))
             if len(expressed) > 1:
                 # WHERE THE TWO ANSWERS CAME FROM. Since #90 a backend appears
                 # in a group twice, once per durability class, and a strict
@@ -295,7 +341,7 @@ def report(groups, seen_backends, out=print, list_groups=False):
         # and recorded neither a digest nor a declared absence for a query its
         # neighbours answered has not been checked and does not say why.
         for be in sorted(seen_backends.get((lane, scale, workload), set())):
-            if lane in SPLIT_BY_DEPLOYMENT and "@" in str(query) \
+            if (lane in SPLIT_BY_DEPLOYMENT or lane in SPLIT_BY_FIELD) and "@" in str(query) \
                     and _DEPLOYMENT.get((lane, be)) != str(query).rsplit("@", 1)[1]:
                 continue
             if be not in per_backend:
@@ -319,7 +365,8 @@ def report(groups, seen_backends, out=print, list_groups=False):
         if len(by_digest) == 1:
             agreed += 1
             continue
-        why = NOT_COMPARABLE.get((lane, query))
+        why = (NOT_COMPARABLE.get((lane, query))
+               or NOT_COMPARABLE.get((lane, str(query).split("@", 1)[0])))
         if why:
             not_comparable.append((key, why, sorted(real)))
             continue
@@ -415,6 +462,15 @@ def report(groups, seen_backends, out=print, list_groups=False):
             seen.add(tag)
             out(f"  {key[0]:8} {key[2]:10} {key[3]:24} {be:32} {reason}")
 
+    if censored:
+        # A DIFFERENT ABSENCE FROM E4 (DECISIONS #120): the engine can ask the
+        # question, and its budget stopped it partway through the start set, so
+        # the rows it has answer fewer starts than its neighbours' and are not
+        # compared. Printed on every run, like E4, so it is never silent.
+        out("\n=== E4b: answers cut short by a per-query budget, declared and not compared ===")
+        for key, be, reason in sorted(censored, key=lambda a: (str(a[1]), str(a[0]))):
+            out(f"  {key[0]:8} {str(key[1]):8} {key[3]:24} {be:32} {reason}")
+
     if known_disagreements:
         out("\n=== E8: KNOWN disagreements: one engine is wrong, and its cell is "
             "withheld from the page ===")
@@ -437,7 +493,8 @@ def report(groups, seen_backends, out=print, list_groups=False):
         singles = collections.Counter()
         for key in sorted(groups):
             real = [be for be, ds in groups[key].items()
-                    if any(not bench_common.is_unexpressible(d) for d in ds)]
+                    if any(not bench_common.is_unexpressible(d)
+                           and not bench_common.is_censored_answer(d) for d in ds)]
             if len(real) < 2:
                 singles[(key[0], key[1], key[2])] += 1
         for (lane, scale, workload), n in sorted(singles.items()):

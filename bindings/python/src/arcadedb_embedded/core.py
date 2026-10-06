@@ -47,6 +47,81 @@ def _java_class(name):
     return cls
 
 
+def _column_to_java(name, values):
+    """One column of ``Database.insert_columns`` as ``(java array, length)``.
+
+    A numpy array of an integer, float, or bool kind crosses as ONE buffer copy
+    into a ``long[]``, ``double[]``, or ``boolean[]``; a string or object array
+    and any other sequence convert per element into an ``Object[]`` (a ``str``
+    reuses one Java String per distinct value, ``None`` is a null). A pandas
+    ``Series`` is read through ``to_numpy``, with a nullable dtype's ``<NA>``
+    as ``None``. Kinds that do not cross natively raise ``TypeError`` rather
+    than being stored as something else.
+    """
+    if hasattr(values, "to_numpy") and not isinstance(values, (list, tuple)):
+        dtype = getattr(values, "dtype", None)
+        if _np is not None and isinstance(dtype, _np.dtype):
+            values = values.to_numpy()
+        else:  # a pandas extension dtype (Int64, string, boolean, category): its <NA> is a null
+            values = values.to_numpy(dtype=object, na_value=None)
+    if _np is not None and isinstance(values, _np.ndarray):
+        if values.ndim != 1:
+            raise ValueError(
+                f"column {name!r} is {values.ndim}-dimensional; a column is one-dimensional"
+            )
+        kind = values.dtype.kind
+        if kind in "iu":
+            if (
+                kind == "u"
+                and values.size
+                and int(values.max()) > _np.iinfo(_np.int64).max
+            ):
+                raise ValueError(
+                    f"column {name!r} holds a value beyond the 64-bit signed range"
+                )
+            return (
+                jpype.JArray(jpype.JLong)(
+                    _np.ascontiguousarray(values, dtype=_np.int64)
+                ),
+                int(values.shape[0]),
+            )
+        if kind == "f":
+            return (
+                jpype.JArray(jpype.JDouble)(
+                    _np.ascontiguousarray(values, dtype=_np.float64)
+                ),
+                int(values.shape[0]),
+            )
+        if kind == "b":
+            return (
+                jpype.JArray(jpype.JBoolean)(
+                    _np.ascontiguousarray(values, dtype=_np.bool_)
+                ),
+                int(values.shape[0]),
+            )
+        if kind in "MmcV":
+            raise TypeError(
+                f"column {name!r} has dtype {values.dtype}, which does not cross natively; "
+                "convert it to Python values or use insert_many"
+            )
+        # a string, bytes, or object array: its elements are Python objects (str, None, ...), converted one by one below
+        values = list(values.astype(object, copy=False))
+    elif not isinstance(values, (list, tuple)):
+        values = list(values)
+    converted = []
+    seen = {}
+    for value in values:
+        if type(value) is str:
+            java = seen.get(value)
+            if java is None:
+                java = convert_python_to_java(value)
+                seen[value] = java
+            converted.append(java)
+        else:
+            converted.append(convert_python_to_java(value))
+    return jpype.JArray(jpype.JObject)(converted), len(converted)
+
+
 def _wrap_java_record(java_record, database=None):
     """Wrap a Java record in the matching Python class (Vertex/Edge/Document)."""
     if java_record is None:
@@ -416,6 +491,122 @@ class Database:
                 f"may have been stored (first failure: {first_failure})"
             )
         return len(rows)
+
+    def insert_columns(
+        self,
+        type_name: str,
+        columns,
+        commit_every: int = 10_000,
+        parallel: bool = False,
+    ) -> int:
+        """Bulk-insert documents from whole columns, the recommended path for column data.
+
+        Each column crosses the Python/Java bridge ONCE, as one typed array,
+        and the documents are built Java-side (``DocumentBatcher.insertColumns``),
+        instead of one JSON text per batch that the engine parses and copies
+        key by key. Measured on a laptop (first 2,000,000 TPC-H SF1 line items,
+        nine typed properties, commit every 10,000, same rows, cores, and
+        engine): 8.2 s against 18.4 s for ``insert_many`` (2.24x); every arm
+        stored the same sums and count. Use it whenever the data already lives
+        in columns (a pandas ``DataFrame``, a parquet batch, numpy arrays);
+        ``insert_many`` stays the path for a list of dicts.
+
+        Args:
+            type_name: Target document type (must exist).
+            columns: ``{property name: column}``, or a pandas ``DataFrame``.
+                Every column has the same length. A column is a numpy array
+                (integer kinds cross as ``long[]``, float kinds as ``double[]``,
+                bool as ``boolean[]``, one buffer copy each) or any sequence of
+                Python values (``str``, ``int``, ``float``, ``bool``, ``None``,
+                and the types ``insert_many``'s per-row fallback accepts), which
+                converts per element. ``None`` is a null; a float ``NaN`` in a
+                numpy float column is stored as NaN, not as null (use a
+                sequence with ``None`` for nulls). A pandas nullable column
+                (``Int64``, ``string``) converts with its ``<NA>`` as null.
+            commit_every: Transaction batch size for the synchronous mode.
+            parallel: If True, hand the documents to the async executor's
+                parallel bucket writers and wait for completion before
+                returning, exactly as ``insert_many(parallel=True)`` does (the
+                same bucket-count rule, the same out-of-order writes;
+                ``commit_every`` does not apply). Only the transport differs:
+                columns instead of one JSON text per batch.
+
+        Returns:
+            Number of documents inserted.
+
+        Raises:
+            ValueError: If ``columns`` is empty, a column has a different
+                length from the others, a name is not a string, or an unsigned
+                column holds a value beyond the 64-bit signed range. Raised
+                before anything is written.
+            TypeError: If a numpy column has a dtype that does not cross
+                natively (datetime64, timedelta64, complex): convert it to
+                Python values, or use ``insert_many``.
+            ArcadeDBError: If the load fails (a duplicate key, a value the
+                declared property type refuses): the transaction this call
+                opened is rolled back, as for ``insert_many``. In the parallel
+                mode also when the writers report any record they could not
+                store, after the load completes (records other than the failed
+                ones may have been stored). A transaction the caller opened is
+                left to the caller.
+
+        Example:
+            >>> db.insert_columns("Reading", {
+            ...     "id": np.arange(1_000_000, dtype=np.int64),
+            ...     "value": np.random.random(1_000_000),
+            ...     "label": ["a", "b"] * 500_000,
+            ... })
+        """
+        self._check_not_closed()
+        items = list(columns.items()) if hasattr(columns, "items") else None
+        if not items:
+            raise ValueError("insert_columns needs at least one column")
+        names = []
+        for name, _values in items:
+            if not isinstance(name, str):
+                raise ValueError(f"column names must be strings, got {name!r}")
+            names.append(name)
+        java_columns = [_column_to_java(name, values) for name, values in items]
+        lengths = {name: n for name, (_arr, n) in zip(names, java_columns)}
+        if len(set(lengths.values())) != 1:
+            raise ValueError(f"columns differ in length: {lengths}")
+        n = next(iter(lengths.values()))
+        if n == 0:
+            return 0
+        try:
+            batcher = _java_class("com.arcadedb.python.DocumentBatcher")
+            string_array = jpype.JArray(jpype.JString)(names)
+            object_array = jpype.JArray(jpype.JObject)(
+                [arr for arr, _n in java_columns]
+            )
+            if not parallel:
+                return int(
+                    batcher.insertColumns(
+                        self._java_db,
+                        type_name,
+                        string_array,
+                        object_array,
+                        n,
+                        int(commit_every),
+                    )
+                )
+            failures = batcher.insertColumnsParallel(
+                self._java_db, type_name, string_array, object_array, n
+            )
+            self._java_db.async_().waitCompletion()
+            n_failed = int(failures.getCount())
+            first_failure = failures.getFirstMessage()
+        except Exception as e:
+            raise ArcadeDBError(f"Failed to bulk-insert into '{type_name}': {e}") from e
+        # As insert_many does: the writers report a rejected record only through
+        # its error callback, so the count is read here rather than assumed.
+        if n_failed:
+            raise ArcadeDBError(
+                f"Failed to bulk-insert into '{type_name}': the parallel writers "
+                f"reported {n_failed} failed record(s) of {n}; the rest may have "
+                f"been stored (first failure: {first_failure})"
+            )
+        return n
 
     def close(self):
         """Close the database."""

@@ -273,7 +273,7 @@ against its own artifact proves nothing.
 | **F11** | Equivalent queries must return equivalent answers. This one has its own page: [Answer Checking](equivalence.md). |
 | **F12** | Every table reports the same measurement set, or says why not, and no table carries an aggregate across its queries (see [Repetitions, and What a Cell Prints](#repetitions-and-what-a-cell-prints)). |
 | **F13** | Close cost is an invariant, not a column: close should be proportional to what was written and not to what is stored, and a clean close that exceeds the stated budget fails the gate. |
-| **F14** | Equivalent queries get equivalent index support, chosen by measurement rather than by reasoning: each engine's index decision on a selective-filter lane is declared and names its evidence. The declaration is checked against the rows (F14b), and where one engine on a lane times ingest and index build separately, every engine does (F14c). |
+| **F14** | Equivalent queries get equivalent index support, chosen by measurement rather than by reasoning: each engine's index decision on a selective-filter lane is declared and names its evidence. The declaration is checked against the rows (F14b), and where one engine on a lane times ingest and index build separately, every engine does (F14c). ArcadeDB's own id indexes follow its maintainers' rule for the index kind: a hash index on an id the lane only looks up by equality, a sorted one where the key is also ranged over or ordered. |
 
 ## Engine Identity and Pins
 

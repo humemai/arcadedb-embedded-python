@@ -23,12 +23,14 @@ import mongo_common
 
 import budget_lookup
 import graph_common
-from graph_common import (HOP3_VISITED, LSQB_QUERIES, NA_LSQB_NO_MESSAGE_HALF,
+from graph_common import (HOP3_VISITED, HOP3_VISITED_BY_VERTEX, HOP3F_MIN_AGE, OLTP_READS_BY_VERTEX, LSQB_QUERIES, NA_LSQB_NO_MESSAGE_HALF,
                           OLAP_BUDGET_S, OLAP_DIGEST, OLAP_ITERATIONS, OLAP_QUERIES,
-                          OLTP_READS, OLTP_WRITE, OLTP_DELETE, OLTP_UPDATE,
-                          PERSON_STATE_DIGEST, READ_DIGEST, SCALE_OLTP_QUERIES,
+                          OLTP_READ_BUDGET_S, OLTP_READS, OLTP_WRITE, OLTP_DELETE, OLTP_UPDATE,
+                          EDGE_SCAN, EDGE_STATE_DIGEST,
+                          PERSON_STATE_DIGEST, READ_DIGEST, READ_WARMUP_BUDGET_SHARE,
+                          READ_WARMUP_IDS, SCALE_OLTP_QUERIES,
                           SCALE_PERSONS, UPDATE_AGE, VISITED_DIGEST, VISITED_SAMPLE,
-                          gen_edges, gen_persons, pick_query_ids)
+                          gen_edges, gen_persons, pick_query_ids, warmup_ids)
 import bench_common
 
 # Data-source switch (same pattern as l3_sparse/bigann): BENCH_GRAPH_SOURCE=ldbc
@@ -57,6 +59,22 @@ GAV_TIMEOUT_S = 3600
 # -1 means no cap.
 HTTP_LIMIT = -1
 
+
+
+def _name_list(rows, field):
+    """A list of names from a schema report row: a list as the HTTP API sends it, or its JSON text as the
+    embedded to_json_list() of some wheels renders a nested value."""
+    for r in rows or []:
+        v = r.get(field)
+        if v is None:
+            continue
+        if isinstance(v, str):
+            try:
+                v = json.loads(v)
+            except ValueError:
+                v = [x.strip().strip("'\"") for x in v.strip("[]").split(",") if x.strip()]
+        return [str(x) for x in v]
+    return []
 
 
 class Base:
@@ -95,8 +113,10 @@ class Base:
         """
         raise NotImplementedError(f"{self.name} has no reopen path")
 
-    def run_cypher(self, text):
-        """Execute one cypher statement and RETURN ITS ROWS.
+    def run_cypher(self, text, params=None):
+        """Execute one cypher statement and RETURN ITS ROWS. `params` are the
+        statement's bound values, passed through the engine's own driver
+        (DECISIONS #116 item 2); None for the constant analytics texts.
 
         Returned the row COUNT until 2026-09-14, which is why this lane could
         not record a result digest: the answer was thrown away inside the
@@ -106,35 +126,48 @@ class Base:
         """
         raise NotImplementedError
 
-    def run_cypher_write(self, text):
-        self.run_cypher(text)
+    def run_cypher_write(self, text, params=None):
+        self.run_cypher(text, params)
 
     # NAME-BASED HOOKS (2026-09-11): the loops call these, and the defaults
     # format the shared Cypher text, so an engine without Cypher (SurrealDB)
     # can answer the same question in its own language by overriding three
     # methods while the mix, counts and statistics stay identical.
+    # Each statement gets exactly the parameters its text names: LadybugDB
+    # rejects a parameter the statement does not use.
+    # True for an engine whose MATCH may walk one relationship twice in a chain (FalkorDB, LadybugDB): it is then asked the
+    # same question with the exclusions written on the vertices (graph_common.OLTP_READS_BY_VERTEX).
+    REPEATS_RELATIONSHIPS = False
+
     def run_read(self, op, pid):
-        return self.run_cypher(OLTP_READS[op].format(id=pid))
+        texts = OLTP_READS_BY_VERTEX if self.REPEATS_RELATIONSHIPS else OLTP_READS
+        return self.run_cypher(texts[op], {"id": int(pid)})
 
     def run_write(self, pid, new_id):
-        self.run_cypher_write(OLTP_WRITE.format(id=pid, new_id=new_id))
+        self.run_cypher_write(OLTP_WRITE, {"id": int(pid), "new_id": int(new_id),
+                                           "name": f"w{int(new_id)}"})
 
     def run_delete(self, new_id):
-        self.run_cypher_write(OLTP_DELETE.format(new_id=new_id))
+        self.run_cypher_write(OLTP_DELETE, {"new_id": int(new_id)})
 
     def run_update(self, new_id):
         """One property of one record (DECISIONS #82a)."""
-        self.run_cypher_write(OLTP_UPDATE.format(new_id=new_id))
+        self.run_cypher_write(OLTP_UPDATE, {"new_id": int(new_id)})
 
     def run_visited(self, pid):
         """Untimed: the distinct persons at three hops, before the age filter."""
-        return self.run_cypher(HOP3_VISITED.format(id=pid))
+        return self.run_cypher(HOP3_VISITED_BY_VERTEX if self.REPEATS_RELATIONSHIPS else HOP3_VISITED, {"id": int(pid)})
 
     def person_scan(self, id_from):
         """Untimed read-back of the persons the CRUD phases wrote."""
         return self.run_cypher(
-            f"MATCH (q:Person) WHERE q.id >= {id_from} "
-            f"RETURN q.id AS id, q.name AS name, q.age AS age, q.city AS city")
+            "MATCH (q:Person) WHERE q.id >= $f "
+            "RETURN q.id AS id, q.name AS name, q.age AS age, q.city AS city", {"f": int(id_from)})
+
+    def edge_scan(self, id_from):
+        """Untimed read-back of the KNOWS edges into the persons the write phase created (row 58): one per
+        written person after the insert, none after the delete."""
+        return self.run_cypher(EDGE_SCAN, {"f": int(id_from)})
 
     def run_olap(self, qname):
         return self.run_cypher(OLAP_QUERIES[qname])
@@ -147,6 +180,13 @@ class Base:
 class ArcadeGraphEmbedded(Base):
     QUERY_LANGUAGE = "openCypher (the engine also has its own SQL; DECISIONS #113)"
     name = "arcadedb_graph_embedded"
+
+    def index_readback(self):
+        """The index kinds the engine built (CAMPAIGN 7 row 68): Person's, and the message
+        half's once build_messages() has made them. Asked after the build and outside every
+        timer; the lane puts it on the row as `index_kinds`."""
+        return bench_common.arcadedb_index_readback(
+            lambda: self.db.query("sql", "SELECT FROM schema:indexes").to_list())
 
     def connect(self):
         import arcadedb_embedded as arcadedb
@@ -186,37 +226,32 @@ class ArcadeGraphEmbedded(Base):
             jvm_kwargs={"heap_size": heap, "jvm_args": f"-Xms{heap}"})
 
     def build(self, n_persons):
-        # Native Java API with batched commits — ArcadeDB's embedded bulk path
-        jdb = self.db.get_java_database()
-        verts = {}  # keyed by person id (sparse longs under the LDBC source)
-        jdb.begin()
-        n = 0
-        for i, name, age, city in gen_persons(n_persons):
-            v = jdb.newVertex("Person")
-            v.set("id", i)
-            v.set("name", name)
-            v.set("age", age)
-            v.set("city", city)
-            v.save()
-            verts[i] = v
-            n += 1
-            if n % INGEST_BATCH == 0:
-                jdb.commit()
-                jdb.begin()
-        jdb.commit()
-        jdb.begin()
-        n = 0
-        for src, dst, since in gen_edges(n_persons):
-            verts[src].newEdge("KNOWS", verts[dst], "since", since)
-            n += 1
-            if n % INGEST_BATCH == 0:
-                jdb.commit()
-                jdb.begin()
-        jdb.commit()
+        # ArcadeDB's bulk graph path at the maintainers' recommended crash-safe
+        # settings (ArcadeData/arcadedb#8287; BUGS F123): GraphBatch with the
+        # write-ahead log ON and the edge count given, so the batch size tunes
+        # itself; batch size, commit cadence and parallel flush stay at their
+        # defaults. The edges are staged in memory first because the count has
+        # to be known before the batch opens -- the same kind of staging
+        # LadybugDB's CSV COPY does inside its timer. Every comparator on this
+        # table loads through its own bulk path.
+        persons = [{"id": i, "name": name, "age": age, "city": city}
+                   for i, name, age, city in gen_persons(n_persons)]
+        edges = list(gen_edges(n_persons))
+        self._person_rid = {}
+        with self.db.graph_batch(use_wal=True, expected_edge_count=len(edges)) as gb:
+            for s in range(0, len(persons), INGEST_BATCH):
+                chunk = persons[s:s + INGEST_BATCH]
+                for p, rid in zip(chunk, gb.create_vertices("Person", chunk)):
+                    self._person_rid[p["id"]] = rid
+            for s in range(0, len(edges), INGEST_BATCH):
+                chunk = edges[s:s + INGEST_BATCH]
+                gb.new_edges([self._person_rid[a] for a, _, _ in chunk], "KNOWS",
+                             [self._person_rid[b] for _, b, _ in chunk],
+                             [{"since": since} for _, _, since in chunk])
 
     # MESSAGE-HALF SCHEMA, shared by both ArcadeDB arms. Message is an abstract
     # supertype and Post/Comment EXTEND it, so `MATCH (m:Message)` reaches both
-    # (verified on 26.9.1: the inheritance, `tag1.id <> tag2.id`, the anti-join
+    # (verified on 26.9.1: the inheritance, the node inequality `tag1 <> tag2`, the anti-join
     # `WHERE NOT (c)-[:HAS_TAG]->(t)` and OPTIONAL MATCH all run in openCypher).
     # Vertices carry only `id`; every LSQB query is a structural count and the
     # analytics questions never read a message property. The Graph Analytical
@@ -225,6 +260,41 @@ class ArcadeGraphEmbedded(Base):
     MSG_EDGE_TYPES = ("IS_LOCATED_IN", "IS_PART_OF", "HAS_MEMBER", "CONTAINER_OF",
                       "REPLY_OF", "HAS_TAG", "HAS_TYPE", "HAS_CREATOR", "LIKES",
                       "HAS_INTEREST")
+
+    # THE VIEW COVERS EVERY VERTEX AND EDGE TYPE OF THE LOADED GRAPH (CAMPAIGN section 7 row 61,
+    # DECISIONS #154 item 3, BUGS F174). ArcadeDB's planner uses a Graph Analytical View only when the view
+    # covers the vertex and edge types a query reads (docs, how-to/data-modeling/graph-olap.adoc), and upstream's
+    # own LSQB runner builds its view over all eight vertex types and all eleven edge types. This lane built it over
+    # Person and KNOWS, so no LSQB query could use it. At a tier with no message half the lists are what is loaded
+    # (Person, KNOWS: the view the five projection questions always had); at the full network they are Person plus
+    # ldbc_snb.MSG_VERTEX_LABELS and KNOWS plus MSG_EDGE_TYPES (Message is the abstract supertype of Post and Comment
+    # and holds no record of its own, so it is not listed, as upstream's runner does not list it). The properties are
+    # the five questions' own. An ArcadeDB-only setting, the user's call; the no-view arm (BENCH_GAV=0, backend_arm
+    # nogav) stays on the table as the like-for-like row, and the build time of the larger view is priced on the row.
+    GAV_PROPERTIES = "PROPERTIES (id, name, age, city) EDGE PROPERTIES (since)"
+
+    def _gav_types(self):
+        """(vertex types, edge types) the view is created over."""
+        if not getattr(self, "_load_messages", False):
+            return ["Person"], ["KNOWS"]
+        import ldbc_snb as _ldbc
+        return ["Person"] + list(_ldbc.MSG_VERTEX_LABELS), ["KNOWS"] + list(self.MSG_EDGE_TYPES)
+
+    def _gav_ddl(self):
+        v, e = self._gav_types()
+        return (f"CREATE GRAPH ANALYTICAL VIEW {GAV_NAME} VERTEX TYPES ({', '.join(v)}) "
+                f"EDGE TYPES ({', '.join(e)}) {self.GAV_PROPERTIES} UPDATE MODE OFF")
+
+    def _gav_confirm(self, report_rows):
+        """The types the ENGINE says the view covers (`schema:graphAnalyticalViews`), kept for the row as
+        `gav_types`, and a refusal when they are not the types the statement asked for: a view that silently
+        covers less is the defect this row removes."""
+        v, e = self._gav_types()
+        got_v, got_e = _name_list(report_rows, "vertexTypes"), _name_list(report_rows, "edgeTypes")
+        if set(got_v) != set(v) or set(got_e) != set(e):
+            raise RuntimeError(f"the view covers vertex types {got_v} and edge types {got_e}, not the "
+                               f"{v} and {e} the statement named")
+        self.gav_types = f"vertex: {', '.join(got_v)}; edge: {', '.join(got_e)}"
 
     def _msg_schema_ddl(self):
         import ldbc_snb as _ldbc
@@ -235,54 +305,52 @@ class ArcadeGraphEmbedded(Base):
             else:
                 ddl.append(f"CREATE VERTEX TYPE {label}")
             ddl.append(f"CREATE PROPERTY {label}.id LONG")
-            ddl.append(f"CREATE INDEX ON {label} (id) UNIQUE")
+            # The message half's ids are only looked up by equality (the
+            # analytics are structural counts), so a hash index (CAMPAIGN 7
+            # row 68). Person(id) is NOT here: the person_scan ranges over it.
+            ddl.append(f"CREATE INDEX ON {label} (id) UNIQUE_HASH")
         for rel in self.MSG_EDGE_TYPES:
             ddl.append(f"CREATE EDGE TYPE {rel}")
         return ddl
 
     def build_messages(self):
-        # Native Java API with index lookups, the same batched-commit path the
-        # persons+KNOWS load uses. Person is already loaded with a unique id
-        # index (connect()), so its endpoints resolve by lookupByKey too.
+        # The same GraphBatch path and settings as build(). Endpoints resolve
+        # from the RIDs create_vertices returned (Person's from build()), so
+        # nothing is looked up by index during the load. The edge count is not
+        # given: at the full-network tier staging every message edge would cost
+        # gigabytes, and the hint measured no difference (#8287). An edge whose
+        # endpoint a capped slice dropped is skipped, as before.
         import ldbc_snb as _ldbc
         mc = _ldbc.MessageCorpus(self._scale)
         for ddl in self._msg_schema_ddl():
             self.db.command("sql", ddl)
-        jdb = self.db.get_java_database()
+        rid = {"Person": self._person_rid}
         vcount = ecount = 0
-        jdb.begin()
-        n = 0
-        for label, ids in mc.vertex_spec():
-            for vid in ids:
-                v = jdb.newVertex(label)
-                v.set("id", vid)
-                v.save()
-                vcount += 1
-                n += 1
-                if n % INGEST_BATCH == 0:
-                    jdb.commit()
-                    jdb.begin()
-        jdb.commit()
-
-        def _lookup(label, vid):
-            cur = jdb.lookupByKey(label, "id", vid)
-            return cur.next().getRecord() if cur.hasNext() else None
-
-        jdb.begin()
-        n = 0
-        for rel, src_label, dst_label, gen in mc.edge_spec():
-            for s, d in gen():
-                sv = _lookup(src_label, s)
-                dv = _lookup(dst_label, d)
-                if sv is None or dv is None:
-                    continue          # a capped slice can drop an endpoint
-                sv.newEdge(rel, dv)
-                ecount += 1
-                n += 1
-                if n % INGEST_BATCH == 0:
-                    jdb.commit()
-                    jdb.begin()
-        jdb.commit()
+        with self.db.graph_batch(use_wal=True) as gb:
+            for label, ids in mc.vertex_spec():
+                m = rid.setdefault(label, {})
+                ids = list(ids)
+                for s in range(0, len(ids), INGEST_BATCH):
+                    chunk = ids[s:s + INGEST_BATCH]
+                    for vid, r in zip(chunk, gb.create_vertices(label, [{"id": v} for v in chunk])):
+                        m[vid] = r
+                    vcount += len(chunk)
+            for rel, src_label, dst_label, gen in mc.edge_spec():
+                sm, dm = rid.get(src_label, {}), rid.get(dst_label, {})
+                src, dst = [], []
+                for s_id, d_id in gen():
+                    sr, dr = sm.get(s_id), dm.get(d_id)
+                    if sr is None or dr is None:
+                        continue          # a capped slice can drop an endpoint
+                    src.append(sr)
+                    dst.append(dr)
+                    if len(src) == INGEST_BATCH:
+                        gb.new_edges(src, rel, dst)
+                        ecount += len(src)
+                        src, dst = [], []
+                if src:
+                    gb.new_edges(src, rel, dst)
+                    ecount += len(src)
         self.msg_counts = {"msg_vertices": vcount, "msg_edges": ecount}
 
     def post_build(self, workload):
@@ -305,12 +373,7 @@ class ArcadeGraphEmbedded(Base):
         # TIMED SEPARATELY: a view that accelerates a query is not free, and
         # the paper cannot claim the speedup without pricing the view.
         _gav_t0 = time.perf_counter()
-        self.db.command(
-            "sql",
-            f"CREATE GRAPH ANALYTICAL VIEW {GAV_NAME} "
-            "VERTEX TYPES (Person) EDGE TYPES (KNOWS) "
-            "PROPERTIES (id, name, age, city) EDGE PROPERTIES (since) "
-            "UPDATE MODE OFF")
+        self.db.command("sql", self._gav_ddl())
         t0 = time.time()
         while time.time() - t0 < GAV_TIMEOUT_S:
             rows = self.db.query(
@@ -319,18 +382,24 @@ class ArcadeGraphEmbedded(Base):
             status = rows[0].get("status") if rows else None
             if status == "READY":
                 self.gav_build_s = round(time.perf_counter() - _gav_t0, 3)
+                self._gav_confirm(rows)
                 return
             if status in ("FAILED", "ERROR"):
                 raise RuntimeError(f"GAV build failed: {rows[0]}")
             time.sleep(1)
         raise RuntimeError("GAV not READY within timeout")
 
-    def run_cypher(self, text):
+    def run_cypher(self, text, params=None):
+        if params:
+            return self.db.query("opencypher", text, params).to_json_list()
         return self.db.query("opencypher", text).to_json_list()
 
-    def run_cypher_write(self, text):
+    def run_cypher_write(self, text, params=None):
         with self.db.transaction():
-            self.db.command("opencypher", text)
+            if params:
+                self.db.command("opencypher", text, params)
+            else:
+                self.db.command("opencypher", text)
 
     def close(self):
         self.db.close()
@@ -348,9 +417,11 @@ class ArcadeGraphServer(ArcadeGraphEmbedded):
     def connect(self):
         self.durability = (bench_common.at_class(bench_common.DURABILITY_ARCADEDB)
                            + bench_common.ARCADE_SERVER_DURABILITY_NOTE)
-        import requests
-        self.rq = requests.Session()
+        import lean_http
+        self.rq = lean_http.Session()
         self.rq.auth = ("root", "dbbenchpass")
+        # WHICH HTTP CLIENT ran, read from the session (CAMPAIGN 7 row 72), on every row this arm writes
+        self.row_extra = {**(getattr(self, "row_extra", None) or {}), **lean_http.row_fields(self.rq)}
         host = os.environ["BENCH_SERVER_HOST"]
         port = os.environ.get("BENCH_SERVER_PORT", "2480")
         self.base = f"http://{host}:{port}/api/v1"
@@ -358,7 +429,7 @@ class ArcadeGraphServer(ArcadeGraphEmbedded):
         # fix in l1_tabular.py: a hardcoded "server:latest" is a tag nobody
         # ran, and it makes every F5 version check on this lane vacuous.
         try:
-            info = self.rq.get(f"http://{host}:{port}/api/v1/server", timeout=30)
+            info = self.rq.get(f"http://{host}:{port}/api/v1/server?mode=basic", timeout=30)
             self.version = "server:" + (info.json().get("version") or "?")
         except Exception:
             self.version = "server:unknown"
@@ -372,8 +443,14 @@ class ArcadeGraphServer(ArcadeGraphEmbedded):
                     "CREATE PROPERTY KNOWS.since INTEGER"]:
             self._http("command", "sql", ddl)
 
-    def _http(self, endpoint, language, command):
+    def index_readback(self):
+        return bench_common.arcadedb_index_readback(
+            lambda: self._http("query", "sql", "SELECT FROM schema:indexes"))
+
+    def _http(self, endpoint, language, command, params=None):
         body = {"language": language, "command": command}
+        if params:
+            body["params"] = params
         if endpoint == "query":
             body["limit"] = HTTP_LIMIT   # only the query endpoint takes a row cap
         r = self.rq.post(f"{self.base}/{endpoint}/bench", json=body,
@@ -381,61 +458,72 @@ class ArcadeGraphServer(ArcadeGraphEmbedded):
         r.raise_for_status()
         return r.json().get("result", [])
 
+    def _batch(self, lines, query):
+        """POST JSONL to /api/v1/batch, streamed: the server consumes the body
+        while it loads, so the client never holds a whole payload."""
+        def body():
+            buf = []
+            for ln in lines:
+                buf.append(ln)
+                if len(buf) >= INGEST_BATCH:
+                    yield ("\n".join(buf) + "\n").encode()
+                    buf = []
+            if buf:
+                yield ("\n".join(buf) + "\n").encode()
+        r = self.rq.post(f"{self.base}/batch/bench?{query}", data=body(),
+                         headers={"Content-Type": "application/x-ndjson"}, timeout=36000)
+        r.raise_for_status()
+        return r.json()
+
     def build(self, n_persons):
-        # SQL-over-HTTP sqlscript batches — the server's remote bulk surface
-        buf = []
-        for i, name, age, city in gen_persons(n_persons):
-            # literal SQL: escape string payloads (LDBC names contain quotes)
-            name_q = name.replace("\\", "\\\\").replace("'", "\\'")
-            city_q = city.replace("\\", "\\\\").replace("'", "\\'")
-            buf.append(f"CREATE VERTEX Person SET id = {i}, name = '{name_q}', "
-                       f"age = {age}, city = '{city_q}'")
-            if len(buf) >= INGEST_BATCH:
-                self._http("command", "sqlscript", ";".join(buf))
-                buf = []
-        if buf:
-            self._http("command", "sqlscript", ";".join(buf))
-        buf = []
-        for src, dst, since in gen_edges(n_persons):
-            buf.append("CREATE EDGE KNOWS FROM (SELECT FROM Person WHERE id = "
-                       f"{src}) TO (SELECT FROM Person WHERE id = {dst}) "
-                       f"SET since = {since}")
-            if len(buf) >= INGEST_BATCH:
-                self._http("command", "sqlscript", ";".join(buf))
-                buf = []
-        if buf:
-            self._http("command", "sqlscript", ";".join(buf))
+        # ArcadeDB's served bulk graph path, POST /api/v1/batch (GraphBatch
+        # under the hood), at the maintainers' recommended crash-safe settings
+        # (ArcadeData/arcadedb#8287; BUGS F123): the WAL on and the edge count
+        # given. JSONL, vertices first; edges name their endpoints by the
+        # vertices' @id. idMapping=true returns every Person's RID, which the
+        # message half references across requests (a later request can only
+        # name an earlier one's vertices by RID).
+        edges = list(gen_edges(n_persons))
+        def lines():
+            for i, name, age, city in gen_persons(n_persons):
+                yield json.dumps({"@type": "vertex", "@class": "Person", "@id": f"p{i}",
+                                  "id": i, "name": name, "age": age, "city": city})
+            for src, dst, since in edges:
+                yield json.dumps({"@type": "edge", "@class": "KNOWS", "@from": f"p{src}",
+                                  "@to": f"p{dst}", "since": since})
+        res = self._batch(lines(), f"wal=true&expectedEdgeCount={len(edges)}&idMapping=true")
+        self._person_rid = {int(k[1:]): v for k, v in res["idMapping"].items()}
 
     def build_messages(self):
-        # HTTP sqlscript, the server's remote bulk surface, over the SAME schema
-        # the embedded arm builds (_msg_schema_ddl: Message supertype, Post and
-        # Comment EXTENDS it, a unique id index on each). The LSQB Cypher is
-        # identical to the embedded arm's, which is the tested one; only this
-        # ingest text is the server arm's own. INFERRED, not run on the laptop.
+        # The same /batch path and settings as build(), in ONE streamed request:
+        # message vertices first, then every edge, message endpoints by @id and
+        # Person endpoints by the RIDs build() got back. An edge whose endpoint
+        # a capped slice dropped is skipped here, because /batch refuses an
+        # unknown reference; the counts are the server's own. The edge count is
+        # not given, for the reason the embedded arm states.
         import ldbc_snb as _ldbc
         mc = _ldbc.MessageCorpus(self._scale)
         for ddl in self._msg_schema_ddl():
             self._http("command", "sql", ddl)
-        vcount = ecount = 0
-        buf = []
-        for label, ids in mc.vertex_spec():
-            for vid in ids:
-                buf.append(f"CREATE VERTEX {label} SET id = {vid}")
-                vcount += 1
-                if len(buf) >= INGEST_BATCH:
-                    self._http("command", "sqlscript", ";".join(buf)); buf = []
-        if buf:
-            self._http("command", "sqlscript", ";".join(buf)); buf = []
-        for rel, src_label, dst_label, gen in mc.edge_spec():
-            for s, d in gen():
-                buf.append(f"CREATE EDGE {rel} FROM (SELECT FROM {src_label} WHERE id = "
-                           f"{s}) TO (SELECT FROM {dst_label} WHERE id = {d})")
-                ecount += 1
-                if len(buf) >= INGEST_BATCH:
-                    self._http("command", "sqlscript", ";".join(buf)); buf = []
-        if buf:
-            self._http("command", "sqlscript", ";".join(buf))
-        self.msg_counts = {"msg_vertices": vcount, "msg_edges": ecount}
+        loaded = {}
+        def ref(label, vid):
+            if label == "Person":
+                return self._person_rid.get(vid)
+            return f"{label}:{vid}" if vid in loaded.get(label, ()) else None
+        def lines():
+            for label, ids in mc.vertex_spec():
+                seen = loaded.setdefault(label, set())
+                for vid in ids:
+                    seen.add(vid)
+                    yield json.dumps({"@type": "vertex", "@class": label, "@id": f"{label}:{vid}", "id": vid})
+            for rel, src_label, dst_label, gen in mc.edge_spec():
+                for s_id, d_id in gen():
+                    sr, dr = ref(src_label, s_id), ref(dst_label, d_id)
+                    if sr is None or dr is None:
+                        continue          # a capped slice can drop an endpoint
+                    yield json.dumps({"@type": "edge", "@class": rel, "@from": sr, "@to": dr})
+        res = self._batch(lines(), "wal=true&idMapping=false")
+        self.msg_counts = {"msg_vertices": res.get("verticesCreated"), "msg_edges": res.get("edgesCreated")}
 
     def post_build(self, workload):
         if workload != "olap":
@@ -450,11 +538,7 @@ class ArcadeGraphServer(ArcadeGraphEmbedded):
             self.gav_build_s = 0.0
             return
         _gav_t0 = time.perf_counter()
-        self._http("command", "sql",
-                   f"CREATE GRAPH ANALYTICAL VIEW {GAV_NAME} "
-                   "VERTEX TYPES (Person) EDGE TYPES (KNOWS) "
-                   "PROPERTIES (id, name, age, city) EDGE PROPERTIES (since) "
-                   "UPDATE MODE OFF")
+        self._http("command", "sql", self._gav_ddl())
         t0 = time.time()
         while time.time() - t0 < GAV_TIMEOUT_S:
             rows = self._http(
@@ -463,17 +547,18 @@ class ArcadeGraphServer(ArcadeGraphEmbedded):
             status = rows[0].get("status") if rows else None
             if status == "READY":
                 self.gav_build_s = round(time.perf_counter() - _gav_t0, 3)
+                self._gav_confirm(rows)
                 return
             if status in ("FAILED", "ERROR"):
                 raise RuntimeError(f"GAV build failed: {rows[0]}")
             time.sleep(1)
         raise RuntimeError("GAV not READY within timeout")
 
-    def run_cypher(self, text):
-        return self._http("query", "cypher", text)
+    def run_cypher(self, text, params=None):
+        return self._http("query", "cypher", text, params)
 
-    def run_cypher_write(self, text):
-        self._http("command", "cypher", text)
+    def run_cypher_write(self, text, params=None):
+        self._http("command", "cypher", text, params)
 
     def close(self):
         pass
@@ -507,6 +592,12 @@ class Neo4jGraph(Base):
         with self.driver.session() as s:
             s.run("CREATE INDEX person_id IF NOT EXISTS "
                   "FOR (p:Person) ON (p.id)").consume()
+        # Two settings the runner overrides on this server, as the engine
+        # reports them (CAMPAIGN section 7 row 21, overrides.py): the page
+        # cache fitted to the cell, and the checkpoint interval set short so the
+        # disk reading finds the store on disk.
+        with self.driver.session() as s:
+            self.row_extra = bench_common.neo4j_readback(s, checkpoint=True)
 
     def build(self, n_persons):
         # UNWIND batches over bolt — Neo4j's standard client bulk path
@@ -596,13 +687,13 @@ class Neo4jGraph(Base):
         with self.driver.session() as s:
             self._await_indexes(s)
 
-    def run_cypher(self, text):
+    def run_cypher(self, text, params=None):
         with self.driver.session() as s:
-            return [dict(r) for r in s.run(text)]
+            return [dict(r) for r in s.run(text, params or {})]
 
-    def run_cypher_write(self, text):
+    def run_cypher_write(self, text, params=None):
         with self.driver.session() as s:
-            s.run(text).consume()
+            s.run(text, params or {}).consume()
 
     def close(self):
         self.driver.close()
@@ -724,7 +815,8 @@ def _int_or(v):
 
 
 class FalkorGraph(Base):
-    """FalkorDB 4.20.6 served (2026-09-17): a Redis module, reached through the
+    """FalkorDB 6.0.1 served (2026-10-02, #129; 4.20.6 from 2026-09-17 until
+    then): a Redis module, reached through the
     falkordb Python client over the Redis protocol (GRAPH.QUERY), the lane's
     Cypher VERBATIM. Every timed and untimed statement ran unchanged on the
     pinned image and every digest matched Neo4j's on the micro corpus (laptop
@@ -744,10 +836,12 @@ class FalkorGraph(Base):
         RESULTSET_SIZE -1 and leaves TIMEOUT at the module default of 0, no
         limit, so the lane's budget and, behind it, the cell watchdog are the
         only censors (#82b).
-      * THREAD_COUNT is sized from the HOST's logical cores: the log read
-        "Thread pool created, using 16 threads" under a 12-CPU cpuset, while
-        its OpenMP pool read 12 (FAIRNESS F6). The runner passes THREAD_COUNT
-        from the cpuset and the row records what the server reports.
+      * THREAD_COUNT: 4.20.6 sized it from the HOST's logical cores (the log
+        read "Thread pool created, using 16 threads" under a 12-CPU cpuset,
+        while its OpenMP pool read 12; FAIRNESS F6); 6.0.1 follows the cpuset
+        (GRAPH.CONFIG GET THREAD_COUNT 4 under a 4-CPU cpuset). The runner
+        still passes THREAD_COUNT from the cpuset and the row records what
+        the server reports.
       * BROWSER=1 starts a Next.js process in the same container; BROWSER=0.
 
     DURABILITY IS REDIS PERSISTENCE, read back with CONFIG GET. The image
@@ -757,6 +851,7 @@ class FalkorGraph(Base):
     default and 3,011 fdatasync with --appendonly yes --appendfsync always,
     which is what the strict class sets through REDIS_ARGS (DECISIONS #90).
     """
+    REPEATS_RELATIONSHIPS = True      # a chain of relationships may reuse one: see graph_common.OLTP_READS_BY_VERTEX
     QUERY_LANGUAGE = "Cypher over the Redis protocol"
     name = "falkordb_graph"
 
@@ -871,7 +966,9 @@ class FalkorGraph(Base):
         self.msg_counts = {"msg_vertices": vcount, "msg_edges": ecount}
 
     # LSQB q1 WITH EVERY NODE NAMED (2026-09-18, DECISIONS #92). The canonical
-    # text binds none of its nine nodes, and on FalkorDB 4.20.6 the anonymous
+    # text binds none of its nine nodes, and on FalkorDB 4.20.6 (fixed in 6.0.1:
+    # `.notes` repros/falkordb-anon-chain, 8 against 60 on a synthetic chain,
+    # 60 on 6.0.1; the named spelling stays, it is the same query) the anonymous
     # chain loses PATH MULTIPLICITY across its intermediates: on the capped SF1
     # slice the eight-label chain answered 2,393 against 300,871 on every
     # other engine, and cutting it short showed where. Country<-City<-Person
@@ -891,15 +988,17 @@ class FalkorGraph(Base):
     def run_olap(self, qname):
         return self.run_cypher(self.LSQB.get(qname) or OLAP_QUERIES[qname])
 
-    def run_cypher(self, text):
-        res = self.g.query(text)
+    def run_cypher(self, text, params=None):
+        # The client sends parameters as a `CYPHER id=...` header ahead of the
+        # text; the server caches the plan on the text after it.
+        res = self.g.query(text, params)
         # header entries are [type, name]; the RETURN aliases are the names
         # the digest compares against.
         cols = [h[1] if isinstance(h, (list, tuple)) else h for h in res.header]
         return [dict(zip(cols, row)) for row in res.result_set]
 
-    def run_cypher_write(self, text):
-        self.g.query(text)
+    def run_cypher_write(self, text, params=None):
+        self.g.query(text, params)
 
     def close(self):
         self.conn.close()
@@ -933,6 +1032,7 @@ def _ladybug_fit(memory_max_text=None):
 
 class LadybugGraph(Base):
     QUERY_LANGUAGE = "Cypher, embedded"
+    REPEATS_RELATIONSHIPS = True      # a chain of relationships may reuse one: see graph_common.OLTP_READS_BY_VERTEX
     name = "ladybug_graph"
 
     def _open_fitted(self, ladybug):
@@ -954,6 +1054,7 @@ class LadybugGraph(Base):
         import ladybug
         self._mod = ladybug
         self._open_fitted(ladybug)
+        self._prepared = {}   # per connection: a prepared statement belongs to one
         self.version = f"ladybug:{getattr(ladybug, '__version__', '?')}"
         self.conn.execute(
             "CREATE NODE TABLE Person(id INT64, name STRING, age INT64, "
@@ -1093,6 +1194,7 @@ class LadybugGraph(Base):
         import ladybug
         self._mod = ladybug
         self._open_fitted(ladybug)
+        self._prepared = {}   # per connection: a prepared statement belongs to one
 
     # MESSAGE-HALF loader + LSQB queries (DECISIONS #103b/#104). INFERRED, NOT
     # RUN: LadybugDB (Kùzu) has no type inheritance and no multi-label, so it
@@ -1188,7 +1290,12 @@ class LadybugGraph(Base):
         self.msg_counts = {"msg_vertices": vcount, "msg_edges": ecount}
 
     # LSQB in LadybugDB's typed-rel-table Cypher (see the note above). Undirected
-    # knows to match the canonical queries the tested arms run.
+    # knows to match the canonical queries the tested arms run. THE INEQUALITIES ARE LSQB'S OWN
+    # LADYBUG TEXT (ldbc/lsqb ladybug/q5, q6, q9: `id(tag1) <> id(tag2)`, `id(person1) <> id(person3)`;
+    # q8 compares the tags' key property, here `id`), row 60. CAMPAIGN row 60 names the node form
+    # (`tag1 <> tag2`) for this arm too; LadybugDB 0.21.2 accepts all three spellings and counts the
+    # same on a probe graph, and the row's governing sentence is "LSQB's own text on every engine",
+    # so this is the form LSQB publishes for the engine.
     LSQB = {
         "lsqb_q1": ("MATCH (:Country)<-[:City_isPartOf_Country]-(:City)<-[:Person_isLocatedIn_City]-(:Person)"
                     "<-[:Forum_hasMember_Person]-(:Forum)-[:Forum_containerOf_Message]->(:Message)"
@@ -1207,9 +1314,9 @@ class LadybugGraph(Base):
                     "(message)<-[:Person_likes_Message]-(liker:Person), "
                     "(message)<-[:Message_replyOf_Message]-(comment:Message) RETURN count(*) AS n"),
         "lsqb_q5": ("MATCH (tag1:Tag)<-[:Message_hasTag_Tag]-(message:Message)<-[:Message_replyOf_Message]-"
-                    "(comment:Message)-[:Message_hasTag_Tag]->(tag2:Tag) WHERE tag1.id <> tag2.id RETURN count(*) AS n"),
+                    "(comment:Message)-[:Message_hasTag_Tag]->(tag2:Tag) WHERE id(tag1) <> id(tag2) RETURN count(*) AS n"),
         "lsqb_q6": ("MATCH (person1:Person)-[:KNOWS]-(person2:Person)-[:KNOWS]-"
-                    "(person3:Person)-[:Person_hasInterest_Tag]->(tag:Tag) WHERE person1.id <> person3.id RETURN count(*) AS n"),
+                    "(person3:Person)-[:Person_hasInterest_Tag]->(tag:Tag) WHERE id(person1) <> id(person3) RETURN count(*) AS n"),
         "lsqb_q7": ("MATCH (:Tag)<-[:Message_hasTag_Tag]-(message:Message)-[:Message_hasCreator_Person]->(creator:Person) "
                     "OPTIONAL MATCH (message)<-[:Person_likes_Message]-(liker:Person) "
                     "OPTIONAL MATCH (message)<-[:Message_replyOf_Message]-(comment:Message) RETURN count(*) AS n"),
@@ -1218,7 +1325,7 @@ class LadybugGraph(Base):
                     "WHERE NOT (comment)-[:Message_hasTag_Tag]->(tag1) AND tag1.id <> tag2.id RETURN count(*) AS n"),
         "lsqb_q9": ("MATCH (person1:Person)-[:KNOWS]-(person2:Person)-[:KNOWS]-"
                     "(person3:Person)-[:Person_hasInterest_Tag]->(tag:Tag) "
-                    "WHERE NOT (person1)-[:KNOWS]-(person3) AND person1.id <> person3.id RETURN count(*) AS n"),
+                    "WHERE NOT (person1)-[:KNOWS]-(person3) AND id(person1) <> id(person3) RETURN count(*) AS n"),
     }
 
     def run_olap(self, qname):
@@ -1226,10 +1333,17 @@ class LadybugGraph(Base):
         # LSQB queries need LadybugDB's typed-rel-table spelling.
         return self.run_cypher(self.LSQB.get(qname) or OLAP_QUERIES[qname])
 
-    def run_cypher(self, text):
+    def run_cypher(self, text, params=None):
         # Rows come back positional, in the RETURN clause's order, which is the
         # declared column order the digest compares against.
-        return [list(r) for r in self.conn.execute(text)]
+        if not params:
+            return [list(r) for r in self.conn.execute(text)]
+        # PREPARED ONCE PER TEXT, the documented way to run a statement many
+        # times: execute(text, params) would prepare it again on every call.
+        stmt = self._prepared.get(text)
+        if stmt is None:
+            stmt = self._prepared[text] = self.conn.prepare(text)
+        return [list(r) for r in self.conn.execute(stmt, params)]
 
 
 class DuckpgqGraph(Base):
@@ -1281,48 +1395,59 @@ class DuckpgqGraph(Base):
     # every engine stays on the same query-plan surface. Every edge binds a
     # variable (DuckPGQ requires it); the COLUMNS clause names the answer in the
     # declared digest order (graph_common.READ_DIGEST).
+    #
+    # UNDIRECTED (CAMPAIGN section 7 row 56, graph_common.KNOWS_DIRECTION): every
+    # `-[k:knows]-` is SQL/PGQ's undirected edge pattern, over the one stored edge
+    # per friendship. SQL/PGQ walks do not forbid reusing an edge the way Cypher's
+    # relationship isomorphism does, so the walks the question excludes are written
+    # out, on the vertices (a friendship is not walked back along itself: the 2nd
+    # hop does not return to the start, the 3rd does not return to the 1st):
+    # `fof.id <> p.id`, and `m2.id <> p.id AND x.id <> m1.id`. In a simple graph,
+    # which LDBC's knows is (one row per friendship), that is exactly the
+    # distinct-edges rule; a corpus holding both a->b and b->a would differ.
     READS = {
         "point": ("SELECT name, age FROM GRAPH_TABLE (pg "
                   "MATCH (p:Person WHERE p.id = {id}) "
                   "COLUMNS (p.name AS name, p.age AS age))"),
         "hop1": ("SELECT count(*) AS n, avg(fage) AS a FROM GRAPH_TABLE (pg "
-                 "MATCH (p:Person WHERE p.id = {id})-[k:knows]->(f:Person) "
+                 "MATCH (p:Person WHERE p.id = {id})-[k:knows]-(f:Person) "
                  "COLUMNS (f.age AS fage))"),
         "hop2": ("SELECT count(DISTINCT fof) AS n FROM GRAPH_TABLE (pg "
-                 "MATCH (p:Person WHERE p.id = {id})-[k1:knows]->(m:Person)"
-                 "-[k2:knows]->(fof:Person) COLUMNS (fof.id AS fof))"),
+                 "MATCH (p:Person WHERE p.id = {id})-[k1:knows]-(m:Person)"
+                 "-[k2:knows]-(fof:Person) WHERE fof.id <> p.id COLUMNS (fof.id AS fof))"),
         "hop3f": ("SELECT count(DISTINCT x) AS n FROM GRAPH_TABLE (pg "
-                  "MATCH (p:Person WHERE p.id = {id})-[k1:knows]->(m1:Person)"
-                  "-[k2:knows]->(m2:Person)-[k3:knows]->(x:Person WHERE x.age > 30) "
-                  "COLUMNS (x.id AS x))"),
+                  "MATCH (p:Person WHERE p.id = {id})-[k1:knows]-(m1:Person)"
+                  "-[k2:knows]-(m2:Person)-[k3:knows]-(x:Person WHERE x.age > " + str(HOP3F_MIN_AGE) + ") "
+                  "WHERE m2.id <> p.id AND x.id <> m1.id COLUMNS (x.id AS x))"),
     }
     VISITED = ("SELECT count(DISTINCT x) AS n FROM GRAPH_TABLE (pg "
-               "MATCH (p:Person WHERE p.id = {id})-[k1:knows]->(m1:Person)"
-               "-[k2:knows]->(m2:Person)-[k3:knows]->(x:Person) COLUMNS (x.id AS x))")
+               "MATCH (p:Person WHERE p.id = {id})-[k1:knows]-(m1:Person)"
+               "-[k2:knows]-(m2:Person)-[k3:knows]-(x:Person) "
+               "WHERE m2.id <> p.id AND x.id <> m1.id COLUMNS (x.id AS x))")
     OLAP = {
         "top_degree": ("SELECT id, count(*) AS d FROM GRAPH_TABLE (pg "
-                       "MATCH (p:Person)-[k:knows]->(f:Person) COLUMNS (p.id AS id)) "
+                       "MATCH (p:Person)-[k:knows]-(f:Person) COLUMNS (p.id AS id)) "
                        "GROUP BY id ORDER BY d DESC, id ASC LIMIT 10"),
         "same_city_edges": ("SELECT c, count(*) AS n FROM GRAPH_TABLE (pg "
-                            "MATCH (a:Person)-[k:knows]->(b:Person) WHERE a.city = b.city "
+                            "MATCH (a:Person)-[k:knows]-(b:Person) WHERE a.city = b.city AND a.id < b.id "
                             "COLUMNS (a.city AS c)) GROUP BY c ORDER BY n DESC, c ASC LIMIT 10"),
         "friend_age_by_city": ("SELECT c, avg(fage) AS a, count(*) AS n FROM GRAPH_TABLE (pg "
-                               "MATCH (p:Person)-[k:knows]->(f:Person) "
+                               "MATCH (p:Person)-[k:knows]-(f:Person) "
                                "COLUMNS (p.city AS c, f.age AS fage)) "
                                "GROUP BY c ORDER BY n DESC, c ASC LIMIT 10"),
-        # Degree distribution: the per-person out-degree, then a histogram over
-        # it. Two levels, the inner GROUP BY over the MATCH's one-row-per-edge
-        # and the outer over the degrees; persons with no outgoing KNOWS are
-        # outside the MATCH and so outside the histogram, matching the Cypher.
+        # Degree distribution: the per-person friend count, then a histogram over
+        # it. Two levels, the inner GROUP BY over the MATCH's one-row-per-friendship-
+        # end and the outer over the degrees; persons with no friends are outside
+        # the MATCH and so outside the histogram, matching the Cypher.
         "degree_dist": ("SELECT deg, count(*) AS n FROM (SELECT id, count(*) AS deg "
-                        "FROM GRAPH_TABLE (pg MATCH (p:Person)-[k:knows]->(f:Person) "
+                        "FROM GRAPH_TABLE (pg MATCH (p:Person)-[k:knows]-(f:Person) "
                         "COLUMNS (p.id AS id)) GROUP BY id) GROUP BY deg ORDER BY deg"),
-        # The triangle count as the 3-cycle pattern, closing back on `a`; the
-        # id ordering keeps `a` the smallest of the three so each triangle is
-        # counted once, the same rule the Cypher and every other adapter apply.
+        # The triangle count as the undirected 3-cycle pattern, closing back on
+        # `a`; the id ordering a < b < c keeps one of each triangle's six walks,
+        # the same rule the Cypher and every other adapter apply.
         "triangles": ("SELECT count(*) AS n FROM GRAPH_TABLE (pg "
-                      "MATCH (a:Person)-[k1:knows]->(b:Person)-[k2:knows]->(c:Person)"
-                      "-[k3:knows]->(a:Person) WHERE a.id < b.id AND a.id < c.id "
+                      "MATCH (a:Person)-[k1:knows]-(b:Person)-[k2:knows]-(c:Person)"
+                      "-[k3:knows]-(a:Person) WHERE a.id < b.id AND b.id < c.id "
                       "COLUMNS (a.id AS aid, b.id AS bid, c.id AS cid))"),
     }
     # Nothing on this lane is unexpressible in SQL/PGQ. The hook stays, and
@@ -1345,7 +1470,10 @@ class DuckpgqGraph(Base):
             "WHERE extension_name = 'duckpgq'").fetchall()
         _ev = _ext[0][0] if _ext else "?"
         self.version = f"duckdb:{duckdb.__version__} + duckpgq:{_ev}"
-        self.row_extra = {"duckpgq_threads": self._threads,
+        # The engine's own answer, not the number passed above (CAMPAIGN
+        # section 7 row 21): fairness_check F15 holds it to the cpuset's size.
+        _rb = bench_common.duckdb_readback(self.cx)
+        self.row_extra = {"duckpgq_threads": _rb.pop("duckdb_threads", None), **_rb,
                           "duckpgq_extension_version": _ev}
         # Tables first, then the property graph over them (empty is fine: the
         # graph is a live view, so the build below fills it). Person keyed by id
@@ -1507,11 +1635,18 @@ class DuckpgqGraph(Base):
                     "WHERE g.p1 <> g.p3 AND ka.src IS NULL AND kb.src IS NULL)"),
     }
 
+    # THE ONE ENGINE ON THIS TABLE WHOSE READS PASTE THEIR VALUE (DECISIONS
+    # #116 item 2). DuckPGQ rejects a parameter anywhere in a query that holds
+    # a GRAPH_TABLE -- named, `?` or `$1`, inside MATCH or in the outer WHERE:
+    # "Parameter argument/count mismatch" on duckdb 1.5.4 (laptop, 2026-09-26),
+    # an open extension issue since 2024 (cwida/duckpgq-extension#75). DuckDB
+    # keeps no plan cache keyed on the text, so pasting costs it a parse, not a
+    # lost cached plan. Its writes are plain SQL and bind.
     def run_read(self, op, pid):
-        return self.cx.execute(self.READS[op].format(id=pid)).fetchall()
+        return self.cx.execute(self.READS[op].format(id=int(pid))).fetchall()
 
     def run_visited(self, pid):
-        return self.cx.execute(self.VISITED.format(id=pid)).fetchall()
+        return self.cx.execute(self.VISITED.format(id=int(pid))).fetchall()
 
     def run_olap(self, qname):
         if qname == "lsqb_q7":
@@ -1530,8 +1665,11 @@ class DuckpgqGraph(Base):
 
     def person_scan(self, id_from):
         return self.cx.execute(
-            f"SELECT id, name, age, city FROM Person WHERE id >= {id_from} "
-            "ORDER BY id").fetchall()
+            "SELECT id, name, age, city FROM Person WHERE id >= ? "
+            "ORDER BY id", [int(id_from)]).fetchall()
+
+    def edge_scan(self, id_from):
+        return self.cx.execute("SELECT src, dst FROM knows WHERE dst >= ? ORDER BY dst", [int(id_from)]).fetchall()
 
     def run_write(self, pid, new_id):
         # One transaction, the Cypher's CREATE-and-link: the person and the edge
@@ -1552,13 +1690,254 @@ class DuckpgqGraph(Base):
         self.cx.execute("DELETE FROM Person WHERE id = ?", [new_id])
         self.cx.execute("COMMIT")
 
-    def run_cypher(self, text):
+    def run_cypher(self, text, params=None):
         raise NotImplementedError("DuckPGQ runs SQL/PGQ through the name-based hooks")
 
     def close(self):
         self.cx.close()
 
 
+
+
+class PgAgeGraph(Base):
+    """PostgreSQL with Apache AGE, served (DECISIONS #128): every graph read
+    and write is the lane's own Cypher text, run through AGE's `cypher()`
+    table function, on the `dbbench:pg-age` image the cross-model lane already
+    pins (PostgreSQL 18 + pgvector 0.8.6 + AGE 1.8.0~rc0; the row records the
+    versions the server reports).
+
+    THE TEXTS RUN AS WRITTEN (laptop probe 2026-10-02,
+    repros/age-dialect/probe.py): the four reads, the write,
+    update and delete, the five hand-written analytics queries and LSQB's
+    nine. What AGE adds is the wrapper: `SELECT * FROM cypher('l2g', $$ <text>
+    $$, $1) AS (<one agtype column per RETURN item>)`, the column names taken
+    from the RETURN aliases every lane text already carries, and the values
+    bound through cypher()'s third argument as one agtype map (DECISIONS #116
+    item 2). AGE returns each value as agtype text, parsed back to the Python
+    value it spells after the timed call returns, as every adapter's rows are.
+
+    ONE LABEL PER VERTEX, SO MESSAGE IS A TABLE PARENT. AGE gives a vertex
+    exactly one label, and LSQB asks for `(:Message)`, the SNB supertype of
+    Post and Comment. A label is a PostgreSQL table here, so the supertype is
+    PostgreSQL inheritance: an empty `Message` label, and `ALTER TABLE
+    l2g."Post" INHERIT l2g."Message"` (and Comment), after which a scan of
+    Message reads both and `label(m)` still names each own label
+    (repros/age-dialect/inherit.py). Without it q4, q5, q7 and q8 count 0.
+
+    THE LOAD IS POSTGRESQL'S COPY INTO AGE'S LABEL TABLES. AGE's own bulk
+    loader, load_labels_from_file, reads a CSV from the server's filesystem,
+    which a served arm on this harness does not share with its client. A label
+    is an ordinary table (`id graphid, properties agtype`; an edge label adds
+    `start_id, end_id`), so COPY ... FROM STDIN writes exactly the rows the
+    loader and a Cypher CREATE write: each id is the graphid the label's own
+    sequence would assign, (label id << 48) | n in insertion order, and the
+    sequences are advanced past them so the timed CREATE continues from there.
+    Measured on the laptop: 20,000 persons in 0.12 s and 418,599 KNOWS in
+    2.9 s, where the cross-model lane's UNWIND ... CREATE path took 3.7 minutes
+    for 150,000 edges (BUGS F35).
+
+    INDEXES. AGE 1.8 creates a primary key on every vertex label's id and
+    btree indexes on every edge label's start_id and end_id, which are what a
+    traversal joins on. The lane adds the one its reads need: a btree on the
+    Person `id` property expression, which `WHERE p.id = $id` uses with the
+    value bound (EXPLAIN: Index Scan using person_id). Chosen by measurement
+    (DECISIONS #112; repros/age-dialect/index_probe.py, 10,000 persons on the
+    laptop, p50 without -> with it): point 7.76 -> 0.13 ms, hop1 8.08 -> 0.49,
+    hop2 13.8 -> 4.4, hop3f 126 -> 59, the same answers both ways.
+
+    ONE WRONG ANSWER, AGE'S AND DECLARED. The CRUD read-back `q.id >= $f`
+    goes through that index, and a btree scan on agtype that starts at a `>=`
+    bound skips the key equal to it (apache/age#2587, every release since
+    1.6.0), so the read-back misses the first person the write phase created.
+    equivalence_check.KNOWN_DISAGREEMENTS names it; the timed writes are right.
+
+    RESOURCES FITTED TO THE CELL, as every other engine's pools are (FAIRNESS
+    F3/F6): the runner sizes shared_buffers, effective_cache_size and
+    maintenance_work_mem from the container's cap, parallel workers per query
+    from its cpuset (PostgreSQL's fixed default of 2 used 3 cores of 12), and
+    work_mem from the cap over the cpuset's processes (the 4 MB default
+    spilled 42 GB of temp files per analytics pass on the full SF1 network;
+    fitted, 0.7 GB). Measured in repros/age-dialect/resource_fit_probe.py.
+    Every setting that decides what was measured is read back with SHOW onto
+    the row; synchronous_commit=off in the relaxed class, and durability is
+    the server's own answer (DECISIONS #81, #90).
+    """
+    QUERY_LANGUAGE = "Cypher through Apache AGE (cypher() in SQL)"
+    name = "pgage_graph"
+    GRAPH = "l2g"
+    # Read back onto the row: the settings that decide a plan or a cache.
+    _SHOW = ("shared_buffers", "effective_cache_size", "work_mem", "hash_mem_multiplier",
+             "maintenance_work_mem", "max_parallel_workers_per_gather", "max_parallel_workers",
+             "max_parallel_maintenance_workers", "max_worker_processes", "jit", "synchronous_commit")
+
+    def _open(self):
+        import psycopg
+        host = os.environ["BENCH_SERVER_HOST"]
+        port = os.environ.get("BENCH_SERVER_PORT", "5432")
+        # Autocommit: every lane statement is one cypher() call, one statement,
+        # so each is its own transaction, as the write's MATCH + two CREATEs
+        # must be (DECISIONS #82a).
+        self.cx = psycopg.connect(f"host={host} port={port} dbname=bench user=postgres "
+                                  "password=dbbenchpass", autocommit=True)
+        self.cx.execute("LOAD 'age'")
+        self.cx.execute('SET search_path = ag_catalog, "$user", public')
+        self._sql = {}   # lane text -> wrapped SQL, built once per text
+
+    def connect(self):
+        self._open()
+        c = self.cx
+        c.execute("CREATE EXTENSION IF NOT EXISTS age")
+        pv = c.execute("SELECT version()").fetchone()[0].split(" (")[0]
+        av = c.execute("SELECT extversion FROM pg_extension WHERE extname = 'age'").fetchone()[0]
+        self.version = f"{pv} + age:{av}"
+        shown = {k: c.execute(f"SHOW {k}").fetchone()[0] for k in self._SHOW}
+        self.durability = bench_common.pg_durability_string(shown["synchronous_commit"])
+        self.row_extra = {f"pg_{k}": v for k, v in shown.items() if k != "synchronous_commit"}
+        self.row_extra["driver_version"] = f"psycopg:{__import__('psycopg').__version__}"
+        # A fresh cell gets a fresh server; a reused one (laptop smoke) starts clean.
+        if c.execute("SELECT 1 FROM ag_catalog.ag_graph WHERE name = %s", (self.GRAPH,)).fetchone():
+            c.execute("SELECT drop_graph(%s, true)", (self.GRAPH,))
+        c.execute("SELECT create_graph(%s)", (self.GRAPH,))
+        self._labels = {}
+        self._make_label("Person", "v")
+        self._make_label("KNOWS", "e")
+
+    def _make_label(self, name, kind):
+        fn = "create_vlabel" if kind == "v" else "create_elabel"
+        self.cx.execute(f"SELECT {fn}(%s, %s)", (self.GRAPH, name))
+        self._labels[name] = self.cx.execute(
+            "SELECT id FROM ag_catalog.ag_label WHERE name = %s AND graph = "
+            "(SELECT graphid FROM ag_catalog.ag_graph WHERE name = %s)",
+            (name, self.GRAPH)).fetchone()[0]
+
+    def _gid(self, label, n):
+        """The graphid AGE's sequence for `label` assigns to its n-th row."""
+        return (self._labels[label] << 48) | n
+
+    def _copy_vertices(self, label, rows):
+        """COPY (property dict, ...) into a vertex label; returns {lane id: graphid}."""
+        gids, n = {}, 0
+        with self.cx.cursor() as cur, cur.copy(
+                f'COPY {self.GRAPH}."{label}" (id, properties) FROM STDIN') as cp:
+            for props in rows:
+                n += 1
+                g = self._gid(label, n)
+                gids[props["id"]] = g
+                cp.write_row((g, json.dumps(props)))
+        self.cx.execute(f"SELECT setval('{self.GRAPH}.\"{label}_id_seq\"', %s)", (max(n, 1),))
+        return gids
+
+    def _copy_edges(self, label, triples):
+        """COPY (start graphid, end graphid, property dict) into an edge label,
+        continuing the label's sequence from wherever an earlier stream left it."""
+        n = self._edge_n.get(label, 0)
+        with self.cx.cursor() as cur, cur.copy(
+                f'COPY {self.GRAPH}."{label}" (id, start_id, end_id, properties) FROM STDIN') as cp:
+            for s, d, props in triples:
+                n += 1
+                cp.write_row((self._gid(label, n), s, d, json.dumps(props)))
+        added = n - self._edge_n.get(label, 0)
+        self._edge_n[label] = n
+        self.cx.execute(f"SELECT setval('{self.GRAPH}.\"{label}_id_seq\"', %s)", (max(n, 1),))
+        return added
+
+    def build(self, n_persons):
+        self._edge_n = {}
+        self._gids = {"Person": self._copy_vertices(
+            "Person", ({"id": i, "name": name, "age": age, "city": city}
+                       for i, name, age, city in gen_persons(n_persons)))}
+        pg = self._gids["Person"]
+        self._copy_edges("KNOWS", ((pg[s], pg[d], {"since": y}) for s, d, y in gen_edges(n_persons)))
+        self.cx.execute(f'CREATE INDEX person_id ON {self.GRAPH}."Person" USING btree '
+                        "(ag_catalog.agtype_access_operator(properties, '\"id\"'::agtype))")
+
+    def build_messages(self):
+        import ldbc_snb as _ldbc
+        mc = _ldbc.MessageCorpus(self._scale)
+        self._make_label("Message", "v")
+        vcount = ecount = 0
+        for label, ids in mc.vertex_spec():
+            self._make_label(label, "v")
+            self._gids[label] = self._copy_vertices(label, ({"id": v} for v in ids))
+            vcount += len(self._gids[label])
+            if label in _ldbc.MSG_MESSAGE_SUBLABELS:
+                self.cx.execute(f'ALTER TABLE {self.GRAPH}."{label}" INHERIT {self.GRAPH}."Message"')
+        for rel, src_label, dst_label, gen in mc.edge_spec():
+            if rel not in self._labels:
+                self._make_label(rel, "e")
+            sg, dg = self._gids[src_label], self._gids[dst_label]
+            ecount += self._copy_edges(rel, ((sg[s], dg[d], {}) for s, d in gen()))
+        self.msg_counts = {"msg_vertices": vcount, "msg_edges": ecount}
+        # The id maps were only the load's; the timed queries never read them.
+        self._gids = {"Person": self._gids["Person"]}
+
+    def post_build(self, workload):
+        """PostgreSQL's documented step after a bulk load: ANALYZE, so the
+        planner has statistics for the tables COPY just filled."""
+        self.cx.execute("ANALYZE")
+
+    def reopen(self):
+        """Reattach to the built graph: a new session, no DDL."""
+        self.cx.close()
+        self._open()
+
+    @staticmethod
+    def _columns(text):
+        """The result columns of a lane text: its last RETURN's aliases."""
+        import re
+        m = list(re.finditer(r"\bRETURN\b", text, re.I))
+        if not m:
+            return ["v"]
+        tail = re.split(r"\b(?:ORDER\s+BY|LIMIT|SKIP)\b", text[m[-1].end():], flags=re.I)[0]
+        items, depth, cur = [], 0, ""
+        for ch in tail:
+            depth += ch in "([{"
+            depth -= ch in ")]}"
+            if ch == "," and depth == 0:
+                items.append(cur)
+                cur = ""
+            else:
+                cur += ch
+        items.append(cur)
+        cols = []
+        for i, it in enumerate(items):
+            a = re.search(r"\bAS\s+(\w+)\s*$", it.strip(), re.I)
+            cols.append(a.group(1) if a else f"c{i}")
+        return cols
+
+    def _wrapped(self, text, bound):
+        """(SQL, column names) for a lane text, built on its first call."""
+        hit = self._sql.get((text, bound))
+        if hit is None:
+            cols = self._columns(text)
+            sql = (f"SELECT * FROM cypher('{self.GRAPH}', $$ {text} $$"
+                   + (", %s" if bound else "") + ") AS ("
+                   + ", ".join(f"{c} agtype" for c in cols) + ")")
+            hit = self._sql[(text, bound)] = (sql, cols)
+        return hit
+
+    @staticmethod
+    def _value(v):
+        """agtype text -> the Python value it spells ('"a"' -> 'a', '3' -> 3)."""
+        if v is None:
+            return None
+        s = str(v)
+        for suffix in ("::numeric", "::vertex", "::edge", "::path"):
+            if s.endswith(suffix):
+                s = s[: -len(suffix)]
+        return json.loads(s)
+
+    def run_cypher(self, text, params=None):
+        sql, cols = self._wrapped(text, bool(params))
+        rows = self.cx.execute(sql, (json.dumps(params),) if params else None).fetchall()
+        return [{c: self._value(v) for c, v in zip(cols, r)} for r in rows]
+
+    def run_cypher_write(self, text, params=None):
+        sql, _ = self._wrapped(text, bool(params))
+        self.cx.execute(sql, (json.dumps(params),) if params else None)
+
+    def close(self):
+        self.cx.close()
 
 
 class SurrealGraph(Base):
@@ -1673,49 +2052,107 @@ class SurrealGraph(Base):
             res = res[-1]["result"]
         return res if isinstance(res, list) else ([res] if res is not None else [])
 
+    # BOUND VALUES (DECISIONS #116 item 2): `$vars` with RecordID objects, so
+    # record-id addressing is kept and nothing is written into the SurrealQL
+    # text (same answers as the pasted form, laptop 2026-09-26).
+    #
+    # UNDIRECTED (CAMPAIGN section 7 row 56, graph_common.KNOWS_DIRECTION). A
+    # person's friends are the far end of every friendship touching them, which in
+    # SurrealQL is the out-neighbours concatenated with the in-neighbours
+    # (`->knows->person` and `<-knows<-person`; `<->knows<->person` is NOT that
+    # list, see the LSQB note below). One friendship is one stored edge, so it
+    # appears once. A multi-hop walk maps the same expression over the previous
+    # hop's records in a CLOSURE (`array::map` keeps path multiplicity on core
+    # 2.3.10 and on 3.2.4; a traversal off a parenthesised array does not on
+    # 3.2.4), and Cypher's rule that a friendship is not walked back along itself
+    # is written out on the vertices: the 2nd hop does not return to the start,
+    # the 3rd does not return to the 1st. Exact on a simple graph, which LDBC's
+    # knows is. The reads count DISTINCT ends, so path multiplicity drops out.
+    _FRIENDS = "array::concat(->knows->person, <-knows<-person)"
+    # walks p-a-b: b is not p; and p-a-b-x: x is not a.
+    _HOP2 = ("array::complement(array::flatten(array::map(" + _FRIENDS + ", |$a| "
+             + "array::concat($a->knows->person, $a<-knows<-person))), [$p])")
+    # TWO THINGS THE ENGINE DOES NOT DO INSIDE A CLOSURE (found by comparing every start of the SF1 slice with a DuckDB
+    # reference, 26 of 96 present starts off by one or more, probed on core 2.3.10): a QUERY PARAMETER (`$p`) reads as NONE, and
+    # an OUTER closure's variable (`$a`) is not visible inside an INNER closure. So `complement(..., [$p])` and
+    # `complement(..., [$a])` written inside the inner closures removed nothing, and the walks p-a-p-x and p-a-b-a were
+    # counted. What IS visible inside a closure is the current record: `id` is the start person. The exclusion of `p` is
+    # therefore written `[id]`, and the exclusion of `a` is applied to the union over b in the OUTER closure, where `$a` is
+    # its own variable (for one fixed a, the union over b minus {a} is exactly the ends of the walks p-a-b-x with b not p and
+    # x not a). The 2-hop's `[$p]` is outside any closure and was right.
+    _HOP3 = ("array::flatten(array::map(" + _FRIENDS + ", |$a| array::complement(array::flatten(array::map("
+             + "array::complement(array::concat($a->knows->person, $a<-knows<-person), [id]), |$b| "
+             + "array::concat($b->knows->person, $b<-knows<-person))), [$a])))")
+    READS = {
+        "point": "SELECT name, age FROM ONLY $p",
+        "hop1": ("SELECT array::len(" + _FRIENDS + ") AS n, "
+                 "math::mean(array::concat(->knows->person.age, <-knows<-person.age)) AS a FROM ONLY $p"),
+        "hop2": "SELECT array::len(array::distinct(" + _HOP2 + ")) AS n FROM ONLY $p",
+        "hop3f": ("SELECT array::len(array::distinct(array::filter(" + _HOP3 + ", |$x| $x.age > "
+                  + str(HOP3F_MIN_AGE) + "))) AS n FROM ONLY $p"),
+    }
+    VISITED = "SELECT array::len(array::distinct(" + _HOP3 + ")) AS n FROM ONLY $p"
+
+    @staticmethod
+    def _rid(i):
+        from surrealdb import RecordID
+        return RecordID("person", int(i))
+
     def run_read(self, op, pid):
-        if op == "point":
-            r = self.db.query(f"SELECT name, age FROM ONLY person:{pid}")
-        elif op == "hop1":
-            r = self.db.query(f"SELECT count(->knows->person) AS n, math::mean(->knows->person.age) AS a FROM ONLY person:{pid}")
-        elif op == "hop3f":
-            r = self.db.query(f"SELECT array::len(array::distinct(->knows->person->knows->person->knows->(person WHERE age > 30))) AS n FROM ONLY person:{pid}")
-        else:
-            r = self.db.query(f"SELECT array::len(array::distinct(->knows->person->knows->person)) AS n FROM ONLY person:{pid}")
-        return self._rows(r)
+        return self._rows(self.db.query(self.READS[op], {"p": self._rid(pid)}))
 
     def run_visited(self, pid):
-        return self._rows(self.db.query(
-            f"SELECT array::len(array::distinct(->knows->person->knows->person->knows->person)) AS n "
-            f"FROM ONLY person:{pid}"))
+        return self._rows(self.db.query(self.VISITED, {"p": self._rid(pid)}))
 
     def run_update(self, new_id):
-        self.db.query(f"UPDATE person:{new_id} SET age = {UPDATE_AGE}")
+        self.db.query("UPDATE $p SET age = $a", {"p": self._rid(new_id), "a": UPDATE_AGE})
 
     def person_scan(self, id_from):
         return self._rows(self.db.query(
-            f"SELECT pid, name, age, city FROM person WHERE pid >= {id_from}"))
+            "SELECT pid, name, age, city FROM person WHERE pid >= $f", {"f": int(id_from)}))
+
+    def edge_scan(self, id_from):
+        return self._rows(self.db.query(
+            "SELECT in.pid AS src, out.pid AS dst FROM knows WHERE out.pid >= $f", {"f": int(id_from)}))
 
     def run_write(self, pid, new_id):
-        self.db.query(f"CREATE person:{new_id} SET pid = {new_id}, name = 'w{new_id}', age = 33, city = 'city_0'; "
-                      f"RELATE person:{pid}->knows->person:{new_id} SET since = 2026")
+        # ONE TRANSACTION, as on every other engine. Until the re-pin the two
+        # statements went without BEGIN/COMMIT, and SurrealDB runs each
+        # statement of a request in its own transaction: a failed RELATE left
+        # the person behind, and the SDK did not raise (BUGS F130).
+        self.db.query("BEGIN; CREATE $n SET pid = $nid, name = $name, age = 33, city = 'city_0'; "
+                      "RELATE $p->knows->$n SET since = 2026; COMMIT;",
+                      {"n": self._rid(new_id), "nid": int(new_id), "name": f"w{int(new_id)}",
+                       "p": self._rid(pid)})
 
     def run_delete(self, new_id):
         # One transaction: the edges into the record, then the record.
-        # person:{id}<->knows deletes the edges touching the record through
+        # $n<->knows deletes the edges touching the record through
         # the graph (laptop, 2026-09-14: the WHERE form scanned the edge table,
         # 777 ms at micro); then the record, one transaction.
-        self.db.query(f"BEGIN; DELETE person:{new_id}<->knows; DELETE person:{new_id}; COMMIT;")
+        self.db.query("BEGIN; DELETE $n<->knows; DELETE $n; COMMIT;", {"n": self._rid(new_id)})
 
     OLAP = {
-        "top_degree": "SELECT pid, count(->knows) AS d FROM person ORDER BY d DESC, pid ASC LIMIT 10",
+        # UNDIRECTED (row 56): a friendship counts for both of its people.
+        "top_degree": "SELECT pid, count(->knows) + count(<-knows) AS d FROM person ORDER BY d DESC, pid ASC LIMIT 10",
         # subquery form: on core 2.3.10 ORDER BY after GROUP BY sorted by the group
-        # key, not n (laptop smoke, 2026-09-11); 3.2.4 accepts both forms
+        # key, not n (laptop smoke, 2026-09-11); 3.2.4 accepts both forms.
+        # One row of `knows` is one friendship, which is what a.id < b.id asks for:
+        # the stored direction does not matter, so the scan is unchanged.
         "same_city_edges": "SELECT * FROM (SELECT in.city AS c, count() AS n FROM knows WHERE in.city = out.city GROUP BY c) ORDER BY n DESC, c ASC LIMIT 10",
-        "friend_age_by_city": "SELECT * FROM (SELECT in.city AS c, math::mean(out.age) AS a, count() AS n FROM knows GROUP BY c) ORDER BY n DESC, c ASC LIMIT 10",
+        # Per person (their friends' count and age sum), then per city: the mean is
+        # the sum over the count, the same number the Cypher's avg gives, from both
+        # ends of every friendship. THE SUM IS CAST: SurrealQL divides two integers as
+        # integers (5 / 2 is 2), so `S / N` returned 41 for 41.79 and the digest, which
+        # rounds at the sixth digit, disagreed with every other engine on the SF1 slice.
+        "friend_age_by_city": ("SELECT * FROM (SELECT c, <float> S / N AS a, N AS n FROM (SELECT c, "
+                               "math::sum(s) AS S, math::sum(n) AS N FROM (SELECT city AS c, "
+                               "array::len(array::concat(->knows->person, <-knows<-person)) AS n, "
+                               "math::sum(array::concat(->knows->person.age, <-knows<-person.age)) AS s "
+                               "FROM person) GROUP BY c) WHERE N > 0) ORDER BY n DESC, c ASC LIMIT 10"),
         # 2026-10 (#82b). The degree distribution is a group-by over a computed
-        # out-degree; degree zero is excluded to match the Cypher MATCH, which
-        # does not reach a person with no outgoing KNOWS.
+        # friend count; degree zero is excluded to match the Cypher MATCH, which
+        # does not reach a person with no friends.
         # TWO SUBQUERIES, not one GROUP BY on a computed alias. The one-level
         # form `SELECT count(->knows) AS deg, count() AS n FROM person GROUP BY
         # deg` did NOT group: it returned 2,000 rows, one per person, each
@@ -1725,7 +2162,7 @@ class SurrealGraph(Base):
         # the outer one, so the group key is a plain field by the time GROUP BY
         # sees it.
         "degree_dist": ("SELECT * FROM (SELECT deg, count() AS n FROM "
-                        "(SELECT count(->knows) AS deg FROM person) WHERE deg > 0 "
+                        "(SELECT count(->knows) + count(<-knows) AS deg FROM person) WHERE deg > 0 "
                         "GROUP BY deg) ORDER BY deg"),
         # THE TRIANGLE COUNT, WHICH THIS ADAPTER DECLARED UNEXPRESSIBLE UNTIL
         # 2026-09-14. The old reason -- "arrow traversal returns a path's
@@ -1737,21 +2174,19 @@ class SurrealGraph(Base):
         # have. Same reading as the degree distribution (#82b): a first failure
         # is evidence about our fluency, not about the engine.
         #
-        # WHY IT COUNTS EACH TRIANGLE ONCE, which is the whole of the question.
-        # The Cypher is MATCH (a)->(b)->(c)->(a) WHERE a.id < b.id AND
-        # a.id < c.id, so `a` is the smallest id of the three and exactly one
-        # of a directed 3-cycle's three rotations survives. Here one row of
-        # `knows` IS the (a -> b) leg: `in` is a, `out` is b, `WHERE in < out`
-        # is a.id < b.id, and the third vertex c is any record that b points at
-        # and that points at a -- that is N+(b) INTERSECT N-(a), spelled
-        # `out->knows.out` and `in<-knows.in`. `|$c| $c > in` is a.id < c.id.
-        # So each row contributes the triangles whose smallest-id vertex is its
-        # own `in`, and summing over the rows counts every triangle once.
-        # Verified against the harness's own Python triangle enumeration on the
-        # shared generator at 200/300/600/1000/2000 persons, on core 2.3.10 and
-        # on the 3.2.4 server: 1836 / 2452 / 2999 / 2469 / 2776, exact on every
-        # one, which is what DECISIONS #88's digest then checks against Neo4j,
-        # ArcadeDB, LadybugDB and ArangoDB.
+        # WHY IT COUNTS EACH TRIANGLE ONCE (UNDIRECTED, CAMPAIGN section 7 row 56).
+        # The Cypher is MATCH (a)-[:KNOWS]-(b)-[:KNOWS]-(c)-[:KNOWS]-(a) WHERE
+        # a.id < b.id AND b.id < c.id, so a triangle is counted at its two
+        # smallest ids. One row of `knows` IS a friendship (u, v), stored in
+        # either direction: the third person is any c that is a friend of BOTH
+        # ends and has a larger id than both, N(u) INTERSECT N(v) above max(u, v),
+        # where N(x) is `x->knows.out` joined with `x<-knows.in`. A triangle
+        # {a < b < c} has three friendships and is counted only from (a, b): from
+        # (a, c) and (b, c) no common friend exceeds c. So summing over every row
+        # counts each triangle once whatever way its edges are stored. (Through
+        # October this was the directed 3-cycle `WHERE in < out` with `$c > in`,
+        # which a graph stored from the smaller id to the larger cannot hold:
+        # 0 on every engine, BUGS F169.)
         #
         # THREE CONSTRUCTS, EACH FROM THE DOCUMENTATION, each of which the
         # first attempt got wrong:
@@ -1761,7 +2196,7 @@ class SurrealGraph(Base):
         #  - array::intersect(a, b) keeps a's duplicates and needs no closure
         #    (surrealdb.com/docs/surrealql/functions/database/array).
         #  - array::filter's closure CAPTURES the fields of the row being
-        #    projected, which is how `$c > in` reaches the edge's own `in`.
+        #    projected, which is how `$c > ...in` reaches the edge's own `in`.
         #    `$parent` does NOT: inside an idiom filter or a closure it
         #    resolves to nothing and the comparison silently passes, which is
         #    the bug that made the first ordered attempt return 3,656 for a
@@ -1772,20 +2207,17 @@ class SurrealGraph(Base):
         # the same set and both return the same count, but `->knows->person`
         # fetches every neighbour's whole record while `->knows.out` reads the
         # destination id off the edge. On core 2.3.10 that is 16.4 s against
-        # 85.9 s at 1,000 persons (laptop, 2026-09-14). This form costs about
-        # |E|^1.1 on the shared generator -- 38.1 s over 40,833 edges, 227.0 s
-        # over 206,713 -- so SF10's roughly 1.9M edges EXTRAPOLATE to a cold
-        # pass of tens of minutes, and the arrow form to several times that.
-        # Extrapolated, not measured: no SF10 cell has run since this query
-        # existed, and the extrapolation crosses a corpus change as well as a
-        # size one, since a triangle count's real cost is sum(deg(u)*deg(v))
-        # over the edges and LDBC's degree distribution is not the
-        # generator's. The 3.2.4 server inverts the spelling preference, and
-        # its subclass overrides this entry for that reason.
+        # 85.9 s at 1,000 persons (laptop, 2026-09-14, the directed form). The
+        # 3.2.4 server inverts the spelling preference, and its subclass
+        # overrides this entry for that reason. Extrapolated, not measured, for
+        # SF10: the cost of a triangle count is sum(deg(u)*deg(v)) over the
+        # edges and LDBC's degree distribution is not the generator's.
         "triangles": ("SELECT math::sum(n) AS n FROM ("
                       "SELECT array::len(array::filter(array::intersect("
-                      "out->knows.out, in<-knows.in), |$c| $c > in)) AS n "
-                      "FROM knows WHERE in < out) GROUP ALL"),
+                      "array::concat(in->knows.out, in<-knows.in), "
+                      "array::concat(out->knows.out, out<-knows.in)), "
+                      "|$c| $c > (IF in < out THEN out ELSE in END))) AS n "
+                      "FROM knows) GROUP ALL"),
     }
     # Nothing on this lane is unexpressible in SurrealQL any more. The hook
     # stays, and stays empty, because DECISIONS #88 is about declaring an
@@ -1935,7 +2367,7 @@ class SurrealGraph(Base):
     def run_olap(self, qname):
         return self._rows(self.db.query(self.LSQB.get(qname) or self.OLAP[qname]))
 
-    def run_cypher(self, text):
+    def run_cypher(self, text, params=None):
         raise NotImplementedError("SurrealDB runs SurrealQL through the name-based hooks")
 
     def close(self):
@@ -1970,8 +2402,10 @@ class SurrealGraphServer(SurrealGraph):
     OLAP = dict(SurrealGraph.OLAP,
                 triangles=("SELECT math::sum(n) AS n FROM ("
                            "SELECT array::len(array::filter(array::intersect("
-                           "out->knows->person, in<-knows<-person), |$c| $c > in)) AS n "
-                           "FROM knows WHERE in < out) GROUP ALL"))
+                           "array::concat(in->knows->person, in<-knows<-person), "
+                           "array::concat(out->knows->person, out<-knows<-person)), "
+                           "|$c| $c > (IF in < out THEN out ELSE in END))) AS n "
+                           "FROM knows) GROUP ALL"))
 
     # THE SERVED 3.2.4 SPELLS THREE OF THE NINE DIFFERENTLY (2026-09-18,
     # DECISIONS #93 applied to LSQB), each proven against the reference on the
@@ -2009,6 +2443,7 @@ class SurrealGraphServer(SurrealGraph):
         # reconnects, re-authenticates and re-selects the namespace once when
         # the socket dies mid-query.
         self.db = surreal_common.served_client()
+        self.durability = surreal_common.served_durability()
         self.version = "surrealdb-server:" + str(self.db.version()).replace("surrealdb-", "")
 
 
@@ -2105,36 +2540,44 @@ class ArangoGraph(Base):
                 ecolls[ec].import_bulk(buf)
         self.msg_counts = {"msg_vertices": vcount, "msg_edges": ecount}
 
+    # UNDIRECTED (CAMPAIGN section 7 row 56, graph_common.KNOWS_DIRECTION): every
+    # traversal is `ANY`, over the one stored edge per friendship. AQL's default
+    # `uniqueEdges: "path"` is Cypher's relationship isomorphism (a friendship is
+    # not walked back along itself), so the multi-hop reads need nothing written
+    # out; each friendship counts once per walk, whichever way it is stored.
     READS = {
         "point": "FOR p IN person FILTER p._key == @k RETURN {name: p.name, age: p.age}",
-        "hop1": ("FOR f IN 1..1 OUTBOUND CONCAT('person/', @k) knows "
+        "hop1": ("FOR f IN 1..1 ANY CONCAT('person/', @k) knows "
                  "COLLECT AGGREGATE n = COUNT(1), a = AVG(f.age) RETURN {n, a}"),
         # DISTINCT at depth two, like count(DISTINCT fof): the default path
         # uniqueness matches Cypher's relationship isomorphism.
-        "hop2": ("LET s = (FOR v IN 2..2 OUTBOUND CONCAT('person/', @k) knows RETURN DISTINCT v._key) "
+        "hop2": ("LET s = (FOR v IN 2..2 ANY CONCAT('person/', @k) knows RETURN DISTINCT v._key) "
                  "RETURN LENGTH(s)"),
-        "hop3f": ("LET s = (FOR v IN 3..3 OUTBOUND CONCAT('person/', @k) knows FILTER v.age > 30 RETURN DISTINCT v._key) "
+        "hop3f": ("LET s = (FOR v IN 3..3 ANY CONCAT('person/', @k) knows FILTER v.age > " + str(HOP3F_MIN_AGE) + " RETURN DISTINCT v._key) "
                   "RETURN LENGTH(s)"),
     }
-    VISITED = ("LET s = (FOR v IN 3..3 OUTBOUND CONCAT('person/', @k) knows RETURN DISTINCT v._key) "
+    VISITED = ("LET s = (FOR v IN 3..3 ANY CONCAT('person/', @k) knows RETURN DISTINCT v._key) "
                "RETURN LENGTH(s)")
     OLAP = {
-        "top_degree": ("FOR p IN person FOR f IN 1..1 OUTBOUND p knows "
+        "top_degree": ("FOR p IN person FOR f IN 1..1 ANY p knows "
                        "COLLECT id = p.id WITH COUNT INTO d SORT d DESC, id ASC LIMIT 10 RETURN {id, d}"),
-        "same_city_edges": ("FOR a IN person FOR b IN 1..1 OUTBOUND a knows FILTER a.city == b.city "
+        # One row per friendship: the pair is ordered (a.id < b.id) so ANY counts it once.
+        "same_city_edges": ("FOR a IN person FOR b IN 1..1 ANY a knows FILTER a.city == b.city AND a.id < b.id "
                             "COLLECT c = a.city WITH COUNT INTO n SORT n DESC, c ASC LIMIT 10 RETURN {c, n}"),
-        "friend_age_by_city": ("FOR p IN person FOR f IN 1..1 OUTBOUND p knows "
+        "friend_age_by_city": ("FOR p IN person FOR f IN 1..1 ANY p knows "
                                "COLLECT c = p.city AGGREGATE a = AVG(f.age), n = COUNT(1) "
                                "SORT n DESC, c ASC LIMIT 10 RETURN {c, a, n}"),
         # 2026-10 (#82b), the same two questions in AQL. degree zero is filtered
         # out to match the Cypher MATCH.
-        "degree_dist": ("FOR p IN person LET d = LENGTH(FOR f IN 1..1 OUTBOUND p knows RETURN 1) "
+        "degree_dist": ("FOR p IN person LET d = LENGTH(FOR f IN 1..1 ANY p knows RETURN 1) "
                         "FILTER d > 0 COLLECT deg = d WITH COUNT INTO n SORT deg RETURN {deg, n}"),
+        # a < b < c, so each triangle is counted once of its six walks; the
+        # closing traversal is back to `a`.
         "triangles": ("RETURN {n: LENGTH("
                       "FOR a IN person "
-                      "FOR b IN 1..1 OUTBOUND a knows FILTER b.id > a.id "
-                      "FOR c IN 1..1 OUTBOUND b knows FILTER c.id > a.id "
-                      "FOR d IN 1..1 OUTBOUND c knows FILTER d._key == a._key "
+                      "FOR b IN 1..1 ANY a knows FILTER b.id > a.id "
+                      "FOR c IN 1..1 ANY b knows FILTER c.id > b.id "
+                      "FOR d IN 1..1 ANY c knows FILTER d._key == a._key "
                       "RETURN 1)}"),
     }
 
@@ -2280,28 +2723,46 @@ class ArangoGraph(Base):
         return self._n(self.VISITED, k=str(pid))
 
     def run_update(self, new_id):
-        self._n("UPDATE {_key: @nk} WITH {age: @a} IN person", nk=str(new_id), a=UPDATE_AGE)
+        # A no-op when the person is absent, as Cypher's MATCH ... SET is:
+        # `UPDATE {_key: ...}` raises "document not found" instead, which the
+        # anchored write (above) makes reachable on a capped slice. The
+        # FILTER on _key reads the primary index.
+        self._n("FOR p IN person FILTER p._key == @nk UPDATE p WITH {age: @a} IN person",
+                nk=str(new_id), a=UPDATE_AGE)
 
     def person_scan(self, id_from):
         return self._n("FOR p IN person FILTER p.id >= @f "
                        "RETURN {id: p.id, name: p.name, age: p.age, city: p.city}", f=id_from)
 
+    def edge_scan(self, id_from):
+        # the edges INTO the written persons: the edge collection's _to index, from the persons read back
+        return self._n("FOR p IN person FILTER p.id >= @f "
+                       "FOR a IN 1..1 INBOUND p knows RETURN {src: a.id, dst: p.id}", f=id_from)
+
     def run_write(self, pid, new_id):
-        self._n("INSERT {_key: @nk, id: @n, name: CONCAT('w', @nk), age: 33, city: 'city_0'} INTO person "
+        # THE ANCHOR IS LOOKED UP FIRST, as the Cypher's MATCH does, and
+        # nothing is written when it is absent (2026-10-02, the same fix as
+        # MongoDB's): on a capped LDBC slice the read set names persons the
+        # slice did not load, and the unconditional inserts created a person
+        # the Cypher engines did not. Still one AQL query, so one transaction.
+        self._n("LET a = DOCUMENT('person', @k) FILTER a != null "
+                "INSERT {_key: @nk, id: @n, name: CONCAT('w', @nk), age: 33, city: 'city_0'} INTO person "
                 "INSERT {_from: CONCAT('person/', @k), _to: CONCAT('person/', @nk), since: 2026} INTO knows",
                 k=str(pid), nk=str(new_id), n=new_id)
 
     def run_delete(self, new_id):
         # One AQL query, so one transaction: the edges touching the vertex, then the vertex.
+        # Both removals are no-ops when the person is absent, as Cypher's
+        # MATCH ... DETACH DELETE is (`REMOVE {_key: ...}` raised instead).
         self._n("LET v = CONCAT('person/', @nk) "
-                "FOR e IN knows FILTER e._from == v OR e._to == v REMOVE e IN knows "
-                "REMOVE {_key: @nk} IN person",
+                "LET gone = (FOR e IN knows FILTER e._from == v OR e._to == v REMOVE e IN knows) "
+                "FOR p IN person FILTER p._key == @nk REMOVE p IN person",
                 nk=str(new_id))
 
     def run_olap(self, qname):
         return self._n(self.LSQB.get(qname) or self.OLAP[qname])
 
-    def run_cypher(self, text):
+    def run_cypher(self, text, params=None):
         raise NotImplementedError("ArangoDB runs AQL through the name-based hooks")
 
     def close(self):
@@ -2320,42 +2781,34 @@ class MongoGraph(Base):
     turned out to be expressible; what follows is the part that is not
     obvious, and the full account is in COMPARATOR-DIALECTS.md.
 
-    THE MULTI-HOP READS USE CHAINED $lookup, NOT $graphLookup, and the reason
-    is not that $graphLookup fails. Measured at micro (2,000 persons, 40,833
-    edges, the fifty-id read set), with the depth offset written correctly --
-    `startWith: "$dst"` has already consumed the first hop, so "exactly N
-    hops" is `maxDepth: N-2` with `depthField == N-2` -- $graphLookup agrees
-    with the chained form on 50 of 50 ids at two hops AND at three, and both
-    agree with a plain Python enumeration over the same generator. The first
-    version of this probe compared depth 1 against two hops, got a disagreement
-    on 50 of 50, and would have gone into the record as "MongoDB's recursive
-    stage answers a different question"; it was our off-by-one. What decided
-    the spelling is cost, the way DECISIONS #93 decided SurrealDB's triangle
-    count: per operation over the same fifty ids,
-
-        two hops    $graphLookup 4.10 ms   chained $lookup 3.21 ms
-        three hops  $graphLookup 30.01 ms  chained $lookup 38.27 ms
-
-    so neither form wins on both. The chained form is used for both, because
-    it is the only one of the two that is a faithful translation BY
-    CONSTRUCTION rather than by measurement on one corpus (see below), and the
-    three-hop reading is the one place this arm is left slower than it needs
-    to be. Re-checking $graphLookup's equivalence at the campaign's LDBC
-    corpus would buy about 1.3x on hop3f and nothing else.
+    EVERY QUESTION IS ASKED UNDIRECTED (CAMPAIGN section 7 row 56, DECISIONS #151,
+    graph_common.KNOWS_DIRECTION), over the one stored `knows` document per
+    friendship, which is why the multi-hop reads are chained $lookup stages again.
+    DECISIONS #131 item 2 had moved them to $graphLookup "wherever it states the
+    question exactly": it walks ONE direction of `knows` (connectFromField dst to
+    connectToField src), so it states the directed question exactly and the
+    undirected one only over a second, symmetric copy of the edges, which would
+    change this arm's storage (every other engine keeps one edge per friendship;
+    the full-network tier's `knows_undir` is a copy of that kind, built only for
+    LSQB). So each hop is two indexed $lookups, one on `src` and one on `dst`,
+    and a friendship counts once per walk whichever way it is stored.
 
     RELATIONSHIP UNIQUENESS HAS TO BE WRITTEN OUT. Cypher's MATCH forbids
     reusing the same relationship inside one path and ArangoDB's traversal
-    defaults to the same (uniqueEdges: path); neither a chain of $lookups nor
-    $graphLookup has such a rule. At three hops the only collision this corpus
-    can produce is the first edge reappearing as the third (a->b, b->a, a->b),
-    so hop3f and the three-hop visited probe carry an explicit `$ne` on the
-    edge _id. On the micro corpus the clause changes the answer on 0 of 50
-    ids, because these queries count DISTINCT endpoints and a dropped path
-    almost always has a surviving twin -- which is exactly why it is written
-    out rather than left to luck: the day it matters, it would be a silent
-    over-count against every engine that enforces the rule.
+    defaults to the same (uniqueEdges: path); a chain of $lookups has no such
+    rule, and undirected it matters at every hop (a friendship can be walked back
+    along itself). Each hop therefore drops the edges already on the path by
+    their _id, so the answer is Cypher's even on a corpus holding both a->b and
+    b->a.
+
+    $lookup is also the shape of the one-hop read (an index match on `src` or
+    `dst` and a join to the friend's `person` document for the age), the far
+    end's age filter on hop3f, the writes, and the analytics, whose fourteen
+    questions are fixed-shape patterns (one-hop joins, a closed triangle, LSQB's
+    labelled chains) that $graphLookup cannot state, since it neither returns
+    paths nor closes a cycle.
     """
-    QUERY_LANGUAGE = "the aggregation pipeline ($graphLookup)"
+    QUERY_LANGUAGE = "the aggregation pipeline ($lookup joins over both ends of each friendship)"
     name = "mongodb_graph"
 
     def connect(self):
@@ -2386,11 +2839,16 @@ class MongoGraph(Base):
         # dst is the inbound side the triangle count and the delete need.
         self.knows.create_index("src")
         self.knows.create_index("dst")
+        # The undirected hops below are exact only without self-loops (a self-loop is
+        # both ends of one friendship); counted on the row and refused.
+        loops = self.knows.count_documents({"$expr": {"$eq": ["$src", "$dst"]}})
+        self.row_extra = {**(getattr(self, "row_extra", None) or {}), "mongodb_knows_self_loops": loops}
+        if loops:
+            raise RuntimeError(f"mongodb_graph: {loops} KNOWS self-loops; the undirected reads assume none")
 
     # ---- reads -------------------------------------------------------
-    # One hop is one $lookup from `knows` into `knows`; the last hop joins
-    # `person` only where a property of the far end is asked for.
-    _HOP = {"from": "knows", "localField": "dst", "foreignField": "src", "as": "e2"}
+    # The multi-hop reads walk `knows` with $graphLookup; a join to `person`
+    # only where a property of the far end is asked for.
 
     def _agg(self, coll, pipeline):
         return list(coll.aggregate(pipeline))
@@ -2409,48 +2867,76 @@ class MongoGraph(Base):
                 {"$match": {"_id": pid}},
                 {"$project": {"_id": 0, "name": 1, "age": 1}}])
         if op == "hop1":
-            rows = self._agg(self.knows, [
-                {"$match": {"src": pid}},
-                {"$lookup": {"from": "person", "localField": "dst",
-                             "foreignField": "_id", "as": "f"}},
-                {"$unwind": "$f"},
-                {"$group": {"_id": None, "n": {"$sum": 1}, "a": {"$avg": "$f.age"}}},
+            rows = self._agg(self.knows, self._first_hop(pid) + [
+                {"$lookup": {"from": "person", "localField": "f", "foreignField": "_id", "as": "fp"}},
+                {"$unwind": "$fp"},
+                {"$group": {"_id": None, "n": {"$sum": 1}, "a": {"$avg": "$fp.age"}}},
                 {"$project": {"_id": 0, "n": 1, "a": 1}}])
             return rows if rows else [{"n": 0, "a": None}]
         if op == "hop2":
-            return self._count_or_zero(self._agg(self.knows, [
-                {"$match": {"src": pid}},
-                {"$lookup": dict(self._HOP)}, {"$unwind": "$e2"},
-                {"$group": {"_id": "$e2.dst"}},
+            return self._count_or_zero(self._agg(self.knows, self._second_hop(pid) + [
+                {"$group": {"_id": "$f2"}},
                 {"$count": "n"}]))
         if op == "hop3f":
-            return self._count_or_zero(self._agg(self.knows, self._three_hops(pid) + [
-                {"$lookup": {"from": "person", "localField": "e3.dst",
+            return self._count_or_zero(self._agg(self.knows, self._third_hop(pid) + [
+                {"$group": {"_id": "$f3"}},
+                {"$lookup": {"from": "person", "localField": "_id",
                              "foreignField": "_id", "as": "x"}},
                 {"$unwind": "$x"},
-                {"$match": {"x.age": {"$gt": 30}}},
-                {"$group": {"_id": "$x._id"}},
+                {"$match": {"x.age": {"$gt": HOP3F_MIN_AGE}}},
                 {"$count": "n"}]))
         raise KeyError(op)
 
+    # THE UNDIRECTED HOPS. A friendship is one `knows` document, so a person's
+    # edges are the ones with the person on either end (an $or over the two
+    # indexes), and the friend is the other end. Each later hop is the same
+    # two-index join from the friend, minus the edges already on the path.
     @staticmethod
-    def _three_hops(pid):
+    def _first_hop(pid):
+        """One document per friendship of `pid`: `e1` its _id, `f` the friend."""
         return [
-            {"$match": {"src": pid}},
-            {"$lookup": {"from": "knows", "localField": "dst",
-                         "foreignField": "src", "as": "e2"}},
-            {"$unwind": "$e2"},
-            {"$lookup": {"from": "knows", "localField": "e2.dst",
-                         "foreignField": "src", "as": "e3"}},
-            {"$unwind": "$e3"},
-            # Cypher's relationship isomorphism, written out: the third edge
-            # may not be the first one again (a->b, b->a, a->b).
-            {"$match": {"$expr": {"$ne": ["$e3._id", "$_id"]}}},
+            {"$match": {"$or": [{"src": pid}, {"dst": pid}]}},
+            {"$project": {"e1": "$_id", "f": {"$cond": [{"$eq": ["$src", pid]}, "$dst", "$src"]}}},
         ]
 
+    @staticmethod
+    def _step(frm, edges_seen, into, carry):
+        """Join the friend `frm` to its edges on both ends, drop the ones in `edges_seen`
+        (field paths of _ids already walked), and keep the OTHER end as `into` and the edge as
+        `<into>_e`, beside the `carry` fields of the walk so far. One output document per
+        (walk so far, next edge)."""
+        keep = {"$not": {"$in": ["$$this._id", edges_seen]}}
+        # $lookup's localField is a field NAME ("f"), not an aggregation expression ("$f"): mongod refuses the second with
+        # "FieldPath field names may not start with '$'". `frm` arrives as the expression form because the callers also use it
+        # as a path elsewhere, so the sigil is dropped here (found by the first run of the 2-hop and 3-hop reads on mongod).
+        local = frm.lstrip("$")
+        return [
+            {"$lookup": {"from": "knows", "localField": local, "foreignField": "src", "as": "_o"}},
+            {"$lookup": {"from": "knows", "localField": local, "foreignField": "dst", "as": "_i"}},
+            {"$project": {**{c: 1 for c in carry}, "nxt": {"$concatArrays": [
+                {"$map": {"input": {"$filter": {"input": "$_o", "cond": keep}},
+                          "in": {"v": "$$this.dst", "e": "$$this._id"}}},
+                {"$map": {"input": {"$filter": {"input": "$_i", "cond": keep}},
+                          "in": {"v": "$$this.src", "e": "$$this._id"}}}]}}},
+            {"$unwind": "$nxt"},
+            {"$project": {**{c: 1 for c in carry}, into: "$nxt.v", into + "_e": "$nxt.e"}},
+        ]
+
+    @staticmethod
+    def _second_hop(pid):
+        """Every walk of two distinct friendships from `pid`: `f2` is its far end."""
+        return (MongoGraph._first_hop(pid)
+                + MongoGraph._step("$f", ["$e1"], "f2", ["e1", "f"]))
+
+    @staticmethod
+    def _third_hop(pid):
+        """Every walk of three distinct friendships from `pid`: `f3` is its far end."""
+        return (MongoGraph._second_hop(pid)
+                + MongoGraph._step("$f2", ["$e1", "$f2_e"], "f3", ["e1", "f", "f2", "f2_e"]))
+
     def run_visited(self, pid):
-        return self._count_or_zero(self._agg(self.knows, self._three_hops(pid) + [
-            {"$group": {"_id": "$e3.dst"}},
+        return self._count_or_zero(self._agg(self.knows, self._third_hop(pid) + [
+            {"$group": {"_id": "$f3"}},
             {"$count": "n"}]))
 
     # ---- writes ------------------------------------------------------
@@ -2459,8 +2945,18 @@ class MongoGraph(Base):
         # person and the edge that links them either both exist or neither
         # does. A multi-document transaction is why the server runs as a
         # single-node replica set.
+        #
+        # THE ANCHOR IS LOOKED UP FIRST, as the Cypher's MATCH does, and
+        # nothing is written when it is absent (2026-10-02). The inserts were
+        # unconditional until then: on the full corpus every anchor exists, so
+        # the answers agreed, but on a capped LDBC slice the read set names
+        # persons the slice did not load, the Cypher engines created nothing
+        # for them, and this arm created them anyway, which the read-back
+        # digest showed. The lookup is also work every Cypher engine pays.
         with self.cl.start_session() as s:
             with s.start_transaction(write_concern=self._wc):
+                if self.db["person"].find_one({"_id": pid}, {"_id": 1}, session=s) is None:
+                    return
                 self.db["person"].insert_one(
                     {"_id": new_id, "name": f"w{new_id}", "age": 33, "city": "city_0"},
                     session=s)
@@ -2488,12 +2984,21 @@ class MongoGraph(Base):
             {"$match": {"_id": {"$gte": id_from}}},
             {"$project": {"_id": 0, "id": "$_id", "name": 1, "age": 1, "city": 1}}])
 
+    def edge_scan(self, id_from):
+        return list(self.knows.find({"dst": {"$gte": id_from}}, {"_id": 0, "src": 1, "dst": 1}))
+
     # ---- analytics ---------------------------------------------------
+    # UNDIRECTED (row 56). A friendship is one `knows` document and counts for BOTH
+    # of its people, so the per-person questions emit each document twice (once
+    # from each end) rather than reading a second, symmetric copy of the edges.
+    _BOTH_ENDS = [{"$project": {"v": ["$src", "$dst"]}}, {"$unwind": "$v"}]
     OLAP = {
-        "top_degree": ("knows", [
-            {"$group": {"_id": "$src", "d": {"$sum": 1}}},
+        "top_degree": ("knows", _BOTH_ENDS + [
+            {"$group": {"_id": "$v", "d": {"$sum": 1}}},
             {"$sort": {"d": -1, "_id": 1}}, {"$limit": 10},
             {"$project": {"_id": 0, "id": "$_id", "d": 1}}]),
+        # One document per friendship already, which is what a.id < b.id asks
+        # for: the stored direction does not matter, so the scan is unchanged.
         "same_city_edges": ("knows", [
             {"$lookup": {"from": "person", "localField": "src", "foreignField": "_id", "as": "a"}},
             {"$unwind": "$a"},
@@ -2503,34 +3008,42 @@ class MongoGraph(Base):
             {"$group": {"_id": "$a.city", "n": {"$sum": 1}}},
             {"$sort": {"n": -1, "_id": 1}}, {"$limit": 10},
             {"$project": {"_id": 0, "c": "$_id", "n": 1}}]),
+        # Each friendship is a (person, friend) pair from both ends.
         "friend_age_by_city": ("knows", [
             {"$lookup": {"from": "person", "localField": "src", "foreignField": "_id", "as": "a"}},
             {"$unwind": "$a"},
             {"$lookup": {"from": "person", "localField": "dst", "foreignField": "_id", "as": "f"}},
             {"$unwind": "$f"},
-            {"$group": {"_id": "$a.city", "a": {"$avg": "$f.age"}, "n": {"$sum": 1}}},
+            {"$project": {"r": [{"c": "$a.city", "age": "$f.age"}, {"c": "$f.city", "age": "$a.age"}]}},
+            {"$unwind": "$r"},
+            {"$group": {"_id": "$r.c", "a": {"$avg": "$r.age"}, "n": {"$sum": 1}}},
             {"$sort": {"n": -1, "_id": 1}}, {"$limit": 10},
             {"$project": {"_id": 0, "c": "$_id", "a": 1, "n": 1}}]),
-        "degree_dist": ("knows", [
-            {"$group": {"_id": "$src", "d": {"$sum": 1}}},
+        "degree_dist": ("knows", _BOTH_ENDS + [
+            {"$group": {"_id": "$v", "d": {"$sum": 1}}},
             {"$group": {"_id": "$d", "n": {"$sum": 1}}},
             {"$sort": {"_id": 1}},
             {"$project": {"_id": 0, "deg": "$_id", "n": 1}}]),
-        # THE SET-INTERSECTION FORM, not a triple $unwind. One row of `knows`
-        # is the a->b leg with a < b; N+(b) and N-(a) are two indexed
-        # $lookups, and the third vertex is any c in both with c > a, so each
-        # triangle is counted once at its smallest-id vertex. The same shape
-        # SurrealDB's triangle count uses, and for the same reason: the
-        # nested-unwind spelling materialises every three-path.
+        # THE SET-INTERSECTION FORM, not a triple $unwind. One document of `knows`
+        # is a friendship (lo, hi); N(lo) and N(hi) are each two indexed $lookups
+        # (the friendships touching the person, on either end), and the third
+        # person is any c in both with c > hi, so each triangle is counted once
+        # at its (a, b) friendship, a < b < c, whichever way the three are stored.
+        # The same shape SurrealDB's triangle count uses, and for the same reason:
+        # the nested-unwind spelling materialises every three-path.
         "triangles": ("knows", [
-            {"$match": {"$expr": {"$lt": ["$src", "$dst"]}}},
-            {"$lookup": {"from": "knows", "localField": "dst", "foreignField": "src", "as": "bc"}},
-            {"$lookup": {"from": "knows", "localField": "src", "foreignField": "dst", "as": "ca"}},
-            {"$project": {"n": {"$size": {"$filter": {
+            {"$project": {"lo": {"$min": ["$src", "$dst"]}, "hi": {"$max": ["$src", "$dst"]}}},
+            {"$lookup": {"from": "knows", "localField": "lo", "foreignField": "src", "as": "lo_o"}},
+            {"$lookup": {"from": "knows", "localField": "lo", "foreignField": "dst", "as": "lo_i"}},
+            {"$lookup": {"from": "knows", "localField": "hi", "foreignField": "src", "as": "hi_o"}},
+            {"$lookup": {"from": "knows", "localField": "hi", "foreignField": "dst", "as": "hi_i"}},
+            {"$project": {"hi": 1, "n": {"$size": {"$filter": {
                 "input": {"$setIntersection": [
-                    {"$map": {"input": "$bc", "in": "$$this.dst"}},
-                    {"$map": {"input": "$ca", "in": "$$this.src"}}]},
-                "cond": {"$gt": ["$$this", "$src"]}}}}}},
+                    {"$concatArrays": [{"$map": {"input": "$lo_o", "in": "$$this.dst"}},
+                                       {"$map": {"input": "$lo_i", "in": "$$this.src"}}]},
+                    {"$concatArrays": [{"$map": {"input": "$hi_o", "in": "$$this.dst"}},
+                                       {"$map": {"input": "$hi_i", "in": "$$this.src"}}]}]},
+                "cond": {"$gt": ["$$this", "$hi"]}}}}}},
             {"$group": {"_id": None, "n": {"$sum": "$n"}}},
             {"$project": {"_id": 0, "n": 1}}]),
     }
@@ -2763,7 +3276,7 @@ class MongoGraph(Base):
                                                {"$eq": ["$c2.d", "$c3.d"]}]}}},
                 {"$count": "n"}], allowDiskUse=True)))
 
-    def run_cypher(self, text):
+    def run_cypher(self, text, params=None):
         raise NotImplementedError("MongoDB runs aggregation pipelines through the name-based hooks")
 
     def close(self):
@@ -2773,11 +3286,11 @@ class MongoGraph(Base):
 ADAPTERS = {a.name: a for a in
             [ArcadeGraphEmbedded, ArcadeGraphServer, Neo4jGraph, LadybugGraph,
              SurrealGraph, SurrealGraphServer, ArangoGraph, MongoGraph,
-             MemgraphGraph, FalkorGraph, DuckpgqGraph]}
+             MemgraphGraph, FalkorGraph, DuckpgqGraph, PgAgeGraph]}
 
 # DECISIONS #81: what each arm runs at commit, recorded on the row. Neo4j and
 # LadybugDB cannot be relaxed and are the named exceptions on this table; the
-# SurrealDB server's behaviour could not be established and its string says so.
+# SurrealDB server runs sync=never or sync=every, read back by the runner (F165).
 # Every string, and the evidence behind it, is in bench_common.
 DURABILITY = {
     "arcadedb_graph_embedded": bench_common.DURABILITY_ARCADEDB,
@@ -2795,6 +3308,9 @@ DURABILITY = {
     # DuckDB has no durability knob (DECISIONS #90): one string in both classes,
     # the same the document, time-series and dense-VSS DuckDB arms record.
     "duckpgq_graph": bench_common.DURABILITY_DUCKDB,
+    # Read back with SHOW at connect (the adapter's own answer wins); this is
+    # the relaxed-class string it is compared against, as for every PostgreSQL arm.
+    "pgage_graph": bench_common.DURABILITY_PG_OFF,
 }
 
 
@@ -2931,6 +3447,14 @@ def main():
     # published.
     out["query_language"] = getattr(ad, "QUERY_LANGUAGE", "not declared")
     out["instrument"] = bench_common.INSTRUMENT
+    # EVERY QUESTION IS ASKED UNDIRECTED (CAMPAIGN section 7 row 56, BUGS F169): the page's
+    # one-way disclosure (export_web._knows_one_way_note) retires per row from this field, so
+    # it is written on every graph row, both workloads, before the first query runs.
+    out[graph_common.KNOWS_DIRECTION_FIELD] = graph_common.KNOWS_DIRECTION
+    # LSQB'S OWN TEXT on every graph analytics row (row 60, BUGS F174): the page's id-form sentence
+    # (export_web._lsqb_id_form_note) retires per row from this field.
+    if args.workload == "olap":
+        out[graph_common.LSQB_TEXT_FIELD] = graph_common.LSQB_TEXT
 
     # THE MESSAGE HALF, inside the build timer, because at the full-network
     # tier it IS the load: the ingest column prices the whole corpus. The
@@ -2949,6 +3473,13 @@ def main():
     with _beat.phase("post-build", workload=args.workload):
         ad.post_build(args.workload)
     out["build_s"] = round(time.perf_counter() - t0, 2)
+    # Facts an adapter can only read once its data is loaded (MongoDB's
+    # self-loop count, which its $graphLookup reads depend on) join the row
+    # here; the connect-time read above cannot see them. So do the index kinds an
+    # ArcadeDB arm's engine reports (CAMPAIGN 7 row 68), after the message half exists.
+    if hasattr(ad, "index_readback"):
+        ad.row_extra = {**(getattr(ad, "row_extra", None) or {}), **ad.index_readback()}
+    out.update(getattr(ad, "row_extra", None) or {})
     if _load_messages:
         # What the message half actually loaded, so a reader can check it
         # against the corpus README the way n_persons_ingested checks the
@@ -2968,6 +3499,16 @@ def main():
         total_t0 = time.perf_counter()
 
         collected = {}
+
+        # ONE BUDGET PER READ, SPANNING BOTH PASSES (DECISIONS #120). Same
+        # lookup as the analytics queries' (measured when the bench host has a
+        # number for this tier, otherwise the lane default clamped to the
+        # read's share of the cell cap), never per engine.
+        read_budget = {op: budget_lookup.budget_for(
+            "l2", args.scale, op, OLTP_READ_BUDGET_S, "BENCH_GRAPH_READ_BUDGET_S",
+            n_queries=len(OLTP_READS)) for op in OLTP_READS}
+        read_spent = {op: 0.0 for op in OLTP_READS}
+        read_cut = {}       # op -> (the pass it stopped in, starts it answered there)
 
         def _read_pass(prefix=""):
             """One full pass over the read set, identical on both calls.
@@ -2989,11 +3530,26 @@ def main():
             res = {}
             for op, tmpl in OLTP_READS.items():
                 lat = []
+                raw = []
                 answers = []
+                if op in read_cut:
+                    # Spent its budget in the first pass: nothing left to time.
+                    for q in (0.50, 0.95, 0.99):
+                        res[f"{prefix}{op}_p{int(q * 100)}_ms"] = None
+                    continue
+                answered = 0
                 for w, pid in enumerate(ids):
+                    if read_spent[op] > read_budget[op][0]:
+                        read_cut[op] = (prefix, answered)
+                        _beat.mark(f"oltp-{op}-censored", answered=answered,
+                                   budget_s=read_budget[op][0])
+                        break
                     t = time.perf_counter()
                     rows = ad.run_read(op, pid)
                     dt = (time.perf_counter() - t) * 1000
+                    read_spent[op] += dt / 1000.0
+                    answered += 1
+                    raw.append(dt)
                     if not prefix and w == 0:
                         # The cell's first query after the database opened
                         # (#89 as amended): the first id of the first read op
@@ -3007,32 +3563,76 @@ def main():
                         # ...and so is a sample whose connection dropped
                         # while it was being taken (DECISIONS #91).
                         surreal_common.keep(ad, lat, dt)
+                if not lat and raw:
+                    # CUT BEFORE THE WARM-UPS WERE OVER. A censored read with a
+                    # measurement is a result and one with none is a gap, so the
+                    # percentiles come from the starts it did answer and
+                    # `<read>_iters` says how few (as the analytics budget does).
+                    lat = list(raw)
                 lat.sort()
-                res[f"{prefix}{op}_p50_ms"] = round(pct(lat, 0.50), 3)
-                res[f"{prefix}{op}_p95_ms"] = round(pct(lat, 0.95), 3)
-                res[f"{prefix}{op}_p99_ms"] = round(pct(lat, 0.99), 3)
-                collected[op] = answers
+                for q in (0.50, 0.95, 0.99):
+                    res[f"{prefix}{op}_p{int(q * 100)}_ms"] = round(pct(lat, q), 3) if lat else None
+                if prefix == "":
+                    res[f"{op}_iters"] = len(lat)
+                # A pass that stopped early answered fewer starts than every
+                # other engine; its rows are not what the digest compares.
+                if read_cut.get(op, (None,))[0] != prefix:
+                    collected[op] = answers
             return res
 
+        # THE UNTIMED WARM-UP, on start persons the timed set never asks for (row 55, DECISIONS
+        # #148). The first read of the session is timed and kept as the cell's one cold number (#89
+        # as amended); every other warm-up read is untimed, per operation, in the order the timed
+        # pass runs them. Bounded by a share of each read's own budget, so the slowest engine's
+        # three-hop read cannot spend the cell in its warm-up.
+        _universe = (_ldbc.person_ids(args.scale) if _GRAPH_SOURCE == "ldbc" else range(n_persons))
+        _warm_ids = warmup_ids(_universe, ids)
+        assert not set(_warm_ids) & set(ids), "the warm-up ids must be disjoint from the timed ones"
+        _beat.mark("reads-warmup-start", n=len(_warm_ids), ops=len(OLTP_READS))
+        _w0 = time.perf_counter()
+        _warm_n = {}
+        for op in OLTP_READS:
+            _cap = read_budget[op][0] * READ_WARMUP_BUDGET_SHARE
+            _o0 = time.perf_counter()
+            _warm_n[op] = 0
+            for pid in _warm_ids:
+                if _warm_n[op] and time.perf_counter() - _o0 > _cap:
+                    break
+                _t = time.perf_counter()
+                ad.run_read(op, pid)
+                if not out.get("cold_first_query_name"):
+                    bench_common.record_first_query(out, op, (time.perf_counter() - _t) * 1000)
+                _warm_n[op] += 1
+        out["read_warmup_s"] = round(time.perf_counter() - _w0, 2)
+        out["read_warmup"] = (f"up to {READ_WARMUP_IDS} untimed reads of each operation on start persons "
+                              f"outside the timed set, before the timed passes")
+        for op in OLTP_READS:
+            out[f"{op}_warmup_n"] = _warm_n[op]
+        _beat.mark("reads-warmup-done", t=f"{out['read_warmup_s']}s")
         _beat.mark("reads-cold-start", n=len(ids), ops=len(OLTP_READS))
-        out.update(_read_pass())            # first touch
+        out.update(_read_pass())            # the table's column: timed after the warm-up
         _beat.mark("reads-warm-start", n=len(ids), ops=len(OLTP_READS))
-        out.update(_read_pass("warm_"))     # same queries, index now resident
+        out.update(_read_pass("warm_"))     # a second timed pass over the same ids: the check that the warm-up was enough
         _beat.mark("reads-done")
-        # ONE NAMING CONVENTION ACROSS THE LANES (DECISIONS #89). This lane's
-        # FIRST pass is the cold one and has always been recorded unprefixed,
-        # while the second wears "warm_"; the page reads the unprefixed names,
-        # so they stay, and these aliases let a table ask every lane the same
-        # question without knowing which lane it is asking.
-        for _op in OLTP_READS:
-            out[f"cold_{_op}_p50_ms"] = out[f"{_op}_p50_ms"]
-            out[f"cold_{_op}_p99_ms"] = out[f"{_op}_p99_ms"]
         # THE ANSWERS THE WARM PASS RETURNED (DECISIONS #88): every row of
         # every read, over the same seeded id list on every engine, hashed
         # here rather than in the loop. The two passes ask the same questions,
         # so digesting the second is digesting both.
         for op in OLTP_READS:
-            bench_common.record_result(out, op, collected.get(op), **READ_DIGEST[op])
+            b_s, b_src = read_budget[op]
+            out[f"{op}_budget_s"] = b_s
+            out[f"{op}_budget_source"] = b_src
+            where, answered = read_cut.get(op, (None, None))
+            # The page prints the first pass, so that is the one "censored"
+            # describes; a stop in the second pass leaves the published
+            # numbers whole and is recorded as such.
+            out[f"{op}_censored"] = where == ""
+            out[f"warm_{op}_censored"] = where is not None
+            if op in collected:
+                bench_common.record_result(out, op, collected.get(op), **READ_DIGEST[op])
+            else:
+                bench_common.record_censored_answer(
+                    out, op, f"stopped at its {b_s:g} s budget after {answered} of {len(ids)} starts")
         # HOW LOCAL IS THE THREE-HOP READ? Untimed, over the first
         # VISITED_SAMPLE ids: the distinct persons at three hops before the
         # age filter, which is the set hop3f filters. The page can now say
@@ -3085,6 +3685,9 @@ def main():
         # back untimed. A create that silently wrote nothing fails the gate.
         bench_common.record_result(out, "graph_insert", ad.person_scan(write_id_base),
                                    **PERSON_STATE_DIGEST)
+        # ...and the edge into each of them (row 58): the other half of the write transaction.
+        bench_common.record_result(out, "graph_insert_edges", ad.edge_scan(write_id_base),
+                                   **EDGE_STATE_DIGEST)
         # UPDATE, the third of the four (DECISIONS #82a): one property of one
         # record, set to a fixed value, over the same ids the writes created.
         ulat = []
@@ -3124,8 +3727,13 @@ def main():
         # over a graph that still holds the rows (#82a).
         bench_common.record_result(out, "graph_delete", ad.person_scan(write_id_base),
                                    **PERSON_STATE_DIGEST)
-        # DECISIONS #89: where a split does not apply the row says why.
-        out["cold_warm_na"] = bench_common.NA_COLD_WARM_TXN
+        # DETACH DELETE removed the edges too (row 58): none may be left into a deleted person.
+        bench_common.record_result(out, "graph_delete_edges", ad.edge_scan(write_id_base),
+                                   **EDGE_STATE_DIGEST)
+        # DECISIONS #89: where a split does not apply the row says why. Not on this lane any more
+        # (row 55): its reads are timed warm and the first query of the session is the cold
+        # column, so the "already warm by construction" reason would be false, and
+        # export_web._cold_note would print it in place of the cold column's own sentence.
         out["oltp_total_s"] = round(time.perf_counter() - total_t0, 2)
     else:
         for qname, text in OLAP_QUERIES.items():
@@ -3278,6 +3886,10 @@ def main():
     _gav = getattr(ad, "gav_build_s", None)
     if _gav is not None:
         out["gav_build_s"] = _gav
+    # THE TYPES THE VIEW COVERS, as the engine reports them (row 61): the page's narrow-view sentence
+    # (export_web._gav_scope_note) retires per row from this field; the no-view arm has none.
+    if getattr(ad, "gav_types", None):
+        out["gav_types"] = ad.gav_types
 
     _t = time.perf_counter()
     with _beat.phase("close"):
@@ -3327,6 +3939,9 @@ def main():
                 f"{_short} (loaded, expected); the row would publish an inflated "
                 f"ingest rate under the full network's label.")
 
+    # THE JPYPE THIS PROCESS RAN (CAMPAIGN 7 row 73): empty when the arm never imported it
+    # (every comparator, every served ArcadeDB client), read after the arm has run.
+    out.update(bench_common.jpype_fields())
     with open(args.out, "w") as f:
         json.dump(out, f)
     print(json.dumps(out))

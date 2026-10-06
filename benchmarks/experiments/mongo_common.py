@@ -174,10 +174,11 @@ VECTOR_INDEX = "vidx"
 
 
 def create_vector_index(coll, path, dim, max_edges, num_edge_candidates,
-                        similarity="euclidean", filter_paths=(), name=VECTOR_INDEX):
+                        similarity="euclidean", filter_paths=(), name=VECTOR_INDEX,
+                        quantization="none"):
     from pymongo.operations import SearchIndexModel
     field = {"type": "vector", "path": path, "numDimensions": int(dim),
-             "similarity": similarity, "quantization": "none",
+             "similarity": similarity, "quantization": quantization,
              "indexingMethod": "hnsw",
              "hnswOptions": {"maxEdges": int(max_edges),
                              "numEdgeCandidates": int(num_edge_candidates)}}
@@ -185,6 +186,15 @@ def create_vector_index(coll, path, dim, max_edges, num_edge_candidates,
     coll.create_search_index(SearchIndexModel(definition={"fields": fields},
                                               name=name, type="vectorSearch"))
     return name
+
+
+def index_quantization(coll, name=VECTOR_INDEX):
+    """The `quantization` of the index's vector field as mongot holds it (its
+    latestDefinition), or None when the field or the index is absent: the
+    engine's answer, never the option we sent (BUGS F164)."""
+    idx = [i for i in coll.list_search_indexes() if i.get("name") == name]
+    fields = ((idx[0].get("latestDefinition") or {}).get("fields") or []) if idx else []
+    return next((f.get("quantization") for f in fields if f.get("type") == "vector"), None)
 
 
 def wait_queryable(coll, name=VECTOR_INDEX, timeout_s=7200):

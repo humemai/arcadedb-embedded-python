@@ -7,7 +7,7 @@ sources live in `bindings/python/src/java/com/arcadedb/python/`:
 |---|---|
 | `RowBatcher` | Serializes up to N result rows into one JSON-array string per call (batched row transport) |
 | `ColumnBatcher` | Encodes up to N rows into one `byte[]` of typed little-endian column buffers plus null bitmaps (binary columnar transport) |
-| `DocumentBatcher` | Inserts a whole batch of documents from one JSON-rows string (transactional or async parallel writers); also boxes numpy numeric arrays for `append_samples` |
+| `DocumentBatcher` | Inserts a whole batch of documents from one JSON-rows string (transactional or async parallel writers), or from whole typed columns (`insertColumns`, one `long[]`, `double[]`, `boolean[]`, or `Object[]` per property); also boxes numpy numeric arrays for `append_samples` |
 | `EdgeBatcher` | Buffers a whole batch of edges into `GraphBatch` from one call (RID strings, or JSON rows for edges with properties) |
 | `VertexBatcher` | Creates a whole batch of vertices from one JSON-rows string, returning all RIDs as one joined string |
 | `TimeSeriesBatcher` | Fills the engine's primitive `TimeSeriesBatch` one column per call, so numeric samples are never boxed |
@@ -38,6 +38,7 @@ crossing per batch**, receiving a bulk payload it can decode at C speed: the
 | `ResultSet.to_list()` (rows in batches), `Result.to_dict()` (one row) | `RowAccess` |
 | `ResultSet.to_columns()` / fast `to_dataframe()` / `to_arrow()` | `ColumnBatcher` |
 | `Database.insert_many()` | `DocumentBatcher` |
+| `Database.insert_columns()` | `DocumentBatcher` |
 | `AsyncExecutor.append_samples()` (numpy numeric-column boxing) | `DocumentBatcher` |
 | `AsyncExecutor.append_samples(..., primitive=True)` | `TimeSeriesBatcher` |
 | `GraphBatch.new_edges()` (with and without properties) | `EdgeBatcher` |

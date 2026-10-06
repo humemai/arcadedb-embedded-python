@@ -24,8 +24,14 @@ set -euo pipefail
 
 DIGEST="${1:?usage: build_matched_pair.sh <image-digest> [tag-suffix]}"
 SRC="arcadedata/arcadedb@${DIGEST}"
-REPO=$HOME/repos/humemai/arcadedb-embedded-python
-WORK=$HOME/engine-builds/c25
+# THE CHECKOUT THIS SCRIPT LIVES IN, not a fixed path. It was $HOME/repos/humemai/arcadedb-embedded-python,
+# the main checkout, so run from a worktree it built from, wrote into, and verified against main's
+# bindings/python/dist and .venv: the pair it reported was another tree's. BENCH_PRINT_REPO=1 prints the
+# tree and exits (test_pair_scripts.py holds this).
+REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../.." && pwd)"
+[ -z "${BENCH_PRINT_REPO:-}" ] || { echo "REPO=$REPO"; exit 0; }
+WORK="${C25_WORK:-$HOME/engine-builds/c25}"
+[ -n "$WORK" ] && [ "$WORK" != / ] || { echo "refusing WORK='$WORK'"; exit 1; }
 say() { echo "[$(date -Is)] pair: $*"; }
 
 say "source image $SRC"
