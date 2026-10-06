@@ -7,6 +7,11 @@ that test is a strict `xfail`, a tripwire as in `test_null_index_known_issues.py
 reaches the wheel it starts passing and the suite fails, and the test is then converted to a plain
 one.
 
+#9277, #9278 and #9281 are fixed in ArcadeDB 26.11.1 (ArcadeData/arcadedb#9288, merged 2026-10-06),
+which is the engine this tree builds against, so their tests are plain regression tests now. They
+fail on the 26.10.1 engine, the one in the released wheel; known-issues.md says so. Only #9290 is
+still open and still a tripwire.
+
 Each test of a count first checks that the query as written is planned through the `COUNT
 ANTI-JOIN CHAIN` push-down. The check calls `pytest.fail`, which the `xfail` marks do not absorb
 (`raises=AssertionError`): a plan that stops using the push-down fails the suite instead of staying
@@ -15,27 +20,18 @@ an expected failure, so the tripwire cannot pass by comparing the row pipeline w
 Upstream: ArcadeData/arcadedb #9277 (the push-down counts the wrong vertices when the far end of the
 chain has another label than the first hop's target; the change for #9203 let `id(a) <> id(b)` reach
 it), #9278 (the push-down ignores the property map of the negated pattern's relationship), #9281
-(`sum()` and `avg()` over a `BYTE` property raise `IllegalArgumentException`), #9290 (the push-down
-counts wrong for chains with more than two hops of one type, an inequality between other nodes, no
-inequality, a negated pattern away from the first node, or an unlabelled node with the first node as
-the target).
+(`sum()` and `avg()` over a `BYTE` property raise `IllegalArgumentException`), all three fixed by
+#9288; #9290 (the push-down counts wrong for chains with more than two hops of one type, an
+inequality between other nodes, no inequality, a negated pattern away from the first node, or an
+unlabelled node with the first node as the target), open.
 """
 
 import arcadedb_embedded as arcadedb
 import pytest
 
 # ---------------------------------------------------------------------------------------------
-# #9277: another label at the far end of the chain
+# #9277: another label at the far end of the chain (fixed in 26.11.1, #9288)
 # ---------------------------------------------------------------------------------------------
-
-CROSS_REASON = (
-    "ArcadeData/arcadedb#9277: the COUNT ANTI-JOIN CHAIN push-down reuses a hop's neighbour map "
-    "filtered for the wrong target label, so a chain whose far end has another label than the "
-    "first hop's target counts 0 where the row pipeline counts 1"
-)
-cross_label_bug = pytest.mark.xfail(
-    strict=True, raises=AssertionError, reason=CROSS_REASON
-)
 
 CROSS_CHAIN = "MATCH (p1:Person)-[:KNOWS]-(p2:Person)-[:KNOWS]-(p3:Employee)-[:HAS_INTEREST]->(t:Tag) "
 
@@ -87,7 +83,6 @@ def _require_anti_join_plan(db, query):
         ),
     ],
 )
-@cross_label_bug
 def test_negated_pattern_in_a_chain_with_another_label_at_the_far_end_counts_the_path(
     temp_db_path, where
 ):
@@ -151,17 +146,8 @@ def test_a_chain_with_the_same_label_throughout_is_not_affected(temp_db_path):
 
 
 # ---------------------------------------------------------------------------------------------
-# #9278: the property map of the negated pattern's relationship
+# #9278: the property map of the negated pattern's relationship (fixed in 26.11.1, #9288)
 # ---------------------------------------------------------------------------------------------
-
-EDGE_PROPERTY_REASON = (
-    "ArcadeData/arcadedb#9278: the COUNT ANTI-JOIN CHAIN push-down drops the inline property map "
-    "of the negated pattern's relationship, so NOT (x)-[:K {w: 1}]->(z) is counted as "
-    "NOT (x)-[:K]->(z)"
-)
-edge_property_bug = pytest.mark.xfail(
-    strict=True, raises=AssertionError, reason=EDGE_PROPERTY_REASON
-)
 
 EDGE_CHAIN = "MATCH (x:P)-[:K]->(y:P)-[:K]->(z:P)-[:L]->(t:Q) "
 
@@ -193,7 +179,6 @@ def _edge_property_graph(db):
         pytest.param("NOT (x)-[:K {w: 1}]->(z) AND x <> z", id="map-and-inequality"),
     ],
 )
-@edge_property_bug
 def test_negated_pattern_with_a_property_map_counts_the_path(temp_db_path, where):
     """#9278: the direct edge has w = 0, so no edge with w = 1 connects x to z and the path
     passes: the count is 1, as the same WHERE after a `WITH` gives."""
@@ -241,16 +226,8 @@ def test_negated_pattern_the_map_does_not_change_is_counted_right(temp_db_path, 
 
 
 # ---------------------------------------------------------------------------------------------
-# #9281: sum() and avg() over a BYTE property
+# #9281: sum() and avg() over a BYTE property (fixed in 26.11.1, #9288)
 # ---------------------------------------------------------------------------------------------
-
-BYTE_REASON = (
-    "ArcadeData/arcadedb#9281: sum() and avg() over a BYTE property raise IllegalArgumentException "
-    "(Cannot increment value ... class java.lang.Byte); Type.increment has no Byte case"
-)
-byte_aggregate_bug = pytest.mark.xfail(
-    strict=True, raises=AssertionError, reason=BYTE_REASON
-)
 
 
 def _byte_types(db):
@@ -289,7 +266,6 @@ def _result_or_error(db, language, query, reported_error="Cannot increment value
         ),
     ],
 )
-@byte_aggregate_bug
 def test_sum_and_avg_over_a_byte_property(temp_db_path, language, query, expected):
     """#9281: the two rows hold 100 and 50, so the sum is 150 and the average 75.0, as for a
     SHORT property."""
