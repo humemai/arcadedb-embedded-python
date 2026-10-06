@@ -228,6 +228,75 @@ installable. **This server is single-node by construction**: it cannot replicate
 or fail over. Use the Docker distribution
 for HA, gRPC, or Mongo-protocol access.
 
+## Choosing a Protocol from Python
+
+From Python, the client library often costs more than the protocol. ArcadeDB's own
+documentation has a section on this, [Python: choosing a protocol](https://docs.arcadedb.com/arcadedb/how-to/connectivity/drivers/python-http#python-choosing-protocol),
+and the advice below agrees with it and adds what we measured.
+
+**One-row reads and writes (a point lookup, an update by key).**
+
+1. **The Postgres wire** is the fastest single-row route. With `psycopg`, prefix an
+   openCypher statement with `{cypher}`, or send SQL as is. Bind values with `%s`;
+   psycopg sends them to the server as `$1`, `$2`. It needs the Postgres plugin (see
+   [Wire Protocols](#wire-protocols)) and it is the one route in the table below
+   that beats a hand-written HTTP client.
+2. **HTTP over one persistent connection** comes next. Open the connection once and
+   reuse it, with a login token if you like (see
+   [Authentication Tokens](#authentication-tokens-http-api)). `requests.Session` is
+   convenient but adds client time on every call.
+3. **The official Python clients** are `arcadedb-driver` (HTTP, built on `httpx`) and
+   `arcadedb-driver-grpc`. They run every statement shown in this guide and are the
+   easiest way to get typed errors and transactions, but they add client work to
+   every call. `arcadedb-driver-grpc` needs the gRPC plugin, which this wheel does
+   not bundle (see [Not bundled](#not-bundled)), so it talks to the official server
+   distribution only.
+4. **Bolt through the `neo4j` driver** is for tooling that already speaks Bolt. On
+   one-row reads it is slower than a persistent HTTP connection.
+
+Measured on one laptop, one client thread, loopback, ArcadeDB 26.10.1, Python 3.14. These
+are relative numbers (median call time as a multiple of one persistent `http.client`
+connection, lower is faster), meant to rank the routes and not to predict your
+latency:
+
+| Route | One-row SQL read | One-row Cypher read | 100-row read (SQL / Cypher) |
+|---|---|---|---|
+| Postgres wire, `psycopg` | 0.45x | 0.48x | 0.57x / 0.69x |
+| HTTP, one persistent connection (`http.client`) | 1x | 1x | 1x |
+| `arcadedb-driver-grpc` | 1.2x | 1.3x | 1.8x / 2.2x |
+| `neo4j` driver over Bolt | Cypher only | 1.6x | 7.1x on Cypher |
+| `arcadedb-driver` (HTTP) | 3.2x | 3.4x | 2.0x / 2.3x |
+| `requests.Session` | 4.0x | 4.1x | 2.1x / 2.3x |
+
+Most of the difference is client code, not the server. A one-row call through
+`arcadedb-driver` runs about 2,000 Python calls, against about 500 for a plain
+`http.client` request, and the `neo4j` driver spends about 80 percent of its time in the
+client process. The gRPC rows were measured against a JDK 25 server; on JDK 21 the same
+one-row read was about 1.65x. Treat a difference under about 1.3x as a tie, and measure
+your own workload before you change a client for these numbers.
+
+**Large results (thousands of rows or more).** Prefer HTTP. Over Bolt the Python
+driver spends about 5 microseconds of Python per record and fetches 1,000 records per
+round trip by default; upstream measured it 4x to 10x slower than HTTP on large results and
+advises raising `fetch_size` (for example `driver.session(fetch_size=-1)`). That advice
+was measured on ArcadeDB 26.11.1, which batches Bolt records. On the 26.10.1 server in
+this wheel a 10,000-row result did not get faster with it when we tried.
+
+gRPC streaming with a batch size of 10,000 or more was the fastest route in upstream's
+measurement of results of hundreds of thousands of rows. At the default batch size it
+was slower than HTTP in ours (a 10,000-row Cypher read took about 3.3x as long, on a
+26.11.1 pre-release build), so set the batch size explicitly and measure. When your code
+runs in the same process as the database (embedded mode), skip the socket and read a
+large result with [`to_arrow()`, `to_columns()`, or `to_json_list()`](../api/results.md).
+
+**Bulk loads** go through HTTP: `INSERT INTO T CONTENT :rows` for documents, `/api/v1/batch`
+for vertices and edges (see [Bulk Loading over the Server](#bulk-loading-over-the-server)).
+The Postgres wire is the exception for rows that carry a vector. The official gRPC
+client's `insert_stream` was no faster than HTTP loads in our measurement.
+
+Reuse the connection on every route: opening a new one for each call costs more than
+the choice of protocol.
+
 ## Server Info Endpoint
 
 The server exposes `/api/v1/server` for metadata such as version, server name,
