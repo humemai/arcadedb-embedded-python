@@ -103,7 +103,7 @@ RESTART_BY_MODEL = {m: tuple(b for b in runner.LANES["restart"][1] if _RS.MODEL[
                     for m in ("docs", "graph", "dense", "ts")}
 RESTART_ENV = ("BENCH_RS_ITERS=5", "BENCH_RS_WARMUP=1", "BENCH_RS_WRITE_N=1000")
 # id, title, lane, workloads, scales, guards, extra, stage_env, only, dur_mode, after
-STAGES = [
+STATIC_STAGES = [
     ("qRA", "graph INTERACTIVE at both sizes, both durability classes", "l2", ["oltp"], ["sf1", "sf10"],
      _october("qOA")[5], {}, []),
     ("qRB", "graph ANALYTICS on the full SF1 network", "l2", ["olap"], ["sf1full"],
@@ -163,7 +163,6 @@ def _derived_stages(static):
     return out
 
 
-STATIC_STAGES = list(STAGES)
 STAGES = STATIC_STAGES + _derived_stages(STATIC_STAGES)
 
 
