@@ -287,6 +287,16 @@ CRUD_OPS = int(os.environ.get("BENCH_CRUD_OPS", "1000"))
 CRUD_QTY_AFTER_UPDATE = 2
 CRUD_DIGEST = dict(columns=(("ckey", "_id"), "pkey", "qty"))
 OLTP_STATE_DIGEST = dict(columns=(("okey", "_id"), "pkey", "qty", "paid"))
+# THE OTHER HALF OF NEW-ORDER (CAMPAIGN section 7 row 58, BUGS F172). The transaction inserts an order AND
+# decrements the part's stock, and the state digest above reads only the orders: an engine that skipped the
+# decrement printed a faster new-order and passed every gate. Every part starts at STOCK_START, so the rows
+# with a different stock are exactly the parts a new-order touched, and each engine reads them back untimed
+# in its own language (`SELECT p_partkey, stock FROM part WHERE stock <> 100`).
+STOCK_START = 100
+STOCK_DIGEST = dict(columns=("p_partkey", "stock"))
+# The payments the loop inserted, compared across engines as a one-row digest: a payment transaction that
+# marked the order paid and silently skipped its insert left every other digest agreeing.
+PAYMENTS_DIGEST = dict(columns=("n",))
 CRUD_READ_DIGEST = dict(columns=(("ckey", "_id"), "pkey", "qty"))
 
 
@@ -451,6 +461,9 @@ class DuckTPC:
     def oltp_scan(self):
         return self.cx.execute("SELECT okey, pkey, qty, paid FROM orders_new").fetchall()
 
+    def stock_scan(self):
+        return self.cx.execute("SELECT p_partkey, stock FROM part WHERE stock <> 100").fetchall()
+
     def payments_n(self):
         return self.cx.execute("SELECT count(*) FROM payments").fetchone()[0]
 
@@ -548,6 +561,9 @@ class SQLiteTPC:
 
     def oltp_scan(self):
         return self.cx.execute("SELECT okey, pkey, qty, paid FROM orders_new").fetchall()
+
+    def stock_scan(self):
+        return self.cx.execute("SELECT p_partkey, stock FROM part WHERE stock <> 100").fetchall()
 
     def payments_n(self):
         return self.cx.execute("SELECT count(*) FROM payments").fetchone()[0]
@@ -689,6 +705,9 @@ class MongoTPC:
     def oltp_scan(self):
         return list(self.db["orders_new"].find({}, {"_id": 0, "okey": 1, "pkey": 1, "qty": 1, "paid": 1}))
 
+    def stock_scan(self):
+        return list(self.db["part"].find({"stock": {"$ne": 100}}, {"_id": 0, "p_partkey": 1, "stock": 1}))
+
     def payments_n(self):
         return self.db["payments"].count_documents({})
 
@@ -820,6 +839,9 @@ class SurrealTPC:
 
     def oltp_scan(self):
         return self._rows(self.db.query("SELECT okey, pkey, qty, paid FROM orders_new"))
+
+    def stock_scan(self):
+        return self._rows(self.db.query("SELECT p_partkey, stock FROM part WHERE stock != 100"))
 
     def payments_n(self):
         r = self._rows(self.db.query("SELECT count() AS n FROM payments GROUP ALL"))
@@ -963,6 +985,9 @@ class PostgresTPC:
 
     def oltp_scan(self):
         return self._all("SELECT okey, pkey, qty, paid FROM orders_new")
+
+    def stock_scan(self):
+        return self._all("SELECT p_partkey, stock FROM part WHERE stock <> 100")
 
     def payments_n(self):
         return self._all("SELECT count(*) FROM payments")[0][0]
@@ -1164,6 +1189,9 @@ class ArcadeTPC:
     def oltp_scan(self):
         return self.db.query("sql", "SELECT okey, pkey, qty, paid FROM OrderNew LIMIT 1000000").to_list()
 
+    def stock_scan(self):
+        return self.db.query("sql", "SELECT p_partkey, stock FROM Part WHERE stock <> 100 LIMIT 1000000").to_list()
+
     def payments_n(self):
         r = self.db.query("sql", "SELECT count(*) AS n FROM Payment").to_list()
         return (r[0].get("n") if r else 0) or 0
@@ -1332,6 +1360,9 @@ class ArcadeServerTPC(ArcadeTPC):
     def oltp_scan(self):
         return self._cmd("SELECT okey, pkey, qty, paid FROM OrderNew LIMIT 1000000")
 
+    def stock_scan(self):
+        return self._cmd("SELECT p_partkey, stock FROM Part WHERE stock <> 100 LIMIT 1000000")
+
     def payments_n(self):
         r = self._cmd("SELECT count(*) AS n FROM Payment")
         return (r[0].get("n") if r else 0) or 0
@@ -1473,6 +1504,11 @@ class ArangoTPC:
     def oltp_scan(self):
         return list(self.db.aql.execute(
             "FOR o IN orders_new RETURN {okey: o.okey, pkey: o.pkey, qty: o.qty, paid: o.paid}",
+            batch_size=10_000))
+
+    def stock_scan(self):
+        return list(self.db.aql.execute(
+            "FOR p IN part FILTER p.stock != 100 RETURN {p_partkey: p.p_partkey, stock: p.stock}",
             batch_size=10_000))
 
     def payments_n(self):
@@ -1664,6 +1700,8 @@ def main():
         # nothing now fails the gate instead of printing the best number on the
         # table. Taken BEFORE the payment loop, which changes `paid`.
         bench_common.record_result(out, "neworder", b.oltp_scan(), **OLTP_STATE_DIGEST)
+        # ...and the stock it decremented (row 58): the same transaction's other write.
+        bench_common.record_result(out, "stock", b.stock_scan(), **STOCK_DIGEST)
         # PAYMENT (2026-10, DECISIONS #82): the same count, against the orders
         # new-order just placed, each chosen at random so the read is not a
         # scan of the newest page. Read the order, mark it paid, insert the
@@ -1690,6 +1728,7 @@ def main():
         # engines must agree on it.
         bench_common.record_result(out, "payment", b.oltp_scan(), **OLTP_STATE_DIGEST)
         out["payments_n"] = b.payments_n()
+        bench_common.record_result(out, "payments", [(out["payments_n"],)], **PAYMENTS_DIGEST)
 
         # ------------------------------------------------------------------
         # THE FOUR SINGLE-RECORD OPERATIONS (2026-10, DECISIONS #82a), 1,000 of
