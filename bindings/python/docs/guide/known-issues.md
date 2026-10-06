@@ -102,6 +102,98 @@ or upgrade JPype to the release that carries the fix when it ships. Count the li
 objects with `sys.getallocatedblocks()` before and after a read to see whether your path is
 affected.
 
+## An openCypher one-hop `count(*)` answers 0 for edges loaded with `light_edges=True` into a type that is not `LIGHTWEIGHT`
+
+ArcadeDB [#9378](https://github.com/ArcadeData/arcadedb/issues/9378); measured through the
+bindings on the 26.10.1 wheel (the official jars are upstream build d36b4ca3ae), and in Java on that
+build and on upstream main 246821a605 (26.11.1-SNAPSHOT), on Temurin 21 and 25, with the same
+answers. Open: reported upstream and not fixed on main, so no release carries a fix yet.
+
+`db.graph_batch(light_edges=True)` writes each edge that has no properties as a light edge, one
+with no record of its own. When the edge type is an ordinary one (`CREATE EDGE TYPE E`, not
+`CREATE EDGE TYPE E LIGHTWEIGHT`), a `MATCH` of one hop that ends in `RETURN count(*)` is answered
+by the count push-down from the number of records in the type, and the type holds none. On three
+vertices a, b, and c with the edges a to b and b to c, loaded that way:
+
+```python
+db.command("sql", "CREATE VERTEX TYPE V")
+db.command("sql", "CREATE EDGE TYPE E")
+with db.graph_batch(light_edges=True) as batch:
+    a, b, c = batch.create_vertices("V", 3)
+    batch.new_edge(a, "E", b)
+    batch.new_edge(b, "E", c)
+
+db.query("opencypher", "MATCH (a:V)-[:E]->(b:V) RETURN count(*) AS n").first().get("n")  # 0, not 2
+```
+
+`EXPLAIN` of that query shows `CONSTANT COUNT (0: the pattern has an empty or undeclared type)`.
+The edges are in the graph: the same pattern returning rows gives 2, the two-hop count gives 1, and
+SQL `out('E')` finds both. The wrong count does not depend on the session: it is the same after the
+database is closed and opened again. It also holds for `<-[:E]-`, for an undirected `-[:E]-`, and
+for unlabelled nodes. A type declared `LIGHTWEIGHT`, a batch with `light_edges=False`, and a
+batch that does not pass `light_edges` all counted 2 in the same run.
+
+Do not pass `light_edges=True` for an edge type that is not declared `LIGHTWEIGHT`: declare the
+type `LIGHTWEIGHT` before the load, or leave the option out. A `LIGHTWEIGHT` type refuses an edge with
+properties (`IllegalArgumentException`). For a graph that is already loaded, count in a way that does not take the push-down:
+put the variables through a `WITH`, count a node, or name the relationship and count that. All
+three counted 2 on the graph above:
+
+```python
+db.query("opencypher", "MATCH (a:V)-[:E]->(b:V) WITH a, b RETURN count(*) AS n")
+db.query("opencypher", "MATCH (a:V)-[:E]->(b:V) RETURN count(b) AS n")
+db.query("opencypher", "MATCH (a:V)-[r:E]->(b:V) RETURN count(r) AS n")
+```
+
+Tests: `tests/test_light_edge_and_view_known_issues.py` checks the workarounds and the cases that are
+not affected, and has a strict `xfail` test of the right count; it starts failing the suite when
+the engine fixes it, which is the cue to remove this entry.
+
+
+## An openCypher count with a pattern predicate over an edge type that a Graph Analytical View does not list is wrong
+
+ArcadeDB [#9377](https://github.com/ArcadeData/arcadedb/issues/9377); measured through the
+bindings on the 26.10.1 wheel (the official jars are upstream build d36b4ca3ae), and in Java on that
+build and on upstream main 246821a605 (26.11.1-SNAPSHOT), on Temurin 21 and 25, with the same
+answers. Open: reported upstream and not fixed on main, so no release carries a fix yet.
+
+A Graph Analytical View copies the structure of the vertex and edge types it lists
+(`CREATE GRAPH ANALYTICAL VIEW ... VERTEX TYPES (...) EDGE TYPES (...)`), and a query that the
+view can serve is answered from the copy. A view that lists the edge types of the chain in a
+`MATCH` but not an edge type that a pattern predicate in its `WHERE` names is still used for an
+aggregate, and the predicate is then checked against the copy, where the unlisted type has no
+edges. On the vertices x, y, and z of type `V` with the edges x `-E->` y, x `-F->` y, and
+y `-E->` z, and a view over `V` and `E`, the pair (x, y) has an `F` edge, so the right count of each
+query below is 1. The view answered:
+
+| Query over the view that lists `E` only | Counted | Right |
+| --- | --- | --- |
+| `MATCH (a:V)-[:E]->(b:V) WHERE NOT (a)-[:F]->(b) RETURN count(*)` | 2 | 1 |
+| `MATCH (a:V)-[:E]->(b:V) WHERE (a)-[:F]->(b) RETURN count(*)` | 0 | 1 |
+| `MATCH (a:V)-[:E]->(b:V) WHERE NOT (a)-[:F]->(b) RETURN count(a)` | 2 | 1 |
+
+`EXPLAIN` of the first shows `GAV ONE-HOP SCAN` with the predicate as its filter. The same
+predicates counted right with no view, with a view that lists `F` as well as `E`, behind a `WITH`,
+and in a query that returns rows instead of an aggregate. The query returns no error and no
+warning, only the wrong number.
+
+Put the variables through a `WITH` before the `WHERE`, as for the count push-down entries below.
+That keeps the query off the view, and counted 1 for both forms above. It gives up the view's
+speed for that query. Or list every edge type that your pattern predicates name when you create the
+view (`EDGE TYPES (E, F)`), which counted 1 as well:
+
+```python
+db.query(
+    "opencypher",
+    "MATCH (a:V)-[:E]->(b:V) WITH a, b WHERE NOT (a)-[:F]->(b) RETURN count(*) AS n",
+)
+```
+
+Tests: `tests/test_light_edge_and_view_known_issues.py` checks both workarounds and the cases that
+are not affected, and has strict `xfail` tests of the right counts; they start failing the suite
+when the engine fixes them, which is the cue to remove this entry.
+
+
 ## An openCypher count with a negated pattern in a chain is wrong when the far end has another label or the pattern has a property map
 
 ArcadeDB [#9277](https://github.com/ArcadeData/arcadedb/issues/9277) and
