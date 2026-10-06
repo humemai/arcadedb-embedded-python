@@ -150,3 +150,55 @@ def test_mongodb_lookup_local_fields_are_field_names_never_expressions():
     for lk in lookups:
         assert not lk["localField"].startswith("$"), lk
         assert lk["localField"] in ("f", "f2"), lk
+
+
+def _walks(edges, start, k):
+    """Every walk of k pairwise-distinct friendships from `start` (Cypher's relationship isomorphism), as the list of far ends."""
+    adj = {}
+    for i, (a, b) in enumerate(edges):
+        adj.setdefault(a, []).append((b, i))
+        adj.setdefault(b, []).append((a, i))
+    ends = []
+
+    def go(at, used, left):
+        if left == 0:
+            ends.append(at)
+            return
+        for nxt, e in adj.get(at, []):
+            if e not in used:
+                go(nxt, used | {e}, left - 1)
+    go(start, frozenset(), k)
+    return ends
+
+
+def test_surrealql_two_and_three_hop_reads_equal_the_distinct_edge_walks_for_every_start_on_the_real_engine():
+    """Found on the SF1 slice (26 of 96 present starts off): inside a SurrealQL closure a query parameter reads as NONE and an
+    outer closure's variable is invisible to an inner one, so exclusions written there removed nothing. Every start of a
+    small graph with triangles and a pendant person is compared with a brute-force enumeration of distinct-edge walks."""
+    surrealdb = pytest.importorskip("surrealdb", reason="add --with surrealdb==2.0.0 to run the SurrealDB case")
+    ages = {1: 50, 2: 45, 3: 50, 4: 50, 5: 30, 6: 44, 7: 60, 8: 41}
+    edges = [(1, 2), (2, 3), (3, 4), (2, 4), (4, 5), (5, 6), (6, 7), (7, 4), (1, 8), (6, 8), (3, 7)]
+    db = surrealdb.Surreal("mem://")
+    db.use("t", "t")
+    for pid, age in ages.items():
+        db.query(f"CREATE person:{pid} SET pid = {pid}, age = {age}, city = 'c'")
+    for a, b in edges:
+        db.query(f"RELATE person:{a}->knows->person:{b} SET since = 2000")
+    S = L.SurrealGraph
+    for start in ages:
+        rid = surrealdb.RecordID("person", start)
+
+        def one(text):
+            out = db.query(text, {"p": rid})
+            return out.get("n") if isinstance(out, dict) else None
+        two, three = _walks(edges, start, 2), _walks(edges, start, 3)
+        assert one(S.READS["hop2"]) == len(set(two)), start
+        assert one(S.READS["hop3f"]) == len({x for x in three if ages[x] > G.HOP3F_MIN_AGE}), start
+        assert one(S.VISITED) == len(set(three)), start
+
+
+def test_surrealql_three_hop_text_names_no_parameter_or_outer_variable_inside_a_closure():
+    h = L.SurrealGraph._HOP3
+    assert "[id]" in h and "[$p]" not in h                  # the start is the current record inside a closure
+    assert h.count("[$a]") == 1                              # `a` is excluded once, by the outer closure
+    assert "|$b| array::concat($b->knows->person, $b<-knows<-person)" in h      # the inner closure reads only its own variable

@@ -2063,9 +2063,17 @@ class SurrealGraph(Base):
     # walks p-a-b: b is not p; and p-a-b-x: x is not a.
     _HOP2 = ("array::complement(array::flatten(array::map(" + _FRIENDS + ", |$a| "
              + "array::concat($a->knows->person, $a<-knows<-person))), [$p])")
-    _HOP3 = ("array::flatten(array::map(" + _FRIENDS + ", |$a| array::flatten(array::map("
-             + "array::complement(array::concat($a->knows->person, $a<-knows<-person), [$p]), |$b| "
-             + "array::complement(array::concat($b->knows->person, $b<-knows<-person), [$a])))))")
+    # TWO THINGS THE ENGINE DOES NOT DO INSIDE A CLOSURE (found by comparing every start of the SF1 slice with a DuckDB
+    # reference, 26 of 96 present starts off by one or more, probed on core 2.3.10): a QUERY PARAMETER (`$p`) reads as NONE, and
+    # an OUTER closure's variable (`$a`) is not visible inside an INNER closure. So `complement(..., [$p])` and
+    # `complement(..., [$a])` written inside the inner closures removed nothing, and the walks p-a-p-x and p-a-b-a were
+    # counted. What IS visible inside a closure is the current record: `id` is the start person. The exclusion of `p` is
+    # therefore written `[id]`, and the exclusion of `a` is applied to the union over b in the OUTER closure, where `$a` is
+    # its own variable (for one fixed a, the union over b minus {a} is exactly the ends of the walks p-a-b-x with b not p and
+    # x not a). The 2-hop's `[$p]` is outside any closure and was right.
+    _HOP3 = ("array::flatten(array::map(" + _FRIENDS + ", |$a| array::complement(array::flatten(array::map("
+             + "array::complement(array::concat($a->knows->person, $a<-knows<-person), [id]), |$b| "
+             + "array::concat($b->knows->person, $b<-knows<-person))), [$a])))")
     READS = {
         "point": "SELECT name, age FROM ONLY $p",
         "hop1": ("SELECT array::len(" + _FRIENDS + ") AS n, "
