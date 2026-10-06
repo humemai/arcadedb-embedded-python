@@ -11,9 +11,10 @@ in scope and in where they publish, not in the kind of thing they measure.
   against specialist and multi-model engines on documents,
   graph, dense and sparse vectors, time series, and cross-model queries. It
   is what every campaign runs, and its results are the project page at
-  <https://humem.ai/projects/arcadedb>. There is no paper; the page is the
-  only artifact, and every number on it is generated from the frozen rows by
-  the exporter and checked by gates before it can be published.
+  <https://humem.ai/projects/arcadedb>. The page is the living artifact, and
+  every number on it is generated from the frozen rows by the exporter and
+  checked by gates before it can be published; a paper written from the same
+  rows pins a stable release where the page may pin a commit (DECISIONS #42).
 - `python-bindings/` is the **SciPy 2026 paper's artifact**, frozen with the
   paper: the package as published on PyPI against four embedded Python
   specialists on one corpus, plus `jpype_overhead/`, which times the binding
@@ -22,8 +23,8 @@ in scope and in where they publish, not in the kind of thing they measure.
   extended; new work goes in `experiments/`. The one exception is
   `jpype_overhead/results/mini_results_<pin>.csv`, the bench-host run that feeds the
   page's Python-cost table: `export_web.py` reads the file named by the pin it
-  publishes, only the September pin's exists, and the October payload omits the
-  table until it is re-measured. Its own README carries its versions and layout.
+  publishes, only the September pin's exists until the 26.10.1 measurement's
+  Python-cost stage lands, and the October payload omits the table until then. Its own README carries its versions and layout.
 
 ## Where to start in `experiments/`
 
@@ -38,6 +39,7 @@ its detail. Read it first; the rest are the references it points to.
 | `PROTOCOL.md` | How a row is produced, and what enforces each rule (a gate, a check, or a person) |
 | `FAIRNESS.md` | When two numbers may be compared: the invariants and the disclosed overrides |
 | `COMPARATORS.md` | What every comparator is pinned to, and why it runs the way it does |
+| `QUANTIZATION.md` | What each dense and sparse engine ships, and which quantized arm the page runs |
 | `PAGE-SPEC.md` | What the page contains: tables, rows, columns, and what each cell must satisfy |
 | `PUBLISHING.md` | How the numbers get from the frozen rows onto the page, the preview route, and the results asset |
 | `READING-RESULTS.md` | How to read what came out without misreading it |

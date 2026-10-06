@@ -50,7 +50,7 @@ The single rule, from which most of the rest follows:
 
 **`instrument` names the query set, timers, and durability rule a row ran under.** Rows before 2026-10 carry none and are the September instrument; `load_canonical` and `export_web` refuse two values in one table. Read a 2026-10 document OLTP row's `oltp_ops_per_s` as new-order and payment together (`oltp_ops` says how many), where a September row's is new-order alone.
 
-**`durability` is what the engine ran at commit, read from the engine where it can be read.** PostgreSQL-family rows carry the server's own `SHOW synchronous_commit` answer; a value ending "(NOT the #81 setting)" means the server was not started with the flag and the row fails F10. Strings starting "fsync at commit" are the named exceptions (Neo4j, LadybugDB, DuckDB), and "unverified" is SurrealDB served, which has no setting to read.
+**`durability` is what the engine ran at commit, read from the engine where it can be read.** PostgreSQL-family rows carry the server's own `SHOW synchronous_commit` answer; a value ending "(NOT the #81 setting)" means the server was not started with the flag and the row fails F10. Strings starting "fsync at commit" are the named exceptions (Neo4j, LadybugDB, DuckDB), and "unverified" is a class no engine is in now (`fairness_check.UNVERIFIED_ALLOWED` is empty; SurrealDB served was the last, until BUGS F165 found its `sync` setting).
 
 **A digest is of the canonical answer, not of the raw rows.** The digest is taken after the answer is put in canonical form: sorted unless the query defines an order, floats rounded to a fixed precision, engine-specific row wrappers and column ordering gone. Two engines whose digests match did not return identical result objects, and hashing what a driver handed back instead will disagree on every engine pair for reasons that are not about the answer.
 
@@ -58,13 +58,13 @@ The single rule, from which most of the rest follows:
 
 **The revenue total and the revenue by month carry a row count in the answer.** It is compared exactly and is not a page column (DECISIONS #94): at the campaign's largest tier a single lost row moves either sum by less than the digest's rounding, detected 10.8 and 36.5 per cent of the time, and F46 is an engine that loses exactly one row to an index bound.
 
-**A withheld cell is not a missing measurement.** A disagreement that has been reproduced and filed upstream prints as KNOWN and its cell is withheld (`equivalence_check.KNOWN_DISAGREEMENTS`, `export_web.WITHHELD_CELLS`); nothing is withheld today; the last entry (the served native time-series group-by, upstream #7610) was released on 2026-09-18.
+**A withheld cell is not a missing measurement.** A disagreement that has been reproduced and filed upstream prints as KNOWN and its cell is withheld (`equivalence_check.KNOWN_DISAGREEMENTS`, `export_web.WITHHELD_CELLS`); nothing is withheld today (`WITHHELD_CELLS` is empty; the last entry, the served native time-series group-by, upstream #7610, was released on 2026-09-18). `KNOWN_DISAGREEMENTS` holds PostgreSQL + AGE's CRUD read-backs (apache/age#2587), whose cells publish with a note.
 
 **Every row since 2026-09-14 says how hot the machine was.** `host_temp_c_start` and `_end`, `host_throttle_count_start` and `_end`, and `host_throttled_ms` (BUGS.md F45). mini throttles under sustained load while the busy cores hold 4.3 GHz, the power mode is unchanged by decision, and rows from different stages are compared with those fields read rather than assumed equal.
 
 **"Unexpressible" is a declaration, not a failure.** An engine whose adapter declares an operation absent has said so deliberately (DECISIONS #88); `equivalence_check` names it and the table prints a dash with the reason in its condition. It is not a crashed cell, a timeout, or a gap to be filled, and it is not evidence that the engine is slow. A silently missing answer is the failure, and that is what the gate exists to tell apart from this.
 
-**`ingest_s` and `index_s` are present only where the engine has the boundary** (on the dense lane ArcadeDB, pgvector, Neo4j, Milvus, LanceDB, the SurrealDB server, and MongoDB; on the document, time-series, and cross-model lanes every arm, through `bench_common.index_split`, with `index_before_load` true where the index was defined before the load and its work sits inside `ingest_s`); `build_s` is still the whole timer and the two do not sum to it exactly (schema creation and Milvus's compaction sit outside them). Milvus's `index_s` is its post-build wait, flush through load.
+**`ingest_s` and `index_s` are present only where the engine has the boundary** (on the dense lane every arm except those `fairness_check.PHASE_SPLIT_DECLARED` names, which index while they load; on the document, time-series, and cross-model lanes every arm, through `bench_common.index_split`, with `index_before_load` true where the index was defined before the load and its work sits inside `ingest_s`); `build_s` is still the whole timer and the two do not sum to it exactly (schema creation and Milvus's compaction sit outside them). Milvus's `index_s` is its post-build wait, flush through load.
 
 **The graph write pass now has a partner.** `delete_p50_ms` and `delete_p99_ms` come from deleting, in order, the persons the write pass created (with their edge), one transaction each; `hop3f_*` is the 3-hop read filtered on the far end. Neither exists on September rows.
 
@@ -76,9 +76,8 @@ is what the ENGINE reported, read back out of it wherever it can be asked;
 healthy row. A row where they differ is a flag that did not take -- an
 environment variable the server ignores, a JVM property that never reached the
 JVM -- and `fairness_check` fails it rather than publishing the asserted value.
-`durability_no_setting` marks the four engines with no knob (Neo4j, DuckDB,
-LadybugDB, the SurrealDB 3.2.4 server); they run once and the page prints that
-one number in both columns. `durability_server_flags` says what the runner
+`durability_no_setting` marks the three engines with no knob (Neo4j, DuckDB,
+LadybugDB); they run once and the page prints that one number in both columns. `durability_server_flags` says what the runner
 changed on a server container for the class, and is blank for an embedded arm.
 
 **A strict cell is a different cell, not a different column.** The strict arm of

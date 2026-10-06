@@ -16,7 +16,7 @@ Comparators (`python:3.12-slim`, x86_64):
 | arcadedb-embedded | `arcadedb-embedded` | 26.8.1 | documents + graph + vectors |
 | SQLite | stdlib `sqlite3` | 3.46.1 | documents, transactional |
 | DuckDB | `duckdb` | 1.5.4 | documents, analytical |
-| LadybugDB | `ladybug` | 0.18.1 | graph (see `docs/ladybug-package.md`) |
+| LadybugDB | `ladybug` | 0.18.1 | graph (the official package from LadybugDB/ladybug-python; the earlier `real_ladybug` 0.15.3, published from lbugdb/lbug, is frozen and not used) |
 | Chroma | `chromadb` | 1.5.9 | vectors (HNSW) |
 | Faiss | `faiss-cpu` | 1.14.3 | exact recall baseline |
 
@@ -100,9 +100,6 @@ benchmarks/python-bindings/
 │   ├── mem/                   per-run memory time series (untracked)
 │   ├── overhead_2681/         an earlier JPype-overhead run (RESULT lines; results.csv tracked)
 │   └── results_abl_*/         ablation campaigns (GAV off, strict durability)
-└── docs/
-    ├── dev-log-2026-06.md     development log, June to August 2026
-    └── ladybug-package.md     LadybugDB package and version note
 ```
 
 ## What is and is not committed
