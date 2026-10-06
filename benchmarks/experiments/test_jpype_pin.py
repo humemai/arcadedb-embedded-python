@@ -177,8 +177,10 @@ def stages(tmp_path_factory):
 
 
 def _stage_ids():
-    host = [s[0] for s in G.STAGES if s[2] == "pycost"]
-    runner_stages = [s[0] for s in G.STAGES if s[2] != "pycost"]
+    # the ids of the order the fixture generates (the generator's default, DECISIONS #163: qT01..), not the paper order's qRA..
+    stages = G.tiered_stages()
+    host = [s[0] for s in stages if s[2] == "pycost"]
+    runner_stages = [s[0] for s in stages if s[2] != "pycost"]
     assert len(host) == 1 and runner_stages
     return host[0], runner_stages
 
@@ -262,7 +264,7 @@ def test_the_stages_carry_the_pin_the_generator_holds_not_a_literal_of_their_own
     out.mkdir()
     G.emit_all(str(out), {"ARCADEDB_ENGINE_COMMIT": "d36b4ca3ae4c170abc73598e0dffa2bb58e06621",
                           "ARCADEDB_WHEEL": str(wheel), "ARCADEDB_SERVER_IMAGE": "arcadedb-c25:26.10.1"},
-               None, allow_dev=False)
+               None, allow_dev=False, stages=G.tiered_stages())
     host, runner_stages = _stage_ids()
     assert '[ "$IJ" = "1.7.2" ]' in (out / f"{runner_stages[0]}.sh").read_text()
     assert '[ "$HAVE_J" = "1.7.2" ]' in (out / f"{host}.sh").read_text()
