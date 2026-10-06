@@ -209,3 +209,104 @@ def test_async_parameters_reach_one_java_overload(temp_db):
         assert received(method, [{"p": 1}]) == ("Map", {"p": 1})
         assert received(method, p=None) == ("Map", {"p": None})
     assert seen == []
+
+
+class TestScalarParametersTakeTheShortPath:
+    """Plain scalars cross as they are, without the per-value conversion walk.
+
+    A dict of str keys with scalar values, or positional scalars, is bound with a HashMap or an
+    Object[] built directly: 4 to 6 microseconds a call against 6.5 to 9 for the general path.
+    Exact types only; anything else (numpy scalars, Decimal, date, list, a subclass of int) keeps
+    the general path and its conversions.
+    """
+
+    @pytest.fixture
+    def counted(self, monkeypatch):
+        from arcadedb_embedded import core
+
+        calls = []
+        real = core.convert_python_to_java
+
+        def spy(value):
+            calls.append(type(value).__name__)
+            return real(value)
+
+        monkeypatch.setattr(core, "convert_python_to_java", spy)
+        return calls
+
+    def test_scalar_dict_is_not_converted(self, db, counted):
+        rows = db.query(
+            "sql", "SELECT k FROM T WHERE v = :v AND k = :k", {"v": 5, "k": "set"}
+        ).to_list()
+        assert rows == [{"k": "set"}]
+        assert counted == []
+
+    def test_positional_scalars_are_not_converted(self, db, counted):
+        rows = db.query(
+            "sql", "SELECT k FROM T WHERE v = ? AND k = ?", 5, "set"
+        ).to_list()
+        assert rows == [{"k": "set"}]
+        assert counted == []
+        rows = db.query("sql", "SELECT k FROM T WHERE v = ?", [5]).to_list()
+        assert rows == [{"k": "set"}]
+        assert counted == []
+
+    def test_every_scalar_type_binds_as_before(self, db):
+        with db.transaction():
+            db.command(
+                "sql",
+                "INSERT INTO T SET k = :k, i = :i, f = :f, b = :b, n = :n, big = :big",
+                {"k": "all", "i": 7, "f": 2.5, "b": True, "n": None, "big": 2**40},
+            )
+            db.command(
+                "sql",
+                "INSERT INTO T SET k = ?, i = ?, f = ?, b = ?, n = ?, big = ?",
+                "pos",
+                7,
+                2.5,
+                False,
+                None,
+                2**40,
+            )
+        rec = _records(db)
+        assert (
+            rec["all"]["i"] == 7 and rec["all"]["f"] == 2.5 and rec["all"]["b"] is True
+        )
+        assert rec["all"]["n"] is None and rec["all"]["big"] == 2**40
+        assert rec["pos"]["b"] is False and rec["pos"]["i"] == 7
+
+    def test_the_overloads_still_see_the_same_kind_of_argument(self, db):
+        # a dict goes to the Map overload and positional values to Object...: identical answers
+        named = db.query("sql", "SELECT k FROM T WHERE v = :v", {"v": 5}).to_list()
+        positional = db.query("sql", "SELECT k FROM T WHERE v = ?", 5).to_list()
+        assert named == positional == [{"k": "set"}]
+
+    def test_non_scalars_keep_the_general_path(self, db, counted):
+        import decimal
+
+        db.query(
+            "sql", "SELECT k FROM T WHERE v = :v", {"v": decimal.Decimal("5")}
+        ).to_list()
+        assert counted  # converted
+        del counted[:]
+        db.query("sql", "SELECT k FROM T WHERE v IN :vs", {"vs": [5, 6]}).to_list()
+        assert counted
+
+    def test_a_subclass_of_a_scalar_is_not_assumed_to_be_one(self, db, counted):
+        class MyInt(int):
+            pass
+
+        rows = db.query(
+            "sql", "SELECT k FROM T WHERE v = :v", {"v": MyInt(5)}
+        ).to_list()
+        assert rows == [{"k": "set"}]
+        assert counted  # took the general path
+
+    def test_numpy_scalars_keep_the_general_path(self, db, counted):
+        np = pytest.importorskip("numpy")
+        rows = db.query("sql", "SELECT k FROM T WHERE v = ?", np.int64(5)).to_list()
+        assert rows == [{"k": "set"}]
+        rows = db.query(
+            "sql", "SELECT k FROM T WHERE v = :v", {"v": np.float64(5.0)}
+        ).to_list()
+        assert rows == [{"k": "set"}]

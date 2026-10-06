@@ -81,6 +81,16 @@ Since 26.10.1's parallel scan (ArcadeData/arcadedb#8524) a query whose `LIMIT` i
 - **exhaustion, first and one close the Java result set**: `list(rs)`, `to_list()`, `first()`, and `one()` each leave the result set closed.
 - **a set closed before its end raises when read again**: after `first()`, each of `list()`, `to_list()`, `first()`, `count()`, `iter_json_batches()`, and `to_columns()` raises `ArcadeDBError` ("closed before"), and so does `to_list()` after a `with` block that took one row; a set read to its end reads as empty through `list()`, `to_list()`, `first()`, and `iter_json_batches()`.
 
+### A small result costs one bridge call (`TestSmallResultsCostOneBridgeCall`)
+
+A JPype call costs 3 to 4 microseconds, a fifth of a one-row read. `RowAccess.nextRows` and `RowBatcher.nextJsonBatch` return fewer rows than asked for only when the result set is drained, and close it themselves, so `to_list()` and `to_json_list()` make exactly one bridge call for a result that fits one batch, and no separate `close()` call.
+
+- **`to_list()` makes one call for a short result**, including an empty one: a counting stand-in for the bridge class sees one `nextRows`, and the set is closed and exhausted
+- **`to_json_list()` makes one call** for a short result
+- **a full batch still ends on the next call**: exactly 512 rows (the `to_list()` batch) take two calls and return every row
+- **a drained set reads as empty and is not an error**: `to_list()`, iteration, `first()`, and `iter_json_batches()` on a drained set return nothing, and `close()` stays idempotent
+- **the bridge releases the engine cursor**: 60,000 documents walked in `@rid` pages of 5,000 with `to_list()` and `to_json_list()`, nobody calling `close()`, finish (a LIMIT that stops a parallel scan early parks its producers until the result set is closed, ArcadeData/arcadedb#8594)
+
 ### Results and records after their database is closed (`test_results_after_close.py`)
 
 A result, a result set, or a record keeps the `Database` it came from alive and raises `ArcadeDBError` ("Database is closed") once that database is closed (humemai/arcadedb-embedded-python#117). Before, a record row read `{}`, a record property read `None`, and a plain scan raised a raw `TransactionException`.

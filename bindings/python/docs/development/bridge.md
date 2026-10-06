@@ -13,6 +13,8 @@ sources live in `bindings/python/src/java/com/arcadedb/python/`:
 | `TimeSeriesBatcher` | Fills the engine's primitive `TimeSeriesBatch` one column per call, so numeric samples are never boxed |
 | `RowAccess` | Hands a row's names and values to Python in one call (`namesAndValues`), and up to N such rows per call (`nextRows`); the values are the engine's own objects, so Python converts them with full type fidelity |
 
+`RowBatcher.nextJsonBatch` and `RowAccess.nextRows` return fewer rows than asked for only when the result set is drained, and they close it before returning. Python therefore stops after a short batch and makes no further call into the bridge, not even `close()`: a one-row `to_list()` or `to_json_list()` costs one call into the bridge.
+
 ## Why it exists
 
 Every JPype call from Python into the JVM pays a fixed boundary-crossing tax

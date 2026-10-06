@@ -567,3 +567,182 @@ class TestResultSetReleasesTheEngineCursor:
         assert len(rs.to_list()) == 5
         assert list(rs) == [] and rs.to_list() == [] and rs.first() is None
         assert list(rs.iter_json_batches()) == []
+
+
+class _CountingBridge:
+    """Stands in for a bridge class in results._BRIDGE_CLASSES: counts each call and delegates."""
+
+    def __init__(self, real, name):
+        self._real, self._name, self.calls = real, name, 0
+
+    def __getattr__(self, attr):
+        target = getattr(self._real, attr)
+        if attr != self._name:
+            return target
+
+        def counted(*args):
+            self.calls += 1
+            return target(*args)
+
+        return counted
+
+
+@pytest.fixture
+def counting_bridge(monkeypatch):
+    """Count the calls the Python layer makes into RowAccess.nextRows and RowBatcher.nextJsonBatch."""
+    from arcadedb_embedded import results
+
+    row_access = results._bridge_class("RowAccess")
+    row_batcher = results._bridge_class("RowBatcher")
+    assert row_access is not None and row_batcher is not None
+    counters = {
+        "nextRows": _CountingBridge(row_access, "nextRows"),
+        "nextJsonBatch": _CountingBridge(row_batcher, "nextJsonBatch"),
+    }
+    monkeypatch.setitem(results._BRIDGE_CLASSES, "RowAccess", counters["nextRows"])
+    monkeypatch.setitem(
+        results._BRIDGE_CLASSES, "RowBatcher", counters["nextJsonBatch"]
+    )
+    return counters
+
+
+class TestSmallResultsCostOneBridgeCall:
+    """A result that fits one batch is read with ONE call into the bridge, and the bridge closes it.
+
+    A JPype call is 3 to 4 microseconds, a fifth of a one-row read. to_list() asked
+    RowAccess.nextRows a second time just to see an empty batch (the fix that #144 made for
+    to_json_list()), and every drained result set cost one more crossing for close().
+    nextRows and nextJsonBatch return fewer rows than asked for only when the result set is
+    drained, and close it themselves.
+    """
+
+    @pytest.fixture
+    def three(self, temp_db):
+        temp_db.command("sql", "CREATE DOCUMENT TYPE Few")
+        with temp_db.transaction():
+            for i in range(3):
+                temp_db.command("sql", "INSERT INTO Few SET k = ?", i)
+        return temp_db
+
+    def test_to_list_makes_one_call_for_a_short_result(self, three, counting_bridge):
+        rs = three.query("sql", "SELECT k FROM Few ORDER BY k")
+        assert rs.to_list() == [{"k": 0}, {"k": 1}, {"k": 2}]
+        assert counting_bridge["nextRows"].calls == 1
+        assert rs._closed and rs._exhausted
+
+    def test_to_list_of_an_empty_result_makes_one_call(self, three, counting_bridge):
+        rs = three.query("sql", "SELECT k FROM Few WHERE k = 99")
+        assert rs.to_list() == []
+        assert counting_bridge["nextRows"].calls == 1
+        assert rs._closed and rs._exhausted
+
+    def test_to_json_list_makes_one_call_for_a_short_result(
+        self, three, counting_bridge
+    ):
+        rs = three.query("sql", "SELECT k FROM Few ORDER BY k")
+        assert rs.to_json_list() == [{"k": 0}, {"k": 1}, {"k": 2}]
+        assert counting_bridge["nextJsonBatch"].calls == 1
+        assert rs._closed and rs._exhausted
+
+    def test_a_full_batch_still_ends_on_the_next_call(self, temp_db, counting_bridge):
+        """Exactly 512 rows (the to_list batch): the first batch is full, so one more call finds it drained."""
+        temp_db.command("sql", "CREATE DOCUMENT TYPE Exact")
+        with temp_db.transaction():
+            for i in range(512):
+                temp_db.command("sql", "INSERT INTO Exact SET k = ?", i)
+        rs = temp_db.query("sql", "SELECT k FROM Exact ORDER BY k")
+        rows = rs.to_list()
+        assert [r["k"] for r in rows] == list(range(512))
+        assert counting_bridge["nextRows"].calls == 2
+        assert rs._closed and rs._exhausted
+        assert rs.to_list() == []  # a result set read to its end reads as empty
+
+    def test_a_drained_set_reads_as_empty_and_is_not_an_error(
+        self, three, counting_bridge
+    ):
+        rs = three.query("sql", "SELECT k FROM Few")
+        assert len(rs.to_list()) == 3
+        assert rs.to_list() == [] and list(rs) == [] and rs.first() is None
+        assert list(rs.iter_json_batches()) == []
+        rs.close()  # idempotent
+
+    def test_python_does_not_cross_the_bridge_to_close_a_drained_set(
+        self, three, counting_bridge, monkeypatch
+    ):
+        from arcadedb_embedded import results
+
+        closes = []
+        real_close = results.ResultSet.close
+        monkeypatch.setattr(
+            results.ResultSet,
+            "close",
+            lambda self: (closes.append(1), real_close(self))[1],
+        )
+        for read in ("to_list", "to_json_list"):
+            rs = three.query("sql", "SELECT k FROM Few")
+            assert len(getattr(rs, read)()) == 3
+            assert rs._closed and rs._exhausted
+        assert closes == []
+
+    @pytest.mark.parametrize("batcher", ["nextRows", "nextJsonBatch"])
+    def test_the_bridge_closes_what_it_drains_and_only_that(self, three, batcher):
+        """Straight at the Java side: nextRows and nextJsonBatch close a result set when it
+        has fewer rows than asked for, and leave one alone that still has rows."""
+        import jpype
+        from arcadedb_embedded import results
+
+        interface = jpype.JClass("com.arcadedb.query.sql.executor.ResultSet")
+
+        class Spy:
+            def __init__(self, real):
+                self.real, self.closed = real, 0
+
+            def hasNext(self):
+                return self.real.hasNext()
+
+            def next(self):
+                return self.real.next()
+
+            def close(self):
+                self.closed += 1
+                self.real.close()
+
+        keep = []  # the Python wrapper closes its Java result set when it is freed
+
+        def spied(query):
+            wrapper = three.query("sql", query)
+            keep.append(wrapper)
+            spy = Spy(wrapper._java_result_set)
+            return spy, jpype.JObject(jpype.JProxy(interface, inst=spy), interface)
+
+        bridge = results._bridge_class(
+            "RowAccess" if batcher == "nextRows" else "RowBatcher"
+        )
+        call = getattr(bridge, batcher)
+
+        spy, proxy = spied("SELECT k FROM Few ORDER BY k")
+        assert len(call(proxy, 2)) > 0  # a full batch of two rows: left open
+        assert spy.closed == 0
+        call(proxy, 2)  # one row left: a short batch, drained, closed
+        assert spy.closed == 1
+        spy, proxy = spied("SELECT k FROM Few WHERE k = 99")
+        call(proxy, 10)  # nothing at all
+        assert spy.closed == 1
+
+    def test_the_bridge_releases_the_engine_cursor(self, temp_db):
+        """The Java result set is closed by the bridge when it drains it: a LIMIT that stops a
+        parallel scan early leaves producer threads parked until close (arcadedb #8594), so
+        reading page after page by to_list() and to_json_list() without anyone else calling
+        close() must not stall."""
+        temp_db.command("sql", "CREATE DOCUMENT TYPE Paged2")
+        temp_db.insert_many(
+            "Paged2",
+            [{"k": i, "pad": "x" * 40} for i in range(60_000)],
+            commit_every=10_000,
+        )
+        last = "#-1:-1"
+        for read in ("to_list", "to_json_list") * 6:
+            q = f"SELECT @rid AS rid, k FROM Paged2 WHERE @rid > {last} LIMIT 5000"  # nosec B608 - test-owned
+            page = getattr(temp_db.query("sql", q), read)()
+            assert len(page) == 5000
+            last = str(page[-1]["rid"])

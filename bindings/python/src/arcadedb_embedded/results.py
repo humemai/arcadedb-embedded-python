@@ -279,6 +279,18 @@ class ResultSet:
         self._exhausted = True
         self.close()
 
+    def _drained(self) -> None:
+        """The bridge returned its last batch and closed the Java result set itself.
+
+        ``RowBatcher.nextJsonBatch`` and ``RowAccess.nextRows`` return fewer rows
+        than asked for only when the result set is drained, and close it before
+        returning, so Python marks the set finished without another JVM
+        crossing (a JPype call is 3 to 4 microseconds, a fifth of a one-row
+        read through ``to_json_list()``).
+        """
+        self._exhausted = True
+        self._closed = True
+
     def __next__(self) -> "Result":
         if self._readable():
             try:
@@ -341,9 +353,7 @@ class ResultSet:
                         batch = row_access.nextRows(self._java_result_set, 512)
                     except JException as exc:
                         raise _read_error(exc) from exc
-                    if len(batch) == 0:
-                        self._finish()
-                        return out
+                    count = len(batch)
                     for pair in batch:
                         out.append(
                             {
@@ -351,6 +361,11 @@ class ResultSet:
                                 for name, value in zip(pair[0], pair[1])
                             }
                         )
+                    if count < 512:
+                        # a short batch is the last one, and the bridge closed
+                        # the result set: no second call just to see an empty batch
+                        self._drained()
+                        return out
         return list(self.iter_dicts(convert_types=convert_types))
 
     def iter_dicts(self, convert_types: bool = True) -> Iterator[Dict[str, Any]]:
@@ -472,8 +487,9 @@ class ResultSet:
             if len(batch) < size:
                 # nextJsonBatch stops short only when the result set is drained, so a
                 # short batch is the last one: no second call (a JVM crossing, a
-                # str(), and a json.loads) just to see "[]".
-                self._finish()
+                # str(), and a json.loads) just to see "[]". It closed the result
+                # set itself, so there is no close() crossing either.
+                self._drained()
                 if batch:
                     yield batch
                 return
