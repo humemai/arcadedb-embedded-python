@@ -1,5 +1,5 @@
 """Engine findings about openCypher count push-downs and BYTE aggregates that reach Python users
-(known-issues.md).
+(known-issues.md), now all fixed in ArcadeDB 26.11.1.
 
 Each finding has a test of its documented workaround, which must keep passing, and a test of the
 engine behavior itself that asserts the answer the row pipeline gives. While an engine bug is open
@@ -7,15 +7,15 @@ that test is a strict `xfail`, a tripwire as in `test_null_index_known_issues.py
 reaches the wheel it starts passing and the suite fails, and the test is then converted to a plain
 one.
 
-#9277, #9278 and #9281 are fixed in ArcadeDB 26.11.1 (ArcadeData/arcadedb#9288, merged 2026-10-06),
-which is the engine this tree builds against, so their tests are plain regression tests now. They
-fail on the 26.10.1 engine, the one in the released wheel; known-issues.md says so. Only #9290 is
-still open and still a tripwire.
+#9277, #9278 and #9281 (ArcadeData/arcadedb#9288) and #9290 (ArcadeData/arcadedb#9299) are fixed in
+26.11.1, which is the engine this tree builds against, so their tests are plain regression tests
+now. They fail on the 26.10.1 engine, the one in the released wheel; known-issues.md says so.
 
-Each test of a count first checks that the query as written is planned through the `COUNT
-ANTI-JOIN CHAIN` push-down. The check calls `pytest.fail`, which the `xfail` marks do not absorb
-(`raises=AssertionError`): a plan that stops using the push-down fails the suite instead of staying
-an expected failure, so the tripwire cannot pass by comparing the row pipeline with itself.
+Where a query is still answered by the `COUNT ANTI-JOIN CHAIN` push-down (the LSQB Q9 shape, the
+only shape the engine verifies against the row pipeline since #9299) the test first checks the
+plan, so a plan that stops using the push-down fails the suite instead of passing by comparing the
+row pipeline with itself. Every other shape takes the row pipeline since #9299, so those tests
+assert the count only.
 
 Upstream: ArcadeData/arcadedb #9277 (the push-down counts the wrong vertices when the far end of the
 chain has another label than the first hop's target; the change for #9203 let `id(a) <> id(b)` reach
@@ -23,7 +23,8 @@ it), #9278 (the push-down ignores the property map of the negated pattern's rela
 (`sum()` and `avg()` over a `BYTE` property raise `IllegalArgumentException`), all three fixed by
 #9288; #9290 (the push-down counts wrong for chains with more than two hops of one type, an
 inequality between other nodes, no inequality, a negated pattern away from the first node, or an
-unlabelled node with the first node as the target), open.
+unlabelled node with the first node as the target), fixed by #9299 (the push-down now applies only
+to the verified shape).
 """
 
 import arcadedb_embedded as arcadedb
@@ -313,16 +314,8 @@ def test_converting_a_byte_to_an_integer_before_the_aggregate_works(
 
 
 # ---------------------------------------------------------------------------------------------
-# #9290: other shapes of the chain
+# #9290: other shapes of the chain (fixed in 26.11.1, #9299)
 # ---------------------------------------------------------------------------------------------
-
-SHAPES_REASON = (
-    "ArcadeData/arcadedb#9290: the COUNT ANTI-JOIN CHAIN push-down counts more than the row "
-    "pipeline for chains with more than two hops of one type, an inequality between other nodes "
-    "than the negated pattern's, no inequality, a negated pattern away from the first node, or an "
-    "unlabelled node with the first node as the target"
-)
-shapes_bug = pytest.mark.xfail(strict=True, raises=AssertionError, reason=SHAPES_REASON)
 
 _P3 = "MATCH (p0:Person)-[:KNOWS]-(p1:Person)-[:KNOWS]-(p2:Person)-[:HAS_INTEREST]->(t:Tag) "
 _P4 = (
@@ -388,15 +381,14 @@ _SHAPES = [
 
 
 @pytest.mark.parametrize("match, variables, where, expected", _SHAPES)
-@shapes_bug
 def test_the_push_down_counts_the_other_shapes_like_the_row_pipeline(
     temp_db_path, match, variables, where, expected
 ):
-    """#9290: each shape is answered by the push-down with a larger count than the row pipeline's."""
+    """#9290: each shape counts what the row pipeline counts. Since #9299 the engine takes the row
+    pipeline for every shape but the verified one, so there is no plan check here."""
     with arcadedb.create_database(temp_db_path) as db:
         _shapes_graph(db)
         written = f"{match}WHERE {where} RETURN count(*) AS n"  # nosec B608
-        _require_anti_join_plan(db, written)
         assert _count(db, written) == expected
 
 
