@@ -403,21 +403,27 @@ jobs:
             FAILED=$(grep -oE 'failures="[0-9]+"' test-results.xml | grep -oE '[0-9]+' | head -1)
             SKIPPED=$(grep -oE 'skipped="[0-9]+"' test-results.xml | grep -oE '[0-9]+' | head -1)
             ERRORS=$(grep -oE 'errors="[0-9]+"' test-results.xml | grep -oE '[0-9]+' | head -1)
+            # JUnit counts an expected failure (a strict xfail: an open upstream bug the suite tracks)
+            # as skipped, so a run with 14 of them read "14 skipped". Count them apart from real skips.
+            XFAILED=$(grep -oE 'type="pytest.xfail"' test-results.xml | wc -l | tr -d ' ')
 
             # Default to 0 if not found
             TOTAL=${TOTAL:-0}
             FAILED=${FAILED:-0}
             SKIPPED=${SKIPPED:-0}
             ERRORS=${ERRORS:-0}
+            XFAILED=${XFAILED:-0}
 
-            # Calculate passed tests
+            # Calculate passed tests (JUnit's skipped total includes the expected failures)
             PASSED=$((TOTAL - FAILED - SKIPPED - ERRORS))
+            SKIPPED=$((SKIPPED - XFAILED))
 
             echo "passed=$PASSED" >> $GITHUB_OUTPUT
             echo "skipped=$SKIPPED" >> $GITHUB_OUTPUT
+            echo "xfailed=$XFAILED" >> $GITHUB_OUTPUT
             echo "failed=$FAILED" >> $GITHUB_OUTPUT
 
-            echo "✅ Test results: $PASSED passed, $SKIPPED skipped, $FAILED failed"
+            echo "✅ Test results: $PASSED passed, $XFAILED expected failures (xfail), $SKIPPED skipped, $FAILED failed"
 
             # A test that skips because a dependency is missing is not a
             # passing test, and it does not look like a failure either: the
@@ -490,6 +496,7 @@ jobs:
               # Show test results
               f.write("| ✅ Passed | ${{ steps.pytest.outputs.passed || 'N/A' }} |\n")
               f.write("| ⏭️ Skipped | ${{ steps.pytest.outputs.skipped || 'N/A' }} |\n")
+              f.write("| 🔖 Expected failures (xfail) | ${{ steps.pytest.outputs.xfailed || 'N/A' }} |\n")
               f.write("| ❌ Failed | ${{ steps.pytest.outputs.failed || 'N/A' }} |\n")
               f.write("\n")
 

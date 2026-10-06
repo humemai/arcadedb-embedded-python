@@ -1,8 +1,8 @@
 # Known Engine Issues
 
 These are ArcadeDB engine bugs that can return a wrong answer, store a wrong value, change
-the wrong rows, or refuse a read or a write. The entry about Ctrl-C is not an engine bug: it is a
-race in JPype, the library that connects Python to the engine. Each entry names the versions
+the wrong rows, or refuse a read or a write. The entries about Ctrl-C and about memory held by
+results are not engine bugs: they are in JPype, the library that connects Python to the engine. Each entry names the versions
 it was measured on, what you see, a workaround that was checked on the same reproduction, and
 the release that fixes it once there is one. Entries leave this page when the fix ships in a
 release these bindings package.
@@ -13,7 +13,8 @@ the cue to remove the entry.
 ## Ctrl-C during an interruptible Java wait can raise `InterruptedException`, not `KeyboardInterrupt`
 
 JPype 1.7.1, the version the wheel installs; measured through the bindings with a 26.10.1
-snapshot of the engine. Open. This is a race in JPype, not in ArcadeDB; it is reported as
+snapshot of the engine, and again on JPype master (874a197, 2026-10-06), where it is unchanged.
+Open. This is a race in JPype, not in ArcadeDB; it is reported as
 [jpype-project/jpype#1496](https://github.com/jpype-project/jpype/issues/1496).
 
 With the default `interrupt=False`, JPype handles SIGINT in Java. Its handler first interrupts
@@ -76,6 +77,26 @@ signal.signal(signal.SIGTERM, lambda *args: sys.exit(0))
 Tests: `tests/test_sigint.py` covers a Python loop and a Java call that Ctrl-C cannot wake.
 It has no test of the waits above, because the failure is random (humemai/arcadedb-embedded-python#179).
 
+
+## `to_list()` and `Result.get()` keep a Python object for every number that comes back from Java
+
+JPype 1.7.1, the version the wheel installs ([jpype-project/jpype#1379](https://github.com/jpype-project/jpype/issues/1379));
+measured through the bindings on the 26.10.1 wheel with a Python 3.12 process. Fixed on JPype
+master (874a197, 2026-10-06, not in a release yet), which leaks nothing in the same runs. This is a
+leak in JPype, not in ArcadeDB.
+
+JPype 1.7.1 keeps one Python object (about 32 bytes) for every number that comes back from Java
+as a boxed `Long`, `Integer`, `Short`, `Byte`, `Float`, or `Double`, and never frees it before the
+process ends. Through the bindings that is about 3.9 objects per row for a scan of nine
+properties read with `to_list()`, `Result.get()`, `Result.to_dict()`, or `iter_dicts()`, about
+125 bytes per row, or 1.2 GB for 10 million rows. Small integers and booleans are cached by
+Python and do not count, so only values above 256 and floats leak. `to_json_list()` and
+`to_columns()` did not leak in the same runs (0 objects per row).
+
+Read a large result with `to_json_list()` or `to_columns()`, which also cross the JVM faster,
+or upgrade JPype to the release that carries the fix when it ships. Count the live Python
+objects with `sys.getallocatedblocks()` before and after a read to see whether your path is
+affected.
 
 ## An openCypher count with a negated pattern in a chain is wrong when the far end has another label or the pattern has a property map
 

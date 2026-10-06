@@ -89,6 +89,8 @@ EXCLUDE_PATHS=(
     # Needs benchmarks/experiments/jvm_payload_check.py, which never crosses: upstream's CI would skip
     # both of its tests, and its docstring names our private filing numbers.
     "bindings/python/tests/test_jvm_payload.py"
+    # Fork-only: it checks the fork's release (humemai/arcadedb-embedded-python) on GitHub and PyPI.
+    "bindings/python/scripts/after_tag_verify.sh"
 )
 
 PUSH=1
