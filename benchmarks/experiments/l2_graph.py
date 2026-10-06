@@ -153,6 +153,13 @@ class ArcadeGraphEmbedded(Base):
     QUERY_LANGUAGE = "openCypher (the engine also has its own SQL; DECISIONS #113)"
     name = "arcadedb_graph_embedded"
 
+    def index_readback(self):
+        """The index kinds the engine built (CAMPAIGN 7 row 68): Person's, and the message
+        half's once build_messages() has made them. Asked after the build and outside every
+        timer; the lane puts it on the row as `index_kinds`."""
+        return bench_common.arcadedb_index_readback(
+            lambda: self.db.query("sql", "SELECT FROM schema:indexes").to_list())
+
     def connect(self):
         import arcadedb_embedded as arcadedb
         heap = os.environ.get("ARCADEDB_HEAP", "4g")
@@ -374,6 +381,10 @@ class ArcadeGraphServer(ArcadeGraphEmbedded):
                     "CREATE EDGE TYPE KNOWS",
                     "CREATE PROPERTY KNOWS.since INTEGER"]:
             self._http("command", "sql", ddl)
+
+    def index_readback(self):
+        return bench_common.arcadedb_index_readback(
+            lambda: self._http("query", "sql", "SELECT FROM schema:indexes"))
 
     def _http(self, endpoint, language, command, params=None):
         body = {"language": language, "command": command}
@@ -3300,7 +3311,10 @@ def main():
     out["build_s"] = round(time.perf_counter() - t0, 2)
     # Facts an adapter can only read once its data is loaded (MongoDB's
     # self-loop count, which its $graphLookup reads depend on) join the row
-    # here; the connect-time read above cannot see them.
+    # here; the connect-time read above cannot see them. So do the index kinds an
+    # ArcadeDB arm's engine reports (CAMPAIGN 7 row 68), after the message half exists.
+    if hasattr(ad, "index_readback"):
+        ad.row_extra = {**(getattr(ad, "row_extra", None) or {}), **ad.index_readback()}
     out.update(getattr(ad, "row_extra", None) or {})
     if _load_messages:
         # What the message half actually loaded, so a reader can check it

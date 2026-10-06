@@ -7111,26 +7111,29 @@ def _hash_ids_phrase(ids):
     is one property on several types, "`id` of Country, City, and Forum"."""
     props = {p for _, p in ids}
     if len(ids) > 1 and len(props) == 1:
-        return f"`{next(iter(props))}` of {_join_and(t for t, _ in ids)}"
+        return f"the `{next(iter(props))}` of {_join_and(t for t, _ in ids)}"
     return _join_and(f"`{t}.{p}`" for t, p in ids)
 
 
 def _arcadedb_hash_index_notes(table):
-    """The index kind ArcadeDB's id indexes carry on this table, and what it
-    costs (CAMPAIGN section 7 row 68).
+    """The index kind ArcadeDB's id indexes carry on this table, and what it costs
+    (CAMPAIGN section 7 row 68).
 
-    READ FROM fairness_check.ARCADEDB_HASH_ID_INDEXES, the registry that
-    test_index_kinds.py holds equal to the CREATE INDEX text in the lanes, so
-    the sentence cannot name an id the DDL does not make a hash index and the
-    DDL cannot move without the sentence. Only a table that prints an ArcadeDB
-    arm AND an ingest or index column gets it, for the lane (and, for the graph
-    lane's message half, the workload) the registry names. No digit: how much the lookups gain and the
-    loads lose is in the cells beside it, measured, and a typed ratio would be
-    a number nothing checks.
+    GENERATED FROM THE ROWS, not from the code. Each cell records `index_kinds`, the engine's
+    own answer to `SELECT FROM schema:indexes` after the schema was built (bench_common.
+    arcadedb_index_readback), and the sentence names an id only where EVERY ArcadeDB row this
+    table prints reads HASH for it. A row without the stamp (any row measured before the
+    harness recorded it, or a read-back that failed) asserts nothing, so the id drops out and
+    a table with no stamped rows says nothing: regenerating a page over rows that ran the old
+    DDL cannot claim a hash index. fairness_check.ARCADEDB_HASH_ID_INDEXES names the ids a lane
+    is asked to make hash indexes and test_index_kinds.py holds it equal to the DDL; this reads
+    which of them the engine reports. No digit: how much the lookups gain and the loads lose
+    is in the measured cells beside it.
     """
     lane_wl = _TABLE_LANE.get(table.get("id"))
-    if not lane_wl or not any(e.get("is_arcadedb") and not e.get("outcome")
-                              for e in table.get("entries") or []):
+    shown = {(str(e.get("backend_key")), str(e.get("scale")))
+             for e in table.get("entries") or [] if e.get("is_arcadedb") and not e.get("outcome")}
+    if not lane_wl or not shown:
         return []
     # A table that prints no ingest or index time (the cross-model atomicity
     # table counts trials) has nowhere for the cost to show, so it says nothing.
@@ -7138,11 +7141,21 @@ def _arcadedb_hash_index_notes(table):
         return []
     try:
         import fairness_check
+        import bench_common
         registry = fairness_check.ARCADEDB_HASH_ID_INDEXES
     except Exception:  # noqa: BLE001 - the page must still build without it
         return []
     lane, workload = lane_wl
-    ids = [pair for ln, wl, pairs in registry if ln == lane and wl in (None, workload) for pair in pairs]
+    rows = [r for r in _FROZEN_ROWS
+            if r.get("lane") == lane and r.get("workload") == workload
+            and (str(r.get("backend")), str(r.get("scale"))) in shown]
+    if not rows:
+        return []
+    kinds = [bench_common.parse_index_kinds(r.get("index_kinds")) for r in rows]
+    ids = []
+    for ln, wl, pairs in registry:
+        if ln == lane and wl in (None, workload):
+            ids += [(t, p) for t, p in pairs if all(k.get(f"{t}.{p}") == "HASH" for k in kinds)]
     if not ids:
         return []
     many = len(ids) > 1

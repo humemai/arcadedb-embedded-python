@@ -492,6 +492,52 @@ def arcadedb_hierarchy_readback(db, index_name):
     return out
 
 
+def parse_index_kinds(stamp):
+    """`index_kinds` as a dict: 'Part.p_partkey=HASH;LineItem.l_shipdate=LSM_TREE' ->
+    {'Part.p_partkey': 'HASH', 'LineItem.l_shipdate': 'LSM_TREE'}. An absent, blank, or NaN
+    stamp parses to {} (a row that never recorded one asserts nothing)."""
+    if stamp is None or str(stamp).strip().lower() in ("", "none", "nan"):
+        return {}
+    out = {}
+    for part in str(stamp).split(";"):
+        key, _, kind = part.partition("=")
+        if key.strip() and kind.strip():
+            out[key.strip()] = kind.strip()
+    return out
+
+
+def arcadedb_index_kinds(index_rows):
+    """The kinds of the indexes the ENGINE built, from the rows of `SELECT FROM
+    schema:indexes` (CAMPAIGN 7 row 68): one `Type.property=KIND` per type-level index,
+    sorted, joined by `;`. The engine lists each index twice, once per bucket
+    (`Part_0_381...`) and once for the type (`Part[p_partkey]`); only the type-level
+    entry names the type and its properties, so only those are kept. `indexType` is the
+    engine's own word: HASH, LSM_TREE, LSM_VECTOR."""
+    kinds = {}
+    for r in index_rows or []:
+        name = str(r.get("name"))
+        if "[" not in name or not name.endswith("]"):
+            continue
+        type_name, _, props = name[:-1].partition("[")
+        kinds[f"{type_name}.{props}"] = str(r.get("indexType"))
+    return ";".join(f"{k}={v}" for k, v in sorted(kinds.items()))
+
+
+def arcadedb_index_readback(query):
+    """The `index_kinds` stamp, asked of the engine through `query()` (a callable that
+    returns the rows of `SELECT FROM schema:indexes` as dicts), or the reason it could not
+    be asked. Called after the schema is built and OUTSIDE every timer, and it never ends a
+    cell: a failed read is `index_kinds_error` and the gates say what a row without the
+    stamp may not claim."""
+    try:
+        stamp = arcadedb_index_kinds(query())
+        if not stamp:
+            return {"index_kinds_error": "schema:indexes returned no type-level index"}
+        return {"index_kinds": stamp}
+    except Exception as e:  # noqa: BLE001 - recorded, never swallowed
+        return {"index_kinds_error": f"{type(e).__name__}: {e}"}
+
+
 def arcadedb_hierarchy_requested(ddl):
     """What the CREATE INDEX statement SENT, for the served arm: the HTTP API
     returns no index metadata at this pin, so the field says it is a request."""

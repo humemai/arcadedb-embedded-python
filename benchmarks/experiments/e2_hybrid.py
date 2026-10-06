@@ -198,6 +198,13 @@ def gen_data():
 
 class ArcadeE2:
     name = "arcadedb_e2"
+
+    def index_readback(self):
+        """The index kinds the engine built (CAMPAIGN 7 row 68), asked after build() and outside
+        every timer; the lane puts it on the row as `index_kinds`."""
+        return bench_common.arcadedb_index_readback(
+            lambda: self.db.query("sql", "SELECT FROM schema:indexes").to_list())
+
     # WHAT THE TIMED TRANSACTION HOLDS (DECISIONS #118): the vector search, the
     # hop, and the update, all inside one transaction.
     TXN_SCOPE = "whole"
@@ -417,6 +424,9 @@ class ArcadeE2Server(ArcadeE2):
             self.version = "server:" + (info.json().get("version") or "?")
         except Exception:  # noqa: BLE001
             self.version = "server:unknown"
+
+    def index_readback(self):
+        return bench_common.arcadedb_index_readback(lambda: self._post("query", "SELECT FROM schema:indexes"))
 
     def _post(self, kind, command, params=None, language="sql", sid=None, timeout=600):
         payload = {"language": language, "command": command}
@@ -1943,7 +1953,10 @@ def main():
         b.build(vecs, edges)
     out["build_s"] = round(time.perf_counter() - t0, 2)
     # And again after the build: what an adapter can only read once its index
-    # exists (Neo4j's applied vector quantization, BUGS F164) joins the row here.
+    # exists (Neo4j's applied vector quantization, BUGS F164) joins the row here, and so
+    # do the index kinds an ArcadeDB arm's engine reports (CAMPAIGN 7 row 68).
+    if hasattr(b, "index_readback"):
+        b.row_extra = {**(getattr(b, "row_extra", None) or {}), **b.index_readback()}
     out.update(getattr(b, "row_extra", None) or {})
     # THE SPLIT (FAIRNESS F14). This lane builds the page's most expensive
     # indexes -- LSM_VECTOR, HNSW, FAISS IVF, a MongoDB vector search index --

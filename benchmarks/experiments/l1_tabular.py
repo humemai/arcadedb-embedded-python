@@ -498,6 +498,11 @@ class ArcadeEmbedded(Base):
     name = "arcadedb_embedded"
     insert_cols = COLS_SQL
 
+    def index_readback(self):
+        import bench_common      # this retired lane imports nothing else from it
+        return bench_common.arcadedb_index_readback(
+            lambda: self.db.query("sql", "SELECT FROM schema:indexes").to_list())
+
     def connect(self):
         import arcadedb_embedded as arcadedb
         heap = os.environ.get("ARCADEDB_HEAP", "4g")
@@ -630,6 +635,10 @@ class ArcadeServer(Base):
                 sql = sql.replace("?", f":p{i}", 1)
         return self._post("query", sql, params)
 
+    def index_readback(self):
+        import bench_common
+        return bench_common.arcadedb_index_readback(lambda: self.query_all("SELECT FROM schema:indexes"))
+
     def schema(self):
         self.exec("CREATE DOCUMENT TYPE orders")
         for prop, typ in [("id", "LONG"), ("customer_id", "LONG"),
@@ -703,6 +712,10 @@ def main():
     t0 = time.perf_counter()
     b.schema()
     out["schema_s"] = round(time.perf_counter() - t0, 3)
+    # The index kinds the engine built (an ArcadeDB arm; CAMPAIGN 7 row 68), after the schema
+    # exists and before the timed ingest.
+    if hasattr(b, "index_readback"):
+        out.update(b.index_readback())
 
     t0 = time.perf_counter()
     b.ingest(n)

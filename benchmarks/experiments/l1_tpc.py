@@ -972,6 +972,13 @@ class PostgresTPC:
 
 
 class ArcadeTPC:
+    # THE INDEX KINDS THE ENGINE BUILT, asked of it after build() and outside every timer
+    # (CAMPAIGN 7 row 68): the row's `index_kinds`. The lane calls this once the build timer
+    # has stopped; a served arm overrides it with its HTTP query.
+    def index_readback(self):
+        return bench_common.arcadedb_index_readback(
+            lambda: self.db.query("sql", "SELECT FROM schema:indexes").to_list())
+
     name = "arcadedb_embedded"
     # DECISIONS #81. Every string, and the evidence for the default it
     # names, is in bench_common (one per engine, so two lanes cannot
@@ -1261,6 +1268,9 @@ class ArcadeServerTPC(ArcadeTPC):
         with index_timer(self):
             self._cmd("CREATE INDEX ON LineItem (l_shipdate) NOTUNIQUE")
 
+    def index_readback(self):
+        return bench_common.arcadedb_index_readback(lambda: self._query("SELECT FROM schema:indexes"))
+
     def _query(self, command, timeout=1800, params=None):
         body = {"language": "sql", "command": command}
         if params is not None:
@@ -1529,6 +1539,10 @@ def main():
     out["li_batches"] = li.n_batches
     if getattr(b, "load_batch", None):
         out["served_load_batch"] = b.load_batch
+    # The index kinds the engine built (an ArcadeDB arm; CAMPAIGN 7 row 68), after the build
+    # timer has stopped and before any timed operation.
+    if hasattr(b, "index_readback"):
+        b.row_extra = {**(getattr(b, "row_extra", None) or {}), **b.index_readback()}
     # Settings an arm read back from its engine (the DuckDB thread pool today;
     # CAMPAIGN section 7 row 21).
     out.update(getattr(b, "row_extra", None) or {})

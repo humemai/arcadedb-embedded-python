@@ -1299,6 +1299,11 @@ NOT_PRINTED = [
      "whether ArcadeDB's vector index was built with a hierarchy, and whether "
      "that was read from the engine (embedded) or recorded as the request "
      "(served, whose HTTP API returns no index metadata)"),
+    (r"^index_kinds(_error)?$",
+     "the index kinds an ArcadeDB arm's engine reports after its schema is built (SELECT FROM "
+     "schema:indexes, type-level entries), or why it could not be asked: the evidence the "
+     "sentence about hash indexes is generated from, and fairness_check F14d holds against "
+     "the lanes' registry"),
     (r"^server_jvm_\w+$",
      "what a served ArcadeDB's JVM was running, read from the process (its flags, its maximum and initial "
      "heap in bytes, its collector, its JDK major, and the image-defaults stamp): the sentence under a table "

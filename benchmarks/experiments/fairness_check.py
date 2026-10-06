@@ -1065,6 +1065,59 @@ ARCADEDB_HASH_ID_INDEXES = (
 ARCADEDB_SORTED_ID_INDEXES = (("l2", "Person", "id"),)
 
 
+# WHAT THE ENGINE SAID IT BUILT (CAMPAIGN 7 row 68, F14d). `index_kinds` on a row is the
+# engine's own answer to `SELECT FROM schema:indexes`, asked after the schema was built and
+# outside every timer (bench_common.arcadedb_index_readback). The registry above is the
+# claim, this is the evidence: a row of an ArcadeDB arm on those lanes must carry the stamp,
+# every registered id must read HASH in it, and a key that stays sorted must not. An id
+# whose type the row never built is not owed: the graph lane's message half exists only in a
+# cell that loaded it, which the row says with `msg_vertices`.
+ARCADEDB_HASH_ID_REQUIRES = {("l2", "olap"): "msg_vertices"}
+
+
+def check_index_kinds(rows):
+    """F14d: every 2026-10 row of an ArcadeDB arm on a lane that has a changed index records
+    the kinds the engine built, and they are the kinds the registry says. Returns the failure
+    count. The unstamped row is a failure (a setting written is not a setting in force), and it
+    is also the row the page makes no claim about (export_web)."""
+    from bench_common import parse_index_kinds
+    print("=== F14d: the engine reports the index kinds the lanes asked for ===")
+    bad = judged = 0
+    lanes = {lane for lane, _wl, _pairs in ARCADEDB_HASH_ID_INDEXES}
+    for r in rows:
+        be, lane = str(r.get("backend")), str(r.get("lane"))
+        if (not be.startswith("arcadedb") or lane not in lanes or r.get("error")
+                or str(r.get("instrument") or "") != "2026-10"):
+            continue
+        wl = str(r.get("workload"))
+        judged += 1
+        where = f"{lane} {r.get('scale')} {wl} {be} rep {r.get('rep')}"
+        kinds = parse_index_kinds(r.get("index_kinds"))
+        if not kinds:
+            why = f" ({r.get('index_kinds_error')})" if r.get("index_kinds_error") else ""
+            print(f"  NOT STAMPED {where}: no `index_kinds`{why}")
+            bad += 1
+            continue
+        for ln, w, pairs in ARCADEDB_HASH_ID_INDEXES:
+            if ln != lane or w not in (None, wl):
+                continue
+            need = ARCADEDB_HASH_ID_REQUIRES.get((ln, w))
+            if need and not r.get(need):
+                continue
+            for t, p in pairs:
+                got = kinds.get(f"{t}.{p}")
+                if got != "HASH":
+                    print(f"  WRONG {where}: the engine reports {t}.{p} as {got!r}, the registry says HASH")
+                    bad += 1
+        for ln, t, p in ARCADEDB_SORTED_ID_INDEXES:
+            if ln == lane and kinds.get(f"{t}.{p}") == "HASH":
+                print(f"  WRONG {where}: {t}.{p} is a hash index, and the graph lane's person_scan ranges over it")
+                bad += 1
+    if not bad:
+        print(f"  ok   {judged} row(s) judged against the engine's own report")
+    return bad
+
+
 # INDEX DDL A "NONE" ARM STILL TIMES (BUGS F122). index_timer covers every index
 # statement in build(), not only the lane's selective one, so an arm that declares
 # NONE for l_shipdate can still time a key index its transactional workload needs.
@@ -1432,6 +1485,7 @@ def main():
     else:
         bad = check_cpuset(rows) + check_envelope(rows)
     bad += check_jvm_defaults_arms(rows)
+    bad += check_index_kinds(rows)
     bad += check_degree(rows)
     bad += check_close_cost(rows)
     bad += check_durability(rows)
