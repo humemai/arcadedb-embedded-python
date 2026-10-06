@@ -26,6 +26,7 @@ next sync.
     (`sync-upstream.sh` does). If their tag is ever fetched, `git tag -a X.Y.Z` fails
     with "already exists", but `git push origin X.Y.Z` still succeeds and publishes
     upstream's commit. Check what a tag points to before pushing it (step 4 below).
+    `git config remote.upstream.tagopt --no-tags` makes `git fetch upstream` skip tags for good.
 
 ## Release Checklist (stable `X.Y.Z`)
 
@@ -58,7 +59,10 @@ uv run pytest
 ```
 
 - [ ] Full test suite passes
-- [ ] Release notes prepared (for example in `notes.md`)
+- [ ] Every wheel is under 100 MB (`build.sh` fails a wheel at or over it, and the release workflow
+  checks it again before the upload; the policy holds even where the PyPI project's own limit is
+  higher, because an embedded database should not ship a huge wheel)
+- [ ] Release notes prepared in `notes.md` (see [What the release body contains](#what-the-release-body-contains))
 - [ ] Documentation updated if needed
 
 ### 3. Push and Let CI Pass
@@ -76,6 +80,9 @@ Tags are the source of truth. Pushing `X.Y.Z`, `X.Y.Z.devN`, or `X.Y.Z.postN` tr
 PyPI + docs.
 
 ```bash
+# No tag of this name may exist yet, here or on origin (upstream's tags share our names)
+test -z "$(git tag -l X.Y.Z)" && test -z "$(git ls-remote --tags origin X.Y.Z)" && echo "no tag yet"
+
 git tag -a X.Y.Z -F notes.md
 
 # The tag must point at the commit you just tested
@@ -86,12 +93,30 @@ git push origin X.Y.Z
 # The remote tag must peel to the same commit
 git ls-remote origin 'refs/tags/X.Y.Z^{}'
 
-gh release create X.Y.Z --verify-tag \
-  --title "Python release X.Y.Z" \
+gh release create X.Y.Z -R humemai/arcadedb-embedded-python --verify-tag \
+  --title "X.Y.Z" \
   --notes-file notes.md
 ```
 
 `--verify-tag` stops `gh` from creating a tag of its own if the pushed one is missing.
+Always pass `-R humemai/arcadedb-embedded-python`: in a checkout of this fork, `gh`
+resolves its default repository to upstream, where a release would be a mistake. The
+release is created at <https://github.com/humemai/arcadedb-embedded-python/releases>;
+every release there is named by its tag (`26.9.1`, `26.5.1.post1`) and has no assets,
+because the wheels go to PyPI.
+
+#### What the release body contains
+
+Read the previous release at that page and keep its shape:
+
+- one line saying the wheel bundles the ArcadeDB engine of that version, synced to
+  upstream's release commit, with a link to the commit by its full SHA;
+- the `pip install` lines, including the optional extras;
+- "Read this before upgrading": behaviour changes a working program may depend on,
+  grouped under SQL, openCypher, and Through the bindings, each deliberate upstream and
+  linked to its issue;
+- a Security section for upstream advisories that matter to embedded use;
+- what the bindings added, and a pointer to [Known Engine Issues](../guide/known-issues.md).
 
 ### 5. Monitor GitHub Actions
 
@@ -99,7 +124,21 @@ gh release create X.Y.Z --verify-tag \
 - The release workflow first checks that the tag's base version equals the `pom.xml`
   base version, then runs both test workflows, then publishes the wheels.
 - The publish job has `continue-on-error: true`, so the run stays green even when the
-  PyPI upload fails. Check PyPI for every wheel the release built.
+  PyPI upload fails. Read the publish job's own conclusion, then check PyPI for every
+  wheel the release built:
+
+  ```bash
+  curl -s https://pypi.org/pypi/arcadedb-embedded/X.Y.Z/json | python3 -c \
+    "import json,sys; fs=json.load(sys.stdin)['urls']; print(len(fs)); [print(f['filename'], f['size']) for f in sorted(fs, key=lambda f: f['filename'])]"
+  ```
+
+  Expect 20 files: Python 3.10 to 3.14, each as `macosx_11_0_arm64`,
+  `manylinux_2_34_aarch64`, `manylinux_2_34_x86_64`, and `win_amd64`, about 66 to 72 MB
+  each (PyPI refuses a file over 100 MB). Compare each file's sha256 with the artifact
+  the run built, and install the release from PyPI into a fresh environment and run a
+  query. The workflow does not set `skip-existing`, so re-running the publish job after
+  a partial upload stops at the first file that already exists: upload the missing
+  files from the run's artifacts with `twine upload --skip-existing`.
 - Every tag push deploys its docs as `latest`, dev tags included. To publish docs
   without moving `latest`, run the docs workflow by hand (`workflow_dispatch`) with
   `set_latest=false`.
@@ -115,6 +154,13 @@ Return `main` to upstream's development line with a normal sync. It brings the n
 ```bash
 ./sync-upstream.sh
 ```
+
+### 7. Open the Upstream Pull Request, Last
+
+Only now regenerate the `python-bindings` branch and open the pull request to
+ArcadeData/arcadedb: it is built on the `upstream-main` mirror that this sync just
+brought up to date, and it carries everything since the previous one. See
+[Contributing Back to Upstream](upstream-pr.md).
 
 **Announce Release:**
 
@@ -243,8 +289,8 @@ test "$(git rev-parse 'X.Y.Z.post1^{}')" = "$(git rev-parse HEAD)" && echo "tag 
 git push origin X.Y.Z.post1
 
 # 5. Create GitHub Release
-gh release create X.Y.Z.post1 --verify-tag \
-  --title "Python hotfix release X.Y.Z.post1" \
+gh release create X.Y.Z.post1 -R humemai/arcadedb-embedded-python --verify-tag \
+  --title "X.Y.Z.post1" \
   --notes "Hotfix for critical bug in X.Y.Z"
 
 # 6. Bring the fix back to main

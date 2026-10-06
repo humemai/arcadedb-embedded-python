@@ -475,6 +475,16 @@ for old in dist/*.whl; do
     fi
 done
 
+# THE WHEEL SIZE POLICY: a wheel at or over 100 MB means a mistake (a whole distribution in JAR_LIB_DIR, an optional jar,
+# a stale artifact), and an embedded database should not ship a huge wheel anyway. Fail it here, before anything tests
+# or publishes it. The release workflow checks the same limit again before the upload.
+SIZE_PY=$(command -v python3 || command -v python || true)
+if [[ -z "$SIZE_PY" ]]; then
+    echo -e "${YELLOW}⚠️  No python found: the wheel size check was skipped${NC}"
+else
+    "$SIZE_PY" "$SCRIPT_DIR/verify_wheel_size.py" "$NEWEST_WHEEL" || exit 1
+fi
+
 echo -e "${GREEN}🎉 Build completed successfully!${NC}"
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""

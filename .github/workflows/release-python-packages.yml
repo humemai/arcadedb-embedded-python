@@ -114,6 +114,17 @@ jobs:
             exit 1
           fi
 
+          # Size policy: every wheel stays under 100 MB (decimal), also where the PyPI project's own limit is higher.
+          # An embedded database does not ship huge wheels; a larger one means a mistake. build.sh checks the same limit.
+          for WHEEL in dist/*.whl; do
+            SIZE=$(stat -c %s "$WHEEL")
+            if [ "$SIZE" -ge 100000000 ]; then
+              echo "❌ $WHEEL is $SIZE bytes, at or over the 100 MB size policy"
+              exit 1
+            fi
+          done
+          echo "✅ Every wheel is under 100 MB"
+
           # Show checksums to verify wheels are different
           echo ""
           echo "🔐 Wheel checksums (SHA256):"
