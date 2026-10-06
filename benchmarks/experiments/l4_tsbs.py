@@ -1218,6 +1218,12 @@ class QuestTS:
             f"host={host} port=8812 dbname=qdb user=admin password=quest",
             autocommit=True)
 
+    def _q(self, sql):
+        # THE QUESTDB DOCS' ADVICE: "We recommend always passing binary=True to the cursor() method to use the binary protocol for
+        # better performance." (G3d, repros/postgres-roundtrips-ab-20261007; DECISIONS #174: 1.34x on the 32,944-row q_high, null on the
+        # five small results, identical answers). Connection.execute(sql, binary=True) is cursor(binary=True).execute(sql).
+        return self.cx.execute(sql, binary=True)
+
     def version(self):
         # The engine under test is in another container, so ASK it rather than
         # reporting anything about this process.
@@ -1275,39 +1281,39 @@ class QuestTS:
             time.sleep(1)
 
     def q_last(self):
-        return self.cx.execute(
+        return self._q(
             f"SELECT timestamp, uu FROM p WHERE host='{HOST}' "
             f"ORDER BY timestamp DESC LIMIT 1").fetchall()
 
     def q_range(self):
         # QuestDB idiom: SAMPLE BY (its native time-bucketing)
-        return self.cx.execute(
+        return self._q(
             f"SELECT timestamp, max(uu) FROM p WHERE host='{HOST}' "
             f"AND timestamp >= '2026-01-01T00:00:00Z' "
             f"AND timestamp < '2026-01-01T01:00:00Z' SAMPLE BY 1m").fetchall()
 
     def q_global(self):
-        return self.cx.execute(
+        return self._q(
             f"SELECT timestamp, avg(uu) FROM p "
             f"WHERE timestamp >= '2026-01-01T00:00:00Z' "
             f"AND timestamp < '2026-01-01T12:00:00Z' SAMPLE BY 1h").fetchall()
 
     def q_groupby(self):
         # SAMPLE BY with a key column groups per host per bucket, QuestDB's own form.
-        return self.cx.execute(
+        return self._q(
             f"SELECT host, timestamp, avg(uu) FROM p "
             f"WHERE timestamp >= '2026-01-01T00:00:00Z' "
             f"AND timestamp < '2026-01-01T12:00:00Z' SAMPLE BY 1h ORDER BY host, timestamp").fetchall()
 
     def q_high(self):
-        return self.cx.execute(
+        return self._q(
             f"SELECT host, timestamp, uu FROM p WHERE timestamp >= '2026-01-01T00:00:00Z' "
             f"AND timestamp < '2026-01-01T12:00:00Z' AND uu > {HIGH}").fetchall()
 
     def q_orderlimit(self):
         # SAMPLE BY in a subquery: QuestDB does not accept ORDER BY ... LIMIT
         # directly after SAMPLE BY, and the ordering is the point of the query.
-        return self.cx.execute(
+        return self._q(
             f"SELECT * FROM (SELECT timestamp, max(uu) AS v FROM p "
             f"WHERE timestamp >= '2026-01-01T00:00:00Z' "
             f"AND timestamp < '2026-01-01T12:00:00Z' SAMPLE BY 1h) "

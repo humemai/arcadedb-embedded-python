@@ -1019,6 +1019,9 @@ class PgAgeE2:
             c.execute("SELECT version()")
             pv = c.fetchone()[0].split(" (")[0]
         self.cx.commit()
+        # lazy import: only a pg_age_e2 cell needs pgvector-python (G3c, DECISIONS #174); registers the vector adapter for the binary COPY in build()
+        from pgvector.psycopg import register_vector
+        register_vector(self.cx)
         self.version = f"{pv} + pgvector:{ext.get('vector')} + age:{ext.get('age')}"
 
     def _cur(self):
@@ -1035,9 +1038,10 @@ class PgAgeE2:
         self.cx.commit()
         c = self._cur()
         c.execute(f"CREATE TABLE product (pid INTEGER PRIMARY KEY, views INTEGER NOT NULL DEFAULT 0, embedding vector({DIM}))")
-        with c.copy("COPY product (pid, views, embedding) FROM STDIN") as cp:
+        with c.copy("COPY product (pid, views, embedding) FROM STDIN WITH (FORMAT BINARY)") as cp:     # G3c: 9.1x on this load
+            cp.set_types(["int4", "int4", "vector"])
             for i in range(len(vecs)):
-                cp.write_row((i, 0, "[" + ",".join("%.9g" % x for x in vecs[i]) + "]"))
+                cp.write_row((i, 0, vecs[i]))
         with bench_common.index_timer(self):
             c.execute("CREATE INDEX ON product USING hnsw (embedding vector_l2_ops) WITH (m = 16, ef_construction = 100)")
         c.execute("SELECT create_graph('e2graph')")
