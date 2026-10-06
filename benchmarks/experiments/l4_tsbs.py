@@ -956,8 +956,9 @@ class MongoTS:
 
 class TimescaleTS:
     """TimescaleDB 2.28 on PostgreSQL 17 (2026-09-11): a hypertable on ts,
-    COPY ingest, time_bucket for the two aggregates; server memory fitted to
-    the cap like the PostgreSQL tuned arm."""
+    COPY ingest, then the (host, ts DESC) index and ANALYZE, both inside the
+    ingest timer exactly as PostgresTS has them; time_bucket for the two
+    aggregates; server memory fitted to the cap like the PostgreSQL tuned arm."""
     name = "timescaledb"
 
     def connect(self):
@@ -991,6 +992,11 @@ class TimescaleTS:
                     cp.write_row((h, _dt.datetime.fromtimestamp(t, _dt.timezone.utc), uu, us, ui))
             with bench_common.index_timer(self):
                 c.execute("CREATE INDEX p_host_ts ON p (host, ts DESC)")
+            # ANALYZE AFTER THE INDEX, INSIDE THE INGEST TIMER, as PostgresTS does (the same
+            # PostgreSQL step after a bulk load, and the planner needs the statistics for the hypertable
+            # as much as for a plain table). Until the 26.10.1 re-pin this arm had none while the plain
+            # PostgreSQL arm paid for one; the re-pin re-runs every arm, so no published row is split.
+            c.execute("ANALYZE p")
 
     def _t(self, s):
         return _dt.datetime.fromtimestamp(s, _dt.timezone.utc)
