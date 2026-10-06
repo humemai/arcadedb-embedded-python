@@ -104,7 +104,8 @@ def _column_to_java(name, values):
                 f"column {name!r} has dtype {values.dtype}, which does not cross natively; "
                 "convert it to Python values or use insert_many"
             )
-        values = values.tolist()
+        # a string, bytes, or object array: its elements are Python objects (str, None, ...), converted one by one below
+        values = list(values.astype(object, copy=False))
     elif not isinstance(values, (list, tuple)):
         values = list(values)
     converted = []

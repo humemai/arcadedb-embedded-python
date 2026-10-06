@@ -77,6 +77,26 @@ class TestTypedValuesLand:
         assert _count(temp_db, "Col", "WHERE label IS NULL") == 2
         assert _count(temp_db, "Col", "WHERE label = 'c'") == 1
 
+    def test_a_numpy_string_array_and_an_object_array_with_none_cross_per_element(
+        self, temp_db
+    ):
+        _make_type(temp_db)
+        temp_db.insert_columns(
+            "Col",
+            {"id": np.arange(3, dtype=np.int64), "label": np.array(["a", "bb", "a"])},
+        )
+        temp_db.insert_columns(
+            "Col",
+            {
+                "id": np.arange(3, 6, dtype=np.int64),
+                "label": np.array(["c", None, "e"], dtype=object),
+            },
+        )
+        assert _count(temp_db, "Col") == 6
+        assert _count(temp_db, "Col", "WHERE label = 'a'") == 2
+        assert _count(temp_db, "Col", "WHERE label = 'bb'") == 1
+        assert _count(temp_db, "Col", "WHERE label IS NULL") == 1
+
     def test_a_python_list_of_numbers_crosses_per_element(self, temp_db):
         _make_type(temp_db)
         temp_db.insert_columns(
