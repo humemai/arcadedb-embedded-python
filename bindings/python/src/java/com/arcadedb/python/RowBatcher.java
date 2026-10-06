@@ -40,7 +40,7 @@ public final class RowBatcher {
    * Serialize up to {@code max} rows of the result set into a JSON array
    * string. Returns fewer than {@code max} rows only when the result set is
    * drained, so a caller can stop after a short batch instead of calling again
-   * to see {@code "[]"}.
+   * to see {@code "[]"}, and a drained result set is closed here, so the caller must not use it again.
    *
    * <p>The builder starts at the default size and grows: a 64 KB start was
    * allocated on every call and cost 2.5x the engine lookup on a one-row
@@ -58,7 +58,22 @@ public final class RowBatcher {
       appendRow(sb, row);
       n++;
     }
+    if (n < max)
+      closeDrained(rs);
     return sb.append(']').toString();
+  }
+
+  /**
+   * The result set is drained, so the caller will not come back: close it here instead of making Python cross the
+   * bridge once more just to call close() (a JPype call costs 3 to 4 microseconds, a fifth of a one-row read).
+   * Best effort, like the Python-side close it replaces.
+   */
+  static void closeDrained(final ResultSet rs) {
+    try {
+      rs.close();
+    } catch (final Exception ignored) {
+      // closing is hygiene; the rows were read
+    }
   }
 
   private static void appendRow(final StringBuilder sb, final Result row) {
