@@ -324,6 +324,13 @@ PAYMENTS_DIGEST = dict(columns=("n",))
 CRUD_READ_DIGEST = dict(columns=(("ckey", "_id"), "pkey", "qty"))
 
 
+def li_columns(df):
+    """One prepared frame of LI_COLS as the {property: column} mapping the bindings' columnar insert takes
+    (CAMPAIGN section 7 row 63, own issue #150): numeric columns as numpy arrays (one buffer copy each across the
+    bridge), the four text columns as object arrays of str."""
+    return {c: df[c].to_numpy() for c in LI_COLS}
+
+
 def _prepare(li):
     """The frame every engine is fed: the same column set and the same
     coercions the whole-table load applied before the stream existed."""
@@ -1134,21 +1141,36 @@ class ArcadeTPC:
         # json.dumps the batch and falls back to the slow per-row path on a
         # TypeError, so an unconverted np.int64 would silently restore exactly
         # the behaviour this replaces.
-        buf = []
-        for t in li.records():
-            buf.append({"l_orderkey": int(t.l_orderkey), "l_partkey": int(t.l_partkey),
-                        "l_quantity": float(t.l_quantity),
-                        "l_extendedprice": float(t.l_extendedprice),
-                        "l_discount": float(t.l_discount),
-                        "l_returnflag": str(t.l_returnflag),
-                        "l_linestatus": str(t.l_linestatus),
-                        "l_shipdate": str(t.l_shipdate),
-                        "l_shipmode": str(t.l_shipmode),
-                        "l_tax": float(t.l_tax)})
-            if len(buf) >= self.load_call_rows:
-                db.insert_many("LineItem", buf, parallel=True); buf = []
-        if buf:
-            db.insert_many("LineItem", buf, parallel=True)
+        #
+        # FROM THE 26.10.1 MEASUREMENT THE LOAD IS COLUMNAR (CAMPAIGN section 7 row 63, DECISIONS #153 item 2,
+        # the user's choice, own issue #150): each parquet batch crosses the bridge as whole columns (a long[] or
+        # double[] copied from the numpy buffer, a String[] from a list) and the documents are built in Java, instead
+        # of one JSON payload per batch. The transport is the only change: the same async writers, the same bucket
+        # rule, the same executor flush class, parallel=True. On the laptop the columnar call stored the same count
+        # and sums as insert_many in a fraction of its time (mechanics only; the page's numbers come from the bench
+        # host). A wheel without insert_columns keeps insert_many and the row says nothing, so a
+        # measurement meant to be columnar cannot silently become the other one: `columnar_insert` is recorded only
+        # when the call was made.
+        if hasattr(db, "insert_columns"):
+            self.columnar_insert = "insert_columns"
+            for df in li.frames():
+                db.insert_columns("LineItem", li_columns(df), parallel=True)
+        else:
+            buf = []
+            for t in li.records():
+                buf.append({"l_orderkey": int(t.l_orderkey), "l_partkey": int(t.l_partkey),
+                            "l_quantity": float(t.l_quantity),
+                            "l_extendedprice": float(t.l_extendedprice),
+                            "l_discount": float(t.l_discount),
+                            "l_returnflag": str(t.l_returnflag),
+                            "l_linestatus": str(t.l_linestatus),
+                            "l_shipdate": str(t.l_shipdate),
+                            "l_shipmode": str(t.l_shipmode),
+                            "l_tax": float(t.l_tax)})
+                if len(buf) >= self.load_call_rows:
+                    db.insert_many("LineItem", buf, parallel=True); buf = []
+            if buf:
+                db.insert_many("LineItem", buf, parallel=True)
         # STORED, not submitted: a record the async writers reject is reported
         # only through an error callback, and wheels before 2026-09-28 passed
         # none (insert_many returned the input count while dropping it). A
@@ -1618,7 +1640,7 @@ def main():
     # CAMPAIGN section 7 row 21).
     out.update(getattr(b, "row_extra", None) or {})
     # item 10's embedded bulk path, as the executor reported it (not as asked)
-    for _k in ("lineitem_buckets", "async_writers", "async_sync", "load_call_rows"):
+    for _k in ("lineitem_buckets", "async_writers", "async_sync", "load_call_rows", "columnar_insert"):
         if getattr(b, _k, None) is not None:
             out[_k] = getattr(b, _k)
     if li.n_streamed != len(li):

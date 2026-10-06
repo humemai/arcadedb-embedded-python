@@ -5724,12 +5724,27 @@ OCT_PROSE = {
         "ratio": ("The ratio is what the strict setting costs on that engine for that operation. The document and graph operations write the same few records whatever the corpus holds, so each row pools every corpus size its lane ran it at; the cross-model transaction searches and expands over the whole catalog, so it has one row per catalog size and its ratio holds at that size. It is not a claim about any other write. A large ratio is not a slow engine: it is an engine whose relaxed path was fast, measured against a flush that costs what a flush costs.", []),
     },
     "docs_oltp": {
-        "ingest": ("Ingest paths: ArcadeDB embedded loads through the Python package's insert_many in 10,000-row batches, one JSON payload per batch; served binds 2,000-row INSERT ... CONTENT batches over HTTP; PostgreSQL COPY FROM STDIN; DuckDB CREATE TABLE AS SELECT from in-memory frames; SQLite executemany; MongoDB insert_many; ArangoDB import_bulk; SurrealDB inserts through its Python SDK.",
-                   [(r"in ([\d,]+)-row batches", lambda P, rows: _const("l1_tpc", "BATCH"), "const"),
-                    (r"binds ([\d,]+)-row INSERT", lambda P, rows: _const("l1_tpc", "ArcadeServerTPC").load_batch, "const")]),
+        "ingest": ("Ingest paths: DuckDB and ArcadeDB embedded load whole frames, DuckDB with CREATE TABLE AS SELECT from in-memory frames and ArcadeDB embedded through the Python package's insert_columns, which hands each batch of the file to the engine as whole columns and builds the documents in Java; ArcadeDB served binds 2,000-row INSERT ... CONTENT batches over HTTP; PostgreSQL COPY FROM STDIN, SQLite executemany, MongoDB insert_many, ArangoDB import_bulk, and SurrealDB's Python SDK are fed row by row.",
+                   [(r"binds ([\d,]+)-row INSERT", lambda P, rows: _const("l1_tpc", "ArcadeServerTPC").load_batch, "const")]),
     },
 }
-OCT_PROSE["docs_olap"] = {"ingest": OCT_PROSE["docs_oltp"]["ingest"]}
+# THE SENTENCE FOR ROWS THAT LOADED ArcadeDB EMBEDDED THROUGH insert_many (the October pin's): kept beside the columnar one
+# (CAMPAIGN section 7 row 63) and chosen from the rows behind the table, so no table says "insert_columns" about rows that
+# loaded through insert_many (_docs_ingest_note).
+OCT_PROSE["docs_oltp"]["ingest_insert_many"] = (
+    "Ingest paths: ArcadeDB embedded loads through the Python package's insert_many in 10,000-row batches, one JSON payload per batch; served binds 2,000-row INSERT ... CONTENT batches over HTTP; PostgreSQL COPY FROM STDIN; DuckDB CREATE TABLE AS SELECT from in-memory frames; SQLite executemany; MongoDB insert_many; ArangoDB import_bulk; SurrealDB inserts through its Python SDK.",
+    [(r"in ([\d,]+)-row batches", lambda P, rows: _const("l1_tpc", "BATCH"), "const"),
+     (r"binds ([\d,]+)-row INSERT", lambda P, rows: _const("l1_tpc", "ArcadeServerTPC").load_batch, "const")])
+OCT_PROSE["docs_olap"] = {"ingest": OCT_PROSE["docs_oltp"]["ingest"],
+                          "ingest_insert_many": OCT_PROSE["docs_oltp"]["ingest_insert_many"]}
+
+
+def _docs_ingest_note(table, october_note):
+    """The documents tables' ingest sentence: the columnar one when every ArcadeDB embedded row behind the table
+    recorded `columnar_insert`, the insert_many one while any did not (the October pin's rows)."""
+    if table.get("id") in _DOCS_TABLE_WORKLOAD and _docs_row_load_tables([table], _FROZEN_ROWS):
+        return OCT_PROSE[table["id"]]["ingest_insert_many"][0]
+    return october_note
 # The server restart (DECISIONS #139 item 2). Facts about the protocol, no
 # numbers, so no pins: the counts (cycles, batch size) are on every row.
 OCT_PROSE["restart"] = {
@@ -8401,6 +8416,8 @@ def _finish_table(table: dict) -> dict:
     table["columns"] = [c for c in cols if c in present]
     note = ((OCT_PROSE.get(table["id"]) or {}).get("ingest", (None,))[0] if october
             else INGEST_NOTES.get(table["id"]))
+    if october and note:
+        note = _docs_ingest_note(table, note)
     if note and any("ingest" in c for c in table["columns"]) and note not in table.get("conditions", []):
         table["conditions"] = list(table.get("conditions", [])) + [note]
     # Which way is better, per column, so the header can say it (2026-09-11).
