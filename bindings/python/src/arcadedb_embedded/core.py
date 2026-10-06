@@ -805,14 +805,14 @@ class Database:
                 and from countEntries(). Size the heap instead. The parameter is
                 kept only so that upgrading callers get this explanation rather
                 than an unexplained TypeError.
-            graph_build_cache_size: Per-index override for graph build cache size
-                (maps to Java metadata key "graphBuildCacheSize"; uses
-                GlobalConfiguration default if None). Typical ranges (higher = faster
-                build, more RAM):
-                - ~100K: 10k–30k
-                - ~1M: 30k–75k
-                - ~10M: 75k–150k
-                - ~100M: 150k–250k (only if heap allows)
+            graph_build_cache_size: Per-index override for the number of vectors
+                cached while the graph is built (maps to Java metadata key
+                "graphBuildCacheSize"; uses GlobalConfiguration default if None).
+                Leave it unset: the default is automatic, sized from the heap the
+                engine has free, and caches the whole corpus when it fits. A count
+                below the corpus makes the build re-read vectors from the
+                documents. Set an absolute count only to bound a build on a
+                deliberately small heap.
             mutations_before_rebuild: Per-index override for mutations threshold
                 before triggering a graph rebuild (maps to Java metadata key
                 "mutationsBeforeRebuild"; uses GlobalConfiguration default if None).
