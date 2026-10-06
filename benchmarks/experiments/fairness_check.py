@@ -775,7 +775,7 @@ def _known_matches(known, rows):
 
 
 def check_close_cost(rows):
-    """F11: close must be O(what was written), not O(what is stored).
+    """F13: close must be O(what was written), not O(what is stored).
 
     DECISIONS #50. This is a REGRESSION gate rather than a fairness one, and it
     lives here because this is where the numbered invariants are. Two ways to
@@ -794,7 +794,7 @@ def check_close_cost(rows):
     was ours, #5872), which is why a number that can slide between releases
     with nobody watching gets a gate instead of a column.
     """
-    # THE SESSION, not just the close. F11 originally watched clean_close alone,
+    # THE SESSION, not just the close. F13 originally watched clean_close alone,
     # and PR #6588 upstream is the proof that this is not enough: persisting the
     # analytical view's CSR moved its cost from close to open, 4032 -> 5.95 ms
     # closing and 4.94 -> 241.84 ms opening at a million vertices. A close-only
@@ -824,7 +824,7 @@ def check_close_cost(rows):
         # A gate whose only failure mode is "I saw nothing" has to treat seeing
         # nothing as the failure.
         any_lifecycle = any(r.get("lane") == "lifecycle" for r in rows)
-        print("\n== F11 session cost ==\n  NO LIFECYCLE ROWS REACHED THIS GATE.")
+        print("\n== F13 session cost ==\n  NO LIFECYCLE ROWS REACHED THIS GATE.")
         if any_lifecycle:
             print("  Rows exist but none carry clean_close_ms; the lane wrote them "
                   "without the column this gate reads.")
@@ -856,7 +856,7 @@ def check_close_cost(rows):
         print("  Check PAPER_SCALES in make_paper_tables.py: a lane absent from "
               "it is deleted by load_canonical before any gate runs.")
         return 1
-    print("\n== F11 session cost (open+close): O(written), not O(stored), under 100 ms ==")
+    print("\n== F13 session cost (open+close): O(written), not O(stored), under 100 ms ==")
     for (be, sit, scale), vals in sorted(_others.items(), key=str):
         print(f"  info: {be} {sit}/{scale} clean session (open+close) "
               f"{statistics.median(vals):.1f} ms median of {len(vals)} (comparator, not judged)")
