@@ -133,7 +133,7 @@ asserts, so the list below stops at the file.
 | File | What it checks |
 | --- | --- |
 | `test_docs_examples.py` | Python blocks from the documentation run as code; see [Documentation example tests](#documentation-example-tests) |
-| `test_count_pushdown_known_issues.py` | The openCypher count push-down and `BYTE` aggregate entries on [Known Engine Issues](../guide/known-issues.md): their workarounds pass, and a strict `xfail` asserts the right answer |
+| `test_count_pushdown_known_issues.py` | The openCypher count push-down and `BYTE` aggregate entries on [Known Engine Issues](../guide/known-issues.md): their workarounds pass, and plain regression tests assert the right answer (fixed in 26.11.1; they fail on the 26.10.1 wheel) |
 | `test_null_index_known_issues.py`, `test_declared_type_known_issues.py`, `test_dml_plan_cache_known_issues.py` | Plain regression tests for engine bugs that 26.10.1 fixed (null keys and index lookups, declared properties, positional parameters in a cached DML plan), with the workarounds that were documented for them |
 
 ## Markers
@@ -192,9 +192,9 @@ CI builds its wheel from upstream's current snapshot jars, so that can be days b
 carries the fix. The entry stays on the Known Engine Issues page until a release that carries the
 fix ships.
 
-A passing run ends with a summary of the form `N passed, K xfailed`, with no failures or errors.
-The strict xfails are the open engine findings listed on [Known Engine Issues](../guide/known-issues.md),
-and nothing skips. Run with `-rs` to see why a test skipped locally.
+A passing run ends with a summary of the form `N passed`, or `N passed, K xfailed` while an engine
+finding is open, with no failures or errors. The strict xfails are the open engine findings listed
+on [Known Engine Issues](../guide/known-issues.md), and nothing skips. Run with `-rs` to see why a test skipped locally.
 
 ## Documentation example tests
 

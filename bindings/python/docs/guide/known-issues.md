@@ -6,9 +6,11 @@ results are not engine bugs: they are in JPype, the library that connects Python
 it was measured on, what you see, a workaround that was checked on the same reproduction, and
 the release that fixes it once there is one. Entries leave this page when the fix ships in a
 release these bindings package.
-An entry with a `Tests:` line has a test of its workaround and a strict `xfail` test of the
-engine behavior; the `xfail` starts failing the suite when a fix reaches the wheel, which is
-the cue to remove the entry.
+An entry with a `Tests:` line has a test of its workaround. While the bug is open it also has a
+strict `xfail` test of the engine behavior, which starts failing the suite when a fix reaches the
+engine the suite runs on; the test is then made a plain regression test. An entry for a bug that
+is fixed on upstream's main but not yet in a release says so, and its regression tests fail on the
+released wheel until the next release ships.
 
 ## Ctrl-C during an interruptible Java wait can raise `InterruptedException`, not `KeyboardInterrupt`
 
@@ -143,8 +145,9 @@ n = (
 ```
 
 Tests: `tests/test_count_pushdown_known_issues.py` checks the `WITH` workaround and the cases
-that are not affected, and has strict `xfail` tests of the wrong counts; they start failing the
-suite when the engine fixes them, which is the cue to remove this entry.
+that are not affected, and has plain regression tests of the right counts. They pass on the
+engine the suite builds against (upstream's 26.11.1 snapshot, which has the fix) and fail on the
+26.10.1 wheel. Remove this entry when the release that carries the fix ships.
 
 
 ## An openCypher count with a negated pattern is wrong for other shapes of the chain
@@ -152,7 +155,11 @@ suite when the engine fixes them, which is the cue to remove this entry.
 ArcadeDB [#9290](https://github.com/ArcadeData/arcadedb/issues/9290); measured through the
 bindings on the 26.10.1 wheel, and in Java on 26.10.1, on upstream main cbf701d66e, and on the
 head of the upstream fix for the entry above (#9288, head 7d69d5f534, merged for 26.11.1), on Temurin 21
-and 25, with the same answers. Open: the fix for the entry above does not change these shapes.
+and 25, with the same answers. Fixed upstream by
+[ArcadeData/arcadedb#9299](https://github.com/ArcadeData/arcadedb/pull/9299), merged on 2026-10-06
+for ArcadeDB 26.11.1, which is not released yet: the push-down now applies only to the one shape
+the engine verifies against the row pipeline, and every other chain takes the row pipeline. The
+26.10.1 wheel still has the bug, and the `WITH` workaround below is still needed on it.
 
 The count push-down of the entry above (`EXPLAIN` lists `COUNT ANTI-JOIN CHAIN`) is also wrong
 for chains that are not the two-hop shape it is written for. On four people with `KNOWS` a-b,
@@ -211,6 +218,7 @@ total = db.query("sql", "SELECT sum(b.asInteger()) AS total FROM T").first().get
 average = db.query("sql", "SELECT avg(b.asInteger()) AS average FROM T").first().get("average")
 ```
 
-Tests: `tests/test_count_pushdown_known_issues.py` checks the conversion workaround and has strict
-`xfail` tests of the failing aggregates; they start failing the suite when the engine fixes them,
-which is the cue to remove this entry.
+Tests: `tests/test_count_pushdown_known_issues.py` checks the conversion workaround and has plain
+regression tests of the aggregates. They pass on the engine the suite builds against (upstream's
+26.11.1 snapshot, which has the fix) and fail on the 26.10.1 wheel. Remove this entry when the
+release that carries the fix ships.
