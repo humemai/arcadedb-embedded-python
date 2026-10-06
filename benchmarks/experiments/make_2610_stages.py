@@ -200,7 +200,7 @@ def check_tiers():
     return problems
 
 
-def tiered_stages(stages=None):
+def tiered_stages(stages=None, prefix="qT", rep_pass=None):
     """The stage list in tier order: tier 1's pieces in the paper's lane order (#133), then tier 2's, then
     tier 3's. A stage whose roster spans tiers is split into one stage per tier it touches (same lane,
     workloads, scales, guards and environment; only the roster differs), the host-side Python-cost stage
@@ -224,7 +224,11 @@ def tiered_stages(stages=None):
                 p[8] = by[t]
                 pieces[t].append(p)
     flat = [p for t in (1, 2, 3) for p in pieces[t]]
-    return [tuple([f"qT{i + 1:02d}"] + p[1:]) for i, p in enumerate(flat)]
+    if rep_pass:
+        for p in flat:
+            if p[2] != "pycost":
+                p[1] = f"{p[1]}, reps 1 to {rep_pass}"
+    return [tuple([f"{prefix}{i + 1:02d}"] + p[1:]) for i, p in enumerate(flat)]
 
 
 # --------------------------------------------------------------------- coverage
@@ -345,7 +349,7 @@ def _sub(text, old, new):
     return text.replace(old, new)
 
 
-def _head():
+def _head(rep_pass=None):
     h = O.HEAD
     h = _sub(h, "# {id}. October stage {n} of {total}: {title}.",
              "# {id}. 26.10.1 stage {n} of {total}: {title}.")
@@ -397,6 +401,26 @@ say "$ID: dbbench:arcadedb runs JPype $IJ, the pin"''')
     h = _sub(h, '''./verify_pair_c25.sh "$SHA" >> "$S" 2>&1 || {{ say "$ID ABORT: pair unverified at the October pin"; exit 1; }}''',
              '''PAIR_IMAGE="$ARCADEDB_SERVER_IMAGE" ./verify_pair_c25.sh "$SHA" >> "$S" 2>&1 || {{ say "$ID ABORT: pair unverified at the pin"; exit 1; }}''')
     h = _sub(h, "pin $PIN, instrument 2026-10\"", "pin $PIN, instrument {instrument}\"")
+    if rep_pass:
+        # REPETITION PASSES (DECISIONS #164): the stage runs reps 1..rep_pass of the REPS it declares. `--reps`
+        # stays the declared total (the rows say reps=5 whatever pass produced them, and the runner draws its
+        # shuffle from it); `--only-reps` names the pass. A cell that declares fewer reps than the pass (the
+        # image-defaults arm, REPS=3) runs its own. Rep 1 still goes first and a failed rep 1 still ends the arm.
+        h = _sub(h, '\nBACKENDS="{backends}"\n',
+                 '\n# REPETITION PASS: reps 1 to {rep_pass} of the REPS declared (DECISIONS #164)\n'
+                 'LAST_REP=$(( REPS < {rep_pass} ? REPS : {rep_pass} ))\n\nBACKENDS="{backends}"\n')
+        h = _sub(h, '[ "$REPS" -lt 2 ] || env $envset python3 runner.py',
+                 '[ "$LAST_REP" -lt 2 ] || env $envset python3 runner.py')
+        h = _sub(h, '--only-reps "$(seq -s, 2 "$REPS")" --reps "$REPS" --results-file "$RF"',
+                 '--only-reps "$(seq -s, 2 "$LAST_REP")" --reps "$REPS" --results-file "$RF"')
+        h = _sub(h, 'local label=$1 scale=$2 cap=$3 be=$4 wl=$5 drv=$6 outdir=$7 orf=$8 oreps=$9 oenv=${{10}}',
+                 'local label=$1 scale=$2 cap=$3 be=$4 wl=$5 drv=$6 outdir=$7 orf=$8 oreps=$9 oenv=${{10}}\n'
+                 '  local olast=$(( oreps < LAST_REP ? oreps : LAST_REP ))')
+        # the template's `\\`-newline continuations are joined inside its string, so these anchors are single-line
+        h = _sub(h, '\n  env $oenv python3 runner.py --lanes {lane}',
+                 '\n  [ "$olast" -lt 2 ] || env $oenv python3 runner.py --lanes {lane}')
+        h = _sub(h, '--only-reps "$(seq -s, 2 "$oreps")"', '--only-reps "$(seq -s, 2 "$olast")"')
+        h = _sub(h, 'REPS=$REPS, pin $PIN', 'REPS=$REPS (reps run: 1 to $LAST_REP), pin $PIN')
     return h
 
 
@@ -498,11 +522,11 @@ def _wait(after):
             f'say "$ID: {after} finished, taking the machine"\n')
 
 
-def emit_all(out, pins, first_after, allow_dev, stages=None):
+def emit_all(out, pins, first_after, allow_dev, stages=None, rep_pass=None):
     """Write every stage. October's emit() is reused for the runner stages, with its
     template and SHA swapped for the duration of the call."""
     stages = STAGES if stages is None else stages
-    head = _head()
+    head = _head(rep_pass)
     sha, wheel, server = pins["ARCADEDB_ENGINE_COMMIT"], pins["ARCADEDB_WHEEL"], pins["ARCADEDB_SERVER_IMAGE"]
     wheel_name = os.path.basename(wheel)
     wheel_sha = hashlib.sha256(open(wheel, "rb").read()).hexdigest()
@@ -526,6 +550,7 @@ def emit_all(out, pins, first_after, allow_dev, stages=None):
                 O.HEAD = head.replace("{prior}", PRIOR_PIN).replace("{wheel_name}", wheel_name) \
                     .replace("{wheel_sha256}", wheel_sha).replace("{server_image}", server) \
                     .replace("{allow_dev}", "1" if allow_dev else "0") \
+                    .replace("{rep_pass}", str(rep_pass or "")) \
                     .replace("{jpype_version}", bench_common.JPYPE_PIN) \
                     .replace("{instrument}", bench_common.INSTRUMENT)
                 body = O.emit(i, full)
@@ -600,6 +625,11 @@ def main(argv=None) -> int:
                     help="tiers (default, DECISIONS #163): every ArcadeDB arm first, then the other engines already "
                          "run, then new versions and new arms; paper: #133's lane order with every engine in each "
                          "lane's stage (the chain launched 2026-10-06 11:22Z)")
+    ap.add_argument("--rep-pass", type=int, default=None, metavar="N",
+                    help="run only reps 1..N of each cell's declared REPS (DECISIONS #164: N=3 first, the rest in a "
+                         "later pass); default runs every declared rep. Stage ids take the prefix qP, so no earlier "
+                         "chain's ALL-DONE marker can start this one")
+    ap.add_argument("--id-prefix", default=None, help="stage id prefix (default qT; qP with --rep-pass)")
     ap.add_argument("--check", action="store_true", help="coverage only")
     ap.add_argument("--project", metavar="CELLS_TSV", help="per-stage hours from October's measured cells")
     a = ap.parse_args(argv)
@@ -613,7 +643,10 @@ def main(argv=None) -> int:
         return 1
     print(f"jpype pin: {bench_common.JPYPE_PIN} (bench_common.JPYPE_PIN = Dockerfile.bench's ARG default, a hard == "
           f"install; every stage reads JPype back out of the image or the repo venv)")
-    stages = tiered_stages() if a.order == "tiers" else STAGES
+    if a.rep_pass is not None and not 1 <= a.rep_pass <= 5:
+        raise SystemExit("--rep-pass must be 1 to 5 (the declared REPS)")
+    prefix = a.id_prefix or ("qP" if a.rep_pass else "qT")
+    stages = tiered_stages(prefix=prefix, rep_pass=a.rep_pass) if a.order == "tiers" else STAGES
     problems, excluded, counts = check_coverage(stages)
     problems += check_tiers()
     print(f"order: {a.order}, {len(stages)} stages")
@@ -659,7 +692,7 @@ def main(argv=None) -> int:
         raise SystemExit(f"REFUSING to emit: wheel {ver} is a pre-release; the paper cites stable releases "
                          f"(DECISIONS #42). --allow-prerelease emits for a page-only measurement.")
     os.makedirs(a.out, exist_ok=True)
-    emit_all(a.out, pins, a.after, allow_dev=pre, stages=stages)
+    emit_all(a.out, pins, a.after, allow_dev=pre, stages=stages, rep_pass=a.rep_pass)
     return 0
 
 
