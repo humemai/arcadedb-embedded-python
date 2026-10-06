@@ -64,6 +64,16 @@ def pg_durability(cx):
 DATA = os.environ.get("BENCH_TPC_DATA", "/data/tpch")
 SF = os.environ.get("BENCH_TPC_SF", "1")
 OLTP_OPS = 1_000
+# THE OLTP WARM-UP (CAMPAIGN section 7 row 65, DECISIONS #157). New-order, payment, and the four single-record operations
+# are timed from the FIRST operation after the load, each leaving out only its first 20 from the percentiles, so on the
+# JVM engines the statements compile inside the timed window (ArcadeDB embedded's new-order is 2.34x and 2.56x its own
+# payment, timed right after it, against 0.94x to 1.30x for every engine that is not on a JVM; on the laptop the window
+# is 2.90x to 3.79x the warm median and an untimed warm-up of 2,000 operations on disjoint keys cuts it to 0.38x). Every
+# engine now runs OLTP_WARMUP untimed operations of each kind first, on keys BELOW the timed ones (the timed keys start at
+# OLTP_WARMUP, so the timed inserts still land at the end of the order index), the same count in both durability classes;
+# the first operation of the session is timed and kept as the cold column. 2,000 is the count measured on the laptop;
+# the bench host may choose another (BENCH_DOCS_OLTP_WARMUP, recorded on the row as `oltp_warmup`).
+OLTP_WARMUP = int(os.environ.get("BENCH_DOCS_OLTP_WARMUP") or 2_000)
 # 100 runs per analytical query per repetition (DECISIONS #82): was 5, and a
 # p99 needs the samples (2026-09-10, BUGS F29). BENCH_OLAP_ITER lowers it for a
 # laptop smoke, where one SurrealDB cell is 16 minutes of the same query; the
@@ -1703,17 +1713,46 @@ def main():
     else:
         rng = random.Random(SEED)
         keys = part["p_partkey"].tolist()
+        # THE UNTIMED WARM-UP (row 65), on keys below the timed ones: order keys 0..W-1 (the timed orders are
+        # W..W+OLTP_OPS-1), single-record keys 0..W-1 (the timed ones start at W, and the warm-up deletes its own
+        # rows, so the table the timed phases see is empty as it always was). Part keys come from the same
+        # distribution as the timed ones, from their own seeded stream so the timed stream is the one it was.
+        # The first operation of the session is the one timed here, as the cell's cold number (#89 as amended);
+        # the timed new-order i == 0 below no longer is it.
+        W = OLTP_WARMUP
+        ORDER_BASE = CRUD_BASE = W
+        if W:
+            _wrng = random.Random(SEED + 1)
+            _w0 = time.perf_counter()
+            _beat.mark("oltp-warmup-start", n=W)
+            for i in range(W):
+                _t = time.perf_counter()
+                b.new_order(i, int(keys[_wrng.randrange(len(keys))]))
+                if i == 0:
+                    bench_common.record_first_query(out, "new_order", (time.perf_counter() - _t) * 1000)
+            for _ in range(W):
+                b.payment(_wrng.randrange(W))
+            for i in range(W):
+                b.crud_insert(i, int(keys[_wrng.randrange(len(keys))]))
+            for i in range(W):
+                b.crud_read(i)
+            for i in range(W):
+                b.crud_update(i)
+            for i in range(W):
+                b.crud_delete(i)
+            out["oltp_warmup"] = W
+            out["oltp_warmup_s"] = round(time.perf_counter() - _w0, 2)
+            _beat.mark("oltp-warmup-done", t=f"{out['oltp_warmup_s']}s")
         lat = []
         _beat.mark("new-order-start", n=OLTP_OPS)
         for i in range(OLTP_OPS):
             k = keys[rng.randrange(len(keys))]
             t = time.perf_counter()
-            b.new_order(i, int(k))
+            b.new_order(ORDER_BASE + i, int(k))
             _dt = (time.perf_counter() - t) * 1000
             if i == 0:
-                # The first timed operation of the cell, which is this lane's
-                # cold number under #89 as amended. The twenty discarded
-                # warmups below are still discarded from the percentiles.
+                # The first timed operation of the cell is this lane's cold number under #89 as amended
+                # when nothing ran before it (OLTP_WARMUP=0); setdefault, so the warm-up's first one wins.
                 bench_common.record_first_query(out, "new_order", _dt)
             if i >= 20:
                 surreal_common.keep(b, lat, _dt)
@@ -1736,7 +1775,7 @@ def main():
         plat = []
         _beat.mark("payment-start", n=OLTP_OPS)
         for j in range(OLTP_OPS):
-            okey = rng.randrange(OLTP_OPS)
+            okey = ORDER_BASE + rng.randrange(OLTP_OPS)
             t = time.perf_counter()
             b.payment(okey)
             if j >= 20:
@@ -1783,21 +1822,24 @@ def main():
             out[f"{label}_ops"] = CRUD_OPS
             _beat.mark(f"{label}-done", n=CRUD_OPS, p50=out[f"{label}_p50_ms"])
 
-        _crud_phase("crud_insert", lambda i: b.crud_insert(i, crud_pkeys[i]))
+        _crud_phase("crud_insert", lambda i: b.crud_insert(CRUD_BASE + i, crud_pkeys[i]))
         bench_common.record_result(out, "crud_insert", b.crud_scan(), **CRUD_DIGEST)
-        _crud_phase("crud_read", b.crud_read, collect=True)
+        _crud_phase("crud_read", lambda i: b.crud_read(CRUD_BASE + i), collect=True)
         # The read's digest is the VALUES THE TIMED READS RETURNED, accumulated
         # as they came back and hashed here; the three write phases have no
         # answer of their own and are digested by the state they left.
         bench_common.record_result(out, "crud_read", crud_read_rows, **CRUD_READ_DIGEST)
-        _crud_phase("crud_update", b.crud_update)
+        _crud_phase("crud_update", lambda i: b.crud_update(CRUD_BASE + i))
         bench_common.record_result(out, "crud_update", b.crud_scan(), **CRUD_DIGEST)
-        _crud_phase("crud_delete", b.crud_delete)
+        _crud_phase("crud_delete", lambda i: b.crud_delete(CRUD_BASE + i))
         bench_common.record_result(out, "crud_delete", b.crud_scan(), **CRUD_DIGEST)
 
         # DECISIONS #89: where a measurement does not apply the row says so in
-        # one clause rather than leaving a blank.
-        out["cold_warm_na"] = bench_common.NA_COLD_WARM_TXN
+        # one clause rather than leaving a blank. Not once the operations are timed warm (row 65): the
+        # cold column is the first operation of the session, and "already warm by construction" would
+        # be false and would shadow the cold column's own sentence in export_web._cold_note.
+        if not W:
+            out["cold_warm_na"] = bench_common.NA_COLD_WARM_TXN
 
     # TIME THE CLOSE, do not merely perform it (#155). A clean close is when
     # compaction, writeback and WAL truncation happen: measured on 26.8.1 it
