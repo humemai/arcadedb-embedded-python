@@ -13,8 +13,10 @@ nothing cannot pass. Where an approximate index makes two separate builds differ
 the session is swapped between the clients instead. BENCH_ARCADEDB_HTTP_CLIENT is set per run, so the adapters' own connect() builds
 the client under test and records it in `row_extra`.
 """
+import json
 import os
 import random
+import subprocess
 import sys
 import types
 from collections import namedtuple
@@ -387,7 +389,6 @@ def test_l5_lifecycle_server_read_identical(env, workload, tmp_path):
         L5.L.SCALE_ROWS["lc_live"] = 600 if workload == "doc" else 40
         args = types.SimpleNamespace(scale="lc_live", workload=workload, out=str(outp))
         L5.main(args)
-        import json
         runs[choice] = json.loads(outp.read_text())
     assert runs["lean"]["arcadedb_http_client"] == LH.LEAN_NAME and runs["requests"]["arcadedb_http_client"] == RQ_NAME
     dl, dr = digests(runs["lean"]), digests(runs["requests"])
@@ -395,3 +396,30 @@ def test_l5_lifecycle_server_read_identical(env, workload, tmp_path):
     assert runs["lean"].get("lifecycle_read_situation") == runs["requests"].get("lifecycle_read_situation")
     if dl:
         non_degenerate(runs["lean"])
+
+
+# ------------------------------------------------------------------------------------- e4 deployment decomposition (row 72 addendum)
+@pytest.mark.parametrize("legacy", ["requests", "shim"])
+def test_e4_decomposition_measures_both_clients_and_every_path_returns_the_same_rows(legacy, tmp_path):
+    """The e4 lane (e4_decomp.py, with a real in-process engine and a real server) at a small corpus, once with requests importable and once
+    with it blocked, which is the e4 cell's own condition (its image has none, so the probe's client is the urllib shim)."""
+    pytest.importorskip("arcadedb_embedded")
+    host, port = _host_port()
+    _admin("drop database deploy_decomp", ok_missing=True)
+    out = tmp_path / f"e4-{legacy}.json"
+    code = ("import runpy, sys\n" + ("sys.modules['requests'] = None\n" if legacy == "shim" else "") +
+            f"sys.argv = ['e4_decomp.py', '--backend', 'arcadedb_e4', '--workload', 'decomp', '--scale', 'e2', '--out', {str(out)!r}]\n"
+            f"runpy.run_path({str(HERE / 'e4_decomp.py')!r}, run_name='__main__')\n")
+    env = dict(os.environ, BENCH_SERVER_HOST=host, BENCH_SERVER_PORT=port, ARCADEDB_HEAP="1g", ROWS="3000", SIZES="1,10,100,1000",
+               REPS="3", WARMUP="1")
+    r = subprocess.run([sys.executable, "-c", code], env=env, cwd=str(HERE), capture_output=True, text=True, timeout=900)
+    assert r.returncode == 0, r.stdout[-1500:] + r.stderr[-1500:]
+    art = json.loads(out.read_text())
+    meta, res = art["meta"], art["results"]
+    assert set(res) == {"embedded", "inproc_http", "inproc_http_lean", "docker_http", "docker_http_lean"}
+    key = "requests" if legacy == "requests" else "urllib_shim"
+    assert meta["arm_clients"]["docker_http"] == key and meta["arm_clients"]["docker_http_lean"] == "lean"
+    assert meta["row_count_agreement"] == "ok" and meta["answer_agreement"] == "ok"
+    for size, per in meta["answers"].items():
+        assert len({d["digest"] for d in per.values()}) == 1 and len(per) == 5 and next(iter(per.values()))["n"] == int(size)
+    assert art["arcadedb_http_clients"][-1] == LH.LEAN_NAME and len(art["arcadedb_http_clients"]) == 2

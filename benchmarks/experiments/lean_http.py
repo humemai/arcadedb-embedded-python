@@ -7,8 +7,9 @@ the same. Every comparator on the tables is driven by its own official driver (B
 pays a `requests`-sized client overhead, so the served ArcadeDB column measured the client library as much as the engine. This module is the
 one place the lanes get their ArcadeDB HTTP session from; a lane changes by one import.
 
-The interface is the part of `requests.Session` the lanes use: `.auth` (a (user, password) tuple, sent as Basic), `.get(url, timeout=)`,
-`.post(url, json=, data=, headers=, timeout=)`, `.close()`, and a response with `.status_code`, `.reason`, `.headers`, `.content`, `.text`,
+The interface is the part of `requests.Session` the lanes use: `.auth` (a (user, password) tuple, sent as Basic), `.get(url, auth=, headers=, timeout=)`,
+`.post(url, json=, data=, auth=, headers=, timeout=)` (a per-call `auth=` tuple replaces the session's for that call, as in requests; the e4
+deployment decomposition passes it), `.close()`, and a response with `.status_code`, `.reason`, `.headers`, `.content`, `.text`,
 `.url`, `.ok`, `.json()`, and `.raise_for_status()` whose message is requests' own (`"500 Server Error: <reason> for url: <url>"`).
 
 WHAT IS THE SAME AS requests: the request line, `Authorization: Basic`, `Accept: */*`, `Accept-Encoding: gzip, deflate` (and the response is decoded
@@ -219,15 +220,16 @@ class LeanSession:
         self.close()
 
     # -- requests
-    def _headers(self, extra, has_json):
+    def _headers(self, extra, has_json, auth=None):
         h = {
             "User-Agent": "lean_http/1 (http.client)",
             "Accept-Encoding": "gzip, deflate",
             "Accept": "*/*",
             "Connection": "keep-alive",
         }
-        if self.auth:
-            user, password = self.auth
+        auth = auth if auth is not None else self.auth
+        if auth:
+            user, password = auth
             h["Authorization"] = "Basic " + base64.b64encode(f"{user}:{password}".encode("latin-1")).decode("ascii")
         if has_json:
             h["Content-Type"] = "application/json"
@@ -235,7 +237,7 @@ class LeanSession:
             h.update({str(k): str(v) for k, v in extra.items()})
         return h
 
-    def request(self, method, url, json=None, data=None, headers=None, timeout=None):
+    def request(self, method, url, json=None, data=None, headers=None, timeout=None, auth=None):
         parts = urllib.parse.urlsplit(url)
         scheme = parts.scheme or "http"
         host = parts.hostname
@@ -256,7 +258,7 @@ class LeanSession:
         else:
             body = data  # bytes, or an iterator of bytes (sent chunked)
         replayable = body is None or isinstance(body, (bytes, bytearray))
-        hdrs = self._headers(headers, json is not None)
+        hdrs = self._headers(headers, json is not None, auth)
         retried = False
         while True:
             conn, reused = self._conn_for(key, timeout)

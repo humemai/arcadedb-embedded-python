@@ -3563,6 +3563,51 @@ E4_ARMS = [
     ("docker_http", "separate container, HTTP ms"),
 ]
 
+# THE CLIENT AXIS (CAMPAIGN section 7 row 72). An artifact written since the lean client carries `meta.arm_clients` (arm -> client key) and
+# measures every HTTP arm under both clients: `inproc_http` and `docker_http` through the probe's own session, `<arm>_lean` through
+# lean_http. Its table names the client in every HTTP column, so the three costs it separates (the wire format, the client, the process
+# boundary) each sit between two columns that differ in that one thing. An artifact without `arm_clients` (October's, measured before
+# row 72) keeps the three columns above, unchanged: which client it ran through was not recorded, and is not inferred.
+E4_PLACES = [("inproc_http", "in-process server, HTTP ms"), ("docker_http", "separate container, HTTP ms")]
+E4_CLIENT_LABELS = {"requests": "requests client", "urllib_shim": "urllib client", "lean": "lean client"}
+
+
+def _e4_arms(loaded):
+    """[(arm, column label)] for the artifacts in the pin's directory. Refuses a directory whose reps disagree about the clients: a column
+    cannot be the median of two different clients."""
+    maps = {json.dumps((d.get("meta") or {}).get("arm_clients") or {}, sort_keys=True) for d in loaded}
+    if len(maps) > 1:
+        raise SystemExit(f"{E4_DIR.name}: the repetitions disagree about which client each arm ran through ({sorted(maps)}); "
+                         "re-run the e4 stage, a column cannot mix clients")
+    arm_clients = (loaded[0].get("meta") or {}).get("arm_clients") or {}
+    if not arm_clients:
+        return list(E4_ARMS)
+    arms = [("embedded", "in-process ms")]
+    for place, label in E4_PLACES:
+        for arm in (place, place + "_lean"):
+            key = arm_clients.get(arm)
+            if key:
+                arms.append((arm, f"{label}, {E4_CLIENT_LABELS.get(key, key)}"))
+    return arms
+
+
+def _e4_client_sentences(meta):
+    """The sentence that names the two clients, from the artifact (generated, so the names are the ones that ran). Nothing for an
+    artifact measured before the client axis existed."""
+    names = meta.get("client_names") or {}
+    arm_clients = meta.get("arm_clients") or {}
+    if not names or not arm_clients:
+        return []
+    legacy = next((names[k] for k in names if k != "lean"), None)
+    lean = names.get("lean")
+    if not (legacy and lean):
+        return []
+    return [_gen(f"Each HTTP column is measured through two Python clients, in the same rounds against the same server: {legacy}, the client this "
+                 f"table was measured with before the second was added, and {lean}, one persistent connection, which the benchmark's served "
+                 "ArcadeDB arms use from the 26.10.1 re-pin on. "
+                 "Two columns of one deployment differ only in the client; the HTTP columns against the in-process column add the wire format "
+                 "and, for the separate container, the process boundary.", legacy, lean)]
+
 
 def _e4_table():
     """Deployment decomposition: what the client/server split actually costs.
@@ -3583,20 +3628,21 @@ def _e4_table():
     loaded = [json.loads(p.read_text(encoding="utf-8")) for p in reps]
     meta = loaded[0]["meta"]
     sizes = sorted(loaded[0]["results"]["embedded"], key=int)
+    arms = _e4_arms(loaded)
 
     entries = []
     for size in sizes:
         per_arm = {}
-        for arm, _ in E4_ARMS:
+        for arm, _ in arms:
             vals = [d["results"][arm][size]["p50_ms"] for d in loaded
                     if arm in d["results"] and size in d["results"][arm]]
             if vals:
                 per_arm[arm] = statistics.median(vals)
-        if len(per_arm) != len(E4_ARMS):
+        if len(per_arm) != len(arms):
             continue
 
         metrics = {}
-        for arm, label in E4_ARMS:
+        for arm, label in arms:
             metrics[label] = {"median": round(per_arm[arm], 4),
                               "min": round(per_arm[arm], 4),
                               "max": round(per_arm[arm], 4),
@@ -3647,10 +3693,11 @@ def _e4_table():
                  str(_engine_identity(meta.get('engine_version'), meta.get('engine_commit'))),
                  str(meta.get('reps')), str(meta.get('warmup')), str(meta.get('cpuset')),
                  str(meta.get('mem_cap')), str(meta.get('heap'))),
+            *_e4_client_sentences(meta),
             _R("e4", "same_materialisation"),
             _R("e4", "same_machine"),
         ],
-        "columns": [label for _, label in E4_ARMS],
+        "columns": [label for _, label in arms],
         "withheld_scales": [],
         "withheld_reason": None,
         "entries": entries,

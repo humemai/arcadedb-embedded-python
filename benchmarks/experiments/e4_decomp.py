@@ -9,7 +9,10 @@ probe itself is unchanged (deployment_decomp_probe.py); this wrapper maps the
 runner's arguments onto it, then writes the artifact where export_web reads
 E4 from: results/e4decomp_<pin>/decomp3m_<pin>_rep<r>.json.
 
-The client image has no `requests`; the probe gets a stdlib shim.
+The client image has no `requests`; the probe gets a stdlib shim. THAT SHIM IS THE e4 CELL'S LEGACY HTTP CLIENT: it opens a new connection for
+every call (urllib), where requests.Session keeps one alive. Since CAMPAIGN section 7 row 72 the probe measures every HTTP arm under
+BOTH that client and lean_http's persistent connection, names the client of each arm in the artifact (`meta.arm_clients`, `meta.client_names`), and
+the row lists the clients it ran (`arcadedb_http_clients`). BENCH_ARCADEDB_HTTP_CLIENT does not apply to this lane: it measures both.
 """
 import argparse
 import json
@@ -37,6 +40,9 @@ def _shim_requests():
 
     class Session:
         auth = None
+        # NAMED SO THE ARTIFACT CAN SAY WHICH CLIENT AN ARM RAN THROUGH (row 72): deployment_decomp_probe.legacy_client reads these
+        client_key = "urllib_shim"
+        client_name = "urllib shim (e4_decomp._shim_requests, one connection per call)"
         def _do(self, method, url, auth=None, json_body=None, headers=None, timeout=300):
             data = json.dumps(json_body).encode() if json_body is not None else None
             req = urllib.request.Request(url, data=data, method=method)
@@ -62,6 +68,13 @@ def _shim_requests():
     m = types.ModuleType("requests")
     m.Session = Session
     sys.modules["requests"] = m
+
+
+def stamp_clients(payload):
+    """The row says which HTTP clients it measured (row 72): the distinct names the artifact's meta carries, legacy first. Returns the list."""
+    names = (payload.get("meta") or {}).get("client_names") or {}
+    payload["arcadedb_http_clients"] = [names[k] for k in sorted(names, key=lambda k: (k == "lean", k))]
+    return payload["arcadedb_http_clients"]
 
 
 def main():
@@ -105,6 +118,7 @@ def main():
     import bench_common
     payload["durability"] = bench_common.arcade_durability_readback()
     payload["durability_class"] = bench_common.DURABILITY_CLASS
+    stamp_clients(payload)
     for n, d in payload.get("results", {}).get("embedded", {}).items():
         payload[f"embedded_{n}_p50_ms"] = d.get("p50_ms")
     # THE ANSWER, in the fields the equivalence gate reads (DECISIONS #88, BUGS
