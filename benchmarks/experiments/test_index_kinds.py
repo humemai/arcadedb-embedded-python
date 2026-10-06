@@ -226,9 +226,12 @@ def test_gate_passes_stamped_rows_of_every_lane(capsys):
         assert "ok   5 row(s)" in capsys.readouterr().out
 
 
-BAD_ROWS = [
+UNSTAMPED_ROWS = [
     (_row(stamp=None), "NOT STAMPED"),                                        # no stamp
-    (_row(stamp="", index_kinds_error="OSError: gone"), "NOT STAMPED"),
+    (_row(stamp="", index_kinds_error="OSError: gone"), "NOT STAMPED"),       # the read failed
+]
+
+WRONG_ROWS = [
     (_row(stamp="Part.p_partkey=LSM_TREE;Crud.ckey=HASH;OrderNew.okey=HASH"), "WRONG"),   # the old DDL
     (_row(stamp="Crud.ckey=HASH;OrderNew.okey=HASH"), "WRONG"),                           # an id the engine did not build
     (_row("l2", "arcadedb_graph_embedded", "olap",
@@ -236,22 +239,41 @@ BAD_ROWS = [
 ]
 
 
-@pytest.mark.parametrize("row,what", BAD_ROWS)
-def test_gate_fails_what_the_engine_did_not_report_once_it_is_strict(row, what, strict, capsys):
+@pytest.mark.parametrize("row,what", WRONG_ROWS)
+def test_a_stamped_row_with_the_wrong_kind_always_fails(row, what, capsys, monkeypatch):
+    """A STAMPED row can only have been written by this harness, so a kind the registry does not ask for is
+    evidence the setting did not take, and there is no old row for the failure to block: it fails from the
+    first day, whether or not the gate has been flipped."""
+    for flag in (False, True):
+        monkeypatch.setattr(FC, "INDEX_KINDS_GATE_FAILS", flag)
+        assert FC.check_index_kinds([row]) >= 1
+        out = capsys.readouterr().out
+        assert what in out and not any(l.lstrip().startswith("WARN") for l in out.splitlines())
+
+
+@pytest.mark.parametrize("row,what", UNSTAMPED_ROWS)
+def test_an_unstamped_row_fails_only_once_the_gate_is_flipped(row, what, strict, capsys):
     assert FC.check_index_kinds([row]) >= 1
     out = capsys.readouterr().out
-    assert what in out and "WARN" not in out and "[FAILURE]" in out
+    assert what in out and "WARN" not in out and "an unstamped row FAILS" in out
 
 
-@pytest.mark.parametrize("row,what", BAD_ROWS)
-def test_gate_only_warns_until_the_campaign_starts(row, what, capsys):
-    """THE DEFAULT. October's rows predate the stamp and must not block landing an October stage: every
-    finding is printed as a warning and the return value (which main() adds to the exit status) is 0."""
+@pytest.mark.parametrize("row,what", UNSTAMPED_ROWS)
+def test_an_unstamped_row_only_warns_until_the_campaign_starts(row, what, capsys):
+    """THE DEFAULT. October's rows predate the stamp and must not block landing an October stage: an
+    unstamped row is printed as a warning and the return value (which main() adds to the exit status) is 0."""
     assert FC.INDEX_KINDS_GATE_FAILS is False
     assert FC.check_index_kinds([row]) == 0
     out = capsys.readouterr().out
-    assert f"WARN {what}" in out and "report-only" in out and "exit status unchanged" in out
-    assert "[FAILURE]" not in out
+    assert f"WARN {what}" in out and "do not change the exit status" in out
+
+
+def test_in_the_default_mode_only_the_wrong_stamped_row_counts(capsys):
+    """October-shaped rows (no stamp) beside one wrong stamped row: the unstamped ones warn, the wrong one fails."""
+    rows = [_row(stamp=None), _row(backend="arcadedb_server", stamp=None), WRONG_ROWS[0][0]]
+    assert FC.check_index_kinds(rows) == 1
+    out = capsys.readouterr().out
+    assert out.count("WARN NOT STAMPED") == 2 and out.count("WRONG") == 1
 
 
 def test_the_gate_has_exactly_one_switch():
@@ -264,8 +286,8 @@ def test_the_gate_has_exactly_one_switch():
 
 def test_the_flip_changes_the_exit_status_of_the_whole_gate(monkeypatch):
     """main() adds check_index_kinds' return value to its failure count, so the constant is what moves
-    the exit status: an October-shaped set of rows (no stamp anywhere) passes in the default mode and fails
-    after the flip."""
+    the exit status for the UNSTAMPED case: an October-shaped set of rows (no stamp anywhere) passes in the
+    default mode and fails after the flip. (A wrong stamped kind never waited for the flip.)"""
     october = [_row(stamp=None), _row(backend="arcadedb_server", stamp=None)]
     assert "bad += check_index_kinds(rows)" in (HERE / "fairness_check.py").read_text()
     assert FC.check_index_kinds(october) == 0

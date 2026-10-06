@@ -1115,26 +1115,32 @@ ARCADEDB_SORTED_ID_INDEXES = (("l2", "Person", "id"),)
 # cell that loaded it, which the row says with `msg_vertices`.
 ARCADEDB_HASH_ID_REQUIRES = {("l2", "olap"): "msg_vertices"}
 
-# REPORT-ONLY UNTIL THE RE-PIN CAMPAIGN STARTS, THEN A FAILURE. October's own rows predate the
-# stamp, so a gate that failed them would block landing an October stage (or the freeze's
-# consistency pass) whenever this branch's gates are run over October's rows. While this is False,
-# F14d prints every finding as a WARNING and leaves the exit status alone. The commit that starts
-# the re-pin campaign sets it to True (CAMPAIGN section 7, row 68), and from then on a row without
-# the stamp, or with a kind other than the registry's, fails the gate. This is the ONLY switch.
+# THE UNSTAMPED ROW IS REPORT-ONLY UNTIL THE RE-PIN CAMPAIGN STARTS, THEN A FAILURE. October's own
+# rows predate the stamp, so a gate that failed an UNSTAMPED row would block landing an October stage
+# (or the freeze's consistency pass) whenever this branch's gates are run over October's rows. While
+# this is False, a row with no `index_kinds` is printed as a WARNING and the exit status is left alone.
+# The commit that starts the re-pin campaign sets it to True (CAMPAIGN section 7, row 68), and from
+# then on an unstamped row fails too. This is the ONLY switch, and it does not touch the other case: a
+# STAMPED row whose kind disagrees with the registry is a failure from the first day (see below).
 INDEX_KINDS_GATE_FAILS = False
 
 
 def check_index_kinds(rows):
     """F14d: every 2026-10 row of an ArcadeDB arm on a lane that has a changed index records
     the kinds the engine built, and they are the kinds the registry says (a setting written is
-    not a setting in force). Findings are WARNINGS and the return value is 0 until
-    INDEX_KINDS_GATE_FAILS is True, when each finding counts as a failure and the return value
-    is how many there were. Either way the unstamped row is also the row the page makes no claim
-    about (export_web)."""
+    not a setting in force). Returns the failure count.
+
+    TWO CASES, TWO RULES. A STAMPED row whose kind disagrees with the registry (an id the
+    engine reports as sorted, a registered id it did not build, Person(id) as HASH) is ALWAYS a
+    failure: only a row this harness wrote can carry the stamp, so it is evidence that the setting
+    did not take, and there is no old row for it to block. A row with NO stamp is a WARNING and
+    counts as a failure only once INDEX_KINDS_GATE_FAILS is True. Either way the unstamped row is
+    also the row the page makes no claim about (export_web)."""
     from bench_common import parse_index_kinds
-    mode = "FAILURE" if INDEX_KINDS_GATE_FAILS else "WARNING (report-only until INDEX_KINDS_GATE_FAILS is set)"
+    mode = ("an unstamped row FAILS" if INDEX_KINDS_GATE_FAILS else
+            "an unstamped row is a WARNING until INDEX_KINDS_GATE_FAILS is set; a wrong stamped kind always fails")
     print(f"=== F14d: the engine reports the index kinds the lanes asked for [{mode}] ===")
-    bad = judged = 0
+    bad = warned = judged = 0
     lanes = {lane for lane, _wl, _pairs in ARCADEDB_HASH_ID_INDEXES}
     for r in rows:
         be, lane = str(r.get("backend")), str(r.get("lane"))
@@ -1148,7 +1154,10 @@ def check_index_kinds(rows):
         if not kinds:
             why = f" ({r.get('index_kinds_error')})" if r.get("index_kinds_error") else ""
             print(f"  {'' if INDEX_KINDS_GATE_FAILS else 'WARN '}NOT STAMPED {where}: no `index_kinds`{why}")
-            bad += 1
+            if INDEX_KINDS_GATE_FAILS:
+                bad += 1
+            else:
+                warned += 1
             continue
         for ln, w, pairs in ARCADEDB_HASH_ID_INDEXES:
             if ln != lane or w not in (None, wl):
@@ -1159,18 +1168,18 @@ def check_index_kinds(rows):
             for t, p in pairs:
                 got = kinds.get(f"{t}.{p}")
                 if got != "HASH":
-                    print(f"  {'' if INDEX_KINDS_GATE_FAILS else 'WARN '}WRONG {where}: the engine reports {t}.{p} as {got!r}, the registry says HASH")
+                    print(f"  WRONG {where}: the engine reports {t}.{p} as {got!r}, the registry says HASH")
                     bad += 1
         for ln, t, p in ARCADEDB_SORTED_ID_INDEXES:
             if ln == lane and kinds.get(f"{t}.{p}") == "HASH":
-                print(f"  {'' if INDEX_KINDS_GATE_FAILS else 'WARN '}WRONG {where}: {t}.{p} is a hash index, and the graph lane's person_scan ranges over it")
+                print(f"  WRONG {where}: {t}.{p} is a hash index, and the graph lane's person_scan ranges over it")
                 bad += 1
-    if not bad:
+    if not bad and not warned:
         print(f"  ok   {judged} row(s) judged against the engine's own report")
-    elif not INDEX_KINDS_GATE_FAILS:
-        print(f"  {bad} warning(s) over {judged} row(s); exit status unchanged "
+    if warned:
+        print(f"  {warned} unstamped row(s) warned over {judged} row(s); they do not change the exit status "
               f"(INDEX_KINDS_GATE_FAILS is False until the re-pin campaign starts)")
-    return bad if INDEX_KINDS_GATE_FAILS else 0
+    return bad
 
 
 # INDEX DDL A "NONE" ARM STILL TIMES (BUGS F122). index_timer covers every index
