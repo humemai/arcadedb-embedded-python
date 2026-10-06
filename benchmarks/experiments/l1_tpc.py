@@ -101,11 +101,23 @@ OLAP_BUDGET_S = float(os.environ.get("BENCH_DOCS_OLAP_BUDGET_S") or 1800.0)
 SEED = 20260722
 BATCH = 10_000
 
+# THE FULL TPC-H Q1 (CAMPAIGN section 7 row 57, DECISIONS #151 item 3, BUGS F170). TPC-H Q1, the pricing summary
+# report, returns ten columns: the two group keys, sum_qty, sum_base_price, sum_disc_price, sum_charge, avg_qty,
+# avg_price, avg_disc, and count_order. Through October this lane's Q1 returned seven of them: `l_tax` was never
+# loaded, so it could not compute sum_charge, and it left out avg_price and avg_disc too, while the page called it
+# "TPC-H's own Q1". Every engine now loads l_tax and computes all ten (our short names: sum_base, sum_disc,
+# sum_charge, avg_qty, avg_price, avg_disc, n); every documents analytics row records `tpch_q1` = full. The answer is
+# checked against DuckDB's bundled official SF1 answer (tpch_answers()) on the laptop (test_tpch_q1_full.py's
+# reference, and the smoke in REPIN-REHEARSAL).
+TPCH_Q1_FIELD = "tpch_q1"      # the row field export_web._partial_q1 reads
+TPCH_Q1 = "full"               # all ten of TPC-H Q1's output columns
 Q1_DUCK = """
 SELECT l_returnflag, l_linestatus, sum(l_quantity) AS sum_qty,
        sum(l_extendedprice) AS sum_base,
        sum(l_extendedprice * (1 - l_discount)) AS sum_disc,
-       avg(l_quantity) AS avg_qty, count(*) AS n
+       sum(l_extendedprice * (1 - l_discount) * (1 + l_tax)) AS sum_charge,
+       avg(l_quantity) AS avg_qty, avg(l_extendedprice) AS avg_price,
+       avg(l_discount) AS avg_disc, count(*) AS n
 FROM lineitem WHERE l_shipdate <= DATE '1998-09-02'
 GROUP BY l_returnflag, l_linestatus ORDER BY l_returnflag, l_linestatus
 """
@@ -140,7 +152,8 @@ BY_MONTH_TEXT = ("SELECT substr(l_shipdate, 1, 7) AS m, sum(l_extendedprice * (1
 Q1_ARCADE = ("SELECT l_returnflag, l_linestatus, sum(l_quantity) AS sum_qty, "
              "sum(l_extendedprice) AS sum_base, "
              "sum(l_extendedprice * (1 - l_discount)) AS sum_disc, "
-             "avg(l_quantity) AS avg_qty, "
+             "sum(l_extendedprice * (1 - l_discount) * (1 + l_tax)) AS sum_charge, "
+             "avg(l_quantity) AS avg_qty, avg(l_extendedprice) AS avg_price, avg(l_discount) AS avg_disc, "
              "count(*) AS n FROM LineItem WHERE l_shipdate <= '1998-09-02' "
              "GROUP BY l_returnflag, l_linestatus "
              "ORDER BY l_returnflag, l_linestatus")
@@ -181,7 +194,8 @@ DUCK_OLAP = {"q1": Q1_DUCK, "q6": Q6_DUCK, "top_parts": TOP_PARTS_SQL, "ship_mod
 
 LI_COLS = ["l_orderkey", "l_partkey", "l_quantity", "l_extendedprice",
            "l_discount", "l_returnflag", "l_linestatus", "l_shipdate",
-           "l_shipmode"]   # l_shipmode joined for the 2026-10 ship-mode query
+           "l_shipmode",   # l_shipmode joined for the 2026-10 ship-mode query
+           "l_tax"]        # l_tax joined for the full TPC-H Q1 (row 57); LAST, so every positional table keeps its order
 # Rows per streamed batch. DuckDB's COPY writes 122,880-row row groups (both
 # the SF1 and the SF10 files, DuckDB 1.5.4), so this reads one row group per
 # batch; a batch is one pandas frame of the nine LI_COLS, about 17 MB, and it
@@ -241,9 +255,9 @@ OLAP_QUERIES = ("q1", "q6", "top_parts", "ship_mode", "by_month")
 # produced a clean SF1 row (tpc_rounding_audit.py).
 OLAP_DIGEST = {
     "q1": dict(columns=(("l_returnflag", "_id.f", "f"), ("l_linestatus", "_id.s", "s"),
-                        "sum_qty", "sum_base", "sum_disc", "avg_qty", "n"),
-               coerce={"sum_qty": "num", "sum_base": "num",
-                       "sum_disc": "num", "avg_qty": "num"}),
+                        "sum_qty", "sum_base", "sum_disc", "sum_charge", "avg_qty", "avg_price", "avg_disc", "n"),
+               coerce={"sum_qty": "num", "sum_base": "num", "sum_disc": "num", "sum_charge": "num",
+                       "avg_qty": "num", "avg_price": "num", "avg_disc": "num"}),
     # THE COUNT IS PART OF THE ANSWER (DECISIONS #94). `revenue` is one large
     # float, so at SF1 and above a single lost row falls inside six significant
     # digits and the digest does not move: measured, the revenue total detected
@@ -304,7 +318,7 @@ def _prepare(li):
     """The frame every engine is fed: the same column set and the same
     coercions the whole-table load applied before the stream existed."""
     li["l_shipdate"] = li["l_shipdate"].astype(str)
-    for col in ("l_quantity", "l_extendedprice", "l_discount"):
+    for col in ("l_quantity", "l_extendedprice", "l_discount", "l_tax"):
         li[col] = li[col].astype("float64")  # parquet DECIMAL -> uniform DOUBLE
     return li
 
@@ -499,7 +513,7 @@ class SQLiteTPC:
     def build(self, li, part):
         self.cx.execute("CREATE TABLE lineitem (l_orderkey INTEGER, l_partkey INTEGER, "
                         "l_quantity REAL, l_extendedprice REAL, l_discount REAL, "
-                        "l_returnflag TEXT, l_linestatus TEXT, l_shipdate TEXT, l_shipmode TEXT)")
+                        "l_returnflag TEXT, l_linestatus TEXT, l_shipdate TEXT, l_shipmode TEXT, l_tax REAL)")
         self.cx.execute("CREATE TABLE part (p_partkey INTEGER PRIMARY KEY, p_retailprice REAL, stock INTEGER)")
         self.cx.execute("CREATE TABLE orders_new (okey INTEGER PRIMARY KEY, pkey INTEGER, qty INTEGER, paid INTEGER DEFAULT 0)")
         self.cx.execute("CREATE TABLE payments (okey INTEGER, pkey INTEGER, amount REAL)")
@@ -508,10 +522,10 @@ class SQLiteTPC:
         for r in li.rows():
             buf.append(r)
             if len(buf) >= 50_000:
-                self.cx.executemany("INSERT INTO lineitem VALUES (?,?,?,?,?,?,?,?,?)", buf)
+                self.cx.executemany("INSERT INTO lineitem VALUES (?,?,?,?,?,?,?,?,?,?)", buf)
                 self.cx.commit(); buf = []
         if buf:
-            self.cx.executemany("INSERT INTO lineitem VALUES (?,?,?,?,?,?,?,?,?)", buf)
+            self.cx.executemany("INSERT INTO lineitem VALUES (?,?,?,?,?,?,?,?,?,?)", buf)
             self.cx.commit()
         self.cx.executemany("INSERT INTO part VALUES (?,?,100)",
                             list(part[["p_partkey", "p_retailprice"]].itertuples(index=False, name=None)))
@@ -658,7 +672,10 @@ class MongoTPC:
           {"$group": {"_id": {"f": "$l_returnflag", "s": "$l_linestatus"},
                       "sum_qty": {"$sum": "$l_quantity"}, "sum_base": {"$sum": "$l_extendedprice"},
                       "sum_disc": {"$sum": {"$multiply": ["$l_extendedprice", {"$subtract": [1, "$l_discount"]}]}},
-                      "avg_qty": {"$avg": "$l_quantity"}, "n": {"$sum": 1}}},
+                      "sum_charge": {"$sum": {"$multiply": ["$l_extendedprice", {"$subtract": [1, "$l_discount"]},
+                                                            {"$add": [1, "$l_tax"]}]}},
+                      "avg_qty": {"$avg": "$l_quantity"}, "avg_price": {"$avg": "$l_extendedprice"},
+                      "avg_disc": {"$avg": "$l_discount"}, "n": {"$sum": 1}}},
           {"$sort": {"_id.f": 1, "_id.s": 1}}]
     Q6 = [{"$match": {"l_shipdate": {"$gte": "1994-01-01", "$lt": "1995-01-01"},
                       "l_discount": {"$gte": 0.05, "$lte": 0.07}, "l_quantity": {"$lt": 24}}},
@@ -767,7 +784,10 @@ class SurrealTPC:
             self.db.insert("part", pr[s0:s0 + BATCH])
 
     Q1 = ("SELECT l_returnflag, l_linestatus, math::sum(l_quantity) AS sum_qty, math::sum(l_extendedprice) AS sum_base, "
-          "math::sum(l_extendedprice * (1 - l_discount)) AS sum_disc, math::mean(l_quantity) AS avg_qty, count() AS n "
+          "math::sum(l_extendedprice * (1 - l_discount)) AS sum_disc, "
+          "math::sum(l_extendedprice * (1 - l_discount) * (1 + l_tax)) AS sum_charge, "
+          "math::mean(l_quantity) AS avg_qty, math::mean(l_extendedprice) AS avg_price, "
+          "math::mean(l_discount) AS avg_disc, count() AS n "
           "FROM lineitem WHERE l_shipdate <= '1998-09-02' GROUP BY l_returnflag, l_linestatus ORDER BY l_returnflag, l_linestatus")
     Q6 = ("SELECT math::sum(l_extendedprice * l_discount) AS revenue, count() AS n FROM lineitem "
           "WHERE l_shipdate >= '1994-01-01' "
@@ -899,7 +919,7 @@ class PostgresTPC:
         cur.execute("CREATE TABLE lineitem (l_orderkey BIGINT, l_partkey BIGINT, "
                     "l_quantity DOUBLE PRECISION, l_extendedprice DOUBLE PRECISION, "
                     "l_discount DOUBLE PRECISION, l_returnflag TEXT, "
-                    "l_linestatus TEXT, l_shipdate DATE, l_shipmode TEXT)")
+                    "l_linestatus TEXT, l_shipdate DATE, l_shipmode TEXT, l_tax DOUBLE PRECISION)")
         with cur.copy("COPY lineitem FROM STDIN") as cp:
             for t in li.rows():
                 cp.write_row(t)
@@ -1112,7 +1132,8 @@ class ArcadeTPC:
                         "l_returnflag": str(t.l_returnflag),
                         "l_linestatus": str(t.l_linestatus),
                         "l_shipdate": str(t.l_shipdate),
-                        "l_shipmode": str(t.l_shipmode)})
+                        "l_shipmode": str(t.l_shipmode),
+                        "l_tax": float(t.l_tax)})
             if len(buf) >= self.load_call_rows:
                 db.insert_many("LineItem", buf, parallel=True); buf = []
         if buf:
@@ -1250,6 +1271,7 @@ class ArcadeServerTPC(ArcadeTPC):
                     "CREATE PROPERTY LineItem.l_extendedprice DOUBLE",
                     "CREATE PROPERTY LineItem.l_discount DOUBLE",
                     "CREATE PROPERTY LineItem.l_shipmode STRING",
+                    "CREATE PROPERTY LineItem.l_tax DOUBLE",
                     "CREATE DOCUMENT TYPE Part",
                     "CREATE PROPERTY Part.p_partkey LONG",
                     "CREATE INDEX ON Part (p_partkey) UNIQUE_HASH",
@@ -1278,7 +1300,7 @@ class ArcadeServerTPC(ArcadeTPC):
                          "l_quantity": float(t.l_quantity), "l_extendedprice": float(t.l_extendedprice),
                          "l_discount": float(t.l_discount), "l_returnflag": str(t.l_returnflag),
                          "l_linestatus": str(t.l_linestatus), "l_shipdate": str(t.l_shipdate),
-                         "l_shipmode": str(t.l_shipmode)})
+                         "l_shipmode": str(t.l_shipmode), "l_tax": float(t.l_tax)})
             if len(rows) >= batch:
                 _flush("LineItem", rows)
                 rows = []
@@ -1436,8 +1458,10 @@ class ArangoTPC:
     Q1 = ("FOR l IN lineitem FILTER l.l_shipdate <= '1998-09-02' "
           "COLLECT f = l.l_returnflag, s = l.l_linestatus "
           "AGGREGATE sum_qty = SUM(l.l_quantity), sum_base = SUM(l.l_extendedprice), "
-          "sum_disc = SUM(l.l_extendedprice * (1 - l.l_discount)), avg_qty = AVG(l.l_quantity), n = COUNT(1) "
-          "SORT f, s RETURN {f, s, sum_qty, sum_base, sum_disc, avg_qty, n}")
+          "sum_disc = SUM(l.l_extendedprice * (1 - l.l_discount)), "
+          "sum_charge = SUM(l.l_extendedprice * (1 - l.l_discount) * (1 + l.l_tax)), "
+          "avg_qty = AVG(l.l_quantity), avg_price = AVG(l.l_extendedprice), avg_disc = AVG(l.l_discount), n = COUNT(1) "
+          "SORT f, s RETURN {f, s, sum_qty, sum_base, sum_disc, sum_charge, avg_qty, avg_price, avg_disc, n}")
     Q6 = ("FOR l IN lineitem FILTER l.l_shipdate >= '1994-01-01' AND l.l_shipdate < '1995-01-01' "
           "AND l.l_discount >= 0.05 AND l.l_discount <= 0.07 AND l.l_quantity < 24 "
           "COLLECT AGGREGATE revenue = SUM(l.l_extendedprice * l.l_discount), n = COUNT(1) "
@@ -1599,6 +1623,9 @@ def main():
     out["instrument"] = bench_common.INSTRUMENT
     if args.workload == "olap":
         out["olap_iters"] = OLAP_ITER
+        # THE Q1 THIS ROW RAN (row 57, BUGS F170): all ten of TPC-H Q1's output columns. The page's
+        # "the lane's Q1 has seven of its ten columns" sentence retires per row from this field.
+        out[TPCH_Q1_FIELD] = TPCH_Q1
         for which in OLAP_QUERIES:
             times = []
             ref = None
