@@ -23,7 +23,7 @@ import mongo_common
 
 import budget_lookup
 import graph_common
-from graph_common import (HOP3_VISITED, HOP3F_MIN_AGE, LSQB_QUERIES, NA_LSQB_NO_MESSAGE_HALF,
+from graph_common import (HOP3_VISITED, HOP3_VISITED_BY_VERTEX, HOP3F_MIN_AGE, OLTP_READS_BY_VERTEX, LSQB_QUERIES, NA_LSQB_NO_MESSAGE_HALF,
                           OLAP_BUDGET_S, OLAP_DIGEST, OLAP_ITERATIONS, OLAP_QUERIES,
                           OLTP_READ_BUDGET_S, OLTP_READS, OLTP_WRITE, OLTP_DELETE, OLTP_UPDATE,
                           EDGE_SCAN, EDGE_STATE_DIGEST,
@@ -135,8 +135,13 @@ class Base:
     # methods while the mix, counts and statistics stay identical.
     # Each statement gets exactly the parameters its text names: LadybugDB
     # rejects a parameter the statement does not use.
+    # True for an engine whose MATCH may walk one relationship twice in a chain (FalkorDB, LadybugDB): it is then asked the
+    # same question with the exclusions written on the vertices (graph_common.OLTP_READS_BY_VERTEX).
+    REPEATS_RELATIONSHIPS = False
+
     def run_read(self, op, pid):
-        return self.run_cypher(OLTP_READS[op], {"id": int(pid)})
+        texts = OLTP_READS_BY_VERTEX if self.REPEATS_RELATIONSHIPS else OLTP_READS
+        return self.run_cypher(texts[op], {"id": int(pid)})
 
     def run_write(self, pid, new_id):
         self.run_cypher_write(OLTP_WRITE, {"id": int(pid), "new_id": int(new_id),
@@ -151,7 +156,7 @@ class Base:
 
     def run_visited(self, pid):
         """Untimed: the distinct persons at three hops, before the age filter."""
-        return self.run_cypher(HOP3_VISITED, {"id": int(pid)})
+        return self.run_cypher(HOP3_VISITED_BY_VERTEX if self.REPEATS_RELATIONSHIPS else HOP3_VISITED, {"id": int(pid)})
 
     def person_scan(self, id_from):
         """Untimed read-back of the persons the CRUD phases wrote."""
@@ -844,6 +849,7 @@ class FalkorGraph(Base):
     default and 3,011 fdatasync with --appendonly yes --appendfsync always,
     which is what the strict class sets through REDIS_ARGS (DECISIONS #90).
     """
+    REPEATS_RELATIONSHIPS = True      # a chain of relationships may reuse one: see graph_common.OLTP_READS_BY_VERTEX
     QUERY_LANGUAGE = "Cypher over the Redis protocol"
     name = "falkordb_graph"
 
@@ -1024,6 +1030,7 @@ def _ladybug_fit(memory_max_text=None):
 
 class LadybugGraph(Base):
     QUERY_LANGUAGE = "Cypher, embedded"
+    REPEATS_RELATIONSHIPS = True      # a chain of relationships may reuse one: see graph_common.OLTP_READS_BY_VERTEX
     name = "ladybug_graph"
 
     def _open_fitted(self, ladybug):

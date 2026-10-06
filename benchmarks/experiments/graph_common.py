@@ -208,6 +208,25 @@ HOP3_VISITED = ("MATCH (p:Person)-[:KNOWS]-(:Person)-[:KNOWS]-(:Person)-[:KNOWS]
                 "WHERE p.id = $id RETURN count(DISTINCT x) AS n")
 VISITED_SAMPLE = 20
 
+# FOR AN ENGINE WHOSE MATCH MAY WALK A RELATIONSHIP TWICE. Cypher's MATCH forbids reusing a relationship within one pattern
+# (relationship isomorphism), and that rule is what makes the 2-hop and 3-hop reads above the question "walks of k DISTINCT
+# friendships". FalkorDB and LadybugDB do not apply it to a chain of relationships: on the SF1 slice both answered the 2-hop,
+# filtered 3-hop and visited reads differently from a DuckDB reference (the point and 1-hop reads, which have one relationship,
+# agreed), because the walk from the start along a friendship and straight back along the same friendship was counted, so the
+# start person was its own friend of a friend. The same question for them names the exclusions on the vertices, as DuckPGQ's and
+# SurrealQL's spellings do: in a simple graph (LDBC's knows holds each friendship once) the walks the exclusions remove are
+# exactly the walks that reuse a relationship, so the two spellings answer alike. The mechanism is `Base.REPEATS_RELATIONSHIPS`.
+OLTP_READS_BY_VERTEX = {
+    **OLTP_READS,
+    "hop2": ("MATCH (p:Person)-[:KNOWS]-(m:Person)-[:KNOWS]-(fof:Person) "
+             "WHERE p.id = $id AND fof <> p RETURN count(DISTINCT fof) AS n"),
+    "hop3f": ("MATCH (p:Person)-[:KNOWS]-(m1:Person)-[:KNOWS]-(m2:Person)-[:KNOWS]-(x:Person) "
+              "WHERE p.id = $id AND m2 <> p AND x <> m1 AND x.age > " + str(HOP3F_MIN_AGE) + " RETURN count(DISTINCT x) AS n"),
+}
+HOP3_VISITED_BY_VERTEX = ("MATCH (p:Person)-[:KNOWS]-(m1:Person)-[:KNOWS]-(m2:Person)-[:KNOWS]-(x:Person) "
+                          "WHERE p.id = $id AND m2 <> p AND x <> m1 RETURN count(DISTINCT x) AS n")
+
+
 # EVERY "ORDER BY ... LIMIT" CARRIES A TOTAL ORDER, and it did not until
 # 2026-09-14, when the #88 digests showed what that costs. Three of these five
 # had ties spanning the limit boundary -- dozens of people share an out-degree,

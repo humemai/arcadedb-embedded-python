@@ -152,6 +152,61 @@ def test_mongodb_lookup_local_fields_are_field_names_never_expressions():
         assert lk["localField"] in ("f", "f2"), lk
 
 
+# ---- engines whose MATCH may walk one relationship twice (found by the SF1-slice reads against the DuckDB reference) ----------
+
+def test_the_vertex_exclusion_spelling_changes_only_the_chains_and_is_used_by_exactly_the_engines_that_need_it():
+    base, by_vertex = G.OLTP_READS, G.OLTP_READS_BY_VERTEX
+    assert by_vertex["point"] == base["point"] and by_vertex["hop1"] == base["hop1"]      # one relationship: nothing to repeat
+    assert "fof <> p" in by_vertex["hop2"]
+    assert "m2 <> p" in by_vertex["hop3f"] and "x <> m1" in by_vertex["hop3f"] and f"x.age > {G.HOP3F_MIN_AGE}" in by_vertex["hop3f"]
+    assert "m2 <> p" in G.HOP3_VISITED_BY_VERTEX and "x <> m1" in G.HOP3_VISITED_BY_VERTEX and "age" not in G.HOP3_VISITED_BY_VERTEX
+    needing = {c.__name__ for c in vars(L).values()
+               if isinstance(c, type) and issubclass(c, L.Base) and getattr(c, "REPEATS_RELATIONSHIPS", False)}
+    assert needing == {"FalkorGraph", "LadybugGraph"}
+
+
+def test_a_repeating_engine_is_sent_the_vertex_exclusion_text_and_the_others_the_standard_one():
+    seen = []
+
+    class _Probe(L.Base):
+        name = "probe"
+        def run_cypher(self, text, params=None):
+            seen.append(text)
+            return []
+
+    class _Repeats(_Probe):
+        REPEATS_RELATIONSHIPS = True
+
+    for cls, texts, visited in ((_Probe, G.OLTP_READS, G.HOP3_VISITED), (_Repeats, G.OLTP_READS_BY_VERTEX, G.HOP3_VISITED_BY_VERTEX)):
+        seen.clear()
+        a = object.__new__(cls)
+        for op in texts:
+            a.run_read(op, 1)
+        a.run_visited(1)
+        assert seen == [texts[op] for op in texts] + [visited]
+
+
+def test_ladybugdb_counts_the_start_person_as_its_own_friend_of_a_friend_without_the_exclusion(tmp_path):
+    """The engine's own behaviour, on four persons: 1-2, 2-3, 3-4, 2-4. The friends of friends of 1 are 3 and 4. LadybugDB's chain
+    of relationships walks 1-2 and back along 1-2, so the standard text counts 1 as well (3); the exclusion text answers 2."""
+    lb = pytest.importorskip("ladybug", reason="add --with ladybug==0.21.2 to run the LadybugDB case")
+    db = lb.Database(str(tmp_path / "g"))
+    cx = lb.Connection(db)
+    cx.execute("CREATE NODE TABLE Person(id INT64 PRIMARY KEY, name STRING, age INT64, city STRING)")
+    cx.execute("CREATE REL TABLE KNOWS(FROM Person TO Person, since INT64)")
+    for i, a in ((1, 50), (2, 45), (3, 50), (4, 50)):
+        cx.execute(f"CREATE (:Person {{id: {i}, name: 'p{i}', age: {a}, city: 'c'}})")
+    for a, b in ((1, 2), (2, 3), (3, 4), (2, 4)):
+        cx.execute(f"MATCH (x:Person {{id: {a}}}), (y:Person {{id: {b}}}) CREATE (x)-[:KNOWS {{since: 2000}}]->(y)")
+
+    def run(q):
+        return [tuple(r) for r in cx.execute(q, {"id": 1}).get_all()]
+    assert run(G.OLTP_READS["hop2"]) == [(3,)]                    # the defect: p is its own friend of a friend
+    assert run(G.OLTP_READS_BY_VERTEX["hop2"]) == [(2,)]
+    assert run(G.OLTP_READS_BY_VERTEX["hop3f"]) == [(2,)]
+    assert run(G.HOP3_VISITED_BY_VERTEX) == [(2,)]
+
+
 def _walks(edges, start, k):
     """Every walk of k pairwise-distinct friendships from `start` (Cypher's relationship isomorphism), as the list of far ends."""
     adj = {}
