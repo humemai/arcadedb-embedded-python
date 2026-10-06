@@ -1391,6 +1391,15 @@ def check_phase_split(rows):
     return bad
 
 
+def _durability_classes_required(lane, backend):
+    """The classes a timed write cell of this arm must exist in: both (DECISIONS #90), except for an arm that
+    runner.ARM_RUNS declares runs one class of this lane (CAMPAIGN row 69: the image-defaults arm runs the relaxed
+    class only, so asking it for a strict cell would fail the landing of the last stage for a cell nobody queued)."""
+    import runner
+    declared = (runner.ARM_RUNS.get(backend, {}).get(lane) or {}).get("durability")
+    return {declared} if declared in ("relaxed", "strict") else {"relaxed", "strict"}
+
+
 def check_durability(rows):
     import bench_common
     print("=== F10: durability class and instrument per table ===")
@@ -1452,7 +1461,7 @@ def check_durability(rows):
             continue
         if "no-setting" in classes:
             continue
-        missing = {"relaxed", "strict"} - classes
+        missing = _durability_classes_required(lane, backend) - classes
         if missing:
             print(f"  FAIL {lane} {scale} {workload} {backend}: a timed write cell "
                   f"in only the {sorted(classes)} class; #90 runs it at both "
