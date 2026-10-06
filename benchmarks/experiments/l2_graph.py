@@ -1330,48 +1330,59 @@ class DuckpgqGraph(Base):
     # every engine stays on the same query-plan surface. Every edge binds a
     # variable (DuckPGQ requires it); the COLUMNS clause names the answer in the
     # declared digest order (graph_common.READ_DIGEST).
+    #
+    # UNDIRECTED (CAMPAIGN section 7 row 56, graph_common.KNOWS_DIRECTION): every
+    # `-[k:knows]-` is SQL/PGQ's undirected edge pattern, over the one stored edge
+    # per friendship. SQL/PGQ walks do not forbid reusing an edge the way Cypher's
+    # relationship isomorphism does, so the walks the question excludes are written
+    # out, on the vertices (a friendship is not walked back along itself: the 2nd
+    # hop does not return to the start, the 3rd does not return to the 1st):
+    # `fof.id <> p.id`, and `m2.id <> p.id AND x.id <> m1.id`. In a simple graph,
+    # which LDBC's knows is (one row per friendship), that is exactly the
+    # distinct-edges rule; a corpus holding both a->b and b->a would differ.
     READS = {
         "point": ("SELECT name, age FROM GRAPH_TABLE (pg "
                   "MATCH (p:Person WHERE p.id = {id}) "
                   "COLUMNS (p.name AS name, p.age AS age))"),
         "hop1": ("SELECT count(*) AS n, avg(fage) AS a FROM GRAPH_TABLE (pg "
-                 "MATCH (p:Person WHERE p.id = {id})-[k:knows]->(f:Person) "
+                 "MATCH (p:Person WHERE p.id = {id})-[k:knows]-(f:Person) "
                  "COLUMNS (f.age AS fage))"),
         "hop2": ("SELECT count(DISTINCT fof) AS n FROM GRAPH_TABLE (pg "
-                 "MATCH (p:Person WHERE p.id = {id})-[k1:knows]->(m:Person)"
-                 "-[k2:knows]->(fof:Person) COLUMNS (fof.id AS fof))"),
+                 "MATCH (p:Person WHERE p.id = {id})-[k1:knows]-(m:Person)"
+                 "-[k2:knows]-(fof:Person) WHERE fof.id <> p.id COLUMNS (fof.id AS fof))"),
         "hop3f": ("SELECT count(DISTINCT x) AS n FROM GRAPH_TABLE (pg "
-                  "MATCH (p:Person WHERE p.id = {id})-[k1:knows]->(m1:Person)"
-                  "-[k2:knows]->(m2:Person)-[k3:knows]->(x:Person WHERE x.age > " + str(HOP3F_MIN_AGE) + ") "
-                  "COLUMNS (x.id AS x))"),
+                  "MATCH (p:Person WHERE p.id = {id})-[k1:knows]-(m1:Person)"
+                  "-[k2:knows]-(m2:Person)-[k3:knows]-(x:Person WHERE x.age > " + str(HOP3F_MIN_AGE) + ") "
+                  "WHERE m2.id <> p.id AND x.id <> m1.id COLUMNS (x.id AS x))"),
     }
     VISITED = ("SELECT count(DISTINCT x) AS n FROM GRAPH_TABLE (pg "
-               "MATCH (p:Person WHERE p.id = {id})-[k1:knows]->(m1:Person)"
-               "-[k2:knows]->(m2:Person)-[k3:knows]->(x:Person) COLUMNS (x.id AS x))")
+               "MATCH (p:Person WHERE p.id = {id})-[k1:knows]-(m1:Person)"
+               "-[k2:knows]-(m2:Person)-[k3:knows]-(x:Person) "
+               "WHERE m2.id <> p.id AND x.id <> m1.id COLUMNS (x.id AS x))")
     OLAP = {
         "top_degree": ("SELECT id, count(*) AS d FROM GRAPH_TABLE (pg "
-                       "MATCH (p:Person)-[k:knows]->(f:Person) COLUMNS (p.id AS id)) "
+                       "MATCH (p:Person)-[k:knows]-(f:Person) COLUMNS (p.id AS id)) "
                        "GROUP BY id ORDER BY d DESC, id ASC LIMIT 10"),
         "same_city_edges": ("SELECT c, count(*) AS n FROM GRAPH_TABLE (pg "
-                            "MATCH (a:Person)-[k:knows]->(b:Person) WHERE a.city = b.city "
+                            "MATCH (a:Person)-[k:knows]-(b:Person) WHERE a.city = b.city AND a.id < b.id "
                             "COLUMNS (a.city AS c)) GROUP BY c ORDER BY n DESC, c ASC LIMIT 10"),
         "friend_age_by_city": ("SELECT c, avg(fage) AS a, count(*) AS n FROM GRAPH_TABLE (pg "
-                               "MATCH (p:Person)-[k:knows]->(f:Person) "
+                               "MATCH (p:Person)-[k:knows]-(f:Person) "
                                "COLUMNS (p.city AS c, f.age AS fage)) "
                                "GROUP BY c ORDER BY n DESC, c ASC LIMIT 10"),
-        # Degree distribution: the per-person out-degree, then a histogram over
-        # it. Two levels, the inner GROUP BY over the MATCH's one-row-per-edge
-        # and the outer over the degrees; persons with no outgoing KNOWS are
-        # outside the MATCH and so outside the histogram, matching the Cypher.
+        # Degree distribution: the per-person friend count, then a histogram over
+        # it. Two levels, the inner GROUP BY over the MATCH's one-row-per-friendship-
+        # end and the outer over the degrees; persons with no friends are outside
+        # the MATCH and so outside the histogram, matching the Cypher.
         "degree_dist": ("SELECT deg, count(*) AS n FROM (SELECT id, count(*) AS deg "
-                        "FROM GRAPH_TABLE (pg MATCH (p:Person)-[k:knows]->(f:Person) "
+                        "FROM GRAPH_TABLE (pg MATCH (p:Person)-[k:knows]-(f:Person) "
                         "COLUMNS (p.id AS id)) GROUP BY id) GROUP BY deg ORDER BY deg"),
-        # The triangle count as the 3-cycle pattern, closing back on `a`; the
-        # id ordering keeps `a` the smallest of the three so each triangle is
-        # counted once, the same rule the Cypher and every other adapter apply.
+        # The triangle count as the undirected 3-cycle pattern, closing back on
+        # `a`; the id ordering a < b < c keeps one of each triangle's six walks,
+        # the same rule the Cypher and every other adapter apply.
         "triangles": ("SELECT count(*) AS n FROM GRAPH_TABLE (pg "
-                      "MATCH (a:Person)-[k1:knows]->(b:Person)-[k2:knows]->(c:Person)"
-                      "-[k3:knows]->(a:Person) WHERE a.id < b.id AND a.id < c.id "
+                      "MATCH (a:Person)-[k1:knows]-(b:Person)-[k2:knows]-(c:Person)"
+                      "-[k3:knows]-(a:Person) WHERE a.id < b.id AND b.id < c.id "
                       "COLUMNS (a.id AS aid, b.id AS bid, c.id AS cid))"),
     }
     # Nothing on this lane is unexpressible in SQL/PGQ. The hook stays, and
@@ -1976,13 +1987,35 @@ class SurrealGraph(Base):
     # BOUND VALUES (DECISIONS #116 item 2): `$vars` with RecordID objects, so
     # record-id addressing is kept and nothing is written into the SurrealQL
     # text (same answers as the pasted form, laptop 2026-09-26).
+    #
+    # UNDIRECTED (CAMPAIGN section 7 row 56, graph_common.KNOWS_DIRECTION). A
+    # person's friends are the far end of every friendship touching them, which in
+    # SurrealQL is the out-neighbours concatenated with the in-neighbours
+    # (`->knows->person` and `<-knows<-person`; `<->knows<->person` is NOT that
+    # list, see the LSQB note below). One friendship is one stored edge, so it
+    # appears once. A multi-hop walk maps the same expression over the previous
+    # hop's records in a CLOSURE (`array::map` keeps path multiplicity on core
+    # 2.3.10 and on 3.2.4; a traversal off a parenthesised array does not on
+    # 3.2.4), and Cypher's rule that a friendship is not walked back along itself
+    # is written out on the vertices: the 2nd hop does not return to the start,
+    # the 3rd does not return to the 1st. Exact on a simple graph, which LDBC's
+    # knows is. The reads count DISTINCT ends, so path multiplicity drops out.
+    _FRIENDS = "array::concat(->knows->person, <-knows<-person)"
+    # walks p-a-b: b is not p; and p-a-b-x: x is not a.
+    _HOP2 = ("array::complement(array::flatten(array::map(" + _FRIENDS + ", |$a| "
+             + "array::concat($a->knows->person, $a<-knows<-person))), [$p])")
+    _HOP3 = ("array::flatten(array::map(" + _FRIENDS + ", |$a| array::flatten(array::map("
+             + "array::complement(array::concat($a->knows->person, $a<-knows<-person), [$p]), |$b| "
+             + "array::complement(array::concat($b->knows->person, $b<-knows<-person), [$a])))))")
     READS = {
         "point": "SELECT name, age FROM ONLY $p",
-        "hop1": "SELECT count(->knows->person) AS n, math::mean(->knows->person.age) AS a FROM ONLY $p",
-        "hop2": "SELECT array::len(array::distinct(->knows->person->knows->person)) AS n FROM ONLY $p",
-        "hop3f": ("SELECT array::len(array::distinct(->knows->person->knows->person->knows->(person WHERE age > " + str(HOP3F_MIN_AGE) + "))) "
-                  "AS n FROM ONLY $p"),
+        "hop1": ("SELECT array::len(" + _FRIENDS + ") AS n, "
+                 "math::mean(array::concat(->knows->person.age, <-knows<-person.age)) AS a FROM ONLY $p"),
+        "hop2": "SELECT array::len(array::distinct(" + _HOP2 + ")) AS n FROM ONLY $p",
+        "hop3f": ("SELECT array::len(array::distinct(array::filter(" + _HOP3 + ", |$x| $x.age > "
+                  + str(HOP3F_MIN_AGE) + "))) AS n FROM ONLY $p"),
     }
+    VISITED = "SELECT array::len(array::distinct(" + _HOP3 + ")) AS n FROM ONLY $p"
 
     @staticmethod
     def _rid(i):
@@ -1993,9 +2026,7 @@ class SurrealGraph(Base):
         return self._rows(self.db.query(self.READS[op], {"p": self._rid(pid)}))
 
     def run_visited(self, pid):
-        return self._rows(self.db.query(
-            "SELECT array::len(array::distinct(->knows->person->knows->person->knows->person)) AS n "
-            "FROM ONLY $p", {"p": self._rid(pid)}))
+        return self._rows(self.db.query(self.VISITED, {"p": self._rid(pid)}))
 
     def run_update(self, new_id):
         self.db.query("UPDATE $p SET age = $a", {"p": self._rid(new_id), "a": UPDATE_AGE})
@@ -2022,14 +2053,24 @@ class SurrealGraph(Base):
         self.db.query("BEGIN; DELETE $n<->knows; DELETE $n; COMMIT;", {"n": self._rid(new_id)})
 
     OLAP = {
-        "top_degree": "SELECT pid, count(->knows) AS d FROM person ORDER BY d DESC, pid ASC LIMIT 10",
+        # UNDIRECTED (row 56): a friendship counts for both of its people.
+        "top_degree": "SELECT pid, count(->knows) + count(<-knows) AS d FROM person ORDER BY d DESC, pid ASC LIMIT 10",
         # subquery form: on core 2.3.10 ORDER BY after GROUP BY sorted by the group
-        # key, not n (laptop smoke, 2026-09-11); 3.2.4 accepts both forms
+        # key, not n (laptop smoke, 2026-09-11); 3.2.4 accepts both forms.
+        # One row of `knows` is one friendship, which is what a.id < b.id asks for:
+        # the stored direction does not matter, so the scan is unchanged.
         "same_city_edges": "SELECT * FROM (SELECT in.city AS c, count() AS n FROM knows WHERE in.city = out.city GROUP BY c) ORDER BY n DESC, c ASC LIMIT 10",
-        "friend_age_by_city": "SELECT * FROM (SELECT in.city AS c, math::mean(out.age) AS a, count() AS n FROM knows GROUP BY c) ORDER BY n DESC, c ASC LIMIT 10",
+        # Per person (their friends' count and age sum), then per city: the mean is
+        # the sum over the count, the same number the Cypher's avg gives, from both
+        # ends of every friendship.
+        "friend_age_by_city": ("SELECT * FROM (SELECT c, S / N AS a, N AS n FROM (SELECT c, "
+                               "math::sum(s) AS S, math::sum(n) AS N FROM (SELECT city AS c, "
+                               "array::len(array::concat(->knows->person, <-knows<-person)) AS n, "
+                               "math::sum(array::concat(->knows->person.age, <-knows<-person.age)) AS s "
+                               "FROM person) GROUP BY c) WHERE N > 0) ORDER BY n DESC, c ASC LIMIT 10"),
         # 2026-10 (#82b). The degree distribution is a group-by over a computed
-        # out-degree; degree zero is excluded to match the Cypher MATCH, which
-        # does not reach a person with no outgoing KNOWS.
+        # friend count; degree zero is excluded to match the Cypher MATCH, which
+        # does not reach a person with no friends.
         # TWO SUBQUERIES, not one GROUP BY on a computed alias. The one-level
         # form `SELECT count(->knows) AS deg, count() AS n FROM person GROUP BY
         # deg` did NOT group: it returned 2,000 rows, one per person, each
@@ -2039,7 +2080,7 @@ class SurrealGraph(Base):
         # the outer one, so the group key is a plain field by the time GROUP BY
         # sees it.
         "degree_dist": ("SELECT * FROM (SELECT deg, count() AS n FROM "
-                        "(SELECT count(->knows) AS deg FROM person) WHERE deg > 0 "
+                        "(SELECT count(->knows) + count(<-knows) AS deg FROM person) WHERE deg > 0 "
                         "GROUP BY deg) ORDER BY deg"),
         # THE TRIANGLE COUNT, WHICH THIS ADAPTER DECLARED UNEXPRESSIBLE UNTIL
         # 2026-09-14. The old reason -- "arrow traversal returns a path's
@@ -2051,21 +2092,19 @@ class SurrealGraph(Base):
         # have. Same reading as the degree distribution (#82b): a first failure
         # is evidence about our fluency, not about the engine.
         #
-        # WHY IT COUNTS EACH TRIANGLE ONCE, which is the whole of the question.
-        # The Cypher is MATCH (a)->(b)->(c)->(a) WHERE a.id < b.id AND
-        # a.id < c.id, so `a` is the smallest id of the three and exactly one
-        # of a directed 3-cycle's three rotations survives. Here one row of
-        # `knows` IS the (a -> b) leg: `in` is a, `out` is b, `WHERE in < out`
-        # is a.id < b.id, and the third vertex c is any record that b points at
-        # and that points at a -- that is N+(b) INTERSECT N-(a), spelled
-        # `out->knows.out` and `in<-knows.in`. `|$c| $c > in` is a.id < c.id.
-        # So each row contributes the triangles whose smallest-id vertex is its
-        # own `in`, and summing over the rows counts every triangle once.
-        # Verified against the harness's own Python triangle enumeration on the
-        # shared generator at 200/300/600/1000/2000 persons, on core 2.3.10 and
-        # on the 3.2.4 server: 1836 / 2452 / 2999 / 2469 / 2776, exact on every
-        # one, which is what DECISIONS #88's digest then checks against Neo4j,
-        # ArcadeDB, LadybugDB and ArangoDB.
+        # WHY IT COUNTS EACH TRIANGLE ONCE (UNDIRECTED, CAMPAIGN section 7 row 56).
+        # The Cypher is MATCH (a)-[:KNOWS]-(b)-[:KNOWS]-(c)-[:KNOWS]-(a) WHERE
+        # a.id < b.id AND b.id < c.id, so a triangle is counted at its two
+        # smallest ids. One row of `knows` IS a friendship (u, v), stored in
+        # either direction: the third person is any c that is a friend of BOTH
+        # ends and has a larger id than both, N(u) INTERSECT N(v) above max(u, v),
+        # where N(x) is `x->knows.out` joined with `x<-knows.in`. A triangle
+        # {a < b < c} has three friendships and is counted only from (a, b): from
+        # (a, c) and (b, c) no common friend exceeds c. So summing over every row
+        # counts each triangle once whatever way its edges are stored. (Through
+        # October this was the directed 3-cycle `WHERE in < out` with `$c > in`,
+        # which a graph stored from the smaller id to the larger cannot hold:
+        # 0 on every engine, BUGS F169.)
         #
         # THREE CONSTRUCTS, EACH FROM THE DOCUMENTATION, each of which the
         # first attempt got wrong:
@@ -2075,7 +2114,7 @@ class SurrealGraph(Base):
         #  - array::intersect(a, b) keeps a's duplicates and needs no closure
         #    (surrealdb.com/docs/surrealql/functions/database/array).
         #  - array::filter's closure CAPTURES the fields of the row being
-        #    projected, which is how `$c > in` reaches the edge's own `in`.
+        #    projected, which is how `$c > ...in` reaches the edge's own `in`.
         #    `$parent` does NOT: inside an idiom filter or a closure it
         #    resolves to nothing and the comparison silently passes, which is
         #    the bug that made the first ordered attempt return 3,656 for a
@@ -2086,20 +2125,17 @@ class SurrealGraph(Base):
         # the same set and both return the same count, but `->knows->person`
         # fetches every neighbour's whole record while `->knows.out` reads the
         # destination id off the edge. On core 2.3.10 that is 16.4 s against
-        # 85.9 s at 1,000 persons (laptop, 2026-09-14). This form costs about
-        # |E|^1.1 on the shared generator -- 38.1 s over 40,833 edges, 227.0 s
-        # over 206,713 -- so SF10's roughly 1.9M edges EXTRAPOLATE to a cold
-        # pass of tens of minutes, and the arrow form to several times that.
-        # Extrapolated, not measured: no SF10 cell has run since this query
-        # existed, and the extrapolation crosses a corpus change as well as a
-        # size one, since a triangle count's real cost is sum(deg(u)*deg(v))
-        # over the edges and LDBC's degree distribution is not the
-        # generator's. The 3.2.4 server inverts the spelling preference, and
-        # its subclass overrides this entry for that reason.
+        # 85.9 s at 1,000 persons (laptop, 2026-09-14, the directed form). The
+        # 3.2.4 server inverts the spelling preference, and its subclass
+        # overrides this entry for that reason. Extrapolated, not measured, for
+        # SF10: the cost of a triangle count is sum(deg(u)*deg(v)) over the
+        # edges and LDBC's degree distribution is not the generator's.
         "triangles": ("SELECT math::sum(n) AS n FROM ("
                       "SELECT array::len(array::filter(array::intersect("
-                      "out->knows.out, in<-knows.in), |$c| $c > in)) AS n "
-                      "FROM knows WHERE in < out) GROUP ALL"),
+                      "array::concat(in->knows.out, in<-knows.in), "
+                      "array::concat(out->knows.out, out<-knows.in)), "
+                      "|$c| $c > (IF in < out THEN out ELSE in END))) AS n "
+                      "FROM knows) GROUP ALL"),
     }
     # Nothing on this lane is unexpressible in SurrealQL any more. The hook
     # stays, and stays empty, because DECISIONS #88 is about declaring an
@@ -2284,8 +2320,10 @@ class SurrealGraphServer(SurrealGraph):
     OLAP = dict(SurrealGraph.OLAP,
                 triangles=("SELECT math::sum(n) AS n FROM ("
                            "SELECT array::len(array::filter(array::intersect("
-                           "out->knows->person, in<-knows<-person), |$c| $c > in)) AS n "
-                           "FROM knows WHERE in < out) GROUP ALL"))
+                           "array::concat(in->knows->person, in<-knows<-person), "
+                           "array::concat(out->knows->person, out<-knows<-person)), "
+                           "|$c| $c > (IF in < out THEN out ELSE in END))) AS n "
+                           "FROM knows) GROUP ALL"))
 
     # THE SERVED 3.2.4 SPELLS THREE OF THE NINE DIFFERENTLY (2026-09-18,
     # DECISIONS #93 applied to LSQB), each proven against the reference on the
@@ -2420,36 +2458,44 @@ class ArangoGraph(Base):
                 ecolls[ec].import_bulk(buf)
         self.msg_counts = {"msg_vertices": vcount, "msg_edges": ecount}
 
+    # UNDIRECTED (CAMPAIGN section 7 row 56, graph_common.KNOWS_DIRECTION): every
+    # traversal is `ANY`, over the one stored edge per friendship. AQL's default
+    # `uniqueEdges: "path"` is Cypher's relationship isomorphism (a friendship is
+    # not walked back along itself), so the multi-hop reads need nothing written
+    # out; each friendship counts once per walk, whichever way it is stored.
     READS = {
         "point": "FOR p IN person FILTER p._key == @k RETURN {name: p.name, age: p.age}",
-        "hop1": ("FOR f IN 1..1 OUTBOUND CONCAT('person/', @k) knows "
+        "hop1": ("FOR f IN 1..1 ANY CONCAT('person/', @k) knows "
                  "COLLECT AGGREGATE n = COUNT(1), a = AVG(f.age) RETURN {n, a}"),
         # DISTINCT at depth two, like count(DISTINCT fof): the default path
         # uniqueness matches Cypher's relationship isomorphism.
-        "hop2": ("LET s = (FOR v IN 2..2 OUTBOUND CONCAT('person/', @k) knows RETURN DISTINCT v._key) "
+        "hop2": ("LET s = (FOR v IN 2..2 ANY CONCAT('person/', @k) knows RETURN DISTINCT v._key) "
                  "RETURN LENGTH(s)"),
-        "hop3f": ("LET s = (FOR v IN 3..3 OUTBOUND CONCAT('person/', @k) knows FILTER v.age > " + str(HOP3F_MIN_AGE) + " RETURN DISTINCT v._key) "
+        "hop3f": ("LET s = (FOR v IN 3..3 ANY CONCAT('person/', @k) knows FILTER v.age > " + str(HOP3F_MIN_AGE) + " RETURN DISTINCT v._key) "
                   "RETURN LENGTH(s)"),
     }
-    VISITED = ("LET s = (FOR v IN 3..3 OUTBOUND CONCAT('person/', @k) knows RETURN DISTINCT v._key) "
+    VISITED = ("LET s = (FOR v IN 3..3 ANY CONCAT('person/', @k) knows RETURN DISTINCT v._key) "
                "RETURN LENGTH(s)")
     OLAP = {
-        "top_degree": ("FOR p IN person FOR f IN 1..1 OUTBOUND p knows "
+        "top_degree": ("FOR p IN person FOR f IN 1..1 ANY p knows "
                        "COLLECT id = p.id WITH COUNT INTO d SORT d DESC, id ASC LIMIT 10 RETURN {id, d}"),
-        "same_city_edges": ("FOR a IN person FOR b IN 1..1 OUTBOUND a knows FILTER a.city == b.city "
+        # One row per friendship: the pair is ordered (a.id < b.id) so ANY counts it once.
+        "same_city_edges": ("FOR a IN person FOR b IN 1..1 ANY a knows FILTER a.city == b.city AND a.id < b.id "
                             "COLLECT c = a.city WITH COUNT INTO n SORT n DESC, c ASC LIMIT 10 RETURN {c, n}"),
-        "friend_age_by_city": ("FOR p IN person FOR f IN 1..1 OUTBOUND p knows "
+        "friend_age_by_city": ("FOR p IN person FOR f IN 1..1 ANY p knows "
                                "COLLECT c = p.city AGGREGATE a = AVG(f.age), n = COUNT(1) "
                                "SORT n DESC, c ASC LIMIT 10 RETURN {c, a, n}"),
         # 2026-10 (#82b), the same two questions in AQL. degree zero is filtered
         # out to match the Cypher MATCH.
-        "degree_dist": ("FOR p IN person LET d = LENGTH(FOR f IN 1..1 OUTBOUND p knows RETURN 1) "
+        "degree_dist": ("FOR p IN person LET d = LENGTH(FOR f IN 1..1 ANY p knows RETURN 1) "
                         "FILTER d > 0 COLLECT deg = d WITH COUNT INTO n SORT deg RETURN {deg, n}"),
+        # a < b < c, so each triangle is counted once of its six walks; the
+        # closing traversal is back to `a`.
         "triangles": ("RETURN {n: LENGTH("
                       "FOR a IN person "
-                      "FOR b IN 1..1 OUTBOUND a knows FILTER b.id > a.id "
-                      "FOR c IN 1..1 OUTBOUND b knows FILTER c.id > a.id "
-                      "FOR d IN 1..1 OUTBOUND c knows FILTER d._key == a._key "
+                      "FOR b IN 1..1 ANY a knows FILTER b.id > a.id "
+                      "FOR c IN 1..1 ANY b knows FILTER c.id > b.id "
+                      "FOR d IN 1..1 ANY c knows FILTER d._key == a._key "
                       "RETURN 1)}"),
     }
 
@@ -2648,54 +2694,34 @@ class MongoGraph(Base):
     turned out to be expressible; what follows is the part that is not
     obvious, and the full account is in COMPARATOR-DIALECTS.md.
 
-    THE MULTI-HOP READS USE $graphLookup (DECISIONS #131 item 2, from the
-    26.10.1 measurement), MongoDB's graph stage, wherever it states the
-    question exactly; until then every hop was a hand-written chained $lookup.
-    The stage walks `knows` breadth first and returns each edge ONCE, at its
-    shortest depth from where it was seeded, which is reachability, while the
-    lane's reads count the ends of paths of an exact length. Where it is
-    seeded therefore decides whether the two agree, and they agree by
-    construction, not by luck on one corpus, in these two spellings:
-
-      two hops (hop2): seeded at the person, maxDepth 1, the edges at depth 1.
-        An edge's depth is the distance from the person to its source; every
-        neighbour is at distance 1 (none at 0, since no person KNOWS itself),
-        so the depth-1 edges are exactly the neighbours' out-edges.
-      three hops (hop3f, the visited probe): seeded at each first edge's end,
-        maxDepth 1, the edges at depth 1, the third edge not the first one
-        again. By the same argument, relative to each first-hop neighbour.
-
-    Seeding three hops at the person instead is NOT the same question: a
-    neighbour that is also two hops away has its edges at depth 1, so paths
-    through it are lost. Measured with `graphlookup_probe` against the chained
-    form over 200 read-set ids: the two spellings above 0 disagreements at two
-    and three hops, with and without the age filter, on the micro corpus and
-    on the LDBC SF1 person slice; seeding at the person 92 of 200 (micro) and
-    12 of 200 (LDBC). Both spellings rely on there being no self-loop, which
-    build() counts, records (`mongodb_knows_self_loops`), and refuses.
-
-    $lookup STAYS where the question is a join rather than a reachability:
-    the one-hop read (an index match on `src` and a join to the friend's
-    `person` document for the age), the far end's age filter on hop3f, the
-    writes, and the analytics, whose fourteen questions are fixed-shape
-    patterns (one-hop joins, a closed triangle, LSQB's labelled chains) that
-    $graphLookup cannot state, since it neither returns paths nor closes a
-    cycle.
+    EVERY QUESTION IS ASKED UNDIRECTED (CAMPAIGN section 7 row 56, DECISIONS #151,
+    graph_common.KNOWS_DIRECTION), over the one stored `knows` document per
+    friendship, which is why the multi-hop reads are chained $lookup stages again.
+    DECISIONS #131 item 2 had moved them to $graphLookup "wherever it states the
+    question exactly": it walks ONE direction of `knows` (connectFromField dst to
+    connectToField src), so it states the directed question exactly and the
+    undirected one only over a second, symmetric copy of the edges, which would
+    change this arm's storage (every other engine keeps one edge per friendship;
+    the full-network tier's `knows_undir` is a copy of that kind, built only for
+    LSQB). So each hop is two indexed $lookups, one on `src` and one on `dst`,
+    and a friendship counts once per walk whichever way it is stored.
 
     RELATIONSHIP UNIQUENESS HAS TO BE WRITTEN OUT. Cypher's MATCH forbids
     reusing the same relationship inside one path and ArangoDB's traversal
-    defaults to the same (uniqueEdges: path); neither a chain of $lookups nor
-    $graphLookup has such a rule. At three hops the only collision this corpus
-    can produce is the first edge reappearing as the third (a->b, b->a, a->b),
-    so hop3f and the three-hop visited probe carry an explicit `$ne` on the
-    edge _id. On the micro corpus the clause changes the answer on 0 of 50
-    ids, because these queries count DISTINCT endpoints and a dropped path
-    almost always has a surviving twin -- which is exactly why it is written
-    out rather than left to luck: the day it matters, it would be a silent
-    over-count against every engine that enforces the rule.
+    defaults to the same (uniqueEdges: path); a chain of $lookups has no such
+    rule, and undirected it matters at every hop (a friendship can be walked back
+    along itself). Each hop therefore drops the edges already on the path by
+    their _id, so the answer is Cypher's even on a corpus holding both a->b and
+    b->a.
+
+    $lookup is also the shape of the one-hop read (an index match on `src` or
+    `dst` and a join to the friend's `person` document for the age), the far
+    end's age filter on hop3f, the writes, and the analytics, whose fourteen
+    questions are fixed-shape patterns (one-hop joins, a closed triangle, LSQB's
+    labelled chains) that $graphLookup cannot state, since it neither returns
+    paths nor closes a cycle.
     """
-    QUERY_LANGUAGE = ("the aggregation pipeline ($graphLookup for the two- and three-hop reads; "
-                      "$lookup for one-hop joins and the analytics)")
+    QUERY_LANGUAGE = "the aggregation pipeline ($lookup joins over both ends of each friendship)"
     name = "mongodb_graph"
 
     def connect(self):
@@ -2726,12 +2752,12 @@ class MongoGraph(Base):
         # dst is the inbound side the triangle count and the delete need.
         self.knows.create_index("src")
         self.knows.create_index("dst")
-        # The $graphLookup spellings below are exact only without self-loops
-        # (see the class docstring); counted on the row and refused.
+        # The undirected hops below are exact only without self-loops (a self-loop is
+        # both ends of one friendship); counted on the row and refused.
         loops = self.knows.count_documents({"$expr": {"$eq": ["$src", "$dst"]}})
         self.row_extra = {**(getattr(self, "row_extra", None) or {}), "mongodb_knows_self_loops": loops}
         if loops:
-            raise RuntimeError(f"mongodb_graph: {loops} KNOWS self-loops; the $graphLookup reads assume none")
+            raise RuntimeError(f"mongodb_graph: {loops} KNOWS self-loops; the undirected reads assume none")
 
     # ---- reads -------------------------------------------------------
     # The multi-hop reads walk `knows` with $graphLookup; a join to `person`
@@ -2754,50 +2780,72 @@ class MongoGraph(Base):
                 {"$match": {"_id": pid}},
                 {"$project": {"_id": 0, "name": 1, "age": 1}}])
         if op == "hop1":
-            rows = self._agg(self.knows, [
-                {"$match": {"src": pid}},
-                {"$lookup": {"from": "person", "localField": "dst",
-                             "foreignField": "_id", "as": "f"}},
-                {"$unwind": "$f"},
-                {"$group": {"_id": None, "n": {"$sum": 1}, "a": {"$avg": "$f.age"}}},
+            rows = self._agg(self.knows, self._first_hop(pid) + [
+                {"$lookup": {"from": "person", "localField": "f", "foreignField": "_id", "as": "fp"}},
+                {"$unwind": "$fp"},
+                {"$group": {"_id": None, "n": {"$sum": 1}, "a": {"$avg": "$fp.age"}}},
                 {"$project": {"_id": 0, "n": 1, "a": 1}}])
             return rows if rows else [{"n": 0, "a": None}]
         if op == "hop2":
-            # Seeded at the person: the depth-1 edges are the neighbours' out-edges.
-            return self._count_or_zero(self._agg(self.person, [
-                {"$match": {"_id": pid}},
-                {"$graphLookup": {"from": "knows", "startWith": "$_id", "connectFromField": "dst",
-                                  "connectToField": "src", "maxDepth": 1, "depthField": "d", "as": "e"}},
-                {"$unwind": "$e"}, {"$match": {"e.d": 1}},
-                {"$group": {"_id": "$e.dst"}},
+            return self._count_or_zero(self._agg(self.knows, self._second_hop(pid) + [
+                {"$group": {"_id": "$f2"}},
                 {"$count": "n"}]))
         if op == "hop3f":
-            return self._count_or_zero(self._agg(self.knows, self._three_hops(pid) + [
-                {"$lookup": {"from": "person", "localField": "e3.dst",
+            return self._count_or_zero(self._agg(self.knows, self._third_hop(pid) + [
+                {"$group": {"_id": "$f3"}},
+                {"$lookup": {"from": "person", "localField": "_id",
                              "foreignField": "_id", "as": "x"}},
                 {"$unwind": "$x"},
                 {"$match": {"x.age": {"$gt": HOP3F_MIN_AGE}}},
-                {"$group": {"_id": "$x._id"}},
                 {"$count": "n"}]))
         raise KeyError(op)
 
+    # THE UNDIRECTED HOPS. A friendship is one `knows` document, so a person's
+    # edges are the ones with the person on either end (an $or over the two
+    # indexes), and the friend is the other end. Each later hop is the same
+    # two-index join from the friend, minus the edges already on the path.
     @staticmethod
-    def _three_hops(pid):
-        """The third edges of every three-hop path from `pid`, as `e3`: one
-        $graphLookup per first edge, seeded at its end (see the docstring)."""
+    def _first_hop(pid):
+        """One document per friendship of `pid`: `e1` its _id, `f` the friend."""
         return [
-            {"$match": {"src": pid}},
-            {"$graphLookup": {"from": "knows", "startWith": "$dst", "connectFromField": "dst",
-                              "connectToField": "src", "maxDepth": 1, "depthField": "d", "as": "e3"}},
-            {"$unwind": "$e3"}, {"$match": {"e3.d": 1}},
-            # Cypher's relationship isomorphism, written out: the third edge
-            # may not be the first one again (a->b, b->a, a->b).
-            {"$match": {"$expr": {"$ne": ["$e3._id", "$_id"]}}},
+            {"$match": {"$or": [{"src": pid}, {"dst": pid}]}},
+            {"$project": {"e1": "$_id", "f": {"$cond": [{"$eq": ["$src", pid]}, "$dst", "$src"]}}},
         ]
 
+    @staticmethod
+    def _step(frm, edges_seen, into, carry):
+        """Join the friend `frm` to its edges on both ends, drop the ones in `edges_seen`
+        (field paths of _ids already walked), and keep the OTHER end as `into` and the edge as
+        `<into>_e`, beside the `carry` fields of the walk so far. One output document per
+        (walk so far, next edge)."""
+        keep = {"$not": {"$in": ["$$this._id", edges_seen]}}
+        return [
+            {"$lookup": {"from": "knows", "localField": frm, "foreignField": "src", "as": "_o"}},
+            {"$lookup": {"from": "knows", "localField": frm, "foreignField": "dst", "as": "_i"}},
+            {"$project": {**{c: 1 for c in carry}, "nxt": {"$concatArrays": [
+                {"$map": {"input": {"$filter": {"input": "$_o", "cond": keep}},
+                          "in": {"v": "$$this.dst", "e": "$$this._id"}}},
+                {"$map": {"input": {"$filter": {"input": "$_i", "cond": keep}},
+                          "in": {"v": "$$this.src", "e": "$$this._id"}}}]}}},
+            {"$unwind": "$nxt"},
+            {"$project": {**{c: 1 for c in carry}, into: "$nxt.v", into + "_e": "$nxt.e"}},
+        ]
+
+    @staticmethod
+    def _second_hop(pid):
+        """Every walk of two distinct friendships from `pid`: `f2` is its far end."""
+        return (MongoGraph._first_hop(pid)
+                + MongoGraph._step("$f", ["$e1"], "f2", ["e1", "f"]))
+
+    @staticmethod
+    def _third_hop(pid):
+        """Every walk of three distinct friendships from `pid`: `f3` is its far end."""
+        return (MongoGraph._second_hop(pid)
+                + MongoGraph._step("$f2", ["$e1", "$f2_e"], "f3", ["e1", "f", "f2", "f2_e"]))
+
     def run_visited(self, pid):
-        return self._count_or_zero(self._agg(self.knows, self._three_hops(pid) + [
-            {"$group": {"_id": "$e3.dst"}},
+        return self._count_or_zero(self._agg(self.knows, self._third_hop(pid) + [
+            {"$group": {"_id": "$f3"}},
             {"$count": "n"}]))
 
     # ---- writes ------------------------------------------------------
@@ -2846,11 +2894,17 @@ class MongoGraph(Base):
             {"$project": {"_id": 0, "id": "$_id", "name": 1, "age": 1, "city": 1}}])
 
     # ---- analytics ---------------------------------------------------
+    # UNDIRECTED (row 56). A friendship is one `knows` document and counts for BOTH
+    # of its people, so the per-person questions emit each document twice (once
+    # from each end) rather than reading a second, symmetric copy of the edges.
+    _BOTH_ENDS = [{"$project": {"v": ["$src", "$dst"]}}, {"$unwind": "$v"}]
     OLAP = {
-        "top_degree": ("knows", [
-            {"$group": {"_id": "$src", "d": {"$sum": 1}}},
+        "top_degree": ("knows", _BOTH_ENDS + [
+            {"$group": {"_id": "$v", "d": {"$sum": 1}}},
             {"$sort": {"d": -1, "_id": 1}}, {"$limit": 10},
             {"$project": {"_id": 0, "id": "$_id", "d": 1}}]),
+        # One document per friendship already, which is what a.id < b.id asks
+        # for: the stored direction does not matter, so the scan is unchanged.
         "same_city_edges": ("knows", [
             {"$lookup": {"from": "person", "localField": "src", "foreignField": "_id", "as": "a"}},
             {"$unwind": "$a"},
@@ -2860,34 +2914,42 @@ class MongoGraph(Base):
             {"$group": {"_id": "$a.city", "n": {"$sum": 1}}},
             {"$sort": {"n": -1, "_id": 1}}, {"$limit": 10},
             {"$project": {"_id": 0, "c": "$_id", "n": 1}}]),
+        # Each friendship is a (person, friend) pair from both ends.
         "friend_age_by_city": ("knows", [
             {"$lookup": {"from": "person", "localField": "src", "foreignField": "_id", "as": "a"}},
             {"$unwind": "$a"},
             {"$lookup": {"from": "person", "localField": "dst", "foreignField": "_id", "as": "f"}},
             {"$unwind": "$f"},
-            {"$group": {"_id": "$a.city", "a": {"$avg": "$f.age"}, "n": {"$sum": 1}}},
+            {"$project": {"r": [{"c": "$a.city", "age": "$f.age"}, {"c": "$f.city", "age": "$a.age"}]}},
+            {"$unwind": "$r"},
+            {"$group": {"_id": "$r.c", "a": {"$avg": "$r.age"}, "n": {"$sum": 1}}},
             {"$sort": {"n": -1, "_id": 1}}, {"$limit": 10},
             {"$project": {"_id": 0, "c": "$_id", "a": 1, "n": 1}}]),
-        "degree_dist": ("knows", [
-            {"$group": {"_id": "$src", "d": {"$sum": 1}}},
+        "degree_dist": ("knows", _BOTH_ENDS + [
+            {"$group": {"_id": "$v", "d": {"$sum": 1}}},
             {"$group": {"_id": "$d", "n": {"$sum": 1}}},
             {"$sort": {"_id": 1}},
             {"$project": {"_id": 0, "deg": "$_id", "n": 1}}]),
-        # THE SET-INTERSECTION FORM, not a triple $unwind. One row of `knows`
-        # is the a->b leg with a < b; N+(b) and N-(a) are two indexed
-        # $lookups, and the third vertex is any c in both with c > a, so each
-        # triangle is counted once at its smallest-id vertex. The same shape
-        # SurrealDB's triangle count uses, and for the same reason: the
-        # nested-unwind spelling materialises every three-path.
+        # THE SET-INTERSECTION FORM, not a triple $unwind. One document of `knows`
+        # is a friendship (lo, hi); N(lo) and N(hi) are each two indexed $lookups
+        # (the friendships touching the person, on either end), and the third
+        # person is any c in both with c > hi, so each triangle is counted once
+        # at its (a, b) friendship, a < b < c, whichever way the three are stored.
+        # The same shape SurrealDB's triangle count uses, and for the same reason:
+        # the nested-unwind spelling materialises every three-path.
         "triangles": ("knows", [
-            {"$match": {"$expr": {"$lt": ["$src", "$dst"]}}},
-            {"$lookup": {"from": "knows", "localField": "dst", "foreignField": "src", "as": "bc"}},
-            {"$lookup": {"from": "knows", "localField": "src", "foreignField": "dst", "as": "ca"}},
-            {"$project": {"n": {"$size": {"$filter": {
+            {"$project": {"lo": {"$min": ["$src", "$dst"]}, "hi": {"$max": ["$src", "$dst"]}}},
+            {"$lookup": {"from": "knows", "localField": "lo", "foreignField": "src", "as": "lo_o"}},
+            {"$lookup": {"from": "knows", "localField": "lo", "foreignField": "dst", "as": "lo_i"}},
+            {"$lookup": {"from": "knows", "localField": "hi", "foreignField": "src", "as": "hi_o"}},
+            {"$lookup": {"from": "knows", "localField": "hi", "foreignField": "dst", "as": "hi_i"}},
+            {"$project": {"hi": 1, "n": {"$size": {"$filter": {
                 "input": {"$setIntersection": [
-                    {"$map": {"input": "$bc", "in": "$$this.dst"}},
-                    {"$map": {"input": "$ca", "in": "$$this.src"}}]},
-                "cond": {"$gt": ["$$this", "$src"]}}}}}},
+                    {"$concatArrays": [{"$map": {"input": "$lo_o", "in": "$$this.dst"}},
+                                       {"$map": {"input": "$lo_i", "in": "$$this.src"}}]},
+                    {"$concatArrays": [{"$map": {"input": "$hi_o", "in": "$$this.dst"}},
+                                       {"$map": {"input": "$hi_i", "in": "$$this.src"}}]}]},
+                "cond": {"$gt": ["$$this", "$hi"]}}}}}},
             {"$group": {"_id": None, "n": {"$sum": "$n"}}},
             {"$project": {"_id": 0, "n": 1}}]),
     }
@@ -3291,6 +3353,10 @@ def main():
     # published.
     out["query_language"] = getattr(ad, "QUERY_LANGUAGE", "not declared")
     out["instrument"] = bench_common.INSTRUMENT
+    # EVERY QUESTION IS ASKED UNDIRECTED (CAMPAIGN section 7 row 56, BUGS F169): the page's
+    # one-way disclosure (export_web._knows_one_way_note) retires per row from this field, so
+    # it is written on every graph row, both workloads, before the first query runs.
+    out[graph_common.KNOWS_DIRECTION_FIELD] = graph_common.KNOWS_DIRECTION
 
     # THE MESSAGE HALF, inside the build timer, because at the full-network
     # tier it IS the load: the ingest column prices the whole corpus. The

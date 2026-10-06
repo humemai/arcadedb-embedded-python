@@ -112,6 +112,26 @@ def pick_query_ids(n_persons, n_queries, seed=PICK_SEED):
 # which is a filter that filters.
 HOP3F_MIN_AGE = 41
 
+# EVERY GRAPH QUESTION IS ASKED UNDIRECTED (CAMPAIGN section 7 row 56, DECISIONS
+# #151 item 1, BUGS F169). LDBC lists each friendship ONCE, always from the smaller
+# person id to the larger (all 180,623 SF1 rows), and the lane loads each row as one
+# KNOWS edge, so a question that follows `->` answers a question about ids: 1-hop saw
+# 53.2% of a start person's friends, 2-hop and 3-hop followed rising ids, and the
+# triangle count was 0 on every engine by construction. Each friendship stays ONE
+# stored edge (load and storage are unchanged: doubling the edges was rejected, it
+# moves ingest and storage and is not how LDBC defines knows), and every question is
+# asked in each dialect's undirected or ANY form: `-[:KNOWS]-` here, and the
+# equivalents l2_graph spells for the other dialects, the way LSQB's nine already
+# were. THE QUESTION, in one sentence every dialect must answer the same: walks of
+# k distinct friendships (Cypher's relationship isomorphism: a friendship is not
+# walked back along itself), counted per walk, where a friendship counts once
+# whichever way it is stored; a question that counts friendships or triangles counts
+# each one once (friends in same city with `a.id < b.id`, a triangle with
+# `a.id < b.id < c.id`). The row records `knows_direction` so the page's one-way
+# disclosure (export_web._knows_one_way_note) retires from the rows.
+KNOWS_DIRECTION = "undirected"
+KNOWS_DIRECTION_FIELD = "knows_direction"   # the row field; export_web._KNOWS_DIRECTION_FIELD reads it
+
 OLTP_READS = {
     # ALIASED RETURN COLUMNS (2026-10). `RETURN p.name, p.age` gives the column
     # the driver's own spelling -- "p.name" through the Neo4j driver, a
@@ -121,15 +141,15 @@ OLTP_READS = {
     # comparable.
     "point": ("MATCH (p:Person) WHERE p.id = $id "
               "RETURN p.name AS name, p.age AS age"),
-    "hop1": ("MATCH (p:Person)-[:KNOWS]->(f:Person) WHERE p.id = $id "
+    "hop1": ("MATCH (p:Person)-[:KNOWS]-(f:Person) WHERE p.id = $id "
              "RETURN count(f) AS n, avg(f.age) AS a"),
-    "hop2": ("MATCH (p:Person)-[:KNOWS]->(:Person)-[:KNOWS]->(fof:Person) "
+    "hop2": ("MATCH (p:Person)-[:KNOWS]-(:Person)-[:KNOWS]-(fof:Person) "
              "WHERE p.id = $id RETURN count(DISTINCT fof) AS n"),
     # 2026-10 (DECISIONS #82): three hops with a property filter on the far
     # end, the interactive workload's characteristic shape, where the planner
     # decides whether the filter or the expansion goes first. The threshold is
     # HOP3F_MIN_AGE, shared by every engine's spelling (BUGS F146).
-    "hop3f": ("MATCH (p:Person)-[:KNOWS]->(:Person)-[:KNOWS]->(:Person)-[:KNOWS]->(x:Person) "
+    "hop3f": ("MATCH (p:Person)-[:KNOWS]-(:Person)-[:KNOWS]-(:Person)-[:KNOWS]-(x:Person) "
               "WHERE p.id = $id AND x.age > " + str(HOP3F_MIN_AGE) + " RETURN count(DISTINCT x) AS n"),
 }
 # write op: create a person and link them to an existing one (one txn).
@@ -158,7 +178,7 @@ UPDATE_AGE = 44
 # filter is applied to. Run UNTIMED, once per cell, over a small sample of the
 # same ids the timed loop uses, so a reader can check "stays local" against a
 # number instead of a word.
-HOP3_VISITED = ("MATCH (p:Person)-[:KNOWS]->(:Person)-[:KNOWS]->(:Person)-[:KNOWS]->(x:Person) "
+HOP3_VISITED = ("MATCH (p:Person)-[:KNOWS]-(:Person)-[:KNOWS]-(:Person)-[:KNOWS]-(x:Person) "
                 "WHERE p.id = $id RETURN count(DISTINCT x) AS n")
 VISITED_SAMPLE = 20
 
@@ -209,13 +229,16 @@ def tier_excluded(scale, qname):
 
 
 OLAP_QUERIES = {
-    "top_degree": ("MATCH (p:Person)-[:KNOWS]->(:Person) "
+    # UNDIRECTED (row 56): a person's friends are the other end of every friendship
+    # touching them, so a friendship counts for BOTH of its people.
+    "top_degree": ("MATCH (p:Person)-[:KNOWS]-(:Person) "
                    "RETURN p.id AS id, count(*) AS d ORDER BY d DESC, id ASC LIMIT 10"),
-    "same_city_edges": ("MATCH (a:Person)-[:KNOWS]->(b:Person) "
-                        "WHERE a.city = b.city "
+    # One row per friendship, so the pair is ordered (a.id < b.id) to count it once.
+    "same_city_edges": ("MATCH (a:Person)-[:KNOWS]-(b:Person) "
+                        "WHERE a.city = b.city AND a.id < b.id "
                         "RETURN a.city AS c, count(*) AS n ORDER BY n DESC, c ASC "
                         "LIMIT 10"),
-    "friend_age_by_city": ("MATCH (p:Person)-[:KNOWS]->(f:Person) "
+    "friend_age_by_city": ("MATCH (p:Person)-[:KNOWS]-(f:Person) "
                            "RETURN p.city AS c, avg(f.age) AS a, count(*) AS n "
                            "ORDER BY n DESC, c ASC LIMIT 10"),
     # 2026-10 (DECISIONS #82b), so the graph table is as thorough as the
@@ -223,21 +246,24 @@ OLAP_QUERIES = {
     #
     # The degree distribution: how many people have how many friends. A
     # whole-graph aggregation over every edge, and the cheapest honest way to
-    # make the planner touch everything. Persons with no outgoing KNOWS are
-    # outside the MATCH and therefore outside the histogram, on every engine,
-    # which is stated here because it is the one modelling choice in it.
-    "degree_dist": ("MATCH (p:Person)-[:KNOWS]->(f:Person) "
+    # make the planner touch everything. Persons with no friends are outside
+    # the MATCH and therefore outside the histogram, on every engine, which is
+    # stated here because it is the one modelling choice in it.
+    "degree_dist": ("MATCH (p:Person)-[:KNOWS]-(f:Person) "
                     "WITH p, count(f) AS d "
                     "RETURN d AS deg, count(*) AS n ORDER BY deg"),
-    # The triangle count: mutual-friend triples, each counted once. The
-    # canonical graph analytic, and the one query on the page that punishes a
-    # bad join or traversal plan rather than a slow scan. A directed 3-cycle
-    # has three rotations; requiring the start to be the smallest id selects
-    # exactly one of them, so each triangle is counted once on every engine.
-    # Expected to exceed its budget at the larger scale factor, which is a
-    # named censored cell and not a bug (#82b).
-    "triangles": ("MATCH (a:Person)-[:KNOWS]->(b:Person)-[:KNOWS]->(c:Person)-[:KNOWS]->(a) "
-                  "WHERE a.id < b.id AND a.id < c.id RETURN count(*) AS n"),
+    # The triangle count: three people who are all friends with one another,
+    # each triangle counted once. The canonical graph analytic, and the one
+    # query on the page that punishes a bad join or traversal plan rather than
+    # a slow scan. Ordering the three ids a < b < c selects exactly one of a
+    # triangle's six walks, so each triangle is counted once on every engine.
+    # (Through October this followed `->` and asked for a directed 3-cycle, which
+    # a graph stored from the smaller id to the larger cannot hold: 0 on every
+    # engine, 387,573 triangles at SF1 undirected; BUGS F169.) Expected to exceed
+    # its budget at the larger scale factor, which is a named censored cell and
+    # not a bug (#82b).
+    "triangles": ("MATCH (a:Person)-[:KNOWS]-(b:Person)-[:KNOWS]-(c:Person)-[:KNOWS]-(a) "
+                  "WHERE a.id < b.id AND b.id < c.id RETURN count(*) AS n"),
 }
 
 # ---------------------------------------------------------------------------
@@ -255,9 +281,9 @@ OLAP_QUERIES = {
 # Message is the SNB supertype of Post and Comment; the Cypher engines reach it
 # through inheritance (ArcadeDB) or a second label (Neo4j/Memgraph/FalkorDB) on
 # every Post and Comment, so `(:Message)` matches both (see ldbc_snb.py).
-# KNOWS is UNDIRECTED here, exactly as LSQB writes it (`-[:KNOWS]-`), which is
-# why the LSQB queries use `-[:KNOWS]-` where the five hand-written analytics
-# queries above use the directed `-[:KNOWS]->`.
+# KNOWS is UNDIRECTED here, exactly as LSQB writes it (`-[:KNOWS]-`), and since
+# the re-pin (row 56) the five hand-written analytics questions above ask it the
+# same way.
 #
 # Each is a whole-graph count(*), so each digest is `columns=("n",)` (below),
 # and the per-query budget (#100/#100a) bounds all fourteen alike.

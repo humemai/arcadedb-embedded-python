@@ -13,8 +13,11 @@ adapter and query template works unchanged:
     age  <- years since birthday (fixed reference date, deterministic)
     city <- "city_<isLocatedIn place id>"
 KNOWS edges carry since = year(creationDate). LDBC ships knows once per
-undirected pair; we load it as a single directed edge (the lane's queries
-traverse OUT), storage is bidirectional (engine default) in every adapter.
+undirected pair, always from the smaller id to the larger; we load it as one
+stored edge per friendship (storage is bidirectional, the engine default, in
+every adapter) and every question is asked UNDIRECTED (CAMPAIGN section 7 row 56),
+so a person's friends are the far end of every friendship touching them. Through
+October the questions followed the stored direction (BUGS F169).
 
 Deliberately unchanged vs graph_common: OLTP/OLAP Cypher templates and all
 tunables, so synthetic-vs-LDBC runs differ ONLY in data.
