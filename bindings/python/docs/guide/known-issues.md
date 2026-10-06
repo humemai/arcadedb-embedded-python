@@ -714,7 +714,8 @@ searches that land inside it, too slow and too timing-dependent for the suite.
 ## Ctrl-C during an interruptible Java wait can raise `InterruptedException`, not `KeyboardInterrupt`
 
 JPype 1.7.1, the version the wheel installs; measured through the bindings with a 26.10.1
-snapshot of the engine. Open. This is a race in JPype, not in ArcadeDB.
+snapshot of the engine. Open. This is a race in JPype, not in ArcadeDB; it is reported as
+[jpype-project/jpype#1496](https://github.com/jpype-project/jpype/issues/1496).
 
 With the default `interrupt=False`, JPype handles SIGINT in Java. Its handler first interrupts
 the main thread with `Thread.interrupt()` and only then tells Python that Ctrl-C arrived. A
@@ -754,6 +755,24 @@ while worker.is_alive():
 
 The worker keeps waiting after Ctrl-C and ends with the process. A Python wait loop such as
 `while True: time.sleep(1)`, as in the server examples, is not affected.
+
+The same handler has a second problem with `interrupt=False` when Python has no handler of its
+own for SIGTERM, which is the normal state of a script: `kill -TERM` crashes the process with a
+SIGSEGV in `PyErr_SetInterruptEx` (exit status -6 and an `hs_err_pid*.log`) instead of stopping
+it ([jpype-project/jpype#1497](https://github.com/jpype-project/jpype/issues/1497); measured on
+JPype 1.7.1 and master, Temurin 21 and 25, 10 of 10 attempts each, and through the bindings, 3
+of 3). Register a handler after the first database is opened, which is after the JVM has
+started; the process then stops at once, 3 of 3 through the bindings. A handler registered
+before the JVM starts also avoids the crash, but runs only when the main thread next executes
+Python code, so a blocking call such as `time.sleep(30)` delays it until the call returns:
+
+```python
+import signal
+import sys
+
+db = arcadedb.create_database("./mydb")
+signal.signal(signal.SIGTERM, lambda *args: sys.exit(0))
+```
 
 Tests: `tests/test_sigint.py` covers a Python loop and a Java call that Ctrl-C cannot wake.
 It has no test of the waits above, because the failure is random (humemai/arcadedb-embedded-python#179).
