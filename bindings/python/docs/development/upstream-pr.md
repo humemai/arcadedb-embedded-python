@@ -49,7 +49,14 @@ What the script does beyond that:
 - Besides `bindings/python`, it ships `.github/workflows/test-python-bindings.yml` and `.github/workflows/test-python-examples.yml`, so an edit to either workflow must also work in upstream's repository.
 - It leaves out `examples/benchmark_results`, `examples/scripts`, `scripts/profile-python`, `scripts/fix_markdown.py`, `scripts/list_image_jars_by_size.sh`, and `scripts/build_and_install_locally.sh`.
 - It refuses to run while tracked files have uncommitted changes, and it warns when the branch has a top-level entry under `bindings/python` that upstream's tree lacks.
-- It ships only the tree: set the pull request's title and body by hand.
+- It ships only the tree: set the pull request's title and body by hand. The earlier ones
+  (ArcadeData/arcadedb#5807, #6889) open with "Periodic update of `bindings/python` from the
+  downstream packaging fork (humemai/arcadedb-embedded-python), rebased on current `main`.
+  No engine code.", say that the change has been shipping on PyPI as `arcadedb-embedded`,
+  most recently as which version, then explain each file that crosses outside
+  `bindings/python` and why, show the result of upstream's checks on the first push, and
+  state the scope. In a release cycle the pull request comes last, after the release and
+  the sync that follows it ([Release Workflow](release.md#7-open-the-upstream-pull-request-last)).
 
 ## What upstream expects
 
