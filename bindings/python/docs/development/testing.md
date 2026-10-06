@@ -187,8 +187,10 @@ anything it can state otherwise:
 A skip that is truly unavoidable (a Windows limitation, a case that needs an engine fix that is
 still upstream) goes on the list in `scripts/check_test_skips.py` with the platform, the reason,
 and the upstream issue. For an engine bug prefer a strict `xfail`: it fails the suite as soon as
-the fix reaches the wheel, which is the cue to convert it to a plain test and take the entry off
-the Known Engine Issues page.
+the fix reaches the engine the suite runs on, which is the cue to convert it to a plain test.
+CI builds its wheel from upstream's current snapshot jars, so that can be days before a release
+carries the fix. The entry stays on the Known Engine Issues page until a release that carries the
+fix ships.
 
 A passing run ends with a summary of the form `N passed, K xfailed`, with no failures or errors.
 The strict xfails are the open engine findings listed on [Known Engine Issues](../guide/known-issues.md),
