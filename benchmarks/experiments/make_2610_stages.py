@@ -47,6 +47,10 @@ stage per workload, from runner.LANES and export_web._TABLE_LANE, not from a lis
 Usage:
   python3 make_2610_stages.py --check                 # coverage only, no pins needed
   python3 make_2610_stages.py --project CELLS.tsv     # per-stage hours from measured cells
+  python3 pass2_roster.py results/runs_page_<pin>.jsonl -o ROSTER.json    # pass 2: which arms have reps 1 to 3 clean
+  python3 make_2610_stages.py --rep-from 4 --roster ROSTER.json --dry-run # lane order and an hours projection
+  ARCADEDB_WHEEL=... ARCADEDB_SERVER_IMAGE=... ARCADEDB_ENGINE_COMMIT=<40 hex> \\
+      python3 make_2610_stages.py --rep-from 4 --roster ROSTER.json --after <last pass-1 stage> --out DIR
   ARCADEDB_WHEEL=... ARCADEDB_SERVER_IMAGE=... ARCADEDB_ENGINE_COMMIT=<40 hex> \\
       python3 make_2610_stages.py --out DIR [--after qOA5 | --after none]
 """
@@ -58,6 +62,7 @@ import collections
 import csv
 import hashlib
 import json
+import math
 import os
 import re
 import statistics
@@ -278,10 +283,15 @@ def stage_backends(spec):
     return list(only) if only else [b for b in runner.LANES[spec[2]][1] if b not in runner.restricted_arms(spec[2])]
 
 
-def check_coverage(stages=STAGES):
+def check_coverage(stages=STAGES, plan=None):
     """Every registered arm of every page lane in exactly one stage per workload.
 
+    With a pass-2 `plan` (pass2_plan), the claim is the roster's instead: every arm cell the roster lists for the tiers
+    the pass runs appears in exactly one stage, and a stage names no cell the roster does not.
+
     Returns (problems, excluded lanes with reasons, per-lane counts)."""
+    if plan is not None:
+        return plan.problems(stages)
     page = _page_lanes()
     seen = collections.Counter()
     stage_wls = collections.defaultdict(set)
@@ -330,6 +340,297 @@ def check_coverage(stages=STAGES):
     return problems, excluded, counts
 
 
+# ------------------------------------------------------------------- pass 2: the top-up (DECISIONS #164)
+# Pass 1 runs reps 1 to 3. Pass 2 runs reps 4 and 5 of every ArcadeDB arm and every tier-2 arm, one whole lane (one
+# stage of the paper's table order, every engine of it together) at a time, and ONLY for the arm cells whose reps 1 to
+# 3 all left a clean row: the roster is read from the pin's rows (pass2_roster.py), never from the stage list, so a
+# censored, killed, or crashed arm does not spend its cap again. Tier 3 and ArcadeDB 26.11.1 come after (DECISIONS
+# #164), so `--tiers` defaults to 1,2.
+ROSTER_FORMAT = "pass2-roster-1"
+# the extra arms a lane stage runs (CAMPAIGN row for qRB: BENCH_GAV=0) and the marker their rows carry as `backend_arm`
+ARM_OF_ENV = {"BENCH_GAV=0": "nogav"}
+
+Cell = collections.namedtuple("Cell", "label lane scale workload backend cls arm kind")
+
+
+def declared_reps(spec):
+    """The REPS a stage declares: its own `REPS=N` environment entry, else the template's default of 5."""
+    for e in (spec[7] if len(spec) > 7 else []):
+        m = re.fullmatch(r"REPS=(\d+)", e)
+        if m:
+            return int(m.group(1))
+    return 5
+
+
+def stage_cells(spec):
+    """Every run_cell and run_overlay call a stage makes, as (label, lane, scale, workload, backend, class, arm, kind),
+    in the order make_october_stages.emit writes them. The label is the string the script passes, so the roster of a
+    stage is keyed by what the script already says; a test reads the emitted scripts back and compares."""
+    lane, wls, scales = spec[2], spec[3], spec[4]
+    extra = spec[6] if len(spec) > 6 and spec[6] else {}
+    dur_mode = spec[9] if len(spec) > 9 else None
+    out = []
+    for sc in scales:
+        for be in stage_backends(spec):
+            for wl in wls:
+                if not runner.arm_runs(lane, wl, be):
+                    continue
+                base = f"{lane}/{sc}/{be}/{wl}"
+                if dur_mode != "strict":
+                    out.append(Cell(base, lane, sc, wl, be, "relaxed", "", "lane"))
+                if (lane, wl) in O.STRICT_WORKLOADS and dur_mode != "relaxed":
+                    out.append(Cell(f"{base} strict", lane, sc, wl, be, "strict", "", "lane"))
+                for e in extra.get(be, []):
+                    if e not in ARM_OF_ENV:
+                        raise SystemExit(f"{lane}/{be}: the extra arm's environment {e!r} has no row marker in "
+                                         f"ARM_OF_ENV, so the roster cannot say whether it finished")
+                    out.append(Cell(f"{base} {e}", lane, sc, wl, be, "relaxed", ARM_OF_ENV[e], "lane"))
+                if lane in O.OVERLAY:
+                    out.append(Cell(f"{base} multipass", lane, sc, wl, be, "relaxed", "", "overlay"))
+    return out
+
+
+def overlay_reps(lane, declared):
+    """The repetitions the lane's overlay driver takes from the runner: the declared REPS, or one (the sparse driver
+    repeats inside itself, so it has nothing to top up)."""
+    n = O.OVERLAY[lane][1]
+    return declared if n == "$REPS" else int(n)
+
+
+def load_roster(path):
+    with open(path, encoding="utf-8") as fh:
+        roster = json.load(fh)
+    if roster.get("format") != ROSTER_FORMAT:
+        raise SystemExit(f"{path} is not a {ROSTER_FORMAT} roster (pass2_roster.py writes it)")
+    return roster
+
+
+def roster_index(roster):
+    """{(lane, scale, workload, backend, class, arm): record} for every eligible cell of the roster."""
+    out = {}
+    for lane, per_be in roster["lanes"].items():
+        for be, recs in per_be.items():
+            for rec in recs:
+                out[(lane, rec["scale"], rec["workload"], be, rec["durability_class"], rec["arm"])] = rec
+    return out
+
+
+def _closeness(roster, spec, tiers):
+    """(share inside the band, comparisons, inside, closest) of a stage over the comparators this pass runs; share is
+    None when the rows hold no ArcadeDB-versus-comparator ratio for the stage yet."""
+    n = inside = 0
+    closest = None
+    for sc in spec[4]:
+        for wl in spec[3]:
+            for comp, rec in roster.get("closeness", {}).get(f"{spec[2]}|{sc}|{wl}", {}).items():
+                if tier_of(comp) not in tiers:
+                    continue
+                n += rec["comparisons"]
+                inside += rec["within_band"]
+                cl = rec["closest"]
+                if closest is None or abs(math.log(cl["ratio"])) < abs(math.log(closest["ratio"])):
+                    closest = dict(cl, comparator=comp)
+    return (inside / n if n else None), n, inside, closest
+
+
+class Pass2Plan:
+    """What pass 2 runs: the stages in order, each stage's roster block, and the accounting that proves the roster was
+    honoured. Built by pass2_plan; `problems` is the coverage proof."""
+
+    def __init__(self):
+        self.stages = []        # stage tuples (the shape of STAGES entries, ids assigned)
+        self.cells = {}         # stage id -> [planned cell dicts, lane and overlay]
+        self.blocks = {}        # stage id -> the `label|reps` lines
+        self.want = {}          # roster cell key -> record, every eligible cell of the tiers this pass runs
+        self.matched = collections.Counter()   # roster cell key -> stages that hold it
+        self.complete = []      # keys with nothing left to run (already topped up)
+        self.out_of_scope = []  # keys of tiers this pass does not run
+        self.order = []         # one dict per stage: score, hours, counts
+        self.ineligible = 0
+
+    def scheduled(self):
+        return [c for cells in self.cells.values() for c in cells if c["kind"] == "lane"]
+
+    def problems(self, stages=None):
+        out = []
+        for key in sorted(self.want, key=str):
+            n = self.matched[key]
+            if n != 1:
+                out.append(f"{'/'.join(map(str, key))}: a roster cell in {n} stages, expected exactly 1"
+                           + (" (no stage enumerates it: a lane, scale, workload or arm the stage list does not run)" if n == 0 else ""))
+        scheduled = collections.Counter((c["lane"], c["scale"], c["workload"], c["backend"], c["cls"], c["arm"])
+                                        for c in self.scheduled())
+        for key, n in scheduled.items():
+            if key not in self.want:
+                out.append(f"{'/'.join(map(str, key))}: scheduled but not in the roster")
+            elif n != 1:
+                out.append(f"{'/'.join(map(str, key))}: scheduled {n} times")
+        done = set(self.complete) | set(scheduled)
+        for key in self.want:
+            if key not in done and self.matched[key] == 1:
+                out.append(f"{'/'.join(map(str, key))}: in the roster, matched a stage, and neither scheduled nor complete")
+        if stages is not None and [s[0] for s in stages] != [s[0] for s in self.stages]:
+            out.append("the stage list is not the plan's")
+        return out, [], {}
+
+
+def pass2_plan(roster, rep_from=4, tiers=(1, 2), lane_order="closest", prefix="qR", stages=None):
+    """The pass-2 stage list from a roster (pass2_roster.py): one stage per stage of the paper's table order that still
+    has a rostered cell to run, restricted to the arms with cells to run, in lane order. `closest` puts the lanes where
+    ArcadeDB's ratio to its comparators is nearest the 1.3x a median of three cannot settle first (the share of its
+    ArcadeDB-versus-comparator ratios inside that band, from the rows so far), the lifecycle, restart and sensitivity
+    stages after the core lanes as DECISIONS #165 has them; `paper` is the table order. The cells to run are the
+    repetitions from `rep_from` to the stage's declared REPS that the roster does not already show clean."""
+    if lane_order not in ("closest", "paper"):
+        raise SystemExit("--lane-order is closest or paper")
+    stages = STAGES if stages is None else stages
+    plan = Pass2Plan()
+    plan.ineligible = sum(len(v) for d in roster.get("ineligible", {}).values() for v in d.values())
+    index = roster_index(roster)
+    plan.want = {k: rec for k, rec in index.items() if tier_of(k[3]) in tiers}
+    plan.out_of_scope = [k for k in index if k not in plan.want]
+    pieces = []
+    for pos, spec in enumerate(stages):
+        if spec[2] == "pycost":
+            continue
+        declared = declared_reps(spec)
+        todo_of = {}
+        planned = []
+        for c in stage_cells(spec):
+            key = (c.lane, c.scale, c.workload, c.backend, c.cls, c.arm)
+            if c.kind == "lane":
+                rec = plan.want.get(key)
+                if rec is None:
+                    continue
+                plan.matched[key] += 1
+                todo = [r for r in range(rep_from, declared + 1) if r not in rec["clean_reps"]]
+                todo_of[key] = todo
+                if not todo:
+                    plan.complete.append(key)
+                    continue
+                wall = rec.get("wall_s_per_rep")
+                reps = todo
+            else:
+                lane_key = (c.lane, c.scale, c.workload, c.backend, "relaxed", "")
+                reps = [r for r in todo_of.get(lane_key, []) if r <= overlay_reps(c.lane, declared)]
+                if not reps:
+                    continue
+                wall = None   # the overlay's time is inside its lane cell's estimate (pass2_roster: gap to the next cell)
+            for ch in "|{}'\n":
+                if ch in c.label:
+                    raise SystemExit(f"cell label {c.label!r} holds {ch!r}, which the roster block cannot carry")
+            planned.append({"label": c.label, "lane": c.lane, "scale": c.scale, "workload": c.workload,
+                            "backend": c.backend, "cls": c.cls, "arm": c.arm, "kind": c.kind, "reps": reps,
+                            "wall_s": wall if c.kind == "lane" else None})
+        if not any(p["kind"] == "lane" for p in planned):
+            continue
+        pieces.append((pos, spec, planned))
+    # the estimate for a cell with no usable gap: the median of its stage's cells of the same lane, scale, workload and class
+    group = collections.defaultdict(list)
+    for key, rec in plan.want.items():
+        if rec.get("wall_s_per_rep"):
+            group[(key[0], key[1], key[2], key[4])].append(rec["wall_s_per_rep"])
+    score = {}
+    for pos, spec, planned in pieces:
+        score[pos] = _closeness(roster, spec, tiers)
+
+    def sort_key(piece):
+        pos, spec = piece[0], piece[1]
+        if lane_order == "paper":
+            return (pos,)
+        share = score[pos][0]
+        return (is_extra(spec), share is None, -(share or 0.0), pos)
+
+    pieces.sort(key=sort_key)
+    cum = 0.0
+    for i, (pos, spec, planned) in enumerate(pieces):
+        sid = f"{prefix}{i + 1:02d}"
+        lane_cells = [p for p in planned if p["kind"] == "lane"]
+        backends = [b for b in stage_backends(spec) if any(p["backend"] == b for p in lane_cells)]
+        wls = [w for w in spec[3] if any(p["workload"] == w for p in lane_cells)]
+        scales = [s for s in spec[4] if any(p["scale"] == s for p in lane_cells)]
+        reps_lo = min(r for p in lane_cells for r in p["reps"])
+        reps_hi = max(r for p in lane_cells for r in p["reps"])
+        title = f"{spec[1]}, top-up reps {reps_lo} to {reps_hi}"
+        hours = 0.0
+        unestimated = 0
+        for p in lane_cells:
+            w = p["wall_s"]
+            if w is None:
+                g = group.get((p["lane"], p["scale"], p["workload"], p["cls"]))
+                w = statistics.median(g) if g else None
+                p["wall_estimated_from_group"] = w is not None
+            if w is None:
+                unestimated += 1
+            else:
+                hours += w * len(p["reps"]) / 3600.0
+        cum += hours
+        spec10 = list(spec) + [None] * (10 - len(spec))
+        stage = (sid, title, spec[2], wls, scales, list(spec[5]), spec[6], list(spec[7]), backends, spec10[9])
+        plan.stages.append(stage)
+        plan.cells[sid] = planned
+        plan.blocks[sid] = "\n".join(f"{p['label']}|{','.join(map(str, p['reps']))}" for p in planned)
+        share, n, inside, closest = score[pos]
+        plan.order.append({"id": sid, "lane": spec[2], "workloads": wls, "scales": scales, "base_id": spec[0],
+                           "extra": is_extra(spec), "share": share, "comparisons": n, "within_band": inside,
+                           "closest": closest, "cells": len(lane_cells),
+                           "reps": sum(len(p["reps"]) for p in lane_cells), "hours": hours, "cum_hours": cum,
+                           "unestimated": unestimated, "backends": backends})
+    return plan
+
+
+def roster_pin_problems(roster):
+    """A pin's rows file holds one engine commit and one ArcadeDB version; a roster read from a file that holds two is a
+    roster for no pin (engine_commit is a claim, engine_version is evidence: the roster records both)."""
+    out = []
+    commits = roster.get("engine_commits", {})
+    if len(commits) != 1:
+        out.append(f"the roster's rows carry {len(commits)} engine commits {sorted(commits)}, expected exactly one pin")
+    versions = roster.get("arcadedb_engine_versions", {})
+    if len(versions) > 1:
+        out.append(f"the roster's ArcadeDB rows carry {len(versions)} engine versions {sorted(versions)}, expected one")
+    return out
+
+
+def parse_tiers(text):
+    try:
+        tiers = tuple(sorted({int(x) for x in text.split(",") if x.strip()}))
+    except ValueError:
+        tiers = ()
+    if not tiers or any(t not in (1, 2, 3) for t in tiers):
+        raise SystemExit("--tiers is a comma list of 1, 2, 3")
+    return tiers
+
+
+def describe_plan(plan, roster, rep_from, tiers, lane_order):
+    """The dry run: the lane order with each stage's score, and an hours PROJECTION from the rows."""
+    lines = [f"pass 2: reps {rep_from} up to the declared REPS, tiers {','.join(map(str, tiers))}, roster "
+             f"{roster.get('source') or '(unnamed)'} ({roster['n_rows']} rows, reps {roster['need_reps']} clean), "
+             f"lane order {lane_order}",
+             f"  roster cells in scope {len(plan.want)}: to run {len(plan.scheduled())}, already complete "
+             f"{len(plan.complete)}; outside the tiers {len(plan.out_of_scope)}; "
+             f"ineligible (fewer than 3 clean reps, never retried) {plan.ineligible}"]
+    if lane_order == "closest":
+        lines.append(f"  order: the share of a stage's ArcadeDB-versus-comparator ratios inside {roster.get('band', 1.3)}x, "
+                     f"largest first, from the rows so far; lifecycle, restart and sensitivity stages after the core lanes")
+    lines.append("  PROJECTION, not measured: hours are the roster cells' repetitions times the per-repetition wall time "
+                 "estimated from the rows' own timestamps (overlay and stage overhead included)")
+    for o in plan.order:
+        cl = o["closest"]
+        score = (f"share {o['share']:.2f} ({o['within_band']}/{o['comparisons']})" if o["share"] is not None
+                 else "share n/a (no ratio in the rows yet)")
+        near = (f", nearest {cl['ratio']}x {cl['arcadedb']} vs {cl['comparator']} on {cl['metric']}" if cl else "")
+        lines.append(f"  {o['id']}  {o['lane']:9} {','.join(o['workloads']):14} {','.join(o['scales']):28} {score}{near}")
+        lines.append(f"        {o['cells']} cells, {o['reps']} repetitions, {len(o['backends'])} arms: "
+                     f"{o['hours']:6.1f} h projected, {o['cum_hours']:7.1f} h cumulative"
+                     + (f"; {o['unestimated']} cells with no wall estimate (not in the hours)" if o["unestimated"] else ""))
+    total = plan.order[-1]["cum_hours"] if plan.order else 0.0
+    left = sum(o["unestimated"] for o in plan.order)
+    lines.append(f"  total {total:.0f} h projected over {len(plan.order)} stages"
+                 + (f", a lower bound: {left} cells have no estimate" if left else ""))
+    return "\n".join(lines)
+
+
 # ------------------------------------------------------------------- the JPype pin
 JPYPE_DOCKERFILE = os.path.join(HERE, "Dockerfile.bench")
 _JPYPE_ARG = re.compile(r"^ARG JPYPE_VERSION=(\S*)[ \t]*$", re.M)
@@ -371,7 +672,7 @@ def _sub(text, old, new):
     return text.replace(old, new)
 
 
-def _head(rep_pass=None):
+def _head(rep_pass=None, rep_from=None):
     h = O.HEAD
     h = _sub(h, "# {id}. October stage {n} of {total}: {title}.",
              "# {id}. 26.10.1 stage {n} of {total}: {title}.")
@@ -443,6 +744,51 @@ say "$ID: dbbench:arcadedb runs JPype $IJ, the pin"''')
                  '\n  [ "$olast" -lt 2 ] || env $oenv python3 runner.py --lanes {lane}')
         h = _sub(h, '--only-reps "$(seq -s, 2 "$oreps")"', '--only-reps "$(seq -s, 2 "$olast")"')
         h = _sub(h, 'REPS=$REPS, pin $PIN', 'REPS=$REPS (reps run: 1 to $LAST_REP), pin $PIN')
+    if rep_from:
+        h = _top_up(h, rep_from)
+    return h
+
+
+def _top_up(h, rep_from):
+    """THE TOP-UP PASS (DECISIONS #164 item 5): every cell runs the repetitions the ROSTER names for it, and no cell the
+    roster does not name. The roster is pass2_roster.py's reading of the pin's rows (reps 1 to 3 all clean), baked into
+    each stage as `label|reps` lines; `{roster_block}` is replaced per stage by emit_all. A cell outside it (an arm
+    that was censored, killed, or crashed in pass 1, or a tier this pass does not run) returns at once, so a censored
+    arm never spends its cap again. The first repetition goes alone and a failure ends the cell, as in pass 1; the
+    overlay follows its lane cell, and an overlay that takes its repetitions inside its driver (the sparse one) has no
+    roster line and never runs again."""
+    h = _sub(h, "\nrun_overlay() {{",
+             "\n# THE ROSTER, one `label|reps` line per cell this stage still runs (pass2_roster.py reads the pin's rows;\n"
+             "# a cell is listed only when reps 1 to 3 each left a clean row). The label is the one the run_cell and\n"
+             "# run_overlay calls below pass, so a cell the roster leaves out is skipped by name.\n"
+             "ROSTER=$(cat <<'ROSTER_EOF'\n{roster_block}\nROSTER_EOF\n)\n"
+             "roster_reps() {{  # <label>: the reps still to run, comma-joined; fails when the label is not rostered\n"
+             "  printf '%s\\n' \"$ROSTER\" | awk -F'|' -v k=\"$1\" '$1 == k {{ print $2; f = 1 }} END {{ exit !f }}'\n"
+             "}}\n\n"
+             "run_overlay() {{")
+    lookup = ('\n  local todo first rest=""\n'
+              '  todo=$(roster_reps "$label") || {{ say "$ID: $label is not in the roster, skipped"; return 0; }}\n'
+              '  first=${{todo%%,*}}\n'
+              '  case $todo in *,*) rest=${{todo#*,}} ;; esac')
+    h = _sub(h, 'local label=$1 scale=$2 cap=$3 be=$4 wl=$5 envset=$6',
+             'local label=$1 scale=$2 cap=$3 be=$4 wl=$5 envset=$6' + lookup)
+    h = _sub(h, '--only-reps 1 --reps "$REPS" --results-file "$RF"',
+             '--only-reps "$first" --reps "$REPS" --results-file "$RF"')
+    h = _sub(h, 'rep 1 failed, not repeating it', 'rep $first failed, not repeating it')
+    h = _sub(h, '[ "$REPS" -lt 2 ] || env $envset python3 runner.py',
+             '[ -z "$rest" ] || env $envset python3 runner.py')
+    h = _sub(h, '--only-reps "$(seq -s, 2 "$REPS")" --reps "$REPS" --results-file "$RF"',
+             '--only-reps "$rest" --reps "$REPS" --results-file "$RF"')
+    h = _sub(h, 'local label=$1 scale=$2 cap=$3 be=$4 wl=$5 drv=$6 outdir=$7 orf=$8 oreps=$9 oenv=${{10}}',
+             'local label=$1 scale=$2 cap=$3 be=$4 wl=$5 drv=$6 outdir=$7 orf=$8 oreps=$9 oenv=${{10}}' + lookup)
+    h = _sub(h, '--only-reps 1 --reps "$oreps" --driver', '--only-reps "$first" --reps "$oreps" --driver')
+    h = _sub(h, 'OVERLAY rep 1 left no clean row, reps 2-$oreps skipped',
+             'OVERLAY rep $first left no clean row, reps $rest skipped')
+    h = _sub(h, '\n  env $oenv python3 runner.py --lanes {lane}',
+             '\n  [ -z "$rest" ] || env $oenv python3 runner.py --lanes {lane}')
+    h = _sub(h, '--only-reps "$(seq -s, 2 "$oreps")"', '--only-reps "$rest"')
+    h = _sub(h, 'REPS=$REPS, pin $PIN',
+             f'REPS=$REPS (top-up pass: reps {rep_from} up, as the roster says), pin $PIN')
     return h
 
 
@@ -544,11 +890,14 @@ def _wait(after):
             f'say "$ID: {after} finished, taking the machine"\n')
 
 
-def emit_all(out, pins, first_after, allow_dev, stages=None, rep_pass=None):
+def emit_all(out, pins, first_after, allow_dev, stages=None, rep_pass=None, rep_from=None, rosters=None):
     """Write every stage. October's emit() is reused for the runner stages, with its
-    template and SHA swapped for the duration of the call."""
+    template and SHA swapped for the duration of the call. `rep_from` and `rosters` (stage id -> roster block)
+    make it the top-up pass."""
     stages = STAGES if stages is None else stages
-    head = _head(rep_pass)
+    if rep_from and rep_pass:
+        raise SystemExit("--rep-from and --rep-pass are two different passes")
+    head = _head(rep_pass, rep_from)
     sha, wheel, server = pins["ARCADEDB_ENGINE_COMMIT"], pins["ARCADEDB_WHEEL"], pins["ARCADEDB_SERVER_IMAGE"]
     wheel_name = os.path.basename(wheel)
     wheel_sha = hashlib.sha256(open(wheel, "rb").read()).hexdigest()
@@ -573,6 +922,7 @@ def emit_all(out, pins, first_after, allow_dev, stages=None, rep_pass=None):
                     .replace("{wheel_sha256}", wheel_sha).replace("{server_image}", server) \
                     .replace("{allow_dev}", "1" if allow_dev else "0") \
                     .replace("{rep_pass}", str(rep_pass or "")) \
+                    .replace("{roster_block}", rosters[spec[0]] if rep_from else "") \
                     .replace("{jpype_version}", bench_common.JPYPE_PIN) \
                     .replace("{instrument}", bench_common.INSTRUMENT)
                 body = O.emit(i, full)
@@ -651,7 +1001,24 @@ def main(argv=None) -> int:
                     help="run only reps 1..N of each cell's declared REPS (DECISIONS #164: N=3 first, the rest in a "
                          "later pass); default runs every declared rep. Stage ids take the prefix qP, so no earlier "
                          "chain's ALL-DONE marker can start this one")
-    ap.add_argument("--id-prefix", default=None, help="stage id prefix (default qT; qP with --rep-pass)")
+    ap.add_argument("--rep-from", type=int, default=None, metavar="N",
+                    help="THE TOP-UP PASS (DECISIONS #164 item 5): run reps N up to each cell's declared REPS (N=4: reps 4 "
+                         "and 5, `--only-reps 4,5 --reps 5`), one stage per lane, and only the arm cells the --roster "
+                         "lists. Stage ids take the prefix qR followed by two digits, which no earlier marker in "
+                         "STATUS.txt has, so no old chain's ALL-DONE can start these")
+    ap.add_argument("--roster", metavar="ROSTER_JSON",
+                    help="pass2_roster.py's reading of the pin's rows: the arm cells whose reps 1 to 3 are all clean; "
+                         "required with --rep-from, because a censored arm must not repeat at its cap")
+    ap.add_argument("--tiers", default="1,2", metavar="LIST",
+                    help="with --rep-from: the tiers this pass runs (default 1,2: tier 3 and ArcadeDB 26.11.1 come after)")
+    ap.add_argument("--lane-order", choices=("closest", "paper"), default="closest",
+                    help="with --rep-from: closest (default) puts the lanes whose ArcadeDB-versus-comparator ratios sit "
+                         "nearest 1.3x first, the lifecycle, restart and sensitivity stages after the core lanes; "
+                         "paper is the table order")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="with --rep-from: print the lane order, what each stage runs, and an hours projection from the "
+                         "rows; write nothing and need no pins")
+    ap.add_argument("--id-prefix", default=None, help="stage id prefix (default qT; qP with --rep-pass; qR with --rep-from)")
     ap.add_argument("--check", action="store_true", help="coverage only")
     ap.add_argument("--project", metavar="CELLS_TSV", help="per-stage hours from October's measured cells")
     a = ap.parse_args(argv)
@@ -667,12 +1034,37 @@ def main(argv=None) -> int:
           f"install; every stage reads JPype back out of the image or the repo venv)")
     if a.rep_pass is not None and not 1 <= a.rep_pass <= 5:
         raise SystemExit("--rep-pass must be 1 to 5 (the declared REPS)")
-    prefix = a.id_prefix or ("qP" if a.rep_pass else "qT")
-    stages = tiered_stages(prefix=prefix, rep_pass=a.rep_pass) if a.order == "tiers" else STAGES
-    problems, excluded, counts = check_coverage(stages)
+    plan = None
+    if a.dry_run and a.rep_from is None:
+        raise SystemExit("--dry-run is the top-up pass's: it needs --rep-from and --roster")
+    if a.rep_from is not None:
+        if a.rep_pass is not None:
+            raise SystemExit("--rep-from and --rep-pass are two different passes: choose one")
+        if not 2 <= a.rep_from <= 5:
+            raise SystemExit("--rep-from must be 2 to 5 (reps below it ran in pass 1)")
+        if not a.roster:
+            raise SystemExit("--rep-from needs --roster: without the rows' reading, a censored arm would repeat at its cap")
+        explicit_after = any(x == "--after" or x.startswith("--after=") for x in (sys.argv[1:] if argv is None else argv))
+        if a.out and not a.dry_run and not explicit_after:
+            raise SystemExit("--rep-from needs an explicit --after (the last pass-1 stage, or `none`): the default waits on "
+                             "October's chain")
+        tiers = parse_tiers(a.tiers)
+        roster = load_roster(a.roster)
+        plan = pass2_plan(roster, rep_from=a.rep_from, tiers=tiers, lane_order=a.lane_order, prefix=a.id_prefix or "qR")
+        stages = plan.stages
+        # the stage list the roster is read against still covers every arm exactly once
+        problems, excluded, counts = check_coverage(STAGES)
+        more, _ex, _ct = check_coverage(stages, plan=plan)
+        problems += more + roster_pin_problems(roster)
+        print(describe_plan(plan, roster, a.rep_from, tiers, a.lane_order))
+        print("coverage: every roster cell of the tiers this pass runs in exactly one stage, none outside the roster")
+    else:
+        prefix = a.id_prefix or ("qP" if a.rep_pass else "qT")
+        stages = tiered_stages(prefix=prefix, rep_pass=a.rep_pass) if a.order == "tiers" else STAGES
+        problems, excluded, counts = check_coverage(stages)
+        print(f"order: {a.order}, {len(stages)} stages")
+        print("coverage: every registered arm of every page lane in exactly one stage per workload")
     problems += check_tiers()
-    print(f"order: {a.order}, {len(stages)} stages")
-    print("coverage: every registered arm of every page lane in exactly one stage per workload")
     for lane, n in sorted(counts.items()):
         print(f"  {lane:10} {n:2} arms")
     for lane, why in excluded:
@@ -693,7 +1085,7 @@ def main(argv=None) -> int:
                 print(f"         estimated: {', '.join(new[:14])}{' ...' if len(new) > 14 else ''}")
         print(f"  total measured {tm:.0f} h + estimated {te:.0f} h = {tm + te:.0f} h "
               f"(a stage whose estimates say 'thin' needs projection-2026-10-02/SUMMARY.md's range instead)")
-    if a.check or a.project:
+    if a.check or a.project or a.dry_run:
         return 0
 
     if not a.out:
@@ -713,8 +1105,14 @@ def main(argv=None) -> int:
     if pre and not a.allow_prerelease:
         raise SystemExit(f"REFUSING to emit: wheel {ver} is a pre-release; the paper cites stable releases "
                          f"(DECISIONS #42). --allow-prerelease emits for a page-only measurement.")
+    if plan is not None:
+        for c in sorted(roster.get("engine_commits", {})):
+            if not pins["ARCADEDB_ENGINE_COMMIT"].startswith(c):
+                raise SystemExit(f"REFUSING to emit: the roster was read from rows at engine commit {c}, these stages are "
+                                 f"generated for {pins['ARCADEDB_ENGINE_COMMIT']}")
     os.makedirs(a.out, exist_ok=True)
-    emit_all(a.out, pins, a.after, allow_dev=pre, stages=stages, rep_pass=a.rep_pass)
+    emit_all(a.out, pins, a.after, allow_dev=pre, stages=stages, rep_pass=a.rep_pass, rep_from=a.rep_from,
+             rosters=plan.blocks if plan else None)
     return 0
 
 
