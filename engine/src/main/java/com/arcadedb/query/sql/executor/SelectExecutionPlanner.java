@@ -27,6 +27,7 @@ import com.arcadedb.database.bucketselectionstrategy.BucketSelectionStrategy;
 import com.arcadedb.database.bucketselectionstrategy.PartitionedBucketSelectionStrategy;
 import com.arcadedb.schema.LocalDocumentType;
 import com.arcadedb.exception.CommandExecutionException;
+import com.arcadedb.exception.CommandSQLParsingException;
 import com.arcadedb.index.Index;
 import com.arcadedb.index.IndexException;
 import com.arcadedb.index.IndexInternal;
@@ -81,6 +82,7 @@ import com.arcadedb.query.sql.parser.SchemaIdentifier;
 import com.arcadedb.query.sql.parser.SelectStatement;
 import com.arcadedb.query.sql.parser.SuffixIdentifier;
 import com.arcadedb.query.sql.parser.Statement;
+import com.arcadedb.query.sql.parser.Timeout;
 import com.arcadedb.query.sql.parser.TraverseStatement;
 import com.arcadedb.query.sql.parser.SubQueryCollector;
 import com.arcadedb.query.sql.parser.ValueExpression;
@@ -196,6 +198,34 @@ public class SelectExecutionPlanner {
     // literal-only comparisons, so the verdict holds for every execution that reuses the cached plan.
     if (info.whereClause != null && info.whereClause.isAlwaysTrue(context))
       info.whereClause = null;
+  }
+
+  /**
+   * Plans the read side of an UPDATE or DELETE: {@code SELECT FROM <target> WHERE <where>}. The synthetic SELECT is its own
+   * original statement, so the plan lands in the execution plan cache under its text and the next execution of the same
+   * UPDATE/DELETE (or of the identical SELECT) takes a copy instead of planning again (issue #9207). Honors the cache
+   * rules of a SELECT: no profiling, no input-parameter dependent plan, no non-cacheable clause.
+   *
+   * @param timeout may be null
+   * @param keyHolder the key memoized on the UPDATE/DELETE statement, so a cache hit builds nothing
+   */
+  static InternalExecutionPlan createSourcePlan(final FromClause target, final WhereClause whereClause, final Timeout timeout,
+      final DmlSourcePlanKey keyHolder, final CommandContext context) {
+    final DatabaseInternal db = context.getDatabase();
+    final long epoch = db.getExecutionPlanCache().getInvalidationEpoch();
+    final String key = context.isProfiling() ? null : keyHolder.resolve(target, whereClause, timeout, epoch);
+    if (key == null)
+      return new SelectExecutionPlanner(DmlSourcePlanKey.newSource(target, whereClause, timeout, null)).createExecutionPlan(context,
+          false);
+
+    final ExecutionPlan cached = db.getExecutionPlanCache().get(key, context);
+    if (cached != null)
+      return (InternalExecutionPlan) cached;
+
+    final InternalExecutionPlan plan = new SelectExecutionPlanner(DmlSourcePlanKey.newSource(target, whereClause, timeout, key))
+        .createExecutionPlan(context, true);
+    keyHolder.planned(db.getExecutionPlanCache().contains(key), epoch, db.getExecutionPlanCache().getInvalidationEpoch());
+    return plan;
   }
 
   public InternalExecutionPlan createExecutionPlan(final CommandContext context, final boolean useCache) {
@@ -467,6 +497,8 @@ public class SelectExecutionPlanner {
         final ProjectionItem item = projection.getItems().getFirst();
         final FunctionCall function = ((BaseExpression) item.getExpression().getMathExpression()).getIdentifier().getLevelZero()
             .getFunctionCall();
+        if (function.getParams() == null || function.getParams().isEmpty())
+          throw new CommandSQLParsingException("distinct() requires one argument: distinct(<expression>)");
         final Expression exp = function.getParams().getFirst();
         final ProjectionItem resultItem = new ProjectionItem();
         resultItem.setAlias(item.getAlias());
@@ -524,6 +556,10 @@ public class SelectExecutionPlanner {
       final CommandContext context) {
     final Identifier targetClass = info.target == null ? null : info.target.getItem().getIdentifier();
     if (targetClass == null)
+      return false;
+
+    // a variable ($parent, a LET) is not a type name: the schema has nothing to count (#9049)
+    if (targetClass.getStringValue().startsWith("$"))
       return false;
 
     if (info.distinct || info.expand)
@@ -966,7 +1002,7 @@ public class SelectExecutionPlanner {
     }
 
     splitProjectionsForGroupBy(info, context);
-    addOrderByProjections(info);
+    addOrderByProjections(info, context);
     addUnwindProjections(info);
   }
 
@@ -982,7 +1018,11 @@ public class SelectExecutionPlanner {
 
       String typeName = info.target.getItem().getIdentifier().getStringValue();
       if (typeName.startsWith("$")) {
-        typeName = (String) context.getVariable(typeName);
+        // only a variable holding a type name can be resolved here: an unset one ($parent at the top level, a script
+        // LET) is resolved at execution time, and one holding RIDs or records is not a type at all (#9049)
+        if (!(context.getVariable(typeName) instanceof final String variableValue) || variableValue.startsWith("#"))
+          return;
+        typeName = variableValue;
         info.target.getItem().setIdentifier(new Identifier(typeName));
       }
 
@@ -1048,14 +1088,21 @@ public class SelectExecutionPlanner {
   }
 
   /**
+   * Shared by {@link #splitProjectionsForGroupBy} and {@link #addOrderByProjections}: the ORDER BY can get extra projections only when
+   * none of these early-exit conditions holds.
+   */
+  private static boolean canAddOrderByProjections(final QueryPlanningInfo info) {
+    return !(info.orderApplied || info.expand || info.unwind != null || info.orderBy == null || info.orderBy.getItems().size() == 0
+        || info.projection == null || info.projection.getItems() == null || (info.projection.getItems().size() == 1
+        && info.projection.getItems().getFirst().isAll()));
+  }
+
+  /**
    * creates additional projections for ORDER BY
    */
-  private static void addOrderByProjections(final QueryPlanningInfo info) {
-    if (info.orderApplied || info.expand || info.unwind != null || info.orderBy == null || info.orderBy.getItems().size() == 0
-        || info.projection == null || info.projection.getItems() == null || (info.projection.getItems().size() == 1
-        && info.projection.getItems().getFirst().isAll())) {
+  private static void addOrderByProjections(final QueryPlanningInfo info, final CommandContext context) {
+    if (!canAddOrderByProjections(info))
       return;
-    }
 
     final OrderBy newOrderBy = info.orderBy.copy();
     final List<ProjectionItem> additionalOrderByProjections = calculateAdditionalOrderByProjections(info.projection.getAllAliases(),
@@ -1071,7 +1118,24 @@ public class SelectExecutionPlanner {
       }
 
       for (final ProjectionItem item : additionalOrderByProjections) {
-        if (info.preAggregateProjection != null) {
+        if (info.aggregateProjection != null && isAggregate(item, context)) {
+          // AN AGGREGATE IN ORDER BY (ORDER BY sum(v)) MUST BE SPLIT LIKE ANY AGGREGATE IN THE PROJECTION, OTHERWISE IT IS EVALUATED PER
+          // RECORD AND THE GROUP TAKES THE VALUE OF ITS FIRST RECORD (#8973)
+          final AggregateProjectionSplit split = new AggregateProjectionSplit();
+          // CONTINUE THE GENERATED ALIAS NUMBERING OF THE PROJECTION SPLIT, OTHERWISE TWO AGGREGATES SHARE ONE ALIAS AND ACCUMULATE TWICE
+          split.setNextAliasId(info.nextAggregateAliasId);
+          final ProjectionItem post = item.splitForAggregation(split, context);
+          info.nextAggregateAliasId = split.getNextAliasId();
+          post.setAlias(new Identifier(item.getAlias(), true));
+          if (info.preAggregateProjection == null) {
+            info.preAggregateProjection = new Projection();
+            info.preAggregateProjection.setItems(new ArrayList<>());
+          }
+          info.preAggregateProjection.getItems().addAll(split.getPreAggregate());
+          info.aggregateProjection.getItems().addAll(split.getAggregate());
+          info.orderByAggregateAdded = true;
+          info.projection.getItems().add(post);
+        } else if (info.preAggregateProjection != null) {
           info.preAggregateProjection.getItems().add(item);
           info.aggregateProjection.getItems().add(projectionFromAlias(item.getAlias()));
           info.projection.getItems().add(projectionFromAlias(item.getAlias()));
@@ -1193,6 +1257,14 @@ public class SelectExecutionPlanner {
           break;
         }
 
+    // AN AGGREGATE ONLY IN ORDER BY (SELECT k ... GROUP BY k ORDER BY count(*)) ALSO NEEDS THE SPLIT (WITHOUT A GROUP BY THE QUERY KEEPS ITS PER-RECORD SHAPE), addOrderByProjections() ADDS ITS PARTS (#8973)
+    if (!isSplitted && info.groupBy != null && canAddOrderByProjections(info))
+      for (final OrderByItem orderItem : info.orderBy.getItems())
+        if (orderItem.expression != null && orderItem.expression.isAggregate(context)) {
+          isSplitted = true;
+          break;
+        }
+
     //split for aggregate projections
     final AggregateProjectionSplit result = new AggregateProjectionSplit();
     for (final ProjectionItem item : info.projection.getItems()) {
@@ -1217,6 +1289,7 @@ public class SelectExecutionPlanner {
     }
 
     //bind split projections to the execution planner
+    info.nextAggregateAliasId = result.getNextAliasId();
     if (isSplitted) {
       info.preAggregateProjection = preAggregate;
       if (info.preAggregateProjection.getItems() == null || info.preAggregateProjection.getItems().size() == 0) {
@@ -1864,7 +1937,7 @@ public class SelectExecutionPlanner {
       else if (name.startsWith("index:"))
         plan.chain(new FetchFromSchemaIndexDetailStep(metadata.getName().substring("index:".length()), context));
       else
-        throw new UnsupportedOperationException("Invalid metadata: " + metadata.getName());
+        throw new CommandExecutionException("Invalid metadata: " + metadata.getName());
     }
     }
   }
@@ -3468,6 +3541,10 @@ public class SelectExecutionPlanner {
     if (info.aggregateProjection == null)
       return false;
 
+    // The engine builds its requests from the SELECT projection only: an aggregate that only the ORDER BY needs would never be computed
+    if (info.orderByAggregateAdded)
+      return false;
+
     // No DISTINCT
     if (info.distinct)
       return false;
@@ -5056,8 +5133,11 @@ public class SelectExecutionPlanner {
             // side of the range)
             while (blockIterator.hasNext()) {
               BooleanExpression next = blockIterator.next();
-              // The other side of a range over field.toLowerCase() is probed lower-cased too, so it must already be
-              if (next.createRangeWith(singleExp) && rangePartnerAllowed(singleExp, next, ciCollation, info)
+              // The other side of a range over field.toLowerCase() is probed lower-cased too, so it must already be.
+              // The other side becomes a key the index scan computes with no record, so it must pass the same
+              // isIndexAware test as the first side: a bound that reads the record (u <= id, u <= w * 100) is not
+              // early calculated and stays in the filter, and the search goes on for a constant partner (issue #9029)
+              if (next.createRangeWith(singleExp) && next.isIndexAware(info) && rangePartnerAllowed(singleExp, next, ciCollation, info)
                   && !hasLossyDecimalLiteralBound(next, clazz, baseFieldName, context)) {
                 additionalRangeCondition = (BinaryCondition) next;
                 blockIterator.remove();

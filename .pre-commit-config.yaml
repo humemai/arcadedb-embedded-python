@@ -23,6 +23,15 @@ repos:
         exclude: ^(k8s/|bindings/python/mkdocs\.yml$)
       - id: check-json
       - id: check-xml
+  # native-image.yml's publishing steps run only on a published release, so a shell bug in one of
+  # them is otherwise found by a release that silently fails to publish (#7282 shipped
+  # `[ a || b ]` in the Docker push gate). actionlint runs shellcheck over every `run:` block.
+  # Scoped to that one file because the other workflows still carry pre-existing findings.
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.12
+    hooks:
+      - id: actionlint
+        files: ^\.github/workflows/native-image\.yml$
   - repo: https://github.com/psf/black
     rev: 26.5.1
     hooks:
@@ -30,7 +39,7 @@ repos:
         language_version: python3
         files: ^bindings/python/.*\.py$
   - repo: https://github.com/pycqa/isort
-    rev: 9.0.1
+    rev: 9.0.2
     hooks:
       - id: isort
         args: ["--profile", "black"]
@@ -58,7 +67,7 @@ repos:
         types: [ java, xml ]
         additional_dependencies:
           - prettier@3.9.9
-          - prettier-plugin-java@2.10.4
+          - prettier-plugin-java@2.11.0
           - prettier-plugin-xml
         args:
           - --write

@@ -115,6 +115,7 @@ import java.util.PriorityQueue;
 import java.util.Set;
 import java.util.Timer;
 import java.util.TimerTask;
+import java.util.WeakHashMap;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ForkJoinTask;
@@ -236,6 +237,18 @@ public class LSMVectorIndex implements Index, IndexInternal {
   private volatile boolean                       persistedGraphUnresolved = true;
   private volatile ImmutableGraphIndex           graphIndex;        // Current graph (OnHeap or OnDisk)
   private volatile int[]                         ordinalToVectorId; // Maps graph ordinals to vector IDs
+  // The lookups of the ordinal maps a renumbering compaction translated while the old graph was resident: such a map holds -1 for
+  // the ordinals whose vector is gone, so it is not sorted and a lookup by vector id cannot binary search it (issue #9241). Keyed
+  // by the identity of the map, so a query holding a map always finds the lookup that belongs to it, and the entry goes with the map.
+  private final Map<int[], OrdinalLookup> renumberedLookups = Collections.synchronizedMap(new WeakHashMap<>());
+
+  /** The live ids of an ordinal map holding -1 entries, ascending, and the ordinal of each: a binary search over primitives */
+  private record OrdinalLookup(int[] vectorIds, int[] ordinals) {
+    int ordinalOf(final int vectorId) {
+      final int position = Arrays.binarySearch(vectorIds, vectorId);
+      return position < 0 ? -1 : ordinals[position];
+    }
+  }
   // Lightweight pointer index. Volatile and swapped as a whole (never cleared and refilled in place) so the
   // readers that take no lock - countEntries() and getStats() - always see a complete location set instead of a
   // rebuild in progress (issue #5568). Everything else reaches it through lock.readLock().
@@ -350,6 +363,11 @@ public class LSMVectorIndex implements Index, IndexInternal {
   // that a build has passed the point after which further mutations are preserved rather than folded into the
   // build's own snapshot (issue #3683).
   private volatile long    rebuildSnapshotGeneration = 0;
+  /**
+   * The data file this compaction holds the commit lock of, or -1. Only touched under {@code graphBuildLock}. The commits of the
+   * index are held off for the page read, the document scan fallback when pages miss vectors, and the rewrite.
+   */
+  private          int     compactionFileLock = -1;
 
   // Dedicated ForkJoinPool for graph building, so we can shut it down on close() to cancel
   // long-running build operations that would otherwise block server shutdown.
@@ -692,6 +710,10 @@ public class LSMVectorIndex implements Index, IndexInternal {
         // each >= their rank), so a renumbered entry is never bigger on disk than the one it replaces.
         final List<VectorEntryForGraphBuild> sorted = new ArrayList<>(liveEntries);
         sorted.sort((a, b) -> Integer.compare(a.vectorId, b.vectorId));
+        // the old id of each entry, ascending: the position of an old id is its new one (issue #9241)
+        final int[] oldVectorIds = new int[sorted.size()];
+        for (int i = 0; i < oldVectorIds.length; i++)
+          oldVectorIds[i] = sorted.get(i).vectorId;
 
         final List<MutablePage> newPages = new ArrayList<>();
         final int pageSize = getPageSize();
@@ -784,6 +806,14 @@ public class LSMVectorIndex implements Index, IndexInternal {
         // entry's bytes, or the dropped compacted component through a null reference.
         publishLocationIndex(liveEntries);
 
+        // The renumbering reissued every id, and what is resident still speaks the old ones until the graph this build is about
+        // to make is published: the resident graph's ordinal map and the pending entries of the delta buffer. Both are
+        // translated here, in the critical section of the swap, rather than dropped (the buffer was emptied for issue #9071,
+        // which made every record added since the last build unsearchable for the whole build, issue #9241). An id that is no
+        // longer live (deleted, or superseded by a newer vector of its record) has no new one: its ordinal answers -1, which
+        // every reader of the map treats as a vector that is gone. The write lock is held.
+        renumberResidentIds(oldVectorIds);
+
         // The rename and the schema re-keying are ONE step and must stay adjacent: `indexName` is volatile and read
         // without this lock (getName(), which is what TransactionIndexContext keys a lane by), so between these two
         // statements the index answers to a name the schema does not know yet - a milder recurrence of the very bug
@@ -868,6 +898,58 @@ public class LSMVectorIndex implements Index, IndexInternal {
       LogManager.instance().log(this, Level.WARNING, "Error dropping the file replaced by the compaction of '%s': %s",
           indexName, e.getMessage());
     }
+  }
+
+  private static OrdinalLookup lookupOf(final int[] map) {
+    int live = 0;
+    for (final int vectorId : map)
+      if (vectorId >= 0)
+        live++;
+    final int[] vectorIds = new int[live];
+    final int[] ordinals = new int[live];
+    // the live ids are ascending, as in the map this one was translated from
+    for (int ordinal = 0, i = 0; ordinal < map.length; ordinal++)
+      if (map[ordinal] >= 0) {
+        vectorIds[i] = map[ordinal];
+        ordinals[i++] = ordinal;
+      }
+    return new OrdinalLookup(vectorIds, ordinals);
+  }
+
+  /**
+   * Translates the ids the resident graph's ordinal map and the delta buffer hold into the ids a renumbering compaction
+   * handed out. Called with the write lock held, in the section that swaps the data file and publishes the new location
+   * index, so no reader sees one generation of ids through the other (issue #9241).
+   *
+   * @param oldVectorIds the ids of the live set before the renumbering, ascending; the position of an id is its new id
+   */
+  private void renumberResidentIds(final int[] oldVectorIds) {
+    final int[] oldOrdinalMap = ordinalToVectorId;
+    if (oldOrdinalMap != null && oldOrdinalMap.length > 0) {
+      final int[] renumbered = new int[oldOrdinalMap.length];
+      boolean anyDead = false;
+      // both are ascending: one pass over the two
+      for (int ordinal = 0, next = 0; ordinal < renumbered.length; ordinal++) {
+        final int oldId = oldOrdinalMap[ordinal];
+        while (next < oldVectorIds.length && oldVectorIds[next] < oldId)
+          next++;
+        final boolean live = next < oldVectorIds.length && oldVectorIds[next] == oldId;
+        renumbered[ordinal] = live ? next : -1;
+        anyDead |= !live;
+      }
+      if (anyDead)
+        renumberedLookups.put(renumbered, lookupOf(renumbered));
+      ordinalToVectorId = renumbered;
+    }
+
+    final List<DeltaVectorEntry> renumberedDelta = new ArrayList<>(deltaVectors.size());
+    for (final DeltaVectorEntry entry : deltaVectors) {
+      final int newId = Arrays.binarySearch(oldVectorIds, entry.vectorId);
+      if (newId >= 0)
+        renumberedDelta.add(new DeltaVectorEntry(newId, entry.rid, entry.vector));
+    }
+    deltaVectors = renumberedDelta;
+    recountDeltaResidentPayloads();
   }
 
   /**
@@ -2702,7 +2784,8 @@ public class LSMVectorIndex implements Index, IndexInternal {
       if (ordinal < 0 || ordinal >= graphNodes || ordinal >= ordinalToVectorId.length)
         continue;
       final int vectorId = ordinalToVectorId[ordinal];
-      if (!alreadyQueued.contains(vectorId))
+      // -1: the vector is gone (a map translated by a compaction)
+      if (vectorId >= 0 && !alreadyQueued.contains(vectorId))
         candidates[count++] = vectorId;
     }
     return count == candidates.length ? candidates : Arrays.copyOf(candidates, count);
@@ -3010,7 +3093,17 @@ public class LSMVectorIndex implements Index, IndexInternal {
       // The persist keeps opening a transaction of its own (issue #7058) - it now opens it on the suspended
       // thread's fresh context, so it cannot reach the caller's at all rather than merely promising not to.
       try (final CommittedReadScope ignored = CommittedReadScope.open(database)) {
-        buildGraphFromScratchExclusively(graphCallback, compactDataFile, releaseResidentGraphFirst);
+        // A compaction reads the live set off the pages and then replaces the data file with a rewrite of it: whatever a
+        // commit adds to the old file in between is in neither, and the old file is then dropped (issue #9071). The commits
+        // of this index are kept out from before the pages are read until the new file is in, which is the only span where
+        // the live set has to equal the file. Released by the build as soon as the rewrite is done, so the graph build that
+        // follows does not hold writers up.
+        compactionFileLock = compactDataFile ? lockDataFileForCompaction() : -1;
+        try {
+          buildGraphFromScratchExclusively(graphCallback, compactDataFile, releaseResidentGraphFirst);
+        } finally {
+          releaseCompactionFileLock();
+        }
       }
     } finally {
       // The scan work this build was meant to make unnecessary has been paid for; start the amortization window
@@ -3026,6 +3119,42 @@ public class LSMVectorIndex implements Index, IndexInternal {
       deltaScanWorkSinceRebuild.set(0L);
       graphBuildLock.unlock();
     }
+  }
+
+  /**
+   * Takes the lock commits take on this index's data file, waiting as long as a commit waits for it, so that no commit can add to
+   * the file while a compaction reads its live set and swaps the rewrite in (issue #9071). Commits lock their files before they take
+   * the index lock and so does this, in the same order. When the lock is already held by this thread (the rewrite itself asks for
+   * it too) nothing is taken and nothing is released here.
+   *
+   * Lock order: this runs under {@code graphBuildLock}, and no commit path takes the file lock and then {@code graphBuildLock}
+   * (commits take the file lock, then the index lock; only searches and rebuild threads take {@code graphBuildLock}, holding no file
+   * lock), so the two cannot invert. A {@link TimeoutException} is what {@link #compact()} treats as "retry later".
+   * <p>
+   * Only the mutable data file is locked, not every file of the index: it is the one the rewrite replaces and the only one commits
+   * append to (the compacted sub-index is read-only).
+   *
+   * @return the file id to release, or -1 when this call did not take the lock
+   *
+   * @throws TimeoutException when the commits of the index did not leave the file free: the compaction is retried later
+   */
+  private int lockDataFileForCompaction() {
+    final DatabaseInternal database = getDatabase();
+    final int fileId = getFileId();
+    final LockManager.LOCK_STATUS locked = database.getTransactionManager().tryLockFile(fileId,
+        database.getConfiguration().getValueAsLong(GlobalConfiguration.COMMIT_LOCK_TIMEOUT), Thread.currentThread());
+    if (locked == LockManager.LOCK_STATUS.NO)
+      throw new TimeoutException("Cannot compact vector index '" + indexName + "': timeout locking file " + fileId);
+    return locked == LockManager.LOCK_STATUS.YES ? fileId : -1;
+  }
+
+  /** Lets the commits of this index in again. Idempotent: the build releases it after the rewrite and the caller on every exit. */
+  private void releaseCompactionFileLock() {
+    final int fileId = compactionFileLock;
+    if (fileId < 0)
+      return;
+    compactionFileLock = -1;
+    getDatabase().getTransactionManager().unlockFile(fileId, Thread.currentThread());
   }
 
   private void buildGraphFromScratchExclusively(final GraphBuildCallback graphCallback, final boolean compactDataFile,
@@ -3069,7 +3198,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
     //
     // The read lock is all it takes: writers mutate both under the write lock, and holding it for two volatile
     // reads costs a rebuild nothing next to the build it is about to run.
-    final int deltaSnapshotId;
+    int deltaSnapshotId;
     final int mutationsAtBuildStart;
     lock.readLock().lock();
     try {
@@ -3259,6 +3388,22 @@ public class LSMVectorIndex implements Index, IndexInternal {
           indexName);
     final boolean locationIndexAlreadyPublished = compactDataFile && !leftRecordsOut && rewriteDataFileWithLiveEntries(
         ridToLatestVector.values());
+    if (locationIndexAlreadyPublished) {
+      // (The file lock is held here: it was taken by this build, or by a caller that holds it for the whole build.)
+      // The rewrite renumbered every vector and reset the id sequence to the dense count, so the snapshot taken above is a
+      // high-water mark of ids that no longer exist: kept, it would trim as "already in the graph" the ids the next commits
+      // hand out below it (issue #9071). Nothing has been committed since the pages were read, so the current sequence is the
+      // first id this build does not cover.
+      lock.readLock().lock();
+      try {
+        deltaSnapshotId = nextId.get();
+      } finally {
+        lock.readLock().unlock();
+      }
+    }
+    // The file is final now, and the commits held off since the pages were read can go on: the ids they hand out continue
+    // the dense sequence the rewrite just set
+    releaseCompactionFileLock();
 
     // Rebuild ordinal mapping (may have changed after document scan fallback)
     final int[] finalActiveVectorIdsFromPages = ridToLatestVector.values().stream()
@@ -7051,9 +7196,11 @@ public class LSMVectorIndex implements Index, IndexInternal {
   /**
    * Resolve an allow-list to the ordinals it occupies in {@code ordinalMap}, ascending.
    * <p>
-   * {@code ordinalMap} is always sorted ascending - every producer of {@code ordinalToVectorId} builds it with
+   * {@code ordinalMap} is sorted ascending - every producer of {@code ordinalToVectorId} builds it with
    * {@code sorted()} because the ordinal order has to match the order the graph was persisted in - so the reverse
-   * lookup is a binary search and needs no per-query map. A RID with no live vector id, or one whose vector was
+   * lookup is a binary search and needs no per-query map. The exception is the map a renumbering compaction translated
+   * while the old graph is resident, which holds -1 entries: it is resolved through its {@link OrdinalLookup}
+   * (issue #9241). A RID with no live vector id, or one whose vector was
    * ingested after the last rebuild and is therefore only in the delta buffer, simply contributes no ordinal.
    * <p>
    * The result is sorted so the caller scores in ordinal order, exactly the order the full scan uses. Distance ties
@@ -7066,9 +7213,13 @@ public class LSMVectorIndex implements Index, IndexInternal {
     int[] ordinals = new int[Math.min(allowedRIDs.size(), 256)];
     int count = 0;
     final VectorLocationIndex locations = vectorIndex();
+    // A map translated by a renumbering compaction holds -1 for the vectors that are gone and is not sorted: it is resolved
+    // through its lookup for as long as that graph is the resident one
+    final OrdinalLookup lookup = renumberedLookups.get(ordinalMap);
     for (final RID rid : allowedRIDs) {
       for (final int vectorId : locations.getVectorIdsForRid(rid)) {
-        final int ordinal = Arrays.binarySearch(ordinalMap, vectorId);
+        final int ordinal =
+            lookup != null ? lookup.ordinalOf(vectorId) : Arrays.binarySearch(ordinalMap, vectorId);
         if (ordinal < 0)
           continue;
         if (count == ordinals.length)
@@ -10594,6 +10745,12 @@ public class LSMVectorIndex implements Index, IndexInternal {
     // Track bytes written for chunking
     final AtomicLong bytesInCurrentChunk = new AtomicLong(0);
 
+    // scanBucket() logs and swallows whatever its callback throws, so a failed chunk commit is parked here, the scan
+    // is stopped, and the failure is rethrown below for build() to roll back and mark the index INVALID (issue #8906).
+    // Deliberately only the commit: a record that cannot be indexed is skipped and logged by design, while a failed
+    // commit leaves the transaction unusable and every later record failing for the same reason
+    final AtomicReference<RuntimeException> chunkCommitFailure = new AtomicReference<>();
+
     // Scan the bucket and index all documents
     db.scanBucket(db.getSchema().getBucketById(metadata.associatedBucketId).getName(), record -> {
       // Add to index
@@ -10624,10 +10781,15 @@ public class LSMVectorIndex implements Index, IndexInternal {
             "Committing chunk: %.1fMB written, %d vectors...",
             bytesInCurrentChunk.get() / (1024.0 * 1024.0), total.get());
 
-        db.getWrappedDatabaseInstance().commit();
-        db.getWrappedDatabaseInstance().begin();
-        db.getTransaction().setUseWALForThisTransaction(false); // Re-disable WAL for new transaction
-        db.getTransaction().setCommitLockTimeout(getGraphPersistCommitLockTimeout()); // and re-apply the bulk lock budget
+        try {
+          db.getWrappedDatabaseInstance().commit();
+          db.getWrappedDatabaseInstance().begin();
+          db.getTransaction().setUseWALForThisTransaction(false); // Re-disable WAL for new transaction
+          db.getTransaction().setCommitLockTimeout(getGraphPersistCommitLockTimeout()); // and re-apply the bulk lock budget
+        } catch (final RuntimeException e) {
+          chunkCommitFailure.set(e);
+          return false;
+        }
 
         bytesInCurrentChunk.set(0);
       }
@@ -10637,6 +10799,11 @@ public class LSMVectorIndex implements Index, IndexInternal {
 
       return true;
     });
+
+    final RuntimeException failure = chunkCommitFailure.get();
+    if (failure != null)
+      throw new IndexException("Cannot build vector index '" + indexName
+          + "': a chunk commit or the restart of its transaction failed after " + total.get() + " records were indexed", failure);
 
     final long elapsed = System.currentTimeMillis() - startTime;
     LogManager.instance().log(this, Level.INFO,
