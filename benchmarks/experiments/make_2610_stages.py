@@ -166,37 +166,58 @@ def _derived_stages(static):
 STAGES = STATIC_STAGES + _derived_stages(STATIC_STAGES)
 
 
-# ------------------------------------------------------------------- the tiers (DECISIONS #163)
+# ------------------------------------------------------------------- the tiers (DECISIONS #163, #165)
 # The user's queue priority for the 26.10.1 measurement: every ArcadeDB arm (embedded and served) first, the
-# other engines already in the harness at the version October's rows carry second, and what is new about the
-# others last. Tier 3 is deferred, never dropped: its arms stay in the coverage proof, so a later chain runs
-# them with no code change.
-#   moved  : the version in runner.py is not the one October's rows carry (ArangoDB 3.12.11 -> 3.12.12,
-#            FalkorDB 4.20.6 -> 6.0.1, LadybugDB 0.20.4 -> 0.21.2)
-#   new    : no October rows at all (a new arm: CAMPAIGN rows 26, 37 to 39, 41, 44, 49, 50)
-TIER3_MOVED = ("arangodb_dense", "arangodb_e2", "arangodb_graph", "arangodb_tpc", "arangodb_ts",
+# other engines already in the harness second, and what is new about the others last. Tier 3 is deferred,
+# never dropped: its arms stay in the coverage proof, so a later chain runs them with no code change.
+#   tier 2 includes the arms whose version MOVED since October's rows (ArangoDB 3.12.11 -> 3.12.12,
+#   FalkorDB 4.20.6 -> 6.0.1, LadybugDB 0.20.4 -> 0.21.2): they run at the new version in runner.py, no old
+#   image is restored, and leaving them out of the core tables until November would leave the closest
+#   multi-model comparator out of the paper (the user, 2026-10-06, DECISIONS #165).
+#   tier 3 is the arms with no October rows at all (a new arm: CAMPAIGN rows 26, 37 to 39, 41, 44, 49, 50).
+TIER2_MOVED = ("arangodb_dense", "arangodb_e2", "arangodb_graph", "arangodb_tpc", "arangodb_ts",
                "falkordb_graph", "ladybug_graph")
 TIER3_NEW = ("arangodb_dense_int8", "elasticsearch_dense", "elasticsearch_dense_int8", "falkordb_dense",
              "ladybug_dense", "ladybug_e2", "memgraph_dense", "memgraph_dense_int8", "memgraph_e2",
              "neo4j_dense_int8", "postgres_ts", "qdrant_sparse_uint8", "duckdb_e2", "lancedb_dense_fp32",
              "mongodb_dense_int8", "pgage_graph")
-TIER3 = TIER3_MOVED + TIER3_NEW
-TIER_NAMES = {1: "ArcadeDB", 2: "other engines already run", 3: "new versions and new arms"}
+TIER3 = TIER3_NEW
+TIER_NAMES = {1: "ArcadeDB", 2: "other engines already run", 3: "new arms"}
+
+# The stages behind the core tables (DECISIONS #165): lifecycle (the largest caps: 8 h at 1M, 48 h at 10M),
+# the server restart lane, and the arm that runs only part of its lane (the image-defaults sensitivity arm).
+# ArcadeDB's own arms of these run AFTER tier 2's core stages, so the core comparisons land first.
+EXTRA_LANES = ("lifecycle", "restart")
 
 
 def tier_of(backend):
-    """1 for every ArcadeDB arm (embedded or served), 3 for a moved or new comparator arm, else 2."""
+    """1 for every ArcadeDB arm (embedded or served), 3 for an arm with no October rows, else 2."""
     if backend.startswith("arcadedb"):
         return 1
     return 3 if backend in TIER3 else 2
+
+
+def is_extra(spec):
+    """True for a stage behind the core tables: an extra lane, or a restricted arm's own stage."""
+    if spec[2] in EXTRA_LANES:
+        return True
+    return spec[2] != "pycost" and any(b in runner.restricted_arms(spec[2]) for b in stage_backends(spec))
+
+
+def phase_of(tier, extra):
+    """The position of a (tier, extra) piece: 0 tier-1 core, 1 tier-2 core, 2 tier-1 extras, 3 tier-2 extras,
+    4 tier 3 (core and extras together, in the paper's lane order)."""
+    return 4 if tier == 3 else (2 if extra else 0) + (tier - 1)
 
 
 def check_tiers():
     """Problems with the tier lists: a name that is no registered arm (a typo is a tier nobody asked for)
     or one listed twice."""
     registered = {b for spec in runner.LANES.values() for b in spec[1]}
-    problems = [f"TIER3 names {b}, which no lane registers" for b in TIER3 if b not in registered]
-    problems += [f"TIER3 lists {b} twice" for b, c in collections.Counter(TIER3).items() if c > 1]
+    problems = [f"TIER3_NEW names {b}, which no lane registers" for b in TIER3_NEW if b not in registered]
+    problems += [f"TIER2_MOVED names {b}, which no lane registers" for b in TIER2_MOVED if b not in registered]
+    problems += [f"{b} is in both TIER2_MOVED and TIER3_NEW" for b in TIER2_MOVED if b in TIER3_NEW]
+    problems += [f"{b} listed twice" for b, c in collections.Counter(TIER2_MOVED + TIER3_NEW).items() if c > 1]
     return problems
 
 
@@ -208,12 +229,13 @@ def tiered_stages(stages=None, prefix="qT", rep_pass=None):
     EXIT trap, and a chain that reused qRA..qRO would find the old chain's markers already in the
     append-only STATUS.txt and start every stage at once."""
     stages = STAGES if stages is None else stages
-    pieces = {1: [], 2: [], 3: []}
+    pieces = {k: [] for k in range(5)}
     for spec in stages:
         s = list(spec) + [None] * (10 - len(spec))
         if s[2] == "pycost":
-            pieces[1].append(s)
+            pieces[phase_of(1, False)].append(s)
             continue
+        extra = is_extra(spec)
         by = collections.defaultdict(list)
         for be in stage_backends(spec):
             by[tier_of(be)].append(be)
@@ -222,8 +244,8 @@ def tiered_stages(stages=None, prefix="qT", rep_pass=None):
                 p = list(s)
                 p[1] = f"{s[1]} (tier {t}, {TIER_NAMES[t]})"
                 p[8] = by[t]
-                pieces[t].append(p)
-    flat = [p for t in (1, 2, 3) for p in pieces[t]]
+                pieces[phase_of(t, extra)].append(p)
+    flat = [p for k in range(5) for p in pieces[k]]
     if rep_pass:
         for p in flat:
             if p[2] != "pycost":
