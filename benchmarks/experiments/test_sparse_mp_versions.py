@@ -66,8 +66,11 @@ def _run_driver(tmp_path, backend, version, result):
 
 def test_a_comparator_pass_record_names_its_own_version_not_the_wheel(tmp_path):
     for rec in _run_driver(tmp_path, "milvus_sparse", "milvus:3.0.1", None):
+        # lib_version is what the page reads for a comparator pass (export_web). engine_version is whatever run_conditions()
+        # stamps from the package in the container, the ArcadeDB wheel's version where one is installed (a repo venv) and
+        # "unknown" where none is (a bench client image), which is exactly why lib_version exists; asserting on it here made
+        # the test pass vacuously in a clean environment and fail in a venv that holds the wheel.
         assert rec["lib_version"] == "milvus:3.0.1"
-        assert not str(rec["engine_version"]).startswith("26.")          # never the ArcadeDB wheel's
         assert not rec.get("sparse_result")
 
 
