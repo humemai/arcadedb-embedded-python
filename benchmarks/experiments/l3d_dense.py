@@ -1174,8 +1174,13 @@ class Qdrant(Base):
     def connect(self):
         from qdrant_client import QdrantClient
         import qdrant_client
-        self.cl = QdrantClient(host=os.environ["BENCH_SERVER_HOST"], port=6333,
-                               timeout=600)
+        # gRPC, the vendor's documented performance path (qdrant.tech/documentation/interfaces: "We recommend using gRPC ... to optimize the
+        # performance"). A laptop A/B (repros qdrant-transport-ab) measured REST 1.3x to 1.5x slower per query at p50 on the dense, int8,
+        # sparse and composed searches, with client CPU per call at 0.6x and identical answers; the bulk loads did not move. REST was the
+        # handicap, so the comparator takes the faster transport (the knob rule; DECISIONS #169). Recorded as qdrant_transport.
+        self.cl = QdrantClient(host=os.environ["BENCH_SERVER_HOST"], port=6333, grpc_port=6334,
+                               prefer_grpc=True, timeout=600)
+        self.row_extra = {**(getattr(self, "row_extra", None) or {}), "qdrant_transport": "grpc"}
         # THE SERVER'S version, and AFTER the client exists. lib_version reads
         # the CLIENT package, which is right for an embedded comparator and
         # wrong for a served one: the sparse lane records "qdrant:1.18.2" (the
