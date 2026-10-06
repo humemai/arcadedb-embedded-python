@@ -43,7 +43,7 @@ def check(wheel: Path, max_mb: float, warn_mb: float, min_mb: float) -> int:
     mb = size / MB
     label = f"{wheel.name}: {size:,} bytes ({mb:.1f} MB)"
     if size >= max_mb * MB:
-        print(f"❌ {label} is at or over the {max_mb:g} MB limit", file=sys.stderr)
+        print(f"ERROR: {label} is at or over the {max_mb:g} MB limit", file=sys.stderr)
         print("   largest members (compressed):", file=sys.stderr)
         for name, compressed in _largest_members(wheel):
             print(f"     {compressed / MB:8.1f} MB  {name}", file=sys.stderr)
@@ -54,11 +54,15 @@ def check(wheel: Path, max_mb: float, warn_mb: float, min_mb: float) -> int:
         )
         return 1
     if size >= warn_mb * MB:
-        print(f"⚠️  {label} is within {max_mb - mb:.1f} MB of the {max_mb:g} MB limit")
+        print(
+            f"WARNING: {label} is within {max_mb - mb:.1f} MB of the {max_mb:g} MB limit"
+        )
     elif size < min_mb * MB:
-        print(f"⚠️  {label} is below {min_mb:g} MB: is the engine or the JRE missing?")
+        print(
+            f"WARNING: {label} is below {min_mb:g} MB: is the engine or the JRE missing?"
+        )
     else:
-        print(f"✅ {label}")
+        print(f"OK: {label}")
     return 0
 
 
@@ -71,11 +75,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     max_mb = float(os.environ.get("ARCADEDB_WHEEL_MAX_MB") or args.max_mb)
     if max_mb != args.max_mb:
-        print(f"ℹ️  size limit set to {max_mb:g} MB by ARCADEDB_WHEEL_MAX_MB")
+        print(f"NOTE: size limit set to {max_mb:g} MB by ARCADEDB_WHEEL_MAX_MB")
     status = 0
     for wheel in args.wheels:
         if not wheel.is_file() or not zipfile.is_zipfile(wheel):
-            print(f"❌ {wheel} is not a wheel file", file=sys.stderr)
+            print(f"ERROR: {wheel} is not a wheel file", file=sys.stderr)
             return 2
         status = max(status, check(wheel, max_mb, args.warn_mb, args.min_mb))
     return status

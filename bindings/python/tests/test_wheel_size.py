@@ -40,7 +40,7 @@ def test_a_wheel_under_the_limit_passes(tmp_path, capsys):
         )
         == 0
     )
-    assert "✅" in capsys.readouterr().out
+    assert "OK:" in capsys.readouterr().out
 
 
 def test_a_wheel_at_or_over_the_limit_fails_and_names_the_largest_members(
@@ -133,3 +133,10 @@ def test_the_default_limit_is_the_policy_of_100_decimal_megabytes_and_main_uses_
     monkeypatch.setattr(module, "DEFAULT_MAX_MB", 5.0)
     monkeypatch.setattr(module, "DEFAULT_MIN_MB", 0.0)
     assert module.main([str(wheel)]) == 0
+
+
+def test_the_script_prints_only_ascii_so_a_windows_console_cannot_crash_it():
+    """The Windows CI job failed once with a UnicodeEncodeError on an emoji in the output (cp1252 console)."""
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+    body = source.split('"""', 2)[2]
+    assert not [c for c in body if ord(c) > 127]
