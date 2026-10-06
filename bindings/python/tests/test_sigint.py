@@ -5,6 +5,16 @@ and ends the whole process with status 130, so no ``KeyboardInterrupt``,
 ``finally`` block, or ``atexit`` hook runs and a ``with db.transaction():`` block
 is left without its rollback. ``start_jvm`` now passes ``interrupt=False``
 unless asked otherwise. Each case needs a fresh JVM, hence the child process.
+
+The ``java`` case blocks in a Java call that Ctrl-C cannot wake, on purpose
+(#179). JPype's Java handler for SIGINT first calls ``Thread.interrupt()`` on the
+main thread and only then marks the interrupt for Python. A call blocked in an
+interruptible wait (``Thread.sleep``, ``Object.wait``) wakes in between, and
+JPype 1.7.1 raises ``java.lang.InterruptedException`` or ``RuntimeError: Fatal
+error occurred`` and delivers the ``KeyboardInterrupt`` late. That failed 14 of
+400 interrupts with two cores idle and 26 of 200 with two busy cores. A call
+that Ctrl-C cannot wake leaves no such window, and it is the case ``start_jvm``
+documents: the ``KeyboardInterrupt`` arrives when the call returns.
 """
 
 import os
@@ -34,7 +44,14 @@ try:
         db.command("sql", "INSERT INTO T SET n = 1")
         if sys.argv[1] == "java":
             import jpype
-            jpype.JClass("java.lang.Thread").sleep(30000)  # a Java call that blocks
+            # A Java call that blocks for 4 s and ignores Thread.interrupt():
+            # a classic socket accept() polls with a timeout. It is not a
+            # Thread.sleep(), which JPype's SIGINT handler can wake before it
+            # records the interrupt for Python (#179).
+            loopback = jpype.JClass("java.net.InetAddress").getLoopbackAddress()
+            server = jpype.JClass("java.net.ServerSocket")(0, 1, loopback)
+            server.setSoTimeout(4000)
+            server.accept()
         else:
             while True:
                 time.sleep(0.05)
@@ -67,8 +84,9 @@ def _run_sigint(tmp_path, mode, interrupt):
 
 @pytest.mark.parametrize("mode", ["python", "java"])
 def test_ctrl_c_raises_keyboard_interrupt_and_runs_cleanup(tmp_path, mode):
-    """Python loop and a blocked, interruptible Java call: KeyboardInterrupt,
-    the transaction rolled back (COUNT 0), finally and atexit run, exit 0."""
+    """Python loop and a blocked Java call that Ctrl-C cannot wake (the
+    KeyboardInterrupt arrives when it returns): KeyboardInterrupt, the
+    transaction rolled back (COUNT 0), finally and atexit run, exit 0."""
     code, out = _run_sigint(tmp_path, mode, "0")
     assert code == 0, out
     lines = out.split()
