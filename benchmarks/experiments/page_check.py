@@ -1323,6 +1323,11 @@ NOT_PRINTED = [
      "the served ArcadeDB's limit on records or groups one query may hold in "
      "memory, asked of the engine over HTTP by the runner (or the container's "
      "own setting, named as the source when the engine could not be asked)"),
+    (r"^server_http_body_max_(bytes|source|default)$",
+     "the served ArcadeDB's limit on the size of one HTTP request body on the arms that bulk-load through the batch "
+     "endpoint, asked of the engine over HTTP by the runner (or the container's own setting, named as the request in the "
+     "source field when the engine could not be asked), and the engine's own default: the evidence behind the sentence "
+     "that names the raised limit"),
     (r"^ts_compaction_interval(_ms|_readback_error)?$",
      "the compaction interval ArcadeDB's native time-series arms created the type with, as the engine "
      "reports it (milliseconds), or why it could not be asked: the evidence behind the sentence that "
