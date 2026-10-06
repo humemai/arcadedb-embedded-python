@@ -488,3 +488,73 @@ def test_f3_still_judges_every_other_arms_heap(monkeypatch):
     a = _served(server_heap="8g", server_jvm_max_heap_bytes=8 * GIB)
     b = _served(backend="arcadedb_e4", server_heap="4g", server_jvm_max_heap_bytes=4 * GIB)
     assert FC.check_envelope([a, b]) == 1                  # two different heaps at one cap still fail
+
+
+# ------------------------------------------------- restricted arms, declared once (runner.ARM_RUNS)
+
+def test_the_declaration_is_the_only_place_that_names_the_arm_for_stages():
+    """Nothing in the stage generator names an arm: its stage, its roster, its repetitions and its class
+    all come from runner.ARM_RUNS."""
+    src = (HERE / "make_2610_stages.py").read_text()
+    import make_2610_stages as M
+    assert ARM not in src.split("def _derived_stages")[1].split("STATIC_STAGES = ")[0]
+    cfg = RN.ARM_RUNS[ARM]["l1tpc"]
+    own = next(s for s in M.STAGES if s[2] == "l1tpc" and M.stage_backends(s) == [ARM])
+    assert (own[3], own[4], own[7], own[9]) == (list(cfg["workloads"]), list(cfg["scales"]),
+                                                [f"REPS={cfg['reps']}"], cfg["durability"])
+    assert own[1] == cfg["title"] and own[5] == next(s for s in M.STATIC_STAGES if s[2] == "l1tpc")[5]
+
+
+def test_a_second_restricted_arm_needs_no_special_case(monkeypatch):
+    import make_2610_stages as M
+    second = "arcadedb_graph_server"
+    monkeypatch.setitem(RN.ARM_RUNS, second, {"l2": {"workloads": ("oltp",), "scales": ("sf1",), "reps": 2,
+                                                     "durability": None, "title": "graph reads, one size"}})
+    derived = M._derived_stages(M.STATIC_STAGES)
+    assert [d[0] for d in derived] == ["qRO", "qRP"]                          # ids continue the sequence
+    by_arm = {M.stage_backends(d)[0]: d for d in derived}
+    assert set(by_arm) == {second, ARM}
+    stages = M.STATIC_STAGES + derived
+    problems, _e, _c = M.check_coverage(stages)
+    assert problems == []
+    graph_main = next(s for s in stages if s[0] == "qRA")
+    assert second not in M.stage_backends(graph_main) and "neo4j_graph" in M.stage_backends(graph_main)
+    assert by_arm[second][4] == ["sf1"] and by_arm[second][7] == ["REPS=2"] and by_arm[second][5] == graph_main[5]
+    # without its stage the arm is simply not covered: the check, not a special case, says so
+    problems, _e, _c = M.check_coverage(M.STATIC_STAGES + [by_arm[ARM]])
+    assert any(second in p and "expected exactly 1" in p for p in problems)
+
+
+def test_coverage_holds_a_restricted_arm_to_its_declaration(monkeypatch):
+    import make_2610_stages as M
+    base = [s for s in M.STAGES if M.stage_backends(s) != [ARM]]
+    own = next(s for s in M.STAGES if M.stage_backends(s) == [ARM])
+    cases = {"outside runner.ARM_RUNS' sizes": own[:4] + (["tpch1"],) + own[5:],
+             "staged without REPS=3": own[:7] + ([],) + own[8:],
+             "staged for both durability classes": own[:9] + (None,) + own[10:]}
+    for what, spec in cases.items():
+        problems, _e, _c = M.check_coverage(base + [spec])
+        assert any(what in p for p in problems), (what, problems)
+
+
+def test_the_generated_stage_is_linted_like_every_other(tmp_path):
+    """Generate the real chain for a stand-in wheel and lint it: queue_lint passes, the arm's stage waits on
+    its predecessor, runs one workload and one size with the declared repetitions and one class, and the
+    documents stage leaves the arm out."""
+    import make_2610_stages as M
+    wheel = tmp_path / "arcadedb_embedded-26.10.1.dev0-cp312-cp312-manylinux_2_34_x86_64.whl"
+    wheel.write_bytes(b"stand-in")
+    out = tmp_path / "stages"
+    out.mkdir()
+    pins = {"ARCADEDB_WHEEL": str(wheel), "ARCADEDB_SERVER_IMAGE": "arcadedb-c25:test",
+            "ARCADEDB_ENGINE_COMMIT": "0" * 40}
+    M.emit_all(str(out), pins, "qOA5", True)
+    own = (out / "qRO.sh").read_text()
+    assert 'BACKENDS="arcadedb_imgdefaults_server"' in own and "export REPS=3" in own
+    assert own.count("run_cell ") == 2 or own.count("run_cell \"l1tpc/tpch10/$BE/oltp\"") == 1     # def + one call
+    assert "--durability strict" not in own.split("run_cell()")[1].split("for BE in")[1]
+    assert 'qRN ALL-DONE' in own
+    assert ARM not in (out / "qRD.sh").read_text().split('BACKENDS="')[1].split('"')[0]
+    done = subprocess.run([sys.executable, str(HERE / "queue_lint.py")] + sorted(str(p) for p in out.glob("*.sh")),
+                          capture_output=True, text=True)
+    assert done.returncode == 0, done.stdout[-600:] + done.stderr[-600:]

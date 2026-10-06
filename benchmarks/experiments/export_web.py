@@ -8235,7 +8235,7 @@ def _finish_table(table: dict) -> dict:
             # decision (OFF_PAGE_ARMS), and saying "the skeleton did not cover"
             # them names an arm the page does not print, which page_check's
             # OFF-PAGE check refuses (found rehearsing the 26.10.1 publish).
-            # Nor an arm that does not run this table's workload (runner.ARM_WORKLOADS) or is
+            # Nor an arm that does not run this table's workload (runner.ARM_RUNS) or is
             # printed on another table only (ARM_TABLES): it is not owed here.
             _norow = [display_name(_be) for _be in (LANES_RUNNER.get(_lane) or ())
                       if _be not in _have and _be not in OFF_PAGE_ARMS

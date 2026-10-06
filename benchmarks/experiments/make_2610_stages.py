@@ -95,12 +95,6 @@ import l6_restart as _RS  # noqa: E402
 RESTART_BY_MODEL = {m: tuple(b for b in runner.LANES["restart"][1] if _RS.MODEL[b] == m)
                     for m in ("docs", "graph", "dense", "ts")}
 RESTART_ENV = ("BENCH_RS_ITERS=5", "BENCH_RS_WARMUP=1", "BENCH_RS_WRITE_N=1000")
-# THE SENSITIVITY ARM (CAMPAIGN 7 row 69): the arms runner.ARM_WORKLOADS restricts to one
-# workload. The main documents stage leaves them out, and a stage of their own runs them
-# where the row says: documents OLTP, served, the 2M-part cell (tpch10), three repetitions,
-# the relaxed class only (the page prints the arm beside the main arm on the relaxed table).
-SENSITIVITY_ARMS = tuple(sorted(runner.ARM_WORKLOADS))
-DOCS_MAIN_ARMS = [b for b in runner.LANES["l1tpc"][1] if b not in SENSITIVITY_ARMS]
 # id, title, lane, workloads, scales, guards, extra, stage_env, only, dur_mode, after
 STAGES = [
     ("qRA", "graph INTERACTIVE at both sizes, both durability classes", "l2", ["oltp"], ["sf1", "sf10"],
@@ -110,7 +104,7 @@ STAGES = [
     ("qRC", "cross-model at both sizes, both durability classes", "e2", ["hybrid", "atomicity"],
      ["e2", "e2_500k"], _october("qOD")[5], {}, []),
     ("qRD", "documents, both tables, at both sizes", "l1tpc", ["oltp", "olap"], ["tpch1", "tpch10"],
-     _october("qOE")[5], {}, [], DOCS_MAIN_ARMS),
+     _october("qOE")[5], {}, []),
     ("qRE", "dense vector at both sizes, with the multipass overlay", "l3d", ["search"],
      ["small", "deep10m"], [], {}, []),
     ("qRF", "sparse vector at three sizes, with the second pass", "l3s", ["search"],
@@ -137,13 +131,33 @@ STAGES = [
      [_october("qOJ")[5][0]], {}, list(RESTART_ENV), list(RESTART_BY_MODEL["ts"])),
     # The lifecycle expansion stage (the single-model embedded engines) was
     # dropped (DECISIONS #139); the lane's roster is ArcadeDB and SurrealDB.
-    # LAST, because it is a sensitivity arm that no table waits for: ONE served
-    # ArcadeDB arm at the image's own JVM settings, on the documents transaction
-    # workload at the 2M-part tier, three repetitions (REPS=3, set after the
-    # template's default of five), the relaxed class only (CAMPAIGN 7 row 69).
-    ("qRO", "documents OLTP, served ArcadeDB at the image's own JVM defaults, the 2M-part cell", "l1tpc",
-     ["oltp"], ["tpch10"], _october("qOE")[5], {}, ["REPS=3"], list(SENSITIVITY_ARMS), "relaxed"),
 ]
+
+
+def _next_id(stage_id):
+    """qRN -> qRO: the letter after the last static stage's."""
+    return stage_id[:-1] + chr(ord(stage_id[-1]) + 1)
+
+
+def _derived_stages(static):
+    """One stage per arm that runs only part of its lane (runner.ARM_RUNS), after the static
+    ones (nothing waits for a sensitivity arm, so it runs last): the arm alone, on the
+    workloads, sizes, repetitions and durability class its declaration names, under the guards
+    of its lane's main stage. Nothing here names an arm."""
+    out, last = [], static[-1][0]
+    for lane in runner.LANES:
+        for arm, cfg in sorted(runner.restricted_arms(lane).items()):
+            main = next((s for s in static if s[2] == lane), None)
+            if main is None:
+                raise SystemExit(f"{arm} is declared for lane {lane}, which has no stage here to take its guards from")
+            last = _next_id(last)
+            out.append((last, cfg["title"], lane, list(cfg["workloads"]), list(cfg["scales"]), list(main[5]), {},
+                        [f"REPS={cfg['reps']}"] if cfg.get("reps") else [], [arm], cfg.get("durability")))
+    return out
+
+
+STATIC_STAGES = list(STAGES)
+STAGES = STATIC_STAGES + _derived_stages(STATIC_STAGES)
 
 
 # --------------------------------------------------------------------- coverage
@@ -167,7 +181,8 @@ def stage_backends(spec):
     only = spec[8] if len(spec) > 8 and spec[8] else None
     if spec[2] == "pycost":
         return []
-    return list(only) if only else list(runner.LANES[spec[2]][1])
+    # a lane's main stage leaves out the arms that run only part of it: they have stages of their own
+    return list(only) if only else [b for b in runner.LANES[spec[2]][1] if b not in runner.restricted_arms(spec[2])]
 
 
 def check_coverage(stages=STAGES):
@@ -187,7 +202,15 @@ def check_coverage(stages=STAGES):
             for be in stage_backends(spec):
                 seen[(lane, wl, be)] += 1
                 if not runner.arm_runs(lane, wl, be):
-                    problems.append(f"{lane}/{wl}/{be}: staged, but runner.ARM_WORKLOADS keeps it off this workload")
+                    problems.append(f"{lane}/{wl}/{be}: staged, but runner.ARM_RUNS keeps it off this workload")
+                cfg = runner.ARM_RUNS.get(be, {}).get(lane)
+                for sc in (spec[4] if cfg else []):
+                    if sc not in cfg["scales"]:
+                        problems.append(f"{lane}/{wl}/{be}: staged at {sc}, outside runner.ARM_RUNS' sizes {cfg['scales']}")
+                if cfg and cfg.get("reps") and f"REPS={cfg['reps']}" not in (spec[7] if len(spec) > 7 else []):
+                    problems.append(f"{lane}/{wl}/{be}: staged without REPS={cfg['reps']}, the repetitions runner.ARM_RUNS declares")
+                if cfg and cfg.get("durability") and (spec[9] if len(spec) > 9 else None) != cfg["durability"]:
+                    problems.append(f"{lane}/{wl}/{be}: staged for both durability classes, runner.ARM_RUNS declares {cfg['durability']} only")
     excluded, counts = [], {}
     for lane, spec_l in runner.LANES.items():
         backends = spec_l[1]
@@ -374,8 +397,11 @@ def emit_all(out, pins, first_after, allow_dev):
                                    steps=PYCOST_STEPS)
             else:
                 guards = list(spec[5]) + _pin_guard(stage_backends(spec))
+                # THE ROSTER IS stage_backends(spec), never the template's own default (every arm the
+                # lane registers): that default would put an arm that runs only part of its lane
+                # into the lane's main stage as well.
                 full = (spec[0], spec[1], spec[2], spec[3], spec[4], guards, spec[6], spec[7],
-                        spec[8] if len(spec) > 8 else None, spec[9] if len(spec) > 9 else None, after)
+                        stage_backends(spec), spec[9] if len(spec) > 9 else None, after)
                 O.HEAD = head.replace("{prior}", PRIOR_PIN).replace("{wheel_name}", wheel_name) \
                     .replace("{wheel_sha256}", wheel_sha).replace("{server_image}", server) \
                     .replace("{allow_dev}", "1" if allow_dev else "0") \

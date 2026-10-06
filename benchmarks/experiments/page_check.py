@@ -1676,7 +1676,7 @@ def _check_lane_roster(payload):
         absent = {str(a.get("backend")) for a in (t.get("declared_absences") or [])
                   if not a.get("column")}
         for key in registered:
-            # An arm that runs one workload of its lane only (runner.ARM_WORKLOADS) is not owed
+            # An arm that runs one workload of its lane only (runner.ARM_RUNS) is not owed
             # on the other workload's table: not a row, not a declared absence.
             if not RN.arm_runs(lane, _wl, key):
                 continue

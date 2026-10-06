@@ -1560,7 +1560,7 @@ BACKENDS["arcadedb_e4"] = dict(BACKENDS["arcadedb_server"], image="dbbench:arcad
 # 75% of the container limit, generational ZGC, and no -Xms. This arm is started
 # WITHOUT those two variables, so the image applies exactly that, and it is printed
 # beside the main arm on one lane (documents OLTP, served, the 2M-part cell, three
-# repetitions; ARM_WORKLOADS keeps it off the analytics workload). It is DERIVED
+# repetitions; ARM_RUNS keeps it to that workload, size, and rep count). It is DERIVED
 # from arcadedb_server rather than copied, so every other setting (the root
 # password, the default database, the query cap, the build cache, the compact
 # object headers, the strict-class flag) is the main arm's by construction and the
@@ -3423,20 +3423,31 @@ def split_cpuset(cpuset, n):
     return shards
 
 
-# ARMS THAT RUN ON ONE WORKLOAD OF THEIR LANE ONLY (CAMPAIGN 7 row 69). A lane
-# registers its arms once, for every workload it defines, and the stage generator,
-# the page's roster gate, and the runner all read that. The image-defaults arm is a
-# sensitivity arm for the documents transaction workload and must not run (or be
-# expected) on the analytics one. {backend: {lane: workloads}}; an arm absent from
-# the map runs on every workload of its lane, as before.
-ARM_WORKLOADS = {"arcadedb_imgdefaults_server": {"l1tpc": ("oltp",)}}
+# ARMS THAT RUN ONLY PART OF THEIR LANE (CAMPAIGN 7 row 69). A lane registers its arms once,
+# for every workload and every size it defines, and the stage generator, the page's roster
+# gate, and the runner all read that. A sensitivity arm is declared here instead, once, and
+# every reader takes it from here: {backend: {lane: {workloads, scales, reps, durability,
+# title}}}. The stage generator gives each entry a stage of its own (so the lane's main stage
+# leaves the arm out) and its coverage check expects the arm on exactly these workloads and
+# sizes; page_check does not owe the arm on another workload's table; build_jobs does not
+# make its other workloads. An arm absent from the map runs the whole lane, as before.
+ARM_RUNS = {
+    "arcadedb_imgdefaults_server": {
+        "l1tpc": {"workloads": ("oltp",), "scales": ("tpch10",), "reps": 3, "durability": "relaxed",
+                  "title": "documents OLTP, served ArcadeDB at the image's own JVM defaults, the 2M-part cell"},
+    },
+}
 
 
 def arm_runs(lane, workload, backend):
-    """Does this arm run this workload of this lane? True for every arm not in
-    ARM_WORKLOADS."""
-    only = ARM_WORKLOADS.get(backend, {}).get(lane)
-    return only is None or workload in only
+    """Does this arm run this workload of this lane? True for every arm not in ARM_RUNS."""
+    cfg = ARM_RUNS.get(backend, {}).get(lane)
+    return cfg is None or workload in cfg["workloads"]
+
+
+def restricted_arms(lane):
+    """{backend: its ARM_RUNS entry} for the arms of this lane that run only part of it."""
+    return {be: ARM_RUNS[be][lane] for be in LANES[lane][1] if lane in ARM_RUNS.get(be, {})}
 
 
 def build_jobs(lanes, workloads_arg):
