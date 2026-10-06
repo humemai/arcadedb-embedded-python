@@ -10,7 +10,8 @@
  * Two modes: transactional batches on the calling thread (commitEvery), or
  * the async executor's parallel bucket writers (insertManyJsonParallel; the
  * Python insert_many wrapper waits for completion itself, then reads the
- * failures the writers reported). The boxDoubles/boxLongs
+ * failures the writers reported). insertColumns takes whole columns instead of
+ * JSON (Database.insert_columns). The boxDoubles/boxLongs
  * helpers below serve AsyncExecutor.append_samples' numpy fast path.
  *
  * JSON-representable property values only (str/int/float/bool/null and
@@ -71,6 +72,106 @@ public final class DocumentBatcher {
       throw e;
     }
     return n;
+  }
+
+  /**
+   * Columnar insert: the documents are built Java-side from whole columns, so each column crosses the FFI once (a long[] or
+   * double[] copied from a numpy buffer, a boolean[], or an Object[] of Strings, boxed numbers, and nulls) instead of one
+   * JSON text per batch (bindings issue #150: 2.24x over insertManyJson on the first
+   * 2,000,000 TPC-H SF1 line items, nine typed properties, commit every 10,000, same sums and count).
+   *
+   * Same failure contract as insertManyJson (#7882): batch commits and the failure rollback apply only to a transaction
+   * opened here; a caller's own transaction is the caller's to commit or roll back.
+   *
+   * @param columns one array per name, each of length n: long[], double[], boolean[] or Object[]; a null element sets
+   *                the property to null, as a JSON null does on the insertManyJson path
+   */
+  public static long insertColumns(final Database db, final String typeName, final String[] names, final Object[] columns,
+      final int n, final int commitEvery) {
+    checkColumns(names, columns, n);
+    final boolean wasActive = db.isTransactionActive();
+    if (!wasActive)
+      db.begin();
+    try {
+      for (int i = 0; i < n; i++) {
+        final MutableDocument doc = db.newDocument(typeName);
+        fillRow(doc, names, columns, i);
+        doc.save();
+        if (!wasActive && commitEvery > 0 && (i + 1) % commitEvery == 0) {
+          db.commit();
+          db.begin();
+        }
+      }
+      if (!wasActive)
+        db.commit();
+    } catch (final Throwable e) {
+      if (!wasActive && db.isTransactionActive()) {
+        try {
+          db.rollback();
+        } catch (final Throwable rollbackError) {
+          e.addSuppressed(rollbackError);
+        }
+      }
+      throw e;
+    }
+    return n;
+  }
+
+  /**
+   * The parallel twin of insertColumns: each document is built Java-side from the columns and handed to the async executor's
+   * bucket writers, as insertManyJsonParallel does with parsed JSON rows. The caller waits for completion, then reads the
+   * failures the writers reported (a record they reject reaches only the error callback).
+   */
+  public static AsyncFailures insertColumnsParallel(final Database db, final String typeName, final String[] names,
+      final Object[] columns, final int n) {
+    checkColumns(names, columns, n);
+    final AsyncFailures failures = new AsyncFailures();
+    final ErrorCallback onError = failures::record;
+    for (int i = 0; i < n; i++) {
+      final MutableDocument doc = db.newDocument(typeName);
+      fillRow(doc, names, columns, i);
+      db.async().createRecord(doc, null, onError);
+    }
+    return failures;
+  }
+
+  private static void checkColumns(final String[] names, final Object[] columns, final int n) {
+    final int k = names.length;
+    if (columns.length != k)
+      throw new IllegalArgumentException("columns has " + columns.length + " arrays for " + k + " names");
+    for (int c = 0; c < k; c++) {
+      final Object col = columns[c];
+      final int len;
+      if (col instanceof long[] a)
+        len = a.length;
+      else if (col instanceof double[] a)
+        len = a.length;
+      else if (col instanceof boolean[] a)
+        len = a.length;
+      else if (col instanceof Object[] a)
+        len = a.length;
+      else
+        throw new IllegalArgumentException("column '" + names[c] + "' is a " + (col == null ? "null" : col.getClass().getName())
+            + ", not a long[], double[], boolean[] or Object[]");
+      if (len != n)
+        throw new IllegalArgumentException("column '" + names[c] + "' has " + len + " values for " + n + " rows");
+    }
+  }
+
+  private static void fillRow(final MutableDocument doc, final String[] names, final Object[] columns, final int i) {
+    for (int c = 0; c < names.length; c++) {
+      final Object col = columns[c];
+      final Object v;
+      if (col instanceof long[] a)
+        v = a[i];
+      else if (col instanceof double[] a)
+        v = a[i];
+      else if (col instanceof boolean[] a)
+        v = a[i];
+      else
+        v = ((Object[]) col)[i];
+      doc.set(names[c], v);
+    }
   }
 
   /**

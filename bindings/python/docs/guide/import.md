@@ -8,7 +8,7 @@ repository still does not encourage leaning on importer-based paths heavily from
 
 Use it when you need its supported file-import behavior or a full
 `EXPORT DATABASE` + `IMPORT DATABASE` restore flow. For large Python-side table/document
-ingest, prefer `db.insert_many(...)`; for bulk graph ingest, prefer `GraphBatch`.
+ingest, prefer `db.insert_many(...)` for rows and `db.insert_columns(...)` for column data (a `DataFrame`, a parquet batch, numpy arrays); for bulk graph ingest, prefer `GraphBatch`.
 
 ## Overview
 
@@ -44,7 +44,11 @@ not something we currently encourage as the default Python import story.
 + Example 15 plus the larger table examples are the basis for the current repository
     guidance.
 + For bulk document ingest from Python, `db.insert_many(...)` is the recommended
-    default: it batches rows across the FFI boundary; see Example 22.
+    default for rows: it batches rows across the FFI boundary; see Example 22. For data
+    that already lives in columns, `db.insert_columns(...)` is the recommended path: each
+    column crosses once as a typed array and the documents are built in Java (2.24x over
+    `insert_many` on the first 2,000,000 TPC-H SF1 line items, laptop, p50 of 3, same
+    sums and count); it takes `parallel=True` for the async writers like `insert_many`.
     `parallel=True` hands the rows to the async executor's writers; on a laptop (4 performance cores, parallel level 3, 1,000,000 rows, 6 runs per arm, engine `b22b5e9954`, 2026-10-04) it loaded 1.11x to 1.14x faster than the synchronous mode at 1, 3, 4, and 8 buckets alike (`CREATE DOCUMENT TYPE T BUCKETS n`). The maintainers' rule (ArcadeData/arcadedb#8478): as many buckets as the async executor has writers (`async_executor().get_parallel_level()`, default cores - 1), or a multiple of that, decided when the type is created; create indexes after the load where you can; a record the writers reject raises `ArcadeDBError` once the load completes. Each bucket has its own sub-index, so on a type with a key (a UNIQUE index) route records by it, ``ALTER TYPE T BucketSelectionStrategy `partitioned('id')` ``: then an insert's unique check and a keyed lookup touch one sub-index instead of every bucket's (the same laptop, 400,000 rows, 4 buckets, 6 runs per arm: the parallel load 3.15 s against 2.53 s partitioned, and a keyed lookup 16.2 against 14.6 us).
 + The async executor's SQL command path (`db.async_executor().command(...)`) is not a
     bulk-write path at any parallel level. Above parallel level 1 it silently discarded

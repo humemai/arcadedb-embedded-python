@@ -505,6 +505,8 @@ JNI calls per row. Rows are serialized to a single JSON string and looped
 Java-side, which makes this the fastest document-ingest path from Python
 (measured ~3x over a per-row SQL loop and ~1.7x over per-row async
 creation). Manages its own transactions unless one is already active.
+For data that already lives in columns, [`insert_columns`](#insert_columns) is
+faster still (2.24x on the same rows).
 
 **Parameters:**
 
@@ -561,6 +563,76 @@ n = db.insert_many(
     "Order",
     ({"oid": i, "amount": i * 1.5} for i in range(1_000_000)),
 )
+```
+
+---
+
+### insert_columns
+
+```python
+db.insert_columns(type_name: str, columns, commit_every: int = 10_000,
+                  parallel: bool = False) -> int
+```
+
+Bulk-insert documents **from whole columns**, the recommended path when the data
+already lives in columns (a pandas `DataFrame`, a parquet batch, numpy arrays).
+Each column crosses the bridge once as one typed array (a `long[]` or `double[]`
+copied from the numpy buffer, a `boolean[]`, a `String[]` from a list) and the
+documents are built Java-side, instead of one JSON text per batch that the
+engine parses and copies key by key. Measured on a laptop on the first
+2,000,000 TPC-H SF1 line items (nine typed properties, commit every 10,000,
+same rows, cores, and engine, p50 of 3): 8.21 s against 18.42 s for
+`insert_many` (2.24x); every arm stored the same sums and count. Cheaper
+row-wise bridges gained only 2-12% (tuples plus `dict(zip())`, `DataFrame.to_json`).
+Same failure contract as `insert_many`: the transaction the call opened is
+rolled back on any failure, a transaction the caller opened is left to the caller.
+
+**Parameters:**
+
+- `type_name` (str): Target document type (must exist)
+- `columns` (mapping or `DataFrame`): `{property name: column}`, every column
+  the same length. A numpy array of an integer, float, or bool kind crosses as
+  one buffer copy; a string or object array and any other sequence convert per
+  element (`None` is a null; a `str` reuses one Java String per distinct value).
+  A float `NaN` in a numpy float column is stored as NaN, not as null: use a
+  sequence with `None` for nulls. A pandas nullable column (`Int64`, `string`)
+  converts with its `<NA>` as null. `datetime64`, `timedelta64`, and complex
+  columns do not cross natively (`TypeError`): convert them to Python values or
+  use `insert_many`.
+- `commit_every` (int): Transaction batch size in synchronous mode (ignored
+  when a transaction is already open)
+- `parallel` (bool): Hand the documents to the async executor's parallel bucket
+  writers and wait for completion, exactly as `insert_many(parallel=True)`
+  does: the same bucket-count rule (`CREATE DOCUMENT TYPE T BUCKETS n`, a count
+  equal to or a multiple of `async_executor().get_parallel_level()`,
+  ArcadeData/arcadedb#8478), the same out-of-order writes, `commit_every` does
+  not apply. Only the transport differs.
+
+**Returns:**
+
+- `int`: Number of documents inserted
+
+**Raises:**
+
+- `ValueError`: no columns, columns of different lengths, a name that is not a
+  string, a 2-D array, or an unsigned value beyond the signed 64-bit range;
+  raised before anything is written
+- `TypeError`: a numpy column of a dtype that does not cross natively
+- `ArcadeDBError`: the load fails (a duplicate key, a value the declared
+  property type refuses); in the parallel mode also when the writers report any
+  record they could not store, once the load completes
+
+**Example:**
+
+```python
+import numpy as np
+
+db.command("sql", "CREATE DOCUMENT TYPE Reading")
+n = db.insert_columns("Reading", {
+    "id": np.arange(1_000_000, dtype=np.int64),
+    "value": np.random.random(1_000_000),
+    "label": ["a", "b"] * 500_000,
+})
 ```
 
 ---
