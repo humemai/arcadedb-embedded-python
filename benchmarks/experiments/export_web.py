@@ -42,7 +42,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from runner import BACKENDS, MEM_BY_SCALE, HEAP_BY_SCALE  # noqa: E402  (path set above)
+from runner import BACKENDS, MEM_BY_SCALE, HEAP_BY_SCALE, arm_runs  # noqa: E402  (path set above)
 
 
 # SIZE LABELS FROM THE LANES' OWN CONSTANTS, not typed. The time-series label
@@ -5978,6 +5978,11 @@ def _jvm_memory_note(table):
         # row carries text where the median would be.
         if not cell or e.get("outcome") or cell.get("median") is None:
             continue
+        # THE IMAGE-DEFAULTS ARM HAS ITS OWN SENTENCE (CAMPAIGN 7 row 69): it sets no initial
+        # heap, so its peak follows the work, and "close to the heap it was given" would be
+        # false of it. _jvm_defaults_notes says what its column follows.
+        if e.get("backend_key") == JVM_DEFAULTS_ARM:
+            continue
         heaps = _entry_heaps(e, lane, wl)
         if not heaps:
             continue
@@ -7041,7 +7046,8 @@ def _index_note(table_id, table=None):
     # prints (OFF_PAGE_ARMS). Naming "PostgreSQL (tuned)" here put a name
     # under the documents table that no row on it carries.
     _gone = {display_name(bk) for bk in _withdrawn_now(table_id)} | {
-        display_name(bk) for bk in OFF_PAGE_ARMS}
+        display_name(bk) for bk in OFF_PAGE_ARMS} | {
+        display_name(bk) for bk, tabs in ARM_TABLES.items() if table_id not in tabs}
     have = sorted({display_name(be) for be, d in decided.items()
                    if not d.startswith("NONE")} - _gone)
     none = sorted({display_name(be) for be, d in decided.items()
@@ -7142,8 +7148,8 @@ def _arcadedb_hash_index_notes(table):
     many = len(ids) > 1
     return [_gen(
         f"ArcadeDB's {'indexes' if many else 'index'} on {_hash_ids_phrase(ids)} "
-        f"{'are hash indexes' if many else 'is a hash index'} (`UNIQUE_HASH`), because this table only "
-        f"looks {'those ids' if many else 'that id'} up by equality. A hash index keeps no key order: an equality "
+        f"{'are hash indexes' if many else 'is a hash index'} (`UNIQUE_HASH`), because the benchmark never "
+        f"ranges over or orders by {'those ids' if many else 'that id'}. A hash index keeps no key order: an equality "
         f"lookup goes straight to its bucket instead of walking a sorted tree, and building it can cost "
         f"more than building a sorted index when the ids arrive in ascending order, which is the order "
         f"this loader sends them. Any such cost is in ArcadeDB's ingest and index times on this table.")]
@@ -8092,7 +8098,29 @@ def _declare_withheld_tier_absences(table):
                 _declare_absence(tid, label, col, "withheld", note)
 
 
+# THE SENSITIVITY ARM IS PRINTED ON ONE TABLE (CAMPAIGN 7 row 69): beside the main served
+# row on the documents transaction table, and nowhere else. It runs the transaction workload
+# only and the relaxed class only, so on the analytics table it would be a row of ingest and
+# memory with no query cell, and on the durability table half a pair. {backend key: the
+# table ids that print it}. Applied to every table in _finish_table, so no builder has to know.
+ARM_TABLES = {"arcadedb_imgdefaults_server": ("docs_oltp",)}
+
+
+def _drop_arms_not_printed_here(table):
+    tid = table.get("id")
+    hidden_keys = {k for k, tabs in ARM_TABLES.items() if tid not in tabs}
+    if not hidden_keys:
+        return
+    hidden_labels = {display_name(k) for k in hidden_keys}
+    keep = lambda e: not (e.get("backend_key") in hidden_keys or str(e.get("backend")) in hidden_labels)
+    table["entries"] = [e for e in table.get("entries") or [] if keep(e)]
+    if table.get("declared_absences"):
+        table["declared_absences"] = [a for a in table["declared_absences"]
+                                      if str(a.get("backend")) not in hidden_labels]
+
+
 def _finish_table(table: dict) -> dict:
+    _drop_arms_not_printed_here(table)
     table["instrument"] = _table_instrument(table.get("id"))
     october = table["instrument"] == "2026-10"
     base = list(table.get("conditions") or [])
@@ -8145,8 +8173,12 @@ def _finish_table(table: dict) -> dict:
             # decision (OFF_PAGE_ARMS), and saying "the skeleton did not cover"
             # them names an arm the page does not print, which page_check's
             # OFF-PAGE check refuses (found rehearsing the 26.10.1 publish).
+            # Nor an arm that does not run this table's workload (runner.ARM_WORKLOADS) or is
+            # printed on another table only (ARM_TABLES): it is not owed here.
             _norow = [display_name(_be) for _be in (LANES_RUNNER.get(_lane) or ())
-                      if _be not in _have and _be not in OFF_PAGE_ARMS]
+                      if _be not in _have and _be not in OFF_PAGE_ARMS
+                      and arm_runs(_lane, _wl, _be)
+                      and table.get("id") in ARM_TABLES.get(_be, (table.get("id"),))]
             if _norow:
                 _who = _join_and(_norow)
                 _why = _gen(f"{_who} {'has' if len(_norow) == 1 else 'have'} no row on this "

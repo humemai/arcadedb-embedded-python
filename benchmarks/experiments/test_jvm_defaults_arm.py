@@ -349,3 +349,34 @@ def test_roster_does_not_owe_the_arm_on_the_analytics_table(EW, capsys):
     assert f"[{ARM}] on docs_olap" not in out                       # not owed there
     PC._check_lane_roster({"tables": [table("docs_oltp", False), table("docs_olap", False)]})
     assert f"[{ARM}] on docs_oltp: registered for lane l1tpc, no row and no declaration" in capsys.readouterr().out
+
+
+def test_the_arm_is_printed_on_the_transaction_table_only(EW):
+    for tid, kept in (("docs_oltp", True), ("docs_olap", False), ("durability", False), ("l2", False)):
+        t = {"id": tid, "entries": [{"backend_key": "arcadedb_server", "backend": "ArcadeDB (server)"},
+                                    {"backend_key": ARM, "backend": EW.display_name(ARM)}],
+             "declared_absences": [{"backend": EW.display_name(ARM)}, {"backend": "DuckDB"}]}
+        EW._drop_arms_not_printed_here(t)
+        keys = [e["backend_key"] for e in t["entries"]]
+        assert (ARM in keys) is kept and "arcadedb_server" in keys
+        if not kept:
+            assert [a["backend"] for a in t["declared_absences"]] == ["DuckDB"]
+
+
+def test_the_skeleton_does_not_declare_the_arm_absent_where_it_is_not_owed(EW):
+    assert not RN.arm_runs("l1tpc", "olap", ARM)
+    assert "docs_olap" not in EW.ARM_TABLES[ARM] and EW.ARM_TABLES[ARM] == ("docs_oltp",)
+
+
+def test_memory_and_index_notes_leave_the_arm_to_its_own_sentence(EW, monkeypatch):
+    rows = [dict(r, heap="1g") for r in _frozen()[:1]] + _frozen()[1:]
+    monkeypatch.setattr(EW, "_FROZEN_ROWS", rows)
+    t = {"id": "docs_oltp", "entries": [
+        {"backend_key": "arcadedb_server", "backend": "ArcadeDB (server)", "scale": "tpch10",
+         "metrics": {"peak memory GiB": {"median": 0.9}}},
+        {"backend_key": ARM, "backend": EW.display_name(ARM), "scale": "tpch10",
+         "metrics": {"peak memory GiB": {"median": 0.3}}}]}
+    text = EW._jvm_memory_note(t)
+    assert text and EW.display_name(ARM) not in text and "ArcadeDB (server)" in text
+    notes = EW._index_note("docs_olap", {"id": "docs_olap", "entries": []})
+    assert notes and all(EW.display_name(ARM) not in n for n in notes)
