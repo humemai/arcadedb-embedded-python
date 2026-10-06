@@ -597,9 +597,11 @@ class ArcadeServer(Base):
     insert_cols = COLS_SQL
 
     def connect(self):
-        import requests
-        self.rq = requests.Session()
+        import lean_http
+        self.rq = lean_http.Session()
         self.rq.auth = ("root", "dbbenchpass")
+        # WHICH HTTP CLIENT ran, read from the session (CAMPAIGN 7 row 72), on every row this arm writes
+        self.row_extra = {**(getattr(self, "row_extra", None) or {}), **lean_http.row_fields(self.rq)}
         host = os.environ["BENCH_SERVER_HOST"]
         port = os.environ.get("BENCH_SERVER_PORT", "2480")
         self.base = f"http://{host}:{port}/api/v1"
@@ -702,6 +704,7 @@ def main():
     b.connect()
     out["connect_s"] = round(time.perf_counter() - t0, 3)
     out["engine_version"] = getattr(b, "version", "?")
+    out.update(getattr(b, "row_extra", None) or {})
     # F6 provenance: what the engine's pool was actually sized to, and what the
     # cpuset allowed. A cell where these differ is oversubscribed; recording it
     # means a later reader does not have to reconstruct it from the run script.

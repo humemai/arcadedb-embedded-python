@@ -1268,11 +1268,13 @@ class ArcadeServerTPC(ArcadeTPC):
     def connect(self):
         self.durability = (bench_common.at_class(bench_common.DURABILITY_ARCADEDB)
                            + bench_common.ARCADE_SERVER_DURABILITY_NOTE)
-        import requests
-        self.rq = requests.Session()
+        import lean_http
+        self.rq = lean_http.Session()
         host = os.environ.get("BENCH_SERVER_HOST", "localhost")
         self.base = f"http://{host}:2480/api/v1"
         self.rq.auth = ("root", "dbbenchpass")
+        # WHICH HTTP CLIENT ran, read from the session (CAMPAIGN 7 row 72), on every row this arm writes
+        self.row_extra = {**(getattr(self, "row_extra", None) or {}), **lean_http.row_fields(self.rq)}
         # ASK THE SERVER, as l1_tabular, l2_graph, l3_sparse and l3d_dense all
         # already do. "server" is a name, not a version (#156), and this lane
         # was the last one still asserting it. The same defect in another form

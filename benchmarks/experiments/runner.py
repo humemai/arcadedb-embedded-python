@@ -1985,6 +1985,11 @@ def build_manifest(ts, args, workers, shards, jobs):
         }
     manifest["runner_env"] = {k: v for k, v in sorted(os.environ.items())
                               if k.startswith(MANIFEST_ENV_PREFIXES)}
+    # THE ARCADEDB SERVED ARMS' HTTP CLIENT, resolved (CAMPAIGN 7 row 72): the environment above says what was SET, which is
+    # nothing at the default, so the choice that applies is recorded by name beside it. Each served row records what its own session
+    # ran with (`arcadedb_http_client`, read from the session).
+    import lean_http
+    manifest["arcadedb_http_client"] = lean_http.client_choice()
     return manifest
 
 
@@ -2981,7 +2986,12 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                    # the start deadline, and the laptop-only shutdown trace.
                    "BENCH_RS_ITERS", "BENCH_RS_WARMUP", "BENCH_RS_WRITE_N",
                    "BENCH_RS_GRACE_S", "BENCH_RS_POLL_S", "BENCH_RS_START_TIMEOUT_S",
-                   "BENCH_RS_TRACE", "BENCH_RS_VERIFY_S"):
+                   "BENCH_RS_TRACE", "BENCH_RS_VERIFY_S",
+                   # The HTTP client every ArcadeDB served arm uses (lean_http.py, CAMPAIGN 7
+                   # row 72): unset or "lean" is the persistent http.client connection,
+                   # "requests" restores the October client. CLOSED tuple: a campaign that set it
+                   # without this line would have run the default while believing otherwise.
+                   "BENCH_ARCADEDB_HTTP_CLIENT"):
             if os.environ.get(_k):
                 bench_env += ["-e", f"{_k}={os.environ[_k]}"]
 

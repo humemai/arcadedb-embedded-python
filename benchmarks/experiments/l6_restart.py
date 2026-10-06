@@ -391,9 +391,10 @@ class Graph(Engine):
         ad = self.G.ADAPTERS[self.backend]()
         ad._scale = self.scale
         if self.backend == "arcadedb_graph_server":
-            import requests
-            ad.rq = requests.Session()        # connect() would issue the schema DDL again
+            import lean_http
+            ad.rq = lean_http.Session()        # connect() would issue the schema DDL again
             ad.rq.auth = ("root", "dbbenchpass")
+            ad.row_extra = {**(getattr(ad, "row_extra", None) or {}), **lean_http.row_fields(ad.rq)}
             ad.base = f"http://{HOST}:2480/api/v1"
         elif self.backend == "falkordb_graph":
             import falkordb

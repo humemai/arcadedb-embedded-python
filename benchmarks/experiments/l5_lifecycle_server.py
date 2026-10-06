@@ -215,8 +215,8 @@ def measure(rq, root, db, situation, mode):
 
 
 def main(args):
-    import requests
-    rq = requests.Session()
+    import lean_http
+    rq = lean_http.Session()
     rq.auth = ("root", "dbbenchpass")
     host = os.environ["BENCH_SERVER_HOST"]
     port = os.environ.get("BENCH_SERVER_PORT", "2480")
@@ -228,7 +228,7 @@ def main(args):
     except Exception:  # noqa: BLE001
         version = "server:unknown"
     n = L.SCALE_ROWS[args.scale]
-    out = {"situation": args.workload, "n_rows": n, "engine_version": version,
+    out = {"situation": args.workload, "n_rows": n, "engine_version": version, **lean_http.row_fields(rq),
            "deployment": "server", "import_ms": None, "jvm_start_ms": None,
            "first_open_ms": None, "cold_process_ms": None}
     server_cmd(rq, root, f"drop database {DB}")

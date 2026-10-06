@@ -1154,6 +1154,9 @@ NOT_PRINTED = [
      "beside it, which is itself a diagnostic and not a column"),
     (r"^(rep|rc|trials|seed)$",
      "provenance: which repetition this row is and whether it exited clean"),
+    (r"^arcadedb_http_client$",
+     "which HTTP client an ArcadeDB served arm ran with (CAMPAIGN 7 row 72, lean_http.py): a condition of the served arms, read from "
+     "the session that ran, never a column"),
     (r"^(tpch_sf|n_docs|n_docs_ingested|n_lineitem|n_part|n_persons|"
      r"n_persons_in_corpus|n_persons_ingested|n_edges|n_edges_ingested|"
      r"n_points|n_products|n_rows|dim|dims|ts_chunk|ts_shards|last_window_s|"
