@@ -1023,9 +1023,13 @@ def main() -> int:
     print("\nevery override a table meets is named under it (CAMPAIGN section 7 row 21)")
     ov_bad = _check_override_disclosures(payload)
     print(f"  {ov_bad} undisclosed override(s)")
+    print("\nthe ArcadeDB row at the image's own JVM settings is explained wherever it is printed "
+          "(CAMPAIGN section 7 row 69)")
+    j_bad = _check_jvm_defaults_disclosure(payload)
+    print(f"  {j_bad} table(s) missing the sentence")
     return 1 if (bad or d_bad or p_bad or a_bad or l_bad or h_bad or c_bad
                  or r_bad or m_bad or not u_ok or k_bad or o_bad or z_bad or w_bad
-                 or q_bad or v_bad or n_bad or i_bad or ov_bad) else 0
+                 or q_bad or v_bad or n_bad or i_bad or ov_bad or j_bad) else 0
 
 
 # --------------------------------------------------------------------------
@@ -1295,6 +1299,10 @@ NOT_PRINTED = [
      "whether ArcadeDB's vector index was built with a hierarchy, and whether "
      "that was read from the engine (embedded) or recorded as the request "
      "(served, whose HTTP API returns no index metadata)"),
+    (r"^server_jvm_\w+$",
+     "what a served ArcadeDB's JVM was running, read from the process (its flags, its maximum and initial "
+     "heap in bytes, its collector, its JDK major, and the image-defaults stamp): the sentence under a table "
+     "that prints the image-defaults arm is generated from them, and the JVM heap column prints the heap"),
     (r"^(server_query_max_heap_elements|server_query_max_heap_source)$",
      "the served ArcadeDB's limit on records or groups one query may hold in "
      "memory, asked of the engine over HTTP by the runner (or the container's "
@@ -1663,6 +1671,10 @@ def _check_lane_roster(payload):
         absent = {str(a.get("backend")) for a in (t.get("declared_absences") or [])
                   if not a.get("column")}
         for key in registered:
+            # An arm that runs one workload of its lane only (runner.ARM_WORKLOADS) is not owed
+            # on the other workload's table: not a row, not a declared absence.
+            if not RN.arm_runs(lane, _wl, key):
+                continue
             checked += 1
             label = EW.display_name(key)
             if key in keyed:
@@ -2036,6 +2048,28 @@ def _check_override_disclosures(payload):
         lane_of(t.get("id")), [e.get("backend_key") for e in t.get("entries") or []]))
     print(f"  {len(tables)} October table(s), {owed} override sentence(s) owed from their entries")
     return len(found)
+
+
+def _check_jvm_defaults_disclosure(payload):
+    """A table that prints the image-defaults ArcadeDB row says what that row runs (CAMPAIGN
+    section 7 row 69): the sentence export_web generates from the cells' recorded JVM flags,
+    held here to the words that make it say it (the image's own settings, the heap, the
+    collector, no initial heap). A table that prints the arm and lost the sentence fails.
+    Returns bad count."""
+    import export_web as EW
+    bad = 0
+    for t in payload.get("tables", []):
+        if not any(e.get("backend_key") == EW.JVM_DEFAULTS_ARM and not e.get("outcome")
+                   for e in t.get("entries") or []):
+            continue
+        conds = [str(c) for c in (t.get("conditions") or [])]
+        if any(all(re.search(p, c) for p in (r"image's own JVM settings", r"\bheap\b", r"collector",
+                                              r"initial heap")) for c in conds):
+            print(f"  {t['id']}: the image-defaults row is explained")
+        else:
+            print(f"    MISSING {t['id']}: prints the image-defaults ArcadeDB row and no sentence says what it runs")
+            bad += 1
+    return bad
 
 
 def _check_one_way_knows_disclosure(payload, rows):

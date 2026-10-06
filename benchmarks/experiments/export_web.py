@@ -609,6 +609,9 @@ def _image_version_names() -> dict[str, str]:
 DISPLAY_NAMES = {
     "arcadedb_embedded": "ArcadeDB (embedded)",
     "arcadedb_server": "ArcadeDB (server)",
+    # The sensitivity arm at the vendor image's own JVM settings (CAMPAIGN 7 row 69): its
+    # own label, so it is printed beside the main served row and never mistaken for it.
+    "arcadedb_imgdefaults_server": "ArcadeDB (server, image JVM defaults)",
     "arcadedb_graph_embedded": "ArcadeDB (embedded)",
     "arcadedb_graph_server": "ArcadeDB (server)",
     "arcadedb_dense_embedded": "ArcadeDB (embedded)",
@@ -5881,6 +5884,19 @@ def _surreal_pair_note(table):
         ev, sv)
 
 
+def _jvm_reported_heap(r):
+    """The heap the JVM itself reported for a row of the image-defaults arm ('12g'), which sets
+    none of its own (CAMPAIGN 7 row 69): the runner records no tier heap for it, and the figure
+    the column prints is what the running process answered. None for every other row."""
+    if str(r.get("server_jvm_defaults")).lower() not in ("true", "1"):
+        return None
+    try:
+        gib = float(r.get("server_jvm_max_heap_bytes")) / 2**30
+    except (TypeError, ValueError):
+        return None
+    return f"{gib:.1f}".rstrip("0").rstrip(".") + "g"
+
+
 def _entry_heaps(e, lane, wl, exact_only=False):
     """The JVM heaps the rows behind a table entry ran with ('4g', ...); empty
     for an engine that records none. Shared by the memory note and the heap
@@ -5916,7 +5932,7 @@ def _entry_heaps(e, lane, wl, exact_only=False):
     rs = [r for r in _FROZEN_ROWS if _match(r) and str(r.get("scale")) == str(e.get("scale"))]
     if not rs and not exact_only:
         rs = [r for r in _FROZEN_ROWS if _match(r)]
-    heaps = {str(r.get("heap") or r.get("server_heap") or "").strip() for r in rs}
+    heaps = {str(r.get("heap") or r.get("server_heap") or _jvm_reported_heap(r) or "").strip() for r in rs}
     heaps = {h for h in heaps if h and h[-1].lower() == "g" and h[:-1].replace(".", "").isdigit()}
     return heaps
 
@@ -7133,6 +7149,70 @@ def _arcadedb_hash_index_notes(table):
         f"this loader sends them. Any such cost is in ArcadeDB's ingest and index times on this table.")]
 
 
+JVM_DEFAULTS_ARM = "arcadedb_imgdefaults_server"
+
+
+def _jvm_defaults_notes(table):
+    """What the image-defaults ArcadeDB row runs, said under every table that prints it
+    (CAMPAIGN section 7 row 69). Generated from the JVM flags the cells recorded: the arm's
+    own heap, collector, and share of its container, and the main served arm's, so the
+    sentence cannot say G1 or 8 GiB of a row that ran otherwise. The runner reads both from
+    the running process (`server_jvm_*`); a main-arm row without the read-back is said
+    without its numbers rather than guessed."""
+    lw = _TABLE_LANE.get(table.get("id"))
+    if not lw or not any(e.get("backend_key") == JVM_DEFAULTS_ARM and not e.get("outcome")
+                         for e in table.get("entries") or []):
+        return []
+    lane, wl = lw
+    mine = lambda r, be: r.get("backend") == be and r.get("lane") == lane and r.get("workload") == wl
+    arm = [r for r in _FROZEN_ROWS if mine(r, JVM_DEFAULTS_ARM)]
+    scales = {str(r.get("scale")) for r in arm}
+    main = [r for r in _FROZEN_ROWS if mine(r, "arcadedb_server") and str(r.get("scale")) in scales]
+
+    def gib(rows, key):
+        out = set()
+        for r in rows:
+            try:
+                out.add(float(r[key]) / 2**30)
+            except (KeyError, TypeError, ValueError):
+                pass
+        return sorted(out)
+
+    def fmt(x):
+        return f"{x:.1f}".rstrip("0").rstrip(".")
+
+    arm_heap, main_heap = gib(arm, "server_jvm_max_heap_bytes"), gib(main, "server_jvm_max_heap_bytes")
+    caps = sorted({float(str(r.get("server_mem_cap")).rstrip("g")) for r in arm
+                   if str(r.get("server_mem_cap", "")).rstrip("g").replace(".", "").isdigit()})
+    gcs = sorted({str(r.get("server_jvm_gc")) for r in arm if r.get("server_jvm_gc")})
+    main_gcs = sorted({str(r.get("server_jvm_gc")) for r in main if r.get("server_jvm_gc")})
+    values = []
+    other = "The main ArcadeDB server row gives the JVM a fixed heap"
+    if len(main_heap) == 1:
+        other += f" of {fmt(main_heap[0])} GiB"
+        values.append(fmt(main_heap[0]))
+    other += " and the " + (f"{main_gcs[0]} collector" if len(main_gcs) == 1 else "collector the JVM chooses by default")
+    other += ", and the embedded rows are configured the same way, so that the two deployments differ in transport only"
+    took = "this row sets neither, so the image applied its own"
+    if len(arm_heap) == 1:
+        took += f": a heap of {fmt(arm_heap[0])} GiB"
+        values.append(fmt(arm_heap[0]))
+        if len(caps) == 1 and caps[0]:
+            pct = round(100 * arm_heap[0] / caps[0])
+            took += f", {pct} per cent of its {fmt(caps[0])} GiB container"
+            values += [str(pct), fmt(caps[0])]
+    else:
+        took += ": a heap of 75 per cent of its container"
+        values.append("75")
+    took += (f", the {gcs[0]} collector" if len(gcs) == 1 else ", the image's default collector")
+    took += ", and no initial heap size"
+    text = (f"{display_name(JVM_DEFAULTS_ARM)} is the one row here that runs the ArcadeDB image's own JVM "
+            f"settings. {other}; {took}. Its difference from the main served row is the heap, the collector, "
+            f"and the heap's warm-up together, not any one of them. Because the main rows fix the initial "
+            f"heap at the maximum, their peak memory follows that setting; this row's follows the work done.")
+    return [_gen(text, *values)]
+
+
 def _censored_notes(table_id):
     lane_wl = _TABLE_LANE.get(table_id)
     if not lane_wl:
@@ -8035,6 +8115,7 @@ def _finish_table(table: dict) -> dict:
                            + _counts_note(table.get("id"), table.get("entries", []))
                            + _index_note(table.get("id"), table)
                            + _arcadedb_hash_index_notes(table)
+                           + _jvm_defaults_notes(table)
                            + _split_note(table)
                            + _phase_split_notes(table)
                            + _delete_settle_notes(table)

@@ -2467,8 +2467,18 @@ def server_jvm_readback(cid):
             out["server_jvm_max_heap_bytes"] = int(mx.group(1))
         if ms:
             out["server_jvm_initial_heap_bytes"] = int(ms.group(1))
+        ver = subprocess.run(["docker", "exec", cid, "jcmd", "1", "VM.version"],
+                             capture_output=True, text=True, timeout=30).stdout
+        major = re.search(r"VM version (\d+)", ver)
+        if major:
+            out["server_jvm_major"] = int(major.group(1))
         if "-XX:+UseZGC" in vm:
-            out["server_jvm_gc"] = "ZGC generational" if "-XX:+ZGenerational" in vm else "ZGC"
+            # JDK 24 removed the non-generational ZGC and the ZGenerational flag with it, so on 24 and
+            # later `-XX:+UseZGC` IS the generational collector and VM.flags no longer lists the flag
+            # (the first rehearsal cell of the image-defaults arm was refused for exactly that).
+            gen = ("-XX:+ZGenerational" in vm
+                   or ("-XX:-ZGenerational" not in vm and out.get("server_jvm_major", 0) >= 24))
+            out["server_jvm_gc"] = "ZGC generational" if gen else "ZGC"
         elif "-XX:+UseG1GC" in vm:
             out["server_jvm_gc"] = "G1"
         elif "-XX:+UseParallelGC" in vm:
