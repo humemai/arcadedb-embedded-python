@@ -296,14 +296,18 @@ OLAP_QUERIES = {
 # LSQB's nine pattern-matching queries (DECISIONS #104), on the FULL social
 # network at SF1 that the analytics table moves to (#103b). Canonical Cypher
 # from github.com/ldbc/lsqb (cypher/q1.cypher .. q9.cypher), taken nearly
-# verbatim; the only changes to the published text are:
+# verbatim; the only change to the published text is:
 #   * `RETURN count(*) AS n` in place of `AS count`, the one alias the digest
-#     compares against on every engine (the same reason the five above alias);
-#   * node inequality written as `<>` on the `.id` property (`tag1.id <>
-#     tag2.id`, `person1.id <> person3.id`) rather than on the node
-#     (`tag1 <> tag2`). Every vertex here carries a unique per-label id, so the
-#     two are the same predicate, and the property form is the one ArcadeDB's
-#     openCypher accepts as well as Neo4j/Memgraph/FalkorDB.
+#     compares against on every engine (the same reason the five above alias).
+# LSQB'S NODE INEQUALITY IS KEPT (CAMPAIGN section 7 row 60, DECISIONS #154 item 1,
+# BUGS F174): q5, q6, q8, and q9 compare two matched NODES (`tag1 <> tag2`,
+# `person1 <> person3`), not their ids. From 2026-09-18 (`d1fe3183a0`) this file
+# wrote the id property instead (`tag1.id <> tag2.id`), on the belief that
+# ArcadeDB's openCypher needed it; it does not, and its planner recognises only
+# the inequality between two node variables for the count operators it has for
+# q5, q6, and q9 (`COUNT ANTI-JOIN CHAIN` for q9). The id form sent all four to
+# the row pipeline and cost Neo4j 1.4-1.7x too. Every row records `lsqb_text`
+# (LSQB_TEXT below) so the page's id-form disclosure retires from the rows.
 # Message is the SNB supertype of Post and Comment; the Cypher engines reach it
 # through inheritance (ArcadeDB) or a second label (Neo4j/Memgraph/FalkorDB) on
 # every Post and Comment, so `(:Message)` matches both (see ldbc_snb.py).
@@ -335,10 +339,10 @@ LSQB_QUERIES = {
                 "(message)<-[:REPLY_OF]-(comment:Comment) RETURN count(*) AS n"),
     # q5: a message and a reply to it that carry two different tags.
     "lsqb_q5": ("MATCH (tag1:Tag)<-[:HAS_TAG]-(message:Message)<-[:REPLY_OF]-(comment:Comment)"
-                "-[:HAS_TAG]->(tag2:Tag) WHERE tag1.id <> tag2.id RETURN count(*) AS n"),
+                "-[:HAS_TAG]->(tag2:Tag) WHERE tag1 <> tag2 RETURN count(*) AS n"),
     # q6: a two-hop friend chain whose far end has a tag interest.
     "lsqb_q6": ("MATCH (person1:Person)-[:KNOWS]-(person2:Person)-[:KNOWS]-(person3:Person)"
-                "-[:HAS_INTEREST]->(tag:Tag) WHERE person1.id <> person3.id RETURN count(*) AS n"),
+                "-[:HAS_INTEREST]->(tag:Tag) WHERE person1 <> person3 RETURN count(*) AS n"),
     # q7: q4's left join -- a tagged message with a creator, likers and replies OPTIONAL.
     "lsqb_q7": ("MATCH (:Tag)<-[:HAS_TAG]-(message:Message)-[:HAS_CREATOR]->(creator:Person) "
                 "OPTIONAL MATCH (message)<-[:LIKES]-(liker:Person) "
@@ -346,15 +350,20 @@ LSQB_QUERIES = {
     # q8: q5 with the reply NOT itself carrying tag1 (anti-join).
     "lsqb_q8": ("MATCH (tag1:Tag)<-[:HAS_TAG]-(message:Message)<-[:REPLY_OF]-(comment:Comment)"
                 "-[:HAS_TAG]->(tag2:Tag) WHERE NOT (comment)-[:HAS_TAG]->(tag1) "
-                "AND tag1.id <> tag2.id RETURN count(*) AS n"),
+                "AND tag1 <> tag2 RETURN count(*) AS n"),
     # q9: q6 with person1 NOT directly KNOWS person3 (anti-join).
     "lsqb_q9": ("MATCH (person1:Person)-[:KNOWS]-(person2:Person)-[:KNOWS]-(person3:Person)"
                 "-[:HAS_INTEREST]->(tag:Tag) WHERE NOT (person1)-[:KNOWS]-(person3) "
-                "AND person1.id <> person3.id RETURN count(*) AS n"),
+                "AND person1 <> person3 RETURN count(*) AS n"),
 }
 # The table is five hand-written questions plus LSQB's nine = fourteen columns
 # (DECISIONS #104). The harness iterates OLAP_QUERIES, so the nine join it here.
 OLAP_QUERIES.update(LSQB_QUERIES)
+
+# The row field the page's id-form sentence reads (export_web._LSQB_TEXT_FIELD) and its value: LSQB's own text, every
+# engine, in the dialect LSQB publishes for it (a dialect with no LSQB text is checked against it, row 60).
+LSQB_TEXT_FIELD = "lsqb_text"
+LSQB_TEXT = "lsqb"
 
 # AND THE NINE NEED THE MESSAGE HALF. Every one of them counts a pattern over
 # Forum, Post, Comment, Tag, TagClass or Country, which ldbc_snb.MessageCorpus

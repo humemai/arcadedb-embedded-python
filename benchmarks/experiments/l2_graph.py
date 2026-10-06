@@ -240,7 +240,7 @@ class ArcadeGraphEmbedded(Base):
 
     # MESSAGE-HALF SCHEMA, shared by both ArcadeDB arms. Message is an abstract
     # supertype and Post/Comment EXTEND it, so `MATCH (m:Message)` reaches both
-    # (verified on 26.9.1: the inheritance, `tag1.id <> tag2.id`, the anti-join
+    # (verified on 26.9.1: the inheritance, the node inequality `tag1 <> tag2`, the anti-join
     # `WHERE NOT (c)-[:HAS_TAG]->(t)` and OPTIONAL MATCH all run in openCypher).
     # Vertices carry only `id`; every LSQB query is a structural count and the
     # analytics questions never read a message property. The Graph Analytical
@@ -1275,7 +1275,12 @@ class LadybugGraph(Base):
         self.msg_counts = {"msg_vertices": vcount, "msg_edges": ecount}
 
     # LSQB in LadybugDB's typed-rel-table Cypher (see the note above). Undirected
-    # knows to match the canonical queries the tested arms run.
+    # knows to match the canonical queries the tested arms run. THE INEQUALITIES ARE LSQB'S OWN
+    # LADYBUG TEXT (ldbc/lsqb ladybug/q5, q6, q9: `id(tag1) <> id(tag2)`, `id(person1) <> id(person3)`;
+    # q8 compares the tags' key property, here `id`), row 60. CAMPAIGN row 60 names the node form
+    # (`tag1 <> tag2`) for this arm too; LadybugDB 0.21.2 accepts all three spellings and counts the
+    # same on a probe graph, and the row's governing sentence is "LSQB's own text on every engine",
+    # so this is the form LSQB publishes for the engine.
     LSQB = {
         "lsqb_q1": ("MATCH (:Country)<-[:City_isPartOf_Country]-(:City)<-[:Person_isLocatedIn_City]-(:Person)"
                     "<-[:Forum_hasMember_Person]-(:Forum)-[:Forum_containerOf_Message]->(:Message)"
@@ -1294,9 +1299,9 @@ class LadybugGraph(Base):
                     "(message)<-[:Person_likes_Message]-(liker:Person), "
                     "(message)<-[:Message_replyOf_Message]-(comment:Message) RETURN count(*) AS n"),
         "lsqb_q5": ("MATCH (tag1:Tag)<-[:Message_hasTag_Tag]-(message:Message)<-[:Message_replyOf_Message]-"
-                    "(comment:Message)-[:Message_hasTag_Tag]->(tag2:Tag) WHERE tag1.id <> tag2.id RETURN count(*) AS n"),
+                    "(comment:Message)-[:Message_hasTag_Tag]->(tag2:Tag) WHERE id(tag1) <> id(tag2) RETURN count(*) AS n"),
         "lsqb_q6": ("MATCH (person1:Person)-[:KNOWS]-(person2:Person)-[:KNOWS]-"
-                    "(person3:Person)-[:Person_hasInterest_Tag]->(tag:Tag) WHERE person1.id <> person3.id RETURN count(*) AS n"),
+                    "(person3:Person)-[:Person_hasInterest_Tag]->(tag:Tag) WHERE id(person1) <> id(person3) RETURN count(*) AS n"),
         "lsqb_q7": ("MATCH (:Tag)<-[:Message_hasTag_Tag]-(message:Message)-[:Message_hasCreator_Person]->(creator:Person) "
                     "OPTIONAL MATCH (message)<-[:Person_likes_Message]-(liker:Person) "
                     "OPTIONAL MATCH (message)<-[:Message_replyOf_Message]-(comment:Message) RETURN count(*) AS n"),
@@ -1305,7 +1310,7 @@ class LadybugGraph(Base):
                     "WHERE NOT (comment)-[:Message_hasTag_Tag]->(tag1) AND tag1.id <> tag2.id RETURN count(*) AS n"),
         "lsqb_q9": ("MATCH (person1:Person)-[:KNOWS]-(person2:Person)-[:KNOWS]-"
                     "(person3:Person)-[:Person_hasInterest_Tag]->(tag:Tag) "
-                    "WHERE NOT (person1)-[:KNOWS]-(person3) AND person1.id <> person3.id RETURN count(*) AS n"),
+                    "WHERE NOT (person1)-[:KNOWS]-(person3) AND id(person1) <> id(person3) RETURN count(*) AS n"),
     }
 
     def run_olap(self, qname):
@@ -3402,6 +3407,10 @@ def main():
     # one-way disclosure (export_web._knows_one_way_note) retires per row from this field, so
     # it is written on every graph row, both workloads, before the first query runs.
     out[graph_common.KNOWS_DIRECTION_FIELD] = graph_common.KNOWS_DIRECTION
+    # LSQB'S OWN TEXT on every graph analytics row (row 60, BUGS F174): the page's id-form sentence
+    # (export_web._lsqb_id_form_note) retires per row from this field.
+    if args.workload == "olap":
+        out[graph_common.LSQB_TEXT_FIELD] = graph_common.LSQB_TEXT
 
     # THE MESSAGE HALF, inside the build timer, because at the full-network
     # tier it IS the load: the ingest column prices the whole corpus. The
