@@ -41,7 +41,7 @@ Usage:
   python3 make_2610_stages.py --check                 # coverage only, no pins needed
   python3 make_2610_stages.py --project CELLS.tsv     # per-stage hours from measured cells
   ARCADEDB_WHEEL=... ARCADEDB_SERVER_IMAGE=... ARCADEDB_ENGINE_COMMIT=<40 hex> \\
-      python3 make_2610_stages.py --out DIR [--after qOA5]
+      python3 make_2610_stages.py --out DIR [--after qOA5 | --after none]
 """
 from __future__ import annotations
 
@@ -372,6 +372,14 @@ say "$ID finished"   # the EXIT trap writes the ALL-DONE marker
 '''
 
 
+def _after_arg(text):
+    """`--after none` (or an empty string) is no wait. An empty id must never reach _wait: it would write
+    `grep -q " ALL-DONE"`, which matches the first marker line in STATUS.txt and starts the stage at once
+    while looking like a wait."""
+    t = text.strip()
+    return None if t.lower() in ("", "none") else t
+
+
 def _wait(after):
     return ("" if after is None else
             f'\nwhile ! grep -q "{after} ALL-DONE" "$S" 2>/dev/null; do sleep 300; done\n'
@@ -468,7 +476,9 @@ def project(cells_tsv):
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", help="directory for the generated scripts (not the repo)")
-    ap.add_argument("--after", default=OCTOBER_LAST_STAGE, help="the stage the first one waits on")
+    ap.add_argument("--after", default=OCTOBER_LAST_STAGE, type=_after_arg,
+                    help="the stage the first one waits on; `none` for no wait at all (the old chain was "
+                         "cancelled, or the host is idle): the first stage then starts when launched")
     ap.add_argument("--allow-prerelease", action="store_true",
                     help="emit for a dev/rc wheel (a page measurement; the paper cites releases, #42)")
     ap.add_argument("--check", action="store_true", help="coverage only")
