@@ -18,12 +18,31 @@ pip install arcadedb-embedded
 
 ## What's Included
 
-The `arcadedb-embedded` package includes everything you need. Current Linux x86_64
-package metadata and local installs are about 69 MiB as a wheel and 96 MiB
-installed, with some variation by platform, version, and filesystem allocation:
+The `arcadedb-embedded` package includes everything you need. The Linux x86_64 wheel of
+26.10.1 is 69.4 MiB to download and 96.9 MiB unpacked (measured on the file on PyPI);
+other platforms are in the same range:
 
-- **ArcadeDB JARs**: ~33 MiB (uncompressed)
-- **Bundled JRE**: ~63 MiB (uncompressed, platform-specific Java 25 runtime via jlink)
+| Platform | Wheel tag (Python 3.12) | Download |
+|---|---|---|
+| Linux x86_64 | `manylinux_2_34_x86_64` | 69.4 MiB |
+| Linux ARM64 | `manylinux_2_34_aarch64` | 68.3 MiB |
+| macOS Apple Silicon | `macosx_11_0_arm64` | 64.8 MiB |
+| Windows x86_64 | `win_amd64` | 66.1 MiB |
+
+Every wheel is platform-specific, built on a native runner of its platform, and carries a
+JRE for that platform, so pip needs no hint to pick the right one. Unpacked, the Linux
+x86_64 wheel holds:
+
+- **ArcadeDB JARs**: ~34 MiB across 64 JARs, including the optional server and Studio stack
+  ([Server Mode](../guide/server.md#what-it-costs-you) lists it; `arcadedb.jar_fingerprint()`
+  counts and hashes the installed JARs)
+- **Bundled JRE**: ~63 MiB (Java 25 runtime trimmed with jlink to 20 modules)
+
+Engine modules the bindings do not use are left out to keep the wheel small: the gRPC and
+MongoDB wire protocols, Raft HA, and Gremlin among them (`scripts/jar_exclusions.txt` in the
+repository has the full list). The optional server is in-process, so its lifetime is your
+Python process's, and it bundles the Postgres, Redis, and Bolt wire protocols (opt-in); see
+[Access Methods](../api-access-methods.md).
 
 **Features Included:**
 
@@ -34,9 +53,6 @@ installed, with some variation by platform, version, and filesystem allocation:
 - ✅ **Data Import**: CSV, XML, and ArcadeDB JSONL import
 - ✅ **Server Mode**: Optional in-process HTTP server
 - ✅ **Studio Web UI**: Visual database explorer and query editor
-
-!!! tip "Platform Selection"
-    pip automatically selects the correct platform-specific wheel for your system. You don't need to specify the platform manually.
 
 ## Python Version
 
@@ -163,6 +179,5 @@ For detailed configuration and memory tuning, see [Troubleshooting - Memory Conf
 ## Next Steps
 
 - [Quick Start Guide](quickstart.md) - Get started in 5 minutes
-- [Package Overview](distributions.md) - Detailed package information
 - [User Guide](../guide/core/database.md) - Learn all features
 - [Build Architecture](../development/build-architecture.md) - How platform-specific wheels are built

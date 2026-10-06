@@ -6,16 +6,16 @@ ArcadeDB Python bindings include a full HTTP server with the Studio web UI. This
 
 Server mode is bundled by default.
 
-**Disk.** The server stack is these JARs, measured on the 26.10.1.dev0 wheel (2026-10-01);
-the current package sizes are in
-[Package Overview](../getting-started/distributions.md#whats-inside):
+**Disk.** The server stack is these JARs, measured on the 26.10.1 wheel from PyPI;
+the package sizes are in
+[Installation](../getting-started/installation.md#whats-included):
 
 | JAR | MB (uncompressed) | contains |
 |---|---|---|
-| `arcadedb-studio` | 2.82 | web UI assets, **no** `.class` files |
+| `arcadedb-studio` | 2.88 | web UI assets, **no** `.class` files |
 | `undertow-core` | 2.33 | HTTP server, 1,510 classes |
+| `arcadedb-server` | 1.09 | the server itself, 373 classes |
 | `micrometer-core` | 0.92 | metrics, required at server startup |
-| `arcadedb-server` | 0.87 | the server itself, 307 classes |
 | `xnio-api` | 0.59 | undertow's IO layer |
 | `wildfly-common` | 0.28 | |
 | `jboss-threads` | 0.13 | |
@@ -24,7 +24,7 @@ the current package sizes are in
 | `jboss-logging` | 0.06 | |
 | `micrometer-commons` | 0.05 | |
 | `wildfly-client-config` | 0.05 | |
-| **total** | **8.29** | |
+| **total** | **8.58** | |
 
 **Memory and CPU, if you never call `create_server()`.** The JARs sit on the
 classpath and the JVM loads classes lazily, so nothing is initialised, no
@@ -34,7 +34,7 @@ threads start, and no heap is allocated for them.
 Undertow starts listener threads and buffer pools. That is the real cost, and
 it arrives when you ask for it.
 
-**Studio specifically is free until browsed.** Its JAR contains 126 entries,
+**Studio specifically is free until browsed.** Its JAR contains 120 entries,
 all static JS/HTML/CSS/SVG/PNG, and **zero** `.class` files: it cannot execute
 anything. Assets are read out of the zip only when a browser requests them.
 (`tests/test_server_packaging.py` asserts this, so the claim fails loudly if a
@@ -136,6 +136,16 @@ start_jvm(heap_size="8g")
 server = arcadedb.create_server("./databases", root_password="my_secure_password")
 ```
 
+### Serving a database you created in embedded mode
+
+A server finds its databases in `<root_path>/databases/`. To serve one you created with
+`create_database()`, close it first, because an open database holds the file lock. Then move
+its directory into `<root_path>/databases/`, start the server, and open the database with
+`server.get_database(name)`. Without the `close()` the server cannot open it
+(`tests/test_server_patterns.py::test_pattern1_embedded_first_requires_close`). The shorter
+route is `server.create_database(name)` on a started server, which registers the database
+with the server from the start (see [Access Methods](../api-access-methods.md)).
+
 ## Wire Protocols
 
 The wheel bundles three protocol plugins besides HTTP. They are **opt-in**: a
@@ -182,12 +192,9 @@ multi-homed or internet-facing machine exposes it beyond localhost.
 
 ### Arrow (ADBC) clients over the Postgres wire
 
-From **26.10.1**, Arrow's native PostgreSQL ADBC driver
-(`adbc-driver-postgresql`, measured with 1.12.0) connects to a server started
-from this wheel with the Postgres plugin, and `fetch_arrow_table()` returns
-Arrow tables directly. On **26.9.1 it cannot connect**: the driver's type
-bootstrap fails with "Expected 5 or 6 columns from type resolver pg_type query
-but got 0" (ArcadeDB [#7178][7178], fixed for 26.10.1).
+Arrow's native PostgreSQL ADBC driver (`adbc-driver-postgresql`, measured with
+1.12.0) connects to a server started from this wheel with the Postgres plugin,
+and `fetch_arrow_table()` returns Arrow tables directly.
 
 ```python
 import adbc_driver_postgresql.dbapi as pg
@@ -202,30 +209,17 @@ with pg.connect("postgresql://root:<password>@localhost:5432/mydb") as conn:
 declared in the schema (`LONG`, `STRING`, `DOUBLE`, `BOOLEAN`) comes back as
 `int64`, `string`, `double`, `bool`, and a computed column as its real type:
 `count(*)` and `max(n)` as `int64`, `sum(x)` as `double`, `n * 2` as `int64`.
-Development builds before 2026-09-24 described computed columns as `varchar`
-before execution, so the driver returned them as strings (`'3'`, not `3`), and
-pgjdbc's `PreparedStatement` returned them as `String`; fixed for 26.10.1
-(ArcadeDB [#8285][8285]).
 
 **Bound parameters are served from indexes.** Postgres-wire clients send a
-bound value as `$1`; from 26.10.1 an equality on an indexed property with a
-`$1` uses the index, where earlier builds scanned the whole type (ArcadeDB
-[#8288][8288]). pgjdbc also works at its default `prepareThreshold` from
-26.10.1; earlier builds failed a prepared statement's sixth execution
-(ArcadeDB [#8244][8244]).
+bound value as `$1`, and an equality on an indexed property with a `$1` uses
+the index. pgjdbc works at its default `prepareThreshold`.
 
-Measured on a laptop against the 26.10.1 development wheel (engine
-`3440a871a9`); `tests/test_server_wire_protocols.py` connects with the driver,
-checks the typed columns, values, a bound parameter, and a computed column's
-type, so the test fails the day any of it changes.
+`tests/test_server_wire_protocols.py` connects with the driver and checks the
+typed columns, their values, a bound parameter, and a computed column's type,
+so the test fails the day any of it changes.
 
 The other ADBC route, adbcBridge over the psqlodbc driver, is described in
 ArcadeDB's announcement and was not measured here.
-
-[7178]: https://github.com/ArcadeData/arcadedb/issues/7178
-[8285]: https://github.com/ArcadeData/arcadedb/issues/8285
-[8288]: https://github.com/ArcadeData/arcadedb/issues/8288
-[8244]: https://github.com/ArcadeData/arcadedb/issues/8244
 
 ### Not bundled
 
@@ -238,8 +232,7 @@ for HA, gRPC, or Mongo-protocol access.
 
 The server exposes `/api/v1/server` for metadata such as version, server name,
 and supported query languages. Add `?mode=basic` when that is all you need: the
-full form also computes a metrics section, which on 26.9.1 and earlier made the
-first call after a start take about 20 s (ArcadeData/arcadedb#8909). To wait for
+full form also computes a metrics section. To wait for
 a server to come up, poll `/api/v1/ready`, which answers 204 without
 authentication once the server accepts requests:
 
@@ -494,8 +487,6 @@ with arcadedb.create_database("./mydb") as db:
     for t in threads:
         t.join()
 ```
-
-For more details, see [Concurrency Tests](../development/testing/test-concurrency.md).
 
 ## Next Steps
 

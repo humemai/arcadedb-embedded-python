@@ -116,53 +116,7 @@ arcadedb-embedded-python/bindings/python/
 │   ├── __init__.py
 │   ├── conftest.py                         # Shared fixtures
 │   ├── README.md                           # Testing documentation
-│   ├── test_async_executor.py              # Async execution tests
-│   ├── test_bulk_insert.py                 # insert_many / create_record bulk ingest tests
-│   ├── test_concurrency.py                 # Concurrency tests
-│   ├── test_core.py                        # Core operations
-│   ├── test_cross_model_atomicity.py       # Search, hop, and update in one transaction
-│   ├── test_cypher.py                      # OpenCypher tests
-│   ├── test_database_utils.py              # Database utility tests
-│   ├── test_docs_examples.py               # Runnable docs example tests
-│   ├── test_example11_degree_matching.py   # Example 11 backend degree matching
-│   ├── test_exporter.py                    # Exporter tests
-│   ├── test_geo_predicate_sql.py           # Geospatial SQL predicate tests
-│   ├── test_graph.py                       # GraphBatch new_edges / create_vertices bulk tests
-│   ├── test_graph_algorithms_sql.py        # shortestPath / dijkstra / astar
-│   ├── test_graph_api.py                   # Graph API tests
-│   ├── test_graph_batch.py                 # Bulk graph ingest helper
-│   ├── test_hash_index_schema.py           # HASH index schema tests, plus a named-list IN parameter on an LSM_TREE index
-│   ├── test_import_database.py             # SQL import workflow tests
-│   ├── test_importer_api.py                # Import helper wrapper tests
-│   ├── test_jar_provenance.py              # Engine provenance carried by the wheel
-│   ├── test_java_package_shadowing.py      # java/ or com/ folders on the path
-│   ├── test_jvm.py                         # start_jvm() re-entry, close and reopen in one process, and exit with an unclosed database
-│   ├── test_jvm_args.py                    # JVM argument tests
-│   ├── test_jvm_payload.py                 # No Python list crosses into the JVM
-│   ├── test_logging_helper.py              # Internal logging helper tests
-│   ├── test_materialized_view_sql.py       # Materialized view lifecycle
-│   ├── test_numpy_support.py               # NumPy integration tests
-│   ├── test_restore_sql.py                 # RESTORE DOCUMENT / VERTEX tests
-│   ├── test_resultset.py                   # Result handling tests
-│   ├── test_resultset_arrow.py             # ResultSet.to_arrow() tests
-│   ├── test_runtime_cache.py               # Dev-mode runtime cache tests
-│   ├── test_schema.py                      # Schema tests
-│   ├── test_schema_batching.py             # Schema statements apply at once; many batch in one transaction
-│   ├── test_server.py                      # Server tests
-│   ├── test_server_http_endpoints.py       # Server HTTP features the bindings do not wrap
-│   ├── test_server_packaging.py            # Server stack bundled in the wheel
-│   ├── test_server_patterns.py             # Embedded/server access patterns
-│   ├── test_server_wire_protocols.py       # Bundled wire protocols
-│   ├── test_sparse_quantization_compact.py # Sparse precision, settle step, dense beam
-│   ├── test_timeseries_sql.py              # Timeseries SQL coverage
-│   ├── test_transaction_config.py          # Transaction config tests
-│   ├── test_type_conversion.py             # Type conversion tests
-│   ├── test_vector.py                      # Vector API tests
-│   ├── test_vector_delta_visibility.py     # Vectors searchable before a rebuild
-│   ├── test_vector_params_verification.py  # Vector parameter validation tests
-│   ├── test_vector_second_pass.py          # Repeated query sets return the same neighbours
-│   ├── test_vector_sql.py                  # Vector SQL tests
-│   └── test_wheel_platform_tag.py          # Wheel platform tag tests, and __version__ equals the installed distribution version
+│   └── test_*.py                           # One file per feature area; see Testing
 ├── docs/                          # MkDocs documentation
 │   ├── getting-started/
 │   ├── guide/
@@ -182,6 +136,7 @@ arcadedb-embedded-python/bindings/python/
 ├── pyproject.toml                 # Package configuration
 ├── setup.py                       # Setup configuration
 ├── scripts/                       # Build and maintenance helpers
+│   ├── after_tag_verify.sh        # Release check after the tag push (run, PyPI files, installs, docs)
 │   ├── arrow_transport_probe.py   # to_arrow() measurement script
 │   ├── build.sh                   # Main build entrypoint
 │   ├── build-native.sh            # Native build script
@@ -194,6 +149,7 @@ arcadedb-embedded-python/bindings/python/
 │   ├── profile-python/            # Result-consumption profiler
 │   ├── setup_jars.py              # JAR staging script
 │   ├── verify_wheel_platform_tag.py # Wheel platform tag verifier
+│   ├── verify_wheel_size.py       # Wheel size policy check
 │   ├── write_version.py           # Version writing
 │   └── Dockerfile.build           # Build container
 └── mkdocs.yml                     # Documentation config
@@ -316,7 +272,7 @@ uv run pytest -k cypher
 ```
 
 The markers in use are `server` and `server_wire`; `integration` is registered
-but unused. See [Test Markers](testing/overview.md#test-markers) for which tests each one covers
+but unused. See [Markers](testing.md#markers) for which tests each one covers
 and how to leave out every server-starting test.
 
 ### Writing Tests
@@ -325,7 +281,7 @@ Use the shared fixtures in `tests/conftest.py` rather than your own temporary di
 server test carries `@pytest.mark.server` and does not skip. One JVM serves the whole session,
 and engine-wide settings carry from one test to the next, so run the full suite after adding a
 test. The fixtures, what may skip, optional dependencies, hang diagnostics, and the Bandit rule
-are in [Writing a Test for This Suite](testing/best-practices.md#writing-a-test-for-this-suite).
+are in [Writing a Test for This Suite](testing.md#writing-a-test-for-this-suite).
 
 ```python
 # tests/test_example.py
@@ -374,44 +330,16 @@ def test_transaction_rollback(tmp_path):
 
 ### Python Style
 
-We follow **PEP 8** with some modifications:
+The code follows **PEP 8** as black formats it: 88-character lines (black's default; no
+override is configured), double quotes, and trailing commas in multi-line structures. Use
+the existing code as the guide for the rest:
 
-- Line length: 88 characters (black's default; no override is configured)
-- Use double quotes for strings
-- Use trailing commas in multi-line structures
-
-```python
-# Good
-def create_user(db, name: str, email: str) -> dict:
-    """
-    Create a new user vertex.
-
-    Args:
-        db: Database instance
-        name: User's full name
-        email: User's email address
-
-    Returns:
-        User vertex as dict
-    """
-    with db.transaction():
-        db.command(
-            "sql",
-            "INSERT INTO User SET name = ?, email = ?",
-            name,
-            email,
-        )
-
-    return {
-        "name": name,
-        "email": email,
-    }
-
-# Bad
-def create_user(db,name,email):
-    db.command('sql',f"INSERT INTO User SET name = '{name}', email = '{email}'")
-    return {"name": name, "email": email}
-```
+- Type hints on public APIs.
+- Google-style docstrings (`Args:`, `Returns:`, `Raises:`, `Example:`).
+- Error messages that say what failed and for which input, raised with `from e` so the
+  cause stays attached.
+- SQL built with parameters (`?` or `:name`), never an f-string around user input; a
+  deliberate f-string needs `# nosec B608` on its line (see [CI Gates](ci-setup.md#ci-gates)).
 
 ### Formatting Tools
 
@@ -431,101 +359,6 @@ versions, which can differ from the uv environment's, and it also covers `exampl
 CI also runs Bandit, a dependency-floor audit, and the pre-commit hooks; see
 [CI Gates](ci-setup.md#ci-gates) for what they check and how to run them locally.
 
-### Type Hints
-
-Use type hints for all public APIs:
-
-```python
-from typing import Optional, List, Dict, Any
-
-def query_users(
-    db: Database,
-    filters: Optional[Dict[str, Any]] = None,
-    limit: int = 100
-) -> List[Dict[str, Any]]:
-    """Query users with optional filters."""
-    # Implementation
-    pass
-```
-
-### Docstrings
-
-Use Google-style docstrings:
-
-```python
-def import_database(
-    db: Database,
-    source_url: str,
-    options: str = ""
-) -> None:
-    """
-    Import data into the database through SQL.
-
-    Args:
-        db: Database instance
-        source_url: File URL to import from
-        options: Additional SQL import options fragment
-
-    Returns:
-        None
-
-    Example:
-        >>> db = arcadedb.open_database("./mydb")
-        >>> import_database(db, "file:///tmp/users.csv", "WITH documentType = 'User'")
-    """
-    db.command("sql", f"IMPORT DATABASE {source_url} {options}".strip())
-```
-
-### Error Handling
-
-Always provide clear error messages:
-
-```python
-# Good
-try:
-    db = arcadedb.open_database(path)
-except Exception as e:
-    raise ArcadeDBError(
-        f"Failed to open database at '{path}': {e}"
-    ) from e
-
-# Bad
-try:
-    db = arcadedb.open_database(path)
-except:
-    raise Exception("Error")  # Not informative!
-```
-
-### Naming Conventions
-
-```python
-# Classes: PascalCase
-class DatabaseFactory:
-    pass
-
-class VectorIndex:
-    pass
-
-# Functions/methods: snake_case
-def create_database(path: str) -> Database:
-    pass
-
-def import_data(self, path: str) -> None:
-    pass
-
-# Constants: UPPER_SNAKE_CASE
-DEFAULT_BATCH_SIZE = 1000
-MAX_RETRIES = 3
-
-# Private: leading underscore
-def _internal_helper():
-    pass
-
-class Database:
-    def _check_not_closed(self):
-        pass
-```
-
 ## Documentation
 
 ### Building Documentation
@@ -542,111 +375,11 @@ uv run mkdocs build --strict -f bindings/python/mkdocs.yml
 
 ### Writing Documentation
 
-Documentation uses **Markdown** with **MkDocs Material** theme:
-
-````markdown
-# Page Title
-
-Brief introduction to the topic.
-
-## Section
-
-Content here with examples.
-
-### Code Examples
-
-```python
-import arcadedb_embedded as arcadedb
-
-db = arcadedb.create_database("./mydb")
-```
-
-### Admonitions
-
-!!! note "Important Note"
-    This is important information.
-
-!!! warning "Warning"
-    Be careful with this!
-
-!!! tip "Pro Tip"
-    This will make your life easier.
-
-### Links
-
-- [Internal link](../api/database.md)
-- [External link](https://arcadedb.com)
-````
-
-### API Documentation
-
-Keep API reference in sync with code:
-
-```python
-# src/arcadedb_embedded/core.py
-class Database:
-    def query(self, language: str, command: str, *args) -> ResultSet:
-        """
-        Execute a query and return results.
-
-        Args:
-            language: Query language (sql, opencypher, graphql)
-            command: Query command string
-            *args: Positional parameters, or one dict of named parameters
-
-        Returns:
-            ResultSet: Iterable query results
-
-        Raises:
-            ArcadeDBError: If query execution fails
-
-        Example:
-            >>> result = db.query("sql", "SELECT FROM User WHERE age > :min_age", {"min_age": 18})
-            >>> for user in result:
-            ...     print(user.get("name"))
-        """
-```
-
-Corresponding documentation in `docs/api/database.md`:
-
-````markdown
-### query
-
-```python
-db.query(language: str, command: str, *args) -> ResultSet
-```
-
-Execute a query and return results.
-
-**Parameters:**
-
-- `language` (str): Query language (sql, opencypher, graphql)
-- `command` (str): Query command string
-- `*args`: Positional parameters for `?` placeholders, or one dict of named parameters
-
-**Returns:**
-
-- `ResultSet`: Iterable query results
-
-**Raises:**
-
-- `ArcadeDBError`: If query execution fails
-
-**Example:**
-
-```python
-# Basic query
-result = db.query("sql", "SELECT FROM User")
-for user in result:
-    print(user.get("name"))
-
-# Parameterized query
-result = db.query("sql",
-    "SELECT FROM User WHERE age > :min_age",
-    {"min_age": 18}
-)
-```
-````
+Documentation is Markdown for the MkDocs Material theme, under `bindings/python/docs/`.
+[Documentation Development](documentation.md) has the style guide, the Markdown features the
+site enables, and the structure of an API reference entry. Keep the API pages in
+`docs/api/` in step with the signatures and docstrings in `src/arcadedb_embedded/`, and add a
+new page to the `nav` in `mkdocs.yml`.
 
 ## Pull Request Process
 
@@ -736,37 +469,6 @@ Fixes #123"
 git push origin feature/my-new-feature
 
 # Go to GitHub and create Pull Request
-```
-
-### 7. Suggested PR Description
-
-```markdown
-## Description
-Brief description of changes.
-
-## Type of Change
-- [ ] Bug fix
-- [ ] New feature
-- [ ] Documentation update
-- [ ] Performance improvement
-- [ ] Code refactoring
-
-## Testing
-- [ ] All tests pass
-- [ ] Added new tests for changes
-- [ ] Updated documentation
-- [ ] Tested manually
-
-## Checklist
-- [ ] Code follows project style guide
-- [ ] Self-review completed
-- [ ] Comments added for complex code
-- [ ] Documentation updated
-- [ ] No breaking changes (or documented)
-
-## Related Issues
-Fixes #123
-Closes #456
 ```
 
 ## Release Process

@@ -6,14 +6,17 @@ results are not engine bugs: they are in JPype, the library that connects Python
 it was measured on, what you see, a workaround that was checked on the same reproduction, and
 the release that fixes it once there is one. Entries leave this page when the fix ships in a
 release these bindings package.
-An entry with a `Tests:` line has a test of its workaround and a strict `xfail` test of the
-engine behavior; the `xfail` starts failing the suite when a fix reaches the wheel, which is
-the cue to remove the entry.
+An entry with a `Tests:` line has a test of its workaround. While the bug is open it also has a
+strict `xfail` test of the engine behavior, which starts failing the suite when a fix reaches the
+engine the suite runs on; the test is then made a plain regression test. An entry for a bug that
+is fixed on upstream's main but not yet in a release says so, and its regression tests fail on the
+released wheel until the next release ships.
 
 ## Ctrl-C during an interruptible Java wait can raise `InterruptedException`, not `KeyboardInterrupt`
 
-JPype 1.7.1, the version the wheel installs; measured through the bindings with a 26.10.1
-snapshot of the engine, and again on JPype master (874a197, 2026-10-06), where it is unchanged.
+JPype 1.7.1, the newest release and the one a fresh install gets (the package declares
+`jpype1>=1.5.0`); measured through the bindings with a 26.10.1 snapshot of the engine, and again
+on JPype master (874a197, 2026-10-06), where it is unchanged.
 Open. This is a race in JPype, not in ArcadeDB; it is reported as
 [jpype-project/jpype#1496](https://github.com/jpype-project/jpype/issues/1496).
 
@@ -80,7 +83,8 @@ It has no test of the waits above, because the failure is random (humemai/arcade
 
 ## `to_list()` and `Result.get()` keep a Python object for every number that comes back from Java
 
-JPype 1.7.1, the version the wheel installs ([jpype-project/jpype#1379](https://github.com/jpype-project/jpype/issues/1379));
+JPype 1.7.1, the newest release and the one a fresh install gets (the package declares
+`jpype1>=1.5.0`; 1.6.0 leaks too, [jpype-project/jpype#1379](https://github.com/jpype-project/jpype/issues/1379));
 measured through the bindings on the 26.10.1 wheel with a Python 3.12 process. Fixed on JPype
 master (874a197, 2026-10-06, not in a release yet), which leaks nothing in the same runs. This is a
 leak in JPype, not in ArcadeDB.
@@ -103,7 +107,9 @@ affected.
 ArcadeDB [#9277](https://github.com/ArcadeData/arcadedb/issues/9277) and
 [#9278](https://github.com/ArcadeData/arcadedb/issues/9278); measured through the bindings on
 26.10.1 (the official jars are upstream build d36b4ca3ae), and in Java on that build, on 26.9.1, and on
-5a90b0f52a, on Temurin 21 and 25, with the same answers. Open.
+5a90b0f52a, on Temurin 21 and 25, with the same answers. Both are fixed upstream by
+[ArcadeData/arcadedb#9288](https://github.com/ArcadeData/arcadedb/pull/9288), merged on 2026-10-06 for
+ArcadeDB 26.11.1, which is not released yet. The 26.10.1 wheel still has both bugs.
 
 A `MATCH` chain of two or more hops that ends in `RETURN count(*)` and has a negated pattern
 predicate between two of its nodes (`WHERE NOT (a)-[:R]-(c)`, alone or with `AND a <> c` or
@@ -139,16 +145,21 @@ n = (
 ```
 
 Tests: `tests/test_count_pushdown_known_issues.py` checks the `WITH` workaround and the cases
-that are not affected, and has strict `xfail` tests of the wrong counts; they start failing the
-suite when the engine fixes them, which is the cue to remove this entry.
+that are not affected, and has plain regression tests of the right counts. They pass on the
+engine the suite builds against (upstream's 26.11.1 snapshot, which has the fix) and fail on the
+26.10.1 wheel. Remove this entry when the release that carries the fix ships.
 
 
 ## An openCypher count with a negated pattern is wrong for other shapes of the chain
 
 ArcadeDB [#9290](https://github.com/ArcadeData/arcadedb/issues/9290); measured through the
 bindings on the 26.10.1 wheel, and in Java on 26.10.1, on upstream main cbf701d66e, and on the
-head of the upstream fix for the entry above (7d69d5f534), on Temurin 21 and 25, with the same
-answers. Open.
+head of the upstream fix for the entry above (#9288, head 7d69d5f534, merged for 26.11.1), on Temurin 21
+and 25, with the same answers. Fixed upstream by
+[ArcadeData/arcadedb#9299](https://github.com/ArcadeData/arcadedb/pull/9299), merged on 2026-10-06
+for ArcadeDB 26.11.1, which is not released yet: the push-down now applies only to the one shape
+the engine verifies against the row pipeline, and every other chain takes the row pipeline. The
+26.10.1 wheel still has the bug, and the `WITH` workaround below is still needed on it.
 
 The count push-down of the entry above (`EXPLAIN` lists `COUNT ANTI-JOIN CHAIN`) is also wrong
 for chains that are not the two-hop shape it is written for. On four people with `KNOWS` a-b,
@@ -189,7 +200,9 @@ engine fixes them, which is the cue to remove this entry.
 
 ArcadeDB [#9281](https://github.com/ArcadeData/arcadedb/issues/9281); measured through the
 bindings on 26.10.1 (the official jars are upstream build d36b4ca3ae), and in Java on that build, on 26.9.1, and
-on 5a90b0f52a, on Temurin 21 and 25. Open.
+on 5a90b0f52a, on Temurin 21 and 25. Fixed upstream by
+[ArcadeData/arcadedb#9288](https://github.com/ArcadeData/arcadedb/pull/9288), merged on 2026-10-06 for
+ArcadeDB 26.11.1, which is not released yet. The 26.10.1 wheel still has the bug.
 
 Over a property declared `BYTE`, `SELECT sum(b) FROM T` and `SELECT avg(b) FROM T` in SQL and
 `MATCH (n:V) RETURN sum(n.b)` in openCypher raise `ArcadeDBError` (`Query failed:
@@ -205,6 +218,7 @@ total = db.query("sql", "SELECT sum(b.asInteger()) AS total FROM T").first().get
 average = db.query("sql", "SELECT avg(b.asInteger()) AS average FROM T").first().get("average")
 ```
 
-Tests: `tests/test_count_pushdown_known_issues.py` checks the conversion workaround and has strict
-`xfail` tests of the failing aggregates; they start failing the suite when the engine fixes them,
-which is the cue to remove this entry.
+Tests: `tests/test_count_pushdown_known_issues.py` checks the conversion workaround and has plain
+regression tests of the aggregates. They pass on the engine the suite builds against (upstream's
+26.11.1 snapshot, which has the fix) and fail on the 26.10.1 wheel. Remove this entry when the
+release that carries the fix ships.

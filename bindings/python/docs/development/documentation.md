@@ -50,14 +50,11 @@ Build the static site to verify there are no errors:
 uv run mkdocs build --strict -f bindings/python/mkdocs.yml
 ```
 
-The built site will be in `site/` directory.
-
-### Check for Issues
-
-```bash
-# Check for broken links
-uv run mkdocs build --strict -f bindings/python/mkdocs.yml
-```
+The built site will be in `site/` directory. `--strict` turns warnings into errors, so a link to
+a page that does not exist fails the build. It does not check `#anchors`: MkDocs reports
+a link to a missing heading only at `info` level (`validation.links.anchors`), so follow a
+link with an anchor in the built site, or build once with a temporary config that sets
+`validation: {links: {anchors: warn}}`.
 
 ## Versioned Documentation
 
@@ -240,73 +237,26 @@ db.close()
 
 1. Creates a new database in the current directory
 
-#### Tables
-
-```markdown
-| Feature | Current Package | Notes |
-|---------|----------------|--------|
-| SQL | ✅ Yes | All SQL features |
-| OpenCypher | ✅ Yes | Graph queries |
-| Studio UI | ✅ Yes | Web interface |
-```
-
 #### Internal Links
 
 ```markdown
 See [Installation Guide](../getting-started/installation.md) for details.
 
-Link to a specific section: [Testing](testing.md#quick-start)
-```
-
-#### External Links
-
-```markdown
-Check the [official ArcadeDB docs](https://docs.arcadedb.com) for more.
+Link to a specific section: [Testing](testing.md#running-the-tests)
 ```
 
 ### API Documentation
 
-When documenting API methods, use this structure:
-
-````markdown
-## method_name()
-
-Brief one-line description.
-
-**Signature:**
-
-```python
-method_name(param1: type, param2: type = default) -> ReturnType
-```
-
-**Parameters:**
-
-- `param1` (type): Description of param1
-- `param2` (type, optional): Description of param2. Defaults to `default`.
-
-**Returns:**
-
-- `ReturnType`: Description of return value
-
-**Raises:**
-
-- `ExceptionType`: When this exception occurs
-
-**Example:**
-
-```python
-result = obj.method_name("value", param2=True)
-```
-````
+An entry in `docs/api/` is a `###` heading with the method name, the signature in a
+`python` block, a short description, and then **Parameters:**, **Returns:**, **Raises:**, and
+**Example:** in that order, as in [Database API](../api/database.md). Keep it in step with the
+signature and docstring in `src/arcadedb_embedded/`.
 
 ## Testing Documentation
 
 ### Verify All Links Work
 
-```bash
-# Build with strict mode (fails on warnings)
-uv run mkdocs build --strict -f bindings/python/mkdocs.yml
-```
+Run the strict build above, then follow the links you added or changed in `mkdocs serve`.
 
 ### Check Mobile Responsiveness
 
@@ -329,7 +279,7 @@ The Material theme is mobile-responsive by default. Test by:
 No workflow builds the documentation on a push or a pull request.
 `deploy-python-docs.yml` runs only on a version tag or a manual dispatch, and it runs
 `mike deploy`, not a strict build. Run the strict build locally before you push a docs
-change; it fails on warnings and on broken internal links:
+change; it fails on warnings and on links to pages that do not exist (not on missing `#anchors`, see above):
 
 ```bash
 uv run mkdocs build --strict -f bindings/python/mkdocs.yml
@@ -341,7 +291,7 @@ and `mike` with `uv pip install --system`. A page that builds locally can still 
 deployed build.
 
 `tests/test_docs_examples.py`, part of the test suite, executes a selection of the
-Python snippets in these pages (see [Documentation Example Tests](testing/test-docs-examples.md)).
+Python snippets in these pages (see [Documentation Example Tests](testing.md#documentation-example-tests)).
 
 ## Troubleshooting
 

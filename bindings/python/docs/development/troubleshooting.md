@@ -68,43 +68,12 @@ uv run python -c "import arcadedb_embedded as a; print(a.__version__, a.jar_fing
 
 ## Runtime Errors
 
-### Database Connection Issues
-
-**Problem**: Can't connect to database
-
-**Solutions**:
-
-1. **Check Database Path**:
-    ```python
-    import os
-    db_path = "databases/mydb"
-    print(f"Exists: {os.path.exists(db_path)}")
-    ```
-
-2. **Verify Database Created**:
-    ```python
-    import arcadedb_embedded as arcadedb
-
-    # Create if not exists
-    if not os.path.exists(db_path):
-        db = arcadedb.create_database(db_path)
-    else:
-        db = arcadedb.open_database(db_path)
-    ```
-
-3. **Check Permissions**:
-    ```bash
-    ls -la databases/
-    chmod -R 755 databases/
-    ```
----
-
 ### Database Already Exists
 
 **Symptom:**
 ```python
 arcadedb.create_database("./mydb")
-# ArcadeDBError: Database already exists
+# ArcadeDBError: Failed to create database: ... Database './mydb' already exists
 ```
 
 **Solution:**
@@ -167,7 +136,7 @@ kill <PID>
 ```
 
 3. **Share the database through a server** if several processes need it at once
-   (see [Server Patterns](testing/test-server-patterns.md)).
+   (see [Server Mode](../guide/server.md)).
 
 !!! warning "Do not delete `database.lck`"
     A `database.lck` left on disk after a crash does not block anything: no process
@@ -435,75 +404,29 @@ with db.transaction():
 
 ---
 
-### Query Syntax Error
+### A String Filter Returns Nothing
 
-**Symptom:**
+**Symptom:** A query that filters on a string returns no rows and raises no error.
+
 ```python
-db.query("sql", "SELECT * FROM User WHERE name = Alice")
-# ArcadeDBError: Query failed: ...
+db.query("sql", "SELECT FROM User WHERE name = Alice").to_list()  # []
 ```
 
-**Cause:** String not properly quoted.
+**Cause:** The unquoted `Alice` is read as a property name, not a string, so the query
+compares `name` with a property called `Alice` that no record has.
 
 **Solution:**
 
-Use parameters (RECOMMENDED):
+Use a parameter (recommended):
 
 ```python
-db.query("sql",
-    "SELECT FROM User WHERE name = :name",
-    {"name": "Alice"}
-)
+db.query("sql", "SELECT FROM User WHERE name = :name", {"name": "Alice"})
 ```
 
-Or quote strings in SQL:
+Or quote the string in SQL:
 
 ```python
 db.query("sql", "SELECT FROM User WHERE name = 'Alice'")
-#                                              ↑    ↑ quotes
-```
-
----
-
-### Function Name Errors
-
-**Problem**: SQL function not recognized
-
-SQL function names are case-insensitive (`SYSDATE()` and `sysdate()` are the same
-function), so case is not the cause. Check the spelling, and that the function exists
-in the bundled engine.
-
-**Solutions**:
-
-1. **Use Built-in Functions**:
-    ```python
-    # Date/time
-    with db.transaction():
-        db.command("sql", "INSERT INTO Event SET timestamp = sysdate()")
-
-    # UUID
-    with db.transaction():
-        db.command("sql", "INSERT INTO User SET id = uuid()")
-    ```
-
----
-
-### Multi-line Query Issues
-
-**Problem**: SQL parser errors with complex queries
-
-**Solution**: Use single-line queries or proper escaping:
-
-```python
-# ✅ Single line (wrap in a transaction when executing)
-query = "INSERT INTO Product SET name = 'test', created_at = sysdate()"
-
-# ✅ Multi-line with proper formatting
-query = """
-INSERT INTO Product SET
-    name = 'test',
-    created_at = sysdate()
-""".strip()
 ```
 
 ---
@@ -513,10 +436,12 @@ INSERT INTO Product SET
 **Symptom:**
 ```python
 vertex.set("embedding", numpy_array)
-# TypeError: Cannot convert numpy.ndarray to Java type
+# TypeError: only integer scalar arrays can be converted to a scalar index
 ```
 
-**Cause:** NumPy arrays need explicit conversion.
+The message comes from NumPy (here NumPy 2.5 with JPype 1.7.1) and varies with the versions.
+
+**Cause:** `Document.set()` does not convert a NumPy array. A bound query parameter does.
 
 **Solution:**
 
@@ -581,43 +506,14 @@ Importing data is very slow.
 
 **Solutions:**
 
-1. **Increase batch size (`commitEvery`):**
-```python
-db.command(
-    "sql",
-    "IMPORT DATABASE file:///data/users.csv WITH documentType = 'User', commitEvery = 10000",
-)
-```
+1. **Use the bulk paths.** `db.insert_many(...)` for rows, `db.insert_columns(...)` for
+   column data, and `GraphBatch` for vertices and edges cross the Java boundary once per
+   batch instead of once per record. A loop of `db.command("sql", "INSERT ...")` calls, even
+   inside one large transaction, pays that cost on every row. See
+   [Data Import](../guide/import.md#bulk-ingest-recommendation).
 
-2. **Drop indexes during import:**
-```python
-# Drop indexes
-db.command("sql", "DROP INDEX `User[email]`")
-
-# Import data
-db.command(
-    "sql",
-    "IMPORT DATABASE file:///data/users.csv WITH documentType = 'User'",
-)
-
-# Recreate indexes
-db.command("sql", "CREATE INDEX ON User (email) UNIQUE_HASH")
-```
-
-3. **Use transactions efficiently:**
-```python
-# Bad: Many small transactions
-for record in records:
-    with db.transaction():
-        db.command("sql", "INSERT INTO Data SET data = ?", record)
-
-# Good: Batch in larger transactions
-batch_size = 10000
-for i in range(0, len(records), batch_size):
-    with db.transaction():
-        for record in records[i:i+batch_size]:
-            db.command("sql", "INSERT INTO Data SET data = ?", record)
-```
+2. **For `IMPORT DATABASE`, raise `commitEvery`** and consider dropping heavy indexes during
+   the load; see [Performance Guidance](../guide/import.md#performance-guidance).
 
 ---
 
@@ -775,8 +671,10 @@ curl -u root:change-me http://localhost:2480/api/v1/server
 **Symptom:**
 ```python
 vertex.save()
-# ArcadeDBError: Vector dimension mismatch
+# java.lang.IllegalArgumentException: Vector dimension does not match index dimension 384: got float[] of length 768
 ```
+
+The error reaches Python as the Java exception, not as `ArcadeDBError`.
 
 **Cause:**
 Embedding dimension doesn't match index dimension.
@@ -884,16 +782,6 @@ db.command(
     }
     ''',
 )
-```
-
-3. **Improve embeddings:**
-```python
-# Combine title and content
-text = f"{doc['title']}. {doc['content']}"
-embedding = model.encode(text)
-
-# vs. just content
-embedding = model.encode(doc['content'])  # May be less effective
 ```
 
 ## Debugging
@@ -1021,95 +909,62 @@ results = debug_query(db, "sql", "SELECT FROM User WHERE name = :name", {"name":
 
 ## Common Error Messages
 
-### "Property not found"
+### "Type with name '...' was not found"
 
-**Meaning:** Trying to get property that doesn't exist.
-
-**Solution:**
-```python
-# Check if property exists
-row = db.query("sql", "SELECT name FROM User LIMIT 1").first()
-if row.has_property("name"):
-    name = row.get("name")
-else:
-    name = "Unknown"
-
-# Or use default
-name = row.get("name") or "Unknown"
-```
-
----
-
-### "Type not found"
-
-**Meaning:** Vertex/Edge type doesn't exist.
+**Meaning:** The vertex, edge, or document type does not exist. It arrives as an
+`ArcadeDBError` wrapping a `SchemaException`.
 
 **Solution:**
 ```python
-# Create type first
-result = db.query("sql", "SELECT FROM schema:types WHERE name = 'User'")
-if result.first() is None:
-    db.command("sql", "CREATE VERTEX TYPE User")
+# Create the type if it is missing, then insert
+db.command("sql", "CREATE VERTEX TYPE User IF NOT EXISTS")
 
-# Then insert data
 with db.transaction():
     db.command("sql", "INSERT INTO User SET name = ?", "Alice")
 ```
 
 ---
 
-### "Index already exists"
+### "Index '...' already exists"
 
-**Meaning:** Trying to create duplicate index.
+**Meaning:** The index was created before.
 
 **Solution:**
 ```python
-# Drop existing index
-try:
-    db.command("sql", "DROP INDEX `User[email]`")
-except Exception:
-    pass  # Index doesn't exist
-
-# Create new index
-db.command("sql", "CREATE INDEX ON User (email) UNIQUE_HASH")
+# A no-op when the index exists. Dropping and recreating it rebuilds it.
+db.command("sql", "CREATE INDEX IF NOT EXISTS ON User (email) UNIQUE_HASH")
 ```
 
 ---
 
-### "Unique constraint violation"
+### "Duplicated key ... found on index"
 
-**Meaning:** Trying to insert duplicate value for unique property.
+**Meaning:** A unique index already holds that value. The engine raises
+`DuplicatedKeyException` when the transaction commits, and the bindings raise it as
+`ArcadeDBError: Failed to commit transaction: ...`, so the whole transaction is rolled back.
 
 **Solution:**
 ```python
-# Check if exists first
-result = db.query("sql", "SELECT FROM User WHERE email = :email", {"email": "alice@example.com"})
-
-if result.first() is not None:
-    with db.transaction():
-        db.command(
-            "sql",
-            "UPDATE User SET name = ? WHERE email = ?",
-            "Alice",
-            "alice@example.com",
-        )
-else:
-    # Create new
-    with db.transaction():
-        db.command(
-            "sql",
-            "INSERT INTO User SET email = ?, name = ?",
-            "alice@example.com",
-            "Alice",
-        )
+# Update the existing record, or insert it if there is none, in one statement
+with db.transaction():
+    db.command(
+        "sql",
+        "UPDATE User SET name = ?, email = ? UPSERT WHERE email = ?",
+        "Alice",
+        "alice@example.com",
+        "alice@example.com",
+    )
 ```
+
+A missing property is not an error: `Result.get("name")` returns `None` and
+`Result.has_property("name")` returns `False`.
 
 ## Getting Help
 
 1. **Check Documentation:**
     - [API Reference](../api/database.md)
     - [Guides](../guide/import.md)
-    - [Examples](../examples/import.md)
+    - [Examples](../examples/index.md)
 
 2. **Search Issues:**
     - [GitHub Issues](https://github.com/humemai/arcadedb-embedded-python/issues)

@@ -123,14 +123,11 @@ nested maps convert as expected, but `DATE` and `DATETIME` values arrive as
 epoch-millisecond integers (not `datetime`) and DECIMALs as floats. A `DATE` is the
 epoch milliseconds of midnight UTC, whatever the JVM's time zone, so it is the same
 integer `Result.to_json()` writes and `datetime.fromtimestamp(ms / 1000, timezone.utc)`
-gives the right day. (Before this was fixed it was midnight in the JVM's zone: the
-previous day when decoded as UTC east of UTC, humemai/arcadedb-embedded-python#116.)
-Use `to_list()` when full Python-type fidelity matters more than speed.
+gives the right day. Use `to_list()` when full Python-type fidelity matters more than
+speed.
 
 It is also the fast path for a small result: a one-row read through `to_json_list()` takes
-one Java crossing (a short batch ends the read) and allocates only what the row needs,
-about 0.022 ms for a bound openCypher point lookup against 0.037 ms before this was fixed
-(laptop, relative only, 2026-10-04).
+one Java crossing (a short batch ends the read) and allocates only what the row needs.
 
 **Parameters:**
 
@@ -219,17 +216,14 @@ unavailable (callers fall back to row-based paths).
 
 The columns are the union of the property names of every row, in order of first
 appearance, because a document is schemaless: a property the first row lacks is still
-a column, null where a row lacks it. (Before this was fixed the columns were the first
-row's, and `to_columns()`, `to_dataframe()`, and `to_arrow()` dropped the others,
-humemai/arcadedb-embedded-python#113.) The result does not depend on `batch_size`.
+a column, null where a row lacks it. The result does not depend on `batch_size`.
 Finding the columns costs one pass over each row's property names (about 25% of a
 200,000-row, twelve-property `to_columns()`, measured on the laptop, relative only);
 pass `columns=["a", "b"]` to read exactly those, as a projection would, and skip it. A
 row lacking one of them reads null, and a property not listed is left out.
 
 A `DECIMAL` column is an object array of `Decimal` (`None` for null), exact to the last
-digit; it used to arrive as JSON numbers, so a double lost digits and the dtype followed
-the data (humemai/arcadedb-embedded-python#115).
+digit.
 
 **Example:**
 
@@ -256,7 +250,7 @@ time.
 The table's columns are the union of the rows' property names, as in `to_columns()`. A
 column's type does not depend on `batch_size`: a batch whose rows lack the column, carry
 it as null, or hold only empty lists in it says nothing about its type and takes the
-type of the other batches (humemai/arcadedb-embedded-python#114). If batches really do
+type of the other batches. If batches really do
 disagree (an int in one row, a string in another), the column becomes strings, in one
 batch as well as across batches. A `DECIMAL` column is `decimal128` (`decimal256` above
 38 digits, strings above 76), so no digit is lost.
@@ -377,16 +371,13 @@ and keep the object around.
 
 A result set read to its end reads as empty afterwards. One closed before its end, by
 `first()`, `one()`, `close()`, or leaving its `with` block, raises `ArcadeDBError` if you
-read it again: the rows it had not returned are gone, so run the query again. (Until
-2026-09-29 such a read returned whatever the closed Java result set still handed out,
-which depended on the engine build.) To take one row and keep reading, use
-`next(iter(rs))` rather than `first()`.
+read it again: the rows it had not returned are gone, so run the query again. To take one row and keep
+reading, use `next(iter(rs))` rather than `first()`.
 
 The engine computes rows lazily, so an error in the statement can come while the rows are
 read, after `query()` returned: a division by zero on the tenth row, say. Iteration,
 `first()`, `one()`, `count()`, and every `to_*` and `iter_*` method raise it as
-`ArcadeDBError`, with the Java exception as its `__cause__`. (Before 26.10.1 the Java
-exception reached Python as it was.)
+`ArcadeDBError`, with the Java exception as its `__cause__`.
 
 A result set, and each `Result` it returns, keeps its `Database` alive. Reading a result
 set after the database was closed (`db.close()`, or leaving the `with` block that opened
@@ -402,10 +393,7 @@ Closing is not only memory hygiene: since 26.10.1's parallel scan
 (ArcadeData/arcadedb#8524) a query whose `LIMIT` is satisfied keeps its scan's producer
 threads parked until its result set is closed or
 `arcadedb.parallelScanAbandonedTimeout` (10 minutes) passes, and a few such result sets
-stall the next query that needs those threads (ArcadeData/arcadedb#8594). 26.10.1
-development wheels built before 2026-09-28 closed nothing on exhaustion, so RID-paged
-reads (`WHERE @rid > <last> LIMIT n`) stalled on their fifth page on 8 cores. The
-26.9.1 release does not have that parallel scan and is not affected.
+stall the next query that needs those threads (ArcadeData/arcadedb#8594).
 
 `ResultSet` is also a context manager (`__enter__`/`__exit__`), so `with` blocks close
 it automatically.
@@ -875,268 +863,12 @@ db.close()
 
 ---
 
-## Complete Examples
-
-### User Search and Display
-
-```python
-import arcadedb_embedded as arcadedb
-
-db = arcadedb.open_database("./users_db")
-
-def search_users(name_pattern):
-    """Search users by name pattern."""
-    query = """
-        SELECT name, email, created_at
-        FROM User
-        WHERE name LIKE ?
-        ORDER BY name
-    """
-
-    result_set = db.query("sql", query, f"%{name_pattern}%")
-    users = []
-
-    for result in result_set:
-        user = {
-            'name': result.get("name"),
-            'email': result.get("email"),
-            'created_at': result.get("created_at")
-        }
-        users.append(user)
-
-    return users
-
-# Search
-results = search_users("John")
-
-print(f"Found {len(results)} users:")
-for user in results:
-    print(f"  {user['name']} <{user['email']}>")
-
-db.close()
-```
-
----
-
-### Graph Traversal Results
-
-```python
-import arcadedb_embedded as arcadedb
-
-db = arcadedb.open_database("./social_graph")
-
-# Find friends of friends
-query = """
-    SELECT
-        @rid as person_rid,
-        name,
-        out('Follows').out('Follows').name as friends_of_friends
-    FROM Person
-    WHERE name = 'Alice'
-"""
-
-result_set = db.query("sql", query)
-
-for result in result_set:
-    person_name = result.get("name")
-    friends_of_friends = result.get("friends_of_friends")
-
-    print(f"{person_name}'s extended network:")
-
-    # get() has already converted the Java collection to a Python list
-    if friends_of_friends:
-        for friend in friends_of_friends:
-            print(f"  - {friend}")
-
-db.close()
-```
-
----
-
-### Aggregation Results
-
-```python
-import arcadedb_embedded as arcadedb
-
-db = arcadedb.open_database("./analytics_db")
-
-# Group by and aggregation
-query = """
-    SELECT
-        category,
-        COUNT(*) as product_count,
-        AVG(price) as avg_price,
-        MAX(price) as max_price
-    FROM Product
-    GROUP BY category
-    ORDER BY product_count DESC
-"""
-
-result_set = db.query("sql", query)
-
-print("Product Statistics by Category:")
-print("-" * 60)
-
-for result in result_set:
-    category = result.get("category")
-    count = result.get("product_count")
-    avg_price = result.get("avg_price")
-    max_price = result.get("max_price")
-
-    print(f"{category}:")
-    print(f"  Products: {count}")
-    print(f"  Avg Price: ${avg_price:.2f}")
-    print(f"  Max Price: ${max_price:.2f}")
-    print()
-
-db.close()
-```
-
----
-
-### Export to JSON File
-
-```python
-import arcadedb_embedded as arcadedb
-import json
-
-db = arcadedb.open_database("./mydb")
-
-# Export query results to JSON file
-result_set = db.query("sql", "SELECT * FROM Document")
-
-# Method 1: Using to_dict()
-documents = [result.to_dict() for result in result_set]
-
-with open("export.json", "w") as f:
-    json.dump(documents, f, indent=2, default=str)
-
-# Method 2: Using to_json() directly
-result_set = db.query("sql", "SELECT * FROM Document")
-
-with open("export_raw.jsonl", "w") as f:
-    for result in result_set:
-        f.write(result.to_json() + "\n")
-
-db.close()
-```
-
----
-
-### Cypher Query Results
-
-```python
-import arcadedb_embedded as arcadedb
-
-db = arcadedb.open_database("./graph_db")
-
-# OpenCypher queries also return ResultSet
-cypher_query = """
-    MATCH (p:Person)-[:WORKS_AT]->(c:Company)
-    WHERE c.name = 'TechCorp'
-    RETURN p.name AS employee, p.role AS position
-"""
-
-result_set = db.query("opencypher", cypher_query)
-
-print("TechCorp Employees:")
-for result in result_set:
-    employee = result.get("employee")
-    position = result.get("position")
-    print(f"  {employee} - {position}")
-
-db.close()
-```
-
----
-
-## Error Handling
-
-```python
-from arcadedb_embedded import ArcadeDBError
-
-result_set = db.query("sql", "SELECT * FROM Person")
-
-for result in result_set:
-    try:
-        # Safe property access
-        name = result.get("name")
-
-        # May not exist
-        if result.has_property("phone"):
-            phone = result.get("phone")
-        else:
-            phone = "N/A"
-
-        print(f"{name}: {phone}")
-
-    except ArcadeDBError as e:
-        print(f"Error accessing properties: {e}")
-        continue
-```
-
----
-
 ## Type Handling
 
 `get()`, `to_dict()`, and `to_list()` convert Java values to Python types
 automatically (`Boolean` to `bool`, `BigDecimal` to `Decimal`, dates to `date` and
 `datetime`, collections to `list`, `set`, and `dict`). See
 [Type Conversion](type_conversion.md) for the full table.
-
----
-
-## Performance Tips
-
-### Minimize Property Access
-
-```python
-# Less efficient: Multiple property accesses
-for result in result_set:
-    if result.get("age") > 25:
-        name = result.get("name")
-        age = result.get("age")
-        print(f"{name}: {age}")
-
-# More efficient: Access once, reuse
-for result in result_set:
-    age = result.get("age")
-    if age > 25:
-        name = result.get("name")
-        print(f"{name}: {age}")
-```
-
-### Use to_dict() for Multiple Properties
-
-```python
-# When accessing many properties, convert to dict once
-for result in result_set:
-    data = result.to_dict()
-
-    # Now access from Python dict (faster)
-    process(
-        data["name"],
-        data["age"],
-        data["email"],
-        data["phone"]
-    )
-```
-
-### Stream Processing
-
-```python
-# Don't collect all results if you can process incrementally
-result_set = db.query("sql", "SELECT * FROM LargeTable")
-
-# Process as you iterate (memory efficient)
-total = 0
-for result in result_set:
-    value = result.get("amount")
-    total += value
-
-# Better than:
-# results = list(result_set)  # Loads everything into memory
-```
 
 ---
 

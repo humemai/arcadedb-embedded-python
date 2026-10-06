@@ -193,7 +193,7 @@ no reason to cast before calling.
   any iterable, and a NumPy array of any integer dtype.
 
 **Raises:** `OverflowError` when an element does not fit in 32 bits, for a list and for an
-integer NumPy array alike (an `int64` array used to wrap silently: `2**31` became `-2**31`).
+integer NumPy array alike.
 
 **Returns:** a Java `int[]`.
 
@@ -204,7 +204,9 @@ integer NumPy array alike (an `int64` array used to wrap silently: `2**31` becam
 Convert a Python byte-like or integer array-like object to a Java `byte[]`.
 
 Use this when inserting native INT8 vectors into a `BINARY` property for indexes
-created with `encoding="INT8"`.
+created with `encoding="INT8"`. It accepts `bytes`, `bytearray`, a NumPy array, or any
+iterable of integers in the signed (-128 to 127) or unsigned (0 to 255) byte range, and
+raises `ArcadeDBError` for a value outside both.
 
 ```python
 from arcadedb_embedded import to_java_byte_array
@@ -255,68 +257,9 @@ if you intentionally want lazy preparation.
 Python-driven helper for manual setup, tests, and API completeness rather than the
 primary documented workflow.
 
-**Signature:**
-
-```python
-db.create_vector_index(
-    vertex_type: str,
-    vector_property: str,
-    dimensions: int,
-    id_property: str | None = None,
-    distance_function: str = "cosine",
-    max_connections: int = 32,
-    beam_width: int = 100,
-    quantization: str = "INT8",
-    encoding: str | None = None,
-    location_cache_size: int | None = None,  # removed: any value raises ValueError
-    graph_build_cache_size: int | None = None,
-    mutations_before_rebuild: int | None = None,
-    store_vectors_in_graph: bool = False,
-    add_hierarchy: bool | None = True,
-    pq_subspaces: int | None = None,
-    pq_clusters: int | None = None,
-    pq_center_globally: bool | None = None,
-    pq_training_limit: int | None = None,
-    build_graph_now: bool = True,
-) -> VectorIndex
-```
-
-**Parameters:**
-
-- `vertex_type` (str): Vertex type containing vectors
-- `vector_property` (str): Property name storing vector arrays
-- `dimensions` (int): Vector dimensionality (must match your embeddings)
-- `id_property` (str | None): Optional property used for key-based lookup with
-    `find_nearest_by_key()`. Defaults to the engine default (`"id"`) when omitted.
-- `distance_function` (str): Distance metric (default: `"cosine"`)
-    - `"cosine"`: Cosine distance (1 - cosine similarity)
-    - `"euclidean"`: Squared Euclidean distance
-    - `"dot_product"`: `-(1 + A·B) / 2`, for unit-length vectors
-- `max_connections` (int): Per-layer graph degree (default: 32; Vamana degree, NOT doubled at the base layer like hnswlib M, so use 2*M to match an hnswlib config)
-    - Maps to `maxConnections` in JVector
-    - Higher = better recall, more memory
-        - Typical range: 8-64
-- `beam_width` (int): Beam width for search/construction (default: 100)
-    - Maps to `beamWidth` in JVector
-    - Higher = better recall, slower search
-        - Typical range: 50-500
-- `quantization` (str | None): `"INT8"` (recommended), `"BINARY"`, `"PRODUCT"`, or
-  `None` (default: `"INT8"`)
-    - In current ArcadeDB engine builds, `"PRODUCT"` also requires enough indexed
-      vectors per bucket for PQ training. For tiny corpora, set `pq_clusters` explicitly
-      to a small value or prefer `"INT8"`, `"BINARY"`, or `None`.
-    - Prefer `"INT8"` for current production usage in these bindings.
-    - `"PRODUCT"`/PQ is available but currently not recommended for production workloads.
-- `encoding` (str | None): Optional storage encoding for the vector property.
-    - Use `"INT8"` with a `BINARY` property when your vectors are already stored as
-    signed bytes.
-    - Pair `encoding="INT8"` with `quantization="NONE"` to avoid double quantization.
-- `build_graph_now` (bool): If `True` (default), eagerly prepares the vector graph
-  during index creation. Set to `False` to defer graph preparation until first query.
-
-**Returns:**
-
-- `VectorIndex`: Index object for searching
+The signature, every parameter, and the quantization and PQ options are documented
+once, under [`Database.create_vector_index`](database.md#create_vector_index). It
+returns a `VectorIndex`.
 
 **Example:**
 
@@ -369,7 +312,8 @@ also the default. If you explicitly disable eager preparation, the first call to
     - Any array-like iterable
 - `k` (int): Number of neighbors to return (default: 10)
 - `ef_search` (int | None): Optional exact-search beam width override. `None` uses
-  ArcadeDB's default/adaptive search behavior.
+  ArcadeDB's default/adaptive search behavior. Anything but a positive integer raises
+  `ArcadeDBError`.
 - `allowed_rids` (List[str]): Optional list of RID strings (e.g. `["#1:0", "#2:5"]`) to
   restrict search (default: `None`)
 
@@ -552,19 +496,13 @@ Return stable vector index metadata as a Python dictionary.
 
 **Returns:**
 
-- `dict` with keys such as:
-    - `index_name`
-    - `bucket_index_name`
-    - `type_name`
-    - `vector_property`
-    - `dimensions`
-    - `similarity_function`
-    - `id_property`
-    - `quantization`
-    - `max_connections`
-    - `beam_width`
-    - `store_vectors_in_graph`
+- `dict` with these keys:
+    - `index_name`, `bucket_index_name`, `type_name`, `vector_property`
+    - `dimensions`, `similarity_function`, `id_property`, `quantization`
+    - `max_connections`, `beam_width`, `ef_search`, `add_hierarchy`
+    - `graph_build_cache_size`, `mutations_before_rebuild`, `store_vectors_in_graph`
     - `build_state`
+    - `pq_subspaces`, `pq_clusters`, `pq_center_globally`, `pq_training_limit`
 
 **Example:**
 
@@ -617,20 +555,18 @@ cache far better than fp32 does.
 
 ### `VectorIndex.warm_up()`
 
-Load the index's graph now instead of on the first search. From 26.10.1.
+Load the index's graph now instead of on the first search.
 
 After a database is opened, a vector index loads its persisted graph lazily, on
-the first search, and that search pays for it (ArcadeData/arcadedb#8852). After
-the 26.10.1 fix that is about 1 s at 1M 64-dimension vectors, growing with the
-index, and more on an index with deletions since its graph was saved, which
-still re-reads every vector's document. A service that restarts can call
-`warm_up()` right after opening the database, so the first user query does not
-pay it.
+the first search, and that search pays for it (ArcadeData/arcadedb#8852). That is
+about 1 s at 1M 64-dimension vectors, growing with the index, and more on an index
+with deletions since its graph was saved, which still re-reads every vector's
+document. A service that restarts can call `warm_up()` right after opening the
+database, so the first user query does not pay it.
 
 It loads the existing graph and does not rebuild it (that is
 `build_graph_now()`). It is a no-op once the graph is in memory, and safe to call
-while other threads search. On an engine before 26.10.1 it raises
-`ArcadeDBError`; there, one throwaway search does the same.
+while other threads search.
 
 `get_stats()["graphState"]` reads `0` (loading) between the open and the first
 search or `warm_up()`, and `graphNodeCount` is `0` until the graph is resident.
@@ -645,10 +581,6 @@ search or `warm_up()`, and `graphNodeCount` is `0` until the graph is resident.
 with arcadedb.open_database("./vectors") as db:
     index = db.schema.get_vector_index("Doc", "embedding")
     index.warm_up()  # pay the graph load now, not on the first query
-
-# On engines before 26.10.1, the same with one throwaway search. The vector is
-# wrapped in a list: a lone list argument is read as the parameter list itself.
-#   db.query("sql", "SELECT vectorNeighbors('Doc[embedding]', ?, 1)", [probe_vector])
 ```
 
 ---
@@ -685,310 +617,7 @@ index.build_graph_now()
 
 ---
 
-## Complete Examples
-
-### Semantic Search with Sentence Transformers
-
-```python
-import arcadedb_embedded as arcadedb
-from arcadedb_embedded import to_java_float_array
-from sentence_transformers import SentenceTransformer
-import numpy as np
-
-# Load embedding model
-model = SentenceTransformer('all-MiniLM-L6-v2')  # 384 dimensions
-
-# Create database and schema
-db = arcadedb.create_database("./semantic_search")
-
-db.command("sql", "CREATE VERTEX TYPE Document")
-db.command("sql", "CREATE PROPERTY Document.id STRING")
-db.command("sql", "CREATE PROPERTY Document.title STRING")
-db.command("sql", "CREATE PROPERTY Document.content STRING")
-db.command("sql", "CREATE PROPERTY Document.embedding ARRAY_OF_FLOATS")
-db.command("sql", "CREATE INDEX ON Document (id) UNIQUE_HASH")
-
-# Preferred: create vector index in SQL
-db.command(
-    "sql",
-    """
-    CREATE INDEX ON Document (embedding)
-    LSM_VECTOR
-    METADATA {
-        "dimensions": 384,
-        "similarity": "COSINE",
-        "maxConnections": 32,
-        "beamWidth": 100
-    }
-    """
-)
-
-index = db.schema.get_vector_index("Document", "embedding")
-
-# Sample documents
-documents = [
-    {"id": "doc1", "title": "Python Tutorial",
-        "content": "Learn Python programming basics"},
-    {"id": "doc2", "title": "Machine Learning Guide",
-        "content": "Introduction to ML algorithms"},
-    {"id": "doc3", "title": "Database Systems",
-        "content": "Understanding relational databases"},
-]
-
-# Index documents
-print("Indexing documents...")
-with db.transaction():
-    for doc in documents:
-        # Generate embedding
-        text = f"{doc['title']} {doc['content']}"
-        embedding = model.encode(text)
-
-        db.command(
-            "sql",
-            "INSERT INTO Document SET id = ?, title = ?, content = ?, embedding = ?",
-            doc["id"],
-            doc["title"],
-            doc["content"],
-            to_java_float_array(embedding),
-        )
-
-print(f"Indexed {len(documents)} documents")
-
-# Search
-query = "How to learn programming"
-query_embedding = model.encode(query)
-
-print(f"\nQuery: '{query}'")
-results = index.find_nearest(query_embedding, k=3)
-
-for vertex, distance in results:
-    print(f"\nDistance: {distance:.4f}")
-    print(f"Title: {vertex.get('title')}")
-    print(f"Content: {vertex.get('content')}")
-
-db.close()
-```
-
----
-
-### Hybrid Search (Vector + Filters)
-
-Combine vector similarity with property filters using SQL:
-
-```python
-import arcadedb_embedded as arcadedb
-from arcadedb_embedded import to_java_float_array
-import numpy as np
-
-db = arcadedb.open_database("./products_db")
-
-# Create schema
-db.command("sql", "CREATE VERTEX TYPE Product")
-db.command("sql", "CREATE PROPERTY Product.id STRING")
-db.command("sql", "CREATE PROPERTY Product.name STRING")
-db.command("sql", "CREATE PROPERTY Product.category STRING")
-db.command("sql", "CREATE PROPERTY Product.price DECIMAL")
-db.command("sql", "CREATE PROPERTY Product.features ARRAY_OF_FLOATS")
-db.command("sql", "CREATE INDEX ON Product (category) NOTUNIQUE")
-
-# Create vector index in SQL
-db.command(
-    "sql",
-    """
-    CREATE INDEX ON Product (features)
-    LSM_VECTOR
-    METADATA {
-        "dimensions": 128,
-        "similarity": "COSINE"
-    }
-    """
-)
-
-index = db.schema.get_vector_index("Product", "features")
-
-# Add products with feature vectors
-products = [
-    {"id": "p1", "name": "Laptop", "category": "Electronics",
-        "price": 999.99, "features": np.random.rand(128)},
-    {"id": "p2", "name": "Mouse", "category": "Electronics",
-        "price": 29.99, "features": np.random.rand(128)},
-    {"id": "p3", "name": "Desk", "category": "Furniture",
-        "price": 299.99, "features": np.random.rand(128)},
-]
-
-with db.transaction():
-    for prod in products:
-        db.command(
-            "sql",
-            "INSERT INTO Product SET id = ?, name = ?, category = ?, price = ?, features = ?",
-            prod["id"],
-            prod["name"],
-            prod["category"],
-            prod["price"],
-            to_java_float_array(prod["features"]),
-        )
-        # Note: LSM vector index automatically indexes new records
-
-# Hybrid search: vector similarity + filters
-query_features = np.random.rand(128)
-candidates = index.find_nearest(query_features, k=100)  # Get many candidates
-
-# Filter by category and price
-filtered_results = []
-for vertex, distance in candidates:
-    category = vertex.get("category")
-    price = float(vertex.get("price"))
-
-    if category == "Electronics" and price < 500:
-        filtered_results.append((vertex, distance))
-
-    if len(filtered_results) >= 5:  # Want top 5 after filtering
-        break
-
-print("Filtered Results:")
-for vertex, distance in filtered_results:
-    print(f"{vertex.get('name')} - ${vertex.get('price')} - {distance:.4f}")
-
-db.close()
-```
-
----
-
-### Image Similarity Search
-
-```python
-import arcadedb_embedded as arcadedb
-from arcadedb_embedded import to_java_float_array
-from PIL import Image
-import numpy as np
-
-# Assuming you have a function to generate image embeddings
-def get_image_embedding(image_path):
-    """
-    Generate embedding for image using your model
-    (e.g., ResNet, CLIP, etc.)
-    """
-    # Placeholder - use your actual embedding model
-    return np.random.rand(512)  # Example: 512-dim embedding
-
-db = arcadedb.create_database("./image_search")
-
-# Schema
-db.command("sql", "CREATE VERTEX TYPE Image")
-db.command("sql", "CREATE PROPERTY Image.id STRING")
-db.command("sql", "CREATE PROPERTY Image.filename STRING")
-db.command("sql", "CREATE PROPERTY Image.path STRING")
-db.command("sql", "CREATE PROPERTY Image.embedding ARRAY_OF_FLOATS")
-
-# Create index in SQL
-db.command(
-    "sql",
-    """
-    CREATE INDEX ON Image (embedding)
-    LSM_VECTOR
-    METADATA {
-        "dimensions": 512,
-        "similarity": "COSINE",
-        "maxConnections": 24,
-        "beamWidth": 200
-    }
-    """
-)
-
-index = db.schema.get_vector_index("Image", "embedding")
-
-# Index images
-image_files = ["img1.jpg", "img2.jpg", "img3.jpg"]
-
-with db.transaction():
-    for idx, img_file in enumerate(image_files):
-        embedding = get_image_embedding(img_file)
-
-        v = db.new_vertex("Image")
-        v.set("id", f"img_{idx}")
-        v.set("filename", img_file)
-        v.set("path", f"/images/{img_file}")
-        v.set("embedding", to_java_float_array(embedding))
-        v.save()
-
-        # Note: LSM vector index automatically indexes new records
-
-# Search for similar images
-query_image = "query.jpg"
-query_embedding = get_image_embedding(query_image)
-
-similar_images = index.find_nearest(query_embedding, k=5)
-
-print(f"Similar images to {query_image}:")
-for vertex, distance in similar_images:
-    print(f"  {vertex.get('filename')} - similarity: {1 - distance:.4f}")
-
-db.close()
-```
-
----
-
-## Performance Tuning
-
-### Vector Index Parameters
-
-**max_connections (connections per node):**
-
-- **Lower (16)**: Faster build, less memory, lower recall
-- **Medium (32)**: Balanced (default)
-- **Higher (64)**: Better recall, more memory, slower build
-
-**ef_search (exact search beam width):**
-
-- **Unset (`None`)**: Use ArcadeDB's default/adaptive behavior
-- **Lower (32)**: Faster search, lower recall
-- **Medium (100)**: Balanced explicit override
-- **Higher (200)**: Better recall, slower search
-
-**beam_width:**
-
-- **Lower (64)**: Faster build, lower quality
-- **Medium (100)**: Balanced (default)
-- **Higher (200)**: Better quality, slower build
-
-### Distance Functions
-
-**Cosine Distance:**
-
-- Best for: Text embeddings, normalized vectors
-- Range: [0, 2], lower is better
-- Use when: Direction matters more than magnitude
-
-**Euclidean Distance:**
-
-- Best for: Image embeddings, spatial data
-- Range: [0, ∞), lower is better
-- Use when: Absolute distance matters
-
-**Dot Product:**
-
-- Best for: unit-length vectors, which it ranks the same way as cosine
-- Range: [-1, 0] for unit vectors, lower is better (the score is `-(1 + A·B) / 2`)
-- The engine expects unit-length vectors: when sampled vectors are not, it logs a
-  warning that search quality is degraded. Normalize on ingest, or use cosine
-
-### Memory Considerations
-
-Approximate memory per vertex:
-
-```
-memory_per_vertex = dimensions * 4 bytes + max_connections * 8 bytes + overhead
-```
-
-Example for 384-dim vectors with max_connections=16:
-
-```
-384 * 4 + 16 * 8 + ~100 bytes ≈ 1.8 KB per vertex
-```
-
-For 1 million vectors: ~1.8 GB RAM
-
-### Vector Caches
+## Vector Caches
 
 Two caches dominate large-index behavior. Both size themselves automatically
 from the index size and the heap, and both are settable as global
@@ -1004,10 +633,8 @@ before the first database is opened):
 
 Leave both at their defaults. Automatic build-cache sizing reads the heap the
 engine actually has free and caches the whole corpus when it fits, which is
-what a build wants; engines before 26.10 read a post-GC figure that included
-the evictable page cache and could settle on a fraction of a large corpus on
-a large heap (upstream #7146, fixed in #7147). Set an absolute size only to
-bound a build on a deliberately small heap.
+what a build wants. Set an absolute size only to bound a build on a deliberately
+small heap.
 
 The search cache is per index and stays warm between queries, so the first
 queries after a fresh build pay a cold-start cost while it fills; check
@@ -1053,6 +680,6 @@ with db.transaction():
 ## See Also
 
 - [Vector Search Guide](../guide/vectors.md) - Comprehensive vector search strategies
-- [Vector Examples](../examples/vectors.md) - More practical examples
+- [Example 03: Vector Search](../examples/03_vector_search.md) - A worked vector search
 - [Database API](database.md) - Database operations
 - [Query Guide](../guide/core/queries.md) - Combining vectors with queries

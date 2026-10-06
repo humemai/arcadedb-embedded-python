@@ -52,6 +52,7 @@ arcadedb_embedded/
 - Always reads `ARCADEDB_JVM_ARGS` and puts its flags before `jvm_args`; `ARCADEDB_JVM_ERROR_FILE` sets the crash-log path
 - Adds default flags unless the merged arguments already set them: `--add-modules=jdk.incubator.vector`, `-Djava.awt.headless=true`, `--enable-native-access=ALL-UNNAMED`, `-Dfile.encoding=UTF8`, `--add-opens` flags (for `java.util.concurrent.atomic`, `java.nio.channels.spi`, and `java.lang`), `-Dpolyglot.engine.WarnInterpreterOnly=false`, `-XX:+UseCompactObjectHeaders`, and `-Xmx4g` when no heap is given; the `jdk.xml` entity limits are lifted while `disable_xml_limits` is true, and `-XX:ErrorFile` defaults to `./log/hs_err_pid%p.log`
 - Starts once per process: a later `start_jvm()` with no settings, or the same ones, joins the running JVM; different settings raise `ArcadeDBError`
+- `interrupt` chooses what Ctrl-C does: by default (`False`) Python gets it and raises `KeyboardInterrupt`; `True` leaves it to JPype's handler, which ends the process with status 130 and runs no Python cleanup (see [JVM API](../api/jvm.md))
 - From a source checkout (no `jars/` or `jre/` next to the package), extracts them from the newest wheel in `dist/` into `bindings/python/.runtime-cache/`, stamped with that wheel and re-extracted when the wheel changes
 - `jar_fingerprint()` hashes the JARs on disk (`sha256` over all of them, `engine_sha256` without the bridge JAR), so two installs can be compared by engine rather than by version string
 - `shutdown_jvm()` closes open databases and shuts the JVM down
@@ -62,7 +63,7 @@ arcadedb_embedded/
 
 - `DatabaseFactory`: create/open databases
 - `Database`: queries/commands, transactions, lookups, vector index builder
-- `insert_many()`: bulk document ingest via the bridge's `DocumentBatcher`
+- `insert_many()` and `insert_columns()`: bulk document ingest via the bridge's `DocumentBatcher`, from a list of dicts and from whole columns
 - Convenience: `async_executor()`, `schema`, export helpers
 
 **`graph.py`**
@@ -144,6 +145,7 @@ def start_jvm(
     disable_xml_limits=True,
     jvm_args=None,
     common_pool_parallelism=None,
+    interrupt=None,
 ):
     if jpype.isJVMStarted():
         # No explicit settings: join the running JVM.
@@ -236,28 +238,10 @@ java_array = vertex.get("embedding")
 numpy_array = to_python_array(java_array)
 ```
 
-**Type Mapping:**
-
-| Python Type | Java Type | Notes |
-|-------------|-----------|-------|
-| `str` | `String` | Automatic |
-| `int` | `Long` | Automatic |
-| `float` | `Double` | Automatic |
-| `bool` | `Boolean` | Automatic |
-| `None` | `null` | Automatic |
-| `list` | `ArrayList` | Converted by `convert_python_to_java()` (used by `set()`, and by a bound parameter that is one of several arguments) |
-| `tuple` | `ArrayList` | Converted by `convert_python_to_java()` |
-| `set` | `HashSet` | Converted by `convert_python_to_java()`; stored as a list, so it reads back as a `list` after the commit |
-| `dict` | `HashMap` | Converted by `convert_python_to_java()` |
-| `Decimal` | `BigDecimal` | Converted by `convert_python_to_java()` |
-| `datetime` | `java.util.Date` | Converted by `convert_python_to_java()` |
-| `date` | `LocalDate` | Converted by `convert_python_to_java()` |
-| `bytes` / `bytearray` | `byte[]` | Converted by `convert_python_to_java()` |
-| `np.ndarray` | `float[]` | via `to_java_float_array()`; a bound parameter is converted automatically |
-| `np.ndarray` (integer dtype) | `int[]` | via `to_java_int_array()` |
-
-A single `list` or `tuple` passed as the only bound argument is not one parameter: it
-expands into the positional parameters, one element per `?`.
+**Type Mapping:** the [Type Conversion](../api/type_conversion.md) page has the full table, in
+both directions. Two things trip people up: a `datetime` crosses as a `LocalDateTime` holding a
+UTC wall clock, and a single `list` or `tuple` passed as the only bound argument is not one
+parameter but the positional-parameter array (see [Database API](../api/database.md)).
 
 ---
 
@@ -313,7 +297,7 @@ Database (core.py)
     ├─ run_in_transaction(fn, retries=12) (retries on conflicts)
     ├─ is_transaction_active()
     ├─ new_vertex()/new_document() → Vertex | Document
-    ├─ insert_many() → int
+    ├─ insert_many()/insert_columns() → int
     ├─ import_documents() → ImportResult
     ├─ graph_batch() → GraphBatch (graph_batch.py)
     ├─ lookup_by_key()/lookup_by_rid()/count_type()
@@ -368,7 +352,7 @@ Result (results.py)
 
 `tests/test_concurrency.py` covers this: `test_thread_safety` runs four threads against
 one shared `Database`, and `test_oltp_mixed_workload_threads` mixes reads with retried
-updates. See [Concurrency Tests](testing/test-concurrency.md).
+updates.
 
 **Example:**
 
@@ -409,7 +393,7 @@ Only one process can open a database directory at a time: the engine holds an OS
 `test_concurrency.py::test_concurrent_access_limitation`). Separate processes can work
 on separate databases. To share one database across processes, open it in one process
 that runs a server, and have the others use its HTTP API (see
-[Server Patterns](testing/test-server-patterns.md)).
+[Access Methods](../api-access-methods.md#hybrid-usage)).
 
 ## Performance Considerations
 
@@ -599,9 +583,8 @@ xml_loader.load_xml("data.xml", "Data")
 
 ## Testing
 
-The test suite, its fixtures, and the patterns it uses are documented under
-[Testing](testing.md), with one page per test file and a
-[Best Practices](testing/best-practices.md) summary.
+The test suite, how to run it, and the CI gates it must pass are documented under
+[Testing](testing.md).
 
 ## Build System
 

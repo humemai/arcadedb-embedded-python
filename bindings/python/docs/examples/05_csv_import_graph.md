@@ -407,9 +407,6 @@ Each configuration is one run of `05_csv_import_graph.py` with the flags shown:
 5. `sql` (`--method sql`) - SQL with indexes (always synchronous)
 6. `sql_noindex` (`--method sql --no-index`) - SQL without indexes (always synchronous)
 
-Configurations 1 and 3 build vertices with GraphBatch and have not been timed yet, so
-the tables above have no rows for them.
-
 ## Benchmark Configuration
 
 ### JVM Settings

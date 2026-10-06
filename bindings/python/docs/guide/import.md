@@ -48,20 +48,27 @@ not something we currently encourage as the default Python import story.
     that already lives in columns, `db.insert_columns(...)` is the recommended path: each
     column crosses once as a typed array and the documents are built in Java (2.24x over
     `insert_many` on the first 2,000,000 TPC-H SF1 line items, laptop, p50 of 3, same
-    sums and count); it takes `parallel=True` for the async writers like `insert_many`.
-    `parallel=True` hands the rows to the async executor's writers; on a laptop (4 performance cores, parallel level 3, 1,000,000 rows, 6 runs per arm, engine `b22b5e9954`, 2026-10-04) it loaded 1.11x to 1.14x faster than the synchronous mode at 1, 3, 4, and 8 buckets alike (`CREATE DOCUMENT TYPE T BUCKETS n`). The maintainers' rule (ArcadeData/arcadedb#8478): as many buckets as the async executor has writers (`async_executor().get_parallel_level()`, default cores - 1), or a multiple of that, decided when the type is created; create indexes after the load where you can; a record the writers reject raises `ArcadeDBError` once the load completes. Each bucket has its own sub-index, so on a type with a key (a UNIQUE index) route records by it, ``ALTER TYPE T BucketSelectionStrategy `partitioned('id')` ``: then an insert's unique check and a keyed lookup touch one sub-index instead of every bucket's (the same laptop, 400,000 rows, 4 buckets, 6 runs per arm: the parallel load 3.15 s against 2.53 s partitioned, and a keyed lookup 16.2 against 14.6 us).
+    sums and count). Both take `parallel=True`:
+    + `parallel=True` hands the rows to the async executor's writers. On a laptop (4
+        performance cores, parallel level 3, 1,000,000 rows, 6 runs per arm, 2026-10-04)
+        it loaded 1.11x to 1.14x faster than the synchronous mode at 1, 3, 4, and 8
+        buckets alike (`CREATE DOCUMENT TYPE T BUCKETS n`).
+    + The maintainers' rule (ArcadeData/arcadedb#8478): as many buckets as the async
+        executor has writers (`async_executor().get_parallel_level()`, default
+        cores - 1), or a multiple of that, decided when the type is created. Create
+        indexes after the load where you can. A record the writers reject raises
+        `ArcadeDBError` once the load completes.
+    + Each bucket has its own sub-index, so on a type with a key (a UNIQUE index) route
+        records by it, ``ALTER TYPE T BucketSelectionStrategy `partitioned('id')` ``: then
+        an insert's unique check and a keyed lookup touch one sub-index instead of every
+        bucket's (the same laptop, 400,000 rows, 4 buckets, 6 runs per arm: the parallel
+        load 3.15 s against 2.53 s partitioned, and a keyed lookup 16.2 against 14.6 us).
 + The async executor's SQL command path (`db.async_executor().command(...)`) is not a
     bulk-write path at any parallel level. Above parallel level 1 it silently discarded
     records before 26.10.1 (`ArcadeData/arcadedb#7615`, fixed in #7625: a failed
     periodic commit is now retried and otherwise reported through the error callback).
-    Observed on arcadedb-engine 26.9.1 and 26.6.1, measured 2026-09-15: how
-    much was lost varied by run and by workload shape, and 9,742 single-record `INSERT`
-    commands submitted at parallel level 4 stored 2,436, 5,742, and 7,742 rows across
-    runs. No error reached the per-command callback,
-    nothing was logged, and `wait_completion()` returned normally. Only the executor-wide
-    `on_error` handler saw anything, one `ConcurrentModificationException` per
-    rolled-back batch. `create_record`, `append_samples`, `db.insert_many(...)`, and
-    `db.graph_batch(...)` are unaffected.
+    `create_record`, `append_samples`, `db.insert_many(...)`, and `db.graph_batch(...)`
+    never had that problem.
 + `db.import_documents(...)` exists for document-shaped file import convenience; like
     `IMPORT DATABASE`, it is not the recommended default for bulk loads from Python.
 + Reserve `IMPORT DATABASE` for supported import formats, restore flows, and cases where
@@ -158,20 +165,16 @@ with arcadedb.create_database("./restored") as db:
     )
 ```
 
-On 26.9.1 and earlier, ArcadeDB
-[#8871](https://github.com/ArcadeData/arcadedb/issues/8871) makes this restore lossy: an
-export that holds an infinite `FLOAT` or `DOUBLE` does not import at all (the import stops
-with `NumberFormatException: For input string: "NegInfinity"`), a `DECIMAL` comes back
-rounded to the 17 digits of a double, and NaN or an infinity inside a list is exported as
-0. **Fixed in 26.10.1** (PR #8878, verified on its merge) for declared `FLOAT`, `DOUBLE`, and
-`DECIMAL` properties and for `LIST OF FLOAT`, `LIST OF DOUBLE`, and `LIST OF DECIMAL`. NaN
+`IMPORT DATABASE` restores `FLOAT`, `DOUBLE`, and `DECIMAL` values exactly: infinities, NaN, and
+every digit of a `DECIMAL`, in declared properties and in `LIST OF FLOAT`, `LIST OF DOUBLE`, and
+`LIST OF DECIMAL` (ArcadeDB [#8871](https://github.com/ArcadeData/arcadedb/issues/8871)). NaN
 and the infinities still come back as the strings `"NaN"`, `"PosInfinity"`, and
 `"NegInfinity"` from a property with no declared type, and are not restored inside `MAP`
 properties, embedded documents, or nested lists.
 
-When the copy has to be exact, take a backup instead: in the same test, `BACKUP DATABASE` and
-its restore returned all 2,769 records of edge-case values unchanged on both versions, with
-every index answer equal, and copying the closed database directory
+When the copy has to be exact whatever the types, take a backup instead: `BACKUP DATABASE` and
+its restore returned all 2,769 records of edge-case values unchanged in the check reported in
+that issue, and copying the closed database directory
 ([Database Backup Pattern](core/database.md#database-backup-pattern)) copies the files
 themselves.
 
@@ -300,6 +303,6 @@ db.command(
 ## See Also
 
 + [Import Workflow Reference](../api/importer.md) - Supported SQL import surface
-+ [Import Examples](../examples/import.md) - Practical examples
++ [Examples](../examples/index.md) - Runnable examples, including the import and ingest ones
 + [Database API](../api/database.md) - Database operations
 + [Transactions](../api/transactions.md) - Transaction management

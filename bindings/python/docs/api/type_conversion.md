@@ -10,7 +10,7 @@ The `type_conversion` module enables:
 - **Collection Handling**: Lists, sets, maps, and nested structures
 - **Date/Time Support**: datetime and date objects (`datetime.time` is not converted)
 - **Decimal Precision**: High-precision decimal numbers
-- **Binary Data**: `bytes` and `bytearray` are stored as Java `byte[]` (from 26.10.1)
+- **Binary Data**: `bytes` and `bytearray` are stored as Java `byte[]`
 - **Type Safety**: Validation and error handling
 
 ## Why Type Conversion?
@@ -20,9 +20,7 @@ ArcadeDB Python bindings wrap a Java database engine. When you:
 - Set properties on records → Python values converted to Java
 - Read properties from records → Java values converted to Python
 - Pass query parameters → Python values converted to Java (positional parameters
-  convert `Decimal`, `date`, and `datetime` as below from 26.10.1; before, a `Decimal`
-  reached the engine as a `Double` and kept only about 16 significant digits, and a `date` or
-  `datetime` was refused with "No matching overloads")
+  convert `Decimal`, `date`, and `datetime` as below)
 - Receive query results → Java values converted to Python
 
 The type_conversion module handles this automatically.
@@ -70,9 +68,6 @@ subclass, and JPype would store it as the `Double` 1.0 or 0.0.
 - For the current time, store `datetime.now(timezone.utc)`. A naive `datetime.now()`
   is the host's local wall clock, which the engine then reads as UTC: on a UTC+9 host
   it lands nine hours after the real instant.
-- Before 26.10.1 a `datetime` crossed as a `java.util.Date`, which read a naive value
-  as local time and kept milliseconds, so `DATETIME_MICROS` and `DATETIME_NANOS` lost
-  the rest and a lookup by the same value found nothing.
 - `date` is converted to a `LocalDate`. If the Java types are unavailable it is
   combined with `time.min` and converted as a `datetime`.
 - Collection elements, set members, and map keys/values are converted recursively.
@@ -281,10 +276,8 @@ with db.transaction():
 ```
 
 `bytes` and `bytearray` are stored as `byte[]` both through `set()` and as a
-bound SQL parameter. Before 26.10.1 they reached Java as a `String`: text bytes
-came back as `str`, and bytes that are not valid UTF-8 were stored as an empty
-string without an error. On those wheels, wrap the value in
-`arcadedb.to_java_byte_array()`, which stores the same `byte[]`.
+bound SQL parameter. `arcadedb.to_java_byte_array()` builds the same `byte[]`
+explicitly.
 
 ---
 
@@ -380,77 +373,6 @@ read (`lookup_by_rid()`, a query row's `get()`, `to_list()`) returns a `list`, i
 particular order. Duplicates are still removed. If your code needs a set, convert on
 read: `set(vertex.get("roles"))`.
 
-## Complete Example
-
-```python
-import arcadedb_embedded as arcadedb
-from datetime import date, datetime, timezone
-from decimal import Decimal
-
-# Create database
-db = arcadedb.create_database("./type_demo")
-
-# Create schema (applies immediately)
-db.command("sql", "CREATE VERTEX TYPE Product")
-
-# Test all type conversions
-with db.transaction():
-    product = db.new_vertex("Product")
-
-    # Primitives
-    product.set("productId", 12345)                    # int
-    product.set("name", "Laptop")                      # str
-    product.set("inStock", True)                       # bool
-    product.set("price", 999.99)                       # float
-    product.set("tax", Decimal("50.00"))               # Decimal
-
-    # Date/time
-    product.set("createdAt", datetime.now(timezone.utc))  # datetime
-    product.set("releaseDate", date(2024, 1, 15))      # date
-
-    # Collections
-    product.set("tags", ["electronics", "laptop"])     # list
-    product.set("categories", {"computers", "tech"})   # set, a list after the commit
-
-    # Nested structures
-    product.set("specs", {
-        "cpu": "Intel i7",
-        "ram": "16GB",
-        "storage": ["512GB SSD", "1TB HDD"]
-    })                                                  # dict
-
-    # Binary
-    product.set("thumbnail", b"PNG\x89...")            # bytes
-
-    product.save()
-
-# Read back and verify types
-results = list(db.query("sql", "SELECT FROM Product"))
-product = results[0]
-
-print(f"Product ID: {product.get('productId')} ({type(product.get('productId')).__name__})")
-print(f"Name: {product.get('name')} ({type(product.get('name')).__name__})")
-print(f"In Stock: {product.get('inStock')} ({type(product.get('inStock')).__name__})")
-print(f"Price: {product.get('price')} ({type(product.get('price')).__name__})")
-print(f"Tax: {product.get('tax')} ({type(product.get('tax')).__name__})")
-print(f"Created At: {product.get('createdAt')} ({type(product.get('createdAt')).__name__})")
-print(f"Tags: {product.get('tags')} ({type(product.get('tags')).__name__})")
-
-db.close()
-```
-
-**Output:**
-
-```
-Product ID: 12345 (int)
-Name: Laptop (str)
-In Stock: True (bool)
-Price: 999.99 (float)
-Tax: 50.00 (Decimal)
-Created At: 2024-01-15 10:30:45.123000 (datetime)
-Tags: ['electronics', 'laptop'] (list)
-```
-
 ## Manual Conversion
 
 Most of the time, conversions happen automatically. But you can manually convert when needed:
@@ -501,33 +423,9 @@ vertex.set("tax", Decimal("1.60"))
 vertex.set("price", 19.99)  # May lose precision
 ```
 
-### 3. Consistent Collection Types
-
-```python
-# ✅ Good: Consistent types
-vertex.set("tags", ["tag1", "tag2", "tag3"])  # All strings
-
-# ⚠️ Mixed types work but can be confusing
-vertex.set("mixed", [1, "two", 3.0, True])
-```
-
-### 4. Handle None Values
-
-```python
-# ✅ Good: Check for None
-age = vertex.get("age")
-if age is not None:
-    print(f"Age: {age}")
-else:
-    print("Age not set")
-
-# ❌ Bad: Assume value exists
-print(f"Age: {vertex.get('age')}")  # May be None
-```
-
 ## Type Conversion Limitations
 
-### 1. Custom Python Classes
+### Custom Python Classes
 
 ```python
 # ❌ Custom classes not supported
@@ -539,75 +437,6 @@ vertex.set("custom", MyClass(42))  # ❌ Error
 
 # ✅ Convert to dict first
 vertex.set("custom", {"value": 42})  # ✅ Works
-```
-
-### 2. Complex Nested Structures
-
-```python
-# ✅ Reasonable nesting works
-vertex.set("data", {
-    "level1": {
-        "level2": {
-            "level3": [1, 2, 3]
-        }
-    }
-})
-
-# ⚠️ Very deep nesting may impact performance
-```
-
-### 3. Large Binary Data
-
-```python
-# ✅ Small binary data
-vertex.set("icon", b"PNG\x89...")  # OK
-
-# ⚠️ Large binary data (consider file storage)
-with open("large_file.bin", "rb") as f:
-    data = f.read()  # May be very large
-    vertex.set("file", data)  # May impact memory
-```
-
-## Troubleshooting
-
-### Type Mismatch Errors
-
-```python
-# ❌ Error: Expected list, got dict
-vertex.set("tags", {"tag1": 1})  # Wrong type
-
-# ✅ Fix: Use correct type
-vertex.set("tags", ["tag1"])
-```
-
-### Precision Loss with Floats
-
-```python
-# ⚠️ Float precision issues
-price = 19.99
-tax = 0.01
-total = price + tax  # May not be exactly 20.00
-
-# ✅ Use Decimal
-from decimal import Decimal
-price = Decimal("19.99")
-tax = Decimal("0.01")
-total = price + tax  # Exactly 20.00
-```
-
-### Date/Time Timezone Issues
-
-```python
-from datetime import datetime, timezone
-
-# ⚠️ Naive local time: stored as if it were UTC, so off by the host's offset
-now = datetime.now()
-
-# ✅ Aware UTC time: stored as the real instant
-now_utc = datetime.now(timezone.utc)
-
-# ✅ A naive value you mean as a UTC wall clock reads back unchanged on any host
-meeting = datetime(2026, 10, 1, 12, 34)
 ```
 
 ## See Also

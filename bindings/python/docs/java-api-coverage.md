@@ -46,7 +46,7 @@ your Python process, or for HA/TLS, use the official ArcadeDB distribution.
 - ✅ Transaction helpers: `run_in_transaction()` (retries on concurrent-modification
   conflicts), `is_transaction_active()`
 - ✅ Records: `new_document()`, `new_vertex()`, `lookup_by_rid()`, `lookup_by_key()`
-- ✅ Bulk ingest: `insert_many()` (documents), `graph_batch()` (vertices and edges)
+- ✅ Bulk ingest: `insert_many()` (documents from rows), `insert_columns()` (documents from columns), `graph_batch()` (vertices and edges)
 - ✅ Import: `import_documents()` for document-shaped files
 - ✅ Vector indexes: `create_vector_index()`
 - ✅ Utilities: `count_type()`, `drop()`, `get_name()`, `get_database_path()`, `is_open()`, `close()`
@@ -213,18 +213,11 @@ through:
 - **SQL/OpenCypher** for graph and document operations
 - **Thin helper APIs** for transactions, vector search, and targeted record access
 
-This approach is actually **cleaner and more maintainable** than direct API exposure:
+For example, an index is one SQL statement and a graph query is one OpenCypher statement:
 
 ```python
-# Python way (clean):
 db.command("sql", "CREATE INDEX ON User (email) UNIQUE_HASH")
 db.query("opencypher", "MATCH (a)-[:Follows]->(b) RETURN b")
-
-# vs. hypothetical direct API (complex):
-schema = db.getSchema()
-type = schema.getType("User")
-index_builder = schema.buildTypeIndex("User", ["email"])
-index = index_builder.withUnique(true).create()
 ```
 
 ### Use Case Suitability
@@ -237,18 +230,6 @@ index = index_builder.withUnique(true).create()
 | Vector similarity search | ✅ Excellent | JVector + NumPy integration |
 | Development with Studio UI | ✅ Excellent | Server mode included |
 | Data migration (CSV/XML/JSONL import) | ✅ Good | SQL import workflows exercised by tests |
-| Async bulk ingestion | ❌ Not recommended | Before 26.10.1, `async_executor().command(...)` could silently drop records above parallel level 1 (`ArcadeData/arcadedb#7615`, fixed in #7625); see [Bulk Ingest Recommendation](guide/import.md#bulk-ingest-recommendation). Use `insert_many()` or `GraphBatch` |
+| Async SQL commands as a bulk load | ❌ Not recommended | `async_executor().command(...)` is not a bulk-write path; see [Bulk Ingest Recommendation](guide/import.md#bulk-ingest-recommendation). Use `insert_many()`, `insert_columns()`, or `GraphBatch` |
 | Multi-master replication | ❌ Not supported | Java server only |
 | Custom query language | ❌ Not supported | Use built-in languages |
-
-### Conclusion
-
-These bindings cover the **primary workflows** most Python developers need:
-
-- Embedded multi-model database
-- Graph, document, vector, and time-series data
-- SQL and OpenCypher queries
-
-They intentionally **do not expose** low-level JVM internals and clustering. For those scenarios, use the Java APIs directly.
-
-For development workflow and tests, see [Contributing](development/contributing.md).

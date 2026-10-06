@@ -180,12 +180,10 @@ The JARs are filtered later, by the build that packages them (see
 
 **Location:** `bindings/python/scripts/jar_exclusions.txt`
 
-**Format:** One glob pattern per line
-
-```text
-arcadedb-grpcw-*.jar
-arcadedb-ha-raft-*.jar
-```
+**Format:** One glob pattern per line; `#` starts a comment. The file is the list: it drops
+the engine's Gremlin, gRPC, MongoDB, Raft HA, metrics, and tracing modules, the GraalVM
+JavaScript jars, and a few third-party libraries the embedded engine does not use. Read the
+file for the current patterns.
 
 **Used by:**
 

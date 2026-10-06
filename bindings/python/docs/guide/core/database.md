@@ -356,54 +356,14 @@ def backup_database(db_path: str, backup_dir: str):
 backup_path = backup_database("./mydb", "./backups")
 ```
 
-### Database Migration
+### Moving Data to a New Database
 
-```python
-def migrate_database(old_path: str, new_path: str):
-    """Migrate data from old to new database."""
-    with arcadedb.open_database(old_path) as old_db, \
-            arcadedb.create_database(new_path) as new_db:
-        # Copy schema
-        new_db.command("sql", "CREATE VERTEX TYPE User")
-        new_db.command("sql", "CREATE VERTEX TYPE Post")
-        new_db.command("sql", "CREATE EDGE TYPE Authored")
-
-        # Copy data
-        batch_size = 1000
-
-        # Migrate users
-        result = old_db.query("sql", "SELECT FROM User")
-        users_batch = []
-        for user in result:
-            users_batch.append(user)
-
-            if len(users_batch) >= batch_size:
-                with new_db.transaction():
-                    for u in users_batch:
-                        new_db.command(
-                            "sql",
-                            "INSERT INTO User SET name = ?, email = ?",
-                            u.get("name"),
-                            u.get("email"),
-                        )
-                users_batch = []
-
-        # Flush remaining
-        if users_batch:
-            with new_db.transaction():
-                for u in users_batch:
-                    new_db.command(
-                        "sql",
-                        "INSERT INTO User SET name = ?, email = ?",
-                        u.get("name"),
-                        u.get("email"),
-                    )
-
-        print("Migration complete")
-
-# Usage
-migrate_database("./old_db", "./new_db")
-```
+To copy a whole database, use the closed-directory copy of the backup pattern above, or write
+it out with `db.export_database("mydb.jsonl.tgz")` and restore it into a new database with
+SQL `IMPORT DATABASE` (see [Restore an ArcadeDB Export](../import.md#restore-an-arcadedb-export)).
+Both keep the schema, the indexes, and the edges. A copy built from your own `SELECT` and
+`INSERT` loop carries only the types and properties the loop names, so use it only to
+reshape data.
 
 ## Database Information
 

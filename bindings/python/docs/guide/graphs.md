@@ -27,23 +27,19 @@ same options as query parameters (`wal=true`, `expectedEdgeCount=...`). A
 `sqlscript` of `CREATE VERTEX`/`CREATE EDGE` statements parses and plans every
 statement and measured 6 to 7 times slower for the same graph.
 
-Async SQL graph insert is not a bulk graph ingest path at all. Before 26.10.1,
-`async_executor().command(...)` could silently drop records above parallel level 1
-(`ArcadeData/arcadedb#7615`, fixed in #7625); see
+Async SQL graph insert is not a bulk graph ingest path at all; see
 [Bulk Ingest Recommendation](import.md#bulk-ingest-recommendation). Example 16 keeps it
 as a comparison arm, pinned to one worker and checked against what it submitted.
 `GraphBatch` flushes its edges through that same executor and is measured exact.
 
 **Edge direction must match the schema.** `CREATE EDGE TYPE` makes a two-way type by
 default, and `GraphBatch` stores both directions unless you pass `bidirectional=False`.
-Pass it only for a type declared one-way (`CREATE EDGE TYPE ... UNIDIRECTIONAL`). From
-26.10.1 the engine refuses a one-way edge in a two-way type: `new_edge` raises
-`ArcadeDBError` naming the type, and nothing is written. Before 26.10.1 the batch did not
-check, and such edges made any query the planner walked from the target end return 0
-rows with no error (`ArcadeData/arcadedb#8625`, fixed in #8628).
+Pass it only for a type declared one-way (`CREATE EDGE TYPE ... UNIDIRECTIONAL`). The
+engine refuses a one-way edge in a two-way type: `new_edge` raises `ArcadeDBError` naming
+the type, and nothing is written.
 
 **What sees a one-way edge.** An edge of a `UNIDIRECTIONAL` type is stored on its source
-vertex only. From 26.10.1:
+vertex only:
 
 - Patterns see every such edge, whichever way they are written: Cypher
   (`(t:Tag)<-[:TAGGED_WITH]-(q:Question)`, `(q)-[:TAGGED_WITH]->(t)`, and the undirected
@@ -53,9 +49,8 @@ vertex only. From 26.10.1:
   (`get_in_edges()`, `get_both_edges()` on the target), read what the target vertex stores,
   which for a one-way edge is nothing. `out()` and `get_out_edges()` on the source see it.
 
-Before 26.10.1, patterns walked from the target end returned 0 rows as well. If a type
-is often queried from its target, declare it two-way (the default): a pattern from the
-target of a one-way type pays a scan of the whole edge type.
+If a type is often queried from its target, declare it two-way (the default): a pattern
+from the target of a one-way type pays a scan of the whole edge type.
 
 ## Overview
 
@@ -145,21 +140,6 @@ with db.transaction():
     """)
 
     print("✅ Created edge: Alice -> Bob")
-```
-
-### Creating Edges with Retrieved Vertices (SQL pattern)
-
-```python
-with db.transaction():
-    db.command(
-        "sql",
-        """
-        CREATE EDGE Knows
-        FROM (SELECT FROM Person WHERE name = 'Alice')
-        TO (SELECT FROM Person WHERE name = 'Bob')
-        SET since = date('2020-01-15')
-        """,
-    )
 ```
 
 !!! warning "Vertex must exist before edge creation"
@@ -316,18 +296,6 @@ db.query("opencypher", "MATCH (p:Person {id: $id})-[:Knows]->()-[:Knows]->(f) RE
 db.query("opencypher", "MATCH (p:Person {id: $id})-[r:Knows]->()-[:Knows]->(f) RETURN count(DISTINCT f) AS n", {"id": 42})
 ```
 
-### 5. Ensure Vertices Exist Before Creating Edges
-
-```python
-with db.transaction():
-    db.command("sql", "INSERT INTO Person SET name = 'Alice'")
-    db.command("sql", "INSERT INTO Person SET name = 'Bob'")
-    db.command(
-        "sql",
-        "CREATE EDGE Knows FROM (SELECT FROM Person WHERE name='Alice') TO (SELECT FROM Person WHERE name='Bob')",
-    )
-```
-
 ## Deleting Records
 
 Deleting vertices, edges, and documents requires understanding cascade behavior.
@@ -412,18 +380,6 @@ print(f"Vertices: {len(vertices)}")  # Output: 2
 print(f"Edges: {len(edges)}")        # Output: 0
 ```
 
-### Best Practices for Deletion
-
-| Scenario | Recommended Approach | Why |
-|----------|----------------------|-----|
-| Delete from query results | SQL DELETE | Works predictably |
-| Delete single record by RID | SQL DELETE | Consistent style |
-| Delete with complex WHERE clause | SQL DELETE | Readable and powerful |
-| Delete in loop | SQL DELETE with WHERE clause | Faster than per-record calls |
-| Interactive/programmatic delete | SQL DELETE | Same behavior across modes |
-
-**Summary: use SQL DELETE.**
-
 ## OpenCypher Queries
 
 ArcadeDB supports OpenCypher for declarative graph pattern matching.
@@ -457,16 +413,6 @@ with arcadedb.create_database("./graph_db") as db:
         print(record.get("name"))  # Outputs: Alice
 ```
 
-### OpenCypher vs SQL
-
-| Feature | OpenCypher | SQL |
-|---------|-----------|-----|
-| **Style** | Declarative graph patterns | Declarative |
-| **Graph Traversal** | ✅ Patterns and paths | ✅ `MATCH` patterns |
-| **Readability** | High | High |
-| **Standards Body** | openCypher | ANSI SQL |
-| **Best For** | Graph patterns and paths | Relational queries |
-
 ### Common OpenCypher Patterns
 
 ```python
@@ -491,14 +437,6 @@ results = db.query("opencypher", """
     RETURN DISTINCT fof.name as name
 """)
 ```
-
-### When to Use OpenCypher
-
-- **Pattern matching**: Express graph structures declaratively
-- **Multi-hop traversals**: Variable-length paths
-- **Readable queries**: Clear syntax for graph relationships
-
-For more details, see [OpenCypher Tests](../development/testing/test-opencypher.md).
 
 ## Next Steps
 

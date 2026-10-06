@@ -30,7 +30,7 @@ with arcadedb.create_database("./vector_demo") as db:
         "similarity": "COSINE"
         }
         """,
-)
+    )
 
     with db.transaction():
         for i, t in enumerate(texts):
@@ -80,7 +80,7 @@ Preferred split:
   [Vector Caches](../api/vector.md#vector-caches).
 - After a database is opened, an index loads its graph on the first search, and that
   search pays for it. A service that restarts can call `warm_up()` on the loaded index
-  right after opening (26.10.1 and later), or run one throwaway search on older engines.
+  right after opening.
   See [`VectorIndex.warm_up()`](../api/vector.md#vectorindexwarm_up).
 
 ## Distance Functions (scoring behavior)
@@ -137,10 +137,12 @@ rebuild takes about as long as building the index, and the engine logs
 At about 10M vectors with sustained inserts while a rebuild runs, the next
 rebuild can be deferred indefinitely, and every search then pays a growing scan
 of the vectors not yet in the graph (ArcadeDB
-[#7260](https://github.com/ArcadeData/arcadedb/issues/7260), open). A heap of
-about twice the graph, a lower `mutations_before_rebuild`, or rebuilding in a
-quiet window avoids it. Read-mostly use, and loading first and serving after,
-never meet it.
+[#7260](https://github.com/ArcadeData/arcadedb/issues/7260)). Upstream fixed it
+in [#9289](https://github.com/ArcadeData/arcadedb/pull/9289), merged on
+2026-10-06 for ArcadeDB 26.11.1, which is not released yet: the 26.10.1 wheel
+still has it. A heap of about twice the graph, a lower `mutations_before_rebuild`,
+or rebuilding in a quiet window avoids it. Read-mostly use, and loading first and
+serving after, never meet it.
 
 ### Build-time cache: use the default
 
@@ -150,11 +152,8 @@ automatic and is the right setting: it reads the heap the engine actually has
 free and caches the whole corpus when it fits, inside a share of the heap
 (`arcadedb.vectorIndex.graphBuildCacheMaxHeapPercent`, 25%). Give the JVM the
 heap and leave `graphBuildCacheSize` alone; set an absolute count only to bound
-a build on a deliberately small heap. Engines before 26.10 sized it from a
-post-GC heap figure that included the page cache and could pick a fraction of
-the corpus on a large heap (a 10M build took 7,000 s that way against 2,300 s
-with the corpus cached); upstream fixed the sizing, so nothing in the bindings'
-tests or examples sets it. See the
+a build on a deliberately small heap. Nothing in the bindings' tests or
+examples sets it. See the
 [Memory & Heap](#memory-heap-requirements-1024-dim-vectors) section for the
 heap side.
 
@@ -248,9 +247,9 @@ from arcadedb_embedded import to_java_float_array
 rows = db.query(
     "sql",
     (
-    "SELECT title, category, distance, (1 - distance) AS score "
-    "FROM (SELECT expand(vectorNeighbors('Article[embedding]', ?, 50))) "
-    "WHERE category = ? ORDER BY distance LIMIT 5"
+        "SELECT title, category, distance, (1 - distance) AS score "
+        "FROM (SELECT expand(vectorNeighbors('Article[embedding]', ?, 50))) "
+        "WHERE category = ? ORDER BY distance LIMIT 5"
     ),
     to_java_float_array(query_vec),
     "category_42",
@@ -263,9 +262,9 @@ rows = db.query(
 rows = db.query(
     "sql",
     (
-    "SELECT title, distance, (1 - distance) AS score "
-    "FROM (SELECT expand(vectorNeighbors('Movie[embedding]', ?, 20))) "
-    "WHERE title <> ? ORDER BY distance LIMIT 10"
+        "SELECT title, distance, (1 - distance) AS score "
+        "FROM (SELECT expand(vectorNeighbors('Movie[embedding]', ?, 20))) "
+        "WHERE title <> ? ORDER BY distance LIMIT 10"
     ),
     to_java_float_array(query_vec),
     movie_title,
@@ -278,8 +277,8 @@ rows = db.query(
 rows = db.query(
     "opencypher",
     (
-    "CALL vector.neighbors('Doc[embedding]', $vec, $k) "
-    "YIELD name, distance RETURN name, (1 - distance) AS score ORDER BY score DESC"
+        "CALL vector.neighbors('Doc[embedding]', $vec, $k) "
+        "YIELD name, distance RETURN name, (1 - distance) AS score ORDER BY score DESC"
     ),
     {"vec": query_vec, "k": 5},
 ).to_list()
@@ -353,17 +352,17 @@ with arcadedb.create_database("./vector_demo_int8") as db:
     db.command("sql", "CREATE PROPERTY ByteDoc.embedding BINARY")
 
     db.command(
-    "sql",
-    """
-    CREATE INDEX ON ByteDoc (embedding)
-    LSM_VECTOR
-    METADATA {
-        "dimensions": 4,
-        "similarity": "COSINE",
-        "quantization": "NONE",
-        "encoding": "INT8"
-    }
-    """,
+        "sql",
+        """
+        CREATE INDEX ON ByteDoc (embedding)
+        LSM_VECTOR
+        METADATA {
+            "dimensions": 4,
+            "similarity": "COSINE",
+            "quantization": "NONE",
+            "encoding": "INT8"
+        }
+        """,
     )
 
     with db.transaction():
@@ -396,19 +395,19 @@ with arcadedb.create_database("./sparse_demo") as db:
     db.command("sql", "CREATE PROPERTY SparseDoc.weights ARRAY_OF_FLOATS")
 
     db.command(
-    "sql",
-    """
-    CREATE INDEX ON SparseDoc (tokens, weights)
-    LSM_SPARSE_VECTOR
-    METADATA {"dimensions": 128}
-    """,
+        "sql",
+        """
+        CREATE INDEX ON SparseDoc (tokens, weights)
+        LSM_SPARSE_VECTOR
+        METADATA {"dimensions": 128}
+        """,
     )
 
     rows = db.query(
-    "sql",
-    "SELECT expand(`vector.sparseNeighbors`('SparseDoc[tokens,weights]', ?, ?, 5))",
-    jtypes.JArray(jtypes.JInt)([5]),
-    arcadedb.to_java_float_array([1.0]),
+        "sql",
+        "SELECT expand(`vector.sparseNeighbors`('SparseDoc[tokens,weights]', ?, ?, 5))",
+        jtypes.JArray(jtypes.JInt)([5]),
+        arcadedb.to_java_float_array([1.0]),
     ).to_list()
 ```
 
@@ -423,16 +422,15 @@ CREATE INDEX ON SparseDoc (tokens, weights) LSM_SPARSE_VECTOR
 METADATA {"dimensions": 30000, "weightQuantization": "FP32"}
 ```
 
-Both forms answer `vector.sparseNeighbors` the same way. From 26.10.1 the INT8 index
+Both forms answer `vector.sparseNeighbors` the same way. The INT8 index
 only picks the candidates: it fetches `k × rescoreOversample` of them and ranks them by
 the exact score computed from the records' own weights (`ArcadeData/arcadedb#8576`).
 `rescoreOversample` is an index metadata key, 2 by default for INT8 and FP16 and off for
 FP32; `0` turns it off. On 100,000 BigANN SPLADE documents that took INT8 recall@10 from
 0.9948 to 1.0000, the same as FP32, and made the top-10 lists identical whatever the
 commit size the index was loaded with, for about 16% more scorer time on Temurin 25
-(43% on Temurin 21, laptop, 4 cores). So the choice is now on disk (FP32 about 20% larger
-for a SPLADE-style corpus) and speed, not on the answers. Before 26.10.1, INT8 cost a few
-tenths of a point of recall@10 and its answers depended on how the data was committed.
+(43% on Temurin 21, laptop, 4 cores). So the choice is on disk (FP32 about 20% larger
+for a SPLADE-style corpus) and speed, not on the answers.
 
 Leave the scorer's own settings at their defaults (posting block size 128,
 `arcadedb.sparseVectorScoringMaxPartitions=0`); upstream has no other setting to
@@ -453,10 +451,8 @@ The statement is synchronous and works embedded and over the server's HTTP
 API alike. In-process there is also the Java handle,
 `db.get_java_database().getSchema().getIndexByName(...).compact()`, which is
 what the SQL form calls. At one million documents the compaction took about
-two seconds and moved query p50 from 9.5 ms to 7.0 ms. From 26.10.1 it also flushes
-the in-memory postings, so afterwards the whole index is one segment
-(`ArcadeData/arcadedb#8576`); before, what was still in memory stayed there (422,190 of
-12.7 million postings in a 100,000-document load committed 500 at a time).
+two seconds and moved query p50 from 9.5 ms to 7.0 ms. It also flushes the in-memory
+postings, so afterwards the whole index is one segment (`ArcadeData/arcadedb#8576`).
 
 ## Grouped Search
 
@@ -468,9 +464,9 @@ document family.
 rows = db.query(
     "sql",
     (
-    "SELECT source_file, distance FROM "
-    "(SELECT expand(`vector.neighbors`(?, ?, ?, { groupBy: 'source_file', groupSize: 1 }))) "
-    "ORDER BY distance"
+        "SELECT source_file, distance FROM "
+        "(SELECT expand(`vector.neighbors`(?, ?, ?, { groupBy: 'source_file', groupSize: 1 }))) "
+        "ORDER BY distance"
     ),
     "GroupedDoc[embedding]",
     arcadedb.to_java_float_array([1.0, 0.0, 0.0, 0.0]),
