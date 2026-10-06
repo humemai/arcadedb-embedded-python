@@ -1122,7 +1122,7 @@ ARCADEDB_HASH_ID_REQUIRES = {("l2", "olap"): "msg_vertices"}
 # The commit that starts the re-pin campaign sets it to True (CAMPAIGN section 7, row 68), and from
 # then on an unstamped row fails too. This is the ONLY switch, and it does not touch the other case: a
 # STAMPED row whose kind disagrees with the registry is a failure from the first day (see below).
-INDEX_KINDS_GATE_FAILS = False
+INDEX_KINDS_GATE_FAILS = True
 
 
 def check_index_kinds(rows):
@@ -1178,7 +1178,7 @@ def check_index_kinds(rows):
         print(f"  ok   {judged} row(s) judged against the engine's own report")
     if warned:
         print(f"  {warned} unstamped row(s) warned over {judged} row(s); they do not change the exit status "
-              f"(INDEX_KINDS_GATE_FAILS is False until the re-pin campaign starts)")
+              f"(INDEX_KINDS_GATE_FAILS is True from the re-pin campaign on: an unstamped row fails)")
     return bad
 
 

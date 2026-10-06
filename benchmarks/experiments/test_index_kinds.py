@@ -213,16 +213,13 @@ def strict(monkeypatch):
     monkeypatch.setattr(FC, "INDEX_KINDS_GATE_FAILS", True)
 
 
-def test_gate_passes_stamped_rows_of_every_lane(capsys):
+def test_gate_passes_stamped_rows_of_every_lane(capsys, monkeypatch):
     rows = [_row(), _row(backend="arcadedb_server"),
             _row("e2", "arcadedb_e2", "hybrid"), _row("e2", "arcadedb_e2_server", "atomicity"),
             _row("l2", "arcadedb_graph_embedded", "olap", msg_vertices=107605)]
     for mode in (False, True):                                   # clean rows pass in both modes
-        FC.INDEX_KINDS_GATE_FAILS = mode
-        try:
-            assert FC.check_index_kinds(rows) == 0
-        finally:
-            FC.INDEX_KINDS_GATE_FAILS = False
+        monkeypatch.setattr(FC, "INDEX_KINDS_GATE_FAILS", mode)
+        assert FC.check_index_kinds(rows) == 0
         assert "ok   5 row(s)" in capsys.readouterr().out
 
 
@@ -259,17 +256,20 @@ def test_an_unstamped_row_fails_only_once_the_gate_is_flipped(row, what, strict,
 
 
 @pytest.mark.parametrize("row,what", UNSTAMPED_ROWS)
-def test_an_unstamped_row_only_warns_until_the_campaign_starts(row, what, capsys):
-    """THE DEFAULT. October's rows predate the stamp and must not block landing an October stage: an
-    unstamped row is printed as a warning and the return value (which main() adds to the exit status) is 0."""
-    assert FC.INDEX_KINDS_GATE_FAILS is False
+def test_an_unstamped_row_only_warns_in_report_only_mode(row, what, capsys, monkeypatch):
+    """REPORT-ONLY MODE (the default until the re-pin commit flipped it). October's rows predate the stamp
+    and must not block landing an October stage: an unstamped row is printed as a warning and the return
+    value (which main() adds to the exit status) is 0."""
+    monkeypatch.setattr(FC, "INDEX_KINDS_GATE_FAILS", False)
     assert FC.check_index_kinds([row]) == 0
     out = capsys.readouterr().out
     assert f"WARN {what}" in out and "do not change the exit status" in out
 
 
-def test_in_the_default_mode_only_the_wrong_stamped_row_counts(capsys):
-    """October-shaped rows (no stamp) beside one wrong stamped row: the unstamped ones warn, the wrong one fails."""
+def test_in_report_only_mode_only_the_wrong_stamped_row_counts(capsys, monkeypatch):
+    """October-shaped rows (no stamp) beside one wrong stamped row: in report-only mode the unstamped ones
+    warn and the wrong one fails."""
+    monkeypatch.setattr(FC, "INDEX_KINDS_GATE_FAILS", False)
     rows = [_row(stamp=None), _row(backend="arcadedb_server", stamp=None), WRONG_ROWS[0][0]]
     assert FC.check_index_kinds(rows) == 1
     out = capsys.readouterr().out
@@ -279,7 +279,7 @@ def test_in_the_default_mode_only_the_wrong_stamped_row_counts(capsys):
 def test_the_gate_has_exactly_one_switch():
     src = (HERE / "fairness_check.py").read_text()
     assert len(re.findall(r"^INDEX_KINDS_GATE_FAILS = ", src, re.M)) == 1
-    assert "INDEX_KINDS_GATE_FAILS = False" in src                      # report-only is the committed state
+    assert "INDEX_KINDS_GATE_FAILS = True" in src                       # an unstamped row fails from the re-pin on
     # the switch is documented where the flip is made
     assert "INDEX_KINDS_GATE_FAILS" in (HERE / "CAMPAIGN.md").read_text()
 
@@ -290,9 +290,9 @@ def test_the_flip_changes_the_exit_status_of_the_whole_gate(monkeypatch):
     default mode and fails after the flip. (A wrong stamped kind never waited for the flip.)"""
     october = [_row(stamp=None), _row(backend="arcadedb_server", stamp=None)]
     assert "bad += check_index_kinds(rows)" in (HERE / "fairness_check.py").read_text()
-    assert FC.check_index_kinds(october) == 0
-    monkeypatch.setattr(FC, "INDEX_KINDS_GATE_FAILS", True)
-    assert FC.check_index_kinds(october) == 2
+    assert FC.check_index_kinds(october) == 2                           # the committed state since the re-pin: fails
+    monkeypatch.setattr(FC, "INDEX_KINDS_GATE_FAILS", False)
+    assert FC.check_index_kinds(october) == 0                           # report-only, as before the re-pin
 
 
 def test_gate_does_not_owe_the_message_half_to_a_cell_that_never_loaded_it(strict):
