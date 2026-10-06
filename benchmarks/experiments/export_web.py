@@ -2719,7 +2719,16 @@ def _metrics_for(table_id, spec, src_lane=None):
     src_lane = src_lane or table_id
     oct_ = _instrument_of(src_lane) == "2026-10"
     if oct_ and table_id in OCT_TABLE_METRICS:
-        return list(OCT_TABLE_METRICS[table_id])
+        cols = list(OCT_TABLE_METRICS[table_id])
+        # THE GRAPH TABLE'S COLD COLUMN, once its reads are timed after an untimed warm-up (CAMPAIGN
+        # section 7 row 55): the first query of the session. A row without `read_warmup` timed the
+        # FIRST of two passes, whose columns are the cold ones, so a table built from such rows
+        # grows no column (and the October payload is unchanged by this).
+        if table_id == "l2" and any(str(r.get("read_warmup") or "").strip()
+                                    for r in _FROZEN_ROWS if r.get("lane") == "l2"):
+            at = next(i for i, (f, _l) in enumerate(cols) if f == "delete_p50_ms") + 1
+            cols.insert(at, ("cold_first_query_ms", "cold first query ms"))
+        return cols
     return list(spec["metrics"]) + (OCT_METRICS.get(src_lane, []) if oct_ else [])
 
 

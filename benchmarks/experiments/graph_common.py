@@ -58,6 +58,32 @@ OLTP_READ_BUDGET_S = float(_os.environ.get("BENCH_GRAPH_READ_BUDGET_S") or 1800.
 GRAPH_SEED = 20260708
 PICK_SEED = 777
 
+# THE READS' UNTIMED WARM-UP (CAMPAIGN section 7 row 55, DECISIONS #148, which implements #89 and PROTOCOL.md's
+# rule that warm queries are disjoint from the cold ones). Through October the lane timed its reads twice over the SAME start
+# persons and the table printed the first pass, so for an engine on a JVM the printed column included the JIT
+# compiling the query path: ArcadeDB embedded's SF1 point p50 was 3.59x its second pass, Neo4j's 2.13x, every
+# engine not on a JVM 0.89x to 1.10x. Every engine now runs READ_WARMUP_IDS untimed reads of each operation on start
+# persons the timed set never asks for (the Java control: an untimed warm-up over disjoint ids removed 87-94% of the
+# excess), the table prints the warm median, and the one cold number is the first query of the session. The count is
+# a property of the lane, never of an engine; BENCH_GRAPH_READ_WARMUP lowers it for a laptop smoke and the row records
+# what ran. A warm-up that would take longer than READ_WARMUP_BUDGET_SHARE of its read's budget stops there (the
+# slowest engines' three-hop read), and the row records how many it ran.
+READ_WARMUP_IDS = int(_os.environ.get("BENCH_GRAPH_READ_WARMUP") or 1000)
+READ_WARMUP_SEED = PICK_SEED + 1
+READ_WARMUP_BUDGET_SHARE = 0.25
+
+
+def warmup_ids(universe, timed_ids, n=None, seed=READ_WARMUP_SEED):
+    """`n` start persons for the untimed warm-up: distinct, deterministic, and NONE of them in `timed_ids`.
+
+    `universe` is every person id the corpus holds (LDBC ids are sparse). Fewer than `n` candidates return all of them."""
+    n = READ_WARMUP_IDS if n is None else n
+    timed = set(timed_ids)
+    pool = [i for i in universe if i not in timed]
+    if len(pool) <= n:
+        return pool
+    return random.Random(seed).sample(pool, n)
+
 
 def gen_persons(n, seed=GRAPH_SEED):
     """Yield (id, name, age, city). Deterministic stream."""

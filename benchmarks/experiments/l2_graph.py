@@ -26,9 +26,10 @@ import graph_common
 from graph_common import (HOP3_VISITED, HOP3F_MIN_AGE, LSQB_QUERIES, NA_LSQB_NO_MESSAGE_HALF,
                           OLAP_BUDGET_S, OLAP_DIGEST, OLAP_ITERATIONS, OLAP_QUERIES,
                           OLTP_READ_BUDGET_S, OLTP_READS, OLTP_WRITE, OLTP_DELETE, OLTP_UPDATE,
-                          PERSON_STATE_DIGEST, READ_DIGEST, SCALE_OLTP_QUERIES,
+                          PERSON_STATE_DIGEST, READ_DIGEST, READ_WARMUP_BUDGET_SHARE,
+                          READ_WARMUP_IDS, SCALE_OLTP_QUERIES,
                           SCALE_PERSONS, UPDATE_AGE, VISITED_DIGEST, VISITED_SAMPLE,
-                          gen_edges, gen_persons, pick_query_ids)
+                          gen_edges, gen_persons, pick_query_ids, warmup_ids)
 import bench_common
 
 # Data-source switch (same pattern as l3_sparse/bigann): BENCH_GRAPH_SOURCE=ldbc
@@ -3482,19 +3483,40 @@ def main():
                     collected[op] = answers
             return res
 
+        # THE UNTIMED WARM-UP, on start persons the timed set never asks for (row 55, DECISIONS
+        # #148). The first read of the session is timed and kept as the cell's one cold number (#89
+        # as amended); every other warm-up read is untimed, per operation, in the order the timed
+        # pass runs them. Bounded by a share of each read's own budget, so the slowest engine's
+        # three-hop read cannot spend the cell in its warm-up.
+        _universe = (_ldbc.person_ids(args.scale) if _GRAPH_SOURCE == "ldbc" else range(n_persons))
+        _warm_ids = warmup_ids(_universe, ids)
+        assert not set(_warm_ids) & set(ids), "the warm-up ids must be disjoint from the timed ones"
+        _beat.mark("reads-warmup-start", n=len(_warm_ids), ops=len(OLTP_READS))
+        _w0 = time.perf_counter()
+        _warm_n = {}
+        for op in OLTP_READS:
+            _cap = read_budget[op][0] * READ_WARMUP_BUDGET_SHARE
+            _o0 = time.perf_counter()
+            _warm_n[op] = 0
+            for pid in _warm_ids:
+                if _warm_n[op] and time.perf_counter() - _o0 > _cap:
+                    break
+                _t = time.perf_counter()
+                ad.run_read(op, pid)
+                if not out.get("cold_first_query_name"):
+                    bench_common.record_first_query(out, op, (time.perf_counter() - _t) * 1000)
+                _warm_n[op] += 1
+        out["read_warmup_s"] = round(time.perf_counter() - _w0, 2)
+        out["read_warmup"] = (f"up to {READ_WARMUP_IDS} untimed reads of each operation on start persons "
+                              f"outside the timed set, before the timed passes")
+        for op in OLTP_READS:
+            out[f"{op}_warmup_n"] = _warm_n[op]
+        _beat.mark("reads-warmup-done", t=f"{out['read_warmup_s']}s")
         _beat.mark("reads-cold-start", n=len(ids), ops=len(OLTP_READS))
-        out.update(_read_pass())            # first touch
+        out.update(_read_pass())            # the table's column: timed after the warm-up
         _beat.mark("reads-warm-start", n=len(ids), ops=len(OLTP_READS))
-        out.update(_read_pass("warm_"))     # same queries, index now resident
+        out.update(_read_pass("warm_"))     # a second timed pass over the same ids: the check that the warm-up was enough
         _beat.mark("reads-done")
-        # ONE NAMING CONVENTION ACROSS THE LANES (DECISIONS #89). This lane's
-        # FIRST pass is the cold one and has always been recorded unprefixed,
-        # while the second wears "warm_"; the page reads the unprefixed names,
-        # so they stay, and these aliases let a table ask every lane the same
-        # question without knowing which lane it is asking.
-        for _op in OLTP_READS:
-            out[f"cold_{_op}_p50_ms"] = out[f"{_op}_p50_ms"]
-            out[f"cold_{_op}_p99_ms"] = out[f"{_op}_p99_ms"]
         # THE ANSWERS THE WARM PASS RETURNED (DECISIONS #88): every row of
         # every read, over the same seeded id list on every engine, hashed
         # here rather than in the loop. The two passes ask the same questions,
@@ -3605,8 +3627,10 @@ def main():
         # over a graph that still holds the rows (#82a).
         bench_common.record_result(out, "graph_delete", ad.person_scan(write_id_base),
                                    **PERSON_STATE_DIGEST)
-        # DECISIONS #89: where a split does not apply the row says why.
-        out["cold_warm_na"] = bench_common.NA_COLD_WARM_TXN
+        # DECISIONS #89: where a split does not apply the row says why. Not on this lane any more
+        # (row 55): its reads are timed warm and the first query of the session is the cold
+        # column, so the "already warm by construction" reason would be false, and
+        # export_web._cold_note would print it in place of the cold column's own sentence.
         out["oltp_total_s"] = round(time.perf_counter() - total_t0, 2)
     else:
         for qname, text in OLAP_QUERIES.items():
