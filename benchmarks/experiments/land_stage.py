@@ -72,6 +72,34 @@ def sh(cmd, cwd=None, check=True, capture=False, env=None, quiet=False):
                           capture_output=capture or quiet, env=env)
 
 
+# THE PYTHON-COST TABLE'S FILE (the 26.10.1 chain's qRJ, CAMPAIGN section 7 row 29). The stage is host-side, not runner
+# cells: it writes $HOME/pycost/mini_results_<pin>.csv OUTSIDE the tree (a file the laptop later commits must not sit
+# untracked on the bench host, BUGS F19), and the landing is what puts it where export_web reads it, named by the pin
+# (`mini_results_<pin>.csv` beside the tracked file, which wins when it exists) and committed with the rest. Without this
+# step a qRJ landing published the table from the September file, with every gate green.
+PYCOST_DIR = REPO / "benchmarks" / "python-bindings" / "jpype_overhead" / "results"
+PYCOST_REMOTE = "~/pycost"
+
+
+def pull_pycost(pin, lanes, host=None, run=None):
+    """Pull the pin's Python-cost file from the bench host. The Path when it landed here (non-empty, with RESULT
+    lines), None when the host has none yet or this landing is scoped away from it. `lanes` is the --only-lanes set."""
+    if lanes and "pycost" not in lanes:
+        return None
+    run = run or sh
+    dest = PYCOST_DIR / f"mini_results_{pin}.csv"
+    run(["scp", "-q", f"{host or HOST}:{PYCOST_REMOTE}/mini_results_{pin}.csv", str(dest)], check=False)
+    if not dest.exists() or not dest.read_text(encoding="utf-8", errors="replace").strip():
+        if dest.exists():
+            dest.unlink()
+        print(f"  pycost: no mini_results_{pin}.csv on {host or HOST} yet (the pycost stage has not run at this pin); "
+              f"the table keeps reading the tracked file")
+        return None
+    n = sum(1 for l in dest.read_text(encoding="utf-8", errors="replace").splitlines() if ",RESULT," in l)
+    print(f"  pycost: mini_results_{pin}.csv, {n} RESULT line(s)")
+    return dest
+
+
 def _warn_rows_predate_lane_changes(lanes, pin):
     """Say when a lane's rows were measured before its own script changed.
 
@@ -380,6 +408,8 @@ def main():
             # present and move the failure somewhere less obvious.
             _sp.rmdir()
 
+    _pycost = pull_pycost(args.pin, {l.strip() for l in args.only_lanes.split(",") if l.strip()})
+
     _e4 = RESULTS / f"e4decomp_{args.pin}"
     _e4.mkdir(exist_ok=True)
     sh(["scp", "-q", f"{HOST}:{REMOTE}/e4decomp_{args.pin}/decomp3m_*.json", str(_e4)],
@@ -620,7 +650,8 @@ def main():
     _frozen, _payload, _generated = (
         ("runs_paper_oct.csv", "web_benchmarks_next.json", "generated_oct") if args.preview
         else ("runs_paper.csv", "web_benchmarks.json", "generated"))
-    tracked = [f"benchmarks/experiments/results/{_frozen}",
+    tracked = ([str(_pycost.relative_to(REPO))] if _pycost else []) + [
+               f"benchmarks/experiments/results/{_frozen}",
                f"benchmarks/experiments/results/{_payload}",
                f"benchmarks/experiments/results/{_generated}",
                # the preview route's inventory, which stays under
