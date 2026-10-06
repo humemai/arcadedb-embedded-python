@@ -14,6 +14,8 @@ import re
 import sys
 from pathlib import Path
 
+import pytest
+
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
@@ -115,3 +117,23 @@ def test_every_cypher_engine_reads_the_shared_text():
     for cls in (L.ArcadeGraphEmbedded, L.ArcadeGraphServer, L.Neo4jGraph, L.MemgraphGraph, L.FalkorGraph,
                 L.LadybugGraph, L.PgAgeGraph):
         assert "READS" not in cls.__dict__ and "OLAP" not in cls.__dict__, f"{cls.__name__} has its own question texts"
+
+
+def test_surrealql_mean_age_is_a_float_division():
+    """Found on the SF1 slice against the DuckDB reference: SurrealQL divides two integers as integers (5 / 2 is 2), so the
+    per-city mean friend age came back as 41 where every other engine returned 41.79. The sum is cast before the division."""
+    assert "<float> S / N" in L.SurrealGraph.OLAP["friend_age_by_city"]
+    assert L.SurrealGraphServer.OLAP["friend_age_by_city"] == L.SurrealGraph.OLAP["friend_age_by_city"]
+
+
+def test_surrealql_mean_age_on_the_real_engine_is_not_truncated():
+    surrealdb = pytest.importorskip("surrealdb", reason="add --with surrealdb==2.0.0 to run the SurrealDB case")
+    db = surrealdb.Surreal("mem://")
+    db.use("t", "t")
+    for pid, age in ((1, 40), (2, 43), (3, 42)):
+        db.query(f"CREATE person:{pid} SET pid = {pid}, age = {age}, city = 'c'")
+    db.query("RELATE person:1->knows->person:2; RELATE person:1->knows->person:3")
+    rows = db.query(L.SurrealGraph.OLAP["friend_age_by_city"])
+    # the friendships count for both of their people: the ages seen are 43 and 42 (person 1), 40 (person 2), 40 (person 3)
+    assert len(rows) == 1 and rows[0]["n"] == 4
+    assert rows[0]["a"] == pytest.approx(165 / 4)          # 41.25; the integer division gave 41

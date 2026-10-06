@@ -2125,8 +2125,10 @@ class SurrealGraph(Base):
         "same_city_edges": "SELECT * FROM (SELECT in.city AS c, count() AS n FROM knows WHERE in.city = out.city GROUP BY c) ORDER BY n DESC, c ASC LIMIT 10",
         # Per person (their friends' count and age sum), then per city: the mean is
         # the sum over the count, the same number the Cypher's avg gives, from both
-        # ends of every friendship.
-        "friend_age_by_city": ("SELECT * FROM (SELECT c, S / N AS a, N AS n FROM (SELECT c, "
+        # ends of every friendship. THE SUM IS CAST: SurrealQL divides two integers as
+        # integers (5 / 2 is 2), so `S / N` returned 41 for 41.79 and the digest, which
+        # rounds at the sixth digit, disagreed with every other engine on the SF1 slice.
+        "friend_age_by_city": ("SELECT * FROM (SELECT c, <float> S / N AS a, N AS n FROM (SELECT c, "
                                "math::sum(s) AS S, math::sum(n) AS N FROM (SELECT city AS c, "
                                "array::len(array::concat(->knows->person, <-knows<-person)) AS n, "
                                "math::sum(array::concat(->knows->person.age, <-knows<-person.age)) AS s "
