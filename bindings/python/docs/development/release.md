@@ -72,7 +72,19 @@ git push origin main
 ```
 
 Wait for "Test Python Bindings" and "Test Python Examples" to finish, and check that
-the examples actually ran rather than skipped.
+the examples actually ran rather than skipped. The bindings summary of a green run reads
+`N passed, K expected failures (xfail), 0 skipped, 0 failed`: the xfails are open upstream bugs
+the suite tracks, and `scripts/check_test_skips.py` already fails any real skip.
+
+The other 19 wheels are built by CI, so check their sizes before you tag. With the release
+commit `pom.xml` reads `X.Y.Z`, so the run on the commit you will tag builds from the same
+official image the release run will use:
+
+```bash
+gh run download <run-id> -R humemai/arcadedb-embedded-python -p 'wheel-*-py*' -D wheels
+ls wheels/*/*.whl | wc -l                                           # 20
+for w in wheels/*/*.whl; do [ "$(stat -c%s "$w")" -lt 100000000 ] || echo "TOO BIG: $w"; done
+```
 
 ### 4. Tag, Check, and Release
 
@@ -83,10 +95,12 @@ PyPI + docs.
 # No tag of this name may exist yet, here or on origin (upstream's tags share our names)
 test -z "$(git tag -l X.Y.Z)" && test -z "$(git ls-remote --tags origin X.Y.Z)" && echo "no tag yet"
 
-git tag -a X.Y.Z -F notes.md
+git tag -a --cleanup=verbatim X.Y.Z -F notes.md
 
-# The tag must point at the commit you just tested
+# The tag must point at the commit you just tested...
 test "$(git rev-parse 'X.Y.Z^{}')" = "$(git rev-parse HEAD)" && echo "tag OK"
+# ...and must not be upstream's release commit (ours has it as an ancestor, but is not it)
+test "$(git rev-parse 'X.Y.Z^{}')" != "<upstream release commit, 40 characters>" && echo "not upstream's"
 
 git push origin X.Y.Z
 
@@ -98,6 +112,8 @@ gh release create X.Y.Z -R humemai/arcadedb-embedded-python --verify-tag \
   --notes-file notes.md
 ```
 
+`--cleanup=verbatim` keeps the lines of the notes that start with `#`: `git tag -F` strips them
+by default, so the `##` headings of the release body would be missing from the tag message.
 `--verify-tag` stops `gh` from creating a tag of its own if the pushed one is missing.
 Always pass `-R humemai/arcadedb-embedded-python`: in a checkout of this fork, `gh`
 resolves its default repository to upstream, where a release would be a mistake. The
@@ -131,6 +147,12 @@ Read the previous release at that page and keep its shape:
   curl -s https://pypi.org/pypi/arcadedb-embedded/X.Y.Z/json | python3 -c \
     "import json,sys; fs=json.load(sys.stdin)['urls']; print(len(fs)); [print(f['filename'], f['size']) for f in sorted(fs, key=lambda f: f['filename'])]"
   ```
+
+  `scripts/after_tag_verify.sh <version> <previous-version> <release-run-id>` (optionally followed
+  by the engine jar's sha256 and build number) does the whole check in one command and prints
+  PASS or FAIL for each step: the run and the publish job's own conclusion, the file set against
+  the previous release, every file's sha256 against the run's artifact, `pip download` for the
+  four platforms, fresh installs on the oldest and newest Python, and the docs.
 
   Expect 20 files: Python 3.10 to 3.14, each as `macosx_11_0_arm64`,
   `manylinux_2_34_aarch64`, `manylinux_2_34_x86_64`, and `win_amd64`, about 66 to 72 MB
