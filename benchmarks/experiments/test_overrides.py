@@ -364,5 +364,5 @@ def test_the_manifest_records_the_strict_class_patch_the_server_was_given(monkey
     args = SimpleNamespace(tier="paper", scale="micro", reps=5, seed=7)
     m = runner.build_manifest("20261003T000000Z", args, 1, ["0-11"], [{"backend": "arcadedb_graph_server"}])
     c = m["engine_config"]["arcadedb_graph_server"]
-    assert c["durability_class"] == "strict" and c["durability_server_flags"] == "txWalFlush=2"
-    assert any("-Darcadedb.txWalFlush=2" in e for e in c["server_env"])
+    assert c["durability_class"] == "strict" and c["durability_server_flags"] == "txWalFlush=1"
+    assert any("-Darcadedb.txWalFlush=1" in e for e in c["server_env"])

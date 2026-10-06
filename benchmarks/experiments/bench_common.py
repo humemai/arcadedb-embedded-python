@@ -42,7 +42,7 @@ UNVERIFIED_MARK = "not verified"
 # asked for; this classifies what the ENGINE reported, and fairness_check
 # compares the two. A mismatch is a cell that asked for one setting and got
 # another, which is the failure mode a flag the server ignores produces.
-STRICT_MARKS = ("txWalFlush=2", "synchronous=FULL", "j=true", "commit.mode=sync",
+STRICT_MARKS = ("txWalFlush=2", "txWalFlush=1:", "synchronous=FULL", "j=true", "commit.mode=sync",
                 "SURREAL_SYNC_DATA=true", "waitForSync=true", "synchronous_commit=on",
                 # the colon keeps "=1:" from matching the relaxed "=100000"
                 "flush-every-n-tx=1:", "appendfsync=always", "sync=every")
@@ -190,7 +190,17 @@ DURABILITY_CLASS = os.environ.get("BENCH_DURABILITY", CLASS_RELAXED).strip() or 
 if DURABILITY_CLASS not in (CLASS_RELAXED, CLASS_STRICT):
     raise SystemExit(f"BENCH_DURABILITY must be 'relaxed' or 'strict', not {DURABILITY_CLASS!r}")
 
-DURABILITY_ARCADEDB_STRICT = "txWalFlush=2: the WAL is flushed and synced at every commit"
+# ARCADEDB'S STRICT CLASS IS txWalFlush=1 FROM THE 26.10.1 MEASUREMENT (CAMPAIGN section 7 row 5, the user's decision of
+# 2026-10-04). `2` is FileChannel.force(true), the log's data AND metadata at every commit, one fsync; SQLite's FULL in WAL
+# mode is one fdatasync, which is `1` (force(false)). Upstream's own transactions documentation (concepts/transactions.adoc,
+# docs commit c52695ba66) calls `1` "Safe against power loss. Recommended for production." and says `2` has "No additional
+# recovery value over `1`", with no measurable difference in performance; the server's production mode defaults to 1. So 1 is
+# the setting matched BY EFFECT to SQLite's, not the flattering choice the knob-free-for-them rule guards against. The October
+# rows were measured at 2 and say so (DURABILITY_ARCADEDB_STRICT_FULL_SYNC); the page keeps the sentence that names the change
+# for as long as such a row stands behind a table (export_web._ARCADEDB_FULL_SYNC).
+ARCADE_STRICT_TX_WAL_FLUSH = 1
+DURABILITY_ARCADEDB_STRICT = "txWalFlush=1: the WAL is flushed with a data-only sync (fdatasync) at every commit"
+DURABILITY_ARCADEDB_STRICT_FULL_SYNC = "txWalFlush=2: the WAL is flushed and synced at every commit"   # the October rows
 DURABILITY_SQLITE_STRICT = "WAL, synchronous=FULL: synced at every commit"
 DURABILITY_MONGODB_STRICT = "write concern w=1, j=true (the journal is synced before the ack)"
 DURABILITY_QUESTDB_STRICT = "cairo.commit.mode=sync: fsync at commit"
@@ -281,7 +291,7 @@ def arcade_jvm_args(base="", cls=None):
     passed EXPLICITLY at the relaxed class too, so the row's claim is a flag
     this process set rather than a default someone remembered.
     """
-    flush = "2" if (cls or DURABILITY_CLASS) == CLASS_STRICT else "0"
+    flush = str(ARCADE_STRICT_TX_WAL_FLUSH) if (cls or DURABILITY_CLASS) == CLASS_STRICT else "0"
     arg = f"-Darcadedb.txWalFlush={flush}"
     return f"{base} {arg}".strip() if base else arg
 
@@ -291,10 +301,11 @@ def arcade_async_sync(cls=None):
 
     The executor's writers stamp their own flush on every transaction they
     open and do not read txWalFlush, so a load through it must be told the
-    class separately (ArcadeData/arcadedb#8478): yes_full is the executor's
-    spelling of txWalFlush=2, no of txWalFlush=0.
+    class separately (ArcadeData/arcadedb#8478): yes_nometadata is the executor's
+    spelling of txWalFlush=1 (the strict class since the 26.10.1 measurement,
+    row 5; yes_full is txWalFlush=2), no of txWalFlush=0.
     """
-    return "yes_full" if (cls or DURABILITY_CLASS) == CLASS_STRICT else "no"
+    return "yes_nometadata" if (cls or DURABILITY_CLASS) == CLASS_STRICT else "no"
 
 
 # The served twin's txWalFlush is a JAVA_OPTS entry on its container, set by
@@ -327,8 +338,10 @@ def arcade_durability_readback(fallback_cls=None):
         return want + f" (asserted: the engine could not be asked, {e.__class__.__name__})"
     if value == 0:
         return DURABILITY_ARCADEDB
-    if value == 2:
+    if value == ARCADE_STRICT_TX_WAL_FLUSH:
         return DURABILITY_ARCADEDB_STRICT
+    if value == 2:
+        return DURABILITY_ARCADEDB_STRICT_FULL_SYNC     # the October class; no lane asks for it any more
     return f"txWalFlush={value}, which is neither class (DECISIONS #90)"
 
 

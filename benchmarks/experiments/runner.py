@@ -1908,8 +1908,8 @@ def durability_server_patch(cfg, cls):
     # own JVM, appended to JAVA_OPTS.
     for i, e in enumerate(env):
         if isinstance(e, str) and e.startswith("JAVA_OPTS="):
-            env[i] = e + " -Darcadedb.txWalFlush=2"
-            notes.append("txWalFlush=2")
+            env[i] = e + f" -Darcadedb.txWalFlush={bench_common.ARCADE_STRICT_TX_WAL_FLUSH}"
+            notes.append(f"txWalFlush={bench_common.ARCADE_STRICT_TX_WAL_FLUSH}")
     # QuestDB: its commit mode is a server setting.
     if "questdb" in str(cfg.get("server_image", "")):
         env += ["-e", "QDB_CAIRO_COMMIT_MODE=sync"]

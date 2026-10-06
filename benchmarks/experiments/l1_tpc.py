@@ -1073,8 +1073,9 @@ class ArcadeTPC:
         # One writer owns each bucket, so the default single bucket gave no
         # gain (F141). Two settings follow from how the executor works:
         #   - its writers stamp their own WAL flush on every transaction and
-        #     ignore txWalFlush (default NO), so the strict class sets YES_FULL
-        #     on the executor itself or its load would skip the fsyncs;
+        #     ignore txWalFlush (default NO), so the strict class sets the executor's own
+        #     spelling of it (YES_NOMETADATA, txWalFlush=1, since row 5; YES_FULL was 2) on the
+        #     executor itself or its load would skip the fsyncs;
         #   - waitCompletion(), which each insert_many call ends with, commits
         #     every writer's open batch, so each call carries writers x the
         #     writers' commit size: one commit per writer per call, the batch
