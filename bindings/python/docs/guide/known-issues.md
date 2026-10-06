@@ -757,3 +757,73 @@ The worker keeps waiting after Ctrl-C and ends with the process. A Python wait l
 
 Tests: `tests/test_sigint.py` covers a Python loop and a Java call that Ctrl-C cannot wake.
 It has no test of the waits above, because the failure is random (humemai/arcadedb-embedded-python#179).
+
+
+## An openCypher count with a negated pattern in a chain is wrong when the far end has another label or the pattern has a property map
+
+ArcadeDB [#9277](https://github.com/ArcadeData/arcadedb/issues/9277) and
+[#9278](https://github.com/ArcadeData/arcadedb/issues/9278); measured through the bindings on
+a 26.10.1 snapshot of upstream d36b4ca3ae, and in Java on that build, on 26.9.1, and on
+5a90b0f52a, on Temurin 21 and 25, with the same answers. Open.
+
+A `MATCH` chain of two or more hops that ends in `RETURN count(*)` and has a negated pattern
+predicate between two of its nodes (`WHERE NOT (a)-[:R]-(c)`, alone or with `AND a <> c` or
+`AND id(a) <> id(c)`) is answered by a count push-down; `EXPLAIN` lists `COUNT ANTI-JOIN
+CHAIN`. It counts wrong in two cases:
+
+- **Another label at the far end (#9277).** On the single path
+  `(x0:Person)-[:KNOWS]-(x1:Person)-[:KNOWS]-(y0:Employee)-[:HAS_INTEREST]->(t:Tag)`, in which
+  `x0` and `y0` are not connected, the chain `(p1:Person)...(p2:Person)...(p3:Employee)...(t:Tag)`
+  with `WHERE NOT (p1)-[:KNOWS]-(p3)` counted 0 where the answer is 1. The same holds with
+  `AND p1 <> p3`. A chain whose nodes all have the same label, and a far end that is a sub type
+  of the first labels, gave the right count in every case I ran. From the snapshot that carries
+  upstream #9271, `id(p1) <> id(p3)` takes the same push-down, so that spelling, which counted 1
+  before, now counts 0.
+- **A property map on the pattern's relationship (#9278).** The push-down drops it. With an edge
+  `x -[:K {w: 0}]-> z`, `WHERE NOT (x)-[:K {w: 1}]->(z)` counted 0 where the answer is 1,
+  because no edge with `w = 1` connects them; it was counted as `NOT (x)-[:K]->(z)`.
+
+Put the variables through a `WITH` before the `WHERE`. That keeps the query off the push-down,
+and the row pipeline counted the right number in every case above. It gives up the push-down's
+speed for that query:
+
+```python
+chain = "MATCH (p1:Person)-[:KNOWS]-(p2:Person)-[:KNOWS]-(p3:Employee)-[:HAS_INTEREST]->(t:Tag) "
+n = (
+    db.query(
+        "opencypher",
+        chain + "WITH p1, p2, p3, t WHERE NOT (p1)-[:KNOWS]-(p3) RETURN count(*) AS n",
+    )
+    .first()
+    .get("n")
+)
+```
+
+Tests: `tests/test_count_pushdown_known_issues.py` checks the `WITH` workaround and the cases
+that are not affected, and has strict `xfail` tests of the wrong counts; they start failing the
+suite when the engine fixes them, which is the cue to remove this entry.
+
+
+## `sum()` and `avg()` over a `BYTE` property raise `IllegalArgumentException`
+
+ArcadeDB [#9281](https://github.com/ArcadeData/arcadedb/issues/9281); measured through the
+bindings on a 26.10.1 snapshot of upstream d36b4ca3ae, and in Java on that build, on 26.9.1, and
+on 5a90b0f52a, on Temurin 21 and 25. Open.
+
+Over a property declared `BYTE`, `SELECT sum(b) FROM T` and `SELECT avg(b) FROM T` in SQL and
+`MATCH (n:V) RETURN sum(n.b)` in openCypher raise `ArcadeDBError` (`Query failed:
+java.lang.IllegalArgumentException: Cannot increment value '100' (class java.lang.Byte) with
+'50' (class java.lang.Byte)`) once the aggregate has two rows to add. The same values in a
+`SHORT` or `INTEGER` property sum and average as expected.
+
+Convert the value before the aggregate, `b.asInteger()` in SQL and `toInteger(n.b)` in
+openCypher, or declare the property `SHORT`:
+
+```python
+total = db.query("sql", "SELECT sum(b.asInteger()) AS total FROM T").first().get("total")
+average = db.query("sql", "SELECT avg(b.asInteger()) AS average FROM T").first().get("average")
+```
+
+Tests: `tests/test_count_pushdown_known_issues.py` checks the conversion workaround and has strict
+`xfail` tests of the failing aggregates; they start failing the suite when the engine fixes them,
+which is the cue to remove this entry.
