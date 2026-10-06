@@ -108,6 +108,32 @@ git checkout -q -B "$BRANCH" "$BASE"
 git rm -rq bindings/python
 git checkout "$SOURCE" -- "${INCLUDE_PATHS[@]}"
 git rm -rqf --ignore-unmatch "${EXCLUDE_PATHS[@]}"
+# examples/scripts is fork-only and stays out, except the one script that the examples workflow, which does cross,
+# runs after example 10: compare_query_hashes.py checks its answers against the pure-Python reference. Without it
+# that step fails in every job, because "python scripts/compare_query_hashes.py" finds no file.
+git checkout "$SOURCE" -- bindings/python/examples/scripts/compare_query_hashes.py
+
+# The two workflows that cross keep UPSTREAM's own triggers. The fork's copies differ there on purpose (push runs on main only,
+# so a pull request branch is not tested twice; no workflow_run on a "Release" workflow the fork does not have), and the fork's
+# comment names fork-only tooling. Everything after the trigger block (inputs, jobs, steps) is ours. The trigger block is the
+# part of the file before the "Allow being called by other workflows" comment, in both files.
+for WF in .github/workflows/test-python-bindings.yml .github/workflows/test-python-examples.yml; do
+    UPWF=$(mktemp)
+    git show "$BASE:$WF" > "$UPWF" || { echo -e "${RED}❌ $BASE has no $WF${NC}"; exit 1; }
+    python3 - "$WF" "$UPWF" <<'PYEOF'
+import sys
+ours_path, up_path = sys.argv[1], sys.argv[2]
+marker = "  # Allow being called by other workflows"
+ours, up = open(ours_path).read(), open(up_path).read()
+if marker not in ours or marker not in up:
+    sys.exit(f"{ours_path}: the marker line {marker!r} is missing in one of the two files; update make-upstream-pr-branch.sh")
+head_up = up[: up.index(marker)]
+rest_ours = ours[ours.index(marker):]
+open(ours_path, "w").write(head_up + rest_ours)
+PYEOF
+    rm -f "$UPWF"
+    git add "$WF"
+done
 
 SUBJECT="Update Python bindings from humemai/arcadedb-embedded-python ($(date +%Y-%m-%d))"
 git -c user.name="Taewoon Kim" commit -q -m "$SUBJECT" \
