@@ -26,6 +26,7 @@ next sync.
     (`sync-upstream.sh` does). If their tag is ever fetched, `git tag -a X.Y.Z` fails
     with "already exists", but `git push origin X.Y.Z` still succeeds and publishes
     upstream's commit. Check what a tag points to before pushing it (step 4 below).
+    `git config remote.upstream.tagopt --no-tags` makes `git fetch upstream` skip tags for good.
 
 ## Release Checklist (stable `X.Y.Z`)
 
@@ -58,6 +59,9 @@ uv run pytest
 ```
 
 - [ ] Full test suite passes
+- [ ] Every wheel is under 100 MB (`build.sh` fails a wheel at or over it, and the release workflow
+  checks it again before the upload; the policy holds even where the PyPI project's own limit is
+  higher, because an embedded database should not ship a huge wheel)
 - [ ] Release notes prepared in `notes.md` (see [What the release body contains](#what-the-release-body-contains))
 - [ ] Documentation updated if needed
 
@@ -76,6 +80,9 @@ Tags are the source of truth. Pushing `X.Y.Z`, `X.Y.Z.devN`, or `X.Y.Z.postN` tr
 PyPI + docs.
 
 ```bash
+# No tag of this name may exist yet, here or on origin (upstream's tags share our names)
+test -z "$(git tag -l X.Y.Z)" && test -z "$(git ls-remote --tags origin X.Y.Z)" && echo "no tag yet"
+
 git tag -a X.Y.Z -F notes.md
 
 # The tag must point at the commit you just tested
