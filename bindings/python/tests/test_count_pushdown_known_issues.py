@@ -184,8 +184,10 @@ def test_negated_pattern_with_a_property_map_counts_the_path(temp_db_path, where
     passes: the count is 1, as the same WHERE after a `WITH` gives."""
     with arcadedb.create_database(temp_db_path) as db:
         _edge_property_graph(db)
+        # No plan check: since #9288 the engine declines the push-down for a negated pattern with a
+        # property map and answers it through the row pipeline, so the query is no longer planned
+        # through `COUNT ANTI-JOIN CHAIN`; the count is what the test is about.
         written = f"{EDGE_CHAIN}WHERE {where} RETURN count(*) AS n"  # nosec B608
-        _require_anti_join_plan(db, written)
         assert _count(db, written) == 1
 
 
@@ -216,12 +218,15 @@ def test_with_before_the_where_honours_the_property_map(temp_db_path, where, exp
     ],
 )
 def test_negated_pattern_the_map_does_not_change_is_counted_right(temp_db_path, where):
-    """Where the dropped property map would not change the answer (the direct edge has w = 0,
-    or there is no map) the push-down counts 0, as the row pipeline does."""
+    """Where the property map does not change the answer (the direct edge has w = 0, or there is
+    no map) the count is 0, as the row pipeline gives. Without a map the push-down still answers
+    it; with one, the engine declines the push-down since #9288 and the row pipeline answers.
+    """
     with arcadedb.create_database(temp_db_path) as db:
         _edge_property_graph(db)
         written = f"{EDGE_CHAIN}WHERE {where} RETURN count(*) AS n"  # nosec B608
-        _require_anti_join_plan(db, written)
+        if where == "NOT (x)-[:K]->(z)":
+            _require_anti_join_plan(db, written)
         assert _count(db, written) == 0
 
 
