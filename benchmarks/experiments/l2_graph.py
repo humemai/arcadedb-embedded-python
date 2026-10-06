@@ -60,6 +60,22 @@ HTTP_LIMIT = -1
 
 
 
+def _name_list(rows, field):
+    """A list of names from a schema report row: a list as the HTTP API sends it, or its JSON text as the
+    embedded to_json_list() of some wheels renders a nested value."""
+    for r in rows or []:
+        v = r.get(field)
+        if v is None:
+            continue
+        if isinstance(v, str):
+            try:
+                v = json.loads(v)
+            except ValueError:
+                v = [x.strip().strip("'\"") for x in v.strip("[]").split(",") if x.strip()]
+        return [str(x) for x in v]
+    return []
+
+
 class Base:
     name = "base"
     version = "?"
@@ -234,6 +250,41 @@ class ArcadeGraphEmbedded(Base):
                       "REPLY_OF", "HAS_TAG", "HAS_TYPE", "HAS_CREATOR", "LIKES",
                       "HAS_INTEREST")
 
+    # THE VIEW COVERS EVERY VERTEX AND EDGE TYPE OF THE LOADED GRAPH (CAMPAIGN section 7 row 61,
+    # DECISIONS #154 item 3, BUGS F174). ArcadeDB's planner uses a Graph Analytical View only when the view
+    # covers the vertex and edge types a query reads (docs, how-to/data-modeling/graph-olap.adoc), and upstream's
+    # own LSQB runner builds its view over all eight vertex types and all eleven edge types. This lane built it over
+    # Person and KNOWS, so no LSQB query could use it. At a tier with no message half the lists are what is loaded
+    # (Person, KNOWS: the view the five projection questions always had); at the full network they are Person plus
+    # ldbc_snb.MSG_VERTEX_LABELS and KNOWS plus MSG_EDGE_TYPES (Message is the abstract supertype of Post and Comment
+    # and holds no record of its own, so it is not listed, as upstream's runner does not list it). The properties are
+    # the five questions' own. An ArcadeDB-only setting, the user's call; the no-view arm (BENCH_GAV=0, backend_arm
+    # nogav) stays on the table as the like-for-like row, and the build time of the larger view is priced on the row.
+    GAV_PROPERTIES = "PROPERTIES (id, name, age, city) EDGE PROPERTIES (since)"
+
+    def _gav_types(self):
+        """(vertex types, edge types) the view is created over."""
+        if not getattr(self, "_load_messages", False):
+            return ["Person"], ["KNOWS"]
+        import ldbc_snb as _ldbc
+        return ["Person"] + list(_ldbc.MSG_VERTEX_LABELS), ["KNOWS"] + list(self.MSG_EDGE_TYPES)
+
+    def _gav_ddl(self):
+        v, e = self._gav_types()
+        return (f"CREATE GRAPH ANALYTICAL VIEW {GAV_NAME} VERTEX TYPES ({', '.join(v)}) "
+                f"EDGE TYPES ({', '.join(e)}) {self.GAV_PROPERTIES} UPDATE MODE OFF")
+
+    def _gav_confirm(self, report_rows):
+        """The types the ENGINE says the view covers (`schema:graphAnalyticalViews`), kept for the row as
+        `gav_types`, and a refusal when they are not the types the statement asked for: a view that silently
+        covers less is the defect this row removes."""
+        v, e = self._gav_types()
+        got_v, got_e = _name_list(report_rows, "vertexTypes"), _name_list(report_rows, "edgeTypes")
+        if set(got_v) != set(v) or set(got_e) != set(e):
+            raise RuntimeError(f"the view covers vertex types {got_v} and edge types {got_e}, not the "
+                               f"{v} and {e} the statement named")
+        self.gav_types = f"vertex: {', '.join(got_v)}; edge: {', '.join(got_e)}"
+
     def _msg_schema_ddl(self):
         import ldbc_snb as _ldbc
         ddl = ["CREATE VERTEX TYPE Message"]
@@ -311,12 +362,7 @@ class ArcadeGraphEmbedded(Base):
         # TIMED SEPARATELY: a view that accelerates a query is not free, and
         # the paper cannot claim the speedup without pricing the view.
         _gav_t0 = time.perf_counter()
-        self.db.command(
-            "sql",
-            f"CREATE GRAPH ANALYTICAL VIEW {GAV_NAME} "
-            "VERTEX TYPES (Person) EDGE TYPES (KNOWS) "
-            "PROPERTIES (id, name, age, city) EDGE PROPERTIES (since) "
-            "UPDATE MODE OFF")
+        self.db.command("sql", self._gav_ddl())
         t0 = time.time()
         while time.time() - t0 < GAV_TIMEOUT_S:
             rows = self.db.query(
@@ -325,6 +371,7 @@ class ArcadeGraphEmbedded(Base):
             status = rows[0].get("status") if rows else None
             if status == "READY":
                 self.gav_build_s = round(time.perf_counter() - _gav_t0, 3)
+                self._gav_confirm(rows)
                 return
             if status in ("FAILED", "ERROR"):
                 raise RuntimeError(f"GAV build failed: {rows[0]}")
@@ -478,11 +525,7 @@ class ArcadeGraphServer(ArcadeGraphEmbedded):
             self.gav_build_s = 0.0
             return
         _gav_t0 = time.perf_counter()
-        self._http("command", "sql",
-                   f"CREATE GRAPH ANALYTICAL VIEW {GAV_NAME} "
-                   "VERTEX TYPES (Person) EDGE TYPES (KNOWS) "
-                   "PROPERTIES (id, name, age, city) EDGE PROPERTIES (since) "
-                   "UPDATE MODE OFF")
+        self._http("command", "sql", self._gav_ddl())
         t0 = time.time()
         while time.time() - t0 < GAV_TIMEOUT_S:
             rows = self._http(
@@ -491,6 +534,7 @@ class ArcadeGraphServer(ArcadeGraphEmbedded):
             status = rows[0].get("status") if rows else None
             if status == "READY":
                 self.gav_build_s = round(time.perf_counter() - _gav_t0, 3)
+                self._gav_confirm(rows)
                 return
             if status in ("FAILED", "ERROR"):
                 raise RuntimeError(f"GAV build failed: {rows[0]}")
@@ -3783,6 +3827,10 @@ def main():
     _gav = getattr(ad, "gav_build_s", None)
     if _gav is not None:
         out["gav_build_s"] = _gav
+    # THE TYPES THE VIEW COVERS, as the engine reports them (row 61): the page's narrow-view sentence
+    # (export_web._gav_scope_note) retires per row from this field; the no-view arm has none.
+    if getattr(ad, "gav_types", None):
+        out["gav_types"] = ad.gav_types
 
     _t = time.perf_counter()
     with _beat.phase("close"):
