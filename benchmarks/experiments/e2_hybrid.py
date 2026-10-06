@@ -1717,7 +1717,12 @@ class ComposedE2:
         from qdrant_client import QdrantClient
         from neo4j import GraphDatabase
         host = os.environ.get("BENCH_SERVER_HOST", "localhost")
-        self.qc = QdrantClient(host=host, port=6333, timeout=600)
+        # gRPC, the vendor's documented performance path (qdrant.tech/documentation/interfaces: "We recommend using gRPC ... to optimize the
+        # performance"). A laptop A/B (repros qdrant-transport-ab) measured REST 1.3x to 1.5x slower per query at p50 on the dense, int8,
+        # sparse and composed searches, with client CPU per call at 0.6x and identical answers; the bulk loads did not move. REST was the
+        # handicap, so the comparator takes the faster transport (the knob rule; DECISIONS #169). Recorded as qdrant_transport.
+        self.qc = QdrantClient(host=host, port=6333, grpc_port=6334, prefer_grpc=True, timeout=600)
+        self.row_extra = {**(getattr(self, "row_extra", None) or {}), "qdrant_transport": "grpc"}
         self.neo = GraphDatabase.driver(f"bolt://{host}:7687",
                                         auth=("neo4j", "dbbenchpass"))
         # BOTH HALVES, with versions (#156). A composed stack whose row names
