@@ -65,6 +65,7 @@ class Override(NamedTuple):
     tables: tuple = ()                       # artifact-backed tables that get the sentence from a constant
     constant: Optional[Callable] = None      # () -> (text, [values]) for those tables, from no rows
     companions: tuple = ()                   # other fields the stamp writes: a source, a default, a failed read's reason
+    applies: Optional[Callable] = None       # (row) -> True when the override is in force for that row; None = every row
 
 
 # ---------------------------------------------------------------------------
@@ -207,6 +208,26 @@ def _count_at_ingest_end(row, v):
     return None if n is not None and n >= 0 else f"reads {v!r}, not a count of samples"
 
 
+# The compaction interval l4_tsbs declares on ArcadeDB's native time-series type (`COMPACTION_INTERVAL 1 HOURS`,
+# CAMPAIGN section 7 row 54), in the milliseconds the engine reports back (`compactionBucketIntervalMs`).
+TS_COMPACTION_MS = 3_600_000
+
+
+# The pins measured BEFORE the compaction interval was declared (CAMPAIGN section 7 row 54): their l4 rows ran
+# without it and carry no stamp, so the override is not in force for them, no sentence about it may stand under a
+# table built from them, and the fairness gate does not ask them for the read-back.
+PRE_COMPACTION_PINS = ("417314c18",)
+
+
+def _compaction_in_force(row):
+    return not str(row.get("engine_commit") or "").startswith(PRE_COMPACTION_PINS)
+
+
+def _compaction_is_one_hour(row, v):
+    n = _int(v)
+    return None if n == TS_COMPACTION_MS else f"reads {v!r}, not the one-hour interval the sentence names"
+
+
 # ---------------------------------------------------------------------------
 # the sentences
 
@@ -268,6 +289,13 @@ def _arcadedb_cap(rows, constant=None):
         shown = f"{_int(n):,}"
         return f"{head} fixed at {shown}{tail}", [shown]
     return f"{head} fixed explicitly{tail}", []
+
+
+def _arcadedb_ts_compaction(rows):
+    return ("ArcadeDB's native time-series type is created with a one-hour compaction interval, the bucket of "
+            "the hourly aggregate on this table, so compaction cuts its sealed blocks at the boundaries of the "
+            "hourly buckets. Its default cuts them wherever they fill. No other engine on this table has "
+            "such a setting.", [])
 
 
 def _arcadedb_ts_acceptance(rows):
@@ -413,6 +441,15 @@ OVERRIDES = (
                   Carrier("l4", "arcadedb_ts_native_server", "ts_mutable_at_ingest_end")),
         check=_count_at_ingest_end, sentence=_arcadedb_ts_acceptance,
         says=(r"ArcadeDB", r"time-series", r"sealing")),
+    Override(
+        key="arcadedb_ts_compaction_interval",
+        setting="COMPACTION_INTERVAL 1 HOURS",
+        carriers=(Carrier("l4", "arcadedb_ts_native", "ts_compaction_interval_ms"),
+                  Carrier("l4", "arcadedb_ts_native_server", "ts_compaction_interval_ms")),
+        check=_compaction_is_one_hour, sentence=_arcadedb_ts_compaction,
+        says=(r"ArcadeDB", r"time-series", r"compaction", r"hour"),
+        companions=("ts_compaction_interval", "ts_compaction_interval_readback_error"),
+        applies=_compaction_in_force),
 )
 
 BY_KEY = {o.key: o for o in OVERRIDES}
@@ -431,12 +468,21 @@ def keys_for_backend(backend):
 # ---------------------------------------------------------------------------
 # consumer 1: export_web
 
-def applicable(table_lane, backend_keys):
+def applicable(table_lane, backend_keys, rows=None):
     """The overrides whose carriers sit on this table's lane and appear among
-    its entries' backends."""
+    its entries' backends. With `rows` given, an override that is in force only for some rows
+    (`applies`) counts only when at least one such row of a carrier is behind the table."""
     keys = {str(k) for k in backend_keys}
-    return [o for o in OVERRIDES
-            if any(c.lane == table_lane and c.backend in keys for c in o.carriers)]
+    out = []
+    for o in OVERRIDES:
+        mine = {c.backend for c in o.carriers if c.lane == table_lane and c.backend in keys}
+        if not mine:
+            continue
+        if rows is not None and o.applies is not None and not any(
+                r.get("lane") == table_lane and r.get("backend") in mine and o.applies(r) for r in rows):
+            continue
+        out.append(o)
+    return out
 
 
 def notes_for_table(table_id, table_lane, backend_keys, rows):
@@ -457,6 +503,10 @@ def notes_for_table(table_id, table_lane, backend_keys, rows):
         if not mine & {str(k) for k in backend_keys}:
             continue
         sel = [r for r in rows if r.get("lane") == table_lane and r.get("backend") in mine]
+        if o.applies is not None:
+            sel = [r for r in sel if o.applies(r)]
+            if not sel:
+                continue          # every row behind this table predates the override: a sentence about it would be false
         out.append(o.sentence(sel))
     return out
 
@@ -473,7 +523,7 @@ def sentence_findings(tables, lane_of, rows):
         tid = t.get("id")
         conds = [str(c) for c in (t.get("conditions") or [])]
         keys = [str(e.get("backend_key")) for e in t.get("entries") or [] if e.get("backend_key")]
-        hit = list(applicable(lane_of(tid), keys)) if lane_of(tid) else []
+        hit = list(applicable(lane_of(tid), keys, rows)) if lane_of(tid) else []
         hit += [o for o in OVERRIDES if tid in o.tables and o not in hit]
         for o in hit:
             if not any(all(re.search(p, c) for p in o.says) for c in conds):
@@ -500,6 +550,8 @@ def stamp_findings(rows):
         if str(r.get("instrument") or "") != INSTRUMENT:
             continue
         for o, c in index.get((r.get("lane"), r.get("backend")), ()):
+            if o.applies is not None and not o.applies(r):
+                continue
             judged += 1
             where = f"{r.get('lane')} {r.get('scale')} {r.get('workload')} {r.get('backend')}"
             v = r.get(c.field)

@@ -1021,7 +1021,7 @@ def main() -> int:
     i_bad = _check_arango_ivf_sentence(payload, rows)
     print(f"  {i_bad} IVF sentence finding(s)")
     print("\nevery override a table meets is named under it (CAMPAIGN section 7 row 21)")
-    ov_bad = _check_override_disclosures(payload)
+    ov_bad = _check_override_disclosures(payload, rows)
     print(f"  {ov_bad} undisclosed override(s)")
     print("\nthe ArcadeDB row at the image's own JVM settings is explained wherever it is printed "
           "(CAMPAIGN section 7 row 69)")
@@ -1316,6 +1316,10 @@ NOT_PRINTED = [
      "the served ArcadeDB's limit on records or groups one query may hold in "
      "memory, asked of the engine over HTTP by the runner (or the container's "
      "own setting, named as the source when the engine could not be asked)"),
+    (r"^ts_compaction_interval(_ms|_readback_error)?$",
+     "the compaction interval ArcadeDB's native time-series arms created the type with, as the engine "
+     "reports it (milliseconds), or why it could not be asked: the evidence behind the sentence that "
+     "names the one-hour interval"),
     (r"^ts_mutable_at_ingest_end$",
      "the samples ArcadeDB's native time-series arms had not yet sealed when "
      "the ingest timer stopped, from the engine's own count: the evidence "
@@ -2036,7 +2040,7 @@ def _check_zero_age_disclosure(payload, rows):
     return bad
 
 
-def _check_override_disclosures(payload):
+def _check_override_disclosures(payload, rows=None):
     """A table that shows an arm running a PROTOCOL section 7 override prints a
     sentence that says so (overrides.py, CAMPAIGN section 7 row 21).
 
@@ -2050,11 +2054,11 @@ def _check_override_disclosures(payload):
     import overrides as OV
     tables = [t for t in payload.get("tables", []) if t.get("instrument") == OV.INSTRUMENT]
     lane_of = lambda tid: (EW._TABLE_LANE.get(tid) or (None,))[0]   # noqa: E731
-    found = OV.sentence_findings(tables, lane_of, None)
+    found = OV.sentence_findings(tables, lane_of, rows)
     for f in found:
         print(f"    {f}")
     owed = sum(1 for t in tables for _ in OV.applicable(
-        lane_of(t.get("id")), [e.get("backend_key") for e in t.get("entries") or []]))
+        lane_of(t.get("id")), [e.get("backend_key") for e in t.get("entries") or []], rows))
     print(f"  {len(tables)} October table(s), {owed} override sentence(s) owed from their entries")
     return len(found)
 

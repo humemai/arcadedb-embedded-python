@@ -409,6 +409,21 @@ def _mutable_samples(rows):
     return total if seen else -1
 
 
+def _compaction_interval_ms(rows):
+    """The compaction bucket interval the ENGINE reports for the type, in milliseconds, from the rows of
+    `SELECT FROM schema:types WHERE name = ...` (`compactionBucketIntervalMs`: 3600000 for
+    `COMPACTION_INTERVAL 1 HOURS`, 0 for a type declared without one). None when the engine reports no
+    such field, so a missing answer can never read as "declared"."""
+    for r in rows or []:
+        v = r.get("compactionBucketIntervalMs")
+        if v is not None:
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
 class ArcadeNativeTS(ArcadeTS):
     """ArcadeDB's native TIMESERIES type, promoted from l4_native_probe.py into the lane.
 
@@ -437,6 +452,26 @@ class ArcadeNativeTS(ArcadeTS):
     NUMPY_COLS = os.environ.get("TS_NUMPY", "1") == "1"
     CHUNK = int(os.environ.get("TS_CHUNK", "100000"))
     SHARDS = int(os.environ.get("TS_SHARDS", "4"))
+    # THE HOURLY AGGREGATE'S BUCKET (CAMPAIGN section 7 row 54, DECISIONS #147; upstream's answer on
+    # ArcadeData/arcadedb#9166, 2026-10-05, is that this is the declaration for a type whose main query is an
+    # hourly aggregate). Compaction then cuts sealed blocks at hour boundaries, so the 12-hour hourly average
+    # answers from block statistics instead of decoding every block. ArcadeDB's own knob: no comparator has an
+    # equivalent, which is why the page discloses it beside the table. SHARDS stays at 4 (row 54: no
+    # measurable effect on the laptop), recorded as ts_shards.
+    COMPACTION_INTERVAL = "1 HOURS"
+
+    def compaction_readback(self):
+        """The engine's own answer for the type's compaction interval, for the row (an override stamp)."""
+        try:
+            ms = _compaction_interval_ms(self._type_report())
+        except Exception as e:  # noqa: BLE001
+            return {"ts_compaction_interval_readback_error": f"{e.__class__.__name__}: {e}"}
+        if ms is None:
+            return {"ts_compaction_interval_readback_error": "schema:types reports no compactionBucketIntervalMs"}
+        return {"ts_compaction_interval": self.COMPACTION_INTERVAL, "ts_compaction_interval_ms": ms}
+
+    def _type_report(self):
+        return self.db.query("sql", "SELECT FROM schema:types WHERE name = 'Point'").to_json_list()
 
     def declared(self):
         """What this arm turned on, for the row. The page must be able to say that this
@@ -455,7 +490,7 @@ class ArcadeNativeTS(ArcadeTS):
                    "CREATE TIMESERIES TYPE Point TIMESTAMP ts "
                    "TAGS (host STRING) "
                    "FIELDS (uu DOUBLE, us DOUBLE, ui DOUBLE) "
-                   f"SHARDS {self.SHARDS}")
+                   f"SHARDS {self.SHARDS} COMPACTION_INTERVAL {self.COMPACTION_INTERVAL}")
         ex = db.async_executor()
         for lo in range(0, len(pts), self.CHUNK):
             chunk = pts[lo:lo + self.CHUNK]
@@ -640,7 +675,7 @@ class ArcadeNativeTSServer(ArcadeNativeTS):
     def ingest(self, pts):
         self._post("command", "CREATE TIMESERIES TYPE Point TIMESTAMP ts "
                               "TAGS (host STRING) FIELDS (uu DOUBLE, us DOUBLE, ui DOUBLE) "
-                              f"SHARDS {self.SHARDS}")
+                              f"SHARDS {self.SHARDS} COMPACTION_INTERVAL {self.COMPACTION_INTERVAL}")
         url = f"{self.base}/ts/bench/write?precision=s"
         # WHICH SIDE OF THE WIRE THE TIME IS ON. `ingest_s` is the whole of
         # this method and keeps that meaning, but a served arm that posts line
@@ -705,6 +740,9 @@ class ArcadeNativeTSServer(ArcadeNativeTS):
     # read over HTTP (DECISIONS #121). It used to be empty here.
     def mutable_samples(self):
         return _mutable_samples(self._post("query", "SELECT FROM schema:types WHERE name = 'Point'"))
+
+    def _type_report(self):
+        return self._post("query", "SELECT FROM schema:types WHERE name = 'Point'")
 
     def close(self):
         self.rq.close()
@@ -1590,6 +1628,9 @@ def main():
     out["engine_settle_s"] = round(time.perf_counter() - _t, 3)
     if getattr(b, "_mutable_at_ingest_end", None) is not None:
         out["ts_mutable_at_ingest_end"] = b._mutable_at_ingest_end
+    # WHAT THE ENGINE SAYS THE TYPE WAS CREATED WITH (row 54): read back, never the string we sent.
+    if hasattr(b, "compaction_readback"):
+        out.update(b.compaction_readback())
 
     # RELEASE THE CORPUS once nothing reads it (CAMPAIGN.md section 7 row 18,
     # BUGS F66). It used to stay referenced from here to the end of the cell,

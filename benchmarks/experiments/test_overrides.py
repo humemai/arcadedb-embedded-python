@@ -291,9 +291,30 @@ def test_hierarchy_must_say_whether_it_was_read_or_requested():
 
 def test_the_ts_native_arms_must_record_what_ingest_left_unsealed():
     assert OV.stamp_findings([_row(lane="l4", backend="arcadedb_ts_native")])[0][0]["kind"] == "NOT STAMPED"
-    assert OV.stamp_findings([_row(lane="l4", backend="arcadedb_ts_native", ts_mutable_at_ingest_end=0)]) == ([], 1)
+    one_hour = OV.TS_COMPACTION_MS
+    good = dict(ts_compaction_interval_ms=one_hour)
+    assert OV.stamp_findings([_row(lane="l4", backend="arcadedb_ts_native", ts_mutable_at_ingest_end=0, **good)]) == ([], 2)
     # -1 is the lane's "could not read it"
-    assert OV.stamp_findings([_row(lane="l4", backend="arcadedb_ts_native", ts_mutable_at_ingest_end=-1)])[0][0]["kind"] == "WRONG"
+    assert OV.stamp_findings([_row(lane="l4", backend="arcadedb_ts_native", ts_mutable_at_ingest_end=-1,
+                                   **good)])[0][0]["kind"] == "WRONG"
+
+
+@pytest.mark.parametrize("backend", ["arcadedb_ts_native", "arcadedb_ts_native_server"])
+def test_the_ts_native_arms_must_say_what_compaction_interval_the_engine_reports(backend):
+    """CAMPAIGN row 54: COMPACTION_INTERVAL 1 HOURS is read back from the engine, never the string we sent."""
+    served = backend.endswith("_server")
+    base = dict(ts_mutable_at_ingest_end=0, **({"server_query_max_heap_elements": 5000000} if served else {}))
+    row = lambda **kw: _row(lane="l4", backend=backend, **base, **kw)
+    judged_all = 3 if served else 2
+    findings, _judged = OV.stamp_findings([row()])
+    assert [f["key"] for f in findings] == ["arcadedb_ts_compaction_interval"] and findings[0]["kind"] == "NOT STAMPED"
+    assert OV.stamp_findings([row(ts_compaction_interval_ms=OV.TS_COMPACTION_MS)]) == ([], judged_all)
+    # an arm created without an interval reads back 0: the sentence would be false on this row
+    wrong = OV.stamp_findings([row(ts_compaction_interval_ms=0)])[0]
+    assert wrong[0]["kind"] == "WRONG" and "one-hour" in wrong[0]["text"]
+    # a failed read-back is named on the finding
+    named = OV.stamp_findings([row(ts_compaction_interval_readback_error="HTTP 500")])[0]
+    assert named[0]["kind"] == "NOT STAMPED" and "HTTP 500" in named[0]["text"]
 
 
 def test_every_stamp_field_is_a_declared_not_printed_field():
