@@ -67,6 +67,7 @@ FORK_GITHUB_ALLOWLIST=(
     ".github/workflows/release-python-packages.yml"  # ours; not upstream
     ".github/workflows/test-python-bindings.yml"     # ours; upstream has a copy, we diverge
     ".github/workflows/test-python-examples.yml"     # ours; upstream has a copy, we diverge
+    ".github/workflows/build-engine-jars.yml"        # ours; not upstream (workflow_dispatch: builds the engine jars from any commit)
     # Fork-only: upstream runs the same SHA-pin check in mvn-test.yml, so this
     # is deliberately NOT in make-upstream-pr-branch.sh's INCLUDE_PATHS.
     ".github/workflows/lint-workflows.yml"
