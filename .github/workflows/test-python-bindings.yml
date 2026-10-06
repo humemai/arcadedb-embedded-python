@@ -380,7 +380,7 @@ jobs:
           echo "🧪 Testing arcadedb-embedded (with bundled JRE)..."
 
           # Run pytest with JUnit XML output for structured results
-          # WINDOWS RUNS WITH --capture=sys (issue #10). pytest's default fd capture swaps
+          # WINDOWS RUNS WITH --capture=sys (humemai/arcadedb-embedded-python#10). pytest's default fd capture swaps
           # fds 1 and 2 with dup2 around every test; on Windows that closes the OS handle
           # the JVM cached for System.out/err at start-up, a later pipe or socket can be
           # handed the same handle value, and the next Java log line then blocks forever
