@@ -101,13 +101,14 @@ What must pass before a change is green, beyond the tests themselves:
   `bindings/python/pyproject.toml` (with the `test`, `vector`, `examples`, `arrow`,
   and `pandas` extras) are resolved to their lowest allowed versions for every
   Python version in the classifiers, and `pip-audit` checks the result.
-- **No unaccepted skips** (`test` job): a skipped test did not run, so the job fails when
-  any skip in the JUnit XML has a reason that `scripts/check_test_skips.py` does not list.
-  The list is short and each entry says why the test cannot run on that platform: the
-  Windows file name and SIGINT tests, and the docs-example tests on the upstream pull
-  request branch, which has no `docs/`. A skip for a missing package (`could not import`, which is what
-  `pytest.importorskip` gives, so call it without its own `reason=`) or for a feature the
-  wheel always ships is therefore a failure, and a new test dependency must be added both
+- **No skips** (`test` job): a skipped test did not run, so the job fails on any skip in the
+  JUnit XML (`scripts/check_test_skips.py`; its list of accepted skips is empty). A test file
+  that cannot run on a platform is left out of collection in `tests/conftest.py`
+  (`collect_ignore`: `test_sigint.py` on Windows, `test_docs_examples.py` on the upstream pull
+  request branch, which has no `docs/`), so it is not reported as skipped. A skip for a
+  missing package (`could not import`, which is what `pytest.importorskip` gives, so call it
+  without its own `reason=`) or for a feature the wheel always ships is therefore a failure,
+  and a skip that is truly unavoidable (a Windows limitation, a case that needs an engine fix that is still upstream) is added to the list with the platform, the reason, and the upstream issue (for an engine bug a strict `xfail` is better: it fails the suite once the fix arrives). A new test dependency must be added both
   to the `test` extra in `bindings/python/pyproject.toml` and to the "Install wheel and
   test dependencies" step of `test-python-bindings.yml`. The repo-root `pyproject.toml`
   carries the same packages for local runs.

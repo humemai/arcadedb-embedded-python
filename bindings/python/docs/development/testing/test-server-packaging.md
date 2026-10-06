@@ -20,7 +20,7 @@ The studio JAR is present and contains no `.class` entries: Studio is static ass
 
 ### 4) server starts and serves http
 
-Marked `server`; skips without `requests`. The bundled server starts, and `GET /api/v1/server` returns 200 with a `version` field.
+Marked `server`; needs `requests` (`importorskip`). The bundled server starts, and `GET /api/v1/server` returns 200 with a `version` field.
 
 ## Running
 

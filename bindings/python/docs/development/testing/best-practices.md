@@ -217,8 +217,9 @@ except Exception:
    other bundled feature runs and fails when the feature is missing: a guard that skips
    cannot notice the feature going missing (the server JARs left the wheel in 26.7.2 and
    the guarded tests skipped into a green suite). Skip only for an optional Python package,
-   through `pytest.importorskip` without a custom reason, or for a platform that cannot run
-   the test; CI fails every other skip (`scripts/check_test_skips.py`). A server test carries
+   through `pytest.importorskip` without a custom reason, and leave a file that a platform
+   cannot run out of collection (`collect_ignore` in `tests/conftest.py`); CI fails every
+   skip (`scripts/check_test_skips.py`). A server test carries
    `@pytest.mark.server`.
 4. **One JVM serves the whole session.** A `start_jvm()` call with a different configuration
    raises "already started", and engine-wide settings carry from one test to the next, so

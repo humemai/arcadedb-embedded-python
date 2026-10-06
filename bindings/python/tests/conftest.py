@@ -10,6 +10,16 @@ import threading
 
 import pytest
 
+# A test file that cannot run here is not collected, so nothing is reported as skipped: a skip means
+# a test that should have run, and scripts/check_test_skips.py fails the CI job on any skip.
+collect_ignore = []
+if sys.platform == "win32":
+    # test_sigint.py sends SIGINT to a child process, which Windows cannot deliver
+    collect_ignore.append("test_sigint.py")
+if not os.path.isdir(os.path.join(os.path.dirname(os.path.dirname(__file__)), "docs")):
+    # the upstream pull request branch has no docs/ directory
+    collect_ignore.append("test_docs_examples.py")
+
 
 @pytest.hookimpl(trylast=True)
 def pytest_configure(config):

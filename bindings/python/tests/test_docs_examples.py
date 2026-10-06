@@ -10,10 +10,6 @@ import pytest
 
 DOCS_ROOT = Path(__file__).resolve().parents[1] / "docs"
 PYTHON_BLOCK_RE = re.compile(r"```python\n(.*?)```", re.DOTALL)
-pytestmark = pytest.mark.skipif(
-    not DOCS_ROOT.exists(),
-    reason="bindings/python/docs is not present on this branch",
-)
 
 
 def _doc_path(relative_path: str) -> Path:

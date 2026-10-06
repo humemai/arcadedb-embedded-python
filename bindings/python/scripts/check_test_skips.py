@@ -4,8 +4,9 @@
 A skip is a test that did not run. When it skips on "the runtime lacks a feature" or on a
 missing dependency, a regression or a broken install turns the suite green having exercised
 nothing, and a wrong empty answer can show up as a skip. This script reads the JUnit XML that
-pytest wrote and exits 1 for every skip whose message is not on the list below. xfail results
-are not skips and are not checked here: a strict xfail already fails the suite when it passes.
+pytest wrote and exits 1 for every skip whose message is not on the list below, which is empty.
+xfail results are not skips and are not checked here: a strict xfail already fails the suite
+when it passes.
 
 usage: check_test_skips.py test-results.xml [--platform linux/amd64]
 
@@ -21,24 +22,13 @@ import sys
 import xml.etree.ElementTree as ET  # nosec B405 - parses the JUnit file pytest just wrote
 from typing import Iterable
 
-# (message pattern, operating systems it is allowed on, why)
-ALLOWED_SKIPS = (
-    (
-        r"^a question mark is not allowed in a Windows file name$",
-        ("windows",),
-        "Windows cannot create the file",
-    ),
-    (
-        r"^the test sends SIGINT to a child process$",
-        ("windows",),
-        "Windows has no SIGINT delivery to a child process",
-    ),
-    (
-        r"^bindings/python/docs is not present on this branch$",
-        ("linux", "darwin", "windows"),
-        "the upstream pull request branch has no docs/ directory (the fork's tree always does)",
-    ),
-)
+# (message pattern, operating systems it is allowed on, why). Empty on purpose: every test runs on
+# every platform in CI. A test file that cannot run on one is left out of collection in
+# tests/conftest.py (collect_ignore), which reports nothing as skipped. Some skips are unavoidable
+# (a Windows limitation, a case that needs an engine fix that is still upstream): add an entry for
+# those, with the platform, the reason, and the upstream issue in the third field. For an engine
+# bug prefer a strict xfail, which fails the suite as soon as the fix arrives.
+ALLOWED_SKIPS: tuple[tuple[str, tuple[str, ...], str], ...] = ()
 
 
 def skips(path: str) -> Iterable[tuple[str, str]]:

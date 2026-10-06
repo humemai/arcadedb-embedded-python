@@ -24,4 +24,4 @@ These tests cover HASH index creation and discovery through the Python schema AP
 
 ## Runtime Guard
 
-If the current packaged runtime does not support `IndexType.HASH`, the two schema-API HASH tests skip instead of failing spuriously. `test_indexed_in_named_list_parameter_returns_rows` uses `LSM_TREE` and the `UNIQUE_HASH` test uses SQL, so neither has such a guard.
+The wheel always ships the HASH index type; a refusal of `IndexType.HASH` fails the two schema-API HASH tests.

@@ -40,55 +40,41 @@ def test_a_run_with_no_skips_passes(tmp_path, capsys):
     assert "OK" in capsys.readouterr().out
 
 
-def test_the_docs_branch_skip_passes_everywhere(tmp_path):
-    module = _load()
-    xml = _junit(
-        tmp_path / "r.xml",
-        [
-            (
-                "test_docs_index_and_quickstart_examples",
-                "pytest.skip",
-                "bindings/python/docs is not present on this branch",
-            )
-        ],
-    )
-    for platform in ("linux/amd64", "darwin/arm64", "windows/amd64"):
-        assert module.main([xml, "--platform", platform]) == 0, platform
-
-
-def test_a_windows_only_skip_fails_on_linux(tmp_path, capsys):
-    module = _load()
-    xml = _junit(
-        tmp_path / "r.xml",
-        [
-            (
-                "test_sigint",
-                "pytest.skip",
-                "the test sends SIGINT to a child process",
-            )
-        ],
-    )
-    assert module.main([xml, "--platform", "windows/amd64"]) == 0
-    assert module.main([xml, "--platform", "linux/arm64"]) == 1
-    assert "test_sigint" in capsys.readouterr().out
-
-
 @pytest.mark.parametrize(
     "message",
     [
         "OpenCypher not available",
         "Requires GraphML/GraphSON support",
-        "could not import 'pyarrow': No module named 'pyarrow'",
         "Requires server support",
+        "the test sends SIGINT to a child process",
+        "bindings/python/docs is not present on this branch",
+        "could not import 'pyarrow': No module named 'pyarrow'",
         "NumPy not installed",
     ],
 )
-def test_a_skip_for_a_missing_feature_or_package_fails(tmp_path, message, capsys):
+def test_every_skip_fails_by_default(tmp_path, message, capsys):
     module = _load()
+    assert module.ALLOWED_SKIPS == ()
     xml = _junit(tmp_path / "r.xml", [("test_y", "pytest.skip", message)])
-    assert module.main([xml, "--platform", "linux/amd64"]) == 1
+    for platform in ("linux/amd64", "darwin/arm64", "windows/amd64"):
+        assert module.main([xml, "--platform", platform]) == 1, platform
     out = capsys.readouterr().out
-    assert "ERROR" in out and message in out
+    assert "ERROR" in out and message in out and "test_y" in out
+
+
+def test_an_accepted_skip_passes_only_on_the_platforms_it_names(
+    tmp_path, monkeypatch, capsys
+):
+    module = _load()
+    monkeypatch.setattr(
+        module,
+        "ALLOWED_SKIPS",
+        ((r"^no SIGINT here$", ("windows",), "Windows cannot do it"),),
+    )
+    xml = _junit(tmp_path / "r.xml", [("test_s", "pytest.skip", "no SIGINT here")])
+    assert module.main([xml, "--platform", "windows/amd64"]) == 0
+    assert module.main([xml, "--platform", "linux/arm64"]) == 1
+    assert "test_s" in capsys.readouterr().out
 
 
 def test_an_xfail_is_not_a_skip(tmp_path):

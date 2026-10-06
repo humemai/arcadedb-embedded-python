@@ -25,10 +25,6 @@ import time
 
 import pytest
 
-pytestmark = pytest.mark.skipif(
-    sys.platform == "win32", reason="the test sends SIGINT to a child process"
-)
-
 _CHILD = """
 import atexit, sys, time
 import arcadedb_embedded as arcadedb
