@@ -2,7 +2,7 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_numpy_support.py){ .md-button }
 
-These tests cover automatic conversion of NumPy arrays passed into `db.command()`, `db.query()`, and regular transactions. Each test is guarded by `@pytest.mark.skipif(not HAS_NUMPY, ...)`.
+These tests cover automatic conversion of NumPy arrays passed into `db.command()`, `db.query()`, and regular transactions. The module calls `pytest.importorskip("numpy")`.
 
 ## Coverage
 

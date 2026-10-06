@@ -46,10 +46,8 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Objects;
 import java.util.function.Function;
 import java.util.stream.Collectors;
-import java.util.stream.StreamSupport;
 
 /**
  * Represents PostgreSQL data types and provides serialization/deserialization functionality.
@@ -95,7 +93,9 @@ public enum PostgresType {
   ARRAY_DOUBLE(1022, "_float8", 701, 0, Collection.class, -1, value -> parseArrayFromString(value, Double::parseDouble)),
   ARRAY_TEXT(1009, "_text", 25, 0, Collection.class, -1, value -> parseArrayFromString(value, s -> s)),
   ARRAY_JSON(199, "_json", 114, 0, Collection.class, -1, value -> parseArrayFromString(value, s -> s)),
-  ARRAY_BOOLEAN(1000, "_bool", 16, 0, Collection.class, -1, value -> parseArrayFromString(value, Boolean::parseBoolean));
+  ARRAY_BOOLEAN(1000, "_bool", 16, 0, Collection.class, -1, value -> parseArrayFromString(value, Boolean::parseBoolean)),
+  // numeric[]: the one array type that holds every integer, long, float, double and BigDecimal exactly (issue #9008)
+  ARRAY_NUMERIC(1231, "_numeric", 1700, 0, Collection.class, -1, value -> parseArrayFromString(value, BigDecimal::new));
 
   private static final Map<Integer, PostgresType> CODE_MAP = Arrays.stream(values())
       .collect(Collectors.toMap(type -> type.code, type -> type));
@@ -614,18 +614,9 @@ public enum PostgresType {
     } else if (val instanceof Record) {
       return PostgresType.JSON;
     } else if (val instanceof Collection<?> collection) {
-      // Determine element type from the first non-null element
-      return collection.stream()
-          .filter(Objects::nonNull)
-          .findFirst()
-          .map(PostgresType::getArrayTypeForElementType)
-          .orElse(PostgresType.ARRAY_TEXT);
+      return getArrayTypeForElements(collection.iterator());
     } else if (val instanceof Iterable<?> iterable) {
-      return StreamSupport.stream(iterable.spliterator(), false)
-          .filter(Objects::nonNull)
-          .findFirst()
-          .map(PostgresType::getArrayTypeForElementType)
-          .orElse(PostgresType.ARRAY_TEXT);
+      return getArrayTypeForElements(iterable.iterator());
 
     } else if (val instanceof Iterator<?> iterator) {
       while (iterator.hasNext()) {
@@ -707,15 +698,15 @@ public enum PostgresType {
       // Not a scalar: the list holds embedded documents of a schema type.
       return JSON;
 
-    // Every branch must agree with getArrayTypeForElementType, which types a populated list from its first
-    // element: a mismatch would make a column's OID depend on whether the list is empty. DECIMAL therefore
-    // falls through to ARRAY_TEXT, because a list of BigDecimal has no match there either.
+    // Every branch must agree with getArrayTypeForElementType, which types each element of a populated list: a
+    // mismatch would make a column's OID depend on whether the list is empty.
     return switch (elementType) {
       case BOOLEAN -> ARRAY_BOOLEAN;
       case INTEGER, SHORT, BYTE -> ARRAY_INT;
       case LONG -> ARRAY_LONG;
       case FLOAT -> ARRAY_REAL;
       case DOUBLE -> ARRAY_DOUBLE;
+      case DECIMAL -> ARRAY_NUMERIC;
       // Nested collections (issue #5365) join maps and embedded documents in being carried as a JSON document:
       // a Postgres array is rectangular and homogeneous, an ArcadeDB nested list is neither.
       case MAP, EMBEDDED, LIST, ARRAY_OF_SHORTS, ARRAY_OF_INTEGERS, ARRAY_OF_LONGS, ARRAY_OF_FLOATS, ARRAY_OF_DOUBLES -> JSON;
@@ -892,10 +883,97 @@ public enum PostgresType {
       final long secsFromPgEpoch = ldt.toEpochSecond(ZoneOffset.UTC) - POSTGRES_EPOCH_SECONDS;
       typeBuffer.putLong(secsFromPgEpoch * 1_000_000L + ldt.getNano() / 1000L);
     }
-    // Strings, JSON, and arrays do not have a separate binary representation: their wire format
-    // is identical to text for our purposes (length-prefixed UTF-8 bytes / array literal text).
+    case ARRAY_INT, ARRAY_CHAR, ARRAY_LONG, ARRAY_REAL, ARRAY_DOUBLE, ARRAY_TEXT, ARRAY_JSON, ARRAY_BOOLEAN, ARRAY_NUMERIC -> {
+      final Collection<?> elements = value instanceof Collection<?> collection ? collection
+          : value.getClass().isArray() ? convertPrimitiveArrayToCollection(value) : null;
+      if (elements == null)
+        // the OID announced an array and a binary client decodes the array layout: a text literal would be read as garbage
+        throw new PostgresProtocolException("Cannot send a " + value.getClass().getSimpleName() + " value as a binary " + pgType.typeName
+            + " array: a collection or a Java array is expected");
+      putArrayBinary(pgType, typeBuffer, elements);
+    }
+    // Strings and JSON do not have a separate binary representation: their wire format is identical to text
+    // for our purposes (length-prefixed UTF-8 bytes).
     default -> serializeAsText(pgType, typeBuffer, value);
     }
+  }
+
+  /**
+   * Writes a one-dimensional array in PostgreSQL's binary array format (array_send): the number of dimensions, a flag telling
+   * whether a NULL element is present, the element type OID, then for the dimension its length and lower bound (1), then every
+   * element as a length-prefixed binary value (-1 for NULL). An empty array has no dimensions at all. A client that asks for the
+   * binary format of an array column (pgjdbc does once a statement is server-prepared) decodes exactly this layout, and fails on
+   * the text literal (issue #9007). A nested list or a document is one JSON-text element of the one-dimensional array, as in the text
+   * format; an element of a numeric array is converted to the element type, so a Long inside an int4[] is narrowed.
+   */
+  private void putArrayBinary(final PostgresType arrayType, final Binary typeBuffer, final Collection<?> elements) {
+    final PostgresType elementType = elementTypeOf(arrayType);
+    final int lengthPosition = typeBuffer.position();
+    typeBuffer.putInt(0);  // the value length, patched once the elements are written
+
+    boolean hasNull = false;
+    for (final Object element : elements)
+      if (element == null) {
+        hasNull = true;
+        break;
+      }
+
+    typeBuffer.putInt(elements.isEmpty() ? 0 : 1);
+    typeBuffer.putInt(hasNull ? 1 : 0);
+    typeBuffer.putInt(elementType.code);
+    if (!elements.isEmpty()) {
+      typeBuffer.putInt(elements.size());
+      typeBuffer.putInt(1);
+      for (final Object element : elements) {
+        if (element == null)
+          typeBuffer.putInt(-1);
+        else if (elementType == TEXT || elementType == JSON)
+          writeString(typeBuffer, arrayElementToText(element));
+        else
+          try {
+            serializeAsBinary(elementType, typeBuffer, element);
+          } catch (final RuntimeException e) {
+            throw new PostgresProtocolException("Cannot send a " + element.getClass().getSimpleName() + " element in a binary "
+                + arrayType.typeName + " array (the column was announced as that array type): " + e.getMessage(), e);
+          }
+      }
+    }
+    typeBuffer.putInt(lengthPosition, typeBuffer.position() - lengthPosition - 4);
+  }
+
+  private static PostgresType elementTypeOf(final PostgresType arrayType) {
+    return switch (arrayType) {
+      case ARRAY_INT -> INTEGER;
+      case ARRAY_CHAR -> CHAR;
+      case ARRAY_LONG -> LONG;
+      case ARRAY_REAL -> REAL;
+      case ARRAY_DOUBLE -> DOUBLE;
+      case ARRAY_TEXT -> TEXT;
+      case ARRAY_JSON -> JSON;
+      case ARRAY_BOOLEAN -> BOOLEAN;
+      case ARRAY_NUMERIC -> NUMERIC;
+      default -> throw new IllegalArgumentException("Not an array type: " + arrayType);
+    };
+  }
+
+  /** The text of one element of a text[] or json[] array: what {@link #serializeArrayToString} writes, without the literal quoting. */
+  @SuppressWarnings("unchecked")
+  private String arrayElementToText(final Object element) {
+    return switch (element) {
+      case String str -> str;
+      case Float f -> String.valueOf(f.floatValue());
+      case Double d -> String.valueOf(d.doubleValue());
+      case Date date -> LocalDateTime.ofInstant(date.toInstant(), ZoneOffset.UTC).format(POSTGRES_DATETIME_FORMATTER);
+      case LocalDateTime ldt -> ldt.format(POSTGRES_DATETIME_FORMATTER);
+      case Binary binary -> binary.getString();
+      case Collection<?> nested -> new JSONArray(nested).toString();
+      case Result result -> result.toJSON().toString();
+      case JSONObject json -> json.toString();
+      case Map<?, ?> map -> new JSONObject((Map<String, ?>) map).toString();
+      case EmbeddedDocument embeddedDocument -> embeddedDocument.toJSON(true).toString();
+      case Record record -> record.toJSON(true).toString();
+      default -> element.getClass().isArray() ? new JSONArray(convertPrimitiveArrayToCollection(element)).toString() : element.toString();
+    };
   }
 
   private void writeString(final Binary typeBuffer, final String value) {
@@ -1090,6 +1168,100 @@ public enum PostgresType {
   }
 
   /**
+   * The array type that can hold EVERY non-null element, not just the first one (issue #9008): a list loaded from
+   * JSON can mix integers and doubles, or numbers and text, and an {@code int4[]} announced from the first element
+   * made a client read {@code [1, 2.5]} as {@code [1, 2]} or fail on the rest.
+   */
+  private static PostgresType getArrayTypeForElements(final Iterator<?> elements) {
+    PostgresType type = null;
+    Class<?> lastClass = null;
+    while (elements.hasNext()) {
+      final Object element = elements.next();
+      if (element == null)
+        continue;
+      // an element of the class just seen cannot change the answer: spares the type chain on a long homogeneous list
+      if (element.getClass() == lastClass)
+        continue;
+      lastClass = element.getClass();
+      final PostgresType elementType = getArrayTypeForElementType(element);
+      type = type == null ? elementType : mergeTypes(type, elementType, true);
+      if (type == ARRAY_TEXT)
+        break; // text[] holds anything: nothing left to widen
+    }
+    return type != null ? type : ARRAY_TEXT;
+  }
+
+  private static int numericRank(final PostgresType type) {
+    return switch (type) {
+      case SMALLINT -> 0;
+      case INTEGER, ARRAY_INT -> 1;
+      case LONG, ARRAY_LONG -> 2;
+      case REAL, ARRAY_REAL -> 3;
+      case DOUBLE, ARRAY_DOUBLE -> 4;
+      case NUMERIC, ARRAY_NUMERIC -> 5;
+      default -> -1;
+    };
+  }
+
+  /**
+   * The narrowest type that holds every value of both {@code a} and {@code b}, used to type a column over all the rows
+   * of a result and a list over all its elements (issue #9008, #9009). Integers widen to long, integers and floats to
+   * double (a long beyond 2^53 is then rounded, which numeric could avoid only by failing on NaN and infinity), and
+   * anything meeting a BigDecimal to numeric. Whatever else differs falls back to the one type every value can be written under: varchar for a column, text[] for a list.
+   *
+   * <p>A column mixing a BigDecimal row with a NaN or infinite double row is announced numeric and cannot carry the
+   * double; that combination is accepted as too rare to give up numeric for.
+   *
+   * @param listElements true when merging the element types of ONE list (so json, which stands for a list of
+   *                     documents there, merges into text[]); false when merging the types of one column across rows
+   */
+  public static PostgresType mergeTypes(final PostgresType a, final PostgresType b, final boolean listElements) {
+    if (a == b)
+      return a;
+
+    final int rankA = numericRank(a);
+    final int rankB = numericRank(b);
+    if (rankA >= 0 && rankB >= 0 && a.isArrayType() == b.isArrayType()) {
+      final int low = Math.min(rankA, rankB);
+      final int high = Math.max(rankA, rankB);
+      final int rank;
+      if (high == 5)
+        rank = 5;
+      else if (high <= 2 || low >= 3)
+        rank = high;
+      else
+        rank = 4; // an integer, smallint or long with a float is a double: numeric could not carry a NaN or an infinity
+      final boolean array = a.isArrayType();
+      return switch (rank) {
+        case 0, 1 -> array ? ARRAY_INT : INTEGER;
+        case 2 -> array ? ARRAY_LONG : LONG;
+        case 3 -> array ? ARRAY_REAL : REAL;
+        case 4 -> array ? ARRAY_DOUBLE : DOUBLE;
+        default -> array ? ARRAY_NUMERIC : NUMERIC;
+      };
+    }
+
+    if (listElements || a.isArrayType() && b.isArrayType())
+      return ARRAY_TEXT;
+    return VARCHAR;
+  }
+
+  /**
+   * The type to announce for a property that the schema does not declare, when the announcement has to stay true for
+   * rows that are not the ones inspected - the statement-level layout a client keeps and reuses (issue #9009). A
+   * schemaless property can hold an integer in one record and a long, a double or text in the next, so only text can
+   * be promised for it: every scalar becomes varchar and every list text[], while json and bytea, which carry their
+   * own framing, are left as they are.
+   */
+  public static PostgresType stableTypeForUndeclared(final PostgresType type) {
+    if (type == JSON || type == BYTEA || type == VARCHAR)
+      return type;
+    if (type.isArrayType())
+      return ARRAY_TEXT;
+    return type.isNativeScalarType() ? VARCHAR : type;
+  }
+
+  /**
    * Determines the appropriate array type based on the element type.
    */
   public static PostgresType getArrayTypeForElementType(Object element) {
@@ -1107,6 +1279,8 @@ public enum PostgresType {
       return ARRAY_LONG;
     if (element instanceof Boolean)
       return ARRAY_BOOLEAN;
+    if (element instanceof BigDecimal)
+      return ARRAY_NUMERIC;
     if (element instanceof String)
       return ARRAY_TEXT;
     // A list of documents is advertised as a single json value holding a JSON array, not as json[] (issue
@@ -1210,7 +1384,7 @@ public enum PostgresType {
         // (json_send emits it verbatim); the length is already provided by the Bind message.
         yield parseJsonText(new String(valueAsBytes, DatabaseFactory.getDefaultCharset()));
       }
-      case ARRAY_INT, ARRAY_LONG, ARRAY_DOUBLE, ARRAY_REAL, ARRAY_TEXT, ARRAY_BOOLEAN, ARRAY_CHAR, ARRAY_JSON ->
+      case ARRAY_INT, ARRAY_LONG, ARRAY_DOUBLE, ARRAY_REAL, ARRAY_TEXT, ARRAY_BOOLEAN, ARRAY_CHAR, ARRAY_JSON, ARRAY_NUMERIC ->
           deserializeBinaryArray(buffer);
     };
   }
@@ -1273,6 +1447,8 @@ public enum PostgresType {
       return buf.getFloat();
     if (elemOid == DOUBLE.code)
       return buf.getDouble();
+    if (elemOid == NUMERIC.code)
+      return parseNumericBinary(buf);
     // text/varchar/bpchar/json/unknown - raw bytes are already the UTF-8 string content.
     return new String(bytes, DatabaseFactory.getDefaultCharset());
   }
@@ -1288,7 +1464,8 @@ public enum PostgresType {
         this == ARRAY_REAL ||
         this == ARRAY_TEXT ||
         this == ARRAY_JSON ||
-        this == ARRAY_BOOLEAN;
+        this == ARRAY_BOOLEAN ||
+        this == ARRAY_NUMERIC;
   }
 
   /**
@@ -1309,16 +1486,5 @@ public enum PostgresType {
         this == BOOLEAN ||
         this == DATE ||
         this == TIMESTAMP;
-  }
-
-  /**
-   * Returns true when {@link #serializeAsBinary} produces a wire payload that matches the type's
-   * binary protocol specification. Array types currently lack a binary encoder, so they MUST be
-   * advertised as text (0) in RowDescription regardless of what the client requested in Bind -
-   * otherwise the RowDescription format code and the DataRow bytes disagree and clients misparse.
-   * String/JSON types are safe because their text and binary wire formats are identical raw bytes.
-   */
-  public boolean hasBinaryEncoding() {
-    return !isArrayType();
   }
 }

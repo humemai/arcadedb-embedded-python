@@ -531,11 +531,8 @@ def test_http_api_access_pattern(cleanup_test_dirs):
     print("=" * 70)
 
     # Import requests here to avoid dependency for non-HTTP tests
-    try:
-        import requests
-        from requests.auth import HTTPBasicAuth
-    except ImportError:
-        pytest.skip("requests library not available for HTTP API testing")
+    requests = pytest.importorskip("requests")
+    from requests.auth import HTTPBasicAuth
 
     root_path = create_temp_dir("http_api_")
 

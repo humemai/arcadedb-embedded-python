@@ -620,26 +620,21 @@ def test_opencypher_queries(temp_db_path):
         db.command("sql", "CREATE VERTEX TYPE Person")
         db.command("sql", "CREATE EDGE TYPE FRIEND_OF")
 
-        # Insert data using OpenCypher (if available)
-        try:
-            with db.transaction():
-                db.command("opencypher", "CREATE (p:Person {name: 'Alice', age: 30})")
-                db.command("opencypher", "CREATE (p:Person {name: 'Bob', age: 25})")
+        # Insert data using OpenCypher
+        with db.transaction():
+            db.command("opencypher", "CREATE (p:Person {name: 'Alice', age: 30})")
+            db.command("opencypher", "CREATE (p:Person {name: 'Bob', age: 25})")
 
-            # Query using OpenCypher
-            result = db.query(
-                "opencypher",
-                "MATCH (p:Person) WHERE p.age > 20 RETURN p.name as name",
-            )
-            names = [record.get("name") for record in result]
+        # Query using OpenCypher
+        result = db.query(
+            "opencypher",
+            "MATCH (p:Person) WHERE p.age > 20 RETURN p.name as name",
+        )
+        names = [record.get("name") for record in result]
 
-            assert len(names) == 2
-            assert "Alice" in names
-            assert "Bob" in names
-        except arcadedb.ArcadeDBError as e:
-            if "Query engine 'opencypher' was not found" in str(e):
-                pytest.skip("OpenCypher not available (unexpected in base package)")
-            raise
+        assert len(names) == 2
+        assert "Alice" in names
+        assert "Bob" in names
 
 
 def test_unicode_support(temp_db_path):

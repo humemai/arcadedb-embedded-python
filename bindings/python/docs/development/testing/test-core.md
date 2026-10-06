@@ -70,7 +70,7 @@ Tests validate:
 
 ### Query Languages
 
-- **test_opencypher_queries**: Tests OpenCypher `CREATE` and `MATCH` queries (skips if the opencypher engine is unavailable)
+- **test_opencypher_queries**: Tests OpenCypher `CREATE` and `MATCH` queries
 
 ### Result Materialization
 

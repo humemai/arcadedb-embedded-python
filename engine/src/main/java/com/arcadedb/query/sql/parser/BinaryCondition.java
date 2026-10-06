@@ -255,6 +255,8 @@ public class BinaryCondition extends BooleanExpression {
             if (vl instanceof Collection<?> collection) {
               return !collection.isEmpty();
             }
+            // A null value is not tested here: the plan is cached by statement text and reused by runs with another parameter value,
+            // so the index step skips the seek when the value is null (#9238, #9274)
             return true;
           } else if (operator instanceof ContainsKeyOperator
               && info.isMap()
@@ -272,6 +274,7 @@ public class BinaryCondition extends BooleanExpression {
     if (info.isCaseInsensitive() && isFieldWithLowerCaseMethod(left, info.getField())) {
       if (right.isEarlyCalculated(info.getContext())) {
         if (operator instanceof EqualsCompareOperator)
+          // a null value is skipped by the index step at execution, like the case sensitive one above (#9274)
           return true;
         // A CI index probes with the lower-cased bound, so a range is the one the user wrote only when the bound is
         // already lower case: name.toLowerCase() >= 'C' matches "anne", the probe >= 'c' does not (issue #8560)

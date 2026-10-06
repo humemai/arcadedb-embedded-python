@@ -16,11 +16,10 @@ import time
 
 import pytest
 from arcadedb_embedded import ArcadeDBServer
-from tests.conftest import TEST_PASSWORD, has_server_support
+from tests.conftest import TEST_PASSWORD
 
 
 @pytest.mark.server
-@pytest.mark.skipif(not has_server_support(), reason="Requires server support")
 def test_server_creation(temp_server_root):
     """Test creating and starting a server."""
     server = ArcadeDBServer(
@@ -46,7 +45,6 @@ def test_server_creation(temp_server_root):
 
 
 @pytest.mark.server
-@pytest.mark.skipif(not has_server_support(), reason="Requires server support")
 def test_server_database_operations(temp_server_root):
     """
     Test database operations through server using Java API.
@@ -84,7 +82,6 @@ def test_server_database_operations(temp_server_root):
 
 
 @pytest.mark.server
-@pytest.mark.skipif(not has_server_support(), reason="Requires server support")
 def test_server_custom_config(temp_server_root):
     """Test server with custom configuration."""
     config = {"http_port": 8080, "host": "127.0.0.1", "mode": "production"}
@@ -101,7 +98,6 @@ def test_server_custom_config(temp_server_root):
 
 
 @pytest.mark.server
-@pytest.mark.skipif(not has_server_support(), reason="Requires server support")
 def test_server_context_manager(temp_server_root):
     """Test server context manager."""
     with ArcadeDBServer(
@@ -136,7 +132,6 @@ def test_default_host_is_localhost(temp_server_root):
 
 
 @pytest.mark.server
-@pytest.mark.skipif(not has_server_support(), reason="Requires server support")
 def test_failed_server_start_does_not_hang_process_exit(tmp_path):
     """A server.start() that fails part-way must not leave the process unable to exit.
 

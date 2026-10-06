@@ -92,8 +92,7 @@ From engine 26.10.1 (ArcadeDB
 `ArcadeDBError` when you have a transaction open, and your transaction stays open with your
 writes in it. A refused `close()` leaves the batch open with its edges pending: end your
 transaction and call `close()` again. On 26.9.1 and earlier they commit the transaction open
-on the thread, yours included; see [Known Engine Issues](../guide/known-issues.md) for the
-details of both. Commit your own writes before the batch's first call, or write them after it
+on the thread, yours included. Commit your own writes before the batch's first call, or write them after it
 closes, which is right on every version:
 
 ```python
@@ -157,8 +156,7 @@ Buffer an edge for creation during flush/close.
     conversion and the type's constraints: a `None` followed by another property was stored as
     `-1` in an `INTEGER`, and `40000` in a `SHORT` as `-25536`. From 26.10.1 a batched edge
     stores a null as null and converts or refuses a declared value as `Vertex.new_edge` does;
-    on an older engine, write edges with declared properties through `Vertex.new_edge`. See
-    [Known Engine Issues](../guide/known-issues.md).
+    on an older engine, write edges with declared properties through `Vertex.new_edge`.
 
 ### `new_edges(source_rids, edge_type, destination_rids, properties=None)`
 

@@ -20,4 +20,4 @@ Appends 5,000 samples with `append_samples()`, runs `COMPACT TIMESERIES TYPE Tem
 
 ## Runtime Guard
 
-If the packaged runtime does not support `CREATE TIMESERIES TYPE`, these tests skip cleanly.
+The wheel always ships time series, so a failing `CREATE TIMESERIES TYPE` fails these tests; none skips.

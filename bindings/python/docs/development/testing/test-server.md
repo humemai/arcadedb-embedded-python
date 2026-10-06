@@ -4,7 +4,7 @@
 
 These tests cover server creation, database operations, custom config, context managers, and the default host. For advanced patterns (embedded + HTTP), see [Server Patterns](test-server-patterns.md).
 
-Note: the tests construct the server directly with the `ArcadeDBServer` class. Every test except `test_default_host_is_localhost` is marked `@pytest.mark.server` and is skipped unless server support is available.
+Note: the tests construct the server directly with the `ArcadeDBServer` class. Every test except `test_default_host_is_localhost` is marked `@pytest.mark.server`. None skips: the wheel always ships the server stack, and a missing one fails these tests.
 
 ## Quick Example
 
