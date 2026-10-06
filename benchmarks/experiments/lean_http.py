@@ -3,8 +3,11 @@
 WHY (levers audit 2026-10-06, `.notes/bench/repros/levers-audit-20261006/LEAN-HTTP.md`). Every served ArcadeDB statement is one HTTP round
 trip, and about three quarters of that round trip was the Python client, not the engine: against one ArcadeDB 26.10.1 server a bound one-row
 read costs 468 to 628 us through `requests.Session`, 119 to 150 us through a persistent `http.client` connection (3.9x), the server being
-the same. Every comparator on the tables is driven by its own official driver (Bolt, the Postgres wire, the Mongo wire, ...), none of which
-pays a `requests`-sized client overhead, so the served ArcadeDB column measured the client library as much as the engine. This module is the
+the same. The comparators are driven by their vendors' own clients, which differ in weight: the Postgres and Mongo wire clients are light, but
+python-arango is `requests`, qdrant-client over REST is httpx plus pydantic, and elasticsearch-py is urllib3, so `requests` was heavier than most
+and the served ArcadeDB column measured the client library as much as the engine. This client is lighter than the official `arcadedb-driver`
+(httpx, published 2026-10-06), which measured 3.2x slower on a one-row read (protocol audit round 3); the 26.11.1 re-measure headlines the
+official driver and keeps this client as a disclosed sensitivity row. This module is the
 one place the lanes get their ArcadeDB HTTP session from; a lane changes by one import.
 
 The interface is the part of `requests.Session` the lanes use: `.auth` (a (user, password) tuple, sent as Basic), `.get(url, auth=, headers=, timeout=)`,
