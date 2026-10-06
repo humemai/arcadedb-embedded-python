@@ -45,6 +45,17 @@ def recall_at_k(result_ids, gt_row):
     return len(truth.intersection(int(x) for x in result_ids)) / len(truth)
 
 
+# WHAT A SEARCH RETURNS (CAMPAIGN section 7 row 62, DECISIONS #153 item 1). Every comparator's timed search
+# returns the ids of its hits (Qdrant with_payload=False, Elasticsearch _source=False, Milvus no output
+# fields, pgvector SELECT id); ArcadeDB's returned each hit's WHOLE record, about 46 KB of JSON per query,
+# and mapped record ids to ordinals in an untimed pass. Both ArcadeDB adapters now project `id` (and the
+# score) inside the timed query, so the arms differ in the engine and not in what comes back, and every
+# ArcadeDB sparse row, the lane's and the multipass driver's, records `sparse_result`. The projection returns
+# the same ids in the same order as the whole-record form (50 of 50 queries, the pin and main, laptop).
+SPARSE_RESULT = "id"
+ARCADE_SPARSE_SEARCH_SQL = "SELECT id, score FROM (SELECT expand(`vector.sparseNeighbors`({a})))"
+
+
 class Base:
     # VERSION IS A MEASUREMENT INPUT, not a label.
     #
@@ -111,6 +122,7 @@ class Base:
 
 class ArcadeEmbedded(Base):
     name = "arcadedb_sparse_embedded"
+    SPARSE_RESULT = SPARSE_RESULT      # stamped on the row; see the note above Base
     quant = None  # None = engine default (INT8); "FP32"/"FP16" per engine #5143
 
     def _index_metadata(self):
@@ -203,31 +215,16 @@ class ArcadeEmbedded(Base):
         ji = jpype.JArray(jpype.JInt)(idx)
         jv = jpype.JArray(jpype.JFloat)(vals)
         rows = self.db.query(
-            "sql", "SELECT expand(`vector.sparseNeighbors`(?, ?, ?, ?))",
+            "sql", ARCADE_SPARSE_SEARCH_SQL.format(a="?, ?, ?, ?"),
             self.idx_name, ji, jv, k).to_json_list()
-        self._last_rids = [r["@rid"] for r in rows]
-        return self._last_rids  # RIDs; resolved to ordinals untimed
+        return [int(r["id"]) for r in rows]   # ids, as every comparator returns them
 
-    def resolve(self, rids):
-        # RID list as the query TARGET, not as a WHERE predicate. Engine #5824:
-        # `WHERE @rid IN [list]` is planned as FetchFromTypeWithFilterStep, a
-        # full bucket scan whose cost is linear in the TYPE and independent of
-        # k, while `FROM [list]` plans as FETCH FROM RIDs and is flat. Measured
-        # 1143x at 400k docs; at this lane 8.84M it was ~4.7s per resolve call,
-        # 82% of a cell wall clock.
-        #
-        # THIS CHANGES NO RECORDED NUMBER. resolve() runs in the UNTIMED recall
-        # pass; only search() is timed. Both forms verified to return identical
-        # rows, identical projection shape, and identical -1 handling for a
-        # dangling RID.
-        if not rids:
-            return []
-        in_list = ",".join(rids)
-        rows = self.db.query(
-            "sql", f"SELECT id, @rid AS r FROM [{in_list}]"
-        ).to_json_list()
-        by_rid = {r["r"]: r["id"] for r in rows}
-        return [by_rid.get(x, -1) for x in rids]
+    def resolve(self, ids):
+        # THE IDENTITY, as it is for every comparator (Qdrant, pgvector, Milvus, Elasticsearch):
+        # the search returns the lane's own ids, so there is nothing to look up. Until the re-pin
+        # this mapped each hit's record id to its ordinal in the untimed recall pass (a RID list
+        # as the query TARGET, because `WHERE @rid IN [list]` is a full bucket scan, engine #5824).
+        return ids
 
     def close(self):
         self.db.close()
@@ -331,19 +328,13 @@ class ArcadeServer(ArcadeEmbedded):
 
     def search(self, idx, vals, k):
         rows = self._query(
-            "SELECT expand(`vector.sparseNeighbors`(:i, :t, :w, :k))",
+            ARCADE_SPARSE_SEARCH_SQL.format(a=":i, :t, :w, :k"),
             {"i": self.idx_name, "t": idx, "w": vals, "k": k})
-        self._last_rids = [r["@rid"] for r in rows]
-        return self._last_rids
+        return [int(r["id"]) for r in rows]
 
-    def resolve(self, rids):
-        if not rids:
-            return []
-        in_list = ",".join(rids)
-        rows = self._query(
-            f"SELECT id, @rid AS r FROM [{in_list}]")
-        by_rid = {r["r"]: r["id"] for r in rows}
-        return [by_rid.get(x, -1) for x in rids]
+    def resolve(self, ids):
+        return ids       # the identity, as for every comparator (see ArcadeEmbedded.resolve)
+
     def close(self):
         # Served arm: the database lives in another container. Closing here
         # releases the HTTP session only, which is why a served arm's
@@ -771,6 +762,10 @@ def main():
     bench_common.stamp_durability(out, getattr(b, "durability", None)
                                   or DURABILITY.get(args.backend, DURABILITY_INGEST_ONLY))
     out["instrument"] = bench_common.INSTRUMENT
+    # WHAT THE SEARCH RETURNS, on every ArcadeDB row (row 62); the page's whole-record sentence
+    # (export_web._sparse_whole_record_note) retires per row from this field.
+    if getattr(b, "SPARSE_RESULT", None):
+        out["sparse_result"] = b.SPARSE_RESULT
     # DECISIONS #89: where the split does not apply, the reason, not a blank.
     out["cold_warm_na"] = bench_common.NA_COLD_WARM_SPARSE_LANE
     # Only Elasticsearch sets this. A row must say which operating point it

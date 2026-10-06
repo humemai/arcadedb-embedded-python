@@ -134,6 +134,8 @@ def main():
                "k": K, "n_queries": len(qs),
                "queries": "first half" if cold else "second half",
                "engine_version": getattr(b, "version", "?"),
+               # What the search returned, on every ArcadeDB pass (row 62): ids, like the comparators.
+               **({"sparse_result": b.SPARSE_RESULT} if getattr(b, "SPARSE_RESULT", None) else {}),
                # Only Elasticsearch has it, and the 9.0-vs-9.4 recall gap was
                # diagnosable only because the lane recorded it.
                "es_prune": getattr(b, "prune", None),
