@@ -46,7 +46,6 @@ your_project/
 │   │   ├── server-users.jsonl   # User accounts
 │   │   └── server-groups.json   # Permissions
 │   └── log/                     # Server event logs
-│       ├── server-event-log-*.jsonl
 │       └── server-event-log-*.jsonl
 ```
 

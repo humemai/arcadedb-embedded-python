@@ -109,6 +109,8 @@ python 04_csv_import_documents.py --help
   JSONL importer does not read `parallel` or `commitEvery`, so neither changes the round trip
 - `--batch-size BATCH_SIZE` - Records per commit batch (default: 5000)
 - `--export` - Export database to JSONL after import
+- `--export-path EXPORT_PATH` - Export filename (default: `{db_name}.jsonl.tgz` in `exports/`)
+- `--heap-size SIZE` - JVM max heap size (e.g. `8g`, `4096m`)
 - `--db-name DB_NAME` - Custom database name (default: movielens_{size}_db)
 
 **Recommendations:**
@@ -259,7 +261,6 @@ index exists, raising `RuntimeError` if any are missing.
 
 **Why create indexes AFTER import?**
 
-- 2-3x faster total time
 - Indexes built in one pass
 - Fully compacted from start
 - Production best practice
@@ -378,7 +379,7 @@ The example includes comprehensive data analysis:
 
 ### Record Counts
 
-```python
+```sql
 SELECT count(*) as count FROM Movie
 SELECT count(*) as count FROM Rating
 SELECT count(*) as count FROM Link
@@ -387,7 +388,7 @@ SELECT count(*) as count FROM Tag
 
 ### Rating Statistics
 
-```python
+```sql
 SELECT
     count(*) as total_ratings,
     avg(rating) as avg_rating,
@@ -398,7 +399,7 @@ FROM Rating
 
 ### Rating Distribution
 
-```python
+```sql
 SELECT rating, count(*) as count
 FROM Rating
 GROUP BY rating
@@ -407,7 +408,7 @@ ORDER BY rating
 
 ### Top Genres
 
-```python
+```sql
 SELECT genres, count(*) as count
 FROM Movie
 WHERE genres <> '(no genres listed)'
@@ -418,7 +419,7 @@ LIMIT 10
 
 ### Most Active Users
 
-```python
+```sql
 SELECT userId, count(*) as rating_count
 FROM Rating
 GROUP BY userId

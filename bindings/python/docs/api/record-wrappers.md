@@ -137,7 +137,7 @@ Delete the document from the database.
 
 **⚠️ Important Limitation:** Call it on a wrapper from `lookup_by_rid()` or on a newly
 created object. Iterating a query yields `Result` rows, which have no `delete()`; use SQL
-DELETE for query results.
+DELETE for query results, or reach the record with `result.get_element()` and delete that.
 
 ```python
 # ✅ Works on fresh lookup

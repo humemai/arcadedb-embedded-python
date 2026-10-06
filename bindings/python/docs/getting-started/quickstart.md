@@ -309,6 +309,6 @@ except Exception as e:
 
 ## Need Help?
 
-- **Examples**: Check [Examples](../examples/basic.md) for more code samples
+- **Examples**: Check [Examples](../examples/index.md) for more code samples
 - **API Reference**: See [Database API](../api/database.md) for all methods
 - **Troubleshooting**: Visit [Troubleshooting Guide](../development/troubleshooting.md)

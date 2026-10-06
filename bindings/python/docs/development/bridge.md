@@ -69,17 +69,20 @@ source on every wheel build.
 - **Most callers have a fallback.** Most Python APIs that ride the bridge
   fall back to a pure-JPype implementation if the jar (or a required method)
   is absent, so they still work, just slower. `to_columns()` and `to_arrow()`
-  return `None` instead, as they do without NumPy or pyarrow. Two need the jar:
+  return `None` instead, as they do without NumPy or pyarrow. Three need the jar:
   `AsyncExecutor.append_samples()`, whose numpy-column path and `primitive=True`
-  path load the bridge classes directly, and `Database.insert_many()`, which loads
+  path load the bridge classes directly, `Database.insert_many()`, which loads
   `DocumentBatcher` for any JSON-serializable rows and raises `ArcadeDBError` if it
-  is missing (its per-row path runs only for rows `json.dumps` rejects).
+  is missing (its per-row path runs only for rows `json.dumps` rejects), and
+  `Database.insert_columns()`, which always loads `DocumentBatcher` and raises the same
+  error.
 - **A missing jar is logged.** When a bridge class cannot be loaded, the
   `arcadedb_embedded.results` logger warns `bridge class <name> unavailable;
   falling back to the slow per-row path`. To see whether the jar is in an
   install, look for an entry named `arcadedb-python-bridge.jar` in
   `jar_fingerprint(per_jar=True)["jars"]`.
-- `RowBatcher` serializes rows property-by-property rather than via
-  `Result.toJSON()` to work around upstream
+- `RowBatcher` serializes rows property by property rather than through
+  `Result.toJSON()`, so it controls the JSON types (a `DATE` or `DATETIME` is an
+  epoch-millisecond integer). It began as a workaround for upstream
   [#4967](https://github.com/ArcadeData/arcadedb/issues/4967) (primitive
-  arrays rendered as `"[F@..."`).
+  arrays rendered as `"[F@..."`), which the engine fixed in 26.7.2.

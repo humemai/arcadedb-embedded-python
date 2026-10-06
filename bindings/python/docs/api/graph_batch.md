@@ -6,14 +6,9 @@ The `GraphBatch` helper exposes ArcadeDB's high-throughput graph-ingest path fro
 
 Use `GraphBatch` when you need to load many vertices and edges efficiently.
 
-This is the repository's current recommended bulk graph-ingest path from Python, and
-the reason is not only throughput. The alternative of submitting per-record SQL through
-`db.async_executor().command(...)` silently discarded records above parallel level 1
-before 26.10.1 (`ArcadeData/arcadedb#7615`, fixed in #7625: a failed periodic commit is
-now retried and otherwise reported through the error callback). `GraphBatch` dispatches
-its edge flush through that same
-executor and is measured exact: 20,000 vertices and 40,000 edges landed in full, with
-and without `parallel_flush`.
+This is the repository's current recommended bulk graph-ingest path from Python. It
+dispatches its edge flush through the database's async executor and is measured exact:
+20,000 vertices and 40,000 edges landed in full, with and without `parallel_flush`.
 
 You typically create it through `db.graph_batch(...)` rather than constructing the class directly.
 
@@ -38,11 +33,9 @@ Create a configured batch helper tied to the current database.
 - `light_edges`: create property-less light edges when appropriate
 - `bidirectional`: store each edge on both vertices (the default) or on its source only.
   Pass `False` only for an edge type declared one-way (`CREATE EDGE TYPE ...
-  UNIDIRECTIONAL`). From 26.10.1 a one-way edge in a two-way type (the default
-  `CREATE EDGE TYPE`) is refused: `new_edge` raises `ArcadeDBError` naming the type and
-  writes nothing. Before 26.10.1 it was accepted, and every query the planner walked from
-  the target end returned 0 rows with no error (ArcadeData/arcadedb#8625). What a one-way
-  edge is visible to is in [Graphs](../guide/graphs.md)
+  UNIDIRECTIONAL`). A one-way edge in a two-way type (the default `CREATE EDGE TYPE`)
+  is refused: `new_edge` raises `ArcadeDBError` naming the type and writes nothing. What a
+  one-way edge is visible to is in [Graphs](../guide/graphs.md)
 - `commit_every`: commit cadence during batch work
 - `use_wal`: write-ahead log during the import. **Off by default**: a crash in
   the middle of the import can lose its tail, with nothing to replay. Pass
@@ -87,13 +80,10 @@ Call the batch outside your own transactions. `create_vertices()`, `flush()`, an
 manage their own transactions, and so do `new_edge()` and `new_edges()` when the buffer
 reaches `batch_size` and flushes. Leaving a `with db.graph_batch()` block calls `close()`.
 
-From engine 26.10.1 (ArcadeDB
-[#9242](https://github.com/ArcadeData/arcadedb/issues/9242), fixed) each of them raises
-`ArcadeDBError` when you have a transaction open, and your transaction stays open with your
-writes in it. A refused `close()` leaves the batch open with its edges pending: end your
-transaction and call `close()` again. On 26.9.1 and earlier they commit the transaction open
-on the thread, yours included. Commit your own writes before the batch's first call, or write them after it
-closes, which is right on every version:
+Each of them raises `ArcadeDBError` when you have a transaction open, and your transaction
+stays open with your writes in it. A refused `close()` leaves the batch open with its edges
+pending: end your transaction and call `close()` again. Commit your own writes before the
+batch's first call, or write them after it closes:
 
 ```python
 with db.transaction():
@@ -110,9 +100,7 @@ both; outside one, it commits its own. `new_edge()` and `new_edges()` with room 
 buffer only buffer.
 
 While a batch is open, the batch's WAL setting (`use_wal=False` by default) applies to the
-batch's own calls only. On 26.9.1 and earlier it stayed on the thread from the batch's first
-call until `close()`, and every commit on that thread used it, yours too: a transaction of
-yours committed in that time wrote no WAL record.
+batch's own calls only, not to your transactions.
 
 ## Common Operations
 
@@ -128,9 +116,8 @@ commits (see [Transactions](#transactions)).
 
 ### `create_vertices(type_name, count_or_properties)`
 
-Create many vertices efficiently and return their RIDs as strings. The call commits, in
-the transaction open on the thread if there is one: call it outside your own transactions
-(see [Transactions](#transactions)).
+Create many vertices efficiently and return their RIDs as strings. The call manages its
+own transaction: call it outside your own transactions (see [Transactions](#transactions)).
 `count_or_properties` is either an `int`, the number of vertices to create without
 properties, or an iterable of property dicts (`None` or `{}` for a vertex without
 properties). Only rows whose values are all scalars (`str`, `int`, `float`, `bool`, or
@@ -151,12 +138,8 @@ was also slower than inserting one vector per `db.command(...)`.
 
 Buffer an edge for creation during flush/close.
 
-!!! note "Declared edge properties before 26.10.1"
-    Up to engine 26.9.1 an edge buffered with properties skipped the declared property's
-    conversion and the type's constraints: a `None` followed by another property was stored as
-    `-1` in an `INTEGER`, and `40000` in a `SHORT` as `-25536`. From 26.10.1 a batched edge
-    stores a null as null and converts or refuses a declared value as `Vertex.new_edge` does;
-    on an older engine, write edges with declared properties through `Vertex.new_edge`.
+A batched edge stores a null as null and converts or refuses a declared value as
+`Vertex.new_edge` does.
 
 ### `new_edges(source_rids, edge_type, destination_rids, properties=None)`
 
@@ -177,13 +160,13 @@ with db.graph_batch(use_wal=False) as batch:
 
 ### `flush()`
 
-Force buffered edge work to disk early. Commits the transaction open on the thread, yours
-included (see [Transactions](#transactions)).
+Force buffered edge work to disk early. Call it outside your own transactions (see
+[Transactions](#transactions)).
 
 ### `close()`
 
-Flush remaining work and finalize the batch. A second `close()` does nothing. Commits the
-transaction open on the thread, yours included (see [Transactions](#transactions)).
+Flush remaining work and finalize the batch. A second `close()` does nothing. Call it
+outside your own transactions (see [Transactions](#transactions)).
 
 ### Counters
 

@@ -68,7 +68,7 @@ python 16_import_database_vs_transactional_graph_ingest.py \
 - `--edge-int-props` / `--edge-str-props`: edge property counts
 - `--string-size`: generated string payload size
 - `--batch-size`: ingest batch size
-- `--async-parallel`: async SQL worker count; only `1` is accepted (#7615)
+- `--async-parallel`: async SQL worker count; only `1` is accepted (see the warning above)
 - `--parallel`: SQL import worker count and GraphBatch parallel-flush toggle
 - `--heap-size`: JVM heap size
 

@@ -92,14 +92,6 @@ Both APIs can be used **simultaneously** on the same server instance; see
     For a database that outlives any one client, or for HA/replication and TLS,
     run the standalone [ArcadeDB server](https://docs.arcadedb.com/#Server).
 
-## Additional Features
-
-- **Multiple Query Languages**: SQL and OpenCypher
-- **ACID Transactions**: a commit survives a process crash; with
-    `arcadedb.txWalFlush=1` it also survives a power cut (see
-    [Durability](guide/core/transactions.md#durability-what-a-commit-survives))
-- **Type Safety**: Strong Python type handling and clear errors
-
 ## Current Ingest Guidance
 
 The bindings are SQL/Cypher-first, but the recommended ingest path depends on what you
@@ -109,13 +101,15 @@ are doing.
     `db.query(...)`.
 - For file-driven imports or restore flows, use SQL `IMPORT DATABASE` or the narrow
     `db.import_documents(...)` wrapper when you specifically need document-file import.
-- For bulk document ingest from Python, prefer `db.insert_many(...)`, which crosses
-    the FFI boundary once per batch; add `parallel=True` on a type created with as many buckets as the async executor has writers, or a multiple (`CREATE DOCUMENT TYPE T BUCKETS n`, ArcadeData/arcadedb#8478); on a laptop's 4 performance cores (engine `b22b5e9954`, 6 runs per arm) it was 1.11x to 1.14x faster than the synchronous mode at 1, 3, 4, and 8 buckets alike.
-- The async executor's SQL command path is not a bulk-ingest path. Before 26.10.1,
-    `async_executor().command(...)` could silently drop records above parallel level 1
-    (`ArcadeData/arcadedb#7615`, fixed in #7625); see
-    [Bulk Ingest Recommendation](guide/import.md#bulk-ingest-recommendation).
+- For bulk document ingest from Python, prefer `db.insert_many(...)` for rows and
+    `db.insert_columns(...)` for data that already lives in columns. They cross the FFI
+    boundary once per batch and once per column.
 - For bulk graph ingest from Python, prefer `GraphBatch`.
+- Do not use the async executor's SQL command path (`async_executor().command(...)`) for
+    bulk writes.
+
+The measurements and the reasons are in the
+[Bulk Ingest Recommendation](guide/import.md#bulk-ingest-recommendation).
 
 ## Features
 
@@ -130,7 +124,7 @@ are doing.
 
 !!! success "Advanced Features"
     - ⚡ **High performance** - Direct JVM integration via JPype
-    - 🔒 **ACID transactions** - durable to a process crash by default, to a power cut with `arcadedb.txWalFlush=1`
+    - 🔒 **ACID transactions** - durable to a process crash by default, to a power cut with `arcadedb.txWalFlush=1` (see [Durability](guide/core/transactions.md#durability-what-a-commit-survives))
     - 🎯 **Vector storage** - HNSW (JVector) indexing for embeddings
     - 📥 **Data import** - CSV, XML, and ArcadeDB JSONL
     - 🔎 **Full-text search** - Lucene integration
@@ -190,7 +184,7 @@ We provide a **single, self-contained package** that works on all major platform
 
 | Platforms | Package Name | Size | What's Included |
 |----------|-------------|------|-----------------|
-| linux/amd64, linux/arm64, darwin/arm64, windows/amd64 | `arcadedb-embedded` | ~69 MiB wheel, ~96 MiB installed | Full ArcadeDB + Bundled JRE + Studio UI |
+| linux/amd64, linux/arm64, darwin/arm64, windows/amd64 | `arcadedb-embedded` | ~69 MiB wheel, ~97 MiB installed | Full ArcadeDB + Bundled JRE + Studio UI |
 
 The package uses the standard import:
 
@@ -228,21 +222,6 @@ import arcadedb_embedded as arcadedb
 
 - **Python**: 3.10 to 3.14 (CI runs all five on every supported platform)
 - **OS**: Linux (x86_64, ARM64), macOS (Apple Silicon), or Windows (x86_64)
-
-!!! note "Self-Contained"
-    Everything needed to run ArcadeDB is included in the wheel. Current Linux
-    x86_64 package metadata and local installs are in this ballpark, with small
-    variation by platform, version, and filesystem:
-
-    - **Bundled JRE**
-    (Platform-specific Java 25 runtime trimmed with jlink to only what's required for ArcadeDB, ~63 MiB uncompressed)
-    - **ArcadeDB JARs**
-    (~33 MiB uncompressed)
-    - **Wheel download**
-    (~69 MiB compressed)
-    - **Installed package on disk**
-    (~96 MiB)
-    - **JPype** (Bridge between Python and the bundled JVM)
 
 ## Community & Support
 

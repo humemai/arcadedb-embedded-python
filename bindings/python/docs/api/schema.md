@@ -264,7 +264,7 @@ schema.create_property(
     type_name: str,
     property_name: str,
     property_type: Union[str, PropertyType],
-    of_type: Optional[str] = None
+    of_type: Optional[Union[str, PropertyType]] = None
 ) -> Any
 ```
 
@@ -275,7 +275,7 @@ Create a property on a type. Returns the underlying Java `Property` object.
 - `type_name` (str): Name of the type
 - `property_name` (str): Name of the property
 - `property_type` (str or `PropertyType`): ArcadeDB type (see types below)
-- `of_type` (Optional[str]): Element type for `LIST`/`MAP` collections
+- `of_type` (str or `PropertyType`, optional): Element type for `LIST`/`MAP` collections
 
 **Returns:**
 
@@ -329,13 +329,12 @@ schema.get_or_create_property(
     type_name: str,
     property_name: str,
     property_type: Union[str, PropertyType],
-    of_type: Optional[str] = None
+    of_type: Optional[Union[str, PropertyType]] = None
 ) -> Any
 ```
 
 Get an existing property or create it if it doesn't exist. Same parameters as
-`create_property`, except that `of_type` must be a string here: a `PropertyType`
-member raises `ArcadeDBError`. Returns the underlying Java `Property` object.
+`create_property`. Returns the underlying Java `Property` object.
 
 ```python
 prop = schema.get_or_create_property("User", "email", "STRING")
@@ -414,12 +413,11 @@ schema.create_index("Article", ["content"], index_type="FULL_TEXT")
 **Index choice rules of thumb:**
 
 - Use `HASH` for an id that is only read, updated and deleted by equality and is not
-  bulk-loaded in key order. From 26.10.1 a unique hash index answers SQL `id = ?` 1.5 to
+  bulk-loaded in key order. A unique hash index answers SQL `id = ?` 1.5 to
   2.3 times faster than `LSM_TREE` and an `Index.get()` hit 1.9 to 3.1 times faster. Its
   insert is 1.14 to 1.23 times faster for shuffled ids but 9% to 16% slower for ids loaded
   in ascending order (ArcadeDB [#9169](https://github.com/ArcadeData/arcadedb/issues/9169),
-  200,000 and 2,000,000 entries). It cannot serve a range or an `ORDER BY`. On 26.9.1 its
-  inserts are several times slower than `LSM_TREE`.
+  200,000 and 2,000,000 entries). It cannot serve a range or an `ORDER BY`.
 - Use `LSM_TREE` when you need ranges, sorting, or a safe general-purpose default, and for
   a non-unique column with few distinct values.
 - Use `FULL_TEXT`, `LSM_VECTOR`, and `GEOSPATIAL` only for their specialized query
@@ -941,34 +939,6 @@ def migrate_schema_v1_to_v2(db):
 
 # Use it
 migrate_schema_v1_to_v2(db)
-```
-
-## Troubleshooting
-
-### Type Already Exists Error
-
-```python
-# ✅ Good: Check first
-if not schema.exists_type("User"):
-    schema.create_vertex_type("User")
-```
-
-### Property Not Found
-
-```python
-# ✅ Good: Check property exists on the Java type object (camelCase JPype methods)
-user_type = schema.get_type("User")
-if user_type is not None and user_type.existsProperty("email"):
-    print(f"Email type: {user_type.getProperty('email').getType()}")
-else:
-    print("Email property not found")
-```
-
-### Index Creation Fails
-
-```python
-# ✅ Good: Create index (applies immediately)
-schema.create_index("User", ["username"], unique=True)
 ```
 
 ## See Also

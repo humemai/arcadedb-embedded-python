@@ -6,9 +6,8 @@ the test harness.
 > **Embedded note:** For bulk table/document ingest in embedded mode, the repository
 > recommendation is `db.insert_many(...)`, which batches rows across the FFI boundary.
 > Use explicit chunked transactions when you need tight manual control, but do not
-> treat them as the default bulk-ingest recommendation here. Before 26.10.1,
-> `async_executor().command(...)` could silently drop records above parallel level 1
-> (`ArcadeData/arcadedb#7615`, fixed in #7625); see
+> treat them as the default bulk-ingest recommendation here. The async executor's SQL
+> command path, `async_executor().command(...)`, is not a bulk-write path either; see
 > [Bulk Ingest Recommendation](../import.md#bulk-ingest-recommendation).
 
 ## Basic commit and rollback
@@ -232,10 +231,7 @@ A server started with `config={"mode": "production"}` sets it to 1 by itself, al
 production defaults, and for the whole process: every database opened in that Python process afterwards, embedded
 ones included, inherits it. See [Server Mode](../server.md).
 
-**`db.set_wal_flush()` sets it for one database, on every thread** (26.10.1 and later). Before that release it
-changed only the calling thread: measured on an earlier 26.10.1-SNAPSHOT, the thread that called
-`set_wal_flush("yes_nometadata")` synced every commit and a second thread synced none (`ArcadeData/arcadedb#8352`,
-fixed in #8397; now both threads sync, about 9.8 ms per commit each). It still covers only the database it is called
+**`db.set_wal_flush()` sets it for one database, on every thread.** It covers only the database it is called
 on, so for a process-wide default the JVM flag above remains the simplest choice.
 
 **The cost is one disk sync per commit**, 7 to 10 ms on a laptop NVMe drive, so commit in batches: one transaction
@@ -244,8 +240,7 @@ per chunk of writes, not one per row (`insert_many`, or the chunked pattern abov
 **Bulk imports are the exception:** `db.graph_batch()` and the server's `/api/v1/batch` turn the WAL off by default
 for speed. Pass `use_wal=True` (served: `wal=true`) unless you would rather delete the database and re-run the import
 after a crash; see [GraphBatch](../../api/graph_batch.md). Call the batch outside your own transactions: its
-`create_vertices()`, `flush()`, and `close()` raise `ArcadeDBError` inside one from 26.10.1, and on 26.9.1 and earlier
-commit it, yours included (`ArcadeData/arcadedb#9242`; see
+`create_vertices()`, `flush()`, and `close()` raise `ArcadeDBError` inside one (see
 [GraphBatch transactions](../../api/graph_batch.md#transactions)).
 
 **The async writers ignore `txWalFlush`.** `insert_many(..., parallel=True)`, and anything else that goes through

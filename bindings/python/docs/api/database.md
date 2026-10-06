@@ -197,7 +197,7 @@ result = db.query("opencypher", """
 | `sqlscript` | Several SQL statements separated by `;`, run as one script (`query()` and `command()`) |
 | `opencypher` | OpenCypher graph query language |
 | `cypher` | Alias of `opencypher` |
-| `graphql` | GraphQL queries |
+| `graphql` | GraphQL queries (the module ships in the wheel; no Python test exercises it) |
 
 ---
 
@@ -520,9 +520,6 @@ faster still (2.24x on the same rows).
   such a value exactly or raises, as `Document.set` does.
 - `commit_every` (int): Transaction batch size in synchronous mode
   (0 = single transaction; ignored when a transaction is already open).
-  Wheels before 26.10.1 did not ignore it on the JSON fast path: they
-  committed the caller's open transaction every `commit_every` rows
-  (fixed 2026-09-27).
 - `parallel` (bool): Route rows through the async executor's parallel
   bucket writers and wait for completion (out-of-order writes). On a laptop
   (4 performance cores, parallel level 3, 1,000,000 rows, 6 runs per arm,
@@ -552,8 +549,7 @@ faster still (2.24x on the same rows).
 - `ArcadeDBError`: If the load fails; in the parallel mode also when the
   writers report any record they could not store (a duplicate key, a failed
   batch commit), once the load completes. Records other than the failed ones
-  may have been stored. Wheels before this change returned the input row count
-  and only logged the failure (2026-09-28).
+  may have been stored.
 
 **Example:**
 
@@ -771,7 +767,11 @@ Check if a transaction is currently active.
 db.set_wal_flush(mode: str)
 ```
 
-Configure WAL flush strategy. Modes: `"no"`, `"yes_nometadata"`, `"yes_full"`.
+Configure WAL flush strategy. Modes: `"no"` (the default: a commit survives a process
+crash but not a power cut), `"yes_nometadata"` (flush the data at commit), and
+`"yes_full"` (flush data and metadata at commit). The setting covers the commits of
+every thread on this database and no other database. Any other mode raises
+`ValueError`.
 
 ---
 
@@ -826,8 +826,7 @@ db.async_executor() -> AsyncExecutor
 The executor runs individual statements, queries, and record operations off the calling
 thread. It is not the bulk-write path: use [`insert_many`](#insert_many) (whose
 `parallel=True` mode runs on this executor's writers) or [`graph_batch`](#graph_batch)
-for bulk loads. Before 26.10.1, `async_executor().command(...)` could silently drop
-records above parallel level 1 (`ArcadeData/arcadedb#7615`, fixed in #7625); see
+for bulk loads. See
 [Bulk Ingest Recommendation](../guide/import.md#bulk-ingest-recommendation) and the
 [AsyncExecutor API](async_executor.md).
 
@@ -1135,6 +1134,17 @@ Get the file system path to the database.
 **Returns:**
 
 - `str`: Database path
+
+---
+
+### schema
+
+```python
+db.schema -> Schema
+```
+
+Property that returns the database's [`Schema`](schema.md) wrapper, for creating and
+inspecting types, properties, and indexes: `db.schema.create_vertex_type("User")`.
 
 ---
 

@@ -258,7 +258,7 @@ def _seed_knows_graph_setup() -> str:
         """)
 
 
-def test_docs_installation_and_distribution_examples(temp_dir_factory):
+def test_docs_installation_examples(temp_dir_factory):
     base_dir = Path(temp_dir_factory("docs_installation_"))
 
     _run_doc_block(
@@ -272,19 +272,9 @@ def test_docs_installation_and_distribution_examples(temp_dir_factory):
         base_dir / "installation_jvm",
     )
     _run_doc_block(
-        "getting-started/distributions.md",
-        "Version: {arcadedb.__version__}",
-        base_dir / "distributions_check",
-    )
-    _run_doc_block(
         "getting-started/installation.md",
         'with arcadedb.create_database("./db", jvm_kwargs={"heap_size": "8g"}) as db:',
         base_dir / "installation_jvm_kwargs",
-    )
-    _run_doc_block(
-        "getting-started/distributions.md",
-        "System: {platform.system()}",
-        base_dir / "distributions_platform",
     )
 
 

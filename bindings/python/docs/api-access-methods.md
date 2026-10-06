@@ -175,12 +175,13 @@ finally:
 ```
 
 !!! tip "The first HTTP request is much slower than the rest"
-    Measured on one developer machine, in-process: first request **5.6 s**,
-    second **0.7 s**, every one after that **under 10 ms**. Undertow and the
-    REST handlers class-load lazily and the root password is verified with a
+    On one developer machine, in-process, the first request took several seconds
+    (5.6 s), the second under a second, and every one after that under 10 ms; that
+    was measured in August 2026, before 26.10.1, and not repeated since. Undertow and the REST
+    handlers class-load lazily and the root password is verified with a
     deliberately expensive KDF, and both land on request one. If you poll for
-    readiness after `start()`, give the first attempt a generous timeout; a
-    tight one just turns warmup into a failure.
+    readiness after `start()`, give the first attempt a generous timeout, or poll
+    `/api/v1/ready`; a tight timeout just turns warmup into a failure.
 
 ### Token-based authentication (optional)
 
@@ -270,7 +271,7 @@ What is worth knowing structurally:
 | Result materialization | Python objects from JVM refs | Parse a JSON body |
 | Transaction scope | Any block you want (`with db.transaction():`) | One request, unless you use the transactional endpoints |
 | Reach | Owning process only | Any process, any language, optionally remote |
-| First-call cost | JVM start (once) | Server warmup, ~5.6 s measured (once) |
+| First-call cost | JVM start (once) | Server warmup on the first request (once) |
 
 For a measured, reproducible comparison of Python-side call overhead in the
 embedded path, see `benchmarks/python-bindings/jpype_overhead/REPORT.md` in the repository.
@@ -313,8 +314,8 @@ docker run -d --name arcadedb -p 2480:2480 \
 ```
 
 Choose it when you need a server that outlives any one client, HA/replication,
-TLS termination, or the wire protocols the wheel does not bundle (Mongo, gRPC,
-Gremlin). Postgres, Redis, and Bolt are bundled; see
+TLS termination, or the wire protocols the wheel does not bundle (Mongo and
+gRPC). Postgres, Redis, and Bolt are bundled; see
 [Server Mode](guide/server.md#wire-protocols).
 To move data across, use [`export_database`](api/database.md) / SQL
 `IMPORT DATABASE`; the on-disk format and export archives are compatible.

@@ -59,7 +59,7 @@ python 15_import_database_vs_transactional_table_ingest.py \
 - `--columns`: extra columns per table in addition to `id`
 - `--string-size`: generated string payload size
 - `--batch-size`: ingest batch size
-- `--async-parallel`: async SQL worker count; only `1` is accepted (#7615)
+- `--async-parallel`: async SQL worker count; only `1` is accepted (see the warning above)
 - `--parallel`: SQL import worker count
 - `--import-chunk-rows`: chunk size for the `import_documents` benchmark path
 - `--heap-size`: JVM heap size

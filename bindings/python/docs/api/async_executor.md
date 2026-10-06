@@ -3,26 +3,9 @@
 !!! note "Recommended usage"
     For individual statements in application code, prefer async SQL/OpenCypher via
     `async_exec.command(...)` and `async_exec.query(...)`. Record-level helpers remain
-    available for lower-level workflows and tests. For bulk ingest, see the warning
-    below.
-
-!!! warning "Async SQL commands silently lost records above parallel level 1 before 26.10.1"
-    The async executor's SQL command path, `async_exec.command(...)`, discarded records
-    once the parallel level was above 1, before 26.10.1 (`ArcadeData/arcadedb#7615`,
-    fixed in #7625: a failed periodic commit is now retried and otherwise reported
-    through the error callback). Observed on arcadedb-engine 26.9.1 and 26.6.1,
-    measured 2026-09-15. How much was lost varied by run and by workload shape: 9,742
-    single-record `INSERT` commands submitted at parallel level 4 stored 2,436, 5,742,
-    and 7,742 rows across runs. Nothing was raised and nothing was logged: the
-    per-command callback reported no error, and `wait_completion()` returned normally.
-    Only the executor-wide `on_error` handler saw anything, one
-    `ConcurrentModificationException` per rolled-back batch. At parallel level 1 no
-    records were lost.
-
-    Treat `command()` as a way to run individual statements asynchronously, not as a
-    bulk-write path, at any parallel level. For bulk graph loading use
-    `db.graph_batch(...)`, and for bulk document loading use `db.insert_many(...)` or a
-    plain batched transaction.
+    available for lower-level workflows and tests. `command()` is not a bulk loader: for
+    bulk graph loading use `db.graph_batch(...)`, and for bulk document loading use
+    `db.insert_many(...)` or a plain batched transaction.
 
 The AsyncExecutor provides low-level async operations for parallel processing,
 automatic batching, and optimized WAL operations.
@@ -44,9 +27,7 @@ automatic batching, and optimized WAL operations.
 
 The `AsyncExecutor` class enables:
 
-- **Parallel Execution**: one or more worker threads for concurrent operations (a level above 1
-  lost records submitted through `command()` before 26.10.1, see the warning above and
-  #7615)
+- **Parallel Execution**: one or more worker threads for concurrent operations
 - **Automatic Batching**: Auto-commit every N operations
 - **Optimized WAL**: Configurable Write-Ahead Log settings
 - **High Performance**: for measured bulk throughput paths, see `Database.insert_many` (documents), `Database.graph_batch` (graphs), and [`append_samples`](#append_samples) (time series)
@@ -94,7 +75,7 @@ All configuration methods return `self` for method chaining.
 async_exec.set_parallel_level(level: int) -> AsyncExecutor
 ```
 
-Set the number of parallel worker threads, at least 1 (no upper cap; before 2026-09-29 the package refused anything above 16). The engine's default, `arcadedb.asyncWorkerThreads`, is the number of cores minus 1 (half the cores minus 1 under the `high-performance` profile). Each worker owns a share of a type's buckets, so a type loaded in parallel wants as many buckets as there are workers, or a multiple.
+Set the number of parallel worker threads, at least 1 (no upper cap). The engine's default, `arcadedb.asyncWorkerThreads`, is the number of cores minus 1 (half the cores minus 1 under the `high-performance` profile). Each worker owns a share of a type's buckets, so a type loaded in parallel wants as many buckets as there are workers, or a multiple.
 
 **Parameters:**
 
@@ -113,11 +94,8 @@ Set the number of parallel worker threads, at least 1 (no upper cap; before 2026
 - **Default**: `arcadedb.asyncWorkerThreads`, the number of available cores minus 1
   (at least 1)
 - Raises `ValueError` if `level` is below 1
-- Before 26.10.1, any level above 1 lost records submitted through `command()` (the
-  warning at the top of this page; #7615, fixed in #7625). On an engine older than
-  26.10.1, keep the level at 1 when the executor runs SQL commands that write.
 - `create_record`, `append_samples`, `Database.insert_many`, and `Database.graph_batch`
-  were not affected by that loss and can run above level 1.
+  run above level 1 as well.
 
 **Example:**
 
@@ -152,7 +130,7 @@ Set auto-commit batch size. Commits transaction every N operations.
 - A larger value lowers commit overhead and raises the amount of work a single
   rollback discards; a smaller value does the opposite.
 - This is a commit cadence for queued async work. It does not make `command()` usable as
-  a bulk-ingest path, see the warning at the top of this page.
+  a bulk-ingest path, see the note at the top of this page.
 
 **Example:**
 
@@ -305,8 +283,8 @@ and time-series operations. Record creation is available via
 SQL. For bulk ingest, use `Database.insert_many(..., parallel=True)` for documents (on a
 type with as many buckets as there are writers, or a multiple: each bucket is owned by
 one writer, ArcadeData/arcadedb#8478) and
-`Database.graph_batch(...)` for graphs; `command(...)` is not a bulk-write path (#7615,
-see the warning at the top of this page).
+`Database.graph_batch(...)` for graphs; `command(...)` is not a bulk-write path (see the
+note at the top of this page).
 
 ### command
 
@@ -340,10 +318,8 @@ Execute an async command (INSERT/UPDATE/DELETE/DDL). The callback is optional.
     `ValueError`.
 
 !!! note "One statement at a time, not a bulk loader"
-    Submitting a `command()` per row lost records above parallel level 1 before 26.10.1
-    (#7615, fixed in #7625, see the warning at the top of this page). Load many rows with
-    `db.insert_many(...)` or
-    `db.graph_batch(...)` instead.
+    Load many rows with `db.insert_many(...)` or `db.graph_batch(...)`, not with one
+    `command()` per row (see the note at the top of this page).
 
 **Example:**
 
@@ -497,7 +473,6 @@ once per batch instead of per document.
     record. Pass `error_callback` to hear about it per record; without it the failure
     reaches only the executor-wide [`on_error`](#on_error) handler, if one is registered
     (and is logged). `db.insert_many(..., parallel=True)` raises `ArcadeDBError` instead.
-    (`error_callback` is new in 26.10.1; before it, `on_error` was the only way.)
 
 **Example:**
 
@@ -907,16 +882,7 @@ async_exec.close()
 async_exec.close()  # Operations may be lost!
 ```
 
-### 3. Before 26.10.1, Keep `command()` Writes on One Worker
-
-```python
-# ✅ Good on an engine older than 26.10.1: async SQL writes on a single worker (#7615)
-async_exec.set_parallel_level(1)
-async_exec.command("sql", "DELETE FROM LogEntry WHERE timestamp < :cutoff",
-                   cutoff=cutoff_date)
-```
-
-### 4. Load Bulk Data Outside the Executor
+### 3. Load Bulk Data Outside the Executor
 
 ```python
 # ✅ Good: documents
@@ -954,9 +920,8 @@ async_exec.set_transaction_use_wal(False)
 ```
 
 Raising `set_parallel_level` is not the fix for a `command()` workload: `command()` is
-not a bulk-write path, and above level 1 it lost records before 26.10.1 (#7615, fixed in
-#7625). If the slow workload is a bulk load, move it to `db.insert_many(...)` or
-`db.graph_batch(...)`.
+not a bulk-write path. If the slow workload is a bulk load, move it to
+`db.insert_many(...)` or `db.graph_batch(...)`.
 
 ### Operations Not Completing
 
@@ -974,4 +939,4 @@ if async_exec.is_pending():
 - **[Transactions API](transactions.md)** - Transaction management
 - **[Database API](database.md)** - Database operations
 - **[Example 22: numpy Bulk I/O](../examples/22_numpy_bulk_io.md)** - `append_samples` and a parallel `insert_many` in practice
-- **[Testing Overview](../development/testing/overview.md)** - Testing patterns
+- **[Testing Guide](../development/testing.md)** - Running the test suite

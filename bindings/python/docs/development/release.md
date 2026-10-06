@@ -184,12 +184,6 @@ ArcadeData/arcadedb: it is built on the `upstream-main` mirror that this sync ju
 brought up to date, and it carries everything since the previous one. See
 [Contributing Back to Upstream](upstream-pr.md).
 
-**Announce Release:**
-
-- Update project README if needed
-- Notify users/community
-- Update any integration guides
-
 ## Development Releases (`X.Y.Z.devN`)
 
 A dev tag is released from `main` while `pom.xml` reads `X.Y.Z-SNAPSHOT`: the release
@@ -368,9 +362,12 @@ uv run --project .. --group docs mike alias --update-aliases \
 
 **Size limit exceeded:**
 
-- Distribution might hit PyPI limits
-- Request size increase: <https://pypi.org/help/#file-size-limit>
-- Or distribute via GitHub releases only
+- PyPI refuses a file over 100 MB by default, and the policy here is to stay under that:
+  `build.sh` and the release workflow's "Verify wheels" step fail a wheel at or over
+  100 MB before anything uploads
+- Find what grew instead of asking for a larger limit: `scripts/list_image_jars_by_size.sh`
+  lists the engine JARs by size, and `scripts/jar_exclusions.txt` is where a JAR that the
+  wheel does not need is dropped
 
 **Authentication error:**
 

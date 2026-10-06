@@ -142,11 +142,8 @@ Always bind values as parameters instead of pasting them into the query text,
 for two reasons. **Safety**: a pasted value can change the statement (SQL
 injection), and a quote in a name breaks it. **Speed**: ArcadeDB caches parsed
 statements and plans by their text, so every distinct value pasted in is a new
-text that is parsed again. Before 26.10.1 the stream of one-off texts also
-evicted the cached statements that do repeat (ArcadeDB
-[#8286](https://github.com/ArcadeData/arcadedb/issues/8286)); from 26.10.1 the
-SQL and Cypher caches protect statements that are hit repeatedly, but every
-pasted value still costs a parse. Measured on an indexed point lookup, 20,000
+text that is parsed again. The SQL and Cypher caches protect statements that
+are hit repeatedly, but every pasted value still costs a parse. Measured on an indexed point lookup, 20,000
 records: Cypher 0.87 ms with the value pasted in against 0.09 ms with `$id`
 bound, SQL 0.48 ms against 0.09 ms. If an application cannot avoid pasting
 values, raising `arcadedb.sqlStatementCache` and
@@ -179,8 +176,7 @@ result = db.query(
 
 Positional values bind one per `?`, from the extra arguments or from one list or tuple
 (`db.query("sql", q, ["Alice", 25])`). `None` binds as null in `query()`, `command()`,
-and `async_executor()`. Before 26.10.1, `command()` with a lone `None` (or `[None]`, or
-`(None, 1)`) raised `Ambiguous overloads` instead.
+and `async_executor()`.
 
 ### SQLScript (multi-statement)
 
@@ -413,8 +409,8 @@ work, pass `"buildGraphNow": false` inside `METADATA`.
 
 Rules of thumb:
 
-- Use `UNIQUE_HASH` or `NOTUNIQUE_HASH` for exact-match lookups only: a range on a property whose only index is a hash index scans the type (in openCypher from 26.10.1; before it the query failed, ArcadeDB [#8835](https://github.com/ArcadeData/arcadedb/issues/8835)).
-- `NULL_STRATEGY ERROR` on a hash index is enforced only from 26.10.1 (ArcadeDB [#9074](https://github.com/ArcadeData/arcadedb/issues/9074), PR #9222): on 26.9.1 a hash index created with it still accepted null and missing keys, and on 26.10.1 such an index over rows that hold a null or missing key cannot be rebuilt: `REBUILD INDEX` fails and leaves the type without that index, so delete those rows before rebuilding.
+- Use `UNIQUE_HASH` or `NOTUNIQUE_HASH` for exact-match lookups only: a range on a property whose only index is a hash index scans the type.
+- `NULL_STRATEGY ERROR` on a hash index refuses null and missing keys (ArcadeDB [#9074](https://github.com/ArcadeData/arcadedb/issues/9074)). A database written by an engine before 26.10.1 can hold such an index over rows that already have a null or missing key: on 26.10.1 `REBUILD INDEX` fails on it and leaves the type without that index, so delete those rows before rebuilding.
 - Use `UNIQUE` or `NOTUNIQUE` for `LSM_TREE` indexes when you need ranges, ordering, or a safe general-purpose default.
 - Use `FULL_TEXT` for tokenized text search, not normal equality lookups.
 - Use `LSM_VECTOR` for embeddings and nearest-neighbor search.
@@ -449,12 +445,7 @@ with db.transaction():
 rows = db.query("opencypher", "MATCH (n:Item {id: $id}) RETURN n.label AS label", {"id": 42})
 ```
 
-On 26.9.1 the hash buckets still keep their entries sorted, and loading ids into a
-`UNIQUE_HASH` index was 2.5 to 6 times slower than into `UNIQUE` (200,000 `LONG` ids through
-`insert_many`, laptop, 1.3 to 2.6 s against 6.5 to 7.7 s); lookups were still faster, by less
-than the engine's 3x because the Python call dominates. On 26.9.1, index an id you load in
-bulk with `UNIQUE`. Both index kinds reject a duplicate key with the same
-`DuplicatedKeyException`.
+Both index kinds reject a duplicate key with the same `DuplicatedKeyException`.
 
 An index on a range column is not free when the range matches most of the rows. From
 26.10.1 a scan runs on several workers, while the index entries are read by one thread,
@@ -471,10 +462,7 @@ Index a range column for the selective ranges you actually run, and measure with
 without the index when most of your ranges are wide.
 
 `HASH` does not imply uniqueness: a non-unique hash index serves exact-match lookups on a
-value that a few records share. Before 26.10.1, which fixes ArcadeDB
-[#8829](https://github.com/ArcadeData/arcadedb/issues/8829), deleting some of the records of a
-value that holds a few dozen or more, such as a `status`, a `country`, or a customer with many
-orders, could fail at commit; on 26.9.1, index such a property with `NOTUNIQUE` instead.
+value that a few records share.
 
 **Ordered reads over an optional property.** A SQL `ORDER BY p LIMIT k` reads an `LSM_TREE`
 index on `p` in order, but nulls sort first in ascending order, and an index created with
@@ -484,32 +472,20 @@ skipped when the `WHERE` clause excludes nulls on `p` (`p IS NOT NULL`, `p = ?`,
 `p > ?`; not `>=` or `<=`, which two nulls satisfy), or when `p` is declared both
 `MANDATORY` and `NOTNULL`. `NOTNULL` alone is not enough: it rejects an explicit null but
 not a record that leaves `p` out (ArcadeDB [#8701](https://github.com/ArcadeData/arcadedb/issues/8701)).
-Otherwise, create the index with `NULL_STRATEGY INDEX` so the nulls are in it. Through such an
-index, SQL `p = ?` with `None` bound returned the records without a value instead of none
-(ArcadeDB [#9238](https://github.com/ArcadeData/arcadedb/issues/9238), and
-[#9274](https://github.com/ArcadeData/arcadedb/issues/9274) when an earlier run of the same
-statement with a value had cached its plan); 26.10.1 fixes both. Write `p IS NULL` when you
-mean those records, and on 26.9.1 do not bind `None` to `=`. Before 26.10.1,
-a SQL range with only an upper bound (`p < ?`, `p <= ?`) on such an index also returned the
-records without a value (ArcadeDB [#8833](https://github.com/ArcadeData/arcadedb/issues/8833));
-on 26.9.1, add `AND p IS NOT NULL` to it. Descending
-SQL reads are not affected. At 1,000,000 rows the ascending top 10 measured about 290 ms
-with the scan and about 1 ms without it (ArcadeDB [#8664](https://github.com/ArcadeData/arcadedb/issues/8664)).
+Otherwise, create the index with `NULL_STRATEGY INDEX` so the nulls are in it. An equality with
+`None` bound (`p = ?`) matches no record, even through such an index: write `p IS NULL` when you
+mean the records without a value. Descending SQL reads are not affected. At 1,000,000 rows the
+ascending top 10 measured about 290 ms with the scan and about 1 ms without it (ArcadeDB
+[#8664](https://github.com/ArcadeData/arcadedb/issues/8664)).
 SQL reads the index in order whether the query projects `p` under its own name, under an
-alias, or not at all: `SELECT title FROM Event ORDER BY createdAt DESC LIMIT 10` reads ten
-index entries. Before ArcadeDB [#8811](https://github.com/ArcadeData/arcadedb/issues/8811),
-fixed in 26.10.1, the aliased and unprojected forms scanned the type and sorted it (642 to
-806 ms at 1,000,000 records, against 0.45 to 0.93 ms with the fix). With a range on `p` in
-the `WHERE` as well, the aliased and unprojected forms read in order from 26.10.1; before it
-they read the whole range and sorted it (106 to 128 ms against 0.6 to 1.3 ms when half of
-1,000,000 records match; ArcadeDB [#8836](https://github.com/ArcadeData/arcadedb/issues/8836)),
-so on 26.9.1 keep `p` under its own name there. openCypher reads the index in order in every form.
+alias, or not at all, and with or without a range on `p` in the `WHERE`:
+`SELECT title FROM Event ORDER BY createdAt DESC LIMIT 10` reads ten index entries (0.45 to
+0.93 ms at 1,000,000 records). openCypher reads the index in order in every form.
 For the first or last value past a bound, `SELECT min(ts) FROM Event WHERE ts > ?` reads one
-index entry from 26.10.1, in both languages, as `SELECT ts FROM Event WHERE ts > ? ORDER BY ts
-LIMIT 1` does. Before it, the aggregate read every record in the range (at 1,000,000 records
-0.2 to 0.7 ms against 136 to 145 ms in SQL and about 800 ms in openCypher; ArcadeDB
-[#8812](https://github.com/ArcadeData/arcadedb/issues/8812)), so on 26.9.1 write the ordered
-read. Over a whole type, without a range, `min()` and `max()` already read one end of the index.
+index entry, in both languages, as `SELECT ts FROM Event WHERE ts > ? ORDER BY ts
+LIMIT 1` does (at 1,000,000 records 0.2 to 0.7 ms in SQL; ArcadeDB
+[#8812](https://github.com/ArcadeData/arcadedb/issues/8812)). Over a whole type, without a
+range, `min()` and `max()` read one end of the index.
 
 openCypher sorts nulls last in ascending order and first in descending order. From 26.10.1
 it reads the index in order over a whole label, in either direction, for
@@ -566,10 +542,9 @@ openCypher, and a group-by with a count and a sum 221 ms against 141 ms. openCyp
 aggregates such as `count(DISTINCT n.p)`, `collect()`, and aggregates over a function call
 still run on one thread (`count(DISTINCT n.grp)` measured 827 ms); the SQL form of the same
 question runs in the workers. SQL accepts `count(DISTINCT expr)`, and `sum`, `avg`, and
-`list` with `DISTINCT`, from 26.10.1 (ArcadeDB
+`list` with `DISTINCT` (ArcadeDB
 [#8889](https://github.com/ArcadeData/arcadedb/issues/8889)): its scan runs in the parallel
-workers and the distinct values are merged on one thread. On 26.9.1 it is a syntax error, so
-count the rows of a `SELECT DISTINCT` subquery instead, as below.
+workers and the distinct values are merged on one thread.
 
 ```python
 # openCypher aggregates over a label run in the parallel workers (26.10.1)
@@ -650,6 +625,10 @@ bulk APIs when you're taking everything from a large result.**
 - Use `to_list()` when you need full Python-type fidelity (`datetime`,
     `Decimal`) as row dicts and the result is not huge.
 - Use wrapper `to_dict()` only when you truly want the full document in Python.
+
+On JPype 1.7.1, the newest release, `to_list()` and `Result.get()` also keep a
+Python object for every number they return, which adds up on very large reads;
+`to_json_list()` and `to_columns()` do not (see [Known Engine Issues](../known-issues.md)).
 
 A result set closes itself when it is exhausted (by iteration or any `to_*`
 method) and when `first()` or `one()` returns. If you stop reading early and keep

@@ -74,21 +74,19 @@ with arcadedb.create_database("./mydb") as db:
 
 The `arcadedb-embedded` package is platform-specific and self-contained:
 
-**Package Contents (current Linux x86_64 dev build; varies by platform and version):**
+**Package Contents (the 26.10.1 Linux x86_64 wheel; varies by platform and version):**
 
 - **Wheel size (compressed)**: ~69 MiB
-- **ArcadeDB JARs (uncompressed)**: ~33 MiB across 64 JARs
+- **ArcadeDB JARs (uncompressed)**: ~34 MiB across 64 JARs
 - **Bundled JRE (uncompressed)**: ~63 MiB (platform-specific Java 25 runtime via jlink)
-- **Installed package size**: ~96 MiB
+- **Installed package size**: ~97 MiB
 
 The compressed wheel size is measured from `dist/*.whl`, and the installed package size
 is measured from the extracted `site-packages/arcadedb_embedded/` directory.
 
-Of that, the optional **server stack is 12 JARs, 8.29MB uncompressed** (the 26.10.1.dev0 wheel; 7.65MB on 26.8.1), and on 26.8.1 it added
-~8MB to the wheel (the extra ~0.8MB beyond the JARs is JRE modules that only the
-server needs). [Server Mode](https://docs.humem.ai/arcadedb/latest/guide/server/)
-breaks the cost down and explains what you pay at runtime (nothing, until you start
-a server).
+Of that, the optional **server stack is 12 JARs, 8.58MB uncompressed**. [Server
+Mode](https://docs.humem.ai/arcadedb/latest/guide/server/) breaks the cost down and
+explains what you pay at runtime (nothing, until you start a server).
 
 **Note**: Some JARs are excluded to optimize package size (e.g., gRPC wire protocol). See [`scripts/jar_exclusions.txt`](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/scripts/jar_exclusions.txt) for details.
 

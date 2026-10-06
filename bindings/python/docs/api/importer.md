@@ -257,4 +257,4 @@ typo would silently run the import in `abort` mode instead.
 - [Data Import Guide](../guide/import.md) - Import strategy and tradeoffs
 - [Database API](database.md) - Database operations
 - [Graph Operations Guide](../guide/graphs.md) - Working with graph data
-- [Import Examples](../examples/import.md) - Practical examples
+- [Example 04: CSV Import (Tables)](../examples/04_csv_import_documents.md) - A worked CSV import
