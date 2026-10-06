@@ -31,6 +31,16 @@ import lean_http as LH  # noqa: E402
 requests = pytest.importorskip("requests", reason="the parity tests compare against requests")
 
 BIG = json.dumps({"result": [{"id": i, "name": "n%d" % i, "pad": "x" * 40} for i in range(60_000)]}).encode()
+
+def _raw_deflate(b):
+    c = zlib.compressobj(wbits=-zlib.MAX_WBITS)       # a raw deflate stream (no zlib header), which some servers send as "deflate"
+    return c.compress(b) + c.flush()
+
+
+# THE CONTENT CODINGS THE STUB SERVER CAN ENCODE, which is the set a client may advertise: a coding the client sends in
+# Accept-Encoding and the tests cannot encode is one nobody has shown it can decode (brotli and zstd are only offered by
+# requests when the installed urllib3 has the optional libraries, so the venv a test runs in must not decide the expectation).
+ENCODERS = {"identity": lambda b: b, "gzip": gzip.compress, "deflate": zlib.compress}
 NON_ASCII = json.dumps({"result": [{"name": "caf\u00e9 \u4e2d\u6587"}]}, ensure_ascii=False).encode("utf-8")
 
 
@@ -94,6 +104,11 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, gzip.compress(BIG), extra={"Content-Encoding": "gzip"})
         elif p == "/deflate":
             self._send(200, zlib.compress(BIG), extra={"Content-Encoding": "deflate"})
+        elif p == "/encoded":
+            q = dict(kv.split("=", 1) for kv in self.path.split("?", 1)[1].split("&"))
+            enc, raw = q["enc"], q.get("raw") == "1"
+            payload = _raw_deflate(BIG) if raw else ENCODERS[enc](BIG)
+            self._send(200, payload, extra={} if enc == "identity" else {"Content-Encoding": enc})
         elif p == "/sleep":
             time.sleep(float(self.path.split("t=")[1]))
             self._send(200, b"{}")
@@ -219,11 +234,86 @@ def test_the_request_sent_is_the_same_as_requests_sends(server, kind):
     b = rq.post(server.base + "/echo?wal=true&expectedEdgeCount=7", timeout=30, **kw_rq)
     ha, hb = a.json()["headers"], b.json()["headers"]
     assert a.json()["body"] == b.json()["body"]                           # the same bytes on the wire
-    for h in ("authorization", "content-type", "content-length", "transfer-encoding", "accept", "accept-encoding", "connection", "arcadedb-session-id"):
+    # accept-encoding is NOT compared for equality: requests advertises "gzip, deflate" or "gzip, deflate, br, zstd" depending on
+    # which optional libraries its urllib3 found, so the installed environment would decide the expectation. It is judged below
+    # by what the lean client can actually decode (test_the_lean_client_advertises_only_codings_it_decodes).
+    for h in ("authorization", "content-type", "content-length", "transfer-encoding", "accept", "connection", "arcadedb-session-id"):
         assert ha.get(h) == hb.get(h), h
+    assert _codings(ha["accept-encoding"]) <= _codings(hb["accept-encoding"]), "the lean client asks for a coding requests would not"
     assert set(ha) - set(hb) == set()                                      # nothing extra but the User-Agent value
     assert ha["user-agent"] != hb["user-agent"]
     assert server.log[-1][1] == server.log[-2][1] == "/echo?wal=true&expectedEdgeCount=7"
+
+
+def _codings(header):
+    """The content codings an Accept-Encoding header names, q-values dropped: "gzip, deflate;q=0.5" -> {"gzip", "deflate"}."""
+    return {t.split(";")[0].strip().lower() for t in header.split(",") if t.strip()}
+
+
+def _undecodable(server, lean, advertised):
+    """The advertised codings the lean client does NOT decode correctly: each is asked of the stub server in that coding and the
+    answer must equal the identity answer. A coding the stub cannot encode counts as undecodable (nothing shows the client reads it)."""
+    bad = []
+    for coding in sorted(advertised):
+        if coding not in ENCODERS:
+            bad.append(coding)
+            continue
+        got = lean.get(server.base + f"/encoded?enc={coding}", timeout=30)
+        if got.status_code != 200 or got.content != BIG:
+            bad.append(coding)
+    return bad
+
+
+def test_the_lean_client_advertises_only_codings_it_decodes(server):
+    """Whatever the installed requests advertises, the lean client's Accept-Encoding is stable and every coding in it round-trips."""
+    lean, rq = both(server)
+    seen = set()
+    for i in range(3):
+        lean.get(server.base + "/echo", timeout=5)
+        lean.post(server.base + "/echo", json={"i": i}, timeout=5)
+        seen.add({k.lower(): v for k, v in server.log[-1][2].items()}["accept-encoding"])
+        seen.add({k.lower(): v for k, v in server.log[-2][2].items()}["accept-encoding"])
+    assert len(seen) == 1, f"the lean client's Accept-Encoding changes between calls: {sorted(seen)}"
+    advertised = _codings(seen.pop())
+    assert advertised, "the lean client sends no Accept-Encoding at all"
+    assert not _undecodable(server, lean, advertised), \
+        f"the lean client advertises {_undecodable(server, lean, advertised)} and does not decode it"
+    rq.get(server.base + "/echo", timeout=5)
+    assert advertised <= _codings({k.lower(): v for k, v in server.log[-1][2].items()}["accept-encoding"])
+
+
+@pytest.mark.parametrize("header", ["gzip, deflate, br", "gzip, deflate, br, zstd", "gzip, deflate, zstd;q=0.5", "br"])
+def test_the_decodability_check_fails_for_a_coding_the_client_cannot_read(server, header):
+    """The guard above is not vacuous: a header naming brotli or zstd is reported, by name."""
+    lean, _ = both(server)
+    bad = _undecodable(server, lean, _codings(header))
+    assert bad and set(bad) <= {"br", "zstd"} and set(bad) == _codings(header) - set(ENCODERS)
+
+
+def test_a_lean_client_that_advertised_brotli_would_fail_the_advertised_check(server, monkeypatch):
+    """The same check, run on a client that does advertise a coding it cannot decode (the headers it builds are patched)."""
+    original = LH.LeanSession._headers
+
+    def headers(self, extra, has_json, auth=None):
+        h = original(self, extra, has_json, auth)
+        h["Accept-Encoding"] = "gzip, deflate, br, zstd"
+        return h
+    monkeypatch.setattr(LH.LeanSession, "_headers", headers)
+    lean, _ = both(server)
+    lean.get(server.base + "/echo", timeout=5)
+    advertised = _codings({k.lower(): v for k, v in server.log[-1][2].items()}["accept-encoding"])
+    assert _undecodable(server, lean, advertised) == ["br", "zstd"]
+
+
+@pytest.mark.parametrize("coding,raw", [("identity", False), ("gzip", False), ("deflate", False), ("deflate", True)])
+def test_the_lean_client_decodes_what_the_server_sends_the_way_requests_does(server, coding, raw):
+    """gzip, deflate (zlib-wrapped and raw), and identity, each equal to the plain body and to what requests returns."""
+    lean, rq = both(server)
+    url = server.base + f"/encoded?enc={coding}" + ("&raw=1" if raw else "")
+    a, b = lean.get(url, timeout=30), rq.get(url, timeout=30)
+    assert a.content == b.content == BIG
+    assert a.text == b.text and a.json() == b.json()
+    assert (a.headers.get("Content-Encoding") or "identity").lower() == coding
 
 
 def test_a_json_body_that_cannot_be_json_is_refused_like_requests_refuses_it(server):
