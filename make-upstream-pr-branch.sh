@@ -86,6 +86,9 @@ EXCLUDE_PATHS=(
     "bindings/python/scripts/fix_markdown.py"
     "bindings/python/scripts/list_image_jars_by_size.sh"
     "bindings/python/scripts/build_and_install_locally.sh"
+    # Needs benchmarks/experiments/jvm_payload_check.py, which never crosses: upstream's CI would skip
+    # both of its tests, and its docstring names our private filing numbers.
+    "bindings/python/tests/test_jvm_payload.py"
 )
 
 PUSH=1
