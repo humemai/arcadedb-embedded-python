@@ -183,6 +183,11 @@ finally:
     readiness after `start()`, give the first attempt a generous timeout, or poll
     `/api/v1/ready`; a tight timeout just turns warmup into a failure.
 
+A plain `requests.post` opens a new connection on every call. For many small calls from
+Python, reuse one connection, and see
+[Choosing a Protocol from Python](guide/server.md#choosing-a-protocol-from-python) for
+the Postgres wire, the official drivers, and large results.
+
 ### Token-based authentication (optional)
 
 For repeated requests, you can exchange Basic Auth for a session token and use

@@ -83,6 +83,8 @@ access methods**:
         timeout=30,
     )
     ```
+    For many small calls, or large results, the client library and the protocol matter:
+    see [Choosing a Protocol from Python](guide/server.md#choosing-a-protocol-from-python).
 
 Both APIs can be used **simultaneously** on the same server instance; see
 [Access Methods](api-access-methods.md) and [Server Mode](guide/server.md).

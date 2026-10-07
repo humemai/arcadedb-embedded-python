@@ -153,6 +153,36 @@ def test_postgres_wire_answers_a_query(wire_server):
     assert any("alpha" in str(r) for r in rows), rows
 
 
+def test_postgres_wire_runs_cypher_with_a_bound_parameter(wire_server):
+    """The `{cypher}` prefix and a bound parameter work over the Postgres wire.
+
+    docs/guide/server.md ("Choosing a Protocol from Python") recommends this as
+    the fastest route for single-row openCypher from Python, so the claim that
+    the route exists and returns the right row is pinned here, not only written
+    down. psycopg writes its placeholder as `%s` and sends it as `$1`.
+    """
+    psycopg = pytest.importorskip("psycopg")
+    _, ports = wire_server
+    assert _wait(ports["postgres"]), "postgres plugin never bound its port"
+
+    with psycopg.connect(
+        host="127.0.0.1",
+        port=ports["postgres"],
+        dbname="wiretest",
+        user="root",
+        password=ROOT_PASSWORD,
+        connect_timeout=15,
+        autocommit=True,
+    ) as conn:
+        with conn.cursor() as cur:
+            cur.execute("{cypher}MATCH (i:Item) WHERE i.id = %s RETURN i.name", (1,))
+            hit = cur.fetchall()
+            cur.execute("{cypher}MATCH (i:Item) WHERE i.id = %s RETURN i.name", (2,))
+            miss = cur.fetchall()
+    assert [str(r[0]) for r in hit] == ["alpha"], hit
+    assert miss == [], miss
+
+
 def test_postgres_wire_answers_arrow_adbc(wire_server):
     """Arrow's native PostgreSQL ADBC driver connects and fetches typed columns.
 
