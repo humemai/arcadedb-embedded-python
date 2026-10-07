@@ -363,6 +363,7 @@ def _arcadedb_ts_acceptance(rows):
 # The cap the runner launches every served ArcadeDB arm with, read from the
 # server_env the runner itself passes, so the value cannot differ from what ran.
 CAP_PROPERTY = "arcadedb.queryMaxHeapElementsAllowedPerOp"
+QUERY_RAM_PROPERTY = "arcadedb.queryMaxHeapRAM"
 
 
 def served_arcadedb_from_runner():
@@ -446,6 +447,34 @@ BODY_LIMIT_CARRIERS = (
     ("e2", "arcadedb_e2_server"),
     ("restart", "arcadedb_graph_server"),
 )
+
+# THE QUERY HEAP BUDGET (DECISIONS #175, bench_common.QUERY_RAM_ENV): OFF unless the launching environment asks, so the override is in force for
+# exactly the rows that carry the stamp. `applies` keeps the gates quiet about a row without it (the engine default ran), and puts the sentence
+# under any table that shows a stamped row.
+QUERY_RAM_CARRIERS = (("l1tpc", "arcadedb_embedded"), ("l1tpc", "arcadedb_server"))
+
+
+def _query_ram_in_force(row):
+    return _present(row.get("arcadedb_query_max_heap_ram_mb"))
+
+
+def _query_ram_is_a_budget(row, v):
+    n = _int(v)
+    if n is None or n <= 0:
+        return f"reads {v!r}, not a positive number of MB (0 or less would DISABLE the engine's budget)"
+    src = str(row.get("arcadedb_query_max_heap_ram_source") or "")
+    return None if src else "no `arcadedb_query_max_heap_ram_source`, so a reader cannot tell a read-back from a request"
+
+
+def _arcadedb_query_ram(rows):
+    got = _values(rows, "arcadedb_query_max_heap_ram_mb")
+    amount = f"to {int(float(got[0])):,} MB " if len(got) == 1 and _int(got[0]) else ""
+    return ("The ArcadeDB rows of this table that carry the budget stamp ran with the engine's query heap budget raised "
+            f"{amount}(the engine's default is half the JVM heap). That budget caps the memory that the sort, group, and distinct "
+            "buffers of all running queries may hold, and a parallel GROUP BY with very many groups is refused at the default on this "
+            "host; the engine's own message names the setting. It is a safety limit and no speed setting, and the other engines on this "
+            "table have no such limit.", [str(int(float(got[0]))), f"{int(float(got[0])):,}"] if len(got) == 1 and _int(got[0]) else [])
+
 
 OVERRIDES = (
     Override(
@@ -533,6 +562,14 @@ OVERRIDES = (
         says=(r"ArcadeDB server", r"request body", r"embedded"),
         companions=("server_http_body_max_source", "server_http_body_max_default"),
         applies=_body_limit_in_force),
+    Override(
+        key="arcadedb_query_ram",
+        setting=f"-D{QUERY_RAM_PROPERTY}",
+        carriers=tuple(Carrier(lane, be, "arcadedb_query_max_heap_ram_mb") for lane, be in QUERY_RAM_CARRIERS),
+        check=_query_ram_is_a_budget, sentence=_arcadedb_query_ram,
+        says=(r"ArcadeDB", r"query heap budget", r"default"),
+        companions=("arcadedb_query_max_heap_ram_source",),
+        applies=_query_ram_in_force),
     Override(
         key="arcadedb_ts_acceptance",
         setting="ingest timer stops at wait_completion()",

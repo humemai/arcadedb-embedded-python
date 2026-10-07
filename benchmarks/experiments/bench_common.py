@@ -325,7 +325,55 @@ def arcade_jvm_args(base="", cls=None):
     """
     flush = str(ARCADE_STRICT_TX_WAL_FLUSH) if (cls or DURABILITY_CLASS) == CLASS_STRICT else "0"
     arg = f"-Darcadedb.txWalFlush={flush}"
+    ram = arcade_query_ram_opt()
+    if ram:
+        arg = f"{arg} {ram}"
     return f"{base} {arg}".strip() if base else arg
+
+
+# THE QUERY HEAP BUDGET OVERRIDE (DECISIONS #175, CAMPAIGN section 7): OFF unless the environment asks. ArcadeDB 26.10.1 gives all the queries
+# of a JVM one budget for their in-heap buffers (default half the heap). On a 12-core host a parallel GROUP BY with about 2M groups (TPC-H SF10
+# top_parts) is refused at 16 GB. The repair stage for those cells sets the variable; every other run leaves it unset and runs the engine default,
+# so a row that carries `arcadedb_query_max_heap_ram_mb` says the budget was raised and a row without it says it was not.
+QUERY_RAM_ENV = "BENCH_ARCADE_QUERY_MAX_HEAP_RAM_MB"
+QUERY_RAM_PROPERTY = "arcadedb.queryMaxHeapRAM"
+
+
+def arcade_query_ram_mb():
+    """The budget in MB the environment asks for, or None (the engine default). A value that is not a positive whole number ends the run:
+    0 or a negative number DISABLES the budget in the engine, which is not what this override is for."""
+    raw = os.environ.get(QUERY_RAM_ENV, "").strip()
+    if not raw:
+        return None
+    try:
+        n = int(raw)
+    except ValueError:
+        n = 0
+    if n <= 0:
+        raise SystemExit(f"{QUERY_RAM_ENV}={raw!r}: a positive number of MB is required (0 or a negative value would disable the engine's budget)")
+    return n
+
+
+def arcade_query_ram_opt():
+    n = arcade_query_ram_mb()
+    return f"-D{QUERY_RAM_PROPERTY}={n}" if n else ""
+
+
+def arcade_query_ram_readback():
+    """The row fields for the embedded engine when the override is on, else {}. The engine is ASKED (GlobalConfiguration), and when it cannot be
+    the field carries the request with a source that says so."""
+    n = arcade_query_ram_mb()
+    if not n:
+        return {}
+    try:
+        import jpype
+        gc = jpype.JClass("com.arcadedb.GlobalConfiguration")
+        got = int(gc.QUERY_MAX_HEAP_RAM.getValueAsLong())
+        return {"arcadedb_query_max_heap_ram_mb": got,
+                "arcadedb_query_max_heap_ram_source": "read from the engine (GlobalConfiguration.QUERY_MAX_HEAP_RAM)"}
+    except Exception as e:  # noqa: BLE001
+        return {"arcadedb_query_max_heap_ram_mb": n,
+                "arcadedb_query_max_heap_ram_source": f"requested via the JVM argument (the engine could not be asked, {e.__class__.__name__})"}
 
 
 def arcade_async_sync(cls=None):

@@ -116,6 +116,7 @@ SAMPLE_ROWS = {
     "arcadedb_query_cap": [{"server_query_max_heap_elements": "5000000"}],
     "arcadedb_http_body_limit": [{"server_http_body_max_bytes": "68719476736", "server_http_body_max_default": "104857600"}],
     "neo4j_checkpoint": [{"neo4j_checkpoint_interval": "5s", "neo4j_checkpoint_interval_default": "15m"}],
+    "arcadedb_query_ram": [{"arcadedb_query_max_heap_ram_mb": "12288"}],
 }
 
 
@@ -559,3 +560,70 @@ def test_the_manifest_records_the_strict_class_patch_the_server_was_given(monkey
     c = m["engine_config"]["arcadedb_graph_server"]
     assert c["durability_class"] == "strict" and c["durability_server_flags"] == "txWalFlush=1"
     assert any("-Darcadedb.txWalFlush=1" in e for e in c["server_env"])
+
+
+# ---------------------------------------------------------------------------
+# the query heap budget override (DECISIONS #175): OFF unless the environment asks
+
+def test_the_query_budget_override_is_off_by_default_and_changes_nothing(monkeypatch):
+    import bench_common
+    monkeypatch.delenv(bench_common.QUERY_RAM_ENV, raising=False)
+    assert bench_common.arcade_query_ram_mb() is None and bench_common.arcade_query_ram_opt() == ""
+    assert bench_common.arcade_query_ram_readback() == {}
+    assert "queryMaxHeapRAM" not in bench_common.arcade_jvm_args("-Xms4g")
+    import runner
+    for be in runner.QUERY_RAM_BACKENDS:
+        assert "queryMaxHeapRAM" not in " ".join(str(x) for x in runner.BACKENDS[be]["server_env"]), be
+    assert bench_common.QUERY_RAM_ENV in open(HERE_RUNNER).read()      # forwarded into the container, or the embedded arm never sees it
+
+
+HERE_RUNNER = str(Path(__file__).resolve().parent / "runner.py")
+
+
+def test_the_query_budget_option_reaches_the_embedded_jvm_and_exactly_one_served_java_opts_entry(monkeypatch):
+    import bench_common
+    import runner
+    monkeypatch.setenv(bench_common.QUERY_RAM_ENV, "12288")
+    assert bench_common.arcade_query_ram_mb() == 12288
+    args = bench_common.arcade_jvm_args("-Xms16g")
+    assert args.count("-Darcadedb.queryMaxHeapRAM=12288") == 1 and args.startswith("-Xms16g -Darcadedb.txWalFlush=")
+    cfg = runner._with_query_ram(runner.BACKENDS["arcadedb_server"], 12288)
+    envs = [e for e in cfg["server_env"] if isinstance(e, str) and e.startswith("JAVA_OPTS=")]
+    assert len(envs) == 1 and envs[0].count("-Darcadedb.queryMaxHeapRAM=12288") == 1
+    assert "queryMaxHeapRAM" not in " ".join(str(x) for x in runner.BACKENDS["arcadedb_server"]["server_env"])     # the original is untouched
+    assert runner.arcadedb_query_ram_readback is not None
+
+
+@pytest.mark.parametrize("bad", ["0", "-1", "twelve", "1.5"])
+def test_a_budget_that_would_disable_the_engines_guard_ends_the_run(monkeypatch, bad):
+    import bench_common
+    monkeypatch.setenv(bench_common.QUERY_RAM_ENV, bad)
+    with pytest.raises(SystemExit):
+        bench_common.arcade_query_ram_mb()
+
+
+def test_the_query_budget_stamp_is_judged_only_where_it_exists_and_needs_a_source():
+    ram = lambda rows: [f for f in OV.stamp_findings(rows)[0] if f["key"] == "arcadedb_query_ram"]   # noqa: E731 - the served arm also carries the query-cap stamp
+    for be in ("arcadedb_embedded", "arcadedb_server"):
+        plain = _row(lane="l1tpc", backend=be)
+        assert ram([plain]) == [], be                                      # the engine default ran: nothing to judge for this override
+        ok = dict(plain, arcadedb_query_max_heap_ram_mb=12288, arcadedb_query_max_heap_ram_source="read from the engine over HTTP (server?mode=default)")
+        assert ram([ok]) == [], be
+        no_src = dict(ok)
+        no_src.pop("arcadedb_query_max_heap_ram_source")
+        assert [f["kind"] for f in ram([no_src])] == ["WRONG"]
+        assert [f["kind"] for f in ram([dict(ok, arcadedb_query_max_heap_ram_mb=0)])] == ["WRONG"]
+
+
+def test_the_query_budget_sentence_appears_only_under_a_table_with_a_stamped_row():
+    stamped = _row(lane="l1tpc", backend="arcadedb_server", arcadedb_query_max_heap_ram_mb=12288,
+                   arcadedb_query_max_heap_ram_source="requested via the container's JAVA_OPTS (the engine could not be asked from the host)")
+    plain = _row(lane="l1tpc", backend="arcadedb_server")
+    keys = ["arcadedb_server"]
+    assert [o.key for o in OV.applicable("l1tpc", keys, [plain]) if o.key == "arcadedb_query_ram"] == []
+    assert [o.key for o in OV.applicable("l1tpc", keys, [plain, stamped]) if o.key == "arcadedb_query_ram"] == ["arcadedb_query_ram"]
+    notes = OV.notes_for_table("t", "l1tpc", keys, [plain, stamped])
+    text = [t for t, _v in notes if "query heap budget" in t]
+    assert len(text) == 1 and "12,288 MB" in text[0] and "no speed setting" in text[0]
+    assert not [t for t, _v in OV.notes_for_table("t", "l1tpc", keys, [plain]) if "query heap budget" in t]
+    assert "—" not in text[0] and "--" not in text[0]
