@@ -201,3 +201,18 @@ def test_an_empty_file_is_refused(tmp_path):
     src.write_text("")
     r = subprocess.run([sys.executable, str(HERE / "pass2_roster.py"), str(src)], cwd=HERE, capture_output=True, text=True)
     assert r.returncode != 0 and "holds no rows" in (r.stdout + r.stderr)
+
+
+def test_one_engine_version_in_three_spellings_counts_once():
+    """Embedded arms record '26.10.1', served arms 'server:26.10.1 (build ...)', and a cell that died before the client read
+    the version records none: the pin check must see one version (found by the first dry run on real rows, 2026-10-07)."""
+    served = "server:26.10.1 (build d36b4ca3ae4c170abc73598e0dffa2bb58e06621/1791229620009/main)"
+    rows = (reps("arcadedb_graph_embedded") + reps("arcadedb_graph_server", engine_version=served)
+            + [row(be="arcadedb_graph_server", rep=1, minute=40, rc=1, engine_version=None, scale="sf10")])
+    r = R.build_roster(rows)
+    assert r["arcadedb_engine_versions"] == {"26.10.1": 6}
+
+
+def test_two_different_versions_are_still_two():
+    r = R.build_roster(reps("arcadedb_graph_embedded") + reps("arcadedb_graph_server", engine_version="server:26.11.1 (build abc/1/main)"))
+    assert sorted(r["arcadedb_engine_versions"]) == ["26.10.1", "26.11.1"]
