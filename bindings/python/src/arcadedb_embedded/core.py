@@ -595,6 +595,13 @@ class Database:
             if not isinstance(name, str):
                 raise ValueError(f"column names must be strings, got {name!r}")
             names.append(name)
+        # Compare the lengths that are known without converting first, so ragged columns are refused
+        # before a large one is copied across the JVM bridge; a plain iterable is measured after.
+        known = {
+            name: len(values) for name, values in items if hasattr(values, "__len__")
+        }
+        if len(set(known.values())) > 1:
+            raise ValueError(f"columns differ in length: {known}")
         java_columns = [_column_to_java(name, values) for name, values in items]
         lengths = {name: n for name, (_arr, n) in zip(names, java_columns)}
         if len(set(lengths.values())) != 1:
