@@ -404,6 +404,7 @@ else
         ARCADEDB_VERSION="$DOCKER_TAG" BUILD_VERSION="${BUILD_VERSION:-}" NEW_WHEELS="${NEW_WHEELS:-}" python3 - << 'PY'
 import hashlib
 import os
+import re
 import sys
 import zipfile
 from pathlib import Path
@@ -420,15 +421,22 @@ ARCADEDB_VERSION = os.environ["ARCADEDB_VERSION"]
 # (BUILD_VERSION when set, as the wheel's own version follows it), and assert
 # the version, so picking the wrong file fails loudly.
 _want = (os.environ.get("BUILD_VERSION") or ARCADEDB_VERSION).replace("-SNAPSHOT", "").replace("-", ".")
+
+
+def _is_wanted(wheel_path):
+    # The wheel's version field, matched whole: 26.10.1 is 26.10.1 or its dev, post, or pre-release, never 26.10.10.
+    parts = wheel_path.name.split("-")
+    return len(parts) > 1 and re.fullmatch(re.escape(_want) + r"(\.dev\d+|\.post\d+|(a|b|rc)\d+)?", parts[1]) is not None
+
+
 _new = [Path(p) for p in os.environ.get("NEW_WHEELS", "").split() if p.endswith(".whl")]
-wheels = _new or sorted((p for p in Path("dist").glob("arcadedb_embedded-*.whl")
-                         if p.name.startswith(f"arcadedb_embedded-{_want}")),
+wheels = _new or sorted((p for p in Path("dist").glob("arcadedb_embedded-*.whl") if _is_wanted(p)),
                         key=lambda p: p.stat().st_mtime)
 if not wheels:
     print(f"❌ no arcadedb_embedded-{_want} wheel in dist/", file=sys.stderr)
     sys.exit(1)
 wheel = wheels[-1]
-if not wheel.name.startswith(f"arcadedb_embedded-{_want}"):
+if not _is_wanted(wheel):
     print(f"❌ newest wheel is {wheel.name}, which is not the "
           f"{ARCADEDB_VERSION} build this run produced", file=sys.stderr)
     sys.exit(1)
