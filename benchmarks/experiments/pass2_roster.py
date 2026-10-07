@@ -151,6 +151,16 @@ def closeness(rows, band=BAND):
     return out
 
 
+
+def normalize_engine_version(value):
+    """The bare version of an engine_version field. Embedded arms record '26.10.1'; served arms record
+    'server:26.10.1 (build <sha>/<ts>/main)': one version, two spellings (the pin check counts versions, not spellings)."""
+    text = str(value)
+    if text.startswith("server:"):
+        text = text[len("server:"):]
+    return text.split(" (", 1)[0].strip()
+
+
 def build_roster(rows, source="", need=NEED_REPS, caps=None, bad_lines=0):
     """The roster document: eligible cells per lane per backend, the ineligible ones with why, the wall estimates and the
     closeness table. Pure function of the rows."""
@@ -182,7 +192,9 @@ def build_roster(rows, source="", need=NEED_REPS, caps=None, bad_lines=0):
             rec["reps_seen"] = sorted(seen.get(k, ()))
             rec["last_error"] = last_error.get(k)
             inel[lane][be].append(rec)
-    version = collections.Counter(str(r.get("engine_version")) for r in rows if str(r.get("backend", "")).startswith("arcadedb"))
+    version = collections.Counter(
+        normalize_engine_version(r.get("engine_version")) for r in rows
+        if str(r.get("backend", "")).startswith("arcadedb") and r.get("engine_version") is not None)
     return {
         "format": FORMAT, "source": source, "n_rows": len(rows), "bad_lines": bad_lines, "need_reps": list(need),
         "clean_rule": "rc == 0, no error, no OOM kill, paper tier, cpuset 0-11 or unset",
