@@ -286,6 +286,13 @@ class TestBadInputIsRefusedBeforeAnythingIsWritten:
                 "Col", {"id": np.array([1, 2**63 + 5], dtype=np.uint64)}
             )
 
+    @pytest.mark.parametrize("value", ["abc", b"abc", bytearray(b"abc")])
+    def test_a_string_or_bytes_column_is_refused_not_split(self, temp_db, value):
+        _make_type(temp_db)
+        with pytest.raises(TypeError, match="not a sequence of values"):
+            temp_db.insert_columns("Col", {"label": value})
+        assert _count(temp_db, "Col") == 0
+
     def test_a_two_dimensional_column(self, temp_db):
         _make_type(temp_db)
         with pytest.raises(ValueError, match="one-dimensional"):
