@@ -569,6 +569,9 @@ class Database:
             TypeError: If a numpy column has a dtype that does not cross
                 natively (datetime64, timedelta64, complex): convert it to
                 Python values, or use ``insert_many``.
+                Also if a column is a ``str``, ``bytes``, or ``bytearray``
+                (one value, not a column), which would otherwise be split into
+                one row per character.
             ArcadeDBError: If the load fails (a duplicate key, a value the
                 declared property type refuses): the transaction this call
                 opened is rolled back, as for ``insert_many``. In the parallel
@@ -591,9 +594,16 @@ class Database:
         if not items:
             raise ValueError("insert_columns needs at least one column")
         names = []
-        for name, _values in items:
+        for name, values in items:
             if not isinstance(name, str):
                 raise ValueError(f"column names must be strings, got {name!r}")
+            # A str or bytes value is one value, not a column: list() would split it into
+            # characters and store one row per character without an error.
+            if isinstance(values, (str, bytes, bytearray)):
+                raise TypeError(
+                    f"column {name!r} is a {type(values).__name__}, not a sequence of values; "
+                    f"wrap a single value in a list"
+                )
             names.append(name)
         # Compare the lengths that are known without converting first, so ragged columns are refused
         # before a large one is copied across the JVM bridge; a plain iterable is measured after.
