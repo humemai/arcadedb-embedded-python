@@ -401,7 +401,7 @@ else
 
     if [[ -n "$JAR_LIB_DIR" ]]; then
         echo -e "${CYAN}🔎 Verifying embedded local integration JAR...${NC}"
-        ARCADEDB_VERSION="$DOCKER_TAG" python3 - << 'PY'
+        ARCADEDB_VERSION="$DOCKER_TAG" BUILD_VERSION="${BUILD_VERSION:-}" NEW_WHEELS="${NEW_WHEELS:-}" python3 - << 'PY'
 import hashlib
 import os
 import sys
@@ -413,16 +413,21 @@ ARCADEDB_VERSION = os.environ["ARCADEDB_VERSION"]
 # "26.9.1" ranks above "26.10.1" because '9' > '1'. On 2026-09-19 that made
 # this check open September's 26.9.1 wheel, look for October's
 # arcadedb-integration-26.10.1-SNAPSHOT.jar inside it, and fail a wheel that
-# was in fact correct and complete. Take the wheel this build just wrote --
-# the newest by mtime -- and then assert its version is the one we asked for,
-# so picking the wrong file fails loudly instead of validating a stale one.
-wheels = sorted(Path("dist").glob("arcadedb_embedded-*.whl"),
-                key=lambda p: p.stat().st_mtime)
+# was in fact correct and complete. Nor the newest by mtime: `docker cp` keeps
+# the timestamp from inside the container, so a fully cached run's wheel can be
+# older than one left in dist/ by another build. Take the wheel this run added
+# (NEW_WHEELS), else the newest wheel of the version this run asked for
+# (BUILD_VERSION when set, as the wheel's own version follows it), and assert
+# the version, so picking the wrong file fails loudly.
+_want = (os.environ.get("BUILD_VERSION") or ARCADEDB_VERSION).replace("-SNAPSHOT", "").replace("-", ".")
+_new = [Path(p) for p in os.environ.get("NEW_WHEELS", "").split() if p.endswith(".whl")]
+wheels = _new or sorted((p for p in Path("dist").glob("arcadedb_embedded-*.whl")
+                         if p.name.startswith(f"arcadedb_embedded-{_want}")),
+                        key=lambda p: p.stat().st_mtime)
 if not wheels:
-    print("❌ no wheel in dist/", file=sys.stderr)
+    print(f"❌ no arcadedb_embedded-{_want} wheel in dist/", file=sys.stderr)
     sys.exit(1)
 wheel = wheels[-1]
-_want = ARCADEDB_VERSION.replace("-SNAPSHOT", "").replace("-", ".")
 if not wheel.name.startswith(f"arcadedb_embedded-{_want}"):
     print(f"❌ newest wheel is {wheel.name}, which is not the "
           f"{ARCADEDB_VERSION} build this run produced", file=sys.stderr)
@@ -466,7 +471,14 @@ echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━�
 # apart), which is exactly the confusion a stale artifact produces. Only the
 # wheel this build wrote survives for its python/platform tag; wheels for
 # other tags are someone else's build and are left alone.
-NEWEST_WHEEL=$(ls -t dist/*.whl | head -n1)
+# Which wheel is "this build's": the one this run added (NEW_WHEELS, Docker path), not the newest by mtime. `docker cp`
+# keeps the container's timestamp, so after a fully cached run `ls -t` can rank an older build's wheel of ANOTHER
+# version first, and this loop would then delete the wheel just produced as "superseded" (CodeRabbit on upstream #9294).
+if [[ -n "${NEW_WHEELS:-}" ]]; then
+    NEWEST_WHEEL=$(echo "$NEW_WHEELS" | head -n1)
+else
+    NEWEST_WHEEL=$(ls -t dist/*.whl | head -n1)
+fi
 NEWEST_TAG=$(basename "$NEWEST_WHEEL" | sed -E 's/^[^-]+-[^-]+-//')
 for old in dist/*.whl; do
     if [[ "$old" != "$NEWEST_WHEEL" && "$(basename "$old" | sed -E 's/^[^-]+-[^-]+-//')" == "$NEWEST_TAG" ]]; then

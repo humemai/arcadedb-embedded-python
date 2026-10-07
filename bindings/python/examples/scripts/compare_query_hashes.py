@@ -16,6 +16,9 @@ import re
 import sys
 
 LINE = re.compile(r"^(\w+): [0-9.]+s, rows=(\d+), hash=([0-9a-f]+)\s*$")
+# A line that starts like a query result but does not parse is a broken result, not log noise: dropping it would let
+# the comparison pass on the queries that did parse.
+RESULT_START = re.compile(r"^\w+: [0-9.]+s,")
 
 
 def answers(path: str) -> dict[str, tuple[int, str]]:
@@ -25,6 +28,10 @@ def answers(path: str) -> dict[str, tuple[int, str]]:
             m = LINE.match(line.strip())
             if m:
                 out[m.group(1)] = (int(m.group(2)), m.group(3))
+            elif RESULT_START.match(line.strip()):
+                raise SystemExit(
+                    f"{path}: malformed query result line: {line.strip()!r}"
+                )
     return out
 
 
