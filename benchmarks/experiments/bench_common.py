@@ -56,6 +56,38 @@ def jpype_fields():
     """What a result row records about JPype: {"jpype_version": ...}. Stamp it after the arm has run."""
     return {"jpype_version": jpype_version()}
 
+
+def client_path_fields():
+    """What a result row records about the comparator CLIENT's accelerators (DECISIONS #173, issue #261).
+
+    Read from the modules the arm actually imported (the lanes import drivers lazily), so a field is
+    absent on a row whose client never loaded that driver, and the value is the flag the driver itself
+    consults, not "the package is installed". Stamp it after the arm has run."""
+    out = {}
+    if "neo4j" in sys.modules:
+        try:
+            from neo4j._codec.packstream import RUST_AVAILABLE
+            out["neo4j_rust_ext"] = bool(RUST_AVAILABLE)
+        except Exception:
+            out["neo4j_rust_ext"] = None
+    if "redis" in sys.modules:
+        try:
+            import redis.utils
+            out["redis_hiredis"] = bool(redis.utils.HIREDIS_AVAILABLE)
+        except Exception:
+            out["redis_hiredis"] = None
+    return out
+
+
+def es_json_serializer(es):
+    """The class name of an Elasticsearch client's application/json serializer: the class the client
+    really encodes with, which stays the stdlib JsonSerializer unless the constructor passes another,
+    whether or not orjson is importable (DECISIONS #173)."""
+    try:
+        return type(es.transport.serializers.get_serializer("application/json")).__name__
+    except Exception:
+        return None
+
 # DECISIONS #81: the matched durability class is "relaxed" (a commit returns
 # without waiting for the disk). An engine that cannot be relaxed declares a
 # `durability` string starting with this prefix and is the named exception on

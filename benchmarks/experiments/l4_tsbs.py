@@ -1201,6 +1201,8 @@ class QuestTS:
     name = "questdb"
 
     def connect(self):
+        # WHICH #174 CLIENT PATH THIS ARM RAN (issue #261): stamped so a row says it, not only the code.
+        self.row_extra = {**(getattr(self, "row_extra", None) or {}), "pg_client_path": "binary_cursor"}
         import socket
         import psycopg
         # BENCH_SERVER_HOST is what runner.py sets for a client_server cell.
@@ -1908,6 +1910,7 @@ def main():
     except Exception as e:                     # never lose a measured result
         out["conditions_error"] = f"{e.__class__.__name__}: {e}"
 
+    out.update(bench_common.client_path_fields())
     with open(args.out, "w") as f:
         json.dump(out, f)
     print("RESULT " + json.dumps(out), flush=True)

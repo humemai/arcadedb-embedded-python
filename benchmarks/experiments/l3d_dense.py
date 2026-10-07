@@ -1248,6 +1248,8 @@ class PgVector(Base):
     name = "pgvector_dense"
 
     def connect(self):
+        # WHICH #174 CLIENT PATH THIS ARM RAN (issue #261): stamped so a row says it, not only the code.
+        self.row_extra = {**(getattr(self, "row_extra", None) or {}), "pg_client_path": "copy_binary"}
         import psycopg
         host = os.environ.get("BENCH_SERVER_HOST", "localhost")
         self.cx = psycopg.connect(f"host={host} dbname=bench user=postgres password=dbbenchpass",
@@ -2209,6 +2211,7 @@ class ElasticDense(Base):
             "es_index_type": self.INDEX_TYPE,
             "es_num_candidates": EF_SEARCH,
             "es_rescore_oversample": self.RESCORE_OVERSAMPLE,
+            "es_json_serializer": bench_common.es_json_serializer(self.es),
         }
 
     def build(self, vecs):
@@ -3006,6 +3009,7 @@ def main():
     # Again at the end: an adapter may record a setting the mutation phase
     # needed (Memgraph's delete settle), after the copy taken at the build.
     out.update(getattr(b, "row_extra", None) or {})
+    out.update(bench_common.client_path_fields())
     with open(args.out, "w") as f:
         json.dump(out, f)
     print("RESULT", json.dumps(out))
