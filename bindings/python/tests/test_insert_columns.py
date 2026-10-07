@@ -214,9 +214,9 @@ class TestFailureContract:
         with pytest.raises(ArcadeDBError):
             temp_db.insert_columns("Col", cols, commit_every=100)
         # batches the call had already committed are NOT undone: a failure rolls back the
-        # transaction open at that moment, as insert_many does; what must hold is that the
-        # duplicate was refused and the engine is usable
-        assert _count(temp_db, "Col") <= 250
+        # transaction open at that moment, as insert_many does. 300 rows, commit_every=100, the
+        # duplicate in the third batch: the first two batches stay, the third is rolled back whole
+        assert _count(temp_db, "Col") == 200
         assert temp_db.insert_columns("Col", _columns(10, offset=1_000)) == 10
 
     def test_a_single_batch_failure_leaves_nothing_behind(self, temp_db):
