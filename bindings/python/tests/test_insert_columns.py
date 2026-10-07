@@ -9,6 +9,8 @@ before anything is written, and the rows are the ones insert_many would have
 stored.
 """
 
+import time
+
 import pytest
 
 np = pytest.importorskip("numpy")
@@ -185,6 +187,23 @@ class TestParallelMode:
         ids[150] = ids[7]
         with pytest.raises(ArcadeDBError, match="failed record"):
             temp_db.insert_columns("ColDup", {"id": ids}, parallel=True)
+
+    def test_a_failed_parallel_load_is_final_when_it_raises(self, temp_db):
+        # Rows handed to the writers before a failure are committed by them whatever the call does
+        # (CodeRabbit on upstream #9294): the call must wait for them before raising, so nothing lands
+        # after the error, and the message must say rows may have been stored, not imply a rollback.
+        temp_db.command("sql", "CREATE DOCUMENT TYPE ColBad BUCKETS 3")
+        temp_db.command("sql", "CREATE PROPERTY ColBad.n INTEGER")
+        values = [str(i) for i in range(2_000)]
+        values[1_500] = "not a number"
+        with pytest.raises(
+            ArcadeDBError, match="may have been stored|failed record"
+        ) as err:
+            temp_db.insert_columns("ColBad", {"n": values}, parallel=True)
+        assert "rolled back" not in str(err.value)
+        stored = _count(temp_db, "ColBad")
+        time.sleep(0.5)
+        assert _count(temp_db, "ColBad") == stored <= 2_000
 
 
 class TestFailureContract:

@@ -377,6 +377,24 @@ class Database:
                 f"Failed to create document of type '{type_name}': {e}"
             ) from e
 
+    def _parallel_load_failed(self, type_name, error):
+        """The error for a parallel load that failed while handing rows to the writers.
+
+        The rows handed over before the failure are already queued, and the async writers commit
+        them whatever this call does. So wait for the queue to drain before raising: the caller then
+        sees a final state that does not change behind its back, and the message says that those
+        rows may have been stored, rather than implying a rollback that cannot happen.
+        """
+        try:
+            self._java_db.async_().waitCompletion()
+        except Exception:  # nosec B110 - the original error is the one to report
+            pass
+        return ArcadeDBError(
+            f"Failed to bulk-insert into '{type_name}': {error}; the rows handed to the "
+            f"parallel writers before the failure may have been stored (the call waited "
+            f"for them before raising)"
+        )
+
     def insert_many(
         self,
         type_name: str,
@@ -420,7 +438,9 @@ class Database:
                 the writers report any record they could not store (a
                 duplicate key, a failed batch commit), after the load
                 completes. Records other than the failed ones may have been
-                stored.
+                stored. In the parallel mode nothing is rolled back: rows
+                handed to the writers before a failure may be stored, and the
+                call waits for them before raising.
         """
         self._check_not_closed()
         rows = list(rows)
@@ -475,10 +495,17 @@ class Database:
                         self._java_db, type_name, payload, int(commit_every), False
                     )
                 )
-            failures = batcher.insertManyJsonParallel(self._java_db, type_name, payload)
+            try:
+                failures = batcher.insertManyJsonParallel(
+                    self._java_db, type_name, payload
+                )
+            except Exception as e:
+                raise self._parallel_load_failed(type_name, e) from e
             self._java_db.async_().waitCompletion()
             n_failed = int(failures.getCount())
             first_failure = failures.getFirstMessage()
+        except ArcadeDBError:
+            raise
         except Exception as e:
             raise ArcadeDBError(f"Failed to bulk-insert into '{type_name}': {e}") from e
         # The writers report a rejected record only through its error callback
@@ -546,9 +573,11 @@ class Database:
                 declared property type refuses): the transaction this call
                 opened is rolled back, as for ``insert_many``. In the parallel
                 mode also when the writers report any record they could not
-                store, after the load completes (records other than the failed
-                ones may have been stored). A transaction the caller opened is
-                left to the caller.
+                store, after the load completes; the parallel mode rolls
+                nothing back: rows handed to the writers before a failure, or
+                other than the failed ones, may have been stored, and the call
+                waits for them before raising. A transaction the caller opened
+                is left to the caller.
 
         Example:
             >>> db.insert_columns("Reading", {
@@ -590,12 +619,17 @@ class Database:
                         int(commit_every),
                     )
                 )
-            failures = batcher.insertColumnsParallel(
-                self._java_db, type_name, string_array, object_array, n
-            )
+            try:
+                failures = batcher.insertColumnsParallel(
+                    self._java_db, type_name, string_array, object_array, n
+                )
+            except Exception as e:
+                raise self._parallel_load_failed(type_name, e) from e
             self._java_db.async_().waitCompletion()
             n_failed = int(failures.getCount())
             first_failure = failures.getFirstMessage()
+        except ArcadeDBError:
+            raise
         except Exception as e:
             raise ArcadeDBError(f"Failed to bulk-insert into '{type_name}': {e}") from e
         # As insert_many does: the writers report a rejected record only through
