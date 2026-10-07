@@ -78,7 +78,9 @@ def timeseries_from_numpy(db, n_points: int) -> None:
     db.command(
         "sql",
         "CREATE TIMESERIES TYPE Sensor TIMESTAMP ts "
-        "TAGS (host STRING) FIELDS (cpu DOUBLE, mem DOUBLE) SHARDS 4",
+        # SHARDS stays at its default (cores minus one), as upstream advises
+        # (ArcadeData/arcadedb#9166).
+        "TAGS (host STRING) FIELDS (cpu DOUBLE, mem DOUBLE)",
     )
     base_ms = 1_767_225_600_000  # 2026-01-01T00:00:00Z
     ts = base_ms + np.arange(n_points, dtype=np.int64) * 1_000

@@ -4162,7 +4162,7 @@ def execute_arcadedb_fast_top_questions_by_total_comments(db) -> List[Dict[str, 
     for row in db.query(
         "sql",
         "SELECT @in.Id AS question_id, count(*) AS count FROM COMMENTED_ON GROUP BY @in.Id",
-    ).to_list():
+    ).to_json_list():
         qid = row.get("question_id")
         count = row.get("count")
         if qid is None:
@@ -4173,7 +4173,7 @@ def execute_arcadedb_fast_top_questions_by_total_comments(db) -> List[Dict[str, 
     for row in db.query(
         "sql",
         "SELECT @in.Id AS answer_id, count(*) AS count FROM COMMENTED_ON_ANSWER GROUP BY @in.Id",
-    ).to_list():
+    ).to_json_list():
         aid = row.get("answer_id")
         count = row.get("count")
         if aid is None:

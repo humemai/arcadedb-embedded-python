@@ -1002,7 +1002,7 @@ specifically need that surface.
 - `location_cache_size` (int | None): **removed** (ArcadeDB #5559, #5568). Passing a
   value raises `ValueError`; the engine no longer accepts the setting because bounding
   the vector-location index drops vectors from searches rather than spilling to disk.
-- `graph_build_cache_size` (int | None): Override graph build cache size (default: `None`, uses engine default).
+- `graph_build_cache_size` (int | None): Override the number of vectors cached while the graph is built (default: `None`, the engine's automatic sizing; leave it unset, see [Build-time cache](../guide/vectors.md#build-time-cache-use-the-default)).
 - `mutations_before_rebuild` (int | None): Override rebuild threshold (default: `None`, uses engine default).
 - `store_vectors_in_graph` (bool): Persist vectors inline in graph file (faster reopen/search, larger graph).
 - `add_hierarchy` (bool | None): Force enabling/disabling HNSW hierarchy (default: `True`).
