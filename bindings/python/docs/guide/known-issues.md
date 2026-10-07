@@ -153,11 +153,12 @@ On 26.10.1, do not pass `light_edges=True` for an edge type that is not declared
 declare the type `LIGHTWEIGHT` before the load, or leave the option out. A `LIGHTWEIGHT` type
 refuses an edge with properties (`IllegalArgumentException`).
 
-**A database that was already loaded that way stays wrong** on every engine, 26.11.1 included: the
-snapshot does not detect the light edges and still answers 0 for the same query, which I checked by
-writing two light edges into an undeclared type with the engine's `newLightEdge`. Count in a way
-that does not take the push-down: put the variables through a `WITH`, count a node, or name the
-relationship and count that. All three counted 2 on the 26.10.1 wheel and on the snapshot:
+**A database that was already loaded that way stays wrong on 26.10.1.** The 26.11.1 snapshot counts
+it right since upstream #9409 (closing #9389): its count push-down now finds the light edges in an
+undeclared type (checked with two light edges written by the engine's `newLightEdge`: 2 on the
+snapshot, 0 on 26.10.1). On 26.10.1, count in a way that does not take the push-down: put the
+variables through a `WITH`, count a node, or name the relationship and count that. All three counted
+2 on the 26.10.1 wheel and on the snapshot:
 
 ```python
 db.query("opencypher", "MATCH (a:V)-[:E]->(b:V) WITH a, b RETURN count(*) AS n")
@@ -167,10 +168,9 @@ db.query("opencypher", "MATCH (a:V)-[r:E]->(b:V) RETURN count(r) AS n")
 
 Tests: `tests/test_light_edge_and_view_known_issues.py` checks the workarounds, the refusal, and the
 cases that are not affected. The refusal test is plain and passes on the engine the suite builds
-against (upstream's 26.11.1 snapshot, which has the fix) and fails on the 26.10.1 wheel. A strict
-`xfail` test of the count over light edges that an older version wrote keeps the caveat above
-honest: it starts failing the suite if an engine repairs them. Remove the 26.10.1 part of this entry
-when the release that carries the fix ships.
+against (upstream's 26.11.1 snapshot, which has the fix) and fails on the 26.10.1 wheel, and so does
+the test of the count over light edges that an older version wrote (a strict `xfail` until #9409).
+Remove the 26.10.1 part of this entry when the release that carries the fix ships.
 
 
 ## An openCypher count with a pattern predicate over an edge type that a Graph Analytical View does not list is wrong

@@ -15,9 +15,9 @@ predicate over an edge type that a Graph Analytical View does not list was evalu
 view, where that type has no edges, so `NOT (a)-[:F]->(b)` excluded nothing and `(a)-[:F]->(b)`
 matched nothing in an aggregate), both fixed by ArcadeData/arcadedb#9383. For #9378 the fix is that a
 batch with `withLightEdges(true)` refuses an edge type that does not declare `LIGHTWEIGHT`, with an
-`IllegalArgumentException` that `new_edge` raises as `ArcadeDBError`. It does not repair a database
-that an older version wrote: the last two tests of the #9378 section build such a database with the
-engine's `newLightEdge` and run on every engine.
+`IllegalArgumentException` that `new_edge` raises as `ArcadeDBError`. A database that an older version
+wrote is counted right since #9409 (closing #9389): the last two tests of the #9378 section build such a
+database with the engine's `newLightEdge`.
 """
 
 import time
@@ -175,29 +175,16 @@ def test_other_ways_to_count_light_edges_an_older_version_loaded(temp_db_path, q
         assert _count(db, query) == 2
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "ArcadeData/arcadedb#9378 is fixed for new loads (#9383) but does not repair edges an older "
-        "version wrote: a one-hop count(*) over light edges already in an undeclared type is "
-        "CONSTANT COUNT 0, where the row pipeline answers 2"
-    ),
-)
 def test_one_hop_count_over_light_edges_an_older_version_loaded(temp_db_path):
-    """The right count is 2, as the rows and `out('E')` show. The engine does not repair a database
-    that an older version wrote, so this is expected to fail; a strict `xfail`, so the suite
-    says so if a later engine repairs it. The two checks before the assertion call `pytest.fail`,
-    which the `xfail` does not absorb, so a changed plan fails the suite instead."""
+    """The right count is 2, as the rows and `out('E')` show. Until ArcadeData/arcadedb#9409 (merge
+    9b6aaedd40, closing #9389) the push-down planned this CONSTANT COUNT and answered 0 for light edges
+    an older version had written; this was a strict `xfail` tripwire then. The snapshot now counts
+    them through the CSR chain-count push-down, so it is a plain regression test. It fails on the
+    26.10.1 wheel."""
     with arcadedb.create_database(temp_db_path) as db:
         _graph_an_older_version_loaded(db)
         _require_the_edges_are_there(db)
-        plan = _plan(db, ONE_HOP)
-        if "CONSTANT COUNT" not in plan:
-            pytest.fail(
-                f"{ONE_HOP!r} is no longer planned as CONSTANT COUNT; if the engine now answers it "
-                f"another way, check the answer and update the test:\n{plan}"
-            )
+        assert "CONSTANT COUNT" not in _plan(db, ONE_HOP)
         assert _count(db, ONE_HOP) == 2
 
 
