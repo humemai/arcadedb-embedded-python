@@ -452,7 +452,11 @@ def main() -> int:
 
         print_rows("Latest sample per sensor:", latest_per_sensor(db))
 
-    server_mode_demo(samples, db_dir)
+    try:
+        server_mode_demo(samples, db_dir)
+    except arcadedb.ArcadeDBError as exc:
+        # The embedded part above already ran; a runtime without the server part skips only this demo.
+        print(f"Server-mode demo skipped: {exc}")
     print("Example complete. Database files were kept for inspection.")
     return 0
 

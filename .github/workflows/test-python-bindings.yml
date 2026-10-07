@@ -407,7 +407,7 @@ jobs:
             # as skipped, so a run with 14 of them read "14 skipped". Count them apart from real skips.
             # grep exits 1 when nothing matches, and this shell runs with pipefail and -e: a suite with no expected failures
             # (every upstream bug fixed, no strict xfail left) used to abort the step here, silently, after all tests passed.
-            XFAILED=$({ grep -oE 'type="pytest.xfail"' test-results.xml || true; } | wc -l | tr -d ' ')
+            XFAILED=$({ grep -oE '<skipped[^>]*type="pytest.xfail"' test-results.xml || true; } | wc -l | tr -d ' ')
 
             # Default to 0 if not found
             TOTAL=${TOTAL:-0}

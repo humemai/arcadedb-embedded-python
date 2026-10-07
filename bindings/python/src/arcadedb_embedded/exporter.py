@@ -138,7 +138,8 @@ def export_database(
     except Exception as e:
         # Check for specific error messages
         error_msg = str(e)
-        if (
+        # Only GraphML and GraphSON come from arcadedb-gremlin; "not found" also matches a missing type or file.
+        if export_format.lower() in ("graphml", "graphson") and (
             "arcadedb-gremlin" in error_msg
             or "Format not supported" in error_msg
             or "not found" in error_msg

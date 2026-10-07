@@ -117,6 +117,11 @@ def main() -> None:
         if args.server_root
         else Path(tempfile.mkdtemp(prefix="arcadedb_ex24_"))
     )
+    # A directory the user named is never wiped: refuse one that holds anything, so unrelated data is not lost.
+    if args.server_root and root.exists() and any(root.iterdir()):
+        raise SystemExit(
+            f"--server-root {root} is not empty; pass a new or empty directory"
+        )
     if root.exists():
         shutil.rmtree(root)
     port = free_port(args.http_port)
