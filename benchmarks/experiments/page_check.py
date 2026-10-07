@@ -1328,6 +1328,10 @@ NOT_PRINTED = [
      "endpoint, asked of the engine over HTTP by the runner (or the container's own setting, named as the request in the "
      "source field when the engine could not be asked), and the engine's own default: the evidence behind the sentence "
      "that names the raised limit"),
+    (r"^arcadedb_query_max_heap_ram_(mb|source)$",
+     "the query heap budget (MB) an ArcadeDB arm of the documents lane ran with when the override was on (DECISIONS #175), read from the "
+     "engine (embedded: GlobalConfiguration; served: the server's settings over HTTP) or named as the request in the source field when "
+     "the engine could not be asked: the evidence behind the sentence that names the raised budget"),
     (r"^ts_compaction_interval(_ms|_readback_error)?$",
      "the compaction interval ArcadeDB's native time-series arms created the type with, as the engine "
      "reports it (milliseconds), or why it could not be asked: the evidence behind the sentence that "

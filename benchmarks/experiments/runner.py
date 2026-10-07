@@ -1590,6 +1590,32 @@ for _be in BATCH_ENDPOINT_BACKENDS:
     BACKENDS[_be] = _with_http_body_limit(BACKENDS[_be])
 
 
+# THE QUERY HEAP BUDGET OVERRIDE (DECISIONS #175; bench_common.QUERY_RAM_ENV): OFF unless the launching environment sets the variable. The
+# repair stage for the l1tpc tpch10 olap cells sets it, and then the served documents arm is launched with the flag; with the variable unset
+# BACKENDS is exactly what it was, so the running chain is unchanged by construction (test_overrides holds that).
+QUERY_RAM_BACKENDS = ("arcadedb_server",)
+
+
+def _with_query_ram(cfg, mb):
+    """A copy of a served ArcadeDB arm's launch configuration whose JAVA_OPTS also carries -Darcadedb.queryMaxHeapRAM=<mb> (the HTTP_BODY pattern)."""
+    opt = f"-D{bench_common.QUERY_RAM_PROPERTY}={mb}"
+    out = dict(cfg)
+    env, hits = list(cfg["server_env"]), 0
+    for i, e in enumerate(env):
+        if isinstance(e, str) and e.startswith("JAVA_OPTS="):
+            env[i] = e + " " + opt
+            hits += 1
+    if hits != 1:
+        raise SystemExit(f"a served ArcadeDB arm must carry exactly one JAVA_OPTS entry to take {opt} (found {hits})")
+    out["server_env"] = env
+    return out
+
+
+if bench_common.arcade_query_ram_mb():
+    for _be in QUERY_RAM_BACKENDS:
+        BACKENDS[_be] = _with_query_ram(BACKENDS[_be], bench_common.arcade_query_ram_mb())
+
+
 # THE SENSITIVITY ARM AT THE IMAGE'S OWN JVM DEFAULTS (CAMPAIGN 7 row 69, DECISIONS
 # #159). Every served ArcadeDB arm above sets ARCADEDB_OPTS_MEMORY to
 # `-Xms{heap} -Xmx{heap}` and clears ARCADEDB_OPTS_GC, so that the embedded-versus-
@@ -2512,6 +2538,10 @@ def observe_server(cid):
     body = re.findall(rf"-D{re.escape(HTTP_BODY_MAX_PROPERTY)}=(\d+)", envs)
     if body:
         out.update(arcadedb_body_limit_readback(cid, envs, int(body[-1])))
+    # THE QUERY HEAP BUDGET (DECISIONS #175): present only when the override is on for this launch.
+    ram = re.findall(rf"-D{re.escape(bench_common.QUERY_RAM_PROPERTY)}=(\d+)", envs)
+    if ram:
+        out.update(arcadedb_query_ram_readback(cid, envs, int(ram[-1])))
     return out
 
 
@@ -2658,6 +2688,34 @@ def arcadedb_cap_readback(cid, envs, from_env):
                 time.sleep(1)
     return {"server_query_max_heap_elements": from_env,
             "server_query_max_heap_source": "the container's JAVA_OPTS (the engine could not be asked from the host)"}
+
+
+def arcadedb_query_ram_readback(cid, envs, from_env):
+    """The query heap budget (MB) a served ArcadeDB runs with, asked of the engine (`GET /api/v1/server?mode=default` lists every server setting
+    with its effective value and default). If the host cannot ask, the value from the container's own JAVA_OPTS is recorded as the REQUEST and
+    the source says so. Runs before the client starts and outside every timer; it never ends a cell."""
+    pw = re.search(r"-Darcadedb\.server\.rootPassword=(\S+)", envs)
+    ips = (sh(["docker", "inspect", "-f",
+               "{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}", cid]) or "").split()
+    for ip in ips[:1]:
+        for attempt in range(3):
+            try:
+                req = urllib.request.Request(
+                    f"http://{ip}:2480/api/v1/server?mode=default",
+                    headers={"Authorization": "Basic " + base64.b64encode(
+                        f"root:{pw.group(1) if pw else 'dbbenchpass'}".encode()).decode()})
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    settings = json.load(resp)["settings"]
+                found = [x for x in settings if x.get("key") == bench_common.QUERY_RAM_PROPERTY]
+                if found:
+                    out = {"arcadedb_query_max_heap_ram_mb": int(found[0]["value"]),
+                           "arcadedb_query_max_heap_ram_source": "read from the engine over HTTP (server?mode=default)"}
+                    return out
+                break
+            except Exception:  # noqa: BLE001 - fall through to the env value, labelled
+                time.sleep(1)
+    return {"arcadedb_query_max_heap_ram_mb": from_env,
+            "arcadedb_query_max_heap_ram_source": "requested via the container's JAVA_OPTS (the engine could not be asked from the host)"}
 
 
 def arcadedb_body_limit_readback(cid, envs, from_env):
@@ -3028,6 +3086,8 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                    "BENCH_DENSE_QUANT", "BENCH_DENSE_COMPARATOR_M",
                    "BENCH_DUCKDB_THREADS", "BENCH_ES_PRUNE",
                    "ARCADEDB_JVM_EXTRA", "ARCADEDB_EXTRA_JVM_ARGS",
+                   # the query heap budget override, OFF unless set (DECISIONS #175); the embedded arm reads it in the container
+                   "BENCH_ARCADE_QUERY_MAX_HEAP_RAM_MB",
                    # l4's native-path fast paths. The lane arm's defaults are ON, so
                    # its rows are right today, but a campaign could not turn them OFF
                    # to produce the ablation the page needs.
