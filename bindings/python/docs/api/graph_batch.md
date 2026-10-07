@@ -31,7 +31,7 @@ Create a configured batch helper tied to the current database.
   a single flush is the optimal shape
 - `edge_list_initial_size`: initial size in bytes of each vertex's edge segment
 - `light_edges`: create property-less light edges when appropriate
-  Warning: `light_edges=True` into an edge type that is not declared `LIGHTWEIGHT` makes an openCypher one-hop `count(*)` answer 0 on the 26.10.1 engine, an open upstream bug; see [Known Engine Issues](../guide/known-issues.md#an-opencypher-one-hop-count-answers-0-for-edges-loaded-with-light_edgestrue-into-a-type-that-is-not-lightweight) for the workaround.
+  Warning: from ArcadeDB 26.11.1, `light_edges=True` raises `ArcadeDBError` from `new_edge` for an edge type that is not declared `LIGHTWEIGHT`; declare it with `CREATE EDGE TYPE ... LIGHTWEIGHT` or leave the option out. On 26.10.1 and earlier the load succeeds but an openCypher one-hop `count(*)` over those edges answers 0, and a graph loaded that way stays wrong; see [Known Engine Issues](../guide/known-issues.md#an-opencypher-one-hop-count-answers-0-for-edges-loaded-with-light_edgestrue-into-a-type-that-is-not-lightweight) for the workaround.
 - `bidirectional`: store each edge on both vertices (the default) or on its source only.
   Pass `False` only for an edge type declared one-way (`CREATE EDGE TYPE ...
   UNIDIRECTIONAL`). A one-way edge in a two-way type (the default `CREATE EDGE TYPE`)
