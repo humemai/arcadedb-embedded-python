@@ -344,8 +344,8 @@ start_jvm(heap_size="8g", jvm_args="-Xms8g -XX:MaxDirectMemorySize=8g")
     converted to a Java `float[]` automatically, so it works, but it takes the
     general conversion path on every call. Convert it once with
     `to_java_float_array()` and bind the Java array: a Java array crosses as it is,
-    which made a loop of single-row vector inserts about 18% faster (32.9 to 27.0
-    us per vector). `Document.set()` needs the explicit conversion anyway (see
+    which made a loop of single-row vector inserts 13 to 18% faster in our
+    measurements. `Document.set()` needs the explicit conversion anyway (see
     [Type Conversion Error](#type-conversion-error)).
     ```python
     import numpy as np
