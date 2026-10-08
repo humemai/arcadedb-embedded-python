@@ -287,7 +287,7 @@ measurement of results of hundreds of thousands of rows. At the default batch si
 was slower than HTTP in ours (a 10,000-row Cypher read took about 3.3x as long, on a
 26.11.1 pre-release build), so set the batch size explicitly and measure. When your code
 runs in the same process as the database (embedded mode), skip the socket and read a
-large result with [`to_arrow()`, `to_columns()`, or `to_json_list()`](../api/results.md).
+large result with [`to_arrow()`, `to_columns()`, or `to_list()`](../api/results.md).
 
 **Bulk loads** go through HTTP: `INSERT INTO T CONTENT :rows` for documents, `/api/v1/batch`
 for vertices and edges (see [Bulk Loading over the Server](#bulk-loading-over-the-server)).

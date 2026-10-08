@@ -665,7 +665,7 @@ result = db.query("sql", "SELECT name, score FROM Item WHERE score > ?", 100)
 payload = result.to_list()
 
 # Same shape with JSON-native values (DATE and DATETIME values arrive as
-# epoch-millisecond integers, not datetime), in bounded batches
+# epoch-millisecond integers, not datetime), e.g. to send to a JSON API
 rows = db.query("sql", "SELECT FROM Item").to_json_list()
 
 # For wrappers, prefer field access over full dict conversion in large loops

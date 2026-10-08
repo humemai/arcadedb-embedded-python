@@ -676,7 +676,7 @@ def build_rid_lookup(db, vertex_type: str) -> Dict[int, str]:
     rows = db.query(
         "sql",
         f"SELECT Id AS id, @rid AS rid FROM {vertex_type} WHERE Id IS NOT NULL",
-    ).to_json_list()
+    ).to_list()
     lookup: Dict[int, str] = {}
     for row in rows:
         entity_id = row.get("id")

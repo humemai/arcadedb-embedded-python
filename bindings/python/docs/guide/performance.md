@@ -26,7 +26,7 @@ Ratios are Python time / Java-native time (lower is better; 1.0× = parity).
 | Vector search, 500k vectors | **1.13×** | |
 | `find_nearest()` wrapper | **1.08×** | |
 | Typed bulk scan → numpy/pandas (100k×7 cols) | **~1.6×** | `to_columns()` / `to_dataframe()` |
-| Bulk scan → list of dicts (100k×7 cols) | **~2.6×** | `to_json_list()`; `to_list()` reads rows the same way, with `date`, `datetime`, and `Decimal` values |
+| Bulk scan → list of dicts (100k×7 cols) | **~2.6×** | `to_list()` (default, keeps `date`, `datetime`, and `Decimal` values); `to_json_list()` costs about the same |
 | Bulk edge ingest (`GraphBatch.new_edges()`) | **0.57µs/edge** | near the 0.1µs Java floor; with properties: 1.6µs |
 | Bulk vertex creation (`GraphBatch.create_vertices()`) | **parity** (6.0 vs 6.2µs/vertex) | |
 | GROUP BY, Cypher traversal, BM25 full-text, JSONL export | **1.02–1.06×** | engine-bound: at parity |
@@ -122,7 +122,7 @@ Measured limits that remain by design, and the recommended pattern for each:
 
 | Limit | Measured | Recommended pattern |
 |---|---|---|
-| Per-row `.get()` loops over huge results | Each `get()` is a crossing into the JVM (about 1.5 us) | Use `to_list()` (261 ms to 37 ms on a 10,000-row, nine-property scan), `to_columns()`/`to_dataframe()` (~1.6×), or `to_json_list()` (~2.6×) for bulk consumption |
+| Per-row `.get()` loops over huge results | Each `get()` is a crossing into the JVM (about 1.5 us) | Use `to_list()` (261 ms to 37 ms on a 10,000-row, nine-property scan), `to_columns()`/`to_dataframe()` (~1.6×), for bulk consumption (`to_json_list()` costs about the same as `to_list()` and returns JSON-native values) |
 | Threading plateaus around 4 threads (~45k qps vs Java's 107k at 8 threads) | GIL bounds Python's per-op share | Keep write concurrency at ~4 threads with `run_in_transaction(retries=)`, or use multiprocessing for more parallelism |
 | Async per-operation Python callbacks | ~104µs vs 5.5µs per completion | Not a bulk-write path; see [Bulk Ingest Recommendation](import.md#bulk-ingest-recommendation). Use `insert_many()`, `insert_columns()`, or `graph_batch()` for volume |
 | Values pasted into the query text (`f"... WHERE id = {x}"`) | Indexed point lookup, 20k records: Cypher 0.87 ms vs 0.09 ms bound, SQL 0.48 ms vs 0.09 ms | Bind them: `?`/`:name` in SQL, `$name` in Cypher. Every distinct text is parsed again and churns the statement cache ([queries guide](core/queries.md#parameters)) |
