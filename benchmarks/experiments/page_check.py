@@ -1021,6 +1021,9 @@ def main() -> int:
           "(DECISIONS #176)")
     t_bad = _check_top_parts_refusal(payload)
     print(f"  {t_bad} top parts refusal finding(s)")
+    print("\nan ingest cell the bindings' memory defect killed is declared (CAMPAIGN section 7 row 86)")
+    o_bad = _check_ts_doc_oom(payload)
+    print(f"  {o_bad} time-series out-of-memory finding(s)")
     print("\nthe dense table's ArangoDB IVF sentence says what the harness does, from the rows")
     i_bad = _check_arango_ivf_sentence(payload, rows)
     print(f"  {i_bad} IVF sentence finding(s)")
@@ -2247,6 +2250,27 @@ def _check_top_parts_refusal(payload):
             else:
                 print(f"  {t['id']}: {backend} at {scale} disclosed"
                       + (", row marked n/c" if rows_here else ", size not on the table"))
+    return bad
+
+
+def _check_ts_doc_oom(payload):
+    """The time-series document load that ran out of memory in our bindings
+    (humemai/arcadedb-embedded-python#294) carries the sentence that says so
+    and that the next measurement runs it again. Re-decided from the run log,
+    as the exporter decides it; rows from the fixed bindings that complete
+    declare nothing. Returns bad count."""
+    import export_web as EW
+    bad = 0
+    for t in payload.get("tables", []):
+        want = EW._ts_doc_oom_note(t.get("id"))
+        if not want:
+            continue
+        if want not in (t.get("conditions") or []):
+            print(f"    MISSING {t['id']}: the time-series document load ran out of memory in the "
+                  f"bindings and no sentence says so")
+            bad += 1
+        else:
+            print(f"  {t['id']}: time-series document load at 1,000 hosts disclosed")
     return bad
 
 

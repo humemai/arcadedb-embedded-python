@@ -3481,6 +3481,11 @@ def _next_measurement_note(tables):
         items.append(_gen(f"On the {_join_and(ts_stream)} table, the next measurement reads ArcadeDB's "
                           f"served time-series results as a stream, as the other served engines do.",
                           *ts_stream))
+    ts_oom = carried_by("ts_doc_oom")
+    if ts_oom:
+        items.append(_gen(f"On the {_join_and(ts_oom)} table, ArcadeDB's embedded time-series document "
+                          f"load at {_TS_OOM_HOSTS:,} hosts is measured again on Python bindings that "
+                          f"read the load a chunk at a time.", *ts_oom, f"{_TS_OOM_HOSTS:,}"))
     sparse = carried_by("sparse_ids")
     if sparse:
         items.append(_gen(f"On the {_join_and(sparse)} table, ArcadeDB returns the ids of its "
@@ -6959,6 +6964,7 @@ def _censored_cells():
     # A cell the 26.10.1 query heap budget refused at the default is a declared
     # outcome of its own (_top_parts_refusals), not an unexplained failure.
     declared = {("l1tpc", scale, backend, "olap") for backend, scale in _top_parts_refusals()}
+    declared |= _ts_doc_oom_cells()
     _CENSORED_CACHE = {k: v for k, v in timeouts.items() if k not in clean and k not in declared}
     return _CENSORED_CACHE
 
@@ -7630,6 +7636,11 @@ def _censored_notes(table_id):
     refusal = _top_parts_refusal_note(table_id)
     if refusal:
         notes.append(refusal)
+    oom = _ts_doc_oom_note(table_id)
+    if oom:
+        notes.append(oom)
+        for backend in sorted({k[2] for k in _ts_doc_oom_cells()}):
+            _declare_absence(table_id, display_name(backend), None, "envelope", oom)
     return notes
 
 
@@ -8521,6 +8532,80 @@ def _top_parts_refusal_note(table_id):
             f"next measurement re-measures it.")
     return _next_item("release", _gen(text, who, size, *releases, groups, _REFUSAL_FIXED_IN,
                                       *_REFUSAL_ISSUES, *([str(core_n)] if core_n else [])))
+
+
+# ARCADEDB'S EMBEDDED TIME-SERIES DOCUMENT LOAD RAN OUT OF MEMORY IN THE
+# BINDINGS WE SHIP (CAMPAIGN section 7 row 86; humemai/arcadedb-embedded-python
+# #294, fixed by #295). In the 26.10.1 campaign the l4 `arcadedb_ts_doc` ingest
+# at ts1000 was OOM-killed at the tier's memory cap: `Database.insert_many`
+# held the whole input three times at once (the Python list, one JSON text, one
+# parsed array on the Java heap). The defect is in our bindings and not in the
+# engine; the fix reads 10,000 rows at a time, and the next measurement runs
+# with it. The cell has no row to print, so it is a declared outcome of its own
+# (an `envelope` absence with one plain sentence), not an unexplained failure.
+#
+# KEYED ON THE ROWS, like _top_parts_refusals: the l4 ingest rows at ts1000 of
+# `arcadedb_ts_doc` at this publish's pin, every one OOM-killed (`oom_killed`),
+# and each recording an embedded bindings version below _BINDINGS_FASTER_FROM
+# (the first wheel built with the fix, equal to the next wheel measured). A row
+# that completes stands and the cell prints its number; a failure from a wheel
+# at or above the cut, or one that cannot be placed on a wheel, keeps the
+# generic failed-cell sentence. So the sentence goes by itself once a row from
+# the fixed bindings completes.
+_TS_OOM_BACKEND = "arcadedb_ts_doc"
+_TS_OOM_SCALE = "ts1000"
+_TS_OOM_HOSTS = 1000
+_TS_OOM_CACHE = None
+
+
+def _ts_doc_oom_cells():
+    """{("l4", "ts1000", "arcadedb_ts_doc", "ingest")} when the rows behind
+    this publish declare the cell, else the empty set (see the comment above)."""
+    global _TS_OOM_CACHE
+    if _TS_OOM_CACHE is not None:
+        return _TS_OOM_CACHE
+    pin = os.environ.get("BENCH_ENGINE_COMMIT", "").strip()
+
+    def at_pin(r):
+        if not pin:
+            return True
+        got = str(r.get("engine_commit") or "")
+        return bool(got) and (got.startswith(pin) or pin.startswith(got))
+
+    rows = [r for r in _run_log_rows()
+            if r.get("lane") == "l4" and r.get("backend") == _TS_OOM_BACKEND and at_pin(r)
+            and str(r.get("instrument") or "") == "2026-10"]
+    mine = [r for r in rows if str(r.get("scale")) == _TS_OOM_SCALE and r.get("workload") == "ingest"]
+    out = set()
+    if mine and all(str(r.get("error") or "").strip() or str(r.get("rc") or "") not in ("", "0", "None")
+                    for r in mine):
+        def killed(r):
+            return str(r.get("oom_killed")).strip().lower() in ("true", "1")
+
+        def wheel(r):
+            got = _one_list_release(r.get("engine_version"))
+            if got:
+                return got
+            sib = {_one_list_release(o.get("engine_version")) for o in rows
+                   if o.get("engine_commit") == r.get("engine_commit")}
+            sib.discard(None)
+            return next(iter(sib)) if len(sib) == 1 else None
+
+        if all(killed(r) and wheel(r) and _bindings_behind([wheel(r)]) for r in mine):
+            out = {("l4", _TS_OOM_SCALE, _TS_OOM_BACKEND, "ingest")}
+    _TS_OOM_CACHE = out
+    return out
+
+
+def _ts_doc_oom_note(table_id):
+    """The one sentence the declared cell carries, or None."""
+    if table_id != "l4" or not _OCTOBER_ENV or not _ts_doc_oom_cells():
+        return None
+    hosts = f"{_TS_OOM_HOSTS:,}"
+    return _next_item("ts_doc_oom", _gen(
+        f"ArcadeDB's embedded time-series document load at {hosts} hosts ran out of memory because the "
+        f"Python bindings held the whole load in memory at once; the bindings are fixed and the next "
+        f"measurement runs it again.", hosts))
 
 
 def _refusal_entries(table):
