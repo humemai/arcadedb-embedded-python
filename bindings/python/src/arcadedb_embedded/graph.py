@@ -25,6 +25,21 @@ def _graph_classes():
     return _GRAPH_CLASSES
 
 
+_GRAPH_CALLS = None
+
+
+def _graph_calls():
+    """``com.arcadedb.python.GraphCalls`` from the bridge jar; None (with the
+    bridge's usual one warning) when the jar is missing, which sends the caller
+    down the plain path."""
+    global _GRAPH_CALLS
+    if _GRAPH_CALLS is None:
+        from .results import _bridge_class
+
+        _GRAPH_CALLS = _bridge_class("GraphCalls") or False
+    return _GRAPH_CALLS or None
+
+
 class Document:
     """Wrapper for ArcadeDB Document.
 
@@ -214,6 +229,14 @@ class Vertex(Document):
     def get_out_edges(self, *labels: str) -> List["Edge"]:
         """Get outgoing edges."""
         self._check_open()
+        calls = _graph_calls()
+        if calls is not None:
+            # every edge in one crossing instead of a hasNext and a next each
+            database = self._database
+            return [
+                Edge(edge, database)
+                for edge in calls.outEdges(self._java_document, *labels)
+            ]
         direction = jpype.JClass("com.arcadedb.graph.Vertex$DIRECTION").OUT
         java_edges = (
             self._java_document.getEdges(direction, *labels)
@@ -225,6 +248,14 @@ class Vertex(Document):
     def get_in_edges(self, *labels: str) -> List["Edge"]:
         """Get incoming edges."""
         self._check_open()
+        calls = _graph_calls()
+        if calls is not None:
+            # every edge in one crossing instead of a hasNext and a next each
+            database = self._database
+            return [
+                Edge(edge, database)
+                for edge in calls.inEdges(self._java_document, *labels)
+            ]
         direction = jpype.JClass("com.arcadedb.graph.Vertex$DIRECTION").IN
         java_edges = (
             self._java_document.getEdges(direction, *labels)
@@ -236,6 +267,14 @@ class Vertex(Document):
     def get_both_edges(self, *labels: str) -> List["Edge"]:
         """Get both incoming and outgoing edges."""
         self._check_open()
+        calls = _graph_calls()
+        if calls is not None:
+            # every edge in one crossing instead of a hasNext and a next each
+            database = self._database
+            return [
+                Edge(edge, database)
+                for edge in calls.bothEdges(self._java_document, *labels)
+            ]
         direction = jpype.JClass("com.arcadedb.graph.Vertex$DIRECTION").BOTH
         java_edges = (
             self._java_document.getEdges(direction, *labels)

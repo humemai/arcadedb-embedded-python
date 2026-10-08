@@ -11,10 +11,12 @@ sources live in `bindings/python/src/java/com/arcadedb/python/`:
 | `EdgeBatcher` | Buffers a whole batch of edges into `GraphBatch` from one call (RID strings, or JSON rows for edges with properties) |
 | `VertexBatcher` | Creates a whole batch of vertices from one JSON-rows string, returning all RIDs as one joined string |
 | `TimeSeriesBatcher` | Fills the engine's primitive `TimeSeriesBatch` one column per call, so numeric samples are never boxed |
-| `RowAccess` | Hands a row's names and values to Python in one call (`namesAndValues`), and up to N such rows per call (`nextRows`); the values are the engine's own objects, so Python converts them with full type fidelity. Also the first row of a result set with the set closed (`firstAndClose`, behind `ResultSet.first()`) and a property or null (`propertyOrNull`, behind `Result.get()`), each in one call instead of two or three |
+| `RowAccess` | Hands a row's names and values to Python in one call (`namesAndValues`), and up to N such rows per call (`nextRows`, the fallback for `to_list()` when the bridge jar lacks `TypedRows`); the values are the engine's own objects, so Python converts them with full type fidelity. Also the first row of a result set with the set closed (`firstAndClose`, behind `ResultSet.first()`) and a property or null (`propertyOrNull`, behind `Result.get()`), each in one call instead of two or three |
+| `TypedRows` | Up to N rows per call as one JSON string, type-faithful (`nextRows`): DECIMAL, BigInteger, DATE, DATETIME, Instant and zoned values, and sets are tagged and restored exactly by Python, and every other value (RIDs, embedded documents, `float[]` and `double[]`, non-finite floats, maps with non-String keys, years Python cannot hold) is returned in a side array as the engine's own object and converted by Python as before. Behind `ResultSet.to_list()` (1,000 rows per call) and `ResultSet.iter_dicts()` (one row per call, so a lazy caller reads rows when it asks) |
+| `GraphCalls` | Every edge of `Vertex.getEdges(direction, labels)` in one call (`outEdges`, `inEdges`, `bothEdges`, behind `Vertex.get_out_edges()` and its siblings), and the record and score of every vector search hit in one call (`hits`, behind `LSMVectorIndex` search results) |
 | `DbCalls` | One-row statements and lookups in one call: `commandNamed`, `queryNamed`, `commandPositional`, and `queryPositional` take the parameters as the varargs of a single non-overloaded method and build the map Java-side (behind `Database.command()` and `Database.query()`), and `lookupFirst` is the whole of `Database.lookup_by_key()` |
 
-`RowBatcher.nextJsonBatch` and `RowAccess.nextRows` return fewer rows than asked for only when the result set is drained, and they close it before returning. Python therefore stops after a short batch and makes no further call into the bridge, not even `close()`: a one-row `to_list()` or `to_json_list()` costs one call into the bridge.
+`RowBatcher.nextJsonBatch`, `TypedRows.nextRows`, and `RowAccess.nextRows` return fewer rows than asked for only when the result set is drained, and they close it before returning. Python therefore stops after a short batch and makes no further call into the bridge, not even `close()`: a one-row `to_list()` or `to_json_list()` costs one call into the bridge.
 
 ## Why it exists
 
@@ -36,7 +38,9 @@ crossing per batch**, receiving a bulk payload it can decode at C speed: the
 | Python API | Bridge class |
 |---|---|
 | `ResultSet.to_json_list()` / `iter_json_batches()` | `RowBatcher` |
-| `ResultSet.to_list()` (rows in batches), `Result.to_dict()` (one row) | `RowAccess` |
+| `ResultSet.to_list()` (rows in batches), `ResultSet.iter_dicts()` (one row per call) | `TypedRows` |
+| `Result.to_dict()` (one row) | `RowAccess` |
+| `Vertex.get_out_edges()` / `get_in_edges()` / `get_both_edges()`, vector search results | `GraphCalls` |
 | `ResultSet.to_columns()` / fast `to_dataframe()` / `to_arrow()` | `ColumnBatcher` |
 | `Database.insert_many()` | `DocumentBatcher` |
 | `Database.insert_columns()` | `DocumentBatcher` |

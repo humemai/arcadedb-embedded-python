@@ -587,9 +587,9 @@ cities = [r.get("city") for r in db.query("sql", "SELECT city FROM Person GROUP 
 
 ### ResultSet Methods
 
-Use `first()` or direct iteration when you want the lowest-overhead path.
-`to_list()` eagerly materializes the full result set into Python dictionaries, so it
-is best reserved for smaller results or explicit interop steps.
+Use `first()` or direct iteration when you want the lowest-overhead path for one row
+or a few. `to_list()` eagerly materializes the full result set into Python
+dictionaries, in batches, and is the fast way to take a whole result as row dicts.
 
 ```python
 # first() - get first result
@@ -620,21 +620,26 @@ bulk APIs when you're taking everything from a large result.**
 - Use `first()` when you only need one row.
 - Use direct iteration plus `get()` when you read only some columns, need live
     records (`get_element()`), or may stop early. Ideal for small/medium results;
-    on very large results it pays a per-row boundary cost.
+    each `get()` is a crossing into the JVM.
+- Use `iter_dicts()` to stream rows as dicts: one row per crossing, read when you ask
+    for it (3.6x faster than it was on a 10,000-row, nine-property scan).
+- Use `to_list()` to take the whole result as row dicts with full Python-type
+    fidelity (`date`, `datetime`, `Decimal`). Rows come over in batches (7.1x faster
+    than it was on the same scan: 261 ms to 37 ms, laptop, 2026-10-08).
 - Use `to_columns()` / `to_dataframe()` to bulk-load large results into
-    numpy/pandas. This is the fastest path (~12x over `to_list()` on a
-    10,000-row, nine-property scan, laptop, 2026-09-27), with typed columns
-    including real `datetime64`.
+    numpy/pandas. This is the fastest path (about 28 ms against 37 ms for `to_list()` on that
+    scan), with typed columns including real `datetime64`.
 - Use `to_json_list()` (or `iter_json_batches()` when it may not fit in memory)
-    to bulk-load large results as plain dicts. JSON-native types: `DATE` and
-    `DATETIME` values arrive as epoch-millisecond integers.
-- Use `to_list()` when you need full Python-type fidelity (`datetime`,
-    `Decimal`) as row dicts and the result is not huge.
+    only when you want JSON-native values (`DATE` and `DATETIME` as
+    epoch-millisecond integers, `DECIMAL` as float) or need to bound memory with
+    batches; it costs about the same as `to_list()`.
 - Use wrapper `to_dict()` only when you truly want the full document in Python.
 
-On JPype 1.7.1, the newest release, `to_list()` and `Result.get()` also keep a
-Python object for every number they return, which adds up on very large reads;
-`to_json_list()` and `to_columns()` do not (see [Known Engine Issues](../known-issues.md)).
+On JPype 1.7.1, the newest release, `Result.get()` and the values of an object
+that the batched paths hand over as engine objects keep a Python object for every
+number they return, which adds up on very large reads; `to_list()`, `iter_dicts()`,
+`to_json_list()` and `to_columns()` do not for plain numbers (see
+[Known Engine Issues](../known-issues.md)).
 
 A result set closes itself when it is exhausted (by iteration or any `to_*`
 method) and when `first()` or `one()` returns. If you stop reading early and keep
@@ -654,15 +659,14 @@ with db.query("sql", "SELECT name, score FROM Item WHERE score > ?", 100) as res
         if row.get("score") > 1000:
             break
 
-# Bulk materialization as dicts (~5.5x faster than to_list on a wide scan):
-# rows are JSON-serialized in batches on the Java side. Values carry
-# JSON-native types (DATE and DATETIME values arrive as epoch-millisecond
-# integers, not datetime).
-rows = db.query("sql", "SELECT FROM Item").to_json_list()
-
-# Materialize with full Python-type fidelity (datetime, Decimal, ...)
+# Bulk materialization as dicts with full Python-type fidelity (date,
+# datetime, Decimal, ...): rows come over in batches
 result = db.query("sql", "SELECT name, score FROM Item WHERE score > ?", 100)
 payload = result.to_list()
+
+# Same shape with JSON-native values (DATE and DATETIME values arrive as
+# epoch-millisecond integers, not datetime), in bounded batches
+rows = db.query("sql", "SELECT FROM Item").to_json_list()
 
 # For wrappers, prefer field access over full dict conversion in large loops
 for doc in db.query("sql", "SELECT FROM Person"):

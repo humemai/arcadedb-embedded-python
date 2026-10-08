@@ -4,6 +4,9 @@ ArcadeDB Python Bindings - Result Set Wrappers
 ResultSet and Result classes for wrapping query results.
 """
 
+import json
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
 import jpype as _jpype
@@ -16,6 +19,42 @@ from .type_conversion import convert_java_to_python
 
 _logger = get_logger(__name__)
 _BRIDGE_CLASSES: dict = {}
+
+
+# Rows per crossing for ResultSet.to_list(): large enough that the per-batch
+# cost (one crossing, one decoder) disappears, small enough that the JSON text
+# of a wide batch stays a few megabytes.
+_TYPED_BATCH_ROWS = 1000
+
+_TYPED_TAG = "\u0001"
+_TYPED_SIMPLE = {
+    "n": Decimal,
+    "i": int,
+    "D": date.fromisoformat,
+    "T": datetime.fromisoformat,
+    "Z": datetime.fromisoformat,
+    "s": set,
+}
+
+
+def _typed_hook(side):
+    """The json object_hook that restores the values TypedRows tagged."""
+
+    def hook(obj):
+        tagged = obj.get(_TYPED_TAG)
+        if tagged is None:
+            return obj
+        kind, payload = tagged
+        restore = _TYPED_SIMPLE.get(kind)
+        if restore is not None:
+            return restore(payload)
+        if kind == "x":
+            return convert_java_to_python(side[payload])
+        # "r": a row whose property name is the tag key, sent as names and values
+        pair = side[payload]
+        return {str(n): convert_java_to_python(v) for n, v in zip(pair[0], pair[1])}
+
+    return hook
 
 
 def _bridge_class(name):
@@ -307,25 +346,19 @@ class ResultSet:
         """
         Convert all results to list of dictionaries.
 
-        More efficient than iterating manually: rows come over from the JVM in
-        batches (the bridge's ``RowAccess``), but each value is still converted
-        to its Python type one by one, which is what buys full Python-type
-        fidelity and what keeps this the slowest way to materialize a large
-        result.
+        Rows come over from the JVM in batches (the bridge's ``TypedRows``):
+        Java writes each batch as JSON, tags the values JSON cannot carry
+        exactly (DECIMAL, DATE, DATETIME, sets) and hands everything else
+        (RIDs, embedded documents, ``float[]``, ...) over as the engine's own
+        object, so each value has the Python type it always had and no value
+        crosses the JVM boundary on its own. That is within a few percent of
+        ``to_json_list()`` on a wide scan (see the performance guide).
 
-        For large results, in increasing order of how much they change your
-        code:
-
-        - ``to_json_list()`` returns the SAME shape, a list of dicts, and is
-          measured ~5.5x faster on a 10,000-row, nine-property scan (578 ms
-          against 103 ms, laptop, 2026-09-27).
-          The trade-off is JSON-native values: DATE and DATETIME values
-          arrive as epoch-millisecond integers and DECIMALs as floats, so it
-          is a drop-in only when the result carries neither.
-        - ``to_columns()``, ``to_dataframe()`` or ``to_arrow()`` move the data
-          as columns and are faster still (~12x on the same scan: 47 ms).
-
-        See the performance guide.
+        For large results, ``to_columns()``, ``to_dataframe()`` or
+        ``to_arrow()`` move the data as columns and are faster still.
+        ``to_json_list()`` returns the same shape with JSON-native values
+        (DATE and DATETIME as epoch-millisecond integers, DECIMAL as float),
+        which only matters when you want that form.
 
         Args:
             convert_types: Convert Java types to Python (default: True)
@@ -342,8 +375,12 @@ class ResultSet:
         if convert_types:
             # The whole result is consumed, so rows can come over in batches:
             # one crossing per batch instead of hasNext/next and a Result
-            # wrapper per row. iter_dicts() stays row by row, because a batch
-            # taken ahead would consume rows a lazy caller may still want.
+            # wrapper per row. iter_dicts() reads one row per crossing instead,
+            # because a batch taken ahead would consume rows a lazy caller may
+            # still want.
+            typed_rows = _bridge_class("TypedRows")
+            if typed_rows is not None:
+                return self._to_list_typed(typed_rows)
             row_access = _bridge_class("RowAccess")
             if row_access is not None:
                 out: List[Dict[str, Any]] = []
@@ -369,9 +406,42 @@ class ResultSet:
                         return out
         return list(self.iter_dicts(convert_types=convert_types))
 
+    def _to_list_typed(self, typed_rows) -> List[Dict[str, Any]]:
+        """``to_list()`` through the bridge's ``TypedRows``.
+
+        Java writes each batch as JSON and tags the values JSON cannot carry
+        exactly (DECIMAL, dates and datetimes, sets) and refers to everything
+        else (RIDs, embedded documents, non-finite floats, ...) by index into
+        a side array of the engine's own objects, so every value comes back
+        as the type ``convert_java_to_python`` gives it. The C ``json`` module
+        parses the text and one hook call per tagged value restores it.
+        """
+        out: List[Dict[str, Any]] = []
+        if not self._readable():
+            return out
+        while True:
+            try:
+                java_batch = typed_rows.nextRows(
+                    self._java_result_set, _TYPED_BATCH_ROWS
+                )
+            except JException as exc:
+                raise _read_error(exc) from exc
+            side = java_batch[1]
+            rows = json.loads(str(java_batch[0]), object_hook=_typed_hook(side))
+            out.extend(rows)
+            if len(rows) < _TYPED_BATCH_ROWS:
+                # a short batch is the last one, and the bridge closed the
+                # result set: no second call just to see an empty batch
+                self._drained()
+                return out
+
     def iter_dicts(self, convert_types: bool = True) -> Iterator[Dict[str, Any]]:
         """
         Iterate results as dictionaries.
+
+        Each row is read when you ask for it, in one crossing into the JVM
+        (``TypedRows``, as for ``to_list()``), so stopping early or changing
+        records inside the loop behaves as it always did.
 
         Args:
             convert_types: Convert Java types to Python (default: True)
@@ -379,8 +449,29 @@ class ResultSet:
         Yields:
             Result rows as dictionaries
         """
-        for result in self:
-            yield result.to_dict(convert_types=convert_types)
+        typed_rows = _bridge_class("TypedRows") if convert_types else None
+        if typed_rows is None:
+            for result in self:
+                yield result.to_dict(convert_types=convert_types)
+            return
+        # One row per crossing, read when the caller asks for it, exactly as
+        # before (a batch taken ahead would read rows a lazy caller may not
+        # want, or that its own loop body is about to change). It replaces the
+        # hasNext, next, wrapper, and per-property reads of the row-by-row
+        # path with one crossing and one JSON parse.
+        while self._readable():
+            try:
+                java_batch = typed_rows.nextRows(self._java_result_set, 1)
+            except JException as exc:
+                raise _read_error(exc) from exc
+            rows = json.loads(
+                str(java_batch[0]), object_hook=_typed_hook(java_batch[1])
+            )
+            if not rows:
+                # nextRows closed the drained result set itself
+                self._drained()
+                return
+            yield rows[0]
 
     def close(self) -> None:
         """
@@ -425,14 +516,15 @@ class ResultSet:
         The fast path for large result sets: rows are serialized to JSON in
         batches on the Java side (one JPype crossing per batch instead of
         several per row) and parsed with the C json module. Measured ~5.5x
-        faster than ``to_list()`` on a 10,000-row, nine-property scan (578 ms
-        against 103 ms, laptop, 2026-09-27).
+        faster than ``to_list()`` used to be on a 10,000-row, nine-property
+        scan (578 ms against 103 ms, laptop, 2026-09-27); ``to_list()`` now
+        reads rows the same way and keeps the Python types.
 
-        Trade-off: values carry JSON-native types. Numbers, strings, booleans,
-        lists and nested maps convert as expected, but DATE and DATETIME
-        values arrive as epoch-millisecond integers (not ``datetime``) and
-        DECIMALs as floats. Use
-        ``to_list()`` when full Python-type fidelity matters more than speed.
+        Values carry JSON-native types. Numbers, strings, booleans, lists and
+        nested maps convert as expected, but DATE and DATETIME values arrive
+        as epoch-millisecond integers (not ``datetime``) and DECIMALs as
+        floats. Use ``to_list()`` when you want ``date``, ``datetime`` and
+        ``Decimal`` values: it costs about the same.
 
         Args:
             batch_size: Rows serialized per Java crossing (default 10000)

@@ -81,7 +81,7 @@ Tests: `tests/test_sigint.py` covers a Python loop and a Java call that Ctrl-C c
 It has no test of the waits above, because the failure is random (humemai/arcadedb-embedded-python#179).
 
 
-## `to_list()` and `Result.get()` keep a Python object for every number that comes back from Java
+## `Result.get()` keeps a Python object for every number that comes back from Java
 
 JPype 1.7.1, the newest release and the one a fresh install gets (the package declares
 `jpype1>=1.5.0`; 1.6.0 leaks too, [jpype-project/jpype#1379](https://github.com/jpype-project/jpype/issues/1379));
@@ -92,13 +92,16 @@ leak in JPype, not in ArcadeDB.
 JPype 1.7.1 keeps one Python object (about 32 bytes) for every number that comes back from Java
 as a boxed `Long`, `Integer`, `Short`, `Byte`, `Float`, or `Double`, and never frees it before the
 process ends. Through the bindings that is about 3.9 objects per row for a scan of nine
-properties read with `to_list()`, `Result.get()`, `Result.to_dict()`, or `iter_dicts()`, about
-125 bytes per row, or 1.2 GB for 10 million rows. Small integers and booleans are cached by
-Python and do not count, so only values above 256 and floats leak. `to_json_list()` and
-`to_columns()` did not leak in the same runs (0 objects per row).
+properties read with `Result.get()` or `Result.to_dict()`, about 125 bytes per row, or 1.2 GB
+for 10 million rows. Small integers and booleans are cached by Python and do not count, so
+only values above 256 and floats leak. `to_list()` and `iter_dicts()` read numbers from
+JSON text, as `to_json_list()` and `to_columns()` do, so plain numbers do not leak there
+(only a value the transport hands over as the engine's own object, such as a `float[]`,
+is a number JPype boxes). The 3.9 objects per row above were measured when `to_list()` and
+`iter_dicts()` converted each value in Python.
 
-Read a large result with `to_json_list()` or `to_columns()`, which also cross the JVM faster,
-or upgrade JPype to the release that carries the fix when it ships. Count the live Python
+Read a large result with `to_list()`, `iter_dicts()`, `to_json_list()`, or `to_columns()`
+rather than a `get()` per value, or upgrade JPype to the release that carries the fix when it ships. Count the live Python
 objects with `sys.getallocatedblocks()` before and after a read to see whether your path is
 affected.
 

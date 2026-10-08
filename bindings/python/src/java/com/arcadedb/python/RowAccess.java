@@ -16,7 +16,8 @@
  *
  * Compiled into arcadedb-python-bridge.jar during the wheel build
  * (scripts/Dockerfile.build and scripts/build-native.sh) and consumed by
- * Result.to_dict() and ResultSet.to_list() in the Python bindings.
+ * Result.to_dict() in the Python bindings (ResultSet.to_list() and iter_dicts() read through TypedRows, and fall back to
+ * nextRows only when that class is missing).
  */
 package com.arcadedb.python;
 

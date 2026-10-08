@@ -469,8 +469,8 @@ for row in result:
 ```
 
 When you do need the whole result materialized, prefer the bulk APIs
-(`to_columns()`/`to_dataframe()` or `to_json_list()`) over `list(result)` /
-`to_list()`; see the [Performance guide](../guide/performance.md).
+(`to_columns()`/`to_dataframe()`) over `list(result)`; `to_list()` is the fast
+way to take row dicts. See the [Performance guide](../guide/performance.md).
 
 ---
 

@@ -71,7 +71,7 @@ the MongoDB query language are not bundled (`scripts/jar_exclusions.txt`).
 
 - ✅ Pythonic iteration (`ResultSet.__iter__`, `__next__`)
 - ✅ `ResultSet` helpers: `first()`, `one()`, `count()`, `close()`
-- ✅ Row materialization: `to_list()` / `iter_dicts()` (full Python types), `to_json_list()` / `iter_json_batches()` (same list-of-dicts shape, ~5.5x faster than `to_list()` on a wide scan, JSON-native values), `iter_chunks()`
+- ✅ Row materialization: `to_list()` / `iter_dicts()` (full Python types), `to_json_list()` / `iter_json_batches()` (same list-of-dicts shape with JSON-native values; `to_list()` costs about the same), `iter_chunks()`
 - ✅ Columnar materialization: `to_columns()`, `to_arrow()`, `to_dataframe()`
 - ✅ `Result.get()`, `has_property()`, `get_property_names()`
 - ✅ `Result.to_json()`, `to_dict()` (Python enhancement)
