@@ -1336,6 +1336,9 @@ NOT_PRINTED = [
      "the query heap budget (MB) an ArcadeDB arm of the documents lane ran with when the override was on (DECISIONS #175), read from the "
      "engine (embedded: GlobalConfiguration; served: the server's settings over HTTP) or named as the request in the source field when "
      "the engine could not be asked: the evidence behind the sentence that names the raised budget"),
+    (r"^dense_id_index$",
+     "the statement that built the dense arm's index on the vector id when BENCH_DENSE_ID_INDEX was on (#291, DECISIONS #178), or "
+     "\"key\" where the engine's own record key is the id: the evidence behind the sentence that names the id index"),
     (r"^sparse_warmup_queries$",
      "how many untimed searches the sparse lane ran on this engine before the timed pass when the warm-up was on (DECISIONS #177): "
      "the evidence behind the sentence that names the warm-up"),

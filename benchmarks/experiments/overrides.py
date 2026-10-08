@@ -477,6 +477,33 @@ def _arcadedb_query_ram(rows):
             "table have no such limit.", [str(int(float(got[0]))), f"{int(float(got[0])):,}"] if len(got) == 1 and _int(got[0]) else [])
 
 
+# THE DENSE ID INDEX (humemai/arcadedb-embedded-python#291, CAMPAIGN section 7 row 84, DECISIONS #178): OFF unless the launching
+# environment sets BENCH_DENSE_ID_INDEX=1, so the override is in force for exactly the rows that carry the stamp. Every dense arm
+# stamps it when on: the statement that built its id index, or "key" where its own record key is the id.
+DENSE_ID_INDEX_CARRIERS = tuple(("l3d", be) for be in (
+    "arcadedb_dense_embedded", "arcadedb_dense_embedded_int8", "arcadedb_dense_server", "arcadedb_dense_server_int8",
+    "pgvector_dense", "neo4j_dense", "neo4j_dense_int8", "memgraph_dense", "memgraph_dense_int8", "falkordb_dense",
+    "duckdb_vss_dense", "lancedb_dense", "lancedb_dense_fp32", "chroma_dense", "qdrant_dense", "qdrant_dense_int8",
+    "milvus_dense", "milvus_dense_int8", "elasticsearch_dense", "elasticsearch_dense_int8", "mongodb_dense",
+    "mongodb_dense_int8", "arangodb_dense", "arangodb_dense_int8", "surrealdb_dense", "surrealdb_dense_server",
+    "sqlite_vec_dense", "sqlite_vec_dense_int8", "ladybug_dense"))
+
+
+def _id_index_in_force(row):
+    return _present(row.get("dense_id_index"))
+
+
+def _id_index_is_named(row, v):
+    return None if str(v or "").strip() else "is empty, so a reader cannot tell which index the delete used"
+
+
+def _dense_id_index(rows):
+    return ("The rows of this table that carry the id-index stamp ran with an index on the vector's id in every engine: "
+            "ArcadeDB, pgvector, Neo4j, Memgraph, FalkorDB, DuckDB, and LanceDB built one on the empty store before the load, "
+            "so it is counted in the load time, and the other engines find a record by a key they always index. The delete "
+            "finds each vector through that index.", [])
+
+
 # THE SPARSE WARM-UP AND THE IDLE-STATE HOLD (CAMPAIGN section 7 row 81, DECISIONS #177): both OFF unless the launching environment asks, so the
 # override is in force for exactly the rows that carry the stamp. The warm-up is the sparse lane's; the hold is the runner's and stamps every
 # row of every lane, and its sentence is owed under the sparse table, the lane whose single-client times sit near the wake-up latency.
@@ -628,6 +655,13 @@ OVERRIDES = (
         says=(r"ArcadeDB", r"query heap budget", r"default"),
         companions=("arcadedb_query_max_heap_ram_source",),
         applies=_query_ram_in_force),
+    Override(
+        key="dense_id_index",
+        setting="BENCH_DENSE_ID_INDEX=1: an index on the vector id before the load",
+        carriers=tuple(Carrier(lane, be, "dense_id_index") for lane, be in DENSE_ID_INDEX_CARRIERS),
+        check=_id_index_is_named, sentence=_dense_id_index,
+        says=(r"id-index", r"every engine", r"load time"),
+        applies=_id_index_in_force, in_manifest=False),
     Override(
         key="sparse_warmup",
         setting="BENCH_SPARSE_WARMUP untimed searches before the timed pass",
