@@ -251,6 +251,20 @@ class TestScalarParametersTakeTheShortPath:
         assert rows == [{"k": "set"}]
         assert counted == []
 
+    def test_a_java_array_value_is_not_converted_and_binds_as_before(self, db, counted):
+        # a vector already converted with to_java_float_array (#276): the general path returned it
+        # unchanged after the conversion walk, so the short path passes it as it is
+        vec = jpype.JArray(jpype.JFloat)([0.5, 1.5, 2.5])
+        with db.transaction():
+            db.command(
+                "sql", "INSERT INTO T SET k = :k, emb = :e", {"k": "named", "e": vec}
+            )
+            db.command("sql", "INSERT INTO T SET k = ?, emb = ?", "positional", vec)
+        assert counted == []
+        rec = _records(db)
+        assert [float(x) for x in rec["named"]["emb"]] == [0.5, 1.5, 2.5]
+        assert [float(x) for x in rec["positional"]["emb"]] == [0.5, 1.5, 2.5]
+
     def test_every_scalar_type_binds_as_before(self, db):
         with db.transaction():
             db.command(
