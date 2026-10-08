@@ -90,3 +90,32 @@ def test_release_rows_keep_the_table_lines_too(EW, note):
 
 def test_the_refusal_sentence_uses_the_same_constant(EW):
     assert EW._REFUSAL_FIXED_IN == EW._PAPER_RELEASE == "26.11.1"
+
+
+BINDINGS = ("newer Python bindings, which are faster at reading results and binding parameters, so ArcadeDB's embedded numbers "
+            "are expected to move for that reason as well as for the engine release.")
+
+
+def test_bindings_line_shows_on_26_10_1_rows(EW, note):
+    for rows in (_release_rows("26.10.1"), [("arcadedb_embedded", "26.10.1.dev0"), ("arcadedb_server", SERVED.format(v="26.10.1"))]):
+        out = note(rows)
+        [line] = [x for x in out if "Python bindings" in x]
+        assert line.startswith("The next measurement also runs ArcadeDB on ") and BINDINGS in line
+        assert not re.search(r"\b(lane|cell|row|arm|harness|wheel)s?\b|#\d", line)      # PAGE-SPEC: the reader's language
+        assert ".notes" not in line
+
+
+def test_bindings_line_goes_with_the_new_wheel(EW, note):
+    # a new wheel on an old-release server row keeps the release line but not the bindings line
+    out = note([("arcadedb_embedded", "26.11.1"), ("arcadedb_server", SERVED.format(v="26.10.1"))])
+    assert any("carry over" in x for x in out) and not any("Python bindings" in x for x in out)
+    assert note(_release_rows("26.11.1")) == []
+
+
+def test_served_rows_alone_do_not_trigger_the_bindings_line(EW, note):
+    out = note([("arcadedb_server", SERVED.format(v="26.10.1"))])
+    assert not any("Python bindings" in x for x in out)
+
+
+def test_the_bindings_constant_is_a_version(EW):
+    assert re.fullmatch(r"\d+\.\d+\.\d+", EW._BINDINGS_FASTER_FROM)
