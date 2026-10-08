@@ -199,30 +199,14 @@ def _row(**kw):
     return r
 
 
-def test_page_sentence_while_a_served_arcadedb_ts_row_read_a_buffered_answer(EW, monkeypatch):
-    monkeypatch.setattr(EW, "_OCTOBER_ENV", True)
-    monkeypatch.setattr(EW, "_NEXT_ITEM_SENTENCES", {})
-    s = EW._ts_ndjson_note("l4", [_row()])
-    assert s and "served ArcadeDB arms" in s and "PostgreSQL and MongoDB" in s
-    assert s in EW._NEXT_ITEM_SENTENCES["ts_ndjson"]
-    assert EW._ts_ndjson_note("l4", [_row(backend="arcadedb_ts_doc_server")]) == s
-    assert EW._ts_ndjson_note("l4", [_row(arcadedb_ts_result_format="ndjson")]) is None
-    assert EW._ts_ndjson_note("l4", [_row(backend="arcadedb_ts_native")]) is None     # embedded arms have no HTTP answer
-    assert EW._ts_ndjson_note("l4", [_row(backend="timescaledb")]) is None
-    assert EW._ts_ndjson_note("l4", [_row(q_high_ms=None)]) is None                   # no query measured, nothing to say
-    assert EW._ts_ndjson_note("l3d", [_row()]) is None
-
-
-def test_next_measurement_line_says_the_results_are_read_as_a_stream(EW, monkeypatch):
+def test_the_page_promises_no_stream(EW, monkeypatch):
+    """The switch measured mixed at ts100 (documents 0.853 [0.713, 0.928], native 1.087 [1.083, 1.088] with the merged
+    whole-body reader), so it stays off at 26.11.1 and the page says nothing about it: no table sentence, no
+    next-measurement line (CAMPAIGN section 7 row 85)."""
+    assert not hasattr(EW, "_ts_ndjson_note")
     monkeypatch.setattr(EW, "_OCTOBER_ENV", True)
     monkeypatch.setattr(EW, "SKELETON", False)
     monkeypatch.setattr(EW, "_FROZEN_ROWS", [{"backend": "arcadedb_embedded", "engine_version": "26.10.1"}])
     monkeypatch.setattr(EW, "_NEXT_ITEM_SENTENCES", {})
-    s = EW._ts_ndjson_note("l4", [_row()])
-    out = EW._next_measurement_note([{"id": "l4", "title": "Time series", "conditions": [s]}])
-    [line] = [x for x in out if "as a stream" in x]
-    assert "Time series" in line and "served time-series results" in line and "as the other served engines do" in line
-    monkeypatch.setattr(EW, "_NEXT_ITEM_SENTENCES", {})
-    assert EW._ts_ndjson_note("l4", [_row(arcadedb_ts_result_format="ndjson")]) is None
     out = EW._next_measurement_note([{"id": "l4", "title": "Time series", "conditions": []}])
-    assert not [x for x in out if "as a stream" in x]
+    assert not [x for x in out if "stream" in x]
