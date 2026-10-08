@@ -31,6 +31,37 @@ gen_docs, gen_queries = _src.gen_docs, _src.gen_queries
 WARMUP = 5
 INGEST_BATCH = 500
 
+# THE UNTIMED WARM-UP (CAMPAIGN section 7 row 81, DECISIONS #177), default OFF. Unset: no warm-up and no row field, so
+# a row is what it was. `BENCH_SPARSE_WARMUP=N` (a positive integer) runs N untimed searches on every backend after the
+# build and before the timed pass, and the row records `sparse_warmup_queries`. The N queries are drawn from the query
+# set by a seeded sample, so every engine gets the same ones, and they are spread over the set instead of being the
+# timed pass's first N (those are the ones the timed pass would otherwise replay from a warm cache). Same count and
+# same rule for every engine, as the documents lane's warm-up uses keys apart from the timed ones.
+WARMUP_ENV = "BENCH_SPARSE_WARMUP"
+WARMUP_SEED = 177
+
+
+def sparse_warmup_n():
+    """The requested warm-up count, or 0 when the switch is unset. A value that is not a positive integer ends the run:
+    a launcher that asked for a warm-up and silently got none would stamp nothing and believe otherwise."""
+    raw = (os.environ.get(WARMUP_ENV) or "").strip()
+    if not raw:
+        return 0
+    try:
+        n = int(raw)
+    except ValueError:
+        n = 0
+    if n <= 0:
+        raise SystemExit(f"{WARMUP_ENV}={raw!r}: must be a positive integer (unset it for no warm-up)")
+    return n
+
+
+def warmup_indices(n, n_queries):
+    """Which queries of the set the warm-up runs: the same for every engine."""
+    import random
+    n = min(n, n_queries)
+    return sorted(random.Random(WARMUP_SEED).sample(range(n_queries), n))
+
 
 def pct(vals):
     v = sorted(vals)
@@ -792,6 +823,16 @@ def main():
     # What the engine reported about the index it built, and any settle it
     # waited for, as the dense lane records it.
     out.update(getattr(b, "row_extra", None) or {})
+
+    # THE UNTIMED WARM-UP, only when asked for (row 81); nothing below changes when it is not.
+    _warm_n = sparse_warmup_n()
+    if _warm_n:
+        _w0 = time.perf_counter()
+        _beat.mark("search-warmup-start", n=_warm_n)
+        for _qi in warmup_indices(_warm_n, len(queries)):
+            b.search(queries[_qi][0], queries[_qi][1], K)
+        out["sparse_warmup_queries"] = min(_warm_n, len(queries))
+        _beat.mark("search-warmup-done", t=f"{round(time.perf_counter() - _w0, 2)}s")
 
     # timed warm search
     _search_t0 = time.perf_counter()

@@ -81,7 +81,7 @@ A campaign file reports "no reader" when you grep the publishing scripts. That i
 | `lean_http.py` | the persistent `http.client` session every ArcadeDB served arm talks HTTP through (CAMPAIGN.md section 7, row 72) | `l1_tabular.py`, `l1_tpc.py`, `l2_graph.py`, `l3_sparse.py`, `l3d_dense.py`, `l4_tsbs.py`, `e2_hybrid.py`, `l5_lifecycle_server.py`, `l6_restart.py`, `deployment_decomp_probe.py` |
 | `overrides.py` | the registry of every override a table shows: the row field read back from the engine, the generated sentence, and the checks (PROTOCOL.md section 7) | the lanes, `export_web.py`, `fairness_check.py`, `page_check.py`, `test_overrides.py` |
 
-The answer digest and its readable sample, the `durability` string, and the thermal fields (BUGS.md F45) are row fields rather than files, so nothing under `results/` holds them separately and a question about any of the three is answered by printing the row.
+The answer digest and its readable sample, the `durability` string, the thermal fields (BUGS.md F45), the idle-state stamps (`cpu_dma_latency_us`, `cpu_dma_latency_held`, `cpu_dma_latency_error`), and `sparse_warmup_queries` are row fields rather than files, so nothing under `results/` holds them separately and a question about any of the three is answered by printing the row.
 
 `equivalence_check.py` reads the frozen set like the other gates and takes `--rows <file>` for a campaign file, a smoke file, or the skeleton freeze, reducing to the newest row per cell before it compares, so a re-run cell does not read as one backend giving two answers.
 

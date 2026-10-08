@@ -30,6 +30,7 @@ import os
 import pwd
 import random
 import re
+import struct
 import subprocess
 import tempfile
 import sys
@@ -2819,6 +2820,74 @@ def _client_tail(job, be, scale, run_id):
             "--scale", scale, "--out", f"/work/results/raw/{run_id}.json"]
 
 
+# THE IDLE-STATE HOLD (CAMPAIGN section 7 row 81, DECISIONS #177), default OFF. With `BENCH_CPU_DMA_LATENCY_US` unset nothing in
+# this block runs and no row field is added. Set (0, 10, ...), the runner opens /dev/cpu_dma_latency, writes the target as a
+# 32-bit integer, and keeps the descriptor open for the length of the timed cell: the kernel honours the target only while the
+# descriptor is open, and it caps how deep a core may sleep. The hold is on the host, so it reaches the container's cores.
+CPU_DMA_LATENCY_ENV = "BENCH_CPU_DMA_LATENCY_US"
+CPU_DMA_LATENCY_DEV = "/dev/cpu_dma_latency"
+
+
+def cpu_dma_latency_target():
+    """The requested target in microseconds, or None when the switch is unset. A value that is not a whole number of
+    microseconds ends the run, because stamping a request that was never made would be a false row."""
+    raw = (os.environ.get(CPU_DMA_LATENCY_ENV) or "").strip()
+    if not raw:
+        return None
+    try:
+        n = int(raw)
+    except ValueError:
+        n = -1
+    if n < 0 or n > 0x7FFFFFFF:
+        raise SystemExit(f"{CPU_DMA_LATENCY_ENV}={raw!r}: must be a whole number of microseconds, 0 or more (unset it for no hold)")
+    return n
+
+
+class CpuDmaLatencyHold:
+    """Context manager: hold the idle-state target for a timed cell. `stamp(row)` writes `cpu_dma_latency_us` and
+    `cpu_dma_latency_held`. A failed hold never fails the cell; the stamp says False and why (`cpu_dma_latency_error`)."""
+
+    def __init__(self, target_us):
+        self.target = target_us
+        self.fd = None
+        self.error = None
+
+    def __enter__(self):
+        if self.target is None:
+            return self
+        try:
+            fd = os.open(CPU_DMA_LATENCY_DEV, os.O_WRONLY)
+        except OSError as e:
+            self.error = f"cannot open {CPU_DMA_LATENCY_DEV}: {e.strerror or e}"
+            return self
+        try:
+            os.write(fd, struct.pack("=i", self.target))
+        except OSError as e:
+            os.close(fd)
+            self.error = f"cannot write {CPU_DMA_LATENCY_DEV}: {e.strerror or e}"
+            return self
+        self.fd = fd
+        return self
+
+    def __exit__(self, *exc):
+        if self.fd is not None:
+            try:
+                os.close(self.fd)
+            except OSError:
+                pass
+            self.fd = None
+        return False
+
+    def stamp(self, row):
+        if self.target is None:
+            return row
+        row["cpu_dma_latency_us"] = self.target
+        row["cpu_dma_latency_held"] = self.error is None and self.fd is not None
+        if self.error:
+            row["cpu_dma_latency_error"] = self.error
+        return row
+
+
 def run_cell(job, rep, scale, cpuset, tier, net_name):
     job["_scale"] = scale
     """Run one cell (backend x workload x scale, one repeat). Returns row dict."""
@@ -3162,7 +3231,9 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                    # row 72): unset or "lean" is the persistent http.client connection,
                    # "requests" restores the October client. CLOSED tuple: a campaign that set it
                    # without this line would have run the default while believing otherwise.
-                   "BENCH_ARCADEDB_HTTP_CLIENT"):
+                   "BENCH_ARCADEDB_HTTP_CLIENT",
+                   # the sparse lane's untimed warm-up, OFF unless set (row 81, DECISIONS #177); the lane reads it in the container
+                   "BENCH_SPARSE_WARMUP"):
             if os.environ.get(_k):
                 bench_env += ["-e", f"{_k}={os.environ[_k]}"]
 
@@ -3733,6 +3804,7 @@ def build_jobs(lanes, workloads_arg):
 
 
 def main():
+    cpu_dma_latency_target()      # a malformed BENCH_CPU_DMA_LATENCY_US ends the run here, not inside a worker thread
     ap = argparse.ArgumentParser()
     ap.add_argument("--lanes", default="l1")
     ap.add_argument("--backends", default="",
@@ -3989,7 +4061,10 @@ def main():
             # truncated batch as success. Now the cell is counted as raised,
             # the traceback printed, the batch goes on, and the exit is 1.
             try:
-                row = run_cell(job, rep, args.scale, shard, args.tier, net_name)
+                # the idle-state hold wraps the timed cell (row 81); with the switch unset the hold is a no-op
+                with CpuDmaLatencyHold(cpu_dma_latency_target()) as _hold:
+                    row = run_cell(job, rep, args.scale, shard, args.tier, net_name)
+                    _hold.stamp(row)
             except Exception:
                 with cv:
                     raised.append(f"{job['lane']}_{job['backend']}_r{rep}")
