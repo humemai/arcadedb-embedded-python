@@ -2412,42 +2412,6 @@ def _dense_id_index_note(table_id, rows):
         "DuckDB, and LanceDB), counts the index in the load time, and measures all of them again."))
 
 
-# ARCADEDB'S SERVED TIME-SERIES ARMS READ ONE BUFFERED ANSWER (CAMPAIGN
-# section 7 row 85). The PostgreSQL arms (psycopg) and the MongoDB arm (a
-# cursor) read rows as their server sends them; the served ArcadeDB arms asked
-# for one JSON answer, which the server builds whole before sending (the
-# high-usage query: 393k rows). BENCH_ARCADEDB_TS_NDJSON=1 reads them as a
-# stream of NDJSON lines instead, and the rows stamp
-# `arcadedb_ts_result_format`. A measured served ArcadeDB TS row without the
-# stamp read the buffered answer. Off-page arms do not hold the sentence up.
-_TS_RESULT_FORMAT_FIELD = "arcadedb_ts_result_format"
-_TS_SERVED_ARCADEDB = ("arcadedb_ts_doc_server", "arcadedb_ts_native_server")
-_TS_QUERY_COLUMNS = ("q_last_ms", "q_range_ms", "q_global_ms", "q_groupby_ms", "q_high_ms", "q_orderlimit_ms")
-
-
-def _ts_buffered_served_rows(rows):
-    """The October served ArcadeDB time-series rows on the page that timed a
-    query through the buffered JSON answer, i.e. that record a query time and
-    no `arcadedb_ts_result_format`."""
-    return [r for r in rows
-            if r.get("lane") == "l4"
-            and str(r.get("instrument") or "") == "2026-10"
-            and str(r.get("backend") or "") in _TS_SERVED_ARCADEDB
-            and str(r.get("backend")) not in OFF_PAGE_ARMS
-            and any(_present_number(r.get(c)) for c in _TS_QUERY_COLUMNS)
-            and not str(r.get(_TS_RESULT_FORMAT_FIELD) or "").strip()]
-
-
-def _ts_ndjson_note(table_id, rows):
-    """The streamed-results sentence for the time-series table, or None when
-    no served ArcadeDB row behind it read a buffered answer."""
-    if table_id != "l4" or not _OCTOBER_ENV or not _ts_buffered_served_rows(rows):
-        return None
-    return _next_item("ts_ndjson", _gen(
-        "The served ArcadeDB arms on this table read each answer only after the server has built "
-        "all of it, where the PostgreSQL and MongoDB arms read rows as their server sends them."))
-
-
 def _sparse_whole_record_note(table_id, rows):
     """The whole-record sentence for the sparse table, or None when every
     ArcadeDB sparse row behind it returned ids."""
@@ -3476,11 +3440,6 @@ def _next_measurement_note(tables):
         items.append(_gen(f"On the {_join_and(dense_idx)} table, the delete finds each vector through "
                           f"an index on its id in every engine, so ArcadeDB and the six engines that "
                           f"had no such index are measured again there.", *dense_idx))
-    ts_stream = carried_by("ts_ndjson")
-    if ts_stream:
-        items.append(_gen(f"On the {_join_and(ts_stream)} table, the next measurement reads ArcadeDB's "
-                          f"served time-series results as a stream, as the other served engines do.",
-                          *ts_stream))
     ts_oom = carried_by("ts_doc_oom")
     if ts_oom:
         items.append(_gen(f"On the {_join_and(ts_oom)} table, ArcadeDB's embedded time-series document "
@@ -9638,7 +9597,6 @@ def main() -> int:
                       _gav_scope_note(_t.get("id"), rows),
                       _sparse_whole_record_note(_t.get("id"), rows),
                       _dense_id_index_note(_t.get("id"), rows),
-                      _ts_ndjson_note(_t.get("id"), rows),
                       _docs_warmup_note(_t.get("id"), rows) if _t.get("id") == "durability" else None):
             if _note:
                 _t.setdefault("conditions", [])
