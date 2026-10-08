@@ -960,7 +960,9 @@ class LanceDB(Base):
         # The engine's own answer, never the option we sent (BUGS F164): the
         # index type from index_stats, and its details (HNSW degree and beam,
         # and `compression` on a quantized index) from list_indices.
-        ix = self.tbl.list_indices()
+        # The VECTOR column's index: with BENCH_DENSE_ID_INDEX=1 the table also holds the id's BTREE, and list_indices
+        # gives no order, so taking the first one read the BTREE back (the #291 smoke).
+        ix = [i for i in self.tbl.list_indices() if list(getattr(i, "columns", None) or []) == ["vector"]]
         applied = self.tbl.index_stats(ix[0].name).index_type if ix else None
         if applied != self.INDEX_TYPE:
             raise RuntimeError(f"lancedb vector index type read back {applied!r}, not {self.INDEX_TYPE!r}: "
