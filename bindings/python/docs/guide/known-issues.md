@@ -100,7 +100,7 @@ JSON text, as `to_json_list()` and `to_columns()` do, so plain numbers do not le
 is a number JPype boxes). The 3.9 objects per row above were measured when `to_list()` and
 `iter_dicts()` converted each value in Python.
 
-Read a large result with `to_list()`, `iter_dicts()`, `to_json_list()`, or `to_columns()`
+Read a large result with `to_list()` (the default), `iter_dicts()`, `to_columns()`, or `to_json_list()` (when you want JSON-native values)
 rather than a `get()` per value, or upgrade JPype to the release that carries the fix when it ships. Count the live Python
 objects with `sys.getallocatedblocks()` before and after a read to see whether your path is
 affected.

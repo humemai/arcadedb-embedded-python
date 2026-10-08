@@ -127,7 +127,8 @@ as it always did. 3.6x faster than before on a 10,000-row, nine-property scan (2
 
 Bulk-materialize all rows via batched Java-side JSON serialization.
 
-The fast path for large result sets: rows are serialized to JSON in batches on the Java
+Use this when you want JSON-native values, for example to send rows to a JSON API. For
+everything else prefer `to_list()`, which is as fast and keeps the exact types. Rows are serialized to JSON in batches on the Java
 side (one JPype crossing per batch instead of several per row) and parsed with the C
 json module. It was ~5.5x faster than `to_list()` on a 10,000-row, nine-property scan
 (578 ms against 103 ms, laptop, 2026-09-27); `to_list()` now reads rows the same way and
@@ -141,8 +142,8 @@ integer `Result.to_json()` writes and `datetime.fromtimestamp(ms / 1000, timezon
 gives the right day. Use `to_list()` when you want `date`, `datetime`, and `Decimal`
 values: it costs about the same.
 
-It is also the fast path for a small result: a one-row read through `to_json_list()` takes
-one Java crossing (a short batch ends the read) and allocates only what the row needs.
+A one-row read through `to_json_list()` takes one Java crossing (a short batch ends the
+read), and `to_list()` reads a short result the same way.
 
 **Parameters:**
 

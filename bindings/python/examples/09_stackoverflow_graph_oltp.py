@@ -1167,7 +1167,7 @@ def arcadedb_insert_edges(
 
 
 def build_arcadedb_rid_lookup(db, vertex_type: str) -> Dict[int, str]:
-    rows = db.query("sql", f"SELECT Id, @rid as rid FROM {vertex_type}").to_json_list()
+    rows = db.query("sql", f"SELECT Id, @rid as rid FROM {vertex_type}").to_list()
     rid_lookup: Dict[int, str] = {}
     for row in rows:
         row_id = row.get("Id")

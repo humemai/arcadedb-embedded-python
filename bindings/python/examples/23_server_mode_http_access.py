@@ -437,7 +437,7 @@ def main() -> int:
             emb, http = [], []
             for _ in range(5):
                 t0 = _time.perf_counter()
-                rows_emb = db.query("sql", sql).to_json_list()
+                rows_emb = db.query("sql", sql).to_list()
                 emb.append((_time.perf_counter() - t0) * 1000)
                 t0 = _time.perf_counter()
                 rows_http = http_json_request(

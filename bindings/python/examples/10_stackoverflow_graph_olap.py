@@ -1220,7 +1220,7 @@ def arcadedb_insert_edges(
 
 
 def build_arcadedb_rid_lookup(db, vertex_type: str) -> Dict[int, str]:
-    rows = db.query("sql", f"SELECT Id, @rid as rid FROM {vertex_type}").to_json_list()
+    rows = db.query("sql", f"SELECT Id, @rid as rid FROM {vertex_type}").to_list()
     rid_lookup: Dict[int, str] = {}
     for row in rows:
         row_id = row.get("Id")
@@ -4090,7 +4090,7 @@ def execute_arcadedb_fast_asker_answerer_pairs(db) -> List[Dict[str, Any]]:
     for row in db.query(
         "sql",
         "SELECT @out.Id AS asker_id, @in.Id AS question_id FROM ASKED",
-    ).to_json_list():
+    ).to_list():
         asker_id = row.get("asker_id")
         question_id = row.get("question_id")
         if asker_id is None or question_id is None:
@@ -4103,7 +4103,7 @@ def execute_arcadedb_fast_asker_answerer_pairs(db) -> List[Dict[str, Any]]:
     for row in db.query(
         "sql",
         "SELECT @out.Id AS answerer_id, @in.Id AS answer_id FROM ANSWERED",
-    ).to_json_list():
+    ).to_list():
         answerer_id = row.get("answerer_id")
         answer_id = row.get("answer_id")
         if answerer_id is None or answer_id is None:
@@ -4116,7 +4116,7 @@ def execute_arcadedb_fast_asker_answerer_pairs(db) -> List[Dict[str, Any]]:
     for row in db.query(
         "sql",
         "SELECT @out.Id AS question_id, @in.Id AS answer_id FROM HAS_ANSWER",
-    ).to_json_list():
+    ).to_list():
         question_id = row.get("question_id")
         answer_id = row.get("answer_id")
         if question_id is None or answer_id is None:
@@ -4152,7 +4152,7 @@ def execute_arcadedb_fast_asker_answerer_pairs(db) -> List[Dict[str, Any]]:
 
 def execute_arcadedb_fast_top_questions_by_total_comments(db) -> List[Dict[str, Any]]:
     question_ids: List[int] = []
-    for row in db.query("sql", "SELECT Id AS question_id FROM Question").to_json_list():
+    for row in db.query("sql", "SELECT Id AS question_id FROM Question").to_list():
         qid = row.get("question_id")
         if qid is None:
             continue
@@ -4162,7 +4162,7 @@ def execute_arcadedb_fast_top_questions_by_total_comments(db) -> List[Dict[str, 
     for row in db.query(
         "sql",
         "SELECT @in.Id AS question_id, count(*) AS count FROM COMMENTED_ON GROUP BY @in.Id",
-    ).to_json_list():
+    ).to_list():
         qid = row.get("question_id")
         count = row.get("count")
         if qid is None:
@@ -4173,7 +4173,7 @@ def execute_arcadedb_fast_top_questions_by_total_comments(db) -> List[Dict[str, 
     for row in db.query(
         "sql",
         "SELECT @in.Id AS answer_id, count(*) AS count FROM COMMENTED_ON_ANSWER GROUP BY @in.Id",
-    ).to_json_list():
+    ).to_list():
         aid = row.get("answer_id")
         count = row.get("count")
         if aid is None:
@@ -4184,7 +4184,7 @@ def execute_arcadedb_fast_top_questions_by_total_comments(db) -> List[Dict[str, 
     for row in db.query(
         "sql",
         "SELECT @out.Id AS question_id, @in.Id AS answer_id FROM HAS_ANSWER",
-    ).to_json_list():
+    ).to_list():
         qid = row.get("question_id")
         aid = row.get("answer_id")
         if qid is None or aid is None:
