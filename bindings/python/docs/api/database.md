@@ -500,9 +500,12 @@ db.insert_many(type_name: str, rows, commit_every: int = 10_000,
                parallel: bool = False) -> int
 ```
 
-Bulk-insert documents with **one FFI crossing per batch** instead of several
-JNI calls per row. Rows are serialized to a single JSON string and looped
-Java-side, which makes this the fastest document-ingest path from Python
+Bulk-insert documents with **one FFI crossing per chunk of rows** instead of
+several JNI calls per row. The iterable is read 10,000 rows at a time and each
+chunk is serialized to one JSON string and looped Java-side, so memory stays
+bounded by the chunk whatever the row count (a generator of any length loads;
+before #294 the whole input was held at once, about 1.5 KB per row). This is
+the fastest document-ingest path from Python
 (measured ~3x over a per-row SQL loop and ~1.7x over per-row async
 creation). Manages its own transactions unless one is already active.
 For data that already lives in columns, [`insert_columns`](#insert_columns) is
@@ -511,10 +514,10 @@ faster still (2.24x on the same rows).
 **Parameters:**
 
 - `type_name` (str): Target document type (must exist)
-- `rows` (iterable of dict): One dict per document; values must be
-  JSON-representable (str/int/float/bool/None, nested lists/dicts). Rows
-  with other types (e.g. `datetime`, `bytes`) fall back transparently to
-  the per-row path, and so do values the JSON text would change on the way
+- `rows` (iterable of dict): One dict per document, read lazily one chunk at
+  a time; values must be JSON-representable (str/int/float/bool/None, nested
+  lists/dicts). A chunk with other types (e.g. `datetime`, `bytes`) falls back
+  transparently to the per-row path, and so do values the JSON text would change on the way
   to the engine: an integer beyond 64 bits, NaN or Infinity, a dict key that
   is not a `str`, and a string with a lone surrogate. The per-row path stores
   such a value exactly or raises, as `Document.set` does.
@@ -550,6 +553,9 @@ faster still (2.24x on the same rows).
   writers report any record they could not store (a duplicate key, a failed
   batch commit), once the load completes. Records other than the failed ones
   may have been stored.
+- Any exception raised by `rows` itself propagates unchanged: the open batch
+  is rolled back and the batches committed before it stay (in the parallel
+  mode, rows already handed to the writers are waited for and may be stored).
 
 **Example:**
 

@@ -4,6 +4,7 @@ ArcadeDB Python Bindings - Core Database Classes
 Database and DatabaseFactory classes for embedded database access.
 """
 
+import itertools
 from collections.abc import Mapping
 from datetime import date
 from decimal import Decimal
@@ -31,6 +32,9 @@ except ImportError:  # pragma: no cover - numpy is an optional dependency
 # Java class handles resolved once per process (jpype.JClass lookups are not
 # free and used to run per record in wrapper dispatch).
 _JAVA_CLASSES = {}
+
+# rows per JSON text in insert_many: bounds the memory a load holds (#294)
+_INSERT_MANY_CHUNK = 10_000
 
 # Parameter values that cross as they are (exact types, not subclasses): see
 # Database._java_parameters.
@@ -503,18 +507,21 @@ class Database:
         commit_every: int = 10_000,
         parallel: bool = False,
     ) -> int:
-        """Bulk-insert documents with one FFI crossing per batch.
+        """Bulk-insert documents with one FFI crossing per chunk of rows.
 
-        Rows are serialized to a single JSON string and looped Java-side
-        (``DocumentBatcher``), avoiding the per-row JNI cost that caps
-        ``new_document``-loop ingest. Values must be JSON-representable
-        (str/int/float/bool/None and nested lists/dicts); rows containing
-        other types (e.g. datetime, bytes) fall back transparently to the
-        per-row path.
+        The iterable is read 10,000 rows at a time; each chunk is serialized
+        to one JSON string and looped Java-side (``DocumentBatcher``),
+        avoiding the per-row JNI cost that caps ``new_document``-loop ingest.
+        Memory stays bounded by the chunk whatever the row count, so a
+        generator of any length can be loaded (#294). Values must be
+        JSON-representable (str/int/float/bool/None and nested lists/dicts);
+        a chunk containing other types (e.g. datetime, bytes) falls back
+        transparently to the per-row path.
 
         Args:
             type_name: Target document type (must exist).
-            rows: Iterable of dicts, one per document.
+            rows: Iterable of dicts, one per document. Read lazily, one
+                chunk at a time.
             commit_every: Transaction batch size for the synchronous mode.
             parallel: If True, route rows through the async executor's
                 parallel bucket writers and wait for completion before
@@ -535,6 +542,10 @@ class Database:
             Number of documents inserted.
 
         Raises:
+            Exception: An exception raised by ``rows`` itself propagates
+                unchanged; the open batch is rolled back and the batches
+                committed before it stay (in the parallel mode, rows already
+                handed to the writers are waited for and may be stored).
             ArcadeDBError: If the load fails; in the parallel mode also when
                 the writers report any record they could not store (a
                 duplicate key, a failed batch commit), after the load
@@ -544,81 +555,172 @@ class Database:
                 call waits for them before raising.
         """
         self._check_not_closed()
-        rows = list(rows)
-        if not rows:
+        # Rows are read from the iterable one chunk at a time and each chunk
+        # crosses as its own JSON text, so the memory a load holds is bounded
+        # by the chunk, not by the input. Reading the whole input into a list
+        # and one JSON text (which the engine then parsed into one JSON array)
+        # held about 1.5 KB per row at once, Python and Java together: a
+        # 26-million-row generator could not load under 32 GB (#294).
+        chunk_rows = _INSERT_MANY_CHUNK
+        commit_every = int(commit_every)
+        rows = iter(rows)
+        first = list(itertools.islice(rows, chunk_rows))
+        if not first:
             return 0
+        if parallel:
+            return self._insert_many_parallel(type_name, first, rows)
+        # This call owns the transactions it opens: it commits every
+        # commit_every rows, counted across chunks, and on any failure rolls
+        # back the one still open (earlier batches stay committed, as they
+        # always did). A caller's own transaction is the caller's to commit or
+        # roll back (#7882).
+        was_active = self.is_transaction_active()
+        n = 0
         try:
-            payload = json_bulk_dumps(rows)
+            # begin() inside the try: a ^C landing right after it must still
+            # reach the rollback below.
+            if not was_active:
+                self.begin()
+            chunk = first
+            while chunk:
+                if not was_active and commit_every > 0:
+                    # never let a chunk straddle a commit boundary
+                    room = commit_every - n % commit_every
+                    if len(chunk) > room:
+                        rest = chunk[room:]
+                        chunk = chunk[:room]
+                    else:
+                        rest = None
+                else:
+                    rest = None
+                self._insert_many_chunk(type_name, chunk)
+                n += len(chunk)
+                if not was_active and commit_every > 0 and n % commit_every == 0:
+                    self.commit()
+                    self.begin()
+                if rest:
+                    chunk = rest
+                else:
+                    size = chunk_rows
+                    if not was_active and commit_every > 0:
+                        size = min(size, commit_every - n % commit_every)
+                    chunk = list(itertools.islice(rows, size))
+            if not was_active:
+                self.commit()
+            return n
+        except BaseException:
+            # Any exit other than the final commit rolls back the transaction
+            # this method opened, as run_in_transaction does (#7108, #7882).
+            # BaseException so ^C/SystemExit cannot leak it either.
+            if not was_active:
+                try:
+                    if self.is_transaction_active():
+                        self.rollback()
+                except Exception:  # nosec B110 - best-effort rollback
+                    pass
+            raise
+
+    def _insert_many_chunk(self, type_name, chunk):
+        """Insert one chunk of insert_many rows inside the open transaction."""
+        try:
+            payload = json_bulk_dumps(chunk)
         except (TypeError, ValueError):
             # Values the JSON text cannot carry unchanged (numpy integer
             # scalars, which json.dumps rejects; an integer beyond 64 bits,
             # NaN or Infinity, a non-str dict key, a lone surrogate, which the
-            # engine's JSON parser would store as a different value): per-row
-            # fallback, honoring commit_every batches like the fast path.
-            n = 0
-            was_active = self.is_transaction_active()
-            try:
-                # begin() inside the try: a ^C landing right after it must
-                # still reach the rollback below.
-                if not was_active:
-                    self.begin()
-                for row in rows:
-                    doc = self.new_document(type_name)
-                    for k, v in row.items():
-                        doc.set(k, v)
-                    doc.save()
-                    n += 1
-                    if not was_active and commit_every > 0 and n % commit_every == 0:
-                        self.commit()
-                        self.begin()
-                if not was_active:
-                    self.commit()
-                return n
-            except BaseException:
-                # Any exit other than the final commit must roll back the
-                # transaction this method opened, as run_in_transaction does
-                # (#7108, #7882): this branch runs precisely for values the
-                # fast path could not serialise, the likeliest to make set()
-                # raise. BaseException so ^C/SystemExit cannot leak it either.
-                # A caller's own transaction (was_active) is left to the caller.
-                if not was_active:
-                    try:
-                        if self.is_transaction_active():
-                            self.rollback()
-                    except Exception:  # nosec B110 - best-effort rollback
-                        pass
-                raise
+            # engine's JSON parser would store as a different value): this
+            # chunk goes row by row.
+            for row in chunk:
+                doc = self.new_document(type_name)
+                for k, v in row.items():
+                    doc.set(k, v)
+                doc.save()
+            return
         try:
-            batcher = _java_class("com.arcadedb.python.DocumentBatcher")
-            if not parallel:
-                return int(
-                    batcher.insertManyJson(
-                        self._java_db, type_name, payload, int(commit_every), False
-                    )
-                )
-            try:
-                failures = batcher.insertManyJsonParallel(
-                    self._java_db, type_name, payload
-                )
-            except Exception as e:
-                raise self._parallel_load_failed(type_name, e) from e
-            self._java_db.async_().waitCompletion()
-            n_failed = int(failures.getCount())
-            first_failure = failures.getFirstMessage()
-        except ArcadeDBError:
-            raise
+            # commitEvery 0 inside a transaction that is already open: the
+            # helper only inserts, and the transaction stays with insert_many.
+            _java_class("com.arcadedb.python.DocumentBatcher").insertManyJson(
+                self._java_db, type_name, payload, 0, False
+            )
         except Exception as e:
             raise ArcadeDBError(f"Failed to bulk-insert into '{type_name}': {e}") from e
-        # The writers report a rejected record only through its error callback
-        # (and the executor's global one, which by default just logs), so the
-        # count is read here rather than assumed (ArcadeData/arcadedb#8478).
+
+    def _insert_many_parallel(self, type_name, first, rows):
+        """insert_many(parallel=True): hand each chunk to the async writers."""
+        batcher = _java_class("com.arcadedb.python.DocumentBatcher")
+        n = 0
+        chunk_failures = []
+        chunk = first
+        try:
+            while chunk:
+                try:
+                    payload = json_bulk_dumps(chunk)
+                except (TypeError, ValueError):
+                    payload = None
+                if payload is None:
+                    # A chunk the JSON text cannot carry unchanged is written
+                    # synchronously, row by row, in its own transaction, after
+                    # the writers have drained, as the whole load used to be.
+                    self._java_db.async_().waitCompletion()
+                    was_active = self.is_transaction_active()
+                    try:
+                        if not was_active:
+                            self.begin()
+                        self._insert_many_chunk(type_name, chunk)
+                        if not was_active:
+                            self.commit()
+                    except BaseException:
+                        if not was_active:
+                            try:
+                                if self.is_transaction_active():
+                                    self.rollback()
+                            except Exception:  # nosec B110 - best-effort rollback
+                                pass
+                        raise
+                else:
+                    try:
+                        failures = batcher.insertManyJsonParallel(
+                            self._java_db, type_name, payload
+                        )
+                    except Exception as e:
+                        raise self._parallel_load_failed(type_name, e) from e
+                    # The writers report a rejected record only through its
+                    # error callback (and the executor's global one, which by
+                    # default just logs), so the count is read rather than
+                    # assumed (ArcadeData/arcadedb#8478). Read after the final
+                    # waitCompletion, when every writer is done.
+                    chunk_failures.append(failures)
+                n += len(chunk)
+                chunk = list(itertools.islice(rows, _INSERT_MANY_CHUNK))
+        except ArcadeDBError:
+            raise
+        except BaseException:
+            # An error from the rows iterable, or ^C: the rows already queued
+            # are written whatever happens here, so wait for them and the
+            # caller sees a final state (as _parallel_load_failed does).
+            try:
+                self._java_db.async_().waitCompletion()
+            except Exception:  # nosec B110 - the original error is the one to report
+                pass
+            raise
+        try:
+            self._java_db.async_().waitCompletion()
+        except Exception as e:
+            raise ArcadeDBError(f"Failed to bulk-insert into '{type_name}': {e}") from e
+        n_failed = 0
+        first_failure = None
+        for failures in chunk_failures:
+            count = int(failures.getCount())
+            if count and first_failure is None:
+                first_failure = failures.getFirstMessage()
+            n_failed += count
         if n_failed:
             raise ArcadeDBError(
                 f"Failed to bulk-insert into '{type_name}': the parallel writers "
-                f"reported {n_failed} failed record(s) of {len(rows)}; the rest "
+                f"reported {n_failed} failed record(s) of {n}; the rest "
                 f"may have been stored (first failure: {first_failure})"
             )
-        return len(rows)
+        return n
 
     def insert_columns(
         self,
