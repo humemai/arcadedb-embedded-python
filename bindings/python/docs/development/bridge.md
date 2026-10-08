@@ -11,7 +11,8 @@ sources live in `bindings/python/src/java/com/arcadedb/python/`:
 | `EdgeBatcher` | Buffers a whole batch of edges into `GraphBatch` from one call (RID strings, or JSON rows for edges with properties) |
 | `VertexBatcher` | Creates a whole batch of vertices from one JSON-rows string, returning all RIDs as one joined string |
 | `TimeSeriesBatcher` | Fills the engine's primitive `TimeSeriesBatch` one column per call, so numeric samples are never boxed |
-| `RowAccess` | Hands a row's names and values to Python in one call (`namesAndValues`), and up to N such rows per call (`nextRows`); the values are the engine's own objects, so Python converts them with full type fidelity |
+| `RowAccess` | Hands a row's names and values to Python in one call (`namesAndValues`), and up to N such rows per call (`nextRows`); the values are the engine's own objects, so Python converts them with full type fidelity. Also the first row of a result set with the set closed (`firstAndClose`, behind `ResultSet.first()`) and a property or null (`propertyOrNull`, behind `Result.get()`), each in one call instead of two or three |
+| `DbCalls` | One-row statements and lookups in one call: `commandNamed`, `queryNamed`, `commandPositional`, and `queryPositional` take the parameters as the varargs of a single non-overloaded method and build the map Java-side (behind `Database.command()` and `Database.query()`), and `lookupFirst` is the whole of `Database.lookup_by_key()` |
 
 `RowBatcher.nextJsonBatch` and `RowAccess.nextRows` return fewer rows than asked for only when the result set is drained, and they close it before returning. Python therefore stops after a short batch and makes no further call into the bridge, not even `close()`: a one-row `to_list()` or `to_json_list()` costs one call into the bridge.
 

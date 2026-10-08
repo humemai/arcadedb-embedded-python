@@ -38,6 +38,20 @@ engine costs the same as a Java call. All overhead lives in Python-side result
 materialization and per-operation crossings, which is what the bulk APIs
 eliminate.
 
+Per-operation crossings were cut for single-row work too. A statement with plain
+scalar or Java-array parameters, `ResultSet.first()`, `Result.get()`, and
+`Database.lookup_by_key()` each cross into the JVM once where they used to cross
+two to six times (laptop, P cores 0-3, median of 11 interleaved runs, µs per call, wall):
+
+| Single-row operation | Before | After |
+|---|---|---|
+| `query()` by key plus `first()` | 9.3 | 8.2 |
+| `lookup_by_key()` | 12.2 | 4.6 |
+| `command()` UPDATE, named parameters | 14.2 | 12.5 |
+| `command()` UPDATE, positional parameters | 17.0 | 15.2 |
+| `command()` INSERT with a vector parameter | 17.3 | 14.3 |
+| Three-statement transaction | 61.0 | 55.7 |
+
 ## Choosing a materialization API
 
 Rule of thumb: **iterate when you're selective or the result is small; use the

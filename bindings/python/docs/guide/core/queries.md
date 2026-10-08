@@ -178,6 +178,12 @@ Positional values bind one per `?`, from the extra arguments or from one list or
 (`db.query("sql", q, ["Alice", 25])`). `None` binds as null in `query()`, `command()`,
 and `async_executor()`.
 
+Parameters that are plain scalars (`int`, `float`, `str`, `bool`, `None`) or Java arrays
+(a vector from `to_java_float_array`) cross into the JVM in one call, named or positional.
+A collection, a `Decimal`, a date, or a numpy scalar is converted first and costs a few
+microseconds more per call. For a one-row read, `first()` and `get()` are one call each;
+`db.lookup_by_key(...)` is one call for the whole lookup.
+
 ### SQLScript (multi-statement)
 
 Use `sqlscript` to run multiple statements in one call. When there is no

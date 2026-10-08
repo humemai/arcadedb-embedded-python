@@ -11,16 +11,18 @@ import jpype
 from .exceptions import ArcadeDBError
 from .type_conversion import convert_java_to_python, convert_python_to_java
 
-
-def _java_class_name(value: Any) -> str:
-    return str(value.getClass().getName())
+_GRAPH_CLASSES = None
 
 
-def _is_java_instance(value: Any, class_name: str) -> bool:
-    try:
-        return isinstance(value, jpype.JClass(class_name))
-    except (RuntimeError, TypeError):
-        return False
+def _graph_classes():
+    """``(com.arcadedb.graph.Vertex, com.arcadedb.graph.Edge)``, resolved on first use."""
+    global _GRAPH_CLASSES
+    if _GRAPH_CLASSES is None:
+        _GRAPH_CLASSES = (
+            jpype.JClass("com.arcadedb.graph.Vertex"),
+            jpype.JClass("com.arcadedb.graph.Edge"),
+        )
+    return _GRAPH_CLASSES
 
 
 class Document:
@@ -69,20 +71,14 @@ class Document:
         if java_record is None:
             return None
 
-        class_name = _java_class_name(java_record)
-        if _is_java_instance(
-            java_record, "com.arcadedb.graph.Vertex"
-        ) or class_name in {
-            "com.arcadedb.graph.Vertex",
-            "com.arcadedb.graph.MutableVertex",
-            "com.arcadedb.graph.ImmutableVertex",
-        }:
+        # Class handles are resolved once: the JClass lookup and the getClass().getName()
+        # crossings this used to repeat per record cost more than the wrapping itself.
+        # A record that is an instance of the Java interface is a Vertex or an Edge whatever
+        # its concrete class is called.
+        vertex_class, edge_class = _graph_classes()
+        if isinstance(java_record, vertex_class):
             return Vertex(java_record, database)
-        if _is_java_instance(java_record, "com.arcadedb.graph.Edge") or class_name in {
-            "com.arcadedb.graph.Edge",
-            "com.arcadedb.graph.MutableEdge",
-            "com.arcadedb.graph.ImmutableEdge",
-        }:
+        if isinstance(java_record, edge_class):
             return Edge(java_record, database)
         return Document(java_record, database)
 

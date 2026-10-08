@@ -6,6 +6,7 @@ ResultSet and Result classes for wrapping query results.
 
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
+import jpype as _jpype
 from jpype import JException
 
 from ._logging import get_logger
@@ -406,9 +407,7 @@ class ResultSet:
         # Best effort: the JVM may already be gone at interpreter exit.
         if not getattr(self, "_closed", True):
             try:
-                import jpype
-
-                if jpype.isJVMStarted():
+                if _jpype.isJVMStarted():
                     self.close()
             except Exception:  # nosec B110 - finalizer must never raise
                 pass
@@ -923,6 +922,19 @@ class ResultSet:
             >>> if user:
             ...     print(user.get("name"))
         """
+        row_access = _bridge_class("RowAccess")
+        if row_access is not None and self._readable() and not self._closed:
+            # hasNext(), next(), and close() in ONE crossing instead of three
+            try:
+                java_row = row_access.firstAndClose(self._java_result_set)
+            except JException as exc:
+                self._closed = True  # firstAndClose closes on every path
+                raise _read_error(exc) from exc
+            self._closed = True
+            if java_row is None:
+                self._exhausted = True
+                return None
+            return Result(java_row, self._database)
         try:
             return next(iter(self))
         except StopIteration:
@@ -1053,7 +1065,12 @@ class Result:
         Returns:
             Raw Java-backed property value or None if not found
         """
-        if not self.has_property(name):
+        self._check_open()
+        row_access = _bridge_class("RowAccess")
+        if row_access is not None:
+            # hasProperty() then getProperty() in ONE crossing
+            return row_access.propertyOrNull(self._java_result, name)
+        if not self._java_result.hasProperty(name):
             return None
         return self._java_result.getProperty(name)
 

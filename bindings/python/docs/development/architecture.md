@@ -208,13 +208,14 @@ db = arcadedb.create_database(
 python_str = "hello"
 java_str = jpype.JString(python_str)
 
-# Array
+# Array (to_java_float_array builds the float[] class once; JArray(JFloat) builds it on every call)
+from arcadedb_embedded import to_java_float_array
+
 python_array = [1.0, 2.0, 3.0]
-java_array = jpype.JArray(jpype.JFloat)(python_array)
+java_array = to_java_float_array(python_array)
 
 # NumPy → Java (vectors)
 import numpy as np
-from arcadedb_embedded import to_java_float_array
 
 numpy_array = np.array([1.0, 2.0, 3.0], dtype=np.float32)
 java_array = to_java_float_array(numpy_array)

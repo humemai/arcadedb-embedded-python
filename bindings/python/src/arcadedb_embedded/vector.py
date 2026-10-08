@@ -22,6 +22,11 @@ def _quote_identifier(identifier: str) -> str:
     return "`" + identifier.replace("`", "``") + "`"
 
 
+# float[] class, built on first use (it needs the JVM): jtypes.JArray(jtypes.JFloat)
+# costs about 0.6 us a call, as much as the buffer copy it is followed by.
+_FLOAT_ARRAY = None
+
+
 def to_java_float_array(vector):
     """
     Convert a Python array-like object to a Java float array.
@@ -37,16 +42,21 @@ def to_java_float_array(vector):
     Returns:
         Java float array compatible with ArcadeDB vector indexes
     """
+    global _FLOAT_ARRAY
+    float_array = _FLOAT_ARRAY
+    if float_array is None:
+        float_array = _FLOAT_ARRAY = jtypes.JArray(jtypes.JFloat)
+
     # Handle NumPy arrays
     if _np is not None and isinstance(vector, _np.ndarray):
-        return jtypes.JArray(jtypes.JFloat)(vector)
+        return float_array(vector)
 
     # Convert to Python list if needed
     if not isinstance(vector, list):
         vector = list(vector)
 
     # Create Java float array
-    return jtypes.JArray(jtypes.JFloat)(vector)
+    return float_array(vector)
 
 
 def to_java_int_array(vector):
