@@ -98,6 +98,29 @@ HIGH = 90.0      # the high-cpu threshold, TSBS's own
 # lane sends now says so. A harness defect, not an engine one: the server did
 # exactly what its documented default says.
 HTTP_LIMIT = -1
+# STREAMED RESULTS FOR THE SERVED ARCADEDB ARMS, default OFF (CAMPAIGN section 7
+# row 85). The PostgreSQL arms (psycopg) and the MongoDB arm (a cursor) read
+# their rows as the server sends them; the served ArcadeDB arms asked for one
+# buffered JSON answer, which the server builds whole before the first byte
+# (393k rows, about 20 MB, on the high-usage query at ts1000). With
+# BENCH_ARCADEDB_TS_NDJSON=1 both served arms send `Accept: application/x-ndjson`
+# on every query and read the records line by line (lean_http.post_ndjson,
+# which checks the server's own count), and their rows stamp
+# `arcadedb_ts_result_format`. Unset, the request, the answer path, and the
+# row fields are what they were.
+TS_NDJSON_ENV = "BENCH_ARCADEDB_TS_NDJSON"
+TS_RESULT_FORMAT_FIELD = "arcadedb_ts_result_format"
+
+
+def ts_ndjson_enabled():
+    raw = (os.environ.get(TS_NDJSON_ENV) or "").strip()
+    if not raw:
+        return False
+    if raw != "1":
+        raise SystemExit(f"{TS_NDJSON_ENV}={raw!r}: set it to 1 or unset it")
+    return True
+
+
 QUERIES = ("q_last", "q_range", "q_global", "q_groupby", "q_high", "q_orderlimit")
 ORDERLIMIT_N = 5   # TSBS groupby-orderby-limit takes the last five buckets
 
@@ -289,6 +312,7 @@ class ArcadeTSServer(ArcadeTS):
     client without the wheel gets. The native TIMESERIES arm has no served
     form: it is an embedded API."""
     name = "arcadedb_ts_doc_server"
+    ndjson = False   # BENCH_ARCADEDB_TS_NDJSON=1, read at connect
 
     def connect(self):
         import lean_http
@@ -296,6 +320,9 @@ class ArcadeTSServer(ArcadeTS):
         self.rq.auth = ("root", "dbbenchpass")
         # WHICH HTTP CLIENT ran, read from the session (CAMPAIGN 7 row 72), on every row this arm writes
         self.row_extra = {**(getattr(self, "row_extra", None) or {}), **lean_http.row_fields(self.rq)}
+        self.ndjson = ts_ndjson_enabled()
+        if self.ndjson:
+            self.row_extra[TS_RESULT_FORMAT_FIELD] = "ndjson"
         host = os.environ["BENCH_SERVER_HOST"]
         port = os.environ.get("BENCH_SERVER_PORT", "2480")
         self.base = f"http://{host}:{port}/api/v1"
@@ -314,6 +341,9 @@ class ArcadeTSServer(ArcadeTS):
             # Only the query endpoint takes a row cap; sending it to /command
             # would be an unknown field on a write.
             body["limit"] = HTTP_LIMIT
+            if self.ndjson:
+                import lean_http
+                return lean_http.post_ndjson(self.rq, f"{self.base}/{kind}/bench", body, timeout=timeout)
         r = self.rq.post(f"{self.base}/{kind}/bench", json=body, timeout=timeout)
         r.raise_for_status()
         return r.json().get("result", [])
@@ -665,6 +695,7 @@ class ArcadeNativeTSServer(ArcadeNativeTS):
     `declared` says so: this is what a client without the wheel gets from the
     engine's own idiom."""
     name = "arcadedb_ts_native_server"
+    ndjson = False   # BENCH_ARCADEDB_TS_NDJSON=1, read at connect
     CHUNK = int(os.environ.get("TS_CHUNK", "100000"))
 
     def connect(self):
@@ -673,6 +704,9 @@ class ArcadeNativeTSServer(ArcadeNativeTS):
         self.rq.auth = ("root", "dbbenchpass")
         # WHICH HTTP CLIENT ran, read from the session (CAMPAIGN 7 row 72), on every row this arm writes
         self.row_extra = {**(getattr(self, "row_extra", None) or {}), **lean_http.row_fields(self.rq)}
+        self.ndjson = ts_ndjson_enabled()
+        if self.ndjson:
+            self.row_extra[TS_RESULT_FORMAT_FIELD] = "ndjson"
         host = os.environ["BENCH_SERVER_HOST"]
         port = os.environ.get("BENCH_SERVER_PORT", "2480")
         self.base = f"http://{host}:{port}/api/v1"
@@ -695,6 +729,9 @@ class ArcadeNativeTSServer(ArcadeNativeTS):
             # Only the query endpoint takes a row cap; sending it to /command
             # would be an unknown field on a write.
             body["limit"] = HTTP_LIMIT
+            if self.ndjson:
+                import lean_http
+                return lean_http.post_ndjson(self.rq, f"{self.base}/{kind}/bench", body, timeout=timeout)
         r = self.rq.post(f"{self.base}/{kind}/bench", json=body, timeout=timeout)
         r.raise_for_status()
         return r.json().get("result", [])

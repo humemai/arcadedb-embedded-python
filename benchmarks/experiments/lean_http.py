@@ -711,3 +711,48 @@ def Session():  # noqa: N802 - requests' own spelling, so a lane changes by one 
 def row_fields(session):
     """What a served ArcadeDB row records about its client, read from the session it ran with (not from the environment)."""
     return {"arcadedb_http_client": getattr(session, "client_name", None) or type(session).__module__ + "." + type(session).__name__}
+
+
+# --------------------------------------------------------------------------------------------- streamed (NDJSON) results
+# ArcadeDB's query endpoint answers `Accept: application/x-ndjson` with a chunked body of one `{"record": {...}}` line per row and a last
+# `{"stats": {"returned": N}}` line, so the server sends rows as it produces them instead of building the whole answer first (26.10.1). The
+# served time-series arms read their results this way under BENCH_ARCADEDB_TS_NDJSON=1 (CAMPAIGN section 7 row 85). The body is read in full
+# by whichever session the lane runs (each one de-chunks and decodes it) and parsed in ONE json.loads, the lines joined into a JSON array;
+# the answer is the same rows the buffered call's `result` holds, checked against the server's own count.
+NDJSON_ACCEPT = "application/x-ndjson"
+
+
+class NdjsonError(ValueError):
+    """A streamed answer that is not records followed by a count that matches them."""
+
+
+def ndjson_records(body):
+    """The rows of an NDJSON query answer (bytes), after checking the stats line's `returned` against the number of records."""
+    lines = [ln for ln in body.split(b"\n") if ln.strip()]
+    if not lines:
+        raise NdjsonError("empty NDJSON answer: no stats line")
+    objs = _json.loads(b"[" + b",".join(lines) + b"]")
+    rows, stats = [], None
+    for o in objs:
+        rec = o.get("record", _MISSING) if isinstance(o, dict) else _MISSING
+        if rec is not _MISSING and stats is None:
+            rows.append(rec)
+        elif isinstance(o, dict) and "stats" in o and stats is None:
+            stats = o["stats"]
+        else:
+            raise NdjsonError(f"unexpected NDJSON line {str(o)[:200]!r} (a record after the stats line, or not a record or stats line)")
+    if stats is None:
+        raise NdjsonError(f"NDJSON answer of {len(rows)} records has no stats line")
+    if stats.get("returned") != len(rows):
+        raise NdjsonError(f"NDJSON stats say returned={stats.get('returned')!r} but {len(rows)} records arrived")
+    return rows
+
+
+_MISSING = object()
+
+
+def post_ndjson(session, url, json, timeout=None):
+    """POST a query asking for NDJSON, raise on an HTTP error, and return its rows (`ndjson_records`)."""
+    r = session.post(url, json=json, headers={"Accept": NDJSON_ACCEPT}, timeout=timeout)
+    r.raise_for_status()
+    return ndjson_records(r.content)
