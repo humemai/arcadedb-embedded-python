@@ -2368,6 +2368,50 @@ def _sparse_whole_record_rows(rows):
             and not str(r.get(_SPARSE_RESULT_FIELD) or "").strip()]
 
 
+# ARCADEDB'S DENSE DELETE RAN WITHOUT AN ID INDEX (humemai/arcadedb-embedded-
+# python#291, DECISIONS #178). The mutation pass deletes by the vector's id.
+# Half the comparators address records by a key they always index; ArcadeDB
+# stored `vid` as a plain property, so each delete batch scanned the type
+# (8.1x the comparator median at 1M). BENCH_DENSE_ID_INDEX=1 gives ArcadeDB and
+# every other engine that stores the id as a plain property (pgvector, Neo4j,
+# Memgraph, FalkorDB, DuckDB, LanceDB) an index on it, and the rows stamp
+# `dense_id_index`. A measured ArcadeDB delete row without the stamp ran
+# without the index. Off-page arms do not hold the sentence up.
+_DENSE_ID_INDEX_FIELD = "dense_id_index"
+
+
+def _dense_unindexed_delete_rows(rows):
+    """The October ArcadeDB dense rows on the page that timed a delete without
+    an id index, i.e. that record a delete time and no `dense_id_index`."""
+    return [r for r in rows
+            if r.get("lane") == "l3d"
+            and str(r.get("instrument") or "") == "2026-10"
+            and str(r.get("backend") or "").startswith("arcadedb")
+            and str(r.get("backend")) not in OFF_PAGE_ARMS
+            and _present_number(r.get("mutate_delete_per_op_ms"))
+            and not str(r.get(_DENSE_ID_INDEX_FIELD) or "").strip()]
+
+
+def _present_number(v):
+    try:
+        return v not in (None, "") and float(v) == float(v)
+    except (TypeError, ValueError):
+        return False
+
+
+def _dense_id_index_note(table_id, rows):
+    """The id-index sentence for the dense table, or None when no ArcadeDB
+    delete behind it ran without the index."""
+    if table_id != "l3d" or not _OCTOBER_ENV or not _dense_unindexed_delete_rows(rows):
+        return None
+    return _next_item("dense_id_index", _gen(
+        "On this table ArcadeDB's delete finds each vector by an id that has no index, so every "
+        "delete batch reads the whole collection, while most of the other engines find it "
+        "through a key they always index. The next measurement indexes the id on ArcadeDB and on "
+        "every other engine that stores it the same way (pgvector, Neo4j, Memgraph, FalkorDB, "
+        "DuckDB, and LanceDB), counts the index in the load time, and measures all of them again."))
+
+
 def _sparse_whole_record_note(table_id, rows):
     """The whole-record sentence for the sparse table, or None when every
     ArcadeDB sparse row behind it returned ids."""
@@ -3391,6 +3435,11 @@ def _next_measurement_note(tables):
                           f"ArcadeDB (embedded) loads its data through the Python package's "
                           f"columnar insert, which takes whole columns at a time, as DuckDB "
                           f"takes whole frames.", *docs))
+    dense_idx = carried_by("dense_id_index")
+    if dense_idx:
+        items.append(_gen(f"On the {_join_and(dense_idx)} table, the delete finds each vector through "
+                          f"an index on its id in every engine, so ArcadeDB and the six engines that "
+                          f"had no such index are measured again there.", *dense_idx))
     sparse = carried_by("sparse_ids")
     if sparse:
         items.append(_gen(f"On the {_join_and(sparse)} table, ArcadeDB returns the ids of its "
@@ -3410,7 +3459,8 @@ def _next_measurement_note(tables):
                     "changes listed below."),
                _gen(f"ArcadeDB's numbers here are from release {_join_and(behind)}. The next "
                     f"measurement runs ArcadeDB again on release {_PAPER_RELEASE}, the one the "
-                    f"paper reports, and every other engine's numbers carry over.",
+                    f"paper reports, and every other engine's numbers carry over"
+                    + (" unless a line below says they are measured again" if dense_idx else "") + ".",
                     *behind, _PAPER_RELEASE)]
         out += items
         if other:
@@ -9461,6 +9511,7 @@ def main() -> int:
         for _note in (_lsqb_id_form_note(_t.get("id"), rows),
                       _gav_scope_note(_t.get("id"), rows),
                       _sparse_whole_record_note(_t.get("id"), rows),
+                      _dense_id_index_note(_t.get("id"), rows),
                       _docs_warmup_note(_t.get("id"), rows) if _t.get("id") == "durability" else None):
             if _note:
                 _t.setdefault("conditions", [])

@@ -376,6 +376,27 @@ def mutation_enabled(scale):
                    f"mutation operations at {'/'.join(MUTATE_SCALES)} only")
 
 
+# THE ID INDEX FOR THE DELETE (humemai/arcadedb-embedded-python#291, CAMPAIGN section 7 row 84, DECISIONS #178 index parity), default
+# OFF. The mutation pass deletes by the vector's id. Half the comparators address a record by a key they always index (Chroma,
+# Qdrant, Milvus, Elasticsearch, MongoDB `_id`, ArangoDB `_key`, SurrealDB record ids, sqlite-vec `rowid`, LadybugDB's PRIMARY
+# KEY); ArcadeDB, pgvector, Neo4j, Memgraph, FalkorDB, DuckDB, and LanceDB stored the id as a plain property and scanned for it
+# (ArcadeDB at 1M: 8.1x the comparator median on the delete column; a UNIQUE_HASH index on `vid` cut it to 0.24 of that on the
+# laptop). `BENCH_DENSE_ID_INDEX=1` gives every engine of the second group the index its own docs name for a key lookup, created
+# on the empty store before the load, so its cost is inside `ingest_s`. Unset: no index and no row field, so a row is what it
+# was. Set: every dense row stamps `dense_id_index`, the statement that built the index, or "key" where the engine's own key
+# already serves the delete, so the row shows that every engine deleted through an index.
+ID_INDEX_ENV = "BENCH_DENSE_ID_INDEX"
+
+
+def id_index_enabled():
+    raw = (os.environ.get(ID_INDEX_ENV) or "").strip()
+    if not raw:
+        return False
+    if raw != "1":
+        raise SystemExit(f"{ID_INDEX_ENV}={raw!r}: set it to 1 or unset it")
+    return True
+
+
 def mutation_victims(gt, n_docs, n):
     """Which ids to delete: ground-truth members first, so the delete bites.
 
@@ -439,6 +460,10 @@ class Base:
     # the page keeps the total for it.
     ingest_s = None
     index_s = None
+    # The id index this adapter built for the delete when BENCH_DENSE_ID_INDEX=1 (#291): the statement, or "key" for an engine
+    # whose own record key is the id. None: the switch is off.
+    ID_INDEX_DDL = "key"
+    id_index = None
 
     def engine_stats(self):
         """Engine-side counters for this run, or {} for engines that have none.
@@ -514,6 +539,7 @@ class Base:
 
 class ArcadeEmbedded(Base):
     name = "arcadedb_dense_embedded"
+    ID_INDEX_DDL = "CREATE INDEX ON Article (vid) UNIQUE_HASH"
 
     @property
     def quantization(self):
@@ -608,6 +634,9 @@ class ArcadeEmbedded(Base):
         db.command("sql", "CREATE PROPERTY Article.vid INTEGER")
         db.command("sql", "CREATE PROPERTY Article.embedding ARRAY_OF_FLOATS")
         _t0 = time.perf_counter()
+        if id_index_enabled():
+            db.command("sql", self.ID_INDEX_DDL)
+            self.id_index = self.ID_INDEX_DDL
         # THE ENGINE'S BULK LOADER, WAL ON (DECISIONS #116 item 3): GraphBatch
         # with the write-ahead log kept on, as the maintainers recommended for
         # graph loads on #8287 and as the cross-model lane already loads its
@@ -705,6 +734,7 @@ class ArcadeServer(Base):
     quantization = "fp32"
     _quant_ddl = ""
     name = "arcadedb_dense_server"
+    ID_INDEX_DDL = "CREATE INDEX ON Article (vid) UNIQUE_HASH"
     # Rows per `INSERT ... CONTENT :rows` request; #8337 suggests 2,000-5,000
     # for vector rows; swept on the bench host at the re-pin, recorded per row.
     load_batch = int(os.environ.get("BENCH_SERVED_LOAD_BATCH") or 2000)
@@ -744,6 +774,9 @@ class ArcadeServer(Base):
         self._cmd("sql", "CREATE PROPERTY Article.vid INTEGER")
         self._cmd("sql", "CREATE PROPERTY Article.embedding ARRAY_OF_FLOATS")
         _t0 = time.perf_counter()
+        if id_index_enabled():
+            self._cmd("sql", self.ID_INDEX_DDL)
+            self.id_index = self.ID_INDEX_DDL
         # BOUND ROWS, NOT VALUES WRITTEN INTO SQL TEXT (ArcadeData/arcadedb#8337,
         # DECISIONS #116 item 4). One `INSERT ... CONTENT :rows` per batch, the
         # vectors travelling as JSON arrays. #8337 found the Postgres wire the
@@ -896,6 +929,7 @@ class LanceDB(Base):
     # ArcadeDB fp32 arms.
     quantization = "INT8"
     name = "lancedb_dense"
+    ID_INDEX_DDL = "create_scalar_index('id', index_type='BTREE')"
     INDEX_TYPE = "IVF_HNSW_SQ"
     # lancedb 0.37.1 exposes no close on the connection (checked dir); its
     # tables are files written on commit.
@@ -913,6 +947,10 @@ class LanceDB(Base):
                             pa.array(vecs.ravel(), type=pa.float32()), DIM)})
         _t0 = time.perf_counter()
         self.tbl = self.db.create_table("articles", tbl)
+        if id_index_enabled():
+            # LanceDB builds a scalar index over the rows a table holds, so it follows the load (still inside ingest_s)
+            self.tbl.create_scalar_index("id", index_type="BTREE")
+            self.id_index = self.ID_INDEX_DDL
         self.ingest_s = round(time.perf_counter() - _t0, 2)
         # IVF_HNSW_SQ here (int8 SQ, disclosed above), IVF_HNSW_FLAT on the fp32 arm
         _t1 = time.perf_counter()
@@ -922,7 +960,9 @@ class LanceDB(Base):
         # The engine's own answer, never the option we sent (BUGS F164): the
         # index type from index_stats, and its details (HNSW degree and beam,
         # and `compression` on a quantized index) from list_indices.
-        ix = self.tbl.list_indices()
+        # The VECTOR column's index: with BENCH_DENSE_ID_INDEX=1 the table also holds the id's BTREE, and list_indices
+        # gives no order, so taking the first one read the BTREE back (the #291 smoke).
+        ix = [i for i in self.tbl.list_indices() if list(getattr(i, "columns", None) or []) == ["vector"]]
         applied = self.tbl.index_stats(ix[0].name).index_type if ix else None
         if applied != self.INDEX_TYPE:
             raise RuntimeError(f"lancedb vector index type read back {applied!r}, not {self.INDEX_TYPE!r}: "
@@ -1097,6 +1137,7 @@ class DuckVSS(Base):
     # ablation.
     quantization = "fp32"
     name = "duckdb_vss_dense"
+    ID_INDEX_DDL = "CREATE UNIQUE INDEX t_id ON t (id)"
 
     def close(self):
         self.cx.close()
@@ -1132,6 +1173,10 @@ class DuckVSS(Base):
         self.cx.register("src", tbl)
         self.cx.execute(f"CREATE TABLE t AS SELECT id, vec::FLOAT[{DIM}] AS vec FROM src")
         self.cx.unregister("src")
+        if id_index_enabled():
+            # CREATE TABLE AS makes the table and loads it in one statement, so the index follows the load (inside ingest_s)
+            self.cx.execute(self.ID_INDEX_DDL)
+            self.id_index = self.ID_INDEX_DDL
         self.ingest_s = round(time.perf_counter() - _t0, 2)
         _t1 = time.perf_counter()
         self.cx.execute(
@@ -1246,6 +1291,7 @@ class PgVector(Base):
     unfair."""
     quantization = "fp32"
     name = "pgvector_dense"
+    ID_INDEX_DDL = "vid INTEGER PRIMARY KEY"
 
     def connect(self):
         # WHICH #174 CLIENT PATH THIS ARM RAN (issue #261): stamped so a row says it, not only the code.
@@ -1269,7 +1315,11 @@ class PgVector(Base):
     def build(self, vecs):
         with self.cx.cursor() as c:
             _t0 = time.perf_counter()
-            c.execute(f"CREATE TABLE articles (vid INTEGER, embedding vector({DIM}))")
+            if id_index_enabled():
+                c.execute(f"CREATE TABLE articles (vid INTEGER PRIMARY KEY, embedding vector({DIM}))")
+                self.id_index = self.ID_INDEX_DDL
+            else:
+                c.execute(f"CREATE TABLE articles (vid INTEGER, embedding vector({DIM}))")
             # BINARY COPY WITH pgvector-python's TYPES (G3c: 11.6x on the ingest column at 200,000 SIFT vectors, 13.2x on DEEP-shaped ones,
             # identical stored rows); the text path formatted every float with "%.9g" in Python inside this timer
             with c.copy("COPY articles (vid, embedding) FROM STDIN WITH (FORMAT BINARY)") as cp:
@@ -1323,6 +1373,7 @@ class Neo4jVector(Base):
     rather than recording a label the engine did not run."""
     quantization = "fp32"
     name = "neo4j_dense"
+    ID_INDEX_DDL = "CREATE CONSTRAINT art_vid IF NOT EXISTS FOR (a:Article) REQUIRE a.vid IS UNIQUE"
     QUANT_TYPE = "NONE"
     # THE SEARCH EXPANSION, SET AND READ BACK (2026-10-02). Each quantization
     # type brings its own default `vector.default_search_expansion_factor`
@@ -1348,6 +1399,10 @@ class Neo4jVector(Base):
     def build(self, vecs):
         with self.drv.session() as s:
             _t0 = time.perf_counter()
+            if id_index_enabled():
+                s.run(self.ID_INDEX_DDL).consume()
+                s.run("CALL db.awaitIndexes(3600)").consume()
+                self.id_index = self.ID_INDEX_DDL
             for i in range(0, len(vecs), BATCH):
                 rows = [{"vid": i + j, "e": vecs[i + j].tolist()} for j in range(len(vecs[i:i + BATCH]))]
                 s.run("UNWIND $rows AS r CREATE (:Article {vid: r.vid, embedding: r.e})", rows=rows).consume()
@@ -2300,6 +2355,7 @@ class MemgraphDense(Base):
     """
     quantization = "fp32"
     name = "memgraph_dense"
+    ID_INDEX_DDL = "CREATE INDEX ON :Article(vid)"
     # The element type USearch stores, set in the definition and read back from
     # SHOW VECTOR INDEX INFO onto the row; a mismatch refuses the cell (F164).
     SCALAR_KIND = "f32"
@@ -2327,6 +2383,9 @@ class MemgraphDense(Base):
     def build(self, vecs):
         with self.drv.session() as s:
             _t0 = time.perf_counter()
+            if id_index_enabled():
+                s.run(self.ID_INDEX_DDL).consume()
+                self.id_index = self.ID_INDEX_DDL
             for i in range(0, len(vecs), CHROMA_BATCH):
                 rows = [{"vid": i + j, "e": vecs[i + j].tolist()} for j in range(len(vecs[i:i + CHROMA_BATCH]))]
                 s.run("UNWIND $rows AS r CREATE (:Article {vid: r.vid, embedding: r.e})", rows=rows).consume()
@@ -2412,6 +2471,7 @@ class FalkorDense(Base):
     """
     quantization = "fp32"
     name = "falkordb_dense"
+    ID_INDEX_DDL = "CREATE INDEX FOR (a:Article) ON (a.vid)"
 
     def connect(self):
         import falkordb
@@ -2435,6 +2495,9 @@ class FalkorDense(Base):
 
     def build(self, vecs):
         _t0 = time.perf_counter()
+        if id_index_enabled():
+            self.g.query(self.ID_INDEX_DDL)
+            self.id_index = self.ID_INDEX_DDL
         for i in range(0, len(vecs), CHROMA_BATCH):
             rows = [{"vid": i + j, "e": vecs[i + j].tolist()} for j in range(len(vecs[i:i + CHROMA_BATCH]))]
             self.g.query("UNWIND $rows AS r CREATE (:Article {vid: r.vid, embedding: vecf32(r.e)})", {"rows": rows})
@@ -2749,6 +2812,11 @@ def main():
     # never restated from the flags we sent (FAIRNESS F3/F6; the graph lane's
     # row_extra, 2026-10-02 here).
     out.update(getattr(b, "row_extra", None) or {})
+    if id_index_enabled():
+        # #291: the index each engine deleted through, or "key" where its own record key is the id
+        _idx = "key" if b.ID_INDEX_DDL == "key" else b.id_index      # None when the build failed before the index
+        if _idx:
+            out["dense_id_index"] = _idx
     out.update(b.readbacks())          # after the build timer (CAMPAIGN section 7 row 21)
     # F134: how long the build waited for a background-built index, and the
     # probe latencies that showed it had caught up.
@@ -3009,6 +3077,11 @@ def main():
     # Again at the end: an adapter may record a setting the mutation phase
     # needed (Memgraph's delete settle), after the copy taken at the build.
     out.update(getattr(b, "row_extra", None) or {})
+    if id_index_enabled():
+        # #291: the index each engine deleted through, or "key" where its own record key is the id
+        _idx = "key" if b.ID_INDEX_DDL == "key" else b.id_index      # None when the build failed before the index
+        if _idx:
+            out["dense_id_index"] = _idx
     out.update(bench_common.client_path_fields())
     with open(args.out, "w") as f:
         json.dump(out, f)
