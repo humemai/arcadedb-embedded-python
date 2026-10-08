@@ -52,7 +52,7 @@ declare -A PKGS=(
   # arm's mutation phase after a deleted vector key is re-inserted, and 0.21.1
   # carries #1074 (COPY linear for compressible columns) and #1075 (the pool
   # sized from the cgroup limit). 0.21.2 (2026-10-01) is the newest stable.
-  [client]="requests==2.34.2 psycopg[binary]==3.3.6 $HARNESS_PKGS surrealdb==2.0.0 qdrant-client==1.19.1 pymilvus==3.0.1 elasticsearch==9.5.1 neo4j==6.3.1 ladybug==0.21.2 pymongo==4.18.1 python-arango==8.3.5 falkordb==1.7.1 redis==8.1.0"
+  [client]="requests==2.34.2 psycopg[binary]==3.3.6 $HARNESS_PKGS surrealdb==2.0.0 qdrant-client==1.19.1 pymilvus==3.0.1 elasticsearch==9.5.1 neo4j==6.3.1 ladybug==0.21.2 pymongo==4.18.1 python-arango==8.3.5 falkordb==1.7.1 redis==8.1.0 neo4j-rust-ext==6.3.1.0 pgvector==0.5.0"
   [dense]="chromadb==1.5.9 lancedb==0.39.0 sqlite-vec==0.1.9 duckdb==1.5.4 $HARNESS_PKGS"
 )
 # A GUARD, not a comment. The dev pin above survived because nothing checked

@@ -68,6 +68,8 @@ differ).
 | Qdrant client | `qdrant-client==1.19.0` | `1.19.1` | client package |
 | Elasticsearch client | `elasticsearch==9.5.0` | `9.5.1` | client package |
 | Neo4j driver (Neo4j AND Memgraph arms) | `neo4j==6.2.0` | `6.3.1` | client package |
+| Neo4j driver Rust extension (the same arms; the vendor's documented accelerator, DECISIONS #173) | not installed | `neo4j-rust-ext==6.3.1.0` (from the tier 1 to tier 2 boundary of the 26.10.1 measurement) | client package |
+| pgvector Python adapter (pgvector dense, PostgreSQL with AGE cross-model; binary COPY, DECISIONS #174) | not installed | `pgvector==0.5.0` (from the same boundary) | client package |
 
 **One of those moves is not a labelling change: AGE 1.8.0 builds edges far faster than 1.7.0, and the gap widens with the graph.** Measured on one host with one script, holding a 5,000-edge batch fixed and varying only the vertex count and the image:
 
