@@ -3229,6 +3229,18 @@ _DEV_BUILD = re.compile(r"(dev\d*|SNAPSHOT)\b", re.I)
 #    kills; e3_recovery.py kills but has no table on the page.
 _PAPER_RELEASE = "26.11.1"
 
+# THE FIRST PACKAGE VERSION BUILT WITH THE FASTER PYTHON BINDINGS (humemai/
+# arcadedb-embedded-python#283). The 26.10.1 rows ran on the bindings as they
+# were at the re-pin; since then the per-call glue, the Java-array parameter
+# path, and the result readers got faster, and they reach the page only through
+# the wheel the paper's release is measured with, built from main after those
+# changes. The embedded rows record that wheel's package version as their
+# engine_version, so a row below this version predates the change. Bump the
+# constant (and keep it equal to the version of the next wheel to be measured)
+# when a later bindings change should also be announced; the line goes by
+# itself once the rows come from a wheel at or above it.
+_BINDINGS_FASTER_FROM = "26.11.1"
+
 
 # WHAT THE NEXT MEASUREMENT CHANGES, ONE LINE PER CHANGE, on the page itself
 # (the user, 2026-10-04: "let's write what'll change in the October page").
@@ -3273,6 +3285,18 @@ def _arcadedb_releases_behind(engine_versions):
     return sorted(got - {_PAPER_RELEASE}, key=lambda v: tuple(int(x) for x in v.split(".")))
 
 
+def _bindings_behind(engine_versions):
+    """True when an embedded ArcadeDB row ran on a wheel older than
+    _BINDINGS_FASTER_FROM. Served rows ("server:...") run no Python bindings
+    inside the engine and are not counted."""
+    cut = tuple(int(x) for x in _BINDINGS_FASTER_FROM.split("."))
+    for ev in engine_versions:
+        m = re.match(r"\s*(\d+)\.(\d+)\.(\d+)", ev)
+        if m and tuple(int(x) for x in m.groups()) < cut:
+            return True
+    return False
+
+
 def _next_measurement_note(tables):
     """WHEN "the next measurement" is and WHAT it changes, said for the page:
     a list of sentences, the first saying when and one per change after it.
@@ -3300,6 +3324,7 @@ def _next_measurement_note(tables):
                if str(r.get("backend") or "").startswith("arcadedb")]
     dev = any(_DEV_BUILD.search(ev) for ev in ev_rows)
     behind = [] if dev else _arcadedb_releases_behind(ev_rows)
+    bindings = _bindings_behind(ev_rows)
     if not (dev or behind):
         return []
     conds = [(t, str(c)) for t in tables for c in t.get("conditions") or []]
@@ -3372,6 +3397,11 @@ def _next_measurement_note(tables):
                           f"hits, not the records, as every other engine does.", *sparse))
     if rerun:
         items.append(_gen("The cells marked `re-run` are measured again."))
+    if bindings:
+        items.append(_gen("The next measurement also runs ArcadeDB on newer Python bindings, which "
+                          "are faster at reading results and binding parameters, so ArcadeDB's "
+                          "embedded numbers are expected to move for that reason as well as for "
+                          "the engine release."))
     if behind:
         # Release rows (DECISIONS #176): the move to the paper's release is the
         # release line, and the comparators are already at their latest stable
