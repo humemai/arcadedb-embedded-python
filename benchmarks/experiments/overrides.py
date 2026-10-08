@@ -504,6 +504,24 @@ def _dense_id_index(rows):
             "finds each vector through that index.", [])
 
 
+# STREAMED RESULTS FOR THE SERVED ARCADEDB TIME-SERIES ARMS (CAMPAIGN section 7 row 85): OFF unless the launching environment sets
+# BENCH_ARCADEDB_TS_NDJSON=1, so the override is in force for exactly the rows that carry the stamp. Both served arms stamp "ndjson" when on.
+TS_NDJSON_CARRIERS = (("l4", "arcadedb_ts_doc_server"), ("l4", "arcadedb_ts_native_server"))
+
+
+def _ts_ndjson_in_force(row):
+    return _present(row.get("arcadedb_ts_result_format"))
+
+
+def _ts_ndjson_is_named(row, v):
+    return None if str(v or "").strip() == "ndjson" else f"is {v!r}, not 'ndjson', so a reader cannot tell how the answers were read"
+
+
+def _ts_ndjson(rows):
+    return ("The served ArcadeDB rows of this table that carry the result-format stamp read each answer as a stream of NDJSON lines, "
+            "as the PostgreSQL and MongoDB arms read rows as their server sends them; the buffered JSON answer is the default.", [])
+
+
 # THE SPARSE WARM-UP AND THE IDLE-STATE HOLD (CAMPAIGN section 7 row 81, DECISIONS #177): both OFF unless the launching environment asks, so the
 # override is in force for exactly the rows that carry the stamp. The warm-up is the sparse lane's; the hold is the runner's and stamps every
 # row of every lane, and its sentence is owed under the sparse table, the lane whose single-client times sit near the wake-up latency.
@@ -662,6 +680,13 @@ OVERRIDES = (
         check=_id_index_is_named, sentence=_dense_id_index,
         says=(r"id-index", r"every engine", r"load time"),
         applies=_id_index_in_force, in_manifest=False),
+    Override(
+        key="ts_ndjson",
+        setting="BENCH_ARCADEDB_TS_NDJSON=1: the served time-series arms read query answers as NDJSON",
+        carriers=tuple(Carrier(lane, be, "arcadedb_ts_result_format") for lane, be in TS_NDJSON_CARRIERS),
+        check=_ts_ndjson_is_named, sentence=_ts_ndjson,
+        says=(r"result-format", r"NDJSON", r"buffered JSON"),
+        applies=_ts_ndjson_in_force, in_manifest=False),
     Override(
         key="sparse_warmup",
         setting="BENCH_SPARSE_WARMUP untimed searches before the timed pass",

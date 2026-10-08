@@ -3235,7 +3235,9 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                    # the sparse lane's untimed warm-up, OFF unless set (row 81, DECISIONS #177); the lane reads it in the container
                    "BENCH_SPARSE_WARMUP",
                    # the dense lane's id index for the delete, OFF unless set (row 84, #291, DECISIONS #178)
-                   "BENCH_DENSE_ID_INDEX"):
+                   "BENCH_DENSE_ID_INDEX",
+                   # the served ArcadeDB time-series arms read query answers as NDJSON, OFF unless set (row 85)
+                   "BENCH_ARCADEDB_TS_NDJSON"):
             if os.environ.get(_k):
                 bench_env += ["-e", f"{_k}={os.environ[_k]}"]
 
