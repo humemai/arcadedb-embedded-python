@@ -66,6 +66,7 @@ class Override(NamedTuple):
     constant: Optional[Callable] = None      # () -> (text, [values]) for those tables, from no rows
     companions: tuple = ()                   # other fields the stamp writes: a source, a default, a failed read's reason
     applies: Optional[Callable] = None       # (row) -> True when the override is in force for that row; None = every row
+    in_manifest: bool = True                 # False: a switch that is off unless asked for, so the manifest lists it for no arm
 
 
 # ---------------------------------------------------------------------------
@@ -476,6 +477,63 @@ def _arcadedb_query_ram(rows):
             "table have no such limit.", [str(int(float(got[0]))), f"{int(float(got[0])):,}"] if len(got) == 1 and _int(got[0]) else [])
 
 
+# THE SPARSE WARM-UP AND THE IDLE-STATE HOLD (CAMPAIGN section 7 row 81, DECISIONS #177): both OFF unless the launching environment asks, so the
+# override is in force for exactly the rows that carry the stamp. The warm-up is the sparse lane's; the hold is the runner's and stamps every
+# row of every lane, and its sentence is owed under the sparse table, the lane whose single-client times sit near the wake-up latency.
+SPARSE_WARMUP_CARRIERS = tuple(("l3s", be) for be in (
+    "arcadedb_sparse_embedded", "arcadedb_sparse_embedded_fp32", "arcadedb_sparse_embedded_nocompact",
+    "arcadedb_sparse_server", "arcadedb_sparse_server_fp32", "pgvector_sparse", "qdrant_sparse", "milvus_sparse",
+    "elasticsearch_sparse", "qdrant_sparse_uint8"))
+
+
+def _warmup_in_force(row):
+    return _present(row.get("sparse_warmup_queries"))
+
+
+def _warmup_is_a_count(row, v):
+    n = _int(v)
+    return None if n is not None and n > 0 else f"reads {v!r}, not a positive number of queries"
+
+
+def _sparse_warmup(rows):
+    got = _values(rows, "sparse_warmup_queries")
+    n = f"{int(float(got[0])):,} " if len(got) == 1 and _int(got[0]) else ""
+    return ("The rows of this table that carry the warm-up stamp ran "
+            f"{n}untimed searches on every engine, after the build and before the timed pass, drawn from the same query set by one "
+            "fixed rule, so the first timed queries do not pay for the engine's start-up work (a JVM engine compiles its code while "
+            "it runs). The timed queries and their count are the same.",
+            [str(int(float(got[0]))), f"{int(float(got[0])):,}"] if len(got) == 1 and _int(got[0]) else [])
+
+
+def _dma_in_force(row):
+    return _present(row.get("cpu_dma_latency_us"))
+
+
+def _dma_is_honest(row, v):
+    n = _int(v)
+    if n is None or n < 0:
+        return f"reads {v!r}, not a target of 0 or more microseconds"
+    held = _bool(row.get("cpu_dma_latency_held"))
+    if held is True:
+        return None
+    if held is False:
+        return None if _present(row.get("cpu_dma_latency_error")) else "says the hold failed and names no reason"
+    return "has no `cpu_dma_latency_held`, so a reader cannot tell a hold from a request"
+
+
+def _cpu_dma_latency(rows):
+    got = _values(rows, "cpu_dma_latency_us")
+    held = [r for r in rows if _bool(r.get("cpu_dma_latency_held")) is True]
+    amount = f"{int(float(got[0]))} " if len(got) == 1 and _int(got[0]) else ""
+    tail = ("" if len(held) == len(rows) else
+            " Some rows record that the host refused the hold; those ran with the idle states as the host ships them.")
+    return ("The rows of this table that carry the idle-state stamp ran with the processor's sleep-state target held at "
+            f"{amount}microseconds for the length of each timed cell (the kernel's CPU latency limit), so the cores did not sleep deeper "
+            "than that while a query was timed. Without the hold, a time under a millisecond for a single client includes the cores' "
+            f"wake-up latency.{tail}",
+            [str(int(float(got[0])))] if len(got) == 1 and _int(got[0]) else [])
+
+
 OVERRIDES = (
     Override(
         key="es_security",
@@ -571,6 +629,21 @@ OVERRIDES = (
         companions=("arcadedb_query_max_heap_ram_source",),
         applies=_query_ram_in_force),
     Override(
+        key="sparse_warmup",
+        setting="BENCH_SPARSE_WARMUP untimed searches before the timed pass",
+        carriers=tuple(Carrier(lane, be, "sparse_warmup_queries") for lane, be in SPARSE_WARMUP_CARRIERS),
+        check=_warmup_is_a_count, sentence=_sparse_warmup,
+        says=(r"untimed searches", r"every engine", r"warm-up"),
+        applies=_warmup_in_force, in_manifest=False),
+    Override(
+        key="cpu_dma_latency",
+        setting="/dev/cpu_dma_latency held at BENCH_CPU_DMA_LATENCY_US for each timed cell",
+        carriers=tuple(Carrier(lane, be, "cpu_dma_latency_us") for lane, be in SPARSE_WARMUP_CARRIERS),
+        check=_dma_is_honest, sentence=_cpu_dma_latency,
+        says=(r"idle-state", r"sleep-state", r"wake-up"),
+        companions=("cpu_dma_latency_held", "cpu_dma_latency_error"),
+        applies=_dma_in_force, in_manifest=False),
+    Override(
         key="arcadedb_ts_acceptance",
         setting="ingest timer stops at wait_completion()",
         carriers=(Carrier("l4", "arcadedb_ts_native", "ts_mutable_at_ingest_end"),
@@ -598,7 +671,7 @@ STAMP_FIELDS = frozenset({c.field for o in OVERRIDES for c in o.carriers if c.fi
 
 def keys_for_backend(backend):
     """The override keys that apply to a runner backend, for the manifest."""
-    return sorted({o.key for o in OVERRIDES for c in o.carriers if c.backend == backend})
+    return sorted({o.key for o in OVERRIDES if o.in_manifest for c in o.carriers if c.backend == backend})
 
 
 # ---------------------------------------------------------------------------

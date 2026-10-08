@@ -373,7 +373,7 @@ def test_a_table_that_shows_the_arm_must_carry_the_sentence(o, c):
 
 
 def test_a_table_with_no_such_arm_owes_nothing():
-    assert OV.sentence_findings([_table("l3s", "qdrant_sparse", [])], LANE_OF, None) == []
+    assert OV.sentence_findings([_table("l3s", "qdrant_sparse", [])], LANE_OF, []) == []     # the sparse switches are judged from the rows (none stamped here)
 
 
 def test_the_artifact_backed_e4_table_owes_the_cap_sentence_from_the_runner_constant():

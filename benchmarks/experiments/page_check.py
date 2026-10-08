@@ -1336,6 +1336,13 @@ NOT_PRINTED = [
      "the query heap budget (MB) an ArcadeDB arm of the documents lane ran with when the override was on (DECISIONS #175), read from the "
      "engine (embedded: GlobalConfiguration; served: the server's settings over HTTP) or named as the request in the source field when "
      "the engine could not be asked: the evidence behind the sentence that names the raised budget"),
+    (r"^sparse_warmup_queries$",
+     "how many untimed searches the sparse lane ran on this engine before the timed pass when the warm-up was on (DECISIONS #177): "
+     "the evidence behind the sentence that names the warm-up"),
+    (r"^cpu_dma_latency_(us|held|error)$",
+     "the CPU latency target (microseconds) the runner asked the kernel to hold for the timed cell when the idle-state hold was on "
+     "(DECISIONS #177), whether the write to /dev/cpu_dma_latency succeeded, and why not when it did not: the evidence behind the "
+     "sentence that names the hold"),
     (r"^ts_compaction_interval(_ms|_readback_error)?$",
      "the compaction interval ArcadeDB's native time-series arms created the type with, as the engine "
      "reports it (milliseconds), or why it could not be asked: the evidence behind the sentence that "

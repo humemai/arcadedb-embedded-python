@@ -3196,6 +3196,13 @@ def _thermal_note():
         len(ms), f"{med:.1f}", f"{worst:.0f}")
 
 
+# THE CPU IDLE STATES (DECISIONS #177): always on, text only. The benchmark host leaves them as it ships.
+CPU_IDLE_NOTE = (
+    "CPU idle states are not controlled on the benchmark host (the intel_idle driver is on, with sleep states down to C10 "
+    "enabled), so a time under a millisecond for a single client includes the time the processor cores take to wake up."
+)
+
+
 _DEV_BUILD = re.compile(r"(dev\d*|SNAPSHOT)\b", re.I)
 
 # THE RELEASE THE PAPER PINS (DECISIONS #176): ArcadeDB 26.11.1. The 26.10.1
@@ -9590,6 +9597,7 @@ def main() -> int:
             # that must have hardware on record.
             "hosts": _host_hardware(hosts, rows),
             "cpuset": _dominant_cpuset(rows),
+            "cpu_idle_note": CPU_IDLE_NOTE,
             "memory_cap_by_size": MEM_BY_SCALE,
             "jvm_heap_by_size": HEAP_BY_SCALE,
         },
