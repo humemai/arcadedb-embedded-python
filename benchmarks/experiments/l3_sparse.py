@@ -662,7 +662,8 @@ class Elastic(Base):
         # yellow). Each is asked of Elasticsearch itself, `_xpack` and the
         # index settings, not copied from the environment and the call above,
         # so the row records what the engine ran with.
-        self.row_extra = bench_common.es_readback(self.es, self.IDX)
+        self.row_extra = {**bench_common.es_readback(self.es, self.IDX),
+                          "es_json_serializer": bench_common.es_json_serializer(self.es)}
 
     @staticmethod
     def _tok(idx, vals):
@@ -823,6 +824,7 @@ def main():
     # What the engine reported about the index it built, and any settle it
     # waited for, as the dense lane records it.
     out.update(getattr(b, "row_extra", None) or {})
+    out.update(bench_common.client_path_fields())
 
     # THE UNTIMED WARM-UP, only when asked for (row 81); nothing below changes when it is not.
     _warm_n = sparse_warmup_n()

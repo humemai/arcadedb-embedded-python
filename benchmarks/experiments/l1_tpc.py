@@ -912,6 +912,8 @@ class PostgresTPC:
     name = "postgres"
 
     def connect(self):
+        # WHICH #174 CLIENT PATH THIS ARM RAN (issue #261): stamped so a row says it, not only the code.
+        self.row_extra = {**(getattr(self, "row_extra", None) or {}), "pg_client_path": "autocommit"}
         import psycopg
         host = os.environ.get("BENCH_SERVER_HOST", "localhost")
         self.cx = psycopg.connect(
@@ -1882,6 +1884,7 @@ def main():
     # THE JPYPE THIS PROCESS RAN (CAMPAIGN 7 row 73): empty when the arm never imported it
     # (every comparator, every served ArcadeDB client), read after the arm has run.
     out.update(bench_common.jpype_fields())
+    out.update(bench_common.client_path_fields())
     with open(args.out, "w") as f:
         json.dump(out, f)
     print("RESULT " + json.dumps(out), flush=True)

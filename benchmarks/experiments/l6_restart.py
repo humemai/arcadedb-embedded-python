@@ -844,6 +844,7 @@ def main():
     out["restart_writes_survived"] = True
     out["restart_writes_visible_s"] = max(visible) if visible else None
     out["restart_writes_visible_s_all"] = visible
+    out.update(bench_common.client_path_fields())
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     json.dump(out, open(args.out, "w"), indent=1)
     print(f"RESULT {json.dumps(out)[:400]}")

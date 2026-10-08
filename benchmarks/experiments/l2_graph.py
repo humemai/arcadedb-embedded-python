@@ -3942,6 +3942,7 @@ def main():
     # THE JPYPE THIS PROCESS RAN (CAMPAIGN 7 row 73): empty when the arm never imported it
     # (every comparator, every served ArcadeDB client), read after the arm has run.
     out.update(bench_common.jpype_fields())
+    out.update(bench_common.client_path_fields())
     with open(args.out, "w") as f:
         json.dump(out, f)
     print(json.dumps(out))
