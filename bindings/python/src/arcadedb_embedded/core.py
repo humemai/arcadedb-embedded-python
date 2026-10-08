@@ -37,9 +37,94 @@ _JAVA_CLASSES = {}
 _SCALAR_PARAM_TYPES = frozenset((int, float, str, bool, type(None)))
 
 
+_JArray = jpype.JArray
+
+# Resolved on first use, once the JVM is up (see _db_calls and _object_array).
+_DB_CALLS = None
+_OBJECT_ARRAY = None
+
+
 def _is_plain_param(value):
     """A parameter value JPype passes as it is: an exact scalar type, or a value that is already a Java array."""
-    return type(value) in _SCALAR_PARAM_TYPES or isinstance(value, jpype.JArray)
+    return type(value) in _SCALAR_PARAM_TYPES or isinstance(value, _JArray)
+
+
+def _db_calls():
+    """``com.arcadedb.python.DbCalls`` from the bridge jar; None (the bridge's usual
+    one warning) when the jar is missing, which sends the caller down the plain path."""
+    global _DB_CALLS
+    if _DB_CALLS is None:
+        from .results import _bridge_class
+
+        _DB_CALLS = _bridge_class("DbCalls") or False
+    return _DB_CALLS or None
+
+
+_STRING_ARRAY = None
+
+
+def _string_array(values):
+    """``String[]`` of ``values``, with the array class built once per process."""
+    global _STRING_ARRAY
+    if _STRING_ARRAY is None:
+        _STRING_ARRAY = jpype.JArray(jpype.JString)
+    return _STRING_ARRAY(values)
+
+
+def _object_array(values):
+    """``Object[]`` of ``values``, with the array class built once per process (building it
+    costs about 0.6 us a call)."""
+    global _OBJECT_ARRAY
+    if _OBJECT_ARRAY is None:
+        _OBJECT_ARRAY = jpype.JArray(jpype.JObject)
+    return _OBJECT_ARRAY(values)
+
+
+_NO_GLUE = object()
+
+
+def _through_bridge(name, java_db, language, command, args):
+    """Run ``name`` ("command" or "query") through ``DbCalls``, or return ``_NO_GLUE``.
+
+    ``DbCalls`` takes the parameters as the varargs of one non-overloaded static
+    method, so the call is one crossing where the plain path takes a map or an
+    array to build, a cast, an overload resolution, and the call itself. Only
+    parameters that cross as they are take it: a lone dict of str keys (named),
+    or positional values, each an exact scalar type or a Java array (the same
+    test as the short path of :meth:`Database._java_parameters`). Anything else,
+    and a lone ``None`` or lone Java array (which JPype would read as the varargs
+    array itself), takes the plain path.
+    """
+    calls = _db_calls()
+    if calls is None:
+        return _NO_GLUE
+    scalar = _SCALAR_PARAM_TYPES
+    if len(args) == 1:
+        first = args[0]
+        if type(first) is dict:
+            flat = []
+            for key, value in first.items():
+                if type(key) is not str or not (
+                    type(value) in scalar or isinstance(value, _JArray)
+                ):
+                    return _NO_GLUE
+                flat.append(key)
+                flat.append(value)
+            call = calls.commandNamed if name == "command" else calls.queryNamed
+            return call(java_db, language, command, *flat)
+        values = first if isinstance(first, (list, tuple)) else args
+    else:
+        values = args
+    count = len(values)
+    if count == 0 or (
+        count == 1 and (values[0] is None or isinstance(values[0], _JArray))
+    ):
+        return _NO_GLUE
+    for value in values:
+        if type(value) not in scalar and not isinstance(value, _JArray):
+            return _NO_GLUE
+    call = calls.commandPositional if name == "command" else calls.queryPositional
+    return call(java_db, language, command, *values)
 
 
 def _java_class(name):
@@ -235,7 +320,7 @@ class Database:
                     params.put(key, item)
                 return jpype.JObject(params, _java_class("java.util.Map"))
         if all(plain(a) for a in values):
-            return jpype.JArray(jpype.JObject)(values)
+            return _object_array(values)
         if len(values) == 1 and isinstance(values[0], Mapping):
             java_map = _java_class("java.util.Map")
             params = values[0]
@@ -244,7 +329,7 @@ class Database:
                     params if isinstance(params, dict) else dict(params)
                 )
             return jpype.JObject(params, java_map)
-        return jpype.JArray(jpype.JObject)(Database._convert_args(args))
+        return _object_array(Database._convert_args(args))
 
     def query(self, language: str, command: str, *args) -> ResultSet:
         """Execute a query and return results.
@@ -256,9 +341,13 @@ class Database:
         self._check_not_closed()
         try:
             if args:
-                java_result = self._java_db.query(
-                    language, command, self._java_parameters(args)
+                java_result = _through_bridge(
+                    "query", self._java_db, language, command, args
                 )
+                if java_result is _NO_GLUE:
+                    java_result = self._java_db.query(
+                        language, command, self._java_parameters(args)
+                    )
             else:
                 java_result = self._java_db.query(language, command)
             return ResultSet(java_result, self)
@@ -273,9 +362,13 @@ class Database:
         self._check_not_closed()
         try:
             if args:
-                java_result = self._java_db.command(
-                    language, command, self._java_parameters(args)
+                java_result = _through_bridge(
+                    "command", self._java_db, language, command, args
                 )
+                if java_result is _NO_GLUE:
+                    java_result = self._java_db.command(
+                        language, command, self._java_parameters(args)
+                    )
             else:
                 java_result = self._java_db.command(language, command)
 
@@ -733,15 +826,18 @@ class Database:
         """
         self._check_not_closed()
         try:
-            import jpype
-
-            # Convert to Java arrays
-            keys_array = jpype.JArray(jpype.JString)(keys)
             # Converted like every other parameter: a datetime or a date key
             # matched no Java type at all, and a numpy bool was read as a number.
-            values_array = jpype.JArray(jpype.JObject)(
-                [convert_python_to_java(value) for value in values]
-            )
+            keys_array = _string_array(keys)
+            values_array = _object_array([convert_python_to_java(v) for v in values])
+
+            calls = _db_calls()
+            if calls is not None:
+                # lookup, hasNext(), next(), and getRecord() in ONE crossing
+                java_record = calls.lookupFirst(
+                    self._java_db, type_name, keys_array, values_array
+                )
+                return None if java_record is None else Document.wrap(java_record, self)
 
             cursor = self._java_db.lookupByKey(type_name, keys_array, values_array)
 

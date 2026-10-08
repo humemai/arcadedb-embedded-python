@@ -6,10 +6,10 @@
  * maps are dominated by the NUMBER of calls, not by the data. Materializing
  * one row took hasNext/next, getPropertyNames, and one getProperty per
  * property. This does the same work Java-side in one call and hands Python
- * arrays, whose elements are read without method dispatch. (A parameter map
- * built the same way was measured slower for the one- and two-key maps
- * queries use: converting the Python lists to arrays costs more than the
- * put() calls it saves, so parameters keep the per-key path.)
+ * arrays, whose elements are read without method dispatch. (Parameters go the
+ * other way, see DbCalls: a Python list converted to a Java array was slower
+ * than the put() calls it saved, but the same values passed as the varargs of
+ * one static method cross in a single call.)
  *
  * Values are returned as the engine's own objects, so Python converts them
  * exactly as before (full type fidelity, unlike RowBatcher's JSON).
@@ -58,5 +58,31 @@ public final class RowAccess {
     if (rows.size() < max)
       RowBatcher.closeDrained(rs);
     return rows.toArray();
+  }
+
+  /**
+   * The first row of a result set, or null when it is empty, and the result set is closed either way: the
+   * {@code hasNext()}, {@code next()}, and {@code close()} of {@code ResultSet.first()} in one crossing instead of
+   * three. An error in the statement surfaces from {@code hasNext()} or {@code next()} as before; a failing close is
+   * ignored, as the Python close() ignores it.
+   */
+  public static Result firstAndClose(final ResultSet rs) {
+    try {
+      return rs.hasNext() ? rs.next() : null;
+    } finally {
+      try {
+        rs.close();
+      } catch (final Exception ignored) {
+        // best-effort hygiene, like the Python close()
+      }
+    }
+  }
+
+  /**
+   * {@code row.getProperty(name)} when {@code row.hasProperty(name)}, else null: the two calls of
+   * {@code Result.get()} in one crossing.
+   */
+  public static Object propertyOrNull(final Result row, final String name) {
+    return row.hasProperty(name) ? row.getProperty(name) : null;
   }
 }
