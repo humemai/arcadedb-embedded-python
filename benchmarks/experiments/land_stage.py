@@ -14,7 +14,9 @@ Steps, in order:
      --overlay ARM, the dense multipass files mp_<ARM>_b*.json at both sizes);
   2. drop rows of the backends still running (--exclude-backends), so a
      stage in progress never reaches the freeze; also any row newer than
-     --exclude-since for those backends only;
+     --exclude-since for those backends only; and the rows a repair stage
+     replaced (--drop-unless BACKEND:LANE:WORKLOAD:FIELD=VALUE drops that
+     cell's rows whose FIELD is not the repair's stamp);
   3. merge (merge_campaign.py --from-file --apply);
   4. publish through refresh_web_page.py (page-only, no site build here) and
      stop unless every gate passed;
@@ -273,6 +275,26 @@ def step(n, title):
 # preview one (see main()).
 PIN_DEFAULT = "8d6af9475"
 
+def parse_drop_unless(spec):
+    """BACKEND:LANE:WORKLOAD:FIELD=VALUE -> (backend, lane, workload, field, value). A malformed spec ends the run:
+    a landing that silently dropped nothing would publish the rows the repair replaced."""
+    try:
+        backend, lane, workload, cond = spec.split(":", 3)
+        field, value = cond.split("=", 1)
+    except ValueError:
+        raise SystemExit(f"--drop-unless {spec!r}: expected BACKEND:LANE:WORKLOAD:FIELD=VALUE")
+    if not all((backend, lane, workload, field)):
+        raise SystemExit(f"--drop-unless {spec!r}: every part must be non-empty")
+    return backend, lane, workload, field, value
+
+
+def replaced_by_repair(row, u):
+    """True when the row is BACKEND on LANE and WORKLOAD and its FIELD is not VALUE (absent counts as not VALUE)."""
+    backend, lane, workload, field, value = u
+    return (str(row.get("backend")) == backend and str(row.get("lane")) == lane
+            and str(row.get("workload")) == workload and str(row.get(field)) != value)
+
+
 def main():
     # RUN UNDER THE REPOSITORY'S ENVIRONMENT, whatever interpreter started us.
     # Every step this script shells out to already uses PY; the one piece that
@@ -295,6 +317,10 @@ def main():
     ap.add_argument("--exclude-since", default="",
                     help="ISO UTC timestamp; rows of the excluded backends newer than this are dropped "
                          "(default: every row of those backends)")
+    ap.add_argument("--drop-unless", action="append", default=[], metavar="BACKEND:LANE:WORKLOAD:FIELD=VALUE",
+                    help="drop the rows of BACKEND on LANE and WORKLOAD whose FIELD is not VALUE (compared as text); "
+                         "repeatable. For rows a repair stage replaced, keyed on the stamp only the repair carries: "
+                         "qP01's served graph OLTP rows lack server_http_body_max_bytes=68719476736 (DECISIONS #172)")
     ap.add_argument("--overlay", action="append", default=[],
                     help="dense multipass arm token to pull at both sizes (e.g. neo4jvec, pgvector)")
     ap.add_argument("--message", required=True, help="one-line commit subject for both repos")
@@ -429,10 +455,14 @@ def main():
     excl = {b.strip() for b in args.exclude_backends.split(",") if b.strip()}
     lanes = {l.strip() for l in args.only_lanes.split(",") if l.strip()}
     rows = [json.loads(l) for l in pulled.read_text().splitlines() if l.strip()]
+    unless = [parse_drop_unless(x) for x in args.drop_unless]
     keep, dropped, other_lane = [], [], []
     for r in rows:
         if lanes and str(r.get("lane") or "") not in lanes:
             other_lane.append(r)
+            continue
+        if any(replaced_by_repair(r, u) for u in unless):
+            dropped.append(r)
             continue
         be = str(r.get("backend", ""))
         hit = any(be == x or be.startswith(x) for x in excl)
