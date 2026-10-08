@@ -3198,6 +3198,30 @@ def _thermal_note():
 
 _DEV_BUILD = re.compile(r"(dev\d*|SNAPSHOT)\b", re.I)
 
+# THE RELEASE THE PAPER PINS (DECISIONS #176): ArcadeDB 26.11.1. The 26.10.1
+# rows are a measurement on the way there, so while the ArcadeDB rows' release
+# is another one the next-measurement list says ArcadeDB's numbers are
+# re-measured on it and the comparators' carry over (_next_measurement_note).
+# The same release is the one that fixes the 26.10.1 defects the page declares
+# (_REFUSAL_FIXED_IN). When the rows are this release, the line goes by itself.
+#
+# THE OTHER 26.10.1 DEFECTS FIXED IN 26.11.1 MARK NO PRINTED CELL (checked
+# 2026-10-08, humemai/arcadedb-embedded-python#274), so no mark is keyed on
+# them, and none is to be added without a printed cell that depends on it:
+#  * ArcadeData/arcadedb#9400 (country-partitioned triangle count about 4x
+#    slower, LSQB Q3, the l2olap "LSQB Q3 p50 ms" cell): the regression came in
+#    with #9383 (merge f5bb4acc39, milestone 26.11.1), which is NOT an ancestor
+#    of the 26.10.1 build d36b4ca3a. 26.10.1 never had it; no cell is slow.
+#  * #9397 (openCypher IN and lookupByKey lose a key during a commit that
+#    deletes and re-creates it): needs a reader running against a concurrent
+#    committing writer. l2_graph.py, l1_tpc.py and e2_hybrid.py run one client
+#    at a time, so no printed cell exercises it.
+#  * #9452 (time series rows of acknowledged commits missing after kill -9
+#    while COMPACT TIMESERIES TYPE runs, txWalFlush 1 or 2): needs a kill and a
+#    concurrent compaction. l4_tsbs.py compacts once after the ingest and never
+#    kills; e3_recovery.py kills but has no table on the page.
+_PAPER_RELEASE = "26.11.1"
+
 
 # WHAT THE NEXT MEASUREMENT CHANGES, ONE LINE PER CHANGE, on the page itself
 # (the user, 2026-10-04: "let's write what'll change in the October page").
@@ -3233,6 +3257,15 @@ def _arcadedb_dev_build_date(rows):
     return dates.pop() if len(dates) == 1 else None
 
 
+def _arcadedb_releases_behind(engine_versions):
+    """The x.y.z releases the ArcadeDB rows' engine_version names (served rows
+    read "server:26.10.1 (build <sha>)") that are not the paper's release, in
+    order. Development builds are the caller's case, not this one's."""
+    got = {m.group(1) for ev in engine_versions
+           for m in [re.search(r"(\d+\.\d+\.\d+)", ev)] if m}
+    return sorted(got - {_PAPER_RELEASE}, key=lambda v: tuple(int(x) for x in v.split(".")))
+
+
 def _next_measurement_note(tables):
     """WHEN "the next measurement" is and WHAT it changes, said for the page:
     a list of sentences, the first saying when and one per change after it.
@@ -3244,8 +3277,11 @@ def _next_measurement_note(tables):
 
     KEYED ON THE ROWS: the whole list is shown while the ArcadeDB rows behind
     the page are a development build, which is what this campaign measured,
-    and while a table still defers something. Rows from a release take it off
-    the page, and so does a page with nothing left to re-measure. Each line
+    and while a table still defers something. Rows from a release other than
+    the paper's (_PAPER_RELEASE) show it with the line that ArcadeDB is
+    measured again on that release and the comparators' numbers carry over;
+    rows from the paper's release take it off the page, and so does a page
+    with nothing left to re-measure. Each line
     after the first is keyed on what its table sentence is keyed on. The one
     change no table sentence describes, ArcadeDB embedded's documents load
     (the tables' ingest-path sentence already says what ran), is keyed on its
@@ -3253,9 +3289,11 @@ def _next_measurement_note(tables):
     """
     if not _OCTOBER_ENV or SKELETON:
         return []
-    dev = any(_DEV_BUILD.search(str(r.get("engine_version") or ""))
-              for r in _FROZEN_ROWS if str(r.get("backend") or "").startswith("arcadedb"))
-    if not dev:
+    ev_rows = [str(r.get("engine_version") or "") for r in _FROZEN_ROWS
+               if str(r.get("backend") or "").startswith("arcadedb")]
+    dev = any(_DEV_BUILD.search(ev) for ev in ev_rows)
+    behind = [] if dev else _arcadedb_releases_behind(ev_rows)
+    if not (dev or behind):
         return []
     conds = [(t, str(c)) for t in tables for c in t.get("conditions") or []]
     filed = [s for ss in _NEXT_ITEM_SENTENCES.values() for s in ss]
@@ -3327,6 +3365,21 @@ def _next_measurement_note(tables):
                           f"hits, not the records, as every other engine does.", *sparse))
     if rerun:
         items.append(_gen("The cells marked `re-run` are measured again."))
+    if behind:
+        # Release rows (DECISIONS #176): the move to the paper's release is the
+        # release line, and the comparators are already at their latest stable
+        # release, so their numbers carry over rather than move again.
+        out = [_gen("The next measurement runs after this one is complete, and it makes the "
+                    "changes listed below."),
+               _gen(f"ArcadeDB's numbers here are from release {_join_and(behind)}. The next "
+                    f"measurement runs ArcadeDB again on release {_PAPER_RELEASE}, the one the "
+                    f"paper reports, and every other engine's numbers carry over.",
+                    *behind, _PAPER_RELEASE)]
+        out += items
+        if other:
+            out.append(_gen("The notes under the tables describe the next measurement's other "
+                            "changes."))
+        return out
     if not (items or other):
         return []
     date = _arcadedb_dev_build_date(_FROZEN_ROWS)
@@ -8239,7 +8292,7 @@ def _withheld_recall_cells(table_id):
 # tables are built from (main), so a repair-stage row never silently replaces
 # the refusal on the page.
 _REFUSAL_RELEASES = ("26.10.1",)
-_REFUSAL_FIXED_IN = "26.11.1"
+_REFUSAL_FIXED_IN = _PAPER_RELEASE
 _REFUSAL_BUDGET_MESSAGE = "Query heap budget exceeded"
 _TOP_PARTS_GROUPS = 2_000_000    # TPC-H SF10: 200,000 parts per scale factor
 _REFUSAL_SCALE = "tpch10"
