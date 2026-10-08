@@ -403,6 +403,25 @@ class VectorIndex:
         return record
 
     def _wrap_pair_results(self, pairs):
+        from .core import _wrap_java_record
+        from .graph import _graph_calls
+
+        calls = _graph_calls()
+        if calls is not None:
+            # every hit's record and score in one crossing instead of
+            # getFirst, getSecond, and the record lookup each
+            hits = calls.hits(self._database._java_db, pairs)
+            records, scores = hits[0], hits[1]
+            wrapped = []
+            for i, record in enumerate(records):
+                if record is None:
+                    # name the hit exactly as the per-hit path does
+                    self._lookup_record_by_rid(list(pairs)[i].getFirst())
+                wrapped.append(
+                    (_wrap_java_record(record, self._database), float(scores[i]))
+                )
+            return wrapped
+
         wrapped_results = []
         for pair in pairs:
             rid = pair.getFirst()

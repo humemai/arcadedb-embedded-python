@@ -144,7 +144,7 @@ def generate_embeddings(
     if limit:
         query += f" LIMIT {limit}"
 
-    movies = list(db.query("sql", query))
+    movies = db.query("sql", query).to_list()
     total = len(movies)
     print(f"Processing {total} movies...")
 

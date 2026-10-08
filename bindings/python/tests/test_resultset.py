@@ -426,7 +426,7 @@ def test_to_dict_one_crossing_matches_the_per_property_path(temp_db_path):
             assert one_crossing == per_property, query
             assert list(one_crossing) == list(per_property), query  # same key order
 
-        # to_list() fetches rows in batches (RowAccess.nextRows): same dicts,
+        # to_list() fetches rows in batches (TypedRows.nextRows): same dicts,
         # same order, as reading each row and property on its own, including
         # after rows were already taken from the same result set.
         with db.transaction():
@@ -589,17 +589,17 @@ class _CountingBridge:
 
 @pytest.fixture
 def counting_bridge(monkeypatch):
-    """Count the calls the Python layer makes into RowAccess.nextRows and RowBatcher.nextJsonBatch."""
+    """Count the calls the Python layer makes into TypedRows.nextRows and RowBatcher.nextJsonBatch."""
     from arcadedb_embedded import results
 
-    row_access = results._bridge_class("RowAccess")
+    typed_rows = results._bridge_class("TypedRows")
     row_batcher = results._bridge_class("RowBatcher")
-    assert row_access is not None and row_batcher is not None
+    assert typed_rows is not None and row_batcher is not None
     counters = {
-        "nextRows": _CountingBridge(row_access, "nextRows"),
+        "nextRows": _CountingBridge(typed_rows, "nextRows"),
         "nextJsonBatch": _CountingBridge(row_batcher, "nextJsonBatch"),
     }
-    monkeypatch.setitem(results._BRIDGE_CLASSES, "RowAccess", counters["nextRows"])
+    monkeypatch.setitem(results._BRIDGE_CLASSES, "TypedRows", counters["nextRows"])
     monkeypatch.setitem(
         results._BRIDGE_CLASSES, "RowBatcher", counters["nextJsonBatch"]
     )
@@ -610,7 +610,7 @@ class TestSmallResultsCostOneBridgeCall:
     """A result that fits one batch is read with ONE call into the bridge, and the bridge closes it.
 
     A JPype call is 3 to 4 microseconds, a fifth of a one-row read. to_list() asked
-    RowAccess.nextRows a second time just to see an empty batch (the fix that #144 made for
+    TypedRows.nextRows a second time just to see an empty batch (the fix that #144 made for
     to_json_list()), and every drained result set cost one more crossing for close().
     nextRows and nextJsonBatch return fewer rows than asked for only when the result set is
     drained, and close it themselves.
@@ -645,14 +645,17 @@ class TestSmallResultsCostOneBridgeCall:
         assert rs._closed and rs._exhausted
 
     def test_a_full_batch_still_ends_on_the_next_call(self, temp_db, counting_bridge):
-        """Exactly 512 rows (the to_list batch): the first batch is full, so one more call finds it drained."""
+        """Exactly one batch of rows (the to_list batch): the first batch is full, so one more call finds it drained."""
+        from arcadedb_embedded import results
+
+        batch = results._TYPED_BATCH_ROWS
         temp_db.command("sql", "CREATE DOCUMENT TYPE Exact")
         with temp_db.transaction():
-            for i in range(512):
+            for i in range(batch):
                 temp_db.command("sql", "INSERT INTO Exact SET k = ?", i)
         rs = temp_db.query("sql", "SELECT k FROM Exact ORDER BY k")
         rows = rs.to_list()
-        assert [r["k"] for r in rows] == list(range(512))
+        assert [r["k"] for r in rows] == list(range(batch))
         assert counting_bridge["nextRows"].calls == 2
         assert rs._closed and rs._exhausted
         assert rs.to_list() == []  # a result set read to its end reads as empty

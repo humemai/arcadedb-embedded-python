@@ -26,7 +26,7 @@ Ratios are Python time / Java-native time (lower is better; 1.0× = parity).
 | Vector search, 500k vectors | **1.13×** | |
 | `find_nearest()` wrapper | **1.08×** | |
 | Typed bulk scan → numpy/pandas (100k×7 cols) | **~1.6×** | `to_columns()` / `to_dataframe()` |
-| Bulk scan → list of dicts (100k×7 cols) | **~2.6×** | `to_json_list()` |
+| Bulk scan → list of dicts (100k×7 cols) | **~2.6×** | `to_json_list()`; `to_list()` reads rows the same way, with `date`, `datetime`, and `Decimal` values |
 | Bulk edge ingest (`GraphBatch.new_edges()`) | **0.57µs/edge** | near the 0.1µs Java floor; with properties: 1.6µs |
 | Bulk vertex creation (`GraphBatch.create_vertices()`) | **parity** (6.0 vs 6.2µs/vertex) | |
 | GROUP BY, Cypher traversal, BM25 full-text, JSONL export | **1.02–1.06×** | engine-bound: at parity |
@@ -51,6 +51,32 @@ two to six times (laptop, P cores 0-3, median of 11 interleaved runs, µs per ca
 | `command()` UPDATE, positional parameters | 17.0 | 15.2 |
 | `command()` INSERT with a vector parameter | 17.3 | 14.3 |
 | Three-statement transaction | 61.0 | 55.7 |
+
+Reading rows and walking the graph cross the JVM once per batch or per call now.
+`ResultSet.to_list()` and `iter_dicts()` read rows through the bridge's `TypedRows`: Java writes
+each batch as JSON, tags the values JSON cannot carry exactly (`DECIMAL`, `DATE`, `DATETIME`,
+sets) and hands over everything else (RIDs, embedded documents, `float[]`) as the engine's own
+object, so every value has the Python type it had before. `Vertex.get_out_edges()`,
+`get_in_edges()`, `get_both_edges()`, and vector search results cross once per call instead of
+once per edge or per hit. Laptop, P cores 0-3, 9 interleaved rounds per arm after a warm-up
+round, medians (min-max) of the clean rounds, wall time per call; the ratio is the median of
+the per-round ratios with its 95% interval:
+
+| Operation | Before | After | After / before (95% interval) |
+|---|---|---|---|
+| `to_list()`, 10,000 rows x 9 mixed columns | 261.5 ms (253.7-271.2) | 36.9 ms (34.3-40.0) | 0.141 (0.135-0.142) |
+| `to_list()`, 100 rows | 2.70 ms (2.63-2.85) | 0.44 ms (0.37-0.53) | 0.160 (0.146-0.183) |
+| `to_list()`, 1 row | 85.0 us (83.4-96.4) | 74.8 us (64.4-82.1) | 0.854 (0.783-0.933) |
+| `to_list()`, 2,000 rows of a 128-float vector | 19.0 ms (18.2-21.0) | 8.4 ms (8.0-9.8) | 0.440 (0.426-0.461) |
+| `iter_dicts()`, 10,000 rows x 9 mixed columns | 279.1 ms (274.1-291.3) | 78.8 ms (78.0-84.0) | 0.278 (0.276-0.283) |
+| `iter_dicts()`, 100 rows | 2.84 ms (2.78-2.95) | 0.86 ms (0.84-1.06) | 0.305 (0.295-0.314) |
+| `iter_dicts()`, 1 row | 85.7 us (78.5-90.9) | 70.3 us (64.5-75.3) | 0.825 (0.790-0.876) |
+| `get_out_edges()`, 5 edges per vertex | 12.0 us | 7.0 us | 0.557 (0.515-0.620) |
+| `find_nearest()`, k = 100, 128 dimensions | 0.60 ms | 0.28 ms | 0.467 (0.436-0.546) |
+| `find_nearest()`, k = 10, 128 dimensions | 0.24 ms | 0.21 ms | 0.880 (0.828-0.931) |
+
+`to_json_list()` on the same 10,000-row scan took 32.2 ms in the same runs, so `to_list()` now
+costs about the same and keeps the Python types.
 
 ## Choosing a materialization API
 
@@ -96,18 +122,18 @@ Measured limits that remain by design, and the recommended pattern for each:
 
 | Limit | Measured | Recommended pattern |
 |---|---|---|
-| Per-row materialization of huge results (`to_list`, per-row `.get()`) | 15–21× Java (measured before 26.10.1, where `to_list()` fetches rows in batches and is ~1.5x faster: 873 to 578 ms on a 10,000-row, nine-property scan) | Use `to_columns()`/`to_dataframe()` (~1.6×) or `to_json_list()` (~2.6×) for bulk consumption |
+| Per-row `.get()` loops over huge results | Each `get()` is a crossing into the JVM (about 1.5 us) | Use `to_list()` (261 ms to 37 ms on a 10,000-row, nine-property scan), `to_columns()`/`to_dataframe()` (~1.6×), or `to_json_list()` (~2.6×) for bulk consumption |
 | Threading plateaus around 4 threads (~45k qps vs Java's 107k at 8 threads) | GIL bounds Python's per-op share | Keep write concurrency at ~4 threads with `run_in_transaction(retries=)`, or use multiprocessing for more parallelism |
 | Async per-operation Python callbacks | ~104µs vs 5.5µs per completion | Not a bulk-write path; see [Bulk Ingest Recommendation](import.md#bulk-ingest-recommendation). Use `insert_many()`, `insert_columns()`, or `graph_batch()` for volume |
 | Values pasted into the query text (`f"... WHERE id = {x}"`) | Indexed point lookup, 20k records: Cypher 0.87 ms vs 0.09 ms bound, SQL 0.48 ms vs 0.09 ms | Bind them: `?`/`:name` in SQL, `$name` in Cypher. Every distinct text is parsed again and churns the statement cache ([queries guide](core/queries.md#parameters)) |
 | Record mutation (`modify().set().save()`) | 16.5µs vs 3.4µs per record | Absolute cost is small; use SQL `UPDATE` or bulk ingest paths for volume |
-| List-typed columns convert per element | 14.6ms for a 10k-element LIST via `.get()` | Prefer typed array properties (e.g. `ARRAY_OF_FLOATS`) or `to_json_list()` |
+| List-typed columns convert per element via `.get()` | 14.6ms for a 10k-element LIST via `.get()` | Read the row with `to_list()`, or prefer typed array properties (e.g. `ARRAY_OF_FLOATS`) |
 
 ## Memory
 
 | Question | Answer |
 |---|---|
-| Leaks under sustained load? | Not in the JVM: a 45-minute soak over 2.65M mixed operations shows post-GC heap flat from minute 1 to 45. On the Python side, JPype 1.7.1 keeps a Python object for every number that `to_list()` and `Result.get()` return; see [Known Engine Issues](known-issues.md) |
+| Leaks under sustained load? | Not in the JVM: a 45-minute soak over 2.65M mixed operations shows post-GC heap flat from minute 1 to 45. On the Python side, JPype 1.7.1 keeps a Python object for every number that `Result.get()` returns (`to_list()` reads numbers from JSON text and does not); see [Known Engine Issues](known-issues.md) |
 | Baseline footprint | ~121MB RSS after JVM start |
 | "`-Xmx4g` means it uses 4GB"? | No: `-Xmx` is a ceiling, not a reservation; the heap grows only as needed |
 | Bulk APIs (`to_json_list`, `to_columns`) | Transient peak scales with `batch_size` and is fully reclaimed; under a small heap they degrade gracefully (slower, no OOM) |

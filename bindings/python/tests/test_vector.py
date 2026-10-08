@@ -704,8 +704,10 @@ class TestLSMVectorIndex:
         assert len(results) == 1
         assert str(results[0][0].get_identity()) == rids[3]
 
-    def test_lsm_vector_search_uses_database_lookup_by_rid(self, test_db, monkeypatch):
-        """Result materialization should go through the Database wrapper."""
+    def test_lsm_vector_search_looks_up_all_hits_in_one_bridge_call(
+        self, test_db, monkeypatch
+    ):
+        """Result materialization looks every hit up in one GraphCalls.hits call."""
 
         test_db.command("sql", "CREATE VERTEX TYPE Doc")
         test_db.command("sql", "CREATE PROPERTY Doc.name STRING")
@@ -727,21 +729,23 @@ class TestLSMVectorIndex:
                 arcadedb.to_java_float_array([0.9, 0.1, 0.0]),
             )
 
-        lookup_calls = {"count": 0}
-        # Result materialization uses the Java-RID fast path (no string
-        # round-trip), still delegated to the Database wrapper.
-        original_lookup = test_db._lookup_by_java_rid
+        from arcadedb_embedded import graph
 
-        def wrapped_lookup(rid):
-            lookup_calls["count"] += 1
-            return original_lookup(rid)
+        calls = graph._graph_calls()
+        assert calls is not None
+        hit_calls = {"count": 0}
 
-        monkeypatch.setattr(test_db, "_lookup_by_java_rid", wrapped_lookup)
+        class CountingCalls:
+            def hits(self, java_db, pairs):
+                hit_calls["count"] += 1
+                return calls.hits(java_db, pairs)
+
+        monkeypatch.setattr(graph, "_GRAPH_CALLS", CountingCalls())
 
         results = index.find_nearest([1.0, 0.0, 0.0], k=2)
 
         assert len(results) == 2
-        assert lookup_calls["count"] == 2
+        assert hit_calls["count"] == 1
 
     def test_lsm_vector_search_uses_database_rid_conversion(self, test_db, monkeypatch):
         """RID whitelist conversion should go through the Database wrapper."""

@@ -76,9 +76,18 @@ first = next(result_set)  # Raises StopIteration when exhausted
 
 Convert all results to a list of dictionaries.
 
+Rows come over from the JVM in batches. Java writes each batch as JSON, tags the values
+JSON cannot carry exactly (`DECIMAL`, `DATE`, `DATETIME`, sets), and hands everything else
+(RIDs, embedded documents, `float[]` arrays, ...) over as the engine's own object, so each
+value has the Python type it always had (`date`, `datetime`, `Decimal`, ...) and no value
+crosses the JVM boundary on its own. On a 10,000-row, nine-property scan that is 7.1x
+faster than it was and within a few percent of `to_json_list()` (261 ms to 37 ms, laptop,
+2026-10-08; see the [performance guide](../guide/performance.md)).
+
 **Parameters:**
 
-- `convert_types` (bool): Convert Java types to Python types (default: `True`)
+- `convert_types` (bool): Convert Java types to Python types (default: `True`). `False`
+  reads the rows one at a time without conversion
 
 **Returns:**
 
@@ -99,6 +108,11 @@ print(users[0])
 
 Iterate results as dictionaries.
 
+Each row is read when you ask for it, in one crossing into the JVM (the same typed
+transport as `to_list()`), so stopping early or changing records inside the loop behaves
+as it always did. 3.6x faster than before on a 10,000-row, nine-property scan (279 ms to
+79 ms). To take the whole result, `to_list()` is another 2x faster.
+
 **Parameters:**
 
 - `convert_types` (bool): Convert Java types to Python types (default: `True`)
@@ -115,16 +129,17 @@ Bulk-materialize all rows via batched Java-side JSON serialization.
 
 The fast path for large result sets: rows are serialized to JSON in batches on the Java
 side (one JPype crossing per batch instead of several per row) and parsed with the C
-json module. Measured ~5.5x faster than `to_list()` on a 10,000-row, nine-property scan
-(578 ms against 103 ms, laptop, 2026-09-27).
+json module. It was ~5.5x faster than `to_list()` on a 10,000-row, nine-property scan
+(578 ms against 103 ms, laptop, 2026-09-27); `to_list()` now reads rows the same way and
+keeps the Python types, so the two cost about the same.
 
 **Trade-off:** values carry JSON-native types. Numbers, strings, booleans, lists, and
 nested maps convert as expected, but `DATE` and `DATETIME` values arrive as
 epoch-millisecond integers (not `datetime`) and DECIMALs as floats. A `DATE` is the
 epoch milliseconds of midnight UTC, whatever the JVM's time zone, so it is the same
 integer `Result.to_json()` writes and `datetime.fromtimestamp(ms / 1000, timezone.utc)`
-gives the right day. Use `to_list()` when full Python-type fidelity matters more than
-speed.
+gives the right day. Use `to_list()` when you want `date`, `datetime`, and `Decimal`
+values: it costs about the same.
 
 It is also the fast path for a small result: a one-row read through `to_json_list()` takes
 one Java crossing (a short batch ends the read) and allocates only what the row needs.
@@ -614,8 +629,8 @@ for person in people:
 
 **Performance note:** `to_dict()` converts the whole row in one call into Java, which
 is cheaper than one `get()` per property when you need several fields. For large result
-sets, the bulk methods are faster than any per-row access: `to_json_list()`,
-`to_columns()`, `to_dataframe()`, or `to_arrow()`.
+sets, `to_list()` is the fast way to get row dicts, and `to_columns()`, `to_dataframe()`,
+or `to_arrow()` are faster still when you want columns.
 
 ---
 
@@ -648,14 +663,14 @@ for result in result_set:
 
 ### Converting to Lists and Dicts
 
-`ResultSet.to_list()` and `Result.to_dict()` are eager materializers. They are the
-right choice when you explicitly want Python-native data, but they are not the
-lowest-overhead path for large result sets.
+`ResultSet.to_list()` and `Result.to_dict()` are eager materializers. `to_list()` reads
+rows in batches and is the fast way to get row dicts with Python-native values; for
+columns, `to_columns()`, `to_dataframe()`, and `to_arrow()` are faster still.
 
 ```python
 # List of dictionaries (most common)
 result_set = db.query("sql", "SELECT FROM User")
-users = [result.to_dict() for result in result_set]
+users = result_set.to_list()
 
 # List of specific property values
 result_set = db.query("sql", "SELECT name FROM User")
