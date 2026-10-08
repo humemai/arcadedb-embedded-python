@@ -6664,6 +6664,18 @@ def _server_hit_envelope(r):
     return bool(r.get("error")) and anon >= 0.99 * cap_mib
 
 
+def _run_log_rows():
+    """The rows this publish's censored cells and declared outcomes are read
+    from: the skeleton's own frozen file, else the campaign's run log."""
+    if _SKELETON_ENV:
+        return list(csv.DictReader(FROZEN.open())) if FROZEN.exists() else []
+    path = HERE / "results" / os.environ.get("BENCH_RUNS_JSONL", "runs.jsonl")
+    if not path.exists():
+        return []
+    with open(path) as fh:
+        return [json.loads(l) for l in fh if l.strip()]
+
+
 def _censored_cells():
     """Cells at the pin whose every attempt ended in a timeout: (lane, scale,
     backend, workload) -> budget seconds. A timeout is a censored observation
@@ -6688,14 +6700,7 @@ def _censored_cells():
     # no label for, which is how this surfaced (the export died rather than
     # published, which is the good failure). A skeleton refuses bench-host
     # ROWS by design; it must refuse their outcomes for the same reason.
-    if _SKELETON_ENV:
-        rows = list(csv.DictReader(FROZEN.open())) if FROZEN.exists() else []
-    else:
-        path = HERE / "results" / os.environ.get("BENCH_RUNS_JSONL", "runs.jsonl")
-        rows = []
-        if path.exists():
-            with open(path) as fh:
-                rows = [json.loads(l) for l in fh if l.strip()]
+    rows = _run_log_rows()
     # SCOPE TO THE PIN THIS PUBLISH IS FOR. `pin` was read at the top of this
     # function and never used, so the only scoping was a date, and BOTH
     # campaigns are after it. A cell censored in September therefore carried
@@ -6727,6 +6732,8 @@ def _censored_cells():
             continue
         if r.get("lane") == "lifecycle" and _lifecycle_stale(r):
             continue   # withdrawn, marked `re-run`: its failure was ours (LIFECYCLE_STALE)
+        if _query_budget_raised(r):
+            continue   # a raised-budget row is not the headline and never cancels the default's outcome (DECISIONS #176)
         key = (r.get("lane"), str(r.get("scale")), r.get("backend"), r.get("workload"))
         err = str(r.get("error") or "")
         if not err:
@@ -6768,7 +6775,10 @@ def _censored_cells():
             # no row and no note, which reads as a cell nobody ran.
             # The reason is carried as a string so the note can say it.
             timeouts[key] = err.strip().splitlines()[-1][:90] or "an error"
-    _CENSORED_CACHE = {k: v for k, v in timeouts.items() if k not in clean}
+    # A cell the 26.10.1 query heap budget refused at the default is a declared
+    # outcome of its own (_top_parts_refusals), not an unexplained failure.
+    declared = {("l1tpc", scale, backend, "olap") for backend, scale in _top_parts_refusals()}
+    _CENSORED_CACHE = {k: v for k, v in timeouts.items() if k not in clean and k not in declared}
     return _CENSORED_CACHE
 
 
@@ -7436,6 +7446,9 @@ def _censored_notes(table_id):
         notes.append(why)
         for e in engines:
             _declare_absence(table_id, e, None, kind, why)
+    refusal = _top_parts_refusal_note(table_id)
+    if refusal:
+        notes.append(refusal)
     return notes
 
 
@@ -8196,6 +8209,165 @@ def _withheld_recall_cells(table_id):
     return notes
 
 
+# ARCADEDB 26.10.1 REFUSES THE TPC-H SF10 `top_parts` AGGREGATE AT ITS DEFAULTS
+# (DECISIONS #176, ArcadeData/arcadedb#9402, fixed by #9415 for 26.11.1). That
+# release gives all the queries of a JVM one budget for their in-heap buffers,
+# and the budget shrinks as cores are added, so on the benchmark host's 12 cores
+# the GROUP BY over about 2,000,000 parts is refused in both ArcadeDB arms. The
+# embedded row records the engine's own message ("Query heap budget exceeded");
+# the served row records the query's HTTP 500 and `PHASE query-top_parts-start`
+# as its last phase marker, and nothing else (the server's message is in its
+# log). The row then has no numbers, so it follows the precedent of the
+# ArangoDB one-list cell (_one_list_groups): it stays on the table marked `n/c`
+# in every cell, with ONE sentence that names the cause and the fix, and
+# nothing counts it as a measurement.
+#
+# KEYED ON THE ROWS, not on a cell: the l1tpc olap rows at tpch10 of an
+# ArcadeDB backend that failed with the refusal, whose release (engine_version,
+# else the image tag, else a sibling row of the same pin and backend) is
+# 26.10.1, and which carry no raised-budget stamp. A 26.11.1 row that completes
+# is clean, so nothing is declared and the cell prints its number; a row on any
+# other release, or one that failed some other way, keeps the failed-cell
+# sentence (_censored_notes).
+#
+# THE RAISED-BUDGET ROWS ARE NOT THE HEADLINE (DECISIONS #176, after #175 and
+# humemai/arcadedb-embedded-python#260): a row that carries
+# `arcadedb_query_max_heap_ram_mb` ran with the budget raised, an escape hatch
+# and no measurement at the engine's defaults. They are excluded here
+# (_query_budget_raised): from the declaration, from the cancelling of a failed
+# default row by a clean one (_censored_cells), and from the frozen rows the
+# tables are built from (main), so a repair-stage row never silently replaces
+# the refusal on the page.
+_REFUSAL_RELEASES = ("26.10.1",)
+_REFUSAL_FIXED_IN = "26.11.1"
+_REFUSAL_BUDGET_MESSAGE = "Query heap budget exceeded"
+_TOP_PARTS_GROUPS = 2_000_000    # TPC-H SF10: 200,000 parts per scale factor
+_REFUSAL_SCALE = "tpch10"
+_REFUSAL_ISSUES = ("ArcadeData/arcadedb#9402", "#9415")
+_REFUSAL_CACHE = None
+
+
+def _query_budget_raised(r):
+    """True for an l1tpc ArcadeDB row that ran with the query heap budget
+    raised (the repair stage, `arcadedb_query_max_heap_ram_mb` on the row)."""
+    return (r.get("lane") == "l1tpc" and str(r.get("backend") or "").startswith("arcadedb")
+            and bool(str(r.get("arcadedb_query_max_heap_ram_mb") or "").strip()))
+
+
+def _cpuset_cores(spec):
+    """The number of cores in a cpuset string such as "0-11", or None."""
+    n = 0
+    for part in str(spec or "").split(","):
+        m = re.fullmatch(r"\s*(\d+)(?:-(\d+))?\s*", part)
+        if not m:
+            return None
+        n += int(m.group(2) or m.group(1)) - int(m.group(1)) + 1
+    return n or None
+
+
+def _top_parts_refusals():
+    """(backend, scale) -> {"release": x.y.z, "cores": n or None} for the
+    ArcadeDB documents analytics cells the 26.10.1 query heap budget refused at
+    the engine's defaults, read from the run log (see the comment above)."""
+    global _REFUSAL_CACHE
+    if _REFUSAL_CACHE is not None:
+        return _REFUSAL_CACHE
+    pin = os.environ.get("BENCH_ENGINE_COMMIT", "").strip()
+
+    def at_pin(r):
+        if not pin:
+            return True
+        got = str(r.get("engine_commit") or "")
+        return bool(got) and (got.startswith(pin) or pin.startswith(got))
+
+    rows = [r for r in _run_log_rows()
+            if r.get("lane") == "l1tpc" and str(r.get("backend") or "").startswith("arcadedb")
+            and str(r.get("backend")) not in OFF_PAGE_ARMS and at_pin(r)
+            and str(r.get("instrument") or "") == "2026-10" and not _query_budget_raised(r)]
+
+    def release(r):
+        got = _one_list_release(r.get("engine_version")) or _one_list_release(r.get("server_image_ref"))
+        if got:
+            return got
+        sib = {_one_list_release(o.get("engine_version")) for o in rows
+               if o.get("backend") == r.get("backend") and o.get("engine_commit") == r.get("engine_commit")}
+        sib.discard(None)
+        return next(iter(sib)) if len(sib) == 1 else None
+
+    def refused(r):
+        err = str(r.get("error") or "")
+        if not err or err.startswith("timeout_after_") or r.get("oom_killed"):
+            return False
+        if _REFUSAL_BUDGET_MESSAGE in err:
+            return True
+        phases = re.findall(r"PHASE\s+(\S+)", err)
+        return bool(phases) and phases[-1] == "query-top_parts-start" and "500 Server Error" in err
+
+    out, by = {}, {}
+    for r in rows:
+        if r.get("workload") == "olap" and str(r.get("scale")) == _REFUSAL_SCALE:
+            by.setdefault((str(r.get("backend")), _REFUSAL_SCALE), []).append(r)
+    for key, rs in by.items():
+        if any(not str(r.get("error") or "").strip() for r in rs):
+            continue   # a clean default row stands: the cell has a number
+        if not all(refused(r) and release(r) in _REFUSAL_RELEASES for r in rs):
+            continue
+        cores = {_cpuset_cores(r.get("server_cpuset") or r.get("cpuset")) for r in rs}
+        out[key] = {"release": release(rs[0]), "cores": cores.pop() if len(cores) == 1 else None}
+    _REFUSAL_CACHE = out
+    return out
+
+
+def _top_parts_refusal_note(table_id):
+    """The one sentence the refused cells carry, or None. Filed under the
+    release move, which the page's list of changes states for ArcadeDB."""
+    if table_id != "docs_olap" or not _OCTOBER_ENV:
+        return None
+    found = _top_parts_refusals()
+    if not found:
+        return None
+    releases = sorted({v["release"] for v in found.values()})
+    cores = {v["cores"] for v in found.values()}
+    core_n = next(iter(cores)) if len(cores) == 1 else None
+    who = _join_and(sorted(display_name(b) for b, _ in found))
+    size = scale_label("l1tpc", _REFUSAL_SCALE).split(" (")[0]    # "TPC-H SF10", without the line-item count
+    groups = f"{_TOP_PARTS_GROUPS:,}"
+    host = f"on the benchmark host's {core_n} cores" if core_n else "on the benchmark host"
+    text = (f"The top parts query at {size} is refused on {who} at the engine's default settings: "
+            f"ArcadeDB {_join_and(releases)} gives each query a heap budget that shrinks as cores are "
+            f"added, and {host} it refuses this {groups}-group aggregate, while ArcadeDB "
+            f"{_REFUSAL_FIXED_IN} fixes it ({_REFUSAL_ISSUES[0]}, fixed by {_REFUSAL_ISSUES[1]}) and the "
+            f"next measurement re-measures it.")
+    return _next_item("release", _gen(text, who, size, *releases, groups, _REFUSAL_FIXED_IN,
+                                      *_REFUSAL_ISSUES, *([str(core_n)] if core_n else [])))
+
+
+def _refusal_entries(table):
+    """Rows for the documents analytics cells the budget refusal decided: the
+    shape _not_comparable_entries builds, `n/c` in every cell, declared absent
+    with the sentence. Only at a size the table prints measured rows at."""
+    why = _top_parts_refusal_note(table.get("id"))
+    if not why:
+        return [], set()
+    measured_scales = {str(e.get("scale")) for e in table.get("entries") or []
+                       if not e.get("outcome")}
+    cols = list(table.get("columns") or [])
+    out = []
+    for (backend, scale) in sorted(_top_parts_refusals()):
+        if scale not in measured_scales:
+            continue
+        label = display_name(backend)
+        out.append({"backend": label, "backend_key": backend,
+                    "is_arcadedb": True, "precision": None, "scale": scale,
+                    "scale_label": scale_label("l1tpc", scale), "workload": "olap",
+                    "n_docs": None, "deployment": deployment_of(backend),
+                    "image": None, "version_name": None, "host": None,
+                    "outcome": "not comparable",
+                    "metrics": {c: {"text": "n/c"} for c in cols}})
+        _declare_absence(table.get("id"), label, None, "not comparable", why)
+    return out, ({"n/c"} if out else set())
+
+
 def _withheld_recall_notes(table_id):
     """One sentence per approximate-search cell the freeze withheld for a recall
     below make_paper_tables.RECALL_FLOOR (the sidecar it writes). The cell's
@@ -8368,6 +8540,11 @@ def _finish_table(table: dict) -> dict:
         table, {(str(m.get("backend_key")), str(m.get("scale"))) for m in _marked})
     _marked = _marked + _nc
     _marks = set(_marks) | _nc_marks
+    # The same mark for the documents analytics cells the 26.10.1 query heap
+    # budget refused at the engine's defaults (_top_parts_refusals).
+    _rf, _rf_marks = _refusal_entries(table)
+    _marked = _marked + _rf
+    _marks = set(_marks) | _rf_marks
     # ONE LEGEND for every mark on the table: the censored rows' and the
     # `re-run` cells the #117 withholding placed on rows that stand.
     _marks = set(_marks) | {st["text"] for e in table.get("entries", [])
@@ -8749,6 +8926,18 @@ def main() -> int:
     for _r in rows:
         if str(_r.get("engine_version") or "").startswith("surrealdb-embedded:"):
             _r["engine_version"] = surreal_common.legacy_stamp_fixup(_r["engine_version"])
+
+    # THE RAISED-BUDGET ROWS ARE NOT THE HEADLINE (DECISIONS #176; the comment
+    # above _top_parts_refusals). A row that carries
+    # `arcadedb_query_max_heap_ram_mb` ran with the engine's query heap budget
+    # raised, so it is left out of every table, and the cell it repaired keeps
+    # the engine's default outcome: the refusal sentence, or the number a
+    # release that completes at its defaults measured.
+    _raised = [r for r in rows if _query_budget_raised(r)]
+    if _raised:
+        print(f"  {len(_raised)} ArcadeDB documents rows ran with the query heap budget raised: "
+              f"not the headline, left off the tables")
+        rows = [r for r in rows if not _query_budget_raised(r)]
 
     # WITHHELD: ArcadeDB rows whose engine_version identifies no build.
     #

@@ -1017,6 +1017,10 @@ def main() -> int:
           "(BUGS F175)")
     n_bad = _check_one_list_not_comparable(payload)
     print(f"  {n_bad} not-comparable finding(s)")
+    print("\nan analytics cell the 26.10.1 query heap budget refused is marked not comparable "
+          "(DECISIONS #176)")
+    t_bad = _check_top_parts_refusal(payload)
+    print(f"  {t_bad} top parts refusal finding(s)")
     print("\nthe dense table's ArangoDB IVF sentence says what the harness does, from the rows")
     i_bad = _check_arango_ivf_sentence(payload, rows)
     print(f"  {i_bad} IVF sentence finding(s)")
@@ -2187,6 +2191,42 @@ def _check_one_list_not_comparable(payload):
                                for v in (e.get("metrics") or {}).values())]
             if numbered:
                 print(f"    NUMBERED {t['id']}: {backend} at {scale} prints a number the defect decided")
+                bad += 1
+            elif rows_here and not all(e.get("outcome") == "not comparable" for e in rows_here):
+                print(f"    UNMARKED {t['id']}: {backend} at {scale} has a row not marked not comparable")
+                bad += 1
+            else:
+                print(f"  {t['id']}: {backend} at {scale} disclosed"
+                      + (", row marked n/c" if rows_here else ", size not on the table"))
+    return bad
+
+
+def _check_top_parts_refusal(payload):
+    """The documents analytics cells ArcadeDB 26.10.1's per-query heap budget
+    refused at the engine's defaults (DECISIONS #176, ArcadeData/arcadedb#9402)
+    carry the sentence that names the cause and the fix, and their rows, where
+    the table prints the size, are marked `n/c` with no number in any cell.
+    Re-decided from the run log, as the exporter decides it; a release that
+    completes the query declares nothing. Returns bad count."""
+    import export_web as EW
+    bad = 0
+    for t in payload.get("tables", []):
+        want = EW._top_parts_refusal_note(t.get("id"))
+        if not want:
+            continue
+        if want not in (t.get("conditions") or []):
+            print(f"    MISSING {t['id']}: the top parts query was refused at the default heap budget "
+                  f"and no sentence says so")
+            bad += 1
+            continue
+        for backend, scale in sorted(EW._top_parts_refusals()):
+            rows_here = [e for e in t.get("entries") or []
+                         if str(e.get("backend_key")) == backend and str(e.get("scale")) == scale]
+            numbered = [e for e in rows_here
+                        if any(isinstance(v, dict) and v.get("median") is not None
+                               for v in (e.get("metrics") or {}).values())]
+            if numbered:
+                print(f"    NUMBERED {t['id']}: {backend} at {scale} prints a number the refusal decided")
                 bad += 1
             elif rows_here and not all(e.get("outcome") == "not comparable" for e in rows_here):
                 print(f"    UNMARKED {t['id']}: {backend} at {scale} has a row not marked not comparable")
