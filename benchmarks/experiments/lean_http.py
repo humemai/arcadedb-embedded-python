@@ -32,11 +32,13 @@ closes) raises a `ConnectionError` that carries the status and the first 500 byt
 says why (ArcadeDB 26.10.1's 100 MiB request-body limit looked like `[Errno 32] Broken pipe` until this).
 
 A session is for one thread. `BENCH_ARCADEDB_HTTP_CLIENT=requests` restores the October client (`Session()` then returns a `requests.Session`), so
-the October behaviour stays reproducible; the default is `lean`. `row_fields(session)` is what a row records.
+the October behaviour stays reproducible; the default is `lean`. `BENCH_ARCADEDB_HTTP_CLIENT=lean2` selects `LeanSession2`, the same client over a bare socket (see its docstring), OFF
+unless asked for. `row_fields(session)` is what a row records.
 """
 import base64
 import gzip
 import http.client
+import io
 import json as _json
 import os
 import select
@@ -47,18 +49,22 @@ import zlib
 
 CLIENT_ENV = "BENCH_ARCADEDB_HTTP_CLIENT"
 LEAN = "lean"
+LEAN2 = "lean2"
 REQUESTS = "requests"
 LEAN_NAME = "lean_http (http.client, keep-alive)"
+LEAN2_NAME = "lean_http2 (socket, keep-alive)"
 
 
 def client_choice():
-    """'lean' (the default) or 'requests', from BENCH_ARCADEDB_HTTP_CLIENT; anything else is refused rather than guessed."""
+    """'lean' (the default), 'lean2', or 'requests', from BENCH_ARCADEDB_HTTP_CLIENT; anything else is refused rather than guessed."""
     v = (os.environ.get(CLIENT_ENV) or "").strip().lower()
     if v in ("", LEAN):
         return LEAN
     if v == REQUESTS:
         return REQUESTS
-    raise ValueError(f"{CLIENT_ENV} must be 'lean' or 'requests', got {v!r}")
+    if v == LEAN2:
+        return LEAN2
+    raise ValueError(f"{CLIENT_ENV} must be 'lean', 'lean2', or 'requests', got {v!r}")
 
 
 # ------------------------------------------------------------------------------------------------------ exceptions
@@ -331,10 +337,370 @@ class LeanSession:
         return self.request("POST", url, json=json, data=data, **kw)
 
 
+LEAN2_UA = "lean_http/2 (socket)"
+_RECV_BUF = 65536
+_INLINE_BODY = 16384          # a request whose head and body fit in this many bytes goes out in ONE write
+_CACHE_MAX = 256
+
+
+class _Headers2:
+    """The answer's header block, parsed into http.client's own message class only when a caller reads `.headers`."""
+
+    __slots__ = ("_raw", "_msg")
+
+    def __init__(self, raw):
+        self._raw, self._msg = raw, None
+
+    def msg(self):
+        if self._msg is None:
+            self._msg = http.client.parse_headers(io.BytesIO(self._raw + b"\r\n\r\n"))
+        return self._msg
+
+
+class Response2(Response):
+    """Response for LeanSession2: same fields and methods; `headers` is parsed on first use, `encoding` comes from the scan of the answer."""
+
+    __slots__ = ("_hdr", "_charset")
+
+    def __init__(self, status_code, reason, hdr, content, url, charset):
+        self.status_code, self.reason, self.content, self.url = status_code, reason, content, url
+        self._text, self._hdr, self._charset = None, hdr, charset
+
+    @property
+    def headers(self):
+        return self._hdr.msg()
+
+    @property
+    def encoding(self):
+        return self._charset
+
+
+def _charset_of(ctype):
+    """Response.encoding's rule, on the raw Content-Type value."""
+    for part in ctype.split(";")[1:]:
+        k, _, v = part.strip().partition("=")
+        if k.lower() == "charset" and v:
+            return v.strip("\"'")
+    return "utf-8"
+
+
+def _header_value(head, hl, name):
+    """The value of header `name` (lower-case, written "\r\nname:") in a header block, or None. `hl` is `head` lower-cased."""
+    k = hl.find(name)
+    if k < 0:
+        return None
+    k += len(name)
+    e = hl.find(b"\r\n", k)
+    return head[k:e if e >= 0 else len(head)].strip()
+
+
+class _Sock2:
+    """One persistent socket with its receive buffer and the timeout it was last given."""
+
+    __slots__ = ("sock", "poll", "timeout", "buf", "mv")
+
+    def __init__(self, sock):
+        self.sock = sock
+        self.poll = select.poll()
+        self.poll.register(sock, select.POLLIN)
+        self.timeout = None
+        self.buf = bytearray(_RECV_BUF)
+        self.mv = memoryview(self.buf)
+
+
+class LeanSession2(LeanSession):
+    """LeanSession over a bare socket: the same requests on the wire, the same answers, less Python per call (BENCH_ARCADEDB_HTTP_CLIENT=lean2).
+
+    WHY (perf-served-point 2026-10-08): a served bound Cypher point read cost about 102 us, and `LeanSession` used 82 us of client CPU of it,
+    a hand-built socket 17 us; the rest was http.client's request building, its parsing of every answer header into a message object, and
+    the layers around them. WHAT IS THE SAME: the HTTP/1.1 request bytes (request line, `Host`, `Accept-Encoding: gzip, deflate`, `Accept`,
+    `Connection: keep-alive`, Basic `Authorization`, `Content-Type`, `Content-Length`; only `User-Agent` differs, as it does between lean and
+    requests), the JSON body (the encoding `json.dumps(obj, allow_nan=False)` builds), one persistent connection per (scheme, host, port) with
+    TCP_NODELAY, the check that drops a connection the server closed while idle, the per-call timeout, the retry of a read (never of a
+    write) that died on a reused connection, the early-answer message for a request that died while being sent, content-coding decoding,
+    chunked and close-delimited answers, 1xx interim answers, and the `Response` interface (`.headers` is the same `http.client.HTTPMessage`,
+    built on first use).
+    WHAT IS DONE ONCE INSTEAD OF PER CALL: the URL split and the request head are cached per (method, url, auth, headers), and the encoder is
+    built once. WHAT IS DONE IN LESS: the answer's head is scanned for the six fields the client needs (status, Content-Length,
+    Transfer-Encoding, Content-Encoding, Content-Type, Connection) instead of being parsed into a header table, and the answer is read with
+    `recv_into` on one buffer. A request with an iterator body (`data=`), or with its own Content-Length header, is sent by the parent's
+    http.client path. Nothing about an answer is cached, and every answer is read, decoded, and returned in full.
+    """
+
+    client_name = LEAN2_NAME
+    _encode = _json.JSONEncoder(allow_nan=False).encode          # what json.dumps(obj, allow_nan=False) builds on every call
+
+    def __init__(self):
+        super().__init__()
+        self._socks = {}
+        self._urls = {}
+        self._heads = {}
+
+    # -- connections
+    def _conn2(self, key, timeout):
+        c = self._socks.get(key)
+        if c is not None:
+            try:
+                if c.poll.poll(0):
+                    self._drop2(key)
+                    c = None
+            except (OSError, ValueError):
+                self._drop2(key)
+                c = None
+        if c is not None:
+            return c, True
+        try:
+            sock = socket.create_connection((key[1], key[2]), timeout)
+            if key[0] == "https":
+                sock = ssl.create_default_context().wrap_socket(sock, server_hostname=key[1])
+        except socket.timeout as e:
+            raise Timeout(f"connect to {key[1]}:{key[2]} timed out") from e
+        except OSError as e:
+            raise ConnectionError(f"cannot connect to {key[1]}:{key[2]}: {e}") from e
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        c = self._socks[key] = _Sock2(sock)
+        c.timeout = timeout
+        return c, False
+
+    def _drop2(self, key):
+        c = self._socks.pop(key, None)
+        if c is not None:
+            try:
+                c.sock.close()
+            except OSError:
+                pass
+
+    def close(self):
+        for key in list(self._socks):
+            self._drop2(key)
+        super().close()
+
+    # -- request head: (request line and Host, the other headers); http.client writes Content-Length between the two
+    def _head(self, method, scheme, host, port, path, extra, has_json, auth):
+        auth = auth if auth is not None else self.auth
+        ck = (method, scheme, host, port, path, tuple(extra.items()) if extra else None, has_json, tuple(auth) if auth else None)
+        head = self._heads.get(ck)
+        if head is None:
+            h = self._headers(extra, has_json, auth)
+            h["User-Agent"] = LEAN2_UA
+            hostname = f"[{host}]" if ":" in host else host
+            hh = hostname if port == (443 if scheme == "https" else 80) else f"{hostname}:{port}"
+            head = (f"{method} {path} HTTP/1.1\r\nHost: {hh}".encode("latin-1"),
+                    "".join(f"\r\n{k}: {v}" for k, v in h.items()).encode("latin-1") + b"\r\n\r\n")
+            if len(self._heads) >= _CACHE_MAX:
+                self._heads.clear()
+            self._heads[ck] = head
+        return head
+
+    # -- answer
+    def _read_answer(self, c, method):
+        """Read one complete answer: (status, reason, header block, its lower-case copy, body, will_close). Interim 1xx answers are skipped."""
+        sock, buf, mv = c.sock, c.buf, c.mv
+        have = 0
+        while True:
+            end = buf.find(b"\r\n\r\n", 0, have)
+            while end < 0:
+                if have == len(buf):
+                    nb = bytearray(len(buf) * 2)
+                    nb[:have] = mv[:have]
+                    c.buf = buf = nb
+                    c.mv = mv = memoryview(nb)
+                n = sock.recv_into(mv[have:])
+                if n == 0:
+                    if have == 0:
+                        raise http.client.RemoteDisconnected("Remote end closed connection without response")
+                    raise http.client.BadStatusLine("connection closed inside an answer head")
+                start = max(0, have - 3)
+                have += n
+                end = buf.find(b"\r\n\r\n", start, have)
+            head = bytes(mv[:end])
+            first_end = head.find(b"\r\n")
+            status_line = head[:first_end] if first_end >= 0 else head
+            try:
+                if status_line[:5] != b"HTTP/":
+                    raise ValueError
+                status = int(status_line[9:12])
+            except ValueError:
+                raise http.client.BadStatusLine(status_line.decode("iso-8859-1")) from None
+            if 100 <= status < 200 and status != 101:     # an interim answer: drop it, keep what follows
+                rest = bytes(mv[end + 4:have])
+                buf[:len(rest)] = rest
+                have = len(rest)
+                continue
+            break
+        reason = status_line[13:].decode("iso-8859-1") if len(status_line) > 13 else ""
+        hblock = head[first_end:] if first_end >= 0 else b""
+        hl = hblock.lower()
+        conn_h = _header_value(hblock, hl, b"\r\nconnection:")
+        conn_l = conn_h.lower() if conn_h is not None else b""
+        will_close = b"close" in conn_l or (status_line[:8] == b"HTTP/1.0" and b"keep-alive" not in conn_l)
+        body_start = end + 4
+        if method == "HEAD" or status in (204, 304):
+            return status, reason, hblock, hl, b"", will_close
+        te = _header_value(hblock, hl, b"\r\ntransfer-encoding:")
+        if te is not None and b"chunked" in te.lower():
+            return status, reason, hblock, hl, self._read_chunked(sock, bytes(mv[body_start:have])), will_close
+        cl = _header_value(hblock, hl, b"\r\ncontent-length:")
+        if cl is not None:
+            try:
+                n = int(cl)
+            except ValueError:
+                raise http.client.BadStatusLine("bad Content-Length " + cl.decode("latin-1")) from None
+            got = have - body_start
+            if got >= n:
+                if got > n:
+                    will_close = True            # bytes nobody asked for: the stream is out of step, do not reuse it
+                return status, reason, hblock, hl, bytes(mv[body_start:body_start + n]), will_close
+            out = bytearray(n)
+            out[:got] = mv[body_start:have]
+            ov = memoryview(out)
+            while got < n:
+                k = sock.recv_into(ov[got:])
+                if k == 0:
+                    raise http.client.IncompleteRead(bytes(out[:got]), n - got)
+                got += k
+            return status, reason, hblock, hl, bytes(out), will_close
+        out = bytearray(mv[body_start:have])          # no length, not chunked: the body runs to the end of the stream
+        while True:
+            k = sock.recv_into(mv)
+            if k == 0:
+                break
+            out += mv[:k]
+        return status, reason, hblock, hl, bytes(out), True
+
+    @staticmethod
+    def _read_chunked(sock, data):
+        buf = bytearray(data)
+        out = bytearray()
+        pos = 0
+
+        def more():
+            k = sock.recv(_RECV_BUF)
+            if not k:
+                raise http.client.IncompleteRead(bytes(out))
+            buf.extend(k)
+
+        while True:
+            e = buf.find(b"\r\n", pos)
+            while e < 0:
+                more()
+                e = buf.find(b"\r\n", pos)
+            size = int(bytes(buf[pos:e]).split(b";")[0].strip() or b"0", 16)
+            pos = e + 2
+            if size == 0:
+                while True:                                   # trailers, up to the empty line
+                    e = buf.find(b"\r\n", pos)
+                    while e < 0:
+                        more()
+                        e = buf.find(b"\r\n", pos)
+                    last = e == pos
+                    pos = e + 2
+                    if last:
+                        return bytes(out)
+            while len(buf) < pos + size + 2:
+                more()
+            out += buf[pos:pos + size]
+            pos += size + 2
+
+    @staticmethod
+    def _early_answer2(c):
+        try:
+            c.sock.settimeout(EARLY_ANSWER_WAIT_S)
+            data = c.sock.recv(4096)
+            line, _, rest = data.partition(b"\r\n")
+            _, _, body = rest.partition(b"\r\n\r\n")
+            parts = line.decode("iso-8859-1").split(" ", 2)
+            text = body[:EARLY_ANSWER_BYTES].decode("utf-8", "replace").strip()
+            return f"{parts[1]} {parts[2] if len(parts) > 2 else ''}" + (f": {text}" if text else "")
+        except Exception:  # noqa: BLE001 - as _early_answer
+            return None
+
+    # -- requests
+    def request(self, method, url, json=None, data=None, headers=None, timeout=None, auth=None):
+        if (data is not None and not isinstance(data, (str, bytes, bytearray))) or (
+                headers and any(str(k).lower() == "content-length" for k in headers)):
+            return super().request(method, url, json=json, data=data, headers=headers, timeout=timeout, auth=auth)
+        parsed = self._urls.get(url)
+        if parsed is None:
+            parts = urllib.parse.urlsplit(url)
+            scheme = parts.scheme or "http"
+            path = parts.path or "/"
+            if parts.query:
+                path += "?" + parts.query
+            parsed = (scheme, parts.hostname, parts.port or (443 if scheme == "https" else 80), path)
+            if len(self._urls) >= _CACHE_MAX:
+                self._urls.clear()
+            self._urls[url] = parsed
+        scheme, host, port, path = parsed
+        key = (scheme, host, port)
+        if json is not None:
+            try:
+                body = self._encode(json).encode("utf-8")
+            except ValueError as e:
+                raise InvalidJSONError(e) from e
+        elif data is None:
+            body = None
+        elif isinstance(data, str):
+            body = data.encode("utf-8")
+        else:
+            body = bytes(data)
+        head = self._head(method, scheme, host, port, path, headers, json is not None, auth)
+        tail = None
+        if body is None:
+            wire = head[0] + (b"\r\nContent-Length: 0" if method in ("POST", "PUT", "PATCH") else b"") + head[1]
+        else:
+            wire = head[0] + b"\r\nContent-Length: %d" % len(body) + head[1]
+            if len(wire) + len(body) <= _INLINE_BODY:
+                wire += body
+            else:
+                tail = body
+        retried = False
+        while True:
+            c, reused = self._conn2(key, timeout)
+            if c.timeout != timeout:
+                c.sock.settimeout(timeout)
+                c.timeout = timeout
+            try:
+                c.sock.sendall(wire)
+                if tail is not None:
+                    c.sock.sendall(tail)
+                status, reason, hblock, hl, raw, will_close = self._read_answer(c, method)
+            except socket.timeout as e:
+                self._drop2(key)
+                raise Timeout(f"{method} {url} timed out after {timeout} s") from e
+            except (http.client.RemoteDisconnected, ConnectionResetError, BrokenPipeError, http.client.BadStatusLine) as e:
+                sent_but_unanswered = isinstance(e, (http.client.RemoteDisconnected, ConnectionResetError, http.client.BadStatusLine))
+                if reused and not retried and (not sent_but_unanswered or _is_read(method, path)):
+                    self._drop2(key)
+                    retried = True
+                    continue
+                early = None
+                if isinstance(e, (BrokenPipeError, ConnectionResetError)) and not isinstance(e, http.client.RemoteDisconnected):
+                    early = self._early_answer2(c)
+                self._drop2(key)
+                raise ConnectionError(f"{method} {url}: {e}" + (f" (the server had already answered {early})" if early else "")) from e
+            except (http.client.IncompleteRead, OSError) as e:
+                self._drop2(key)
+                raise ConnectionError(f"{method} {url}: {e}") from e
+            if will_close:
+                self._drop2(key)
+            if raw:
+                ce = _header_value(hblock, hl, b"\r\ncontent-encoding:")
+                if ce is not None:
+                    raw = _decode_body(raw, ce.decode("latin-1"))
+            ctype = _header_value(hblock, hl, b"\r\ncontent-type:")
+            return Response2(status, reason, _Headers2(hblock[2:]), raw, url,
+                             _charset_of(ctype.decode("latin-1")) if ctype is not None else "utf-8")
+
+
 # ------------------------------------------------------------------------------------------------------ the factory
 def Session():  # noqa: N802 - requests' own spelling, so a lane changes by one import
-    """The ArcadeDB served arms' session: lean by default, `requests.Session` when BENCH_ARCADEDB_HTTP_CLIENT=requests."""
-    if client_choice() == REQUESTS:
+    """The ArcadeDB served arms' session: lean by default, LeanSession2 when BENCH_ARCADEDB_HTTP_CLIENT=lean2, `requests.Session` when it is `requests`."""
+    choice = client_choice()
+    if choice == LEAN2:
+        return LeanSession2()
+    if choice == REQUESTS:
         import requests
         s = requests.Session()
         s.client_name = f"requests {requests.__version__}"
