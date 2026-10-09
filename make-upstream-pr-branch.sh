@@ -10,8 +10,13 @@
 # The branch is NEVER edited directly — it is always regenerated from main,
 # so main stays the single source of truth. Usage:
 #
-#   ./make-upstream-pr-branch.sh            # regenerate + force push
+#   ./make-upstream-pr-branch.sh            # regenerate + force push to the `fork` remote
 #   ./make-upstream-pr-branch.sh --no-push  # regenerate only
+#   PUSH_REMOTE=<remote> ./make-upstream-pr-branch.sh   # push somewhere else
+#
+# The branch goes to the `fork` remote (tae898/arcadedb, Actions disabled), never to `origin`: the branch carries upstream's
+# own workflows, which trigger on push and would burn this repository's Actions budget. Open the PR with
+# `gh pr create -R ArcadeData/arcadedb --head tae898:python-bindings`.
 #
 # Prereqs: clean working tree; upstream-main synced (./sync-upstream.sh).
 set -euo pipefail
@@ -19,6 +24,7 @@ set -euo pipefail
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
 
 BRANCH="python-bindings"
+PUSH_REMOTE="${PUSH_REMOTE:-fork}"
 BASE="upstream-main"
 SOURCE="main"
 
@@ -150,8 +156,12 @@ if [ -n "$NEW_TOP" ]; then
 fi
 
 if [ "$PUSH" = "1" ]; then
-    git push -f origin "$BRANCH"
-    echo -e "${GREEN}✅ Force-pushed ${BRANCH}; open/refresh the PR against ArcadeData/arcadedb main.${NC}"
+    if [ "$PUSH_REMOTE" = "origin" ]; then
+        echo -e "${RED}Refusing to push ${BRANCH} to origin: its Actions would run upstream's workflows. Use the fork remote.${NC}"
+        exit 1
+    fi
+    git push -f "$PUSH_REMOTE" "$BRANCH"
+    echo -e "${GREEN}✅ Force-pushed ${BRANCH} to ${PUSH_REMOTE}; open/refresh the PR against ArcadeData/arcadedb main.${NC}"
 else
     echo -e "${YELLOW}--no-push: branch left local.${NC}"
 fi
