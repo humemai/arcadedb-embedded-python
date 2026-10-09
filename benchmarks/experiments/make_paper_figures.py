@@ -284,6 +284,13 @@ def f7_e2(rows):
     order = [("arcadedb_e2", "ArcadeDB\n(one txn)"),
              ("surrealdb_e2", "SurrealDB\n(one txn)"),
              ("composed_qdrant_neo4j", "Qdrant+Neo4j\n(composed)")]
+    # A backend with no rows at this pin yet (a staged landing: ArcadeDB's e2 stage has not run) leaves nothing to
+    # take a median of. The figure is omitted, saying which backend is missing, like a lane scoped out (f6, f3).
+    missing = [be for be, _ in order
+               if not any(r["backend"] == be and r["workload"] == "hybrid" for r in e2)]
+    if missing:
+        print(f"figure omitted: f7_e2 has no hybrid rows for {', '.join(missing)} at this pin")
+        return
     fig, ax = plt.subplots(figsize=(3.45, 2.0))
     anns = []
     for i, (be, label) in enumerate(order):
