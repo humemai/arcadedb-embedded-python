@@ -38,7 +38,8 @@ A change to behaviour updates every place that describes it. Grep these for the 
 - Python tooling runs through `uv add`, `uv sync` and `uv run` only.
 - Run the repository's checks before pushing and again after any later edit, even a message string. A pass covers only the bytes it ran against.
 - Open an issue, work on a branch, open a PR that references the issue, merge when every check is green, delete the branch on merge.
-- Stage files by explicit path, never `git add -A`. Always pass `-R owner/repo` to `gh`.
+- Stage files by explicit path, never `git add -A`.
+- This clone has more than one GitHub remote (`origin`, and `upstream` and `fork` for the sync and upstream-PR scripts), so always pass `-R owner/repo` to `gh`: a bare `gh` command can land on the wrong repository.
 - Issue, PR and comment bodies: one paragraph is one line (no hard wraps), no em dashes; tables and code fences keep their own lines.
 - A security vulnerability is never reported in a public issue or PR; follow `SECURITY.md`.
 - When you add, rename or remove a doc, update its row in this file in the same PR.
