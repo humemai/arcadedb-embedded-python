@@ -1,6 +1,6 @@
 # AGENTS.md: benchmarks
 
-Start with `README.md` here: `experiments/` is the live harness whose rows feed the published benchmark pages, and `python-bindings/` is the frozen artifact of the SciPy 2026 paper (not extended). The general rules of `bindings/python/AGENTS.md` apply here too.
+Start with `README.md` here: `benchmarks/experiments/` is the live harness whose rows feed the published benchmark pages, and `benchmarks/python-bindings/` is the frozen artifact of the SciPy 2026 paper (not extended). The general rules of `bindings/python/AGENTS.md` apply here too.
 
 ## Read first, by task
 
