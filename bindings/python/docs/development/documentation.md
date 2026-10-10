@@ -56,7 +56,9 @@ a link to a missing heading only at `info` level (`validation.links.anchors`), s
 link with an anchor in the built site, or build once with a temporary config that sets
 `validation: {links: {anchors: warn}}`.
 
-A documentation-only pull request does not start the test workflows (they run when `src`, `tests`, `examples`, `scripts`, `pyproject.toml` or `setup.py` change), so run the checks yourself before pushing: the strict build above and `uv run pytest bindings/python/tests/test_docs_examples.py`, which executes the code blocks in these pages. The release workflow runs the whole suite, so a page that drifts cannot ship.
+A documentation-only pull request does not start the test workflows (they run when `src`, `tests`, `examples`, `scripts`, `pyproject.toml` or `setup.py` change). The `Docs Build` workflow runs the strict build above for it. It does not run the code blocks in the pages: `uv run pytest bindings/python/tests/test_docs_examples.py` does, so run it yourself before pushing a change to a code block. The release workflow runs the whole suite, so a page that drifts cannot ship.
+
+When a new tracked file or directory appears directly under `bindings/python`, the `CI triggers cover every bindings/python entry` check in `lint-workflows.yml` fails until it is either added to the trigger paths of both test workflows or listed there as needing no test run.
 
 ## Versioned Documentation
 

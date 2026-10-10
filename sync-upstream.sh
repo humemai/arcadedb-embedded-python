@@ -71,6 +71,7 @@ FORK_GITHUB_ALLOWLIST=(
     # Fork-only: upstream runs the same SHA-pin check in mvn-test.yml, so this
     # is deliberately NOT in make-upstream-pr-branch.sh's INCLUDE_PATHS.
     ".github/workflows/lint-workflows.yml"
+    ".github/workflows/docs-build.yml"               # ours; not upstream (strict docs build for documentation-only changes)
 )
 
 PROTECTED_SOURCE_REV=""
