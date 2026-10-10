@@ -422,6 +422,13 @@ vim tests/test_core.py
 vim docs/api/database.md
 ```
 
+**Keep the change complete.** A change is done when everything that describes it agrees with it:
+
+- When a change alters behaviour, update the source, the tests, the examples, the docs, and the README in the same pull request, and delete the old text in that change. A stale line is worse than a missing one.
+- When a performance hunt or an audit finds the better way to do something, apply it across the package: `src/`, `tests/`, `examples/`, and the guide pages. Grep for the old pattern first, and list what you swept in the pull request body.
+- A number that appears in a doc, a comment, or an issue is generated from the result files or checked against them by a script, never typed by hand.
+- A temporary file or document says when it goes: put a `REMOVE WHEN:` line in it.
+
 ### 4. Test Changes
 
 ```bash
@@ -470,6 +477,8 @@ git push origin feature/my-new-feature
 
 # Go to GitHub and create Pull Request
 ```
+
+Merge when every check is green, and delete the branch (on GitHub and locally) when it merges.
 
 ## Release Process
 
