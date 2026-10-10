@@ -40,7 +40,6 @@ A change to behaviour updates every place that describes it. Grep these for the 
 - Open an issue, work on a branch, open a PR that references the issue, merge when every check is green, delete the branch on merge.
 - Stage files by explicit path, never `git add -A`. Always pass `-R owner/repo` to `gh`.
 - Issue, PR and comment bodies: one paragraph is one line (no hard wraps), no em dashes; tables and code fences keep their own lines.
-- Work on a PR branch in a separate worktree (`git worktree add --detach <dir> origin/main`, then `git switch -c <branch>`), not by switching the main checkout: other agents and long runs use it.
 - A security vulnerability is never reported in a public issue or PR; follow `SECURITY.md`.
 - When you add, rename or remove a doc, update its row in this file in the same PR.
 - This repository is public. Never write secrets, token locations or private notes into a file, a commit message, an issue or a comment.
