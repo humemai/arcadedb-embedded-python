@@ -182,7 +182,7 @@ Return `main` to upstream's development line with a normal sync. It brings the n
 Only now regenerate the `python-bindings` branch and open the pull request to
 ArcadeData/arcadedb: it is built on the `upstream-main` mirror that this sync just
 brought up to date, and it carries everything since the previous one. See
-[Contributing Back to Upstream](upstream-pr.md).
+[Sending the Bindings Upstream](upstream-bindings-pr.md).
 
 ## Development Releases (`X.Y.Z.devN`)
 

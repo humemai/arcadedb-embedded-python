@@ -216,7 +216,8 @@ nav:
   - Contributing: development/contributing.md
   - Documentation: development/documentation.md
   - Syncing Upstream: development/sync-upstream.md
-  - Contributing Back to Upstream: development/upstream-pr.md
+  - Sending the Bindings Upstream: development/upstream-bindings-pr.md
+  - Upstream Issues and Fixes: development/upstream-issues.md
   - Testing: development/testing.md
   - Release Workflow: development/release.md
   - Troubleshooting: development/troubleshooting.md
