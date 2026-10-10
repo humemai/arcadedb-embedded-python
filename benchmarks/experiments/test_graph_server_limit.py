@@ -1,4 +1,4 @@
-"""ArangoDB's and MongoDB's analytics queries are cut by the SERVER at their budget (DECISIONS #179).
+"""ArangoDB's, MongoDB's and Memgraph's analytics queries are cut by the SERVER at their budget (DECISIONS #179).
 
 Run with `python -m pytest test_graph_server_limit.py -q -rs` from this directory.
 
@@ -9,7 +9,7 @@ the server kills (error 1500) is a CENSORED measurement: the row says so, the ti
 the cell does not fail. Every other engine runs exactly as before.
 
 The lane runs here, in-process, against stand-in adapters and a fake python-arango database. No engine is needed; the real
-server's kill (error number, kill latency on a long traversal) is the pending smoke test, smoke_arango_maxruntime.sh.
+server's kill (error number, kill latency on a long traversal) is the pending smoke test, smoke_arangodb_server_limit.sh.
 """
 import json
 import sys
@@ -92,10 +92,11 @@ def test_error_1500_is_a_killed_query_and_other_errors_still_raise():
         ad.run_olap(TRI)
 
 
-def test_only_arango_and_mongo_declare_a_server_side_limit():
-    assert L.ArangoGraph.SERVER_SIDE_LIMIT is True and L.MongoGraph.SERVER_SIDE_LIMIT is True
+def test_only_arango_mongo_and_memgraph_declare_a_server_side_limit():
+    assert all(c.SERVER_SIDE_LIMIT is True for c in (L.ArangoGraph, L.MongoGraph, L.MemgraphGraph))
+    assert L.Neo4jGraph.SERVER_SIDE_LIMIT is False              # the Memgraph subclass sets it; its parent does not
     for name, cls in L.ADAPTERS.items():
-        if cls not in (L.ArangoGraph, L.MongoGraph):
+        if cls not in (L.ArangoGraph, L.MongoGraph, L.MemgraphGraph):
             assert getattr(cls, "SERVER_SIDE_LIMIT", False) is False, name
     assert arango_common.is_query_killed(_Err(1500)) and not arango_common.is_query_killed(_Err(1203))
     assert not arango_common.is_query_killed(ValueError("x"))
@@ -167,6 +168,84 @@ def test_mongo_error_50_is_a_killed_query_and_other_errors_still_raise():
         ad.run_olap("triangles")
     assert not isinstance(ei.value, G.QueryKilled)
     assert mongo_common.is_query_killed(_ExecutionTimeout()) and not mongo_common.is_query_killed(ValueError("x"))
+
+
+# ---- Memgraph: the Bolt transaction timeout, one query per session ---------------------------------------------------
+
+class _BoltTimeout(Exception):
+    """What the neo4j driver raises for Memgraph 3.13.1's abort (verified on the pinned image): a TransientError with a generic code."""
+    code = "Memgraph.TransientError.MemgraphError.MemgraphError"
+
+    def __init__(self, msg="{neo4j_code: Memgraph.TransientError.MemgraphError.MemgraphError} {message: Transaction was asked to "
+                           "abort because of transaction timeout.}"):
+        super().__init__(msg)
+
+
+class _FakeSession:
+    def __init__(self, log, behaviour):
+        self.log, self.behaviour = log, behaviour
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def run(self, query, params=None):
+        self.log.append(query)
+        return self.behaviour(len(self.log))
+
+
+class _FakeDriver:
+    def __init__(self, behaviour):
+        self.log = []
+        self.behaviour = behaviour
+
+    def session(self):
+        return _FakeSession(self.log, self.behaviour)
+
+
+def _memgraph(behaviour):
+    ad = L.MemgraphGraph()
+    ad.driver = _FakeDriver(behaviour)
+    return ad
+
+
+def test_memgraph_passes_the_budget_as_a_bolt_tx_timeout():
+    neo4j = pytest.importorskip("neo4j")
+    ad = _memgraph(lambda n: iter([{"n": 7}]))
+    ad.olap_limit_s = 300
+    assert ad.run_olap("triangles") == [{"n": 7}]
+    (q,) = ad.driver.log
+    assert isinstance(q, neo4j.Query) and q.timeout == 300.0 and q.text == G.OLAP_QUERIES["triangles"]
+
+
+def test_memgraph_without_a_limit_is_the_old_call():
+    ad = _memgraph(lambda n: iter([{"n": 7}]))
+    assert ad.run_olap("triangles") == [{"n": 7}]
+    assert ad.driver.log == [G.OLAP_QUERIES["triangles"]]                # a plain string, no Query, no timeout
+
+
+def test_memgraph_transaction_timeout_is_a_killed_query_and_other_errors_still_raise():
+    pytest.importorskip("neo4j")
+    ad = _memgraph(lambda n: (_ for _ in ()).throw(_BoltTimeout()))
+    ad.olap_limit_s = 1
+    with pytest.raises(G.QueryKilled):
+        ad.run_olap("triangles")
+    other = _BoltTimeout("{neo4j_code: Memgraph.TransientError.MemgraphError.MemgraphError} {message: Memory limit exceeded!}")
+    ad = _memgraph(lambda n: (_ for _ in ()).throw(other))               # same class and code, another cause: a real failure
+    ad.olap_limit_s = 1
+    with pytest.raises(_BoltTimeout):
+        ad.run_olap("triangles")
+    assert G.is_bolt_tx_timeout(_BoltTimeout()) and not G.is_bolt_tx_timeout(other) and not G.is_bolt_tx_timeout(ValueError("x"))
+    neo = ValueError("neo4j says no")
+    neo.code = "Neo.ClientError.Transaction.TransactionTimedOutClientConfiguration"
+    assert G.is_bolt_tx_timeout(neo)                                     # Neo4j's own code names it too
+
+
+def test_memgraph_stamp_says_the_server_timeout_stays_off():
+    assert "--query-execution-timeout-sec stays 0" in L.MemgraphGraph.SERVER_LIMIT_STAMP
+    assert "equal to the lane budget" in L.MemgraphGraph.SERVER_LIMIT_STAMP
 
 
 # ---- the lane, end to end ------------------------------------------------------------------------------------------

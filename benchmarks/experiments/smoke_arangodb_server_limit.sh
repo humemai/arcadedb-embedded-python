@@ -3,7 +3,9 @@
 # with error 1500, in about the time asked, and does the harness adapter turn that into graph_common.QueryKilled?
 #
 # Not run when written (the laptop was in a timed sweep). Run it on a quiet machine, never on mini:
-#   bash smoke_arango_maxruntime.sh            # about 2 minutes, one docker container on port 18529
+#   bash smoke_arangodb_server_limit.sh            # a few minutes, one docker container on port 18529
+# The container is pinned to SMOKE_CORES (default 14-15) with 4g of memory and the client runs under nice -n 19, so it can sit
+# beside a timed sweep as long as the sweep does not use those cores.
 #
 # It checks (1) a fast query with a limit set is untouched; (2) with max_runtime=LIMIT the server answers error 1500 to a
 # triangle count over a dense random graph, a call that would otherwise run far past the limit (if it finishes inside the
@@ -13,6 +15,8 @@
 set -u
 cd "$(dirname "$0")" || exit 1
 PORT=${SMOKE_PORT:-18529}
+CORES=${SMOKE_CORES:-14-15}
+MEM=${SMOKE_MEM:-4g}
 LIMIT=${SMOKE_LIMIT_S:-5}
 SLACK=${SMOKE_SLACK_S:-10}
 IMG=$(python3 - <<'PY'
@@ -22,13 +26,13 @@ PY
 )
 NAME=smoke-arango-maxruntime-$$
 trap 'docker rm -f "$NAME" >/dev/null 2>&1' EXIT
-docker run -d --name "$NAME" -p "$PORT:8529" -e ARANGO_ROOT_PASSWORD=dbbenchpass "$IMG" arangod >/dev/null || { echo "SMOKE FAIL: docker run"; exit 1; }
+docker run -d --name "$NAME" --cpuset-cpus "$CORES" --memory "$MEM" -p "$PORT:8529" -e ARANGO_ROOT_PASSWORD=dbbenchpass "$IMG" arangod >/dev/null || { echo "SMOKE FAIL: docker run"; exit 1; }
 for _ in $(seq 1 120); do docker logs "$NAME" 2>&1 | grep -q "is ready for business" && break; sleep 1; done
 docker logs "$NAME" 2>&1 | grep -q "is ready for business" || { echo "SMOKE FAIL: server not ready"; exit 1; }
-BENCH_SERVER_HOST=localhost BENCH_SERVER_PORT=$PORT LIMIT=$LIMIT SLACK=$SLACK \
-  uv run --with python-arango==8.3.5 python -I - <<'PY' || exit 1
+EXP=$PWD BENCH_SERVER_HOST=localhost BENCH_SERVER_PORT=$PORT LIMIT=$LIMIT SLACK=$SLACK \
+  nice -n 19 taskset -c "$CORES" uv run --directory ../.. --with python-arango==8.3.5 python -I - <<'PY' || exit 1
 import os, random, sys, time
-sys.path.insert(0, os.getcwd())
+sys.path.insert(0, os.environ["EXP"])
 import graph_common as G
 import l2_graph as L
 
