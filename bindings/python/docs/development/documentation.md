@@ -56,6 +56,8 @@ a link to a missing heading only at `info` level (`validation.links.anchors`), s
 link with an anchor in the built site, or build once with a temporary config that sets
 `validation: {links: {anchors: warn}}`.
 
+A documentation-only pull request does not start the test workflows (they run when `src`, `tests`, `examples`, `scripts`, `pyproject.toml` or `setup.py` change), so run the checks yourself before pushing: the strict build above and `uv run pytest bindings/python/tests/test_docs_examples.py`, which executes the code blocks in these pages. The release workflow runs the whole suite, so a page that drifts cannot ship.
+
 ## Versioned Documentation
 
 Documentation is versioned using [mike](https://github.com/jimporter/mike) and automatically deployed when you push a version tag.
