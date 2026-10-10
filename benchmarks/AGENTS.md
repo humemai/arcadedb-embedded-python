@@ -17,5 +17,4 @@ Paths in this file are relative to the repository root (the directory that conta
 
 - Never type a number into a page, doc or comment: generate it from the result rows, or check it with a script.
 - Change a harness, stage or protocol file in its own pull request, and say what it does to rows that already exist. Do not edit published rows.
-- Do not run benchmark compute on the bench host outside the queue that owns it.
 - A temporary file says when it goes (`REMOVE WHEN:`). When the code moves to the standalone benchmark repository, this file moves with it.
