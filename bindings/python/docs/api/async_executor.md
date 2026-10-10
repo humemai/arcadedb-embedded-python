@@ -409,6 +409,8 @@ would cost one JNI call per value and lose far more than the boxing costs.
 Measured 1.38x faster on a 300k-sample, three-field ingest. The default
 (`primitive=False`) stays on the `Object[]` path.
 
+**Atomicity:** an append to a `TIMESERIES` type is not part of a transaction. Each append commits by itself (this is the engine's design, `ArcadeData/arcadedb#7410`), so a `rollback()` does not remove samples that were already appended, and after a crash a batch can be partly present. Measured on 26.10.1 and main: a rolled-back batch of 5 rows kept all 5, and after a `kill -9` a batch was partly present in most runs, while no batch that had committed was lost; a document type in the same test behaved atomically. Use a document type when a multi-row insert has to be all-or-nothing.
+
 **Example:**
 
 ```python

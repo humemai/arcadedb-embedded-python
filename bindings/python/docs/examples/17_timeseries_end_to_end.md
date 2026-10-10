@@ -12,7 +12,7 @@ It covers:
 - creating a `TIMESERIES TYPE` with multiple tags and numeric fields and
   `COMPACTION_INTERVAL 1 HOURS`, the bucket of the hourly aggregates it runs
 - generating deterministic telemetry for six building sensors
-- inserting hundreds of samples transactionally
+- inserting hundreds of samples (each append to a `TIMESERIES` type commits by itself, so the surrounding transaction does not make the batch atomic)
 - sealing the mutable tail with `COMPACT TIMESERIES TYPE` before reading, embedded and
   over HTTP (26.10.1, `ArcadeData/arcadedb#8574`), instead of waiting for the 60-second
   background pass
