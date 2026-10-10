@@ -4,14 +4,12 @@ Start with `README.md` here: `experiments/` is the live harness whose rows feed 
 
 ## Read first, by task
 
-All paths are under `bindings/python/docs/benchmarks/`.
-
 | You are | Read |
 |---|---|
-| running a lane | `running.md` |
-| changing how a number is produced, adding an engine, or judging fairness, durability, pins or censored cells | `protocol.md` |
-| adding or changing a query, or checking that engines answered the same question | `equivalence.md` |
-| reading or publishing results | `results.md`, `index.md` |
+| running a lane | `bindings/python/docs/benchmarks/running.md` |
+| changing how a number is produced, adding an engine, or judging fairness, durability, pins or censored cells | `bindings/python/docs/benchmarks/protocol.md` |
+| adding or changing a query, or checking that engines answered the same question | `bindings/python/docs/benchmarks/equivalence.md` |
+| reading or publishing results | `bindings/python/docs/benchmarks/results.md`, `bindings/python/docs/benchmarks/index.md` |
 
 ## Rules for agents
 
