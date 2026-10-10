@@ -68,3 +68,40 @@ jobs:
       - uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1
         with:
           extra_args: --files $(git ls-files 'bindings/python/**')
+
+  # The test workflows list what triggers them (an allowlist), so a new tracked top-level entry
+  # under bindings/python would silently not start CI unless someone decides about it. This job
+  # makes that decision a failure: every entry is either covered by both workflows' path lists or
+  # named below as documentation/metadata that needs no test run.
+  ci-trigger-coverage:
+    name: CI triggers cover every bindings/python entry
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check the trigger paths against the tracked entries
+        run: |
+          python3 -m pip install --quiet "pyyaml==6.0.3"
+          python3 - <<'PY'
+          import subprocess, sys, yaml
+          # Entries that never need the test matrix. Documentation is built by docs-build.yml.
+          NO_TEST_RUN = {".gitignore", "AGENTS.md", "CLAUDE.md", "README.md", "docs", "mkdocs.yml"}
+          WORKFLOWS = ["test-python-bindings.yml", "test-python-examples.yml"]
+          files = subprocess.check_output(["git", "ls-files", "bindings/python"], text=True).split("\n")
+          entries = {f.split("/")[2] for f in files if f.count("/") >= 2}
+          problems = []
+          for wf in WORKFLOWS:
+              on = yaml.safe_load(open(".github/workflows/" + wf))[True]
+              for event in ("pull_request", "push"):
+                  paths = [p for p in on[event]["paths"] if not p.startswith("!")]
+                  for e in sorted(entries):
+                      base = "bindings/python/" + e
+                      covered = any(p == base or p.startswith(base + "/") for p in paths)
+                      if covered and e in NO_TEST_RUN:
+                          problems.append(f"{wf} {event}: {e} triggers the matrix but is listed as needing no test run")
+                      if not covered and e not in NO_TEST_RUN:
+                          problems.append(f"{wf} {event}: new entry bindings/python/{e} is not in the trigger paths; add it there, or to NO_TEST_RUN in lint-workflows.yml if it needs no test run")
+          if problems:
+              print("\n".join(problems))
+              sys.exit(1)
+          print("every tracked bindings/python entry is decided:", ", ".join(sorted(entries)))
+          PY

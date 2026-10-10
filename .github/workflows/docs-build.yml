@@ -1,0 +1,55 @@
+# Builds the documentation site with --strict, so a broken link, a page missing from the
+# nav or a bad include fails the pull request that caused it. Documentation changes do not
+# start the test matrix (test-python-bindings.yml runs when code changes), and this is the
+# check that covers them. It does not run the code blocks in the pages: tests/test_docs_examples.py
+# does, needs the built wheel, and runs in the release workflow; see "Documentation Development".
+#
+# Fork-only: upstream has no such site, so this is absent from make-upstream-pr-branch.sh's
+# INCLUDE_PATHS and present in sync-upstream.sh's FORK_GITHUB_ALLOWLIST.
+name: Docs Build
+
+on:
+  pull_request:
+    paths:
+      - 'bindings/python/docs/**'
+      - 'bindings/python/mkdocs.yml'
+      - '.github/workflows/docs-build.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'bindings/python/docs/**'
+      - 'bindings/python/mkdocs.yml'
+      - '.github/workflows/docs-build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: mkdocs build --strict
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the git-revision-date plugin reads each page's history
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      # Pinned to the versions the site was last built with, so a new release of the theme
+      # cannot turn a pull request red for a reason that is not in the pull request.
+      - name: Install documentation tools
+        run: python -m pip install "mkdocs==1.6.1" "mkdocs-material==9.7.7" "mkdocs-git-revision-date-localized-plugin==1.6.0" "mkdocs-macros-plugin==1.5.0"
+
+      - name: Build the site (warnings are errors)
+        working-directory: bindings/python
+        run: python -m mkdocs build --strict -f mkdocs.yml
