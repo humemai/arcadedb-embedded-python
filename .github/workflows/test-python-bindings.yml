@@ -10,12 +10,16 @@ on:
       - main
     paths:
       - 'bindings/python/**'
+      - '!bindings/python/AGENTS.md'
+      - '!bindings/python/CLAUDE.md'
       - '.github/workflows/test-python-bindings.yml'
 
   # Run on pull request affecting bindings/python/
   pull_request:
     paths:
       - 'bindings/python/**'
+      - '!bindings/python/AGENTS.md'
+      - '!bindings/python/CLAUDE.md'
       - '.github/workflows/test-python-bindings.yml'
 
   # Allow being called by other workflows (e.g., release workflow)
@@ -39,6 +43,13 @@ on:
         required: false
         type: boolean
         default: false
+
+# A newer push to a pull request supersedes the run of the commit before it: without this each push starts another
+# full matrix next to the one still running. Scoped to pull_request only, so a push to main keeps its run as the
+# record for that commit (same rule as test-python-examples.yml).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
