@@ -18,6 +18,10 @@ Run it after **any** re-measure, after any change to the tables or figures, and 
 
 Flags: `--site <path>` if humem.ai is not a sibling checkout; `--no-build` to skip the Next.js build (do not, normally: the build is what catches the page referencing an asset that was never written); `--preview` for the preview target below; `--skeleton` for the laptop placeholder publish.
 
+## The Engines documentation page
+
+The Engines page of the documentation site (humemai/dbbench, `docs/engines.md`) is generated, never edited: `uv run python benchmarks/experiments/gen_engines_doc.py <path to docs/engines.md>` from the repo root. It reads the October rows through `make_paper_tables.load_canonical`, the arm names from `export_web.py`, and the override sentences from `overrides.py`, so no number or setting on it is typed. Regenerate it at every landing and commit the result in humemai/dbbench; `--check <path>` exits 1 when the page there is out of date. Lanes and arms without rows yet are listed on the page's gap list, not hidden.
+
 ## The preview target (DECISIONS #83)
 
 `refresh_web_page.py --preview` and `land_stage.py --preview` publish to `/projects/arcadedb/next`, the campaign page watched while it fills in: the same exporter, gates, and figures, written to `src/data/arcadedb-benchmarks-next.json` and `public/images/projects/arcadedb-next/`, and checked against the prose in `src/lib/projects/items/arcadedb-next.ts`. The table inventory goes to `results/generated/preview-tables.md` and PAGE-SPEC.md is not rewritten. The route is noindex and not in the project index, and its banner names the pin from the payload.
