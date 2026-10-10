@@ -812,8 +812,32 @@ class MemgraphGraph(Neo4jGraph):
                     "RETURN count(*) AS n"),
     }
 
+    # The analytics budget is enforced by the SERVER here (DECISIONS #179): the Bolt transaction timeout, which the neo4j driver sends
+    # with `neo4j.Query(text, timeout=seconds)`; Memgraph aborts the transaction with a TransientError "Transaction was asked to abort
+    # because of transaction timeout." (verified on 3.13.1: 3.06 s for a 3 s limit). The server's own --query-execution-timeout-sec
+    # stays 0 (runner.py: its 600 s default would abort the whole-graph queries the lane's censors are meant to handle); a limit EQUAL to the
+    # lane's per-query budget enforces that censor, it does not add another. The runtime setting query.timeout also works but is global
+    # state that would have to be set and reset around every query; the per-query Bolt timeout carries none.
+    SERVER_SIDE_LIMIT = True
+    SERVER_LIMIT_NAME = "tx_timeout"
+    SERVER_LIMIT_STAMP = ("Bolt transaction timeout (tx_timeout) = the query's budget_s, on the cold pass and every timed iteration; "
+                          "the server's own --query-execution-timeout-sec stays 0, so a limit equal to the lane budget enforces the "
+                          "lane's censor and adds no other")
+
     def run_olap(self, qname):
-        return self.run_cypher(self.LSQB.get(qname) or OLAP_QUERIES[qname])
+        text = self.LSQB.get(qname) or OLAP_QUERIES[qname]
+        limit = self.olap_limit_s
+        if not limit or limit <= 0:
+            return self.run_cypher(text)
+        import neo4j
+        try:
+            with self.driver.session() as s:
+                return [dict(r) for r in s.run(neo4j.Query(text, timeout=float(limit)))]
+        except Exception as e:  # noqa: BLE001
+            if graph_common.is_bolt_tx_timeout(e):
+                raise graph_common.QueryKilled(
+                    f"memgraph killed {qname} at its {limit:g} s tx_timeout: {e}") from e
+            raise
 
 
 def _int_or(v):

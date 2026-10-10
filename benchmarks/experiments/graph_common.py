@@ -428,6 +428,21 @@ class QueryKilled(RuntimeError):
     """The server cut this query at the time limit the harness gave it."""
 
 
+def is_bolt_tx_timeout(exc) -> bool:
+    """True when `exc` is a Bolt server saying a transaction ran past the timeout it was given.
+
+    Duck-typed, so a fake can raise it and this module needs no neo4j import. Memgraph 3.13.1 answers a Bolt `tx_timeout`
+    (`neo4j.Query(text, timeout=s)`) with a TransientError whose code is the generic
+    `Memgraph.TransientError.MemgraphError.MemgraphError` and whose message is "Transaction was asked to abort because of
+    transaction timeout." (verified on the pinned image, smoke_memgraph_server_limit.sh), so the message decides; Neo4j's code
+    names it (`Neo.ClientError.Transaction.TransactionTimedOut...`).
+    """
+    code = str(getattr(exc, "code", "") or "")
+    if code.startswith("Neo.ClientError.Transaction.TransactionTimedOut"):
+        return True
+    return code.startswith("Memgraph.TransientError") and "transaction timeout" in str(exc).lower()
+
+
 # ---------------------------------------------------------------------------
 # WHAT EACH ANSWER LOOKS LIKE (DECISIONS #88). Declared once per query, never
 # per engine; the alternatives inside a tuple are the names the four dialects
