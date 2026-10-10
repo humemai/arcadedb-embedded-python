@@ -14,7 +14,8 @@ Paths in this file are relative to the repository root (the directory that conta
 | touching CI or the wheel build | `bindings/python/docs/development/ci-setup.md`, `bindings/python/docs/development/build-architecture.md` |
 | touching the Java bridge or the architecture | `bindings/python/docs/development/bridge.md`, `bindings/python/docs/development/architecture.md` |
 | syncing upstream, or testing an engine fix | `bindings/python/docs/development/sync-upstream.md` |
-| sending a change or an engine fix to ArcadeData/arcadedb | `bindings/python/docs/development/upstream-pr.md` |
+| reporting an engine bug upstream, sending a low-hanging engine fix, or checking an upstream fix to one of our issues | `bindings/python/docs/development/upstream-issues.md` |
+| sending the periodic `bindings/python` update to ArcadeData/arcadedb | `bindings/python/docs/development/upstream-bindings-pr.md` |
 | releasing | `bindings/python/docs/development/release.md` |
 | debugging a build, JVM or test failure | `bindings/python/docs/development/troubleshooting.md` |
 | making a performance claim, or working around an engine bug | `bindings/python/docs/guide/performance.md`, `bindings/python/docs/guide/known-issues.md`, `bindings/python/docs/benchmarks/protocol.md` |

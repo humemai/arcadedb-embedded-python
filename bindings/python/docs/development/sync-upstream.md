@@ -71,7 +71,7 @@ from the Java sources you just synced. To test the synced engine code itself, bu
 engine JARs and pass their directory as `build.sh`'s third argument (`JAR_LIB_DIR`); see
 [Build Architecture](build-architecture.md#local-build).
 
-This is step one of the contribution routine. The whole order, through to regenerating the pull-request branch, is in [Contributing Back to Upstream](upstream-pr.md).
+This is step one of the contribution routine. The whole order, through to regenerating the pull-request branch, is in [Sending the Bindings Upstream](upstream-bindings-pr.md); checking an upstream fix to one of our issues is in [Upstream Issues and Fixes](upstream-issues.md).
 
 ## Verifying an upstream fix
 
