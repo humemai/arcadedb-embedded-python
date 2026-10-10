@@ -2,6 +2,8 @@
 
 The Python bindings (`arcadedb-embedded` on PyPI) are our work in this fork. The Java engine under `engine/` and the per-language `e2e-*` suites belong to upstream: report a cause there instead of changing it here. Benchmarks have their own file: `benchmarks/AGENTS.md`.
 
+Paths in this file are relative to the repository root (the directory that contains `.git`), whatever your working directory is.
+
 ## Read first, by task
 
 | You are | Read |

@@ -2,6 +2,8 @@
 
 Start with `README.md` here: `benchmarks/experiments/` is the live harness whose rows feed the published benchmark pages, and `benchmarks/python-bindings/` is the frozen artifact of the SciPy 2026 paper (not extended). The general rules of `bindings/python/AGENTS.md` apply here too.
 
+Paths in this file are relative to the repository root (the directory that contains `.git`), whatever your working directory is.
+
 ## Read first, by task
 
 | You are | Read |
