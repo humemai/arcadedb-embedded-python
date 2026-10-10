@@ -1,10 +1,10 @@
-"""ArangoDB's analytics queries are cut by the SERVER at their budget (DECISIONS #179).
+"""ArangoDB's and MongoDB's analytics queries are cut by the SERVER at their budget (DECISIONS #179).
 
 Run with `python -m pytest test_graph_server_limit.py -q -rs` from this directory.
 
 The analytics loop checked each query's budget only BETWEEN iterations, so one iteration of ArangoDB's triangle count ran
 3,136 s against a 300 s budget (SF1-full graph analytics, 2026-10-09) and the 7,200 s cell cap then killed the cell with no
-row. The adapter now passes the AQL option maxRuntime = the query's budget on the cold pass and every timed iteration; a query
+row. MongoDB's lsqb_q1 cold pass then ran 79 min against the same 300 s budget. The adapters now pass the AQL option maxRuntime = the query's budget on the cold pass and every timed iteration; a query
 the server kills (error 1500) is a CENSORED measurement: the row says so, the time is a floor, there is no answer digest, and
 the cell does not fail. Every other engine runs exactly as before.
 
@@ -21,6 +21,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 import arango_common  # noqa: E402
+import mongo_common  # noqa: E402
 import bench_common  # noqa: E402
 import graph_common as G  # noqa: E402
 import l2_graph as L  # noqa: E402
@@ -91,13 +92,81 @@ def test_error_1500_is_a_killed_query_and_other_errors_still_raise():
         ad.run_olap(TRI)
 
 
-def test_only_arango_declares_a_server_side_limit():
-    assert L.ArangoGraph.SERVER_SIDE_LIMIT is True
+def test_only_arango_and_mongo_declare_a_server_side_limit():
+    assert L.ArangoGraph.SERVER_SIDE_LIMIT is True and L.MongoGraph.SERVER_SIDE_LIMIT is True
     for name, cls in L.ADAPTERS.items():
-        if cls is not L.ArangoGraph:
+        if cls not in (L.ArangoGraph, L.MongoGraph):
             assert getattr(cls, "SERVER_SIDE_LIMIT", False) is False, name
     assert arango_common.is_query_killed(_Err(1500)) and not arango_common.is_query_killed(_Err(1203))
     assert not arango_common.is_query_killed(ValueError("x"))
+
+
+# ---- MongoDB: maxTimeMS on the one aggregate command each analytics query is ---------------------------------------
+
+class _ExecutionTimeout(Exception):
+    """What pymongo raises: ExecutionTimeout, an OperationFailure with code 50 (MaxTimeMSExpired)."""
+    code = 50
+
+
+class _FakeColl:
+    def __init__(self, log, behaviour):
+        self.log, self.behaviour = log, behaviour
+
+    def aggregate(self, pipeline, **kw):
+        self.log.append(kw)
+        return self.behaviour(len(self.log))
+
+
+class _FakeMongoDb:
+    def __init__(self, behaviour):
+        self.log = []
+        self.behaviour = behaviour
+
+    def __getitem__(self, name):
+        return _FakeColl(self.log, self.behaviour)
+
+
+def _mongo(behaviour):
+    ad = L.MongoGraph()
+    ad.db = _FakeMongoDb(behaviour)
+    return ad
+
+
+def test_mongo_passes_the_budget_as_max_time_ms_on_every_pipeline():
+    for qname in ("triangles", "top_degree", "lsqb_q1", "lsqb_q2", "lsqb_q3", "lsqb_q4", "lsqb_q7", "lsqb_q8"):
+        ad = _mongo(lambda n: iter([{"n": 4}]))
+        ad.olap_limit_s = 300
+        ad.run_olap(qname)
+        assert ad.db.log == [{"allowDiskUse": True, "maxTimeMS": 300000}], qname      # ONE command, limit on it
+
+
+def test_mongo_without_a_limit_is_the_old_call():
+    ad = _mongo(lambda n: iter([{"n": 4}]))
+    ad.run_olap("lsqb_q1")
+    assert ad.db.log == [{"allowDiskUse": True}]
+
+
+def test_mongo_error_50_is_a_killed_query_and_other_errors_still_raise():
+    def boom(code):
+        class E(Exception):
+            pass
+        e = E("op failed")
+        e.code = code
+        return e
+    ad = _mongo(lambda n: (_ for _ in ()).throw(_ExecutionTimeout("operation exceeded time limit")))
+    ad.olap_limit_s = 1
+    with pytest.raises(G.QueryKilled):
+        ad.run_olap("lsqb_q1")
+    ad = _mongo(lambda n: (_ for _ in ()).throw(boom(50)))
+    ad.olap_limit_s = 1
+    with pytest.raises(G.QueryKilled):
+        ad.run_olap("triangles")
+    ad = _mongo(lambda n: (_ for _ in ()).throw(boom(2)))             # BadValue: a real failure
+    ad.olap_limit_s = 1
+    with pytest.raises(Exception) as ei:
+        ad.run_olap("triangles")
+    assert not isinstance(ei.value, G.QueryKilled)
+    assert mongo_common.is_query_killed(_ExecutionTimeout()) and not mongo_common.is_query_killed(ValueError("x"))
 
 
 # ---- the lane, end to end ------------------------------------------------------------------------------------------
@@ -112,6 +181,8 @@ def _make(server_limit, script):
         version = "stub"
         QUERY_LANGUAGE = "stub"
         SERVER_SIDE_LIMIT = server_limit
+        SERVER_LIMIT_NAME = "stubLimit"
+        SERVER_LIMIT_STAMP = "stub stamp"
         LIMITS = []          # the olap_limit_s each call was handed
         N = {}
 
@@ -159,7 +230,7 @@ def test_every_pass_gets_the_budget_and_the_row_says_the_limit_ran(lane):
     row, stub = lane(True, {}, budget="50")
     t = [(c, lim) for q, c, lim in stub.LIMITS if q == TRI]
     assert t == [(1, 50.0), (2, 50.0), (3, 50.0), (4, 50.0)]       # cold pass + 3 timed iterations
-    assert row["olap_server_limit"] == arango_common.OLAP_SERVER_LIMIT
+    assert row["olap_server_limit"] == "stub stamp"
     assert row[f"{TRI}_server_limit_s"] == 50.0 == row[f"{TRI}_budget_s"]
     assert f"{TRI}_server_killed" not in row and row[f"{TRI}_censored"] is False
     assert row[f"{TRI}_iters"] == 3 and row[f"res_{TRI}_n"] == 1
@@ -170,6 +241,7 @@ def test_a_query_killed_on_the_cold_pass_is_a_censored_row_with_no_answer(lane):
     row, stub = lane(True, {(TRI, 1): "kill"})
     assert row[f"{TRI}_censored"] is True
     assert row[f"{TRI}_iters"] == 0 and row[f"{TRI}_warm_missing"] is True
+    assert "stubLimit" in row[f"{TRI}_server_killed"]
     assert "cold pass" in row[f"{TRI}_server_killed"] and "lower bound" in row[f"{TRI}_server_killed"]
     assert row[f"{TRI}_rows"] is None
     digest = row[f"res_{TRI}_digest"]

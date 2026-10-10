@@ -220,6 +220,23 @@ def wait_queryable(coll, name=VECTOR_INDEX, timeout_s=7200):
     raise RuntimeError(f"mongot index {name!r} not queryable within {timeout_s}s: {last}")
 
 
+# The server's own error number for an operation that ran past its maxTimeMS: MaxTimeMSExpired, 50. pymongo raises it as
+# ExecutionTimeout (a subclass of OperationFailure).
+ERROR_MAX_TIME_MS_EXPIRED = 50
+# The stamp a row carries when the analytics queries ran under the server-side limit (DECISIONS #179).
+OLAP_SERVER_LIMIT = ("aggregate option maxTimeMS = the query's budget_s * 1000, on the cold pass and every timed "
+                     "iteration (each analytics query is one aggregate command)")
+
+
+def is_query_killed(exc) -> bool:
+    """True when `exc` is the server saying the command ran past maxTimeMS (error 50, ExecutionTimeout).
+
+    Duck-typed on `code` (pymongo's OperationFailure carries the server's error code) and on the class name, so this module needs
+    no pymongo import and a fake can raise it.
+    """
+    return getattr(exc, "code", None) == ERROR_MAX_TIME_MS_EXPIRED or type(exc).__name__ == "ExecutionTimeout"
+
+
 def close(cl):
     try:
         cl.close()
