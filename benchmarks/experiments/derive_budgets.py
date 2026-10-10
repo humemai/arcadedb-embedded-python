@@ -152,8 +152,9 @@ def medians(rows):
     for r in rows:
         lane = r.get("lane")
         for q in BUDGETED.get(lane, ()):
-            # An engine that abandoned after its cold pass does not vote.
-            if r.get(f"{q}_abandoned"):
+            # An engine that abandoned after its cold pass does not vote, and neither does
+            # one the server cut at its budget (DECISIONS #179): its time is a floor.
+            if r.get(f"{q}_abandoned") or r.get(f"{q}_server_killed"):
                 continue
             v = _median_ms(r, q)
             if v is None:
