@@ -1143,7 +1143,11 @@ NOT_PRINTED = [
     # with ValueError instead of reporting, on the first publish after #107 --
     # so the commit that added the field also broke the gate that must admit it,
     # and nothing could notice until a query was actually abandoned.
-    (r"\w+_abandoned$",
+    (r"^(olap_server_limit|\w+_server_limit_s|\w+_server_killed|cold_first_query_censored)$",
+     "whether the server enforced the analytics budget and cut a query at it (DECISIONS #179): it "
+     "qualifies the timing beside it (a cut time is a floor), a diagnostic about how a cell ended "
+     "and not a column of its own"),
+        (r"\w+_abandoned$",
      "whether a query was abandoned after its cold pass rather than run to the "
      "budget (DECISIONS #107): it qualifies the timing beside it, which makes "
      "it a diagnostic about how a cell ended and not a column of its own"),
