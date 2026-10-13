@@ -263,6 +263,22 @@ def index_readback(dbname: str, col_name: str) -> dict:
             "params": ix.get("params", {})}
 
 
+# The server's own error number for a query it stopped: ERROR_QUERY_KILLED, 1500, "query killed".
+# It is what an explicit kill and the maxRuntime query option both raise (HTTP 410).
+ERROR_QUERY_KILLED = 1500
+# The stamp a row carries when the analytics queries ran under the server-side limit (DECISIONS #179).
+OLAP_SERVER_LIMIT = "AQL option maxRuntime = the query's budget_s, on the cold pass and every timed iteration"
+
+
+def is_query_killed(exc) -> bool:
+    """True when `exc` is the server saying it killed the query (error number 1500).
+
+    Duck-typed on `error_code`, which python-arango's ArangoServerError carries from the
+    server's `errorNum`, so this module needs no `arango` import and a fake can raise it.
+    """
+    return getattr(exc, "error_code", None) == ERROR_QUERY_KILLED
+
+
 def close(cl):
     try:
         cl.close()

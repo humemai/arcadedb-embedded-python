@@ -417,6 +417,33 @@ NA_LSQB_NO_MESSAGE_HALF = (
     "not exist and time how long that takes.")
 
 # ---------------------------------------------------------------------------
+# A QUERY THE SERVER CUT AT ITS BUDGET (DECISIONS #179). The analytics loop checks the budget
+# between iterations, so one iteration of an engine that cannot finish ran for 3,136 s against a
+# 300 s budget and the 7,200 s cell cap then killed the cell with no row (ArangoDB SF1-full,
+# graph analytics, 2026-10-09). An adapter that can ask the SERVER to stop a query at a time limit
+# sets SERVER_SIDE_LIMIT, receives the budget in `olap_limit_s`, and raises this when the server
+# kills the query for running out of it. The loop records it as a censored measurement, never as
+# an error and never with an answer digest.
+class QueryKilled(RuntimeError):
+    """The server cut this query at the time limit the harness gave it."""
+
+
+def is_bolt_tx_timeout(exc) -> bool:
+    """True when `exc` is a Bolt server saying a transaction ran past the timeout it was given.
+
+    Duck-typed, so a fake can raise it and this module needs no neo4j import. Memgraph 3.13.1 answers a Bolt `tx_timeout`
+    (`neo4j.Query(text, timeout=s)`) with a TransientError whose code is the generic
+    `Memgraph.TransientError.MemgraphError.MemgraphError` and whose message is "Transaction was asked to abort because of
+    transaction timeout." (verified on the pinned image, smoke_memgraph_server_limit.sh), so the message decides; Neo4j's code
+    names it (`Neo.ClientError.Transaction.TransactionTimedOut...`).
+    """
+    code = str(getattr(exc, "code", "") or "")
+    if code.startswith("Neo.ClientError.Transaction.TransactionTimedOut"):
+        return True
+    return code.startswith("Memgraph.TransientError") and "transaction timeout" in str(exc).lower()
+
+
+# ---------------------------------------------------------------------------
 # WHAT EACH ANSWER LOOKS LIKE (DECISIONS #88). Declared once per query, never
 # per engine; the alternatives inside a tuple are the names the four dialects
 # give the same column.

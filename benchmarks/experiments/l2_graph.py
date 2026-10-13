@@ -172,6 +172,15 @@ class Base:
     def run_olap(self, qname):
         return self.run_cypher(OLAP_QUERIES[qname])
 
+    # SERVER-SIDE QUERY LIMIT (DECISIONS #179). False means the analytics budget is only checked
+    # between iterations, as before. An adapter that sets it True is handed the query's budget in
+    # `olap_limit_s` (None outside the analytics loop) and raises graph_common.QueryKilled when the
+    # server cuts a query at that limit.
+    SERVER_SIDE_LIMIT = False
+    SERVER_LIMIT_NAME = None     # the engine's own name for it, for the row ("maxRuntime", "maxTimeMS")
+    SERVER_LIMIT_STAMP = None    # the sentence stamped on the row as olap_server_limit
+    olap_limit_s = None
+
     def close(self):
         pass
 
@@ -803,8 +812,32 @@ class MemgraphGraph(Neo4jGraph):
                     "RETURN count(*) AS n"),
     }
 
+    # The analytics budget is enforced by the SERVER here (DECISIONS #179): the Bolt transaction timeout, which the neo4j driver sends
+    # with `neo4j.Query(text, timeout=seconds)`; Memgraph aborts the transaction with a TransientError "Transaction was asked to abort
+    # because of transaction timeout." (verified on 3.13.1: 3.06 s for a 3 s limit). The server's own --query-execution-timeout-sec
+    # stays 0 (runner.py: its 600 s default would abort the whole-graph queries the lane's censors are meant to handle); a limit EQUAL to the
+    # lane's per-query budget enforces that censor, it does not add another. The runtime setting query.timeout also works but is global
+    # state that would have to be set and reset around every query; the per-query Bolt timeout carries none.
+    SERVER_SIDE_LIMIT = True
+    SERVER_LIMIT_NAME = "tx_timeout"
+    SERVER_LIMIT_STAMP = ("Bolt transaction timeout (tx_timeout) = the query's budget_s, on the cold pass and every timed iteration; "
+                          "the server's own --query-execution-timeout-sec stays 0, so a limit equal to the lane budget enforces the "
+                          "lane's censor and adds no other")
+
     def run_olap(self, qname):
-        return self.run_cypher(self.LSQB.get(qname) or OLAP_QUERIES[qname])
+        text = self.LSQB.get(qname) or OLAP_QUERIES[qname]
+        limit = self.olap_limit_s
+        if not limit or limit <= 0:
+            return self.run_cypher(text)
+        import neo4j
+        try:
+            with self.driver.session() as s:
+                return [dict(r) for r in s.run(neo4j.Query(text, timeout=float(limit)))]
+        except Exception as e:  # noqa: BLE001
+            if graph_common.is_bolt_tx_timeout(e):
+                raise graph_common.QueryKilled(
+                    f"memgraph killed {qname} at its {limit:g} s tx_timeout: {e}") from e
+            raise
 
 
 def _int_or(v):
@@ -2759,8 +2792,26 @@ class ArangoGraph(Base):
                 "FOR p IN person FILTER p._key == @nk REMOVE p IN person",
                 nk=str(new_id))
 
+    # The analytics budget is enforced by the SERVER here (DECISIONS #179): the AQL option
+    # maxRuntime, in seconds, kills the query and answers error 1500 "query killed". Without it the
+    # budget was only checked between iterations, and one triangle-count iteration ran 3,136 s
+    # against a 300 s budget until the cell cap ended the cell with no row.
+    SERVER_SIDE_LIMIT = True
+    SERVER_LIMIT_NAME = "maxRuntime"
+    SERVER_LIMIT_STAMP = arango_common.OLAP_SERVER_LIMIT
+
     def run_olap(self, qname):
-        return self._n(self.LSQB.get(qname) or self.OLAP[qname])
+        text = self.LSQB.get(qname) or self.OLAP[qname]
+        limit = self.olap_limit_s
+        if not limit or limit <= 0:
+            return self._n(text)
+        try:
+            return list(self.db.aql.execute(text, max_runtime=float(limit)))
+        except Exception as e:  # noqa: BLE001
+            if arango_common.is_query_killed(e):
+                raise graph_common.QueryKilled(
+                    f"arangodb killed {qname} at its {limit:g} s maxRuntime: {e}") from e
+            raise
 
     def run_cypher(self, text, params=None):
         raise NotImplementedError("ArangoDB runs AQL through the name-based hooks")
@@ -3194,10 +3245,34 @@ class MongoGraph(Base):
             {"$count": "n"}]),
     }
 
+    # The analytics budget is enforced by the SERVER here (DECISIONS #179): the aggregate option maxTimeMS, in
+    # milliseconds, stops the command with error 50 (MaxTimeMSExpired, pymongo's ExecutionTimeout). Every analytics query is ONE
+    # aggregate command (checked: no query issues a second command), so the limit covers the whole query and no remaining-budget
+    # arithmetic is needed. Without it lsqb_q1's cold pass ran for 79 min against a 300 s budget until the cell cap ended the cell.
+    SERVER_SIDE_LIMIT = True
+    SERVER_LIMIT_NAME = "maxTimeMS"
+    SERVER_LIMIT_STAMP = mongo_common.OLAP_SERVER_LIMIT
+
+    def _olap_kw(self):
+        """allowDiskUse, plus maxTimeMS when the harness gave this query a budget."""
+        kw = {"allowDiskUse": True}
+        if self.olap_limit_s and self.olap_limit_s > 0:
+            kw["maxTimeMS"] = max(1, int(round(self.olap_limit_s * 1000)))
+        return kw
+
     def run_olap(self, qname):
+        try:
+            return self._run_olap(qname)
+        except Exception as e:  # noqa: BLE001
+            if self.olap_limit_s and mongo_common.is_query_killed(e):
+                raise graph_common.QueryKilled(
+                    f"mongodb killed {qname} at its {self.olap_limit_s:g} s maxTimeMS: {e}") from e
+            raise
+
+    def _run_olap(self, qname):
         if qname in self._LSQB:
             coll, pipeline = self._LSQB[qname]
-            return self._count_or_zero(list(self.db[coll].aggregate(pipeline, allowDiskUse=True)))
+            return self._count_or_zero(list(self.db[coll].aggregate(pipeline, **self._olap_kw())))
         if qname in ("lsqb_q2", "lsqb_q3", "lsqb_q4", "lsqb_q7"):
             return self._lsqb_special(qname)
         coll, pipeline = self.OLAP[qname]
@@ -3205,7 +3280,7 @@ class MongoGraph(Base):
         # friend_age_by_city exceeds the 100 MB in-memory sort/group limit at
         # the campaign's scale factors, and an engine refusing its own query
         # for a memory bound is not a result about the query.
-        rows = list(self.db[coll].aggregate(pipeline, allowDiskUse=True))
+        rows = list(self.db[coll].aggregate(pipeline, **self._olap_kw()))
         return self._count_or_zero(rows) if qname == "triangles" else rows
 
     def _lsqb_special(self, qname):
@@ -3222,7 +3297,7 @@ class MongoGraph(Base):
                 {"$unwind": "$lk"},
                 {"$lookup": {"from": "e_replyof", "localField": "_id", "foreignField": "d", "as": "ro"}},
                 {"$unwind": "$ro"},
-                {"$count": "n"}], allowDiskUse=True)))
+                {"$count": "n"}], **self._olap_kw())))
         if qname == "lsqb_q7":
             # OPTIONAL MATCH: one row per (message,tag,creator) times max(likers,1)
             # times max(replies,1); computed as a sum of that product.
@@ -3235,7 +3310,7 @@ class MongoGraph(Base):
                 {"$lookup": {"from": "e_replyof", "localField": "_id", "foreignField": "d", "as": "ro"}},
                 {"$group": {"_id": None, "n": {"$sum": {"$multiply": [
                     {"$max": [{"$size": "$lk"}, 1]}, {"$max": [{"$size": "$ro"}, 1]}]}}}},
-                {"$project": {"_id": 0, "n": 1}}], allowDiskUse=True))
+                {"$project": {"_id": 0, "n": 1}}], **self._olap_kw()))
             return self._count_or_zero(rows)
         if qname == "lsqb_q2":
             return self._count_or_zero(list(self.db["knows_undir"].aggregate([
@@ -3251,7 +3326,7 @@ class MongoGraph(Base):
                 {"$lookup": {"from": "e_hascreator", "localField": "ro.d", "foreignField": "s", "as": "pc"}},
                 {"$unwind": "$pc"},  # post's creator
                 {"$match": {"$expr": {"$eq": ["$pc.d", "$d"]}}},  # == person2
-                {"$count": "n"}], allowDiskUse=True)))
+                {"$count": "n"}], **self._olap_kw())))
         if qname == "lsqb_q3":
             return self._count_or_zero(list(self.db["knows_undir"].aggregate([
                 {"$lookup": {"from": "knows_undir", "localField": "d", "foreignField": "s", "as": "k2"}},
@@ -3274,7 +3349,7 @@ class MongoGraph(Base):
                 {"$unwind": "$c3"},
                 {"$match": {"$expr": {"$and": [{"$eq": ["$c1.d", "$c2.d"]},
                                                {"$eq": ["$c2.d", "$c3.d"]}]}}},
-                {"$count": "n"}], allowDiskUse=True)))
+                {"$count": "n"}], **self._olap_kw())))
 
     def run_cypher(self, text, params=None):
         raise NotImplementedError("MongoDB runs aggregation pipelines through the name-based hooks")
@@ -3794,22 +3869,51 @@ def main():
             _budget_s, _budget_src = budget_lookup.budget_for(
                 "l2", args.scale, qname, OLAP_BUDGET_S, "BENCH_GRAPH_OLAP_BUDGET_S",
                 n_queries=len(_QUERIES_THIS_TIER))
+            # THE SERVER ENFORCES THE BUDGET WHERE THE ENGINE CAN BE ASKED TO (DECISIONS #179).
+            # The checks below are between iterations, so they cannot stop one that never ends;
+            # the cold pass and every timed iteration of an adapter with a server-side limit
+            # (ArangoDB: maxRuntime, MongoDB: maxTimeMS) are handed the same budget and cut by the server at it.
+            # A query it cuts is a censored measurement (below), never an error and never an
+            # answer. Every other engine runs as before.
+            _server_limit = bool(getattr(ad, "SERVER_SIDE_LIMIT", False)) and _budget_s > 0
+            ad.olap_limit_s = _budget_s if _server_limit else None
+            _killed = None          # None, or where the server cut this query
             _budget_t0 = time.perf_counter()
             _c0 = time.perf_counter()
-            rows0 = ad.run_olap(qname)  # first touch, now measured
+            try:
+                rows0 = ad.run_olap(qname)  # first touch, now measured
+            except graph_common.QueryKilled:
+                rows0 = None
+                _killed = "cold pass"
             out[f"cold_{qname}_ms"] = round((time.perf_counter() - _c0) * 1000, 2)
             bench_common.record_first_query(out, qname, out[f"cold_{qname}_ms"])
+            if _killed and out.get("cold_first_query_name") == qname:
+                out["cold_first_query_censored"] = True    # a lower bound, cut at the budget
             # Abandon here rather than spend the whole budget proving what the
             # cold pass already showed (DECISIONS #107).
-            _aband, _aband_why = budget_lookup.abandon(
+            _aband, _aband_why = (False, "") if _killed else budget_lookup.abandon(
                 out[f"cold_{qname}_ms"] / 1000.0, _budget_s, OLAP_ITERATIONS)
             lat = []
-            for _ in range(0 if _aband else OLAP_ITERATIONS):
+            for _i in range(0 if (_aband or _killed) else OLAP_ITERATIONS):
                 if time.perf_counter() - _budget_t0 > _budget_s:
                     break
                 t = time.perf_counter()
-                ad.run_olap(qname)
+                try:
+                    ad.run_olap(qname)
+                except graph_common.QueryKilled:
+                    _killed = f"timed iteration {_i + 1}"
+                    break
                 surreal_common.keep(ad, lat, (time.perf_counter() - t) * 1000)
+            ad.olap_limit_s = None
+            if _server_limit:
+                out["olap_server_limit"] = ad.SERVER_LIMIT_STAMP
+                out[f"{qname}_server_limit_s"] = _budget_s
+            if _killed:
+                # The query was still running when its budget ran out: the time on this row
+                # is a floor, not a duration (the true latency is above it).
+                out[f"{qname}_server_killed"] = (
+                    f"killed by the server in the {_killed} at its {_budget_s:g} s budget "
+                    f"({ad.SERVER_LIMIT_NAME}, DECISIONS #179); the time is a lower bound")
             out[f"{qname}_budget_s"] = _budget_s
             out[f"{qname}_budget_source"] = _budget_src
             out[f"{qname}_censored"] = len(lat) < OLAP_ITERATIONS
@@ -3819,7 +3923,8 @@ def main():
                 _beat.mark(f"olap-{qname}-censored", iters=len(lat),
                            budget_s=_budget_s)
             if not lat:
-                # THE COLD PASS ALONE EXCEEDED THE BUDGET. A censored cell with
+                # THE COLD PASS ALONE EXCEEDED THE BUDGET (or the server cut the first timed
+                # iteration, which leaves the cold pass the only sample). A censored cell with
                 # one measurement is a result (DECISIONS #82b); a cell with none
                 # is a gap. The percentiles are the cold number and the row says
                 # they came from one sample, so nobody reads a p99 over a single
@@ -3839,7 +3944,7 @@ def main():
             out[f"{qname}_mean_ms"] = round(statistics.mean(lat), 2)
             out[f"{qname}_min_ms"] = round(min(lat), 2)
             out[f"{qname}_iters"] = 0 if out.get(f"{qname}_warm_missing") else len(lat)
-            out[f"{qname}_rows"] = len(rows0)
+            out[f"{qname}_rows"] = None if rows0 is None else len(rows0)
             # COLD AND WARM UNDER ONE NAMING CONVENTION (DECISIONS #89). The
             # cold pass above is separate already, so the warm percentiles come
             # from the loop that follows it.
@@ -3848,11 +3953,20 @@ def main():
                                               cold_ms=out[f"cold_{qname}_ms"], digits=2)
             else:
                 out[f"cold_warm_{qname}_na"] = (
+                    f"no warm pass: the server killed the query at the {_budget_s:.0f}s budget "
+                    f"(DECISIONS #179)" if _killed else
                     f"no warm pass: the cold one alone exceeded the "
                     f"{_budget_s:.0f}s budget (DECISIONS #82b, #106)")
             # THE ANSWER (DECISIONS #88), from the first touch's rows, outside
             # every timed section.
-            bench_common.record_result(out, qname, rows0, **OLAP_DIGEST[qname])
+            if rows0 is None:
+                # KILLED BEFORE IT ANSWERED: there is no answer to digest, and the row says so the
+                # way the interactive reads do when they stop at their budget.
+                bench_common.record_censored_answer(
+                    out, qname, f"killed by the server at its {_budget_s:g} s budget ({ad.SERVER_LIMIT_NAME}) "
+                                f"before the cold pass answered")
+            else:
+                bench_common.record_result(out, qname, rows0, **OLAP_DIGEST[qname])
             _beat.mark(f"olap-{qname}-done", p50=out[f"{qname}_p50_ms"],
                        digest=out[f"res_{qname}_digest"])
         # STAMP THE ARM. BENCH_GAV=0 changes what was measured and, until this
