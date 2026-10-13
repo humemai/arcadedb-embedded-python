@@ -57,6 +57,7 @@ A campaign file reports "no reader" when you grep the publishing scripts. That i
 | `runs-*.csv` | per-invocation summary written by `runner.py` | nothing. Delete them when they pile up; the writer stays. Swept 2026-09-19: 103 files, all 106 rows `tier=sweep` and 88 of them `bench_host=laptop`, zero paper-tier rows, so none could ever reach a page. Check that before deleting, not after |
 | `runs.jsonl.before-merge-<stamp>` | `merge_campaign.py`'s rollback copy of the canonical file | nothing reads them. ONE is kept, the copy of the most recent merge; the script now prunes the rest itself. Eleven had reached 73 MB by 2026-09-19 before this. Verify containment line by line before deleting any: `runs.jsonl` has lost rows once, to a git checkout during a live campaign |
 | `mp_rows_<pin>.jsonl`, `mp_rows_small_<pin>.jsonl`, `mp_rows_sparse_<pin>.jsonl` | the per-cell multipass rows behind the overlay directories below | nothing on the page; the per-cell record |
+| `web_benchmarks_skeleton.json` (tracked), `generated_skeleton/**` and `runs_oct_smoke_laptop.jsonl` (untracked) | `export_web.py` and `make_paper_tables.py` under the skeleton switch (`refresh_web_page.py --skeleton`); the smoke file is a laptop sweep file of 88 rows that overlaps the skeleton freeze (164 rows) | `version_consistency_check.py` reads the JSON; the other readers of the skeleton publish read `generated_skeleton/`; nothing reads the smoke file |
 | `runs_skeleton_laptop.csv` | the laptop micro-scale placeholder freeze behind a skeleton publish, one repetition, sweep tier, `bench_host` of the laptop (DECISIONS #86) | `refresh_web_page.py --skeleton`, which refuses a row from the bench host or at paper tier. Never merged into `runs.jsonl` |
 | `runs_CALIBRATION_<tier>_<pin>.jsonl` | a calibration pass: one repetition per engine at a tier nothing has measured yet, run to turn that tier's query budgets from projections into measurements (DECISIONS #106). Not publishable at n=1 | nothing. `merge_campaign.py` takes an explicit `--remote` path and no glob, so it cannot pick one up by accident; `derive_budgets.py` reads the frozen CSV, so a calibration tier reaches the budget table only when someone re-freezes with its rows |
 
@@ -93,6 +94,7 @@ The answer digest and its readable sample, the `durability` string, the thermal 
 | `dense_mp5_<pin>/` | the page's 9.99M dense table, T5, and f4/f8's dense bars |
 | `dense_mp5_small_<pin>/` | the same table at 1M |
 | `sparse_mp_<pin>/` | the warm columns on the page's `l3s` table (`export_web`) |
+| `e4decomp_<pin>/` | the E4 decomposition table: `export_web.py` (`E4_DIR`, and it stops without the directory unless it is a skeleton run), `make_paper_tables.py`; `land_stage.py` copies the `decomp3m_*.json` files from the bench host into it, so a landing is blocked until the e4 lane has run at that pin |
 
 Every other directory under `results/` is evidence, quarantine, or output; nothing generated reads it.
 

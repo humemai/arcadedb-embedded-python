@@ -419,7 +419,9 @@ schema.create_index("Article", ["content"], index_type="FULL_TEXT")
   in ascending order (ArcadeDB [#9169](https://github.com/ArcadeData/arcadedb/issues/9169),
   200,000 and 2,000,000 entries). It cannot serve a range or an `ORDER BY`.
 - Use `LSM_TREE` when you need ranges, sorting, or a safe general-purpose default, and for
-  a non-unique column with few distinct values.
+  a non-unique column with few distinct values (in the 26.10.1 wheel a `NOTUNIQUE_HASH`
+  insert costs more with every row the key already has, ArcadeDB
+  [#9228](https://github.com/ArcadeData/arcadedb/issues/9228), fixed for 26.11.1).
 - Use `FULL_TEXT`, `LSM_VECTOR`, and `GEOSPATIAL` only for their specialized query
   types.
 - `HASH` can be unique or non-unique. The index structure and uniqueness constraint are

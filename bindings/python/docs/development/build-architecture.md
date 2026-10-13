@@ -111,7 +111,7 @@ See `bindings/python/setup.py` for the complete implementation.
 jobs:
   download-jars:
     runs-on: ubuntu-latest
-    # Copies the ArcadeDB JARs out of the upstream image, uploads artifact
+    # Copies the ArcadeDB JARs out of the upstream image (or builds them from source when engine-from-source is set), uploads artifact
 
   test:
     needs: download-jars
@@ -378,7 +378,7 @@ bindings/python/
 **Key sections:**
 
 1. **download-jars job**
-    - Copies the ArcadeDB JARs out of the upstream image
+    - Copies the ArcadeDB JARs out of the upstream image, or builds them from this commit's source when `engine-from-source` is set (manual dispatch and `workflow_call` only)
     - Uploads artifact for native builds
 
 2. **test job matrix**

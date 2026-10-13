@@ -441,7 +441,9 @@ for ids loaded in ascending order, which is the best case of `LSM_TREE`. So the 
 equality only and not loaded in key order; an id you number as you load pays that on the
 insert and gains on every read. Keep `UNIQUE` (`LSM_TREE`) when you also read the key by
 range or `ORDER BY`, and keep an `LSM_TREE` index on a non-unique column with few distinct
-values (tracked in [#9228](https://github.com/ArcadeData/arcadedb/issues/9228)).
+values: in the 26.10.1 wheel an insert into a `NOTUNIQUE_HASH` index costs more with every row
+the key already has ([#9228](https://github.com/ArcadeData/arcadedb/issues/9228), fixed by
+[#9538](https://github.com/ArcadeData/arcadedb/pull/9538) for 26.11.1, which is not released yet).
 
 ```python
 db.command("sql", "CREATE INDEX ON Item (id) UNIQUE_HASH")  # id: equality only

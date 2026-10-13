@@ -73,8 +73,8 @@ git push origin main
 
 Wait for "Test Python Bindings" and "Test Python Examples" to finish, and check that
 the examples actually ran rather than skipped. The bindings summary of a green run reads
-`N passed, K expected failures (xfail), 0 skipped, 0 failed`: the xfails are open upstream bugs
-the suite tracks, and `scripts/check_test_skips.py` already fails any real skip.
+`N passed, 0 expected failures (xfail), 0 skipped, 0 failed`: a non-zero xfail count would be an open upstream bug
+the suite tracks as an `xfail` (none is today), and `scripts/check_test_skips.py` already fails any real skip.
 
 The other 19 wheels are built by CI, so check their sizes before you tag. With the release
 commit `pom.xml` reads `X.Y.Z`, so the run on the commit you will tag builds from the same

@@ -39,7 +39,8 @@ The CI/CD workflows build and release across **4 platforms** for a total of **20
     - `arcadedb-jars`, the unfiltered JAR set for the native builds, kept 1 day
     - The `test-results-*` upload names `pytest-output.txt` and `.coverage`, which the pytest
       step does not write, so it uploads nothing
-- **Triggers**: pushes to `main` and pull requests that touch `bindings/python/**` or the workflow itself, manual dispatch, and `workflow_call` from the release workflow
+- **Triggers**: pushes to `main` and pull requests that touch `bindings/python/src/**`, `tests/**`, `examples/**`, `scripts/**`, `pyproject.toml`, `setup.py` or the workflow itself, manual dispatch, and `workflow_call` from the release workflow. A documentation-only change does not start the matrix (the `Docs Build` workflow covers it).
+- **Engine from source**: a manual dispatch or a `workflow_call` with `engine-from-source: true` builds the engine jars from this commit's source in `download-jars` instead of copying them out of upstream's snapshot image. Push and pull request runs never take this path.
 
 ### `test-python-examples.yml`
 
@@ -74,6 +75,15 @@ Runs on every push to `main` and every pull request:
 
 - `sha-pinned-actions`: every action reference must be pinned to a full commit SHA
 - `pre-commit`: the repository's pre-commit hooks (black, isort with the black profile, and the rest) on the files under `bindings/python`
+- `ci-trigger-coverage` (`CI triggers cover every bindings/python entry`): every tracked entry directly under `bindings/python` must be in the trigger paths of both test workflows or listed there as needing no test run
+
+### `docs-build.yml`
+
+Named `Docs Build`. Runs `mkdocs build --strict` (Python 3.12, pinned `mkdocs`, `mkdocs-material` and plugin versions) on pull requests and pushes to `main` that change `bindings/python/docs/**`, `bindings/python/mkdocs.yml` or the workflow, and on manual dispatch. It does not run the code blocks in the pages. See [Documentation](documentation.md#build-documentation).
+
+### `build-engine-jars.yml`
+
+Named `Build ArcadeDB engine jars`. A manual dispatch (inputs `repository`, default `ArcadeData/arcadedb`, `ref`, which is required, and `exclude-ha-raft-shaded`) or a `workflow_call` builds the full ArcadeDB distribution from source at any commit and uploads its `lib` directory as an artifact (`arcadedb-lib`, kept 7 days). Use it to check an upstream fix at its merge commit without building on your own machine; see [Upstream Issues](upstream-issues.md). The `engine-from-source` option of the two test workflows builds the jars itself and does not call this workflow.
 
 ### `release-python-packages.yml`
 

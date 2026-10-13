@@ -6,11 +6,9 @@ results are not engine bugs: they are in JPype, the library that connects Python
 it was measured on, what you see, a workaround that was checked on the same reproduction, and
 the release that fixes it once there is one. Entries leave this page when the fix ships in a
 release these bindings package.
-An entry with a `Tests:` line has a test of its workaround. While the bug is open it also has a
-strict `xfail` test of the engine behavior, which starts failing the suite when a fix reaches the
-engine the suite runs on; the test is then made a plain regression test. An entry for a bug that
-is fixed on upstream's main but not yet in a release says so, and its regression tests fail on the
-released wheel until the next release ships.
+An entry with a `Tests:` line has a test of its workaround. An entry for a bug that
+is fixed on upstream's main but not yet in a release says so, and its plain regression tests pass on the
+engine the suite builds against and fail on the released wheel until the next release ships.
 
 ## Ctrl-C during an interruptible Java wait can raise `InterruptedException`, not `KeyboardInterrupt`
 
@@ -315,8 +313,9 @@ n = (
 ```
 
 Tests: `tests/test_count_pushdown_known_issues.py` checks the `WITH` workaround and the unaffected
-shape, and has strict `xfail` tests of the wrong counts; they start failing the suite when the
-engine fixes them, which is the cue to remove this entry.
+shape, and has plain regression tests of the right counts. They pass on the engine the suite builds
+against (upstream's 26.11.1 snapshot, which has the fix) and fail on the 26.10.1 wheel. Remove this
+entry when the release that carries the fix ships.
 
 
 ## `sum()` and `avg()` over a `BYTE` property raise `IllegalArgumentException`
@@ -345,3 +344,14 @@ Tests: `tests/test_count_pushdown_known_issues.py` checks the conversion workaro
 regression tests of the aggregates. They pass on the engine the suite builds against (upstream's
 26.11.1 snapshot, which has the fix) and fail on the 26.10.1 wheel. Remove this entry when the
 release that carries the fix ships.
+
+
+## An async executor batch can run out of retries and be rolled back at parallel level 4 on a one-bucket type
+
+ArcadeDB [#9694](https://github.com/ArcadeData/arcadedb/issues/9694), which our issue [#99](https://github.com/humemai/arcadedb-embedded-python/issues/99) tracks. Upstream measured it on build fd407f1bc0 (a main build from after the 26.10.1 release) and on ac4f75d532 (#9535, which added a retry backoff): with the default settings, 20 of 6,000 and 24 of 6,000 runs of 9,742 single-row `INSERT` commands through the async executor lost a batch (4 workers, commit every 1,000, one bucket). Fixed upstream by [ArcadeData/arcadedb#9703](https://github.com/ArcadeData/arcadedb/pull/9703), merged on 2026-10-11 for ArcadeDB 26.11.1, which is not released yet. The 26.10.1 wheel was released before that fix and does not contain it.
+
+With several workers inserting into the same bucket, most batch commits conflicted and had to be replayed, so now and then a batch used up its retries. The batch is not dropped without a report: it is rolled back, its rows are not stored, and the executor's `on_error` handler fires once for it with a `ConcurrentModificationException`. Without an `on_error` handler on the executor nothing is raised in Python.
+
+Register `on_error` on the executor, and compare the stored count with the submitted count after `wait_completion()`. `command()` is not a bulk loader (see [AsyncExecutor](../api/async_executor.md)): use `Database.insert_many` for documents and `Database.graph_batch` for graphs.
+
+Our issue #99 stays open until the bindings carry an engine build with the fix. Remove this entry when the release that carries the fix ships.
