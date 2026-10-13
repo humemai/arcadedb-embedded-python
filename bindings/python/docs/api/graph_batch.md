@@ -126,7 +126,8 @@ properties). Only rows whose values are all scalars (`str`, `int`, `float`, `boo
 any other value, a list or a Java array included, sends the whole call through the
 per-value path, which converts each value on its own. So does a scalar the JSON text would
 change on the way to the engine: an integer beyond 64 bits, NaN or Infinity, or a string with
-a lone surrogate. The per-value path stores such a value exactly or raises.
+a lone surrogate. The per-value path stores such a value exactly or raises. A property name
+must be a `str`: any other name raises `ArcadeDBError`.
 
 **Vector properties: pass `to_java_float_array(vec)`, not a Python list.** A plain
 list is converted element by element (and, on a type with no declared vector property,
@@ -147,11 +148,13 @@ A batched edge stores a null as null and converts or refuses a declared value as
 Buffer many edges with one JPype crossing per call: the bulk counterpart of
 `new_edge`, which pays one boundary crossing per edge. RIDs may be strings
 (`"#1:0"`) or objects with a string representation; `properties` is an optional
-same-length sequence of per-edge property dicts. When every value is a scalar (`str`,
+sequence of per-edge property dicts. The three sequences must have the same length, or the
+call raises `ArcadeDBError` before it buffers anything. When every value is a scalar (`str`,
 `int`, `float`, `bool`, or `None`) the call takes the bulk path; any other value,
 a list included, sends the whole call through per-edge buffering, and so does a scalar the
 JSON text would change (an integer beyond 64 bits, NaN or Infinity, a lone surrogate), which
-per-edge buffering stores exactly or refuses. Returns the batch for chaining.
+per-edge buffering stores exactly or refuses. A property name must be a `str`: any other name
+raises `ArcadeDBError`. Returns the batch for chaining.
 
 ```python
 with db.graph_batch(use_wal=False) as batch:
