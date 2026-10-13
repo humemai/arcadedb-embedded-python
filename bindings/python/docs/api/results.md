@@ -148,7 +148,10 @@ read), and `to_list()` reads a short result the same way.
 **Parameters:**
 
 - `batch_size` (int): Rows serialized per Java crossing (default: `10_000`); must be at
-  least 1 (`ValueError` otherwise)
+  least 1 (`ValueError` otherwise). A batch is bounded by rows, not bytes, and its JSON text is
+  built in the Java heap and copied twice: for rows of a megabyte or more, pass a small
+  `batch_size`, or the call fails with `ArcadeDBError` (Java heap space). `to_list()` ends
+  its own batches by size and needs no such care.
 
 **Returns:**
 

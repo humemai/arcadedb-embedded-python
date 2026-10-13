@@ -136,7 +136,7 @@ Measured limits that remain by design, and the recommended pattern for each:
 | Leaks under sustained load? | Not in the JVM: a 45-minute soak over 2.65M mixed operations shows post-GC heap flat from minute 1 to 45. On the Python side, JPype 1.7.1 keeps a Python object for every number that `Result.get()` returns (`to_list()` reads numbers from JSON text and does not); see [Known Engine Issues](known-issues.md) |
 | Baseline footprint | ~121MB RSS after JVM start |
 | "`-Xmx4g` means it uses 4GB"? | No: `-Xmx` is a ceiling, not a reservation; the heap grows only as needed |
-| Bulk APIs (`to_json_list`, `to_columns`) | Transient peak scales with `batch_size` and is fully reclaimed; under a small heap they degrade gracefully (slower, no OOM) |
+| Bulk APIs (`to_json_list`, `to_columns`) | Transient peak scales with `batch_size` (rows, not bytes: rows of a megabyte or more need a small `batch_size`) and is fully reclaimed; under a small heap, with rows of ordinary size, they degrade gracefully (slower, no OOM). `to_list()` ends each batch at a few megabytes of JSON, whatever the row width |
 
 ## Full report
 
