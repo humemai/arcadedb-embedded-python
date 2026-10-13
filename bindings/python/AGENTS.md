@@ -26,7 +26,7 @@ A change to behaviour updates every place that describes it. Grep these for the 
 
 | Area | Source and tests | Docs |
 |---|---|---|
-| API (database, schema, transactions, results, records, async, exceptions, type conversion, JVM) | `bindings/python/src/arcadedb_embedded/`, `bindings/python/tests/` | `bindings/python/docs/api/` |
+| API (database, schema, transactions, queries, results, records, async, exceptions, type conversion, JVM) | `bindings/python/src/arcadedb_embedded/`, `bindings/python/tests/` | `bindings/python/docs/api/`, `bindings/python/docs/guide/core/database.md`, `bindings/python/docs/guide/core/queries.md`, `bindings/python/docs/guide/core/transactions.md` |
 | Vectors | same | `bindings/python/docs/guide/vectors.md`, `bindings/python/docs/api/vector.md` |
 | Graphs and bulk loading | same | `bindings/python/docs/guide/graphs.md`, `bindings/python/docs/api/graph_batch.md` |
 | Import and export | same | `bindings/python/docs/guide/import.md`, `bindings/python/docs/api/importer.md`, `bindings/python/docs/api/exporter.md` |

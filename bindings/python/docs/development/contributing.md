@@ -141,6 +141,7 @@ arcadedb-embedded-python/bindings/python/
 │   ├── build.sh                   # Main build entrypoint
 │   ├── build-native.sh            # Native build script
 │   ├── build_and_install_locally.sh # Engine build + wheel from the headless assembly (no Studio, Bolt, Redis, or GraphQL)
+│   ├── check_test_skips.py        # CI skip gate: fails the test job on any skip
 │   ├── ensure-build-tools.sh      # Build tools setup
 │   ├── extract_version.py         # Version extraction
 │   ├── fix_markdown.py            # Docs formatter
