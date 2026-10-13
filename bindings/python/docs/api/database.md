@@ -601,8 +601,9 @@ rolled back on any failure, a transaction the caller opened is left to the calle
   converts with its `<NA>` as null. `datetime64`, `timedelta64`, and complex
   columns do not cross natively (`TypeError`): convert them to Python values or
   use `insert_many`.
-- `commit_every` (int): Transaction batch size in synchronous mode (ignored
-  when a transaction is already open)
+- `commit_every` (int): Transaction batch size in synchronous mode, any int as
+  for `insert_many` (0 = single transaction; ignored when a transaction is already
+  open)
 - `parallel` (bool): Hand the documents to the async executor's parallel bucket
   writers and wait for completion, exactly as `insert_many(parallel=True)`
   does: the same bucket-count rule (`CREATE DOCUMENT TYPE T BUCKETS n`, a count
