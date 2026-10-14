@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This repository is a fork of ArcadeDB. The root `CLAUDE.md` and the ones in `engine/`, `ha-raft/` and `studio/` are upstream's and describe the Java engine; do not edit them here.
+This repository is a fork of ArcadeDB. The `CLAUDE.md` files in `engine/`, `ha-raft/` and `studio/` are upstream's and describe the Java engine; do not edit them here. Upstream's root `CLAUDE.md` is not kept in this fork.
 
 Our work is in two places, each with its own rules:
 
