@@ -8,3 +8,5 @@ Our work is in two places, each with its own rules:
 - `benchmarks/`: the benchmark harness and its published results. Read `benchmarks/AGENTS.md` (and its `README.md`) before changing anything there.
 
 The Java engine under `engine/` and the per-language `e2e-*` suites belong to upstream. Report a cause there instead of changing it here: file an issue, and send a pull request only for a low-hanging fix (`bindings/python/docs/development/upstream-issues.md`). The periodic `bindings/python` update to upstream is a separate routine (`bindings/python/docs/development/upstream-bindings-pr.md`).
+
+Planned changes, not final and not yet public: the Python bindings may move to their own repository and PyPI project, and the benchmarks to `humemai/dbbench`, after the October benchmark campaign and the paper. Until then do not rename or move this repository, and do not change the release or upstream-sync routines without asking. The record is `.notes/bench/DECISIONS.md` #182.
