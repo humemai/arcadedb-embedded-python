@@ -1,0 +1,59 @@
+# REMOVE WHEN: the PyPI project `arcadedb` exists and has been handed to the ArcadeData maintainers (then delete this file; the real package is released from its own repo).
+# Publishes a first release of `arcadedb` to PyPI that only depends on `arcadedb-embedded`, so the name is held by us. Run once by hand: Actions -> this workflow -> Run workflow.
+# Needs a pending trusted publisher on PyPI for project `arcadedb` bound to this repo, this workflow file and the `pypi` environment.
+name: Claim PyPI name arcadedb
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
+
+      - name: Build the placeholder package
+        run: |
+          mkdir pkg && cd pkg
+          cat > pyproject.toml <<'EOF'
+          [build-system]
+          requires = ["setuptools>=77"]
+          build-backend = "setuptools.build_meta"
+
+          [project]
+          name = "arcadedb"
+          version = "0.0.1"
+          description = "ArcadeDB for Python: installs arcadedb-embedded, the embedded multi-model database with a bundled JRE."
+          readme = "README.md"
+          license = "Apache-2.0"
+          requires-python = ">=3.10"
+          dependencies = ["arcadedb-embedded"]
+
+          [project.urls]
+          Homepage = "https://arcadedb.com"
+          Source = "https://github.com/ArcadeData/arcadedb"
+          EOF
+          cat > README.md <<'EOF'
+          # arcadedb
+
+          This name belongs to the ArcadeDB project (https://arcadedb.com). For now `pip install arcadedb` installs
+          [`arcadedb-embedded`](https://pypi.org/project/arcadedb-embedded/), the embedded ArcadeDB database with a bundled JRE
+          (`import arcadedb_embedded`). The client drivers are [`arcadedb-driver`](https://pypi.org/project/arcadedb-driver/) and
+          `arcadedb-driver-grpc`.
+          EOF
+          python -m pip install --quiet build
+          python -m build
+          ls dist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # release/v1
+        with:
+          packages-dir: pkg/dist/
