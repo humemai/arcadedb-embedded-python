@@ -821,6 +821,19 @@ class TestNewEdgesLengths:
             )
         assert self.edge_count(db) == 3
 
+    @pytest.mark.parametrize("bad", [{1: "a"}, {"w": 1, 2: "a"}])
+    def test_a_late_bad_property_name_leaves_no_earlier_edge_behind(self, graph, bad):
+        db, rids = graph
+        with db.graph_batch() as batch:
+            with pytest.raises(ArcadeDBError):
+                batch.new_edges(
+                    rids[:3],
+                    "E",
+                    rids[1:4],
+                    [{"w": 0, "d": datetime(2020, 1, 1)}, {"w": 1}, bad],
+                )
+        assert self.edge_count(db) == 0
+
     @pytest.mark.parametrize("key", [1, True, None, 1.5])
     def test_a_property_name_that_is_not_a_str_is_refused(self, graph, key):
         db, rids = graph

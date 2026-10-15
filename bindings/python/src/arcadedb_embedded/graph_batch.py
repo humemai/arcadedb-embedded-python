@@ -337,6 +337,18 @@ class GraphBatch:
                 f"({got})"
             )
 
+        # A property name that is not a str is refused on every path, so look
+        # for one before the first edge is buffered: the per-edge fallbacks
+        # below would otherwise buffer the edges before it and leave them
+        # behind for close() to persist after this call raised.
+        for p in properties or ():
+            for key in p or ():
+                if not isinstance(key, str):
+                    raise ArcadeDBError(
+                        f"Failed to buffer batch edges '{edge_type}': property "
+                        f"names must be str, got {key!r}"
+                    )
+
         edge_batcher = _bridge_class("EdgeBatcher")
         if edge_batcher is None:
             # bridge jar unavailable (warned once): per-edge fallback,
