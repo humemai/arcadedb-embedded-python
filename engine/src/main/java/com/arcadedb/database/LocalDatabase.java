@@ -116,6 +116,7 @@ import com.arcadedb.utility.LockException;
 import com.arcadedb.utility.MultiIterator;
 import com.arcadedb.utility.RWLockContext;
 import com.arcadedb.utility.RetryBackoff;
+import com.arcadedb.utility.VectorApiSupport;
 
 import java.io.File;
 import java.io.IOException;
@@ -182,6 +183,11 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
    * spelled out at each use so the snapshot's t0 configuration capture (#6114) and this class agree by construction.
    */
   public static final String CONFIGURATION_FILE_NAME = "configuration.json";
+
+  static {
+    // BEFORE ANY JVECTOR CLASS RESOLVES ITS PROVIDER: A NATIVE IMAGE RUNS THE VECTOR API WITHOUT SIMD (#10072)
+    VectorApiSupport.configureJVectorProvider();
+  }
 
   /** What {@link #quiesceAsync()} hands back on a database that never created an async executor: nothing to park. */
   private static final AsyncQuiesce NO_ASYNC_TO_QUIESCE = () -> {
@@ -2245,6 +2251,12 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
           throw e;
         }
 
+        // #9995: a refusal this node repeats until something outside it changes - a follower refusing leader-only work
+        // and naming the leader - fails every attempt the same way, so the caller gets it now instead of after every
+        // retry delay
+        if (e instanceof NeedRetryException retryable && !retryable.isRetryableOnThisNode())
+          throw e;
+
         if (e instanceof DuplicatedKeyException) {
           // #4959: a genuine duplicate is deterministic and fails identically on every attempt. Only a
           // concurrency-induced duplicate can succeed on retry, and one retry is enough to disambiguate:
@@ -3577,16 +3589,6 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
       }
     }
 
-    if (!drop)
-      try {
-        // WHILE THE DATABASE IS STILL OPEN: THE SCHEMA CANNOT BE SERIALIZED ONCE THE CLOSE HAS BEGUN
-        schema.saveUnsavedFullTextCounters();
-      } catch (final Exception e) {
-        // BEST EFFORT, AND THE CLOSE CARRIES ON: THE COUNTERS ARE AN ESTIMATE THE FIRST SEARCH OF THE NEXT SESSION CHECKS AGAINST
-        // THE DATA, WHILE A CLOSE THAT FAILS HERE WOULD LEAVE THE FILES OPEN
-        LogManager.instance().log(this, Level.WARNING, "Error on saving the full-text corpus counters of database '%s'", e, name);
-      }
-
     for (final Index idx : schema.getIndexes()) {
       final IndexInternal index = (IndexInternal) idx;
 
@@ -3680,6 +3682,18 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
       }
 
       final boolean preserveWalForRecovery = !dataSafeOnDisk && !drop;
+
+      if (!drop)
+        try {
+          // THE LAST STEP WHILE THE DATABASE IS STILL OPEN, AFTER THE INDEX FLUSHES AND UNDER THE WRITE LOCK SO NO COMMIT MOVES
+          // THE FULL-TEXT COUNTERS PAST IT: A SCHEMA SERIALIZED ONCE THE DATABASE REPORTS ITSELF CLOSED CANNOT RESOLVE THE
+          // BUCKETS OF ITS INDEXES, AND A CHANGE POSTPONED BY AN OPEN TRANSACTION WAS LOST (#10059)
+          schema.saveBeforeClose();
+        } catch (final Exception e) {
+          // THE CLOSE CARRIES ON: ONE THAT FAILS HERE WOULD LEAVE THE FILES OPEN
+          LogManager.instance().log(this, Level.SEVERE,
+              "Error on saving the schema of database '%s' before closing it: a schema change not saved yet may be lost", e, name);
+        }
 
       open = false;
 
