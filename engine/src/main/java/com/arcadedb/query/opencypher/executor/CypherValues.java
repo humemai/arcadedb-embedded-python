@@ -49,8 +49,12 @@ public final class CypherValues {
   /**
    * Numeric-tolerant equality: a stored {@code Integer} 1 equals a supplied {@code Long} 1, which is what makes a
    * MERGE pattern match a record written with a different integral width. A {@code Float} and a {@code Double} may
-   * still report unequal after widening (0.1f != 0.1d); that is conservative on purpose, since every caller pays for
-   * a false negative with a redundant write or an extra probe, never with a wrong answer.
+   * still report unequal after widening (0.1f != 0.1d). It answers whether a write changes a stored value (the no-op
+   * write skip of a MERGE action, issue #4474), not whether a pattern matches one: MERGE compares the way MATCH does,
+   * through {@code InlineProperties.matchesResolvedValue} (issue #9693), because a false negative there creates a
+   * duplicate. That is why the two zeros are told apart here although a MATCH and the index call them one value (issue
+   * #9303): writing 0.0 over a stored -0.0 changes what the record holds ({@code 1/v} flips sign), so calling them equal
+   * would silently drop the write (issue #9618).
    */
   public static boolean equalValues(final Object a, final Object b) {
     if (a == null)
@@ -294,7 +298,7 @@ public final class CypherValues {
    * javadoc above), and {@link #validatePointEntries} closes the map-smuggling loophole a looser key-presence check
    * would leave open.
    */
-  private static boolean isPointShaped(final Map<?, ?> map) {
+  public static boolean isPointShaped(final Map<?, ?> map) {
     return map.get("crs") != null && map.get("x") instanceof Number && map.get("y") instanceof Number;
   }
 

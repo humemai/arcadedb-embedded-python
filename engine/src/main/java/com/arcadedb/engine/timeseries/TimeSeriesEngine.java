@@ -20,6 +20,8 @@ package com.arcadedb.engine.timeseries;
 
 import com.arcadedb.database.DatabaseInternal;
 import com.arcadedb.engine.timeseries.simd.TimeSeriesVectorOpsProvider;
+import com.arcadedb.exception.DatabaseOperationException;
+import com.arcadedb.log.LogManager;
 import com.arcadedb.schema.LocalSchema;
 
 import java.io.IOException;
@@ -37,6 +39,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.logging.Level;
 
 /**
  * Coordinates N shards for a TimeSeries type. Routes sync writes to shards
@@ -82,8 +85,9 @@ public class TimeSeriesEngine implements AutoCloseable {
   /**
    * @param mutableFormatVersion the type's stored mutable row format version. Version 0 keeps TAG
    *                             STRING columns inline; version 1 and above dictionary-encode them
-   *                             into a 4-byte id (issue #5519). It comes from the schema so a
-   *                             database written by an older build keeps its layout.
+   *                             into a 4-byte id (issue #5519); version 2 and above give a row a
+   *                             null bitmap (issue #9721). It comes from the schema so a database
+   *                             written by an older build keeps its layout.
    */
   public TimeSeriesEngine(final DatabaseInternal database, final String typeName,
       final List<ColumnDefinition> columns, final int shardCount,
@@ -108,7 +112,7 @@ public class TimeSeriesEngine implements AutoCloseable {
       // One dictionary per type, resolved before the shards so every shard shares the same id space.
       this.tagDictionary = TimeSeriesTagDictionary.openOrCreate(database, typeName, columns, mutableFormatVersion);
       for (int i = 0; i < shardCount; i++)
-        shards[i] = new TimeSeriesShard(database, typeName, i, columns, compactionBucketIntervalMs, tagDictionary);
+        shards[i] = new TimeSeriesShard(database, typeName, i, columns, compactionBucketIntervalMs, tagDictionary, mutableFormatVersion);
     } catch (final Exception e) {
       shardExecutor.shutdownNow();
       // Release the shards that were successfully created - their sealed stores only, NOT their mutable buckets.
@@ -120,7 +124,7 @@ public class TimeSeriesEngine implements AutoCloseable {
       for (final TimeSeriesShard shard : shards) {
         if (shard != null) {
           try {
-            shard.closeAfterFailedInit();
+            shard.closeOwnedResources();
           } catch (final IOException ignored) {
           }
         }
@@ -157,7 +161,7 @@ public class TimeSeriesEngine implements AutoCloseable {
    * the limit will cause compaction to fail. Plan tag cardinality accordingly.
    */
   public void appendSamples(final long[] timestamps, final Object[]... columnValues) throws IOException {
-    appendSamples(new ObjectColumnsRowSource(columnKinds, timestamps, columnValues));
+    appendSamples(new ObjectColumnsRowSource(columnKinds, columns, timestamps, columnValues));
   }
 
   /**
@@ -189,7 +193,7 @@ public class TimeSeriesEngine implements AutoCloseable {
    * {@link #appendSamples(long[], Object[][])}. The arrays are held, not copied.
    */
   public TimeSeriesRowSource newRowSource(final long[] timestamps, final Object[][] columnValues) {
-    return new ObjectColumnsRowSource(columnKinds, timestamps, columnValues);
+    return new ObjectColumnsRowSource(columnKinds, columns, timestamps, columnValues);
   }
 
   /**
@@ -226,7 +230,7 @@ public class TimeSeriesEngine implements AutoCloseable {
    *                        is the value for column {@code colIdx} of sample {@code sampleIdx}
    */
   public void appendBatch(final long[] allTimestamps, final Object[][] allColumnValues) throws IOException {
-    appendBatch(new ObjectColumnsRowSource(columnKinds, allTimestamps, allColumnValues));
+    appendBatch(new ObjectColumnsRowSource(columnKinds, columns, allTimestamps, allColumnValues));
   }
 
   /**
@@ -390,14 +394,24 @@ public class TimeSeriesEngine implements AutoCloseable {
    * Returns a merge-sorted iterator across all shards, using a min-heap to merge the per-shard iterators by
    * timestamp.
    * <p>
-   * <b>It is not lazy end to end,</b> whatever the merge itself is: {@link TimeSeriesSealedStore#iterateRange}
-   * materialises every matching row of the sealed layer before it returns an iterator over them, because the
-   * directory read lock has to be released before the caller iterates. So the residency of this method is
-   * O(matching rows), the same as {@link #query} without the sort. What it saves against {@code query} is the
-   * second copy and the sort, not the series.
+   * Lazy end to end (issue #9420): each shard's sealed layer is read one block at a time as the merge reaches it,
+   * so the residency is one decoded block per shard plus each shard's mutable bucket, which
+   * {@link TimeSeriesShard#iterateRange} reads up front and which is bounded by the bucket rather than the series.
+   * It used to materialise every matching sealed row before returning, which made an unbounded
+   * {@code SELECT FROM <type>} need heap for the whole range. The read holds no lock between two blocks, so it
+   * shares {@link #forEachRow}'s consistency rules: a block a retention pass removed mid-read is skipped and
+   * counted in {@code vanishedBlocks}, one a downsample replaced raises {@link TimeSeriesWalkCoarsenedException}.
+   * <p>
+   * Because the rows are produced as the iterator advances, failures can surface mid-stream, after rows were
+   * already returned: an I/O error reading a later block - or the first one, read while the merge is being primed -
+   * as a {@link DatabaseOperationException} rather than the {@code IOException} this method
+   * declares, and a downsample as {@link TimeSeriesWalkCoarsenedException}, which every wire protocol already maps
+   * to "retry the read" (issue #8166). A streaming caller must therefore end its stream with an error, never with a
+   * completion, when either escapes.
    * <p>
    * A reader that folds the rows into an answer - a set of label values, a set of label combinations, an
-   * aggregate - wants {@link #forEachRow} instead, which is bounded by one block (issue #7354).
+   * aggregate - still wants {@link #forEachRow}: it needs no merge, so it holds one block in total rather than one
+   * per shard (issue #7354).
    */
   public Iterator<Object[]> iterateQuery(final long fromTs, final long toTs, final int[] columnIndices,
       final TagFilter tagFilter) throws IOException {
@@ -414,11 +428,26 @@ public class TimeSeriesEngine implements AutoCloseable {
    */
   public Iterator<Object[]> iterateQuery(final long fromTs, final long toTs, final int[] columnIndices,
       final TagFilter tagFilter, final AggregationMetrics metrics) throws IOException {
+    return iterateQuery(fromTs, toTs, columnIndices, tagFilter, null, metrics);
+  }
+
+  /**
+   * {@link #iterateQuery(long, long, int[], TagFilter, AggregationMetrics)} returning only the rows that also pass
+   * {@code fieldFilter} (issue #9612). The sealed layer skips a block whose statistics prove no sample passes and, in a
+   * block it decodes, tests the primitive columns before it builds a row, so a rejected sample costs no allocation.
+   *
+   * @param columnIndices must be {@code null} (every column) when a field filter is given
+   * @param fieldFilter   range predicates on numeric FIELD columns, may be {@code null}
+   */
+  public Iterator<Object[]> iterateQuery(final long fromTs, final long toTs, final int[] columnIndices,
+      final TagFilter tagFilter, final FieldFilter fieldFilter, final AggregationMetrics metrics) throws IOException {
+    if (fieldFilter != null)
+      fieldFilter.validate(columns);
     final PriorityQueue<PeekableIterator> heap = new PriorityQueue<>(
         Math.max(1, shardCount), Comparator.comparingLong(it -> (long) it.peek()[0]));
 
     for (final TimeSeriesShard shard : shards) {
-      final Iterator<Object[]> it = shard.iterateRange(fromTs, toTs, columnIndices, tagFilter, metrics);
+      final Iterator<Object[]> it = shard.iterateRange(fromTs, toTs, columnIndices, tagFilter, fieldFilter, metrics);
       if (it.hasNext())
         heap.add(new PeekableIterator(it));
     }
@@ -697,8 +726,359 @@ public class TimeSeriesEngine implements AutoCloseable {
   public MultiColumnAggregationResult aggregateMulti(final long fromTs, final long toTs,
       final List<MultiColumnAggregationRequest> requests, final long bucketIntervalMs, final long bucketOffsetMs,
       final TagFilter tagFilter, final AggregationMetrics metrics, final int bucketCeiling) throws IOException {
+    return aggregateMulti(fromTs, toTs, requests, bucketIntervalMs, bucketOffsetMs, tagFilter, null, metrics, bucketCeiling);
+  }
+
+  /**
+   * Same as above over only the samples that also pass {@code fieldFilter} (issue #9612): range predicates on numeric
+   * FIELD columns, judged on each sealed block's statistics before anything is read (see
+   * {@link TimeSeriesSealedStore#aggregateMultiBlocks}).
+   * <p>
+   * A non-positive {@code bucketIntervalMs} is ONE bucket over the whole range, which is how an ungrouped aggregate is
+   * answered. Every sealed block fits it, so a block wholly inside the range is answered from its statistics, and the shards
+   * are read in parallel as they are for a bucketed aggregation.
+   *
+   * @param fieldFilter range predicates on numeric FIELD columns, may be {@code null}
+   */
+  public MultiColumnAggregationResult aggregateMulti(final long fromTs, final long toTs,
+      final List<MultiColumnAggregationRequest> requests, final long bucketIntervalMs, final long bucketOffsetMs,
+      final TagFilter tagFilter, final FieldFilter fieldFilter, final AggregationMetrics metrics, final int bucketCeiling)
+      throws IOException {
+    if (fieldFilter != null)
+      fieldFilter.validate(columns);
     final int reqCount = requests.size();
 
+    final BucketWindow window = bucketWindow(fromTs, toTs, bucketIntervalMs, bucketOffsetMs, bucketCeiling);
+    final long firstBucket = window.firstBucket();
+    final int maxBuckets = window.buckets();
+
+    // Pre-extract column indices and types for mutable bucket iteration
+    final int[] columnIndices = new int[reqCount];
+    final boolean[] isCount = new boolean[reqCount];
+    for (int r = 0; r < reqCount; r++) {
+      columnIndices[r] = requests.get(r).columnIndex();
+      isCount[r] = requests.get(r).type() == AggregationType.COUNT;
+    }
+    // Requests over an integral column are kept exact, as longs (issues #9718, #9720)
+    final boolean[] exact = exactRequests(requests);
+
+    // Process sealed stores in parallel when there are multiple shards with data. Without a bucket interval the answer is one
+    // bucket, which each shard accumulates in a map-mode result of its own (issue #9612). The work goes to this engine's own
+    // shardExecutor, never to the common ForkJoinPool (see QueryEngineManager), so an ungrouped count(*) - now on this path -
+    // cannot starve user code sharing that pool
+    final boolean bucketed = bucketIntervalMs > 0;
+    final long singleBucketTs = singleBucketAnchor(fromTs);
+    if (shardCount > 1 && (maxBuckets > 0 || !bucketed)) {
+      @SuppressWarnings("unchecked")
+      final CompletableFuture<MultiColumnAggregationResult>[] futures = new CompletableFuture[shardCount];
+
+      // Acquire all shard compaction read locks on the calling thread (which has the database
+      // transaction context) before dispatching futures. This prevents compaction from
+      // completing between the sealed reads (in futures) and the mutable reads (on the calling
+      // thread), which would cause data loss: sealed would see the old state and mutable would
+      // be empty after compaction cleared it.
+      // Worker threads only read sealed stores (no transaction required); mutable reads happen
+      // on the calling thread after futures complete.
+      for (int s = 0; s < shardCount; s++)
+        shards[s].getCompactionLock().readLock().lock();
+      try {
+        final AggregationMetrics[] shardMetricsArr = metrics != null ? new AggregationMetrics[shardCount] : null;
+        for (int s = 0; s < shardCount; s++) {
+          final TimeSeriesShard shard = shards[s];
+          final AggregationMetrics shardMetrics = metrics != null ? new AggregationMetrics() : null;
+          if (shardMetricsArr != null)
+            shardMetricsArr[s] = shardMetrics;
+          futures[s] = CompletableFuture.supplyAsync(() -> {
+            try {
+              final MultiColumnAggregationResult shardResult = bucketed
+                  ? new MultiColumnAggregationResult(requests, firstBucket, bucketIntervalMs, maxBuckets, exact)
+                  : new MultiColumnAggregationResult(requests, exact);
+              // Each shard stops at the ceiling on its own. Buckets only ever union across shards, so a shard
+              // that has passed it guarantees the merged total has too (issue #7724).
+              //
+              // The ceiling is given to each shard WHOLE rather than divided by their number, which makes this
+              // path's worst case O(shards x ceiling) instead of O(ceiling): every shard may scan its way to
+              // the ceiling before any of them stops. That is deliberate. Dividing would be unsound, not merely
+              // tighter - the buckets of different shards overlap, so a shard legitimately holding more than
+              // ceiling/N of them is not evidence that the UNION is over the ceiling, and stopping it would
+              // refuse a request whose real answer fits. The bound stays a bound either way, and it is the one
+              // that cannot refuse an answer the caller was entitled to.
+              shardResult.setBucketCeiling(bucketCeiling);
+              shard.getSealedStore()
+                  .aggregateMultiBlocks(fromTs, toTs, requests, bucketIntervalMs, bucketOffsetMs, shardResult, shardMetrics, tagFilter, fieldFilter);
+              return shardResult;
+            } catch (final IOException e) {
+              throw new CompletionException(e);
+            }
+          }, shardExecutor);
+        }
+
+        // Wait for all sealed reads to complete
+        try {
+          CompletableFuture.allOf(futures).join();
+        } catch (final CompletionException e) {
+          throw unwrapShardFailure(e, "Parallel shard aggregation failed");
+        }
+
+        // Merge metrics after all futures have completed (avoids race condition)
+        if (shardMetricsArr != null)
+          for (final AggregationMetrics sm : shardMetricsArr)
+            metrics.mergeFrom(sm);
+
+        final MultiColumnAggregationResult result = futures[0].join();
+        for (int s = 1; s < shardCount; s++)
+          result.mergeFrom(futures[s].join());
+
+        // Process mutable buckets on the calling thread (has both transaction context and the
+        // compaction read locks acquired above, so compaction cannot clear mutable data now)
+        final double[] rowValues = new double[reqCount];
+        final long[] rowLongs = new long[reqCount];
+        for (final TimeSeriesShard shard : shards) {
+          if (result.isOverBucketCeiling())
+            break;
+          final Iterator<Object[]> mutableIter = shard.getMutableBucket().iterateRange(fromTs, toTs, null, metrics);
+          while (mutableIter.hasNext()) {
+            if (result.isOverBucketCeiling())
+              break;
+            final Object[] row = mutableIter.next();
+            if (tagFilter != null && !tagFilter.matches(row))
+              continue;
+            if (fieldFilter != null && !fieldFilter.matches(row))
+              continue;
+            final long ts = (long) row[0];
+            final long bucketTs = bucketed ? TimeBucketGrid.bucketStart(ts, bucketIntervalMs, bucketOffsetMs) : singleBucketTs;
+            for (int r = 0; r < reqCount; r++) {
+              rowValues[r] = mutableSample(row, columnIndices[r], isCount[r]);
+              rowLongs[r] = exact[r] ? exactSample(row, columnIndices[r]) : 0L;
+            }
+            result.accumulateRow(bucketTs, rowValues, rowLongs);
+          }
+        }
+
+        result.finalizeAvg();
+        if (metrics != null)
+          metrics.addOverflowBuckets(result.getOverflowBucketCount());
+        return result;
+      } finally {
+        for (int s = 0; s < shardCount; s++)
+          shards[s].getCompactionLock().readLock().unlock();
+      }
+
+    } else {
+      // Sequential path: single shard or no flat mode
+      final MultiColumnAggregationResult result = maxBuckets > 0
+          ? new MultiColumnAggregationResult(requests, firstBucket, bucketIntervalMs, maxBuckets, exact)
+          : new MultiColumnAggregationResult(requests, exact);
+      result.setBucketCeiling(bucketCeiling);
+
+      final double[] rowValues = new double[reqCount];
+      final long[] rowLongs = new long[reqCount];
+
+      for (final TimeSeriesShard shard : shards) {
+        if (result.isOverBucketCeiling())
+          break;
+        // Hold the compaction read lock for sealed+mutable reads to prevent data loss
+        // if compaction completes between reading the two layers.
+        shard.getCompactionLock().readLock().lock();
+        try {
+          shard.getSealedStore().aggregateMultiBlocks(fromTs, toTs, requests, bucketIntervalMs, bucketOffsetMs, result, metrics, tagFilter,
+              fieldFilter);
+
+          final Iterator<Object[]> mutableIter = shard.getMutableBucket().iterateRange(fromTs, toTs, null, metrics);
+          while (mutableIter.hasNext()) {
+            if (result.isOverBucketCeiling())
+              break;
+            final Object[] row = mutableIter.next();
+            if (tagFilter != null && !tagFilter.matches(row))
+              continue;
+            if (fieldFilter != null && !fieldFilter.matches(row))
+              continue;
+            final long ts = (long) row[0];
+            final long bucketTs = bucketed ? TimeBucketGrid.bucketStart(ts, bucketIntervalMs, bucketOffsetMs) : singleBucketTs;
+
+            for (int r = 0; r < reqCount; r++) {
+              rowValues[r] = mutableSample(row, columnIndices[r], isCount[r]);
+              rowLongs[r] = exact[r] ? exactSample(row, columnIndices[r]) : 0L;
+            }
+
+            result.accumulateRow(bucketTs, rowValues, rowLongs);
+          }
+        } finally {
+          shard.getCompactionLock().readLock().unlock();
+        }
+      }
+
+      result.finalizeAvg();
+      if (metrics != null)
+        metrics.addOverflowBuckets(result.getOverflowBucketCount());
+      return result;
+    }
+  }
+
+  /** How many tag columns one grouped aggregation may group by: the sealed layer packs their dictionary indices 16 bits apiece into a long. */
+  public static final int MAX_GROUP_COLUMNS = 4;
+
+  /**
+   * {@link #aggregateMulti} grouped by the values of one or more TAG columns, one group per distinct tag combination
+   * (issue #9489). Each group is bucketed by time exactly as {@code aggregateMulti} would bucket the samples of that
+   * combination alone, in a single pass over the data: a block is decoded once however many series it interleaves.
+   *
+   * @param groupColumns   the grouping columns as NON-timestamp column indices (the numbering {@link TagFilter} uses); each must be
+   *                       a dictionary-coded TAG, at most {@link #MAX_GROUP_COLUMNS} of them
+   * @param bucketIntervalMs the bucket width, {@code <= 0} for one bucket per group over the whole range
+   * @param bucketCeiling  the largest number of result rows the caller will accept, {@code <= 0} for none; as in
+   *                       {@link #aggregateMulti}, the scan stops once the answer is past it. The ceiling is a sum over every group, asked
+   *                       once per block on the sealed side and every 1024 rows on the mutable side, so the answer can overshoot it by
+   *                       about a block per shard before the scan stops
+   */
+  public GroupedAggregationResult aggregateGrouped(final long fromTs, final long toTs, final List<MultiColumnAggregationRequest> requests,
+      final long bucketIntervalMs, final long bucketOffsetMs, final int[] groupColumns, final TagFilter tagFilter,
+      final AggregationMetrics metrics, final int bucketCeiling) throws IOException {
+    return aggregateGrouped(fromTs, toTs, requests, bucketIntervalMs, bucketOffsetMs, groupColumns, tagFilter, null, metrics, bucketCeiling);
+  }
+
+  /**
+   * Same as above over only the samples that also pass {@code fieldFilter} (issue #9612).
+   *
+   * @param fieldFilter range predicates on numeric FIELD columns, may be {@code null}
+   */
+  public GroupedAggregationResult aggregateGrouped(final long fromTs, final long toTs, final List<MultiColumnAggregationRequest> requests,
+      final long bucketIntervalMs, final long bucketOffsetMs, final int[] groupColumns, final TagFilter tagFilter,
+      final FieldFilter fieldFilter, final AggregationMetrics metrics, final int bucketCeiling) throws IOException {
+    if (fieldFilter != null)
+      fieldFilter.validate(columns);
+    if (groupColumns.length == 0 || groupColumns.length > MAX_GROUP_COLUMNS)
+      throw new IllegalArgumentException("A grouped aggregation groups by 1 to " + MAX_GROUP_COLUMNS + " tag column(s), not " + groupColumns.length);
+
+    final int reqCount = requests.size();
+    final BucketWindow window = bucketIntervalMs > 0 ? bucketWindow(fromTs, toTs, bucketIntervalMs, bucketOffsetMs, bucketCeiling)
+        : new BucketWindow(0, 0);
+    final long firstBucket = window.firstBucket();
+    final int buckets = window.buckets();
+
+    final int[] columnIndices = new int[reqCount];
+    final boolean[] isCount = new boolean[reqCount];
+    for (int r = 0; r < reqCount; r++) {
+      columnIndices[r] = requests.get(r).columnIndex();
+      isCount[r] = requests.get(r).type() == AggregationType.COUNT;
+    }
+
+    final boolean[] exact = exactRequests(requests);
+
+    // Row position of each grouping column: a mutable row is the timestamp followed by every other column in schema order
+    final int[] groupRowIndices = new int[groupColumns.length];
+    for (int g = 0; g < groupColumns.length; g++)
+      groupRowIndices[g] = groupColumns[g] + 1;
+
+    final long singleBucketTs = singleBucketAnchor(fromTs);
+
+    final GroupedAggregationResult result;
+    for (int s = 0; s < shardCount; s++)
+      shards[s].getCompactionLock().readLock().lock();
+    try {
+      if (shardCount > 1) {
+        // Sealed stores are read in parallel, one partial answer per shard; the mutable buckets follow on the calling thread, which holds
+        // every compaction read lock so no compaction can seal the rows they hold in the meantime (see aggregateMulti)
+        @SuppressWarnings("unchecked")
+        final CompletableFuture<GroupedAggregationResult>[] futures = new CompletableFuture[shardCount];
+        final AggregationMetrics[] shardMetrics = metrics != null ? new AggregationMetrics[shardCount] : null;
+        for (int s = 0; s < shardCount; s++) {
+          final TimeSeriesShard shard = shards[s];
+          final AggregationMetrics shardMetric = metrics != null ? new AggregationMetrics() : null;
+          if (shardMetrics != null)
+            shardMetrics[s] = shardMetric;
+          futures[s] = CompletableFuture.supplyAsync(() -> {
+            try {
+              final GroupedAggregationResult shardResult = new GroupedAggregationResult(requests, firstBucket, bucketIntervalMs, buckets, exact);
+              shardResult.setBucketCeiling(bucketCeiling);
+              shard.getSealedStore()
+                  .aggregateGroupedBlocks(fromTs, toTs, requests, bucketIntervalMs, bucketOffsetMs, groupColumns, shardResult, shardMetric, tagFilter,
+                      fieldFilter);
+              return shardResult;
+            } catch (final IOException e) {
+              throw new CompletionException(e);
+            }
+          }, shardExecutor);
+        }
+        try {
+          CompletableFuture.allOf(futures).join();
+        } catch (final CompletionException e) {
+          throw unwrapShardFailure(e, "Parallel shard aggregation failed");
+        }
+        if (shardMetrics != null)
+          for (final AggregationMetrics sm : shardMetrics)
+            metrics.mergeFrom(sm);
+
+        result = futures[0].join();
+        for (int s = 1; s < shardCount; s++)
+          result.mergeFrom(futures[s].join());
+        for (final TimeSeriesShard shard : shards)
+          if (!result.isOverBucketCeiling())
+            accumulateMutableGroups(shard, fromTs, toTs, requests, columnIndices, isCount, exact, bucketIntervalMs, bucketOffsetMs,
+                singleBucketTs, groupRowIndices, tagFilter, fieldFilter, metrics, result);
+      } else {
+        result = new GroupedAggregationResult(requests, firstBucket, bucketIntervalMs, buckets, exact);
+        result.setBucketCeiling(bucketCeiling);
+        final TimeSeriesShard shard = shards[0];
+        shard.getSealedStore()
+            .aggregateGroupedBlocks(fromTs, toTs, requests, bucketIntervalMs, bucketOffsetMs, groupColumns, result, metrics, tagFilter, fieldFilter);
+        if (!result.isOverBucketCeiling())
+          accumulateMutableGroups(shard, fromTs, toTs, requests, columnIndices, isCount, exact, bucketIntervalMs, bucketOffsetMs,
+              singleBucketTs, groupRowIndices, tagFilter, fieldFilter, metrics, result);
+      }
+    } finally {
+      for (int s = 0; s < shardCount; s++)
+        shards[s].getCompactionLock().readLock().unlock();
+    }
+
+    result.finalizeAvg();
+    return result;
+  }
+
+  /** Folds the rows still in a shard's mutable bucket into a grouped aggregation. */
+  private void accumulateMutableGroups(final TimeSeriesShard shard, final long fromTs, final long toTs,
+      final List<MultiColumnAggregationRequest> requests, final int[] columnIndices, final boolean[] isCount, final boolean[] exact,
+      final long bucketIntervalMs, final long bucketOffsetMs, final long singleBucketTs, final int[] groupRowIndices, final TagFilter tagFilter,
+      final FieldFilter fieldFilter, final AggregationMetrics metrics, final GroupedAggregationResult result) throws IOException {
+    final int reqCount = requests.size();
+    final double[] rowValues = new double[reqCount];
+    final long[] rowLongs = new long[reqCount];
+    // One array for every row: groupFor only reads it, and copies it when the group is new
+    final String[] values = new String[groupRowIndices.length];
+    final Iterator<Object[]> mutableIter = shard.getMutableBucket().iterateRange(fromTs, toTs, null, metrics);
+    int sinceCeilingCheck = 0;
+    while (mutableIter.hasNext()) {
+      // The ceiling is a sum over every group, so it is asked every so many rows rather than for each one
+      if ((++sinceCeilingCheck & 1023) == 0 && result.isOverBucketCeiling())
+        break;
+      final Object[] row = mutableIter.next();
+      if (tagFilter != null && !tagFilter.matches(row))
+        continue;
+      if (fieldFilter != null && !fieldFilter.matches(row))
+        continue;
+
+      // The text a sealed block's dictionary holds for the value: null is stored as the empty string
+      for (int g = 0; g < values.length; g++) {
+        final Object tag = row[groupRowIndices[g]];
+        values[g] = tag != null ? tag.toString() : "";
+      }
+
+      for (int r = 0; r < reqCount; r++) {
+        rowValues[r] = mutableSample(row, columnIndices[r], isCount[r]);
+        rowLongs[r] = exact[r] ? exactSample(row, columnIndices[r]) : 0L;
+      }
+      final long ts = (long) row[0];
+      result.groupFor(values).accumulateRow(bucketIntervalMs > 0 ? TimeBucketGrid.bucketStart(ts, bucketIntervalMs, bucketOffsetMs) : singleBucketTs,
+          rowValues, rowLongs);
+    }
+  }
+
+  /**
+   * The bucket window an aggregation sizes its flat arrays by (see {@link BucketWindow}); a window too wide for a flat array makes
+   * the result fall back to map mode.
+   */
+  private BucketWindow bucketWindow(final long fromTs, final long toTs, final long bucketIntervalMs, final long bucketOffsetMs,
+      final int bucketCeiling) throws IOException {
     // Determine actual data range to size flat arrays correctly.
     //
     // This scan runs WITHOUT the per-shard compaction read locks on purpose - they are acquired further
@@ -759,149 +1139,53 @@ public class TimeSeriesEngine implements AutoCloseable {
       maxBuckets = 0;
     }
 
-    // Pre-extract column indices and types for mutable bucket iteration
-    final int[] columnIndices = new int[reqCount];
-    final boolean[] isCount = new boolean[reqCount];
-    for (int r = 0; r < reqCount; r++) {
-      columnIndices[r] = requests.get(r).columnIndex();
-      isCount[r] = requests.get(r).type() == AggregationType.COUNT;
+    return new BucketWindow(firstBucket, maxBuckets);
+  }
+
+  /**
+   * @param buckets {@code 0} for an unbucketed query or an empty store, and {@code MAX_FLAT_BUCKETS + 1} for a window too wide for a
+   *                flat array
+   */
+  private record BucketWindow(long firstBucket, int buckets) {
+  }
+
+  /**
+   * Per request, whether it is kept EXACT (issues #9718, #9720): a MIN/MAX/SUM/AVG over a column that stores exact integers -
+   * the integral, boolean and datetime types - whose answer a double would round past 2^53.
+   */
+  boolean[] exactRequests(final List<MultiColumnAggregationRequest> requests) {
+    final boolean[] exact = new boolean[requests.size()];
+    for (int r = 0; r < requests.size(); r++) {
+      final MultiColumnAggregationRequest request = requests.get(r);
+      if (request.type() == AggregationType.COUNT)
+        continue;
+      final ColumnDefinition column = rowColumn(request.columnIndex());
+      exact[r] = column != null && column.storesExactIntegers();
     }
+    return exact;
+  }
 
-    // Process sealed stores in parallel when there are multiple shards with data
-    if (shardCount > 1 && maxBuckets > 0) {
-      @SuppressWarnings("unchecked")
-      final CompletableFuture<MultiColumnAggregationResult>[] futures = new CompletableFuture[shardCount];
-
-      // Acquire all shard compaction read locks on the calling thread (which has the database
-      // transaction context) before dispatching futures. This prevents compaction from
-      // completing between the sealed reads (in futures) and the mutable reads (on the calling
-      // thread), which would cause data loss: sealed would see the old state and mutable would
-      // be empty after compaction cleared it.
-      // Worker threads only read sealed stores (no transaction required); mutable reads happen
-      // on the calling thread after futures complete.
-      for (int s = 0; s < shardCount; s++)
-        shards[s].getCompactionLock().readLock().lock();
-      try {
-        final AggregationMetrics[] shardMetricsArr = metrics != null ? new AggregationMetrics[shardCount] : null;
-        for (int s = 0; s < shardCount; s++) {
-          final TimeSeriesShard shard = shards[s];
-          final AggregationMetrics shardMetrics = metrics != null ? new AggregationMetrics() : null;
-          if (shardMetricsArr != null)
-            shardMetricsArr[s] = shardMetrics;
-          futures[s] = CompletableFuture.supplyAsync(() -> {
-            try {
-              final MultiColumnAggregationResult shardResult =
-                  new MultiColumnAggregationResult(requests, firstBucket, bucketIntervalMs, maxBuckets);
-              // Each shard stops at the ceiling on its own. Buckets only ever union across shards, so a shard
-              // that has passed it guarantees the merged total has too (issue #7724).
-              //
-              // The ceiling is given to each shard WHOLE rather than divided by their number, which makes this
-              // path's worst case O(shards x ceiling) instead of O(ceiling): every shard may scan its way to
-              // the ceiling before any of them stops. That is deliberate. Dividing would be unsound, not merely
-              // tighter - the buckets of different shards overlap, so a shard legitimately holding more than
-              // ceiling/N of them is not evidence that the UNION is over the ceiling, and stopping it would
-              // refuse a request whose real answer fits. The bound stays a bound either way, and it is the one
-              // that cannot refuse an answer the caller was entitled to.
-              shardResult.setBucketCeiling(bucketCeiling);
-              shard.getSealedStore().aggregateMultiBlocks(fromTs, toTs, requests, bucketIntervalMs, bucketOffsetMs, shardResult, shardMetrics, tagFilter);
-              return shardResult;
-            } catch (final IOException e) {
-              throw new CompletionException(e);
-            }
-          }, shardExecutor);
-        }
-
-        // Wait for all sealed reads to complete
-        try {
-          CompletableFuture.allOf(futures).join();
-        } catch (final CompletionException e) {
-          throw unwrapShardFailure(e, "Parallel shard aggregation failed");
-        }
-
-        // Merge metrics after all futures have completed (avoids race condition)
-        if (shardMetricsArr != null)
-          for (final AggregationMetrics sm : shardMetricsArr)
-            metrics.mergeFrom(sm);
-
-        final MultiColumnAggregationResult result = futures[0].join();
-        for (int s = 1; s < shardCount; s++)
-          result.mergeFrom(futures[s].join());
-
-        // Process mutable buckets on the calling thread (has both transaction context and the
-        // compaction read locks acquired above, so compaction cannot clear mutable data now)
-        final double[] rowValues = new double[reqCount];
-        for (final TimeSeriesShard shard : shards) {
-          if (result.isOverBucketCeiling())
-            break;
-          final Iterator<Object[]> mutableIter = shard.getMutableBucket().iterateRange(fromTs, toTs, null, metrics);
-          while (mutableIter.hasNext()) {
-            if (result.isOverBucketCeiling())
-              break;
-            final Object[] row = mutableIter.next();
-            if (tagFilter != null && !tagFilter.matches(row))
-              continue;
-            final long ts = (long) row[0];
-            final long bucketTs = TimeBucketGrid.bucketStart(ts, bucketIntervalMs, bucketOffsetMs);
-            for (int r = 0; r < reqCount; r++)
-              rowValues[r] = mutableSample(row, columnIndices[r], isCount[r]);
-            result.accumulateRow(bucketTs, rowValues);
-          }
-        }
-
-        result.finalizeAvg();
-        if (metrics != null)
-          metrics.addOverflowBuckets(result.getOverflowBucketCount());
-        return result;
-      } finally {
-        for (int s = 0; s < shardCount; s++)
-          shards[s].getCompactionLock().readLock().unlock();
-      }
-
-    } else {
-      // Sequential path: single shard or no flat mode
-      final MultiColumnAggregationResult result = maxBuckets > 0
-          ? new MultiColumnAggregationResult(requests, firstBucket, bucketIntervalMs, maxBuckets)
-          : new MultiColumnAggregationResult(requests);
-      result.setBucketCeiling(bucketCeiling);
-
-      final double[] rowValues = new double[reqCount];
-
-      final long singleBucketTs = singleBucketAnchor(fromTs);
-
-      for (final TimeSeriesShard shard : shards) {
-        if (result.isOverBucketCeiling())
-          break;
-        // Hold the compaction read lock for sealed+mutable reads to prevent data loss
-        // if compaction completes between reading the two layers.
-        shard.getCompactionLock().readLock().lock();
-        try {
-          shard.getSealedStore().aggregateMultiBlocks(fromTs, toTs, requests, bucketIntervalMs, bucketOffsetMs, result, metrics, tagFilter);
-
-          final Iterator<Object[]> mutableIter = shard.getMutableBucket().iterateRange(fromTs, toTs, null, metrics);
-          while (mutableIter.hasNext()) {
-            if (result.isOverBucketCeiling())
-              break;
-            final Object[] row = mutableIter.next();
-            if (tagFilter != null && !tagFilter.matches(row))
-              continue;
-            final long ts = (long) row[0];
-            final long bucketTs = bucketIntervalMs > 0 ? TimeBucketGrid.bucketStart(ts, bucketIntervalMs, bucketOffsetMs) : singleBucketTs;
-
-            for (int r = 0; r < reqCount; r++)
-              rowValues[r] = mutableSample(row, columnIndices[r], isCount[r]);
-
-            result.accumulateRow(bucketTs, rowValues);
-          }
-        } finally {
-          shard.getCompactionLock().readLock().unlock();
-        }
-      }
-
-      result.finalizeAvg();
-      if (metrics != null)
-        metrics.addOverflowBuckets(result.getOverflowBucketCount());
-      return result;
+  /**
+   * The column at position {@code rowIndex} of an engine row - the timestamp at 0, then every other column in schema order - or
+   * {@code null} for a position that names none.
+   */
+  private ColumnDefinition rowColumn(final int rowIndex) {
+    int nonTs = 0;
+    for (final ColumnDefinition column : columns) {
+      if (column.getRole() == ColumnDefinition.ColumnRole.TIMESTAMP)
+        continue;
+      if (++nonTs == rowIndex)
+        return column;
     }
+    return null;
+  }
+
+  /**
+   * The {@code long} one MUTABLE row contributes to an exact request: the sample itself, read only when
+   * {@link #mutableSample} says the row has one (issue #9721).
+   */
+  private static long exactSample(final Object[] row, final int columnIndex) {
+    return columnIndex < row.length && row[columnIndex] != null ? ColumnDefinition.integerValueOf(row[columnIndex]) : 0L;
   }
 
   /**
@@ -1030,8 +1314,9 @@ public class TimeSeriesEngine implements AutoCloseable {
       db.runWithCompactionReplication(() -> {
         for (final TimeSeriesShard shard : shards) {
           final TimeSeriesSealedStore sealed = shard.getSealedStore();
-          shard.getCompactionLock().writeLock().lock();
-          try {
+          // The shard decides what a rewrite of its sealed file must exclude (issue #9771): compaction does not hold the
+          // compaction lock for the part of its work that owns the temp file, so that lock alone does not keep it off.
+          shard.runSealedRewrite(() -> {
             final int blocksBefore = sealed.getBlockCount();
             final long samplesBefore = sealed.getTotalSampleCount();
             work.apply(shard);
@@ -1040,9 +1325,7 @@ public class TimeSeriesEngine implements AutoCloseable {
             if (sealed.getBlockCount() != blocksBefore || sealed.getTotalSampleCount() != samplesBefore)
               db.recordTimeSeriesSealedChange(typeName, shard.getShardIndex(), sealed.getSealedFileName(),
                   sealed.readWholeSealedFile());
-          } finally {
-            shard.getCompactionLock().writeLock().unlock();
-          }
+          });
         }
         return true;
       });
@@ -1066,14 +1349,18 @@ public class TimeSeriesEngine implements AutoCloseable {
 
   /**
    * Returns the total number of samples across all shards (sealed + mutable).
-   * O(shardCount * blockCount), all data already in memory.
+   * O(shardCount), header reads only.
+   * <p>
+   * Each shard's two layers are read together under its compaction read lock ({@link TimeSeriesShard#countSamples}), so
+   * a concurrent compaction cannot be caught between publishing its sealed blocks and clearing the mutable bucket, which
+   * counted the rows it moved twice (issue #9716). No window spans the shards: a row never moves from one shard to
+   * another, so the sum of per-shard counts is never above what was inserted, and one wider lock would only make every
+   * shard's compaction wait for the slowest.
    */
   public long countSamples() throws IOException {
     long total = 0;
-    for (final TimeSeriesShard shard : shards) {
-      total += shard.getSealedStore().getTotalSampleCount();
-      total += shard.getMutableBucket().getSampleCount();
-    }
+    for (final TimeSeriesShard shard : shards)
+      total += shard.countSamples();
     return total;
   }
 
@@ -1228,6 +1515,37 @@ public class TimeSeriesEngine implements AutoCloseable {
 
   @Override
   public void close() throws IOException {
+    shutdownShardExecutor();
+    for (final TimeSeriesShard shard : shards)
+      shard.close();
+    if (tagDictionary != null)
+      tagDictionary.close();
+  }
+
+  /**
+   * Retires an engine that a schema reload has replaced (issue #9886): stops its shard executor and closes each shard's
+   * sealed store, which this instance opened on its own file handle, and leaves every file registered with the schema
+   * OPEN - the shards' mutable buckets and the tag dictionary.
+   * <p>
+   * A reload builds the replacement engine on those very registered files ({@code TimeSeriesShard} and
+   * {@link TimeSeriesTagDictionary#openOrCreate} pick up the component the schema already holds), and
+   * {@code PaginatedComponentFile.close()} is permanent. {@link #close()} here closed them under the live engine, so the
+   * next write to the type failed with "Cannot write page N because the file '..._tags...tstd' is closed"; on an HA
+   * follower, which reloads its schema on every applied schema entry, that quarantined the database and forced a
+   * snapshot resync. The registered files are closed by the file manager when the database closes.
+   */
+  public void closeSuperseded() {
+    shutdownShardExecutor();
+    for (final TimeSeriesShard shard : shards)
+      try {
+        shard.closeOwnedResources();
+      } catch (final IOException e) {
+        LogManager.instance().log(this, Level.WARNING, "Error closing a sealed store of superseded TimeSeries engine '%s': %s", e,
+            typeName, e.getMessage());
+      }
+  }
+
+  private void shutdownShardExecutor() {
     shardExecutor.shutdown();
     try {
       if (!shardExecutor.awaitTermination(30, TimeUnit.SECONDS))
@@ -1236,10 +1554,6 @@ public class TimeSeriesEngine implements AutoCloseable {
       shardExecutor.shutdownNow();
       Thread.currentThread().interrupt();
     }
-    for (final TimeSeriesShard shard : shards)
-      shard.close();
-    if (tagDictionary != null)
-      tagDictionary.close();
   }
 
   /**
@@ -1255,14 +1569,7 @@ public class TimeSeriesEngine implements AutoCloseable {
    * Called when the timeseries type is dropped from the schema.
    */
   public void drop() throws IOException {
-    shardExecutor.shutdown();
-    try {
-      if (!shardExecutor.awaitTermination(30, TimeUnit.SECONDS))
-        shardExecutor.shutdownNow();
-    } catch (final InterruptedException e) {
-      shardExecutor.shutdownNow();
-      Thread.currentThread().interrupt();
-    }
+    shutdownShardExecutor();
     for (final TimeSeriesShard shard : shards)
       shard.drop();
 

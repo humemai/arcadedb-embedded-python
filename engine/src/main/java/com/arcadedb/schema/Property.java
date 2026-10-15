@@ -22,6 +22,7 @@ import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.utility.ExcludeFromJacocoGeneratedReport;
 
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * Schema Property.
@@ -99,6 +100,25 @@ public interface Property {
    */
   Object getDefaultValueDefinition();
 
+  /**
+   * Whether this property's default fills in a value on a record created without it. A {@code DEFAULT null} is kept as its
+   * source text {@code "null"} and leaves the property absent, so it fills in nothing - which is why it is the way to take
+   * a default back under a LIGHTWEIGHT edge type, and must not be refused as a default there (issues #9846 and #9975).
+   */
+  default boolean hasDefaultFillingInAValue() {
+    return fillsInAValue(getDefaultValueDefinition());
+  }
+
+  /**
+   * {@link #hasDefaultFillingInAValue()} for a default definition not yet assigned to a property.
+   */
+  // A String definition is the source text of an expression, from SQL and from the Java API alike (setDefaultValue("null")
+  // is the null literal, setDefaultValue("'null'") the string): the bare text null fills in nothing, while a string default
+  // is quoted (DEFAULT 'null' is kept as 'null', with its quotes) and fills in the four characters like any other string
+  static boolean fillsInAValue(final Object defaultDefinition) {
+    return defaultDefinition != null && !(defaultDefinition instanceof String text && "null".equalsIgnoreCase(text.trim()));
+  }
+
   Property setDefaultValue(Object defaultValue);
 
   String getOfType();
@@ -167,6 +187,15 @@ public interface Property {
   Property setRegexp(String regexp);
 
   String getRegexp();
+
+  /**
+   * The REGEXP compiled, or null when the property has none. Compiled once per declaration by the schema's own properties,
+   * so the write path, which matches it on every insert and update, does not compile it per write.
+   */
+  default Pattern getRegexpPattern() {
+    final String regexp = getRegexp();
+    return regexp != null ? Pattern.compile(regexp) : null;
+  }
 
   Set<String> getCustomKeys();
 

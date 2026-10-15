@@ -24,6 +24,7 @@ import com.arcadedb.database.RID;
 import com.arcadedb.graph.GraphTraversalProvider;
 import com.arcadedb.graph.NeighborView;
 import com.arcadedb.graph.Vertex;
+import com.arcadedb.query.opencypher.executor.SelfLoops;
 import com.arcadedb.query.sql.executor.WorkGuard;
 import com.arcadedb.schema.DocumentType;
 import com.arcadedb.schema.VertexType;
@@ -36,11 +37,18 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.function.ToLongFunction;
 
 /**
  * Count operator for two-pattern pair-join queries (Q2).
  * Build phase: walk arms from start node to get (ep1, ep2) pairs.
  * Probe phase: iterate probe edges and look up pair counts.
+ * <p>
+ * Every position of the build chain can carry a {@link VertexPredicate} on top of its label, the inline property map and the
+ * {@code WHERE} conjuncts of that node alone ({@code (c:Message {kind: 'Comment'})}): the build asks it once per distinct vertex
+ * the walk reaches there, so the property spelling of a pattern costs its label spelling plus the filter (issue #9608). The
+ * predicate of an arm's last position is the one of the shared endpoint, which holds every constraint the probe side wrote on
+ * it as well.
  */
 public final class PairHashJoinOp implements CountOp {
   private final String buildStartLabel;
@@ -53,6 +61,9 @@ public final class PairHashJoinOp implements CountOp {
   private final String probeEdgeType;
   private final Vertex.DIRECTION probeDirection;
   private final String[] allEdgeTypes;
+  private final VertexPredicate buildStartPredicate; // null = no filter
+  private final VertexPredicate[] arm1Predicates;    // per reached node like the labels, null when no position has one
+  private final VertexPredicate[] arm2Predicates;
 
   public PairHashJoinOp(final String buildStartLabel,
       final String[] arm1EdgeTypes, final Vertex.DIRECTION[] arm1Directions,
@@ -60,7 +71,25 @@ public final class PairHashJoinOp implements CountOp {
       final String[] arm2EdgeTypes, final Vertex.DIRECTION[] arm2Directions,
       final String[] arm2IntermediateLabels,
       final String probeEdgeType, final Vertex.DIRECTION probeDirection) {
+    this(buildStartLabel, null, arm1EdgeTypes, arm1Directions, arm1IntermediateLabels, null, arm2EdgeTypes, arm2Directions,
+        arm2IntermediateLabels, null, probeEdgeType, probeDirection);
+  }
+
+  /**
+   * @param buildStartPredicate the predicate of the build-start node, null for none
+   * @param arm1Predicates      the predicate of the node each hop of arm 1 reaches, null entries (or a null array) for none
+   * @param arm2Predicates      the same for arm 2
+   */
+  public PairHashJoinOp(final String buildStartLabel, final VertexPredicate buildStartPredicate,
+      final String[] arm1EdgeTypes, final Vertex.DIRECTION[] arm1Directions,
+      final String[] arm1IntermediateLabels, final VertexPredicate[] arm1Predicates,
+      final String[] arm2EdgeTypes, final Vertex.DIRECTION[] arm2Directions,
+      final String[] arm2IntermediateLabels, final VertexPredicate[] arm2Predicates,
+      final String probeEdgeType, final Vertex.DIRECTION probeDirection) {
     this.buildStartLabel = buildStartLabel;
+    this.buildStartPredicate = buildStartPredicate;
+    this.arm1Predicates = VertexPredicate.any(arm1Predicates) ? arm1Predicates : null;
+    this.arm2Predicates = VertexPredicate.any(arm2Predicates) ? arm2Predicates : null;
     this.arm1EdgeTypes = arm1EdgeTypes;
     this.arm1Directions = arm1Directions;
     this.arm1IntermediateLabels = arm1IntermediateLabels;
@@ -80,6 +109,36 @@ public final class PairHashJoinOp implements CountOp {
   @Override
   public String[] edgeTypes() {
     return allEdgeTypes;
+  }
+
+  /** The average number of relationships of a type a vertex of a label has in a direction, every vertex for no label. */
+  @FunctionalInterface
+  public interface FanOut {
+    double of(String fromLabel, String edgeType, Vertex.DIRECTION direction);
+  }
+
+  /**
+   * How many endpoint pairs the build phase makes, estimated from the statistics: the start label's vertices times the fan-out
+   * of every hop of both arms, from the label each hop leaves. Each pair is then probed, so this is what tells two splits of
+   * one cycle apart (issue #9599); only the ratio between two estimates means anything.
+   *
+   * @param vertices the vertices of a label, every vertex for null
+   */
+  public double estimatedBuildPairs(final ToLongFunction<String> vertices, final FanOut fanOut) {
+    return vertices.applyAsLong(buildStartLabel)
+        * armFanOut(arm1EdgeTypes, arm1Directions, arm1IntermediateLabels, fanOut)
+        * armFanOut(arm2EdgeTypes, arm2Directions, arm2IntermediateLabels, fanOut);
+  }
+
+  private double armFanOut(final String[] types, final Vertex.DIRECTION[] directions, final String[] reachedLabels,
+      final FanOut fanOut) {
+    double product = 1;
+    String from = buildStartLabel;
+    for (int i = 0; i < types.length; i++) {
+      product *= fanOut.of(from, types[i], directions[i]);
+      from = reachedLabels[i];
+    }
+    return product;
   }
 
   /** The build phase walks out from the build-start label; with none there is no set of start nodes to walk from. */
@@ -104,6 +163,11 @@ public final class PairHashJoinOp implements CountOp {
     if (buildBuckets == null || buildBuckets.isEmpty())
       return 0;
 
+    // The property predicates, each asked once per node this run reaches at its position (issue #9608)
+    final VertexPredicate.Evaluation startFilter = buildStartPredicate != null ? buildStartPredicate.evaluation(db, provider) : null;
+    final VertexPredicate.Evaluation[] arm1Filters = VertexPredicate.evaluations(arm1Predicates, db, provider);
+    final VertexPredicate.Evaluation[] arm2Filters = VertexPredicate.evaluations(arm2Predicates, db, provider);
+
     // BUILD: for single-hop arms, use NeighborView for direct edge iteration
     // instead of per-node walkArm (avoids ~6M getNeighborIds method calls).
     // For multi-hop arms, fall back to per-node walkArm.
@@ -111,8 +175,8 @@ public final class PairHashJoinOp implements CountOp {
 
     final boolean arm1SingleHop = arm1EdgeTypes.length == 1;
     final boolean arm2SingleHop = arm2EdgeTypes.length == 1;
-    final NeighborView arm1View = arm1SingleHop ? provider.getNeighborView(arm1Directions[0], arm1EdgeTypes[0]) : null;
-    final NeighborView arm2View = arm2SingleHop ? provider.getNeighborView(arm2Directions[0], arm2EdgeTypes[0]) : null;
+    final NeighborView arm1View = arm1SingleHop ? CSRCountUtils.patternView(provider, arm1Directions[0], arm1EdgeTypes[0]) : null;
+    final NeighborView arm2View = arm2SingleHop ? CSRCountUtils.patternView(provider, arm2Directions[0], arm2EdgeTypes[0]) : null;
 
     // Every CSR build path needs the build anchor's bucket. Endpoint label filters use the same lookup, so build
     // it once rather than resolving RIDs in each hot loop.
@@ -121,52 +185,53 @@ public final class PairHashJoinOp implements CountOp {
       guard.checkPeriodically(v);
       if (!provider.isNodeLive(v))
         continue;
-      bucketIds[v] = provider.getRID(v).getBucketId();
+      bucketIds[v] = provider.getBucketId(v);
     }
 
     // A single-hop arm's only label filter sits on its endpoint, which is the one hop it has. arm1 is single-hop
     // wherever arm1View exists, and the multi-hop arm1 case never reaches a path that reads this.
     final IntHashSet arm1Filter = arm1View != null && arm1Buckets != null ? arm1Buckets[0] : null;
+    final VertexPredicate.Evaluation arm1Predicate = arm1View != null && arm1Filters != null ? arm1Filters[0] : null;
 
     // FAST PATH: Inline probe — skip the HashMap entirely.
     // For each build node, compute (ep1, ep2) and immediately check if the probe
     // edge exists via binary search on sorted CSR neighbor arrays. O(log d) per check.
     // This eliminates ~3M HashMap operations (merge + get + boxing) ≈ 300ms savings.
-    final NeighborView probeView = provider.getNeighborView(probeDirection, probeEdgeType);
+    final NeighborView probeView = CSRCountUtils.patternView(provider, probeDirection, probeEdgeType);
 
     if (arm1View != null && probeView != null) {
       // Pre-fetch arm2 NeighborViews
       final NeighborView[] arm2Views = new NeighborView[arm2EdgeTypes.length];
       boolean allArm2Views = true;
       for (int h = 0; h < arm2EdgeTypes.length; h++) {
-        arm2Views[h] = provider.getNeighborView(arm2Directions[h], arm2EdgeTypes[h]);
+        arm2Views[h] = CSRCountUtils.patternView(provider, arm2Directions[h], arm2EdgeTypes[h]);
         if (arm2Views[h] == null) { allArm2Views = false; break; }
       }
 
       if (allArm2Views) {
-        return buildAndProbeInline(provider, buildBuckets, arm1View, arm1Filter, arm2Views, arm2Buckets, probeView,
-            nodeIdUpperBound, bucketIds, guard);
+        return buildAndProbeInline(provider, buildBuckets, startFilter, arm1View, arm1Filter, arm1Predicate, arm2Views, arm2Buckets,
+            arm2Filters, probeView, nodeIdUpperBound, bucketIds, guard);
       }
     }
 
     // FALLBACK: HashMap build + probe (for cases without full NeighborView coverage)
     if (arm1View != null && arm2View != null) {
-      buildWithViews(provider, buildBuckets, arm1View, arm1Filter,
-          arm2View, arm2Buckets != null ? arm2Buckets[0] : null,
+      buildWithViews(provider, buildBuckets, startFilter, arm1View, arm1Filter, arm1Predicate,
+          arm2View, arm2Buckets != null ? arm2Buckets[0] : null, arm2Filters != null ? arm2Filters[0] : null,
           pairCounts, nodeIdUpperBound, bucketIds, guard);
     } else if (arm1View != null) {
-      buildWithArm1View(buildBuckets, arm1View, arm1Filter, provider, arm2Buckets,
+      buildWithArm1View(buildBuckets, startFilter, arm1View, arm1Filter, arm1Predicate, provider, arm2Buckets, arm2Filters,
           pairCounts, nodeIdUpperBound, bucketIds, guard);
     } else {
       for (int startId = 0; startId < nodeIdUpperBound; startId++) {
         guard.check();
         if (!provider.isNodeLive(startId) || !buildBuckets.contains(bucketIds[startId]))
           continue;
-        final int[] ep1Ids = CSRCountUtils.walkArm(provider, startId, arm1EdgeTypes, arm1Directions, arm1Buckets);
+        final int[] ep1Ids = CSRCountUtils.walkArm(provider, startId, arm1EdgeTypes, arm1Directions, arm1Buckets, arm1Filters);
         if (ep1Ids.length == 0)
           continue;
-        final int[] ep2Ids = CSRCountUtils.walkArm(provider, startId, arm2EdgeTypes, arm2Directions, arm2Buckets);
-        if (ep2Ids.length == 0)
+        final int[] ep2Ids = CSRCountUtils.walkArm(provider, startId, arm2EdgeTypes, arm2Directions, arm2Buckets, arm2Filters);
+        if (ep2Ids.length == 0 || !accepts(startFilter, startId))
           continue;
         for (final int ep1 : ep1Ids)
           for (final int ep2 : ep2Ids)
@@ -174,7 +239,7 @@ public final class PairHashJoinOp implements CountOp {
       }
     }
 
-    final NeighborView probeViewFallback = probeView != null ? probeView : provider.getNeighborView(probeDirection, probeEdgeType);
+    final NeighborView probeViewFallback = probeView != null ? probeView : CSRCountUtils.patternView(provider, probeDirection, probeEdgeType);
     long total = 0;
     if (probeViewFallback != null) {
       final int[] probeNbrs = probeViewFallback.neighbors();
@@ -190,7 +255,7 @@ public final class PairHashJoinOp implements CountOp {
         guard.checkPeriodically(p1);
         if (!provider.isNodeLive(p1))
           continue;
-        final int[] neighbors = provider.getNeighborIds(p1, probeDirection, probeEdgeType);
+        final int[] neighbors = CSRCountUtils.hopNeighborIds(provider, p1, probeDirection, probeEdgeType);
         for (final int p2 : neighbors)
           total += pairCounts.get(CSRCountUtils.packPair(p1, p2), 0);
       }
@@ -201,12 +266,19 @@ public final class PairHashJoinOp implements CountOp {
   @Override
   public long executeOLTP(final Database db, final WorkGuard guard) {
     final HashMap<String, Long> pairCounts = new HashMap<>();
+    final VertexPredicate.Evaluation startFilter = buildStartPredicate != null ? buildStartPredicate.evaluation(db, null) : null;
+    final VertexPredicate.Evaluation[] arm1Filters = VertexPredicate.evaluations(arm1Predicates, db, null);
+    final VertexPredicate.Evaluation[] arm2Filters = VertexPredicate.evaluations(arm2Predicates, db, null);
 
     for (final Iterator<? extends Identifiable> it = CSRCountUtils.iterateAnchors(db, buildStartLabel); it.hasNext(); ) {
       guard.check();
       final Vertex start = it.next().asVertex();
-      final List<RID> ep1List = walkArmOLTP(db, start, arm1EdgeTypes, arm1Directions, arm1IntermediateLabels);
-      final List<RID> ep2List = walkArmOLTP(db, start, arm2EdgeTypes, arm2Directions, arm2IntermediateLabels);
+      if (startFilter != null && !startFilter.accepts(start))
+        continue;
+      final List<RID> ep1List = walkArmOLTP(db, start, arm1EdgeTypes, arm1Directions, arm1IntermediateLabels, arm1Filters);
+      if (ep1List.isEmpty())
+        continue;
+      final List<RID> ep2List = walkArmOLTP(db, start, arm2EdgeTypes, arm2Directions, arm2IntermediateLabels, arm2Filters);
       for (final RID ep1 : ep1List)
         for (final RID ep2 : ep2List)
           pairCounts.merge(ep1 + "|" + ep2, 1L, Long::sum);
@@ -219,7 +291,7 @@ public final class PairHashJoinOp implements CountOp {
       for (final Iterator<? extends Identifiable> it = db.iterateType(dt.getName(), false); it.hasNext(); ) {
         guard.check();
         final Vertex p1 = it.next().asVertex();
-        for (final RID p2Rid : p1.getConnectedVertexRIDs(probeDirection, probeEdgeType)) {
+        for (final RID p2Rid : SelfLoops.connectedVertexRIDs(p1, probeDirection, probeEdgeType)) {
           final Long cnt = pairCounts.get(p1.getIdentity() + "|" + p2Rid);
           if (cnt != null)
             total += cnt;
@@ -230,7 +302,7 @@ public final class PairHashJoinOp implements CountOp {
   }
 
   private List<RID> walkArmOLTP(final Database db, final Vertex start, final String[] edgeTypes,
-      final Vertex.DIRECTION[] directions, final String[] intermediateLabels) {
+      final Vertex.DIRECTION[] directions, final String[] intermediateLabels, final VertexPredicate.Evaluation[] filters) {
     List<RID> current = List.of(start.getIdentity());
     for (int hop = 0; hop < edgeTypes.length; hop++) {
       final IntHashSet labelBuckets = CSRCountUtils.buildValidBuckets(db,
@@ -239,8 +311,10 @@ public final class PairHashJoinOp implements CountOp {
       final List<RID> next = new ArrayList<>();
       for (final RID rid : current) {
         final Vertex v = rid.asVertex();
-        for (final RID neighborRid : v.getConnectedVertexRIDs(directions[hop], edgeTypes[hop])) {
+        for (final RID neighborRid : SelfLoops.connectedVertexRIDs(v, directions[hop], edgeTypes[hop])) {
           if (labelBuckets != null && !labelBuckets.contains(neighborRid.getBucketId()))
+            continue;
+          if (filters != null && filters[hop] != null && !filters[hop].acceptsRid(neighborRid))
             continue;
           next.add(neighborRid);
         }
@@ -248,6 +322,34 @@ public final class PairHashJoinOp implements CountOp {
       current = next;
     }
     return current;
+  }
+
+  /**
+   * Number of times {@code key} occurs in the sorted range {@code [from, to)}. A parallel edge, or the two directions of a
+   * reciprocal pair in a BOTH view, lists the same neighbour more than once, and each is a match of its own (issue #9298).
+   */
+  private static int countOccurrences(final int[] sorted, final int from, final int to, final int key) {
+    final int idx = Arrays.binarySearch(sorted, from, to, key);
+    if (idx < 0)
+      return 0;
+    // the run is bounded by a binary search on each side, so a hub with thousands of parallel edges stays O(log n)
+    int lo = from, hi = idx;
+    while (lo < hi) {
+      final int mid = (lo + hi) >>> 1;
+      if (sorted[mid] < key)
+        lo = mid + 1;
+      else
+        hi = mid;
+    }
+    int up = idx + 1, end = to;
+    while (up < end) {
+      final int mid = (up + end) >>> 1;
+      if (sorted[mid] <= key)
+        up = mid + 1;
+      else
+        end = mid;
+    }
+    return up - lo;
   }
 
   /**
@@ -262,10 +364,10 @@ public final class PairHashJoinOp implements CountOp {
    * check inline to avoid allocating an intermediate int[] per build node.
    */
   private long buildAndProbeInline(final GraphTraversalProvider provider, final IntHashSet buildBuckets,
-      final NeighborView arm1View,
-      final IntHashSet arm1Filter,
-      final NeighborView[] arm2Views, final IntHashSet[] arm2Buckets, final NeighborView probeView,
-      final int nodeIdUpperBound, final int[] bucketIds, final WorkGuard guard) {
+      final VertexPredicate.Evaluation startFilter, final NeighborView arm1View,
+      final IntHashSet arm1Filter, final VertexPredicate.Evaluation arm1Predicate,
+      final NeighborView[] arm2Views, final IntHashSet[] arm2Buckets, final VertexPredicate.Evaluation[] arm2Filters,
+      final NeighborView probeView, final int nodeIdUpperBound, final int[] bucketIds, final WorkGuard guard) {
     final int[] arm1Nbrs = arm1View.neighbors();
     final int[] probeNbrs = probeView.neighbors();
     long total = 0;
@@ -276,6 +378,8 @@ public final class PairHashJoinOp implements CountOp {
       final int[] arm2Nbrs1 = arm2Views[1].neighbors();
       final IntHashSet arm2Filter0 = arm2Buckets != null ? arm2Buckets[0] : null;
       final IntHashSet arm2Filter1 = arm2Buckets != null ? arm2Buckets[1] : null;
+      final VertexPredicate.Evaluation arm2Predicate0 = arm2Filters != null ? arm2Filters[0] : null;
+      final VertexPredicate.Evaluation arm2Predicate1 = arm2Filters != null ? arm2Filters[1] : null;
 
       for (int startId = 0; startId < nodeIdUpperBound; startId++) {
         // The build node's own cost is O(arm1 x arm2 x log d), so a per-anchor check is what bounds it.
@@ -290,6 +394,8 @@ public final class PairHashJoinOp implements CountOp {
         final int a2h0Start = arm2Views[0].offset(startId);
         final int a2h0End = arm2Views[0].offsetEnd(startId);
         if (a2h0Start == a2h0End) continue;
+        // the predicate reads the vertex, so it is asked last, of a node that has edges on both arms
+        if (!accepts(startFilter, startId)) continue;
 
         // For each arm1 endpoint, pre-fetch probe range
         for (int i = a1Start; i < a1End; i++) {
@@ -297,7 +403,7 @@ public final class PairHashJoinOp implements CountOp {
           if (arm1Filter != null && !arm1Filter.contains(bucketIds[ep1])) continue;
           final int pStart = probeView.offset(ep1);
           final int pEnd = probeView.offsetEnd(ep1);
-          if (pStart == pEnd) continue;
+          if (pStart == pEnd || !accepts(arm1Predicate, ep1)) continue;
 
           // Walk arm2 inline: hop0 → hop1 → binary search probe
           for (int j = a2h0Start; j < a2h0End; j++) {
@@ -306,11 +412,12 @@ public final class PairHashJoinOp implements CountOp {
 
             final int a2h1Start = arm2Views[1].offset(mid);
             final int a2h1End = arm2Views[1].offsetEnd(mid);
+            if (a2h1Start == a2h1End || !accepts(arm2Predicate0, mid)) continue;
             for (int k = a2h1Start; k < a2h1End; k++) {
               final int ep2 = arm2Nbrs1[k];
               if (arm2Filter1 != null && !arm2Filter1.contains(bucketIds[ep2])) continue;
-              if (Arrays.binarySearch(probeNbrs, pStart, pEnd, ep2) >= 0)
-                total++;
+              if (!accepts(arm2Predicate1, ep2)) continue;
+              total += countOccurrences(probeNbrs, pStart, pEnd, ep2);
             }
           }
         }
@@ -327,19 +434,18 @@ public final class PairHashJoinOp implements CountOp {
       final int a1End = arm1View.offsetEnd(startId);
       if (a1Start == a1End) continue;
 
-      final int[] ep2Ids = walkArmWithViews(startId, arm2Views, arm2Buckets, bucketIds);
-      if (ep2Ids.length == 0) continue;
+      final int[] ep2Ids = walkArmWithViews(startId, arm2Views, arm2Buckets, arm2Filters, bucketIds);
+      if (ep2Ids.length == 0 || !accepts(startFilter, startId)) continue;
 
       for (int i = a1Start; i < a1End; i++) {
         final int ep1 = arm1Nbrs[i];
         if (arm1Filter != null && !arm1Filter.contains(bucketIds[ep1])) continue;
         final int pStart = probeView.offset(ep1);
         final int pEnd = probeView.offsetEnd(ep1);
-        if (pStart == pEnd) continue;
+        if (pStart == pEnd || !accepts(arm1Predicate, ep1)) continue;
 
         for (final int ep2 : ep2Ids) {
-          if (Arrays.binarySearch(probeNbrs, pStart, pEnd, ep2) >= 0)
-            total++;
+          total += countOccurrences(probeNbrs, pStart, pEnd, ep2);
         }
       }
     }
@@ -355,10 +461,10 @@ public final class PairHashJoinOp implements CountOp {
    * the join cheaper, it makes it count endpoints the pattern excluded (issue #6304).
    */
   private void buildWithViews(final GraphTraversalProvider provider, final IntHashSet buildBuckets,
-      final NeighborView arm1View,
-      final IntHashSet arm1Filter,
-      final NeighborView arm2View, final IntHashSet arm2Filter, final LongLongHashMap pairCounts,
-      final int nodeIdUpperBound, final int[] bucketIds, final WorkGuard guard) {
+      final VertexPredicate.Evaluation startFilter, final NeighborView arm1View,
+      final IntHashSet arm1Filter, final VertexPredicate.Evaluation arm1Predicate,
+      final NeighborView arm2View, final IntHashSet arm2Filter, final VertexPredicate.Evaluation arm2Predicate,
+      final LongLongHashMap pairCounts, final int nodeIdUpperBound, final int[] bucketIds, final WorkGuard guard) {
     final int[] arm1Nbrs = arm1View.neighbors();
     final int[] arm2Nbrs = arm2View.neighbors();
     for (int startId = 0; startId < nodeIdUpperBound; startId++) {
@@ -370,14 +476,16 @@ public final class PairHashJoinOp implements CountOp {
       if (a1Start == a1End) continue;
       final int a2Start = arm2View.offset(startId);
       final int a2End = arm2View.offsetEnd(startId);
-      if (a2Start == a2End) continue;
+      if (a2Start == a2End || !accepts(startFilter, startId)) continue;
 
       for (int i = a1Start; i < a1End; i++) {
         final int ep1 = arm1Nbrs[i];
         if (arm1Filter != null && !arm1Filter.contains(bucketIds[ep1])) continue;
+        if (!accepts(arm1Predicate, ep1)) continue;
         for (int j = a2Start; j < a2End; j++) {
           final int ep2 = arm2Nbrs[j];
           if (arm2Filter != null && !arm2Filter.contains(bucketIds[ep2])) continue;
+          if (!accepts(arm2Predicate, ep2)) continue;
           pairCounts.increment(CSRCountUtils.packPair(ep1, ep2));
         }
       }
@@ -389,17 +497,17 @@ public final class PairHashJoinOp implements CountOp {
    * Uses pre-fetched NeighborViews for arm2 hops to avoid per-node getNeighborIds calls.
    * For Q2: arm1=HAS_CREATOR OUT (Comment→Person), arm2=REPLY_OF+HAS_CREATOR (Comment→Post→Person).
    */
-  private void buildWithArm1View(final IntHashSet buildBuckets, final NeighborView arm1View,
-      final IntHashSet arm1Filter,
-      final GraphTraversalProvider provider, final IntHashSet[] arm2Buckets, final LongLongHashMap pairCounts,
-      final int nodeIdUpperBound, final int[] bucketIds, final WorkGuard guard) {
+  private void buildWithArm1View(final IntHashSet buildBuckets, final VertexPredicate.Evaluation startFilter,
+      final NeighborView arm1View, final IntHashSet arm1Filter, final VertexPredicate.Evaluation arm1Predicate,
+      final GraphTraversalProvider provider, final IntHashSet[] arm2Buckets, final VertexPredicate.Evaluation[] arm2Filters,
+      final LongLongHashMap pairCounts, final int nodeIdUpperBound, final int[] bucketIds, final WorkGuard guard) {
     final int[] arm1Nbrs = arm1View.neighbors();
 
     // Pre-fetch NeighborViews for arm2 hops
     final NeighborView[] arm2Views = new NeighborView[arm2EdgeTypes.length];
     boolean allArm2Views = true;
     for (int h = 0; h < arm2EdgeTypes.length; h++) {
-      arm2Views[h] = provider.getNeighborView(arm2Directions[h], arm2EdgeTypes[h]);
+      arm2Views[h] = CSRCountUtils.patternView(provider, arm2Directions[h], arm2EdgeTypes[h]);
       if (arm2Views[h] == null) { allArm2Views = false; break; }
     }
 
@@ -414,14 +522,15 @@ public final class PairHashJoinOp implements CountOp {
       // Walk arm2 using NeighborViews when available
       final int[] ep2Ids;
       if (allArm2Views)
-        ep2Ids = walkArmWithViews(startId, arm2Views, arm2Buckets, bucketIds);
+        ep2Ids = walkArmWithViews(startId, arm2Views, arm2Buckets, arm2Filters, bucketIds);
       else
-        ep2Ids = CSRCountUtils.walkArm(provider, startId, arm2EdgeTypes, arm2Directions, arm2Buckets);
-      if (ep2Ids.length == 0) continue;
+        ep2Ids = CSRCountUtils.walkArm(provider, startId, arm2EdgeTypes, arm2Directions, arm2Buckets, arm2Filters);
+      if (ep2Ids.length == 0 || !accepts(startFilter, startId)) continue;
 
       for (int i = a1Start; i < a1End; i++) {
         final int ep1 = arm1Nbrs[i];
         if (arm1Filter != null && !arm1Filter.contains(bucketIds[ep1])) continue;
+        if (!accepts(arm1Predicate, ep1)) continue;
         for (final int ep2 : ep2Ids)
           pairCounts.increment(CSRCountUtils.packPair(ep1, ep2));
       }
@@ -432,7 +541,7 @@ public final class PairHashJoinOp implements CountOp {
    * Walks an arm using pre-fetched NeighborViews (zero per-node method dispatch).
    */
   private static int[] walkArmWithViews(final int startId, final NeighborView[] views,
-      final IntHashSet[] intermediateBuckets, final int[] bucketIds) {
+      final IntHashSet[] intermediateBuckets, final VertexPredicate.Evaluation[] filters, final int[] bucketIds) {
     int[] current = new int[]{startId};
     for (int hop = 0; hop < views.length; hop++) {
       final NeighborView view = views[hop];
@@ -460,8 +569,15 @@ public final class PairHashJoinOp implements CountOp {
       } else {
         current = pos < next.length ? Arrays.copyOf(next, pos) : next;
       }
+      if (filters != null && filters[hop] != null)
+        current = filters[hop].retain(current);
     }
     return current;
+  }
+
+  /** Whether a node passes the predicate of its position, null being no predicate. */
+  private static boolean accepts(final VertexPredicate.Evaluation filter, final int nodeId) {
+    return filter == null || filter.acceptsNode(nodeId);
   }
 
   /**
@@ -488,17 +604,22 @@ public final class PairHashJoinOp implements CountOp {
     final String ind = "  ".repeat(Math.max(0, depth * indent));
     sb.append(ind).append("+ COUNT PAIR JOIN (build-probe hash join)\n");
     sb.append(ind).append("  build: ").append(buildStartLabel);
+    if (buildStartPredicate != null)
+      sb.append(' ').append(buildStartPredicate.describe());
     sb.append(", arm1[");
-    for (int i = 0; i < arm1EdgeTypes.length; i++) {
-      if (i > 0) sb.append(",");
-      sb.append(arm1EdgeTypes[i]);
-    }
+    appendArm(sb, arm1EdgeTypes, arm1Predicates);
     sb.append("], arm2[");
-    for (int i = 0; i < arm2EdgeTypes.length; i++) {
-      if (i > 0) sb.append(",");
-      sb.append(arm2EdgeTypes[i]);
-    }
+    appendArm(sb, arm2EdgeTypes, arm2Predicates);
     sb.append("], probe: ").append(probeEdgeType);
     return sb.toString();
+  }
+
+  private static void appendArm(final StringBuilder sb, final String[] edgeTypes, final VertexPredicate[] predicates) {
+    for (int i = 0; i < edgeTypes.length; i++) {
+      if (i > 0) sb.append(",");
+      sb.append(edgeTypes[i]);
+      if (predicates != null && predicates[i] != null)
+        sb.append(' ').append(predicates[i].describe());
+    }
   }
 }

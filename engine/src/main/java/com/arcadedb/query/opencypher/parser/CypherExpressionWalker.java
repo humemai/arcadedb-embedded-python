@@ -40,6 +40,7 @@ import com.arcadedb.query.opencypher.ast.ForeachClause;
 import com.arcadedb.query.opencypher.ast.FunctionCallExpression;
 import com.arcadedb.query.opencypher.ast.InExpression;
 import com.arcadedb.query.opencypher.ast.IsNullExpression;
+import com.arcadedb.query.opencypher.ast.IsNormalizedExpression;
 import com.arcadedb.query.opencypher.ast.IsTypedExpression;
 import com.arcadedb.query.opencypher.ast.LabelCheckExpression;
 import com.arcadedb.query.opencypher.ast.ListComprehensionExpression;
@@ -180,6 +181,17 @@ public final class CypherExpressionWalker {
      * should decide that at construction rather than mid-walk.
      */
     default Visitor forClauseEntry(final ClauseEntry entry) {
+      return this;
+    }
+
+    /**
+     * Called before the walk descends into the part of an expression that sees variables the expression binds
+     * itself - the iterator of a list comprehension, quantifier or {@code reduce()}, and a {@code reduce()}
+     * accumulator. Inside it those names shadow whatever the enclosing scope called them, so a check reading
+     * variable kinds re-binds itself here, the way it does for {@link #forNestedStatement}. Returning {@code this}
+     * is right for a check that carries no positional state.
+     */
+    default Visitor forLocalBindings(final String... variables) {
       return this;
     }
   }
@@ -440,24 +452,27 @@ public final class CypherExpressionWalker {
     }
     case ListComprehensionExpression comprehension -> {
       walk(comprehension.getListExpression(), visitor);
-      walk(comprehension.getWhereExpression(), visitor);
-      walk(comprehension.getMapExpression(), visitor);
+      final Visitor local = visitor.forLocalBindings(comprehension.getVariable());
+      walk(comprehension.getWhereExpression(), local);
+      walk(comprehension.getMapExpression(), local);
     }
     case ListPredicateExpression predicate -> {
       walk(predicate.getListExpression(), visitor);
-      walk(predicate.getWhereExpression(), visitor);
+      walk(predicate.getWhereExpression(), visitor.forLocalBindings(predicate.getVariable()));
     }
     case CypherExpressionBuilder.ChainedPropertyAccessExpression chained -> walk(chained.getBaseExpression(), visitor);
     case ReduceExpression reduce -> {
       walk(reduce.getInitialValue(), visitor);
       walk(reduce.getListExpression(), visitor);
-      walk(reduce.getReduceExpression(), visitor);
+      walk(reduce.getReduceExpression(),
+          visitor.forLocalBindings(reduce.getAccumulatorVariable(), reduce.getIteratorVariable()));
     }
     case AllReduceExpression reduce -> {
       walk(reduce.getInitialValue(), visitor);
       walk(reduce.getListExpression(), visitor);
-      walk(reduce.getReduceExpression(), visitor);
-      walk(reduce.getPredicateExpression(), visitor);
+      final Visitor local = visitor.forLocalBindings(reduce.getAccumulatorVariable(), reduce.getIteratorVariable());
+      walk(reduce.getReduceExpression(), local);
+      walk(reduce.getPredicateExpression(), local);
     }
     case TernaryLogicalExpression ternary -> {
       walk(ternary.getLeft(), visitor);
@@ -513,6 +528,7 @@ public final class CypherExpressionWalker {
     }
     case LabelCheckExpression labelCheck -> walk(labelCheck.getVariableExpression(), visitor);
     case IsTypedExpression typed -> walk(typed.getValueExpression(), visitor);
+    case IsNormalizedExpression normalized -> walk(normalized.getValueExpression(), visitor);
     case BooleanCoercionExpression coercion -> walk(coercion.getExpression(), visitor);
     case PatternPredicateExpression pattern -> walk(pattern.getPathPattern(), visitor);
     default -> {

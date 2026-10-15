@@ -244,6 +244,131 @@ class PostTimeSeriesWriteHandlerIT extends BaseGraphServerTest {
     });
   }
 
+  /**
+   * Issue #8646: a tag or field key the type does not declare used to be ignored, so a misspelled tag stored the
+   * point with the declared tag null - under another series than the one sent - and answered 204. It must be
+   * reported as a partial write naming the key, and the sample not stored.
+   */
+  @Test
+  void undeclaredTagAndFieldKeysAreReportedNotStoredUnderAnotherSeries() throws Exception {
+    testEachServer(serverIndex -> {
+      command(serverIndex, "CREATE TIMESERIES TYPE pw_undeclared TIMESTAMP ts TAGS (city STRING) FIELDS (temp DOUBLE)");
+
+      final HttpURLConnection connection = openWriteConnection(serverIndex, "ms");
+      try (final OutputStream os = connection.getOutputStream()) {
+        os.write("""
+            pw_undeclared,city=rome temp=21.5 1700000000000
+            pw_undeclared,citty=rome temp=21.5 1700000000001
+            pw_undeclared,city=rome tmp=21.5 1700000000002
+            """.getBytes(StandardCharsets.UTF_8));
+        os.flush();
+      }
+
+      assertThat(connection.getResponseCode()).isEqualTo(400);
+
+      final JSONObject error = new JSONObject(readError(connection));
+      assertThat(error.getString("error")).contains("undeclared tag/field key(s)").contains("pw_undeclared.citty (tag)")
+          .contains("arcadedb.timeSeriesUndeclaredKeys");
+      assertThat(error.getInt("written")).isEqualTo(1);
+      assertThat(error.getInt("dropped")).isEqualTo(2);
+      final JSONArray undeclared = error.getJSONArray("undeclaredKeys");
+      assertThat(undeclared.length()).isEqualTo(2);
+      assertThat(undeclared.getString(0)).isEqualTo("pw_undeclared.citty (tag)");
+      assertThat(undeclared.getString(1)).isEqualTo("pw_undeclared.tmp (field)");
+
+      final JSONObject result = executeCommand(serverIndex, "sql", "SELECT FROM pw_undeclared");
+      final JSONArray records = result.getJSONObject("result").getJSONArray("records");
+      assertThat(records.length()).isEqualTo(1);
+      assertThat(records.getJSONObject(0).getString("city")).isEqualTo("rome");
+    });
+  }
+
+  /**
+   * Issue #9809: a quoted datetime sent to a DATETIME field used to fail with a raw ClassCastException answered as a server
+   * error. A readable one is stored, an unreadable one is reported as a partial write naming the column, like any other drop.
+   */
+  @Test
+  void aDatetimeFieldReadsQuotedTextAndNamesWhatItCannotRead() throws Exception {
+    testEachServer(serverIndex -> {
+      command(serverIndex, "CREATE TIMESERIES TYPE pw_datetime TIMESTAMP ts FIELDS (seen DATETIME) SHARDS 1");
+
+      final HttpURLConnection connection = openWriteConnection(serverIndex, "ms");
+      try (final OutputStream os = connection.getOutputStream()) {
+        os.write("""
+            pw_datetime seen="2023-11-14 22:15:23" 1700000000000
+            pw_datetime seen="not a date" 1700000000001
+            pw_datetime seen=1700000002000i 1700000000002
+            """.getBytes(StandardCharsets.UTF_8));
+        os.flush();
+      }
+
+      assertThat(connection.getResponseCode()).isEqualTo(400);
+
+      final JSONObject error = new JSONObject(readError(connection));
+      assertThat(error.getString("error")).contains("unreadable value(s)").contains("pw_datetime.seen (field)");
+      assertThat(error.getInt("written")).isEqualTo(2);
+      assertThat(error.getInt("dropped")).isEqualTo(1);
+      final JSONArray unreadable = error.getJSONArray("unreadableValues");
+      assertThat(unreadable.length()).isEqualTo(1);
+      assertThat(unreadable.getString(0)).startsWith("pw_datetime.seen (field)").contains("'seen'").contains("DATETIME");
+
+      final JSONObject result = executeCommand(serverIndex, "sql", "SELECT FROM pw_datetime");
+      assertThat(result.getJSONObject("result").getJSONArray("records").length()).isEqualTo(2);
+    });
+  }
+
+  /**
+   * Issue #8646: a schema-less producer such as Telegraf sends extra tags the type was never meant to hold. With the
+   * database set to {@code ignore} it keeps the pre-#8646 behaviour - the sample stored, the extra keys discarded.
+   */
+  @Test
+  void undeclaredKeysAreDiscardedWhenTheDatabaseIgnoresThem() throws Exception {
+    testEachServer(serverIndex -> {
+      command(serverIndex, "CREATE TIMESERIES TYPE pw_ignore TIMESTAMP ts TAGS (city STRING) FIELDS (temp DOUBLE)");
+      command(serverIndex, "ALTER DATABASE `arcadedb.timeSeriesUndeclaredKeys` 'ignore'");
+      try {
+        assertThat(postLineProtocol(serverIndex, "pw_ignore,city=rome,host=telegraf-1 temp=21.5,uptime=3i 1700000000000\n",
+            "ms")).isEqualTo(204);
+
+        final JSONObject result = executeCommand(serverIndex, "sql", "SELECT FROM pw_ignore");
+        final JSONArray records = result.getJSONObject("result").getJSONArray("records");
+        assertThat(records.length()).isEqualTo(1);
+        assertThat(records.getJSONObject(0).getString("city")).isEqualTo("rome");
+      } finally {
+        command(serverIndex, "ALTER DATABASE `arcadedb.timeSeriesUndeclaredKeys` 'reject'");
+      }
+    });
+  }
+
+  /**
+   * Issue #8647: a line with an empty tag value ({@code host=}) was stored with {@code host=""} and answered 204. The
+   * InfluxDB line protocol rejects it, so it must be reported as malformed and nothing stored for it.
+   */
+  @Test
+  void emptyTagValueIsReportedAsMalformedNotStored() throws Exception {
+    testEachServer(serverIndex -> {
+      command(serverIndex,
+          "CREATE TIMESERIES TYPE pw_emptytagvalue TIMESTAMP ts TAGS (host STRING) FIELDS (value DOUBLE)");
+
+      final HttpURLConnection connection = openWriteConnection(serverIndex, "ms");
+      try (final OutputStream os = connection.getOutputStream()) {
+        os.write("pw_emptytagvalue,host= value=1 1700000000000\n".getBytes(StandardCharsets.UTF_8));
+        os.flush();
+      }
+
+      assertThat(connection.getResponseCode()).isEqualTo(400);
+
+      final JSONObject error = new JSONObject(readError(connection));
+      assertThat(error.getString("error")).contains("unable to parse 1 line");
+      assertThat(error.getInt("written")).isEqualTo(0);
+      assertThat(error.getInt("dropped")).isEqualTo(1);
+      assertThat(error.getJSONArray("malformedLines").getInt(0)).isEqualTo(1);
+
+      final JSONObject result = executeCommand(serverIndex, "sql", "SELECT FROM pw_emptytagvalue");
+      assertThat(result.getJSONObject("result").getJSONArray("records").length()).isEqualTo(0);
+    });
+  }
+
   @Test
   void onlyMalformedLinesAreReportedNot204() throws Exception {
     testEachServer(serverIndex -> {

@@ -83,7 +83,6 @@
         <maven-versions-plugin.version>2.22.0</maven-versions-plugin.version>
         <maven-jar-plugin.version>3.5.1</maven-jar-plugin.version>
         <maven-shade-plugin.version>3.6.2</maven-shade-plugin.version>
-        <maven-deploy-plugin.version>3.1.4</maven-deploy-plugin.version>
         <maven-install-plugin.version>3.2.0</maven-install-plugin.version>
         <maven-clean-plugin.version>3.5.0</maven-clean-plugin.version>
         <maven-dependency-plugin.version>3.11.0</maven-dependency-plugin.version>
@@ -97,7 +96,7 @@
         <micrometer.version>1.17.1</micrometer.version>
         <micrometer-tracing.version>1.7.1</micrometer-tracing.version>
         <opentelemetry.version>1.66.0</opentelemetry.version>
-        <postgres.version>42.7.13</postgres.version>
+        <postgres.version>42.7.14</postgres.version>
         <jackson.version>2.22.3</jackson.version>
 
         <assertj-core.version>3.27.7</assertj-core.version>
@@ -109,7 +108,7 @@
              UndertowInputStream.close() reads the request body to the end, and available() reports a finished body
              as -1 rather than 0. Both are covered by Issue5470BatchErrorDeliveryIT, so a bump that changes either
              shows up as a test failure there rather than as a silently worse diagnosis (issue #5470). -->
-        <undertow-core.version>2.4.3.Final</undertow-core.version>
+        <undertow-core.version>2.4.4.Final</undertow-core.version>
         <jboss-threads.version>3.10.1</jboss-threads.version>
         <mockito-core.version>5.24.0</mockito-core.version>
         <neo4j-driver.version>6.3.0</neo4j-driver.version>
@@ -454,7 +453,7 @@
                     <publishingServerId>central</publishingServerId>
                     <autoPublish>true</autoPublish>
                     <excludeArtifacts>
-                        arcadedb-coverage,arcadedb-e2e,arcadedb-e2e-perf,arcadedb-e2e-ha
+                        arcadedb-coverage,arcadedb-e2e,arcadedb-e2e-perf,arcadedb-e2e-ha,arcadedb-gremlin-it,arcadedb-gremlin-consumer-it,arcadedb-load-tests
                     </excludeArtifacts>
                 </configuration>
             </plugin>

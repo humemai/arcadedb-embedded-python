@@ -26,8 +26,9 @@ package com.arcadedb.query.sql.parser;
 
 import com.arcadedb.database.Database;
 import com.arcadedb.database.DatabaseInternal;
-import com.arcadedb.exception.ArcadeDBException;
 import com.arcadedb.exception.CommandSQLParsingException;
+import com.arcadedb.index.IndexException;
+import com.arcadedb.log.LogManager;
 import com.arcadedb.query.sql.executor.BasicCommandContext;
 import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.query.sql.executor.InternalExecutionPlan;
@@ -36,8 +37,16 @@ import com.arcadedb.query.sql.executor.SelectExecutionPlanner;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.function.Function;
+import java.util.logging.Level;
 
 public class SelectStatement extends Statement {
+  /**
+   * How many attempts in all a SELECT gets when the index its plan reads is gone by the time it starts (issue #9331). The last
+   * of them plans without the key indexes of the types it reads (issue #9615), see {@link #openResultSet}.
+   */
+  private static final int STALE_INDEX_PLAN_MAX_ATTEMPTS = 3;
+
   public FromClause  target;
   public Projection  projection;
   public WhereClause whereClause;
@@ -190,8 +199,7 @@ public class SelectStatement extends Statement {
 
     context.setInputParameters(params);
 
-    final InternalExecutionPlan executionPlan = createExecutionPlan(context);
-    return new LocalResultSet(executionPlan);
+    return openResultSet(context, this::createExecutionPlan);
   }
 
   @Override
@@ -206,9 +214,55 @@ public class SelectStatement extends Statement {
     setProfilingConstraints((DatabaseInternal) db);
     context.setInputParameters(params);
 
-    final InternalExecutionPlan executionPlan = usePlanCache ? createExecutionPlan(context) :
-        createExecutionPlanNoCache(context);
-    return new LocalResultSet(executionPlan);
+    return openResultSet(context, usePlanCache ? this::createExecutionPlan : this::createExecutionPlanNoCache);
+  }
+
+  /**
+   * Plans the statement and runs the first batch of its plan; when an index the planner or a step reads has been dropped or
+   * rebuilt meanwhile (issue #9331) it plans the statement again. The planner validates an index, picks it, and reads it again
+   * a few calls later; the steps read it once more when they start. A concurrent {@code DROP INDEX} in any of those gaps left
+   * a plan that no longer matches the schema, and the {@link IndexException} reached the caller of a read-only query.
+   * <p>
+   * Only the planning and the first batch are covered: an index dropped after the first rows were returned surfaces as the
+   * {@link IndexException} of {@code FetchFromIndexStep}, which beats a silently short answer. Before the first row nothing has
+   * been returned, so running the statement again is safe (a function with side effects, such as {@code sequence.next()},
+   * would run twice, but the exception comes from the index, before the first row). {@link LocalResultSet} computes the first
+   * row when it is created, so that row is inside the loop. Every attempt after the first plans without the cache, which may
+   * still hold the stale plan.
+   * <p>
+   * Planning again picks the index of the same name when a concurrent DDL recreated it, and a DDL that keeps dropping and
+   * recreating it can take that one away too, attempt after attempt (issue #9615). The last attempt therefore plans without the
+   * key indexes of the types it reads, which no DDL can take away under it: a scan answers what such an index would have,
+   * slower. A FULL_TEXT, geospatial or vector index stays plannable, since a scan would answer its predicates differently.
+   */
+  private ResultSet openResultSet(final CommandContext context, final Function<CommandContext, InternalExecutionPlan> firstPlanner) {
+    for (int attempt = 1; ; attempt++) {
+      InternalExecutionPlan plan = null;
+      try {
+        if (attempt == 1)
+          plan = firstPlanner.apply(context);
+        else if (attempt < STALE_INDEX_PLAN_MAX_ATTEMPTS)
+          plan = createExecutionPlanNoCache(context);
+        else
+          plan = new SelectExecutionPlanner(this).withoutKeyIndexes().createExecutionPlan(context, false);
+        return new LocalResultSet(plan);
+      } catch (final IndexException e) {
+        if (attempt >= STALE_INDEX_PLAN_MAX_ATTEMPTS)
+          throw e;
+        // The last attempt reads the types without their key indexes: a full scan, worth a warning to an operator
+        final boolean lastAttemptNext = attempt + 1 >= STALE_INDEX_PLAN_MAX_ATTEMPTS;
+        LogManager.instance().log(this, lastAttemptNext ? Level.WARNING : Level.INFO,
+            "Planning the statement again after attempt %d%s, its index was dropped or rebuilt: %s", null, attempt,
+            lastAttemptNext ? " without the key indexes of its types (a scan)" : "", e.getMessage());
+        if (plan != null)
+          try {
+            plan.close();
+          } catch (final RuntimeException closeFailure) {
+            // The stale index is the reason for the retry, not the close of the plan it spoiled
+            e.addSuppressed(closeFailure);
+          }
+      }
+    }
   }
 
   public InternalExecutionPlan createExecutionPlan(final CommandContext context) {
@@ -222,27 +276,32 @@ public class SelectStatement extends Statement {
     return planner.createExecutionPlan(context, false);
   }
 
+  /**
+   * Creates the empty instance {@link #copy()} fills in. A subclass that inherits {@code copy()} overrides it to keep the
+   * runtime type of the copy. It replaces a reflective lookup of the no-arg constructor, which fails in the GraalVM native
+   * image, where no parser constructor is registered for reflection (#9495).
+   */
+  protected SelectStatement newInstance() {
+    return new SelectStatement();
+  }
+
   @Override
   public SelectStatement copy() {
-    try {
-      final SelectStatement result = getClass().getConstructor().newInstance();
-      result.originalStatement = originalStatement;
-      result.target = target == null ? null : target.copy();
-      result.projection = projection == null ? null : projection.copy();
-      result.whereClause = whereClause == null ? null : whereClause.copy();
-      result.groupBy = groupBy == null ? null : groupBy.copy();
-      result.orderBy = orderBy == null ? null : orderBy.copy();
-      result.unwind = unwind == null ? null : unwind.copy();
-      result.skip = skip == null ? null : skip.copy();
-      result.limit = limit == null ? null : limit.copy();
-      result.letClause = letClause == null ? null : letClause.copy();
-      result.timeout = timeout == null ? null : timeout.copy();
-      // A COPY IS THE SAME TREE: CARRY THE MEMO SO THE PLANNER'S PER-EXECUTION COPIES DO NOT RE-WALK IT (#8400)
-      result.resultCacheable = resultCacheable;
-      return result;
-    } catch (final Exception e) {
-      throw new ArcadeDBException(e);
-    }
+    final SelectStatement result = newInstance();
+    result.originalStatement = originalStatement;
+    result.target = target == null ? null : target.copy();
+    result.projection = projection == null ? null : projection.copy();
+    result.whereClause = whereClause == null ? null : whereClause.copy();
+    result.groupBy = groupBy == null ? null : groupBy.copy();
+    result.orderBy = orderBy == null ? null : orderBy.copy();
+    result.unwind = unwind == null ? null : unwind.copy();
+    result.skip = skip == null ? null : skip.copy();
+    result.limit = limit == null ? null : limit.copy();
+    result.letClause = letClause == null ? null : letClause.copy();
+    result.timeout = timeout == null ? null : timeout.copy();
+    // A COPY IS THE SAME TREE: CARRY THE MEMO SO THE PLANNER'S PER-EXECUTION COPIES DO NOT RE-WALK IT (#8400)
+    result.resultCacheable = resultCacheable;
+    return result;
   }
 
   @Override
@@ -276,7 +335,7 @@ public class SelectStatement extends Statement {
   }
 
   @Override
-  public boolean isIdempotent() {
+  protected boolean isIdempotentItself() {
     return true;
   }
 

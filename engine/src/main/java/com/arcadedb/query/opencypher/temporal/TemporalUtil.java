@@ -18,10 +18,13 @@
  */
 package com.arcadedb.query.opencypher.temporal;
 
+import com.arcadedb.database.Database;
 import com.arcadedb.database.Document;
 import com.arcadedb.schema.DocumentType;
+import com.arcadedb.schema.LocalSchema;
 import com.arcadedb.schema.Property;
 import com.arcadedb.schema.Type;
+import com.arcadedb.utility.DateUtils;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
@@ -31,6 +34,7 @@ import java.time.temporal.IsoFields;
 import java.time.temporal.Temporal;
 import java.time.temporal.WeekFields;
 import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.Collection;
 import java.util.Date;
 import java.util.List;
@@ -426,18 +430,20 @@ public final class TemporalUtil {
     if (value == null || value instanceof Number || value instanceof String || value instanceof Boolean)
       return value;
 
+    // Every Cypher temporal is persisted as a native value that names its own type (issue #8572), so a read never has to
+    // guess a type from the text. A property declared STRING gets the text form from Type.convert
     if (value instanceof CypherDateTime dt)
-      return dt.toString();
+      return dt.getValue();
     if (value instanceof CypherDate d)
       return d.getValue();
     if (value instanceof CypherLocalDateTime ldt)
       return ldt.getValue();
     if (value instanceof CypherLocalTime lt)
-      return lt.getValue().toString();
+      return lt.getValue();
     if (value instanceof CypherTime t)
-      return t.getValue().toString();
+      return t.getValue();
     if (value instanceof CypherDuration dur)
-      return dur.toString();
+      return dur;
 
     // Recurse into collections - skip when first element is a non-temporal scalar (vector embeddings, etc.)
     if (value instanceof Collection<?> collection) {
@@ -463,6 +469,16 @@ public final class TemporalUtil {
     }
 
     return value;
+  }
+
+  /**
+   * The text a Cypher temporal is stored as in a property declared STRING: what {@link #toCoreJavaType(Object)} answered
+   * before the temporals had native types (issue #8572).
+   */
+  public static String toStorageText(final Object value) {
+    if (value instanceof CypherDateTime || value instanceof CypherDuration)
+      return value.toString();
+    return String.valueOf(toCoreJavaType(value));
   }
 
   /**
@@ -508,52 +524,185 @@ public final class TemporalUtil {
       return new CypherDateTime(i.atZone(ZoneOffset.UTC));
     if (value instanceof Date date)
       return new CypherDateTime(date.toInstant().atZone(ZoneOffset.UTC));
+    // A supported arcadedb.dateTimeImplementation / dateImplementation: an instant like java.util.Date (issue #9647)
+    if (value instanceof Calendar calendar)
+      return new CypherDateTime(calendar.toInstant().atZone(ZoneOffset.UTC));
 
     return value;
   }
 
   /**
-   * Convert an ArcadeDB-stored raw property value back to its Cypher temporal type, when
-   * applicable. {@code Duration}, {@code LocalTime}, and {@code Time} are stored as Strings
-   * because ArcadeDB doesn't have native binary types for them; this restores the proper
-   * {@code CypherDuration}/{@code CypherLocalTime}/{@code CypherTime}/etc. wrapper so component
-   * access (e.g. {@code dur.seconds}, {@code t.hour}) keeps working after a property round-trips
-   * through storage. Non-temporal values (including plain, non-temporal-looking Strings) are
-   * returned unchanged.
-   * <p>
-   * Shared by every property-read path (variable-bound and chained) so a persisted temporal
-   * value dereferences identically regardless of which AST node reads it.
-   */
-  /**
-   * Reads {@code propertyName} from {@code document} and restores its Cypher temporal type, like
-   * {@link #convertFromStorage(Object)}, unless the schema declares the property {@link Type#STRING}. A declared STRING
-   * property holds text by contract, so a value such as an opening-hours range {@code "09:00-17:00"} (which is also a
-   * well-formed ISO {@code OffsetTime}) or a part number {@code "P100D"} (also an ISO duration) must read back as the
-   * String that was stored, the same as SQL reads it (issue #8384). The schema lookup runs only for a String that could
-   * be sniffed as a temporal, so ordinary strings and every other type pay nothing for it.
+   * Reads {@code propertyName} from {@code document} as a Cypher value: a native temporal is wrapped into its Cypher
+   * type so component access ({@code dur.seconds}, {@code t.hour}) and temporal comparison work. A String is not
+   * interpreted: it is a String unless the schema declares the property with a temporal type, in which case the
+   * deserializer has already converted it (issue #8572). The one exception is a database written by a release that
+   * stored these temporals as text, see {@link #restoreLegacyText(Document, String, String)} (issue #9636).
    */
   public static Object convertFromStorage(final Document document, final String propertyName) {
     final Object value = document.get(propertyName);
-    if (value instanceof String str && mayBeTemporalString(str) && isDeclaredString(document, propertyName))
-      return value;
-    return convertFromStorage(value);
+    // A ZonedDateTime on an undeclared (or ZONED_DATETIME) property is the native type that kept its zone, not a
+    // DATETIME read back in the configured Java class, so it is a real zoned value (issue #8572)
+    if (value instanceof ZonedDateTime zoned && keepsZone(document, propertyName))
+      return new CypherDateTime(zoned);
+    if (value instanceof String text)
+      return restoreLegacyText(document, propertyName, text);
+    // A DATE is a Cypher Date whatever Java class arcadedb.dateImplementation reads it into (issue #9647)
+    return convertFromStorage(asDeclaredDate(document, propertyName, value));
   }
 
   /**
-   * True when the schema declares {@code propertyName} as {@link Type#STRING} on the document's type or a supertype.
+   * The value of {@code propertyName} as the Cypher type its schema declares: a property declared DATE that
+   * {@code arcadedb.dateImplementation} read back as a {@code java.util.Date}, a {@code java.util.Calendar} or a
+   * {@code LocalDateTime} is the {@link CypherDate} of that day, so it compares with a {@code date()} literal under every
+   * setting as it does under the default {@code LocalDate} (issue #9647). Any other value is returned unchanged.
    */
-  public static boolean isDeclaredString(final Document document, final String propertyName) {
+  public static Object asDeclaredDate(final Document document, final String propertyName, final Object value) {
+    if (isDateReadAsInstant(value) && isDeclaredDate(document, propertyName))
+      return new CypherDate(LocalDate.ofEpochDay(DateUtils.dateToEpochDays(value)));
+    return value;
+  }
+
+  /**
+   * Whether {@code value} is a native temporal {@link #fromCoreJavaType(Object)} wraps: a {@code java.time} value, a
+   * {@code java.util.Date} or a {@code java.util.Calendar}. The one list of those classes, so a newly supported
+   * {@code arcadedb.dateTimeImplementation} cannot be missed on one path (issue #9647).
+   */
+  public static boolean isNativeTemporal(final Object value) {
+    return value instanceof Temporal || value instanceof Date || value instanceof Calendar;
+  }
+
+  // The classes a non-default arcadedb.dateImplementation reads a DATE into: only these need the schema lookup, so the
+  // default LocalDate and every non-temporal value pay one instanceof chain and nothing more
+  private static boolean isDateReadAsInstant(final Object value) {
+    return value instanceof Date || value instanceof Calendar || value instanceof LocalDateTime;
+  }
+
+  private static boolean isDeclaredDate(final Document document, final String propertyName) {
     final DocumentType type = document.getType();
-    if (type == null)
+    final Property property = type != null ? type.getPolymorphicPropertyIfExists(propertyName) : null;
+    return property != null && property.getType() == Type.DATE;
+  }
+
+  /**
+   * The value an openCypher read gives {@code text}, stored under {@code propertyName} of {@code document}: the text
+   * itself, unless the database predates the native temporal types (issue #9636). A release before them persisted a
+   * {@code time()}, {@code localtime()}, zoned {@code datetime()} or {@code duration()} on a property the schema does
+   * not declare - every property openCypher writes - as its ISO text, and restored it on read by its shape. A database
+   * written by such a release keeps that reading until {@code CALL db.migrateLegacyTemporals()} rewrites the text in
+   * the native types; without it every duration and zoned datetime it holds would read back as a String. A declared
+   * property is never restored: a STRING holds text by contract (issue #8384), and a temporal one has already been
+   * converted by the deserializer.
+   */
+  public static Object restoreLegacyText(final Document document, final String propertyName, final String text) {
+    // The character test first: ordinary text pays nothing for the schema lookups
+    if (!mayBeTemporalString(text) || !isLegacyTemporalText(document))
+      return text;
+    final DocumentType type = document.getType();
+    if (type != null && type.getPolymorphicPropertyIfExists(propertyName) != null)
+      return text;
+    return parseLegacyText(text);
+  }
+
+  private static boolean isLegacyTemporalText(final Document document) {
+    final Database database = document.getDatabase();
+    if (database == null)
       return false;
-    final Property property = type.getPolymorphicPropertyIfExists(propertyName);
-    return property != null && property.getType() == Type.STRING;
+    final LocalSchema schema = database.getSchema().getEmbedded();
+    return schema != null && schema.isLegacyTemporalText();
   }
 
+  /**
+   * The cheap shape of an ISO duration: {@code P} followed by a digit, a sign or {@code T}, ending in a digit or a unit
+   * letter. It keeps ordinary text that merely starts with {@code P} ("Paris", "Peter") away from the parse and its
+   * exception (issue #9338).
+   */
+  private static boolean looksLikeIsoDuration(final String str) {
+    final char second = str.charAt(1);
+    if (!(second >= '0' && second <= '9') && second != 'T' && second != '-' && second != '+')
+      return false;
+    final char last = str.charAt(str.length() - 1);
+    return last >= '0' && last <= '9' || last == 'Y' || last == 'M' || last == 'W' || last == 'D' || last == 'H' || last == 'S';
+  }
+
+  /**
+   * Whether {@code str} has the shape of a temporal text a release before the native temporal types wrote: the
+   * character test that keeps ordinary strings away from {@link #parseLegacyText(String)}.
+   */
   public static boolean mayBeTemporalString(final String str) {
-    return str.length() >= 5 && (Character.isDigit(str.charAt(0)) || str.charAt(0) == 'P');
+    final int length = str.length();
+    if (length == 0)
+      return false;
+    final char first = str.charAt(0);
+    // An ISO duration is recognised by its leading 'P' and is as short as "P1D": the length floor must not apply to it
+    // (issue #9338). Every other temporal text is at least 5 characters long.
+    if (first == 'P')
+      return length >= 3 && looksLikeIsoDuration(str);
+    return length >= 5 && Character.isDigit(first);
   }
 
+  /**
+   * Parses a temporal text the way releases before the native temporal types read their stored text back (issue
+   * #9636): a duration, a datetime, a time with an offset or a local time, recognised by shape. Returns the text itself
+   * when it is none of them. Callers decide whether the text may be legacy at all; this only reads it.
+   */
+  public static Object parseLegacyText(final String str) {
+    if (!mayBeTemporalString(str))
+      return str;
+
+    // Duration strings start with P (ISO-8601)
+    if (str.charAt(0) == 'P') {
+      try {
+        return CypherDuration.parse(str);
+      } catch (final Exception ignored) {
+        // Not a valid duration string
+      }
+    }
+
+    // DateTime strings: contain 'T' with date part before it and timezone/offset
+    // e.g., 1912-01-01T00:00Z, 1984-10-11T12:31:14+01:00[Europe/Stockholm]
+    final int tIdx = str.indexOf('T');
+    if (tIdx >= 4 && tIdx < str.length() - 1 && Character.isDigit(str.charAt(0))) {
+      try {
+        return CypherDateTime.parse(str);
+      } catch (final Exception ignored) {
+        // Not a valid datetime string
+      }
+    }
+
+    // Time strings: HH:MM:SS[.nanos][+/-offset] or HH:MM[+/-offset] or HH:MM:SS[.nanos]Z
+    // Handles both full (10:35:00-08:00) and short (10:35-08:00) time formats
+    if (str.length() >= 5 && str.charAt(2) == ':' && Character.isDigit(str.charAt(0)) && Character.isDigit(str.charAt(3))) {
+      final boolean hasSeconds = str.length() >= 8 && str.charAt(5) == ':';
+      // Check if it has a timezone offset (+ or - after the time part, or trailing Z)
+      final int searchFrom = hasSeconds ? 8 : 5;
+      boolean hasOffset = str.endsWith("Z");
+      if (!hasOffset) {
+        for (int i = searchFrom; i < str.length(); i++) {
+          final char c = str.charAt(i);
+          if (c == '+' || c == '-') {
+            hasOffset = true;
+            break;
+          }
+        }
+      }
+      try {
+        return hasOffset ? CypherTime.parse(str) : CypherLocalTime.parse(str);
+      } catch (final Exception ignored) {
+        // Not a valid time string
+      }
+    }
+    return str;
+  }
+
+  private static boolean keepsZone(final Document document, final String propertyName) {
+    final DocumentType type = document.getType();
+    final Property property = type != null ? type.getPolymorphicPropertyIfExists(propertyName) : null;
+    return property == null || property.getType() == Type.ZONED_DATETIME;
+  }
+
+  /**
+   * Wraps a native value into its Cypher temporal type, and returns anything else (a String included) unchanged.
+   */
   public static Object convertFromStorage(final Object value) {
     // Fast path: common non-temporal types don't need conversion
     if (value == null || value instanceof Number || value instanceof Boolean)
@@ -562,69 +711,27 @@ public final class TemporalUtil {
     // Handle single values - check temporal types before collections. Native java.time / java.util.Date
     // temporals (incl. java.util.Date, the default DATETIME storage type, and ZonedDateTime) are wrapped
     // into Cypher temporal values so a stored native datetime reads back as a comparable temporal.
-    if (value instanceof Temporal || value instanceof Date) {
+    if (value instanceof CypherDuration)
+      return value;
+    if (isNativeTemporal(value)) {
+      // A stored datetime keeps no zone: mark it so a comparison lets it adopt the other operand's zone (issue #9325).
+      // Built directly, not through fromCoreJavaType(), so a scan allocates one wrapper per value
+      if (value instanceof ZonedDateTime zdt)
+        return CypherDateTime.ofStored(zdt);
+      if (value instanceof OffsetDateTime odt)
+        return CypherDateTime.ofStored(odt.toZonedDateTime());
+      if (value instanceof Instant instant)
+        return CypherDateTime.ofStored(instant.atZone(ZoneOffset.UTC));
+      if (value instanceof Date date)
+        return CypherDateTime.ofStored(date.toInstant().atZone(ZoneOffset.UTC));
+      // Under arcadedb.dateTimeImplementation=java.util.Calendar: the zone it carries is the schema's, not a chosen one
+      if (value instanceof Calendar calendar)
+        return CypherDateTime.ofStored(calendar.toInstant().atZone(ZoneOffset.UTC));
       final Object coerced = fromCoreJavaType(value);
       if (coerced instanceof CypherTemporalValue)
         return coerced;
     }
 
-    if (value instanceof String str) {
-      // Fast path: short strings and common patterns can't be temporal
-      if (!mayBeTemporalString(str))
-        return value;
-
-      // Duration strings start with P (ISO-8601)
-      if (str.charAt(0) == 'P') {
-        try {
-          return CypherDuration.parse(str);
-        } catch (final Exception ignored) {
-          // Not a valid duration string
-        }
-      }
-
-      // DateTime strings: contain 'T' with date part before it and timezone/offset
-      // e.g., 1912-01-01T00:00Z, 1984-10-11T12:31:14+01:00[Europe/Stockholm]
-      final int tIdx = str.indexOf('T');
-      if (tIdx >= 4 && tIdx < str.length() - 1 && Character.isDigit(str.charAt(0))) {
-        try {
-          return CypherDateTime.parse(str);
-        } catch (final Exception ignored) {
-          // Not a valid datetime string
-        }
-      }
-
-      // Time strings: HH:MM:SS[.nanos][+/-offset] or HH:MM[+/-offset] or HH:MM:SS[.nanos]Z
-      // Handles both full (10:35:00-08:00) and short (10:35-08:00) time formats
-      if (str.length() >= 5 && str.charAt(2) == ':' && Character.isDigit(str.charAt(0))
-          && Character.isDigit(str.charAt(3))) {
-        final boolean hasSeconds = str.length() >= 8 && str.charAt(5) == ':';
-        // Check if it has a timezone offset (+ or - after the time part, or trailing Z)
-        final int searchFrom = hasSeconds ? 8 : 5;
-        boolean hasOffset = str.endsWith("Z");
-        if (!hasOffset) {
-          for (int i = searchFrom; i < str.length(); i++) {
-            final char c = str.charAt(i);
-            if (c == '+' || c == '-') {
-              hasOffset = true;
-              break;
-            }
-          }
-        }
-        if (hasOffset) {
-          try {
-            return CypherTime.parse(str);
-          } catch (final Exception ignored) {
-            // Not a valid time string
-          }
-        } else {
-          try {
-            return CypherLocalTime.parse(str);
-          } catch (final Exception ignored) {
-            // Not a valid local time string
-          }
-        }
-      }
-    }
     return value;
   }
 

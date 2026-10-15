@@ -19,6 +19,7 @@
 package com.arcadedb.mcp.tools;
 
 import com.arcadedb.database.Database;
+import com.arcadedb.mcp.MCPToolArgumentException;
 import com.arcadedb.query.OperationType;
 import com.arcadedb.query.QueryEngine;
 import com.arcadedb.query.sql.executor.Result;
@@ -75,12 +76,12 @@ public class ExecuteCommandTool {
 
   public static JSONObject execute(final ArcadeDBServer server, final ServerSecurityUser user, final JSONObject args,
       final MCPConfiguration config) {
-    final String databaseName = args.getString("database");
-    final String language = args.getString("language", "cypher");
-    final String command = args.getString("command");
-    final int limit = args.getInt("limit", DEFAULT_LIMIT);
+    final String databaseName = MCPToolUtils.requireString(args, "database");
+    final String language = MCPToolUtils.optionalString(args, "language", "cypher");
+    final String command = MCPToolUtils.requireString(args, "command");
+    final int limit = MCPToolUtils.intArgument(args, "limit", DEFAULT_LIMIT);
     if (limit < 1 || limit > MAX_LIMIT)
-      throw new IllegalArgumentException("'limit' must be between 1 and " + MAX_LIMIT);
+      throw new MCPToolArgumentException("'limit' must be between 1 and " + MAX_LIMIT);
 
     final MCPToolUtils.DatabaseAccess access = MCPToolUtils.resolveDatabase(
         server, user, databaseName, config, MCPToolUtils.RequiredAccess.ACCESS);

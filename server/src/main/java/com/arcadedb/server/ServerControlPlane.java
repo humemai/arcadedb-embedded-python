@@ -22,6 +22,8 @@ import com.arcadedb.ContextConfiguration;
 import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.database.Database;
 import com.arcadedb.database.DatabaseInternal;
+import com.arcadedb.database.DocumentValidator;
+import com.arcadedb.database.LocalDatabase;
 import com.arcadedb.engine.ComponentFile;
 import com.arcadedb.engine.MaintenanceCoordinator;
 import com.arcadedb.engine.MaintenanceCoordinator.Operation;
@@ -29,7 +31,10 @@ import com.arcadedb.engine.OperationProgress;
 import com.arcadedb.engine.OperationProgressRegistry;
 import com.arcadedb.exception.CommandExecutionException;
 import com.arcadedb.exception.DatabaseOperationInProgressException;
+import com.arcadedb.exception.TransactionCommittedRemotelyException;
+import com.arcadedb.exception.TransactionOutcomeUnknownException;
 import com.arcadedb.log.LogManager;
+import com.arcadedb.query.RunningQuery;
 import com.arcadedb.serializer.json.JSONArray;
 import com.arcadedb.serializer.json.JSONException;
 import com.arcadedb.serializer.json.JSONObject;
@@ -39,6 +44,8 @@ import com.arcadedb.server.backup.BackupCoordinator;
 import com.arcadedb.server.http.HttpAuthSession;
 import com.arcadedb.server.http.HttpAuthSessionManager;
 import com.arcadedb.server.http.HttpServer;
+import com.arcadedb.server.http.HttpSession;
+import com.arcadedb.server.http.HttpSessionManager;
 import com.arcadedb.server.monitor.ServerQueryProfiler;
 import com.arcadedb.server.security.ApiTokenConfiguration;
 import com.arcadedb.server.security.ServerSecurity;
@@ -64,6 +71,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -108,6 +116,10 @@ public class ServerControlPlane {
   /** The security documents in the order every source of the convergence signal names them (issue #8317). */
   private static final List<String> SECURITY_DOCUMENT_ORDER = List.of("users", "groups", "API tokens");
   private static final IPAddressBlocklist RESERVED_ADDRESSES = IPAddressBlocklist.defaultReservedRanges();
+  /** How long a terminate waits for the statement to end when the caller does not say (issue #9680). */
+  public static final  long               DEFAULT_TERMINATE_WAIT_MS = 5_000L;
+  /** The longest a terminate waits, whatever the caller asks: the wait holds a request thread, and a client that needs longer polls "list queries". */
+  public static final  long               MAX_TERMINATE_WAIT_MS     = 10_000L;
 
   private final ArcadeDBServer server;
 
@@ -852,6 +864,201 @@ public class ServerControlPlane {
   }
 
   // ---------------------------------------------------------------------------------------------
+  // Running statements and transaction sessions (issue #9680)
+  // ---------------------------------------------------------------------------------------------
+
+  /**
+   * The statements this server is running that {@code user} may see: every one for the server administrator, the user's
+   * own for anybody else. Optionally only those against {@code database} or carrying {@code tag}.
+   * <p>
+   * A statement leaves the list only once the server has stopped working on it - its rollback and cleanup included - so
+   * a statement missing from it is a statement that is over.
+   */
+  public JSONArray listQueries(final ServerSecurityUser user, final String database, final String tag) {
+    final JSONArray result = new JSONArray();
+    for (final RunningQuery query : server.getRunningQueries().getRunning())
+      if (isVisible(user, query) && (database == null || database.equals(query.getDatabase()))
+          && (tag == null || tag.equals(query.getTag())))
+        result.put(query.toJSON().put("server", server.getServerName()));
+    return result;
+  }
+
+  /**
+   * Terminates a running statement and waits up to {@code waitMs} for it to end. The answer says what happened:
+   * <ul>
+   * <li>{@code terminated}: the statement stopped and what it wrote was rolled back;</li>
+   * <li>{@code completed}: it ended on its own before it noticed the request - a write it committed stands;</li>
+   * <li>{@code terminating}: it was asked to stop and has not reached a check yet; poll {@code list queries};</li>
+   * <li>{@code not found}: no such statement is running, or it is not one {@code user} may see - not told apart, so
+   * the existence of another user's statement is not given away.</li>
+   * </ul>
+   * A statement that ran in a transaction session also answers the session's {@code sessionId} and whether it is still
+   * open ({@code sessionOpen}): a terminated command ends its session, a terminated read leaves it to its client (issue
+   * #9798), and a caller waiting for the session to go must then end it with {@code terminate transaction} (issue #9953).
+   * With {@code terminating}, {@code sessionOpen} is only the state when the answer was built: a command still stopping
+   * ends its session as it stops.
+   */
+  public JSONObject terminateQuery(final ServerSecurityUser user, final String id, final long waitMs) {
+    RunningQuery query = user != null ? server.getRunningQueries().get(id) : null;
+    if (query == null && user != null)
+      // A statement another node forwarded here is found by the id it has there too: that node's terminate reaches the
+      // work through it (issue #9689)
+      query = server.getRunningQueries().getForwardedFrom(id);
+    if (query == null || !isVisible(user, query))
+      return new JSONObject().put("id", id).put("status", "not found");
+
+    query.terminate(user.getName());
+    return terminationStatus(query, System.currentTimeMillis() + boundedWait(waitMs));
+  }
+
+  /** Terminates every running statement carrying {@code tag} that {@code user} may see, then waits for them together. */
+  public JSONArray terminateQueriesByTag(final ServerSecurityUser user, final String tag, final long waitMs) {
+    if (user == null || tag == null)
+      return new JSONArray();
+    final List<RunningQuery> matching = new ArrayList<>();
+    for (final RunningQuery query : server.getRunningQueries().getRunning())
+      if (tag.equals(query.getTag()) && isVisible(user, query)) {
+        query.terminate(user.getName());
+        matching.add(query);
+      }
+
+    final long deadline = System.currentTimeMillis() + boundedWait(waitMs);
+    final JSONArray result = new JSONArray();
+    for (final RunningQuery query : matching)
+      result.put(terminationStatus(query, deadline));
+    return result;
+  }
+
+  /** The open HTTP transaction sessions {@code user} may see, with the statements running in each. */
+  public JSONArray listTransactions(final ServerSecurityUser user) {
+    final JSONArray result = new JSONArray();
+    final HttpServer httpServer = server.getHttpServer();
+    if (httpServer == null)
+      return result;
+
+    // The running statements grouped by session once, rather than scanned again for every session
+    final Map<String, JSONArray> queriesBySession = new HashMap<>();
+    for (final RunningQuery query : server.getRunningQueries().getRunning())
+      if (query.getSessionId() != null)
+        queriesBySession.computeIfAbsent(query.getSessionId(), k -> new JSONArray()).put(query.getId());
+
+    for (final HttpSession session : httpServer.getSessionManager().getSessions()) {
+      final String owner = session.user != null ? session.user.getName() : null;
+      if (!isVisible(user, owner))
+        continue;
+      final JSONArray queries = queriesBySession.getOrDefault(session.id, new JSONArray());
+      final JSONObject json = new JSONObject()//
+          .put("id", session.id)//
+          .put("user", owner)//
+          .put("database", session.transaction != null && session.transaction.getDatabase() != null ?
+              session.transaction.getDatabase().getName() : null)//
+          .put("idleMs", session.elapsedFromLastUpdate())//
+          .put("busy", session.isBusy())//
+          .put("runningQueries", queries)//
+          .put("server", server.getServerName());
+      if (session.getTag() != null)
+        json.put("tag", session.getTag());
+      result.put(json);
+    }
+    return result;
+  }
+
+  /**
+   * Ends an HTTP transaction session: terminates the statements running in it, rolls its transaction back and removes
+   * it, so a later request naming it is told it does not exist. Answers {@code terminated}, {@code terminating} when a
+   * statement running in it has not stopped within {@code waitMs} (the session is rolled back and removed as soon as it
+   * does) or the session is still held past that by work in it, which then rolls it back as it ends, or {@code not found}.
+   * The whole call is bounded by {@code waitMs}, capped at {@link #MAX_TERMINATE_WAIT_MS} (issue #9774).
+   */
+  public JSONObject terminateTransaction(final ServerSecurityUser user, final String sessionId, final long waitMs) {
+    final HttpServer httpServer = server.getHttpServer();
+    final HttpSession session = httpServer != null ? findSession(httpServer.getSessionManager(), sessionId) : null;
+    if (session == null || !isVisible(user, session.user != null ? session.user.getName() : null))
+      return new JSONObject().put("id", sessionId).put("status", "not found");
+
+    // A statement running in the session ends the session on its way out once it is terminated (DatabaseAbstractHandler),
+    // so the session is left to it rather than rolled back under its feet: cancel() would wait for it anyway
+    // Every statement of the session is asked to stop before any of them is waited for, as by tag
+    final List<RunningQuery> inSession = new ArrayList<>();
+    for (final RunningQuery query : server.getRunningQueries().getRunning())
+      if (sessionId.equals(query.getSessionId())) {
+        query.terminate(user.getName());
+        inSession.add(query);
+      }
+    final long deadline = System.currentTimeMillis() + boundedWait(waitMs);
+    for (final RunningQuery query : inSession)
+      if (!awaitEnd(query, deadline))
+        return new JSONObject().put("id", sessionId).put("status", "terminating");
+
+    // Idle, or what ran in it is over: end it here. Removed first, so no new request can resolve it meanwhile. The wait for
+    // the session lock shares the deadline (issue #9774): work the registry does not list can still hold it, and this runs on
+    // a request thread the cap exists to protect. Past the deadline the rollback is left to that work, which performs it as
+    // it lets go of the session, and the answer says the session is still terminating
+    if (httpServer.getSessionManager().removeSession(sessionId) != null
+        && !session.cancel(Math.max(0, deadline - System.currentTimeMillis())))
+      return new JSONObject().put("id", sessionId).put("status", "terminating");
+    return new JSONObject().put("id", sessionId).put("status", "terminated");
+  }
+
+  private static HttpSession findSession(final HttpSessionManager sessionManager, final String sessionId) {
+    if (sessionId == null)
+      return null;
+    for (final HttpSession session : sessionManager.getSessions())
+      if (session.id.equals(sessionId))
+        return session;
+    return null;
+  }
+
+  private JSONObject terminationStatus(final RunningQuery query, final long deadline) {
+    final String status;
+    if (!awaitEnd(query, deadline))
+      status = "terminating";
+    else
+      status = query.getOutcome() == RunningQuery.Outcome.TERMINATED ? "terminated" : "completed";
+    final JSONObject result = new JSONObject().put("id", query.getId()).put("status", status);
+    final String sessionId = query.getSessionId();
+    if (sessionId != null) {
+      // Whether the session outlived its statement, so a caller waiting for it to go knows to end it (issue #9953)
+      final HttpServer httpServer = server.getHttpServer();
+      result.put("sessionId", sessionId)
+          .put("sessionOpen", httpServer != null && findSession(httpServer.getSessionManager(), sessionId) != null);
+    }
+    return result;
+  }
+
+  private static boolean awaitEnd(final RunningQuery query, final long deadline) {
+    final long remaining = deadline - System.currentTimeMillis();
+    if (remaining <= 0)
+      // The shared deadline is spent: what has ended has ended, the rest is still terminating
+      return query.isEnded();
+    try {
+      return query.awaitEnd(remaining);
+    } catch (final InterruptedException e) {
+      Thread.currentThread().interrupt();
+      return query.isEnded();
+    }
+  }
+
+  private static long boundedWait(final long waitMs) {
+    return waitMs < 0 ? DEFAULT_TERMINATE_WAIT_MS : Math.min(waitMs, MAX_TERMINATE_WAIT_MS);
+  }
+
+  /**
+   * Whether {@code user} may see and stop the work of {@code owner}: the server administrator any, others their own.
+   * <p>
+   * A {@code null} user sees nothing, unlike in {@link #filterAuthorizedDatabases}: every HTTP request reaches the server
+   * commands authenticated, so a {@code null} here can only be a caller that forgot to pass one, and stopping somebody's
+   * work is the one place where failing closed is the safe answer to that.
+   */
+  private boolean isVisible(final ServerSecurityUser user, final RunningQuery query) {
+    return user != null && server.getRunningQueries().isVisible(user.getName(), query);
+  }
+
+  private boolean isVisible(final ServerSecurityUser user, final String owner) {
+    return user != null && server.getRunningQueries().isVisible(user.getName(), owner);
+  }
+
+  // ---------------------------------------------------------------------------------------------
   // Database lifecycle
   // ---------------------------------------------------------------------------------------------
 
@@ -990,15 +1197,79 @@ public class ServerControlPlane {
     requireDatabaseName(databaseName);
 
     final DatabaseInternal database = server.getDatabase(databaseName);
-    applySetting(database.getConfiguration(), key, value);
-    database.saveConfiguration();
+    // Under Raft HA the save replicates the configuration and can be refused or fail to commit: the setting must not
+    // then stay in force on this node alone (issue #9763), so the value it replaced is put back. Only that setting, so
+    // a change to another one that lands meanwhile is kept. The value replaced is captured and the new one stored in one
+    // step for the apply of a replicated change, so a change to the same setting another node committed cannot land in
+    // between and be undone with a value it replaced (issue #9919).
+    final String storedKey = storedKey(key);
+    final LocalDatabase local = database.getEmbedded() instanceof LocalDatabase l ? l : null;
+    final LocalDatabase.SettingChange change;
+    final GlobalConfiguration setting = GlobalConfiguration.findByKey(storedKey);
+    if (local != null && (setting == GlobalConfiguration.DATE_IMPLEMENTATION
+        || setting == GlobalConfiguration.DATE_TIME_IMPLEMENTATION))
+      change = changeDateImplementation(database, local, setting, value);
+    else if (local != null)
+      change = local.changeSetting(storedKey, () -> applySetting(database.getConfiguration(), key, value));
+    else {
+      applySetting(database.getConfiguration(), key, value);
+      change = null;
+    }
+    try {
+      // This setting only, never another statement's change still on its way to the replication (issue #9959)
+      database.saveConfiguration(storedKey);
+    } catch (final TransactionCommittedRemotelyException e) {
+      // Committed cluster-wide: every node, this one included, installs the change, so there is nothing to undo
+      throw e;
+    } catch (final TransactionOutcomeUnknownException e) {
+      // Handed to the replication, which may still commit it or never (issue #9904): settle on what this node's
+      // configuration.json holds rather than racing this node's own apply of the change with the previous value
+      if (local != null)
+        local.restoreSettingFromSavedConfiguration(storedKey);
+      throw e;
+    } catch (final IOException | RuntimeException e) {
+      // A definite failure: the change did not and will not commit, so the previous value is the right one, unless
+      // another writer changed the setting since (issue #9919)
+      if (local != null)
+        local.undoSettingChange(change);
+      throw e;
+    }
   }
 
+  /**
+   * Stores a new {@code arcadedb.dateImplementation} or {@code arcadedb.dateTimeImplementation} after the check
+   * {@code ALTER DATABASE} runs on the same setting (issue #9976), so this path cannot bypass it (issue #9949): a REGEXP
+   * on a DATE or DATETIME property that would match no value of the new class refuses the change before anything is
+   * stored. Checked and stored under the write lock, taken before the apply lock {@code changeSetting} takes, never after.
+   */
+  private static LocalDatabase.SettingChange changeDateImplementation(final DatabaseInternal database,
+      final LocalDatabase local, final GlobalConfiguration setting, final String value) {
+    // A Class-typed setting coerces to a Class or throws, so the value is refused here before any lock is taken
+    final Class<?> implementation = (Class<?>) coerceSetting(setting, value);
+    final String described = "'" + setting.getKey() + "' to '" + GlobalConfiguration.externalizeValue(implementation) + "'";
+    return database.executeInWriteLock(() -> {
+      DocumentValidator.requireDateImplementationChangeSatisfiable(database, setting, implementation, described);
+      // the class already coerced is what applySetting() would store: no second parse that could disagree with the check
+      return local.changeSetting(setting.getKey(), () -> database.getConfiguration().setValue(setting, implementation));
+    });
+  }
+
+  /**
+   * Stores one server setting the operator sets while the server runs. A declared setting is parsed first and then
+   * offered to the plugins, any of which can refuse a value its running state cannot honour, before anything is
+   * stored (issue #9749: a Gremlin Server channelizer that cannot conceal engine error text refuses a switch to
+   * production mode).
+   */
   public void setServerSetting(final String key, final String value) {
-    applySetting(server.getConfiguration(), key, value);
     final String name = FileUtils.getStringContent(key.trim());
     final GlobalConfiguration setting = GlobalConfiguration.findByKey(name);
-    server.markOperatorSetting(setting != null ? setting.getKey() : name);
+    if (setting == null) {
+      applySetting(server.getConfiguration(), key, value);
+      server.markOperatorSetting(name);
+      return;
+    }
+
+    server.storeOperatorSetting(setting, coerceSetting(setting, value));
   }
 
   /**
@@ -1033,6 +1304,13 @@ public class ServerControlPlane {
    * all, but they go through the same stripping and coercion so a declared setting accepts and refuses the same
    * values on both transports.
    */
+  /** The key {@link #applySetting} stores {@code rawKey} under: the declared one for a known setting. */
+  private static String storedKey(final String rawKey) {
+    final String key = FileUtils.getStringContent(rawKey.trim());
+    final GlobalConfiguration setting = GlobalConfiguration.findByKey(key);
+    return setting != null ? setting.getKey() : key;
+  }
+
   public static void applySetting(final ContextConfiguration configuration, final String rawKey, final String rawValue) {
     final String key = FileUtils.getStringContent(rawKey.trim());
     final String value = FileUtils.getStringContent(rawValue.trim());
@@ -1043,14 +1321,22 @@ public class ServerControlPlane {
       return;
     }
 
-    if (value.isEmpty() && setting.getType() != String.class)
-      throw new IllegalArgumentException(
-          "'value' must not be empty for setting '" + setting.getKey() + "' of type " + setting.getType().getSimpleName());
-
     // setValue also runs the side effect of a declared SCOPE.SERVER setting, so one whose effect is not a value
     // somebody later reads - arcadedb.server.logFormat swapping the console formatter - takes effect here too
     // rather than being stored and ignored (issue #7121).
-    configuration.setValue(setting.getKey(), setting.coerceFromAdminCommand(value));
+    configuration.setValue(setting.getKey(), coerceSetting(setting, rawValue));
+  }
+
+  /**
+   * The value of a "set ... setting" command parsed to {@code setting}'s type: the quotes stripped, an empty value
+   * refused for any type but {@code String}, the rest through {@link GlobalConfiguration#coerceFromAdminCommand(Object)}.
+   */
+  private static Object coerceSetting(final GlobalConfiguration setting, final String rawValue) {
+    final String value = FileUtils.getStringContent(rawValue.trim());
+    if (value.isEmpty() && setting.getType() != String.class)
+      throw new IllegalArgumentException(
+          "'value' must not be empty for setting '" + setting.getKey() + "' of type " + setting.getType().getSimpleName());
+    return setting.coerceFromAdminCommand(value);
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -1591,19 +1877,24 @@ public class ServerControlPlane {
    * Not a race with the scheduler's own prune, even though both now walk the same directory for the same database:
    * this runs inside the {@code BackupCoordinator} BACKUP slot {@link #triggerBackup} holds, and {@code BackupTask}
    * takes the same slot for the scheduled run, so a scheduled backup and an on-demand trigger of one database are
-   * serialised end to end - prune included - rather than overlapping (issue #7472).
+   * serialised end to end - prune included - rather than overlapping (issue #7472). The SQL {@code BACKUP DATABASE}
+   * statement reaches this through {@code BackupDirectoryResolver.applyRetention()} from inside the
+   * BACKUP slot it holds, for the same reason (issue #9844).
+   *
+   * @return the number of archives deleted
    */
-  private void pruneBackups(final Path backupDirectory, final String databaseName) {
+  int pruneBackups(final Path backupDirectory, final String databaseName) {
     final AutoBackupSchedulerPlugin plugin = getBackupPlugin();
     if (plugin == null)
-      return;
+      return 0;
 
     try {
-      plugin.applyRetention(backupDirectory.toString(), databaseName);
+      return plugin.applyRetention(backupDirectory.toString(), databaseName);
     } catch (final Exception e) {
       LogManager.instance().log(this, Level.WARNING,
           "Cannot apply the backup retention policy for database '%s' after an on-demand backup: %s", databaseName,
           e.getMessage());
+      return 0;
     }
   }
 

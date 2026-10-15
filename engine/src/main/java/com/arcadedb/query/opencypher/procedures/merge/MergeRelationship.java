@@ -25,6 +25,7 @@ import com.arcadedb.graph.GhostEdgeReporter;
 import com.arcadedb.graph.LightEdge;
 import com.arcadedb.graph.MutableEdge;
 import com.arcadedb.graph.Vertex;
+import com.arcadedb.query.opencypher.InlineProperties;
 import com.arcadedb.query.opencypher.Labels;
 import com.arcadedb.query.opencypher.executor.CypherVertexReload;
 import com.arcadedb.query.opencypher.procedures.CypherProcedure;
@@ -113,8 +114,8 @@ public class MergeRelationship implements CypherProcedure {
     final Map<String, Object> matchProps = extractMap(args[2], "matchProps");
     final Map<String, Object> createProps = extractMap(args[3], "createProps");
     final Vertex endNode = extractVertex(args[4], "endNode");
-    // Absent whenever the caller used the five-argument form, which getMinArgs() still allows.
-    final Map<String, Object> onMatchProps = args.length < 6 ? null : extractMap(args[5], "onMatchProps");
+    // Empty whenever the caller used the five-argument form, which getMinArgs() still allows.
+    final Map<String, Object> onMatchProps = optionalMapArg(args, 5, "onMatchProps");
 
     final Database database = context.getDatabase();
 
@@ -217,12 +218,15 @@ public class MergeRelationship implements CypherProcedure {
           final Object edgeValue = edge.get(entry.getKey());
           final Object matchValue = entry.getValue();
 
+          // A value is compared the way a MATCH compares an inline property, so a stored FLOAT or INTEGER is found by the
+          // DOUBLE or LONG a query supplies instead of creating a duplicate (issue #9693), a declared property by what the
+          // same value was stored as (issues #9695, #9794), and a legacy temporal text by its temporal (issue #9806)
           if (matchValue == null) {
             if (edgeValue != null) {
               allMatch = false;
               break;
             }
-          } else if (!matchValue.equals(edgeValue)) {
+          } else if (!InlineProperties.matchesProperty(edge, entry.getKey(), matchValue)) {
             allMatch = false;
             break;
           }

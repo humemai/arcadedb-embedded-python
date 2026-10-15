@@ -595,7 +595,7 @@ public class FileUtils {
    * @param syncDirectory whether to fsync the parent directory after the rename; {@code false} only for a caller that
    *                      fsyncs that same directory itself right after (#8635)
    */
-  private static void publishAtomically(final Path tmp, final Path target, final boolean syncDirectory) throws IOException {
+  public static void publishAtomically(final Path tmp, final Path target, final boolean syncDirectory) throws IOException {
     try {
       // REPLACE_EXISTING is required for ATOMIC_MOVE to overwrite an existing target on some
       // platforms (notably Windows), where the move otherwise throws FileAlreadyExistsException.
@@ -726,6 +726,57 @@ public class FileUtils {
                 + "writeFully() requires to avoid retrying forever (a non-blocking channel with no room to write "
                 + "into right now is not supported here)");
     }
+  }
+
+  /**
+   * Positional twin of {@link #writeFully(WritableByteChannel, ByteBuffer)}: writes every remaining byte of
+   * {@code buffer} at {@code position}, continuing each time from where the previous call stopped.
+   * {@link FileChannel#write(ByteBuffer, long)} is no more obliged to write everything than the relative call is, and
+   * a single unlooped call can leave a record half old and half new (issue #9640). Fails on a zero-progress call for
+   * the same reason the relative variant does.
+   *
+   * @param channel  the channel to write to
+   * @param buffer   the bytes to write; consumed as a side effect, empty on return
+   * @param position the file position the first remaining byte of {@code buffer} goes to
+   */
+  public static void writeFully(final FileChannel channel, final ByteBuffer buffer, long position) throws IOException {
+    while (buffer.hasRemaining()) {
+      final int written = channel.write(buffer, position);
+      if (written == 0)
+        throw new IOException(
+            "FileChannel.write() returned 0 with bytes still remaining at position " + position
+                + ": the channel made no progress");
+      position += written;
+    }
+  }
+
+  /**
+   * Reads into {@code buffer} from {@code position} until the buffer is full or the end of the file is reached,
+   * continuing each time from where the previous call stopped. {@link FileChannel#read(ByteBuffer, long)} may return
+   * fewer bytes than are available, so a caller that takes one call's count as the answer decodes whatever was in
+   * the buffer before (issue #9640). A result smaller than what the buffer had room for therefore means the file
+   * ends there, never that a read came back short.
+   *
+   * @param channel  the channel to read from
+   * @param buffer   where the bytes go; filled from its position
+   * @param position the file position to read from
+   *
+   * @return the number of bytes read, less than the buffer's room only at the end of the file
+   */
+  public static int readFully(final FileChannel channel, final ByteBuffer buffer, long position) throws IOException {
+    int total = 0;
+    while (buffer.hasRemaining()) {
+      final int read = channel.read(buffer, position);
+      if (read < 0)
+        break;
+      if (read == 0)
+        throw new IOException(
+            "FileChannel.read() returned 0 with room still remaining at position " + position
+                + ": the channel made no progress");
+      position += read;
+      total += read;
+    }
+    return total;
   }
 
   public static void appendContentToFile(final File file, final String content) throws IOException {

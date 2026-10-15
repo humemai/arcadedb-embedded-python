@@ -34,8 +34,8 @@ set -euo pipefail
 #      with this repository bind-mounted, so the Linux binary lands in native/target on the host;
 #   3. stages the build context exactly as native-image.yml's `docker` job does (binary + config,
 #      plus a CA bundle for the scratch image) and builds the runtime image with buildx --load;
-#   4. smoke-tests the resulting container with native/src/test/scripts/exercise.sh and scans its
-#      startup log, the same two assertions CI makes.
+#   4. runs the Java e2e battery (the e2e module, Testcontainers) against the resulting image, as
+#      CI's `docker` job does; the battery ends by scanning the server log for missing classes.
 #
 # The runtime Dockerfiles are used unmodified, so what you get is the shipped image, not a
 # local approximation:
@@ -53,15 +53,15 @@ set -euo pipefail
 #   --tag <tag>            Image tag to build. Default: arcadedb:<version>-native-<arch>-local
 #   --skip-binary-build    Reuse the Linux binary already in native/target (steps 3-4 only).
 #                          Useful when iterating on the Dockerfiles themselves.
-#   --no-smoke             Build the image but do not run the container smoke test.
-#   --port <port>          Host port the smoke test publishes 2480 on. Default 2480. A dev machine
-#                          is not a clean CI runner: an IDE-launched server or a previous run
-#                          already holding 2480 makes `docker run -p 2480:2480` fail, or - worse,
-#                          if it started before the publish - makes exercise.sh assert against
-#                          THAT server and pass while telling you nothing about this image.
+#   --no-e2e               Build the image but do not run the e2e battery against it (--no-smoke
+#                          is accepted as an alias). The battery runs on the host's Maven and JDK and
+#                          lets Testcontainers pick free ports, so nothing on 2480 can disturb it.
 #   --builder-memory <sz>  Cap the native-image builder heap, e.g. 10g, via NATIVE_IMAGE_OPTIONS
 #                          (-J-Xmx). By default native-image sizes its own heap at ~80% of what it
 #                          can see, which is the Docker VM's memory, not the host's.
+#   --builder-parallelism <n>  Cap the threads native-image compiles with (--parallelism). Each
+#                          compile thread costs heap: CI's runners have 4 CPUs, a 12-core Mac gives the
+#                          builder 12 and can run out of memory where CI does not.
 #   --allow-low-memory     Proceed even though Docker has less memory than this build needs.
 #   --rebuild-builder      Rebuild the builder image even if it already exists locally.
 #   --allow-emulation      Permit --arch different from the host's (QEMU; expect hours, not minutes).
@@ -84,12 +84,12 @@ M2_DIR="${ARCADEDB_NATIVE_M2:-$HOME/.cache/arcadedb-native-m2}"
 ARCH=""
 TAG=""
 SKIP_BINARY=0
-RUN_SMOKE=1
+RUN_E2E=1
 REBUILD_BUILDER=0
 ALLOW_EMULATION=0
 ALLOW_LOW_MEMORY=0
 BUILDER_MEMORY=""
-HTTP_PORT=2480
+BUILDER_PARALLELISM=""
 
 log()  { echo "[native-docker] $*"; }
 fail() { echo "[native-docker] ERROR: $*" >&2; exit 1; }
@@ -105,11 +105,11 @@ while [ $# -gt 0 ]; do
     --tag)              TAG="${2:-}"; shift 2 ;;
     --tag=*)            TAG="${1#*=}"; shift ;;
     --skip-binary-build) SKIP_BINARY=1; shift ;;
-    --no-smoke)         RUN_SMOKE=0; shift ;;
-    --port)             HTTP_PORT="${2:-}"; shift 2 ;;
-    --port=*)           HTTP_PORT="${1#*=}"; shift ;;
+    --no-e2e|--no-smoke) RUN_E2E=0; shift ;;
     --builder-memory)   BUILDER_MEMORY="${2:-}"; shift 2 ;;
     --builder-memory=*) BUILDER_MEMORY="${1#*=}"; shift ;;
+    --builder-parallelism)   BUILDER_PARALLELISM="${2:-}"; shift 2 ;;
+    --builder-parallelism=*) BUILDER_PARALLELISM="${1#*=}"; shift ;;
     --allow-low-memory) ALLOW_LOW_MEMORY=1; shift ;;
     --rebuild-builder)  REBUILD_BUILDER=1; shift ;;
     --allow-emulation)  ALLOW_EMULATION=1; shift ;;
@@ -151,15 +151,17 @@ fi
 # native-image.yml had to move its macOS leg onto a paid larger runner for the same reason,
 # because the free ~7 GB one OOM-thrashed for 40+ minutes.
 #
-# 12 GiB is the floor enforced here and 16 GiB is what CI's Linux runners have; 8 GiB is known
-# to fail. Raise it in Docker Desktop under Settings -> Resources -> Memory.
+# 16 GiB is the target (it is what CI's Linux runners have) and 15 GiB the floor enforced here, because
+# MemTotal reports a little under what Docker Desktop allots (an 8 GiB VM reports 7.65 GiB). With Raft HA,
+# metrics and tracing in the image (#9407) a 9 GB builder heap (80% of 12 GiB) ran out of memory, 12 GB
+# did not, and 8 GiB failed before. Raise it in Docker Desktop under Settings -> Resources -> Memory.
 # ---------------------------------------------------------------------------
 DOCKER_MEM_BYTES="$(docker info --format '{{.MemTotal}}' 2>/dev/null || echo 0)"
 case "$DOCKER_MEM_BYTES" in
   ''|*[!0-9]*) DOCKER_MEM_BYTES=0 ;;
 esac
 if [ "$DOCKER_MEM_BYTES" -gt 0 ] && [ "$SKIP_BINARY" = "0" ]; then
-  # Tenths of a GiB, so a 7.6 GiB VM does not print as a flat "7" next to a "needs 12" and read
+  # Tenths of a GiB, so a 7.6 GiB VM does not print as a flat "7" next to a "needs 15" and read
   # like a bigger shortfall than it is.
   DOCKER_MEM_MIB=$(( DOCKER_MEM_BYTES / 1024 / 1024 ))
   DOCKER_MEM="$(( DOCKER_MEM_MIB / 1024 )).$(( (DOCKER_MEM_MIB % 1024) * 10 / 1024 ))"
@@ -168,7 +170,7 @@ if [ "$DOCKER_MEM_BYTES" -gt 0 ] && [ "$SKIP_BINARY" = "0" ]; then
   if [ "$HOST_MEM_BYTES" -gt "$DOCKER_MEM_BYTES" ]; then
     HOST_MEM_NOTE=" (this machine has $(( HOST_MEM_BYTES / 1024 / 1024 / 1024 )) GiB, but Docker only gets what you allot it)"
   fi
-  if [ "$DOCKER_MEM_MIB" -lt $(( 12 * 1024 )) ]; then
+  if [ "$DOCKER_MEM_MIB" -lt $(( 15 * 1024 )) ]; then
     if [ "$ALLOW_LOW_MEMORY" = "1" ]; then
       log "WARN: Docker has only ${DOCKER_MEM} GiB; proceeding anyway (--allow-low-memory)."
     else
@@ -176,7 +178,7 @@ if [ "$DOCKER_MEM_BYTES" -gt 0 ] && [ "$SKIP_BINARY" = "0" ]; then
   native-image sizes its build heap at ~80% of the memory it can see, and inside a container that
   is the Docker VM's allocation. At ${DOCKER_MEM} GiB it dies with a Java heap OutOfMemoryError
   about 21 minutes in, once the whole Maven reactor has already built. CI's Linux runners have
-  16 GiB; 12 is the floor checked here.
+  16 GiB; the floor checked here is 15 GiB, since a 16 GiB VM reports slightly less.
   Raise it in Docker Desktop: Settings -> Resources -> Memory, then restart Docker.
   Or pass --allow-low-memory to try regardless, --builder-memory <size> to cap the builder heap
   explicitly, or --skip-binary-build if you only need to rebuild the image around an existing
@@ -303,10 +305,16 @@ fi
 # arguments (it announces "Picked up NATIVE_IMAGE_OPTIONS: ..." when it does), so the builder heap
 # can be capped without touching native/pom.xml's buildArgs, which are shared with CI.
 NI_OPTS=()
+NI_VALUE=""
 if [ -n "$BUILDER_MEMORY" ]; then
-  NI_OPTS=(-e "NATIVE_IMAGE_OPTIONS=-J-Xmx${BUILDER_MEMORY}")
+  NI_VALUE="-J-Xmx${BUILDER_MEMORY}"
   log "capping the native-image builder heap at $BUILDER_MEMORY"
 fi
+if [ -n "$BUILDER_PARALLELISM" ]; then
+  NI_VALUE="${NI_VALUE:+$NI_VALUE }--parallelism=${BUILDER_PARALLELISM}"
+  log "capping the native-image builder at $BUILDER_PARALLELISM threads"
+fi
+[ -z "$NI_VALUE" ] || NI_OPTS=(-e "NATIVE_IMAGE_OPTIONS=$NI_VALUE")
 
 if [ "$SKIP_BINARY" = "0" ]; then
   mkdir -p "$M2_DIR"
@@ -387,38 +395,20 @@ docker buildx build \
 log "image built: $TAG ($(docker image inspect "$TAG" --format '{{.Size}}' | awk '{printf "%.0f MB", $1/1024/1024}'))"
 
 # ---------------------------------------------------------------------------
-# Container smoke test, mirroring native-image.yml's "Smoke the container" step: exercise.sh
-# hard-asserts HTTP/Studio/SQL/Cypher/JS against the RUNNING IMAGE, and the startup log is then
-# scanned for the non-fatal failures exercise.sh can stay green through (a class the JUL config
-# loads reflectively being absent from the image degrades logging without failing anything).
+# The Java e2e battery against the image, as native-image.yml's `docker` job runs it. The image is
+# the battery's only parameter; its tag marks it native (Gremlin is not bundled). The battery's last
+# class, ServerLogIT, fails on a ClassNotFoundException / MissingReflectionRegistrationError anywhere
+# in the server log, which replaces the startup-log grep the shell smoke used to make.
 # ---------------------------------------------------------------------------
-if [ "$RUN_SMOKE" = "1" ]; then
-  CONTAINER="arcadedb-native-smoke-$$"
-  # Refuse to start if something already holds the host port. Without this the run either fails
-  # opaquely on the port bind, or - if the squatter was there first and docker picked a different
-  # binding - exercise.sh happily asserts against the OTHER server and reports a green smoke for
-  # an image it never touched.
-  if command -v lsof >/dev/null 2>&1 && lsof -nP -iTCP:"$HTTP_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
-    fail "port $HTTP_PORT is already in use, so the smoke test would either fail to bind or assert
-  against whatever is already listening. Free it, or pass --port <other> / --no-smoke.
-  Culprit: $(lsof -nP -iTCP:"$HTTP_PORT" -sTCP:LISTEN | awk 'NR==2 {print $1" (pid "$2")"}')"
-  fi
-  log "smoke-testing the container (host port $HTTP_PORT -> container 2480)"
-  docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
-  docker run -d --name "$CONTAINER" --platform "linux/$ARCH" -p "$HTTP_PORT":2480 \
-    "$TAG" -Darcadedb.server.rootPassword=PlayWithData123! >/dev/null
-
-  rc=0
-  HTTP="$HTTP_PORT" "$REPO_ROOT/native/src/test/scripts/exercise.sh" || rc=$?
-  LOGS="$(docker logs "$CONTAINER" 2>&1)"
-  echo "$LOGS"
-  docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
-
-  [ "$rc" -eq 0 ] || fail "container exercise.sh failed (rc=$rc)"
-  if grep -qiE "ClassNotFoundException|Can't load log handler" <<<"$LOGS"; then
-    fail "container startup logged a ClassNotFoundException / log-handler load failure"
-  fi
-  log "smoke test passed"
+if [ "$RUN_E2E" = "1" ]; then
+  # unlike the binary build, the battery runs on the HOST: it needs a JDK there, and network access for the dataset the
+  # container imports at startup. The image was built --load for linux/$ARCH only, so Testcontainers runs that platform
+  command -v java >/dev/null 2>&1 || fail "the e2e battery needs a JDK 21+ on the host (java not found); use --no-e2e to only build the image"
+  log "running the e2e battery against $TAG"
+  (cd "$REPO_ROOT" && ./mvnw -B -q install -DskipTests -pl e2e -am) || fail "could not build the e2e module"
+  (cd "$REPO_ROOT" && ./mvnw -B verify -Pintegration -pl e2e -Darcadedb.test.image="$TAG" -Darcadedb.test.native=true) ||
+    fail "the e2e battery failed against $TAG (reports in e2e/target/failsafe-reports)"
+  log "e2e battery passed"
 fi
 
 # The scratch image has no /etc/passwd and runs as UID 0 unless overridden, so the amd64 hint

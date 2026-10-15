@@ -24,6 +24,7 @@ import com.arcadedb.database.BootstrapFingerprint;
 import com.arcadedb.database.DatabaseFactory;
 import com.arcadedb.database.LocalDatabase;
 import com.arcadedb.server.ArcadeDBServer;
+import com.arcadedb.server.FakeArcadeDBServer;
 import com.arcadedb.server.ServerDatabase;
 import com.arcadedb.utility.FileUtils;
 import org.junit.jupiter.api.AfterEach;
@@ -35,8 +36,6 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatNoException;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 /**
  * Regression tests for issue #8177: {@code Issue7519BootstrapWindowGateTest.aPeerThatMatchesTheBaselineIsNeverHeldOutOfTheService}
@@ -83,10 +82,9 @@ class Issue8177BootstrapFingerprintInFlightPagesTest {
     config.setValue(GlobalConfiguration.HA_SNAPSHOT_INSTALL_RETRY_BASE_MS, 0L);
     config.setValue(GlobalConfiguration.NETWORK_USE_SSL, false);
 
-    final ArcadeDBServer server = mock(ArcadeDBServer.class);
-    when(server.getConfiguration()).thenReturn(config);
-    when(server.existsDatabase(DB_NAME)).thenReturn(true);
-    when(server.getDatabase(DB_NAME)).thenReturn(new ServerDatabase(null, localDb));
+    final FakeArcadeDBServer server = FakeArcadeDBServer.create((String) null, config);
+    server.databaseNames(DB_NAME);
+    server.database(DB_NAME, new ServerDatabase(null, localDb));
 
     final ArcadeStateMachine sm = new ArcadeStateMachine();
     sm.setServer(server);
@@ -131,7 +129,7 @@ class Issue8177BootstrapFingerprintInFlightPagesTest {
 
     // Not only a check: the drain inside it is what puts the commit on disk before the state machine reads the
     // directory below, so the apply deterministically sees the other side of the flush.
-    assertThat(SettledBootstrapFingerprint.of(localDb))
+    assertThat(BootstrapFingerprint.computeSettled(localDb))
         .as("the commit's pages reached the disk after the sample was taken, so the directory hashes differently now. "
             + "If this fails, suspendFlushAndExecute no longer defers the pages of a commit made inside its window, and "
             + "this test no longer reproduces the race")
@@ -149,14 +147,15 @@ class Issue8177BootstrapFingerprintInFlightPagesTest {
   /**
    * The fix: the baseline is sampled from the settled copy, so the state machine's recomputation reads the same bytes
    * and a peer whose copy IS the baseline installs nothing, is marked nothing and stays in the Service. A guard for
-   * the helper on the same in-flight commit, deterministic by construction: the drain is explicit. The control for the
-   * test above: same commit, same held flush, only the sampling differs.
+   * {@code BootstrapFingerprint.computeSettled} (issue #8843) on the same in-flight commit, deterministic by
+   * construction: the drain is explicit. The control for the test above: same commit, same held flush, only the
+   * sampling differs.
    */
   @Test
   void aBaselineSampledFromTheSettledCopyMatchesThePeer() throws Exception {
     commitWhileTheFlushIsHeld();
 
-    final String settled = SettledBootstrapFingerprint.of(localDb);
+    final String settled = BootstrapFingerprint.computeSettled(localDb);
     final ArcadeStateMachine sm = stateMachine();
     assertThatNoException().isThrownBy(() -> sm.applyBootstrapFingerprintEntry(baseline(settled, localDb.getLastTransactionId()), 7L));
 

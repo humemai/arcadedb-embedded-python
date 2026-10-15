@@ -22,11 +22,14 @@ import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.database.DatabaseInternal;
 import com.arcadedb.database.LocalDatabase;
 import com.arcadedb.engine.ComponentFile;
+import com.arcadedb.engine.NodeLocalFiles;
 import com.arcadedb.engine.PageSnapshot;
+import com.arcadedb.engine.PaginatedComponent;
 import com.arcadedb.engine.timeseries.ListedSealedStore;
 import com.arcadedb.engine.timeseries.TimeSeriesCompactionPause;
 import com.arcadedb.engine.timeseries.TimeSeriesSealedStore;
 import com.arcadedb.exception.PageSnapshotException;
+import com.arcadedb.index.vector.LSMVectorIndexGraphSideFiles;
 import com.arcadedb.integration.backup.BackupException;
 import com.arcadedb.integration.backup.BackupSettings;
 import com.arcadedb.integration.backup.IoThrottler;
@@ -55,6 +58,7 @@ import java.security.spec.KeySpec;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
@@ -73,6 +77,12 @@ public class FullBackupFormat extends AbstractBackupFormat {
    * test can replace the file between the t0 listing and the read (issue #8738).
    */
   static volatile Consumer<File> beforeSealedStoreReadForTesting;
+
+  /**
+   * Test seam, {@code null} in production: called once the window is open and before the first vector graph's side
+   * files are opened, so a test can run a graph persist between the window's t0 and the copy (issue #9917).
+   */
+  static volatile Runnable beforeVectorGraphSideFilesOpenForTesting;
 
   /**
    * Whether this attempt has written a non-empty {@code schema.json} entry, set by the two methods that append
@@ -150,11 +160,15 @@ public class FullBackupFormat extends AbstractBackupFormat {
       try (final TimeSeriesCompactionPause pause = pauseCompaction()) {
         writeArchive(backupFile, compressionLevel, compressionThreads, maxMBPerSecond, failure, archive -> {
           if (snapshotAttempt)
-            // #6114: NO DATABASE READ LOCK. The lock this path used to hold for its WHOLE duration existed only to
-            // keep the two configuration files consistent with the page files, by excluding the DDL that rewrites
-            // them - so a backup blocked CREATE TYPE / DROP TYPE / CREATE INDEX for as long as it ran. The window
+            // #6114: NO DATABASE READ LOCK OVER THE TRANSFER. The lock this path used to hold for its WHOLE duration
+            // existed only to keep the two configuration files consistent with the page files, by excluding the DDL that
+            // rewrites them - so a backup blocked CREATE TYPE / DROP TYPE / CREATE INDEX for as long as it ran. The window
             // now carries those files itself, captured at t0 together with the page list (see
-            // PageSnapshot.getConfigurationFiles), so there is nothing left for the lock to protect
+            // PageSnapshot.getConfigurationFiles), so the lock has nothing left to protect while the archive is written.
+            // The CAPTURE is the exception: opening the window and listing the TimeSeries sealed stores happen in one
+            // read-locked frame, because the window cannot carry those stores and a DROP TYPE between the two would
+            // archive a schema.json naming segments that are not in the archive (#7705, after #7671). See
+            // backupFromSnapshot for why, and for how little time the lock is held
             databaseOrigSize.set(backupFromSnapshot(archive, pause));
           else
             // THE FALLBACK STILL TAKES IT. Here the page image is the LIVE on-disk one, held still by the flush
@@ -248,9 +262,14 @@ public class FullBackupFormat extends AbstractBackupFormat {
     // window that never reaches the try-with-resources below is never closed by it, so a listing that throws
     // closes it here and suppresses a close failure rather than replacing the exception that says what went wrong.
     final SnapshotImage image = database.executeInReadLock(() -> {
+      // BEFORE THE WINDOW, NOT WITH IT (issue #9917): the side files of a vector graph can only vouch for the pages at
+      // t0 if they are proved unchanged ACROSS t0, so the first observation has to precede it. Inside the frame so the
+      // graphs listed are the ones the window is about to list, with no DROP INDEX in between. It adds two or three
+      // file-attribute reads per vector graph to the time the lock is held, and opens nothing
+      final Map<Integer, LSMVectorIndexGraphSideFiles> vectorGraphSideFiles = LSMVectorIndexGraphSideFiles.capture(database);
       final PageSnapshot window = database.getPageManager().openSnapshot(database);
       try {
-        return new SnapshotImage(window, listSealedStoresOrFail());
+        return new SnapshotImage(window, listSealedStoresOrFail(), vectorGraphSideFiles);
       } catch (final RuntimeException e) {
         try {
           window.close();
@@ -273,8 +292,32 @@ public class FullBackupFormat extends AbstractBackupFormat {
       // SEALED FILE AT THIS POINT
       pause.close();
 
+      final Runnable sideFilesHook = beforeVectorGraphSideFilesOpenForTesting;
+      if (sideFilesHook != null)
+        sideFilesHook.run();
+
       for (final PageSnapshot.SnapshotFile file : snapshot.getFiles())
-        origSize += compressEntry(archive, file.fileName(), file.lastModified(), snapshot.newInputStream(file.fileId()));
+        if (isArchivedPageFile(file.fileName())) {
+          final InputStream input;
+          if (!isArchivedEmpty(file.fileName()))
+            input = snapshot.newInputStream(file.fileId());
+          else {
+            final long sideFilesSize = compressVectorGraphSideFiles(archive, image.vectorGraphSideFiles().get(file.fileId()));
+            if (sideFilesSize >= 0) {
+              // THE SIDE FILES VOUCH FOR THE PAGES AT t0, AND ARE ALREADY IN THE ARCHIVE: THE GRAPH GOES IN WITH ITS
+              // PAGES, AND THE RESTORED DATABASE REUSES IT INSTEAD OF REBUILDING IT (issue #9917)
+              origSize += sideFilesSize;
+              input = snapshot.newInputStream(file.fileId());
+            } else {
+              // AN EMPTY ENTRY NEVER OPENS THE WINDOW'S STREAM, DELIBERATELY: ITS PAGES ARE NOT PART OF THE ARCHIVE, SO
+              // THERE IS NOTHING OF THEM TO READ, AND THE checkValid() BELOW STILL COVERS EVERY PAGE THAT WAS READ
+              input = InputStream.nullInputStream();
+              logger.logLine(2, "- Vector graph '%s' archived empty: nothing vouches for its pages at the snapshot's point in "
+                  + "time (a graph persist ran across it, or none has completed), so the restored database rebuilds it", file.fileName());
+            }
+          }
+          origSize += compressEntry(archive, file.fileName(), file.lastModified(), input);
+        }
 
       // ANY PAGE READ ABOVE COULD HAVE BEEN THE ONE THAT BREACHED THE SHADOW CAP, AND A STREAM THAT ALREADY FAILED
       // WOULD HAVE THROWN - BUT RE-CHECKING HERE ALSO CATCHES A WINDOW INVALIDATED AFTER ITS LAST BYTE WAS READ,
@@ -314,10 +357,97 @@ public class FullBackupFormat extends AbstractBackupFormat {
     final Collection<ComponentFile> files = database.getFileManager().getFiles();
 
     for (final ComponentFile file : new ArrayList<>(files))
-      if (file != null)
-        origSize += compressFile(archive, file.getOSFile());
+      if (file != null && isArchivedPageFile(file.getFileName())) {
+        // ALWAYS EMPTY HERE, NEVER WITH ITS SIDE FILES (issue #9917). The proof the snapshot path relies on needs a t0
+        // to observe the side files across, and this path has none it can see: the on-disk image is the one frozen
+        // when the OUTERMOST flush suspension of this database began, and a backup that joined a suspension another
+        // reader already held skipped the drain and cannot tell when that was. A persist that committed after that
+        // moment is certified by a manifest that is on disk while its pages are not, so a manifest found unchanged
+        // across THIS backup proves nothing about them
+        if (isArchivedEmpty(file.getFileName())) {
+          // THE SAME SKIP compressFile APPLIES TO A FILE THAT IS NOT THERE, SO THE TWO KINDS OF ENTRY CANNOT DISAGREE
+          // ABOUT WHICH REGISTERED FILES THE ARCHIVE NAMES
+          final File osFile = file.getOSFile();
+          if (osFile.exists())
+            origSize += compressEntry(archive, osFile.getName(), osFile.lastModified(), InputStream.nullInputStream());
+        } else
+          origSize += compressFile(archive, file.getOSFile());
+      }
 
     return origSize;
+  }
+
+  /**
+   * Whether a page file belongs in the archive. An index-compaction temporary ({@code *.temp_<ext>}) does not (issue
+   * #8848): while a compaction runs it is a fully registered component, so it is in both the page snapshot window and
+   * {@code FileManager.getFiles()}, but it is half-built output the archived {@code schema.json} never references -
+   * {@code removeTempSuffix()} runs before the schema switches over. Archived, a restore extracted it into the
+   * database directory, where the open-time scan does not register it. Same predicate the HA snapshot ship (#8019)
+   * and the checksum endpoints (#7955) use; it tests the extension, so a type named {@code temp_readings} is kept.
+   */
+  public static boolean isArchivedPageFile(final String fileName) {
+    return !PaginatedComponent.isTemporaryFileName(fileName);
+  }
+
+  /**
+   * Whether an archived page file goes in as an EMPTY entry rather than with its pages: an LSM vector index's
+   * {@code .vecgraph} component (issue #9888, the backup counterpart of #9758). The graph is derived state each
+   * database builds for itself from the vectors the index pages carry, and it is vouched for by plain side files - the
+   * {@code .vecgraphfp} manifest, the {@code .vecordmap} ordinal map and the {@code .vecpq} product quantization - that
+   * neither the page snapshot window nor {@code FileManager.getFiles()} lists. Archived with its pages, the graph was
+   * restored with no manifest beside it, which the index reads as "persisted by a version older than #6106" and reuses
+   * on the node count alone: an unverified reuse, of pages that may even have been captured in the middle of a chunked
+   * graph persist - or wasted bytes, when the index is PRODUCT-quantized and the missing {@code .vecpq} forces a
+   * rebuild anyway.
+   * <p>
+   * Archived EMPTY rather than skipped, which is the state of a freshly created index: the restored database keeps the
+   * component registered under the same file id, and its first search builds a graph of its own - with a manifest.
+   * <p>
+   * <b>Unless the side files can come along (issue #9917).</b> On the snapshot path a graph whose side files are proved
+   * unchanged across the window's t0 goes in WITH its pages, preceded by those side files, so the restored database
+   * verifies and reuses it instead of rebuilding it - see {@link LSMVectorIndexGraphSideFiles} and
+   * {@code compressVectorGraphSideFiles}. This predicate therefore names the files that are archived empty unless that
+   * proof holds. The frozen-files path never attempts it and always archives them empty: see
+   * {@code backupFromFrozenFiles}.
+   * <p>
+   * Matched by the final extension, so a bucket of a type merely named {@code vecgraph} is still archived in full.
+   */
+  public static boolean isArchivedEmpty(final String fileName) {
+    return NodeLocalFiles.isVectorGraphComponentFileName(fileName);
+  }
+
+  /**
+   * Archives the side files of one vector graph when they can vouch for the graph's pages at the window's t0 (issue
+   * #9917): the {@code .vecgraphfp} manifest, the {@code .vecordmap} ordinal map and, for a PRODUCT-quantized index, the
+   * {@code .vecpq} product quantization. See {@link LSMVectorIndexGraphSideFiles} for the protocol and why it proves
+   * the pairing; in short, they were observed before t0 and are opened only while still the same files after it.
+   * <p>
+   * Every file is opened and verified BEFORE the first one is written, so the archive never carries part of a set: an
+   * entry, once written, cannot be taken back out of a streamed archive.
+   *
+   * @param sideFiles what {@link LSMVectorIndexGraphSideFiles#capture} observed for this graph, or {@code null} when it
+   *                  could not vouch for it then
+   *
+   * @return the uncompressed bytes archived, or {@code -1} when nothing was archived and the graph goes in empty
+   */
+  private long compressVectorGraphSideFiles(final BackupArchiveWriter archive, final LSMVectorIndexGraphSideFiles sideFiles)
+      throws IOException {
+    if (sideFiles == null)
+      return -1L;
+
+    try (final LSMVectorIndexGraphSideFiles.Opened opened = sideFiles.openIfUnchanged()) {
+      if (opened == null)
+        // A PERSIST STARTED SINCE THE CAPTURE, SO THE PAGES AT t0 MAY BE PART-WRITTEN OR NOT THE ONES THESE FILES
+        // DESCRIBE (OR A SIDE FILE COULD NOT BE OPENED): THE #9888 FALLBACK, A GRAPH THE RESTORED DATABASE BUILDS FOR
+        // ITSELF. A FAILURE WHILE WRITING THE ENTRIES BELOW IS DIFFERENT: THE ARCHIVE IS ALREADY PART-WRITTEN, SO IT
+        // FAILS THE BACKUP LIKE ANY OTHER I/O ERROR
+        return -1L;
+
+      long origSize = 0L;
+      for (final LSMVectorIndexGraphSideFiles.Entry entry : opened.entries())
+        origSize += compressEntry(archive, entry.fileName(), entry.lastModifiedMillis(), entry.input());
+      return origSize;
+    }
   }
 
   /**
@@ -422,8 +552,12 @@ public class FullBackupFormat extends AbstractBackupFormat {
    * listed at any later moment can disagree with it - see {@link #backupFromSnapshot} for what listing them
    * together buys and what it does not. {@code sealedFiles} is immutable and never {@code null}; it is empty for a
    * database with no TimeSeries type.
+   * <p>
+   * {@code vectorGraphSideFiles} is the third part of the same observation, taken just BEFORE the window rather than with
+   * it (issue #9917): the vector graphs whose side files could vouch for their pages, keyed by the graph's file id.
    */
-  private record SnapshotImage(PageSnapshot snapshot, List<ListedSealedStore> sealedFiles) {
+  private record SnapshotImage(PageSnapshot snapshot, List<ListedSealedStore> sealedFiles,
+                               Map<Integer, LSMVectorIndexGraphSideFiles> vectorGraphSideFiles) {
   }
 
   /**

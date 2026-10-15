@@ -31,6 +31,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.nio.ByteBuffer;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Callable;
@@ -38,10 +39,7 @@ import java.util.concurrent.Callable;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
-import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -64,12 +62,12 @@ class Issue6965LocalCommitHandshakeTest {
 
   private final String dbPath = "issue6965-local-commit-handshake-" + UUID.randomUUID();
 
-  private LocalDatabase          proxied;
-  private RaftHAServer           raftServer;
-  private TransactionContext     tx;
-  private ArcadeStateMachine     stateMachine;
-  private RaftTransactionBroker  broker;
-  private RaftReplicatedDatabase database;
+  private LocalDatabase             proxied;
+  private FakeRaftHAServer          raftServer;
+  private TransactionContext        tx;
+  private ArcadeStateMachine        stateMachine;
+  private FakeRaftTransactionBroker broker;
+  private RaftReplicatedDatabase    database;
   private RaftReplicatedDatabase.ReplicationPayload payload;
 
   @BeforeEach
@@ -83,13 +81,15 @@ class Issue6965LocalCommitHandshakeTest {
     when(proxied.getSchema()).thenReturn(mock(Schema.class, RETURNS_DEEP_STUBS));
     when(proxied.executeInReadLock(any())).thenAnswer(inv -> ((Callable<?>) inv.getArgument(0)).call());
 
-    broker = SubclassMocks.mock(RaftTransactionBroker.class);
-    raftServer = SubclassMocks.mock(RaftHAServer.class, RETURNS_DEEP_STUBS);
-    when(raftServer.isLeader()).thenReturn(true);
-    when(raftServer.getTransactionBroker()).thenReturn(broker);
-    when(raftServer.getQuorumTimeout()).thenReturn(1_000L);
+    broker = new FakeRaftTransactionBroker();
+    raftServer = FakeRaftHAServer.detached();
+    raftServer.leader(true);
+    raftServer.transactionBroker(broker);
+    raftServer.quorumTimeout(1_000L);
+    // No peer advertised the tx-prepared-at section: commits take the three-argument form, as the mocked server answered
+    raftServer.txPreparedAtCapable(false);
     stateMachine = new ArcadeStateMachine();
-    when(raftServer.getStateMachine()).thenReturn(stateMachine);
+    raftServer.stateMachine(stateMachine);
 
     tx = SubclassMocks.mock(TransactionContext.class);
     DatabaseContext.INSTANCE.init(proxied, tx);
@@ -111,14 +111,12 @@ class Issue6965LocalCommitHandshakeTest {
     assertThat(proxied.getClass()).isNotEqualTo(LocalDatabase.class);
     assertThat(tx.getClass()).isNotEqualTo(TransactionContext.class);
     assertThat(proxied.getTransactionManager().getClass()).isNotEqualTo(TransactionManager.class);
-    assertThat(broker.getClass()).isNotEqualTo(RaftTransactionBroker.class);
-    assertThat(raftServer.getClass()).isNotEqualTo(RaftHAServer.class);
   }
 
   /** The common case: the entry is acknowledged after the apply thread published its pages. */
   @Test
   void anAcknowledgedEntryCompletesTheCommitPublishedByTheApplyThread() {
-    when(broker.replicateTransaction(anyString(), any(), any())).thenAnswer(inv -> {
+    broker.on("replicateTransaction", args -> {
       applyThreadPublishes();
       return 7L;
     });
@@ -135,7 +133,7 @@ class Issue6965LocalCommitHandshakeTest {
   /** The apply thread must be the one publishing the pages: the committing thread never does it itself. */
   @Test
   void theCommittingThreadNeverPublishesWhenAStateMachineIsWired() {
-    when(broker.replicateTransaction(anyString(), any(), any())).thenAnswer(inv -> {
+    broker.on("replicateTransaction", args -> {
       applyThreadPublishes();
       return 7L;
     });
@@ -153,8 +151,7 @@ class Issue6965LocalCommitHandshakeTest {
    */
   @Test
   void aTimeoutBeforeTheClaimWithdrawsAndRollsBack() {
-    when(broker.replicateTransaction(anyString(), any(), any()))
-        .thenThrow(new ReplicationDispatchedTimeoutException("dispatched, outcome unknown"));
+    broker.fails("replicateTransaction", new ReplicationDispatchedTimeoutException("dispatched, outcome unknown"));
 
     assertThatThrownBy(() -> database.replicateAndCommitLocally(payload, true, stateMachine))
         .isInstanceOf(ReplicationDispatchedTimeoutException.class);
@@ -171,7 +168,7 @@ class Issue6965LocalCommitHandshakeTest {
    */
   @Test
   void aTimeoutAfterTheClaimCompletesTheCommit() {
-    when(broker.replicateTransaction(anyString(), any(), any())).thenAnswer(inv -> {
+    broker.on("replicateTransaction", args -> {
       applyThreadPublishes();
       throw new ReplicationDispatchedTimeoutException("dispatched, outcome unknown");
     });
@@ -185,8 +182,7 @@ class Issue6965LocalCommitHandshakeTest {
   /** The leader refused the entry before appending it (page-version conflict): definite, retryable, rolled back. */
   @Test
   void aRefusedEntryIsRolledBackAndTheConflictSurfaced() {
-    when(broker.replicateTransaction(anyString(), any(), any()))
-        .thenThrow(new ConcurrentModificationException("Concurrent modification on page 3/0"));
+    broker.fails("replicateTransaction", new ConcurrentModificationException("Concurrent modification on page 3/0"));
 
     assertThatThrownBy(() -> database.replicateAndCommitLocally(payload, true, stateMachine))
         .isInstanceOf(ConcurrentModificationException.class)
@@ -205,7 +201,7 @@ class Issue6965LocalCommitHandshakeTest {
   @Test
   void aFailedPublicationIsSurfacedAsCommittedRemotely() {
     final ConcurrentModificationException cause = new ConcurrentModificationException("simulated phase-2 failure");
-    when(broker.replicateTransaction(anyString(), any(), any())).thenAnswer(inv -> {
+    broker.on("replicateTransaction", args -> {
       final LocalCommit claimed = stateMachine.claimLocalCommit(DB_NAME, WAL_TX_ID, payload.walData());
       assertThat(claimed).isNotNull();
       claimed.failed(cause, true);
@@ -222,13 +218,13 @@ class Issue6965LocalCommitHandshakeTest {
     verify(tx).concludeFailedPhase2(cause);
     verify(tx, never()).completeCommit();
     verify(proxied, never()).rollback();
-    verify(raftServer).stepDown();
+    assertThat(raftServer.calls("stepDown")).hasSize(1);
   }
 
   /** MAJORITY committed, ALL watch failed: the local commit completes and the watch failure is still reported. */
   @Test
   void aMajorityCommitWhoseAllWatchFailedCompletesLocallyAndRethrows() {
-    when(broker.replicateTransaction(anyString(), any(), any())).thenAnswer(inv -> {
+    broker.on("replicateTransaction", args -> {
       applyThreadPublishes();
       throw new MajorityCommittedAllFailedException("ALL quorum not reached");
     });
@@ -241,19 +237,24 @@ class Issue6965LocalCommitHandshakeTest {
   }
 
   /**
-   * Ratis acknowledges only after the apply, so an acknowledged entry nobody claimed with no live state machine left
-   * (here: a Ratis restart replaced the one the commit registered with) means no apply thread will ever run for it: the
-   * committing thread must publish itself rather than wait for a publication that will never come.
+   * Issue #8785: an in-place Ratis restart replaced the state machine the commit registered with. The replacement
+   * recovers the log from its last applied index, which is below this entry since the old one never claimed it, and
+   * applies the entry from its WAL bytes, possibly while this thread would still be inside phase 2: publishing here as
+   * well could fold the record delta into the bucket counters twice. The committing thread waits for the entry's index,
+   * which the waits read from the CURRENT division, and only releases.
    */
   @Test
-  void anAcknowledgedButUnclaimedEntryIsPublishedByTheCommittingThread() {
-    when(broker.replicateTransaction(anyString(), any(), any())).thenReturn(7L);
+  void anUnclaimedEntryTheReplacementStateMachineWillApplyIsNeverPublishedByTheCommittingThread() {
+    broker.returns("replicateTransaction", 7L);
     stateMachineReplacedByARestart();
 
     database.replicateAndCommitLocally(payload, true, stateMachine);
 
-    verify(tx).commit2ndPhase(any());
+    assertThat(waitedFor()).containsExactly(List.of(DB_NAME, 7L));
+    verify(tx, never()).commit2ndPhase(any());
+    verify(tx, never()).publishCommittedPages(any());
     verify(tx, never()).completeCommit();
+    verify(tx).concludeCommitWithoutPublishing();
     verify(proxied, never()).rollback();
     assertThat(stateMachine.pendingLocalCommits()).as("the withdrawal removed the registration").isZero();
   }
@@ -268,14 +269,14 @@ class Issue6965LocalCommitHandshakeTest {
    */
   @Test
   void anUnclaimedEntryALiveStateMachineWillApplyIsNeverPublishedByTheCommittingThread() {
-    when(broker.replicateTransaction(anyString(), any(), any())).thenReturn(7L);
+    broker.returns("replicateTransaction", 7L);
 
     database.replicateAndCommitLocally(payload, true, stateMachine);
 
-    verify(raftServer).waitForAppliedIndex(DB_NAME, 7L);
+    assertThat(waitedFor()).containsExactly(List.of(DB_NAME, 7L));
     verify(tx, never()).commit2ndPhase(any());
     verify(tx, never()).publishCommittedPages(any());
-    verify(tx).reset();
+    verify(tx).concludeCommitWithoutPublishing();
     verify(proxied, never()).rollback();
     assertThat(stateMachine.pendingLocalCommits()).isZero();
   }
@@ -283,16 +284,15 @@ class Issue6965LocalCommitHandshakeTest {
   /** Issue #8781, MAJORITY-committed variant: the exception carries the entry's index, which the committing thread awaits. */
   @Test
   void aMajorityCommittedUnclaimedEntryALiveStateMachineWillApplyIsNeverPublishedByTheCommittingThread() {
-    when(broker.replicateTransaction(anyString(), any(), any()))
-        .thenThrow(new MajorityCommittedAllFailedException("ALL quorum not reached", null, 7L));
+    broker.fails("replicateTransaction", new MajorityCommittedAllFailedException("ALL quorum not reached", null, 7L));
 
     assertThatThrownBy(() -> database.replicateAndCommitLocally(payload, true, stateMachine))
         .isInstanceOf(MajorityCommittedAllFailedException.class);
 
-    verify(raftServer).waitForAppliedIndex(DB_NAME, 7L);
+    assertThat(waitedFor()).containsExactly(List.of(DB_NAME, 7L));
     verify(tx, never()).commit2ndPhase(any());
     verify(tx, never()).publishCommittedPages(any());
-    verify(tx).reset();
+    verify(tx).concludeCommitWithoutPublishing();
     verify(proxied, never()).rollback();
   }
 
@@ -302,31 +302,29 @@ class Issue6965LocalCommitHandshakeTest {
    */
   @Test
   void aMajorityCommittedUnclaimedEntryWithoutAnIndexIsNeverPublishedWhileTheStateMachineLives() {
-    when(broker.replicateTransaction(anyString(), any(), any()))
-        .thenThrow(new MajorityCommittedAllFailedException("ALL quorum not reached"));
-    when(raftServer.getCommitIndex()).thenReturn(11L);
+    broker.fails("replicateTransaction", new MajorityCommittedAllFailedException("ALL quorum not reached"));
+    raftServer.commitIndex(11L);
 
     assertThatThrownBy(() -> database.replicateAndCommitLocally(payload, true, stateMachine))
         .isInstanceOf(MajorityCommittedAllFailedException.class);
 
-    verify(raftServer).waitForAppliedIndex(DB_NAME, 11L);
+    assertThat(waitedFor()).containsExactly(List.of(DB_NAME, 11L));
     verify(tx, never()).commit2ndPhase(any());
-    verify(tx).reset();
+    verify(tx).concludeCommitWithoutPublishing();
   }
 
   /** Issue #8781: with neither the entry's index nor a commit index, a replica still never publishes. */
   @Test
   void aReplicaWithoutAnyIndexStillNeverPublishes() {
-    when(broker.replicateTransaction(anyString(), any(), any()))
-        .thenThrow(new MajorityCommittedAllFailedException("ALL quorum not reached"));
-    when(raftServer.getCommitIndex()).thenReturn(-1L);
+    broker.fails("replicateTransaction", new MajorityCommittedAllFailedException("ALL quorum not reached"));
+    raftServer.commitIndex(-1L);
 
     assertThatThrownBy(() -> database.replicateAndCommitLocally(payload, false, null))
         .isInstanceOf(MajorityCommittedAllFailedException.class);
 
-    verify(raftServer, never()).waitForAppliedIndex(anyString(), anyLong());
+    assertThat(waitedFor()).isEmpty();
     verify(tx, never()).commit2ndPhase(any());
-    verify(tx).reset();
+    verify(tx).concludeCommitWithoutPublishing();
   }
 
   /**
@@ -336,15 +334,14 @@ class Issue6965LocalCommitHandshakeTest {
    */
   @Test
   void aReplicaNeverPublishesAForwardedMajorityCommittedEntry() {
-    when(broker.replicateTransaction(anyString(), any(), any()))
-        .thenThrow(new MajorityCommittedAllFailedException("ALL quorum not reached after MAJORITY commit at logIndex=9"));
+    broker.fails("replicateTransaction", new MajorityCommittedAllFailedException("ALL quorum not reached after MAJORITY commit at logIndex=9"));
 
     assertThatThrownBy(() -> database.replicateAndCommitLocally(payload, false, null))
         .isInstanceOf(MajorityCommittedAllFailedException.class);
 
-    verify(raftServer).waitForAppliedIndex(DB_NAME, 9L);
+    assertThat(waitedFor()).containsExactly(List.of(DB_NAME, 9L));
     verify(tx, never()).commit2ndPhase(any());
-    verify(tx).reset();
+    verify(tx).concludeCommitWithoutPublishing();
   }
 
   /** The index survives the hop to a follower: the message every leader-side constructor call writes carries it. */
@@ -359,39 +356,62 @@ class Issue6965LocalCommitHandshakeTest {
     assertThat(new MajorityCommittedAllFailedException("at logIndex=99999999999999999999999").getLogIndex()).isEqualTo(-1L);
   }
 
-  /** Issue #8781: a closed state machine applies nothing more, so the committing thread publishes. */
+  /**
+   * Issue #8785: a state machine closed without a shutdown is the window of an in-place Ratis restart before the
+   * replacement is wired (or a division Ratis closed itself, which the health monitor restarts in place). The replacement
+   * applies the entry from the log, so the committing thread must not publish it as well. The applied index reads -1
+   * here, as it does while a restart re-initializes the division, which is the branch that warns the machine is still
+   * closed after the wait. The race itself (the replacement applying the entry exactly once) needs a real Ratis restart
+   * mid-commit and is not reproduced deterministically by these mocks.
+   */
   @Test
-  void anUnclaimedEntryIsPublishedByTheCommittingThreadWhenTheStateMachineIsClosed() {
-    final ArcadeStateMachine closed = SubclassMocks.spy(stateMachine);
-    assertThat(closed.getClass()).as("a subclass spy (issue #8021)").isNotEqualTo(ArcadeStateMachine.class);
-    doReturn(true).when(closed).isClosed();
-    when(raftServer.getStateMachine()).thenReturn(closed);
-    when(broker.replicateTransaction(anyString(), any(), any())).thenReturn(7L);
+  void anUnclaimedEntryIsNeverPublishedByTheCommittingThreadWhileAClosedStateMachineAwaitsItsReplacement() {
+    final FakeArcadeStateMachine closed = new FakeArcadeStateMachine().closed(true);
+    raftServer.stateMachine(closed);
+    raftServer.lastAppliedIndex(-1L);
+    broker.returns("replicateTransaction", 7L);
 
     database.replicateAndCommitLocally(payload, true, closed);
 
-    verify(tx).commit2ndPhase(any());
-    verify(tx, never()).reset();
+    assertThat(waitedFor()).containsExactly(List.of(DB_NAME, 7L));
+    verify(tx, never()).commit2ndPhase(any());
+    verify(tx).concludeCommitWithoutPublishing();
   }
 
   /** Issue #8781: a shutdown in progress stops the state machine applying, so the committing thread publishes. */
   @Test
   void anUnclaimedEntryIsPublishedByTheCommittingThreadWhenAShutdownIsRequested() {
-    when(broker.replicateTransaction(anyString(), any(), any())).thenReturn(7L);
-    when(raftServer.isShutdownRequested()).thenReturn(true);
+    broker.returns("replicateTransaction", 7L);
+    raftServer.shutdownRequested(true);
 
     database.replicateAndCommitLocally(payload, true, stateMachine);
 
     verify(tx).commit2ndPhase(any());
-    verify(tx, never()).reset();
+    verify(tx, never()).concludeCommitWithoutPublishing();
   }
 
-  /** MAJORITY committed, ALL watch failed, and no apply thread ever claimed the entry: the committing thread publishes. */
+  /** Issue #8785, MAJORITY-committed variant: the replacement state machine applies the entry, this thread only releases. */
   @Test
-  void aMajorityCommitNobodyClaimedIsPublishedByTheCommittingThread() {
-    when(broker.replicateTransaction(anyString(), any(), any()))
-        .thenThrow(new MajorityCommittedAllFailedException("ALL quorum not reached"));
+  void aMajorityCommitNobodyClaimedIsNeverPublishedAfterTheStateMachineWasReplaced() {
+    broker.fails("replicateTransaction", new MajorityCommittedAllFailedException("ALL quorum not reached", null, 7L));
     stateMachineReplacedByARestart();
+
+    assertThatThrownBy(() -> database.replicateAndCommitLocally(payload, true, stateMachine))
+        .isInstanceOf(MajorityCommittedAllFailedException.class);
+
+    assertThat(waitedFor()).containsExactly(List.of(DB_NAME, 7L));
+    verify(tx, never()).commit2ndPhase(any());
+    verify(tx, never()).completeCommit();
+    verify(tx).concludeCommitWithoutPublishing();
+    verify(proxied, never()).rollback();
+    assertThat(stateMachine.pendingLocalCommits()).isZero();
+  }
+
+  /** MAJORITY committed, ALL watch failed, nobody claimed it and a shutdown stops every apply: the committing thread publishes. */
+  @Test
+  void aMajorityCommitNobodyClaimedIsPublishedByTheCommittingThreadDuringAShutdown() {
+    broker.fails("replicateTransaction", new MajorityCommittedAllFailedException("ALL quorum not reached", null, 7L));
+    raftServer.shutdownRequested(true);
 
     assertThatThrownBy(() -> database.replicateAndCommitLocally(payload, true, stateMachine))
         .isInstanceOf(MajorityCommittedAllFailedException.class);
@@ -410,7 +430,7 @@ class Issue6965LocalCommitHandshakeTest {
   @Test
   void aFailedPublicationDuringMajorityRecoveryStaysSilentButStepsDown() {
     final ConcurrentModificationException cause = new ConcurrentModificationException("simulated phase-2 failure");
-    when(broker.replicateTransaction(anyString(), any(), any())).thenAnswer(inv -> {
+    broker.on("replicateTransaction", args -> {
       final LocalCommit claimed = stateMachine.claimLocalCommit(DB_NAME, WAL_TX_ID, payload.walData());
       assertThat(claimed).isNotNull();
       claimed.failed(cause, true);
@@ -423,13 +443,13 @@ class Issue6965LocalCommitHandshakeTest {
     verify(tx).concludeFailedPhase2(cause);
     verify(tx, never()).completeCommit();
     verify(proxied, never()).rollback();
-    verify(raftServer).stepDown();
+    assertThat(raftServer.calls("stepDown")).hasSize(1);
   }
 
   /** Without a state machine nobody can publish at the log position, so the committing thread does, as before. */
   @Test
   void withoutAStateMachineTheCommittingThreadPublishes() {
-    when(broker.replicateTransaction(anyString(), any(), any())).thenReturn(7L);
+    broker.returns("replicateTransaction", 7L);
 
     database.replicateAndCommitLocally(payload, true, null);
 
@@ -440,19 +460,19 @@ class Issue6965LocalCommitHandshakeTest {
   /** A replica registers nothing: the state machine applies its entry from the WAL bytes (#5503). */
   @Test
   void aReplicaRegistersNothing() {
-    when(broker.replicateTransaction(anyString(), any(), any())).thenReturn(7L);
+    broker.returns("replicateTransaction", 7L);
 
     database.replicateAndCommitLocally(payload, false, null);
 
     assertThat(stateMachine.pendingLocalCommits()).isZero();
     verify(tx, never()).completeCommit();
     verify(tx, never()).commit2ndPhase(any());
-    verify(tx).reset();
+    verify(tx).concludeCommitWithoutPublishing();
   }
 
-  /** A Ratis restart builds a new state machine: the one the commit registered with applies nothing more. */
+  /** A Ratis restart builds a new state machine, which recovers the log the one the commit registered with stopped applying. */
   private void stateMachineReplacedByARestart() {
-    when(raftServer.getStateMachine()).thenReturn(new ArcadeStateMachine());
+    raftServer.stateMachine(new ArcadeStateMachine());
   }
 
   private void applyThreadPublishes() {
@@ -469,5 +489,15 @@ class Issue6965LocalCommitHandshakeTest {
     buf.putInt(0);
     buf.putInt(0);
     return buf.array();
+  }
+
+  /**
+   * The (database, index) of every wait for the local apply. The fake records the canonical (database, index,
+   * throwOnTimeout) form the two-argument one delegates to; a recording of any other shape fails here by name.
+   */
+  private List<List<Object>> waitedFor() {
+    final List<List<Object>> calls = raftServer.calls("waitForAppliedIndex");
+    assertThat(calls).as("waitForAppliedIndex recorded as (database, index, throwOnTimeout)").allSatisfy(args -> assertThat(args).hasSize(3));
+    return calls.stream().map(args -> args.subList(0, 2)).toList();
   }
 }

@@ -813,12 +813,7 @@ public class PageManagerFlushThread extends Thread {
                   // Both the index entry and the WAL ack are released together (issue #6440 review): releasing
                   // only the ack would leave pageIndex.pendingOf(db) inflated - "WAL says done, pageIndex says
                   // pending" - until removeAllPagesOfDatabase's later catch-all gets around to it.
-                  synchronized (pagesToFlush.pages) {
-                    for (final MutablePage page : pagesToFlush.pages) {
-                      removeFromFlushIndex(page);
-                      ackWalFileOfAbandonedPage(page);
-                    }
-                  }
+                  abandonBatch(pagesToFlush);
                   return;
                 }
 
@@ -834,12 +829,7 @@ public class PageManagerFlushThread extends Thread {
               // None of this batch will ever be written (issue #6440): release both the index entry and the WAL
               // ack for every page, rather than leaving pageIndex.pendingOf() inflated and their
               // WALFile.pagesToFlush counters stranded above zero forever.
-              synchronized (pagesToFlush.pages) {
-                for (final MutablePage page : pagesToFlush.pages) {
-                  removeFromFlushIndex(page);
-                  ackWalFileOfAbandonedPage(page);
-                }
-              }
+              abandonBatch(pagesToFlush);
               return;
             }
 
@@ -852,10 +842,7 @@ public class PageManagerFlushThread extends Thread {
                   // TransactionManager.close()'s retry loop on a count that can never be satisfied.
                   LogManager.instance().log(this, Level.FINE, "Skipping page flush for closed database '%s'",
                       pagesToFlush.database.getName());
-                  for (final MutablePage remaining : pagesToFlush.pages) {
-                    removeFromFlushIndex(remaining);
-                    ackWalFileOfAbandonedPage(remaining);
-                  }
+                  abandonBatch(pagesToFlush);
                   break;
                 }
                 boolean keepIndexed = false;
@@ -999,6 +986,51 @@ public class PageManagerFlushThread extends Thread {
       if (remaining <= 0)
         return false;
       pageIndex.awaitDrain(database, Math.min(remaining, RESIDUAL_DRAIN_WAIT_POLL_MILLIS));
+    }
+    return true;
+  }
+
+  /**
+   * Waits for the pages of a database that are in the flush pipeline NOW to reach the disk, bounded by a hard
+   * wall-clock deadline (issue #8843). Unlike {@link #waitAllPagesOfDatabaseAreFlushed}, the wait is not extended by
+   * commits that land after the call: it ends as soon as the pipeline is empty OR as many pages of this database have
+   * been written since the call as were pending at its start - the pipeline is FIFO, so that is the backlog the
+   * caller found. A database under sustained writes therefore costs the caller the time its backlog takes to drain,
+   * never the duration of the writes, and the deadline caps even that (a wedged disk, a suspended flush).
+   * <p>
+   * <b>The watermark is approximate.</b> It counts page WRITES: a page modified again by a later commit can be written
+   * more than once while the backlog drains, so the count can be reached before every page of the original backlog
+   * has landed. That can only happen under concurrent writes, where a reader of the files sees them change anyway. And
+   * when this database has no flushed-pages counter (a close racing the call removed it) the watermark exit is
+   * disabled: the wait degrades to "pipeline empty or deadline".
+   * <p>
+   * On a database with no further commits - the case the bootstrap fingerprint cares about - the first condition is
+   * the one that ends the wait, so it is exact: every committed page is on disk when this returns {@code true}.
+   *
+   * @return {@code true} when the backlog found at the call reached the disk, {@code false} when the deadline expired
+   *     first.
+   */
+  boolean waitPagesPendingNowOfDatabaseAreFlushedUntil(final Database database, final long deadlineMillis)
+      throws InterruptedException {
+    final int pendingAtStart = pageIndex.pendingOf(database);
+    if (pendingAtStart <= 0)
+      return true;
+
+    // A READ, NOT computeIfAbsent: the counter is created when a batch of this database is enqueued, so with pages
+    // pending it exists. A missing one (a close racing this call removed it) must not be re-created by a reader - it
+    // would outlive the database - and the pipeline-empty exit below still ends the wait, or the deadline does.
+    final AtomicLong existing = flushedPagesPerDatabase.get(database);
+    final AtomicLong flushedCounter = existing != null ? existing : new AtomicLong();
+    // The two reads are not atomic: pages flushed between them raise the target above the true backlog. Harmless - the
+    // wait then ends on the pipeline emptying or on the deadline, only the early watermark exit is lost for that call.
+    final long target = flushedCounter.get() + pendingAtStart;
+    while (pageIndex.pendingOf(database) > 0 && flushedCounter.get() < target) {
+      final long remaining = deadlineMillis - System.currentTimeMillis();
+      if (remaining <= 0)
+        return false;
+      // The drain signal only fires when the pipeline empties, which under sustained writes may never happen: the poll
+      // interval is what re-checks the flushed-pages watermark in that case.
+      pageIndex.awaitDrain(database, Math.min(remaining, flushWaitPollMillis));
     }
     return true;
   }
@@ -1310,30 +1342,61 @@ public class PageManagerFlushThread extends Thread {
       // differs from commit order. The reservation below can WAIT (this database is at its bound), and that wait is
       // deliberately done OUTSIDE the lock: the only consumer that frees a slot is the flush thread, which needs the
       // same per-database lock to make progress, so holding it across the wait would deadlock.
+      //
+      // AND IT RUNS INTERRUPT-FREE (issue #9832). The reservation is not an edge case that needs unusual load: a resume
+      // can carry more batches than the database's whole budget, so the loop routinely fills it with its own batches
+      // and then waits. An interrupt there used to `break` out of the loop and drop every batch it had not reached -
+      // out of the deferred map (Phase 3a detached them) and never in the queue, so nothing could see them again:
+      // their pageIndex entries pinned this database's pending count above zero for good, failing every later backup,
+      // verify, HA snapshot and file freeze on their first drain, and their WAL acks were never released. Phase 1
+      // consumed the flag only as a side effect of a page write failing on it, so a thread interrupted with nothing
+      // left to write, or interrupted DURING this loop, reached the wait with it set. It is consumed unconditionally
+      // here instead, and a fresh interrupt during the wait is consumed and the reservation retried; both are restored
+      // with Phase 1's in the same place at the end, so the caller still observes its own cancellation.
       if (newDeferred != null) {
+        if (Thread.interrupted())
+          restoreCallerInterrupt = true;
+
+        boolean pipelineClosed = false;
         for (final PagesToFlush batch : newDeferred) {
           // The batch moves back to the main queue and leaves the deferred backlog accounting (issue #4728).
           addDeferredRAM(database, -batchRAM(batch));
-          // Re-entering the pipeline goes through the same admission control as any other enqueue (#6259): the batch
-          // gave its slot back when the flush thread polled it, and a resume can carry thousands of them, so without
-          // a reservation this loop could exhaust the database's budget under a committer that is holding one -
-          // putting that committer's offer back inside the page-manager lock, which is the whole bug.
-          boolean reserved = false;
-          boolean enqueued = false;
-          try {
-            reserved = reserveQueueSlot(database);
-            if (!reserved || !running)
-              // SHUTTING DOWN: the remaining batches stay unwritten and are recovered from the WAL, as before.
-              break;
-            offerBatch(batch, true);
-            enqueued = true;
-          } catch (final InterruptedException e) {
-            Thread.currentThread().interrupt();
-            break;
-          } finally {
-            if (reserved && !enqueued)
-              releaseQueueReservation(database);
+
+          if (!pipelineClosed) {
+            // Re-entering the pipeline goes through the same admission control as any other enqueue (#6259): the
+            // batch gave its slot back when the flush thread polled it, and a resume can carry thousands of them, so
+            // without a reservation this loop could exhaust the database's budget under a committer that is holding
+            // one - putting that committer's offer back inside the page-manager lock, which is the whole bug.
+            boolean reserved = false;
+            boolean enqueued = false;
+            try {
+              while (true) {
+                try {
+                  reserved = reserveQueueSlot(database);
+                  break;
+                } catch (final InterruptedException e) {
+                  // The flag is already cleared by the throw, so the retry parks normally until a slot frees up or the
+                  // flush thread shuts down; only a further interrupt brings it back here. Deliberately uncapped: a
+                  // caller interrupting in a tight loop only delays the resume, while giving up would abandon the batch.
+                  // reserveQueueSlot cannot park past a shutdown either - it re-checks `running` every poll interval.
+                  restoreCallerInterrupt = true;
+                }
+              }
+              if (reserved && running) {
+                offerBatch(batch, true);
+                enqueued = true;
+              }
+            } finally {
+              if (reserved && !enqueued)
+                releaseQueueReservation(database);
+            }
+            if (enqueued)
+              continue;
+            // SHUTTING DOWN: the one case where giving up is right. This batch and every one after it is released
+            // below rather than dropped on the floor.
+            pipelineClosed = true;
           }
+          abandonBatchOnShutdown(batch);
         }
       }
 
@@ -1347,7 +1410,7 @@ public class PageManagerFlushThread extends Thread {
       releaseResidualDeferredRAM(database);
 
       if (restoreCallerInterrupt)
-        // Consumed once during Phase 1: restore it so the caller still observes its own cancellation.
+        // Consumed during Phase 1 or Phase 3b: restore it so the caller still observes its own cancellation.
         Thread.currentThread().interrupt();
     }
 
@@ -1399,6 +1462,42 @@ public class PageManagerFlushThread extends Thread {
    */
   void removeFromFlushIndex(final MutablePage page) {
     pageIndex.removeIfSame(page);
+  }
+
+  /**
+   * Gives up on a batch the pipeline will never write because its database or file is gone: every page leaves
+   * {@link #pageIndex} and has its WAL ack released (issues #6440, #9832). The invariant every site that drops a batch
+   * must hold - a page that will never be written must not keep the database's pending count above zero, nor its
+   * {@code WALFile.pagesToFlush} - kept in one place so the next such site holds it by construction.
+   */
+  private void abandonBatch(final PagesToFlush batch) {
+    synchronized (batch.pages) {
+      for (final MutablePage page : batch.pages) {
+        removeFromFlushIndex(page);
+        ackWalFileOfAbandonedPage(page);
+      }
+    }
+  }
+
+  /**
+   * Gives up on a deferred batch the resume cannot put back into the pipeline because the flush thread is shutting
+   * down (issue #9832). It still leaves {@link #pageIndex}, so it cannot pin the database's pending count above zero -
+   * which is what used to make every later drain of that database time out. Its WAL ack is released only when the
+   * database is already closed, like {@link #abandonBatch}: while the database is open its files still exist, the
+   * page was simply never written, and the un-acked WAL entry is what replays it on the next open (see
+   * {@link #ackWalFileOfAbandonedPage}). Same outcome as a publication refused during shutdown in
+   * {@link #scheduleFlushOfPages(List, BasicDatabase)}.
+   */
+  private void abandonBatchOnShutdown(final PagesToFlush batch) {
+    if (batch.database != null && !batch.database.isOpen()) {
+      abandonBatch(batch);
+      return;
+    }
+    synchronized (batch.pages) {
+      for (final MutablePage page : batch.pages)
+        removeFromFlushIndex(page);
+      logFailedEnqueue(batch.pages);
+    }
   }
 
   /**
@@ -1734,7 +1833,22 @@ public class PageManagerFlushThread extends Thread {
     }
   }
 
+  /** Purge on a plain close: the deferred batches keep their WAL acks withheld. See {@link #removeAllPagesOfDatabase(Database, boolean)}. */
   public void removeAllPagesOfDatabase(final Database database) {
+    removeAllPagesOfDatabase(database, false);
+  }
+
+  /**
+   * Forgets every pending page and every piece of per-database bookkeeping of a database that is being closed or
+   * dropped.
+   *
+   * @param dropped {@code true} when the database's files are about to be deleted. It decides what happens to the WAL
+   *                acks of the batches deferred while the database was suspended (issue #9881): on a drop nothing will
+   *                ever write or replay those pages, so the acks are released; on a close the pages never reached the
+   *                disk and the un-acked WAL entry is the only durable copy of them, so the acks stay withheld and the
+   *                close preserves the WAL for the next open to replay.
+   */
+  public void removeAllPagesOfDatabase(final Database database, final boolean dropped) {
     // Reference identity ON PURPOSE (issue #6440), not database.equals(pagesToFlush.database): LocalDatabase
     // compares by PATH, so a database dropped and immediately reopened at the same path (a restore, a
     // re-provision, or simply a test's @BeforeEach/@AfterEach hammering one fixed path) would otherwise have
@@ -1745,21 +1859,19 @@ public class PageManagerFlushThread extends Thread {
     for (final PagesToFlush pagesToFlush : queue.stream().toList())
       if (pagesToFlush.database == database) {
         synchronized (pagesToFlush.pages) {
-          for (final MutablePage page : pagesToFlush.pages) {
-            // removeIfSame (via removeFromFlushIndex), NOT pageIndex.remove(page.getPageId()) (issue #6440
-            // review, fourth pass): that single-key overload is a plain, equals()-based pages.remove(), which
-            // collides across same-path instances exactly like removeAllOfDatabase's bulk purge did before it
-            // was switched to filtering by the VALUE's own PageId - a same-path sibling's live page could be
-            // sitting at this exact (fileId, pageNumber) map slot (retained as THIS page's PageId key by
-            // Map.put()'s "keep the old key on an equals() match" behavior) and get silently evicted, unacked,
-            // by this instance's own cleanup. removeIfSame only ever removes the exact instance indexed here.
-            removeFromFlushIndex(page);
-            // The purged page will never be flushed and its content is irrelevant (its database is gone):
-            // release its WAL ack so the close-time ack gate (#4928) is not tripped by stale pending counts.
-            // Exactly-once against the racing flush loop (which does NOT remove pages from this batch list,
-            // so both paths can visit the same page) via takeWALFile() inside the helper.
-            ackWalFileOfAbandonedPage(page);
-          }
+          // removeIfSame (via abandonBatch's removeFromFlushIndex), NOT pageIndex.remove(page.getPageId()) (issue #6440
+          // review, fourth pass): that single-key overload is a plain, equals()-based pages.remove(), which collides
+          // across same-path instances exactly like removeAllOfDatabase's bulk purge did before it was switched to
+          // filtering by the VALUE's own PageId - a same-path sibling's live page could be sitting at this exact
+          // (fileId, pageNumber) map slot (retained as THIS page's PageId key by Map.put()'s "keep the old key on an
+          // equals() match" behavior) and get silently evicted, unacked, by this instance's own cleanup. removeIfSame
+          // only ever removes the exact instance indexed here.
+          //
+          // The purged pages will never be flushed and their content is irrelevant (their database is gone): their WAL
+          // acks are released so the close-time ack gate (#4928) is not tripped by stale pending counts. Exactly-once
+          // against the racing flush loop (which does NOT remove pages from this batch list, so both paths can visit
+          // the same page) via takeWALFile() inside ackWalFileOfAbandonedPage.
+          abandonBatch(pagesToFlush);
           pagesToFlush.pages.clear();
         }
         // And take the emptied wrapper OUT of the queue rather than leaving it to be polled and skipped. It carries
@@ -1813,9 +1925,19 @@ public class PageManagerFlushThread extends Thread {
     // Deliberately outside that monitor: batchRAM takes each batch's own monitor, and the one nesting this class
     // allows is suspendLock BEFORE batch.pages (what the defer path does). These batches are already detached, so
     // no one else can be looking at them, and keeping the accounting out here avoids widening that nesting.
+    //
+    // Their WAL acks depend on why the database goes away (issue #9881). On a drop the files are deleted, so the pages
+    // will never be written nor replayed: the batch is abandoned like a queued one, or the stranded WALFile.pagesToFlush
+    // count keeps TransactionManager.close() retrying to drop WAL files it never can (#6440). On a close the pages never
+    // reached the disk - their database was suspended - so the acks stay withheld: the close's flush wait gives up on
+    // them, the close becomes crash-equivalent, and the preserved WAL replays them on the next open. A close does not
+    // wait on these acks either way: it only closes its WAL files, it deletes nothing.
     if (droppedDeferred != null)
-      for (final PagesToFlush batch : droppedDeferred)
+      for (final PagesToFlush batch : droppedDeferred) {
         addDeferredRAM(database, -batchRAM(batch));
+        if (dropped)
+          abandonBatch(batch);
+      }
 
     // The database is gone: drop its per-database backlog entry with the rest of its bookkeeping, taking whatever
     // it was still charged for out of the JVM-wide total with it - dropping the entry alone would leave the total

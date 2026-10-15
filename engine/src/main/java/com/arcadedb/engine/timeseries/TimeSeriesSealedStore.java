@@ -19,6 +19,8 @@
 package com.arcadedb.engine.timeseries;
 
 import com.arcadedb.GlobalConfiguration;
+import com.arcadedb.engine.ChannelReopenLog;
+import com.arcadedb.exception.DatabaseOperationException;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.engine.timeseries.codec.DeltaOfDeltaCodec;
 import com.arcadedb.engine.timeseries.codec.DictionaryCodec;
@@ -28,12 +30,15 @@ import com.arcadedb.engine.timeseries.codec.TimeSeriesCodec;
 import com.arcadedb.engine.timeseries.simd.TimeSeriesVectorOps;
 import com.arcadedb.engine.timeseries.simd.TimeSeriesVectorOpsProvider;
 import com.arcadedb.schema.Type;
+import com.arcadedb.utility.FileUtils;
 
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
+import java.nio.channels.ClosedChannelException;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -45,15 +50,18 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.function.UnaryOperator;
 import java.util.logging.Level;
 import java.util.zip.CRC32;
 
@@ -72,7 +80,9 @@ import java.util.zip.CRC32;
  * <p>
  * Block entry layout:
  * - magic "TSB3" (4), minTs (8), maxTs (8), sampleCount (4), blockId (8), colSizes (4*colCount)
- * - numericColCount (4), [min (8) + max (8) + sum (8) + count (8)] * numericColCount (schema order, no colIdx)
+ * - numericColCount (4), per numeric column in schema order (no colIdx):
+ *   GORILLA_XOR: min (8) + max (8) + sum (8) as doubles + count (8)
+ *   SIMPLE8B:    min (8) + max (8) + sumLo (8) + sumHi (8) + count (8), all longs (TSB4)
  * - tag metadata: tagColCount (2), per TAG column: distinctCount (2), per value: len (2) + UTF-8 bytes
  * - compressed column data bytes
  * - blockCRC32 (4) — CRC32 of everything from blockMagic to end of compressed data
@@ -90,12 +100,22 @@ import java.util.zip.CRC32;
  * the reason it is on DISK rather than in a counter is that the directory is rebuilt wholesale by a reload - an HA
  * follower installing the leader's sealed file - and an identity a reload invents is no identity at all.
  * <p>
+ * "TSB4" (issues #9720, #9721) is "TSB3" whose statistics of a {@code SIMPLE8B} column - the integral, boolean and datetime
+ * types - are EXACT: the extremes as longs, the total as a 128-bit integer ({@link ExactLongSum}) and the count of the samples
+ * that carry a value. A double holds every integer only up to 2^53, so the TSB3 statistics of a column of epoch nanoseconds or
+ * 64-bit ids were rounded, and the aggregation push-down answered from them, or had to decode every block to be exact. A
+ * {@code GORILLA_XOR} column keeps the double quadruple. A {@code SIMPLE8B} column of a TSB4 block may also carry a null
+ * bitmap (see {@link Simple8bCodec}), for the samples a client wrote with no value. The statistics of an older block's integral
+ * column are exact whenever its doubles prove it (see {@link #exactFromDoubles}); the others take the decompressing path until
+ * the next rewrite of the block, which writes TSB4.
+ * <p>
  * The file header's version byte is what refuses a file to a build that predates a layout: version 1 (issue #7089)
  * says "blocks are self-describing, TSBL or TSB2", and a version-0 file, which can only hold TSBL blocks, is read
  * as it stands and stamped 1 the next time its header is rewritten. Version 2 (issue #8043) says a block may also
  * be TSB3, and IS a refusal rather than a courtesy: a build that does not know the magic stops its directory scan
  * at the first such block, which is indistinguishable from an empty store - so a file this build writes must be
- * refused by an older one loudly, at the header, instead of read as holding nothing.
+ * refused by an older one loudly, at the header, instead of read as holding nothing. Version 3 (issues #9720, #9721) says a
+ * block may be TSB4, for the same reason.
  * <p>
  * <b>High-Availability / Replication note:</b>
  * Sealed store files ({@code .ts.sealed}) are written via {@link RandomAccessFile} and
@@ -117,19 +137,25 @@ import java.util.zip.CRC32;
  */
 public class TimeSeriesSealedStore implements AutoCloseable {
 
-  public static final  int CURRENT_VERSION  = 2;
+  public static final  int CURRENT_VERSION  = 3;
   private static final int MAGIC_VALUE       = 0x54534958; // "TSIX"
   // "TSBL": the layout every block had before issue #7089, whose statistics section is a [min, max, sum] triplet.
   private static final int BLOCK_MAGIC_VALUE    = 0x5453424C;
   // "TSB2": the layout of issue #7089, whose statistics section is a [min, max, sum, count] quadruple.
   private static final int BLOCK_MAGIC_VALUE_V2 = 0x54534232;
-  // "TSB3": the current layout, TSB2 plus the block's own identity (issue #8043). See BlockEntry.blockId.
+  // "TSB3": TSB2 plus the block's own identity (issue #8043). See BlockEntry.blockId.
   private static final int BLOCK_MAGIC_VALUE_V3 = 0x54534233;
+  // "TSB4": the current layout, TSB3 with exact statistics for a SIMPLE8B column (issues #9720, #9721).
+  private static final int BLOCK_MAGIC_VALUE_V4 = 0x54534234;
   // Bytes the identity takes in a TSB3 block record, between the sample count and the column sizes.
   private static final int BLOCK_ID_BYTES       = 8;
   // Bytes one column's statistics take in each layout.
   private static final int LEGACY_STATS_BYTES   = 8 + 8 + 8;
   private static final int STATS_BYTES          = 8 + 8 + 8 + 8;
+  // Bytes a SIMPLE8B column's exact statistics take in a TSB4 block: min, max, the two words of the sum, count.
+  private static final int INTEGRAL_STATS_BYTES = 8 + 8 + 8 + 8 + 8;
+  // The largest magnitude up to which a double holds every integer.
+  private static final double EXACT_INTEGRAL_DOUBLE = 0x1p53;
   private static final int HEADER_SIZE       = 27;
   // Shared with DeltaOfDeltaCodec and GorillaXORCodec: all three validate/use the same limit
   private static final int MAX_BLOCK_SIZE    = DeltaOfDeltaCodec.MAX_BLOCK_SIZE;
@@ -160,8 +186,37 @@ public class TimeSeriesSealedStore implements AutoCloseable {
 
   private final String               basePath;
   private final List<ColumnDefinition> columns;
-  private       RandomAccessFile     indexFile;
-  private       FileChannel          indexChannel;
+  /**
+   * The file and its channel, held for the life of the store and replaced only by the file-swap paths (under the
+   * directory WRITE lock) and by {@link #reopenChannel()}. An interrupt landing on ANY thread blocked in an I/O on the
+   * channel closes it for every thread ({@code ClosedByInterruptException}), so every operation on it recovers through
+   * {@link #retryAfterReopen} instead of leaving the store unreadable until a swap happens to replace the file
+   * (issue #9621). Volatile because a reopen runs under the directory READ lock, which orders nothing between two
+   * readers.
+   */
+  private volatile RandomAccessFile  indexFile;
+  private volatile FileChannel       indexChannel;
+  /** Set by {@link #close()} under {@link #channelReopenLock}: a store closed on purpose is never reopened. */
+  private volatile boolean           closed;
+  /** Serializes {@link #reopenChannel()} with itself and with {@link #close()}. */
+  private final    Object            channelReopenLock = new Object();
+  private final    ChannelReopenLog  reopenLog         = new ChannelReopenLog();
+  /** Same bound as {@code PaginatedComponentFile}: enough for an interrupt landing again during the retry itself. */
+  private static final int           REOPEN_ATTEMPTS   = 5;
+
+  /** An operation on the channel that is repeated from its start after a reopen. */
+  @FunctionalInterface
+  private interface ChannelOperation {
+    void run() throws IOException;
+  }
+
+  /**
+   * Test seam (issue #9640): when set, wraps every {@link FileChannel} this store opens on its sealed file and on its
+   * temp files. A local-disk channel essentially never transfers fewer bytes than asked for, so the short reads and
+   * writes the {@link FileChannel} contract allows can only be exercised through a channel that does. Read once per
+   * channel open, never on the read path.
+   */
+  static volatile UnaryOperator<FileChannel> TEST_CHANNEL_DECORATOR = null;
 
   enum BlockMatchResult { SKIP, FAST_PATH, SLOW_PATH }
 
@@ -192,9 +247,18 @@ public class TimeSeriesSealedStore implements AutoCloseable {
    * {@link #downsampleEpoch} for a walk in flight (kept apart from it because {@link #getDownsampleRewriteCount} counts
    * downsamples only, and the idempotency tests read that): a merge keeps every row but replaces the blocks they sat in, so a
    * walk that has read some of the old blocks and meets one that is gone cannot tell "retired" from "merged", and
-   * answering short would be silent. The snapshot stamps the SUM of the two counters.
+   * answering short would be silent. The snapshot stamps the SUM of the two counters. Unlike a downsample, a merge can be
+   * FOLLOWED: {@link #mergeLedger} records how each merged block was assembled, and {@link #resolveMergedAway} uses it to
+   * continue the walk in the merged block with exactly the rows it has not handed over yet (issue #9488).
    */
   private          long             mergeEpoch;
+  /**
+   * The newest node of the chain of merges that landed ({@link MergeLedger}, issue #9488). A walk keeps the node that
+   * was the newest when it took its snapshot and follows {@link MergeLedger#next} from there, so the store itself
+   * retains nothing about merges no walk in flight can still need. Replaced under the directory WRITE lock, read under
+   * the read lock.
+   */
+  private          MergeLedger      mergeLedger    = new MergeLedger();
   /**
    * The cutoff RETENTION has provably swept past, so a vanished block can be attributed to the pass that actually
    * removed it rather than to whichever maintenance pass happened to run (issue #8166, review of PR #8197).
@@ -295,6 +359,13 @@ public class TimeSeriesSealedStore implements AutoCloseable {
     final double[] columnMaxs;   // per-column max
     final double[] columnSums;   // per-column sum of the REAL (non-NaN) samples, NaN when there is none
     final long[]   columnCounts; // per-column count of the REAL (non-NaN) samples, or COUNT_UNKNOWN (see below)
+    // Per SIMPLE8B column, the EXACT statistics of the samples that carry a value (issue #9720): the extremes, and the 128-bit
+    // total as its low and high word. Meaningful where exactStats says so; columnMins/Maxs/Sums are their nearest doubles.
+    final long[]    exactMins;
+    final long[]    exactMaxs;
+    final long[]    exactSumsLo;
+    final long[]    exactSumsHi;
+    final boolean[] exactStats;
     // indexed by schema column index, null for non-TAG columns. IMMUTABLE: loadDirectory shares one array between every
     // block that declares the same values (issue #8793), so nothing may write into it
     String[][]     tagDistinctValues;
@@ -373,19 +444,23 @@ public class TimeSeriesSealedStore implements AutoCloseable {
      * {@link #recordWrittenCRC(int)}, together with the CRC it is a shortcut for, so a write path that forgets to
      * record one cannot silently inherit the other.
      */
-    BlockEntry(final long minTs, final long maxTs, final int sampleCount, final int columnCount,
-        final double[] mins, final double[] maxs, final double[] sums, final long[] counts, final long blockStartOffset,
-        final long blockId) {
+    BlockEntry(final long minTs, final long maxTs, final int sampleCount, final int columnCount, final BlockStats stats,
+        final long blockStartOffset, final long blockId) {
       this.blockId = blockId;
       this.minTimestamp = minTs;
       this.maxTimestamp = maxTs;
       this.sampleCount = sampleCount;
       this.columnOffsets = new long[columnCount];
       this.columnSizes = new int[columnCount];
-      this.columnMins = mins;
-      this.columnMaxs = maxs;
-      this.columnSums = sums;
-      this.columnCounts = counts;
+      this.columnMins = stats.mins();
+      this.columnMaxs = stats.maxs();
+      this.columnSums = stats.sums();
+      this.columnCounts = stats.counts();
+      this.exactMins = stats.exactMins() != null ? stats.exactMins() : new long[columnCount];
+      this.exactMaxs = stats.exactMaxs() != null ? stats.exactMaxs() : new long[columnCount];
+      this.exactSumsLo = stats.exactSumsLo() != null ? stats.exactSumsLo() : new long[columnCount];
+      this.exactSumsHi = stats.exactSumsHi() != null ? stats.exactSumsHi() : new long[columnCount];
+      this.exactStats = stats.exact() != null ? stats.exact() : new boolean[columnCount];
       this.blockStartOffset = blockStartOffset;
       this.crcValidated = false;
     }
@@ -447,10 +522,10 @@ public class TimeSeriesSealedStore implements AutoCloseable {
     final File f = new File(basePath + ".ts.sealed");
     final boolean exists = f.exists();
     this.indexFile = new RandomAccessFile(f, "rw");
-    this.indexChannel = indexFile.getChannel();
+    this.indexChannel = channelOf(indexFile);
 
     try {
-      if (exists && indexFile.length() >= HEADER_SIZE)
+      if (exists && fileLength() >= HEADER_SIZE)
         loadDirectory();
       else
         writeEmptyHeader();
@@ -483,54 +558,21 @@ public class TimeSeriesSealedStore implements AutoCloseable {
     try {
       final int colCount = columns.size();
 
-      // Count the columns that carry a statistics triplet. Keyed off the codec, never off the VALUE of the
-      // declared minimum: a NaN minimum is a legitimate declaration ("this column holds no real sample", the
-      // absent marker of issue #7043), and treating it as "this column has no statistics section" would drop a
-      // triplet the reader still expects and shift every following column's statistics onto the wrong column.
-      int numericColCount = 0;
-      for (int c = 0; c < colCount; c++)
-        if (hasNumericStats(c))
-          numericColCount++;
-
-      // Build tag metadata section
-      final byte[] tagMeta = buildTagMetadata(tagDistinctValues, colCount);
-
-      // Block header: magic(4) + minTs(8) + maxTs(8) + sampleCount(4) + blockId(8) + colSizes(4*colCount)
-      //              + numericColCount(4) + [min(8) + max(8) + sum(8) + count(8)] * numericColCount
-      //              + tag metadata
+      // A SIMPLE8B column gets exact statistics (issue #9720): proven by the declared doubles, or computed from its values
+      final BlockStats stats = withExactIntegralStats(new BlockStats(columnMins, columnMaxs, columnSums, columnCounts), compressedColumns);
       final long blockId = newBlockId();
-      final int statsSize = 4 + STATS_BYTES * numericColCount;
-      final int metaSize = 4 + 8 + 8 + 4 + BLOCK_ID_BYTES + 4 * colCount + statsSize + tagMeta.length;
-      final ByteBuffer metaBuf = ByteBuffer.allocate(metaSize);
-      metaBuf.putInt(BLOCK_MAGIC_VALUE_V3);
-      metaBuf.putLong(minTs);
-      metaBuf.putLong(maxTs);
-      metaBuf.putInt(sampleCount);
-      metaBuf.putLong(blockId);
-      for (final byte[] col : compressedColumns)
-        metaBuf.putInt(col.length);
-
-      // Write stats section (schema order, no colIdx — iterate columns, skip non-numeric)
-      metaBuf.putInt(numericColCount);
-      for (int c = 0; c < colCount; c++) {
-        if (hasNumericStats(c)) {
-          metaBuf.putDouble(columnMins[c]);
-          metaBuf.putDouble(columnMaxs[c]);
-          metaBuf.putDouble(columnSums[c]);
-          metaBuf.putLong(columnCounts[c]);
-        }
-      }
-
-      // Write tag metadata
-      metaBuf.put(tagMeta);
-      metaBuf.flip();
+      final ByteBuffer metaBuf = blockMeta(sampleCount, minTs, maxTs, blockId, compressedColumns, stats,
+          buildTagMetadata(tagDistinctValues, colCount));
+      final int metaSize = metaBuf.limit();
 
       // Compute CRC32 over meta + compressed data
       // Use metaBuf.limit() (not .array().length) since the backing array may be larger after flip
       final CRC32 crc = new CRC32();
       crc.update(metaBuf.array(), 0, metaBuf.limit());
 
-      final long blockStart = indexFile.length();
+      // fileLength() reopens a channel an interrupt left closed (issue #9621). The RandomAccessFile writes below are not
+      // interruptible, and the directory WRITE lock keeps every reader off the shared descriptor until they are done.
+      final long blockStart = fileLength();
       long offset = blockStart;
       indexFile.seek(offset);
       indexFile.write(metaBuf.array(), 0, metaBuf.limit());
@@ -538,8 +580,7 @@ public class TimeSeriesSealedStore implements AutoCloseable {
 
       // #6360 item 3: the offset is given to the entry rather than patched onto it afterwards, so the entry
       // describes where its block is no matter which side of a restart wrote it.
-      final BlockEntry entry = new BlockEntry(minTs, maxTs, sampleCount, colCount, columnMins, columnMaxs, columnSums,
-          columnCounts, blockStart, blockId);
+      final BlockEntry entry = new BlockEntry(minTs, maxTs, sampleCount, colCount, stats, blockStart, blockId);
       entry.tagDistinctValues = tagDistinctValues;
       // Write compressed column data
       for (int c = 0; c < colCount; c++) {
@@ -644,14 +685,17 @@ public class TimeSeriesSealedStore implements AutoCloseable {
   }
 
   /**
-   * Returns an iterator over sealed blocks overlapping the given time range.
-   * Eagerly collects all matching rows before returning, so the caller iterates a list rather than the file. The
-   * read lock is taken per block and re-resolves the entry against the live directory first, so an atomic file
-   * replacement by a concurrent writer cannot be read through a stale offset (see {@link #walkBlocks}).
+   * Returns an iterator over sealed blocks overlapping the given time range, in timestamp order.
+   * <p>
+   * Lazy, one block at a time (issue #9420): the iterator holds the rows of the block it is in and decodes the next
+   * one when it gets there, so its residency is one block and not the range. Each block is read by the same
+   * {@link #walkBlocks} {@link #forEachRow} uses, with the same per-block read lock and the same re-resolution
+   * against the live directory, so an atomic file replacement by a concurrent writer cannot be read through a
+   * stale offset, a block a retention pass removed mid-iteration is skipped and counted in
+   * {@code vanishedBlocks}, and one a downsample replaced raises {@link TimeSeriesWalkCoarsenedException}.
    * <p>
    * Optimizations:
    * - Binary search on block directory to skip to first matching block
-   * - Early termination when blocks are past the time range (blocks are sorted)
    * - Timestamps decompressed first; value columns only if the block has matches
    * - Binary search within each block's sorted timestamps for the matching range
    *
@@ -659,10 +703,8 @@ public class TimeSeriesSealedStore implements AutoCloseable {
    * @param toTs          end timestamp (inclusive)
    * @param columnIndices which columns to return (null = all)
    *
-   * @return iterator yielding Object[] { timestamp, col1, col2, ... }.
-   *         <b>Note:</b> all matching rows are fully materialised into memory before the iterator
-   *         is returned, because the read lock must be held for all file I/O and released before
-   *         the caller iterates.  For very large time ranges consider using aggregation instead.
+   * @return iterator yielding Object[] { timestamp, col1, col2, ... }. An I/O error reading a later block surfaces
+   *         from {@code hasNext()} as a {@link DatabaseOperationException}
    */
   public Iterator<Object[]> iterateRange(final long fromTs, final long toTs, final int[] columnIndices,
       final TagFilter tagFilter) throws IOException {
@@ -671,13 +713,75 @@ public class TimeSeriesSealedStore implements AutoCloseable {
 
   /**
    * {@link #iterateRange(long, long, int[], TagFilter)}, counting what the walk did into {@code metrics}
-   * (issue #7717). {@code null} means "do not count" and is the path every pre-existing caller takes.
+   * (issue #7717). {@code null} means "do not count" and is the path every pre-existing caller takes. The counters
+   * grow as the iterator advances, not when this returns.
    */
   public Iterator<Object[]> iterateRange(final long fromTs, final long toTs, final int[] columnIndices,
       final TagFilter tagFilter, final AggregationMetrics metrics) throws IOException {
-    final List<Object[]> results = new ArrayList<>();
-    forEachRow(fromTs, toTs, columnIndices, tagFilter, metrics, row -> results.add(row));
-    return results.iterator();
+    return iterateRange(snapshotBlockDirectory(fromTs, toTs), fromTs, toTs, columnIndices, tagFilter, metrics);
+  }
+
+  /**
+   * {@link #iterateRange(long, long, int[], TagFilter, AggregationMetrics)} over a directory snapshot the caller
+   * already took, for the reason {@link TimeSeriesShard#forEachRow} takes one: the shard reads its mutable bucket in
+   * the same window, so a compaction cannot seal those rows into blocks this walk would hand over a second time.
+   * <p>
+   * Each step hands {@link #walkBlocks} a one-block slice of the snapshot, keeping the block's position in the
+   * directory and the snapshot's epoch, so a block is resolved and judged exactly as it would be in the middle of a
+   * whole walk. That is what keeps this iterator and {@code forEachRow} one implementation.
+   */
+  Iterator<Object[]> iterateRange(final BlockDirectorySnapshot directorySnapshot, final long fromTs, final long toTs,
+      final int[] columnIndices, final TagFilter tagFilter, final AggregationMetrics metrics) {
+    return iterateRange(directorySnapshot, fromTs, toTs, columnIndices, tagFilter, null, metrics);
+  }
+
+  /**
+   * Same as above, handing over only the rows that also pass {@code fieldFilter} (issue #9612). A block whose statistics
+   * prove no sample passes is not read at all, and in a block that has to be decoded the filter is applied to the
+   * primitive columns before a row is built, so a rejected sample costs no allocation.
+   */
+  Iterator<Object[]> iterateRange(final BlockDirectorySnapshot directorySnapshot, final long fromTs, final long toTs,
+      final int[] columnIndices, final TagFilter tagFilter, final FieldFilter fieldFilter, final AggregationMetrics metrics) {
+    final List<BlockEntry> blocks = directorySnapshot.blocks();
+    return new Iterator<>() {
+      private final ArrayList<Object[]> blockRows = new ArrayList<>();
+      private       int                 nextBlock = 0;
+      private       int                 position  = 0;
+
+      /** Moves to the next block that has a row in range; {@code false} once every block is spent. */
+      private boolean fill() {
+        while (position >= blockRows.size()) {
+          if (nextBlock >= blocks.size())
+            return false;
+          blockRows.clear();
+          position = 0;
+          final int blockIdx = nextBlock++;
+          final BlockDirectorySnapshot oneBlock = new BlockDirectorySnapshot(List.of(blocks.get(blockIdx)),
+              directorySnapshot.firstIndex() + blockIdx, directorySnapshot.downsampleEpoch(), directorySnapshot.origin());
+          try {
+            walkBlocks(oneBlock, fromTs, toTs, columnIndices, tagFilter, fieldFilter, metrics, blockRows::add, false);
+          } catch (final IOException e) {
+            throw new DatabaseOperationException("Error reading sealed TimeSeries block from '" + getSealedFileName() + "'", e);
+          }
+        }
+        return true;
+      }
+
+      @Override
+      public boolean hasNext() {
+        return fill();
+      }
+
+      @Override
+      public Object[] next() {
+        if (!fill())
+          throw new NoSuchElementException();
+        final Object[] row = blockRows.get(position);
+        // Released as it is handed over, so a consumer that keeps no rows holds no more than the rest of the block.
+        blockRows.set(position++, null);
+        return row;
+      }
+    };
   }
 
   /**
@@ -716,7 +820,7 @@ public class TimeSeriesSealedStore implements AutoCloseable {
   boolean forEachRow(final BlockDirectorySnapshot directorySnapshot, final long fromTs, final long toTs,
       final int[] columnIndices, final TagFilter tagFilter, final AggregationMetrics metrics,
       final TimeSeriesRowVisitor visitor) throws IOException {
-    return walkBlocks(directorySnapshot, fromTs, toTs, columnIndices, tagFilter, metrics, visitor, false);
+    return walkBlocks(directorySnapshot, fromTs, toTs, columnIndices, tagFilter, null, metrics, visitor, false);
   }
 
   /**
@@ -765,7 +869,9 @@ public class TimeSeriesSealedStore implements AutoCloseable {
       if (first >= end)
         return BlockDirectorySnapshot.EMPTY;
 
-      return new BlockDirectorySnapshot(new ArrayList<>(blockDirectory.subList(first, end)), first, downsampleEpoch + mergeEpoch);
+      final List<BlockEntry> blocks = new ArrayList<>(blockDirectory.subList(first, end));
+      return new BlockDirectorySnapshot(blocks, first, downsampleEpoch + mergeEpoch,
+          new WalkOrigin(blocks, first, downsampleEpoch, mergeLedger));
     } finally {
       directoryLock.readLock().unlock();
     }
@@ -786,9 +892,91 @@ public class TimeSeriesSealedStore implements AutoCloseable {
    * has already emitted is a consistent one. Comparing the epoch the snapshot was taken at against the store's
    * current one says whether a downsample can have been the cause, without keeping per-block state for it.
    */
-  record BlockDirectorySnapshot(List<BlockEntry> blocks, int firstIndex, long downsampleEpoch) {
-    static final BlockDirectorySnapshot EMPTY = new BlockDirectorySnapshot(List.of(), 0, 0L);
+  record BlockDirectorySnapshot(List<BlockEntry> blocks, int firstIndex, long downsampleEpoch, WalkOrigin origin) {
+    static final BlockDirectorySnapshot EMPTY = new BlockDirectorySnapshot(List.of(), 0, 0L, null);
   }
+
+  /**
+   * One node of the chain of merges of small blocks that landed in a store (issue #9488). The node a walk holds is the
+   * newest one at the instant of its snapshot; {@link #links} are the blocks the NEXT merge produced and {@link #next}
+   * is the node that merge appended, {@code null} while no merge has landed since. Written under the directory write
+   * lock, {@code links} before {@code next}.
+   */
+  static final class MergeLedger {
+    volatile List<MergeLink> links = List.of();
+    volatile MergeLedger     next;
+  }
+
+  /**
+   * How one merged block was assembled from the blocks it replaced (issue #9488): the ids of the sources in the order
+   * their rows were concatenated, how many rows each contributed, and the permutation the timestamp sort applied to the
+   * concatenation ({@code null} when the rows were already in order), so that row {@code r} of the merged block is row
+   * {@code order[r]} of the concatenation. That is all a walk needs to tell which rows of the merged block belong to
+   * the old blocks it has not read yet.
+   */
+  record MergeLink(BlockEntry merged, long[] sourceIds, int[] sourceSizes, int[] order) {
+  }
+
+  /**
+   * What a walk remembers about the store at the instant of its snapshot, shared by every slice of that snapshot (the lazy
+   * iterator walks it one block at a time) so the answer to "which merged rows did I already hand over" outlives a
+   * single {@link #walkBlocks} call (issue #9488).
+   * <p>
+   * {@code downsampleOnlyEpoch} is the downsample counter alone: a walk is overtaken by a MERGE when that did not
+   * move, and by a downsample when it did, which no hand-over can fix. {@code mergedAway} holds the ids of the
+   * snapshot blocks whose remaining rows were already emitted through the block that replaced them. The remaining
+   * fields are derived from the ledger chain on first need and cached for as long as the chain does not grow.
+   */
+  static final class WalkOrigin {
+    // Not synchronised: a walk (or the lazy iterator over one) is driven by a single thread, as every other piece of its state is
+    final List<BlockEntry> allBlocks;
+    final int              baseFirstIndex;
+    final long             downsampleOnlyEpoch;
+    final MergeLedger      ledger;
+    final Set<Long>        mergedAway = new HashSet<>();
+
+    /** The first node whose merge is not in {@link #parentOf}/{@link #linkOf} yet: the chain is read once, incrementally. */
+    private MergeLedger          loadedUpTo;
+    private final Map<Long, Long>      parentOf   = new HashMap<>();
+    private final Map<Long, MergeLink> linkOf     = new HashMap<>();
+    private       Map<Long, Integer>   positionOf;
+
+    WalkOrigin(final List<BlockEntry> allBlocks, final int baseFirstIndex, final long downsampleOnlyEpoch, final MergeLedger ledger) {
+      this.allBlocks = allBlocks;
+      this.baseFirstIndex = baseFirstIndex;
+      this.downsampleOnlyEpoch = downsampleOnlyEpoch;
+      this.ledger = ledger;
+    }
+
+    /** Loads the merges that landed since the snapshot, only the ones not loaded yet; {@code false} when there are none. */
+    private boolean loadChain() {
+      if (loadedUpTo == null)
+        loadedUpTo = ledger;
+      while (loadedUpTo.next != null) {
+        for (final MergeLink link : loadedUpTo.links) {
+          linkOf.put(link.merged().blockId, link);
+          for (final long source : link.sourceIds())
+            parentOf.put(source, link.merged().blockId);
+        }
+        loadedUpTo = loadedUpTo.next;
+      }
+      if (loadedUpTo == ledger)
+        return false;
+      if (positionOf == null) {
+        positionOf = new HashMap<>(allBlocks.size() * 2);
+        for (int i = 0; i < allBlocks.size(); i++)
+          positionOf.put(allBlocks.get(i).blockId, i);
+      }
+      return true;
+    }
+  }
+
+  /** The block a merge replaced a snapshot block with, and which of its rows the walk has not handed over (null = all). */
+  private record MergedBlock(BlockEntry live, BitSet rows) {
+  }
+
+  private static final BitSet ALL_ROWS = new BitSet();
+  private static final BitSet NO_ROWS  = new BitSet();
 
   /**
    * Visits the distinct TAG COMBINATIONS the sealed blocks carry in the range, rather than the samples that carry
@@ -831,7 +1019,7 @@ public class TimeSeriesSealedStore implements AutoCloseable {
   boolean forEachTagCombination(final BlockDirectorySnapshot directorySnapshot, final long fromTs, final long toTs,
       final int[] columnIndices, final AggregationMetrics metrics, final TimeSeriesRowVisitor visitor)
       throws IOException {
-    return walkBlocks(directorySnapshot, fromTs, toTs, columnIndices, null, metrics, visitor, true);
+    return walkBlocks(directorySnapshot, fromTs, toTs, columnIndices, null, null, metrics, visitor, true);
   }
 
   /**
@@ -851,9 +1039,10 @@ public class TimeSeriesSealedStore implements AutoCloseable {
    * file may have been swapped under it.
    */
   private boolean walkBlocks(final BlockDirectorySnapshot directorySnapshot, final long fromTs, final long toTs,
-      final int[] columnIndices, final TagFilter tagFilter, final AggregationMetrics metrics,
+      final int[] columnIndices, final TagFilter tagFilter, final FieldFilter fieldFilter, final AggregationMetrics metrics,
       final TimeSeriesRowVisitor visitor, final boolean combinationsOnly) throws IOException {
     final List<BlockEntry> snapshot = directorySnapshot.blocks();
+    final WalkOrigin origin = directorySnapshot.origin();
     final int dirSize = snapshot.size();
     if (dirSize == 0)
       return true;
@@ -888,10 +1077,16 @@ public class TimeSeriesSealedStore implements AutoCloseable {
       if (entry.maxTimestamp < fromTs)
         continue;
 
-      final BlockMatchResult tagMatch = tagFilter != null
+      // Its remaining rows were already handed over through the block a merge replaced it with (issue #9488)
+      if (origin != null && !origin.mergedAway.isEmpty() && origin.mergedAway.contains(entry.blockId))
+        continue;
+
+      BlockMatchResult tagMatch = tagFilter != null
           ? blockMatchesTagFilter(entry, tagFilter)
           : BlockMatchResult.FAST_PATH;
-      if (tagMatch == BlockMatchResult.SKIP) {
+      // Issue #9612: a block whose min/max of a filtered column cannot pass is skipped on its entry, like a tag mismatch
+      FieldFilter.BlockMatch fieldMatch = fieldFilter != null ? blockMatchesFieldFilter(entry, fieldFilter) : FieldFilter.BlockMatch.ALL;
+      if (tagMatch == BlockMatchResult.SKIP || fieldMatch == FieldFilter.BlockMatch.NONE) {
         if (metrics != null)
           metrics.addSkippedBlock();
         continue;
@@ -915,9 +1110,29 @@ public class TimeSeriesSealedStore implements AutoCloseable {
       Object[] combination = null;
       boolean vanished = false;
       boolean coarsened = false;
+      BitSet rowFilter = null;
+      // Issue #9612: the decoded columns the field filter reads, and the block's columns left primitive so only the rows
+      // that pass are boxed
+      Object[] fieldCols = null;
+      RawColumn[] rawCols = null;
       directoryLock.readLock().lock();
       try {
-        final BlockEntry live = resolveLiveBlock(entry, directorySnapshot.firstIndex() + blockIdx);
+        BlockEntry live = resolveLiveBlock(entry, directorySnapshot.firstIndex() + blockIdx);
+        if (live == null && !removedByRetention(entry) && downsampleEpoch + mergeEpoch != directorySnapshot.downsampleEpoch()
+            && origin != null && downsampleEpoch == origin.downsampleOnlyEpoch) {
+          // Only merges of small blocks landed (issue #9488): they keep every row, so the rows of this block are in
+          // the block that replaced it and the walk goes on there, minus what it already handed over
+          final MergedBlock merged = resolveMergedAway(entry, directorySnapshot.firstIndex() + blockIdx - origin.baseFirstIndex,
+              origin);
+          if (merged != null) {
+            live = merged.live();
+            rowFilter = merged.rows();
+            if (tagFilter != null)
+              tagMatch = blockMatchesTagFilter(live, tagFilter);
+            if (fieldFilter != null)
+              fieldMatch = blockMatchesFieldFilter(live, fieldFilter);
+          }
+        }
         // A null live entry means the block left the directory while this walk was between two blocks. It no
         // longer means "a sealed file was installed under this walk" - since issue #8043 the block's identity is
         // in the file, so a block the leader's copy still holds resolves - and the two causes that remain are
@@ -930,18 +1145,23 @@ public class TimeSeriesSealedStore implements AutoCloseable {
           // meets BOTH passes from refusing an answer it could have given (review of PR #8197).
           coarsened = !removedByRetention(entry) && downsampleEpoch + mergeEpoch != directorySnapshot.downsampleEpoch();
         } else {
-          // The whole point of issue #7710: one row off the directory entry, with no file read and no decode.
-          if (combinationsOnly)
+          // The whole point of issue #7710: one row off the directory entry, with no file read and no decode. Not for
+          // a merged block read in part: its declaration covers rows this walk already handed over
+          if (combinationsOnly && rowFilter == null)
             combination = declaredSingleCombination(live, combinationColumns, combinationWidth, tsColIdx, fromTs, toTs);
 
-          if (combination == null) {
+          if (tagMatch == BlockMatchResult.SKIP || fieldMatch == FieldFilter.BlockMatch.NONE) {
+            // only reachable for a merged block: the walk's own test already dropped every other one
+            if (metrics != null)
+              metrics.addSkippedBlock();
+          } else if (combination == null && (rowFilter == null || !rowFilter.isEmpty())) {
             final long[] decodedTs = decompressTimestamps(live, tsColIdx);
             final int from = lowerBound(decodedTs, fromTs);
             final int to = upperBound(decodedTs, toTs);
 
             if (from < to) {
               if (metrics != null) {
-                if (tagMatch == BlockMatchResult.SLOW_PATH)
+                if (tagMatch == BlockMatchResult.SLOW_PATH || fieldMatch == FieldFilter.BlockMatch.SOME)
                   metrics.addSlowPathBlock();
                 else
                   metrics.addFastPathBlock();
@@ -950,7 +1170,14 @@ public class TimeSeriesSealedStore implements AutoCloseable {
               ts = decodedTs;
               start = from;
               end = to;
-              decompCols = decompressColumns(live, projection.scanIndices(), tsColIdx);
+              if (fieldMatch == FieldFilter.BlockMatch.SOME) {
+                final List<FieldFilter.Condition> conditions = fieldFilter.getConditions();
+                fieldCols = new Object[conditions.size()];
+                for (int c = 0; c < fieldCols.length; c++)
+                  fieldCols[c] = rawColumnValues(live, findNonTsColumnSchemaIndex(conditions.get(c).columnIndex()));
+                rawCols = decompressColumnsRaw(live, projection.scanIndices(), tsColIdx);
+              } else
+                decompCols = decompressColumns(live, projection.scanIndices(), tsColIdx);
             }
           }
         }
@@ -965,7 +1192,7 @@ public class TimeSeriesSealedStore implements AutoCloseable {
       if (coarsened)
         throw new TimeSeriesWalkCoarsenedException(
             "Sealed block [" + entry.minTimestamp + ".." + entry.maxTimestamp + "] of '" + getSealedFileName()
-                + "' was replaced by a downsample (or a merge of small blocks) while this read was in flight, so no"
+                + "' was replaced by a downsample (or by a merge of small blocks this read could not follow) while this read was in flight, so no"
                 + " answer it can still produce is a consistent one: the rows already returned came from the old blocks and"
                 + " the rows remaining sit in their replacements. Run the read again to get a whole answer");
 
@@ -987,6 +1214,30 @@ public class TimeSeriesSealedStore implements AutoCloseable {
         continue;
       }
 
+      if (rawCols != null) {
+        // Issue #9612: only the rows that pass the field filter are built, from the primitive columns, and the test reads the
+        // decoded columns in place so a rejected row allocates nothing
+        final List<FieldFilter.Condition> conditions = fieldFilter.getConditions();
+        final int resultCols = rawCols.length + 1;
+        for (int i = start; i < end; i++) {
+          if (rowFilter != null && !rowFilter.get(i))
+            continue;
+          if (!FieldFilter.matchesAt(conditions, fieldCols, i))
+            continue;
+          final Object[] row = new Object[resultCols];
+          row[0] = ts[i];
+          for (int c = 0; c < rawCols.length; c++)
+            row[c + 1] = rawCols[c].valueAt(i);
+          if (tagMatch == BlockMatchResult.SLOW_PATH && !tagFilter.matchesMapped(row, projection.scanIndices()))
+            continue;
+          if (metrics != null)
+            metrics.addMaterializedRows(1);
+          if (!visitor.visit(projection.narrow(row)))
+            return false;
+        }
+        continue;
+      }
+
       // Null only because the window above declined the block - no row of it was in range.
       // decompressColumns has one return and it is a toArray, so it never hands back null itself.
       if (decompCols == null)
@@ -994,6 +1245,9 @@ public class TimeSeriesSealedStore implements AutoCloseable {
 
       final int resultCols = decompCols.length + 1;
       for (int i = start; i < end; i++) {
+        // A merged block read in part: the rows that came from blocks this walk already emitted are not handed over twice
+        if (rowFilter != null && !rowFilter.get(i))
+          continue;
         final Object[] row = new Object[resultCols];
         row[0] = ts[i];
         for (int c = 0; c < decompCols.length; c++)
@@ -1049,6 +1303,88 @@ public class TimeSeriesSealedStore implements AutoCloseable {
    */
   private boolean removedByRetention(final BlockEntry snapshotEntry) {
     return snapshotEntry.maxTimestamp < retentionRemovedBelowTs;
+  }
+
+  /**
+   * Follows the merges that landed since the walk's snapshot to the live block now holding the rows of
+   * {@code snapshotEntry}, and works out which of that block's rows the walk has NOT yet handed over (issue #9488).
+   * Called under the directory read lock, for a block that no longer resolves when only merges of small blocks
+   * moved the store.
+   * <p>
+   * A merge keeps every row, so nothing is lost and nothing needs to be refused: the rows of the replacement that came
+   * from the snapshot blocks at or after {@code position} are exactly those the walk still owes. They are found by
+   * pushing "which snapshot blocks are still owed" down the chain of merges - a merged block's rows are the
+   * concatenation of its sources' rows permuted by the sort - so a block that a later merge folded again is resolved
+   * the same way. The snapshot blocks that contributed are recorded in {@link WalkOrigin#mergedAway}, which is what
+   * stops the walk reaching them again and emitting their rows a second time.
+   *
+   * @return the replacement and the rows still owed ({@code null} = all of them), or {@code null} when the block
+   *         cannot be followed (no merge accounts for it, or its replacement is gone too)
+   */
+  private MergedBlock resolveMergedAway(final BlockEntry snapshotEntry, final int position, final WalkOrigin origin) {
+    if (snapshotEntry.blockId == BlockEntry.NO_BLOCK_ID || !origin.loadChain())
+      return null;
+
+    long finalId = snapshotEntry.blockId;
+    Long parent;
+    while ((parent = origin.parentOf.get(finalId)) != null)
+      finalId = parent;
+    final MergeLink finalLink = origin.linkOf.get(finalId);
+    if (finalLink == null)
+      return null;
+
+    // A hint past the end of the directory skips the identity shortcut and goes straight to the search by block id
+    final BlockEntry live = resolveLiveBlock(finalLink.merged(), Integer.MAX_VALUE);
+    if (live == null)
+      return null;
+
+    final List<Long> contributed = new ArrayList<>();
+    final BitSet rows = owedRows(finalId, position, origin, contributed);
+    origin.mergedAway.addAll(contributed);
+    return new MergedBlock(live, rows == ALL_ROWS ? null : rows == NO_ROWS ? new BitSet() : rows);
+  }
+
+  /** The rows of block {@code id} the walk still owes: {@link #ALL_ROWS}, {@link #NO_ROWS}, or a set over the block's rows. */
+  private static BitSet owedRows(final long id, final int position, final WalkOrigin origin, final List<Long> contributed) {
+    final MergeLink link = origin.linkOf.get(id);
+    if (link == null) {
+      final Integer at = origin.positionOf.get(id);
+      if (at == null || at < position || origin.mergedAway.contains(id))
+        return NO_ROWS;
+      contributed.add(id);
+      return ALL_ROWS;
+    }
+
+    final int[] sizes = link.sourceSizes();
+    int total = 0;
+    for (final int size : sizes)
+      total += size;
+
+    final BitSet concatenated = new BitSet(total);
+    int offset = 0;
+    for (int s = 0; s < sizes.length; s++) {
+      final BitSet owed = owedRows(link.sourceIds()[s], position, origin, contributed);
+      if (owed == ALL_ROWS)
+        concatenated.set(offset, offset + sizes[s]);
+      else if (owed != NO_ROWS)
+        for (int r = owed.nextSetBit(0); r >= 0; r = owed.nextSetBit(r + 1))
+          concatenated.set(offset + r);
+      offset += sizes[s];
+    }
+
+    if (concatenated.isEmpty())
+      return NO_ROWS;
+    if (concatenated.cardinality() == total)
+      return ALL_ROWS;
+
+    final int[] order = link.order();
+    if (order == null)
+      return concatenated;
+    final BitSet result = new BitSet(total);
+    for (int r = 0; r < total; r++)
+      if (concatenated.get(order[r]))
+        result.set(r);
+    return result;
   }
 
   private BlockEntry resolveLiveBlock(final BlockEntry snapshotEntry, final int hintIdx) {
@@ -1214,8 +1550,9 @@ public class TimeSeriesSealedStore implements AutoCloseable {
    * older block can still hold a newer row. An unbounded last-point query therefore costs
    * O(blocks touched) instead of O(series), without any extra persisted state.
    * <p>
-   * Early termination is guarded by the timestamp of the oldest row currently retained, so it stays
-   * correct even if two adjacent blocks happen to overlap in time.
+   * Early termination is guarded by the timestamp of the oldest row currently retained, compared with the
+   * running maximum of {@code maxTimestamp} rather than with one block's own, so it stays correct when blocks
+   * overlap in time, which a compaction that met late-arriving samples produces (issues #8813, #9982).
    *
    * @param fromTs        start timestamp (inclusive)
    * @param toTs          end timestamp (inclusive)
@@ -1253,22 +1590,31 @@ public class TimeSeriesSealedStore implements AutoCloseable {
       }
       final int startBlockIdx = lo;
 
+      // The directory is ordered by minTimestamp and its blocks overlap, so maxTimestamp is NOT monotonic along it
+      // and one block ending early says nothing about the blocks before it (issue #9982, the descending half of
+      // #8813). Both early exits below therefore read the running maximum, which bounds every block at or before
+      // an index, and a single block that falls short is only skipped.
+      final long[] runningMax = runningMaxTimestamps();
+      // Every block before this one ends before the requested lower bound.
+      final int stopBlockIdx = firstBlockEndingAtOrAfter(runningMax, fromTs);
+
       // Timestamp of the oldest row retained so far: once `need` rows are held, any block whose
-      // maxTimestamp is older than this cannot contribute and the walk stops.
+      // maxTimestamp is older than this cannot contribute.
       long cutoffTs = Long.MIN_VALUE;
 
-      for (int blockIdx = startBlockIdx; blockIdx >= 0; blockIdx--) {
+      for (int blockIdx = startBlockIdx; blockIdx >= stopBlockIdx; blockIdx--) {
+        // No block from here down can hold a row newer than the oldest one retained: the walk is over.
+        if (results.size() >= need && runningMax[blockIdx] < cutoffTs)
+          break;
+
         final BlockEntry entry = blockDirectory.get(blockIdx);
 
-        // Early termination: blocks are ordered by ascending timestamp, so once a block ends before
-        // the requested lower bound no older block can be in range either.
-        if (entry.maxTimestamp < fromTs)
-          break;
+        if (entry.maxTimestamp < fromTs || entry.minTimestamp > toTs)
+          continue;
 
+        // The per-block twin of the break above: this block alone cannot contribute, but the running maximum says an
+        // earlier one still can, so it is skipped rather than ending the walk
         if (results.size() >= need && entry.maxTimestamp < cutoffTs)
-          break;
-
-        if (entry.minTimestamp > toTs)
           continue;
 
         final BlockMatchResult tagMatch = tagFilter != null
@@ -1302,6 +1648,11 @@ public class TimeSeriesSealedStore implements AutoCloseable {
         // first `need` matches found are the newest ones in this block.
         int taken = 0;
         for (int i = end - 1; i >= start && taken < need; i--) {
+          // Once `need` rows are held, a row older than the oldest of them cannot enter the answer, and the rest of
+          // the block is older still. `cutoffTs` is the value from before this block, so it can only under-estimate,
+          // which makes this break conservative (the mirror of the one in scanRangeAscending).
+          if (results.size() >= need && ts[i] < cutoffTs)
+            break;
           if (tagMatch == BlockMatchResult.SLOW_PATH && !matchesRawColumns(rawCols, i, tagFilter, projection.scanIndices()))
             continue;
           final Object[] row = new Object[resultCols];
@@ -1545,6 +1896,28 @@ public class TimeSeriesSealedStore implements AutoCloseable {
       final List<MultiColumnAggregationRequest> requests, final long bucketIntervalMs, final long bucketOffsetMs,
       final MultiColumnAggregationResult result, final AggregationMetrics metrics,
       final TagFilter tagFilter) throws IOException {
+    aggregateMultiBlocks(fromTs, toTs, requests, bucketIntervalMs, bucketOffsetMs, result, metrics, tagFilter, null);
+  }
+
+  /**
+   * Same as above, counting only the samples that also pass {@code fieldFilter} (issue #9612).
+   * <p>
+   * A non-positive {@code bucketIntervalMs} is one bucket over the whole range, anchored at
+   * {@link TimeSeriesEngine#singleBucketAnchor}, which is how an ungrouped aggregate ({@code SELECT count(*) ... WHERE ts
+   * ...}) is answered. Every block fits that bucket, so every block wholly inside the range is answered from its
+   * statistics, and only the (at most two) blocks straddling a bound of the range are decoded. That used to be the other
+   * way round: the single-bucket path folded every sample of every block into the result one row at a time.
+   * <p>
+   * The field filter is judged on the block's statistics first. A block none of whose samples can pass is skipped, and
+   * one all of whose samples pass is treated as if there were no filter, statistics included; only the blocks in between
+   * decode the filtered columns, select the passing rows on the primitive arrays, and fold those.
+   *
+   * @param fieldFilter range predicates on numeric FIELD columns, may be {@code null}
+   */
+  public void aggregateMultiBlocks(final long fromTs, final long toTs,
+      final List<MultiColumnAggregationRequest> requests, final long bucketIntervalMs, final long bucketOffsetMs,
+      final MultiColumnAggregationResult result, final AggregationMetrics metrics,
+      final TagFilter tagFilter, final FieldFilter fieldFilter) throws IOException {
     final int tsColIdx = findTimestampColumnIndex();
     final int reqCount = requests.size();
 
@@ -1568,13 +1941,25 @@ public class TimeSeriesSealedStore implements AutoCloseable {
 
     final double[] rowValues = new double[reqCount];
     final long[] rowCounts = new long[reqCount];
+    // Per request, whether the result keeps it exact (issues #9718, #9720): an integral column's MIN/MAX/SUM/AVG, answered from
+    // the block's exact statistics or folded from its values as longs, never through a double
+    final boolean[] exact = exactFlags(result, reqCount);
+    final long[] exactValues = new long[reqCount];
+    final long[] exactHigh = new long[reqCount];
+    final long[] exactOut = new long[2];
     // Per schema column, the count of real samples in the segment the vectorized path is on (-1 = not yet counted).
     final long[] presentBySchemaCol = new long[columns.size()];
 
     // Pre-allocate decode buffers reused across all blocks in this call
     final long[] reusableTsBuf = new long[MAX_BLOCK_SIZE];
     final double[] reusableValBuf = new double[MAX_BLOCK_SIZE];
+    // The rows of a block that pass a row-level filter, allocated by the first block that needs one: a tag filter alone usually
+    // meets only homogeneous blocks, which need none. Local to the call, like every buffer here: shards run this method
+    // concurrently on the same store type, so none of them may become a field
+    int[] selected = null;
+    final List<FieldFilter.Condition> fieldConditions = fieldFilter != null ? fieldFilter.getConditions() : null;
 
+    final boolean bucketed = bucketIntervalMs > 0;
     final long singleBucketTs = TimeSeriesEngine.singleBucketAnchor(fromTs);
 
     // Hold the read lock for the entire scan including file I/O to prevent stale offsets
@@ -1598,23 +1983,26 @@ public class TimeSeriesSealedStore implements AutoCloseable {
         final BlockMatchResult tagMatch = tagFilter != null
             ? blockMatchesTagFilter(entry, tagFilter)
             : BlockMatchResult.FAST_PATH;
-        if (tagMatch == BlockMatchResult.SKIP) {
+        // Block-level field filter (issue #9612): the block's min/max of each filtered column decide it the same way
+        final FieldFilter.BlockMatch fieldMatch = fieldFilter != null ? blockMatchesFieldFilter(entry, fieldFilter) : FieldFilter.BlockMatch.ALL;
+        if (tagMatch == BlockMatchResult.SKIP || fieldMatch == FieldFilter.BlockMatch.NONE) {
           if (metrics != null)
             metrics.addSkippedBlock();
           continue;
         }
 
         // Check if entire block falls within a single time bucket and is fully inside the query range
-        // FAST_PATH: block is homogeneous for the filtered tag, so block-level stats are valid
-        if (tagMatch == BlockMatchResult.FAST_PATH
-            && bucketIntervalMs > 0 && entry.minTimestamp >= fromTs && entry.maxTimestamp <= toTs) {
-          final long blockMinBucket = TimeBucketGrid.bucketStart(entry.minTimestamp, bucketIntervalMs, bucketOffsetMs);
-          final long blockMaxBucket = TimeBucketGrid.bucketStart(entry.maxTimestamp, bucketIntervalMs, bucketOffsetMs);
-
-          // A legacy block (written before issue #7089) whose column summed over a NaN sample declares neither a
-          // usable sum nor a count of its real samples, so every request over that column but COUNT has to come
-          // from the values: SUM/AVG for the value itself, MIN/MAX for the count recorded next to it.
-          if (blockMinBucket == blockMaxBucket && !needsValues(entry, requests, schemaColIndices)) {
+        // FAST_PATH: block is homogeneous for the filtered tag, so block-level stats are valid; ALL: every sample of it
+        // passes the field filter, so they are valid for the filtered answer too
+        //
+        // A legacy block (written before issue #7089) whose column summed over a NaN sample declares neither a
+        // usable sum nor a count of its real samples, so every request over that column but COUNT has to come
+        // from the values: SUM/AVG for the value itself, MIN/MAX for the count recorded next to it.
+        if (tagMatch == BlockMatchResult.FAST_PATH && fieldMatch == FieldFilter.BlockMatch.ALL
+            && entry.minTimestamp >= fromTs && entry.maxTimestamp <= toTs && !needsValues(entry, requests, schemaColIndices, exact)) {
+          // Without a bucket interval the whole range is one bucket, which every block fits (issue #9612)
+          final long blockMinBucket = bucketed ? TimeBucketGrid.bucketStart(entry.minTimestamp, bucketIntervalMs, bucketOffsetMs) : singleBucketTs;
+          if (!bucketed || blockMinBucket == TimeBucketGrid.bucketStart(entry.maxTimestamp, bucketIntervalMs, bucketOffsetMs)) {
             // FAST PATH: use block-level stats directly — no decompression needed
             if (metrics != null)
               metrics.addFastPathBlock();
@@ -1632,14 +2020,16 @@ public class TimeSeriesSealedStore implements AutoCloseable {
                 };
                 // The samples that CONTRIBUTED: the real ones, which is what AVG divides by (issue #7089).
                 rowCounts[r] = entry.columnCounts[sci];
+                if (exact[r])
+                  blockExactStat(entry, sci, requests.get(r).type(), exactValues, exactHigh, r);
               }
             }
-            result.accumulateBlockStats(blockMinBucket, rowValues, rowCounts);
+            result.accumulateBlockStats(blockMinBucket, rowValues, rowCounts, exactValues, exactHigh);
             continue;
           }
         }
 
-        // SLOW PATH: decompress and iterate (boundary blocks spanning multiple buckets)
+        // SLOW PATH: decompress and iterate (blocks straddling a bound of the range or several buckets, or needing a row filter)
         if (metrics != null)
           metrics.addSlowPathBlock();
 
@@ -1657,11 +2047,20 @@ public class TimeSeriesSealedStore implements AutoCloseable {
           metrics.addDecompTs(System.nanoTime() - t0);
 
         // Decompress only the columns needed by the requests (deduplicated)
-        // Use reusable buffer for the first column; allocate for additional distinct columns
+        // Use reusable buffer for the first column; allocate for additional distinct columns. An exact request reads its column
+        // as longs, nulls included (issues #9720, #9721)
         final double[][] decompressedCols = new double[columns.size()][];
+        final IntegralColumn[] integralCols = new IntegralColumn[columns.size()];
         boolean reusableValBufferUsed = false;
         for (int r = 0; r < reqCount; r++) {
-          if (!isCount[r] && decompressedCols[schemaColIndices[r]] == null) {
+          if (exact[r]) {
+            if (integralCols[schemaColIndices[r]] == null) {
+              t0 = metrics != null ? System.nanoTime() : 0;
+              integralCols[schemaColIndices[r]] = IntegralColumn.decode(sliceColumn(blockData, entry, schemaColIndices[r]));
+              if (metrics != null)
+                metrics.addDecompVal(System.nanoTime() - t0);
+            }
+          } else if (!isCount[r] && decompressedCols[schemaColIndices[r]] == null) {
             t0 = metrics != null ? System.nanoTime() : 0;
             final byte[] colBytes = sliceColumn(blockData, entry, schemaColIndices[r]);
             final ColumnDefinition col = columns.get(schemaColIndices[r]);
@@ -1678,20 +2077,6 @@ public class TimeSeriesSealedStore implements AutoCloseable {
           }
         }
 
-        // Decompress tag columns for SLOW_PATH tag filtering
-        final boolean needRowTagFilter = tagFilter != null && tagMatch == BlockMatchResult.SLOW_PATH;
-        String[][] tagCols = null;
-        List<TagFilter.Condition> filterConditions = null;
-        if (needRowTagFilter) {
-          filterConditions = tagFilter.getConditions();
-          tagCols = new String[filterConditions.size()][];
-          for (int ci = 0; ci < filterConditions.size(); ci++) {
-            final int schemaIdx = findNonTsColumnSchemaIndex(filterConditions.get(ci).columnIndex());
-            final byte[] colBytes = sliceColumn(blockData, entry, schemaIdx);
-            tagCols[ci] = DictionaryCodec.decode(colBytes);
-          }
-        }
-
         // Use tsCount (not array length) since reusableTsBuf may be larger than actual data
         final long[] timestamps = reusableTsBuf;
 
@@ -1702,79 +2087,89 @@ public class TimeSeriesSealedStore implements AutoCloseable {
         final int rangeStart = lowerBound(timestamps, 0, tsCount, fromTs);
         final int rangeEnd = upperBound(timestamps, 0, tsCount, toTs);
 
-        if (bucketIntervalMs > 0) {
-          if (needRowTagFilter) {
-            // Per-row accumulation with tag filtering (cannot use SIMD on mixed-tag blocks)
-            for (int i = rangeStart; i < rangeEnd; i++) {
-              if (!matchesTagConditions(tagCols, filterConditions, i))
-                continue;
-              final long bucketTs = TimeBucketGrid.bucketStart(timestamps[i], bucketIntervalMs, bucketOffsetMs);
-              for (int r = 0; r < reqCount; r++) {
-                if (isCount[r])
-                  result.accumulateSingleStat(bucketTs, r, 1.0, 1);
-                else {
-                  final double v = decompressedCols[schemaColIndices[r]][i];
-                  result.accumulateSingleStat(bucketTs, r, v, TimeSeriesNaN.countIfPresent(0, v));
-                }
-              }
+        final boolean needRowTagFilter = tagFilter != null && tagMatch == BlockMatchResult.SLOW_PATH;
+        final boolean needRowFieldFilter = fieldMatch == FieldFilter.BlockMatch.SOME;
+        if (needRowTagFilter || needRowFieldFilter) {
+          // Row-level filtering: the passing rows are selected first, on the primitive columns, and only those are folded
+          if (selected == null)
+            selected = new int[MAX_BLOCK_SIZE];
+          int count;
+          if (needRowFieldFilter)
+            count = FieldFilter.select(fieldConditions, fieldFilterColumns(entry, fieldConditions, decompressedCols), rangeStart,
+                rangeEnd, selected);
+          else {
+            count = 0;
+            for (int i = rangeStart; i < rangeEnd; i++)
+              selected[count++] = i;
+          }
+          if (needRowTagFilter && count > 0) {
+            // Mixed-tag block: decompress the tag columns the filter reads and keep the rows that match them
+            final List<TagFilter.Condition> filterConditions = tagFilter.getConditions();
+            final String[][] tagCols = new String[filterConditions.size()][];
+            for (int ci = 0; ci < filterConditions.size(); ci++) {
+              final int schemaIdx = findNonTsColumnSchemaIndex(filterConditions.get(ci).columnIndex());
+              tagCols[ci] = DictionaryCodec.decode(sliceColumn(blockData, entry, schemaIdx));
             }
-          } else {
-            // Vectorized path: find contiguous segments within each bucket and use SIMD ops
-            final TimeSeriesVectorOps ops = TimeSeriesVectorOpsProvider.getInstance();
+            int kept = 0;
+            for (int s = 0; s < count; s++)
+              if (matchesTagConditions(tagCols, filterConditions, selected[s]))
+                selected[kept++] = selected[s];
+            count = kept;
+          }
+          accumulateSelectedRows(selected, count, timestamps, decompressedCols, integralCols, schemaColIndices, isCount, exact, requests,
+              bucketIntervalMs, bucketOffsetMs, singleBucketTs, result);
+        } else {
+          // Vectorized path: find contiguous segments within each bucket and use SIMD ops. Without a bucket interval the
+          // whole clipped range is one segment of the single bucket (issue #9612)
+          final TimeSeriesVectorOps ops = TimeSeriesVectorOpsProvider.getInstance();
 
-            int segStart = rangeStart;
-            while (segStart < rangeEnd) {
-              final long bucketTs = TimeBucketGrid.bucketStart(timestamps[segStart], bucketIntervalMs, bucketOffsetMs);
+          int segStart = rangeStart;
+          while (segStart < rangeEnd) {
+            final long bucketTs;
+            int segEnd;
+            if (bucketed) {
+              bucketTs = TimeBucketGrid.bucketStart(timestamps[segStart], bucketIntervalMs, bucketOffsetMs);
               final long nextBucketTs = bucketTs + bucketIntervalMs;
 
               // Find end of this bucket's segment
-              int segEnd = segStart + 1;
+              segEnd = segStart + 1;
               while (segEnd < rangeEnd && timestamps[segEnd] < nextBucketTs)
                 segEnd++;
-
-              final int segLen = segEnd - segStart;
-
-              // Accumulate each request using vectorized ops on the segment. The count recorded with each value
-              // is of the samples that CONTRIBUTED to it, which under the NaN policy are the real ones (issue
-              // #7089) - the same count the per-row and the block-statistics paths record, so a result does not
-              // depend on how blocks happen to align with buckets. Two requests over the same column share one
-              // pass to count them.
-              Arrays.fill(presentBySchemaCol, -1);
-              for (int r = 0; r < reqCount; r++) {
-                if (isCount[r]) {
-                  result.accumulateSingleStat(bucketTs, r, segLen, segLen);
-                } else {
-                  final int sci = schemaColIndices[r];
-                  final double[] colData = decompressedCols[sci];
-                  final double val = switch (requests.get(r).type()) {
-                    case SUM, AVG -> ops.sum(colData, segStart, segLen);
-                    case MIN -> ops.min(colData, segStart, segLen);
-                    case MAX -> ops.max(colData, segStart, segLen);
-                    case COUNT -> segLen;
-                  };
-                  if (presentBySchemaCol[sci] < 0)
-                    presentBySchemaCol[sci] = ops.countPresent(colData, segStart, segLen);
-                  result.accumulateSingleStat(bucketTs, r, val, presentBySchemaCol[sci]);
-                }
-              }
-
-              segStart = segEnd;
+            } else {
+              bucketTs = singleBucketTs;
+              segEnd = rangeEnd;
             }
-          }
-        } else {
-          // No bucket interval — accumulate all into one bucket
-          for (int i = 0; i < tsCount; i++) {
-            final long ts = timestamps[i];
-            if (ts < fromTs || ts > toTs)
-              continue;
 
-            if (needRowTagFilter && !matchesTagConditions(tagCols, filterConditions, i))
-              continue;
+            final int segLen = segEnd - segStart;
 
-            for (int r = 0; r < reqCount; r++)
-              rowValues[r] = isCount[r] ? 1.0 : decompressedCols[schemaColIndices[r]][i];
+            // Accumulate each request using vectorized ops on the segment. The count recorded with each value
+            // is of the samples that CONTRIBUTED to it, which under the NaN policy are the real ones (issue
+            // #7089) - the same count the per-row and the block-statistics paths record, so a result does not
+            // depend on how blocks happen to align with buckets. Two requests over the same column share one
+            // pass to count them.
+            Arrays.fill(presentBySchemaCol, -1);
+            for (int r = 0; r < reqCount; r++) {
+              if (isCount[r]) {
+                result.accumulateSingleStat(bucketTs, r, segLen, segLen);
+              } else if (exact[r]) {
+                final long present = exactStat(integralCols[schemaColIndices[r]], null, segStart, segEnd, requests.get(r).type(), exactOut);
+                result.accumulateSingleStat(bucketTs, r, 0.0, present, exactOut[0], exactOut[1]);
+              } else {
+                final int sci = schemaColIndices[r];
+                final double[] colData = decompressedCols[sci];
+                final double val = switch (requests.get(r).type()) {
+                  case SUM, AVG -> ops.sum(colData, segStart, segLen);
+                  case MIN -> ops.min(colData, segStart, segLen);
+                  case MAX -> ops.max(colData, segStart, segLen);
+                  case COUNT -> segLen;
+                };
+                if (presentBySchemaCol[sci] < 0)
+                  presentBySchemaCol[sci] = ops.countPresent(colData, segStart, segLen);
+                result.accumulateSingleStat(bucketTs, r, val, presentBySchemaCol[sci]);
+              }
+            }
 
-            result.accumulateRow(singleBucketTs, rowValues);
+            segStart = segEnd;
           }
         }
         if (metrics != null)
@@ -1782,6 +2177,503 @@ public class TimeSeriesSealedStore implements AutoCloseable {
       }
     } finally {
       directoryLock.readLock().unlock();
+    }
+  }
+
+  /**
+   * Folds the rows {@code selected[0..count)} - ascending row indices of one block - into {@code result}, bucket by bucket
+   * (issue #9612). The rows of one bucket are accumulated into primitives and handed to the result once per request, so a
+   * filtered block costs one result update per bucket rather than one per row, and records the same values and counts the
+   * per-row path does: a COUNT counts the rows, every other request folds the real samples under the NaN policy of
+   * {@link TimeSeriesNaN}.
+   */
+  private static void accumulateSelectedRows(final int[] selected, final int count, final long[] timestamps, final double[][] columnsBySchema,
+      final IntegralColumn[] integralBySchema, final int[] schemaColIndices, final boolean[] isCount, final boolean[] exact,
+      final List<MultiColumnAggregationRequest> requests, final long bucketIntervalMs, final long bucketOffsetMs, final long singleBucketTs,
+      final MultiColumnAggregationResult result) {
+    final int reqCount = requests.size();
+    final long[] exactOut = new long[2];
+    int segStart = 0;
+    while (segStart < count) {
+      final long bucketTs;
+      int segEnd;
+      if (bucketIntervalMs > 0) {
+        bucketTs = TimeBucketGrid.bucketStart(timestamps[selected[segStart]], bucketIntervalMs, bucketOffsetMs);
+        final long nextBucketTs = bucketTs + bucketIntervalMs;
+        segEnd = segStart + 1;
+        while (segEnd < count && timestamps[selected[segEnd]] < nextBucketTs)
+          segEnd++;
+      } else {
+        bucketTs = singleBucketTs;
+        segEnd = count;
+      }
+
+      for (int r = 0; r < reqCount; r++) {
+        if (isCount[r]) {
+          result.accumulateSingleStat(bucketTs, r, segEnd - segStart, segEnd - segStart);
+          continue;
+        }
+        if (exact[r]) {
+          final long present = exactStat(integralBySchema[schemaColIndices[r]], selected, segStart, segEnd, requests.get(r).type(), exactOut);
+          result.accumulateSingleStat(bucketTs, r, 0.0, present, exactOut[0], exactOut[1]);
+          continue;
+        }
+        final double[] values = columnsBySchema[schemaColIndices[r]];
+        double accumulator = TimeSeriesNaN.ABSENT;
+        long present = 0;
+        switch (requests.get(r).type()) {
+        case MIN -> {
+          for (int s = segStart; s < segEnd; s++) {
+            final double v = values[selected[s]];
+            accumulator = TimeSeriesNaN.min(accumulator, v);
+            present = TimeSeriesNaN.countIfPresent(present, v);
+          }
+        }
+        case MAX -> {
+          for (int s = segStart; s < segEnd; s++) {
+            final double v = values[selected[s]];
+            accumulator = TimeSeriesNaN.max(accumulator, v);
+            present = TimeSeriesNaN.countIfPresent(present, v);
+          }
+        }
+        default -> {
+          for (int s = segStart; s < segEnd; s++) {
+            final double v = values[selected[s]];
+            accumulator = TimeSeriesNaN.sum(accumulator, present, v);
+            present = TimeSeriesNaN.countIfPresent(present, v);
+          }
+        }
+        }
+        result.accumulateSingleStat(bucketTs, r, accumulator, present);
+      }
+      segStart = segEnd;
+    }
+  }
+
+  /**
+   * Per request, whether {@code result} keeps it exact (see {@link MultiColumnAggregationResult}).
+   */
+  private static boolean[] exactFlags(final MultiColumnAggregationResult result, final int reqCount) {
+    final boolean[] exact = new boolean[reqCount];
+    for (int r = 0; r < reqCount; r++)
+      exact[r] = result.isExact(r);
+    return exact;
+  }
+
+  /**
+   * The exact statistic an exact request reads off a block's header (issue #9720): the extreme for a MIN/MAX, the two words of
+   * the total for a SUM/AVG, written into {@code values[r]} and {@code high[r]}.
+   */
+  private static void blockExactStat(final BlockEntry entry, final int schemaCol, final AggregationType type, final long[] values,
+      final long[] high, final int r) {
+    switch (type) {
+    case MIN -> {
+      values[r] = entry.exactMins[schemaCol];
+      high[r] = 0L;
+    }
+    case MAX -> {
+      values[r] = entry.exactMaxs[schemaCol];
+      high[r] = 0L;
+    }
+    default -> {
+      values[r] = entry.exactSumsLo[schemaCol];
+      high[r] = entry.exactSumsHi[schemaCol];
+    }
+    }
+  }
+
+  /**
+   * Folds rows {@code [from, to)} of an integral column - or, with {@code selected}, the rows {@code selected[from..to)} - for
+   * one exact request (issues #9718, #9720): the extreme for a MIN/MAX into {@code out[0]}, the 128-bit total for a SUM/AVG into
+   * {@code out[0]} and {@code out[1]}. A sample with no value (issue #9721) is skipped.
+   *
+   * @return how many samples carried a value, i.e. contributed
+   */
+  private static long exactStat(final IntegralColumn column, final int[] selected, final int from, final int to, final AggregationType type,
+      final long[] out) {
+    final long[] values = column.values;
+    long count = 0;
+    out[0] = 0L;
+    out[1] = 0L;
+    if (type == AggregationType.MIN || type == AggregationType.MAX) {
+      final boolean min = type == AggregationType.MIN;
+      long extreme = 0L;
+      for (int k = from; k < to; k++) {
+        final int i = selected != null ? selected[k] : k;
+        if (column.isNull(i))
+          continue;
+        final long v = values[i];
+        if (count++ == 0 || (min ? v < extreme : v > extreme))
+          extreme = v;
+      }
+      out[0] = extreme;
+      return count;
+    }
+    for (int k = from; k < to; k++) {
+      final int i = selected != null ? selected[k] : k;
+      if (column.isNull(i))
+        continue;
+      ExactLongSum.add(out, 0, values[i]);
+      count++;
+    }
+    return count;
+  }
+
+  /**
+   * What a block's statistics prove about {@code fieldFilter} (issue #9612): {@code NONE} when one condition cannot be met
+   * by any of its samples, {@code ALL} when every condition is met by all of them, {@code SOME} otherwise.
+   */
+  FieldFilter.BlockMatch blockMatchesFieldFilter(final BlockEntry entry, final FieldFilter fieldFilter) {
+    FieldFilter.BlockMatch match = FieldFilter.BlockMatch.ALL;
+    for (final FieldFilter.Condition condition : fieldFilter.getConditions()) {
+      final int schemaIdx = findNonTsColumnSchemaIndex(condition.columnIndex());
+      // An integral condition over exact statistics compares longs (issue #9720); otherwise the doubles, conservatively
+      final FieldFilter.BlockMatch one = condition.integral() && entry.exactStats[schemaIdx]
+          ? FieldFilter.blockMatchExact(condition, entry.exactMins[schemaIdx], entry.exactMaxs[schemaIdx], entry.columnCounts[schemaIdx],
+          entry.sampleCount)
+          : FieldFilter.blockMatch(condition, entry.columnMins[schemaIdx], entry.columnMaxs[schemaIdx], entry.columnCounts[schemaIdx],
+              entry.sampleCount);
+      if (one == FieldFilter.BlockMatch.NONE)
+        return one;
+      if (one == FieldFilter.BlockMatch.SOME)
+        match = one;
+    }
+    return match;
+  }
+
+  /**
+   * The decoded values of the columns {@code conditions} read, one per condition: a {@code long[]} for an integral condition,
+   * a {@code double[]} otherwise. A floating-point column the requests already decoded is reused; every other one goes
+   * through the decoded-column cache, as the row walk's do, so a repeated windowed query decodes it once.
+   */
+  private Object[] fieldFilterColumns(final BlockEntry entry, final List<FieldFilter.Condition> conditions,
+      final double[][] decodedBySchema) throws IOException {
+    final Object[] values = new Object[conditions.size()];
+    for (int c = 0; c < values.length; c++) {
+      final FieldFilter.Condition condition = conditions.get(c);
+      final int schemaIdx = findNonTsColumnSchemaIndex(condition.columnIndex());
+      values[c] = !condition.integral() && decodedBySchema[schemaIdx] != null ? decodedBySchema[schemaIdx] : rawColumnValues(entry, schemaIdx);
+    }
+    return values;
+  }
+
+  /**
+   * {@link #aggregateMultiBlocks} grouped by the values of one or more TAG columns (issue #9489): each group gets the
+   * result {@link #aggregateMultiBlocks} would have given for the samples of that tag combination alone.
+   * <p>
+   * A block is read ONCE however many groups it holds. When its directory entry declares a single value for every
+   * grouping column the whole block is one group and, if it also sits inside one time bucket, it is answered from its
+   * statistics without being decompressed. Otherwise (the usual shape: a compaction orders samples by time, so a block
+   * interleaves every series) the timestamps, the value columns and the grouping columns are decoded once and each row
+   * is routed to its group through the small dictionary index of the grouping column, with no string hashed per row.
+   *
+   * @param groupColumns the grouping columns, as NON-timestamp column indices; every one must be a dictionary-coded TAG
+   */
+  public void aggregateGroupedBlocks(final long fromTs, final long toTs, final List<MultiColumnAggregationRequest> requests,
+      final long bucketIntervalMs, final long bucketOffsetMs, final int[] groupColumns, final GroupedAggregationResult result,
+      final AggregationMetrics metrics, final TagFilter tagFilter) throws IOException {
+    aggregateGroupedBlocks(fromTs, toTs, requests, bucketIntervalMs, bucketOffsetMs, groupColumns, result, metrics, tagFilter, null);
+  }
+
+  /**
+   * Same as above, counting only the samples that also pass {@code fieldFilter} (issue #9612), which is judged on the block
+   * statistics first exactly as {@link #aggregateMultiBlocks} judges it. A single-group block wholly inside the range is
+   * answered from its statistics without a bucket interval too: the whole range is then one bucket, which it fits.
+   *
+   * @param fieldFilter range predicates on numeric FIELD columns, may be {@code null}
+   */
+  public void aggregateGroupedBlocks(final long fromTs, final long toTs, final List<MultiColumnAggregationRequest> requests,
+      final long bucketIntervalMs, final long bucketOffsetMs, final int[] groupColumns, final GroupedAggregationResult result,
+      final AggregationMetrics metrics, final TagFilter tagFilter, final FieldFilter fieldFilter) throws IOException {
+    final int tsColIdx = findTimestampColumnIndex();
+    final int reqCount = requests.size();
+    final int groupCount = groupColumns.length;
+
+    final int[] schemaColIndices = new int[reqCount];
+    final boolean[] isCount = new boolean[reqCount];
+    for (int r = 0; r < reqCount; r++) {
+      isCount[r] = requests.get(r).type() == AggregationType.COUNT;
+      schemaColIndices[r] = isCount[r] ? -1 : findAggregationSchemaIndex(requests.get(r).columnIndex());
+    }
+
+    final int[] groupSchema = new int[groupCount];
+    final boolean[] declarationExact = new boolean[groupCount];
+    for (int g = 0; g < groupCount; g++) {
+      groupSchema[g] = findNonTsColumnSchemaIndex(groupColumns[g]);
+      final ColumnDefinition column = columns.get(groupSchema[g]);
+      if (column.getRole() != ColumnDefinition.ColumnRole.TAG || column.getCompressionHint() != TimeSeriesCodec.DICTIONARY)
+        throw new IllegalArgumentException("Column '" + column.getName() + "' cannot be grouped by: only a dictionary-coded TAG can");
+      declarationExact[g] = declaredDistinctValuesAreExact(column);
+    }
+
+    final double[] rowValues = new double[reqCount];
+    final long[] rowCounts = new long[reqCount];
+    // Exact requests (issues #9718, #9720), as in aggregateMultiBlocks; every group's result is built with the same flags
+    final boolean[] exact = result.exactFlags(reqCount);
+    final long[] exactValues = new long[reqCount];
+    final long[] exactHigh = new long[reqCount];
+    final long[] rowLongs = new long[reqCount];
+    final double[][] decompressedCols = new double[columns.size()][];
+    final IntegralColumn[] integralCols = new IntegralColumn[columns.size()];
+    // Reused by every block of the scan: groupFor only reads the tuple it is given and copies it when the group is new
+    final String[] wholeBlockGroup = new String[groupCount];
+    final String[][] dictionaries = new String[groupCount][];
+    final PackedGroupMap byPackedIndex = groupCount > 1 ? new PackedGroupMap() : null;
+    final int[][] groupIds = new int[groupCount][MAX_BLOCK_SIZE];
+    final long[] reusableTsBuf = new long[MAX_BLOCK_SIZE];
+    final long singleBucketTs = TimeSeriesEngine.singleBucketAnchor(fromTs);
+    final List<FieldFilter.Condition> fieldConditions = fieldFilter != null ? fieldFilter.getConditions() : null;
+    int[] selected = null;
+
+    directoryLock.readLock().lock();
+    try {
+      for (final BlockEntry entry : blockDirectory) {
+        if (result.isOverBucketCeiling())
+          break;
+
+        if (entry.maxTimestamp < fromTs || entry.minTimestamp > toTs) {
+          if (metrics != null)
+            metrics.addSkippedBlock();
+          continue;
+        }
+
+        final BlockMatchResult tagMatch = tagFilter != null ? blockMatchesTagFilter(entry, tagFilter) : BlockMatchResult.FAST_PATH;
+        final FieldFilter.BlockMatch fieldMatch = fieldFilter != null ? blockMatchesFieldFilter(entry, fieldFilter) : FieldFilter.BlockMatch.ALL;
+        if (tagMatch == BlockMatchResult.SKIP || fieldMatch == FieldFilter.BlockMatch.NONE) {
+          if (metrics != null)
+            metrics.addSkippedBlock();
+          continue;
+        }
+
+        // The whole block is ONE group when its entry declares exactly one value for every grouping column
+        boolean singleGroup = entry.tagDistinctValues != null;
+        for (int g = 0; singleGroup && g < groupCount; g++) {
+          final String[] declared = declarationExact[g] && groupSchema[g] < entry.tagDistinctValues.length
+              ? entry.tagDistinctValues[groupSchema[g]] : null;
+          singleGroup = declared != null && declared.length == 1;
+          if (singleGroup)
+            wholeBlockGroup[g] = declared[0];
+        }
+
+        if (singleGroup && tagMatch == BlockMatchResult.FAST_PATH && fieldMatch == FieldFilter.BlockMatch.ALL
+            && entry.minTimestamp >= fromTs && entry.maxTimestamp <= toTs && !needsValues(entry, requests, schemaColIndices, exact)) {
+          final long blockMinBucket = bucketIntervalMs > 0 ? TimeBucketGrid.bucketStart(entry.minTimestamp, bucketIntervalMs, bucketOffsetMs) : singleBucketTs;
+          if (bucketIntervalMs <= 0 || blockMinBucket == TimeBucketGrid.bucketStart(entry.maxTimestamp, bucketIntervalMs, bucketOffsetMs)) {
+            if (metrics != null)
+              metrics.addFastPathBlock();
+            for (int r = 0; r < reqCount; r++) {
+              if (isCount[r]) {
+                rowValues[r] = entry.sampleCount;
+                rowCounts[r] = entry.sampleCount;
+              } else {
+                final int sci = schemaColIndices[r];
+                rowValues[r] = switch (requests.get(r).type()) {
+                  case MIN -> entry.columnMins[sci];
+                  case MAX -> entry.columnMaxs[sci];
+                  case SUM, AVG -> entry.columnSums[sci];
+                  case COUNT -> entry.sampleCount;
+                };
+                rowCounts[r] = entry.columnCounts[sci];
+                if (exact[r])
+                  blockExactStat(entry, sci, requests.get(r).type(), exactValues, exactHigh, r);
+              }
+            }
+            result.groupFor(wholeBlockGroup).accumulateBlockStats(blockMinBucket, rowValues, rowCounts, exactValues, exactHigh);
+            continue;
+          }
+        }
+
+        if (metrics != null)
+          metrics.addSlowPathBlock();
+
+        long t0 = metrics != null ? System.nanoTime() : 0;
+        final byte[] blockData = readBlockData(entry);
+        if (metrics != null)
+          metrics.addIo(System.nanoTime() - t0);
+
+        t0 = metrics != null ? System.nanoTime() : 0;
+        final int tsCount = DeltaOfDeltaCodec.decode(sliceColumn(blockData, entry, tsColIdx), reusableTsBuf);
+        if (metrics != null)
+          metrics.addDecompTs(System.nanoTime() - t0);
+
+        Arrays.fill(decompressedCols, null);
+        Arrays.fill(integralCols, null);
+        for (int r = 0; r < reqCount; r++)
+          if (exact[r]) {
+            if (integralCols[schemaColIndices[r]] == null)
+              integralCols[schemaColIndices[r]] = IntegralColumn.decode(sliceColumn(blockData, entry, schemaColIndices[r]));
+          } else if (!isCount[r] && decompressedCols[schemaColIndices[r]] == null) {
+            t0 = metrics != null ? System.nanoTime() : 0;
+            decompressedCols[schemaColIndices[r]] = decompressDoubleColumnFromBytes(
+                sliceColumn(blockData, entry, schemaColIndices[r]), schemaColIndices[r]);
+            if (metrics != null)
+              metrics.addDecompVal(System.nanoTime() - t0);
+          }
+
+        t0 = metrics != null ? System.nanoTime() : 0;
+        for (int g = 0; g < groupCount; g++) {
+          final byte[] encoded = sliceColumn(blockData, entry, groupSchema[g]);
+          if (DictionaryCodec.valueCount(encoded) != tsCount)
+            throw new IOException("Sealed block at offset " + entry.blockStartOffset + " has " + tsCount + " timestamp(s) but column '"
+                + columns.get(groupSchema[g]).getName() + "' holds a different number of values");
+          dictionaries[g] = DictionaryCodec.decodeIndexed(encoded, groupIds[g]);
+          // The packed key below gives each dictionary index 16 bits. The format cannot hold more, so this only turns a damaged block into an error
+          if (dictionaries[g].length > 0xFFFF)
+            throw new IOException("Sealed block at offset " + entry.blockStartOffset + " has a dictionary of " + dictionaries[g].length
+                + " entries for column '" + columns.get(groupSchema[g]).getName() + "'");
+        }
+        if (metrics != null)
+          metrics.addDecompVal(System.nanoTime() - t0);
+
+        final boolean needRowTagFilter = tagFilter != null && tagMatch == BlockMatchResult.SLOW_PATH;
+        String[][] filterCols = null;
+        List<TagFilter.Condition> filterConditions = null;
+        if (needRowTagFilter) {
+          filterConditions = tagFilter.getConditions();
+          filterCols = new String[filterConditions.size()][];
+          for (int ci = 0; ci < filterConditions.size(); ci++)
+            filterCols[ci] = DictionaryCodec.decode(sliceColumn(blockData, entry, findNonTsColumnSchemaIndex(filterConditions.get(ci).columnIndex())));
+        }
+
+        t0 = metrics != null ? System.nanoTime() : 0;
+        final int rangeStart = lowerBound(reusableTsBuf, 0, tsCount, fromTs);
+        final int rangeEnd = upperBound(reusableTsBuf, 0, tsCount, toTs);
+
+        // The rows the field filter keeps, selected on the primitive columns before any row is routed to its group
+        int selectedCount = 0;
+        if (fieldMatch == FieldFilter.BlockMatch.SOME) {
+          if (selected == null)
+            selected = new int[MAX_BLOCK_SIZE];
+          selectedCount = FieldFilter.select(fieldConditions, fieldFilterColumns(entry, fieldConditions, decompressedCols), rangeStart,
+              rangeEnd, selected);
+        }
+        final boolean rowFieldFilter = fieldMatch == FieldFilter.BlockMatch.SOME;
+
+        // The group of each dictionary value, resolved the first time a row carries it. One grouping column: an array
+        // indexed by the dictionary index. Several: a map keyed by the indices packed 16 bits apiece (a dictionary
+        // holds at most 65535 entries), which is why the engine groups by at most four columns.
+        final MultiColumnAggregationResult[] byIndex = groupCount == 1 ? new MultiColumnAggregationResult[dictionaries[0].length] : null;
+        if (byPackedIndex != null)
+          byPackedIndex.clear();
+        final int rowCount = rowFieldFilter ? selectedCount : rangeEnd - rangeStart;
+        // The bucket of the last row routed, as [windowStart, windowEnd): the rows of a block are in time order, so the next
+        // one is in it far more often than not and the division that finds a bucket is skipped. Empty at first.
+        long windowStart = 0;
+        long windowEnd = 0;
+        for (int k = 0; k < rowCount; k++) {
+          final int i = rowFieldFilter ? selected[k] : rangeStart + k;
+          if (needRowTagFilter && !matchesTagConditions(filterCols, filterConditions, i))
+            continue;
+
+          MultiColumnAggregationResult group;
+          if (groupCount == 1) {
+            final int id = groupIds[0][i];
+            group = byIndex[id];
+            if (group == null)
+              group = byIndex[id] = result.groupFor(new String[] { dictionaries[0][id] });
+          } else {
+            long packed = 0;
+            for (int g = 0; g < groupCount; g++)
+              packed = (packed << 16) | groupIds[g][i];
+            group = byPackedIndex.get(packed);
+            if (group == null) {
+              final String[] values = new String[groupCount];
+              for (int g = 0; g < groupCount; g++)
+                values[g] = dictionaries[g][groupIds[g][i]];
+              group = result.groupFor(values);
+              byPackedIndex.put(packed, group);
+            }
+          }
+
+          for (int r = 0; r < reqCount; r++) {
+            if (isCount[r])
+              rowValues[r] = 1.0;
+            else if (exact[r]) {
+              // the long itself, and a double that only says whether the row has one
+              final IntegralColumn column = integralCols[schemaColIndices[r]];
+              final boolean absent = column.isNull(i);
+              rowValues[r] = absent ? TimeSeriesNaN.ABSENT : 0.0;
+              rowLongs[r] = column.values[i];
+            } else
+              rowValues[r] = decompressedCols[schemaColIndices[r]][i];
+          }
+          final long rowTs = reusableTsBuf[i];
+          if (bucketIntervalMs > 0 && (rowTs < windowStart || rowTs >= windowEnd)) {
+            windowStart = TimeBucketGrid.bucketStart(rowTs, bucketIntervalMs, bucketOffsetMs);
+            final long end = windowStart + bucketIntervalMs;
+            // The window is kept only when it holds the row it was computed from. A bucket that ends past Long.MAX_VALUE, or begins
+            // before Long.MIN_VALUE and so has its start answered modulo 2^64, leaves it empty: its rows find their bucket one by one
+            windowEnd = windowStart <= rowTs && rowTs < end ? end : windowStart;
+          }
+          group.accumulateRow(bucketIntervalMs > 0 ? windowStart : singleBucketTs, rowValues, rowLongs);
+        }
+        if (metrics != null)
+          metrics.addAccum(System.nanoTime() - t0);
+      }
+    } finally {
+      directoryLock.readLock().unlock();
+    }
+  }
+
+  /**
+   * A map from a packed dictionary-index key to the group's result, with primitive keys so that routing a row to its group
+   * boxes nothing (issue #9489). Open addressing, grown at half load; a slot is free while its value is {@code null}. Local to
+   * one block of one scan, so single threaded.
+   */
+  private static final class PackedGroupMap {
+    private long[]                         keys   = new long[64];
+    private MultiColumnAggregationResult[] values = new MultiColumnAggregationResult[64];
+    private int                            size;
+
+    /**
+     * Forgets every entry for the next block. A map that stayed small keeps its arrays; one a high-cardinality block grew is
+     * dropped, so that later blocks do not pay to clear its capacity.
+     */
+    void clear() {
+      if (keys.length > 1024) {
+        keys = new long[64];
+        values = new MultiColumnAggregationResult[64];
+      } else
+        Arrays.fill(values, null);
+      size = 0;
+    }
+
+    MultiColumnAggregationResult get(final long key) {
+      final int mask = keys.length - 1;
+      for (int i = slot(key, mask); values[i] != null; i = (i + 1) & mask)
+        if (keys[i] == key)
+          return values[i];
+      return null;
+    }
+
+    void put(final long key, final MultiColumnAggregationResult value) {
+      if (size * 2 >= keys.length)
+        grow();
+      final int mask = keys.length - 1;
+      int i = slot(key, mask);
+      while (values[i] != null && keys[i] != key)
+        i = (i + 1) & mask;
+      if (values[i] == null)
+        size++;
+      keys[i] = key;
+      values[i] = value;
+    }
+
+    private static int slot(final long key, final int mask) {
+      long h = key * 0x9E3779B97F4A7C15L;
+      h ^= h >>> 32;
+      return (int) h & mask;
+    }
+
+    private void grow() {
+      final long[] oldKeys = keys;
+      final MultiColumnAggregationResult[] oldValues = values;
+      keys = new long[oldKeys.length * 2];
+      values = new MultiColumnAggregationResult[oldValues.length * 2];
+      size = 0;
+      for (int i = 0; i < oldKeys.length; i++)
+        if (oldValues[i] != null)
+          put(oldKeys[i], oldValues[i]);
     }
   }
 
@@ -1806,19 +2698,13 @@ public class TimeSeriesSealedStore implements AutoCloseable {
       // Build new directory in a local list — do NOT modify blockDirectory until after the
       // atomic file swap. If Files.move() fails, the live file and blockDirectory remain intact.
       final List<BlockEntry> newDirectory = new ArrayList<>();
-      try (final RandomAccessFile tempFile = new RandomAccessFile(tempPath, "rw")) {
-        final ByteBuffer headerBuf = ByteBuffer.allocate(HEADER_SIZE);
-        headerBuf.putInt(MAGIC_VALUE);
-        headerBuf.put((byte) CURRENT_VERSION);
-        headerBuf.putShort((short) colCount);
-        headerBuf.putInt(0);
-        headerBuf.putLong(Long.MAX_VALUE);
-        headerBuf.putLong(Long.MIN_VALUE);
-        headerBuf.flip();
-        tempFile.getChannel().write(headerBuf);
-
+      try (final RandomAccessFile tempFile = openTempFileForRewrite(tempPath, colCount)) {
         for (final BlockEntry oldEntry : retained)
           copyBlockToFile(tempFile, oldEntry, colCount, newDirectory);
+      } catch (final IOException | RuntimeException e) {
+        // a failed copy leaves no half-written file for whoever rewrites next to find (issue #9770)
+        deleteTempFileIfExists();
+        throw e;
       }
 
       // Atomic file swap: close handles first (required on Windows), then atomically replace.
@@ -1834,11 +2720,12 @@ public class TimeSeriesSealedStore implements AutoCloseable {
         // Move failed — original file is still in place; reopen handles so the store stays usable
         try {
           indexFile = new RandomAccessFile(oldFile, "rw");
-          indexChannel = indexFile.getChannel();
+          indexChannel = channelOf(indexFile);
         } catch (final IOException reopenEx) {
           LogManager.instance().log(this, Level.SEVERE,
               "Failed to reopen sealed store after failed atomic move: %s", reopenEx, oldFile.getAbsolutePath());
         }
+        deleteTempFileIfExists();
         throw moveEx;
       }
 
@@ -1863,7 +2750,7 @@ public class TimeSeriesSealedStore implements AutoCloseable {
       retentionRemovedBelowTs = Math.max(retentionRemovedBelowTs, timestamp);
 
       indexFile = new RandomAccessFile(oldFile, "rw");
-      indexChannel = indexFile.getChannel();
+      indexChannel = channelOf(indexFile);
       rewriteHeader();
     } finally {
       directoryLock.writeLock().unlock();
@@ -1925,6 +2812,16 @@ public class TimeSeriesSealedStore implements AutoCloseable {
     final Map<List<Object>, Map<Long, double[]>> groupedData = new HashMap<>(); // tagKey -> (bucketTs -> [sum0, count0, sum1, count1, ...])
     final int numFields = numericColIndices.size();
     final int accSize = numFields * 2; // sum + count per numeric field
+    // An integral field is averaged exactly, as longs (issue #9718): the double sum rounded a total past 2^53, and the mean of
+    // such samples - epoch nanoseconds, 64-bit ids - came out as a different sample. Per (tagKey, bucket), parallel to the
+    // double accumulator, the two words of the total of every integral field.
+    final boolean[] integralField = new boolean[numFields];
+    boolean anyIntegralField = false;
+    for (int n = 0; n < numFields; n++) {
+      integralField[n] = columns.get(numericColIndices.get(n)).storesExactIntegers();
+      anyIntegralField |= integralField[n];
+    }
+    final Map<double[], long[]> exactSums = anyIntegralField ? new IdentityHashMap<>() : null;
 
     for (final BlockEntry entry : toDownsample) {
       final long[] timestamps = decompressTimestamps(entry, tsColIdx);
@@ -1941,11 +2838,15 @@ public class TimeSeriesSealedStore implements AutoCloseable {
         tagData[t] = decodeColumn(columns.get(ci), readBytes(entry.columnOffsets[ci], entry.columnSizes[ci]));
       }
 
-      // Decompress numeric columns
+      // Decompress numeric columns: an integral one as longs, nulls included
       final double[][] numData = new double[numFields][];
+      final IntegralColumn[] intData = new IntegralColumn[numFields];
       for (int n = 0; n < numFields; n++) {
         final int ci = numericColIndices.get(n);
-        numData[n] = decompressDoubleColumn(entry, ci);
+        if (integralField[n])
+          intData[n] = (IntegralColumn) rawColumnValues(entry, ci);
+        else
+          numData[n] = decompressDoubleColumn(entry, ci);
       }
 
       // Group samples by (tagValues list, bucketTs)
@@ -1965,6 +2866,13 @@ public class TimeSeriesSealedStore implements AutoCloseable {
         // The downsampled value is the mean of the REAL samples (issue #7089): a NaN sample neither poisons the
         // sum nor counts toward the denominator, the same policy the aggregation push-down applies.
         for (int n = 0; n < numFields; n++) {
+          if (integralField[n]) {
+            if (intData[n].isNull(i))
+              continue;
+            ExactLongSum.add(exactSums.computeIfAbsent(acc, k -> new long[accSize]), n * 2, intData[n].values[i]);
+            acc[n * 2 + 1] += 1.0;
+            continue;
+          }
           final double v = numData[n][i];
           if (Double.isNaN(v))
             continue;
@@ -1991,6 +2899,13 @@ public class TimeSeriesSealedStore implements AutoCloseable {
           row[tagColIndices.get(t)] = tagParts.get(t);
         for (int n = 0; n < numFields; n++) {
           final double count = acc[n * 2 + 1];
+          if (integralField[n]) {
+            // The exact mean of the samples that carry a value, truncated toward zero as the double mean's long was, and a
+            // sample with no value - not a zero - when none did (issue #9721)
+            final long[] exactAcc = exactSums.get(acc);
+            row[numericColIndices.get(n)] = count > 0 ? ExactLongSum.truncatedAverage(exactAcc[n * 2], exactAcc[n * 2 + 1], (long) count) : null;
+            continue;
+          }
           // A bucket that held no real sample is downsampled to the absent marker, not to a zero that would read
           // as a measurement.
           row[numericColIndices.get(n)] = count > 0 ? acc[n * 2] / count : TimeSeriesNaN.ABSENT;
@@ -2020,13 +2935,7 @@ public class TimeSeriesSealedStore implements AutoCloseable {
         chunkTs[i] = (long) newSamples.get(chunkStart + i)[tsColIdx];
 
       // Per-column stats
-      final double[] mins = new double[colCount];
-      final double[] maxs = new double[colCount];
-      final double[] sums = new double[colCount];
-      final long[] counts = new long[colCount];
-      Arrays.fill(mins, Double.NaN);
-      Arrays.fill(maxs, Double.NaN);
-      Arrays.fill(sums, Double.NaN);
+      final StatsBuilder stats = new StatsBuilder(columns);
 
       final byte[][] compressedCols = new byte[colCount][];
       for (int c = 0; c < colCount; c++) {
@@ -2039,13 +2948,8 @@ public class TimeSeriesSealedStore implements AutoCloseable {
           compressedCols[c] = compressColumn(columns.get(c), chunkValues);
 
           // Compute stats for numeric columns
-          if (hasNumericStats(c)) {
-            final double[] stats = reduceNumericStats(columns.get(c), chunkValues);
-            mins[c] = stats[0];
-            maxs[c] = stats[1];
-            sums[c] = stats[2];
-            counts[c] = (long) stats[3];
-          }
+          if (hasNumericStats(c))
+            stats.add(c, chunkValues);
         }
       }
 
@@ -2064,7 +2968,7 @@ public class TimeSeriesSealedStore implements AutoCloseable {
 
       newBlocksCompressed.add(compressedCols);
       newBlocksMeta.add(new long[] { chunkTs[0], chunkTs[chunkLen - 1], chunkLen });
-      newBlocksStats.add(new BlockStats(mins, maxs, sums, counts));
+      newBlocksStats.add(stats.build());
       newBlocksTagDV.add(chunkTagDV);
       chunkStart = chunkEnd;
     }
@@ -2084,8 +2988,9 @@ public class TimeSeriesSealedStore implements AutoCloseable {
    * @param directoryVersion the {@link #directoryVersion} the temp file was derived from: the commit installs it only
    *                         if the live directory still is that one
    * @param blocksBefore     blocks in the live directory when the plan was made
+   * @param links            how each merged block was assembled, for the walks in flight when the plan lands (issue #9488)
    */
-  record MergePlan(List<BlockEntry> newDirectory, int directoryVersion, int blocksBefore) {
+  record MergePlan(List<BlockEntry> newDirectory, int directoryVersion, int blocksBefore, List<MergeLink> links) {
   }
 
   /**
@@ -2155,8 +3060,8 @@ public class TimeSeriesSealedStore implements AutoCloseable {
    * that appends need while the file is written. If anything rewrote the store meanwhile, the next read notices the
    * version moved and the whole pass is dropped, to be retried by the next maintenance tick.
    * <p>
-   * The temp file is the merge's own, so it needs no serialisation against retention or downsampling; the caller serialises merges
-   * with each other and with compaction ({@code TimeSeriesShard.compactionMutex}).
+   * The temp file is the merge's own, but the directory it installs is planned against a snapshot, so the caller serialises
+   * merges with every other rewrite of the sealed file ({@code TimeSeriesShard.compactionMutex}).
    */
   MergePlan prepareMerge(final int targetSamples, final long bucketIntervalMs, final int minBlocksSaved) throws IOException {
     final List<BlockEntry> snapshot;
@@ -2181,19 +3086,9 @@ public class TimeSeriesSealedStore implements AutoCloseable {
     final int tsColIdx = findTimestampColumnIndex();
     final String tempPath = basePath + MERGE_TEMP_SUFFIX;
     final List<BlockEntry> newDirectory = new ArrayList<>(snapshot.size());
+    final List<MergeLink> links = new ArrayList<>(groups.size());
     boolean complete = false;
-    try (final RandomAccessFile tempFile = new RandomAccessFile(tempPath, "rw")) {
-      tempFile.setLength(0);
-      final ByteBuffer headerBuf = ByteBuffer.allocate(HEADER_SIZE);
-      headerBuf.putInt(MAGIC_VALUE);
-      headerBuf.put((byte) CURRENT_VERSION);
-      headerBuf.putShort((short) colCount);
-      headerBuf.putInt(0);
-      headerBuf.putLong(Long.MAX_VALUE);
-      headerBuf.putLong(Long.MIN_VALUE);
-      headerBuf.flip();
-      tempFile.getChannel().write(headerBuf);
-
+    try (final RandomAccessFile tempFile = openTempFileForRewrite(tempPath, colCount)) {
       int groupIdx = 0;
       int i = 0;
       while (i < snapshot.size()) {
@@ -2207,7 +3102,7 @@ public class TimeSeriesSealedStore implements AutoCloseable {
               return null;
             runBytes.add(bytes);
           }
-          if (!writeMergedRun(tempFile, run, runBytes, tsColIdx, newDirectory))
+          if (!writeMergedRun(tempFile, run, runBytes, tsColIdx, newDirectory, links))
             // too many distinct values for one dictionary: keep the blocks of this run as they are
             for (int r = 0; r < run.size(); r++)
               newDirectory.add(writeRetainedBlock(tempFile, run.get(r), runBytes.get(r), colCount));
@@ -2225,7 +3120,7 @@ public class TimeSeriesSealedStore implements AutoCloseable {
       if (!complete)
         deleteMergeTempFileIfExists();
     }
-    return new MergePlan(newDirectory, version, snapshot.size());
+    return new MergePlan(newDirectory, version, snapshot.size(), links);
   }
 
   /**
@@ -2255,7 +3150,7 @@ public class TimeSeriesSealedStore implements AutoCloseable {
    * {@code target}. Returns {@code false}, writing nothing, when the rows do not fit one block.
    */
   private boolean writeMergedRun(final RandomAccessFile tempFile, final List<BlockEntry> run, final List<byte[][]> runBytes,
-      final int tsColIdx, final List<BlockEntry> target) throws IOException {
+      final int tsColIdx, final List<BlockEntry> target, final List<MergeLink> links) throws IOException {
     final int colCount = columns.size();
     int total = 0;
     for (final BlockEntry entry : run)
@@ -2291,8 +3186,9 @@ public class TimeSeriesSealedStore implements AutoCloseable {
     boolean sorted = true;
     for (int i = 1; i < total && sorted; i++)
       sorted = ts[i - 1] <= ts[i];
+    int[] order = null;
     if (!sorted) {
-      final int[] order = TimeSeriesShard.sortIndices(ts);
+      order = TimeSeriesShard.sortIndices(ts);
       ts = TimeSeriesShard.applyOrder(ts, order);
       for (int c = 0; c < colCount; c++)
         if (c != tsColIdx)
@@ -2310,13 +3206,7 @@ public class TimeSeriesSealedStore implements AutoCloseable {
               canonical.putIfAbsent(v, v);
 
     final byte[][] compressedCols = new byte[colCount][];
-    final double[] mins = new double[colCount];
-    final double[] maxs = new double[colCount];
-    final double[] sums = new double[colCount];
-    final long[] counts = new long[colCount];
-    Arrays.fill(mins, Double.NaN);
-    Arrays.fill(maxs, Double.NaN);
-    Arrays.fill(sums, Double.NaN);
+    final StatsBuilder stats = new StatsBuilder(columns);
     final String[][] tagDistinctValues = new String[colCount][];
     for (int c = 0; c < colCount; c++) {
       final ColumnDefinition column = columns.get(c);
@@ -2332,13 +3222,8 @@ public class TimeSeriesSealedStore implements AutoCloseable {
           return false;
       }
       compressedCols[c] = compressColumn(column, values[c]);
-      if (hasNumericStats(c)) {
-        final double[] stats = reduceNumericStats(column, values[c]);
-        mins[c] = stats[0];
-        maxs[c] = stats[1];
-        sums[c] = stats[2];
-        counts[c] = (long) stats[3];
-      }
+      if (hasNumericStats(c))
+        stats.add(c, values[c]);
       if (column.getRole() == ColumnDefinition.ColumnRole.TAG) {
         final LinkedHashSet<String> distinctSet = new LinkedHashSet<>();
         for (final Object v : values[c]) {
@@ -2350,11 +3235,30 @@ public class TimeSeriesSealedStore implements AutoCloseable {
       }
     }
 
-    final BlockEntry merged = writeNewBlockToFile(tempFile, total, ts[0], ts[total - 1], compressedCols,
-        new BlockStats(mins, maxs, sums, counts), colCount, tagDistinctValues, newBlockId());
+    final BlockEntry merged = writeNewBlockToFile(tempFile, total, ts[0], ts[total - 1], compressedCols, stats.build(), colCount,
+        tagDistinctValues, newBlockId());
     merged.downsampledGranularityMs = run.getFirst().downsampledGranularityMs;
     target.add(merged);
+    recordMergeLink(links, merged, run, order);
     return true;
+  }
+
+  /**
+   * Notes how {@code merged} was assembled so a walk in flight when it lands can follow it (issue #9488). Skipped when a
+   * source has no identity (a block read from a pre-#8043 file): the walk cannot name it, so it is refused as before.
+   */
+  private static void recordMergeLink(final List<MergeLink> links, final BlockEntry merged, final List<BlockEntry> run,
+      final int[] order) {
+    final long[] sourceIds = new long[run.size()];
+    final int[] sourceSizes = new int[run.size()];
+    for (int i = 0; i < sourceIds.length; i++) {
+      final BlockEntry source = run.get(i);
+      if (source.blockId == BlockEntry.NO_BLOCK_ID)
+        return;
+      sourceIds[i] = source.blockId;
+      sourceSizes[i] = source.sampleCount;
+    }
+    links.add(new MergeLink(merged, sourceIds, sourceSizes, order));
   }
 
   /**
@@ -2374,6 +3278,11 @@ public class TimeSeriesSealedStore implements AutoCloseable {
       }
       commitTempFile(plan.newDirectory(), basePath + MERGE_TEMP_SUFFIX);
       ++mergeEpoch;
+      // links before next: a walk that sees the new node must find the links of the merge that created it
+      final MergeLedger appended = new MergeLedger();
+      mergeLedger.links = plan.links();
+      mergeLedger.next = appended;
+      mergeLedger = appended;
       return true;
     } finally {
       directoryLock.writeLock().unlock();
@@ -2407,19 +3316,7 @@ public class TimeSeriesSealedStore implements AutoCloseable {
     // Build new directory in a local list — do NOT modify blockDirectory until after the
     // atomic file swap. If Files.move() fails, the live file and blockDirectory remain intact.
     final List<BlockEntry> newDirectory = new ArrayList<>();
-    try (final RandomAccessFile tempFile = new RandomAccessFile(tempPath, "rw")) {
-      tempFile.setLength(0);
-      // Write placeholder header
-      final ByteBuffer headerBuf = ByteBuffer.allocate(HEADER_SIZE);
-      headerBuf.putInt(MAGIC_VALUE);
-      headerBuf.put((byte) CURRENT_VERSION);
-      headerBuf.putShort((short) colCount);
-      headerBuf.putInt(0);
-      headerBuf.putLong(Long.MAX_VALUE);
-      headerBuf.putLong(Long.MIN_VALUE);
-      headerBuf.flip();
-      tempFile.getChannel().write(headerBuf);
-
+    try (final RandomAccessFile tempFile = openTempFileForRewrite(tempPath, colCount)) {
       // Write all blocks in ascending minTimestamp order
       for (final WriteSpec spec : writeOrder) {
         if (spec.retained()) {
@@ -2435,6 +3332,10 @@ public class TimeSeriesSealedStore implements AutoCloseable {
           newDirectory.add(entry);
         }
       }
+    } catch (final IOException | RuntimeException e) {
+      // a failed write leaves no half-written file for whoever rewrites next to find (issue #9770)
+      deleteTempFileIfExists();
+      throw e;
     }
 
     // Atomic file swap: close handles first (required on Windows), then atomically replace.
@@ -2450,11 +3351,12 @@ public class TimeSeriesSealedStore implements AutoCloseable {
       // Move failed — original file is still in place; reopen handles so the store stays usable
       try {
         indexFile = new RandomAccessFile(oldFile, "rw");
-        indexChannel = indexFile.getChannel();
+        indexChannel = channelOf(indexFile);
       } catch (final IOException reopenEx) {
         LogManager.instance().log(this, Level.SEVERE,
             "Failed to reopen sealed store after failed atomic move: %s", reopenEx, oldFile.getAbsolutePath());
       }
+      deleteTempFileIfExists();
       throw moveEx;
     }
 
@@ -2472,7 +3374,7 @@ public class TimeSeriesSealedStore implements AutoCloseable {
     }
 
     indexFile = new RandomAccessFile(oldFile, "rw");
-    indexChannel = indexFile.getChannel();
+    indexChannel = channelOf(indexFile);
     rewriteHeader();
   }
 
@@ -2509,26 +3411,29 @@ public class TimeSeriesSealedStore implements AutoCloseable {
   }
 
   /**
-   * Writes a single block to a temp file and returns the resulting {@link BlockEntry}.
-   * Does NOT modify {@link #blockDirectory} or the global min/max timestamps —
-   * callers are responsible for those updates.
+   * The metadata record of a block in the current ("TSB4") layout, flipped and ready to write: magic, timestamps, sample count,
+   * identity, column sizes, the statistics of every numeric column - exact longs for a SIMPLE8B one, doubles for a GORILLA_XOR
+   * one - and the tag metadata. The one writer of the record, shared by {@link #appendBlock} and {@link #writeNewBlockToFile}.
+   * <p>
+   * Which columns carry statistics is keyed off the codec ({@link #hasNumericStats}), never off the VALUE of the declared
+   * minimum: a NaN minimum is a legitimate declaration ("this column holds no real sample", the absent marker of issue #7043),
+   * and treating it as "this column has no statistics section" would drop an entry the reader still expects and shift every
+   * following column's statistics onto the wrong column.
    */
-  private BlockEntry writeNewBlockToFile(final RandomAccessFile tempFile, final int sampleCount,
-      final long minTs, final long maxTs, final byte[][] compressedCols, final BlockStats stats,
-      final int colCount, final String[][] tagDistinctValues, final long blockId) throws IOException {
-
-    // Same codec-keyed rule as writeBlock() - see the comment there.
+  private ByteBuffer blockMeta(final int sampleCount, final long minTs, final long maxTs, final long blockId,
+      final byte[][] compressedCols, final BlockStats stats, final byte[] tagMeta) {
+    final int colCount = columns.size();
     int numericColCount = 0;
+    int statsBytes = 0;
     for (int c = 0; c < colCount; c++)
-      if (hasNumericStats(c))
+      if (hasNumericStats(c)) {
         numericColCount++;
+        statsBytes += columns.get(c).storesExactIntegers() ? INTEGRAL_STATS_BYTES : STATS_BYTES;
+      }
 
-    final byte[] tagMeta = buildTagMetadata(tagDistinctValues, colCount);
-
-    final int statsSize = 4 + STATS_BYTES * numericColCount;
-    final int metaSize = 4 + 8 + 8 + 4 + BLOCK_ID_BYTES + 4 * colCount + statsSize + tagMeta.length;
+    final int metaSize = 4 + 8 + 8 + 4 + BLOCK_ID_BYTES + 4 * colCount + 4 + statsBytes + tagMeta.length;
     final ByteBuffer metaBuf = ByteBuffer.allocate(metaSize);
-    metaBuf.putInt(BLOCK_MAGIC_VALUE_V3);
+    metaBuf.putInt(BLOCK_MAGIC_VALUE_V4);
     metaBuf.putLong(minTs);
     metaBuf.putLong(maxTs);
     metaBuf.putInt(sampleCount);
@@ -2537,15 +3442,197 @@ public class TimeSeriesSealedStore implements AutoCloseable {
       metaBuf.putInt(col.length);
     metaBuf.putInt(numericColCount);
     for (int c = 0; c < colCount; c++) {
-      if (hasNumericStats(c)) {
+      if (!hasNumericStats(c))
+        continue;
+      if (columns.get(c).storesExactIntegers()) {
+        metaBuf.putLong(stats.exactMins()[c]);
+        metaBuf.putLong(stats.exactMaxs()[c]);
+        metaBuf.putLong(stats.exactSumsLo()[c]);
+        metaBuf.putLong(stats.exactSumsHi()[c]);
+      } else {
         metaBuf.putDouble(stats.mins()[c]);
         metaBuf.putDouble(stats.maxs()[c]);
         metaBuf.putDouble(stats.sums()[c]);
-        metaBuf.putLong(stats.counts()[c]);
       }
+      metaBuf.putLong(stats.counts()[c]);
     }
     metaBuf.put(tagMeta);
     metaBuf.flip();
+    return metaBuf;
+  }
+
+  /**
+   * {@code stats} with exact statistics for every SIMPLE8B column (issue #9720): kept where they are already exact, proven
+   * from the declared doubles where those prove them ({@link #exactFromDoubles}), and computed from the column's values
+   * otherwise. Every block a write path produces goes through here, so a TSB4 record never carries an integral column whose
+   * statistics are not exact - whichever path built them, and whether the block is new or an older one being rewritten.
+   */
+  private BlockStats withExactIntegralStats(final BlockStats stats, final byte[][] compressedCols) throws IOException {
+    StatsBuilder builder = null;
+    for (int c = 0; c < columns.size(); c++) {
+      if (!hasNumericStats(c) || !columns.get(c).storesExactIntegers() || (stats.exact() != null && stats.exact()[c]))
+        continue;
+      if (builder == null)
+        builder = new StatsBuilder(columns, stats);
+      final long[] proven = exactFromDoubles(stats.mins()[c], stats.maxs()[c], stats.sums()[c], stats.counts()[c]);
+      if (proven != null)
+        builder.setExact(c, proven[0], proven[1], proven[2], proven[3], proven[4]);
+      else
+        builder.addIntegral(c, IntegralColumn.decode(compressedCols[c]));
+    }
+    return builder != null ? builder.build() : stats;
+  }
+
+  /**
+   * The exact statistics {@code {min, max, sumLo, sumHi, count}} of an integral column that a block's DOUBLE statistics prove,
+   * or {@code null} when they prove nothing (issue #9720). A double holds every integer of magnitude below 2^53 and rounding is
+   * monotonic, so extremes below it in magnitude are the stored longs; and a column of {@code count} samples none past the
+   * larger extreme in magnitude has partial sums bounded by {@code count} times it - below 2^53, every one of them, and so the
+   * total, was added exactly. A count unknown (a legacy block, see {@link BlockEntry#COUNT_UNKNOWN}) proves nothing.
+   */
+  static long[] exactFromDoubles(final double min, final double max, final double sum, final long count) {
+    if (count == 0)
+      return new long[] { 0L, 0L, 0L, 0L, 0L };
+    if (count < 0 || Double.isNaN(min) || Double.isNaN(max) || Double.isNaN(sum))
+      return null;
+    final double magnitude = Math.max(Math.abs(min), Math.abs(max));
+    if (!(magnitude < EXACT_INTEGRAL_DOUBLE) || !((double) count * magnitude < EXACT_INTEGRAL_DOUBLE) || min != Math.rint(min)
+        || max != Math.rint(max) || sum != Math.rint(sum))
+      return null;
+    final long total = (long) sum;
+    return new long[] { (long) min, (long) max, total, total >> 63, count };
+  }
+
+  /**
+   * Builds the statistics of a block, column by column, from the values a write path holds: exact longs for a SIMPLE8B column
+   * (issue #9720), the NaN-policy doubles of {@link #reduceNumericStats(ColumnDefinition, Object[])} for a GORILLA_XOR one. A
+   * column nothing is added for declares no statistics (NaN and zero), which is what a non-numeric column declares.
+   */
+  static final class StatsBuilder {
+    private final List<ColumnDefinition> columns;
+    private final double[]               mins;
+    private final double[]               maxs;
+    private final double[]               sums;
+    private final long[]                 counts;
+    private final long[]                 exactMins;
+    private final long[]                 exactMaxs;
+    private final long[]                 exactSumsLo;
+    private final long[]                 exactSumsHi;
+    private final boolean[]              exact;
+
+    StatsBuilder(final List<ColumnDefinition> columns) {
+      final int colCount = columns.size();
+      this.columns = columns;
+      this.mins = new double[colCount];
+      this.maxs = new double[colCount];
+      this.sums = new double[colCount];
+      this.counts = new long[colCount];
+      Arrays.fill(mins, Double.NaN);
+      Arrays.fill(maxs, Double.NaN);
+      Arrays.fill(sums, Double.NaN);
+      this.exactMins = new long[colCount];
+      this.exactMaxs = new long[colCount];
+      this.exactSumsLo = new long[colCount];
+      this.exactSumsHi = new long[colCount];
+      this.exact = new boolean[colCount];
+    }
+
+    /** A builder starting from {@code stats}, copied, so the original is never written. */
+    StatsBuilder(final List<ColumnDefinition> columns, final BlockStats stats) {
+      this.columns = columns;
+      this.mins = stats.mins().clone();
+      this.maxs = stats.maxs().clone();
+      this.sums = stats.sums().clone();
+      this.counts = stats.counts().clone();
+      final int colCount = columns.size();
+      this.exactMins = stats.exactMins() != null ? stats.exactMins().clone() : new long[colCount];
+      this.exactMaxs = stats.exactMaxs() != null ? stats.exactMaxs().clone() : new long[colCount];
+      this.exactSumsLo = stats.exactSumsLo() != null ? stats.exactSumsLo().clone() : new long[colCount];
+      this.exactSumsHi = stats.exactSumsHi() != null ? stats.exactSumsHi().clone() : new long[colCount];
+      this.exact = stats.exact() != null ? stats.exact().clone() : new boolean[colCount];
+    }
+
+    /** The statistics of column {@code c} from the values a write path holds, {@code null} being a sample with no value. */
+    void add(final int c, final Object[] values) {
+      final ColumnDefinition column = columns.get(c);
+      if (column.storesExactIntegers()) {
+        long min = 0;
+        long max = 0;
+        long count = 0;
+        final long[] sum = new long[2];
+        for (final Object value : values) {
+          if (value == null)
+            continue;
+          final long v = ColumnDefinition.integerValueOf(value);
+          if (count == 0 || v < min)
+            min = v;
+          if (count == 0 || v > max)
+            max = v;
+          ExactLongSum.add(sum, 0, v);
+          count++;
+        }
+        setExact(c, min, max, sum[0], sum[1], count);
+      } else {
+        final double[] stats = reduceNumericStats(column, values);
+        mins[c] = stats[0];
+        maxs[c] = stats[1];
+        sums[c] = stats[2];
+        counts[c] = (long) stats[3];
+        exact[c] = false;
+      }
+    }
+
+    /** The exact statistics of the decoded integral column {@code values}. */
+    void addIntegral(final int c, final IntegralColumn values) {
+      long min = 0;
+      long max = 0;
+      long count = 0;
+      final long[] sum = new long[2];
+      for (int i = 0; i < values.size(); i++) {
+        if (values.isNull(i))
+          continue;
+        final long v = values.values[i];
+        if (count == 0 || v < min)
+          min = v;
+        if (count == 0 || v > max)
+          max = v;
+        ExactLongSum.add(sum, 0, v);
+        count++;
+      }
+      setExact(c, min, max, sum[0], sum[1], count);
+    }
+
+    /** Sets exact statistics, and the doubles nearest to them, which every double reader of the block sees. */
+    void setExact(final int c, final long min, final long max, final long sumLo, final long sumHi, final long count) {
+      exactMins[c] = min;
+      exactMaxs[c] = max;
+      exactSumsLo[c] = sumLo;
+      exactSumsHi[c] = sumHi;
+      exact[c] = true;
+      counts[c] = count;
+      mins[c] = count > 0 ? (double) min : Double.NaN;
+      maxs[c] = count > 0 ? (double) max : Double.NaN;
+      sums[c] = count > 0 ? ExactLongSum.toDouble(sumLo, sumHi) : Double.NaN;
+    }
+
+    BlockStats build() {
+      return new BlockStats(mins, maxs, sums, counts, exactMins, exactMaxs, exactSumsLo, exactSumsHi, exact);
+    }
+  }
+
+  /**
+   * Writes a single block to a temp file and returns the resulting {@link BlockEntry}.
+   * Does NOT modify {@link #blockDirectory} or the global min/max timestamps —
+   * callers are responsible for those updates.
+   */
+  private BlockEntry writeNewBlockToFile(final RandomAccessFile tempFile, final int sampleCount,
+      final long minTs, final long maxTs, final byte[][] compressedCols, final BlockStats stats,
+      final int colCount, final String[][] tagDistinctValues, final long blockId) throws IOException {
+
+    final BlockStats exactStats = withExactIntegralStats(stats, compressedCols);
+    final ByteBuffer metaBuf = blockMeta(sampleCount, minTs, maxTs, blockId, compressedCols, exactStats,
+        buildTagMetadata(tagDistinctValues, colCount));
+    final int metaSize = metaBuf.limit();
 
     // Use metaBuf.limit() (not .array().length) since the backing array may be larger after flip
     final CRC32 crc = new CRC32();
@@ -2559,8 +3646,7 @@ public class TimeSeriesSealedStore implements AutoCloseable {
 
     // #6360 item 3: the temp file becomes the live file by an atomic move, so an offset into it is the offset the
     // block will have - exactly as the column offsets set below already are.
-    final BlockEntry newEntry = new BlockEntry(minTs, maxTs, sampleCount, colCount, stats.mins(), stats.maxs(),
-        stats.sums(), stats.counts(), blockStart, blockId);
+    final BlockEntry newEntry = new BlockEntry(minTs, maxTs, sampleCount, colCount, exactStats, blockStart, blockId);
     newEntry.tagDistinctValues = tagDistinctValues;
     for (int c = 0; c < colCount; c++) {
       newEntry.columnOffsets[c] = dataOffset;
@@ -2631,19 +3717,8 @@ public class TimeSeriesSealedStore implements AutoCloseable {
     final List<BlockEntry> newDirectory = new ArrayList<>(writeOrder.size());
 
     // Write placeholder header + all blocks to the temp file (no lock held).
-    // Truncate first so any leftover bytes from a previous partial write are cleared.
-    try (final RandomAccessFile tempFile = new RandomAccessFile(tempPath, "rw")) {
-      tempFile.setLength(0);
-      final ByteBuffer headerBuf = ByteBuffer.allocate(HEADER_SIZE);
-      headerBuf.putInt(MAGIC_VALUE);
-      headerBuf.put((byte) CURRENT_VERSION);
-      headerBuf.putShort((short) colCount);
-      headerBuf.putInt(0);
-      headerBuf.putLong(Long.MAX_VALUE);
-      headerBuf.putLong(Long.MIN_VALUE);
-      headerBuf.flip();
-      tempFile.getChannel().write(headerBuf);
-
+    // The opener truncates first, so any leftover bytes from a previous partial write are cleared.
+    try (final RandomAccessFile tempFile = openTempFileForRewrite(tempPath, colCount)) {
       for (final WriteSpec spec : writeOrder) {
         final BlockEntry entry;
         if (spec.isRetained()) {
@@ -2696,7 +3771,7 @@ public class TimeSeriesSealedStore implements AutoCloseable {
         // Move failed — original file is still in place; reopen handles so the store stays usable
         try {
           indexFile = new RandomAccessFile(sealedFile, "rw");
-          indexChannel = indexFile.getChannel();
+          indexChannel = channelOf(indexFile);
         } catch (final IOException reopenEx) {
           LogManager.instance().log(this, Level.SEVERE,
               "Failed to reopen sealed store after failed atomic move: %s", reopenEx, sealedFile.getAbsolutePath());
@@ -2705,7 +3780,7 @@ public class TimeSeriesSealedStore implements AutoCloseable {
       }
 
       indexFile = new RandomAccessFile(sealedFile, "rw");
-      indexChannel = indexFile.getChannel();
+      indexChannel = channelOf(indexFile);
 
       blockDirectory.clear();
       ++directoryVersion;
@@ -2756,11 +3831,19 @@ public class TimeSeriesSealedStore implements AutoCloseable {
     final String tempPath = basePath + ".ts.sealed.tmp";
     final int colCount = columns.size();
 
+    // The file Phase 3 wrote. Opening a path with "rw" quietly re-creates one that is gone, as an EMPTY file, and the header read
+    // below would then fail on a bounds check that says nothing about why (issue #9771). It is the one writer that must NOT
+    // truncate, so it does not go through openTempFileForRewrite: it appends to what is there, and refuses to invent it.
+    // This check is only a clearer error, not the protection: it is a check followed by an open, and what keeps another rewrite
+    // from removing the file in between is TimeSeriesShard.compactionMutex, which every rewrite of the sealed file holds.
+    if (!new File(tempPath).isFile())
+      throw new IOException("The compaction temp file '" + tempPath
+          + "' is gone: another rewrite of the sealed store removed or replaced it while this compaction was building its replacement");
+
     try (final RandomAccessFile tempFile = new RandomAccessFile(tempPath, "rw")) {
       // Read the current header to get existing block count and global min/max timestamps
       final ByteBuffer hdrBuf = ByteBuffer.allocate(HEADER_SIZE);
-      tempFile.seek(0);
-      tempFile.getChannel().read(hdrBuf);
+      readExactly(channelOf(tempFile), hdrBuf, 0, "the temp file header");
       hdrBuf.flip();
       hdrBuf.position(7); // skip magic(4) + version(1) + colCount(2)
       final int existingBlockCount = hdrBuf.getInt();
@@ -2786,7 +3869,7 @@ public class TimeSeriesSealedStore implements AutoCloseable {
       updateBuf.putLong(curGlobalMin);
       updateBuf.putLong(curGlobalMax);
       updateBuf.flip();
-      tempFile.getChannel().write(updateBuf, 7);
+      FileUtils.writeFully(channelOf(tempFile), updateBuf, 7);
     }
   }
 
@@ -2800,6 +3883,42 @@ public class TimeSeriesSealedStore implements AutoCloseable {
       LogManager.instance().log(this, Level.WARNING,
           "Failed to delete stale compaction temp file '%s'; next compaction may fail or use stale data",
           null, tmp.getAbsolutePath());
+  }
+
+  /**
+   * Opens the temp file a rewrite of the sealed file is about to fill, EMPTY and holding the placeholder header (issue #9770).
+   * <p>
+   * Every rewrite that reuses a fixed temp path owns that file, so it starts from nothing: {@code RandomAccessFile} in
+   * {@code "rw"} mode neither truncates on open nor shrinks on write, and {@link #writeNewBlockToFile} positions each block at
+   * the file's length, so a leftover of ANY size past the header would not be overwritten but preserved whole, with the blocks
+   * the rewrite means to keep appended after it. The six writers each carried their own copy of this preamble and one of them
+   * (retention) had lost the truncate, which is how the blocks it dropped came back at the next open and were shipped to the
+   * followers. With one definition there is no second place for the next rewrite path to forget it in.
+   * <p>
+   * {@link #appendBlocksToTempFile} is the one writer that must NOT truncate, and it says so by not using this.
+   */
+  private RandomAccessFile openTempFileForRewrite(final String tempPath, final int colCount) throws IOException {
+    final RandomAccessFile tempFile = new RandomAccessFile(tempPath, "rw");
+    try {
+      tempFile.setLength(0);
+      final ByteBuffer headerBuf = ByteBuffer.allocate(HEADER_SIZE);
+      headerBuf.putInt(MAGIC_VALUE);
+      headerBuf.put((byte) CURRENT_VERSION);
+      headerBuf.putShort((short) colCount);
+      headerBuf.putInt(0);
+      headerBuf.putLong(Long.MAX_VALUE);
+      headerBuf.putLong(Long.MIN_VALUE);
+      headerBuf.flip();
+      FileUtils.writeFully(channelOf(tempFile), headerBuf, 0);
+      return tempFile;
+    } catch (final IOException | RuntimeException e) {
+      try {
+        tempFile.close();
+      } catch (final IOException closeEx) {
+        e.addSuppressed(closeEx);
+      }
+      throw e;
+    }
   }
 
   /** Deletes the temp file of a merge of small blocks ({@code .ts.sealed.merge.tmp}) if it exists. */
@@ -2819,10 +3938,18 @@ public class TimeSeriesSealedStore implements AutoCloseable {
         yield GorillaXORCodec.encode(doubles);
       }
       case SIMPLE8B -> {
+        // A null is a sample with no value: a zero the block's null bitmap marks absent (issue #9721)
         final long[] longs = new long[values.length];
-        for (int i = 0; i < values.length; i++)
-          longs[i] = ColumnDefinition.integerValueOf(values[i]);
-        yield Simple8bCodec.encode(longs);
+        long[] nulls = null;
+        for (int i = 0; i < values.length; i++) {
+          if (values[i] == null) {
+            if (nulls == null)
+              nulls = new long[Simple8bCodec.bitmapWords(values.length)];
+            nulls[i >>> 6] |= 1L << i;
+          } else
+            longs[i] = ColumnDefinition.integerValueOf(values[i]);
+        }
+        yield Simple8bCodec.encode(longs, nulls);
       }
       case DICTIONARY -> {
         final String[] strings = new String[values.length];
@@ -2855,20 +3982,13 @@ public class TimeSeriesSealedStore implements AutoCloseable {
       // Build new directory in a local list — do NOT modify blockDirectory until after the
       // atomic file swap. If Files.move() fails, the live file and blockDirectory remain intact.
       final List<BlockEntry> newDirectory = new ArrayList<>();
-      try (final RandomAccessFile tempFile = new RandomAccessFile(tempPath, "rw")) {
-        tempFile.setLength(0);
-        final ByteBuffer headerBuf = ByteBuffer.allocate(HEADER_SIZE);
-        headerBuf.putInt(MAGIC_VALUE);
-        headerBuf.put((byte) CURRENT_VERSION);
-        headerBuf.putShort((short) colCount);
-        headerBuf.putInt(0);
-        headerBuf.putLong(Long.MAX_VALUE);
-        headerBuf.putLong(Long.MIN_VALUE);
-        headerBuf.flip();
-        tempFile.getChannel().write(headerBuf);
-
+      try (final RandomAccessFile tempFile = openTempFileForRewrite(tempPath, colCount)) {
         for (final BlockEntry entry : retained)
           copyBlockToFile(tempFile, entry, colCount, newDirectory);
+      } catch (final IOException | RuntimeException e) {
+        // a failed copy leaves no half-written file for whoever rewrites next to find (issue #9770)
+        deleteTempFileIfExists();
+        throw e;
       }
 
       // Atomic file swap: close handles first (required on Windows), then atomically replace.
@@ -2884,11 +4004,12 @@ public class TimeSeriesSealedStore implements AutoCloseable {
         // Move failed — original file is still in place; reopen handles so the store stays usable
         try {
           indexFile = new RandomAccessFile(oldFile, "rw");
-          indexChannel = indexFile.getChannel();
+          indexChannel = channelOf(indexFile);
         } catch (final IOException reopenEx) {
           LogManager.instance().log(this, Level.SEVERE,
               "Failed to reopen sealed store after failed atomic move: %s", reopenEx, oldFile.getAbsolutePath());
         }
+        deleteTempFileIfExists();
         throw moveEx;
       }
 
@@ -2906,7 +4027,7 @@ public class TimeSeriesSealedStore implements AutoCloseable {
       }
 
       indexFile = new RandomAccessFile(oldFile, "rw");
-      indexChannel = indexFile.getChannel();
+      indexChannel = channelOf(indexFile);
       rewriteHeader();
     } finally {
       directoryLock.writeLock().unlock();
@@ -3010,7 +4131,7 @@ public class TimeSeriesSealedStore implements AutoCloseable {
     final Lock lock = options.fix() ? directoryLock.writeLock() : directoryLock.readLock();
     lock.lock();
     try {
-      final long fileLength = indexFile.length();
+      final long fileLength = fileLength();
       if (fileLength < HEADER_SIZE) {
         problems.add("the file is " + fileLength + " bytes, shorter than its " + HEADER_SIZE + "-byte header");
         return new TimeSeriesIntegrity.Outcome(problems, repairs);
@@ -3293,11 +4414,11 @@ public class TimeSeriesSealedStore implements AutoCloseable {
         switch (column.getCompressionHint()) {
         case GORILLA_XOR -> checkNumericColumn(where, entry, c, column, GorillaXORCodec.decode(compressed), problems);
         case SIMPLE8B -> {
-          final long[] longs = Simple8bCodec.decode(compressed);
-          final double[] doubles = new double[longs.length];
-          for (int i = 0; i < longs.length; i++)
-            doubles[i] = longs[i];
-          checkNumericColumn(where, entry, c, column, doubles, problems);
+          final IntegralColumn integral = IntegralColumn.decode(compressed);
+          if (entry.exactStats[c])
+            checkIntegralColumn(where, entry, c, column, integral, problems);
+          else
+            checkNumericColumn(where, entry, c, column, integralAsDoubles(integral), problems);
         }
         case DICTIONARY -> checkDictionaryColumn(where, entry, c, column, DictionaryCodec.decode(compressed), problems);
         default -> {
@@ -3385,7 +4506,12 @@ public class TimeSeriesSealedStore implements AutoCloseable {
   /**
    * The statistics a block declares for every column, in schema order; non-numeric columns hold NaN and zero.
    */
-  record BlockStats(double[] mins, double[] maxs, double[] sums, long[] counts) {
+  record BlockStats(double[] mins, double[] maxs, double[] sums, long[] counts, long[] exactMins, long[] exactMaxs,
+                    long[] exactSumsLo, long[] exactSumsHi, boolean[] exact) {
+    /** Double statistics only: a writer proves or computes the exact ones of every SIMPLE8B column (withExactIntegralStats). */
+    BlockStats(final double[] mins, final double[] maxs, final double[] sums, final long[] counts) {
+      this(mins, maxs, sums, counts, null, null, null, null, null);
+    }
   }
 
   /**
@@ -3398,7 +4524,8 @@ public class TimeSeriesSealedStore implements AutoCloseable {
     double[] sums = entry.columnSums;
     long[] counts = entry.columnCounts;
     for (int c = 0; c < columns.size(); c++) {
-      if (counts[c] != BlockEntry.COUNT_UNKNOWN)
+      // an integral column is recomputed exactly below whatever it declares
+      if (counts[c] != BlockEntry.COUNT_UNKNOWN || (hasNumericStats(c) && columns.get(c).storesExactIntegers()))
         continue;
       if (sums == entry.columnSums) {
         sums = sums.clone();
@@ -3408,7 +4535,9 @@ public class TimeSeriesSealedStore implements AutoCloseable {
       sums[c] = stats[2];
       counts[c] = (long) stats[3];
     }
-    return new BlockStats(entry.columnMins, entry.columnMaxs, sums, counts);
+    // The exact statistics of the integral columns where the block has them; withExactIntegralStats completes the others
+    return withExactIntegralStats(new BlockStats(entry.columnMins, entry.columnMaxs, sums, counts, entry.exactMins, entry.exactMaxs,
+        entry.exactSumsLo, entry.exactSumsHi, entry.exactStats), compressedCols);
   }
 
   /**
@@ -3419,23 +4548,27 @@ public class TimeSeriesSealedStore implements AutoCloseable {
    * is cheaper than two.
    */
   private static boolean needsValues(final BlockEntry entry, final List<MultiColumnAggregationRequest> requests,
-      final int[] schemaColIndices) {
+      final int[] schemaColIndices, final boolean[] exact) {
     for (int r = 0; r < requests.size(); r++)
       if (requests.get(r).type() != AggregationType.COUNT
-          && entry.columnCounts[schemaColIndices[r]] == BlockEntry.COUNT_UNKNOWN)
+          && (entry.columnCounts[schemaColIndices[r]] == BlockEntry.COUNT_UNKNOWN
+          // an exact request over an older block whose doubles do not prove its integral statistics (issue #9720)
+          || (exact[r] && !entry.exactStats[schemaColIndices[r]])))
         return true;
     return false;
   }
 
   private static boolean isBlockMagic(final int magic) {
-    return magic == BLOCK_MAGIC_VALUE || magic == BLOCK_MAGIC_VALUE_V2 || magic == BLOCK_MAGIC_VALUE_V3;
+    return magic == BLOCK_MAGIC_VALUE || magic == BLOCK_MAGIC_VALUE_V2 || magic == BLOCK_MAGIC_VALUE_V3
+        || magic == BLOCK_MAGIC_VALUE_V4;
   }
 
   /**
    * {@link #reduceNumericStats(double[])} over the boxed values a write path holds, unboxed exactly the way
    * {@link #compressColumn} unboxes them so the statistics describe the bytes that get written. Which is why it
-   * takes the column: a null is the absent marker on a floating-point column and a zero on every other, and the
-   * declared minimum has to agree with the encoder about that (issue #7743).
+   * takes the column: a null is absent on every column - the NaN itself on a floating-point one (issue #7743), a zero the
+   * block's null bitmap marks on an integral one (issue #9721) - and the declared minimum has to agree with the encoder about
+   * that. An integral column's write path goes through {@link StatsBuilder}, which keeps its statistics exact.
    */
   static double[] reduceNumericStats(final ColumnDefinition col, final Object[] values) {
     final double[] unboxed = new double[values.length];
@@ -3510,6 +4643,40 @@ public class TimeSeriesSealedStore implements AutoCloseable {
   }
 
   /**
+   * Reconciles an integral column's decoded values against the EXACT statistics the block declares for it (issue #9720): the
+   * numbers the aggregation push-down answers a MIN/MAX/SUM/AVG of the column from, so they have to be the values, exactly.
+   */
+  private void checkIntegralColumn(final String where, final BlockEntry entry, final int colIdx, final ColumnDefinition column,
+      final IntegralColumn values, final List<String> problems) {
+    if (values.size() != entry.sampleCount) {
+      problems.add(where + " declares " + entry.sampleCount + " sample(s) but column '" + column.getName() + "' decodes to "
+          + values.size());
+      return;
+    }
+    final StatsBuilder recomputed = new StatsBuilder(columns);
+    recomputed.addIntegral(colIdx, values);
+    final BlockStats stats = recomputed.build();
+    final long count = stats.counts()[colIdx];
+    if (entry.columnCounts[colIdx] != count) {
+      problems.add(where + " declares " + entry.columnCounts[colIdx] + " sample(s) with a value for column '" + column.getName()
+          + "' but its values hold " + count + ": an aggregation answered from this block would be wrong");
+      return;
+    }
+    if (count == 0)
+      return;
+    if (entry.exactMins[colIdx] != stats.exactMins()[colIdx])
+      problems.add(where + " declares min " + entry.exactMins[colIdx] + " for column '" + column.getName() + "' but its values start at "
+          + stats.exactMins()[colIdx] + ": an aggregation answered from this block would be wrong");
+    if (entry.exactMaxs[colIdx] != stats.exactMaxs()[colIdx])
+      problems.add(where + " declares max " + entry.exactMaxs[colIdx] + " for column '" + column.getName() + "' but its values reach "
+          + stats.exactMaxs()[colIdx] + ": an aggregation answered from this block would be wrong");
+    if (entry.exactSumsLo[colIdx] != stats.exactSumsLo()[colIdx] || entry.exactSumsHi[colIdx] != stats.exactSumsHi()[colIdx])
+      problems.add(where + " declares sum " + ExactLongSum.toNumber(entry.exactSumsLo[colIdx], entry.exactSumsHi[colIdx]) + " for column '"
+          + column.getName() + "' but its values add up to " + ExactLongSum.toNumber(stats.exactSumsLo()[colIdx], stats.exactSumsHi()[colIdx])
+          + ": an aggregation answered from this block would be wrong");
+  }
+
+  /**
    * Checks that a TAG column's declared distinct values cover the values it actually holds. They are what
    * block-level pruning SKIPS a block on, so a value present in the data but missing from the declaration makes
    * every query filtering on it miss this block entirely.
@@ -3560,7 +4727,7 @@ public class TimeSeriesSealedStore implements AutoCloseable {
   public long getFileSizeBytes() throws IOException {
     directoryLock.readLock().lock();
     try {
-      return indexFile.length();
+      return fileLength();
     } finally {
       directoryLock.readLock().unlock();
     }
@@ -3610,11 +4777,18 @@ public class TimeSeriesSealedStore implements AutoCloseable {
 
   @Override
   public void close() throws IOException {
-    flushHeader();
-    if (indexChannel != null && indexChannel.isOpen())
-      indexChannel.close();
-    if (indexFile != null)
-      indexFile.close();
+    try {
+      flushHeader();
+    } finally {
+      // MARKED CLOSED EVEN WHEN THE FLUSH FAILS, SO NO LATER READ REOPENS A STORE ITS OWNER CLOSED (#9621)
+      synchronized (channelReopenLock) {
+        closed = true;
+        if (indexChannel != null && indexChannel.isOpen())
+          indexChannel.close();
+        if (indexFile != null)
+          indexFile.close();
+      }
+    }
   }
 
   /**
@@ -3683,13 +4857,12 @@ public class TimeSeriesSealedStore implements AutoCloseable {
     flushHeader();
     directoryLock.readLock().lock();
     try {
-      final long len = indexFile.length();
+      final long len = fileLength();
       if (len > Integer.MAX_VALUE)
         throw new IOException("Sealed store file too large to ship: " + len + " bytes");
-      final byte[] bytes = new byte[(int) len];
-      indexFile.seek(0);
-      indexFile.readFully(bytes);
-      return bytes;
+      // A POSITIONED read rather than seek + readFully on the RandomAccessFile: two callers under the read lock would share
+      // its file pointer. Through readBytes(), so an interrupt closing the shared channel mid-copy is recovered (#9621).
+      return readBytes(0, (int) len);
     } finally {
       directoryLock.readLock().unlock();
     }
@@ -3739,7 +4912,7 @@ public class TimeSeriesSealedStore implements AutoCloseable {
       Files.move(incoming.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING);
 
       indexFile = new RandomAccessFile(target, "rw");
-      indexChannel = indexFile.getChannel();
+      indexChannel = channelOf(indexFile);
 
       // What this node held a moment ago, so the image can be compared against it below.
       final Set<Long> previousBlockIds = new HashSet<>(blockDirectory.size());
@@ -3752,7 +4925,7 @@ public class TimeSeriesSealedStore implements AutoCloseable {
       globalMinTs = Long.MAX_VALUE;
       globalMaxTs = Long.MIN_VALUE;
       headerDirty = false;
-      if (indexFile.length() >= HEADER_SIZE)
+      if (fileLength() >= HEADER_SIZE)
         loadDirectory();
       else
         writeEmptyHeader();
@@ -4010,6 +5183,12 @@ public class TimeSeriesSealedStore implements AutoCloseable {
     return buf.array();
   }
 
+  private static FileChannel channelOf(final RandomAccessFile file) {
+    final FileChannel channel = file.getChannel();
+    final UnaryOperator<FileChannel> decorator = TEST_CHANNEL_DECORATOR;
+    return decorator != null ? decorator.apply(channel) : channel;
+  }
+
   private void writeEmptyHeader() throws IOException {
     final ByteBuffer buf = ByteBuffer.allocate(HEADER_SIZE);
     buf.putInt(MAGIC_VALUE);
@@ -4019,8 +5198,28 @@ public class TimeSeriesSealedStore implements AutoCloseable {
     buf.putLong(Long.MAX_VALUE); // min ts
     buf.putLong(Long.MIN_VALUE); // max ts
     buf.flip();
-    indexChannel.write(buf, 0);
-    indexChannel.force(true);
+    writeHeader(buf, true);
+  }
+
+  private void writeHeader(final ByteBuffer buf, final boolean metaData) throws IOException {
+    try {
+      writeHeaderOnce(buf, metaData);
+    } catch (final ClosedChannelException e) {
+      retryAfterReopen("header write", () -> {
+        buf.rewind();
+        writeHeaderOnce(buf, metaData);
+      });
+    }
+  }
+
+  /**
+   * Writes {@code buf}, from its current position, at file offset 0. Looped: one positional write may legally store
+   * only part of the header, leaving a block count and a range that are half old and half new (issue #9640).
+   */
+  private void writeHeaderOnce(final ByteBuffer buf, final boolean metaData) throws IOException {
+    final FileChannel channel = indexChannel;
+    FileUtils.writeFully(channel, buf, 0);
+    channel.force(metaData);
   }
 
   private void rewriteHeader() throws IOException {
@@ -4032,11 +5231,24 @@ public class TimeSeriesSealedStore implements AutoCloseable {
     buf.putLong(globalMinTs);
     buf.putLong(globalMaxTs);
     buf.flip();
-    indexChannel.write(buf, 0);
-    indexChannel.force(false);
+    writeHeader(buf, false);
   }
 
+  /**
+   * Rebuilds the directory from the file, rerun from its start on a reopened channel when an interrupt closes it
+   * mid-scan (issue #9621): the scan clears the directory before it reads a block, so a rerun is a clean one.
+   */
   private void loadDirectory() throws IOException {
+    // Only a ClosedChannelException is retried here: the one RandomAccessFile call of the scan, the file length, goes
+    // through fileLength(), which recovers the "Stream Closed" IOException a closed descriptor raises on its own.
+    try {
+      loadDirectoryOnce();
+    } catch (final ClosedChannelException e) {
+      retryAfterReopen("directory load", this::loadDirectoryOnce);
+    }
+  }
+
+  private void loadDirectoryOnce() throws IOException {
     // One canonical instance per distinct tag value, and per distinct declared array, for the whole directory
     // (issue #8793). A low-rate feed seals a small block per pass and every block declares the same few thousand
     // values, so decoding each one into a fresh String kept blocks x values copies alive for the life of the
@@ -4045,7 +5257,8 @@ public class TimeSeriesSealedStore implements AutoCloseable {
     final Map<String, String> canonicalValues = new HashMap<>();
     final Map<List<String>, String[]> canonicalArrays = new HashMap<>();
     final ByteBuffer headerBuf = ByteBuffer.allocate(HEADER_SIZE);
-    indexChannel.read(headerBuf, 0);
+    // Checked: a short read used to be decoded as a whole header, the rest of it whatever the buffer held (#9640)
+    readExactly(indexChannel, headerBuf, 0, "the header");
     headerBuf.flip();
 
     final int magic = headerBuf.getInt();
@@ -4074,7 +5287,7 @@ public class TimeSeriesSealedStore implements AutoCloseable {
     blockDirectory.clear();
     ++directoryVersion;
     decodedColumnCache.clear();
-    final long fileLength = indexFile.length();
+    final long fileLength = fileLength();
     long pos = HEADER_SIZE;
 
     // magic + minTs + maxTs + sampleCount + colSizes: what every generation of the record carries. A TSB3 block
@@ -4086,7 +5299,10 @@ public class TimeSeriesSealedStore implements AutoCloseable {
     while (pos + shortestBaseMetaSize <= fileLength) {
       final int readSize = (int) Math.min(shortestBaseMetaSize + (long) BLOCK_ID_BYTES, fileLength - pos);
       final ByteBuffer metaBuf = ByteBuffer.allocate(readSize);
-      if (indexChannel.read(metaBuf, pos) < readSize)
+      // Every read of the scan loops until the buffer is full or the file ends (issue #9640): a short count is then
+      // the unfinished tail of an interrupted write, never a read that merely came back short - taking one of those
+      // for the end of the file silently dropped every block after it
+      if (FileUtils.readFully(indexChannel, metaBuf, pos) < readSize)
         break;
       metaBuf.flip();
 
@@ -4097,7 +5313,9 @@ public class TimeSeriesSealedStore implements AutoCloseable {
       final boolean legacyStats = blockMagic == BLOCK_MAGIC_VALUE;
       final int statsBytes = legacyStats ? LEGACY_STATS_BYTES : STATS_BYTES;
       // ... and whether the record carries the block's own identity (issue #8043).
-      final boolean carriesBlockId = blockMagic == BLOCK_MAGIC_VALUE_V3;
+      final boolean carriesBlockId = blockMagic == BLOCK_MAGIC_VALUE_V3 || blockMagic == BLOCK_MAGIC_VALUE_V4;
+      // ... and whether a SIMPLE8B column's statistics are exact longs (issue #9720).
+      final boolean exactIntegralStats = blockMagic == BLOCK_MAGIC_VALUE_V4;
       final int baseMetaSize = shortestBaseMetaSize + (carriesBlockId ? BLOCK_ID_BYTES : 0);
       if (readSize < baseMetaSize)
         break; // a TSB3 record the file ends in the middle of: the same unfinished write a short read means
@@ -4124,24 +5342,27 @@ public class TimeSeriesSealedStore implements AutoCloseable {
       // Read stats section: numericColCount(4) + [min(8) + max(8) + sum(8)] * numericColCount (schema order)
       long statsPos = pos + baseMetaSize;
       final ByteBuffer numBuf = ByteBuffer.allocate(4);
-      if (indexChannel.read(numBuf, statsPos) < 4)
+      if (FileUtils.readFully(indexChannel, numBuf, statsPos) < 4)
         break;
       numBuf.flip();
       final int numericColCount = numBuf.getInt();
       statsPos += 4;
 
-      final double[] mins = new double[colCount];
-      final double[] maxs = new double[colCount];
-      final double[] sums = new double[colCount];
-      final long[] counts = new long[colCount];
-      Arrays.fill(mins, Double.NaN);
-      Arrays.fill(maxs, Double.NaN);
-      Arrays.fill(sums, Double.NaN);
+      final StatsBuilder stats = new StatsBuilder(columns);
+      final double[] mins = stats.mins;
+      final double[] maxs = stats.maxs;
+      final double[] sums = stats.sums;
+      final long[] counts = stats.counts;
 
       if (numericColCount > 0) {
-        final int statsSize = statsBytes * numericColCount;
+        int statsSize = 0;
+        for (int c = 0, n = 0; c < colCount && n < numericColCount; c++)
+          if (hasNumericStats(c)) {
+            statsSize += exactIntegralStats && columns.get(c).storesExactIntegers() ? INTEGRAL_STATS_BYTES : statsBytes;
+            n++;
+          }
         final ByteBuffer statsBuf = ByteBuffer.allocate(statsSize);
-        if (indexChannel.read(statsBuf, statsPos) < statsSize)
+        if (FileUtils.readFully(indexChannel, statsBuf, statsPos) < statsSize)
           break;
         statsBuf.flip();
         // Stats are in schema order — iterate columns, consuming one entry per column the WRITER emitted one
@@ -4152,6 +5373,15 @@ public class TimeSeriesSealedStore implements AutoCloseable {
         for (int c = 0; c < colCount && numericIdx < numericColCount; c++) {
           if (!hasNumericStats(c))
             continue;
+          if (exactIntegralStats && columns.get(c).storesExactIntegers()) {
+            final long min = statsBuf.getLong();
+            final long max = statsBuf.getLong();
+            final long sumLo = statsBuf.getLong();
+            final long sumHi = statsBuf.getLong();
+            stats.setExact(c, min, max, sumLo, sumHi, statsBuf.getLong());
+            numericIdx++;
+            continue;
+          }
           mins[c] = statsBuf.getDouble();
           maxs[c] = statsBuf.getDouble();
           sums[c] = statsBuf.getDouble();
@@ -4163,6 +5393,12 @@ public class TimeSeriesSealedStore implements AutoCloseable {
             counts[c] = Double.isNaN(sums[c]) ? BlockEntry.COUNT_UNKNOWN : sampleCount;
           else
             counts[c] = statsBuf.getLong();
+          // An older block's integral column: exact where its doubles prove it, otherwise its exact requests decode it
+          if (columns.get(c).storesExactIntegers()) {
+            final long[] proven = exactFromDoubles(mins[c], maxs[c], sums[c], counts[c]);
+            if (proven != null)
+              stats.setExact(c, proven[0], proven[1], proven[2], proven[3], proven[4]);
+          }
           numericIdx++;
         }
         statsPos += statsSize;
@@ -4172,7 +5408,7 @@ public class TimeSeriesSealedStore implements AutoCloseable {
       String[][] blockTagDistinctValues = null;
       long tagEndPos = statsPos;
       final ByteBuffer tagCountBuf = ByteBuffer.allocate(2);
-      if (indexChannel.read(tagCountBuf, tagEndPos) < 2)
+      if (FileUtils.readFully(indexChannel, tagCountBuf, tagEndPos) < 2)
         break;
       tagCountBuf.flip();
       // Read as unsigned short for safety
@@ -4186,7 +5422,7 @@ public class TimeSeriesSealedStore implements AutoCloseable {
           if (columns.get(c).getRole() != ColumnDefinition.ColumnRole.TAG)
             continue;
           final ByteBuffer dcBuf = ByteBuffer.allocate(2);
-          indexChannel.read(dcBuf, tagEndPos);
+          readExactly(indexChannel, dcBuf, tagEndPos, "a tag value count");
           dcBuf.flip();
           // Read as unsigned short: values up to 65535 (MAX_DICTIONARY_SIZE) are valid
           final int distinctCount = dcBuf.getShort() & 0xFFFF;
@@ -4195,7 +5431,7 @@ public class TimeSeriesSealedStore implements AutoCloseable {
           final String[] distinctValues = new String[distinctCount];
           for (int v = 0; v < distinctCount; v++) {
             final ByteBuffer lenBuf = ByteBuffer.allocate(2);
-            indexChannel.read(lenBuf, tagEndPos);
+            readExactly(indexChannel, lenBuf, tagEndPos, "a tag value length");
             lenBuf.flip();
             // Read as unsigned short: tag values are bounded to 32767 bytes at write time
             final int valLen = lenBuf.getShort() & 0xFFFF;
@@ -4203,7 +5439,7 @@ public class TimeSeriesSealedStore implements AutoCloseable {
 
             final byte[] valBytes = new byte[valLen];
             final ByteBuffer valBuf = ByteBuffer.wrap(valBytes);
-            indexChannel.read(valBuf, tagEndPos);
+            readExactly(indexChannel, valBuf, tagEndPos, "a tag value");
             final String value = new String(valBytes, StandardCharsets.UTF_8);
             distinctValues[v] = canonicalValues.computeIfAbsent(value, k -> k);
             tagEndPos += valLen;
@@ -4214,8 +5450,7 @@ public class TimeSeriesSealedStore implements AutoCloseable {
         }
       }
 
-      final BlockEntry entry = new BlockEntry(minTs, maxTs, sampleCount, colCount, mins, maxs, sums, counts, pos,
-          blockId);
+      final BlockEntry entry = new BlockEntry(minTs, maxTs, sampleCount, colCount, stats.build(), pos, blockId);
       entry.tagDistinctValues = blockTagDistinctValues;
       long dataPos = tagEndPos;
       for (int c = 0; c < colCount; c++) {
@@ -4226,7 +5461,7 @@ public class TimeSeriesSealedStore implements AutoCloseable {
 
       // Read stored CRC32 (validate lazily on first block read)
       final ByteBuffer crcBuf = ByteBuffer.allocate(4);
-      if (indexChannel.read(crcBuf, dataPos) < 4)
+      if (FileUtils.readFully(indexChannel, crcBuf, dataPos) < 4)
         throw new IOException("Unexpected end of sealed store: missing block CRC32");
       crcBuf.flip();
       // Read from the file rather than recorded from a write, so the flag stays false: this is the one path whose
@@ -4284,6 +5519,28 @@ public class TimeSeriesSealedStore implements AutoCloseable {
    * the first position where it reaches {@code fromTs} is exactly the first block that can (issue #8813).
    */
   private int firstBlockEndingAtOrAfter(final long fromTs) {
+    return firstBlockEndingAtOrAfter(runningMaxTimestamps(), fromTs);
+  }
+
+  private static int firstBlockEndingAtOrAfter(final long[] runningMax, final long fromTs) {
+    int lo = 0, hi = runningMax.length;
+    while (lo < hi) {
+      final int mid = (lo + hi) >>> 1;
+      if (runningMax[mid] < fromTs)
+        lo = mid + 1;
+      else
+        hi = mid;
+    }
+    return lo;
+  }
+
+  /**
+   * The running maximum of {@code maxTimestamp} along the directory (see {@link MaxTimestampPrefix}), cached per
+   * {@link #directoryVersion}. It is what bounds a walk over overlapping blocks in either direction: going up it says
+   * where the first block that can reach a lower bound is, going down it says that no block at or before an index can
+   * hold anything newer (issue #9982). Caller holds the directory read lock.
+   */
+  private long[] runningMaxTimestamps() {
     final int dirSize = blockDirectory.size();
     MaxTimestampPrefix prefix = maxTimestampPrefix;
     if (prefix == null || prefix.version() != directoryVersion || prefix.runningMax().length != dirSize) {
@@ -4296,17 +5553,7 @@ public class TimeSeriesSealedStore implements AutoCloseable {
       prefix = new MaxTimestampPrefix(directoryVersion, runningMax);
       maxTimestampPrefix = prefix;
     }
-
-    final long[] runningMax = prefix.runningMax();
-    int lo = 0, hi = dirSize;
-    while (lo < hi) {
-      final int mid = (lo + hi) >>> 1;
-      if (runningMax[mid] < fromTs)
-        lo = mid + 1;
-      else
-        hi = mid;
-    }
-    return lo;
+    return prefix.runningMax();
   }
 
   private long[] decompressTimestamps(final BlockEntry entry, final int tsColIdx) throws IOException {
@@ -4343,14 +5590,9 @@ public class TimeSeriesSealedStore implements AutoCloseable {
     if (col.getCompressionHint() == TimeSeriesCodec.GORILLA_XOR)
       return GorillaXORCodec.decode(compressed);
 
-    // For SIMPLE8B encoded longs, convert to doubles
-    if (col.getCompressionHint() == TimeSeriesCodec.SIMPLE8B) {
-      final long[] longs = Simple8bCodec.decode(compressed);
-      final double[] result = new double[longs.length];
-      for (int i = 0; i < longs.length; i++)
-        result[i] = longs[i];
-      return result;
-    }
+    // For SIMPLE8B encoded longs, convert to doubles: a sample with no value is the absent marker (issue #9721)
+    if (col.getCompressionHint() == TimeSeriesCodec.SIMPLE8B)
+      return integralAsDoubles(IntegralColumn.decode(compressed));
 
     throw new IllegalArgumentException(
         "decodeDoubleColumn: codec " + col.getCompressionHint() + " is not a numeric codec (column " + schemaColIdx + ")");
@@ -4366,10 +5608,10 @@ public class TimeSeriesSealedStore implements AutoCloseable {
   private static final class RawColumn {
     private final ColumnDefinition col;
     private final double[]         doubles;
-    private final long[]           longs;
+    private final IntegralColumn   longs;
     private final String[]         strings;
 
-    private RawColumn(final ColumnDefinition col, final double[] doubles, final long[] longs, final String[] strings) {
+    private RawColumn(final ColumnDefinition col, final double[] doubles, final IntegralColumn longs, final String[] strings) {
       this.col = col;
       this.doubles = doubles;
       this.longs = longs;
@@ -4384,11 +5626,32 @@ public class TimeSeriesSealedStore implements AutoCloseable {
       if (doubles != null)
         return col.boxDouble(doubles[i]);
       if (longs != null)
-        return col.boxRaw(longs[i]);
+        return longs.isNull(i) ? null : col.boxRaw(longs.values[i]);
       if (strings != null)
         return col.boxString(strings[i]);
       return null;
     }
+  }
+
+  /**
+   * One column of a block decoded by its own codec, unboxed: a {@code double[]} for {@code GORILLA_XOR}, an
+   * {@link IntegralColumn} for {@code SIMPLE8B} (its values and the samples that carry none, issue #9721), a {@code String[]}
+   * for {@code DICTIONARY}. Through the decoded-column cache, which holds exactly
+   * that array.
+   */
+  private Object rawColumnValues(final BlockEntry entry, final int schemaColIdx) throws IOException {
+    Object values = decodedColumnCache.get(entry.blockId, schemaColIdx, TimeSeriesDecodedColumnCache.SHAPE_RAW);
+    if (values == null) {
+      final byte[] compressed = readBytes(entry.columnOffsets[schemaColIdx], entry.columnSizes[schemaColIdx]);
+      values = switch (columns.get(schemaColIdx).getCompressionHint()) {
+        case GORILLA_XOR -> GorillaXORCodec.decode(compressed);
+        case SIMPLE8B -> IntegralColumn.decode(compressed);
+        case DICTIONARY -> DictionaryCodec.decode(compressed);
+        default -> null;
+      };
+      decodedColumnCache.put(entry.blockId, schemaColIdx, TimeSeriesDecodedColumnCache.SHAPE_RAW, values);
+    }
+    return values;
   }
 
   /**
@@ -4421,21 +5684,11 @@ public class TimeSeriesSealedStore implements AutoCloseable {
 
       // The CACHE holds the codec's own array; the RawColumn around it is rebuilt per call, being three references
       // and no data.
-      Object values = decodedColumnCache.get(entry.blockId, c, TimeSeriesDecodedColumnCache.SHAPE_RAW);
-      if (values == null) {
-        final byte[] compressed = readBytes(entry.columnOffsets[c], entry.columnSizes[c]);
-        values = switch (col.getCompressionHint()) {
-          case GORILLA_XOR -> GorillaXORCodec.decode(compressed);
-          case SIMPLE8B -> Simple8bCodec.decode(compressed);
-          case DICTIONARY -> DictionaryCodec.decode(compressed);
-          default -> null;
-        };
-        decodedColumnCache.put(entry.blockId, c, TimeSeriesDecodedColumnCache.SHAPE_RAW, values);
-      }
+      final Object values = rawColumnValues(entry, c);
 
       result.add(switch (col.getCompressionHint()) {
         case GORILLA_XOR -> new RawColumn(col, (double[]) values, null, null);
-        case SIMPLE8B -> new RawColumn(col, null, (long[]) values, null);
+        case SIMPLE8B -> new RawColumn(col, null, (IntegralColumn) values, null);
         case DICTIONARY -> new RawColumn(col, null, null, (String[]) values);
         default -> new RawColumn(col, null, null, null);
       });
@@ -4535,10 +5788,10 @@ public class TimeSeriesSealedStore implements AutoCloseable {
         yield boxed;
       }
       case SIMPLE8B -> {
-        final long[] vals = Simple8bCodec.decode(compressed);
-        final Object[] boxed = new Object[vals.length];
-        for (int i = 0; i < vals.length; i++)
-          boxed[i] = col.boxRaw(vals[i]);
+        final IntegralColumn vals = IntegralColumn.decode(compressed);
+        final Object[] boxed = new Object[vals.size()];
+        for (int i = 0; i < boxed.length; i++)
+          boxed[i] = vals.isNull(i) ? null : col.boxRaw(vals.values[i]);
         yield boxed;
       }
       case DICTIONARY -> {
@@ -4572,14 +5825,138 @@ public class TimeSeriesSealedStore implements AutoCloseable {
 
   private byte[] readBytes(final long offset, final int size) throws IOException {
     final ByteBuffer buf = ByteBuffer.allocate(size);
-    int totalRead = 0;
-    while (totalRead < size) {
-      final int read = indexChannel.read(buf, offset + totalRead);
-      if (read == -1)
-        throw new IOException("Unexpected end of sealed store at offset " + (offset + totalRead));
-      totalRead += read;
+    try {
+      readExactly(indexChannel, buf, offset, "block data");
+    } catch (final ClosedChannelException e) {
+      // THE LAMBDA IS ALLOCATED ON THE RECOVERY PATH ONLY (issue #9621)
+      retryAfterReopen("read", () -> {
+        buf.clear();
+        readExactly(indexChannel, buf, offset, "block data");
+      });
     }
     return buf.array();
+  }
+
+
+  /**
+   * The file length, recovering a channel another thread's interrupt closed (issue #9621). {@link RandomAccessFile}
+   * shares its descriptor with the channel, so once the channel is closed every {@code indexFile} call fails with a
+   * plain {@code IOException("Stream Closed")} rather than a {@link ClosedChannelException}: the channel's state, not
+   * the exception type, says whether this is a closed channel. Every path that then writes or reads through
+   * {@code indexFile} ({@link #appendBlock}, {@link #readWholeSealedFile}, {@link #checkIntegrity}) starts here, under a
+   * directory lock that keeps every reader off the channel for the rest of its sequence.
+   */
+  private long fileLength() throws IOException {
+    final RandomAccessFile file = indexFile;
+    try {
+      return file.length();
+    } catch (final IOException e) {
+      if (file.getChannel().isOpen() && file == indexFile)
+        throw e;
+      final long[] length = new long[1];
+      retryAfterReopen("length", () -> length[0] = indexFile.length());
+      return length[0];
+    }
+  }
+
+  /**
+   * The single recovery policy for a channel found closed (issue #9621), the same as {@code PaginatedComponentFile}'s
+   * (#9306): reopen the channel and repeat {@code operation} from its start, a bounded number of times, because this
+   * thread's OWN interrupt can close the freshly reopened channel again. The interrupt flag is cleared around the retry
+   * so the reopened channel is not closed at once, and restored afterwards so the caller still sees the cancellation.
+   * Only a reopen that is REFUSED - the store was closed on purpose, or its file no longer exists - is a real failure.
+   * <p>
+   * So an interrupt does NOT cancel a sealed-store read: the read completes and the flag is left set for the caller to
+   * act on at its next cancellation point, the same deferral #9306 chose for the page file.
+   */
+  private void retryAfterReopen(final String operation, final ChannelOperation channelOperation) throws IOException {
+    boolean wasInterrupted = false;
+    try {
+      for (int attempt = 1; ; attempt++) {
+        wasInterrupted |= Thread.interrupted();
+        reopenChannel();
+        try {
+          channelOperation.run();
+          return;
+        } catch (final IOException e) {
+          final boolean channelClosed = e instanceof ClosedChannelException || !indexChannel.isOpen();
+          if (!channelClosed || attempt >= REOPEN_ATTEMPTS)
+            throw e;
+        }
+      }
+    } finally {
+      if (wasInterrupted)
+        Thread.currentThread().interrupt();
+    }
+  }
+
+  /**
+   * Reopens the channel if it is closed. Takes the directory READ lock, which every caller may already hold (the lock is
+   * reentrant, and the WRITE-lock holder may take it too), so no file swap - they all run under the WRITE lock - can be
+   * replacing the same fields at the same time; {@link #channelReopenLock} then makes concurrent readers reopen it once,
+   * without leaking descriptors, and keeps {@link #close()} from racing a reopen.
+   */
+  private void reopenChannel() throws IOException {
+    directoryLock.readLock().lock();
+    try {
+      synchronized (channelReopenLock) {
+        if (indexChannel.isOpen())
+          return; // ANOTHER THREAD, OR A FILE SWAP, ALREADY REPLACED IT
+
+        if (closed)
+          throw new FileNotFoundException(
+              "Sealed store '" + basePath + FILE_EXTENSION + "' was closed on purpose, refusing to reopen it after a ClosedChannelException");
+        final File file = new File(basePath + FILE_EXTENSION);
+        // "rw" WOULD RE-CREATE A DROPPED FILE AS AN EMPTY GHOST
+        if (!file.exists())
+          throw new FileNotFoundException(
+              "Sealed store '" + file.getPath() + "' no longer exists on disk, refusing to re-create it after a ClosedChannelException");
+
+        final long folded = reopenLog.record();
+        if (folded < 0)
+          LogManager.instance().log(this, Level.FINE, "Sealed store '%s' channel was closed (thread interrupt). Reopen it and retry...", null,
+              file.getPath());
+        else
+          LogManager.instance().log(this, Level.SEVERE,
+              "Sealed store '%s' channel was closed (thread interrupt). Reopen it and retry... (%d more reopens logged at FINE since the last report)",
+              null, file.getPath(), folded);
+
+        final RandomAccessFile previous = indexFile;
+        final RandomAccessFile reopened = new RandomAccessFile(file, "rw");
+        indexFile = reopened;
+        indexChannel = channelOf(reopened);
+        try {
+          previous.close();
+        } catch (final IOException ignored) {
+          // ALREADY CLOSED WITH ITS CHANNEL
+        }
+      }
+    } finally {
+      directoryLock.readLock().unlock();
+    }
+  }
+
+  /** How many times the channel was reopened since the store was opened, for tests (issue #9621). */
+  long getReopenCountForTest() {
+    return reopenLog.getTotal();
+  }
+
+  /** The live channel, for tests that simulate another thread's interrupt by closing it (issue #9621). */
+  FileChannel getIndexChannelForTest() {
+    return indexChannel;
+  }
+
+  /**
+   * Fills {@code buf} from {@code offset}, looping through short reads, and raises if the file ends first. Every
+   * read of a fixed-size structure goes through here, so none can decode what a short read left unfilled (#9640).
+   */
+  private void readExactly(final FileChannel channel, final ByteBuffer buf, final long offset, final String what)
+      throws IOException {
+    final int expected = buf.remaining();
+    final int read = FileUtils.readFully(channel, buf, offset);
+    if (read < expected)
+      throw new IOException("Unexpected end of file in sealed store '" + basePath + "' reading " + what + " at offset "
+          + offset + ": " + read + " of " + expected + " bytes");
   }
 
   /**
@@ -4644,16 +6021,23 @@ public class TimeSeriesSealedStore implements AutoCloseable {
     if (col.getCompressionHint() == TimeSeriesCodec.GORILLA_XOR)
       return GorillaXORCodec.decode(compressed);
 
-    if (col.getCompressionHint() == TimeSeriesCodec.SIMPLE8B) {
-      final long[] longs = Simple8bCodec.decode(compressed);
-      final double[] result = new double[longs.length];
-      for (int i = 0; i < longs.length; i++)
-        result[i] = longs[i];
-      return result;
-    }
+    if (col.getCompressionHint() == TimeSeriesCodec.SIMPLE8B)
+      return integralAsDoubles(IntegralColumn.decode(compressed));
 
     throw new IllegalArgumentException(
         "decompressDoubleColumnFromBytes: codec " + col.getCompressionHint() + " is not a numeric codec (column " + schemaColIdx + ")");
+  }
+
+  /**
+   * An integral column as doubles, a sample with no value as {@link TimeSeriesNaN#ABSENT} (issue #9721), which every aggregate
+   * reading doubles skips.
+   */
+  private static double[] integralAsDoubles(final IntegralColumn column) {
+    final long[] longs = column.values;
+    final double[] result = new double[longs.length];
+    for (int i = 0; i < longs.length; i++)
+      result[i] = column.isNull(i) ? TimeSeriesNaN.ABSENT : longs[i];
+    return result;
   }
 
   private int findTimestampColumnIndex() {

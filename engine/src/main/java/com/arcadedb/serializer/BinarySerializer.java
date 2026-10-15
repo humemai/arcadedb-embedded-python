@@ -50,6 +50,7 @@ import com.arcadedb.graph.StripeDirectory;
 import com.arcadedb.graph.Vertex;
 import com.arcadedb.graph.VertexInternal;
 import com.arcadedb.log.LogManager;
+import com.arcadedb.query.opencypher.temporal.CypherDuration;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.function.sql.geo.GeoUtils;
 import com.arcadedb.database.BaseDocument;
@@ -57,6 +58,7 @@ import com.arcadedb.database.DocumentInternal;
 import com.arcadedb.schema.DocumentType;
 import com.arcadedb.schema.LocalDocumentType;
 import com.arcadedb.schema.Property;
+import com.arcadedb.schema.Type;
 import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.utility.DateUtils;
 
@@ -72,7 +74,14 @@ import java.lang.reflect.Array;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.time.LocalDate;
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.OffsetDateTime;
+import java.time.OffsetTime;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicLong;
@@ -338,6 +347,11 @@ public class BinarySerializer {
       for (int i = 0; i < fieldNames.length; ++i)
         fieldIds[i] = dictionary.getIdByName(fieldNames[i], false);
 
+      // RESOLVED ONCE PER RECORD, NOT PER PROPERTY (#9997): THE OWNER AND THE TYPE THAT DECIDES WHETHER ITS STRINGS ARE
+      // CONVERTED (#8572) ARE THE SAME FOR EVERY PROPERTY OF THE RECORD
+      final Document owner = embeddedModifier != null ? embeddedModifier.getOwner() : null;
+      final DocumentType conversionType = storedStringConversionType(owner);
+
       for (int i = 0; i < properties; ++i) {
         final int nameId = (int) buffer.getUnsignedNumber();
         final int contentPosition = (int) buffer.getUnsignedNumber();
@@ -366,8 +380,12 @@ public class BinarySerializer {
 
           final byte type = buffer.getByte();
 
-          final EmbeddedModifierProperty propertyModifier =
-              embeddedModifier != null ? new EmbeddedModifierProperty(embeddedModifier.getOwner(), propertyName) : null;
+          // ONLY A VALUE THAT CAN HOLD AN EMBEDDED DOCUMENT IS TOLD WHERE IT LIVES, AS IN readPropertyValue(): FOR EVERY
+          // OTHER ONE THE MODIFIER WAS AN OBJECT PER PROPERTY READ THAT NOTHING USED
+          final EmbeddedModifierProperty propertyModifier = owner != null && (type == BinaryTypes.TYPE_EMBEDDED
+              || type == BinaryTypes.TYPE_LIST || type == BinaryTypes.TYPE_MAP || isExternalType(type)) ?
+              new EmbeddedModifierProperty(owner, propertyName) :
+              null;
 
           final Object propertyValue;
           if (isExternalType(type)) {
@@ -376,7 +394,8 @@ public class BinarySerializer {
             propertyValue = readExternalValue((DatabaseInternal) database, extBucketId, extPosition, propertyModifier,
                 isExternalCompressedType(type));
           } else {
-            propertyValue = deserializeValue(database, buffer, type, propertyModifier);
+            propertyValue = convertStoredString(database, conversionType, propertyName,
+                deserializeValue(database, buffer, type, propertyModifier));
           }
 
           values.put(propertyName, propertyValue);
@@ -451,6 +470,20 @@ public class BinarySerializer {
    */
   public Object deserializeProperty(final Database database, final Binary buffer, final EmbeddedModifier embeddedModifier,
       final String fieldName, final RID rid, final Object absentValue) {
+    // ONLY THE OWNER OF THE MODIFIER IS USED: THE VALUE GETS A MODIFIER OF ITS OWN, NAMED AFTER ITS PROPERTY
+    return deserializePropertyOf(database, buffer, embeddedModifier != null ? embeddedModifier.getOwner() : null, fieldName, rid,
+        absentValue);
+  }
+
+  /**
+   * {@link #deserializeProperty(Database, Binary, EmbeddedModifier, String, RID, Object)} for a property of
+   * {@code owner}, the document whose content {@code buffer} is (null for none): an embedded document read from the
+   * value is told it lives in that property of {@code owner}. Taking the owner rather than a modifier spares a caller
+   * that reads a property per row the modifier it would build for every read, and this method builds one only for a
+   * value that can hold an embedded document (issue #9496).
+   */
+  public Object deserializePropertyOf(final Database database, final Binary buffer, final Document owner, final String fieldName,
+      final RID rid, final Object absentValue) {
     boolean found = false;
     try {
       final int initialPosition = buffer.position();
@@ -476,28 +509,137 @@ public class BinarySerializer {
 
         found = true;
         buffer.position(headerEndOffset + contentPosition);
-
-        final byte type = buffer.getByte();
-
-        final EmbeddedModifierProperty propertyModifier =
-            embeddedModifier != null ? new EmbeddedModifierProperty(embeddedModifier.getOwner(), fieldName) : null;
-
-        if (isExternalType(type)) {
-          final int extBucketId = (int) buffer.getNumber();
-          final long extPosition = buffer.getNumber();
-          return readExternalValue((DatabaseInternal) database, extBucketId, extPosition, propertyModifier,
-              isExternalCompressedType(type));
-        }
-
-        return deserializeValue(database, buffer, type, propertyModifier);
+        return readPropertyValue(database, buffer, owner, fieldName);
       }
     } catch (final DatabaseIsClosedException e) {
       throw e;
-    } catch (Exception e) {
+    } catch (final Exception e) {
       LogManager.instance().log(this, Level.SEVERE, "Possible corrupted record %s", e, rid);
       return found ? null : absentValue;
     }
     return absentValue;
+  }
+
+  /**
+   * Finds, in one pass over the header of the record {@code buffer} holds (positioned at the start of its properties),
+   * where the value of each wanted property starts, so a caller reading several properties of the same record walks
+   * its header once instead of once per property (issue #9496).
+   *
+   * @param slotByNameId the index in {@code positions} of every wanted property, by its dictionary id; a negative
+   *                     entry, or an id past the end of the array, for a property that is not wanted
+   * @param positions    receives, for every wanted property, the position of its value in {@code buffer} - to pass to
+   *                     {@link #deserializePropertyAt} - or -1 when the record does not have it
+   * @param wanted       how many properties {@code slotByNameId} wants: the walk stops once it has found them all, so it
+   *                     never reads more of the header than reading the last of them alone would
+   *
+   * @return false when the header cannot be read: the caller reads the properties one by one instead, which logs and
+   * answers a damaged record the way a single read always did
+   */
+  public boolean locateProperties(final Binary buffer, final int[] slotByNameId, final int[] positions, final int wanted) {
+    Arrays.fill(positions, -1);
+    try {
+      final int initialPosition = buffer.position();
+      final int headerEndOffset = buffer.getInt();
+      final int properties = checkPropertyCount(buffer, headerEndOffset, initialPosition);
+      int found = 0;
+      for (int i = 0; i < properties && found < wanted; ++i) {
+        final int nameId = (int) buffer.getUnsignedNumber();
+        final int contentPosition = (int) buffer.getUnsignedNumber();
+        if (nameId >= 0 && nameId < slotByNameId.length) {
+          final int slot = slotByNameId[nameId];
+          if (slot >= 0 && positions[slot] < 0) {
+            positions[slot] = headerEndOffset + contentPosition;
+            ++found;
+          }
+        }
+      }
+      return true;
+    } catch (final DatabaseIsClosedException e) {
+      throw e;
+    } catch (final Exception e) {
+      // NOT LOGGED HERE: THE CALLER READS EVERY PROPERTY ON ITS OWN, WHICH LOGS THE DAMAGED RECORD AS A SINGLE READ ALWAYS DID
+      return false;
+    }
+  }
+
+  /**
+   * The value of the property {@code fieldName} of {@code owner}, starting at {@code position} of {@code buffer} as
+   * {@link #locateProperties} found it: what {@link #deserializePropertyOf} answers for a property the record has.
+   */
+  public Object deserializePropertyAt(final Database database, final Binary buffer, final Document owner, final String fieldName,
+      final RID rid, final int position) {
+    try {
+      buffer.position(position);
+      return readPropertyValue(database, buffer, owner, fieldName);
+    } catch (final DatabaseIsClosedException e) {
+      throw e;
+    } catch (final Exception e) {
+      LogManager.instance().log(this, Level.SEVERE, "Possible corrupted record %s", e, rid);
+      return null;
+    }
+  }
+
+  /** Reads the value of the property {@code fieldName} of {@code owner}, {@code buffer} positioned at its type byte. */
+  private Object readPropertyValue(final Database database, final Binary buffer, final Document owner, final String fieldName) {
+    final byte type = buffer.getByte();
+
+    // ONLY A VALUE THAT CAN HOLD AN EMBEDDED DOCUMENT IS TOLD WHERE IT LIVES: FOR EVERY OTHER ONE THE MODIFIER WAS AN
+    // OBJECT PER PROPERTY READ THAT NOTHING USED. THE LIST IS deserializeValue()'s: IT PASSES THE MODIFIER ON ONLY FOR
+    // TYPE_EMBEDDED AND, RECURSIVELY, TYPE_LIST AND TYPE_MAP, AND readExternalValue() HANDS IT TO deserializeValue()
+    final EmbeddedModifierProperty propertyModifier = owner != null && (type == BinaryTypes.TYPE_EMBEDDED || type == BinaryTypes.TYPE_LIST
+        || type == BinaryTypes.TYPE_MAP || isExternalType(type)) ? new EmbeddedModifierProperty(owner, fieldName) : null;
+
+    if (isExternalType(type)) {
+      final int extBucketId = (int) buffer.getNumber();
+      final long extPosition = buffer.getNumber();
+      return readExternalValue((DatabaseInternal) database, extBucketId, extPosition, propertyModifier,
+          isExternalCompressedType(type));
+    }
+
+    return convertStoredString(database, owner, fieldName, deserializeValue(database, buffer, type, propertyModifier));
+  }
+
+  /**
+   * A String stored under a property the schema now declares as a native temporal type (OFFSET_TIME, LOCAL_TIME,
+   * ZONED_DATETIME, DURATION) is the value as it was written before the property was declared, or before those types
+   * existed: it is converted when read, and saved in the declared type the next time the record is written (issue
+   * #8572). A String that cannot be converted is returned as it is, so a read never fails on it.
+   */
+  private static Object convertStoredString(final Database database, final Document owner, final String propertyName,
+      final Object value) {
+    if (!(value instanceof String))
+      return value;
+    return convertStoredString(database, storedStringConversionType(owner), propertyName, value);
+  }
+
+  /**
+   * The type whose properties decide whether a String read from a record of {@code owner} is converted, or null when none
+   * of them can be (issue #9997): the type remembers whether it, or a super type, declares a property of a type that
+   * converts a stored String, so a record of a type that declares none pays no property lookup per String it reads.
+   */
+  private static DocumentType storedStringConversionType(final Document owner) {
+    // ANY OTHER DocumentType IMPLEMENTATION HAS NO MEMO TO ASK: IT IS RETURNED AS IT IS AND PAYS THE LOOKUP PER String
+    final DocumentType type = owner != null ? owner.getType() : null;
+    if (type instanceof LocalDocumentType localType && !localType.mayConvertStoredStrings())
+      return null;
+    return type;
+  }
+
+  private static Object convertStoredString(final Database database, final DocumentType conversionType,
+      final String propertyName, final Object value) {
+    if (conversionType == null || !(value instanceof String))
+      return value;
+    final Property property = conversionType.getPolymorphicPropertyIfExists(propertyName);
+    if (property == null)
+      return value;
+    final Type declared = property.getType();
+    if (!declared.isConvertedFromStoredString())
+      return value;
+    try {
+      return Type.convert(database, value, declared.getDefaultJavaType(), property);
+    } catch (final RuntimeException e) {
+      return value;
+    }
   }
 
   public void serializeValue(final Database database, final Binary serialized, final byte type, Object value) {
@@ -569,9 +711,13 @@ public class BinarySerializer {
         // arcadedb.dateImplementation=java.util.Calendar is a supported setting, so a DATE column configured with
         // it reaches here holding a Calendar for the same reason (#7638)
         content.putUnsignedNumber(Math.floorDiv(calendar.getTimeInMillis(), DateUtils.MS_IN_A_DAY));
+      else if (value instanceof LocalDateTime dateTime)
+        // arcadedb.dateImplementation=java.time.LocalDateTime reads a DATE as midnight of its day (#9324), so the value
+        // read must be writable back
+        content.putUnsignedNumber(dateTime.toLocalDate().toEpochDay());
       else
         throw new IllegalArgumentException("Cannot serialize " + value.getClass()
-            + " as DATE; expected java.util.Date, java.util.Calendar or java.time.LocalDate");
+            + " as DATE; expected java.util.Date, java.util.Calendar, java.time.LocalDate or java.time.LocalDateTime");
       break;
     case BinaryTypes.TYPE_DATETIME_SECOND:
     case BinaryTypes.TYPE_DATETIME:
@@ -579,6 +725,39 @@ public class BinarySerializer {
     case BinaryTypes.TYPE_DATETIME_NANOS:
       serializeDateTime(database, content, value, type);
       break;
+    case BinaryTypes.TYPE_OFFSET_TIME: {
+      final OffsetTime time = (OffsetTime) value;
+      content.putUnsignedNumber(time.toLocalTime().toNanoOfDay());
+      content.putNumber(time.getOffset().getTotalSeconds());
+      break;
+    }
+    case BinaryTypes.TYPE_LOCAL_TIME:
+      content.putUnsignedNumber(((LocalTime) value).toNanoOfDay());
+      break;
+    case BinaryTypes.TYPE_ZONED_DATETIME: {
+      final ZonedDateTime zoned = value instanceof OffsetDateTime offsetDateTime ?
+          offsetDateTime.toZonedDateTime() :
+          (ZonedDateTime) value;
+      content.putNumber(zoned.toEpochSecond());
+      content.putUnsignedNumber(zoned.getNano());
+      // A FIXED OFFSET IS STORED AS ITS SECONDS, A REGION AS ITS ID
+      if (zoned.getZone() instanceof ZoneOffset offset) {
+        content.putByte((byte) 0);
+        content.putNumber(offset.getTotalSeconds());
+      } else {
+        content.putByte((byte) 1);
+        content.putString(zoned.getZone().getId());
+      }
+      break;
+    }
+    case BinaryTypes.TYPE_DURATION: {
+      final CypherDuration duration = (CypherDuration) value;
+      content.putNumber(duration.getMonths());
+      content.putNumber(duration.getDays());
+      content.putNumber(duration.getSeconds());
+      content.putUnsignedNumber(duration.getNanosAdjustment());
+      break;
+    }
     case BinaryTypes.TYPE_DECIMAL: {
       final BigDecimal decimal = value instanceof BigInteger bigInteger ? new BigDecimal(bigInteger) : (BigDecimal) value;
       content.putNumber(decimal.scale());
@@ -900,25 +1079,34 @@ public class BinarySerializer {
     case BinaryTypes.TYPE_DOUBLE:
       value = Double.longBitsToDouble(content.getNumber());
       break;
-    case BinaryTypes.TYPE_DATE:
-      value = DateUtils.date(database, content.getUnsignedNumber(), dateImplementation);
+    case BinaryTypes.TYPE_DATE, BinaryTypes.TYPE_DATETIME_SECOND, BinaryTypes.TYPE_DATETIME, BinaryTypes.TYPE_DATETIME_MICROS,
+         BinaryTypes.TYPE_DATETIME_NANOS:
+      value = deserializeTemporal(database, content.getUnsignedNumber(), type);
       break;
-    case BinaryTypes.TYPE_DATETIME_SECOND:
-      value = DateUtils.dateTime(database, content.getUnsignedNumber(), ChronoUnit.SECONDS, dateTimeImplementation,
-          ChronoUnit.SECONDS);
+    case BinaryTypes.TYPE_OFFSET_TIME: {
+      final long nanoOfDay = content.getUnsignedNumber();
+      value = OffsetTime.of(LocalTime.ofNanoOfDay(nanoOfDay), ZoneOffset.ofTotalSeconds((int) content.getNumber()));
       break;
-    case BinaryTypes.TYPE_DATETIME:
-      value = DateUtils.dateTime(database, content.getUnsignedNumber(), ChronoUnit.MILLIS, dateTimeImplementation,
-          ChronoUnit.MILLIS);
+    }
+    case BinaryTypes.TYPE_LOCAL_TIME:
+      value = LocalTime.ofNanoOfDay(content.getUnsignedNumber());
       break;
-    case BinaryTypes.TYPE_DATETIME_MICROS:
-      value = DateUtils.dateTime(database, content.getUnsignedNumber(), ChronoUnit.MICROS, subMillisDateTimeImplementation,
-          ChronoUnit.MICROS);
+    case BinaryTypes.TYPE_ZONED_DATETIME: {
+      final long epochSecond = content.getNumber();
+      final int nano = (int) content.getUnsignedNumber();
+      final ZoneId zone = content.getByte() == 0 ?
+          ZoneOffset.ofTotalSeconds((int) content.getNumber()) :
+          ZoneId.of(content.getString());
+      value = ZonedDateTime.ofInstant(Instant.ofEpochSecond(epochSecond, nano), zone);
       break;
-    case BinaryTypes.TYPE_DATETIME_NANOS:
-      value = DateUtils.dateTime(database, content.getUnsignedNumber(), ChronoUnit.NANOS, subMillisDateTimeImplementation,
-          ChronoUnit.NANOS);
+    }
+    case BinaryTypes.TYPE_DURATION: {
+      final long months = content.getNumber();
+      final long days = content.getNumber();
+      final long seconds = content.getNumber();
+      value = new CypherDuration(months, days, seconds, content.getUnsignedNumber());
       break;
+    }
     case BinaryTypes.TYPE_DECIMAL:
       final int scale = (int) content.getNumber();
       final byte[] unscaledValue = content.getBytes();
@@ -1076,6 +1264,27 @@ public class BinarySerializer {
     return properties;
   }
 
+  /**
+   * The type whose schema governs how a record is STORED: the type that owns the record's bucket. This may differ from
+   * {@code record.getType()}: a polymorphic scan ({@code scanType} with polymorphic=true) tags every record with the queried
+   * parent type even when it physically lives in a subtype's bucket, and that parent knows neither the subtype's own
+   * EXTERNAL properties nor its paired external buckets (issue #9683). A record without a bucket (embedded, or not yet
+   * placed) falls back to its own type. A type without subtypes can only be tagged on its own records, so it answers
+   * without the (boxing) bucket-map lookup: that is the common case on the write path.
+   */
+  private static DocumentType getStorageType(final Database database, final Document record) {
+    final DocumentType recordType = record.getType();
+    if (recordType instanceof LocalDocumentType localType && !localType.hasSubTypes())
+      return recordType;
+    final RID identity = record.getIdentity();
+    if (identity != null && identity.getBucketId() > -1) {
+      final DocumentType ownerType = database.getSchema().getTypeByBucketId(identity.getBucketId());
+      if (ownerType != null)
+        return ownerType;
+    }
+    return recordType;
+  }
+
   public Binary serializeProperties(final Database database, final Document record, final Binary header, final Binary content) {
     return serializeProperties(database, record, header, content, false);
   }
@@ -1091,10 +1300,15 @@ public class BinarySerializer {
 
     final Map<String, Object> properties = record.propertiesAsMap();
     final Dictionary dictionary = database.getSchema().getDictionary();
-    final DocumentType documentType = record.getType();
+    final DocumentType documentType = getStorageType(database, record);
+    // An embedded document has no bucket of its own, so it has no paired external bucket either: its values are always
+    // written inline, inside the owner record (which may itself keep the whole embedded value in ITS external bucket)
+    final boolean externalize = !readOnly && !(record instanceof EmbeddedDocument);
 
     // In read-only mode no external bucket interactions occur, so we skip the old-buffer scan entirely.
-    final Map<String, RID> existingExternalRids = readOnly ? Collections.emptyMap() : findExistingExternalRids(database, record);
+    final Map<String, RID> existingExternalRids = readOnly ?
+        Collections.emptyMap() :
+        findExistingExternalRids(database, record, documentType);
     // Track which existing external RIDs we re-used (kept) so we can delete the rest as orphans below. An entry is
     // orphaned when the property is no longer EXTERNAL (toggled off via ALTER), was renamed, or was dropped entirely.
     final Set<String> consumedExternalProperties = existingExternalRids.isEmpty() ? null : new HashSet<>();
@@ -1105,12 +1319,14 @@ public class BinarySerializer {
     final String[] validNames = new String[propertiesSize];
     final Object[] validValues = new Object[propertiesSize];
     final byte[] validTypes = new byte[propertiesSize];
+    final Property[] validDefs = new Property[propertiesSize];
     int validCount = 0;
 
     for (final Map.Entry<String, Object> entry : properties.entrySet()) {
       final String propertyName = entry.getKey();
       final Object value = entry.getValue();
-      final Property propertyType = documentType.getPropertyIfExists(propertyName);
+      // POLYMORPHIC: AN EXTERNAL OR COMPRESSED PROPERTY DECLARED ON A SUPERTYPE APPLIES TO THE SUBTYPE TOO (ISSUE #9683)
+      final Property propertyType = documentType.getPolymorphicPropertyIfExists(propertyName);
       final byte type = BinaryTypes.getTypeFromValue(value, propertyType);
       if (type == -1) {
         // INVALID: SKIP IT
@@ -1123,6 +1339,7 @@ public class BinarySerializer {
       validNames[validCount] = propertyName;
       validValues[validCount] = value;
       validTypes[validCount] = type;
+      validDefs[validCount] = propertyType;
       ++validCount;
     }
 
@@ -1138,9 +1355,9 @@ public class BinarySerializer {
 
       final int startContentPosition = content.position();
 
-      final Property propertyDef = documentType.getPropertyIfExists(propertyName);
+      final Property propertyDef = validDefs[i];
       // ON A READ (readOnly) THE VALUE IS WRITTEN INLINE BY THE else BRANCH BELOW: THE EXTERNAL BUCKET IS NEVER TOUCHED
-      if (propertyDef != null && propertyDef.isExternal() && !readOnly) {
+      if (externalize && propertyDef != null && propertyDef.isExternal()) {
         // NULL is not externalised. set("field", null) is treated semantically the same as remove("field")
         // for storage purposes: we write a TYPE_NULL byte INLINE in the main record and let the orphan-
         // cleanup pass at the end of this method delete any pre-existing external blob (the property is
@@ -1160,13 +1377,10 @@ public class BinarySerializer {
                 "Cannot serialize EXTERNAL property '" + propertyName + "' on type '" + documentType.getName()
                     + "': record has no target bucket. The bucket layer must set a provisional identity before serialize.");
           final int primaryBucketId = identity.getBucketId();
-          // Look up the external bucket via the type that ACTUALLY owns the primary bucket. This may differ from
-          // record.getType(): polymorphic scans (scanType POLYMORPHIC, MATCH, etc.) tag every record with the queried
-          // parent type even when the record physically lives in a subtype's bucket. Trusting documentType in that
-          // case would miss the subtype's external bucket map.
-          final LocalDocumentType ownerType = (LocalDocumentType) database.getSchema().getEmbedded().getTypeByBucketId(primaryBucketId);
-          final Integer extBucketId = (ownerType != null ? ownerType : (LocalDocumentType) documentType)
-              .getExternalBucketIdFor(primaryBucketId);
+          // documentType is the type that owns the primary bucket (see getStorageType), so its map pairs that bucket
+          final Integer extBucketId = documentType instanceof LocalDocumentType localType ?
+              localType.getExternalBucketIdFor(primaryBucketId) :
+              null;
           if (extBucketId == null)
             throw new SerializationException(
                 "Cannot serialize EXTERNAL property '" + propertyName + "' on type '" + documentType.getName()
@@ -1452,12 +1666,18 @@ public class BinarySerializer {
    * the (very common) update hot path of plain-vanilla types.
    */
   public Map<String, RID> findExistingExternalRids(final Database database, final Document record) {
+    return findExistingExternalRids(database, record, getStorageType(database, record));
+  }
+
+  /** @param storageType the type owning the record's bucket, as {@link #getStorageType} resolves it */
+  private Map<String, RID> findExistingExternalRids(final Database database, final Document record,
+      final DocumentType storageType) {
     final RID identity = record.getIdentity();
     if (identity == null)
       return Collections.emptyMap();
     if (!(record instanceof BaseDocument))
       return Collections.emptyMap();
-    if (!(record.getType() instanceof LocalDocumentType ldt) || !ldt.hasExternalBuckets())
+    if (!(storageType instanceof LocalDocumentType ldt) || !ldt.hasExternalBuckets())
       return Collections.emptyMap();
     final Binary buf = ((BaseRecord) record).getBuffer();
     if (buf == null)
@@ -1552,10 +1772,17 @@ public class BinarySerializer {
   /** See {@link #setDateImplementation(Object)}. */
   public void setDateTimeImplementation(final Object dateTimeImplementation) {
     this.dateTimeImplementation = toClass(dateTimeImplementation);
-    this.subMillisDateTimeImplementation =
-        this.dateTimeImplementation.equals(Date.class) || this.dateTimeImplementation.equals(Calendar.class) ?
-            LocalDateTime.class :
-            this.dateTimeImplementation;
+    this.subMillisDateTimeImplementation = subMillisDateTimeImplementation(this.dateTimeImplementation);
+  }
+
+  /**
+   * The class a DATETIME_MICROS or DATETIME_NANOS value is held as when DATETIME is held as {@code dateTimeImplementation}:
+   * the same one, unless it cannot carry sub-millisecond precision.
+   */
+  public static Class<?> subMillisDateTimeImplementation(final Class<?> dateTimeImplementation) {
+    return dateTimeImplementation.equals(Date.class) || dateTimeImplementation.equals(Calendar.class) ?
+        LocalDateTime.class :
+        dateTimeImplementation;
   }
 
   private static Class<?> toClass(final Object implementation) {
@@ -1568,12 +1795,32 @@ public class BinarySerializer {
     }
   }
 
+  /**
+   * The object a stored DATE or DATETIME value of the given binary type reads back as: an epoch count in the type's own unit
+   * (days for a DATE) turned into the implementation class the database is configured with. The one definition, shared by a
+   * document property and a TimeSeries column of the same declared type (issue #9725), so the two cannot hand back
+   * different objects for the same instant.
+   */
+  public Object deserializeTemporal(final Database database, final long epoch, final byte type) {
+    return switch (type) {
+      case BinaryTypes.TYPE_DATE -> DateUtils.date(database, epoch, dateImplementation);
+      case BinaryTypes.TYPE_DATETIME_SECOND -> DateUtils.dateTime(database, epoch, ChronoUnit.SECONDS, dateTimeImplementation, ChronoUnit.SECONDS);
+      case BinaryTypes.TYPE_DATETIME -> DateUtils.dateTime(database, epoch, ChronoUnit.MILLIS, dateTimeImplementation, ChronoUnit.MILLIS);
+      case BinaryTypes.TYPE_DATETIME_MICROS ->
+          DateUtils.dateTime(database, epoch, ChronoUnit.MICROS, subMillisDateTimeImplementation, ChronoUnit.MICROS);
+      case BinaryTypes.TYPE_DATETIME_NANOS ->
+          DateUtils.dateTime(database, epoch, ChronoUnit.NANOS, subMillisDateTimeImplementation, ChronoUnit.NANOS);
+      default -> throw new IllegalArgumentException("Binary type " + type + " is not a date or a datetime");
+    };
+  }
+
   public BinaryComparator getComparator() {
     return comparator;
   }
 
   private void serializeDateTime(final Database database, final Binary content, final Object value, final byte type) {
-    content.putUnsignedNumber(DateUtils.dateTimeToTimestamp(database, value, DateUtils.getPrecisionFromBinaryType(type)));
+    // Stored, so an instant the precision cannot hold is refused instead of saturated into a different one (issue #9725)
+    content.putUnsignedNumber(DateUtils.dateTimeToTimestampExact(database, value, DateUtils.getPrecisionFromBinaryType(type)));
   }
 
   public void setDataEncryption(final DataEncryption dataEncryption) {

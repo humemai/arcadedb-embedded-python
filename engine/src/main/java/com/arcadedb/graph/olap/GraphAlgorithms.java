@@ -19,6 +19,7 @@
 package com.arcadedb.graph.olap;
 
 import com.arcadedb.exception.CommandExecutionException;
+import com.arcadedb.graph.EdgeWeight;
 import com.arcadedb.graph.NodeEdgeWeights;
 import com.arcadedb.graph.Vertex;
 import com.arcadedb.graph.Vertex.DIRECTION;
@@ -36,6 +37,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLongArray;
+import java.util.concurrent.atomic.DoubleAccumulator;
 import java.util.function.BiConsumer;
 
 /**
@@ -339,7 +341,8 @@ public final class GraphAlgorithms {
   /**
    * {@link #pageRank(GraphAnalyticalView, double, int, DIRECTION, String...)} with a cooperative abort hook.
    * <p>
-   * This kernel has no convergence test - it always runs the full {@code iterations} count - and that count comes
+   * Without a tolerance this kernel has no convergence test - it always runs the full {@code iterations} count - and even
+   * with one a graph may never converge below it, so the count decides when a run ends; and that count comes
    * straight from a caller-supplied knob, so without a checkpoint {@code algo.pageRank({maxIterations: 2000000000})}
    * spins with nothing able to stop it. The hook is called once per power iteration at minimum, which bounds abort
    * latency by one sweep of the graph and costs one virtual call per O(n + m) of work.
@@ -354,6 +357,19 @@ public final class GraphAlgorithms {
    */
   public static double[] pageRank(final GraphAnalyticalView view, final double damping,
       final int iterations, final DIRECTION direction, final WorkCheckpoint checkpoint, final String... edgeTypes) {
+    return pageRank(view, damping, iterations, 0.0, direction, checkpoint, edgeTypes);
+  }
+
+  /**
+   * {@link #pageRank(GraphAnalyticalView, double, int, DIRECTION, WorkCheckpoint, String...)} that stops as soon as an
+   * iteration moves no rank by {@code tolerance} or more: the convergence test {@code algo.pagerank}'s OLTP path has, so
+   * the two paths stop at the same iteration and answer the same scores (issue #9791). A non-positive {@code tolerance}
+   * never stops early, and costs nothing: the change is not even measured.
+   *
+   * @param tolerance the largest change of any rank in one iteration below which the ranks are taken as converged
+   */
+  public static double[] pageRank(final GraphAnalyticalView view, final double damping, final int iterations,
+      final double tolerance, final DIRECTION direction, final WorkCheckpoint checkpoint, final String... edgeTypes) {
     final int n = view.getNodeMapping().size();
     if (n == 0)
       return new double[0];
@@ -418,6 +434,8 @@ public final class GraphAlgorithms {
       if (outDeg[u] == 0)
         danglingNodes[dIdx++] = u;
 
+    final boolean measureChange = tolerance > 0.0;
+    final double[] contrib = new double[n];
     for (int iter = 0; iter < iterations; iter++) {
       checkpoint.check();
       final double base = (1.0 - damping) / n;
@@ -426,14 +444,27 @@ public final class GraphAlgorithms {
 
       // Pre-compute contribution per node: rank[v] / outDeg[v].
       // This turns the inner loop into a single gather+accumulate with no arithmetic.
-      final double[] contrib = new double[n];
       parallelForRangeCheckpointed(n, checkpoint, (s, e) -> {
         for (int u = s; u < e; u++)
           contrib[u] = currentRank[u] * invDeg[u];
       });
 
+      // Dangling nodes (no out-degree) spread their rank evenly. Their sum reads the ranks of the previous iteration only,
+      // so it is known before the pull, which then adds the share in the same pass instead of a second one over every node
+      double danglingSum = 0.0;
+      for (int i = 0; i < danglingNodes.length; i++) {
+        if ((i & PERIODIC_CHECKPOINT_MASK) == PERIODIC_CHECKPOINT_MASK)
+          checkpoint.check();
+        danglingSum += currentRank[danglingNodes[i]];
+      }
+      final double danglingContrib = damping * danglingSum / n;
+
+      // The largest change of a rank in this iteration, folded once per chunk rather than once per node
+      final DoubleAccumulator maxChange = measureChange ? new DoubleAccumulator(Math::max, 0.0) : null;
+
       // PULL: each node sums contributions from neighbors — parallel, zero sync
       parallelForRangeCheckpointed(n, checkpoint, (start, end) -> {
+        double chunkMaxChange = 0.0;
         for (int u = start; u < end; u++) {
           double sum = 0;
           for (int t = 0; t < typeCount; t++) {
@@ -452,29 +483,21 @@ public final class GraphAlgorithms {
                 sum += contrib[fwdNeighbors[j]];
             }
           }
-          nextRank[u] = base + damping * sum;
+          nextRank[u] = base + damping * sum + danglingContrib;
+          if (measureChange)
+            chunkMaxChange = Math.max(chunkMaxChange, Math.abs(nextRank[u] - currentRank[u]));
         }
+        if (measureChange)
+          maxChange.accumulate(chunkMaxChange);
       });
-
-      // Handle dangling nodes: distribute their rank evenly
-      double danglingSum = 0.0;
-      for (int i = 0; i < danglingNodes.length; i++) {
-        if ((i & PERIODIC_CHECKPOINT_MASK) == PERIODIC_CHECKPOINT_MASK)
-          checkpoint.check();
-        danglingSum += currentRank[danglingNodes[i]];
-      }
-      if (danglingSum > 0.0) {
-        final double danglingContrib = damping * danglingSum / n;
-        parallelForRangeCheckpointed(n, checkpoint, (s, e) -> {
-          for (int u = s; u < e; u++)
-            nextRank[u] += danglingContrib;
-        });
-      }
 
       // Swap
       final double[] tmp = rank;
       rank = next;
       next = tmp;
+
+      if (measureChange && maxChange.get() < tolerance)
+        break;
     }
     return rank;
   }
@@ -1363,7 +1386,7 @@ public final class GraphAlgorithms {
           for (int j = start; j < end; j++) {
             final double w = getWeight(j, weightDoubleArrays[t], weightIntArrays[t],
                 weightLongArrays[t], weightNullBitsets[t]);
-            if (w < 0)
+            if (!EdgeWeight.isWalkable(w))
               continue;
             final double newDist = d + w;
             final int v = fwdNeighbors[j];
@@ -1383,7 +1406,7 @@ public final class GraphAlgorithms {
             final int fwdIdx = bwdToFwds[t] != null ? bwdToFwds[t][j] : j;
             final double w = getWeight(fwdIdx, weightDoubleArrays[t], weightIntArrays[t],
                 weightLongArrays[t], weightNullBitsets[t]);
-            if (w < 0)
+            if (!EdgeWeight.isWalkable(w))
               continue;
             final double newDist = d + w;
             final int v = bwdNeighbors[j];
@@ -1423,7 +1446,7 @@ public final class GraphAlgorithms {
       if (d > dist[u])
         continue;
 
-      final NodeEdgeWeights edges = view.edgeWeightsOf(u, direction, weightProperty, 1.0, edgeTypes);
+      final NodeEdgeWeights edges = view.edgeWeightsOf(u, direction, weightProperty, EdgeWeight.MISSING, edgeTypes);
       if (edges == null)
         return null; // one node the overlay cannot resolve exactly makes the whole answer refuse, not guess
 
@@ -1434,7 +1457,7 @@ public final class GraphAlgorithms {
         if (v >= dist.length)
           return null; // a concurrent commit widened the id space past this search's pinned bound; refuse rather than overrun it
         final double w = weights[j];
-        if (w < 0)
+        if (!EdgeWeight.isWalkable(w))
           continue;
         final double newDist = d + w;
         if (newDist < dist[v]) {
@@ -1447,18 +1470,21 @@ public final class GraphAlgorithms {
     return dist;
   }
 
-  /** Extracts edge weight from the appropriate typed array. Returns 1.0 if no weight column. */
+  /**
+   * Extracts edge weight from the appropriate typed array: {@link EdgeWeight#MISSING} for an edge without a value or a
+   * view without a numeric weight column, the same rule every weighted path finder reads the records by (issue #9443).
+   */
   private static double getWeight(final int fwdIdx, final double[] doubleData, final int[] intData,
       final long[] longData, final long[] nullBitset) {
     if (nullBitset != null && (nullBitset[fwdIdx >>> 6] & (1L << (fwdIdx & 63))) != 0)
-      return 1.0;
+      return EdgeWeight.MISSING;
     if (doubleData != null)
       return doubleData[fwdIdx];
     if (intData != null)
       return intData[fwdIdx];
     if (longData != null)
       return longData[fwdIdx];
-    return 1.0;
+    return EdgeWeight.MISSING;
   }
 
   // --- Label Propagation (Synchronous, Parallel) ---
@@ -1510,6 +1536,19 @@ public final class GraphAlgorithms {
    */
   public static int[] labelPropagation(final GraphAnalyticalView view, final int maxIters, final int[] rank,
       final WorkCheckpoint checkpoint, final String... edgeTypes) {
+    return labelPropagation(view, maxIters, rank, DIRECTION.BOTH, checkpoint, edgeTypes);
+  }
+
+  /**
+   * {@link #labelPropagation(GraphAnalyticalView, int, int[], WorkCheckpoint, String...)} over a directed adjacency: a
+   * node adopts the most frequent label among the neighbours its edges in {@code direction} reach - OUT its successors, IN
+   * its predecessors, BOTH all of them. The direction {@code algo.labelpropagation}'s OLTP path honours, so the two paths
+   * answer the same communities (issue #9767).
+   *
+   * @param direction the edges whose far end a node reads labels from
+   */
+  public static int[] labelPropagation(final GraphAnalyticalView view, final int maxIters, final int[] rank,
+      final DIRECTION direction, final WorkCheckpoint checkpoint, final String... edgeTypes) {
     final int n = view.getNodeMapping().size();
     if (n == 0)
       return new int[0];
@@ -1537,10 +1576,15 @@ public final class GraphAlgorithms {
       final CSRAdjacencyIndex csr = view.getCSRIndex(types[t]);
       if (csr == null)
         continue;
-      allFwdOffsets[t] = csr.getForwardOffsets();
-      allFwdNeighbors[t] = csr.getForwardNeighbors();
-      allBwdOffsets[t] = csr.getBackwardOffsets();
-      allBwdNeighbors[t] = csr.getBackwardNeighbors();
+      // A side the direction does not read stays null, which every loop below already skips
+      if (direction != DIRECTION.IN) {
+        allFwdOffsets[t] = csr.getForwardOffsets();
+        allFwdNeighbors[t] = csr.getForwardNeighbors();
+      }
+      if (direction != DIRECTION.OUT) {
+        allBwdOffsets[t] = csr.getBackwardOffsets();
+        allBwdNeighbors[t] = csr.getBackwardNeighbors();
+      }
     }
 
     // Pre-compute max degree using pre-hoisted arrays (avoid method calls in loop)

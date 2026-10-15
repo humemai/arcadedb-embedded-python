@@ -18,29 +18,22 @@
  */
 package com.arcadedb.function.sql.text;
 
-import com.arcadedb.database.Database;
-import com.arcadedb.database.DatabaseInternal;
 import com.arcadedb.database.Identifiable;
-import com.arcadedb.database.RID;
 import com.arcadedb.database.Record;
 import com.arcadedb.exception.CommandExecutionException;
-import com.arcadedb.exception.RecordNotFoundException;
+import com.arcadedb.exception.SchemaException;
 import com.arcadedb.index.Index;
-import com.arcadedb.index.IndexCursorEntry;
-import com.arcadedb.index.TempIndexCursor;
 import com.arcadedb.index.TypeIndex;
 import com.arcadedb.index.fulltext.FullTextSearch;
 import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.query.sql.executor.IndexableSQLFunction;
+import com.arcadedb.query.sql.executor.IndexedFunctionPushdown;
 import com.arcadedb.query.sql.parser.BinaryCompareOperator;
 import com.arcadedb.query.sql.parser.Expression;
 import com.arcadedb.query.sql.parser.FromClause;
 import com.arcadedb.function.sql.SQLFunctionAbstract;
-import com.arcadedb.schema.Schema;
 
-import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
 /**
  * SQL function to search a full-text index.
@@ -76,53 +69,7 @@ public class SQLFunctionSearchIndex extends SQLFunctionAbstract implements Index
     if (iParams[0] == null || iParams[1] == null)
       throw new CommandExecutionException("SEARCH_INDEX() parameters cannot be null");
 
-    final String indexName = iParams[0].toString();
-    final String queryString = iParams[1].toString();
-
-    // Cache key for this specific search. The query string is opaque data, so the cache lives in the command context's opaque
-    // cache (getCachedValue/setCachedValue) rather than the variable namespace: getVariable would interpret a '.' in the key as
-    // a nested $var.field path and reject query strings with two or more dots (issue #4734).
-    final String cacheKey = "search_index:" + indexName + ":" + queryString;
-
-    // Try to get cached results (Map of RID -> score). Scores are floats so BM25 relevance is preserved; CLASSIC coordination
-    // scores widen to float losslessly.
-    @SuppressWarnings("unchecked")
-    Map<RID, Float> allResults = (Map<RID, Float>) iContext.getCachedValue(cacheKey);
-
-    if (allResults == null) {
-      // First execution - perform the actual search
-      allResults = performSearch(indexName, queryString, iContext.getDatabase());
-
-      // Cache the results
-      iContext.setCachedValue(cacheKey, allResults);
-    }
-
-    // Check if current record matches
-    if (iCurrentRecord != null) {
-      final RID rid = iCurrentRecord.getIdentity();
-      final boolean matches = allResults.containsKey(rid);
-
-      if (matches) {
-        // Store the score for this record in the context variable $score so $score projection works in SELECT. getOrDefault keeps
-        // $score non-null even if the entry vanished between containsKey and get (cannot happen on the single-threaded SQL path
-        // today, but makes the intent explicit).
-        iContext.setVariable("$score", allResults.getOrDefault(rid, 0f));
-      } else {
-        // Clear the score for non-matching records
-        iContext.setVariable("$score", 0f);
-      }
-
-      return matches;
-    }
-
-    // Return cursor with all results (used when called without a current record)
-    final List<IndexCursorEntry> entries = new ArrayList<>();
-    for (final Map.Entry<RID, Float> entry : allResults.entrySet()) {
-      entries.add(new IndexCursorEntry(new Object[] { queryString }, entry.getKey(), entry.getValue().floatValue()));
-    }
-    entries.sort((a, b) -> Float.compare(b.floatScore, a.floatScore));
-
-    return new TempIndexCursor(entries);
+    return search(iParams[0].toString(), iParams[1].toString(), iContext).evaluate(iCurrentRecord, iContext);
   }
 
   // ---- IndexableSQLFunction implementation ----
@@ -137,7 +84,8 @@ public class SQLFunctionSearchIndex extends SQLFunctionAbstract implements Index
   @Override
   public boolean allowsIndexedExecution(final FromClause target, final BinaryCompareOperator operator, final Object right,
       final CommandContext context, final Expression[] oExpressions) {
-    if (oExpressions == null || oExpressions.length < 2)
+    // Only `= true` asks for the matches (see IndexableSQLFunction.selectsMatches)
+    if (oExpressions == null || oExpressions.length < 2 || !IndexableSQLFunction.selectsMatches(operator, right))
       return false;
 
     // Verify the named index exists and is a full-text type index
@@ -145,8 +93,7 @@ public class SQLFunctionSearchIndex extends SQLFunctionAbstract implements Index
     if (indexName == null)
       return false;
 
-    final Schema schema = context.getDatabase().getSchema();
-    final Index index = schema.getIndexByName(indexName);
+    final Index index = context.getDatabase().getSchema().getIndexByName(indexName);
     return index instanceof TypeIndex;
   }
 
@@ -166,6 +113,23 @@ public class SQLFunctionSearchIndex extends SQLFunctionAbstract implements Index
   @Override
   public Iterable<Record> searchFromTarget(final FromClause target, final BinaryCompareOperator operator,
       final Object rightValue, final CommandContext context, final Expression[] oExpressions) {
+    return searchFromTarget(target, operator, rightValue, context, oExpressions, IndexedFunctionPushdown.NONE);
+  }
+
+  @Override
+  public Iterable<Record> searchFromTarget(final FromClause target, final BinaryCompareOperator operator,
+      final Object rightValue, final CommandContext context, final Expression[] oExpressions, final int limit) {
+    return searchFromTarget(target, operator, rightValue, context, oExpressions, IndexedFunctionPushdown.ofLimit(limit));
+  }
+
+  /**
+   * Answers the matching records lazily, best first or in RID order, deciding the {@code @rid} conditions of the block on
+   * the matches before any record is loaded (issues #9895 and #9909): see {@link FullTextFunctionSearch#search}.
+   */
+  @Override
+  public Iterable<Record> searchFromTarget(final FromClause target, final BinaryCompareOperator operator,
+      final Object rightValue, final CommandContext context, final Expression[] oExpressions,
+      final IndexedFunctionPushdown pushdown) {
     if (oExpressions == null || oExpressions.length < 2)
       return List.of();
 
@@ -174,33 +138,17 @@ public class SQLFunctionSearchIndex extends SQLFunctionAbstract implements Index
     if (indexName == null || queryString == null)
       return List.of();
 
-    // Perform the search and cache results (opaque cache key, see execute() for the rationale - issue #4734)
-    final String cacheKey = "search_index:" + indexName + ":" + queryString;
-    @SuppressWarnings("unchecked")
-    Map<RID, Float> allResults = (Map<RID, Float>) context.getCachedValue(cacheKey);
+    return search(indexName, queryString, context).search(target, context, pushdown);
+  }
 
-    if (allResults == null) {
-      allResults = performSearch(indexName, queryString, context.getDatabase());
-      context.setCachedValue(cacheKey, allResults);
-    }
+  @Override
+  public boolean supportsRIDOrder() {
+    return true;
+  }
 
-    // Sort RIDs by score descending for optimal ORDER BY $score performance
-    final List<Map.Entry<RID, Float>> sorted = new ArrayList<>(allResults.entrySet());
-    sorted.sort((a, b) -> Float.compare(b.getValue(), a.getValue()));
-
-    // Fetch records by RID
-    final DatabaseInternal db = (DatabaseInternal) context.getDatabase();
-    final List<Record> records = new ArrayList<>(sorted.size());
-    for (final Map.Entry<RID, Float> entry : sorted) {
-      try {
-        final Record record = db.lookupByRID(entry.getKey(), true);
-        if (record != null)
-          records.add(record);
-      } catch (final RecordNotFoundException e) {
-        // Record was deleted since the index was last updated, skip it
-      }
-    }
-    return records;
+  @Override
+  public boolean answersByScore() {
+    return true;
   }
 
   @Override
@@ -228,16 +176,19 @@ public class SQLFunctionSearchIndex extends SQLFunctionAbstract implements Index
   // ---- Private helpers ----
 
   /**
-   * Performs the full-text search across all bucket indexes and returns a map of RID to score.
+   * The search of the named full-text index, which is validated here.
+   *
+   * @throws SchemaException          if no index carries that name
+   * @throws CommandExecutionException              if the index exists but is not a full-text type index
    */
-  private Map<RID, Float> performSearch(final String indexName, final String queryString, final Database database) {
-    return FullTextSearch.search(database, indexName, queryString);
+  private static FullTextFunctionSearch search(final String indexName, final String queryString, final CommandContext context) {
+    return new FullTextFunctionSearch(FullTextSearch.resolveFullTextIndex(context.getDatabase(), indexName), queryString, null);
   }
 
   /**
    * Resolves a function expression parameter to a string value.
    */
-  private static String resolveStringParam(final Expression expr, final CommandContext context) {
+  static String resolveStringParam(final Expression expr, final CommandContext context) {
     if (expr == null)
       return null;
     final Object value = expr.execute((Identifiable) null, context);

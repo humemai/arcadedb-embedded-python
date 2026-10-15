@@ -20,6 +20,9 @@ package com.arcadedb.mongo;
 
 import com.arcadedb.database.DatabaseContext;
 import com.arcadedb.database.DatabaseInternal;
+import com.arcadedb.exception.QueryAdmissionException;
+import com.arcadedb.query.RunningQuery;
+import com.arcadedb.query.sql.executor.QueryAdmissionGate;
 import com.arcadedb.server.ArcadeDBServer;
 import com.arcadedb.server.security.ServerSecurityException;
 import com.arcadedb.server.security.ServerSecurityUser;
@@ -41,6 +44,8 @@ public class MongoDBBackend extends AbstractMongoBackend {
   // MongoDB error codes (see https://github.com/mongodb/mongo/blob/master/src/mongo/base/error_codes.yml)
   private static final int    AUTHENTICATION_FAILED = 18;
   private static final int    UNAUTHORIZED          = 13;
+  // THE RETRYABLE CODE THE DRIVERS RETRY READS AND WRITES ON: THE CLOSEST TO "BUSY, TRY AGAIN" THE PROTOCOL HAS (ISSUE #9518)
+  private static final int    EXCEEDED_TIME_LIMIT   = 262;
   private static final int    MECHANISM_UNAVAILABLE = 334;
 
   // The only SASL mechanism ArcadeDB can support: ArcadeDB stores passwords as one-way PBKDF2 hashes, so
@@ -117,14 +122,51 @@ public class MongoDBBackend extends AbstractMongoBackend {
    */
   private Document handleAuthorizedCommand(final Channel channel, final String databaseName, final String command,
       final Document query, final ServerSecurityUser user) {
-    final DatabaseInternal database = (DatabaseInternal) server.getDatabase(databaseName);
-    final DatabaseContext.DatabaseContextTL ctx = DatabaseContext.INSTANCE.init(database);
-    ctx.setCurrentUser(user.getDatabaseUser(database));
+    // The query admission gate (issue #9518), WITHOUT waiting: this runs on the Netty channel thread, which also serves the
+    // other connections assigned to it, so it must never park. A command that cannot start at once is refused with a code
+    // the drivers retry. A cursor continuation is not gated: it only serves the rows its find already read, and refusing
+    // it would break a cursor the client cannot resume
+    final QueryAdmissionGate.Ticket admission;
     try {
-      return super.handleCommand(channel, databaseName, command, query);
-    } finally {
-      ctx.setCurrentUser(null);
+      admission = "getMore".equalsIgnoreCase(command) || "killCursors".equalsIgnoreCase(command) ?
+          null :
+          QueryAdmissionGate.getInstance().admit(0);
+    } catch (final QueryAdmissionException e) {
+      throw new MongoServerError(EXCEEDED_TIME_LIMIT, "ExceededTimeLimit", e.getMessage());
     }
+
+    // Listed by "list queries" / SHOW TRANSACTIONS and stopped by a terminate (issue #9689), over the same window as the
+    // slot. The command document is described only if somebody lists it
+    final RunningQuery runningQuery = admission != null ? registerRunningQuery(channel, databaseName, command, query, user) : null;
+    try {
+      final DatabaseInternal database = (DatabaseInternal) server.getDatabase(databaseName);
+      final DatabaseContext.DatabaseContextTL ctx = DatabaseContext.INSTANCE.init(database);
+      ctx.setCurrentUser(user.getDatabaseUser(database));
+      try {
+        return super.handleCommand(channel, databaseName, command, query);
+      } finally {
+        ctx.setCurrentUser(null);
+      }
+    } finally {
+      try {
+        if (admission != null)
+          admission.close();
+      } finally {
+        // LAST: THE ENTRY LEAVING THE LIST IS THE PROOF THE WORK IS OVER
+        if (runningQuery != null)
+          runningQuery.close();
+      }
+    }
+  }
+
+  private RunningQuery registerRunningQuery(final Channel channel, final String databaseName, final String command,
+      final Document query, final ServerSecurityUser user) {
+    final RunningQuery runningQuery = server.getRunningQueries().register(databaseName, user.getName(), "mongodb", null, null,
+        RunningQuery.Client.of(channel.id().asShortText(), channel.remoteAddress()));
+    // Read on the listing thread while the command runs: a document the backend changes meanwhile can at worst fail the
+    // read, which RunningQuery.getText() turns into an entry listed without its text
+    runningQuery.setStatement("mongo", () -> command + " " + query.toString());
+    return runningQuery;
   }
 
   @Override

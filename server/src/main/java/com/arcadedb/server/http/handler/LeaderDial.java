@@ -31,7 +31,6 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.LongSupplier;
 import java.util.logging.Level;
 
 /**
@@ -186,9 +185,8 @@ public record LeaderDial(String address, boolean https, HttpClient client, Strin
   /**
    * Said once per JVM: a cluster that names an HTTPS leader endpoint but cannot hand out a client for it has a
    * configuration fault worth naming in the log of the node that found it, not only in the answer its client gets.
-   * One latch per JVM rather than per server, matching {@code PLAIN_HTTP_FALLBACK_WARNED} in
-   * {@code SnapshotInstaller}, {@code PeerCapabilityQuery} and {@code LeaderDatabaseQuery} - the three other
-   * one-time notices about an SSL cluster's peer transport.
+   * One latch per JVM rather than per server, matching the plain-HTTP fallback notice every ha-raft peer dial shares
+   * ({@code PeerRequest}) - the other one-time notice about an SSL cluster's peer transport.
    */
   private static final AtomicBoolean HTTPS_CLIENT_UNAVAILABLE_WARNED = new AtomicBoolean(false);
 
@@ -214,21 +212,6 @@ public record LeaderDial(String address, boolean https, HttpClient client, Strin
       final HttpResponse.BodyHandler<T> handler, final long deadlineMs) throws IOException, InterruptedException {
     // Shared with the Java remote client and the AI handlers since issue #8473, hence its home in `network`.
     return BoundedHttpExchange.send(client, request, handler, Math.max(deadlineMs, MIN_FORWARD_TIMEOUT_MS));
-  }
-
-  /**
-   * As {@link #sendBounded}, for a forward whose relayed body can take longer than {@code deadlineMs} to publish: the
-   * deadline counts from the last time {@code progress} changed rather than from the send (issue #8719); see
-   * {@link BoundedHttpExchange#sendWhileProgressing}.
-   *
-   * @param deadlineMs the longest the exchange may stay still, floored at {@link #MIN_FORWARD_TIMEOUT_MS}
-   * @param progress   a counter that moves whenever the relayed body does, safe to read from the calling thread
-   */
-  public static <T> HttpResponse<T> sendBoundedWhileProgressing(final HttpClient client, final HttpRequest request,
-      final HttpResponse.BodyHandler<T> handler, final long deadlineMs, final LongSupplier progress)
-      throws IOException, InterruptedException {
-    return BoundedHttpExchange.sendWhileProgressing(client, request, handler, Math.max(deadlineMs, MIN_FORWARD_TIMEOUT_MS),
-        progress, null);
   }
 
   /**

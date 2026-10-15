@@ -54,6 +54,12 @@ public class HttpSession implements QuerySession {
   // Set when a failed command rolled the transaction back (issue #9006): what the client wrote before is gone, so the session
   // refuses every request that would run in it, instead of running them in autocommit and letting /commit report success.
   private volatile     boolean             rolledBackByFailure;
+  // The label the client gave the session at /begin (issue #9680): the statements run in it are listed with it, unless a
+  // request carries a label of its own, and "terminate transaction" finds the session by it
+  private volatile     String              tag;
+  // Raised by a bounded cancel that did not get the lock in time (issue #9774): the request holding it rolls the transaction
+  // back as it lets go, so a session removed from the manager cannot leak its transaction
+  private volatile     boolean             rollbackOnRelease;
 
   public HttpSession(final ServerSecurityUser user, final String id, final TransactionContext dbTx,
       final HttpSessionManager manager) {
@@ -85,6 +91,19 @@ public class HttpSession implements QuerySession {
     cancel();
   }
 
+  public String getTag() {
+    return tag;
+  }
+
+  public void setTag(final String tag) {
+    this.tag = tag;
+  }
+
+  /** Whether a request is running in the session right now. A snapshot: the answer can change as soon as it is read. */
+  public boolean isBusy() {
+    return lock.isLocked();
+  }
+
   public long elapsedFromLastUpdate() {
     return System.currentTimeMillis() - lastUpdate;
   }
@@ -113,7 +132,45 @@ public class HttpSession implements QuerySession {
     }
 
     try {
+      // ends the session: what a bounded cancel that gave up asked for is done here (issue #9774)
+      rollbackOnRelease = false;
       return rollbackIfActive();
+    } finally {
+      lock.unlock();
+    }
+  }
+
+  /**
+   * {@link #cancel()} for a caller that must not wait longer than {@code timeoutMs} for an in-flight {@link #execute} - a
+   * request thread ending the session on an administrator's behalf, {@code terminate transaction} (issue #9774). The wait of
+   * {@link #cancel()} is unbounded so a removed session cannot leak its transaction; this one is bounded for the same
+   * guarantee by other means: the rollback is asked of the session first, and whichever of the two lets go of the lock
+   * first performs it - this call if it gets the lock in time, the in-flight request on its way out otherwise. The
+   * request's way out is the {@code finally} of {@link #execute}, which a request cannot skip; only a thread that never
+   * returns from its command would leave the transaction open, and such a thread holds the session in any case. Every other
+   * holder of the lock - {@link #cancel()}, the idle sweep - rolls back itself and clears the request. The flag is cleared
+   * nowhere else: a failed command rolls back and then begins a fresh transaction, which the release must still end.
+   *
+   * @return {@code true} when the transaction was rolled back here (or there was none to roll back), {@code false} when a
+   * request still runs in the session and will roll it back as it ends
+   */
+  public boolean cancel(final long timeoutMs) {
+    rollbackOnRelease = true;
+    try {
+      if (!lock.tryLock(Math.max(0, timeoutMs), TimeUnit.MILLISECONDS))
+        return false;
+    } catch (final InterruptedException e) {
+      Thread.currentThread().interrupt();
+      // An interrupted wait may never have tried the lock: with nobody holding it, nobody would roll back. One attempt that
+      // cannot block settles it - taken, the rollback happens here; held, the holder performs it on release
+      if (!lock.tryLock())
+        return false;
+    }
+
+    try {
+      rollbackOnRelease = false;
+      rollbackIfActive();
+      return true;
     } finally {
       lock.unlock();
     }
@@ -137,6 +194,8 @@ public class HttpSession implements QuerySession {
       return IdleCancelOutcome.BUSY;
 
     try {
+      // ends the session's transaction: what a bounded cancel that gave up asked for is done here (issue #9774)
+      rollbackOnRelease = false;
       return rollbackIfActive() ? IdleCancelOutcome.ROLLED_BACK : IdleCancelOutcome.ALREADY_IDLE;
     } finally {
       lock.unlock();
@@ -182,7 +241,10 @@ public class HttpSession implements QuerySession {
    * the single-argument form means and what it has always done: the command failed part way, so the transaction
    * it was running in cannot be trusted and is rolled back before the exception leaves.
    * <p>
-   * It is false for a route whose documented contract is that it does not participate in that transaction at all
+   * It is false for a route that must not destroy the transaction when it fails. That is a different question from
+   * whether the route runs in it, which the five-argument form's {@code joinsTransaction} answers (issue #9312): the
+   * /ws insert session passes false here and still writes into the caller's transaction. It is also false for a route
+   * whose documented contract is that it does not participate in that transaction at all
    * - the three {@code /api/v1/ts} routes since issue #7402, which resolve the session for its lock, principal
    * and idle clock but write through {@code TimeSeriesShard.appendSamples}' own nested begin/commit or read
    * without touching it. For those the rollback was pure collateral damage: a 400 from a body the line-protocol
@@ -199,6 +261,11 @@ public class HttpSession implements QuerySession {
     return execute(user, callback, rollbackOnFailure, false);
   }
 
+  public HttpSession execute(final ServerSecurityUser user, final Callable callback, final boolean rollbackOnFailure,
+      final boolean endsSession) throws Exception {
+    return execute(user, callback, rollbackOnFailure, endsSession, rollbackOnFailure);
+  }
+
   /** True when a failed command rolled the transaction back (issue #9006). */
   public boolean isRolledBackByFailure() {
     return rolledBackByFailure;
@@ -207,9 +274,12 @@ public class HttpSession implements QuerySession {
   /**
    * @param endsSession true for the routes that end the session (/commit, /rollback): they run even when a failed command already
    *                    rolled the transaction back, every other one is refused (issue #9006)
+   * @param joinsTransaction true when the callback writes into the session's transaction, whatever it wants done with that
+   *                    transaction on failure: such a request is refused once a failed command rolled the transaction back, because
+   *                    the work would otherwise autocommit into the gap (issue #9312). Independent of {@code rollbackOnFailure}
    */
   public HttpSession execute(final ServerSecurityUser user, final Callable callback, final boolean rollbackOnFailure,
-      final boolean endsSession) throws Exception {
+      final boolean endsSession, final boolean joinsTransaction) throws Exception {
     if (!this.user.equals(user))
       throw new SecurityException("Cannot use the requested transaction because in use by a different user");
 
@@ -224,7 +294,7 @@ public class HttpSession implements QuerySession {
         if (!manager.isSessionRegistered(id))
           throw new HttpSessionException("Remote transaction '" + id + "' not found or expired");
 
-        if (rolledBackByFailure && rollbackOnFailure && !endsSession)
+        if (rolledBackByFailure && joinsTransaction && !endsSession)
           throw new HttpSessionException("Remote transaction '" + id
               + "' was rolled back after a failed command and cannot run anything more. Send /rollback to end the session");
 
@@ -234,6 +304,9 @@ public class HttpSession implements QuerySession {
         // IN THE GAP BETWEEN UNLOCK AND THIS ASSIGNMENT, SEE A STALE lastUpdate, AND ROLL BACK A TRANSACTION
         // WHOSE COMMAND JUST FINISHED
         lastUpdate = System.currentTimeMillis();
+      } catch (final RequestRefusedBeforeExecutionException e) {
+        // A REQUEST REFUSED BEFORE ANYTHING REACHED THE ENGINE LEAVES THE TRANSACTION AS IT WAS: THERE IS NOTHING IN IT TO DISTRUST (issue #9784)
+        throw e;
       } catch (Exception e) {
         // ROLLBACK SERVER-SIDE TRANSACTION. CALL rollbackIfActive() DIRECTLY (NOT cancel()): THIS THREAD
         // ALREADY HOLDS `lock` HERE, AND ReentrantLock.lockInterruptibly() CHECKS Thread.interrupted() BEFORE
@@ -254,7 +327,16 @@ public class HttpSession implements QuerySession {
         }
         throw e;
       } finally {
-        lock.unlock();
+        try {
+          if (rollbackOnRelease) {
+            // A bounded cancel gave up waiting for this request and removed the session: ending its transaction is this
+            // request's job now, before anything else can take the lock (issue #9774)
+            rollbackOnRelease = false;
+            rollbackIfActive();
+          }
+        } finally {
+          lock.unlock();
+        }
       }
     } else {
       throw new LockTimeoutException("Timeout on locking http session");

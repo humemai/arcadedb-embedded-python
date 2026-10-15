@@ -17,6 +17,8 @@ The persisted `.raft/applied-index` JSON is read in `reinitialize()` but **never
 
 **`takeSnapshot()` therefore refuses while any database is quarantined** (#7735). A quarantine skips a committed entry on purpose and lets every later entry advance `lastAppliedIndex` past it, so checkpointing that index authorises Ratis to purge the one entry a restart still has to replay - which is how a per-database quarantine used to turn into permanent silent divergence. The trade is a log that keeps growing while a database is quarantined; that is deliberate, because no `DivergenceCause` heals without a resync and the node is out of the ready set the whole time.
 
+**It also clamps below an entry left for replay** (#9550). An apply that fails because its database was closed under the apply thread while the node is shutting down (Raft stop requested, server `SHUTTING_DOWN`, or the JVM running its shutdown hooks) is neither applied nor quarantined: it raises `EntryLeftForReplayException`, records `replayFloor`, and `takeSnapshot()` checkpoints at most `replayFloor - 1`. While shutting down, `databaseFor()` also refuses to reopen a closed database. Any new apply path that resolves a database should go through `databaseFor()` so it inherits both. The `BOOTSTRAP_FINGERPRINT_ENTRY` path (#9568) is the exception. A refused read there used to fall back to a leader install, so routing the read alone was not enough. It checks first: when the database is not open on a shutting-down node, the entry is left for replay before any arm runs. `readLocalBootstrapState` and the failed-install safety net also refuse to reopen.
+
 Note that `globalAppliedIndex` and `lastAppliedIndex` track the same value on the apply path but are seeded independently, so they can briefly differ right after `reinitialize()`. Do not assert equality across that window.
 
 ## `RaftHAServer.getLastAppliedIndex()` does not read ArcadeDB's counter
@@ -33,7 +35,7 @@ Two consequences that have already cost debugging time:
 A node holding an unfilled gap fails LINEARIZABLE reads (503) and reports not-ready via `isResyncInProgress()`, by design: it is genuinely missing committed entries, and the alternative is serving short data silently. Two things about how it recovers:
 
 - **The lag backstop cannot see it.** `isFollowerLaggingBeyond()` is driven by `commitIndex - appliedIndex`, and the applied index comes from the marker that is ahead - so the node reports *zero lag* while the gap is open. `retryUnfilledSnapshotGap()` (a `HealthMonitor.HealthTarget` hook, throttled to one attempt per snapshot-watchdog timeout) exists specifically because of this; do not try to fold it back into `recoverFromPersistentLag()`.
-- **A node that becomes leader while holding a gap wedges, deliberately.** `triggerSnapshotDownload()` refuses to resync when this node is the leader (or when the resolved leader address is its own), because copying its own incomplete databases onto themselves would report success and durably record the marker index as applied - re-opening #6111 permanently. So a single-node cluster, or a node that wins the election because every peer is unreachable, retries and refuses on every tick until a peer that actually holds the entries takes leadership. The health tick moves leadership to such a peer on its own (issue #8529, `ArcadeStateMachine.hasLeaderServiceGap()`): the targeted transfer only picks a peer that is not lagging, and it backs off while no peer takes over, or while leadership keeps coming back with the gap still open (a gap every node shares). Where no peer can take over - a single-node cluster, every peer unreachable - the wedge is the intended terminal state, not a hang; the refusal is logged at WARNING on every attempt.
+- **A node that becomes leader while holding a gap wedges, deliberately.** `triggerSnapshotDownload()` refuses to resync when this node is the leader (or when the resolved leader address is its own), because copying its own incomplete databases onto themselves would report success and durably record the marker index as applied - re-opening #6111 permanently. So a single-node cluster, or a node that wins the election because every peer is unreachable, retries and refuses on every tick until a peer that actually holds the entries takes leadership. The health tick moves leadership to such a peer on its own (issue #8529, `ArcadeStateMachine.hasLeaderServiceGap()`): the targeted transfer only picks a peer that is not lagging, and it backs off while no peer takes over, or while leadership keeps coming back with the gap still open (a gap every node shares). Where no peer can take over - a single-node cluster, every peer unreachable - the wedge is the intended terminal state, not a hang; the refusal is logged at WARNING on every attempt. On a sole voter, where no peer can ever take over, the operator's way out is `POST /api/v1/cluster/accept-stale-snapshot` (gRPC `AcceptStaleSnapshot`, issue #9498): root only, refused on a node with a peer, it accepts the gap, persists the marker index as the applied position so the next `reinitialize()` does not raise the floor again, and logs who did it. It lifts only the node-wide floor; a per-database quarantine or floor is `accept-diverged`'s (#9449).
 
 ## Snapshots are taken far more often than you would guess
 
@@ -54,6 +56,22 @@ Each has its own local `excludeId` derivation (`leaderId != null ? leaderId : lo
 **Any change to what "replica" means must be applied to all three.** This has already caused one incomplete fix that review caught, twice: the second time (#7040) `/api/v1/cluster` learned to tell a declared peer from a member of the live Raft configuration while these three still iterated the static `raftGroup.getPeers()`. Since then the membership itself comes from one place - `ClusterMembership.of(raftGroup.getPeers(), getLivePeers()).configuredPeers()`, read through `RaftHAServer.configuredPeers()` - and `GetClusterHandler` reads the same reconciliation. Grep `RaftHAServer.java` for `raftGroup.getPeers()` before claiming such a fix is complete: the only legitimate direct readers left are the ones that want the *declared* list on purpose (`getConfiguredServers()`, `getDeclaredPeers()`, the presence matrix, the membership reconciliation itself).
 
 `getDeclaredPeers()` is the newest of those (#7136): `RaftClusterStatusExporter` reconciles the declared list against the committed membership itself, to decide which declared peers are still *pending a join* rather than *removed*. It reads the committed side through `getCommittedPeersOrNull()`, not `getLivePeers()` - the latter substitutes the declared list when the division is unreadable, and folding that fallback into the "have I ever seen this peer committed" record would mark every declared peer as once-committed and silence the convergence note for good. A caller that must not mistake the declared list for a committed membership reads `getCommittedPeersOrNull()` and treats `null` as "no information this tick".
+
+## A peer's HTTP address is LEARNT, and the capability round is what writes it
+
+Since #9255 `RaftHAServer.httpAddresses` is not only what the server list, `connect cluster` and the #8689 seed wrote:
+every capability round records the address each peer answered on under its own id, and a peer that does not answer
+where this node resolves it is asked on candidates (`PeerHttpAddressCandidates`) - the port it pushes in its own
+capability request body, and the addresses other members relay in their reply (`peerHttpAddresses`). An entry equal to
+this node's own server-list declaration is never replaced; nothing writes a `raftPort + offset` guess at admission any
+more.
+
+The consequence for tests: a test that injects a wrong or missing address into the live map (`getHttpAddresses()`) to
+simulate a misconfigured node now races the capability monitor, which heals it within a round or two. Pause it for the
+window - `raft.stopCapabilityMonitor()` before the mutation, `raft.startCapabilityMonitor()` in the `finally` - as
+`Issue6191FollowerForwardLoopIT`, `Issue6221VerifyFanOutGuardIT` and `Issue6267AmbiguousAddressVisibilityIT` do. The
+fixture's server list declares placeholder HTTP ports (`2480 + i`), so an entry patched to a different bound port is not
+"in force" and can be learnt over.
 
 ## Anything that commits must hold the WRAPPED database instance, not the inner one
 
@@ -167,6 +185,11 @@ Two things that are specific to a refusal and do not apply to a withheld section
   `arcadedb.ha.securityEntryCapabilityGate` (default true) is how an operator who knows the unreachable node
   understands the entry submits anyway; the refusal message names it. Do not remove it in the name of safety -
   without it the only way past a down node is to remove it from the cluster.
+  The escape hatch is per operation, not a pattern to copy by reflex: the `schema-file-renames` refusal of
+  `ALTER TYPE ... NAME` (#9762) deliberately has none (#9891). A rename is not urgent the way a revocation is, so a
+  down peer refusing it costs a wait rather than an incident, and the refusal says there is no override. Decide per
+  refusal whether its operation can wait for the peer; do not reuse `securityEntryCapabilityGate` for a non-security
+  entry.
 
 ### Negotiation governs what is written next, never what is already committed
 

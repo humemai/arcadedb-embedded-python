@@ -23,14 +23,18 @@ import com.arcadedb.exception.DatabaseOperationException;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.serializer.json.JSONException;
 import com.arcadedb.serializer.json.JSONObject;
+import com.arcadedb.server.ErrorConcealment;
 import com.arcadedb.server.http.HttpServer;
 import com.arcadedb.server.http.ws.insert.WebSocketInsertProtocol;
+import com.arcadedb.server.security.ServerSecurityException;
 import com.arcadedb.server.security.ServerSecurityUser;
 import io.undertow.websockets.core.AbstractReceiveListener;
 import io.undertow.websockets.core.BufferedBinaryMessage;
 import io.undertow.websockets.core.BufferedTextMessage;
+import io.undertow.websockets.core.CloseMessage;
 import io.undertow.websockets.core.StreamSourceFrameChannel;
 import io.undertow.websockets.core.WebSocketChannel;
+import io.undertow.websockets.core.WebSockets;
 
 import java.io.IOException;
 import java.util.Locale;
@@ -194,7 +198,15 @@ public class WebSocketReceiveListener extends AbstractReceiveListener {
       switch (action) {
       case SUBSCRIBE:
         final var database = message.getString("database");
-        final var user = (ServerSecurityUser) channel.getAttribute(WebSocketEventBus.USER);
+        final ServerSecurityUser user;
+        try {
+          user = this.webSocketEventBus.revalidatedUser(channel);
+        } catch (final ServerSecurityException e) {
+          // The principal is gone or its credentials changed: say why and close, which also rolls back an insert session
+          sendError(channel, "Security error", e.getMessage(), e);
+          WebSockets.sendClose(new CloseMessage(CloseMessage.MSG_VIOLATES_POLICY, "Principal is no longer valid"), channel, null);
+          break;
+        }
         if (user == null || !user.canAccessToDatabase(database)) {
           sendError(channel, "Security error", "User does not have access to database '%s'.".formatted(database), null);
           break;
@@ -221,10 +233,14 @@ public class WebSocketReceiveListener extends AbstractReceiveListener {
     } catch (final JSONException e) {
       sendError(channel, "Unable to parse JSON", e.getMessage(), e);
     } catch (final DatabaseOperationException e) {
-      sendError(channel, "Database error", e.getMessage(), e);
+      // Engine text, which production mode conceals like every other surface does (issue #8749)
+      sendError(channel, "Database error",
+          ErrorConcealment.clientMessage(ErrorConcealment.isConcealing(httpServer.getServer()), this, "/ws", e.getMessage(), e), e);
     } catch (final Exception e) {
       LogManager.instance().log(this, getErrorLogLevel(), "Error on command execution (%s)", e, getClass().getSimpleName());
-      sendError(channel, "Internal error", e.getMessage(), e);
+      // Outside development the entry above is FINE, which no operator sees: the concealed answer writes its own
+      sendError(channel, "Internal error",
+          ErrorConcealment.clientMessage(ErrorConcealment.isConcealing(httpServer.getServer()), this, "/ws", e.getMessage(), e), e);
     }
   }
 

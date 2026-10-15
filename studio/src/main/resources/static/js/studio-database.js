@@ -546,7 +546,7 @@ function updateDatabases(callback, preferSelected) {
 
 function createDatabase() {
   let html = "<label for='inputCreateDatabaseName'>Enter the database name:</label>" +
-    "<input class='form-control mt-2' id='inputCreateDatabaseName' onkeydown='if (event.which === 13) document.getElementById(\"globalModalConfirmBtn\").click()'>";
+    "<input class='form-control mt-2' id='inputCreateDatabaseName' data-enter-click='globalModalConfirmBtn'>";
 
   globalPrompt("Create a new database", html, "Create", function() {
     // encodeURI() is the wrong encoder for a command payload, the same mistake as escapeHtml() into a URL: a name
@@ -621,13 +621,19 @@ function buildDatasetCardHtml(ds, fromModal) {
   if (ds.edges != null) parts.push(formatNumber(ds.edges) + " edges");
   if (ds.fileSizeMB != null) parts.push(ds.fileSizeMB < 1 ? (ds.fileSizeMB * 1000).toFixed(0) + " KB" : ds.fileSizeMB.toFixed(1) + " MB");
   var stats = parts.length > 0 ? '<div class="text-muted" style="font-size: 0.75rem; margin-top: 4px;">' + parts.join(" &middot; ") + '</div>' : "";
-  var infoLink = ds.url ? ' <a href="' + escapeHtml(ds.url) + '" target="_blank" onclick="event.stopPropagation();" title="More info" style="color: #aaa; font-size: 0.8rem;"><i class="fa fa-circle-info"></i></a>' : "";
-  var onclick = "importSampleDatabase('" + escapeHtml(ds.name) + "', '" + escapeHtml(ds.path) + "', '" + escapeHtml(ds.format) + "'" + (fromModal ? ", true" : "") + ")";
+  var infoLink = ds.url ? ' <a class="quick-start-card-info" href="' + escapeHtml(ds.url) + '" target="_blank" rel="noopener" data-stop-propagation title="More info" aria-label="More info about ' + escapeHtml(ds.name) + '" style="color: #aaa; font-size: 0.8rem;"><i class="fa fa-circle-info" aria-hidden="true"></i></a>' : "";
+  var importArgs = fromModal ? [ds.name, ds.path, ds.format, true] : [ds.name, ds.path, ds.format];
+  // THE IMPORT IS A REAL BUTTON SO THE CARD IS REACHABLE WITH TAB AND TRIGGERED WITH ENTER/SPACE (ISSUE #9375). IT WRAPS
+  // THE NAME ONLY, BECAUSE A BUTTON CANNOT HOLD THE INFO LINK: ITS ::after STRETCHES OVER THE CARD SO A CLICK ANYWHERE ON
+  // THE CARD STILL IMPORTS, AND THE INFO LINK IS LIFTED ABOVE THAT LAYER (SEE studio.css)
   return '<div class="col-md-4">' +
-    '<div class="card quick-start-card" onclick="' + onclick + '">' +
+    '<div class="card quick-start-card">' +
       '<div class="card-body text-center" style="padding: 20px 16px;">' +
-        '<i class="fa ' + escapeHtml(ds.icon) + '" style="font-size: 2rem; color: #00aeee; margin-bottom: 10px; display: block;"></i>' +
-        '<div style="font-weight: 600; font-size: 0.95rem; margin-bottom: 4px;">' + escapeHtml(ds.name) + infoLink + '</div>' +
+        '<i class="fa ' + escapeHtml(ds.icon) + '" aria-hidden="true" style="font-size: 2rem; color: #00aeee; margin-bottom: 10px; display: block;"></i>' +
+        '<div style="font-weight: 600; font-size: 0.95rem; margin-bottom: 4px;">' +
+          '<button type="button" class="quick-start-card-button"' + studioAction("importSampleDatabase", importArgs) + ' aria-label="Import sample database ' + escapeHtml(ds.name) + '">' + escapeHtml(ds.name) + '</button>' +
+          infoLink +
+        '</div>' +
         '<div class="text-muted" style="font-size: 0.8rem;">' + escapeHtml(ds.description) + '</div>' +
         stats +
       '</div>' +
@@ -1851,16 +1857,16 @@ function createTimeSeriesType() {
   // Tags section
   html += "<label>Tags <small class='text-muted'>(indexed metadata columns for filtering)</small></label>";
   html += "<div id='tsCreateTags' class='mb-2'></div>";
-  html += "<button type='button' class='btn btn-sm btn-outline-secondary mb-3' onclick='tsAddColumnRow(\"tsCreateTags\", \"TAG\")'><i class='fa fa-plus'></i> Add Tag</button>";
+  html += "<button type='button' class='btn btn-sm btn-outline-secondary mb-3'" + studioAction("tsAddColumnRow", ["tsCreateTags", "TAG"]) + "><i class='fa fa-plus'></i> Add Tag</button>";
 
   // Fields section
   html += "<label>Fields <small class='text-muted'>(measurement value columns)</small></label>";
   html += "<div id='tsCreateFields' class='mb-2'></div>";
-  html += "<button type='button' class='btn btn-sm btn-outline-secondary mb-3' onclick='tsAddColumnRow(\"tsCreateFields\", \"FIELD\")'><i class='fa fa-plus'></i> Add Field</button>";
+  html += "<button type='button' class='btn btn-sm btn-outline-secondary mb-3'" + studioAction("tsAddColumnRow", ["tsCreateFields", "FIELD"]) + "><i class='fa fa-plus'></i> Add Field</button>";
 
   // Advanced options
   html += "<div class='mt-2 mb-2'>";
-  html += "<a href='#' onclick='$(\"#tsAdvancedOptions\").toggle(); return false;' style='font-size:0.85rem;'><i class='fa fa-cog'></i> Advanced Options</a>";
+  html += "<a href='#'" + studioAction("studioToggleById", ["tsAdvancedOptions"]) + " data-prevent-default style='font-size:0.85rem;'><i class='fa fa-cog'></i> Advanced Options</a>";
   html += "</div>";
   html += "<div id='tsAdvancedOptions' style='display:none;'>";
 
@@ -2011,7 +2017,7 @@ function tsAddColumnRow(containerId, role) {
   let html = "<div class='d-flex gap-2 mb-1 ts-col-row'>";
   html += "<input class='form-control form-control-sm ts-col-name' placeholder='Column name' style='flex:2;'>";
   html += "<select class='form-select form-select-sm ts-col-type' style='flex:1;'>" + typeOptions + "</select>";
-  html += "<button type='button' class='btn btn-sm btn-outline-danger' onclick='$(this).closest(\".ts-col-row\").remove()'><i class='fa fa-times'></i></button>";
+  html += "<button type='button' class='btn btn-sm btn-outline-danger'" + studioAction("studioRemoveClosest", [STUDIO_ARG_THIS, "ts-col-row"]) + "><i class='fa fa-times'></i></button>";
   html += "</div>";
   $("#" + containerId).append(html);
 }
@@ -2184,12 +2190,14 @@ function populateSavedQueriesPanel() {
     let name = escapeHtml(q.name);
     let cmd = escapeHtml(q.c || "");
     let lang = escapeHtml(q.l || "sql");
-    // A CLICK ONLY LOADS THE QUERY, SO IT CAN BE EDITED BEFORE RUNNING IT; RUNNING IS THE EXPLICIT PLAY BUTTON (ISSUE #7049)
-    html += "<div class='saved-query-entry' title='Click to load into the editor' onclick='loadSavedQuery(" + i + ")'>";
-    html += "<div class='saved-query-name'><span>" + name + "<span class='saved-query-lang'>" + lang + "</span></span>";
+    // A CLICK ONLY LOADS THE QUERY, SO IT CAN BE EDITED BEFORE RUNNING IT; RUNNING IS THE EXPLICIT PLAY BUTTON (ISSUE #7049).
+    // THE NAME, RUN AND DELETE CONTROLS ARE REAL BUTTONS SO THEY ARE REACHABLE WITH TAB AND TRIGGERED WITH ENTER/SPACE (ISSUE #8740).
+    // THE NAME BUTTON HAS NO HANDLER OF ITS OWN: THE CLICK A KEYBOARD ACTIVATION DISPATCHES BUBBLES INTO THE ENTRY'S LOAD
+    html += "<div class='saved-query-entry' title='Click to load into the editor'" + studioAction("loadSavedQuery", [i]) + ">";
+    html += "<div class='saved-query-name'><button type='button' class='saved-query-load' aria-label='Load saved query " + name + " (" + lang + ") into the editor'>" + name + "<span class='saved-query-lang'>" + lang + "</span></button>";
     html += "<span class='saved-query-actions'>";
-    html += "<span class='saved-query-run' onclick='event.stopPropagation(); executeSavedQuery(" + i + ")' title='Run'><i class='fa fa-play'></i></span>";
-    html += "<span class='saved-query-delete' onclick='event.stopPropagation(); deleteSavedQuery(" + i + ")' title='Delete'><i class='fa fa-times'></i></span>";
+    html += "<button type='button' class='saved-query-run'" + studioAction("executeSavedQuery", [i]) + " data-stop-propagation title='Run' aria-label='Run saved query " + name + "'><i class='fa fa-play' aria-hidden='true'></i></button>";
+    html += "<button type='button' class='saved-query-delete'" + studioAction("deleteSavedQuery", [i]) + " data-stop-propagation title='Delete' aria-label='Delete saved query " + name + "'><i class='fa fa-times' aria-hidden='true'></i></button>";
     html += "</span></div>";
     html += "<div class='saved-query-preview'>" + cmd + "</div>";
     html += "</div>";
@@ -2210,7 +2218,7 @@ function saveCurrentQuery() {
 
   let html = "<label>Query name</label>" +
     "<input class='form-control mt-2' id='inputSaveQueryName' placeholder='e.g. Get all users' " +
-    "onkeydown='if (event.which === 13) document.getElementById(\"globalModalConfirmBtn\").click()'>";
+    "data-enter-click='globalModalConfirmBtn'>";
 
   globalPrompt("Save Query", html, "Save", function() {
     let name = $("#inputSaveQueryName").val();
@@ -2248,6 +2256,10 @@ function deleteSavedQuery(index) {
   queries.splice(index, 1);
   storeSavedQueries(queries);
   populateSavedQueriesPanel();
+  // RE-RENDERING DROPS THE FOCUSED DELETE BUTTON: HAND THE FOCUS TO THE ENTRY THAT TOOK ITS PLACE, OR THE ONE BEFORE IT,
+  // SO A KEYBOARD USER IS NOT THROWN BACK TO THE TOP OF THE PAGE (ISSUE #8740)
+  if (queries.length > 0)
+    $("#sidebarPanelSaved .saved-query-load").eq(Math.min(index, queries.length - 1)).trigger("focus");
 }
 
 // --- History Panel ---
@@ -2268,7 +2280,7 @@ function populateHistoryPanel() {
 
   // Quick-select with latest 10 queries
   let html = "<div class='history-quick-select'>";
-  html += "<select class='form-select form-select-sm history-quick-dropdown' onchange='loadQuickHistoryEntry(this)' title='Load a recent query into the editor'>";
+  html += "<select class='form-select form-select-sm history-quick-dropdown'" + studioAction("loadQuickHistoryEntry", [STUDIO_ARG_THIS], "change") + " title='Load a recent query into the editor'>";
   html += "<option value='' selected disabled>Recent queries...</option>";
   let quickCount = Math.min(filtered.length, 10);
   for (let i = 0; i < quickCount; i++) {
@@ -2281,11 +2293,11 @@ function populateHistoryPanel() {
   html += "</select></div>";
 
   html += "<div class='history-toolbar'>";
-  html += "<div class='form-check'><input class='form-check-input history-checkbox' type='checkbox' id='historySelectAll' onchange='toggleSelectAllHistory()'>";
+  html += "<div class='form-check'><input class='form-check-input history-checkbox' type='checkbox' id='historySelectAll'" + studioAction("toggleSelectAllHistory", null, "change") + ">";
   html += "<label class='form-check-label' for='historySelectAll' style='font-size:0.72rem;'>All</label></div>";
-  html += "<button class='sidebar-action-btn' onclick='deleteSelectedHistory()' title='Delete selected'><i class='fa fa-trash'></i></button>";
+  html += "<button class='sidebar-action-btn'" + studioAction("deleteSelectedHistory") + " title='Delete selected'><i class='fa fa-trash'></i></button>";
   html += "</div>";
-  html += "<input type='text' class='history-search' id='historySearchInput' placeholder='Search history...' oninput='filterHistoryEntries()'>";
+  html += "<input type='text' class='history-search' id='historySearchInput' placeholder='Search history...'" + studioAction("filterHistoryEntries", null, "input") + ">";
 
   if (filtered.length == 0) {
     html += "<div class='sidebar-empty'><i class='fa fa-clock' style='font-size:1.5rem;color:#ccc !important;margin-bottom:8px;display:block'></i>No history yet.<br><small>Run a query to see it here.</small></div>";
@@ -2338,6 +2350,9 @@ function renderHistoryEntries(entries) {
     let idx = entry.index;
     let lang = escapeHtml(q.l || "sql");
     let cmd = escapeHtml(q.c || "");
+    // EVERY CHECKBOX GETS ITS OWN NAME, OR A SCREEN READER HEARS THE SAME "SELECT HISTORY ENTRY" ON EVERY ROW (ISSUE #8740)
+    let rawCmd = q.c || "";
+    let checkLabel = escapeHtml("Select history entry: " + (rawCmd.length > 60 ? rawCmd.substring(0, 60) + "..." : rawCmd));
     let time = "";
     if (q.t) {
       let d = new Date(q.t);
@@ -2345,14 +2360,16 @@ function renderHistoryEntries(entries) {
     }
 
     html += "<div class='history-entry' data-index='" + idx + "' data-cmd='" + cmd.toLowerCase() + "'>";
-    html += "<input type='checkbox' class='history-checkbox history-item-check' data-index='" + idx + "' onclick='event.stopPropagation()'>";
-    html += "<div class='history-entry-content' title='Click to load into the editor' onclick='loadHistoryEntry(" + idx + ")'>";
-    html += "<div class='history-meta'>";
+    html += "<input type='checkbox' class='history-checkbox history-item-check' data-index='" + idx + "' data-stop-propagation aria-label='" + checkLabel + "'>";
+    // A REAL BUTTON, SO THE ENTRY IS REACHABLE WITH TAB AND LOADED WITH ENTER/SPACE (ISSUE #8740). A BUTTON ONLY ADMITS
+    // PHRASING CONTENT, HENCE THE SPANS: THEIR LAYOUT COMES FROM THE CSS CLASSES, NOT FROM THE ELEMENT
+    html += "<button type='button' class='history-entry-content' title='Click to load into the editor'" + studioAction("loadHistoryEntry", [idx]) + ">";
+    html += "<span class='history-meta'>";
     if (time) html += "<span class='history-time'>" + time + "</span>";
     html += "<span class='history-lang'>" + lang + "</span>";
-    html += "</div>";
-    html += "<div class='history-cmd'>" + cmd + "</div>";
-    html += "</div></div>";
+    html += "</span>";
+    html += "<span class='history-cmd'>" + cmd + "</span>";
+    html += "</button></div>";
   }
   return html;
 }
@@ -2863,15 +2880,16 @@ function populateReferencePanel() {
   for (let s = 0; s < sections.length; s++) {
     let sec = sections[s];
     html += "<div class='reference-section'>";
-    html += "<div class='reference-section-header' onclick='toggleReferenceSection(this)'><span>" + sec.title + "</span><i class='fa fa-chevron-right'></i></div>";
+    // HEADERS, EXAMPLES AND FUNCTION ENTRIES ARE REAL BUTTONS SO THEY ARE REACHABLE WITH TAB AND TRIGGERED WITH ENTER/SPACE.
+    // A BUTTON ONLY ADMITS PHRASING CONTENT; A HEADER REPORTS ITS OPEN STATE THROUGH aria-expanded (ISSUE #9375)
+    html += "<button type='button' class='reference-section-header' aria-expanded='false'" + studioAction("toggleReferenceSection", [STUDIO_ARG_THIS]) + "><span>" + sec.title + "</span><i class='fa fa-chevron-right' aria-hidden='true'></i></button>";
     html += "<div class='reference-section-body'>";
     for (let e = 0; e < sec.examples.length; e++) {
       let ex = sec.examples[e];
-      let escapedCode = escapeHtml(ex.code).replace(/'/g, "&#39;");
-      html += "<div class='reference-example' title='" + escapeHtml(ex.label) + "' onclick='pasteReferenceExample(\"" + escapedCode.replace(/"/g, "&quot;") + "\", \"" + sec.lang + "\")'>";
+      html += "<button type='button' class='reference-example' title='" + escapeHtml(ex.label) + "'" + studioAction("pasteReferenceExample", [ex.code, sec.lang]) + ">";
       html += "<small style='color:#999;font-family:inherit;'>" + escapeHtml(ex.label) + "</small><br>";
       html += escapeHtml(ex.code);
-      html += "</div>";
+      html += "</button>";
     }
     html += "</div></div>";
   }
@@ -2880,12 +2898,12 @@ function populateReferencePanel() {
   if (globalFunctionReference && globalFunctionReference.categories) {
     html += "<div style='margin-top:12px;border-top:1px solid var(--border-main);padding-top:8px;'>";
     html += "<div style='font-weight:600;font-size:0.85rem;margin-bottom:6px;'>Function Reference</div>";
-    html += "<input type='text' id='functionRefFilter' class='form-control form-control-sm' placeholder='Filter functions...' oninput='filterFunctionReference(this.value)' style='margin-bottom:8px;' />";
+    html += "<input type='text' id='functionRefFilter' class='form-control form-control-sm' placeholder='Filter functions...'" + studioAction("filterFunctionReference", [STUDIO_ARG_VALUE], "input") + " style='margin-bottom:8px;' />";
 
     var cats = globalFunctionReference.categories;
     for (var section in cats) {
       html += "<div class='reference-section fn-ref-section'>";
-      html += "<div class='reference-section-header' onclick='toggleReferenceSection(this)'><span>" + escapeHtml(section) + "</span><i class='fa fa-chevron-right'></i></div>";
+      html += "<button type='button' class='reference-section-header' aria-expanded='false'" + studioAction("toggleReferenceSection", [STUDIO_ARG_THIS]) + "><span>" + escapeHtml(section) + "</span><i class='fa fa-chevron-right' aria-hidden='true'></i></button>";
       html += "<div class='reference-section-body'>";
       var subcats = cats[section];
       for (var cat in subcats) {
@@ -2897,11 +2915,11 @@ function populateReferencePanel() {
           var syntax = escapeHtml(fn.syntax);
           var desc = fn.description ? escapeHtml(fn.description) : "";
           var title = desc ? desc : syntax;
-          html += "<div class='reference-example fn-ref-item' data-name='" + escapeHtml(fn.name) + "' title='" + title + "' onclick='insertFunctionSyntax(\"" + syntax.replace(/"/g, "&quot;") + "\")'>";
+          html += "<button type='button' class='reference-example fn-ref-item' data-name='" + escapeHtml(fn.name) + "' title='" + title + "'" + studioAction("insertFunctionSyntax", [fn.syntax]) + ">";
           html += "<code style='font-size:0.72rem;'>" + syntax + "</code>";
           if (desc)
             html += "<br><small style='color:#888;font-size:0.65rem;'>" + desc + "</small>";
-          html += "</div>";
+          html += "</button>";
         }
         html += "</div>";
       }
@@ -2934,6 +2952,7 @@ function filterFunctionReference(query) {
   if (lowerQuery.length > 0) {
     $(".fn-ref-section .reference-section-body").addClass("open");
     $(".fn-ref-section .reference-section-header i").addClass("open");
+    $(".fn-ref-section .reference-section-header").attr("aria-expanded", "true");
   }
 }
 
@@ -2951,6 +2970,7 @@ function toggleReferenceSection(header) {
   let icon = $(header).find("i.fa-chevron-right");
   body.toggleClass("open");
   icon.toggleClass("open");
+  $(header).attr("aria-expanded", body.hasClass("open") ? "true" : "false");
 }
 
 function pasteReferenceExample(code, lang) {
@@ -2979,15 +2999,15 @@ function populateSettingsPanel() {
   let html = "<div class='settings-section'>";
   html += "<div class='settings-section-header'>Table Settings</div>";
   html += "<div class='settings-row'><label>Truncate long values</label>";
-  html += "<input type='checkbox' class='form-check-input' id='settingTruncate' " + truncateChecked + " onchange='applySidebarSetting(\"table.truncateColumns\", this.checked)'></div>";
+  html += "<input type='checkbox' class='form-check-input' id='settingTruncate' " + truncateChecked + studioAction("applySidebarSetting", ["table.truncateColumns", STUDIO_ARG_CHECKED], "change") + "></div>";
   html += "<div class='settings-row'><label>Fit table in page</label>";
-  html += "<input type='checkbox' class='form-check-input' id='settingFitPage' " + fitChecked + " onchange='applySidebarSetting(\"table.fitInPage\", this.checked)'></div>";
+  html += "<input type='checkbox' class='form-check-input' id='settingFitPage' " + fitChecked + studioAction("applySidebarSetting", ["table.fitInPage", STUDIO_ARG_CHECKED], "change") + "></div>";
   html += "</div>";
 
   html += "<div class='settings-section'>";
   html += "<div class='settings-section-header'>Query Defaults</div>";
   html += "<div class='settings-row'><label>Default auto-limit</label>";
-  html += "<select id='settingDefaultLimit' onchange='applyDefaultLimit(this.value)'>";
+  html += "<select id='settingDefaultLimit'" + studioAction("applyDefaultLimit", [STUDIO_ARG_VALUE], "change") + ">";
   let limits = [{ v: "20", l: "20" }, { v: "100", l: "100" }, { v: "500", l: "500" }, { v: "-1", l: "No limit" }];
   for (let i = 0; i < limits.length; i++) {
     let sel = limits[i].v == currentLimit ? " selected" : "";
@@ -3005,19 +3025,19 @@ function populateSettingsPanel() {
   html += "<div class='settings-section'>";
   html += "<div class='settings-section-header'>Graph Settings</div>";
   html += "<div class='settings-row'><label>Node Size: <span id='settingNodeSizeVal'>" + nodeSizeVal + "</span></label>";
-  html += "<input type='range' class='form-range' id='settingNodeSize' min='15' max='80' step='5' value='" + nodeSizeVal + "' onchange='applyNodeSize(this.value)'></div>";
+  html += "<input type='range' class='form-range' id='settingNodeSize' min='15' max='80' step='5' value='" + nodeSizeVal + "'" + studioAction("applyNodeSize", [STUDIO_ARG_VALUE], "change") + "></div>";
   html += "<div class='settings-row'><label>Default Label</label>";
-  html += "<select class='form-select form-select-sm' id='settingDefaultLabel' onchange='applyDefaultLabel(this.value)'>";
+  html += "<select class='form-select form-select-sm' id='settingDefaultLabel'" + studioAction("applyDefaultLabel", [STUDIO_ARG_VALUE], "change") + ">";
   html += "<option value=''" + (defaultLabelVal == "" ? " selected" : "") + ">(none)</option>";
   html += "<option value='name'" + (defaultLabelVal == "name" ? " selected" : "") + ">name</option>";
   html += "<option value='@type'" + (defaultLabelVal == "@type" ? " selected" : "") + ">@type</option>";
   html += "</select></div>";
   html += "<div class='settings-row'><label>Max Label Length: <span id='settingMaxLabelVal'>" + (maxLabelVal == 0 ? "off" : maxLabelVal) + "</span></label>";
-  html += "<input type='range' class='form-range' id='settingMaxLabel' min='0' max='100' step='5' value='" + maxLabelVal + "' onchange='applyMaxLabelLength(this.value)'></div>";
+  html += "<input type='range' class='form-range' id='settingMaxLabel' min='0' max='100' step='5' value='" + maxLabelVal + "'" + studioAction("applyMaxLabelLength", [STUDIO_ARG_VALUE], "change") + "></div>";
   html += "<div class='settings-row'><label>Graph Spacing: <span id='settingGraphSpacingVal'>" + spacingVal + "</span></label>";
-  html += "<input type='range' class='form-range' id='settingGraphSpacing' min='10' max='150' step='10' value='" + spacingVal + "' onchange='applyGraphSpacing(this.value)'></div>";
+  html += "<input type='range' class='form-range' id='settingGraphSpacing' min='10' max='150' step='10' value='" + spacingVal + "'" + studioAction("applyGraphSpacing", [STUDIO_ARG_VALUE], "change") + "></div>";
   html += "<div class='settings-row'><label>Cumulative Selection</label>";
-  html += "<input type='checkbox' class='form-check-input' id='settingCumulativeSelection' " + cumulativeChecked + " onchange='applyCumulativeSelection(this.checked)'></div>";
+  html += "<input type='checkbox' class='form-check-input' id='settingCumulativeSelection' " + cumulativeChecked + studioAction("applyCumulativeSelection", [STUDIO_ARG_CHECKED], "change") + "></div>";
   html += "</div>";
 
   html += "<div class='settings-section'>";
@@ -3574,9 +3594,9 @@ function displaySchema(onReady) {
       html += "<div class='sidebar-section'>";
       html += "<div class='sidebar-section-header'><i class='fa " + sec.icon + "'></i> " + sec.label + " <span class='sidebar-count'>(" + formatSectionTotal(items) + ")</span>";
       if (sec.key == "timeseries")
-        html += "<span class='sidebar-section-header-actions'><button onclick='createTimeSeriesType(); return false;' title='Create timeseries type'><i class='fa fa-plus'></i></button></span>";
+        html += "<span class='sidebar-section-header-actions'><button" + studioAction("createTimeSeriesType") + " data-prevent-default title='Create timeseries type'><i class='fa fa-plus'></i></button></span>";
       else
-        html += "<span class='sidebar-section-header-actions'><button onclick='createType(\"" + sec.key + "\"); return false;' title='Create " + sec.key + " type'><i class='fa fa-plus'></i></button></span>";
+        html += "<span class='sidebar-section-header-actions'><button" + studioAction("createType", [sec.key]) + " data-prevent-default title='Create " + sec.key + " type'><i class='fa fa-plus'></i></button></span>";
       html += "</div>";
       html += "<div class='sidebar-badges'>";
 
@@ -4085,7 +4105,7 @@ function displayDatabaseSettings() {
             title: "Value",
             width: "20%",
             render: function (data, type, row) {
-              return "<a href='#' onclick='updateDatabaseSetting(\"" + row[0] + '", "' + row[1] + "\")' style='color: green;'><b>" + data + "</b></a>";
+              return "<a href='#'" + studioAction("updateDatabaseSetting", [String(row[0]), String(row[1])]) + " style='color: green;'><b>" + data + "</b></a>";
             },
           },
           { title: "Description", width: "33%" },
@@ -4105,7 +4125,7 @@ function displayDatabaseSettings() {
 
 function updateDatabaseSetting(key, value) {
   let html = "<b>" + escapeHtml(key) + "</b> = <input class='form-control mt-2' id='updateSettingInput' value='" + escapeHtml(value) + "' " +
-    "onkeydown='if (event.which === 13) document.getElementById(\"globalModalConfirmBtn\").click()'>";
+    "data-enter-click='globalModalConfirmBtn'>";
   html += "<br><p><i>The setting will be saved in the database configuration.</i></p>";
 
   globalPrompt("Update Database Setting", html, "Update", function() {
@@ -4262,10 +4282,10 @@ function displayDbBackupList(data) {
   for (let i in data.backups) {
     let backup = data.backups[i];
 
-    let safeFileName = (backup.fileName || "").replace(/"/g, "&quot;");
+    let fileName = backup.fileName || "";
     let actions =
-      "<button class='btn btn-sm btn-outline-primary me-1' title='Restore this backup' onclick='restoreBackupAction(\"" + safeFileName + "\")'><i class='fa fa-rotate-left'></i> Restore</button>" +
-      "<button class='btn btn-sm btn-outline-danger' title='Delete this backup' onclick='deleteBackupAction(\"" + safeFileName + "\")'><i class='fa fa-trash'></i> Delete</button>";
+      "<button class='btn btn-sm btn-outline-primary me-1' title='Restore this backup'" + studioAction("restoreBackupAction", [fileName]) + "><i class='fa fa-rotate-left'></i> Restore</button>" +
+      "<button class='btn btn-sm btn-outline-danger' title='Delete this backup'" + studioAction("deleteBackupAction", [fileName]) + "><i class='fa fa-trash'></i> Delete</button>";
 
     let record = [];
     record.push(escapeHtml(backup.fileName));
@@ -4508,7 +4528,7 @@ function renderMaterializedViewsSidebarSection(views, isQuerySidebar) {
   html += "<div class='sidebar-section'>";
   html += "<div class='sidebar-section-header'><i class='fa fa-layer-group'></i> Materialized Views <span class='sidebar-count'>(" + views.length + ")</span>";
   if (!isQuerySidebar)
-    html += "<span class='sidebar-section-header-actions'><button onclick='createMaterializedView(); return false;' title='Create materialized view'><i class='fa fa-plus'></i></button></span>";
+    html += "<span class='sidebar-section-header-actions'><button" + studioAction("createMaterializedView") + " data-prevent-default title='Create materialized view'><i class='fa fa-plus'></i></button></span>";
   html += "</div>";
   html += "<div class='sidebar-badges'>";
 
@@ -4540,7 +4560,7 @@ function renderMaterializedViewsSidebarBadges(views, isQuerySidebar) {
 
   html += "<div class='sidebar-subsection-header'><i class='fa fa-layer-group'></i> Materialized Views <span class='sidebar-count'>(" + count + ")</span>";
   if (!isQuerySidebar)
-    html += "<span class='sidebar-section-header-actions'><button onclick='createMaterializedView(); return false;' title='Create materialized view'><i class='fa fa-plus'></i></button></span>";
+    html += "<span class='sidebar-section-header-actions'><button" + studioAction("createMaterializedView") + " data-prevent-default title='Create materialized view'><i class='fa fa-plus'></i></button></span>";
   html += "</div>";
 
   if (count === 0) return html;
@@ -4603,7 +4623,7 @@ function renderGavSidebarBadges(gavs, isQuerySidebar) {
 
   html += "<div class='sidebar-subsection-header'><i class='fa fa-project-diagram'></i> Graph Analytical Views <span class='sidebar-count'>(" + count + ")</span>";
   if (!isQuerySidebar)
-    html += "<span class='sidebar-section-header-actions'><button onclick='createGraphAnalyticalView(); return false;' title='Create graph analytical view'><i class='fa fa-plus'></i></button></span>";
+    html += "<span class='sidebar-section-header-actions'><button" + studioAction("createGraphAnalyticalView") + " data-prevent-default title='Create graph analytical view'><i class='fa fa-plus'></i></button></span>";
   html += "</div>";
 
   if (count === 0) return html;
@@ -4692,6 +4712,21 @@ function showGavDetail(gavName) {
     html += "<div class='mv-info-row'><span class='mv-info-label'>Memory:</span> " + formatBytes(gav.memoryUsageBytes) + "</div>";
   if (gav.buildDurationMs !== undefined && gav.buildDurationMs > 0)
     html += "<div class='mv-info-row'><span class='mv-info-label'>Last Build Time:</span> " + formatDuration(gav.buildDurationMs) + "</div>";
+
+  if (gav.contractionHierarchies && gav.contractionHierarchies.length > 0) {
+    for (let h = 0; h < gav.contractionHierarchies.length; h++) {
+      let cch = gav.contractionHierarchies[h];
+      html += "<div class='mv-info-row'><span class='mv-info-label'>CCH (" + escapeHtml(cch.weightProperty) + "):</span> ";
+      html += escapeHtml(cch.status || "");
+      if (cch.arcs !== undefined)
+        html += ", " + (cch.arcs || 0).toLocaleString() + " arcs";
+      if (cch.memoryUsageBytes !== undefined)
+        html += ", " + formatBytes(cch.memoryUsageBytes);
+      if (cch.statusReason)
+        html += "<br><small class='text-muted'>" + escapeHtml(cch.statusReason) + "</small>";
+      html += "</div>";
+    }
+  }
 
   // Actions
   html += "<div class='mt-3 d-flex gap-2'>";
@@ -4788,6 +4823,11 @@ function createGraphAnalyticalView() {
   html += "<b>Recommendation:</b> Only include properties you actually need for graph algorithms. Leave empty if using only unweighted algorithms (BFS, PageRank, WCC, LCC, Label Propagation).";
   html += "</div>";
 
+  // -- Contraction hierarchies --
+  html += "<label for='inputGavCch' class='mt-2'>Shortest-Path Hierarchy (CCH) <small class='text-muted'>(optional, comma-separated weights)</small></label>";
+  html += "<input class='form-control mt-1 mb-1' id='inputGavCch' placeholder='e.g. distance, travelTime'>";
+  html += "<small class='text-muted' style='display:block;margin-bottom:10px;'>Keeps a Customizable Contraction Hierarchy per weight for fast point-to-point shortest paths (<code>algo.cch.shortestPath</code>, <code>cchShortestPath()</code>). Best on road, logistics and utility networks; refused on graphs without small separators. Weights are added to the edge properties.</small>";
+
   // -- Update mode --
   html += "<label for='inputGavUpdateMode' class='mt-2'>Update Mode</label>";
   html += "<select class='form-select mt-1 mb-1' id='inputGavUpdateMode'>";
@@ -4860,6 +4900,8 @@ function createGraphAnalyticalView() {
     let compThreshold = $("#inputGavCompactionThreshold").val();
     if (compThreshold && parseInt(compThreshold) > 0)
       command += " COMPACTION THRESHOLD " + parseInt(compThreshold);
+
+    command += buildGavCchClause($("#inputGavCch").val());
 
     let database = getCurrentDatabase();
     if (database === "") {
@@ -4956,6 +4998,7 @@ function createGraphAnalyticalView() {
     $("#inputGavVertexTypes, #inputGavEdgeTypes").on("change", gavUpdateRamEstimate);
     $("#inputGavProperties, #inputGavEdgeProperties").on("input", gavUpdateRamEstimate);
     $("#inputGavUpdateMode").on("change", gavUpdateRamEstimate);
+    $("#inputGavCch").on("input", gavUpdateRamEstimate);
 
     // Initial estimate
     gavUpdateRamEstimate();
@@ -5041,7 +5084,10 @@ function gavUpdateRamEstimate() {
   if (updateMode === "SYNCHRONOUS")
     overlayBytes = Math.ceil((csrBytes + mappingBytes) * 0.1); // ~10% for overlay structures
 
-  let totalBytes = csrBytes + mappingBytes + vertexPropBytes + edgePropBytes + overlayBytes;
+  let cchWeights = parseGavCchWeights($("#inputGavCch").val());
+  let cchBytes = gavCchEstimateBytes(totalEdges, cchWeights.length);
+
+  let totalBytes = csrBytes + mappingBytes + vertexPropBytes + edgePropBytes + overlayBytes + cchBytes;
 
   // Update the UI
   let barEl = $("#gavRamBar");
@@ -5074,6 +5120,8 @@ function gavUpdateRamEstimate() {
     bd += "<div class='gav-ram-row'><span>Edge properties (" + numEdgeProps + " col" + (numEdgeProps > 1 ? "s" : "") + ")</span><span>" + formatBytes(edgePropBytes) + "</span></div>";
   if (overlayBytes > 0)
     bd += "<div class='gav-ram-row'><span>Sync overlay buffer</span><span>~" + formatBytes(overlayBytes) + "</span></div>";
+  if (cchBytes > 0)
+    bd += "<div class='gav-ram-row'><span>Shortest-path hierarchies (" + cchWeights.length + ", road-like graph)</span><span>~" + formatBytes(cchBytes) + "</span></div>";
   bd += "<div class='gav-ram-row gav-ram-total'><span>Total (" + totalNodes.toLocaleString() + " nodes, " + totalEdges.toLocaleString() + " edges)</span><span>" + formatBytes(totalBytes) + "</span></div>";
   breakdownEl.html(bd);
 }
@@ -5149,6 +5197,32 @@ function rebuildGav(gavName) {
   .fail(function (jqXHR) {
     globalNotifyError(jqXHR.responseText);
   });
+}
+
+/**
+ * The CCH clause of a CREATE GRAPH ANALYTICAL VIEW command for a comma-separated list of weight properties, or an empty
+ * string when the list is empty. Each name is quoted like every other name the dialog writes.
+ */
+function buildGavCchClause(weights) {
+  let names = parseGavCchWeights(weights);
+  if (names.length === 0)
+    return "";
+  return " CCH (" + names.map(function (w) { return quoteSqlName(w); }).join(", ") + ")";
+}
+
+/** The weight property names of a comma-separated CCH input, trimmed, empty entries dropped. */
+function parseGavCchWeights(weights) {
+  if (!weights)
+    return [];
+  return String(weights).split(",").map(function (w) { return w.trim(); }).filter(function (w) { return w !== ""; });
+}
+
+/**
+ * Estimated heap of the contraction hierarchies a view keeps: the supergraph is only known once built, so it assumes
+ * the ~4 arcs per edge of a road-like graph, at ~52 bytes per arc (topology plus the directed metric).
+ */
+function gavCchEstimateBytes(edges, hierarchies) {
+  return hierarchies > 0 ? edges * 4 * 52 * hierarchies : 0;
 }
 
 function formatBytes(bytes) {

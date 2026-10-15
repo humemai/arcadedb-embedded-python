@@ -604,7 +604,7 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
     final DeleteRecordRequest req = deleteBuilder.build();
 
     try {
-      if (LogManager.instance().isDebugEnabled()) {
+      if (LogManager.instance().isLoggable(this, Level.FINE)) {
         LogManager.instance().log(this, Level.FINE, "CLIENT deleteRecord: db=%s, tx=%s, rid=%s", getName(),
             transactionId != null,
             record.getIdentity());
@@ -638,7 +638,7 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
     final DeleteRecordRequest req = deleteBuilder.build();
 
     try {
-      if (LogManager.instance().isDebugEnabled()) {
+      if (LogManager.instance().isLoggable(this, Level.FINE)) {
         LogManager.instance()
             .log(this, Level.FINE, "CLIENT deleteRecord: db=%s, tx=%s, rid=%s, timeoutMs=%s", getName(),
                 transactionId != null,
@@ -714,7 +714,7 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
 
     try {
 
-      if (LogManager.instance().isDebugEnabled())
+      if (LogManager.instance().isLoggable(this, Level.FINE))
         LogManager.instance()
             .log(this, Level.FINE, "CLIENT executeCommand: db=%s, tx=%s, cmdLen=%s, params=%s", getName(),
                 transactionId != null,
@@ -723,7 +723,7 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
       final ExecuteCommandResponse response = callUnary("ExecuteCommand",
           () -> blockingStub().withDeadlineAfter(getTimeout(), TimeUnit.MILLISECONDS).executeCommand(requestBuilder.build()));
 
-      if (LogManager.instance().isDebugEnabled())
+      if (LogManager.instance().isLoggable(this, Level.FINE))
         LogManager.instance().log(this, Level.FINE, "CLIENT executeCommand: success = %s", response.getSuccess());
 
       if (!response.getSuccess()) {
@@ -806,7 +806,7 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
 
     try {
 
-      if (LogManager.instance().isDebugEnabled()) {
+      if (LogManager.instance().isLoggable(this, Level.FINE)) {
         LogManager.instance()
             .log(this, Level.FINE, "CLIENT executeQuery: db=%s, tx=%s, queryLen=%s, params=%s", getName(),
                 transactionId != null,
@@ -819,7 +819,7 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
           () -> blockingStub().withDeadlineAfter(getTimeout(), TimeUnit.MILLISECONDS) // or getTimeout(MODE_QUERY)
               .executeQuery(req));
 
-      if (LogManager.instance().isDebugEnabled()) {
+      if (LogManager.instance().isLoggable(this, Level.FINE)) {
         int _r = 0;
         for (var qr : response.getResultsList())
           _r += qr.getRecordsCount();
@@ -1299,7 +1299,7 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
             .setCredentials(buildCredentials()).build();
 
     try {
-      if (LogManager.instance().isDebugEnabled()) {
+      if (LogManager.instance().isLoggable(this, Level.FINE)) {
         LogManager.instance()
             .log(this, Level.FINE, "CLIENT createRecord: db=%s, txOpen=%s, type=%s, propCount=%s, timeoutMs=%s",
                 getName(),
@@ -1364,7 +1364,7 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
             .setTransaction(TransactionContext.newBuilder().setBegin(true).setCommit(true)).setCredentials(buildCredentials()).build();
 
     try {
-      if (LogManager.instance().isDebugEnabled()) {
+      if (LogManager.instance().isLoggable(this, Level.FINE)) {
         LogManager.instance()
             .log(this, Level.FINE, "CLIENT updateRecord(partial): db=%s, txOpen=%s, rid=%s, timeoutMs=%s", getName(),
                 transactionId != null,
@@ -1398,7 +1398,7 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
             .setTransaction(TransactionContext.newBuilder().setBegin(true).setCommit(true)).setCredentials(buildCredentials()).build();
 
     try {
-      if (LogManager.instance().isDebugEnabled()) {
+      if (LogManager.instance().isLoggable(this, Level.FINE)) {
         LogManager.instance().log(this, Level.FINE, """
                 CLIENT updateRecord(full): db=%s, txOpen=%s, rid=%s, \
                 timeoutMs=%s""", getName(),
@@ -1477,7 +1477,7 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
     final LookupByRidRequest req = reqBuilder.build();
 
     try {
-      if (LogManager.instance().isDebugEnabled()) {
+      if (LogManager.instance().isLoggable(this, Level.FINE)) {
         LogManager.instance()
             .log(this, Level.FINE, "CLIENT lookupByRID: db=%s, txOpen=%s, rid=%s, loadContent=%s, timeoutMs=%s",
                 getName(),
@@ -1548,7 +1548,7 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
     final BulkInsertRequest req = BulkInsertRequest.newBuilder().setOptions(newOptions).addAllRows(protoRows).build();
 
     try {
-      if (LogManager.instance().isDebugEnabled()) {
+      if (LogManager.instance().isLoggable(this, Level.FINE)) {
         LogManager.instance()
             .log(this, Level.FINE, "CLIENT insertBulk: rows=%s, timeoutMs=%s, tx=%s", req.getRowsCount(), timeoutMs,
                 transactionId != null);
@@ -1585,7 +1585,7 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
    */
   GraphBatchLoadStream openGraphBatchLoadStream(final long timeoutMs) {
     final GraphBatchLoadStream stream = new GraphBatchLoadStream(timeoutMs);
-    stream.start(callAsyncDuplex("GraphBatchLoad", timeoutMs,
+    stream.start(callAsyncDuplex("GraphBatchLoad", timeoutMs, true,
         (stub, responseObserver) -> stub.graphBatchLoad(responseObserver),
         stream.responseObserver()));
     return stream;
@@ -1643,7 +1643,7 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
       }
     };
 
-    if (LogManager.instance().isDebugEnabled()) {
+    if (LogManager.instance().isLoggable(this, Level.FINE)) {
       LogManager.instance()
           .log(this, Level.FINE, "CLIENT ingestStream: db=%s, rows=%s, chunkSize=%s, timeoutMs=%s", getName(),
               protoRows.size(),
@@ -1653,8 +1653,10 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
 
     // Open the client stream via wrapper (adds deadline, tx checks, unified error
     // mapping)
-    final StreamObserver<InsertChunk> req = callAsyncDuplex("InsertStream", timeoutMs,
-        (stub, responseObserver) -> stub.insertStream(responseObserver), wrapObserver("InsertStream", resp));
+    // resp goes in unwrapped: callAsyncDuplex wraps it, and wrapping it here too mapped every failure twice, the
+    // second pass flattening the engine exception the first produced to "gRPC error: UNKNOWN" (issue #8822)
+    final StreamObserver<InsertChunk> req = callAsyncDuplex("InsertStream", timeoutMs, !effOptions.getValidateOnly(),
+        (stub, responseObserver) -> stub.insertStream(responseObserver), resp);
 
     final String sessionId = "sess-" + System.nanoTime();
     long seq = 1;
@@ -1682,7 +1684,9 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
     // Wait for server final summary or error (tiny grace after deadline)
     final boolean finished = done.await(Math.max(1, timeoutMs) + 1_000, TimeUnit.MILLISECONDS);
     if (!finished) {
-      throw new TimeoutException("ingestStream timed out waiting for server completion");
+      throw new TimeoutException("ingestStream timed out waiting for server completion" + (effOptions.getValidateOnly() ?
+          "" :
+          ": the rows already sent may be partially applied, because the stream commits as it goes"));
     }
 
     // If wrapObserver mapped an error, rethrow it directly
@@ -1699,7 +1703,7 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
       s = InsertSummary.newBuilder().setReceived(sent).build();
     }
 
-    if (LogManager.instance().isDebugEnabled()) {
+    if (LogManager.instance().isLoggable(this, Level.FINE)) {
       LogManager.instance().log(this, Level.FINE, "CLIENT ingestStream: completed; received=%s", s.getReceived());
     }
 
@@ -1770,7 +1774,7 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
     // Pre-map rows → proto
     final List<GrpcRecord> protoRows = rows.stream().map(mapper).collect(Collectors.toList());
 
-    if (LogManager.instance().isDebugEnabled()) {
+    if (LogManager.instance().isLoggable(this, Level.FINE)) {
       LogManager.instance()
           .log(this, Level.FINE, "CLIENT ingestBidi start: rows=%s, chunkSize=%s, maxInflight=%s, timeoutMs=%s",
               protoRows.size(),
@@ -1814,7 +1818,7 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
             }
           } catch (Throwable t) {
             // Best effort - stream may be closed
-            if (LogManager.instance().isDebugEnabled())
+            if (LogManager.instance().isLoggable(this, Level.FINE))
               LogManager.instance().log(this, Level.FINE, "CLIENT ingestBidi commit failed (best effort): %s",
                   t.getMessage());
           }
@@ -1949,10 +1953,11 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
     };
 
     // --- open bidi via wrapper (deadline, tx checks, unified logging)
+    final boolean appliesWrites = !effectiveOpts.getValidateOnly();
     @SuppressWarnings("unused") final StreamObserver<InsertRequest> _req = callAsyncDuplex("InsertBidirectional",
-        timeoutMs,
+        timeoutMs, appliesWrites,
         (stub, responseObs) -> stub.insertBidirectional(responseObs),
-        wrapClientResponseObserver("InsertBidirectional", respObserver) // preserves
+        wrapClientResponseObserver("InsertBidirectional", appliesWrites, respObserver) // preserves
         // beforeStart
     );
 
@@ -1967,19 +1972,21 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
           } catch (Throwable ignore) {
           }
         }
-        throw new TimeoutException("ingestBidirectional timed out waiting for server completion");
+        throw new TimeoutException("ingestBidirectional timed out waiting for server completion" + (appliesWrites ?
+            ": the rows already sent may be partially applied, because the stream commits as it goes" :
+            ""));
       }
 
       final Throwable err = errRef.get();
       if (err != null) {
-        // wrapClientResponseObserver already runs through handleGrpcException();
+        // wrapClientResponseObserver already maps gRPC errors through mapStreamError();
         // if it was a non-gRPC Throwable, surface it uniformly here.
         if (err instanceof RuntimeException re)
           throw re;
         throw new RemoteException("gRPC bidi stream failed: " + err.getMessage(), err);
       }
 
-      if (LogManager.instance().isDebugEnabled()) {
+      if (LogManager.instance().isLoggable(this, Level.FINE)) {
         try {
           LogManager.instance().log(this, Level.FINE, "CLIENT ingestBidi finished: sent=%s, acked=%s", sent.get(),
               acked.get());
@@ -1990,7 +1997,9 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
       scheduler.shutdownNow();
     }
 
-    // Prefer COMMITTED summary; else aggregate ACKs
+    // Prefer COMMITTED summary; else aggregate ACKs. The fallback keeps only the acks' counters, not their errors (a
+    // NOT_LEADER error's leader_address among them, issue #9930); it is not expected to be reached, because the server
+    // answers a failed COMMIT with onError and completes the stream only after COMMITTED
     final InsertSummary finalSummary = committed.get();
     if (finalSummary != null)
       return finalSummary;
@@ -2009,7 +2018,7 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
     GrpcRecord.Builder b = GrpcRecord.newBuilder();
     row.forEach((k, v) -> b.putProperties(k, objectToGrpcValue(v)));
     GrpcRecord rec = b.build();
-    if (LogManager.instance().isDebugEnabled())
+    if (LogManager.instance().isLoggable(this, Level.FINE))
       LogManager.instance().log(this, Level.FINE, "CLIENT toProtoRecordFromMap: %s", summarize(rec));
     return rec;
   }
@@ -2018,7 +2027,7 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
   private GrpcRecord toProtoRecordFromDbRecord(Record rec) {
     // Use ProtoUtils for proper conversion
     GrpcRecord out = ProtoUtils.toProtoRecord(rec);
-    if (LogManager.instance().isDebugEnabled())
+    if (LogManager.instance().isLoggable(this, Level.FINE))
       LogManager.instance().log(this, Level.FINE, "CLIENT toProtoRecordFromDbRecord: %s", summarize(out));
     return out;
   }
@@ -2213,7 +2222,7 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
 
   private Object grpcValueToObject(final GrpcValue grpcValue) {
     Object out = ProtoUtils.fromGrpcValue(grpcValue);
-    if (LogManager.instance().isDebugEnabled())
+    if (LogManager.instance().isLoggable(this, Level.FINE))
       LogManager.instance()
           .log(this, Level.FINE, "CLIENT decode grpcValueToObject: %s -> %s", summarize(grpcValue), summarize(out));
     return out;
@@ -2236,6 +2245,14 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
    */
   private static boolean commitsOnItsOwn(final TransactionContext tx) {
     return tx == null || tx.getTransactionId().isEmpty();
+  }
+
+  /**
+   * Maps the failure a stream ended with. A stream that writes ({@code appliesWrites}: not a dry run) commits as it goes,
+   * so a lost answer is a possibly partial write rather than a retryable failure (issue #8822).
+   */
+  private static RuntimeException mapStreamError(final Throwable t, final String opName, final boolean appliesWrites) {
+    return appliesWrites ? GrpcClientErrorMapper.toStreamingWriteException(t, opName) : GrpcClientErrorMapper.toException(t);
   }
 
   void handleGrpcException(Throwable e) {
@@ -2335,7 +2352,7 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
   }
 
   private void logTx(String phase, String rpcOp) {
-    if (debugTx == null || !LogManager.instance().isDebugEnabled())
+    if (debugTx == null || !LogManager.instance().isLoggable(this, Level.FINE))
       return;
     TxDebug d = debugTx;
     LogManager.instance().log(this, Level.FINE,
@@ -2511,7 +2528,7 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
     final AtomicReference<com.arcadedb.server.grpc.TimeSeriesWriteSummary> summary = new AtomicReference<>();
     final AtomicReference<Throwable> failure = new AtomicReference<>();
 
-    final StreamObserver<TimeSeriesWriteChunk> requests = callAsyncDuplex("TimeSeriesWriteStream", getTimeout(),
+    final StreamObserver<TimeSeriesWriteChunk> requests = callAsyncDuplex("TimeSeriesWriteStream", getTimeout(), true,
         (stub, responseObserver) -> stub.timeSeriesWriteStream(responseObserver),
         new StreamObserver<com.arcadedb.server.grpc.TimeSeriesWriteSummary>() {
           @Override
@@ -2556,7 +2573,8 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
 
     try {
       if (!completed.await(getTimeout(), TimeUnit.MILLISECONDS))
-        throw new RemoteException("Timeout waiting for the TimeSeriesWriteStream summary");
+        throw new RemoteException("Timeout waiting for the TimeSeriesWriteStream summary: the points already sent may be "
+            + "partially applied, because each chunk commits as it is appended");
     } catch (final InterruptedException e) {
       Thread.currentThread().interrupt();
       throw new RemoteException("Interrupted while waiting for the TimeSeriesWriteStream summary", e);
@@ -2564,7 +2582,7 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
 
     if (failure.get() != null) {
       // callAsyncDuplex wraps the response observer, and that wrapper has ALREADY run the failure through
-      // handleGrpcException before handing it here - so this is the engine exception type the server named
+      // mapStreamError before handing it here - so this is the engine exception type the server named
       // (SecurityException for a denied type, DuplicatedKeyException, ...), not a raw gRPC status. Mapping it a
       // second time finds no status on it and flattens every one of them to "gRPC error: UNKNOWN", which is how
       // a PERMISSION_DENIED on the streaming write stopped being distinguishable from any other failure.
@@ -2749,7 +2767,8 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
   private static TimeSeriesWriteSummary toWriteSummary(
       final com.arcadedb.server.grpc.TimeSeriesWriteSummary response) {
     return new TimeSeriesWriteSummary(response.getReceived(), response.getWritten(), response.getDropped(),
-        response.getUnknownTypesList(), response.getNonTimeSeriesTypesList(), response.getUnavailableTypesList());
+        response.getUnknownTypesList(), response.getNonTimeSeriesTypesList(), response.getUnavailableTypesList(),
+        response.getUndeclaredKeysList(), response.getUnreadableValuesList());
   }
 
   private <Resp> Resp callUnary(String opName, Rpc<Resp> rpc) throws StatusException {
@@ -2799,7 +2818,7 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
 
   // For async "client-streaming" and "bidirectional" calls that RETURN a request
   // StreamObserver
-  private <Req, Resp> StreamObserver<Req> callAsyncDuplex(String opName, long timeoutMs,
+  private <Req, Resp> StreamObserver<Req> callAsyncDuplex(String opName, long timeoutMs, final boolean appliesWrites,
                                                           BiFunction<ArcadeDbServiceGrpc.ArcadeDbServiceStub,
                                                               StreamObserver<Resp>, StreamObserver<Req>> starter,
                                                           StreamObserver<Resp> responseObserver) {
@@ -2813,7 +2832,7 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
     // and prevent beforeStart() from being called.
     StreamObserver<Resp> effectiveObserver = responseObserver instanceof ClientResponseObserver
         ? responseObserver
-        : wrapObserver(opName, responseObserver);
+        : wrapObserver(opName, appliesWrites, responseObserver);
     StreamObserver<Req> reqObs = starter.apply(stub, effectiveObserver);
     if (debugTx != null) {
       debugTx.rpcSeq.incrementAndGet();
@@ -2822,7 +2841,8 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
   }
 
   // For async "server-streaming" calls that take (request, responseObserver) and
-  // return void
+  // return void. Read-only by construction (appliesWrites=false): a writing server-streaming RPC must thread the flag
+  // through as callAsyncDuplex does, or a lost answer on it would be reported as retryable (issue #8822).
   private <Req, Resp> void callAsyncServerStreaming(String opName, long timeoutMs, Req request,
                                                     BiConsumer<ArcadeDbServiceGrpc.ArcadeDbServiceStub,
                                                         StreamObserver<Resp>> invoker,
@@ -2832,7 +2852,7 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
       logTx("STREAM(local)", opName);
     }
     final var stub = asyncStub().withDeadlineAfter(timeoutMs, TimeUnit.MILLISECONDS);
-    invoker.accept(stub, wrapObserver(opName, responseObserver));
+    invoker.accept(stub, wrapObserver(opName, false, responseObserver));
     if (debugTx != null) {
       debugTx.rpcSeq.incrementAndGet();
     }
@@ -2840,7 +2860,7 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
 
   // Wrap a plain StreamObserver to translate gRPC Status into your domain
   // exceptions
-  private <T> StreamObserver<T> wrapObserver(String opName, StreamObserver<T> delegate) {
+  private <T> StreamObserver<T> wrapObserver(String opName, final boolean appliesWrites, StreamObserver<T> delegate) {
     return new StreamObserver<>() {
       @Override
       public void onNext(T value) {
@@ -2849,13 +2869,7 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
 
       @Override
       public void onError(Throwable t) {
-        try {
-          handleGrpcException(t);
-        } catch (RuntimeException mapped) {
-          delegate.onError(mapped);
-          return;
-        }
-        delegate.onError(t);
+        delegate.onError(mapStreamError(t, opName, appliesWrites));
       }
 
       @Override
@@ -2867,7 +2881,7 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
 
   // Same idea, but preserves ClientResponseObserver features (beforeStart, flow
   // control)
-  private <Req, Resp> ClientResponseObserver<Req, Resp> wrapObserver(String opName,
+  private <Req, Resp> ClientResponseObserver<Req, Resp> wrapObserver(String opName, final boolean appliesWrites,
                                                                      ClientResponseObserver<Req, Resp> delegate) {
     return new ClientResponseObserver<>() {
       @Override
@@ -2883,13 +2897,7 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
 
       @Override
       public void onError(Throwable t) {
-        try {
-          handleGrpcException(t);
-        } catch (RuntimeException mapped) {
-          delegate.onError(mapped);
-          return;
-        }
-        delegate.onError(t);
+        delegate.onError(mapStreamError(t, opName, appliesWrites));
       }
 
       @Override
@@ -2900,6 +2908,7 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
   }
 
   private <ReqT, RespT> ClientResponseObserver<ReqT, RespT> wrapClientResponseObserver(String opName,
+                                                                                       final boolean appliesWrites,
                                                                                        ClientResponseObserver<ReqT,
                                                                                            RespT> delegate) {
     return new ClientResponseObserver<>() {
@@ -2916,19 +2925,11 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
 
       @Override
       public void onError(Throwable t) {
-        // Normalize gRPC errors through your handler, then pass the mapped exception
-        try {
-          if (t instanceof StatusRuntimeException sre) {
-            handleGrpcException(sre); // throws
-          } else if (t instanceof StatusException se) {
-            handleGrpcException(se); // throws
-          }
-          // Non-gRPC error: forward as-is
+        // Normalize gRPC errors, then pass the mapped exception; a non-gRPC error is forwarded as-is
+        if (t instanceof StatusRuntimeException || t instanceof StatusException)
+          delegate.onError(mapStreamError(t, opName, appliesWrites));
+        else
           delegate.onError(t);
-        } catch (RuntimeException mapped) {
-          // forward the mapped exception to delegate
-          delegate.onError(mapped);
-        }
       }
 
       @Override

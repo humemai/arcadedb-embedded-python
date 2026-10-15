@@ -18,22 +18,14 @@
  */
 package com.arcadedb.graph;
 
-import com.arcadedb.database.DatabaseInternal;
 import com.arcadedb.database.RID;
-import com.arcadedb.exception.RecordNotFoundException;
-import com.arcadedb.log.LogManager;
-import com.arcadedb.schema.DocumentType;
 import com.arcadedb.utility.Pair;
 
 import java.util.NoSuchElementException;
-import java.util.logging.Level;
 
 public class EdgeVertexIterator extends ResettableIteratorBase<Pair<RID, RID>> {
   private final RID              vertex;
   private final Vertex.DIRECTION direction;
-  private       int              lastElementPosition = currentPosition.get();
-  private       RID              nextEdgeRID;
-  private       RID              nextVertexRID;
 
   public EdgeVertexIterator(final EdgeSegment current, final RID vertex, final Vertex.DIRECTION direction) {
     super(null, current);
@@ -43,17 +35,21 @@ public class EdgeVertexIterator extends ResettableIteratorBase<Pair<RID, RID>> {
 
   @Override
   public boolean hasNext() {
+    checkNotInvalidated();
     if (currentContainer == null)
       return false;
 
-    if (currentPosition.get() < currentContainer.getUsed())
-      return true;
+    // A SEGMENT CAN BE EMPTY ANYWHERE IN THE CHAIN (A DELETE EMPTIES THE HEAD, A GRAPHBATCH THEN PREPENDS A NEW ONE OVER IT):
+    // STEP OVER IT INSTEAD OF ENDING THE WALK THERE (#9715)
+    while (true) {
+      if (currentPosition.get() < currentContainer.getUsed())
+        return true;
 
-    if (moveToPreviousChunk() == null)
-      return false;
+      if (moveToPreviousChunk() == null)
+        return false;
 
-    currentPosition.set(MutableEdgeSegment.CONTENT_START_POSITION);
-    return currentPosition.get() < currentContainer.getUsed();
+      currentPosition.set(MutableEdgeSegment.CONTENT_START_POSITION);
+    }
   }
 
   @Override
@@ -61,40 +57,28 @@ public class EdgeVertexIterator extends ResettableIteratorBase<Pair<RID, RID>> {
     if (!hasNext())
       throw new NoSuchElementException();
 
-    lastElementPosition = currentPosition.get();
-
-    nextEdgeRID = currentContainer.getRID(currentPosition);
-    nextVertexRID = currentContainer.getRID(currentPosition);
+    // THE SEGMENT AND BOUNDS OF THE ENTRY ARE RECORDED: a hasNext() in between may already have moved the cursor to
+    // another segment, over empty ones too (#9715), and remove() must take the entry out of the segment it came from
+    final int begin = currentPosition.get();
+    final RID edgeRID = currentContainer.getRID(currentPosition);
+    final RID vertexRID = currentContainer.getRID(currentPosition);
+    entryReturned(currentContainer, begin, currentPosition.get(), edgeRID, vertexRID);
 
     ++browsed;
-    return new Pair(nextEdgeRID, nextVertexRID);
+    return new Pair<>(edgeRID, vertexRID);
   }
 
+  /** See {@link ResettableIteratorBase#removeReturnedEntry}: the refusal of the delete reaches the caller (#9779). */
   @Override
   public void remove() {
-    if (nextEdgeRID == null)
-      throw new NoSuchElementException();
+    removeReturnedEntry(vertex, direction);
+  }
 
-    try {
-      if (nextEdgeRID.getPosition() < 0) {
-        // CREATE LIGHTWEIGHT EDGE
-        final DocumentType edgeType = currentContainer.getDatabase().getSchema().getTypeByBucketId(nextEdgeRID.getBucketId());
-
-        if (direction == Vertex.DIRECTION.OUT)
-          new ImmutableLightEdge(currentContainer.getDatabase(), edgeType, nextEdgeRID.getBucketId(), vertex, nextVertexRID).delete();
-        else
-          new ImmutableLightEdge(currentContainer.getDatabase(), edgeType, nextEdgeRID.getBucketId(), nextVertexRID, vertex).delete();
-      } else
-        nextEdgeRID.asEdge().delete();
-    } catch (final RecordNotFoundException e) {
-      // IGNORE IT
-    } catch (final Exception e) {
-      LogManager.instance().log(this, Level.WARNING, "Error on deleting edge record %s", e, nextEdgeRID);
-    }
-
-    currentContainer.removeEntry(lastElementPosition, currentPosition.get());
-    ((DatabaseInternal) currentContainer.getDatabase()).updateRecord(currentContainer);
-
-    currentPosition.set(lastElementPosition);
+  /**
+   * Takes the entry the last {@code next()} returned out of the list WITHOUT deleting the edge it names: for
+   * {@code CHECK DATABASE}, which prunes an entry as damage even when the edge behind it cannot be deleted.
+   */
+  public void removeEntryKeepingEdge() {
+    unlinkReturnedEntry();
   }
 }

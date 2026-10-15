@@ -102,7 +102,7 @@ public class AlgoPageRank extends AbstractAlgoProcedure {
   public Stream<Result> execute(final Object[] args, final Result inputRow, final CommandContext context) {
     validateArgs(args);
 
-    final Map<String, Object> config = args.length > 0 ? extractMap(args[0], "config") : null;
+    final Map<String, Object> config = extractMap(argOrDefault(args, 0, null), "config");
 
     final double dampingFactor = config != null && config.get("dampingFactor") instanceof Number n ?
         n.doubleValue() : 0.85;
@@ -123,11 +123,11 @@ public class AlgoPageRank extends AbstractAlgoProcedure {
     // as wide as the id space the view now reports - see GraphTraversalProvider#hasPendingChanges (issue #6792).
     if (provider instanceof GraphAnalyticalView gav && !gav.hasPendingChanges()) {
       context.setVariable(CommandContext.CSR_ACCELERATED_VAR, true);
-      return executeWithCSR(context, gav, dampingFactor, maxIterations, direction, guard);
+      return executeWithCSR(gav, dampingFactor, maxIterations, tolerance, direction, guard);
     }
 
     // Fall back to OLTP path
-    return executeWithOLTP(db, dampingFactor, maxIterations, tolerance, weightProperty, direction, guard);
+    return executeWithOLTP(db, dampingFactor, maxIterations, tolerance, weightProperty, direction, guard, context);
   }
 
   /**
@@ -164,18 +164,17 @@ public class AlgoPageRank extends AbstractAlgoProcedure {
         getName() + "(): unknown direction '" + s + "', expected one of OUT, IN or BOTH");
   }
 
-  private Stream<Result> executeWithCSR(final CommandContext context, final GraphAnalyticalView gav,
-      final double dampingFactor, final int maxIterations, final Vertex.DIRECTION direction, final WorkGuard guard) {
+  private Stream<Result> executeWithCSR(final GraphAnalyticalView gav,
+      final double dampingFactor, final int maxIterations, final double tolerance, final Vertex.DIRECTION direction,
+      final WorkGuard guard) {
     final int n = gav.getNodeCount();
     if (n == 0)
       return Stream.empty();
 
-    // The CSR kernel has no convergence test at all, so maxIterations alone decides when it stops: the guard is
-    // the only thing that can end a run the caller no longer wants.
-    final double[] scores = GraphAlgorithms.pageRank(gav, dampingFactor, maxIterations, direction, guard::check);
-
-    // Set result count hint for CallStep count-only optimization
-    context.setVariable(CommandContext.RESULT_COUNT_HINT_VAR, (long) n);
+    // The kernel stops on the same convergence test as the OLTP path below, so the two answer the same scores whether a
+    // view serves the call or not (issue #9791). A graph may never converge below the tolerance, so maxIterations is
+    // what ends the run, and the guard is the only thing that can end one the caller no longer wants.
+    final double[] scores = GraphAlgorithms.pageRank(gav, dampingFactor, maxIterations, tolerance, direction, guard::check);
 
     return IntStream.range(0, n).mapToObj(i -> {
       final ResultInternal result = new ResultInternal();
@@ -187,7 +186,7 @@ public class AlgoPageRank extends AbstractAlgoProcedure {
 
   private Stream<Result> executeWithOLTP(final Database db, final double dampingFactor,
       final int maxIterations, final double tolerance, final String weightProperty,
-      final Vertex.DIRECTION direction, final WorkGuard guard) {
+      final Vertex.DIRECTION direction, final WorkGuard guard, final CommandContext context) {
     final List<Vertex> vertices = loadVertices(db, null, newMemoryBudget(db));
     if (vertices.isEmpty())
       return Stream.empty();
@@ -217,7 +216,8 @@ public class AlgoPageRank extends AbstractAlgoProcedure {
       int count = 0;
 
       for (final Vertex.DIRECTION walk : walks) {
-        for (final Edge edge : v.getEdges(walk)) {
+        // the incoming side of a unidirectional edge type is on the other end only (issue #8629)
+        for (final Edge edge : edgesOf(context, v, walk)) {
           // This build walks and deserialises every edge in the graph and had no checkpoint at all: the first
           // one a call reached was the iteration loop below, so a deadline could not be seen until the whole
           // adjacency was already materialised. Throttled by EDGE rather than by vertex for the reason

@@ -19,18 +19,19 @@
 package com.arcadedb.redis.query;
 
 import com.arcadedb.ContextConfiguration;
+import com.arcadedb.database.DatabaseContext;
 import com.arcadedb.database.DatabaseInternal;
 import com.arcadedb.database.Document;
+import com.arcadedb.database.Identifiable;
 import com.arcadedb.database.MutableDocument;
 import com.arcadedb.database.RID;
+import com.arcadedb.database.RetryScope;
 import com.arcadedb.database.TransactionContext;
 import com.arcadedb.database.Record;
 import com.arcadedb.exception.CommandParsingException;
 import com.arcadedb.exception.DuplicatedKeyException;
 import com.arcadedb.exception.NeedRetryException;
 import com.arcadedb.graph.MutableEdge;
-import com.arcadedb.index.Index;
-import com.arcadedb.index.IndexCursor;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.query.OperationType;
 import com.arcadedb.query.QueryEngine;
@@ -40,9 +41,11 @@ import com.arcadedb.query.sql.executor.IteratorResultSet;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultInternal;
 import com.arcadedb.query.sql.executor.ResultSet;
+import com.arcadedb.redis.RedisCommandArity;
 import com.arcadedb.redis.RedisCounterOperations;
 import com.arcadedb.redis.RedisException;
 import com.arcadedb.redis.RedisIndexKeys;
+import com.arcadedb.redis.RedisRecords;
 import com.arcadedb.schema.DocumentType;
 import com.arcadedb.schema.LocalEdgeType;
 import com.arcadedb.schema.LocalVertexType;
@@ -82,6 +85,9 @@ public class RedisQueryEngine implements QueryEngine {
   // Batch separator: any line break, as the executor has always split on (String.split("\\R")).
   private static final Pattern LINE_SEPARATOR = Pattern.compile("\\R");
   private static final Pattern COMMAND_PATTERN = Pattern.compile("(\\{[^{}]*(?:\\{[^{}]*\\}[^{}]*)*\\})|\"([^\"]*)\"|'([^']*)'|(\\S+)");
+  private static final String RAM_OVERLAY_ATTACHMENT = "redis.ramOverlay";
+  /** The commands that take a value from the shared RAM map and so keep a {@link RamSlot} across retries. */
+  private static final Set<String> RAM_SLOT_COMMANDS = Set.of("INCR", "INCRBY", "INCRBYFLOAT", "DECR", "DECRBY", "GETDEL");
 
   protected RedisQueryEngine(final DatabaseInternal database) {
     this.database = database;
@@ -303,14 +309,16 @@ public class RedisQueryEngine implements QueryEngine {
       return createResultSet("OK");
 
     final List<Object> results = new ArrayList<>();
+    int position = 0;
     for (final Object step : plan) {
       if (step instanceof String command)
-        results.add(executeSingleCommandInternal(command));
+        results.add(executeSingleCommandInternal(command, looseSlot(position, command)));
       else {
         @SuppressWarnings("unchecked")
         final List<String> commands = (List<String>) step;
         results.addAll(executeTransaction(commands));
       }
+      position++;
     }
     return createResultSet(results);
   }
@@ -334,16 +342,17 @@ public class RedisQueryEngine implements QueryEngine {
     @SuppressWarnings("unchecked")
     final List<Object>[] committed = new List[1];
 
-    // Deliberately OUTSIDE the retried block, unlike `committed`: one slot per command, surviving the attempts, so a
-    // retry answers with the value the first attempt already took from the shared map instead of taking another.
-    final RamSlot[] slots = new RamSlot[commands.size()];
-    for (int i = 0; i < slots.length; i++)
-      slots[i] = new RamSlot();
-
+    // One slot per command, taken from the RetryScope of the transaction() call below or, when this block joined an outer
+    // transaction, of the call that owns it (the HTTP command endpoint, which re-parses the batch and calls in again on a
+    // retry): the slots outlive the attempts, so a retry answers with the value the first attempt already took from the
+    // shared map instead of taking another (issue #9322).
     database.transaction(() -> {
+      final RetryScope scope = retryScope();
       final List<Object> attemptResults = new ArrayList<>(commands.size());
-      for (int i = 0; i < commands.size(); i++)
-        attemptResults.add(executeSingleCommandInternal(commands.get(i), slots[i]));
+      for (int i = 0; i < commands.size(); i++) {
+        final String command = commands.get(i);
+        attemptResults.add(executeSingleCommandInternal(command, slotFor(scope, i, command)));
+      }
       committed[0] = attemptResults;
     });
 
@@ -400,7 +409,49 @@ public class RedisQueryEngine implements QueryEngine {
     }
   }
 
-  private static final String RAM_OVERLAY_ATTACHMENT = "redis.ramOverlay";
+
+  /**
+   * @return the state that survives the attempts of the retried transaction call this request runs under, or null when
+   * none is running. A rollback drops a transaction's attachments, so what an INCR/GETDEL took from the shared map
+   * cannot live there (issue #9322).
+   */
+  private RetryScope retryScope() {
+    final DatabaseContext.DatabaseContextTL context = DatabaseContext.INSTANCE.getContextIfExists(database.getDatabasePath());
+    return context != null ? context.getRetryScope() : null;
+  }
+
+  /**
+   * The slot of a command run outside a MULTI/EXEC block: kept across the retries of the request, null when none. It is
+   * keyed by the command text, so a retry that reaches this position with a different command gets a fresh slot and the
+   * effect of that command is applied again instead of answering with another command's value.
+   */
+  private RamSlot looseSlot(final int index, final String command) {
+    return slotFor(retryScope(), index, command);
+  }
+
+  /**
+   * The slot of a command, or null for one that never applies a non-rollbackable effect (GET, SET, HSET, ...): only
+   * INCR/DECR/GETDEL take values from the shared map, so only they need to remember them across a retry. Which commands
+   * need one depends on the command text alone, so every attempt of a retry allocates the same positions.
+   */
+  private static RamSlot slotFor(final RetryScope scope, final int index, final String command) {
+    if (scope == null)
+      return null;
+    // The command name is taken with the same tokenization parseCommand uses (any whitespace separates, a name may be
+    // quoted), or a command the parser accepts would be run without a slot and applied again by a retry
+    final Matcher matcher = COMMAND_PATTERN.matcher(command.trim());
+    if (!matcher.find())
+      return null;
+    final String name = matcher.group(2) != null ? matcher.group(2) : matcher.group(3) != null ? matcher.group(3) : matcher.group(4);
+    if (name == null)
+      return null;
+    final String upper = name.toUpperCase(Locale.ENGLISH);
+    if (RAM_SLOT_COMMANDS.contains(upper))
+      // keyed by the position in the block as well as the text: a command without a slot (a SET) that turns up before this
+      // one on a retry shifts it, and the reserved reply of the earlier attempt is then not reused for another input
+      return scope.nextSlot(index + "#" + command, RamSlot::new);
+    return null;
+  }
 
   /**
    * @return the RAM overlay of the active transaction, created and bound to its commit on first use, or null when no
@@ -424,15 +475,8 @@ public class RedisQueryEngine implements QueryEngine {
    * Executes a single command and returns a ResultSet.
    */
   private ResultSet executeSingleCommand(final String query) {
-    final Object result = executeSingleCommandInternal(query);
+    final Object result = executeSingleCommandInternal(query, looseSlot(0, query));
     return createResultSet(result);
-  }
-
-  /**
-   * Executes a single command and returns the raw result.
-   */
-  private Object executeSingleCommandInternal(final String query) {
-    return executeSingleCommandInternal(query, null);
   }
 
   /**
@@ -445,6 +489,12 @@ public class RedisQueryEngine implements QueryEngine {
     }
 
     final String cmd = parts.getFirst().toUpperCase(Locale.ENGLISH);
+    // the table the RESP wire path uses (#9161): a surplus argument is no longer an amount, a missing one no longer defaults
+    try {
+      RedisCommandArity.checkRam(cmd, parts.size());
+    } catch (final RedisException e) {
+      throw badRequest(e);
+    }
     return switch (cmd) {
       case "PING" -> ping(parts);
       case "SET" -> set(parts);
@@ -463,6 +513,14 @@ public class RedisQueryEngine implements QueryEngine {
       case "HDEL" -> hDel(parts);
       default -> throw new CommandParsingException("Command not found: " + cmd);
     };
+  }
+
+  /**
+   * A command the caller got wrong (argument count, malformed RID) is a client error, as the per-command checks of this engine always
+   * were: a {@link RedisException} would be answered as an internal error (HTTP 500).
+   */
+  private static CommandParsingException badRequest(final RedisException e) {
+    return new CommandParsingException(e.getMessage(), e);
   }
 
   private List<String> parseCommand(final String command) {
@@ -554,9 +612,6 @@ public class RedisQueryEngine implements QueryEngine {
   }
 
   private String set(final List<String> parts) {
-    if (parts.size() < 3) {
-      throw new CommandParsingException("SET requires key and value: SET <key> <value>");
-    }
     final String key = normalizeRamKey(parts.get(1));
     final String value = parts.get(2);
     final RamOverlay overlay = ramOverlay();
@@ -568,17 +623,11 @@ public class RedisQueryEngine implements QueryEngine {
   }
 
   private Object get(final List<String> parts) {
-    if (parts.size() < 2) {
-      throw new CommandParsingException("GET requires a key: GET <key>");
-    }
     return readRamVariable(normalizeRamReadKey(parts.get(1)), ramOverlay());
   }
 
   /** See {@link #computeRamVariable} for when GETDEL stays in the transaction and when it claims from the shared map. */
   private Object getDel(final List<String> parts, final RamSlot slot) {
-    if (parts.size() < 2) {
-      throw new CommandParsingException("GETDEL requires a key: GETDEL <key>");
-    }
     final String key = normalizeRamKey(parts.get(1));
     if (slot != null && slot.reserved)
       return slot.value;
@@ -595,9 +644,6 @@ public class RedisQueryEngine implements QueryEngine {
   }
 
   private int exists(final List<String> parts) {
-    if (parts.size() < 2) {
-      throw new CommandParsingException("EXISTS requires at least one key: EXISTS <key> [key ...]");
-    }
     final RamOverlay overlay = ramOverlay();
     int count = 0;
     for (int i = 1; i < parts.size(); i++) {
@@ -615,9 +661,6 @@ public class RedisQueryEngine implements QueryEngine {
    * atomicity.
    */
   private Object incrBy(final List<String> parts, final boolean decimal, final RamSlot slot) {
-    if (parts.size() < 2) {
-      throw new CommandParsingException("INCR/INCRBY requires a key: INCR <key> [increment]");
-    }
     final String key = normalizeRamKey(parts.get(1));
 
     if (decimal) {
@@ -631,9 +674,6 @@ public class RedisQueryEngine implements QueryEngine {
 
   /** See {@link #incrBy}. */
   private Number decrBy(final List<String> parts, final RamSlot slot) {
-    if (parts.size() < 2) {
-      throw new CommandParsingException("DECR/DECRBY requires a key: DECR <key> [decrement]");
-    }
     final String key = normalizeRamKey(parts.get(1));
     final long decrement = parts.size() > 2 ? RedisCounterOperations.parseInteger(parts.get(2)) : 1L;
 
@@ -674,8 +714,9 @@ public class RedisQueryEngine implements QueryEngine {
         }
 
         document.fromJSON(json);
-        document.save();
-        created++;
+        // the reply is the number of records stored: a create a BeforeRecordCreateListener vetoed is not one (issue #9974)
+        if (document.saveReportingVeto())
+          created++;
       }
       count[0] = created;
     });
@@ -786,66 +827,60 @@ public class RedisQueryEngine implements QueryEngine {
   }
 
   /**
-   * HDEL command: Deletes documents from the database.
+   * HDEL command: Deletes documents from the database. The forms both surfaces serve answer as on the RESP wire path (#9161).
    * Syntax: HDEL <index> <key> [key ...]
    *         HDEL <rid> [rid ...]
+   * Every RID is parsed before anything is deleted, a record that is not there is skipped and not counted, and any other
+   * failure of a delete (a vetoing listener, a permission, a conflict) reaches the caller instead of being read as "not found".
    */
   private int hDel(final List<String> parts) {
-    if (parts.size() < 2) {
-      throw new CommandParsingException("HDEL requires index and keys: HDEL <index> <key> [key ...] or HDEL <rid> [rid ...]");
-    }
+    if (parts.size() < 2)
+      throw badRequest(RedisCommandArity.wrongArity("HDEL"));
 
     final String firstArg = parts.get(1);
     // Same reasoning as hSet() above: counted into a local inside the block, published only once the block has
     // returned (issue #8037).
     final int[] deleted = {0};
 
-    database.transaction(() -> {
-      int removed = 0;
-      // Check if it's RID mode
-      if (firstArg.startsWith("#")) {
-        for (int i = 1; i < parts.size(); i++) {
-          final String rid = parts.get(i);
-          if (!rid.startsWith("#")) {
-            throw new CommandParsingException("All arguments must be RIDs when first argument is a RID");
-          }
-          try {
-            database.lookupByRID(new RID(rid), true).delete();
-            removed++;
-          } catch (Exception e) {
-            // Record not found, ignore
-          }
-        }
-      } else {
-        // It's an index lookup
-        if (parts.size() < 3) {
-          throw new CommandParsingException("HDEL requires index and keys: HDEL <index> <key> [key ...]");
-        }
-
-        final String indexName = firstArg;
-        final Index index = database.getSchema().getIndexByName(indexName);
-
-        for (int i = 2; i < parts.size(); i++) {
-          final String key = parts.get(i);
-          final Object[] keys = RedisIndexKeys.parse(key);
-          final IndexCursor cursor = index.get(keys);
-          if (cursor.hasNext()) {
-            cursor.next().getRecord().delete();
-            removed++;
-          }
+    if (firstArg.startsWith("#")) {
+      final Set<RID> rids = new LinkedHashSet<>();
+      for (int i = 1; i < parts.size(); i++) {
+        final String rid = parts.get(i);
+        if (!rid.startsWith("#"))
+          throw new CommandParsingException("All arguments must be RIDs when first argument is a RID");
+        try {
+          rids.add(RedisRecords.parseRid(rid));
+        } catch (final RedisException e) {
+          throw badRequest(e);
         }
       }
-      deleted[0] = removed;
-    });
+      database.transaction(() -> {
+        int removed = 0;
+        for (final RID rid : rids)
+          removed += RedisRecords.deleteByRid(database, rid) ? 1 : 0;
+        deleted[0] = removed;
+      });
+    } else {
+      // It's an index lookup
+      if (parts.size() < 3)
+        throw badRequest(RedisCommandArity.wrongArity("HDEL"));
+
+      if (!database.getSchema().existsIndex(firstArg))
+        throw new CommandParsingException("Index '" + firstArg + "' not found");
+      database.transaction(() -> {
+        int removed = 0;
+        for (int i = 2; i < parts.size(); i++)
+          removed += RedisRecords.deleteByKey(database, firstArg, parts.get(i)) ? 1 : 0;
+        deleted[0] = removed;
+      });
+    }
 
     return deleted[0];
   }
 
   private Record getRecordByIndex(final String indexName, final String key) {
-    final Index index = database.getSchema().getIndexByName(indexName);
-    final Object[] keys = RedisIndexKeys.parse(key);
-    final IndexCursor cursor = index.get(keys);
-    return cursor.hasNext() ? cursor.next().asDocument() : null;
+    final Identifiable found = RedisIndexKeys.lookup(database, indexName, key);
+    return found != null ? found.asDocument() : null;
   }
 
 }

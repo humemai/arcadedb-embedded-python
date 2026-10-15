@@ -28,6 +28,8 @@ import com.arcadedb.exception.TimeoutException;
 import com.arcadedb.function.graph.IdFunction;
 import com.arcadedb.function.sql.DefaultSQLFunctionFactory;
 import com.arcadedb.graph.Vertex;
+import com.arcadedb.index.IndexException;
+import com.arcadedb.index.IndexInternal;
 import com.arcadedb.index.TypeIndex;
 import com.arcadedb.query.opencypher.InlineProperties;
 import com.arcadedb.query.opencypher.Labels;
@@ -38,10 +40,12 @@ import com.arcadedb.query.opencypher.ast.Expression;
 import com.arcadedb.query.opencypher.ast.FunctionCallExpression;
 import com.arcadedb.query.opencypher.ast.LogicalExpression;
 import com.arcadedb.query.opencypher.ast.NodePattern;
+import com.arcadedb.query.opencypher.ast.ParameterExpression;
 import com.arcadedb.query.opencypher.ast.PropertyAccessExpression;
 import com.arcadedb.query.opencypher.ast.VariableExpression;
 import com.arcadedb.query.opencypher.executor.ExpressionEvaluator;
 import com.arcadedb.query.opencypher.executor.CypherFunctionFactory;
+import com.arcadedb.query.opencypher.parser.CypherASTBuilder;
 import com.arcadedb.query.opencypher.temporal.TemporalUtil;
 import com.arcadedb.query.sql.executor.AbstractExecutionStep;
 import com.arcadedb.query.sql.executor.CommandContext;
@@ -52,6 +56,7 @@ import com.arcadedb.query.sql.executor.WorkGuard;
 import com.arcadedb.schema.DocumentType;
 import com.arcadedb.schema.LocalDocumentType;
 import com.arcadedb.schema.VertexType;
+import com.arcadedb.utility.ScanPressureReporter;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -61,6 +66,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Execution step for matching node patterns.
@@ -92,6 +98,12 @@ public class MatchNodeStep extends AbstractExecutionStep {
   // branches - if a future change drives parallel sub-plans through the same step, all three fields
   // (including cachedFullScanCandidates below) need to move to a per-execution scope or be guarded.
   private       String              usedIndexName; // Track which index was used (if any)
+  // The full type scan the step reads from, kept only to report in a profile whether the heap budget reduced its read-ahead (#9404)
+  // READ BY THE PROFILE WHILE THE THREAD THAT RUNS THE STEP WRITES THEM
+  private volatile ScanPressureReporter scanIterator;
+  private final    AtomicLong           completedScansShrunkBatches = new AtomicLong();
+  // THE FULL TYPE SCAN IN PROGRESS, KEPT TO GIVE ITS READ-AHEAD BACK WHEN THE STEP CLOSES OR OPENS ANOTHER SCAN
+  private volatile ScanPressureReporter openScan;
   private       String              usedPartitionBucket; // Track partition bucket pruning (if any) - same write-once-per-execution contract as usedIndexName
   // Full snapshot of a row-independent full-type-scan's candidates, populated (via recordingIterator) only
   // once the first getVertexIterator() call of a CHAINED match (prev != null) has been fully drained by the
@@ -247,6 +259,15 @@ public class MatchNodeStep extends AbstractExecutionStep {
   /** The variable this step binds. */
   public String getVariable() {
     return variable;
+  }
+
+  @Override
+  public void close() {
+    if (openScan != null) {
+      openScan.releaseReadAhead();
+      openScan = null;
+    }
+    super.close();
   }
 
   @Override
@@ -667,6 +688,17 @@ public class MatchNodeStep extends AbstractExecutionStep {
         if (type != null) {
           @SuppressWarnings("unchecked") final Iterator<Identifiable> iter =
               (Iterator<Identifiable>) (Object) context.getDatabase().iterateType(label, true);
+          // A CHAINED MATCH OPENS A SCAN PER INPUT ROW: THE ONE BEFORE GIVES ITS READ-AHEAD BACK
+          if (openScan != null)
+            openScan.releaseReadAhead();
+          openScan = iter instanceof ScanPressureReporter reporter ? reporter : null;
+          // ONLY A PROFILED RUN KEEPS THE SCAN FOR THE PROFILE, WHICH HOLDS A BATCH OF RECORDS: THE PROFILE IS THE ONLY READER
+          if (context.isProfiling()) {
+            // A CHAINED MATCH OPENS A SCAN PER INPUT ROW: THE ONES DONE STAY IN THE COUNT
+            if (scanIterator != null)
+              completedScansShrunkBatches.addAndGet(scanIterator.getBudgetShrunkBatches());
+            scanIterator = iter instanceof ScanPressureReporter reporter ? reporter : null;
+          }
           return iter;
         }
         return Collections.emptyIterator();
@@ -714,14 +746,16 @@ public class MatchNodeStep extends AbstractExecutionStep {
         scanHashDeclined = true;
         return null;
       }
-      // Prefer a property whose value comes from the row (an expression or a parameter): a literal in the map is the
-      // same for every row and usually the low-cardinality one ({kind: 'X', name: r.v}), a poor key.
+      // Prefer a property whose value comes from the row (an expression): a literal or a parameter in the map is the
+      // same for every row and usually the low-cardinality one ({kind: 'X', name: r.v}, {kind: $k, name: r.v}), a poor
+      // key. A literal the statement cache extracted into a parameter (issue #8307) is one of those too.
       String fallback = null;
       for (final Map.Entry<String, Object> entry : pattern.getProperties().entrySet()) {
         final Object declared = entry.getValue();
         if (!ScanPropertyHashIndex.isSupported(InlineProperties.resolve(declared, currentInputResult, context)))
           continue;
-        if (!(declared instanceof String) && !(declared instanceof Number) && !(declared instanceof Boolean)) {
+        if (!(declared instanceof String) && !(declared instanceof Number) && !(declared instanceof Boolean)
+            && !(declared instanceof CypherASTBuilder.ParameterReference) && !(declared instanceof ParameterExpression)) {
           scanHashProperty = entry.getKey();
           break;
         }
@@ -754,7 +788,7 @@ public class MatchNodeStep extends AbstractExecutionStep {
   }
 
   private Iterator<Identifiable> tryPartitionPrunedIterator(final DocumentType type, final String label) {
-    final String bucketName = PartitionPruning.prunedBucketName(type, pattern.getProperties());
+    final String bucketName = PartitionPruning.prunedBucketName(type, pattern.getProperties(), context);
     if (bucketName == null)
       return null;
 
@@ -867,7 +901,24 @@ public class MatchNodeStep extends AbstractExecutionStep {
    */
   private Iterator<Identifiable> lookupByKey(final TypeIndex index, final String label, final String[] propertyNames,
       final Object[] propertyValues) {
-    final Iterator<Identifiable> cursor = context.getDatabase().lookupByKey(label, propertyNames, propertyValues);
+    final Iterator<Identifiable> cursor;
+    final IndexInternal[] subIndexes = index.getIndexesOnBuckets();
+    try {
+      cursor = context.getDatabase().lookupByKey(label, propertyNames, propertyValues);
+      // The lookup is read whole before it returns: a drop that started meanwhile may have taken sub-indexes away under it
+      // without an error, and the scan answers instead of a lookup that may be short (#9651)
+      if (!index.isUnchangedSince(subIndexes))
+        return null;
+    } catch (final IndexException e) {
+      // A concurrent DDL dropped or rebuilt the index after it was checked: the lookup is eager, so nothing has been returned
+      // yet, and the caller scans the type instead (#9651)
+      return null;
+    } catch (final IllegalArgumentException e) {
+      // lookupByKey answers "no index" this way, and a lookup under the drop fails with "File with id n was not found"
+      if (TypeIndex.isStaleRead(index, e) || !index.isReadyForQueries())
+        return null;
+      throw e;
+    }
     return Labels.isInheritedIndex(index, label) ? Labels.filterByLabel(cursor, context.getDatabase(), label) : cursor;
   }
 
@@ -1141,6 +1192,9 @@ public class MatchNodeStep extends AbstractExecutionStep {
       if (rowCount > 0)
         builder.append(", ").append(getRowCountFormatted());
       builder.append(")");
+      // #9404: A SCAN THAT READ WITH ITS READ-AHEAD REDUCED BY THE QUERY HEAP BUDGET IS SLOWER FOR IT: SAY SO
+      builder.append(ScanPressureReporter.describe(completedScansShrunkBatches.get()
+          + (scanIterator != null ? scanIterator.getBudgetShrunkBatches() : 0L)));
     }
     return builder.toString();
   }

@@ -20,8 +20,10 @@ package com.arcadedb.server.http.ws.insert;
 
 import com.arcadedb.database.DatabaseInternal;
 import com.arcadedb.log.LogManager;
+import com.arcadedb.serializer.json.JSONArray;
 import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.server.ArcadeDBServer;
+import com.arcadedb.server.ErrorConcealment;
 import com.arcadedb.server.http.HttpSession;
 import com.arcadedb.server.http.HttpSessionManager;
 import com.arcadedb.server.security.ServerSecurityUser;
@@ -192,7 +194,8 @@ public class WebSocketInsertSessionManager {
         afterClaimHook.run();
 
       database = server.getDatabase(databaseName, false, false);
-      session = new WebSocketInsertSession(id, database, user, channelId, options, externalId, externalSession);
+      session = new WebSocketInsertSession(id, database, user, channelId, options, externalId, externalSession,
+          () -> ErrorConcealment.isConcealing(server), server.getRunningQueries());
       // Before it is registered, not after: a session the sweep can see must already know where to send its
       // expiry, or the sweep would have nothing to dispatch to and would roll it back on its own thread.
       session.setChannel(channel);
@@ -275,8 +278,25 @@ public class WebSocketInsertSessionManager {
 
     if (user == null || !user.equals(session.user))
       throw new SecurityException("Insert session '" + sessionId + "' belongs to another user");
+    // (ServerSecurityUser.equals compares by name, so the check above is ownership, not authorization.)
+    // Same name, possibly a NEW object: the principal is replaced when the user is updated (issue #9311). The session
+    // writes with the grants of the live one from now on, not those it started with.
+    session.user = user;
 
     return session;
+  }
+
+  /**
+   * Applies one {@code chunk} frame. A session the chunk closed - a {@code terminate query} stopped it, issue #9838 - is
+   * forgotten at once, so the connection may open another without waiting for the idle sweep to notice it.
+   */
+  public JSONObject applyChunk(final WebSocketInsertSession session, final long chunkSeq, final JSONArray records) {
+    try {
+      return session.applyChunk(chunkSeq, records);
+    } finally {
+      if (session.isClosed())
+        unregister(session);
+    }
   }
 
   /** Ends a session the client itself terminated, and answers with the {@code committed} frame. */

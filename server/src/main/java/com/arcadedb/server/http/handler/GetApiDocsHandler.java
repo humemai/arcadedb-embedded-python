@@ -26,6 +26,10 @@ import io.micrometer.core.instrument.Metrics;
 import io.undertow.server.HttpServerExchange;
 import io.undertow.util.Headers;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.Base64;
 import java.util.logging.Level;
 
 /**
@@ -94,6 +98,14 @@ public class GetApiDocsHandler extends AbstractServerHttpHandler {
       </html>
       """;
 
+  // The page's one inline <script>, the Swagger UI bootstrap, is allowed by its hash rather than by 'unsafe-inline', so
+  // the Content-Security-Policy still refuses any other inline script (issue #9681).
+  private static final String INLINE_SCRIPT_HASH_SOURCE = "'sha256-" + sha256Base64(inlineScript(HTML_TEMPLATE)) + "'";
+
+  // The page with its Swagger UI assets addressed by the version of their bytes (issue #9961), rendered on first use: the
+  // assets are immutable for the life of the process
+  private static volatile String versionedPage;
+
   public GetApiDocsHandler(final HttpServer httpServer) {
     super(httpServer);
   }
@@ -107,14 +119,43 @@ public class GetApiDocsHandler extends AbstractServerHttpHandler {
     try {
       // Set proper content type for HTML
       exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "text/html; charset=UTF-8");
+      setContentSecurityPolicy(exchange, INLINE_SCRIPT_HASH_SOURCE);
+      exchange.getResponseHeaders().put(Headers.CACHE_CONTROL, GetDynamicContentHandler.CACHE_REVALIDATE);
 
       LogManager.instance().log(this, Level.FINE, "Serving OpenAPI documentation page");
 
-      return new ExecutionResponse(200, HTML_TEMPLATE);
+      String page = versionedPage;
+      if (page == null)
+        versionedPage = page = GetDynamicContentHandler.stampAssetVersions(HTML_TEMPLATE, "");
+      return new ExecutionResponse(200, page);
 
     } catch (final Exception e) {
       LogManager.instance().log(this, Level.SEVERE, "Error serving OpenAPI documentation page: %s", e, e.getMessage());
       throw e;
+    }
+  }
+
+  /**
+   * The CSP source expression ({@code 'sha256-...'}) that allows the page's inline bootstrap script.
+   */
+  public static String inlineScriptHashSource() {
+    return INLINE_SCRIPT_HASH_SOURCE;
+  }
+
+  private static String inlineScript(final String html) {
+    final int start = html.indexOf("<script>");
+    final int end = html.indexOf("</script>", start);
+    if (start < 0 || end < 0 || html.indexOf("<script>", end) >= 0)
+      throw new IllegalStateException("The API docs page must carry exactly one inline <script> block");
+    return html.substring(start + "<script>".length(), end);
+  }
+
+  private static String sha256Base64(final String text) {
+    try {
+      return Base64.getEncoder().encodeToString(MessageDigest.getInstance("SHA-256").digest(text.getBytes(StandardCharsets.UTF_8)));
+    } catch (final NoSuchAlgorithmException e) {
+      // SHA-256 is a mandatory algorithm of every Java platform
+      throw new IllegalStateException(e);
     }
   }
 

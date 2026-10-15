@@ -44,7 +44,7 @@ public class EdgeIteratorFilter extends IteratorFilterBase<Edge> {
 
   public EdgeIteratorFilter(final DatabaseInternal database, final Vertex vertex, final Vertex.DIRECTION direction,
       final EdgeSegment current, final String[] edgeTypes, final boolean endpointsFromList) {
-    super(database, current, edgeTypes);
+    super(database, current, edgeTypes, vertex.getIdentity(), direction);
     this.direction = direction;
     this.vertex = vertex;
     this.endpointsFromList = endpointsFromList;
@@ -62,15 +62,18 @@ public class EdgeIteratorFilter extends IteratorFilterBase<Edge> {
     if (next == null)
       throw new NoSuchElementException();
 
+    entryReturned();
     try {
       if (next.getPosition() < 0) {
         // LIGHTWEIGHT EDGE
         final DocumentType edgeType = currentContainer.getDatabase().getSchema().getTypeByBucketId(nextEdge.getBucketId());
 
         if (direction == Vertex.DIRECTION.OUT)
-          return new ImmutableLightEdge(currentContainer.getDatabase(), edgeType, nextEdge.getBucketId(), vertex.getIdentity(), nextVertex);
+          return new ImmutableLightEdge(currentContainer.getDatabase(), edgeType, nextEdge.getBucketId(), vertex.getIdentity(),
+              nextVertex, currentContainer.getIdentity(), getEntryPosition(), direction, currentContainer.getUsed(), lightEdgeCensus());
         else
-          return new ImmutableLightEdge(currentContainer.getDatabase(), edgeType, nextEdge.getBucketId(), nextVertex, vertex.getIdentity());
+          return new ImmutableLightEdge(currentContainer.getDatabase(), edgeType, nextEdge.getBucketId(), nextVertex,
+              vertex.getIdentity(), currentContainer.getIdentity(), getEntryPosition(), direction, currentContainer.getUsed(), lightEdgeCensus());
       }
 
       // LAZY LOAD THE CONTENT TO IMPROVE PERFORMANCE WITH TRAVERSAL. NOTE: THE RECORD NOT FOUND WILL NEVER BE TRIGGERED HERE ANYMORE

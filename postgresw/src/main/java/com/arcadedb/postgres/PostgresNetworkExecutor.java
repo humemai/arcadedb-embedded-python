@@ -40,10 +40,14 @@ import com.arcadedb.graph.Edge;
 import com.arcadedb.graph.Vertex;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.network.binary.ChannelBinaryServer;
+import com.arcadedb.network.binary.ServerIsNotTheLeaderException;
+import com.arcadedb.query.RunningQuery;
 import com.arcadedb.query.sql.SQLQueryEngine;
 import com.arcadedb.query.sql.executor.BasicCommandContext;
 import com.arcadedb.query.sql.executor.CommandContext;
+import com.arcadedb.query.sql.executor.CommandTimeoutOverride;
 import com.arcadedb.query.sql.executor.IteratorResultSet;
+import com.arcadedb.query.sql.executor.QueryAdmissionGate;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultInternal;
 import com.arcadedb.query.sql.executor.ResultSet;
@@ -75,6 +79,7 @@ import com.arcadedb.schema.DocumentType;
 import com.arcadedb.schema.Property;
 import com.arcadedb.schema.Type;
 import com.arcadedb.server.ArcadeDBServer;
+import com.arcadedb.server.HAReplicatedDatabase;
 import com.arcadedb.server.monitor.QueryProfile;
 import com.arcadedb.server.monitor.ServerQueryProfiler;
 import com.arcadedb.server.network.PreAuthConnectionGate;
@@ -82,13 +87,13 @@ import com.arcadedb.server.security.ServerSecurityException;
 import com.arcadedb.server.security.ServerSecurityUser;
 import io.micrometer.core.instrument.Metrics;
 import com.arcadedb.utility.FileUtils;
-import com.arcadedb.utility.Pair;
 import com.arcadedb.utility.StringUtils;
 
 import java.io.EOFException;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.net.Socket;
+import java.net.SocketAddress;
 import java.net.SocketException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -106,12 +111,14 @@ import java.nio.CharBuffer;
 import java.nio.charset.CharsetEncoder;
 import java.nio.charset.CoderResult;
 import java.nio.charset.CodingErrorAction;
+import java.security.SecureRandom;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -137,7 +144,19 @@ public class PostgresNetworkExecutor extends Thread {
    * The cap PostgreSQL itself puts on a startup packet ({@code PQ_STARTUP_MSG_LIMIT} in {@code pqcomm.c}).
    */
   private static final int                                            MAX_STARTUP_MESSAGE_LENGTH = 10000;
-  private static final Map<Long, Pair<Long, PostgresNetworkExecutor>> ACTIVE_SESSIONS  = new ConcurrentHashMap<>();
+  /**
+   * The authenticated connections by backend process id, what a {@code CancelRequest} and {@code pg_cancel_backend} name a
+   * connection by. One id space for the JVM: it used to be a counter per connection, so every connection got pid 0, each
+   * registration replaced the last, and a cancel quoting one connection's key reached whichever registered last (#9689).
+   */
+  private static final Map<Integer, PostgresNetworkExecutor>         ACTIVE_SESSIONS  = new ConcurrentHashMap<>();
+  private static final AtomicInteger                                  LAST_PROCESS_ID  = new AtomicInteger();
+  /** The secret a CancelRequest has to quote: it is the request's only credential, so it must not be guessable. */
+  private static final SecureRandom                                   CANCEL_SECRETS   = new SecureRandom();
+  /** At most one WARNING per interval for refused cancel keys: a guessing client must not be able to flood the log. */
+  private static final long                                           REFUSED_CANCEL_WARNING_MS = 60_000L;
+  private static final AtomicLong                                     LAST_REFUSED_WARNING      = new AtomicLong();
+  private static final AtomicLong                                     REFUSED_SINCE_WARNING     = new AtomicLong();
   /** Bind-message parameter length denoting a NULL value (wire value -1, read unsigned). */
   private static final long                                           NULL_PARAM_LENGTH = 0xFFFFFFFFL;
   private static final Object[]                                       NO_PARAMETERS     = new Object[0];
@@ -222,7 +241,15 @@ public class PostgresNetworkExecutor extends Thread {
   private String   userPassword               = null;
   private ServerSecurityUser authenticatedUser;
   private int      consecutiveErrors          = 0;
-  private long     processIdSequence          = 0;
+  /**
+   * BackendKeyData of this connection: its process id and the secret a CancelRequest must quote to reach it. Volatile:
+   * the connection thread writes them while {@link #ACTIVE_SESSIONS} publishes the connection, and a CancelRequest or a
+   * {@code pg_*_backend} call on another thread reads them.
+   */
+  private volatile int processId;
+  private volatile int cancelSecret;
+  /** The statement this connection is running, which a CancelRequest stops; null between statements (issue #9689). */
+  private volatile RunningQuery runningStatement;
   private boolean  explicitTransactionStarted = false;
   private boolean  errorInTransaction         = false;
   /**
@@ -290,6 +317,106 @@ public class PostgresNetworkExecutor extends Thread {
     }
   }
 
+  /**
+   * Reports a CancelRequest that quoted a live backend with the wrong secret: at WARNING at most once a minute, with how
+   * many were refused since the last report, and at FINE otherwise, so guessing is visible and cannot flood the log. The
+   * count is approximate - two counters updated apart - which is all a report of a guessing rate needs.
+   */
+  private void logRefusedCancel(final int pid) {
+    final long refused = REFUSED_SINCE_WARNING.incrementAndGet();
+    final long now = System.currentTimeMillis();
+    final long last = LAST_REFUSED_WARNING.get();
+    if (now - last >= REFUSED_CANCEL_WARNING_MS && LAST_REFUSED_WARNING.compareAndSet(last, now)) {
+      REFUSED_SINCE_WARNING.set(0);
+      LogManager.instance().log(this, Level.WARNING,
+          "PSQL: cancel request for backend %d from %s refused: the secret key does not match (%d refused in the last minute)",
+          pid, channel.socket.getRemoteSocketAddress(), refused);
+    } else
+      LogManager.instance().log(this, Level.FINE, "PSQL: cancel request for backend %d from %s refused: the secret key does not match",
+          pid, channel.socket.getRemoteSocketAddress());
+  }
+
+  /**
+   * Gives the connection a process id no other open connection holds. The counter wraps, and an id still held by a
+   * connection that outlived a whole lap is skipped rather than shared.
+   */
+  private void registerProcessId() {
+    while (true) {
+      final int candidate = LAST_PROCESS_ID.updateAndGet(i -> i == Integer.MAX_VALUE ? 1 : i + 1);
+      if (ACTIVE_SESSIONS.putIfAbsent(candidate, this) == null) {
+        processId = candidate;
+        return;
+      }
+    }
+  }
+
+  /** The connection with this backend process id, or {@code null}: for {@code pg_cancel_backend} / {@code pg_terminate_backend}. */
+  static PostgresNetworkExecutor getBackend(final int processId) {
+    return ACTIVE_SESSIONS.get(processId);
+  }
+
+  int getProcessId() {
+    return processId;
+  }
+
+  String getUserName() {
+    return userName;
+  }
+
+  ArcadeDBServer getServer() {
+    return server;
+  }
+
+  /**
+   * Stops the statement this connection is running, if it runs one (issue #9689): it fails at its next check with
+   * {@code 57014 query_canceled} and its transaction rolls back as after any other failure. The connection stays open.
+   * Best effort, as on PostgreSQL: a cancel that arrives between two statements stops nothing, and one that crosses the
+   * start of the next statement may stop that one.
+   *
+   * @return whether a statement was running and has been asked to stop
+   */
+  boolean cancelRunningStatement(final String by) {
+    final RunningQuery statement = runningStatement;
+    return statement != null && statement.terminate(by);
+  }
+
+  /**
+   * Opens the registry entry of a statement this connection runs (issue #9689): it is listed by {@code list queries} and
+   * {@code SHOW TRANSACTIONS} with this connection's process id, and a {@code CancelRequest} stops it. Close it once the
+   * statement's work - its commit included - is over. The rows are materialized inside that window, so writing them to
+   * the client afterwards is not the statement's work and is not covered; COPY TO STDOUT, which streams rows as the
+   * statement produces them, keeps its entry until the last one is written.
+   */
+  private RunningStatement startStatement(final String language, final String text) {
+    final RunningQuery entry = server.getRunningQueries()
+        .register(database != null ? database.getName() : databaseName, userName, "postgres", null, null,
+            RunningQuery.Client.of(String.valueOf(processId), clientSocketAddress()));
+    entry.setStatement(language, text);
+    runningStatement = entry;
+    return new RunningStatement(entry);
+  }
+
+  private SocketAddress clientSocketAddress() {
+    final ChannelBinaryServer current = channel;
+    return current != null && current.socket != null ? current.socket.getRemoteSocketAddress() : null;
+  }
+
+  /** The entry of the statement running on this connection, closed once its work is over. Closing twice is harmless. */
+  private final class RunningStatement implements AutoCloseable {
+    private final RunningQuery entry;
+
+    private RunningStatement(final RunningQuery entry) {
+      this.entry = entry;
+    }
+
+    @Override
+    public void close() {
+      if (runningStatement == entry)
+        runningStatement = null;
+      entry.close();
+    }
+  }
+
   public void close() {
     shutdown = true;
     releasePreAuthTicket();
@@ -337,20 +464,18 @@ public class PostgresNetworkExecutor extends Thread {
 
       writeMessage("authentication ok", () -> channel.writeUnsignedInt(0), 'R', 8);
 
-      // BackendKeyData
-      final long pid = processIdSequence++;
-      final long secret = Math.abs(ThreadLocalRandom.current().nextInt(10000000));
-      writeMessage("backend key data", () -> {
-        channel.writeUnsignedInt((int) pid);
-        channel.writeUnsignedInt((int) secret);
-      }, 'K', 12);
-
-      ACTIVE_SESSIONS.put(pid, new Pair<>(secret, this));
-
-      // Every reported parameter, the ones the startup packet set included, goes out as a ParameterStatus ahead of
-      // the first ReadyForQuery: writeReadyForQueryMessage() reports them (issue #8241).
-
       try {
+        // BackendKeyData: registered before it is sent, so a client cancelling as soon as it has the key is not refused,
+        // and inside the block whose finally removes it, so a client gone before it arrives leaves nothing registered
+        cancelSecret = CANCEL_SECRETS.nextInt();
+        registerProcessId();
+        writeMessage("backend key data", () -> {
+          channel.writeUnsignedInt(processId);
+          channel.writeUnsignedInt(cancelSecret);
+        }, 'K', 12);
+
+        // Every reported parameter, the ones the startup packet set included, goes out as a ParameterStatus ahead of
+        // the first ReadyForQuery: writeReadyForQueryMessage() reports them (issue #8241).
         writeReadyForQueryMessage();
 
         while (!shutdown) {
@@ -415,7 +540,7 @@ public class PostgresNetworkExecutor extends Thread {
           }
         }
       } finally {
-        ACTIVE_SESSIONS.remove(pid);
+        ACTIVE_SESSIONS.remove(processId, this);
         rollbackPendingTransaction();
       }
 
@@ -571,7 +696,6 @@ public class PostgresNetworkExecutor extends Thread {
         // Execute(s) depend on this same fullResultSet being run exactly once.
         try {
           beginImplicitTransactionBlock(portal);
-          final ResultSet resultSet = runPortalQuery(portal);
           // Materializes the whole result now (issue #6458): Describe needs every row's columns, not just the
           // first, to catch a property that only shows up on a later row (documents can be sparse) - and the
           // portal keeps this list so the Execute(s) that follow slice it by their own row-limit instead of
@@ -579,9 +703,14 @@ public class PostgresNetworkExecutor extends Thread {
           // the simple-query path (issue #7034): the portal's row limit bounds what each Execute SENDS, not
           // what is held here. Marked executed only once the rows are held, so a refused portal is not left
           // looking like a drained one.
-          portal.fullResultSet = browseAndCacheBoundedResultSet(resultSet);
-          portal.executed = true;
-          resolvePortalColumns(portal, true);
+          // The query admission slot (issue #9518) covers the query and its column resolution, which may replay the query for an
+          // empty result, and goes back before anything is written to the client
+          try (final QueryAdmissionGate.Ticket ignored = QueryAdmissionGate.getInstance().admit();
+              final RunningStatement ignoredStatement = startStatement(portal.language, portal.query)) {
+            portal.fullResultSet = browseAndCacheBoundedResultSet(runPortalQuery(portal));
+            portal.executed = true;
+            resolvePortalColumns(portal, true);
+          }
           answerWithColumns(portal);
           portal.rowsDescribed = true;
           rememberDescribedLayout(portal);
@@ -597,6 +726,8 @@ public class PostgresNetworkExecutor extends Thread {
         } catch (final Exception e) {
           setExtendedProtocolError();
           writeError(ERROR_SEVERITY.ERROR, clientMessage("Error on executing query: " + e.getMessage(), e), sqlStateFor(e));
+        } finally {
+          CommandTimeoutOverride.clear();
         }
       } else if (portal.isExpectingResult && portal.columns != null) {
         // Already materialized: a synthetic answer fixed at PARSE (SHOW/system/catalog), or a portal a
@@ -699,6 +830,7 @@ public class PostgresNetworkExecutor extends Thread {
    * in another language had no columns to announce and was answered with nothing at all.
    */
   private ResultSet runPortalQuery(final PostgresPortal portal) {
+    publishStatementTimeout();
     if (portal.catalogQuery) {
       // Deferred from parseCommand because the query's filters are bound parameters (issue #6412).
       final CatalogAnswer catalogAnswer = handleCatalogQuery(portal.query, getParams(portal));
@@ -716,10 +848,48 @@ public class PostgresNetworkExecutor extends Thread {
     final Object[] parameters = portal.parameterValues != null ? portal.parameterValues.toArray() : new Object[0];
     final long metricsStart = QueryMetricsRecorder.Holder.startNanos();
     try {
-      return portal.sqlStatement.execute(database, parameters, createCommandContext());
+      return executeParsed(portal.sqlStatement, portal.language, portal.query, parameters);
     } finally {
       QueryMetricsRecorder.Holder.record(metricsStart, database.getName(), portal.language, "command");
     }
+  }
+
+  /**
+   * Runs a statement the extended protocol already parsed. Locally through the parsed statement, which saves parsing
+   * it again, except on an HA follower for a statement the leader must run: that one goes through
+   * {@code database.command(...)}, whose replicated implementation forwards it to the leader exactly as it does for
+   * the same text sent over the simple query protocol (issue #9954). Executed here instead, a write committed through
+   * Raft from the follower and a schema change was refused by the follower's schema layer, so the same statement
+   * succeeded or failed on a follower depending only on the driver's query mode.
+   */
+  private ResultSet executeParsed(final Statement statement, final String language, final String text, final Object[] parameters) {
+    if (mustForwardToTheLeader(statement))
+      // The text is parsed again there, out of the engine's statement cache, a cost only a follower's write pays. The
+      // replicated command() re-checks leadership itself, so a node that became the leader meanwhile runs it locally.
+      return database.command(language, text, server.getConfiguration(), parameters);
+    return statement.execute(database, parameters, createCommandContext());
+  }
+
+  /**
+   * A DDL statement is always forwarded from a follower: the schema is non-transactional and only the leader may change
+   * it. A non-idempotent statement is forwarded only outside an explicit transaction block. Inside one it runs in the
+   * follower's own transaction, which commits through Raft at COMMIT, because the forward commits it on the leader as a
+   * request of its own: a ROLLBACK would not undo it and the block would not be atomic (issue #10040, where the simple
+   * protocol still does that).
+   */
+  private boolean mustForwardToTheLeader(final Statement statement) {
+    if (!statement.isDDL() && (statement.isIdempotent() || explicitTransactionStarted))
+      return false;
+    return isHAFollower();
+  }
+
+  /** True when this connection's database is replicated and this server is not its leader. */
+  private boolean isHAFollower() {
+    if (database instanceof HAReplicatedDatabase replicated)
+      return !replicated.isLeader();
+    if (database instanceof DatabaseInternal internal && internal.getWrappedDatabaseInstance() instanceof HAReplicatedDatabase replicated)
+      return !replicated.isLeader();
+    return false;
   }
 
   /**
@@ -829,6 +999,10 @@ public class PostgresNetworkExecutor extends Thread {
         beginImplicitTransactionBlock(portal);
       // A SET is applied here and not at Parse (issue #8135), for the same reason as the transaction control above.
       applyPendingSetting(sessionSettings, portal);
+      if (portal.sessionCommand != null) {
+        applySessionCommand(portal.sessionCommand);
+        portal.sessionCommand = null;
+      }
 
       if (portal.ignoreExecution)
         // SAVEPOINT/RELEASE/SET and BEGIN/COMMIT/ROLLBACK never produce rows: Execute must answer
@@ -856,7 +1030,6 @@ public class PostgresNetworkExecutor extends Thread {
           portal.fullResultSet = showResultSet(portal.showName);
         if (!portal.executed) {
           final long engineStart = System.nanoTime();
-          final ResultSet resultSet = runPortalQuery(portal);
           if (portal.isExpectingResult) {
             // Materializes the whole result now (issue #6458), the same way Describe('P') does: a client that
             // never Described this portal first (it already knows the row shape) reaches this branch instead,
@@ -864,23 +1037,31 @@ public class PostgresNetworkExecutor extends Thread {
             // own row-limit below rather than re-running the statement. Bounded by the same cap as the
             // simple-query path (issue #7034): the Execute's own row limit bounds what is SENT, not what is
             // held here.
-            portal.fullResultSet = browseAndCacheBoundedResultSet(resultSet);
-            portal.executed = true;
-            profile.addEngineNanos(System.nanoTime() - engineStart);
-            // Execute never answers with a RowDescription (issue #8244): PostgreSQL's protocol reserves it for
-            // Describe, and a client that bound a statement it already knows the shape of sends Bind/Execute/Sync
-            // with no Describe - pgjdbc once prepareThreshold promotes a statement - and reads a RowDescription it
-            // did not ask for as the answer to a Describe it never sent, which desynchronizes the connection. The
-            // columns are still resolved here, since the data rows are encoded from them. portal.columnsDescribed
-            // means a real Describe('S') already told the client this exact shape/OIDs - and, for a schemaless
-            // type, a client that negotiated binary transfer off that promise cannot have it silently swapped for a
-            // differently-typed one here (issue #6725): keep the promised columns.
-            if (!portal.columnsDescribed) {
-              final long serStart = System.nanoTime();
-              resolvePortalColumns(portal, false);
-              profile.addSerializationNanos(System.nanoTime() - serStart);
+            // The query admission slot (issue #9518) covers the query and its column resolution, as in Describe
+            try (final QueryAdmissionGate.Ticket ignored = QueryAdmissionGate.getInstance().admit();
+                final RunningStatement ignoredStatement = startStatement(portal.language, portal.query)) {
+              portal.fullResultSet = browseAndCacheBoundedResultSet(runPortalQuery(portal));
+              portal.executed = true;
+              profile.addEngineNanos(System.nanoTime() - engineStart);
+              // Execute never answers with a RowDescription (issue #8244): PostgreSQL's protocol reserves it for
+              // Describe, and a client that bound a statement it already knows the shape of sends Bind/Execute/Sync
+              // with no Describe - pgjdbc once prepareThreshold promotes a statement - and reads a RowDescription it
+              // did not ask for as the answer to a Describe it never sent, which desynchronizes the connection. The
+              // columns are still resolved here, since the data rows are encoded from them. portal.columnsDescribed
+              // means a real Describe('S') already told the client this exact shape/OIDs - and, for a schemaless
+              // type, a client that negotiated binary transfer off that promise cannot have it silently swapped for a
+              // differently-typed one here (issue #6725): keep the promised columns.
+              if (!portal.columnsDescribed) {
+                final long serStart = System.nanoTime();
+                resolvePortalColumns(portal, false);
+                profile.addSerializationNanos(System.nanoTime() - serStart);
+              }
             }
           } else {
+            try (final QueryAdmissionGate.Ticket ignored = QueryAdmissionGate.getInstance().admit();
+                final RunningStatement ignoredStatement = startStatement(portal.language, portal.query)) {
+              runPortalQuery(portal);
+            }
             portal.executed = true;
             profile.addEngineNanos(System.nanoTime() - engineStart);
           }
@@ -973,6 +1154,7 @@ public class PostgresNetworkExecutor extends Thread {
       setExtendedProtocolError();
       writeError(ERROR_SEVERITY.ERROR, clientMessage("Error on executing query: " + e.getMessage(), e), sqlStateFor(e));
     } finally {
+      CommandTimeoutOverride.clear();
       if (portal != null)
         recordPostgresProfile(profile, portal.language, portal.query);
       QueryProfile.popCurrent();
@@ -1060,6 +1242,10 @@ public class PostgresNetworkExecutor extends Thread {
     Query query = null;
     String queryText = null;
     CatalogAnswer catalogAnswer = null;
+    // HELD FROM THE MOMENT THE STATEMENT STARTS UNTIL ITS ROWS AND COLUMNS ARE RESOLVED, NOT WHILE THEY ARE WRITTEN (ISSUE #9518)
+    QueryAdmissionGate.Ticket admission = null;
+    // The registry entry a CancelRequest stops, over the same window as the slot (issue #9689)
+    RunningStatement statement = null;
     try {
       final long deserStart = System.nanoTime();
       queryText = normalizeStatementText(readString());
@@ -1098,6 +1284,8 @@ public class PostgresNetworkExecutor extends Thread {
       profile.addDeserializationNanos(System.nanoTime() - deserStart);
       if (DEBUG)
         LogManager.instance().log(this, Level.INFO, "PSQL: query -> %s ", query);
+      // Read before the statement runs: a DISCARD ALL or RESET in this very statement changes the timeout from the next one on
+      publishStatementTimeout();
 
       // COPY ... TO STDOUT is answered by the protocol itself (issue #7188): its rows travel as CopyData rather than
       // DataRow, so it shares nothing below but the query inside it. Recognised ahead of everything else because
@@ -1144,10 +1332,19 @@ public class PostgresNetworkExecutor extends Thread {
       String commandTag = query.query;
       final String upperCaseText = query.query.toUpperCase(Locale.ENGLISH);
       final PostgresSystemQuery systemQuery = PostgresSystemQuery.parse(query.query);
+      PostgresTransactionStatement transactionStatement;
       if (isSettingCommand(upperCaseText)) {
         // Throws for a SET this server cannot parse or cannot honour, which the catch arms below answer with an
         // ErrorResponse: a CommandComplete SET is only ever sent for a SET that did what it asked (issue #8392)
         applySettingCommand(query.query);
+        answersNoRows = true;
+        resultSet = new IteratorResultSet(Collections.emptyIterator());
+      } else if ("sql".equalsIgnoreCase(query.language) && PostgresSessionCommand.isSessionCommand(upperCaseText)) {
+        // DISCARD ALL is what a connection pooler runs between two client sessions (issue #9328); none of these is a
+        // production of the SQL grammar, so the engine would refuse them with a parse error
+        final PostgresSessionCommand sessionCommand = PostgresSessionCommand.parse(query.query);
+        applySessionCommand(sessionCommand);
+        commandTag = sessionCommand.tag();
         answersNoRows = true;
         resultSet = new IteratorResultSet(Collections.emptyIterator());
       } else if (upperCaseText.startsWith("SAVEPOINT ") ||
@@ -1159,16 +1356,13 @@ public class PostgresNetworkExecutor extends Thread {
             createResultSet(systemQuery.columnName, systemQueryValue(systemQuery.function)).iterator());
       else if (upperCaseText.startsWith("SHOW "))
         resultSet = new IteratorResultSet(showResultSet(query.query.substring(5)).iterator());
-      else if (isBeginStatement(upperCaseText)) {
-        applyTransactionControl(PostgresPortal.TransactionControl.BEGIN, null);
-        answersNoRows = true;
-        resultSet = new IteratorResultSet(Collections.emptyIterator());
-      } else if (isCommitStatement(upperCaseText)) {
-        applyTransactionControl(PostgresPortal.TransactionControl.COMMIT, null);
-        answersNoRows = true;
-        resultSet = new IteratorResultSet(Collections.emptyIterator());
-      } else if (isRollbackStatement(upperCaseText)) {
-        applyTransactionControl(PostgresPortal.TransactionControl.ROLLBACK, null);
+      else if ((transactionStatement = PostgresTransactionStatement.parse(upperCaseText)) != null) {
+        // PostgreSQL's own spellings - START TRANSACTION, ABORT, BEGIN <modes>, AND [NO] CHAIN - none of which the SQL
+        // grammar parses (issue #9631). One it cannot honor (READ ONLY, SERIALIZABLE, AND CHAIN) is refused with 0A000
+        // before anything moves
+        transactionStatement.checkSupported();
+        applyTransactionControl(transactionStatement.control, transactionStatement.isolation);
+        commandTag = transactionStatement.tag;
         answersNoRows = true;
         resultSet = new IteratorResultSet(Collections.emptyIterator());
       } else {
@@ -1188,8 +1382,11 @@ public class PostgresNetworkExecutor extends Thread {
             commandTag = transactionControl.name();
             answersNoRows = true;
             resultSet = new IteratorResultSet(Collections.emptyIterator());
-          } else
+          } else {
+            admission = QueryAdmissionGate.getInstance().admit();
+            statement = startStatement(query.language, query.query);
             resultSet = database.command(query.language, query.query, server.getConfiguration());
+          }
         }
       }
       final List<Result> cachedResultSet = browseAndCacheBoundedResultSet(resultSet);
@@ -1208,6 +1405,11 @@ public class PostgresNetworkExecutor extends Thread {
           if (schemaColumns != null)
             columns = schemaColumns;
         }
+        // THE SLOT GOES BACK ONCE THE COLUMNS ARE RESOLVED - THEIR PROBE MAY REPLAY THE QUERY - AND BEFORE ANY ROW IS WRITTEN
+        if (admission != null)
+          admission.close();
+        if (statement != null)
+          statement.close();
         writeRowDescription(columns);
         writeDataRows(cachedResultSet, columns);
       }
@@ -1227,6 +1429,11 @@ public class PostgresNetworkExecutor extends Thread {
     } catch (final Exception e) {
       failSimpleQuery(clientMessage("Error on executing query: " + e.getMessage(), e), sqlStateFor(e));
     } finally {
+      if (admission != null)
+        admission.close();
+      if (statement != null)
+        statement.close();
+      CommandTimeoutOverride.clear();
       if (!explicitTransactionStarted)
         // A simple Query outside an explicit block is a transaction of its own, and the portals bound before it
         // end with it exactly as they do at a Sync (issue #8212)
@@ -1943,7 +2150,7 @@ public class PostgresNetworkExecutor extends Thread {
       // Use sendSuspendedOnLimit=false because this is an internal query for schema discovery,
       // not a client-initiated query that should send protocol messages
       final String sampleQuery = "SELECT FROM `" + typeName + "` LIMIT 1";
-      final ResultSet resultSet = database.query("sql", sampleQuery, server.getConfiguration());
+      final ResultSet resultSet = database.query("sql", sampleQuery);
       final List<Result> sampleRows = browseSample(resultSet, 1);
 
       if (!sampleRows.isEmpty()) {
@@ -2635,6 +2842,15 @@ public class PostgresNetworkExecutor extends Thread {
    */
   private int copyOut(final PostgresCopyStatement copy, final String language, final Object[] parameters,
       final Statement parsed, final QueryProfile profile) throws IOException {
+    // THE ROWS ARE STREAMED AS THE QUERY PRODUCES THEM, SO THE ADMISSION SLOT (ISSUE #9518) IS HELD UNTIL THE LAST ONE IS WRITTEN
+    try (final QueryAdmissionGate.Ticket ignored = QueryAdmissionGate.getInstance().admit();
+        final RunningStatement ignoredStatement = startStatement(language, copy.getQuery())) {
+      return copyOutAdmitted(copy, language, parameters, parsed, profile);
+    }
+  }
+
+  private int copyOutAdmitted(final PostgresCopyStatement copy, final String language, final Object[] parameters,
+      final Statement parsed, final QueryProfile profile) throws IOException {
     final String queryText = copy.getQuery();
     final long engineStart = System.nanoTime();
 
@@ -2644,7 +2860,7 @@ public class PostgresNetworkExecutor extends Thread {
     if (parsed != null) {
       final long metricsStart = QueryMetricsRecorder.Holder.startNanos();
       try {
-        resultSet = parsed.execute(database, parameters, createCommandContext());
+        resultSet = executeParsed(parsed, language, queryText, parameters);
       } finally {
         QueryMetricsRecorder.Holder.record(metricsStart, database.getName(), language, "command");
       }
@@ -3073,7 +3289,7 @@ public class PostgresNetworkExecutor extends Thread {
       final String portalName = readString();
 
       // Normalized HERE, once, for every branch below and for everything that reads portal.query later (issue
-      // #8245): isBeginStatement()/isCommitStatement()/isRollbackStatement() match by exact string equality, and
+      // #8245): PostgresTransactionStatement.parse() matches whole tokens up to the end of the text, and
       // getTag() reads portal.query for the command tag. The healthy transaction-control branch used to read the
       // raw wire text, so "BEGIN;", "COMMIT;", "\nCOMMIT" or "COMMIT " fell through to sqlEngine.parse(), whose
       // grammar accepts them (parse : statement SEMICOLON? EOF): the ENGINE began/committed/rolled back at
@@ -3125,7 +3341,7 @@ public class PostgresNetworkExecutor extends Thread {
         // queryCommand()'s own aborted-transaction branch, which has no language gate either. No real client
         // sends a transaction-control statement under a non-"sql" language mid-session.
         // portal.query is already trimmed and stripped of a trailing ';' at the top of this method (issue #8245),
-        // which is what isCommitStatement()/isRollbackStatement()'s exact string equality needs here too - a
+        // which is what isTransactionEndStatement()'s token matching needs here too - a
         // client that sends "ROLLBACK;" must not fall through to the silent return below (issue #6548 review
         // follow-up).
         final String abortedUpperCaseText = portal.query.toUpperCase(Locale.ENGLISH);
@@ -3228,6 +3444,12 @@ public class PostgresNetworkExecutor extends Thread {
         // nothing (issue #8392). The catch arms below answer the ErrorResponse and register no statement.
         portal.setting = resolveSetCommand(portal.query);
         portal.ignoreExecution = true;
+      } else if ("sql".equalsIgnoreCase(portal.language) && PostgresSessionCommand.isSessionCommand(upperCaseText)) {
+        // Parsed here, applied at Execute like a SET (issue #9328). The text becomes the command tag, which is what
+        // getTag() reads at Execute, and a statement this server cannot parse is refused here, at Parse
+        portal.sessionCommand = PostgresSessionCommand.parse(portal.query);
+        portal.query = portal.sessionCommand.tag();
+        portal.ignoreExecution = true;
       } else if (systemQuery != null) {
         createResultSet(portal, systemQuery.columnName, systemQueryValue(systemQuery.function));
 
@@ -3295,14 +3517,16 @@ public class PostgresNetworkExecutor extends Thread {
             // clients actually send BEGIN. SAVEPOINT/RELEASE/SET were already on the right side of this line;
             // these three now join them, and Execute answers them identically either way (the ignoreExecution
             // arm writes the same CommandComplete an empty cachedResultSet produced).
-            if (isBeginStatement(upperCaseText)) {
-              portal.transactionControl = PostgresPortal.TransactionControl.BEGIN;
-              portal.ignoreExecution = true;
-            } else if (isCommitStatement(upperCaseText)) {
-              portal.transactionControl = PostgresPortal.TransactionControl.COMMIT;
-              portal.ignoreExecution = true;
-            } else if (isRollbackStatement(upperCaseText)) {
-              portal.transactionControl = PostgresPortal.TransactionControl.ROLLBACK;
+            // PostgreSQL's own spellings (issue #9631) are recognized by PostgresTransactionStatement: START
+            // TRANSACTION, ABORT, BEGIN <modes>, AND [NO] CHAIN. One this server cannot honor is refused HERE, at
+            // Parse, like a SET it cannot honor, so no statement is registered for it. The query becomes the tag
+            // (START TRANSACTION, or the canonical BEGIN/COMMIT/ROLLBACK), which is what getTag() reads at Execute.
+            final PostgresTransactionStatement transactionStatement = PostgresTransactionStatement.parse(upperCaseText);
+            if (transactionStatement != null) {
+              transactionStatement.checkSupported();
+              portal.transactionControl = transactionStatement.control;
+              portal.isolationLevel = transactionStatement.isolation;
+              portal.query = transactionStatement.tag;
               portal.ignoreExecution = true;
             } else {
               final SQLQueryEngine sqlEngine = (SQLQueryEngine) database.getQueryEngine("sql");
@@ -3539,49 +3763,9 @@ public class PostgresNetworkExecutor extends Thread {
    */
   private static PostgresSessionSettings.Assignment transactionModes(final String query, final String modes,
       final String isolationParameter) {
-    final String[] tokens = TRANSACTION_MODE_SEPARATOR.split(modes.toUpperCase(Locale.ENGLISH));
-    String isolation = null;
-    int i = 0;
-    while (i < tokens.length) {
-      final String token = tokens[i++];
-      switch (token) {
-      case "ISOLATION" -> {
-        if (i >= tokens.length || !"LEVEL".equals(tokens[i++]) || i >= tokens.length)
-          throw syntaxError(query);
-        final String first = tokens[i++];
-        if ("SERIALIZABLE".equals(first))
-          isolation = "serializable";
-        else {
-          if (i >= tokens.length)
-            throw syntaxError(query);
-          final String second = tokens[i++];
-          if ("REPEATABLE".equals(first) && "READ".equals(second))
-            isolation = "repeatable read";
-          else if ("READ".equals(first) && ("COMMITTED".equals(second) || "UNCOMMITTED".equals(second)))
-            isolation = "read " + second.toLowerCase(Locale.ENGLISH);
-          else
-            throw syntaxError(query);
-        }
-      }
-      case "READ" -> {
-        if (i >= tokens.length)
-          throw syntaxError(query);
-        final String access = tokens[i++];
-        if ("ONLY".equals(access))
-          throw new PostgresSessionSettings.SettingException(PostgresSessionSettings.READ_ONLY_NOT_SUPPORTED,
-              PostgresSessionSettings.SQLSTATE_FEATURE_NOT_SUPPORTED);
-        if (!"WRITE".equals(access))
-          throw syntaxError(query);
-      }
-      case "NOT" -> {
-        if (i >= tokens.length || !"DEFERRABLE".equals(tokens[i++]))
-          throw syntaxError(query);
-      }
-      case "DEFERRABLE" -> {
-      }
-      default -> throw syntaxError(query);
-      }
-    }
+    // The same mode parser BEGIN / START TRANSACTION use (issue #9631), so both refuse the same things the same way
+    final String isolation = PostgresTransactionStatement.isolationOfModes(query,
+        TRANSACTION_MODE_SEPARATOR.split(modes.toUpperCase(Locale.ENGLISH)), 0);
     return isolation != null ? new PostgresSessionSettings.Assignment(isolationParameter, isolation, false) : PostgresSessionSettings.Assignment.NO_OP;
   }
 
@@ -3615,6 +3799,55 @@ public class PostgresNetworkExecutor extends Thread {
       return;
     sessionSettings.apply(setting);
     portal.setting = null;
+  }
+
+  /**
+   * Applies a {@code DISCARD}/{@code DEALLOCATE}/{@code CLOSE} (issue #9328) with PostgreSQL's own refusals. {@code
+   * DISCARD ALL} is what a pooler runs between two client sessions: every setting goes back to its reset value and
+   * every prepared statement and portal is dropped. {@code PLANS}, {@code SEQUENCES} and {@code TEMP} have nothing to
+   * discard on this server (no plan cache a client can see, no session sequence cache, no temporary table) and are
+   * accepted as the no-ops they are.
+   *
+   * @throws PostgresSessionSettings.SettingException {@code 25001} for {@code DISCARD ALL} inside a transaction block,
+   *                                                   {@code 26000}/{@code 34000} for a name that does not exist
+   */
+  private void applySessionCommand(final PostgresSessionCommand command) {
+    switch (command.kind()) {
+    case DISCARD_ALL -> {
+      if (explicitTransactionStarted)
+        throw new PostgresSessionSettings.SettingException("DISCARD ALL cannot run inside a transaction block", "25001");
+      sessionSettings.resetAll();
+      preparedStatements.clear();
+      portals.clear();
+    }
+    case DEALLOCATE_ALL -> preparedStatements.clear();
+    case DEALLOCATE -> {
+      if (preparedStatements.remove(command.name()) == null)
+        throw new PostgresSessionSettings.SettingException("prepared statement \"" + command.name() + "\" does not exist", "26000");
+    }
+    case CLOSE_ALL -> portals.clear();
+    case CLOSE -> {
+      if (portals.remove(command.name()) == null)
+        throw new PostgresSessionSettings.SettingException("cursor \"" + command.name() + "\" does not exist", "34000");
+    }
+    case DISCARD_PLANS, DISCARD_SEQUENCES, DISCARD_TEMP -> {
+      // Nothing to discard on this server
+    }
+    }
+  }
+
+  /**
+   * Publishes the {@code statement_timeout} of this connection as the deadline of the commands the current statement
+   * runs (issue #9329), or leaves them under the database's own {@code arcadedb.command.timeout}. The earlier of the two
+   * wins, so a session can ask for less time than the database allows but not for more. Cleared by
+   * {@link CommandTimeoutOverride#clear()} when the statement ends.
+   */
+  private void publishStatementTimeout() {
+    final long statementTimeout = sessionSettings.statementTimeoutMillis();
+    if (statementTimeout <= 0)
+      return;
+    final long databaseTimeout = database.getConfiguration().getValueAsLong(GlobalConfiguration.COMMAND_TIMEOUT);
+    CommandTimeoutOverride.set(databaseTimeout > 0 ? Math.min(databaseTimeout, statementTimeout) : statementTimeout);
   }
 
   /**
@@ -3740,6 +3973,7 @@ public class PostgresNetworkExecutor extends Thread {
       DatabaseContext.INSTANCE.init((DatabaseInternal) database).setCurrentUser(dbUser.getDatabaseUser(database));
       sessionSettings.setSuperuser(ServerSecurityUser.ROOT_USER.equals(dbUser.getName()));
       sessionSettings.setSessionUser(dbUser.getName());
+      sessionSettings.setCurrentSchema(database.getName());
       sessionSettings.setIsolationLevels(this::currentIsolationLevel, database::getTransactionIsolationLevel);
 
       database.setAutoTransaction(true);
@@ -3826,21 +4060,24 @@ public class PostgresNetworkExecutor extends Thread {
         channel.flush();
         return readStartupMessage(firstPacket);
       } else if (protocolVersion == 80877102) {
-        // CANCEL REQUEST, IGNORE IT
-        final long pid = channel.readUnsignedInt();
-        final long secret = channel.readUnsignedInt();
+        // CANCEL REQUEST: stops the statement the named connection is running, as PostgreSQL does - not the connection,
+        // which is what Statement.cancel() and pgjdbc's query timeout send it for (issue #9689). The secret is the
+        // request's only credential, and the request gets no answer either way
+        final int pid = (int) channel.readUnsignedInt();
+        final int secret = (int) channel.readUnsignedInt();
 
-        LogManager.instance().log(this, Level.INFO, "PSQL: Received cancel request pid %d", pid);
-
-        final Pair<Long, PostgresNetworkExecutor> session = ACTIVE_SESSIONS.get(pid);
-        if (session != null) {
-          if (session.getFirst() == secret) {
-            LogManager.instance().log(this, Level.INFO, "PSQL: Canceling session " + pid);
-            session.getSecond().close();
-          } else
-            LogManager.instance().log(this, Level.INFO, "PSQL: Blocked unauthorized canceling session " + pid);
-        } else
-          LogManager.instance().log(this, Level.INFO, "PSQL: Session " + pid + " not found");
+        final PostgresNetworkExecutor session = ACTIVE_SESSIONS.get(pid);
+        if (session == null)
+          // A connection that just closed, in a race with its own cancel: routine
+          LogManager.instance().log(this, Level.FINE, "PSQL: cancel request for backend %d ignored: no such backend", pid);
+        else if (session.cancelSecret != secret)
+          // An open connection's pid with the wrong secret is no client's race: somebody guessing keys
+          logRefusedCancel(pid);
+        else {
+          final boolean cancelled = session.cancelRunningStatement(session.userName);
+          LogManager.instance().log(this, Level.FINE, "PSQL: cancel request for backend %d: %s", pid,
+              cancelled ? "statement cancelled" : "no statement running");
+        }
 
         close();
         return false;
@@ -3929,7 +4166,9 @@ public class PostgresNetworkExecutor extends Thread {
     if (error instanceof PostgresSessionSettings.SettingException setting)
       return setting.sqlState;
     return switch (ErrorCategory.of(error)) {
-      case RETRY -> "40001";          // serialization_failure - the code drivers auto-retry on
+      // serialization_failure - the code drivers auto-retry on. Also a follower's refusal naming the leader (issue
+      // #9845): the wire has no redirect code, so the leader is named in the message instead (see withLeaderRedirect)
+      case RETRY -> "40001";
       case ARITHMETIC -> arithmeticSqlState(error);
       case DUPLICATED_KEY -> "23505"; // unique_violation
       case NOT_FOUND -> "P0002";      // no_data_found - class 02 is a completion condition, not an error
@@ -3938,6 +4177,7 @@ public class PostgresNetworkExecutor extends Thread {
       case VALIDATION -> "22023";     // invalid_parameter_value
       case PARSING -> "42601";        // syntax_error
       case TIMEOUT -> "57014";        // query_canceled
+      case TERMINATED -> "57014";     // query_canceled - what a CancelRequest or pg_cancel_backend ends a statement with
       case SERVER -> "XX000";         // internal_error
     };
   }
@@ -3961,9 +4201,30 @@ public class PostgresNetworkExecutor extends Thread {
    * the bounded part a driver acts on and stays. Without it the {@code M} field carried the raw exception text, which
    * for a duplicated key holds the customer's stored values (issue #8931). Errors the protocol layer itself words
    * ({@link PostgresProtocolException}) are bounded text and do not go through here.
+   * <p>
+   * A follower's refusal that names the leader also gets the leader's address, in every mode: see
+   * {@link #withLeaderRedirect}.
    */
   private String clientMessage(final String message, final Throwable cause) {
-    if (!server.isProductionMode())
+    return withLeaderRedirect(concealableMessage(message, cause), cause);
+  }
+
+  /**
+   * {@code text}, followed by the leader's address when {@code error} is a follower's refusal of leader-only work that
+   * names one (issue #9845). The Postgres wire has no redirect and the SQLSTATE stays {@code 40001} - see
+   * {@link #sqlStateFor} - so the address in the message is the only thing a client, a connection pool or an operator
+   * can act on, and it used to be dropped. Appended after concealment, as the gRPC transport does: it is an address the
+   * cluster put there, not engine detail.
+   */
+  static String withLeaderRedirect(final String text, final Throwable error) {
+    return ServerIsNotTheLeaderException.withLeaderSentence(text, error);
+  }
+
+  /** {@link #clientMessage} without the leader redirect: the message, or the placeholder in production mode. */
+  private String concealableMessage(final String message, final Throwable cause) {
+    // A refused SET/DISCARD is text the protocol layer wrote, with no user data in it, and the explanation is what the
+    // client is owed; it is also a client mistake, never a server fault (issue #9327)
+    if (!server.isProductionMode() || cause instanceof PostgresSessionSettings.SettingException)
       return message;
     // The client no longer sees the text, so the server log is the only copy the operator has. A routine, client-driven
     // failure (syntax error, duplicated key, ...) is not an incident: the message alone, no stack trace. Anything the
@@ -4150,12 +4411,14 @@ public class PostgresNetworkExecutor extends Thread {
       return "UPDATE " + resultSetCount;
     } else if (upperCaseText.startsWith("DELETE")) {
       return "DELETE " + resultSetCount;
-    } else if (isBeginStatement(upperCaseText)) {
-      return "BEGIN";
-    } else if (isCommitStatement(upperCaseText)) {
-      return "COMMIT";
-    } else if (isRollbackStatement(upperCaseText)) {
-      return "ROLLBACK";
+    } else if (PostgresTransactionStatement.TAG_START_TRANSACTION.equals(upperCaseText)) {
+      // The one transaction-control tag that is not the statement's first word (issue #9631)
+      return PostgresTransactionStatement.TAG_START_TRANSACTION;
+    } else if ("BEGIN".equals(upperCaseText) || "COMMIT".equals(upperCaseText) || "ROLLBACK".equals(upperCaseText)) {
+      // Never the client's own text: once recognized, every transaction-control statement - PostgresTransactionStatement
+      // or the #8273 grammar fallback - leaves its canonical tag as portal.query (extended) or commandTag (simple), which
+      // is the text that reaches here. A new recognition path must do the same, or its statement is tagged ""
+      return upperCaseText;
     } else if (upperCaseText.startsWith("SAVEPOINT ")) {
       return "SAVEPOINT";
     } else if (upperCaseText.startsWith("RELEASE ")) {
@@ -4164,47 +4427,27 @@ public class PostgresNetworkExecutor extends Thread {
       return "SET";
     } else if (upperCaseText.startsWith("RESET ")) {
       return "RESET";
+    } else if (upperCaseText.startsWith("SHOW ")) {
+      // PostgreSQL tags SHOW ALL the same way (issue #9326)
+      return "SHOW";
+    } else if (PostgresSessionCommand.isTag(upperCaseText)) {
+      // A DISCARD/DEALLOCATE/CLOSE leaves its canonical tag as the text of the statement (issue #9328)
+      return upperCaseText;
     } else {
       return "";
     }
   }
 
   /**
-   * Matches a BEGIN statement, including the SQL-standard {@code ... WORK} form alongside the bare and
-   * {@code ... TRANSACTION} forms - the same three-way shape as {@link #isCommitStatement} and
-   * {@link #isRollbackStatement} (issue #6543 review follow-up: PostgreSQL's own grammar is
-   * {@code BEGIN [ WORK | TRANSACTION ]}).
-   */
-  private static boolean isBeginStatement(final String upperCaseText) {
-    return "BEGIN".equals(upperCaseText) || "BEGIN TRANSACTION".equals(upperCaseText) || "BEGIN WORK".equals(upperCaseText);
-  }
-
-  /**
-   * Matches a COMMIT/END statement, the counterpart to the existing BEGIN check (issue #6457). Covers the
-   * SQL-standard {@code ... WORK} form alongside the bare and {@code ... TRANSACTION} forms (issue #6543).
-   */
-  private static boolean isCommitStatement(final String upperCaseText) {
-    return "COMMIT".equals(upperCaseText) || "COMMIT TRANSACTION".equals(upperCaseText) || "COMMIT WORK".equals(upperCaseText) ||
-        "END".equals(upperCaseText) || "END TRANSACTION".equals(upperCaseText) || "END WORK".equals(upperCaseText);
-  }
-
-  /**
-   * Matches a ROLLBACK statement (issue #6457, extended to the extended-query protocol and the
-   * SQL-standard {@code ... WORK} form by issue #6543). Deliberately excludes {@code ROLLBACK TO
-   * <savepoint>}, which the dispatch already routes elsewhere (it does not end the transaction).
-   */
-  private static boolean isRollbackStatement(final String upperCaseText) {
-    return "ROLLBACK".equals(upperCaseText) || "ROLLBACK TRANSACTION".equals(upperCaseText) || "ROLLBACK WORK".equals(upperCaseText);
-  }
-
-  /**
    * True for any statement that ends an explicit transaction block, whichever keyword the client used
-   * (issue #6457). While the transaction is aborted, real Postgres treats all three identically - a plain
-   * rollback - rather than distinguishing COMMIT (which would otherwise try to persist writes that
-   * already failed).
+   * (issue #6457) - COMMIT, END, ROLLBACK, ABORT, with their {@code WORK}/{@code TRANSACTION} and {@code AND NO CHAIN}
+   * forms (issue #9631). While the transaction is aborted, real Postgres treats them all identically - a plain
+   * rollback - rather than distinguishing COMMIT (which would otherwise try to persist writes that already failed).
+   * An {@code AND CHAIN} is not one: this server cannot honor it, so it is refused like any other statement there.
    */
   private static boolean isTransactionEndStatement(final String upperCaseText) {
-    return isCommitStatement(upperCaseText) || isRollbackStatement(upperCaseText);
+    final PostgresTransactionStatement statement = PostgresTransactionStatement.parse(upperCaseText);
+    return statement != null && statement.endsBlock();
   }
 
   private void writeNoData() {
@@ -4276,10 +4519,9 @@ public class PostgresNetworkExecutor extends Thread {
 
   /**
    * Trims a statement's text and strips ONE trailing {@code ';'} (and the whitespace in front of it), the form every
-   * statement matcher of this class expects: {@link #isBeginStatement}, {@link #isCommitStatement} and
-   * {@link #isRollbackStatement} match by exact string equality, and {@link #getTag} derives the command tag from the
-   * text. Shared by the simple-query and the extended-query protocol so the two cannot disagree on what a
-   * transaction-control statement looks like (issue #8245).
+   * statement matcher of this class expects: {@link PostgresTransactionStatement#parse} matches whole tokens up to the
+   * end of the text, and {@link #getTag} derives the command tag from the text. Shared by the simple-query and the
+   * extended-query protocol so the two cannot disagree on what a transaction-control statement looks like (issue #8245).
    */
   static String normalizeStatementText(final String text) {
     String normalized = text.trim();
@@ -4560,6 +4802,8 @@ public class PostgresNetworkExecutor extends Thread {
         else
           database.begin();
       }
+      // The client ends this transaction with its own COMMIT/ROLLBACK: an HA replica runs its writes in it (issue #10040)
+      ((DatabaseInternal) database).getTransaction().setClientManaged(true);
     }
     case COMMIT -> {
       try {
@@ -4591,9 +4835,9 @@ public class PostgresNetworkExecutor extends Thread {
   }
 
   /**
-   * The transaction-control statement the SQL grammar parsed, or null (issue #8273). The exact-text matchers
-   * ({@link #isBeginStatement} and its two siblings) recognize the PostgreSQL spellings the grammar rejects -
-   * {@code BEGIN TRANSACTION}, {@code END}, {@code ... WORK} - while this recognizes every spelling the grammar
+   * The transaction-control statement the SQL grammar parsed, or null (issue #8273). The protocol's own matcher
+   * ({@link PostgresTransactionStatement}) recognizes the PostgreSQL spellings the grammar rejects -
+   * {@code BEGIN TRANSACTION}, {@code END}, {@code ... WORK}, {@code START TRANSACTION}, {@code ABORT} - while this recognizes every spelling the grammar
    * ACCEPTS, which the matchers cannot enumerate: a leading or trailing comment (sqlcommenter, OpenTelemetry and
    * pooler routing hints append one to every statement), a doubled {@code ;}, {@code BEGIN ISOLATION <level>},
    * {@code COMMIT RETRY <n>}. Together they leave no transaction-control text for the engine to execute behind the

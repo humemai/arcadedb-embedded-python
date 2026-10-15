@@ -26,11 +26,14 @@ import com.arcadedb.index.IndexCursor;
 import com.arcadedb.index.IndexCursorEntry;
 import com.arcadedb.index.TempIndexCursor;
 import com.arcadedb.log.LogManager;
+import com.arcadedb.query.sql.executor.RIDFilter;
+import com.arcadedb.query.sql.executor.WorkGuard;
 import com.arcadedb.schema.FullTextIndexMetadata;
 import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.utility.TimeBoundRegex;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.index.Term;
+import org.apache.lucene.queryparser.classic.MultiFieldQueryParser;
 import org.apache.lucene.queryparser.classic.ParseException;
 import org.apache.lucene.queryparser.classic.QueryParser;
 import org.apache.lucene.search.BooleanClause;
@@ -105,8 +108,18 @@ public class FullTextQueryExecutor {
   private final LSMTreeFullTextIndex   index;
   private final Analyzer               analyzer;
   private final FullTextIndexMetadata  metadata;
+  // Stops the posting walks and the score accumulation of a statement that was terminated or ran past its deadline (issue
+  // #9894): all of a search's work happens before its first row, so no check of the executor between rows can reach it.
+  private final WorkGuard              guard;
+  private       int                    guardTicks;
   // Cached once: the indexed property names don't change during a query, but isUnqualified() is consulted per matched term.
   private final List<String>           propertyNames;
+  /**
+   * The fields an unqualified clause is restricted to, or null to search it across every indexed property (issue #9910).
+   */
+  private final String[]               restrictedFields;
+  /** Decides the matches on their RIDs before they are scored, or null to keep every match (issue #9909). */
+  private final RIDFilter              ridFilter;
 
   // BM25 scoring (issue #4687): the positive scoring tokens collected during matching, mapped to their field boost. Populated
   // only when the index uses BM25 similarity and only for positive clauses (never for MUST_NOT exclusion). A new executor is
@@ -146,10 +159,34 @@ public class FullTextQueryExecutor {
    * @param index the full-text index to search
    */
   public FullTextQueryExecutor(final LSMTreeFullTextIndex index) {
+    this(index, WorkGuard.forCommandDeadline(null));
+  }
+
+  /**
+   * Creates a new FullTextQueryExecutor for the given index, whose posting walks abort through {@code guard}.
+   *
+   * @param index the full-text index to search
+   * @param guard checked periodically while the postings are walked and the matches combined
+   */
+  public FullTextQueryExecutor(final LSMTreeFullTextIndex index, final WorkGuard guard) {
+    this(index, guard, null, null);
+  }
+
+  /**
+   * @param restrictedFields the indexed properties an unqualified clause is searched in, each clause becoming an OR of the
+   *                         same clause qualified with each of them, or null to search it across every indexed property.
+   *                         An explicitly qualified clause keeps its own field (issue #9910)
+   * @param ridFilter        decides the matches on their RIDs before they are scored or limited, or null (issue #9909)
+   */
+  public FullTextQueryExecutor(final LSMTreeFullTextIndex index, final WorkGuard guard, final List<String> restrictedFields,
+      final RIDFilter ridFilter) {
     this.index = index;
+    this.guard = guard;
     this.analyzer = index.getAnalyzer();
     this.metadata = index.getFullTextMetadata();
     this.propertyNames = index.getPropertyNames();
+    this.restrictedFields = restrictedFields != null ? restrictedFields.toArray(new String[0]) : null;
+    this.ridFilter = ridFilter;
   }
 
   /**
@@ -159,7 +196,12 @@ public class FullTextQueryExecutor {
    * @return a configured QueryParser
    */
   private QueryParser createQueryParser() {
-    final QueryParser parser = new QueryParser(DEFAULT_FIELD, analyzer);
+    // Restricted to some fields, an unqualified clause is expanded by Lucene's own parser into the OR of that clause over
+    // each of them - a term, a phrase, a prefix, a wildcard and a fuzzy term alike - which the collectors below then look up
+    // under the field-qualified keys the index stores for a multi-property index (issue #9910)
+    final QueryParser parser = restrictedFields != null ?
+        new MultiFieldQueryParser(restrictedFields, analyzer) :
+        new QueryParser(DEFAULT_FIELD, analyzer);
     if (metadata != null) {
       parser.setAllowLeadingWildcard(metadata.isAllowLeadingWildcard());
       if ("AND".equalsIgnoreCase(metadata.getDefaultOperator())) {
@@ -177,6 +219,7 @@ public class FullTextQueryExecutor {
    * @return cursor with matching documents, sorted by score descending
    */
   public IndexCursor search(final String queryString, final int limit) {
+    guard.check();
     resetState();
     return executeQuery(parseQuery(queryString), limit);
   }
@@ -228,6 +271,7 @@ public class FullTextQueryExecutor {
     if (!index.isBM25())
       throw new IllegalStateException("BM25 matching requires a BM25 full-text index");
 
+    guard.check();
     resetState();
     final Map<RID, AtomicInteger> matches = collectQueryMatches(parseQuery(queryString));
     return new BM25QueryMatch(Set.copyOf(matches.keySet()), Map.copyOf(scoringTokens), Map.copyOf(documentFrequencies));
@@ -244,6 +288,10 @@ public class FullTextQueryExecutor {
 
   private IndexCursor executeQuery(final Query query, final int limit) {
     final Map<RID, AtomicInteger> scoreMap = collectQueryMatches(query);
+    if (ridFilter != null)
+      // Before the scoring and the limit: the best matches are the best of those the filter keeps. The scores do not change,
+      // the document frequencies were counted on the postings
+      scoreMap.keySet().removeIf(rid -> !ridFilter.accepts(rid));
 
     // BM25 path: collectMatches above determined WHICH documents match (boolean/phrase/wildcard semantics). Re-rank that
     // candidate set with BM25 using the scoring tokens captured during matching.
@@ -252,11 +300,12 @@ public class FullTextQueryExecutor {
     // whose single query keys flow through). The SQL SEARCH_INDEX function reads only RID + $score from these entries, never
     // getKeys(); a direct executor.search() caller should likewise not rely on getKeys() for this path.
     if (index.isBM25())
-      return index.scoreCandidatesBM25(scoreMap.keySet(), scoringTokens, new Object[] {}, limit);
+      return index.scoreCandidatesBM25(scoreMap.keySet(), scoringTokens, new Object[] {}, limit, guard);
 
     final ArrayList<IndexCursorEntry> list = new ArrayList<>(scoreMap.size());
 
     for (final Map.Entry<RID, AtomicInteger> entry : scoreMap.entrySet()) {
+      tick();
       list.add(new IndexCursorEntry(new Object[] {}, entry.getKey(), entry.getValue().get()));
     }
 
@@ -324,6 +373,7 @@ public class FullTextQueryExecutor {
             mustResults.keySet().retainAll(termResults.keySet());
             // Add scores
             for (final RID rid : mustResults.keySet()) {
+              tick();
               if (termResults.containsKey(rid)) {
                 mustResults.get(rid).addAndGet(termResults.get(rid).get());
               }
@@ -338,6 +388,7 @@ public class FullTextQueryExecutor {
         // MUST clauses exist: only include documents that satisfy all MUST clauses
         // SHOULD clauses add bonus score to documents that already match MUST
         for (final Map.Entry<RID, AtomicInteger> entry : mustResults.entrySet()) {
+          tick();
           final RID rid = entry.getKey();
           int totalScore = entry.getValue().get();
           // Add bonus from SHOULD matches if present
@@ -349,6 +400,7 @@ public class FullTextQueryExecutor {
       } else if (!shouldResults.isEmpty()) {
         // No MUST clauses: SHOULD results are returned (standard OR behavior)
         for (final Map.Entry<RID, AtomicInteger> entry : shouldResults.entrySet()) {
+          tick();
           scoreMap.computeIfAbsent(entry.getKey(), k -> new AtomicInteger(0))
               .addAndGet(entry.getValue().get());
         }
@@ -526,8 +578,10 @@ public class FullTextQueryExecutor {
   private void collectAllIndexedRids(final Map<RID, AtomicInteger> scoreMap) {
     final IndexCursor cursor = index.iterateUnderlying(true, null, true);
     try {
-      while (cursor.hasNext())
+      while (cursor.hasNext()) {
+        tick();
         scoreMap.computeIfAbsent(cursor.next().getIdentity(), k -> new AtomicInteger(1));
+      }
     } finally {
       // a compacted-series cursor registers with its file, so an abandoned one keeps a retired file alive for the
       // lifetime of the database
@@ -556,6 +610,7 @@ public class FullTextQueryExecutor {
     long df = 0L;
     try (final IndexCursor cursor = index.getPostings(searchKey)) {
       while (cursor.hasNext()) {
+        tick();
         final RID rid = cursor.next().getIdentity();
         // Deletion markers carry a negative bucket id: they are not live documents and must not inflate the document frequency.
         if (rid.getBucketId() >= 0)
@@ -592,6 +647,7 @@ public class FullTextQueryExecutor {
       long df = 0L;
       try (final IndexCursor cursor = index.getPostings(searchKey)) {
         while (cursor.hasNext()) {
+          tick();
           final RID rid = cursor.next().getIdentity();
           // Deletion markers carry a negative bucket id and must not inflate the document frequency.
           if (rid.getBucketId() >= 0)
@@ -610,6 +666,7 @@ public class FullTextQueryExecutor {
 
     if (intersection != null) {
       for (final RID rid : intersection.keySet()) {
+        tick();
         scoreMap.computeIfAbsent(rid, k -> new AtomicInteger(0)).addAndGet(terms.length);
       }
     }
@@ -732,6 +789,7 @@ public class FullTextQueryExecutor {
     final Map<String, long[]> walkFrequencies = new HashMap<>();
     try {
       while (cursor.hasNext()) {
+        tick();
         final RID rid = cursor.next().getIdentity();
         final Object[] keys = cursor.getKeys();
         if (keys == null || keys.length == 0 || keys[0] == null)
@@ -756,6 +814,14 @@ public class FullTextQueryExecutor {
 
     for (final Map.Entry<String, long[]> frequency : walkFrequencies.entrySet())
       recordDocumentFrequency(frequency.getKey(), frequency.getValue()[0]);
+  }
+
+  /**
+   * One unit of matching work: a posting read or a match combined. Checks {@link #guard} every 1024 of them, so a cancelled
+   * or timed-out statement stops inside the walk rather than once the whole search is over (issue #9894).
+   */
+  private void tick() {
+    guard.checkPeriodically(++guardTicks);
   }
 
   /**

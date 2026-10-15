@@ -19,10 +19,12 @@
 package com.arcadedb.server.ha.raft;
 
 import com.arcadedb.database.LocalDatabase;
+import com.arcadedb.engine.NodeLocalFiles;
 import com.arcadedb.engine.PageSnapshot;
 import com.arcadedb.engine.PaginatedComponent;
 import com.arcadedb.engine.timeseries.TimeSeriesSealedStore;
 import com.arcadedb.log.LogManager;
+import com.arcadedb.schema.SortedIndexBuildRecoveryMarker;
 import com.arcadedb.serializer.json.JSONArray;
 import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.server.ArcadeDBServer;
@@ -237,7 +239,7 @@ public final class SnapshotManager {
     final byte[] buffer = new byte[8192];
     for (final File file : files) {
       final String name = file.getName();
-      if (isNodeLocalScratchFileName(name))
+      if (isNodeLocalFileName(name))
         continue;
 
       final Integer snapshotFileId = snapshotFileIds.get(name);
@@ -301,19 +303,25 @@ public final class SnapshotManager {
    * place. A crashed install leaves it on disk until the next open cleans it up.</li>
    * <li>{@code .ts.sealed.parts} - where a sealed store too large for one Raft entry is reassembled slice by slice
    * (#4416), so it is present for the whole of a multi-gigabyte transfer.</li>
-   * <li>{@code .snapshot-pending} - the marker saying this node has a half-installed snapshot. Its companions
-   * {@code .snapshot-new} and {@code .snapshot-backup} are directories, which the {@code File::isFile} listing
-   * above already excludes.</li>
-   * <li>{@code .snapshot-swap-state} - the durable phase of that install's file swap (#7769). It is cleared after
-   * the marker, so one crash can leave it beside a serving database until the next install; its temporary
-   * sibling is covered by the {@code .tmp} rule.</li>
+   * <li>the snapshot install's own files, named by {@link SnapshotInstaller#isSnapshotMachineryFileName(String)} so
+   * the list lives beside the constants it lists (#9307): the {@code .snapshot-pending} marker saying this node has a
+   * half-installed snapshot; {@code .snapshot-swap-state}, the durable phase of the swap (#7769), which is cleared
+   * after the marker so one crash can leave it beside a serving database until the next install; its
+   * {@code .tmp} sibling; {@code .snapshot-swap-state.validation-failed}, the verdict record prepared before every
+   * swap (#8942), which a swap that fails leaves beside the reopened database until the next install; and the
+   * transient {@code .snapshot-quarantine} and {@code .snapshot-complete} markers. Exact names rather than the
+   * {@code .snapshot} prefix, because a bucket may be named {@code .snapshot...} and its files are data. The
+   * companions {@code .snapshot-new}, {@code .snapshot-backup} and {@code .snapshot-orphans} are directories, which
+   * the {@code File::isFile} listing above already excludes.</li>
    * <li>{@code .ha-unverified-closed-copy} - the mark of a closed copy a resync could not verify (#8589). It lives only
    * in a closed database's directory, which this endpoint does not checksum, and the leader deletes it when it
    * reopens the copy; skipped anyway, so no node's own bookkeeping can ever read as a data difference.</li>
    * </ul>
-   * The last four exist only on a FOLLOWER, and only while it is catching up, which is the worst possible
-   * combination for a divergence detector: the node being interrogated is the one carrying a key the leader cannot
-   * have, and the endpoint reports that as a difference in the data.
+   * The {@code .ts.sealed.parts} staging, the snapshot install's files and {@code .ha-unverified-closed-copy} are
+   * written on a node that is receiving a snapshot or a sealed store, which is the worst possible
+   * combination for a divergence detector: the node being interrogated is the one carrying a key its peers cannot
+   * have, and the endpoint reports that as a difference in the data. Some outlive the transfer: the swap-state and
+   * verdict records can stay beside a database that is serving again, whatever role the node holds by then.
    * <p>
    * The final entry is #7955, and it is the odd one out: an index-compaction temporary is a fully REGISTERED
    * component file rather than unregistered scratch, so unlike everything above it also reaches the page snapshot
@@ -324,8 +332,20 @@ public final class SnapshotManager {
    * WRITING IT - the torn checksum {@link #computeFileChecksums(File, PageSnapshot)} exists to prevent. Skipping it
    * here settles both, before either branch is reached. See {@link PaginatedComponent#isTemporaryFileName(String)}
    * for why the test is on the extension and not on the name.
+   * <p>
+   * #9638 adds the engine's own node-local side files, which are not scratch at all - they persist across restarts - but
+   * are written per node and never shipped by a snapshot: {@code statistics.json} (and the legacy
+   * {@code cached-count.json}), written at whatever moment this node last closed; a Graph Analytical View's persisted
+   * CSR and contraction-hierarchy orders, written in a replicated database only on the leader; and
+   * {@code database.lck}, empty today and so matching by accident. They are declared by
+   * {@link NodeLocalFiles#isNodeLocalFileName(String)} in the engine, beside the constants their writers build the names
+   * from, rather than listed here, so a new engine side file is classified where it is written.
+   * <p>
+   * #9751 adds two more families there: an LSM vector index's node-locally built graph with its manifest, ordinal map
+   * and product quantization, and the {@code last-tx-id.bin} recency marker, which a snapshot does ship but which a live
+   * node rewrites at moments of its own.
    */
-  private static boolean isNodeLocalScratchFileName(final String name) {
+  private static boolean isNodeLocalFileName(final String name) {
     return name.endsWith(".wal")
         || name.endsWith(".prev.json")
         || name.endsWith(".lock")
@@ -334,9 +354,10 @@ public final class SnapshotManager {
         || name.endsWith(".tmp")
         || name.endsWith(TimeSeriesSealedStore.FILE_EXTENSION + ".incoming")
         || name.endsWith(TimeSeriesSealedStore.FILE_EXTENSION + ArcadeStateMachine.SEALED_STAGING_SUFFIX)
-        || name.equals(ArcadeDBServer.SNAPSHOT_PENDING_FILE)
+        || SnapshotInstaller.isSnapshotMachineryFileName(name)
         || name.equals(ArcadeDBServer.UNVERIFIED_CLOSED_COPY_FILE)
-        || name.equals(SnapshotInstaller.SNAPSHOT_SWAP_STATE_FILE)
-        || PaginatedComponent.isTemporaryFileName(name);
+        || name.startsWith(SortedIndexBuildRecoveryMarker.FILE_PREFIX)
+        || PaginatedComponent.isTemporaryFileName(name)
+        || NodeLocalFiles.isNodeLocalFileName(name);
   }
 }

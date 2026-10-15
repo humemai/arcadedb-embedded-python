@@ -24,12 +24,16 @@ import com.arcadedb.query.opencypher.ast.BooleanExpression;
 import com.arcadedb.query.opencypher.ast.CallClause;
 import com.arcadedb.query.opencypher.ast.ClauseEntry;
 import com.arcadedb.query.opencypher.ast.ComparisonExpression;
+import com.arcadedb.query.opencypher.ast.ConditionalStatement;
 import com.arcadedb.query.opencypher.ast.CreateClause;
 import com.arcadedb.query.opencypher.ast.CypherAdminStatement;
 import com.arcadedb.query.opencypher.ast.CypherDDLStatement;
+import com.arcadedb.query.opencypher.ast.CypherReferencedVariables;
 import com.arcadedb.query.opencypher.ast.CypherSessionStatement;
+import com.arcadedb.query.opencypher.ast.CypherShowSchemaStatement;
 import com.arcadedb.query.opencypher.ast.CypherStatement;
 import com.arcadedb.query.opencypher.ast.CypherTransactionStatement;
+import com.arcadedb.query.opencypher.ast.CypherTypeName;
 import com.arcadedb.query.opencypher.ast.DeleteClause;
 import com.arcadedb.query.opencypher.ast.Direction;
 import com.arcadedb.query.opencypher.ast.Expression;
@@ -37,6 +41,7 @@ import com.arcadedb.query.opencypher.ast.FinishClause;
 import com.arcadedb.query.opencypher.ast.ForeachClause;
 import com.arcadedb.query.opencypher.ast.InExpression;
 import com.arcadedb.query.opencypher.ast.IsNullExpression;
+import com.arcadedb.query.opencypher.ast.IsNormalizedExpression;
 import com.arcadedb.query.opencypher.ast.IsTypedExpression;
 import com.arcadedb.query.opencypher.ast.LabelCheckExpression;
 import com.arcadedb.query.opencypher.ast.LabelPredicate;
@@ -82,8 +87,10 @@ import org.antlr.v4.runtime.misc.Interval;
 import org.antlr.v4.runtime.tree.ParseTree;
 import org.antlr.v4.runtime.tree.TerminalNode;
 
+import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -128,6 +135,8 @@ public class CypherASTBuilder extends Cypher25ParserBaseVisitor<Object> {
       return handleDropCommand(ctx.dropCommand());
     if (ctx.showCommand() != null)
       return handleShowCommand(ctx.showCommand());
+    if (ctx.terminateCommand() != null)
+      return handleTerminateTransactions(ctx.terminateCommand().terminateTransactions());
     if (ctx.alterCommand() != null)
       return handleAlterCommand(ctx.alterCommand());
     if (ctx.transactionCommand() != null)
@@ -183,12 +192,112 @@ public class CypherASTBuilder extends Cypher25ParserBaseVisitor<Object> {
     throw new CommandParsingException("Only DROP CONSTRAINT, DROP INDEX and DROP USER are currently supported");
   }
 
-  private CypherAdminStatement handleShowCommand(final Cypher25Parser.ShowCommandContext ctx) {
+  private CypherStatement handleShowCommand(final Cypher25Parser.ShowCommandContext ctx) {
+    if (ctx.showConstraintCommand() != null)
+      return handleShowConstraints(ctx.showConstraintCommand());
+    if (ctx.showIndexCommand() != null)
+      return handleShowIndexes(ctx.showIndexCommand());
     if (ctx.showUsers() != null)
       return new CypherAdminStatement(CypherAdminStatement.Kind.SHOW_USERS, null, null, false, false);
     if (ctx.showCurrentUser() != null)
       return new CypherAdminStatement(CypherAdminStatement.Kind.SHOW_CURRENT_USER, null, null, false, false);
-    throw new CommandParsingException("Only SHOW USERS and SHOW CURRENT USER are currently supported");
+    if (ctx.showTransactions() != null)
+      return handleShowTransactions(ctx.showTransactions());
+    throw new CommandParsingException(
+        "Only SHOW USERS, SHOW CURRENT USER, SHOW TRANSACTIONS, SHOW CONSTRAINTS and SHOW INDEXES are currently supported");
+  }
+
+  /** {@code SHOW [ALL | [NODE | RELATIONSHIP] (UNIQUE | EXIST | KEY | PROPERTY TYPE)] CONSTRAINTS} (#9706). */
+  private CypherShowSchemaStatement handleShowConstraints(final Cypher25Parser.ShowConstraintCommandContext ctx) {
+    final CypherShowSchemaStatement.ConstraintFilter filter;
+    Cypher25Parser.ShowConstraintEntityContext entity = null;
+    final Cypher25Parser.ShowConstraintsEndContext end;
+    switch (ctx) {
+    case Cypher25Parser.ShowConstraintUniqueContext unique -> {
+      filter = CypherShowSchemaStatement.ConstraintFilter.UNIQUENESS;
+      entity = unique.showConstraintEntity();
+      end = unique.showConstraintsEnd();
+    }
+    case Cypher25Parser.ShowConstraintExistContext exist -> {
+      filter = CypherShowSchemaStatement.ConstraintFilter.EXISTENCE;
+      entity = exist.showConstraintEntity();
+      end = exist.showConstraintsEnd();
+    }
+    case Cypher25Parser.ShowConstraintKeyContext key -> {
+      filter = CypherShowSchemaStatement.ConstraintFilter.KEY;
+      entity = key.showConstraintEntity();
+      end = key.showConstraintsEnd();
+    }
+    case Cypher25Parser.ShowConstraintPropTypeContext propType -> {
+      filter = CypherShowSchemaStatement.ConstraintFilter.PROPERTY_TYPE;
+      entity = propType.showConstraintEntity();
+      end = propType.showConstraintsEnd();
+    }
+    case Cypher25Parser.ShowConstraintAllContext all -> {
+      filter = CypherShowSchemaStatement.ConstraintFilter.ALL;
+      end = all.showConstraintsEnd();
+    }
+    default -> throw new CommandParsingException("Unsupported SHOW CONSTRAINTS form: " + ctx.getText());
+    }
+    if (end.composableCommandClauses() != null)
+      throw new CommandParsingException("SHOW CONSTRAINTS cannot be followed by another command");
+
+    final CypherShowSchemaStatement.EntityFilter entityFilter = entity == null ?
+        CypherShowSchemaStatement.EntityFilter.ALL :
+        entity instanceof Cypher25Parser.NodeEntityContext ?
+            CypherShowSchemaStatement.EntityFilter.NODE :
+            CypherShowSchemaStatement.EntityFilter.RELATIONSHIP;
+    return new CypherShowSchemaStatement(CypherShowSchemaStatement.Kind.CONSTRAINTS, filter, entityFilter, null);
+  }
+
+  /** {@code SHOW [ALL | RANGE | TEXT | POINT | VECTOR | FULLTEXT | LOOKUP] INDEXES} (#9706). */
+  private CypherShowSchemaStatement handleShowIndexes(final Cypher25Parser.ShowIndexCommandContext ctx) {
+    if (ctx.showIndexesEnd().composableCommandClauses() != null)
+      throw new CommandParsingException("SHOW INDEXES cannot be followed by another command");
+    final Cypher25Parser.ShowIndexTypeContext type = ctx.showIndexType();
+    final String indexType = type == null || type.ALL() != null ? null : type.getText().toUpperCase(Locale.ROOT);
+    return new CypherShowSchemaStatement(CypherShowSchemaStatement.Kind.INDEXES, CypherShowSchemaStatement.ConstraintFilter.ALL,
+        CypherShowSchemaStatement.EntityFilter.ALL, indexType);
+  }
+
+  /**
+   * {@code SHOW TRANSACTIONS [ids] [YIELD ...|WHERE ...] [TERMINATE TRANSACTIONS ...]} (issue #9689). The tail is applied
+   * to the rows at execution, from the statement text, as on every other {@code SHOW}.
+   */
+  private CypherAdminStatement handleShowTransactions(final Cypher25Parser.ShowTransactionsContext ctx) {
+    final Cypher25Parser.NamesAndClausesContext clauses = ctx.namesAndClauses();
+    CypherAdminStatement composedTerminate = null;
+    if (clauses.composableCommandClauses() != null) {
+      if (clauses.composableCommandClauses().terminateCommand() == null)
+        throw new CommandParsingException("SHOW TRANSACTIONS can only be followed by TERMINATE TRANSACTIONS");
+      composedTerminate = handleTerminateTransactions(clauses.composableCommandClauses().terminateCommand().terminateTransactions());
+    }
+    final Cypher25Parser.StringsOrExpressionContext ids = clauses.stringsOrExpression();
+    return new CypherAdminStatement(CypherAdminStatement.Kind.SHOW_TRANSACTIONS, ids != null ? transactionIdLiterals(ids) : null,
+        ids != null ? transactionIdExpression(ids) : null, composedTerminate);
+  }
+
+  /** {@code TERMINATE TRANSACTIONS ids [YIELD ...|WHERE ...]} (issue #9689). */
+  private CypherAdminStatement handleTerminateTransactions(final Cypher25Parser.TerminateTransactionsContext ctx) {
+    if (ctx.composableCommandClauses() != null)
+      throw new CommandParsingException("TERMINATE TRANSACTIONS cannot be followed by another command");
+    return new CypherAdminStatement(CypherAdminStatement.Kind.TERMINATE_TRANSACTIONS, transactionIdLiterals(ctx.stringsOrExpression()),
+        transactionIdExpression(ctx.stringsOrExpression()), null);
+  }
+
+  private List<String> transactionIdLiterals(final Cypher25Parser.StringsOrExpressionContext ctx) {
+    if (ctx.stringList() == null)
+      return null;
+    final List<String> ids = new ArrayList<>();
+    for (final Cypher25Parser.StringLiteralContext literal : ctx.stringList().stringLiteral()) {
+      final String raw = literal.getText();
+      ids.add(decodeStringLiteral(raw.substring(1, raw.length() - 1)));
+    }
+    return ids;
+  }
+
+  private Expression transactionIdExpression(final Cypher25Parser.StringsOrExpressionContext ctx) {
+    return ctx.expression() != null ? expressionBuilder.parseExpression(ctx.expression()) : null;
   }
 
   private CypherAdminStatement handleAlterCommand(final Cypher25Parser.AlterCommandContext ctx) {
@@ -267,7 +376,7 @@ public class CypherASTBuilder extends Cypher25ParserBaseVisitor<Object> {
 
     // Determine constraint kind
     final CypherDDLStatement.ConstraintKind constraintKind;
-    String typedName = null;
+    CypherTypeName typedName = null;
     if (constraintType instanceof Cypher25Parser.ConstraintIsUniqueContext)
       constraintKind = CypherDDLStatement.ConstraintKind.UNIQUE;
     else if (constraintType instanceof Cypher25Parser.ConstraintIsNotNullContext)
@@ -276,7 +385,7 @@ public class CypherASTBuilder extends Cypher25ParserBaseVisitor<Object> {
       constraintKind = CypherDDLStatement.ConstraintKind.KEY;
     else if (constraintType instanceof Cypher25Parser.ConstraintTypedContext) {
       constraintKind = CypherDDLStatement.ConstraintKind.TYPED;
-      typedName = extractCypherTypeName(((Cypher25Parser.ConstraintTypedContext) constraintType).type());
+      typedName = parseTypeName(((Cypher25Parser.ConstraintTypedContext) constraintType).type(), "a property type constraint");
     } else
       throw new CommandParsingException("Unsupported constraint type: " + constraintType.getText());
 
@@ -382,86 +491,94 @@ public class CypherASTBuilder extends Cypher25ParserBaseVisitor<Object> {
   }
 
   /**
-   * Extracts the Cypher type name from a type context (e.g., STRING, INTEGER, BOOLEAN, FLOAT, DATE, LOCAL DATETIME).
-   * Returns a normalized uppercase string that can be mapped to an ArcadeDB Type.
-   */
-  private String extractCypherTypeName(final Cypher25Parser.TypeContext typeCtx) {
-    // The type rule is: typePart (BAR typePart)* - we only support single types (no union types)
-    if (typeCtx.typePart().size() != 1)
-      throw new CommandParsingException("Union types are not supported in IS TYPED constraints");
-    final Cypher25Parser.TypePartContext typePart = typeCtx.typePart(0);
-    final Cypher25Parser.TypeNameContext typeName = typePart.typeName();
-    // Build the normalized type name from the tokens (e.g., "LOCAL DATETIME" has two tokens)
-    final StringBuilder sb = new StringBuilder();
-    for (int i = 0; i < typeName.getChildCount(); i++) {
-      if (i > 0)
-        sb.append(' ');
-      sb.append(typeName.getChild(i).getText().toUpperCase(Locale.ROOT));
-    }
-    return sb.toString();
-  }
-
-  /**
    * Builds an {@link IsTypedExpression} from a parsed {@code IS [NOT] TYPED type} or
-   * {@code :: type} comparison (issue #3365 section 3.3). Detects {@code NOT NULL}
-   * nullability and {@code LIST<T>} element-type wrappers. Static so both
+   * {@code :: type} comparison (issue #3365 section 3.3). Static so both
    * {@link CypherASTBuilder} (boolean path) and {@link CypherExpressionBuilder}
    * (expression path) can share a single implementation.
    */
   static IsTypedExpression buildIsTypedExpression(final Expression leftExpr,
       final Cypher25Parser.TypeComparisonContext typeCtx) {
-    final boolean isNot = typeCtx.NOT() != null;
-    final Cypher25Parser.TypeContext typeContext = typeCtx.type();
-    if (typeContext.typePart().size() != 1)
-      throw new CommandParsingException("UnsupportedFeature: union types are not supported in IS TYPED");
-    final Cypher25Parser.TypePartContext typePart = typeContext.typePart(0);
+    return new IsTypedExpression(leftExpr, parseTypeName(typeCtx.type(), "IS TYPED"), typeCtx.NOT() != null);
+  }
 
-    final boolean requiresNonNull;
-    final Cypher25Parser.TypeNullabilityContext nullability = typePart.typeNullability();
-    if (nullability != null)
-      requiresNonNull = nullability.NOT() != null || nullability.EXCLAMATION_MARK() != null;
+  /**
+   * Builds an {@link IsNormalizedExpression} from a parsed {@code IS [NOT] [form] NORMALIZED} comparison (issue #9940). Shared by
+   * the boolean and the expression path, like {@link #buildIsTypedExpression}.
+   */
+  static IsNormalizedExpression buildIsNormalizedExpression(final Expression leftExpr,
+      final Cypher25Parser.NormalFormComparisonContext ctx) {
+    final Cypher25Parser.NormalFormContext formCtx = ctx.normalForm();
+    final Normalizer.Form form;
+    if (formCtx == null || formCtx.NFC() != null)
+      form = Normalizer.Form.NFC;
+    else if (formCtx.NFD() != null)
+      form = Normalizer.Form.NFD;
+    else if (formCtx.NFKC() != null)
+      form = Normalizer.Form.NFKC;
     else
-      requiresNonNull = false;
-
-    final Cypher25Parser.TypeNameContext nameCtx = typePart.typeName();
-    String normalizedName = normalizeTypeNameTokens(nameCtx);
-    String listElementTypeName = null;
-
-    // LIST<inner> / ARRAY<inner> from the typeName rule itself.
-    if (nameCtx.type() != null) {
-      listElementTypeName = extractInnerTypeName(nameCtx.type());
-      normalizedName = normalizedName.startsWith("ARRAY") ? "ARRAY" : "LIST";
-    } else if (!typePart.typeListSuffix().isEmpty()) {
-      // ANY VALUE LIST / INTEGER LIST suffix form: keep the inner type, switch to LIST envelope.
-      listElementTypeName = normalizedName;
-      normalizedName = "LIST";
-    }
-
-    return new IsTypedExpression(leftExpr, normalizedName, listElementTypeName, requiresNonNull, isNot);
+      form = Normalizer.Form.NFKD;
+    return new IsNormalizedExpression(leftExpr, form, ctx.NOT() != null);
   }
 
-  private static String normalizeTypeNameTokens(final Cypher25Parser.TypeNameContext typeName) {
-    final StringBuilder sb = new StringBuilder();
-    for (int i = 0; i < typeName.getChildCount(); i++) {
-      final ParseTree child = typeName.getChild(i);
-      if (child instanceof Cypher25Parser.TypeContext)
-        // LIST<inner> form: skip the inner type here, handled by the caller via nameCtx.type().
-        continue;
-      // Skip surrounding angle brackets for LIST<T>.
-      final String text = child.getText();
-      if ("<".equals(text) || ">".equals(text))
-        continue;
-      if (sb.length() > 0)
-        sb.append(' ');
-      sb.append(text.toUpperCase(Locale.ROOT));
-    }
-    return sb.toString();
+  /**
+   * {@code x IS DIRECTED} is the GQL directed predicate, but the Cypher 25 grammar has no rule for it and reads it as a test
+   * for a label named DIRECTED, which answered false for every relationship (issue #9940). It is refused; a label that
+   * really is called DIRECTED stays reachable as {@code x:DIRECTED} or {@code x IS `DIRECTED`}.
+   */
+  static void rejectDirectedPredicate(final Cypher25Parser.LabelExpressionContext ctx) {
+    if (ctx != null && ctx.IS() != null && "DIRECTED".equalsIgnoreCase(ctx.labelExpression4().getText()))
+      throw new FeatureNotImplementedException("the directed predicate 'IS DIRECTED' is not supported (every "
+          + "relationship is directed); to test a label named DIRECTED write ':DIRECTED' or 'IS `DIRECTED`'");
   }
 
-  private static String extractInnerTypeName(final Cypher25Parser.TypeContext typeCtx) {
+  /**
+   * Parses a Cypher type into its canonical {@link CypherTypeName}, shared by the {@code IS ::} predicate and the property
+   * type constraint so the two cannot read one spelling two ways (#9709). {@code LIST<T>}, {@code ARRAY<T>} and the postfix
+   * {@code T LIST} are all the list of {@code T}; {@code ANY<T>} with a single {@code T} is {@code T}. A union of types and a
+   * list of lists are refused: neither the predicate nor the schema can express them.
+   *
+   * @param where the construct being parsed, for the refusal message
+   */
+  static CypherTypeName parseTypeName(final Cypher25Parser.TypeContext typeCtx, final String where) {
     if (typeCtx.typePart().size() != 1)
-      throw new CommandParsingException("UnsupportedFeature: union types are not supported in IS TYPED");
-    return normalizeTypeNameTokens(typeCtx.typePart(0).typeName());
+      throw new CommandParsingException("UnsupportedFeature: union types are not supported in " + where);
+    final Cypher25Parser.TypePartContext typePart = typeCtx.typePart(0);
+    final Cypher25Parser.TypeNameContext nameCtx = typePart.typeName();
+    final boolean nonNull = isNonNull(typePart.typeNullability());
+
+    if (nameCtx.type() != null) {
+      // LIST<T> / ARRAY<T>, or ANY<T> (ANY VALUE<T>), which is T itself when T is a single type
+      final CypherTypeName inner = parseTypeName(nameCtx.type(), where);
+      if (nameCtx.ANY() != null)
+        return wrapInListSuffixes(new CypherTypeName(inner.name(), inner.elementName(), inner.nonNull() || nonNull,
+            inner.elementNonNull()), typePart, where);
+      if (inner.isList())
+        throw new CommandParsingException("UnsupportedFeature: a list of lists is not supported in " + where);
+      return wrapInListSuffixes(new CypherTypeName(CypherTypeName.LIST, inner.name(), nonNull, inner.nonNull()), typePart, where);
+    }
+
+    final StringBuilder sb = new StringBuilder();
+    for (int i = 0; i < nameCtx.getChildCount(); i++) {
+      if (i > 0)
+        sb.append(' ');
+      sb.append(nameCtx.getChild(i).getText().toUpperCase(Locale.ROOT));
+    }
+    return wrapInListSuffixes(new CypherTypeName(CypherTypeName.canonical(sb.toString()), null, nonNull, false), typePart, where);
+  }
+
+  /** {@code T LIST} / {@code T ARRAY}: the postfix spelling of {@code LIST<T>}, with its own nullability. */
+  private static CypherTypeName wrapInListSuffixes(final CypherTypeName type, final Cypher25Parser.TypePartContext typePart,
+      final String where) {
+    final List<Cypher25Parser.TypeListSuffixContext> suffixes = typePart.typeListSuffix();
+    if (suffixes.isEmpty())
+      return type;
+    if (suffixes.size() > 1 || type.isList())
+      throw new CommandParsingException("UnsupportedFeature: a list of lists is not supported in " + where);
+    return new CypherTypeName(CypherTypeName.LIST, type.name(), isNonNull(suffixes.getFirst().typeNullability()), type.nonNull());
+  }
+
+  private static boolean isNonNull(final Cypher25Parser.TypeNullabilityContext nullability) {
+    return nullability != null && (nullability.NOT() != null || nullability.EXCLAMATION_MARK() != null);
   }
 
   @Override
@@ -525,8 +642,111 @@ public class CypherASTBuilder extends Cypher25ParserBaseVisitor<Object> {
     return new UnionStatement(queries, unionAllFlags);
   }
 
+  /**
+   * True when the conditional query IS the statement: grammar-wise a {@code when} sits in a regularQuery, inside a
+   * nextStatement, inside a queryWithLocalDefinitions that is the statement's own rather than a subquery's body.
+   */
+  private static boolean isWholeStatement(final Cypher25Parser.WhenContext ctx) {
+    ParserRuleContext node = ctx;
+    for (final Class<?> expected : new Class<?>[] { Cypher25Parser.RegularQueryContext.class,
+        Cypher25Parser.NextStatementContext.class, Cypher25Parser.QueryWithLocalDefinitionsContext.class }) {
+      node = node.getParent();
+      if (!expected.isInstance(node))
+        return false;
+    }
+    return node.getParent() instanceof Cypher25Parser.StatementContext;
+  }
+
+  /**
+   * Cypher 25 conditional query {@code WHEN cond THEN query [WHEN ...] [ELSE query]} (issue #9940). Without this visit the
+   * default one returned the LAST branch, so the conditions were never read. The branch is chosen at execution time, when
+   * the parameters the conditions read are known, by {@code OpenCypherQueryEngine}; nested in a subquery the condition could
+   * read the outer row, which no subquery runner evaluates, so there it is refused.
+   */
+  @Override
+  public CypherStatement visitWhen(final Cypher25Parser.WhenContext ctx) {
+    if (!isWholeStatement(ctx))
+      throw new FeatureNotImplementedException("a conditional query (WHEN ... THEN ... ELSE ...) is only "
+          + "supported as a whole statement, not inside a subquery");
+
+    final List<Expression> conditions = new ArrayList<>(ctx.whenBranch().size());
+    final List<CypherStatement> branches = new ArrayList<>(ctx.whenBranch().size());
+    for (final Cypher25Parser.WhenBranchContext branch : ctx.whenBranch()) {
+      final Expression condition = expressionBuilder.parseExpression(branch.expression());
+      final CypherReferencedVariables referenced = CypherReferencedVariables.of(condition);
+      // Fail closed: a condition whose variables cannot all be listed (a subquery body, a pattern) would otherwise be
+      // evaluated against a row that does not exist and quietly read as null
+      if (!referenced.isComplete())
+        throw new FeatureNotImplementedException("the condition of a conditional query must be an expression "
+            + "over parameters; a subquery or a pattern is not supported there");
+      if (!referenced.getNames().isEmpty())
+        throw new CommandParsingException("UndefinedVariable: the condition of a conditional query can read parameters only, not '"
+            + referenced.getNames().iterator().next() + "'");
+      conditions.add(condition);
+      branches.add((CypherStatement) visit(branch.singleQuery()));
+    }
+    final CypherStatement elseBranch = ctx.elseBranch() != null ? (CypherStatement) visit(ctx.elseBranch().singleQuery()) : null;
+    return new ConditionalStatement(conditions, branches, elseBranch);
+  }
+
+  /**
+   * GQL {@code LET x = expr [, y = expr]} (issue #9940): binds each variable next to the incoming ones, row by row, which is an
+   * implicit {@code WITH *, expr AS x} per item. One WITH per item, in order, so an item can read the ones before it. An
+   * aggregation would turn that WITH into a grouping, which a LET never is, so it is refused.
+   */
+  public List<WithClause> visitLetClause(final Cypher25Parser.LetClauseContext ctx) {
+    final List<WithClause> clauses = new ArrayList<>(ctx.letItem().size());
+    for (final Cypher25Parser.LetItemContext item : ctx.letItem()) {
+      if (findPatternExpressionRecursive(item.expression()) != null)
+        throw new CommandParsingException("UnexpectedSyntax: Pattern expressions are not allowed in LET");
+      final Expression expression = expressionBuilder.parseExpression(item.expression());
+      final String variable = stripBackticks(item.variable().getText());
+      if (expression.containsAggregation())
+        throw new CommandParsingException("InvalidAggregation: LET " + variable
+            + " cannot aggregate, a LET binds one value per row; aggregate with WITH instead");
+
+      final ReturnClause.ReturnItem letItem = new ReturnClause.ReturnItem(expression, variable);
+      letItem.setExpressionText(item.expression().getText());
+      final List<ReturnClause.ReturnItem> items = new ArrayList<>(2);
+      items.add(ReturnClause.ReturnItem.star());
+      items.add(letItem);
+      clauses.add(WithClause.letBinding(items));
+    }
+    return clauses;
+  }
+
+  /**
+   * The graph a {@code USE} clause names (issue #9940). Only a graph named by its name is resolved; the graph functions
+   * ({@code graph.byName()}, {@code graph.byElementId()}) belong to composite databases and are refused. Whether the name is
+   * the current database is checked by {@link Cypher25AntlrParser}, which knows the database.
+   */
+  static String useGraphName(final Cypher25Parser.UseClauseContext ctx) {
+    Cypher25Parser.GraphReferenceContext reference = ctx.graphReference();
+    while (reference.graphReference() != null)
+      reference = reference.graphReference();
+    if (reference.symbolicAliasName() == null)
+      throw new FeatureNotImplementedException("USE " + getOriginalText(reference)
+          + " is not supported; a query can only USE the current database, by its name");
+
+    final StringBuilder name = new StringBuilder();
+    for (final Cypher25Parser.SymbolicNameStringContext part : reference.symbolicAliasName().symbolicNameString()) {
+      if (!name.isEmpty())
+        name.append('.');
+      name.append(stripBackticks(part.getText()));
+    }
+    return name.toString();
+  }
+
   @Override
   public CypherStatement visitSingleQuery(final Cypher25Parser.SingleQueryContext ctx) {
+    // `[USE graph] { query }`: the braces hold a whole query. Visiting only clause() turned it into an empty statement
+    // that ran nothing and returned no row (issue #9940)
+    if (ctx.queryWithLocalDefinitions() != null) {
+      if (ctx.useClause() != null)
+        useGraphName(ctx.useClause());
+      return visitQueryWithLocalDefinitions(ctx.queryWithLocalDefinitions());
+    }
+
     // Use builder pattern with dispatch table to eliminate cascading if/else statements
     final StatementBuilder builder = new StatementBuilder();
     final ClauseDispatcher dispatcher = new ClauseDispatcher();
@@ -548,6 +768,7 @@ public class CypherASTBuilder extends Cypher25ParserBaseVisitor<Object> {
 
   @Override
   public MatchClause visitMatchClause(final Cypher25Parser.MatchClauseContext ctx) {
+    checkMatchMode(ctx.matchMode());
     final List<PathPattern> pathPatterns = visitPatternList(ctx.patternList());
     validateNoParameterProperties(pathPatterns, "MATCH");
     final boolean optional = ctx.OPTIONAL() != null;
@@ -559,6 +780,35 @@ public class CypherASTBuilder extends Cypher25ParserBaseVisitor<Object> {
     }
 
     return newMatchClause(pathPatterns, optional, whereClause);
+  }
+
+  /**
+   * GQL match modes (issue #9940). {@code DIFFERENT RELATIONSHIPS} - in any of its spellings - is what every MATCH does
+   * anyway, relationship isomorphism within the clause, so it is accepted. {@code REPEATABLE ELEMENTS} asks for
+   * homomorphic matching, which no planner path implements: it is refused rather than answered isomorphically.
+   *
+   * @param ctx the match mode, or null when the clause has none
+   */
+  static void checkMatchMode(final Cypher25Parser.MatchModeContext ctx) {
+    if (ctx != null && ctx.REPEATABLE() != null)
+      throw new FeatureNotImplementedException("the " + spaced(ctx)
+          + " match mode is not supported; relationships are always matched with DIFFERENT RELATIONSHIPS semantics");
+  }
+
+  /** The keywords of a parse subtree separated by single spaces, upper case, to name a construct in an error. */
+  static String spaced(final ParseTree ctx) {
+    if (ctx instanceof TerminalNode)
+      return ctx.getText().toUpperCase(Locale.ROOT);
+    final StringBuilder sb = new StringBuilder();
+    for (int i = 0; i < ctx.getChildCount(); i++) {
+      final String part = spaced(ctx.getChild(i));
+      if (part.isEmpty())
+        continue;
+      if (!sb.isEmpty())
+        sb.append(' ');
+      sb.append(part);
+    }
+    return sb.toString();
   }
 
   /**
@@ -1448,7 +1698,8 @@ public class CypherASTBuilder extends Cypher25ParserBaseVisitor<Object> {
         && getOriginalText(parenExpr).trim().length() >= getOriginalText(expr6).trim().length();
     if (parenExpr != null && compCtx == null && parenSpansWholeExpression) {
       // Check if the parenthesized expression contains just a bare variable (e.g., WHERE (n)).
-      // A single-node pattern without relationships is invalid as a boolean predicate.
+      // It is kept as a single-node pattern because the grammar cannot tell a node from a Boolean variable: the
+      // validator refuses it when the variable is a graph entity, and the predicate reads the value otherwise (#9542).
       // Use getOriginalText (whitespace-preserving) rather than getText(): getText() strips all
       // whitespace, so a genuine predicate such as (friend IN inactive_nodes) collapses to
       // "friendINinactive_nodes" and spuriously matches the bare-identifier regex, getting
@@ -1456,7 +1707,7 @@ public class CypherASTBuilder extends Cypher25ParserBaseVisitor<Object> {
       final String innerText = getOriginalText(parenExpr.expression()).trim();
       // true/false/null are literals, not variables: "(true)" is a parenthesized boolean (issue #8994).
       if (innerText.matches("^[a-zA-Z_`][a-zA-Z0-9_`]*$") && !isBooleanOrNullKeyword(innerText)) {
-        final NodePattern nodePattern = new NodePattern(innerText, null, null);
+        final NodePattern nodePattern = new NodePattern(stripBackticks(innerText), null, null);
         final PathPattern singleNodePath = new PathPattern(List.of(nodePattern), List.of(), null);
         return new PatternPredicateExpression(singleNodePath, false);
       }
@@ -1529,6 +1780,7 @@ public class CypherASTBuilder extends Cypher25ParserBaseVisitor<Object> {
       // LabelComparison: labelExpression (e.g., n:Person, n:Person|Developer)
       if (compCtx instanceof Cypher25Parser.LabelComparisonContext) {
         final Cypher25Parser.LabelComparisonContext labelCtx = (Cypher25Parser.LabelComparisonContext) compCtx;
+        rejectDirectedPredicate(labelCtx.labelExpression());
         return parseLabelCheckExpression(leftExpr, labelCtx.labelExpression(), ctx.getText());
       }
 
@@ -1537,8 +1789,10 @@ public class CypherASTBuilder extends Cypher25ParserBaseVisitor<Object> {
         return buildIsTypedExpression(leftExpr, (Cypher25Parser.TypeComparisonContext) compCtx);
       }
 
-      // Other comparison types (NormalFormComparison)
-      // Fall back to text-based parsing for now
+      // NormalFormComparison: <expr> IS [NOT] [NFC|NFD|NFKC|NFKD] NORMALIZED (issue #9940)
+      if (compCtx instanceof Cypher25Parser.NormalFormComparisonContext normalForm)
+        return buildIsNormalizedExpression(leftExpr, normalForm);
+
       return createFallbackComparison(ctx);
     }
 
@@ -1653,6 +1907,12 @@ public class CypherASTBuilder extends Cypher25ParserBaseVisitor<Object> {
     // Use getRuleContext on the base class to find PathModeContext regardless of which alternative matched.
     PathMode pathMode = null;
     if (ctx.pathPatternPrefix() != null) {
+      // Only ALL [mode] [PATHS] - every matching path, which is what a pattern returns anyway - is executed. A
+      // selective prefix (ANY SHORTEST, ALL SHORTEST, SHORTEST k [GROUPS], ANY [k]) is refused: dropping it, as the
+      // parser used to, returned every path instead of the ones it selects (issue #9940).
+      if (!(ctx.pathPatternPrefix() instanceof Cypher25Parser.AllPathContext))
+        throw new FeatureNotImplementedException("the " + spaced(ctx.pathPatternPrefix())
+            + " path search prefix is not supported; use shortestPath() or allShortestPaths() to select shortest paths");
       final Cypher25Parser.PathModeContext pm = ctx.pathPatternPrefix().getRuleContext(
           Cypher25Parser.PathModeContext.class, 0);
       if (pm != null) {
@@ -1717,7 +1977,13 @@ public class CypherASTBuilder extends Cypher25ParserBaseVisitor<Object> {
     for (int i = 0; i < childCount; i++) {
       final ParseTree child = ctx.getChild(i);
       if (child instanceof Cypher25Parser.NodePatternContext) {
-        nodes.add(visitNodePattern((Cypher25Parser.NodePatternContext) child));
+        final NodePattern node = visitNodePattern((Cypher25Parser.NodePatternContext) child);
+        // A node pattern written right after an unquantified parenthesized path is that path's last node (GQL
+        // juxtaposition): the two are one node, not two consecutive ones
+        if (i > 0 && isUnquantifiedParenthesizedPath(ctx.getChild(i - 1)))
+          nodes.set(nodes.size() - 1, mergeJuxtaposedNodes(nodes.getLast(), node));
+        else
+          nodes.add(node);
       } else if (child instanceof Cypher25Parser.RelationshipPatternContext) {
         relationships.add(visitRelationshipPattern((Cypher25Parser.RelationshipPatternContext) child));
       } else if (child instanceof Cypher25Parser.QuantifierContext) {
@@ -1725,6 +1991,8 @@ public class CypherASTBuilder extends Cypher25ParserBaseVisitor<Object> {
           throw new CommandParsingException("InvalidSyntax: Quantifier has no preceding relationship");
         final int last = relationships.size() - 1;
         relationships.set(last, applyQuantifier(relationships.get(last), (Cypher25Parser.QuantifierContext) child));
+      } else if (isUnquantifiedParenthesizedPath(child)) {
+        spliceParenthesizedPath((Cypher25Parser.ParenthesizedPathContext) child, nodes, relationships);
       } else if (child instanceof Cypher25Parser.ParenthesizedPathContext) {
         // GQL Quantified Path Pattern (issue #3365 sections 1.4 and 1.5).
         // Phase A: lower a single-relationship grouped pattern to a variable-length
@@ -1842,6 +2110,103 @@ public class CypherASTBuilder extends Cypher25ParserBaseVisitor<Object> {
       outerNodes.add(toBoundaryNode(innerEnd));
   }
 
+  private static boolean isUnquantifiedParenthesizedPath(final ParseTree child) {
+    return child instanceof Cypher25Parser.ParenthesizedPathContext parenthesized && parenthesized.quantifier() == null;
+  }
+
+  /**
+   * Splices a parenthesized path pattern that carries no quantifier into the enclosing chain (issue #9940). With no
+   * quantifier there is exactly one repetition, so the group is the very path it wraps: its variables bind single elements,
+   * not the per-repetition lists of a quantified group, and its {@code WHERE} is an ordinary predicate on them. The
+   * predicate rides on the group's last node as an inline {@code WHERE}, which {@link InlineNodeWhereHoister} moves into the
+   * clause {@code WHERE} like any other. The group's first node is the node written before it, when there is one
+   * (juxtaposition), and {@link #visitPatternElement} merges the node written after it into its last node.
+   */
+  private void spliceParenthesizedPath(final Cypher25Parser.ParenthesizedPathContext pCtx, final List<NodePattern> outerNodes,
+      final List<RelationshipPattern> outerRels) {
+    final PathPattern inner = visitPattern(pCtx.pattern());
+    if (inner instanceof ShortestPathPattern)
+      throw new FeatureNotImplementedException(
+          "shortestPath() / allShortestPaths() inside a parenthesized path pattern is not supported");
+    if (inner.hasPathVariable())
+      throw new FeatureNotImplementedException("a path variable inside a parenthesized path pattern is not supported");
+    if (inner.getPathMode() != null)
+      throw new FeatureNotImplementedException("a path mode inside a parenthesized path pattern is not supported");
+
+    final List<NodePattern> innerNodes = new ArrayList<>(inner.getNodes());
+    if (pCtx.WHERE() != null) {
+      final int last = innerNodes.size() - 1;
+      final NodePattern lastNode = innerNodes.get(last);
+      innerNodes.set(last, withWhere(lastNode, and(lastNode.getWhereExpression(), parseBooleanExpression(pCtx.expression()))));
+    }
+
+    if (outerNodes.size() == outerRels.size() + 1)
+      outerNodes.set(outerNodes.size() - 1, mergeJuxtaposedNodes(outerNodes.getLast(), innerNodes.getFirst()));
+    else
+      outerNodes.add(innerNodes.getFirst());
+    for (int i = 0; i < inner.getRelationshipCount(); i++) {
+      outerRels.add(inner.getRelationship(i));
+      outerNodes.add(innerNodes.get(i + 1));
+    }
+  }
+
+  /**
+   * Two node patterns written next to each other, {@code (a)(b)}, are one node that must satisfy both. Their constraints are
+   * combined; a shape that cannot be expressed as a single node pattern - two different variables, which would each have to
+   * bind it, or a dynamic label, a property-map parameter or a label disjunction next to another constraint - is refused
+   * rather than half applied.
+   */
+  private static NodePattern mergeJuxtaposedNodes(final NodePattern left, final NodePattern right) {
+    if (isUnconstrained(left) && left.getVariable() == null)
+      return right;
+    if (isUnconstrained(right) && right.getVariable() == null)
+      return left;
+
+    final String variable = left.getVariable() != null ? left.getVariable() : right.getVariable();
+    if (left.getVariable() != null && right.getVariable() != null && !left.getVariable().equals(right.getVariable()))
+      throw new FeatureNotImplementedException("the node patterns (" + left.getVariable() + ") and ("
+          + right.getVariable() + ") written next to each other around a parenthesized path are the same node under two "
+          + "variables, which is not supported; use one variable for both");
+    if (left.hasDynamicLabels() || right.hasDynamicLabels() || left.getPropertiesParameterName() != null
+        || right.getPropertiesParameterName() != null || left.isLabelDisjunction() || right.isLabelDisjunction())
+      throw new FeatureNotImplementedException("combining a dynamic label, a property-map parameter or a "
+          + "label disjunction with the constraints of the adjacent node of a parenthesized path is not supported");
+
+    final List<String> labels = new ArrayList<>(left.getLabels());
+    for (final String label : right.getLabels())
+      if (!labels.contains(label))
+        labels.add(label);
+
+    final Map<String, Object> properties = new LinkedHashMap<>(left.getProperties());
+    for (final Map.Entry<String, Object> entry : right.getProperties().entrySet())
+      if (properties.putIfAbsent(entry.getKey(), entry.getValue()) != null)
+        throw new FeatureNotImplementedException("the property '" + entry.getKey()
+            + "' is constrained by both node patterns written next to each other around a parenthesized path, which is not "
+            + "supported; constrain it once");
+
+    return new NodePattern(variable, labels, null,
+        left.hasExplicitProperties() || right.hasExplicitProperties() ? properties : null, null, false,
+        and(left.getWhereExpression(), right.getWhereExpression()));
+  }
+
+  private static boolean isUnconstrained(final NodePattern node) {
+    return !node.hasLabels() && !node.hasDynamicLabels() && !node.hasProperties() && !node.hasWhereExpression();
+  }
+
+  private static NodePattern withWhere(final NodePattern node, final BooleanExpression where) {
+    return new NodePattern(node.getVariable(), node.getLabels(), node.getDynamicLabels(),
+        node.hasExplicitProperties() ? node.getProperties() : null, node.getPropertiesParameterName(),
+        node.isLabelDisjunction(), where);
+  }
+
+  private static BooleanExpression and(final BooleanExpression left, final BooleanExpression right) {
+    if (left == null)
+      return right;
+    if (right == null)
+      return left;
+    return new LogicalExpression(LogicalExpression.Operator.AND, left, right);
+  }
+
   /**
    * Returns true when the group is the Phase A shape that a plain variable-length relationship
    * already expresses exactly: one relationship, no inner {@code WHERE}, and endpoints that bind
@@ -1864,6 +2229,11 @@ public class CypherASTBuilder extends Cypher25ParserBaseVisitor<Object> {
   private static boolean canLowerToVariableLengthRelationship(final PathPattern inner, final BooleanExpression innerWhere) {
     if (innerWhere != null || inner.getRelationshipCount() != 1)
       return false;
+    // A group, or a variable-length relationship, is not one hop: lowering it would overwrite its own bounds with the outer
+    // quantifier's and drop the inner repetition, so it goes to Phase B, which refuses both shapes (issue #9940)
+    final RelationshipPattern relationship = inner.getRelationship(0);
+    if (relationship instanceof QuantifiedPathPattern || relationship.isVariableLength())
+      return false;
     for (int i = 0; i < inner.getNodeCount(); i++) {
       final NodePattern node = inner.getNode(i);
       if (node.getVariable() != null && !node.getVariable().isEmpty())
@@ -1884,31 +2254,31 @@ public class CypherASTBuilder extends Cypher25ParserBaseVisitor<Object> {
     for (int i = 0; i < inner.getRelationshipCount(); i++) {
       final RelationshipPattern rel = inner.getRelationship(i);
       if (rel instanceof QuantifiedPathPattern)
-        throw new CommandParsingException(
-            "FeatureNotImplemented: nesting a quantified path pattern inside another one is not supported (issue #4531)");
+        throw new FeatureNotImplementedException(
+            "nesting a quantified path pattern inside another one is not supported (issue #4531)");
       if (rel.isVariableLength())
-        throw new CommandParsingException(
-            "FeatureNotImplemented: a variable-length relationship inside a quantified path pattern is not supported (issue #4531)");
+        throw new FeatureNotImplementedException(
+            "a variable-length relationship inside a quantified path pattern is not supported (issue #4531)");
     }
     if (inner.hasPathVariable())
-      throw new CommandParsingException(
-          "FeatureNotImplemented: a path variable inside a quantified path pattern is not supported (issue #4531)");
+      throw new FeatureNotImplementedException(
+          "a path variable inside a quantified path pattern is not supported (issue #4531)");
     // A whole-map parameter, (n $props), is not a set of equality predicates the per-repetition matcher
     // can check, and a dynamic $(expression) label resolves per row rather than per repetition. Both
     // would be silently dropped rather than applied, so name them instead.
     for (int i = 0; i < inner.getNodeCount(); i++) {
       final NodePattern node = inner.getNode(i);
       if (node.getPropertiesParameterName() != null)
-        throw new CommandParsingException(
-            "FeatureNotImplemented: a parameterised property map on a node inside a quantified path pattern is not supported (issue #4531)");
+        throw new FeatureNotImplementedException(
+            "a parameterised property map on a node inside a quantified path pattern is not supported (issue #4531)");
       if (node.hasDynamicLabels())
-        throw new CommandParsingException(
-            "FeatureNotImplemented: dynamic labels on a node inside a quantified path pattern are not supported (issue #4531)");
+        throw new FeatureNotImplementedException(
+            "dynamic labels on a node inside a quantified path pattern are not supported (issue #4531)");
     }
     for (int i = 0; i < inner.getRelationshipCount(); i++)
       if (inner.getRelationship(i).getPropertiesParameterName() != null)
-        throw new CommandParsingException(
-            "FeatureNotImplemented: a parameterised property map on a relationship inside a quantified path pattern is not supported (issue #4531)");
+        throw new FeatureNotImplementedException(
+            "a parameterised property map on a relationship inside a quantified path pattern is not supported (issue #4531)");
   }
 
   /**
@@ -2017,13 +2387,13 @@ public class CypherASTBuilder extends Cypher25ParserBaseVisitor<Object> {
     }
 
     // Label expression (relationship types). A negation, the wildcard or a mix of '&' and '|' is checked as a
-    // predicate on the relationship, keeping as its type filter only a type every match must have (#8992).
+    // predicate on the relationship, keeping as its type filter only a type every match must have (#8992). On a
+    // variable-length relationship the predicate rides the inline WHERE, which every expansion evaluates per hop, so
+    // each relationship of the path is checked (#9117).
     BooleanExpression labelCheck = null;
     final LabelPredicate labelPredicate = ParserUtils.buildRelationshipTypePredicate(ctx.labelExpression());
     if (labelPredicate != null) {
       rejectLabelExpressionInWriteClause(ctx.labelExpression());
-      if (ctx.pathLength() != null)
-        ParserUtils.rejectOnVariableLengthRelationship(ctx.labelExpression());
       final List<String> required = labelPredicate.requiredLabels();
       types = required.isEmpty() ? null : required;
       if (variable == null)

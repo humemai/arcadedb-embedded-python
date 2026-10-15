@@ -381,22 +381,7 @@ function profilerRenderQueryTable() {
   var queries = profilerData.queries || [];
   for (var i = 0; i < queries.length; i++) {
     var q = queries[i];
-    var truncated = q.queryText.length > 80 ? q.queryText.substring(0, 80) + "..." : q.queryText;
-    jQuery("#profilerQueryTable tbody").append(
-      '<tr style="cursor: pointer;" onclick="profilerShowDetail(' + i + ')">' +
-      '<td title="' + escapeHtml(q.queryText) + '">' + escapeHtml(truncated) + '</td>' +
-      '<td>' + escapeHtml(q.language) + '</td>' +
-      '<td>' + escapeHtml(q.database) + '</td>' +
-      '<td>' + q.executionCount + '</td>' +
-      '<td>' + q.totalTimeMs + '</td>' +
-      '<td>' + q.avgTimeMs + '</td>' +
-      '<td>' + q.maxTimeMs + '</td>' +
-      '<td>' + q.p99TimeMs + '</td>' +
-      '<td>' + (q.deserializationTotalTimeMs || 0) + '</td>' +
-      '<td>' + (q.engineTotalTimeMs || 0) + '</td>' +
-      '<td>' + (q.serializationTotalTimeMs || 0) + '</td>' +
-      '</tr>'
-    );
+    jQuery("#profilerQueryTable tbody").append(profilerRenderQueryRow(q, i));
   }
 
   profilerQueryDT = jQuery("#profilerQueryTable").DataTable({
@@ -438,6 +423,27 @@ function profilerStepMeasuredCell(step) {
     return '' + measured;
   return '<span class="text-warning" title="Total, Avg, Max and P99 are drawn from these ' + measured +
     ' timed occurrences, not from all ' + step.executionCount + '.">' + measured + '</span>';
+}
+
+// THE QUERY TEXT CELL HOLDS A REAL BUTTON SO THE ROW IS REACHABLE WITH TAB AND TRIGGERED WITH ENTER/SPACE (ISSUE #9508).
+// A TABLE ROW CANNOT BE A BUTTON; THE ROW KEEPS ITS CLICK FOR THE MOUSE BUT IGNORES CLICKS BUBBLING UP FROM THE BUTTON,
+// SO THE DETAIL OPENS ONCE
+function profilerRenderQueryRow(q, i) {
+  var truncated = q.queryText.length > 80 ? q.queryText.substring(0, 80) + "..." : q.queryText;
+  return '<tr style="cursor: pointer;"' + studioAction("profilerShowDetail", [i]) + '>' +
+    '<td><button type="button" class="profiler-query-button" title="' + escapeHtml(q.queryText) + '"' + studioAction("profilerShowDetail", [i]) + ' data-stop-propagation>' +
+    escapeHtml(truncated) + '</button></td>' +
+    '<td>' + escapeHtml(q.language) + '</td>' +
+    '<td>' + escapeHtml(q.database) + '</td>' +
+    '<td>' + q.executionCount + '</td>' +
+    '<td>' + q.totalTimeMs + '</td>' +
+    '<td>' + q.avgTimeMs + '</td>' +
+    '<td>' + q.maxTimeMs + '</td>' +
+    '<td>' + q.p99TimeMs + '</td>' +
+    '<td>' + (q.deserializationTotalTimeMs || 0) + '</td>' +
+    '<td>' + (q.engineTotalTimeMs || 0) + '</td>' +
+    '<td>' + (q.serializationTotalTimeMs || 0) + '</td>' +
+    '</tr>';
 }
 
 function profilerShowDetail(index) {
@@ -603,21 +609,17 @@ function profilerRenderAiResponse(data) {
   profilerAiCommandCounter = 0;
   var contentHtml = '';
 
-  // Render markdown content
-  if (data.response) {
-    if (typeof marked !== "undefined") {
-      try { contentHtml = marked.parse(data.response); }
-      catch (e) { contentHtml = '<pre>' + escapeHtml(data.response) + '</pre>'; }
-    } else
-      contentHtml = '<pre style="white-space: pre-wrap;">' + escapeHtml(data.response) + '</pre>';
-  }
+  // The analysis is model output delivered by a third-party portal: untrusted, so it goes through the escape-first markdown
+  // renderer (studio-support-markdown.js), never through a library that keeps raw HTML (issue #9626)
+  if (data.response)
+    contentHtml = supportMarkdownHtml(data.response, { maxChars: SUPPORT_MD_AI_MAX_CHARS, maxRows: SUPPORT_MD_AI_MAX_ROWS });
 
   var html = '<div class="ai-message-content" style="color: var(--text-primary); line-height: 1.6; font-size: 0.9rem;">' + contentHtml + '</div>';
 
   // Render command blocks
   if (data.commands && data.commands.length > 0) {
     if (data.commands.length > 1)
-      html += '<div class="mt-2 mb-2"><button class="btn btn-sm" style="background: var(--color-brand); color: white; border: none;" onclick="profilerAiExecuteAll(this)">' +
+      html += '<div class="mt-2 mb-2"><button class="btn btn-sm" style="background: var(--color-brand); color: white; border: none;"' + studioAction("profilerAiExecuteAll", [STUDIO_ARG_THIS]) + '>' +
         '<i class="fa fa-forward me-1"></i>Execute All</button></div>';
 
     for (var j = 0; j < data.commands.length; j++)
@@ -636,7 +638,7 @@ function profilerRenderAiCommandBlock(cmd) {
     '<div style="padding: 8px 12px; background: var(--bg-sidebar); border-bottom: 1px solid var(--border-main); display: flex; align-items: center; justify-content: space-between;">' +
     '<div>' + purpose +
     '<span class="badge" style="background: var(--color-brand); color: white; font-size: 0.7rem;">' + lang + '</span></div>' +
-    '<button class="btn btn-sm" style="background: var(--color-brand); color: white; border: none; font-size: 0.8rem;" onclick="profilerAiExecuteCommand(this, \'' + blockId + '\')">' +
+    '<button class="btn btn-sm" style="background: var(--color-brand); color: white; border: none; font-size: 0.8rem;"' + studioAction("profilerAiExecuteCommand", [STUDIO_ARG_THIS, blockId]) + '>' +
     '<i class="fa fa-play me-1"></i>Execute</button></div>' +
     '<pre id="' + blockId + '" style="margin: 0; padding: 12px; background: var(--bg-code); color: var(--text-code); font-size: 0.85rem; overflow-x: auto; white-space: pre-wrap; word-break: break-word;" ' +
     'data-language="' + escapeHtml(cmd.language || "sql") + '" data-command="' + escapeHtml(cmd.command) + '">' +
@@ -698,7 +700,7 @@ function profilerAiExecuteAll(button) {
   var commands = [];
   blocks.each(function() {
     var pre = jQuery(this).find("pre");
-    var execBtn = jQuery(this).find("button[onclick*='profilerAiExecuteCommand']");
+    var execBtn = jQuery(this).find("button[data-on-click='profilerAiExecuteCommand']");
     commands.push({ pre: pre, btn: execBtn, blockId: pre.attr("id") });
   });
 

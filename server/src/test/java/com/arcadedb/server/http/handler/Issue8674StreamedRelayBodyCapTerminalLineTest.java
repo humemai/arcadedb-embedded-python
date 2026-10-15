@@ -22,6 +22,8 @@ import com.arcadedb.ContextConfiguration;
 import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.server.ArcadeDBServer;
+import com.arcadedb.server.TestServerHelper;
+import com.arcadedb.server.UnstartedHttpServers;
 import com.arcadedb.server.http.FakeLeader;
 import com.arcadedb.server.http.HttpServer;
 import io.undertow.Undertow;
@@ -30,6 +32,7 @@ import io.undertow.server.handlers.BlockingHandler;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.extension.RegisterExtension;
 
 import javax.net.ssl.SSLSession;
 import java.io.BufferedReader;
@@ -59,8 +62,6 @@ import java.util.concurrent.TimeoutException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 /**
  * Regression test for issue #8674, the streaming sub-path #8161 left open: a chunked {@code /api/v1/batch} upload sent
@@ -69,23 +70,26 @@ import static org.mockito.Mockito.when;
  * ended the client's stream without a terminal line, logging the failure as the leader's. The leader, fed the same
  * body directly, writes an in-band {@code error} line carrying {@code "status": 413}; the relay now writes that line.
  * <p>
- * The relay is driven with a scripted leader answer rather than through a live forward, because on the JDKs the server
- * runs on the live forward cannot reach it with a refused body: {@link HttpClient} hands back an HTTP/1.1 response only
- * after the request body has been published whole, so a cap trip fails the send itself and #8161's 413 answers it.
- * {@link #theJdkClientHandsBackTheResponseOnlyOnceTheUploadIsPublished} pins that, so the day a JDK starts delivering
- * the response mid-upload this class says the defended path has gone live, rather than leaving it to be rediscovered.
+ * The relay is driven here with a scripted leader answer, which reaches every shape of the leader's ending. The live
+ * forward reaches the same path since issue #9216 sent it full duplex ({@link DuplexHttpExchange}), and
+ * {@code Issue9216StreamedForwardIncrementalAcksTest} drives it there. Before that the forward used {@link HttpClient},
+ * which hands back an HTTP/1.1 response only after the request body has been published whole, so a cap trip always
+ * failed the send itself; {@link #theJdkClientHandsBackTheResponseOnlyOnceTheUploadIsPublished} still pins that JDK
+ * behaviour, as the reason the streaming forward does not go back to it.
  * <p>
  * Driven through a real Undertow exchange, like {@link Issue7738StreamingBatchRelayReadDeadlineTest}, because the relay
  * writes through the exchange's own output stream.
  */
 class Issue8674StreamedRelayBodyCapTerminalLineTest {
-
   private static final long   CAP_BYTES      = 1_024L;
   private static final long   BUDGET_MS      = 10_000L;
   private static final int    CLIENT_READ_MS = 30_000;
   /** Written by the leader's own writer, so a change to its format breaks this test rather than the relay's reading. */
   private static final String PROGRESS_LINE  = leaderLine("progress",
       new JSONObject().put("phase", "vertices").put("verticesCreated", 7L).put("edgesCreated", 0L));
+
+  @RegisterExtension
+  static final UnstartedHttpServers HTTP_SERVERS = new UnstartedHttpServers();
 
   private Undertow follower;
 
@@ -196,10 +200,10 @@ class Issue8674StreamedRelayBodyCapTerminalLineTest {
   }
 
   /**
-   * Why the path above is defended rather than live: the JDK client holds the response back until the upload is
-   * published whole, so the cap cannot trip once {@code forwardBatchToLeader} has handed the leader's answer to the
-   * relay. If this starts failing, a JDK now delivers the response mid-upload: the relay above is then reachable
-   * (and handled), and the streaming forward's header-only deadline no longer bounds the whole upload.
+   * Why the streaming forward does not use the JDK client (issue #9216): it holds the response back until the upload is
+   * published whole, so a client loading through a follower would see none of the leader's acknowledgements until its
+   * upload ended. If this starts failing, a JDK now delivers the response mid-upload and {@link DuplexHttpExchange}
+   * could be retired in favour of it.
    */
   @Test
   @Timeout(value = 60, unit = TimeUnit.SECONDS)
@@ -298,10 +302,8 @@ class Issue8674StreamedRelayBodyCapTerminalLineTest {
     final ContextConfiguration cfg = new ContextConfiguration();
     cfg.setValue(GlobalConfiguration.HA_PROXY_BATCH_READ_TIMEOUT, BUDGET_MS);
     cfg.setValue(GlobalConfiguration.SERVER_HTTP_BODY_CONTENT_MAX_SIZE, CAP_BYTES);
-    final ArcadeDBServer server = mock(ArcadeDBServer.class);
-    when(server.getConfiguration()).thenReturn(cfg);
-    final HttpServer httpServer = mock(HttpServer.class);
-    when(httpServer.getServer()).thenReturn(server);
+    final ArcadeDBServer server = TestServerHelper.unstartedServer((String) null, cfg);
+    final HttpServer httpServer = HTTP_SERVERS.of(server);
     final PostBatchHandler handler = new PostBatchHandler(httpServer);
 
     final byte[] scripted = leaderLines.getBytes(StandardCharsets.UTF_8);

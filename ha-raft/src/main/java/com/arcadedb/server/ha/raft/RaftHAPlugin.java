@@ -20,8 +20,10 @@ package com.arcadedb.server.ha.raft;
 
 import com.arcadedb.ContextConfiguration;
 import com.arcadedb.GlobalConfiguration;
+import com.arcadedb.exception.NeedRetryException;
 import com.arcadedb.exception.TransactionException;
 import com.arcadedb.log.LogManager;
+import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.server.ha.raft.PostSecuritySeedHandler.DeclaredPeerHttpAddress;
 import com.arcadedb.server.ArcadeDBServer;
 import com.arcadedb.server.HAServerPlugin;
@@ -31,6 +33,7 @@ import com.arcadedb.server.monitor.HAReplicationStatsProvider;
 import com.arcadedb.server.http.HttpServer;
 import com.arcadedb.server.http.handler.LeaderDial;
 import com.arcadedb.utility.CodeUtils;
+import com.arcadedb.utility.DedicatedThreadPool.PoolStats;
 
 import io.undertow.server.handlers.PathHandler;
 import org.apache.ratis.protocol.RaftPeer;
@@ -40,7 +43,6 @@ import com.arcadedb.database.DatabaseInternal;
 
 import java.io.Closeable;
 import java.io.IOException;
-import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -68,6 +70,11 @@ public class RaftHAPlugin implements HAServerPlugin, HAReplicationStatsProvider 
   // Read by concurrent HTTP worker threads (e.g. the readiness probe via getReadinessSignal) while it is
   // (re)assigned by the server startup/shutdown thread, so the reference must be published with volatile.
   private volatile RaftHAServer         raftHAServer;
+  // The cluster token of the Raft server this plugin stopped, kept so the node goes on recognising its peers for the
+  // rest of its shutdown (issue #9554): ArcadeDBServer stops HA before the HTTP listener, and a forward still reaching
+  // the node in between must get the retryable "not the leader" answer, not 401 "Invalid cluster token". The token
+  // never changes for the life of the process, so the kept value cannot go stale.
+  private volatile String               stoppedClusterToken;
 
   // Databases already warned about single-bucket types, so the diagnostic is logged once per
   // database per plugin lifetime instead of on every (re)wrap.
@@ -81,6 +88,10 @@ public class RaftHAPlugin implements HAServerPlugin, HAReplicationStatsProvider 
 
   /** How often a cluster that cannot use the #7509 compare-and-set may say so. */
   private static final long SECURITY_PRECONDITION_WITHHELD_LOG_THROTTLE_MS = 5 * 60_000L;
+
+  // Not MembershipSecuritySeeder.EMPTY_POOL_STATS: that one reports a one-slot queue, which these pools do not have.
+  /** What an HA executor row reads while its owner is not running: no worker, nothing queued, no capacity reported. */
+  private static final PoolStats IDLE_POOL_STATS = new PoolStats(0, 0, 0, 0, 0L, 0L, 0L);
 
   // When the "security changes are replicating without the concurrency check" line was last logged.
   private volatile long lastSecurityPreconditionWithheldLog;
@@ -97,10 +108,10 @@ public class RaftHAPlugin implements HAServerPlugin, HAReplicationStatsProvider 
   private SnapshotHttpHandler       snapshotHttpHandler;
   private PostVerifyDatabaseHandler postVerifyDatabaseHandler;
 
-  // The executor-pool rows of the two security workers the state machine owns (issue #7856). Same lifecycle as the
-  // handlers above: set by startService(), closed and cleared by the first of stopService()'s two calls.
-  private Closeable securitySeedPoolMetrics;
-  private Closeable securityCatchUpPoolMetrics;
+  // The executor-pool rows of the executors the HA layer owns: the two security workers (issue #7856) and the
+  // state machine's and RaftHAServer's other per-instance pools (issue #8856). Same lifecycle as the handlers above:
+  // filled by startService(), closed and emptied by the first of stopService()'s two calls.
+  private final List<Closeable> haPoolMetrics = new ArrayList<>(8);
 
   /**
    * Test-only: runs at the start of {@link #startService()} on the server being started, before this plugin has
@@ -201,7 +212,7 @@ public class RaftHAPlugin implements HAServerPlugin, HAReplicationStatsProvider 
       // Register this plugin as the HA implementation on the server
       server.setHA(this);
 
-      registerSecurityPoolMetrics();
+      registerPoolMetrics();
 
       LogManager.instance().log(this, Level.INFO, "Raft HA plugin started successfully");
     } catch (final IOException e) {
@@ -212,6 +223,9 @@ public class RaftHAPlugin implements HAServerPlugin, HAReplicationStatsProvider 
   @Override
   public void stopService() {
     if (raftHAServer != null) {
+      final String clusterToken = raftHAServer.getClusterToken();
+      if (clusterToken != null)
+        stoppedClusterToken = clusterToken;
       // Never issue leaveCluster() on shutdown: the K8s auto-leave (formerly in RaftHAServer.stop())
       // silently shrank the committed Raft membership on every pod recreation and the node was never
       // re-added (issue #5275); a duplicate leave here also caused redundant reconfig work and a
@@ -231,16 +245,9 @@ public class RaftHAPlugin implements HAServerPlugin, HAReplicationStatsProvider 
     // (RaftHAPlugin is itself a discovered ServerPlugin) and once via ArcadeDBServer.stopInternal()'s
     // direct haServer.stopService() call, since startService() above did server.setHA(this), making
     // ArcadeDBServer.haServer the very same instance. The second call must be a no-op (issue #5890).
-    if (securitySeedPoolMetrics != null) {
-      CodeUtils.executeIgnoringExceptions(securitySeedPoolMetrics::close, "Error on removing the security seed pool metrics",
-          false);
-      securitySeedPoolMetrics = null;
-    }
-    if (securityCatchUpPoolMetrics != null) {
-      CodeUtils.executeIgnoringExceptions(securityCatchUpPoolMetrics::close,
-          "Error on removing the security catch-up pool metrics", false);
-      securityCatchUpPoolMetrics = null;
-    }
+    for (final Closeable poolMetrics : haPoolMetrics)
+      CodeUtils.executeIgnoringExceptions(poolMetrics::close, "Error on removing an HA executor pool's metrics", false);
+    haPoolMetrics.clear();
     if (snapshotHttpHandler != null) {
       snapshotHttpHandler.close();
       snapshotHttpHandler = null;
@@ -298,6 +305,8 @@ public class RaftHAPlugin implements HAServerPlugin, HAReplicationStatsProvider 
     if (raftHAServer == null)
       throw new TransactionException("Raft HA server not started");
 
+    refuseWhileRemovedFromConfiguration("user list");
+
     final boolean applied;
     try {
       applied = RaftHAServer.requireTransactionBroker(raftHAServer)
@@ -327,6 +336,8 @@ public class RaftHAPlugin implements HAServerPlugin, HAReplicationStatsProvider 
   public boolean replicateSecurityGroups(final String groupsJson, final String expectedFingerprint) {
     if (raftHAServer == null)
       throw new TransactionException("Raft HA server not started");
+
+    refuseWhileRemovedFromConfiguration("group document");
 
     SecurityEntryCapabilityGate.requireEveryPeerCanDecode(server, raftHAServer, RaftLogEntryType.SECURITY_GROUPS_ENTRY,
         "group document");
@@ -360,6 +371,8 @@ public class RaftHAPlugin implements HAServerPlugin, HAReplicationStatsProvider 
     if (raftHAServer == null)
       throw new TransactionException("Raft HA server not started");
 
+    refuseWhileRemovedFromConfiguration("API-token document");
+
     SecurityEntryCapabilityGate.requireEveryPeerCanDecode(server, raftHAServer,
         RaftLogEntryType.SECURITY_API_TOKENS_ENTRY, "API-token document");
 
@@ -373,6 +386,32 @@ public class RaftHAPlugin implements HAServerPlugin, HAReplicationStatsProvider 
       throw new TransactionException("Error sending security-api-tokens entry via Raft", e);
     }
     return reportSecurityOutcome("API-tokens", applied);
+  }
+
+  /**
+   * Refuses a security entry, retryably, while this node is no longer a member of the Raft configuration (issue #9589,
+   * the security half of #9510).
+   * <p>
+   * A removed node's Raft client still reaches the leader, which accepts an entry from a non-member and commits it on
+   * every member, while this node's own division receives nothing more. A user created, a group changed or an API token
+   * revoked here was therefore in force on every node of the cluster except the one that answered the request, and the
+   * caller waited out the local apply before being told so. Refused before anything is submitted - and before the
+   * #7511 capability gate, whose probe round would be paid for nothing - the caller retries on a member of the cluster,
+   * or here once the node has been added back.
+   * <p>
+   * The seed form (no fingerprint) is refused too, deliberately rather than by accident. Since issues #7531 and #7834
+   * every seed runs on the LEADER's {@code MembershipSecuritySeeder}, never on the node being admitted, so this cannot
+   * refuse a join; a node outside the configuration submitting one would commit documents everywhere but here, exactly
+   * like an operator's change. {@code ServerSecurity.seedSecurityStateClusterWide} reports a refused document as failed
+   * and retries it within its budget.
+   */
+  private void refuseWhileRemovedFromConfiguration(final String document) {
+    final RaftHAServer raft = raftHAServer;
+    if (raft != null && raft.isRemovedFromConfiguration())
+      throw new NeedRetryException("Cannot replicate the security " + document + " from this server: it is not a member "
+          + "of the Raft cluster's configuration any more (it left or was removed), so it receives no entries and the "
+          + "change would apply on every other server but not here. Send the request to a server of the cluster, or add "
+          + "this server back to it");
   }
 
   /**
@@ -538,6 +577,10 @@ public class RaftHAPlugin implements HAServerPlugin, HAReplicationStatsProvider 
     routes.addPrefixPath("/api/v1/cluster/resync/", new PostResyncDatabaseHandler(httpServer, this));
     // Issue #8641: the operator's audited override of a leader's refusal to reopen a closed copy it cannot verify.
     routes.addPrefixPath(PostAcceptCopyHandler.ROUTE, new PostAcceptCopyHandler(httpServer, this));
+    // Issue #9449: the operator's audited override of a quarantine a sole voter can never resync away.
+    routes.addPrefixPath(PostAcceptDivergedHandler.ROUTE, new PostAcceptDivergedHandler(httpServer, this));
+    // Issue #9498: the same override for the node-wide stale-snapshot read floor (issue #6111).
+    routes.addExactPath(PostAcceptStaleSnapshotHandler.ROUTE, new PostAcceptStaleSnapshotHandler(httpServer, this));
     // Issue #4147: pre-bootstrap state RPC, used by the bootstrap leader at first cluster
     // formation to collect each peer's (fingerprint, lastTxId) per database.
     routes.addExactPath("/api/v1/cluster/bootstrap-state", new PostBootstrapStateHandler(httpServer, this));
@@ -588,6 +631,144 @@ public class RaftHAPlugin implements HAServerPlugin, HAReplicationStatsProvider 
     return s.getUnverifiedClosedCopyCheck().check(databaseName);
   }
 
+  /** Lifts a quarantine a sole voter can never resync away (issue #9449); see {@link #acceptDivergedDatabase(ArcadeStateMachine, boolean, String, String, String)}. */
+  @Override
+  public JSONObject acceptDivergedDatabase(final String databaseName, final String acceptedBy) throws IOException {
+    final RaftHAServer s = raftHAServer;
+    final ArcadeStateMachine sm = s != null ? s.getStateMachine() : null;
+    if (sm == null)
+      throw new ServerControlPlane.OperationNotAvailableException("The HA layer of this server has not started yet");
+    // A sole voter has no peer to resync from (issue #9449); nor has a node whose every peer holds the same database
+    // quarantined (issue #9553): there, accepting one copy is the way out the all-voters-quarantined alert names.
+    boolean noResyncSource = s.isSoleVoter();
+    if (!noResyncSource && s.isQuarantinedOnEveryVoter(databaseName)) {
+      // The registry can be one poll behind: confirm with every voter now, so a copy another node has just accepted
+      // cannot be overridden by a second accept here (review on PR #9567)
+      final String refusal = s.refuseUnlessNoOtherVoterServesNow(databaseName);
+      if (refusal != null)
+        throw new ServerControlPlane.OperationNotAvailableException("Database '" + databaseName + "': every voter was "
+            + "last reported holding it quarantined, but asked now, " + refusal + ". Nothing was lifted: if a voter "
+            + "serves it, this node resyncs from it once it leads; otherwise retry once every voter answers");
+      noResyncSource = true;
+    }
+    return acceptDivergedDatabase(sm, noResyncSource, server.getServerName(), databaseName, acceptedBy);
+  }
+
+  /**
+   * The override of issue #9449 past the HA lookup, so it can be driven with a real state machine and a chosen voter
+   * count. Package-private for tests.
+   * <p>
+   * Refused unless no peer can serve a resync: on a sole voter, or where every voter reports the same database
+   * quarantined (issue #9553), which the caller decides and passes as {@code noResyncSource}. Anywhere else the quarantine
+   * is lifted by the targeted resync from a peer (or, on a leader, by the hand-off that lets one), and lifting it by hand
+   * would leave this copy silently different from every other server's, since nothing replays the entry the quarantine
+   * skipped. Where every voter holds it quarantined there is no good copy for this one to differ from: the operator picks
+   * the one to keep, and the others resync from it once it leads.
+   * <p>
+   * The voter count is read before the lift, not atomically with it: a peer added to the configuration in between would
+   * see the lift go through on a node that has just gained someone to resync from. The window is one operator request
+   * wide and the joining peer installs its copy FROM this node anyway, so it inherits the same state rather than
+   * diverging from it; a membership change cannot be held off from inside the state machine's file lock.
+   */
+  static JSONObject acceptDivergedDatabase(final ArcadeStateMachine sm, final boolean noResyncSource, final String localServer,
+      final String databaseName, final String acceptedBy) throws IOException {
+    if (databaseName == null || !PostVerifyDatabaseHandler.VALID_DATABASE_NAME.matcher(databaseName).matches())
+      throw new IllegalArgumentException("Invalid database name '" + databaseName + "'");
+
+    if (sm.quarantineCause(databaseName) == null && sm.getDatabaseAppliedFloor(databaseName) < 0)
+      throw new ServerControlPlane.NotFoundException(notQuarantined(databaseName));
+
+    if (!noResyncSource)
+      throw new ServerControlPlane.OperationNotAvailableException("Database '" + databaseName + "' is quarantined on this "
+          + "node, but this node is not the only voter of its cluster and not every voter reports it quarantined, so the "
+          + "quarantine is lifted by a resync from a peer (POST /api/v1/cluster/resync/" + databaseName + " on this node, "
+          + "or a leadership transfer when this node is the leader). Accepting the copy by hand is only allowed where no "
+          + "peer can serve a resync - on a sole voter, or when every voter holds the database quarantined: anywhere else "
+          + "it would leave this copy silently different from the other servers'");
+
+    final ArcadeStateMachine.DivergedAcceptance acceptance = sm.acceptDivergedDatabase(databaseName, acceptedBy);
+    if (acceptance == null)
+      // Lifted between the check above and here, by a resync or a drop
+      throw new ServerControlPlane.NotFoundException(notQuarantined(databaseName));
+
+    final JSONObject result = new JSONObject()
+        .put("result", "Database '" + databaseName + "': the quarantine is lifted and this node's copy is accepted as it "
+            + "is. The entry the quarantine skipped is not replayed; check the database (CHECK DATABASE) and restore it "
+            + "from a backup if it is damaged")
+        .put("database", databaseName)
+        .put("localServer", localServer)
+        .put("appliedIndex", acceptance.appliedIndex());
+    if (acceptance.cause() != null)
+      result.put("divergenceCause", acceptance.cause().name());
+    if (acceptance.readFloor() >= 0)
+      result.put("readFloor", acceptance.readFloor());
+    return result;
+  }
+
+  private static String notQuarantined(final String databaseName) {
+    return "Database '" + databaseName + "' is not quarantined on this server and carries no read floor: there is "
+        + "nothing to accept";
+  }
+
+  /**
+   * Lifts the node-wide stale-snapshot read floor a sole voter can never resync away (issue #9498); see
+   * {@link #acceptStaleSnapshot(ArcadeStateMachine, boolean, String, String)}.
+   */
+  @Override
+  public JSONObject acceptStaleSnapshot(final String acceptedBy) throws IOException {
+    final RaftHAServer s = raftHAServer;
+    final ArcadeStateMachine sm = s != null ? s.getStateMachine() : null;
+    if (sm == null)
+      throw new ServerControlPlane.OperationNotAvailableException("The HA layer of this server has not started yet");
+    return acceptStaleSnapshot(sm, s.isSoleVoter(), server.getServerName(), acceptedBy);
+  }
+
+  /**
+   * The override of issue #9498 past the HA lookup, so it can be driven with a real state machine and a chosen voter
+   * count. Package-private for tests.
+   * <p>
+   * Refused unless this node is the sole voter of its cluster. With a peer, the floor is lifted by a full resync from it:
+   * a follower retries on every health tick, and a leader hands the leadership to a peer that holds the entries first
+   * (issue #8529). Accepting the gap by hand there would leave this node's databases silently short of entries every
+   * other server applied. The voter count is read before the lift, not atomically with it, for the reason
+   * {@link #acceptDivergedDatabase(ArcadeStateMachine, boolean, String, String, String)} gives.
+   */
+  static JSONObject acceptStaleSnapshot(final ArcadeStateMachine sm, final boolean soleVoter, final String localServer,
+      final String acceptedBy) throws IOException {
+    if (sm.getStaleSnapshotAppliedFloor() < 0)
+      throw new ServerControlPlane.NotFoundException(noStaleSnapshotFloor());
+
+    if (!soleVoter)
+      throw new ServerControlPlane.OperationNotAvailableException("This node holds a stale-snapshot read floor, but it "
+          + "is not the only voter of its cluster, so the floor is lifted by a resync from a peer: a follower retries it "
+          + "on every health tick, and a leader hands the leadership to a peer first (POST /api/v1/cluster/leader to move "
+          + "it by hand). Accepting the gap by hand is only allowed where no peer can serve a resync, on a sole voter: "
+          + "anywhere else it would leave this node's databases silently short of entries the other servers applied");
+
+    final ArcadeStateMachine.StaleSnapshotAcceptance acceptance;
+    try {
+      acceptance = sm.acceptStaleSnapshotFloor(acceptedBy);
+    } catch (final IllegalStateException e) {
+      throw new ServerControlPlane.OperationNotAvailableException("Nothing was lifted: " + e.getMessage());
+    }
+    if (acceptance == null)
+      // Filled between the check above and here, by a resync
+      throw new ServerControlPlane.NotFoundException(noStaleSnapshotFloor());
+
+    return new JSONObject()
+        .put("result", "The stale-snapshot read floor is lifted and this node's databases are accepted as they are. The "
+            + "entries between the floor and the snapshot marker are not replayed; check the databases (CHECK DATABASE) "
+            + "and restore any damaged one from a backup")
+        .put("localServer", localServer)
+        .put("readFloor", acceptance.readFloor())
+        .put("snapshotIndex", acceptance.snapshotIndex())
+        .put("appliedIndex", acceptance.acceptedIndex());
+  }
+
+  private static String noStaleSnapshotFloor() {
+    return "This server holds no stale-snapshot read floor: there is nothing to accept";
+  }
+
   /** Someone wants the database now: the next health tick re-verifies the copy (issue #8606). */
   @Override
   public void onUnverifiedClosedCopyRefused(final String databaseName) {
@@ -598,30 +779,82 @@ public class RaftHAPlugin implements HAServerPlugin, HAReplicationStatsProvider 
   }
 
   /**
-   * Publishes the state machine's two one-slot security workers as executor rows (issue #7856): the leader-side
-   * membership seed ({@code pool=security_seed}) and the rejoining node's catch-up ({@code pool=security_catch_up}).
-   * <p>
-   * Both suppliers resolve the worker through {@link #raftHAServer} on every scrape rather than capturing it: an
-   * in-place Ratis restart builds a new state machine, and with it a new seeder and catch-up. Between a stop and the
-   * next start, or before Ratis is up, the row reads as an idle pool rather than throwing.
+   * Publishes the executors the HA layer owns as executor rows, so they reach {@code /api/v1/metrics} and Studio's
+   * "Executor Pools" card. Each pool publishes the extra gauges that match how it handles saturation:
+   * <ul>
+   * <li>{@code security_seed}, {@code security_catch_up} (state machine, issue #7856): one slot, a refusal is covered
+   * by the queued task - {@code tasks.coalesced};</li>
+   * <li>{@code snapshot_install} (state machine): abort, the refusal becomes a failed future Ratis retries -
+   * {@code tasks.rejected};</li>
+   * <li>{@code sm_lifecycle} (state machine): unbounded queue, never refuses running work - queue depth is the
+   * signal;</li>
+   * <li>{@code database_deleter} (state machine): the submitter, the Raft apply thread, deletes the directory itself
+   * when the queue is full - {@code tasks.caller_run_fallbacks};</li>
+   * <li>{@code channel_recovery} (RaftHAServer): abort, each submitter logs what its drop means -
+   * {@code tasks.rejected}, plus {@code tasks.coalesced} for the #8491 hand-offs a health tick did not queue because
+   * one was already queued or running;</li>
+   * <li>{@code stalled_resync} (RaftHAServer): caller-runs on the lag-monitor thread -
+   * {@code tasks.caller_run_fallbacks}.</li>
+   * </ul>
+   * Every supplier resolves the pool through {@link #raftHAServer} on every scrape rather than capturing it (issue
+   * #8856): an in-place Ratis restart builds a new state machine, and with it new executors and new counters, so a
+   * state machine pool's cumulative counts restart from zero then, which a Prometheus {@code rate()} reads as a
+   * counter reset. Between a stop and the next start, or before Ratis is up, a row reads as an idle pool rather than
+   * throwing.
    */
-  private void registerSecurityPoolMetrics() {
-    securitySeedPoolMetrics = server.registerExecutorPoolMetrics("security_seed",
+  private void registerPoolMetrics() {
+    haPoolMetrics.add(server.registerExecutorPoolMetrics("security_seed",
         "MembershipSecuritySeeder leader-side cluster security seed worker", () -> {
           final ArcadeStateMachine sm = liveStateMachine();
           return sm != null ? sm.getMembershipSecuritySeeder().getPoolStats() : MembershipSecuritySeeder.EMPTY_POOL_STATS;
         }, () -> {
           final ArcadeStateMachine sm = liveStateMachine();
           return sm != null ? sm.getMembershipSecuritySeeder().getCoalescedSeeds() : 0L;
-        });
-    securityCatchUpPoolMetrics = server.registerExecutorPoolMetrics("security_catch_up",
+        }));
+    haPoolMetrics.add(server.registerExecutorPoolMetrics("security_catch_up",
         "SecurityCatchUp rejoining-node security catch-up worker", () -> {
           final ArcadeStateMachine sm = liveStateMachine();
           return sm != null ? sm.getSecurityCatchUp().getPoolStats() : MembershipSecuritySeeder.EMPTY_POOL_STATS;
         }, () -> {
           final ArcadeStateMachine sm = liveStateMachine();
           return sm != null ? sm.getSecurityCatchUp().getCoalescedRequests() : 0L;
-        });
+        }));
+
+    haPoolMetrics.add(server.registerExecutorPoolMetrics("snapshot_install",
+        "ArcadeStateMachine leader-initiated snapshot install worker", () -> {
+          final ArcadeStateMachine sm = liveStateMachine();
+          return sm != null ? sm.getSnapshotInstallPoolStats() : IDLE_POOL_STATS;
+        }, null, () -> {
+          final ArcadeStateMachine sm = liveStateMachine();
+          return sm != null ? sm.getSnapshotInstallRejections() : 0L;
+        }));
+    haPoolMetrics.add(server.registerExecutorPoolMetrics("sm_lifecycle",
+        "ArcadeStateMachine lifecycle worker (leader-facing downloads, bootstrap retries, re-verifications)", () -> {
+          final ArcadeStateMachine sm = liveStateMachine();
+          return sm != null ? sm.getLifecyclePoolStats() : IDLE_POOL_STATS;
+        }, null, null));
+    haPoolMetrics.add(server.registerExecutorPoolMetrics("database_deleter",
+        "DeferredDatabaseDeleter dropped-database directory deletion worker", () -> {
+          final ArcadeStateMachine sm = liveStateMachine();
+          return sm != null ? sm.getDatabaseDeleterPoolStats() : IDLE_POOL_STATS;
+        }, null, null));
+
+    haPoolMetrics.add(server.registerExecutorPoolMetrics("channel_recovery",
+        "RaftHAServer replication-channel recovery and leadership hand-off worker", () -> {
+          final RaftHAServer s = raftHAServer;
+          return s != null ? s.getChannelRecoveryPoolStats() : IDLE_POOL_STATS;
+        }, () -> {
+          final RaftHAServer s = raftHAServer;
+          return s != null ? s.getReplacingHandOffsCoalesced() : 0L;
+        }, () -> {
+          final RaftHAServer s = raftHAServer;
+          return s != null ? s.getChannelRecoveryRejections() : 0L;
+        }));
+    haPoolMetrics.add(server.registerExecutorPoolMetrics("stalled_resync",
+        "RaftHAServer leader-driven stalled-replica resync worker", () -> {
+          final RaftHAServer s = raftHAServer;
+          return s != null ? s.getStalledResyncPoolStats() : IDLE_POOL_STATS;
+        }, null, null));
   }
 
   private ArcadeStateMachine liveStateMachine() {
@@ -639,6 +872,18 @@ public class RaftHAPlugin implements HAServerPlugin, HAReplicationStatsProvider 
   public List<FollowerSample> getFollowerSamples() {
     final RaftHAServer s = raftHAServer;
     return s != null ? s.getFollowerSamples() : List.of();
+  }
+
+  @Override
+  public InPlaceRestartStats getInPlaceRestartStats() {
+    final RaftHAServer s = raftHAServer;
+    return s != null ? s.getInPlaceRestartStats() : InPlaceRestartStats.NONE;
+  }
+
+  @Override
+  public SchemaFullLoadStats getSchemaFullLoadStats() {
+    final RaftHAServer s = raftHAServer;
+    return s != null ? s.getSchemaFullLoadStats() : SchemaFullLoadStats.NONE;
   }
 
   @Override
@@ -773,7 +1018,8 @@ public class RaftHAPlugin implements HAServerPlugin, HAReplicationStatsProvider 
 
   @Override
   public String getClusterToken() {
-    return raftHAServer != null ? raftHAServer.getClusterToken() : null;
+    final RaftHAServer s = raftHAServer;
+    return s != null ? s.getClusterToken() : stoppedClusterToken;
   }
 
   @Override
@@ -941,11 +1187,9 @@ public class RaftHAPlugin implements HAServerPlugin, HAReplicationStatsProvider 
 
     final boolean useSSL = configuration.getValueAsBoolean(GlobalConfiguration.NETWORK_USE_SSL);
     final String url = shutdownUrl(dial, useSSL);
-    if (useSSL && url.startsWith("http://"))
-      // Same fallback as every sibling dial, and said out loud for the same reason: the command below carries
-      // the cluster token, so an operator who set arcadedb.ssl.enabled should not have to guess (issue #7546).
-      PlainHttpFallbackNotice.sayOnce(RaftHAPlugin.class, "sending it the shutdown command");
-    final HttpRequest request = shutdownRequest(url, raft.getClusterToken());
+    // Same fallback as every sibling dial, and said out loud by PeerRequest for the same reason: the command carries
+    // the cluster token, so an operator who set arcadedb.ssl.enabled should not have to guess (issue #7546).
+    final HttpRequest request = shutdownRequest(url, useSSL, raft.getClusterToken());
 
     // One client per call, closed with the request: a remote shutdown is an operator action, not a hot path,
     // and a cached client would outlive the peer it was built to reach. The connect timeout is the same one
@@ -978,7 +1222,7 @@ public class RaftHAPlugin implements HAServerPlugin, HAReplicationStatsProvider 
    * <p>
    * The credential the peer does authenticate is the {@code X-ArcadeDB-Cluster-Token} +
    * {@code X-ArcadeDB-Forwarded-User} pair every other peer-to-peer dial in this module sends, attached by
-   * {@link PeerCredentials} so this site cannot spell it differently from the others. The forwarded user is
+   * {@link PeerRequest} so this site cannot spell it differently from the others. The forwarded user is
    * {@code root} because {@code PostServerCommandHandler.execute} answers {@code shutdown} only to a root
    * principal.
    * <p>
@@ -986,11 +1230,10 @@ public class RaftHAPlugin implements HAServerPlugin, HAReplicationStatsProvider 
    * this request ends in the target node's exit.
    */
   // @VisibleForTesting
-  static HttpRequest shutdownRequest(final String url, final String clusterToken) {
-    return PeerCredentials.attach(HttpRequest.newBuilder()
-        .uri(URI.create(url))
+  static HttpRequest shutdownRequest(final String url, final boolean sslEnabled, final String clusterToken) {
+    return PeerRequest.newRequest(url, sslEnabled, RaftHAPlugin.class, "sending it the shutdown command", clusterToken)
         .header("Content-Type", "application/json")
-        .POST(HttpRequest.BodyPublishers.ofString(SHUTDOWN_COMMAND_BODY, StandardCharsets.UTF_8)), clusterToken)
+        .POST(HttpRequest.BodyPublishers.ofString(SHUTDOWN_COMMAND_BODY, StandardCharsets.UTF_8))
         .build();
   }
 

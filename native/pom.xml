@@ -217,6 +217,11 @@
     </dependencyManagement>
 
     <dependencies>
+        <!-- GraalVM hosted Feature API, for GrpcMessageReflectionFeature (already on the classpath through graal-sdk) -->
+        <dependency>
+            <groupId>org.graalvm.sdk</groupId>
+            <artifactId>nativeimage</artifactId>
+        </dependency>
         <dependency>
             <groupId>com.arcadedb</groupId>
             <artifactId>arcadedb-server</artifactId>
@@ -267,6 +272,41 @@
             <artifactId>arcadedb-mcp</artifactId>
             <version>${project.parent.version}</version>
         </dependency>
+        <!--
+            Raft HA, Prometheus/OTLP metrics and OpenTelemetry tracing (#9407). Each registers a
+            ServerPlugin through META-INF/services, so being on this classpath is what makes it
+            discoverable in the image. All three declare arcadedb-server as provided, which is why
+            they have to be listed here rather than arriving transitively.
+        -->
+        <dependency>
+            <groupId>com.arcadedb</groupId>
+            <artifactId>arcadedb-ha-raft</artifactId>
+            <version>${project.parent.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.arcadedb</groupId>
+            <artifactId>arcadedb-metrics</artifactId>
+            <version>${project.parent.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.arcadedb</groupId>
+            <artifactId>arcadedb-tracing</artifactId>
+            <version>${project.parent.version}</version>
+        </dependency>
+        <!--
+            SLF4J binding to java.util.logging, the same one package/pom.xml bundles into the JVM
+            distribution (the parent keeps it at test scope so it does not leak to library consumers).
+            Without it every third-party slf4j logger binds to the NOP provider inside the image, and
+            Ratis, which logs only through slf4j, goes completely silent: no election, leader or
+            retry line, and a failed Raft start with nothing to read. The build-time initialization
+            rule for org.slf4j.jul in the buildArgs below is for this binding.
+        -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-jdk14</artifactId>
+            <version>${slf4j.version}</version>
+            <scope>runtime</scope>
+        </dependency>
     </dependencies>
 
     <build>
@@ -301,6 +341,9 @@
                         <buildArg>-H:+ReportExceptionStackTraces</buildArg>
                         <buildArg>--enable-url-protocols=http,https</buildArg>
                         <buildArg>--add-modules=jdk.incubator.vector</buildArg>
+                        <!-- The gRPC interceptors read request fields through the protobuf descriptor, which looks up the
+                             generated getters by reflection: register every gRPC message and builder for it. -->
+                        <buildArg>--features=com.arcadedb.nativeimage.GrpcMessageReflectionFeature</buildArg>
                         <!-- Undertow/XNIO: HostName reads the machine hostname eagerly; must be deferred to run time. -->
                         <buildArg>--initialize-at-run-time=org.wildfly.common.net.HostName</buildArg>
                         <!-- slf4j API, helpers, providers and the JUL binding must all initialize at build time,
@@ -309,6 +352,24 @@
                         <buildArg>--initialize-at-build-time=org.slf4j,org.slf4j.helpers,org.slf4j.spi,org.slf4j.event,org.slf4j.jul</buildArg>
                         <!-- Netty holds JNI/native and static state that must not be snapshotted at build time. -->
                         <buildArg>--initialize-at-run-time=io.netty</buildArg>
+                        <!--
+                            Apache Ratis (arcadedb-ha-raft, #9407) ships its own relocated Netty under
+                            org.apache.ratis.thirdparty.io.netty, which the io.netty prefix above does NOT
+                            match, and Netty's own native-image.properties inside that jar name the unshaded
+                            classes too. Left to the default, PooledByteBufAllocator is initialized while the
+                            image is built and the first Raft server start dies with
+                            "NoClassDefFoundError: Could not initialize class
+                            org.apache.ratis.thirdparty.io.netty.buffer.PooledByteBufAllocator".
+
+                            Deferring the WHOLE relocated package works here, unlike for grpc-netty-shaded below,
+                            because reachability-metadata.json lists the reflection that PlatformDependent0 needs
+                            (java.nio.Bits.UNALIGNED, java.nio.Buffer.address, sun.misc.Unsafe.theUnsafe and the
+                            rest) with no typeReached condition. The metadata repository conditions the same
+                            entries on the UNSHADED class, which a relocated copy never satisfies, and the agent
+                            cannot record Unsafe field lookups, so they are curated by hand (docs/native-image.md,
+                            "Building the reachability metadata"). ha-smoke.sh proves it end to end.
+                        -->
+                        <buildArg>--initialize-at-run-time=org.apache.ratis.thirdparty.io.netty</buildArg>
                         <!--
                             grpc-netty-shaded relocates Netty under io.grpc.netty.shaded.io.netty,
                             which the io.netty prefix above does NOT match. Only the classes that
@@ -341,6 +402,20 @@
                             Netty's own native-image.properties does the same for CleanerJava25 only.
                         -->
                         <buildArg>--initialize-at-build-time=io.grpc.netty.shaded.io.netty.util.internal.CleanerJava24Linker</buildArg>
+                        <!--
+                            grpc-netty-shaded's own native-image.properties initializes the whole shaded Netty at build
+                            time, exempting ScheduledFutureTask: the class that held the scheduler clock in Netty 4.1.
+                            Netty 4.2 keeps it in SystemTicker (START_TIME = System.nanoTime() in its static
+                            initializer), which the exemption misses, so the image carries the uptime of the machine
+                            that BUILT it. Every timer of the gRPC server then runs on System.nanoTime() minus that
+                            value: on a host up for less time than the builder was, keepalive fires at once and each
+                            connection is closed with GOAWAY before its first call, so every gRPC request fails while
+                            HTTP, Postgres and Bolt (unshaded Netty, initialized at run time above) are unaffected.
+                            Which hosts break depends on uptimes alone, which is why it showed up only in the docker
+                            job, on a freshly booted runner, and never on the runner that built the binary.
+                            SelfSignedCertificate freezes its validity window the same way, at build time.
+                        -->
+                        <buildArg>--initialize-at-run-time=io.grpc.netty.shaded.io.netty.util.concurrent.SystemTicker,io.grpc.netty.shaded.io.netty.handler.ssl.util.SelfSignedCertificate</buildArg>
                         <!-- Embed all classpath resources (Studio assets, config templates, Lucene codecs). Tighten later. -->
                         <buildArg>-H:IncludeResources=.*</buildArg>
                         <!--

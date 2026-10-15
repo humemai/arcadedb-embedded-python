@@ -31,6 +31,7 @@ import com.arcadedb.gremlin.service.ArcadeServiceRegistry;
 import com.arcadedb.gremlin.service.VectorNeighborsFactory;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.network.HostUtil;
+import com.arcadedb.query.RunningQuery;
 import com.arcadedb.query.sql.executor.ResultSet;
 import com.arcadedb.remote.RemoteDatabase;
 import com.arcadedb.schema.DocumentType;
@@ -138,8 +139,13 @@ public class ArcadeGraph implements Graph, Closeable {
   }
 
   protected ArcadeGraph(final BasicDatabase database, final boolean sharedDatabase) {
+    this(database, sharedDatabase, new ArcadeGraphFeatures());
+  }
+
+  protected ArcadeGraph(final BasicDatabase database, final boolean sharedDatabase, final Features features) {
     this.database = database;
     this.sharedDatabase = sharedDatabase;
+    this.features = features;
     this.transaction = new ArcadeGraphTransaction(this);
     init();
   }
@@ -165,6 +171,18 @@ public class ArcadeGraph implements Graph, Closeable {
 
   public static ArcadeGraph open(final BasicDatabase database) {
     return new ArcadeGraph(database);
+  }
+
+  /**
+   * Opens a graph that writes into the transaction the database's caller already holds and leaves it for the caller to
+   * resolve (issue #9783). Its {@code features().graph().supportsTransactions()} answers {@code false}, which is what
+   * TinkerPop's bulk readers ({@code GraphMLReader}, {@code GraphSONReader}) read before every {@code graph.tx().commit()}
+   * they issue - per batch and at the end. A plain graph JOINS an active transaction (see
+   * {@link ArcadeGraphTransaction#isOpen()}), so those commits would publish the caller's own pending work and leave them no
+   * transaction to commit or roll back. The database's lifecycle is the caller's too: closing the graph does not close it.
+   */
+  public static ArcadeGraph openInCallerTransaction(final BasicDatabase database) {
+    return new ArcadeGraph(database, true, new ArcadeGraphFeatures(false));
   }
 
   /**
@@ -701,6 +719,22 @@ public class ArcadeGraph implements Graph, Closeable {
   @Override
   public String toString() {
     return StringFactory.graphString(this, database.getName());
+  }
+
+  /** How many neighbours an adjacency step walks between two checks of the statement's termination. */
+  static final int TERMINATION_CHECK_INTERVAL = 4096;
+
+  /**
+   * Fails the traversal if the statement it runs for was terminated (issue #9689). The traversal's scans already check
+   * through the SQL steps that feed {@code g.V()} and {@code g.E()}; this is for the work they do not see, the adjacency
+   * steps ({@code out()}, {@code bothE()}, ...) and the iteration of the result, which a deep or repeated traversal
+   * spends all its time in. Cooperative, like every other check: {@code Thread.interrupt()} would close the database
+   * files of a thread caught doing I/O.
+   */
+  static void checkNotTerminated() {
+    final RunningQuery runningQuery = RunningQuery.current();
+    if (runningQuery != null)
+      runningQuery.checkNotTerminated("the gremlin traversal");
   }
 
   public static com.arcadedb.graph.Vertex.DIRECTION mapDirection(final Direction direction) {

@@ -68,7 +68,7 @@ class Issue5475ColumnTypesTest extends TestHelper {
       { "DATE", 1_700_000_123_456L, Long.class },
       { "DATETIME_SECOND", 1_700_000_123L, Long.class },
       { "DATETIME_MICROS", 1_700_000_123_456_789L, Long.class },
-      { "DATETIME_NANOS", 1_700_000_123_456_789L, Long.class },
+      { "DATETIME_NANOS", 1_700_000_123_456_789_000L, Long.class },
       { "STRING", "hello", String.class },
   };
 
@@ -382,16 +382,17 @@ class Issue5475ColumnTypesTest extends TestHelper {
     engine.appendSamples(new long[] { BASE_TS },
         new Object[] { null }, new Object[] { null }, new Object[] { 7.5d });
 
+    // a null reads back as null on both layers since issue #9721, and the column after it is still where it was
     final Object[] mutable = engine.query(Long.MIN_VALUE, Long.MAX_VALUE, null, null).getFirst();
-    assertThat(mutable[1]).isEqualTo(0L);
-    assertThat(mutable[2]).isEqualTo(Boolean.FALSE);
+    assertThat(mutable[1]).isNull();
+    assertThat(mutable[2]).isNull();
     assertThat(mutable[3]).isEqualTo(7.5d);
 
     engine.compactAll();
 
     final Object[] sealed = engine.query(Long.MIN_VALUE, Long.MAX_VALUE, null, null).getFirst();
-    assertThat(sealed[1]).isEqualTo(0L);
-    assertThat(sealed[2]).isEqualTo(Boolean.FALSE);
+    assertThat(sealed[1]).isNull();
+    assertThat(sealed[2]).isNull();
     assertThat(sealed[3]).isEqualTo(7.5d);
   }
 }

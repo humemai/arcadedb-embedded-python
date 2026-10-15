@@ -23,8 +23,6 @@ import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultInternal;
 
-import com.arcadedb.utility.NumberUtils;
-
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -82,15 +80,22 @@ public class PathSubgraphNodes extends AbstractPathProcedure {
     validateArgs(args);
 
     final Vertex startNode = extractVertex(args[0], "startNode");
-    final Map<String, Object> config = extractConfig(args.length > 1 ? args[1] : null);
+    final Map<String, Object> config = optionalMapArg(args, 1, "config");
 
-    final String[] relTypes = extractRelTypes(config.get("relationshipFilter"));
-    final String[] labelFilter = extractLabels(config.get("labelFilter"));
-    final int maxLevel = config.containsKey("maxLevel") ? NumberUtils.saturateToInt((Number) config.get("maxLevel")) : Integer.MAX_VALUE;
+    final int minLevel = extractComponentMinLevel(config);
+    final int maxLevel = extractMaxLevel(config);
+    final int limit = extractLimit(config);
+    final boolean optional = extractBoolean(config, "optional", false);
+    // Read and checked, and then left to APOC's rule: this walk is node-global whatever the option says
+    extractUniqueness(config, PathUniqueness.NODE_GLOBAL);
+    final Filters filters = extractFilters(config, startNode.getDatabase(), minLevel);
 
     // Only the nodes are ever yielded here, so the walk never materialises an edge (issue #7976)
     final List<Vertex> reachableNodes = new ArrayList<>();
-    collectReachableComponent(startNode, relTypes, labelFilter, maxLevel, reachableNodes, null);
+    collectReachableComponent(startNode, filters, minLevel, maxLevel, limit, reachableNodes, null, context);
+
+    if (optional && reachableNodes.isEmpty())
+      return Stream.of(nullRow("node"));
 
     return reachableNodes.stream().map(node -> {
       final ResultInternal result = new ResultInternal();

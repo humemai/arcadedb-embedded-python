@@ -48,10 +48,12 @@ import com.arcadedb.engine.timeseries.promql.ast.PromQLExpr.UnaryExpr;
 import com.arcadedb.engine.timeseries.promql.ast.PromQLExpr.VectorSelector;
 import com.arcadedb.schema.DocumentType;
 import com.arcadedb.schema.LocalTimeSeriesType;
+import com.arcadedb.schema.Type;
 import com.arcadedb.security.SecurityDatabaseUser;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -190,6 +192,12 @@ public class PromQLEvaluator {
 
     final long maxSteps = stepsAfterFirst + 1;
 
+    // A string literal evaluates to a NaN scalar, so the result-type test inside the loop cannot see it (issue #9922).
+    // The literal is the only string-typed expression there is: the parser returns the inner expression of a
+    // parenthesized one, so `("a")` arrives here bare, and no function, aggregation or operator yields a string
+    if (expr instanceof StringLiteral)
+      throw new IllegalArgumentException(invalidRangeQueryType("string"));
+
     // For range queries, evaluate at each step point and collect into MatrixResult
     final Map<String, List<double[]>> seriesMap = new LinkedHashMap<>();
     final Map<String, Map<String, String>> labelsMap = new LinkedHashMap<>();
@@ -216,7 +224,10 @@ public class PromQLEvaluator {
         final String key = "{}";
         seriesMap.computeIfAbsent(key, k -> new ArrayList<>()).add(new double[] { t, sr.value() });
         labelsMap.putIfAbsent(key, Map.of());
-      }
+      } else
+        // a range vector (`m[5m]`) used to fall through both branches and answer an empty matrix (issue #9922). The type
+        // of an expression does not depend on the step, so this fires on the first one, before any series is collected
+        throw new IllegalArgumentException(invalidRangeQueryType(valueTypeName(expr, result)));
     }
 
     final List<MatrixSeries> series = new ArrayList<>();
@@ -265,9 +276,10 @@ public class PromQLEvaluator {
       return new InstantVector(List.of());
 
     final TagFilter tagFilter = buildTagFilter(vs.matchers(), columns);
+    final RowMatchers rowMatchers = rowMatchers(vs.matchers(), columns);
     final long offset = vs.offsetMs();
     final long queryEnd = evalTimeMs - offset;
-    final long queryStart = queryEnd - lookbackMs;
+    final long queryStart = windowScanStart(queryEnd, lookbackMs);
 
     // Folded straight from the scan through forEachRow rather than collected via iterateQuery first (issue
     // #7696): iterateQuery's own javadoc says the sealed layer materialises every matching row of the range
@@ -279,7 +291,7 @@ public class PromQLEvaluator {
     // post-filter regex logic now runs INSIDE the visitor, on the same call stack as the scan, and
     // excludesEverySeries()'s contract - a malformed or ReDoS-shaped =~/!~ propagates rather than being read as
     // an empty result - has to hold for it exactly as it already does for excludesEverySeries() itself. A
-    // TimeoutException/IllegalArgumentException from matchesPostFilters() is a RuntimeException, not an
+    // TimeoutException/IllegalArgumentException from matchesRow() is a RuntimeException, not an
     // IOException, so it is unaffected by this catch and still reaches the caller.
     final Map<String, VectorSample> latestByLabels = new LinkedHashMap<>();
     try {
@@ -288,7 +300,7 @@ public class PromQLEvaluator {
       // anything less than one shared deadline for the whole query would let a crafted pattern tie up the
       // thread for rowCount * stepCount * regexTimeout.
       engine.forEachRow(queryStart, queryEnd, null, tagFilter, readMetrics, row -> {
-        if (!matchesPostFilters(row, vs.matchers(), columns, regexDeadline()))
+        if (!matchesRow(row, rowMatchers))
           return true;
         final Map<String, String> labels = extractLabels(row, columns, vs.metricName());
         final String key = labelKey(labels);
@@ -313,6 +325,18 @@ public class PromQLEvaluator {
     return new InstantVector(new ArrayList<>(latestByLabels.values()));
   }
 
+  /**
+   * First timestamp to scan for a selector window of {@code windowMs} ending at {@code windowEndMs} (issue #9801).
+   * Prometheus selects the window LEFT-OPEN, {@code (end - window, end]}: a sample exactly one lookback old is stale
+   * for an instant selector (in every Prometheus version), and {@code [5m]} excludes the sample at {@code t-5m} (the
+   * 3.x semantics). {@code forEachRow} scans a CLOSED range, so the lower bound moves up by one tick of the stored
+   * unit, which is the millisecond (see {@code TimeSeriesType#MILLISECOND_PRECISION}). Shared by both selectors so the
+   * two cannot drift apart again.
+   */
+  static long windowScanStart(final long windowEndMs, final long windowMs) {
+    return windowEndMs - windowMs + 1;
+  }
+
   private PromQLResult evaluateMatrixSelector(final MatrixSelector ms, final long evalTimeMs) {
     final VectorSelector vs = ms.selector();
     final String typeName = sanitizeTypeName(vs.metricName());
@@ -335,9 +359,11 @@ public class PromQLEvaluator {
       return new RangeVector(List.of());
 
     final TagFilter tagFilter = buildTagFilter(vs.matchers(), columns);
+    final RowMatchers rowMatchers = rowMatchers(vs.matchers(), columns);
     final long offset = vs.offsetMs();
     final long queryEnd = evalTimeMs - offset;
-    final long queryStart = queryEnd - ms.rangeMs();
+    final long windowStart = queryEnd - ms.rangeMs();
+    final long queryStart = windowScanStart(queryEnd, ms.rangeMs());
 
     // Folded straight from the scan through forEachRow rather than collected via iterateQuery first (issue
     // #7696) - same rationale as evaluateVectorSelector() above, including the narrowed IOException catch so a
@@ -347,7 +373,7 @@ public class PromQLEvaluator {
     try {
       // One shared regexDeadline() for the whole evaluator instance - see evaluateVectorSelector().
       engine.forEachRow(queryStart, queryEnd, null, tagFilter, readMetrics, row -> {
-        if (!matchesPostFilters(row, vs.matchers(), columns, regexDeadline()))
+        if (!matchesRow(row, rowMatchers))
           return true;
         final Map<String, String> labels = extractLabels(row, columns, vs.metricName());
         final String key = labelKey(labels);
@@ -371,7 +397,8 @@ public class PromQLEvaluator {
       // the first, last and consecutive pairs of this list assuming ascending order, so it is restored here -
       // once per series, over just that series' own points, rather than once for the whole scan.
       points.sort(Comparator.comparingDouble(p -> p[0]));
-      result.add(new RangeSeries(labelsMap.get(entry.getKey()), points, queryStart, queryEnd));
+      // The window's own boundaries, not the scan's: extrapolation measures from where the range begins
+      result.add(new RangeSeries(labelsMap.get(entry.getKey()), points, windowStart, queryEnd));
     }
     return new RangeVector(result);
   }
@@ -379,11 +406,14 @@ public class PromQLEvaluator {
   private PromQLResult evaluateAggregation(final AggregationExpr agg, final long evalTimeMs, final long queryStartMs,
       final long queryEndMs, final long stepMs, final int depth) {
     final PromQLResult inner = evaluate(agg.expr(), evalTimeMs, queryStartMs, queryEndMs, stepMs, depth);
+    // Prometheus aggregates instant vectors only: a range vector or a scalar used to answer an empty vector (issue #9883).
+    // Checked before the parameter, in the same order as Prometheus' type checker.
+    if (!(inner instanceof InstantVector iv) || agg.expr() instanceof StringLiteral)
+      throw new IllegalArgumentException(
+          "expected type instant vector in aggregation expression, got " + valueTypeName(agg.expr(), inner));
     // k does not depend on the group, and an invalid one is refused even when the vector is empty, like Prometheus
     final boolean ranking = agg.op() == PromQLExpr.AggOp.TOPK || agg.op() == PromQLExpr.AggOp.BOTTOMK;
     final int rankLimit = ranking ? rankingLimit(agg, evalTimeMs, queryStartMs, queryEndMs, stepMs, depth) : 0;
-    if (!(inner instanceof InstantVector iv))
-      return new InstantVector(List.of());
 
     // Group samples by labels
     final Map<String, List<VectorSample>> groups = new LinkedHashMap<>();
@@ -472,11 +502,12 @@ public class PromQLEvaluator {
 
     // Range-vector functions
     if (isRangeFunction(name)) {
-      if (fn.args().isEmpty())
-        throw new IllegalArgumentException("Function '" + fn.name() + "' requires a range vector argument");
+      // every function isRangeFunction() lists takes exactly one argument; quantile_over_time or predict_linear would not
+      checkArgumentCount(name, fn.args().size(), 1, 1);
       final PromQLResult argResult = evaluate(fn.args().getFirst(), evalTimeMs, queryStartMs, queryEndMs, stepMs, depth);
       if (!(argResult instanceof RangeVector rv))
-        throw new IllegalArgumentException("Function '" + fn.name() + "' requires a range vector argument");
+        throw new IllegalArgumentException("expected type range vector in call to function \"" + name + "\", got "
+            + valueTypeName(fn.args().getFirst(), argResult));
 
       final List<VectorSample> samples = new ArrayList<>();
       for (final RangeSeries series : rv.series()) {
@@ -491,7 +522,8 @@ public class PromQLEvaluator {
           case "count_over_time" -> PromQLFunctions.countOverTime(series);
           default -> throw new IllegalArgumentException("Unknown range function: " + fn.name());
         };
-        samples.add(new VectorSample(series.labels(), value, evalTimeMs));
+        samples.add(new VectorSample(functionKeepsMetricName(name) ? series.labels() : withoutMetricName(series.labels()), value,
+            evalTimeMs));
       }
       return new InstantVector(samples);
     }
@@ -506,30 +538,73 @@ public class PromQLEvaluator {
   private PromQLResult evaluateScalarFunction(final FunctionCallExpr fn, final long evalTimeMs, final long queryStartMs,
       final long queryEndMs, final long stepMs, final int depth) {
     final String name = fn.name().toLowerCase(Locale.ROOT);
+    checkArgumentCount(name, fn.args().size(), 1, "round".equals(name) ? 2 : 1);
     final PromQLResult argResult = evaluate(fn.args().getFirst(), evalTimeMs, queryStartMs, queryEndMs, stepMs, depth);
-    final double param = extractSecondParam(fn, evalTimeMs, queryStartMs, queryEndMs, stepMs, depth);
+    // Like Prometheus, only an instant vector is accepted: a range vector used to come back unchanged and a string became
+    // a NaN scalar (issue #9883), and a scalar answered a scalar (`abs(-1)` was 1, issue #9924). Checked on the evaluated
+    // argument, because whether it is a scalar is not always syntactic (`abs(1 + 1)`, `abs((1 > bool 0))`).
+    if (!(argResult instanceof InstantVector iv))
+      throw new IllegalArgumentException("expected type instant vector in call to function \"" + name + "\", got "
+          + valueTypeName(fn.args().getFirst(), argResult));
+    final double param = extractSecondParam(fn, name, evalTimeMs, queryStartMs, queryEndMs, stepMs, depth);
 
-    if (argResult instanceof ScalarResult sr)
-      return new ScalarResult(applyScalarFn(name, sr.value(), param), evalTimeMs);
-
-    if (argResult instanceof InstantVector iv) {
-      final List<VectorSample> samples = new ArrayList<>();
-      for (final VectorSample sample : iv.samples())
-        samples.add(new VectorSample(sample.labels(), applyScalarFn(name, sample.value(), param), sample.timestampMs()));
-      return new InstantVector(samples);
-    }
-
-    return argResult;
+    final List<VectorSample> samples = new ArrayList<>();
+    final boolean keepName = functionKeepsMetricName(name);
+    for (final VectorSample sample : iv.samples())
+      samples.add(new VectorSample(keepName ? sample.labels() : withoutMetricName(sample.labels()),
+          applyScalarFn(name, sample.value(), param), sample.timestampMs()));
+    return new InstantVector(samples);
   }
 
-  private double extractSecondParam(final FunctionCallExpr fn, final long evalTimeMs, final long queryStartMs,
+  private double extractSecondParam(final FunctionCallExpr fn, final String name, final long evalTimeMs, final long queryStartMs,
       final long queryEndMs, final long stepMs, final int depth) {
     if (fn.args().size() <= 1)
       return 1.0;
-    final PromQLResult paramResult = evaluate(fn.args().get(1), evalTimeMs, queryStartMs, queryEndMs, stepMs, depth);
-    if (paramResult instanceof ScalarResult sr)
-      return sr.value();
-    return 1.0;
+    final PromQLExpr paramExpr = fn.args().get(1);
+    final PromQLResult paramResult = evaluate(paramExpr, evalTimeMs, queryStartMs, queryEndMs, stepMs, depth);
+    // a non-scalar precision used to be silently replaced with 1 (issue #9883)
+    if (!(paramResult instanceof ScalarResult sr) || paramExpr instanceof StringLiteral)
+      throw new IllegalArgumentException(
+          "expected type scalar in call to function \"" + name + "\", got " + valueTypeName(paramExpr, paramResult));
+    return sr.value();
+  }
+
+  /**
+   * Refuses a call with too few or too many arguments, in Prometheus' wording. An extra argument used to be ignored and a
+   * missing one raised a {@code NoSuchElementException} (issue #9883).
+   */
+  private static void checkArgumentCount(final String name, final int count, final int min, final int max) {
+    if (min == max) {
+      if (count != min)
+        throw new IllegalArgumentException(
+            "expected " + min + " argument(s) in call to \"" + name + "\", got " + count);
+    } else if (count < min)
+      throw new IllegalArgumentException("expected at least " + min + " argument(s) in call to \"" + name + "\", got " + count);
+    else if (count > max)
+      throw new IllegalArgumentException("expected at most " + max + " argument(s) in call to \"" + name + "\", got " + count);
+  }
+
+  /**
+   * Prometheus' name for the type of an evaluated expression, as its type-check errors print it. A string literal
+   * evaluates to a NaN scalar here, so its type is read from the expression.
+   */
+  private static String valueTypeName(final PromQLExpr expr, final PromQLResult result) {
+    if (expr instanceof StringLiteral)
+      return "string";
+    return switch (result) {
+      case ScalarResult ignored -> "scalar";
+      case InstantVector ignored -> "instant vector";
+      case RangeVector ignored -> "range vector";
+      // only evaluateRange() builds one, from the results of evaluate(), so no argument evaluates to it
+      case MatrixResult ignored -> "matrix";
+    };
+  }
+
+  /**
+   * Prometheus' refusal of a range query whose expression is neither a scalar nor an instant vector (issue #9922).
+   */
+  private static String invalidRangeQueryType(final String typeName) {
+    return "invalid expression type \"" + typeName + "\" for range query, must be Scalar or instant Vector";
   }
 
   private double applyScalarFn(final String name, final double value, final double param) {
@@ -547,21 +622,39 @@ public class PromQLEvaluator {
     final PromQLResult leftResult = evaluate(bin.left(), evalTimeMs, queryStartMs, queryEndMs, stepMs, depth);
     final PromQLResult rightResult = evaluate(bin.right(), evalTimeMs, queryStartMs, queryEndMs, stepMs, depth);
 
+    // Prometheus refuses any other operand type: a range vector (`m[5m] + 1`, `m[5m] and m`) fell through every branch
+    // below to a scalar NaN, and a string literal evaluates to a NaN scalar (issue #9788). Checked before the set-operator
+    // rule, in the same order as Prometheus' type checker.
+    if (!isScalarOrInstantVector(bin.left(), leftResult) || !isScalarOrInstantVector(bin.right(), rightResult))
+      throw new IllegalArgumentException(BINARY_OPERAND_TYPE);
+
+    // Prometheus refuses a set operator with a scalar operand: `and`, `or` and `unless` match series by labels, and a
+    // scalar has none. Without this check the scalar branches below ran them through applyBinaryOp(), which maps them to
+    // NaN (issue #9743). Checked on the evaluated operands for the same reason as the comparison check below.
+    if (bin.op().isSetOperator() && (leftResult instanceof ScalarResult || rightResult instanceof ScalarResult))
+      throw new IllegalArgumentException("set operator \"" + bin.op().symbol() + "\" not allowed in binary scalar expression");
+
     // scalar-scalar
-    if (leftResult instanceof ScalarResult ls && rightResult instanceof ScalarResult rs)
+    if (leftResult instanceof ScalarResult ls && rightResult instanceof ScalarResult rs) {
+      // Prometheus refuses a scalar-scalar comparison without `bool`: there is no sample to keep or drop, so only the
+      // 0/1 answer is meaningful and it must be asked for (issue #9723). Checked on the evaluated operands, not in the
+      // parser, because whether an operand is a scalar is not always syntactic (`(1 + 1)`, `(1 > bool 0)`).
+      if (bin.op().isComparison() && !bin.returnBool())
+        throw new IllegalArgumentException(SCALAR_COMPARISON_WITHOUT_BOOL);
       return new ScalarResult(applyBinaryOp(bin.op(), ls.value(), rs.value()), evalTimeMs);
+    }
 
     // vector-scalar
     if (leftResult instanceof InstantVector iv && rightResult instanceof ScalarResult rs)
-      return applyVectorScalar(iv, rs.value(), bin.op(), false);
+      return applyVectorScalar(iv, rs.value(), bin.op(), false, bin.returnBool());
 
     // scalar-vector
     if (leftResult instanceof ScalarResult ls && rightResult instanceof InstantVector iv)
-      return applyVectorScalar(iv, ls.value(), bin.op(), true);
+      return applyVectorScalar(iv, ls.value(), bin.op(), true, bin.returnBool());
 
     // vector-vector
     if (leftResult instanceof InstantVector lv && rightResult instanceof InstantVector rv)
-      return applyVectorVector(lv, rv, bin.op());
+      return applyVectorVector(lv, rv, bin.op(), bin.returnBool());
 
     return new ScalarResult(Double.NaN, evalTimeMs);
   }
@@ -569,13 +662,16 @@ public class PromQLEvaluator {
   private PromQLResult evaluateUnary(final UnaryExpr un, final long evalTimeMs, final long queryStartMs, final long queryEndMs,
       final long stepMs, final int depth) {
     final PromQLResult result = evaluate(un.expr(), evalTimeMs, queryStartMs, queryEndMs, stepMs, depth);
+    // a range vector used to come back unchanged, silently dropping the sign, and a string became a NaN scalar (#9788)
+    if (!isScalarOrInstantVector(un.expr(), result))
+      throw new IllegalArgumentException(UNARY_OPERAND_TYPE);
     if (un.op() == '-') {
       if (result instanceof ScalarResult sr)
         return new ScalarResult(-sr.value(), sr.timestampMs());
       if (result instanceof InstantVector iv) {
         final List<VectorSample> samples = new ArrayList<>();
         for (final VectorSample s : iv.samples())
-          samples.add(new VectorSample(s.labels(), -s.value(), s.timestampMs()));
+          samples.add(new VectorSample(withoutMetricName(s.labels()), -s.value(), s.timestampMs()));
         return new InstantVector(samples);
       }
     }
@@ -583,6 +679,14 @@ public class PromQLEvaluator {
   }
 
   // --- Helper methods ---
+
+  /**
+   * The only operand types an operator accepts. A string literal is tested on the expression because it evaluates to a
+   * {@link ScalarResult} (NaN); the parser returns the inner expression of a parenthesized one, so {@code ("a")} is seen too.
+   */
+  private static boolean isScalarOrInstantVector(final PromQLExpr expr, final PromQLResult result) {
+    return !(expr instanceof StringLiteral) && (result instanceof ScalarResult || result instanceof InstantVector);
+  }
 
   private Pattern compilePattern(final String regex) {
     if (regex.length() > MAX_REGEX_LENGTH)
@@ -606,15 +710,120 @@ public class PromQLEvaluator {
     }
   }
 
+  /**
+   * Whether the label matchers of a selector rule out every series of a type before any row is read, because a
+   * matcher names a label the type does not declare (issue #6938). Public for the series endpoint, which has to
+   * agree with {@code /query} about what a selector selects (issue #9386).
+   */
+  public boolean selectsNoSeries(final List<LabelMatcher> matchers, final List<ColumnDefinition> columns) {
+    return excludesEverySeries(matchers, columns, regexDeadline());
+  }
+
+  /**
+   * The part of a selector's label matchers a scan can apply itself: its non-empty equalities on declared columns, as a tag
+   * filter, or {@code null} when it has none. Every other matcher is decided per row by {@link #matchesRow}, which skips what
+   * this filter already applied, and {@link #selectsNoSeries} settles a matcher on an undeclared label for the whole type:
+   * the three are one unit, public for the remote-read endpoint so it selects exactly what {@code /query} does (issue #9803).
+   */
+  public TagFilter tagFilter(final List<LabelMatcher> matchers, final List<ColumnDefinition> columns) {
+    return buildTagFilter(matchers, columns);
+  }
+
+  /**
+   * Binds a selector's label matchers to the rows of a scan {@link #tagFilter} narrowed, whose layout is the engine's
+   * {@code [timestamp, non-ts-col-0, non-ts-col-1, ...]}: the matchers that filter did not apply ({@code !=}, {@code =~},
+   * {@code !~}, {@code label=""}), each with its tag's position in the row and the values its text reads as in the tag's declared
+   * type. Resolved once per scan, so the per-row work is a membership test and, for a pattern, a match (issue #9833).
+   * <p>
+   * The three - {@link #tagFilter}, this and {@link #selectsNoSeries} - are one unit, public for the remote-read endpoint so it
+   * selects exactly what {@code /query} does (issue #9803).
+   */
+  public RowMatchers rowMatchers(final List<LabelMatcher> matchers, final List<ColumnDefinition> columns) {
+    final List<ColumnDefinition> rowColumns = new ArrayList<>(columns.size());
+    for (final ColumnDefinition col : columns)
+      if (col.getRole() != ColumnDefinition.ColumnRole.TIMESTAMP)
+        rowColumns.add(col);
+    return bindMatchers(matchers, rowColumns, true);
+  }
+
+  /**
+   * Binds every label matcher of a selector to the rows of a scan that projects some columns and pushes no tag filter down,
+   * as the series endpoint's tag projection does: {@code row[0]} is the timestamp and {@code row[i + 1]} the value of
+   * {@code rowColumns.get(i)}. A matcher on a label the type does not declare is left to {@link #selectsNoSeries} (issue #9386).
+   */
+  public RowMatchers projectedRowMatchers(final List<LabelMatcher> matchers, final List<ColumnDefinition> rowColumns) {
+    return bindMatchers(matchers, rowColumns, false);
+  }
+
+  /**
+   * Whether a row passes the matchers bound by {@link #rowMatchers} or {@link #projectedRowMatchers}, under this evaluator's
+   * shared regex deadline. A malformed or ReDoS-shaped pattern raises an {@link IllegalArgumentException} rather than reading
+   * as "no match" (issue #9803).
+   */
+  public boolean matchesRow(final Object[] row, final RowMatchers rowMatchers) {
+    final long regexDeadline = rowMatchers.matchers.length == 0 ? 0L : regexDeadline();
+    for (int i = 0; i < rowMatchers.matchers.length; i++) {
+      final int rowIdx = rowMatchers.rowIndexes[i];
+      if (!matchesTag(rowMatchers.matchers[i], rowMatchers.valueForms[i], rowMatchers.patterns[i],
+          rowIdx < row.length ? row[rowIdx] : null, regexDeadline))
+        return false;
+    }
+    return true;
+  }
+
+  /**
+   * A selector's label matchers bound to one scan's row layout by {@link #rowMatchers} or {@link #projectedRowMatchers}.
+   * Immutable; valid for the columns it was bound to.
+   */
+  public static final class RowMatchers {
+    private final LabelMatcher[] matchers;
+    private final int[]          rowIndexes;
+    private final Set<Object>[]  valueForms;
+    private final Pattern[]      patterns;
+
+    private RowMatchers(final LabelMatcher[] matchers, final int[] rowIndexes, final Set<Object>[] valueForms,
+        final Pattern[] patterns) {
+      this.matchers = matchers;
+      this.rowIndexes = rowIndexes;
+      this.valueForms = valueForms;
+      this.patterns = patterns;
+    }
+  }
+
+  /**
+   * Whether every {@code __name__} matcher of a selector holds on {@code metricName}: how a selector without a metric name,
+   * {@code {__name__=~"cp.*"}}, picks the metrics it reads (issue #9803). True when there is no such matcher.
+   */
+  public boolean matchesMetricName(final List<LabelMatcher> matchers, final String metricName) {
+    for (final LabelMatcher m : matchers) {
+      if (!METRIC_NAME_LABEL.equals(m.name()))
+        continue;
+      final boolean matches = switch (m.op()) {
+        case EQ -> metricName.equals(m.value());
+        case NEQ -> !metricName.equals(m.value());
+        case RE -> TimeBoundRegex.matchesUntil(compilePattern(m.value()), metricName, regexDeadline());
+        case NRE -> !TimeBoundRegex.matchesUntil(compilePattern(m.value()), metricName, regexDeadline());
+      };
+      if (!matches)
+        return false;
+    }
+    return true;
+  }
+
   private TagFilter buildTagFilter(final List<LabelMatcher> matchers, final List<ColumnDefinition> columns) {
     TagFilter filter = null;
     for (final LabelMatcher m : matchers) {
-      if (m.op() != MatchOp.EQ || "__name__".equals(m.name()))
+      // {label=""} selects the series that do NOT carry the label, which a tag equality filter cannot express (a missing
+      // tag is null, an old row may hold ""): the row matchers decide it (issue #9363)
+      if (m.op() != MatchOp.EQ || isEmptyEquality(m) || "__name__".equals(m.name()))
         continue;
       final int idx = findNonTsColumnIndex(m.name(), columns);
       if (idx < 0)
         continue;
-      filter = filter == null ? TagFilter.eq(idx, m.value()) : filter.and(idx, m.value());
+      // A matcher value is always text and the stored tag is of the column's declared type: compared as text, a LONG or
+      // BOOLEAN tag matched nothing. Coerced as every other tag push-down coerces it (issues #5475, #9803)
+      final Object value = coerceTagValue(nonTsColumn(idx, columns), m.value());
+      filter = filter == null ? TagFilter.eq(idx, value) : filter.and(idx, value);
     }
     return filter;
   }
@@ -628,13 +837,13 @@ public class PromQLEvaluator {
    * {@code !=} with a non-empty value, {@code =""} and any regex the empty string satisfies select everything.
    * The evaluator used to get both directions backwards - {@link #buildTagFilter} silently dropped an unknown
    * {@code =} matcher (so a typo like {@code up{jobb="api"}} widened the query to every series instead of
-   * narrowing it to none) and {@link #matchesPostFilters} rejected every row for an unknown {@code !=}/{@code !~}.
+   * narrowing it to none) and the per-row matcher rejected every row for an unknown {@code !=}/{@code !~}.
    * Deciding it here, before the scan, also means the query never runs when the answer is already known.
    * <p>
    * Deliberately outside the {@code try/catch} that turns an {@code iterateQuery()} failure into an empty
    * result: the {@code IllegalArgumentException}/{@code TimeoutException} a bad or ReDoS-shaped {@code =~} can
    * raise from here propagates to the caller, exactly as the same pattern already does from
-   * {@link #matchesPostFilters}, which runs outside that {@code try} too. A rejected query is not an empty one.
+   * {@link #matchesRow}, which runs outside that {@code try} too. A rejected query is not an empty one.
    */
   private boolean excludesEverySeries(final List<LabelMatcher> matchers, final List<ColumnDefinition> columns,
       final long regexDeadline) {
@@ -654,7 +863,7 @@ public class PromQLEvaluator {
    * <p>
    * Deliberate change of error behaviour for {@code =~}/{@code !~} on an unknown column: the pattern is now
    * compiled - and therefore validated by {@link #compilePattern}, syntax and ReDoS guard alike - where
-   * {@link #matchesPostFilters} used to bail out on {@code rowIdx < 0} before ever reaching the switch, so a
+   * the per-row matcher used to bail out on {@code rowIdx < 0} before ever reaching the switch, so a
    * malformed or ReDoS-shaped regex against a nonexistent label silently produced an empty vector instead of
    * the {@code IllegalArgumentException} the same pattern raises against a label that does exist. Prometheus
    * validates the regex regardless of whether any series carries the label, and a typo'd label name is exactly
@@ -669,37 +878,128 @@ public class PromQLEvaluator {
     };
   }
 
-  private boolean matchesPostFilters(final Object[] row, final List<LabelMatcher> matchers,
-      final List<ColumnDefinition> columns, final long regexDeadline) {
+  /**
+   * Whether {@code m} is {@code label=""}: it selects the series that do not carry the label, so it cannot go through the
+   * tag equality filter and is decided by {@link #matchesRow} instead (issue #9363). Kept in one place so the two
+   * sides of that split cannot disagree.
+   */
+  private static boolean isEmptyEquality(final LabelMatcher m) {
+    return m.op() == MatchOp.EQ && m.value().isEmpty();
+  }
+
+  @SuppressWarnings("unchecked")
+  private RowMatchers bindMatchers(final List<LabelMatcher> matchers, final List<ColumnDefinition> rowColumns,
+      final boolean equalitiesPushedDown) {
+    final LabelMatcher[] bound = new LabelMatcher[matchers.size()];
+    final int[] rowIndexes = new int[matchers.size()];
+    final Set<Object>[] forms = new Set[matchers.size()];
+    final Pattern[] patterns = new Pattern[matchers.size()];
+    int count = 0;
     for (final LabelMatcher m : matchers) {
-      if (m.op() == MatchOp.EQ || "__name__".equals(m.name()))
+      // a non-empty EQ was already applied by the tag filter; an empty one is decided here
+      if ((equalitiesPushedDown && m.op() == MatchOp.EQ && !isEmptyEquality(m)) || METRIC_NAME_LABEL.equals(m.name()))
         continue;
-      final int rowIdx = findNonTsRowIndex(m.name(), columns);
-      if (rowIdx < 0)
+      int col = -1;
+      for (int i = 0; i < rowColumns.size(); i++)
+        if (rowColumns.get(i).getName().equals(m.name())) {
+          col = i;
+          break;
+        }
+      if (col < 0)
         // The column is absent from the schema, so the label is absent from every series. excludesEverySeries()
         // already settled such a matcher for the whole type before the scan started: reaching a row at all
         // means it selected everything, so it cannot reject this one (issue #6938).
         continue;
-      final Object val = rowIdx < row.length ? row[rowIdx] : null;
-      final String strVal = val != null ? val.toString() : "";
-      switch (m.op()) {
-        case NEQ:
-          if (strVal.equals(m.value()))
-            return false;
-          break;
-        case RE:
-          if (!TimeBoundRegex.matchesUntil(compilePattern(m.value()), strVal, regexDeadline))
-            return false;
-          break;
-        case NRE:
-          if (TimeBoundRegex.matchesUntil(compilePattern(m.value()), strVal, regexDeadline))
-            return false;
-          break;
-        default:
-          break;
-      }
+      bound[count] = m;
+      rowIndexes[count] = col + 1;
+      forms[count] = valueFormsOf(rowColumns.get(col), m);
+      // compiled once per scan, before it starts: a malformed or ReDoS-shaped pattern is refused even when no row reaches it
+      if (m.op() == MatchOp.RE || m.op() == MatchOp.NRE)
+        patterns[count] = compilePattern(m.value());
+      count++;
     }
-    return true;
+    return new RowMatchers(Arrays.copyOf(bound, count), Arrays.copyOf(rowIndexes, count), Arrays.copyOf(forms, count),
+        Arrays.copyOf(patterns, count));
+  }
+
+  /**
+   * The stored values a matcher's text names in its tag's declared type, as the tag push-down reads them: {@code 007} names the
+   * LONG 7, {@code 5} the DOUBLE 5.0, a date the epoch count a DATETIME tag holds (issues #5475, #9724, #9803, #9833). For a
+   * pattern, the values the pattern names when read as a literal: its text as written, and, when every metacharacter in it is
+   * escaped, the text it matches. Empty for {@code label=""}/{@code label!=""}, which test presence instead.
+   */
+  private Set<Object> valueFormsOf(final ColumnDefinition column, final LabelMatcher m) {
+    final String value = m.value();
+    if (value.isEmpty() && (m.op() == MatchOp.EQ || m.op() == MatchOp.NEQ))
+      return Set.of();
+    final Set<Object> forms = new HashSet<>();
+    addEqualityForms(forms, column, value);
+    if (m.op() == MatchOp.RE || m.op() == MatchOp.NRE) {
+      final String literal = literalOfPattern(value);
+      if (literal != null && !literal.equals(value))
+        addEqualityForms(forms, column, literal);
+    }
+    return forms;
+  }
+
+  private void addEqualityForms(final Set<Object> forms, final ColumnDefinition column, final String text) {
+    final Object typed = coerceTagValue(column, text);
+    if (typed != null)
+      forms.addAll(TagFilter.equalityForms(typed));
+  }
+
+  /**
+   * The one text {@code pattern} matches when it is a plain literal - every character either ordinary or a backslash-escaped
+   * punctuation character, as in {@code 5\.00} - or {@code null} when it is a real pattern.
+   */
+  static String literalOfPattern(final String pattern) {
+    final StringBuilder sb = new StringBuilder(pattern.length());
+    for (int i = 0; i < pattern.length(); i++) {
+      final char c = pattern.charAt(i);
+      if (c == '\\') {
+        if (++i >= pattern.length() || Character.isLetterOrDigit(pattern.charAt(i)))
+          return null;
+        sb.append(pattern.charAt(i));
+      } else if (".[]{}()*+?^$|".indexOf(c) >= 0)
+        return null;
+      else
+        sb.append(c);
+    }
+    return sb.toString();
+  }
+
+  /**
+   * The one decision of whether a tag holds a matcher, for every operator (issue #9833). Equality is membership in
+   * {@code valueForms}, the forms the tag push-down compares a row with ({@link TagFilter#equalityForms}), so {@code =} and
+   * {@code !=} are complements whichever of the two decides a row. A pattern selects a tag it names as a literal, which is how
+   * {@code =~"007"} agrees with {@code ="007"} on a LONG tag, and otherwise a tag whose label text - what the series is
+   * reported under - it matches. An absent tag (null, or {@code ""} in a row an older build stored) is the empty string.
+   * <p>
+   * The literal reading is broader than Prometheus, whose label values are text only: there {@code =~"007"} never matches a
+   * label {@code 7}. Here it does, deliberately, because {@code ="007"} selects that tag by its declared type and a literal
+   * pattern has to agree with the equality it spells. A real pattern is still matched against the label text only, so
+   * {@code =~"0.7"} does not select a LONG tag holding 7.
+   */
+  private static boolean matchesTag(final LabelMatcher m, final Set<Object> valueForms, final Pattern pattern, final Object stored,
+      final long regexDeadline) {
+    final boolean absent = isAbsent(stored);
+    return switch (m.op()) {
+      case EQ -> m.value().isEmpty() ? absent : !absent && valueForms.contains(stored);
+      case NEQ -> m.value().isEmpty() ? !absent : absent || !valueForms.contains(stored);
+      case RE -> !absent && valueForms.contains(stored) || TimeBoundRegex.matchesUntil(pattern, labelText(stored), regexDeadline);
+      case NRE -> (absent || !valueForms.contains(stored)) && !TimeBoundRegex.matchesUntil(pattern, labelText(stored),
+          regexDeadline);
+    };
+  }
+
+  /** Whether a row carries no value for a tag: null, or {@code ""} in a row an older build stored (issue #9363). */
+  private static boolean isAbsent(final Object stored) {
+    return stored == null || stored instanceof String text && text.isEmpty();
+  }
+
+  /** The text a tag is reported under, which a pattern is matched against; {@code ""} for an absent tag. */
+  private static String labelText(final Object stored) {
+    return stored != null ? stored.toString() : "";
   }
 
   /**
@@ -717,8 +1017,13 @@ public class PromQLEvaluator {
         continue;
       final int rowPos = 1 + nonTsIdx;
       nonTsIdx++;
-      if (col.getRole() == ColumnDefinition.ColumnRole.TAG && rowPos < row.length && row[rowPos] != null)
-        labels.put(col.getName(), row[rowPos].toString());
+      // An empty label value is an absent label in the Prometheus data model, so it is not reported (issue #9363). It
+      // also covers rows an older build stored with "".
+      if (col.getRole() == ColumnDefinition.ColumnRole.TAG && rowPos < row.length && row[rowPos] != null) {
+        final String value = row[rowPos].toString();
+        if (!value.isEmpty())
+          labels.put(col.getName(), value);
+      }
     }
     return labels;
   }
@@ -768,6 +1073,19 @@ public class PromQLEvaluator {
     }
   }
 
+  /**
+   * The value an equality matcher compares a tag with: the matcher's text in the column's declared type, so a LONG or BOOLEAN tag
+   * is compared like with like (issues #5475, #9803). Text the type cannot read stays text, which equals no stored value and so
+   * selects no series: {@code coerceValue} already leaves a number that does not parse as it is, but reads any text that is not
+   * {@code true} as {@code false}, which would select the series whose tag is false.
+   */
+  private Object coerceTagValue(final ColumnDefinition column, final String text) {
+    if (column.getDataType() == Type.BOOLEAN && !"true".equalsIgnoreCase(text) && !"false".equalsIgnoreCase(text))
+      return text;
+    // read through the database, as the INSERT that wrote the tag read it, not in the JVM's default zone (issue #9833)
+    return column.coerceValue(database, text);
+  }
+
   private int findNonTsColumnIndex(final String name, final List<ColumnDefinition> columns) {
     int nonTsIdx = -1;
     for (final ColumnDefinition col : columns) {
@@ -778,6 +1096,18 @@ public class PromQLEvaluator {
         return nonTsIdx;
     }
     return -1;
+  }
+
+  /** The column at {@code nonTsIndex} among the non-timestamp columns, as {@link #findNonTsColumnIndex} counts them. */
+  private static ColumnDefinition nonTsColumn(final int nonTsIndex, final List<ColumnDefinition> columns) {
+    int nonTsIdx = -1;
+    for (final ColumnDefinition col : columns) {
+      if (col.getRole() == ColumnDefinition.ColumnRole.TIMESTAMP)
+        continue;
+      if (++nonTsIdx == nonTsIndex)
+        return col;
+    }
+    throw new IllegalArgumentException("No non-timestamp column at index " + nonTsIndex);
   }
 
   /**
@@ -849,27 +1179,64 @@ public class PromQLEvaluator {
     return labelKey(labels, METRIC_NAME_LABEL);
   }
 
-  /** The result labels of an arithmetic operator: Prometheus drops the metric name. */
-  private Map<String, String> resultLabels(final Map<String, String> labels, final BinaryOp op) {
-    if (isComparisonOp(op) || !labels.containsKey(METRIC_NAME_LABEL))
+  /**
+   * The result labels of a binary operator: Prometheus drops the metric name for an arithmetic operator and for a
+   * comparison with {@code bool} (its {@code returnBool} adds a {@code DropMetricName} of its own, issue #9644), and
+   * keeps it only for a filtering comparison.
+   */
+  private Map<String, String> resultLabels(final Map<String, String> labels, final BinaryOp op, final boolean returnBool) {
+    return op.isComparison() && !returnBool ? labels : withoutMetricName(labels);
+  }
+
+  /**
+   * The sample a comparison or arithmetic operator produces from {@code source} and the operator's raw {@code value},
+   * or {@code null} when a filtering comparison drops it. A comparison with {@code bool} keeps every sample and answers
+   * {@code 0}/{@code 1} (issue #9644); without it a comparison keeps the source value of the samples it lets through.
+   */
+  private VectorSample binarySample(final VectorSample source, final double value, final BinaryOp op, final boolean returnBool) {
+    if (!op.isComparison() || returnBool)
+      return new VectorSample(resultLabels(source.labels(), op, returnBool), value, source.timestampMs());
+    return value != 0 ? source : null; // a filter passes the sample through unchanged, and VectorSample is immutable
+  }
+
+  /**
+   * The labels of a series derived from another one, with the metric name deleted: Prometheus' {@code DropMetricName()},
+   * applied by every operator and function that transforms the value (issue #9330). Returns {@code labels} itself when
+   * it carries no name, so the common case allocates nothing.
+   */
+  private static Map<String, String> withoutMetricName(final Map<String, String> labels) {
+    if (!labels.containsKey(METRIC_NAME_LABEL))
       return labels;
     final Map<String, String> withoutName = new LinkedHashMap<>(labels);
     withoutName.remove(METRIC_NAME_LABEL);
     return withoutName;
   }
 
+  /**
+   * The functions that keep the metric name, as in Prometheus: they reorder or relabel a series instead of deriving a
+   * new value from it. Every other function drops it. Mirrors {@code DropMetricName()} in Prometheus' promql/functions.go.
+   */
+  private static boolean functionKeepsMetricName(final String name) {
+    return switch (name) {
+      case "sort", "sort_desc", "label_replace", "label_join", "last_over_time" -> true;
+      default -> false;
+    };
+  }
+
   private InstantVector applyVectorScalar(final InstantVector iv, final double scalar, final BinaryOp op,
-      final boolean scalarOnLeft) {
+      final boolean scalarOnLeft, final boolean returnBool) {
     final List<VectorSample> result = new ArrayList<>();
     for (final VectorSample s : iv.samples()) {
       final double value = scalarOnLeft ? applyBinaryOp(op, scalar, s.value()) : applyBinaryOp(op, s.value(), scalar);
-      if (!isComparisonOp(op) || value != 0)
-        result.add(new VectorSample(resultLabels(s.labels(), op), isComparisonOp(op) ? s.value() : value, s.timestampMs()));
+      final VectorSample out = binarySample(s, value, op, returnBool);
+      if (out != null)
+        result.add(out);
     }
     return new InstantVector(result);
   }
 
-  private InstantVector applyVectorVector(final InstantVector left, final InstantVector right, final BinaryOp op) {
+  private InstantVector applyVectorVector(final InstantVector left, final InstantVector right, final BinaryOp op,
+      final boolean returnBool) {
     // Simple vector-vector matching by label identity
     final Map<String, VectorSample> rightMap = new HashMap<>();
     for (final VectorSample s : right.samples())
@@ -888,9 +1255,9 @@ public class PromQLEvaluator {
         } else if (op == BinaryOp.UNLESS) {
           // skip — matched, so excluded
         } else {
-          final double value = applyBinaryOp(op, ls.value(), rs.value());
-          if (!isComparisonOp(op) || value != 0)
-            result.add(new VectorSample(resultLabels(ls.labels(), op), isComparisonOp(op) ? ls.value() : value, ls.timestampMs()));
+          final VectorSample out = binarySample(ls, applyBinaryOp(op, ls.value(), rs.value()), op, returnBool);
+          if (out != null)
+            result.add(out);
         }
       } else if (op == BinaryOp.OR || op == BinaryOp.UNLESS) {
         result.add(ls);
@@ -926,11 +1293,8 @@ public class PromQLEvaluator {
     };
   }
 
-  private boolean isComparisonOp(final BinaryOp op) {
-    return op == BinaryOp.EQ || op == BinaryOp.NEQ || op == BinaryOp.LT || op == BinaryOp.GT || op == BinaryOp.LTE
-        || op == BinaryOp.GTE;
-  }
-
+  // evaluateFunction() checks every function listed here for exactly one argument: a function taking more (quantile_over_time,
+  // predict_linear) needs its own count there
   private boolean isRangeFunction(final String name) {
     return switch (name) {
       case "rate", "irate", "increase", "sum_over_time", "avg_over_time", "min_over_time", "max_over_time", "count_over_time" ->
@@ -942,6 +1306,11 @@ public class PromQLEvaluator {
   private static final String METRIC_NAME_LABEL = "__name__";
   private static final int    MAX_TYPE_NAME_LENGTH   = 256;
   private static final Pattern VALID_TYPE_NAME_PATTERN = Pattern.compile("[a-zA-Z_][a-zA-Z0-9_]*");
+
+  /** Prometheus' own wording, so a client matching on it sees the same error from either server. */
+  private static final String SCALAR_COMPARISON_WITHOUT_BOOL = "comparisons between scalars must use BOOL modifier";
+  private static final String BINARY_OPERAND_TYPE            = "binary expression must contain only scalar and instant vector types";
+  private static final String UNARY_OPERAND_TYPE             = "unary expression only allowed on expressions of type scalar or instant vector";
 
   public static String sanitizeTypeName(final String name) {
     final String sanitized = name.replace('.', '_').replace('-', '_').replace(':', '_');

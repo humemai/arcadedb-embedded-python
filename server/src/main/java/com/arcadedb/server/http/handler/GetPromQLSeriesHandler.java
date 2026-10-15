@@ -25,6 +25,7 @@ import com.arcadedb.engine.timeseries.ColumnDefinition;
 import com.arcadedb.engine.timeseries.TimeSeriesEngine;
 import com.arcadedb.engine.timeseries.TimeSeriesGateway;
 import com.arcadedb.engine.timeseries.promql.PromQLEvaluator;
+import com.arcadedb.engine.timeseries.promql.PromQLEvaluator.RowMatchers;
 import com.arcadedb.engine.timeseries.promql.PromQLParser;
 import com.arcadedb.engine.timeseries.promql.ast.PromQLExpr;
 import com.arcadedb.engine.timeseries.promql.ast.PromQLExpr.VectorSelector;
@@ -113,6 +114,8 @@ public class GetPromQLSeriesHandler extends AbstractObservabilityHandler {
     // silently reordered the response - so the ordering the old sort produced is now stated rather than
     // inherited, and it costs one long per distinct series instead of a sort of the whole range (issue #7354).
     final Map<String, ObservedSeries> seriesByKey = new LinkedHashMap<>();
+    // One evaluator for the whole request, so its regex deadline is shared by every match[] and every row (issue #9386).
+    final PromQLEvaluator matcherEvaluator = new PromQLEvaluator(database);
 
     for (final String matchStr : matchParams) {
       try {
@@ -143,6 +146,12 @@ public class GetPromQLSeriesHandler extends AbstractObservabilityHandler {
         final TimeSeriesEngine engine = tsType.getEngine();
         final List<ColumnDefinition> columns = tsType.getTsColumns();
 
+        // The label matchers of the selector narrow the answer to the series they select, exactly as /query does
+        // (issue #9386). A matcher on a label the type does not declare is settled for the whole type, before the scan.
+        final List<PromQLExpr.LabelMatcher> matchers = vs.matchers();
+        if (matcherEvaluator.selectsNoSeries(matchers, columns))
+          continue;
+
         // PROJECTION, not the whole row (issue #7371). The answer is made of the TAG columns, so those are the
         // only ones the scan decodes: a sealed block stores each column in its own byte range and
         // TimeSeriesSealedStore.decompressColumns() reads only the ranges the projection names, while
@@ -168,6 +177,9 @@ public class GetPromQLSeriesHandler extends AbstractObservabilityHandler {
         final String[] tagNames = new String[projected.size() - 1];
         for (int i = 1; i < projected.size(); i++)
           tagNames[i - 1] = projected.get(i).getName();
+        // Bound to the declared type of each tag, so {code="007"} selects the LONG tag 7 here exactly as /query does (issue #9833)
+        final RowMatchers rowMatchers = matcherEvaluator.projectedRowMatchers(matchers,
+            projected.subList(1, projected.size()));
         // Reused across rows: the dedup key is built per row because that is what identifies the combination,
         // but the buffer it is built in need not be. The labels map is built only for a combination not seen
         // before, i.e. once per SERIES rather than once per sample (issue #7354).
@@ -186,6 +198,8 @@ public class GetPromQLSeriesHandler extends AbstractObservabilityHandler {
         final AggregationMetrics readMetrics = TimeSeriesReadMetrics.start();
         try {
           engine.forEachTagCombination(startMs, endMs, columnIndices, readMetrics, row -> {
+            if (!matchers.isEmpty() && !matcherEvaluator.matchesRow(row, rowMatchers))
+              return true;
             key.setLength(0);
             // The metric name is length-prefixed for the same reason its tags are: two match[] patterns naming
             // different metrics share this map.

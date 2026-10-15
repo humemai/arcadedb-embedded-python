@@ -19,7 +19,9 @@
 package com.arcadedb.function.sql;
 
 import com.arcadedb.function.AggregatedFunction;
+import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.query.sql.executor.MultiValue;
+import com.arcadedb.query.sql.executor.OperationHeapLimit;
 
 import java.util.function.Consumer;
 
@@ -87,6 +89,26 @@ public abstract class SQLAggregatedFunction extends SQLFunctionConfigurableAbstr
   }
 
   /**
+   * Feeds the arguments of one row to the cross-row state: what the aggregation of a query calls for every row, which
+   * ignores the value {@link #execute} returns. A function whose return value costs something to build per row (a boxed
+   * running total, a running average) overrides it to skip that (#9496). Like every call the aggregation makes,
+   * {@link #execute} gets no current record nor current result (both null), and an override must not need them.
+   * <p>
+   * A built-in aggregate must not keep {@code params} itself, only the values in it: the aggregation of a GROUP BY feeds
+   * a built-in aggregate the same array for every row (and no row: {@code self} is null), see
+   * {@code AggregateRowEvaluator}.
+   *
+   * @param self    the row, passed to {@link #execute} as its {@code self}; null when the row was read by another worker of
+   *                a parallel GROUP BY, which hands over only the arguments (the key exchange, #9496): a function whose
+   *                partials merge must fold its arguments alone
+   * @param params  the values of the arguments for this row
+   * @param context the command context
+   */
+  public void aggregate(final Object self, final Object[] params, final CommandContext context) {
+    execute(self, null, null, params, context);
+  }
+
+  /**
    * Whether two instances of this function, each fed a disjoint part of the rows, can be combined by
    * {@link #mergePartial} into the state one instance fed every row would have: the partial aggregation a parallel
    * scan runs in its workers (issue #8523). {@code false} unless a function says otherwise, and a function answers
@@ -104,6 +126,34 @@ public abstract class SQLAggregatedFunction extends SQLFunctionConfigurableAbstr
    */
   public boolean holdsEveryValue() {
     return false;
+  }
+
+  /**
+   * How many values a function that {@link #holdsEveryValue() holds every value} holds now: what the per-operation element
+   * cap counts it by (issue #9793). A {@code set()} fed a million rows of two distinct values holds two, and a
+   * {@code list()} fed one collection holds every element of it, so the count is the function's to give. {@code -1} when
+   * it cannot tell, and every value it is given is then counted as one more held.
+   */
+  public long getHeldValues() {
+    return -1L;
+  }
+
+  /**
+   * Accounts under {@code limit} what this function, which {@link #holdsEveryValue() holds every value}, holds after it was
+   * given {@code value}: the element cap counts {@link #getHeldValues()}, and the value's size is charged only when the
+   * function holds more than before - a value {@code set()} already has costs nothing. The one place both the SQL and the
+   * openCypher aggregation account such a function, so the two cannot drift (issue #9793).
+   *
+   * @param heldBefore what the function held before {@code value}, as the previous call returned it (0 at first)
+   * @return what the function holds now, for the next call
+   */
+  public long chargeHeld(final OperationHeapLimit limit, final long heldBefore, final Object value) {
+    final long reported = getHeldValues();
+    final long heldNow = reported < 0 ? heldBefore + 1 : reported;
+    if (heldNow <= heldBefore)
+      return heldBefore;
+    limit.add(heldNow, value);
+    return heldNow;
   }
 
   /**

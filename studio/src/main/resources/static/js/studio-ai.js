@@ -335,25 +335,26 @@ function aiRenderChatList() {
       var chat = chats[j];
       var isActive = chat.id === aiCurrentChatId;
       var activeClass = isActive ? 'background: var(--bg-hover); font-weight: 500;' : '';
-      var item = '<div class="ai-chat-item d-flex align-items-center" style="padding: 6px 8px; border-radius: 6px; cursor: pointer; margin-bottom: 2px; color: var(--text-primary); font-size: 0.85rem; ' + activeClass + '" ' +
-        'onclick="aiLoadChat(\'' + escapeHtml(chat.id) + '\')" ' +
-        'onmouseover="this.style.background=\'var(--bg-hover)\'" ' +
-        'onmouseout="this.style.background=\'' + (isActive ? 'var(--bg-hover)' : '') + '\'">' +
+      var item = '<div class="ai-chat-item d-flex align-items-center' + (isActive ? ' ai-chat-item-active' : '') + '" style="padding: 6px 8px; border-radius: 6px; cursor: pointer; margin-bottom: 2px; color: var(--text-primary); font-size: 0.85rem; ' + activeClass + '" ' +
+        studioAction("aiLoadChat", [chat.id]) + '>' +
         '<span class="text-truncate" style="flex: 1;">' + escapeHtml(chat.title || "Untitled") + '</span>' +
         '<i class="fa fa-trash-can ms-1" style="font-size: 0.7rem; color: var(--text-muted); opacity: 0; cursor: pointer;" ' +
-        'onclick="event.stopPropagation(); aiDeleteChat(\'' + escapeHtml(chat.id) + '\')" ' +
-        'onmouseover="this.parentElement.querySelector(\'.fa-trash-can\').style.opacity=1" ' +
-        '></i>' +
+        studioAction("aiDeleteChat", [chat.id]) + ' data-stop-propagation></i>' +
         '</div>';
       container.append(item);
     }
   }
 
-  // Show delete icon on hover of parent
+  // Highlight the hovered chat and show its delete icon, fully opaque while the icon itself is hovered
   container.find('.ai-chat-item').on('mouseenter', function() {
+    $(this).css('background', 'var(--bg-hover)');
     $(this).find('.fa-trash-can').css('opacity', '0.6');
   }).on('mouseleave', function() {
+    $(this).css('background', $(this).hasClass('ai-chat-item-active') ? 'var(--bg-hover)' : '');
     $(this).find('.fa-trash-can').css('opacity', '0');
+  });
+  container.find('.ai-chat-item .fa-trash-can').on('mouseenter', function() {
+    $(this).css('opacity', '1');
   });
 }
 
@@ -785,7 +786,7 @@ function aiSetSending(sending) {
   aiSending = sending;
   var btn = $("#aiSendBtn");
   if (sending) {
-    btn.attr("onclick", "aiStopResponse()")
+    btn.attr("data-on-click", "aiStopResponse")
       .css("background", "#dc3545")
       .html('<i class="fa fa-stop me-1"></i>Stop');
     // Add thinking indicator to messages
@@ -797,7 +798,7 @@ function aiSetSending(sending) {
     $("#aiMessages").append(thinkingHtml);
     aiScrollToBottom();
   } else {
-    btn.attr("onclick", "aiSendMessage()")
+    btn.attr("data-on-click", "aiSendMessage")
       .css("background", "var(--color-brand)")
       .html("Send");
     $("#aiThinking").remove();
@@ -845,7 +846,7 @@ function aiRenderUserMessage(msg, msgIndex) {
     '<i class="fa fa-user" style="color: var(--text-muted); font-size: 0.85rem;"></i></div></div>' +
     '<div class="d-flex justify-content-end me-5 mt-1">' +
     '<button class="btn btn-link btn-sm p-0" style="color: var(--text-muted); font-size: 0.7rem;" ' +
-    'onclick="aiDeleteMessage(' + msgIndex + ')" title="Delete message"><i class="fa fa-trash-can"></i></button></div></div>';
+    studioAction("aiDeleteMessage", [msgIndex]) + ' title="Delete message"><i class="fa fa-trash-can"></i></button></div></div>';
 }
 
 function aiRenderAssistantMessage(msg, msgIndex) {
@@ -877,12 +878,12 @@ function aiRenderAssistantMessage(msg, msgIndex) {
     // "Execute All" button when multiple commands
     if (msg.commands.length > 1)
       html += '<div class="mt-2"><button class="btn btn-sm" style="background: var(--color-brand); color: white; border: none;" ' +
-        'onclick="aiExecuteAll(this, ' + msgBlockStart + ', ' + aiCommandBlockCounter + ')">' +
+        studioAction("aiExecuteAll", [STUDIO_ARG_THIS, msgBlockStart, aiCommandBlockCounter]) + '>' +
         '<i class="fa fa-forward me-1"></i>Execute All</button></div>';
   } else {
     // No command blocks: show standalone delete button
     html += '<div class="mt-1 ms-1"><button class="btn btn-link btn-sm p-0" style="color: var(--text-muted); font-size: 0.7rem;" ' +
-      'onclick="aiDeleteMessage(' + msgIndex + ')" title="Delete message"><i class="fa fa-trash-can"></i></button></div>';
+      studioAction("aiDeleteMessage", [msgIndex]) + ' title="Delete message"><i class="fa fa-trash-can"></i></button></div>';
   }
 
   html += '</div></div></div>';
@@ -935,15 +936,15 @@ function aiRenderCommandBlock(cmd, index, msgIndex) {
     '<div id="' + blockId + '_result" style="display: none; padding: 8px 12px; border-top: 1px solid var(--border-main); font-size: 0.85rem;"></div>' +
     '<div style="padding: 6px 8px; border-top: 1px solid var(--border-main); display: flex; align-items: center; justify-content: space-between;">' +
     '<div style="display: flex; align-items: center; gap: 8px;">' +
-    '<button class="btn btn-link btn-sm p-0" style="color: var(--text-muted); font-size: 0.75rem;" onclick="aiCopyCode(this, \'' + blockId + '\')" title="Copy to clipboard">' +
+    '<button class="btn btn-link btn-sm p-0" style="color: var(--text-muted); font-size: 0.75rem;" ' + studioAction("aiCopyCode", [STUDIO_ARG_THIS, blockId]) + ' title="Copy to clipboard">' +
     '<i class="fa fa-copy"></i></button>' +
-    '<button class="btn btn-link btn-sm p-0" style="color: var(--text-muted); font-size: 0.75rem;" onclick="aiDeleteMessage(' + msgIndex + ')" title="Delete message">' +
+    '<button class="btn btn-link btn-sm p-0" style="color: var(--text-muted); font-size: 0.75rem;" ' + studioAction("aiDeleteMessage", [msgIndex]) + ' title="Delete message">' +
     '<i class="fa fa-trash-can"></i></button></div>' +
     '<div style="display: flex; align-items: center; gap: 8px;">' +
-    '<button class="btn btn-sm" style="background: transparent; color: var(--text-muted); border: 1px solid var(--border-main); font-size: 0.8rem;" onclick="aiOpenInQuery(\'' + blockId + '\')">' +
+    '<button class="btn btn-sm" style="background: transparent; color: var(--text-muted); border: 1px solid var(--border-main); font-size: 0.8rem;"' + studioAction("aiOpenInQuery", [blockId]) + '>' +
     '<i class="fa fa-terminal me-1"></i>Open in Query</button>' +
-    '<button id="' + blockId + '_toggle" class="btn btn-sm" style="display: none; background: transparent; color: var(--text-muted); border: 1px solid var(--border-main); font-size: 0.8rem;" onclick="aiToggleResults(\'' + blockId + '\')"></button>' +
-    '<button class="btn btn-sm" style="background: var(--color-brand); color: white; border: none; font-size: 0.8rem;" onclick="aiExecuteCommand(this, \'' + blockId + '\')">' +
+    '<button id="' + blockId + '_toggle" class="btn btn-sm" style="display: none; background: transparent; color: var(--text-muted); border: 1px solid var(--border-main); font-size: 0.8rem;"' + studioAction("aiToggleResults", [blockId]) + '></button>' +
+    '<button class="btn btn-sm" style="background: var(--color-brand); color: white; border: none; font-size: 0.8rem;"' + studioAction("aiExecuteCommand", [STUDIO_ARG_THIS, blockId]) + '>' +
     '<i class="fa fa-play me-1"></i>Execute</button></div></div>' +
     '</div>';
 }
@@ -1061,7 +1062,7 @@ function aiShowCommandResult(blockId, data) {
       aiResultTableHtml(table, escapeHtml);
     if (table.truncated)
       html += '<div class="mt-1" style="font-size: 0.78rem; color: var(--text-muted);">' + (table.total - table.rows.length) +
-        ' more rows: <a href="#" onclick="aiOpenInQuery(\'' + blockId + '\'); return false;">open in Query</a></div>';
+        ' more rows: <a href="#"' + studioAction("aiOpenInQuery", [blockId]) + ' data-prevent-default>open in Query</a></div>';
     html += '</div>';
   }
   $("#" + blockId + "_result").show().html(html);
@@ -1110,7 +1111,7 @@ function aiRenderChartShell(spec) {
   return '<div class="ai-chart" id="' + id + '" data-chart-id="' + id + '" style="margin-top: 10px; border: 1px solid var(--border-main); border-radius: 8px; overflow: hidden; background: var(--bg-card);">' +
     '<div style="padding: 8px 12px; background: var(--bg-sidebar); border-bottom: 1px solid var(--border-main); display: flex; align-items: center; justify-content: space-between; gap: 8px;">' +
     '<span style="font-weight: 600; font-size: 0.9rem;"><i class="fa fa-chart-simple me-1"></i>' + escapeHtml(spec.title || "Chart") + '</span>' +
-    '<button class="btn btn-sm" style="background: transparent; color: var(--text-muted); border: 1px solid var(--border-main); font-size: 0.78rem;" onclick="aiChartOpenInQuery(\'' + id + '\')">' +
+    '<button class="btn btn-sm" style="background: transparent; color: var(--text-muted); border: 1px solid var(--border-main); font-size: 0.78rem;"' + studioAction("aiChartOpenInQuery", [id]) + '>' +
     '<i class="fa fa-terminal me-1"></i>Open in Query</button></div>' +
     '<div id="' + id + '_body" style="padding: 8px 12px;"><div class="text-muted" style="font-size: 0.85rem;"><i class="fa fa-spinner fa-spin me-1"></i>Running the query...</div></div>' +
     '</div>';
@@ -1196,7 +1197,7 @@ function aiExecuteAll(button, startId, endId) {
     var blockId = "aiCmd_" + i;
     var pre = document.getElementById(blockId);
     if (pre) {
-      var execBtn = $(pre).closest('.ai-command-block').find("button[onclick*='aiExecuteCommand']");
+      var execBtn = $(pre).closest('.ai-command-block').find("button[data-on-click='aiExecuteCommand']");
       commands.push({ blockId: blockId, pre: pre, btn: execBtn });
     }
   }
@@ -1262,64 +1263,27 @@ function aiRunSequential(commands, index, allBtn) {
 
 var aiMarkdownBlockId = 0;
 
+/**
+ * The HTML of an assistant answer. The answer is untrusted: the model quotes type names and record values from the database,
+ * and the text arrives from a third-party portal (issue #9626). It goes through the escape-first renderer of
+ * studio-support-markdown.js, never through a library that keeps raw HTML, such as `marked`.
+ */
 function aiRenderMarkdown(text) {
   if (!text) return "";
-
-  // Use marked.js if available, otherwise basic rendering
-  if (typeof marked !== "undefined") {
-    try {
-      var renderer = new marked.Renderer();
-      renderer.code = function(obj) {
-        var code = (typeof obj === "object") ? obj.text : obj;
-        var lang = (typeof obj === "object") ? (obj.lang || "") : "";
-        var id = "aiMdCode_" + (aiMarkdownBlockId++);
-        var langBadge = lang ? '<span class="badge" style="background: var(--color-brand); color: white; font-size: 0.65rem;">' + escapeHtml(lang.toUpperCase()) + '</span>' : '';
-        return '<div style="position: relative; margin: 8px 0; border: 1px solid var(--border-main); border-radius: 6px; overflow: hidden;">' +
-          (langBadge ? '<div style="padding: 4px 8px; background: var(--bg-sidebar); border-bottom: 1px solid var(--border-main);">' + langBadge + '</div>' : '') +
-          '<pre id="' + id + '" style="margin: 0; padding: 12px; background: var(--bg-code); color: var(--text-code); font-size: 0.85rem; overflow-x: auto; white-space: pre-wrap; word-break: break-word;">' +
-          escapeHtml(code) + '</pre>' +
-          '<div style="padding: 4px 8px; border-top: 1px solid var(--border-main); background: var(--bg-sidebar);">' +
-          '<button class="btn btn-link btn-sm p-0" style="color: var(--text-muted); font-size: 0.75rem;" onclick="aiCopyCode(this, \'' + id + '\')" title="Copy to clipboard">' +
-          '<i class="fa fa-copy"></i></button></div></div>';
-      };
-      return marked.parse(text, { renderer: renderer });
-    } catch (e) {
-      // Fallback to basic rendering
-    }
-  }
-  return aiBasicMarkdown(text);
+  return supportMarkdownHtml(text, { maxChars: SUPPORT_MD_AI_MAX_CHARS, maxRows: SUPPORT_MD_AI_MAX_ROWS, codeBlock: aiRenderCodeBlock });
 }
 
-function aiBasicMarkdown(text) {
-  // Basic markdown rendering without external library
-  var html = escapeHtml(text);
-
-  // Code blocks with language: ```lang\ncode\n```
-  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, function(match, lang, code) {
-    var id = "aiMdCode_" + (aiMarkdownBlockId++);
-    var langBadge = lang ? '<span class="badge" style="background: var(--color-brand); color: white; font-size: 0.65rem;">' + lang.toUpperCase() + '</span>' : '';
-    return '<div style="position: relative; margin: 8px 0; border: 1px solid var(--border-main); border-radius: 6px; overflow: hidden;">' +
-      (langBadge ? '<div style="padding: 4px 8px; background: var(--bg-sidebar); border-bottom: 1px solid var(--border-main);">' + langBadge + '</div>' : '') +
-      '<pre id="' + id + '" style="margin: 0; padding: 12px; background: var(--bg-code); color: var(--text-code); font-size: 0.85rem; overflow-x: auto; white-space: pre-wrap; word-break: break-word;">' +
-      code.trim() + '</pre>' +
-      '<div style="padding: 4px 8px; border-top: 1px solid var(--border-main); background: var(--bg-sidebar);">' +
-      '<button class="btn btn-link btn-sm p-0" style="color: var(--text-muted); font-size: 0.75rem;" onclick="aiCopyCode(this, \'' + id + '\')" title="Copy to clipboard">' +
-      '<i class="fa fa-copy"></i></button></div></div>';
-  });
-
-  // Inline code
-  html = html.replace(/`([^`]+)`/g, '<code style="background: var(--bg-reference); padding: 2px 4px; border-radius: 3px; font-size: 0.9em;">$1</code>');
-
-  // Bold
-  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-
-  // Italic
-  html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
-
-  // Line breaks
-  html = html.replace(/\n/g, '<br>');
-
-  return html;
+/** A fenced block of an answer, with its language badge and a copy button. Code and language are raw: both are escaped here. */
+function aiRenderCodeBlock(code, lang) {
+  var id = "aiMdCode_" + (aiMarkdownBlockId++);
+  var langBadge = lang ? '<span class="badge" style="background: var(--color-brand); color: white; font-size: 0.65rem;">' + escapeHtml(lang.toUpperCase()) + '</span>' : '';
+  return '<div style="position: relative; margin: 8px 0; border: 1px solid var(--border-main); border-radius: 6px; overflow: hidden;">' +
+    (langBadge ? '<div style="padding: 4px 8px; background: var(--bg-sidebar); border-bottom: 1px solid var(--border-main);">' + langBadge + '</div>' : '') +
+    '<pre id="' + id + '" style="margin: 0; padding: 12px; background: var(--bg-code); color: var(--text-code); font-size: 0.85rem; overflow-x: auto; white-space: pre-wrap; word-break: break-word;">' +
+    escapeHtml(code) + '</pre>' +
+    '<div style="padding: 4px 8px; border-top: 1px solid var(--border-main); background: var(--bg-sidebar);">' +
+    '<button class="btn btn-link btn-sm p-0" style="color: var(--text-muted); font-size: 0.75rem;" ' + studioAction("aiCopyCode", [STUDIO_ARG_THIS, id]) + ' title="Copy to clipboard">' +
+    '<i class="fa fa-copy"></i></button></div></div>';
 }
 
 // ===== SQL Helpers =====

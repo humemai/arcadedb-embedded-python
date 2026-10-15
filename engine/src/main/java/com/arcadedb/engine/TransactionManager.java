@@ -28,10 +28,12 @@ import com.arcadedb.exception.LockTimeoutException;
 import com.arcadedb.exception.SchemaException;
 import com.arcadedb.exception.TransactionException;
 import com.arcadedb.exception.WALVersionGapException;
+import com.arcadedb.index.fulltext.FullTextCorpusDeltas;
 import com.arcadedb.index.vector.LSMVectorIndex;
 import com.arcadedb.index.vector.LSMVectorIndexCompacted;
 import com.arcadedb.index.vector.LSMVectorIndexMutable;
 import com.arcadedb.log.LogManager;
+import com.arcadedb.schema.FullTextIndexMetadata;
 import com.arcadedb.utility.IntHashSet;
 import com.arcadedb.utility.LockException;
 import com.arcadedb.utility.LockManager;
@@ -111,6 +113,15 @@ public class TransactionManager {
    * equality match while it is false.
    */
   private volatile boolean                   recencySignalReliable;
+  /**
+   * The thread replaying this database's own WAL while it opens, set around each {@link #applyChanges} call of that loop
+   * and {@code null} otherwise. A transaction applied on any other thread was written on another node. Only the latter
+   * reaches a live search state: a vector index has no graph resident during recovery, and the first search after the open
+   * reconciles what it loads against the pages (#9857). A field rather than a parameter so the replay keeps going through
+   * the one overridable {@link #applyChanges}, and a thread rather than a flag so a replicated apply running on another
+   * thread at the same time can never be mistaken for the replay.
+   */
+  private volatile Thread                    ownWALReplayThread;
   /**
    * Held SHARED for the whole of {@link #applyChanges}, and EXCLUSIVELY by the snapshot t0 barrier
    * ({@code PageManager.openSnapshot}, issue #6075). Replicated and crash-recovery replay is the one writer that
@@ -617,10 +628,23 @@ public class TransactionManager {
             break;
 
           try {
-            applyChanges(walPositions[lowerTx], Collections.emptyMap(), false);
+            ownWALReplayThread = Thread.currentThread();
+            try {
+              applyChanges(walPositions[lowerTx], Collections.emptyMap(), false);
+            } finally {
+              ownWALReplayThread = null;
+            }
             // Only advance lastTxId after a successful apply, otherwise a failed transaction
             // would wrongly increment the next-tx counter past data that was never written.
-            lastTxId = lowerTxId;
+            // The HIGHEST applied id, not the last one (#9795): a WAL file does NOT hold its transactions in txId
+            // order. The id is allocated at the end of commit1stPhase and the record appended in phase 2, and two
+            // transactions sharing no file have no lock between those points, so the second id can be appended first
+            // into the same file (always with a single-file pool, on a thread-id hash collision otherwise). This
+            // merge then emits [6, 5] as 6, 5. It cannot reverse a CONFLICTING pair: the lock on their shared file
+            // (TransactionContext.lockFilesInOrder in commit1stPhase, released by unlockFilesInOrder when the commit
+            // ends) is held across the WAL append, so the lower id is appended before the higher one is allocated.
+            if (lowerTxId > lastTxId)
+              lastTxId = lowerTxId;
           } catch (WALVersionGapException e) {
             LogManager.instance().log(this, Level.SEVERE,
                 "Recovery aborted for database '%s': version gap in WAL (txId=%d). WAL files have been preserved for manual inspection. No further transactions will be replayed.",
@@ -649,8 +673,12 @@ public class TransactionManager {
         // Only update the next-tx counter if recovery actually applied a transaction. When
         // lastTxId is still -1 the counter must keep the persistedLastTxId value loaded by the
         // constructor; overwriting it with 0 would lose recency and risk transaction-id reuse.
+        // Never move it backwards either (#9795): the marker the constructor loaded, persisted by a clean close or by
+        // a runtime WAL rotation, can be past everything left in the WAL. A rotation drops a file holding the newest
+        // ids while another file still holds older ones, or a commit that took its id before the rotation appends to
+        // the new file after it: replaying only those would hand out again ids that are already durable.
         if (lastTxId != -1) {
-          transactionIds.set(lastTxId + 1);
+          transactionIds.accumulateAndGet(lastTxId + 1, Math::max);
           // Reconstructed from real evidence (replayed WAL transactions), regardless of what the
           // constructor found (or didn't) in the persisted marker.
           recencySignalReliable = true;
@@ -831,6 +859,21 @@ public class TransactionManager {
    */
   public boolean applyChanges(final WALFile.WALTransaction tx, final Map<Integer, Integer> bucketRecordDelta,
       final boolean ignoreErrors) {
+    return applyChanges(tx, bucketRecordDelta, null, ignoreErrors);
+  }
+
+  /**
+   * Same as {@link #applyChanges(WALFile.WALTransaction, Map, boolean)}, for a transaction that also carries what it did to
+   * the BM25 corpus counters of the full-text indexes it wrote (issue #10018). They are folded exactly like the bucket record
+   * counters: only when the entry advanced a page, so a replay of an entry already applied does not count it twice.
+   *
+   * @param corpusDeltas the net effect per logical full-text index, or null when the entry carries none. The WAL of the node
+   *                     itself carries none: after a crash the pages are restored by the recovery replay (which passes null)
+   *                     and the counters can lag them until the first search's drift check runs, which is how they already
+   *                     behaved. The persisted counters are a close-time estimate, not part of the log
+   */
+  public boolean applyChanges(final WALFile.WALTransaction tx, final Map<Integer, Integer> bucketRecordDelta,
+      final List<FullTextCorpusDeltas.CorpusDelta> corpusDeltas, final boolean ignoreErrors) {
     applyLock.readLock().lock();
     final Object requester = Thread.currentThread();
     BucketLocks bucketLocks = null;
@@ -838,7 +881,7 @@ public class TransactionManager {
       // Null on the steady-state path (every counter known), which then allocates nothing. Inside the try: a throw
       // from the lock phase must still release the shared apply lock, or the snapshot t0 barrier waits forever
       bucketLocks = lockBucketsWithUnknownCount(bucketRecordDelta, requester);
-      return applyChangesInternal(tx, bucketRecordDelta, ignoreErrors);
+      return applyChangesInternal(tx, bucketRecordDelta, corpusDeltas, ignoreErrors);
     } finally {
       if (bucketLocks != null) {
         // After the fold: a recompute that published while the pages were being written is discarded (#8640)
@@ -1045,7 +1088,20 @@ public class TransactionManager {
   }
 
   private boolean applyChangesInternal(final WALFile.WALTransaction tx, final Map<Integer, Integer> bucketRecordDelta,
-      final boolean ignoreErrors) {
+      final List<FullTextCorpusDeltas.CorpusDelta> corpusDeltas, final boolean ignoreErrors) {
+    // The pages written below become visible before the delta reaches the BM25 counters: a scan overlapping that window must not
+    // call its result exact (see FullTextIndexMetadata#commitApplyStarted)
+    final List<FullTextIndexMetadata> applying = FullTextCorpusDeltas.replicatedApplyStarted(database.getSchema(), corpusDeltas);
+    try {
+      return applyChangesPages(tx, bucketRecordDelta, corpusDeltas, ignoreErrors);
+    } finally {
+      FullTextCorpusDeltas.replicatedApplyFinished(applying);
+    }
+  }
+
+  private boolean applyChangesPages(final WALFile.WALTransaction tx, final Map<Integer, Integer> bucketRecordDelta,
+      final List<FullTextCorpusDeltas.CorpusDelta> corpusDeltas, final boolean ignoreErrors) {
+    final boolean recovery = Thread.currentThread().equals(ownWALReplayThread);
     boolean changed = false;
     // Whether at least one page was written at a version STRICTLY GREATER than the one on disk, i.e. this
     // transaction carried content the database did not have yet. `changed` cannot answer that question: since
@@ -1234,7 +1290,7 @@ public class TransactionManager {
                 (LSMVectorIndexMutable) component;
             final LSMVectorIndex mainIndex = vectorMutable.getMainIndex();
             if (mainIndex != null) {
-              mainIndex.applyReplicatedPageUpdate(modifiedPage);
+              mainIndex.applyReplicatedPageUpdate(modifiedPage, !recovery);
             } else {
               LogManager.instance().log(this, Level.WARNING,
                   "LSMVectorIndexMutable has null mainIndex for fileId=%d", null, txPage.fileId);
@@ -1243,7 +1299,7 @@ public class TransactionManager {
             final LSMVectorIndex mainIndex =
                 (LSMVectorIndex) ((LSMVectorIndexCompacted) component).getMainComponent();
             if (mainIndex != null) {
-              mainIndex.applyReplicatedPageUpdate(modifiedPage);
+              mainIndex.applyReplicatedPageUpdate(modifiedPage, !recovery);
             }
           }
         }
@@ -1283,6 +1339,9 @@ public class TransactionManager {
           // UPDATE THE CACHE COUNTER ONLY IF ALREADY COMPUTED
           bucket.setCachedRecordCount(bucket.getCachedRecordCount() + entry.getValue());
       }
+      // The same idempotency signal guards the BM25 corpus counters: they are relative increments too (issue #10018)
+      if (corpusDeltas != null && !corpusDeltas.isEmpty())
+        FullTextCorpusDeltas.applyReplicated(database.getSchema(), corpusDeltas);
     }
 
     if (involveDictionary) {
@@ -1479,7 +1538,7 @@ public class TransactionManager {
     }
 
     // OK: ALL LOCKED
-    if (LogManager.instance().isDebugEnabled())
+    if (LogManager.instance().isLoggable(this, Level.FINE))
       LogManager.instance().log(this, Level.FINE, "Locked files %s (threadId=%d)", null, Arrays.toString(fileIds),
           Thread.currentThread().threadId());
     return lockedFiles;

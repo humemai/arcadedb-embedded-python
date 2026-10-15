@@ -35,6 +35,8 @@ import com.arcadedb.serializer.json.JSONObject;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.logging.Level;
@@ -60,7 +62,10 @@ public class LocalTimeSeriesType extends LocalDocumentType implements TimeSeries
   // A type created by this build writes the current mutable row format; one restored from JSON keeps
   // whatever version wrote its pages, which is what lets a pre-#5519 database open unchanged.
   private volatile int                    mutableFormatVersion = TimeSeriesBucket.CURRENT_VERSION;
-  private final    List<ColumnDefinition> tsColumns            = new ArrayList<>();
+  private final    AtomicBoolean          legacyPrecisionWarned = new AtomicBoolean();
+  // filled before the type is reachable and handed to the engine and to every query as it is: copy-on-write, so the
+  // sweep of Issue7299SchemaCopyOnWritePublicationTest does not have to take that ordering on trust (#9989)
+  private final    List<ColumnDefinition> tsColumns            = new CopyOnWriteArrayList<>();
   // Replaced, never mutated in place: TimeSeriesMaintenanceScheduler iterates the list it read with no lock held.
   // Always an immutable copy, so no caller of getDownsamplingTiers() can mutate the published list either.
   private volatile List<DownsamplingTier> downsamplingTiers    = List.of();
@@ -213,6 +218,19 @@ public class LocalTimeSeriesType extends LocalDocumentType implements TimeSeries
   }
 
   /**
+   * Retires the engine of a type instance that a schema reload has replaced (issue #9886): unlike {@link #close()}, it
+   * leaves open the files registered with the schema, which the replacement engine is built on. See
+   * {@link TimeSeriesEngine#closeSuperseded()}.
+   */
+  void closeSuperseded() {
+    final TimeSeriesEngine current = engine;
+    if (current != null) {
+      current.closeSuperseded();
+      engine = null;
+    }
+  }
+
+  /**
    * Drops this timeseries type: deletes all shard data files (mutable bucket and sealed store)
    * from disk and shuts down the engine.
    */
@@ -242,9 +260,22 @@ public class LocalTimeSeriesType extends LocalDocumentType implements TimeSeries
     return precision;
   }
 
+  /**
+   * Inside a schema recording session, like {@link #setDownsamplingTiers}: {@code ALTER TIMESERIES TYPE ... PRECISION}
+   * changes it on a live type, and under HA only the session ships the schema to the followers (issues #9747, #9800).
+   */
   public void setPrecision(final String precision) {
     checkForSchemaMutation();
-    this.precision = precision;
+    getSchema().getEmbedded().recordChange(() -> this.precision = precision);
+  }
+
+  /**
+   * True the first time it is called on this instance only: the maintenance scheduler logs the suspension of a
+   * legacy-precision type once (issue #9800). Kept on the instance because the type's equality is by name, so a set of
+   * types would mistake the same-named type of another database for this one.
+   */
+  public boolean firstLegacyPrecisionWarning() {
+    return !legacyPrecisionWarned.getAndSet(true);
   }
 
   @Override
@@ -334,9 +365,14 @@ public class LocalTimeSeriesType extends LocalDocumentType implements TimeSeries
     return downsamplingTiers;
   }
 
+  /**
+   * Inside a schema recording session, which saves {@code schema.json} and, under HA, ships it to the followers: the
+   * bare save {@code ALTER TIMESERIES TYPE} used to follow this with rewrote the leader's file only (issue #9747).
+   */
   public void setDownsamplingTiers(final List<DownsamplingTier> tiers) {
     checkForSchemaMutation();
-    this.downsamplingTiers = tiers != null ? List.copyOf(tiers) : List.of();
+    final List<DownsamplingTier> newTiers = tiers != null ? List.copyOf(tiers) : List.of();
+    getSchema().getEmbedded().recordChange(() -> this.downsamplingTiers = newTiers);
   }
 
   @Override

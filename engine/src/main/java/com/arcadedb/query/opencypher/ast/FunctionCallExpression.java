@@ -19,7 +19,9 @@
 package com.arcadedb.query.opencypher.ast;
 
 import com.arcadedb.function.StatelessFunction;
+import com.arcadedb.function.misc.CoalesceFunction;
 import com.arcadedb.query.opencypher.LoadCSVRowContext;
+import com.arcadedb.query.opencypher.executor.CypherFunctionFactory;
 import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.query.sql.executor.Result;
 
@@ -44,6 +46,16 @@ public class FunctionCallExpression implements Expression {
    * Marked as transient to avoid serialization issues.
    */
   private transient volatile StatelessFunction cachedFunction;
+
+  /**
+   * Whether this call aggregates, resolved on the first {@link #isAggregation()}: the registry lookup behind it is not free. Like
+   * {@link #cachedFunction}, it is a property of the call site for the life of the AST: a function registered after a plan was
+   * built is not asked again, which the plan's own function lookup would not do either.
+   */
+  private transient volatile Boolean aggregation;
+
+  /** Set once {@link #finishCoalesce} has checked the argument count, which is a property of the call site. */
+  private transient boolean arityValidated; // plain on purpose: the check is idempotent, so a racing second run is harmless
 
   public FunctionCallExpression(final String functionName, final List<Expression> arguments, final boolean distinct) {
     this.originalFunctionName = functionName;
@@ -71,6 +83,12 @@ public class FunctionCallExpression implements Expression {
       if (resolver != null) {
         final StatelessFunction function = resolver.apply(functionName);
         if (function != null) {
+          if (function instanceof CoalesceFunction) {
+            Object value = null;
+            for (int i = 0; i < arguments.size() && value == null; i++)
+              value = arguments.get(i).evaluate(result, context);
+            return finishCoalesce(function, value, result, context);
+          }
           final Object[] args = new Object[arguments.size()];
           for (int i = 0; i < args.length; i++)
             args[i] = arguments.get(i).evaluate(result, context);
@@ -79,6 +97,31 @@ public class FunctionCallExpression implements Expression {
       }
     }
     throw new UnsupportedOperationException("Function evaluation requires StatelessFunction: " + functionName);
+  }
+
+  /**
+   * Evaluates {@code coalesce()} one argument at a time and stops at the first non-null one, as the openCypher
+   * reference does: an argument after it is never evaluated, so {@code coalesce(null, 0, COUNT { ... })} does not run the
+   * COUNT (issue #9580), and {@code coalesce(1, 1/0)} does not raise. Every other function takes all of its arguments
+   * evaluated up front. The two evaluation paths - the AST's own and the {@code ExpressionEvaluator}'s, with its
+   * aggregation overrides - each loop over {@link #getArguments()} resolving one argument at a time, and call this once
+   * they have the value, so the arity check and the row-scoped state publication live in one place and the hot path
+   * allocates nothing.
+   * <p>
+   * This bypasses {@code CoalesceFunction.execute()}, which stays the contract for callers that already hold evaluated
+   * arguments; a change to what coalesce means has to be made in both.
+   *
+   * @param value the first non-null argument, or {@code null} when every argument was null
+   */
+  public Object finishCoalesce(final StatelessFunction function, final Object value, final Result result,
+      final CommandContext context) {
+    // The argument count is fixed by the call site, so it is checked on the first row only
+    if (!arityValidated) {
+      validateArity(function);
+      arityValidated = true;
+    }
+    LoadCSVRowContext.bind(result, context);
+    return value;
   }
 
   /**
@@ -115,8 +158,14 @@ public class FunctionCallExpression implements Expression {
 
   @Override
   public boolean isAggregation() {
-    // Check if this is an aggregation function
-    return isAggregationFunction(functionName);
+    Boolean result = aggregation;
+    if (result == null) {
+      // The Cypher aggregates by name, then any namespaced function that says it aggregates (vector.sum): a call the planner
+      // does not see as an aggregation is called once per row and answers a NULL for each (issue #9768)
+      result = isAggregationFunction(functionName) || CypherFunctionFactory.isNamespacedAggregation(functionName, arguments.size());
+      aggregation = result;
+    }
+    return result;
   }
 
   @Override

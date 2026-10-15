@@ -20,15 +20,22 @@ package com.arcadedb.query.sql.executor;
 
 import com.arcadedb.database.Database;
 import com.arcadedb.database.DatabaseInternal;
+import com.arcadedb.database.Document;
 import com.arcadedb.database.Identifiable;
+import com.arcadedb.database.RID;
 import com.arcadedb.exception.CommandExecutionException;
+import com.arcadedb.exception.QueryTerminatedException;
 import com.arcadedb.exception.TimeoutException;
+import com.arcadedb.index.FloatingKeyBound;
 import com.arcadedb.index.Index;
 import com.arcadedb.index.IndexCursor;
+import com.arcadedb.index.IndexException;
 import com.arcadedb.index.IndexInternal;
 import com.arcadedb.index.IntegralKeyBound;
 import com.arcadedb.index.RangeIndex;
+import com.arcadedb.index.TypeIndex;
 import com.arcadedb.index.lsm.LSMTreeIndexAbstract;
+import com.arcadedb.log.LogManager;
 import com.arcadedb.query.sql.parser.AndBlock;
 import com.arcadedb.query.sql.parser.BetweenCondition;
 import com.arcadedb.query.sql.parser.BinaryCompareOperator;
@@ -39,6 +46,7 @@ import com.arcadedb.query.sql.parser.EqualsCompareOperator;
 import com.arcadedb.query.sql.parser.Expression;
 import com.arcadedb.query.sql.parser.GeOperator;
 import com.arcadedb.query.sql.parser.GtOperator;
+import com.arcadedb.query.sql.parser.Identifier;
 import com.arcadedb.query.sql.parser.InCondition;
 import com.arcadedb.query.sql.parser.IsNullCondition;
 import com.arcadedb.query.sql.parser.LeOperator;
@@ -56,11 +64,19 @@ import com.arcadedb.utility.MultiIterator;
 import com.arcadedb.utility.Pair;
 
 import java.util.*;
+import java.util.function.Consumer;
+import java.util.logging.Level;
 
 /**
  * Created by luigidellaquila on 23/07/16.
  */
 public class FetchFromIndexStep extends AbstractExecutionStep {
+  private static final byte FLOATING_KEYS_UNKNOWN        = 0;
+  private static final byte FLOATING_KEYS_VERIFIABLE     = 1;
+  private static final byte FLOATING_KEYS_NOT_APPLICABLE = 2;
+  /** {@link #checkedKey} before any key was checked: no key, not even null. */
+  private static final Object NOT_CHECKED                  = new Object();
+
   protected final String                                         indexName;
   /** Package-private so a test can observe that a restart released them instead of only dropping the references. */
   final           List<IndexCursor>                              nextCursors = new ArrayList<>();
@@ -71,12 +87,34 @@ public class FetchFromIndexStep extends AbstractExecutionStep {
    * exists to release.
    */
   final           List<IndexCursor>                              customCursors = new ArrayList<>();
+  private         long                                           entriesSequence;
+  // Answered once per run of the step: asked for every row the step loads
+  private         Boolean                                        pointLookup;
   protected       RangeIndex                                     index;
   protected       BooleanExpression                              condition;
   private       BinaryCondition additionalRangeCondition;
   private final boolean         orderAsc;
   private       long            count       = 0;
   private         boolean                                        inited      = false;
+  /**
+   * Whether the index is unique, read once when the step starts: {@link GetValueFromIndexEntryStep} asks for every entry, and an
+   * index dropped while it is read makes the answer an exception rather than a fact that cannot change (issue #9615).
+   */
+  private         boolean                                        indexUnique = false;
+  /**
+   * Set when a bound the key type of the index cannot hold widened a seek (issue #8970): the entries it returns are then checked
+   * against the condition, as a scan evaluates it, before they are handed on.
+   */
+  private         boolean                                        verifyKeys  = false;
+  /** Whether {@link #widenLossyFloatingBounds} can apply to this index, see {@link #FLOATING_KEYS_UNKNOWN}. */
+  private         byte                                           floatingKeys = FLOATING_KEYS_UNKNOWN;
+  /** The row {@link #keysSatisfyCondition} fills for each entry, one per run, and the property names it is filled with. */
+  private         ResultInternal                                 keyRow;
+  private         List<String>                                   keyPropertyNames;
+  /** The last key {@link #isKeyOf} checked a record against, and that key in the index's own form (null: no key of the index). */
+  private         Object                                         checkedKey = NOT_CHECKED;
+  private         Object[]                                       checkedLookupKey;
+  private         KeyMatcher                                     keyMatcher;
   /** Package-private for the same reason as {@link #nextCursors}. */
   IndexCursor                                                    cursor;
   private         MultiIterator<Map.Entry<Object, Identifiable>> customIterator;
@@ -108,7 +146,11 @@ public class FetchFromIndexStep extends AbstractExecutionStep {
     // context variables (e.g. subquery results) before init() evaluates the condition.
     pullPrevious(context, nRecords);
 
-    init(context.getDatabase());
+    try {
+      init(context.getDatabase());
+    } catch (final IllegalArgumentException e) {
+      throw staleIndexOr(e);
+    }
 
     // A blocking consumer (aggregation, ORDER BY, DISTINCT) with no WHERE to guard can otherwise drain
     // the whole index past arcadedb.command.timeout without anything ever checking it (issue #6465).
@@ -168,7 +210,11 @@ public class FetchFromIndexStep extends AbstractExecutionStep {
     if (!inited) {
       // What syncPull() does before its first batch: the previous steps set the variables the condition may read
       pullPrevious(context, DEFAULT_FETCH_RECORDS_PER_PULL);
-      init(context.getDatabase());
+      try {
+        init(context.getDatabase());
+      } catch (final IllegalArgumentException e) {
+        throw staleIndexOr(e);
+      }
     }
     if (nextEntry == null)
       fetchNextEntry();
@@ -177,6 +223,185 @@ public class FetchFromIndexStep extends AbstractExecutionStep {
     final Identifiable value = nextEntry.getSecond();
     nextEntry = null;
     return value;
+  }
+
+  /**
+   * Looks the key of an entry this step returned up again, for {@link GetValueFromIndexEntryStep} to reconcile the entries
+   * whose record it could not serve (#9369, #9902). Null when the key cannot be looked up as it is, in which case the caller
+   * keeps those entries dropped. A cancelled statement or one past its deadline stops here, with the guard's exception (#9893):
+   * that is not a key that could not be read.
+   */
+  List<RID> lookupKeyAgain(final Object key, final WorkGuard guard) {
+    if (index == null)
+      return null;
+    final Object[] keys = key instanceof Object[] array ? array : new Object[] { key };
+    guard.check();
+    try {
+      final List<RID> rids = new ArrayList<>();
+      // A prefix of a composite key is a range of keys, which a get() of the prefix does not read
+      final List<String> properties = index.getPropertyNames();
+      final IndexCursor again = properties != null && keys.length < properties.size() ?
+          index.range(true, keys, true, keys, true) :
+          index.get(keys);
+      try {
+        while (again.hasNext()) {
+          guard.checkPeriodically(rids.size());
+          rids.add(again.next().getIdentity());
+        }
+      } finally {
+        again.close();
+      }
+      return rids;
+    } catch (final TimeoutException | QueryTerminatedException e) {
+      throw e;
+    } catch (final RuntimeException e) {
+      // The caller keeps the entries it has; say why a re-read was not possible rather than losing the cause
+      LogManager.instance().log(this, Level.WARNING, "Cannot look the key %s of index '%s' up again", e, key, indexName);
+      return null;
+    }
+  }
+
+  /**
+   * Whether the record, as it reads now, is indexed under the key of an entry this step returned (#9902): what makes a row
+   * loaded after a commit overlapped the lookup safe to serve, at the cost of the record alone. The commit may have deleted the
+   * record the entry named, moved it to another key, or given its slot to another record; a record that still holds the key is
+   * a row of the key whatever happened. The keys are compared as the index compares them: both sides are taken to the index's
+   * own key form, narrowed to the declared types and folded where the index folds, and a lookup of a prefix of a composite key
+   * matches on that prefix. False when the record holds another key or the comparison cannot be made, which only sends the entry
+   * to be settled by reading the key again.
+   */
+  boolean isKeyOf(final Document record, final Object key) {
+    if (!(index instanceof IndexInternal internal))
+      return false;
+    // The entries of one key carry the same key instance, so the identity test settles nearly every row: a key is converted once
+    if (key != checkedKey && !sameKey(key, checkedKey)) {
+      try {
+        checkedLookupKey = internal.convertLookupKeys(key instanceof Object[] array ? array : new Object[] { key });
+      } catch (final IllegalArgumentException e) {
+        // no key of this index: its entries are settled by reading the key again, which this tells apart from a lost record
+        LogManager.instance().log(this, Level.FINE, "Key %s cannot be read as a key of index '%s'", e, key, indexName);
+        checkedLookupKey = null;
+      }
+      checkedKey = key;
+    }
+    if (checkedLookupKey == null)
+      return false;
+
+    if (keyMatcher == null)
+      keyMatcher = new KeyMatcher();
+    keyMatcher.start(internal, checkedLookupKey);
+    ((DatabaseInternal) context.getDatabase()).getIndexer().forEachIndexKey(index, record, keyMatcher);
+    return keyMatcher.found;
+  }
+
+  /**
+   * The key of the lookup an entry of a point lookup was found by (#9902). A lookup of a prefix of a composite key reads a range
+   * whose entries each carry their whole key ({@code a = 'p'} on {@code (a, b)} returns {@code [p, 0]}, {@code [p, 1]}, ...), so
+   * the entry key is cut to the slots the lookup fills: what the entries of one lookup share, and what reads them all again.
+   * The same instance when nothing is cut.
+   */
+  Object lookupKeyOf(final Object entryKey) {
+    if (condition instanceof AndBlock and && entryKey instanceof Object[] keys && keys.length > and.getSubBlocks().size())
+      return Arrays.copyOf(keys, and.getSubBlocks().size());
+    return entryKey;
+  }
+
+  /** Whether an entry belongs to the lookup of a key {@link #lookupKeyOf} returned, without cutting the entry key. */
+  static boolean isEntryOf(final Object entryKey, final Object lookupKey) {
+    if (lookupKey instanceof Object[] lookup && entryKey instanceof Object[] entry && entry.length > lookup.length) {
+      for (int i = 0; i < lookup.length; i++)
+        if (!Objects.equals(entry[i], lookup[i]))
+          return false;
+      return true;
+    }
+    return sameKey(entryKey, lookupKey);
+  }
+
+  /** Whether two entry keys are the same key: a composite one is an array, compared element by element. */
+  static boolean sameKey(final Object a, final Object b) {
+    if (a instanceof Object[] left && b instanceof Object[] right)
+      return Arrays.equals(left, right);
+    return Objects.equals(a, b);
+  }
+
+  /**
+   * Tells whether one of the keys a record is indexed under matches a lookup key, see {@link #isKeyOf}. One per step, reused for
+   * every row checked: the check runs for every row a large key serves after a commit overlapped it.
+   */
+  private static final class KeyMatcher implements Consumer<Object[]> {
+    private IndexInternal index;
+    private Object[]      lookup;
+    private boolean       found;
+
+    private void start(final IndexInternal index, final Object[] lookup) {
+      this.index = index;
+      this.lookup = lookup;
+      this.found = false;
+    }
+
+    @Override
+    public void accept(final Object[] recordKeys) {
+      if (found || recordKeys.length < lookup.length)
+        return;
+      final Object[] converted;
+      try {
+        converted = index.convertLookupKeys(recordKeys);
+      } catch (final IllegalArgumentException e) {
+        // a value of the record the key type cannot read is not indexed under any key, so it matches none
+        LogManager.instance().log(this, Level.FINE, "Indexed values %s cannot be read as a key of the index", e, Arrays.toString(recordKeys));
+        return;
+      }
+      for (int i = 0; i < lookup.length; i++)
+        if (!BinaryComparator.equals(lookup[i], converted[i]))
+          return;
+      found = true;
+    }
+  }
+
+  /**
+   * True when every entry comes from a lookup of a key made when the step starts - an equality or an {@code IN} - rather than
+   * from a scan that reads the index as it goes.
+   */
+  boolean isPointLookup() {
+    if (pointLookup == null)
+      pointLookup = computeIsPointLookup();
+    return pointLookup;
+  }
+
+  private boolean computeIsPointLookup() {
+    if (condition instanceof InCondition)
+      return true;
+    if (!(condition instanceof AndBlock and) || and.getSubBlocks().isEmpty())
+      return false;
+    for (final BooleanExpression exp : and.getSubBlocks())
+      if (!(exp instanceof InCondition) && !(exp instanceof BinaryCondition binary && binary.getOperator() instanceof EqualsCompareOperator))
+        return false;
+    return additionalRangeCondition == null;
+  }
+
+  List<Integer> indexFileIds() {
+    // `index` is null between a reset() and the next init()
+    final Index current = index != null ? index : context.getDatabase().getSchema().getIndexByName(indexName);
+    return current instanceof IndexInternal internal ? internal.getFileIds() : List.of();
+  }
+
+  boolean isIndexUnique() {
+    return indexUnique;
+  }
+
+  /**
+   * The file of an index dropped under a lookup or an open cursor is gone for the page manager: "File with id n was not found",
+   * an {@link IllegalArgumentException}. When the index is dropped that is what it means, and it is reported as the
+   * {@link IndexException} that makes the statement be planned again (issue #9331); otherwise the exception is the caller's own.
+   * <p>
+   * "Dropped" includes a drop still under way (issue #9615): {@code TypeIndex.drop()} deletes the files of the sub-indexes
+   * first and invalidates the index last, so the files are gone during the whole window in which the index still answers as
+   * valid. {@link TypeIndex#isStaleRead} is the one place that knows both.
+   */
+  private RuntimeException staleIndexOr(final IllegalArgumentException e) {
+    if (TypeIndex.isStaleRead(index, e))
+      return new IndexException("Index '" + indexName + "' was dropped or rebuilt while it was being read", e);
+    return e;
   }
 
   private void fetchNextEntry() {
@@ -202,21 +427,36 @@ public class FetchFromIndexStep extends AbstractExecutionStep {
             nextEntryScore = 0;
           }
 
-          if (nextEntry == null)
+          if (nextEntry == null) {
+            // The entries of an index dropped or rebuilt while the cursors were open run out early, with no error of their own: an
+            // answer that looks complete and is not (issue #9331). Raised so the statement is planned again, see SelectStatement.
+            // A drop landing after the last row but before this read raises it for an answer that was complete: the window is a
+            // few instructions wide, and a statement planned again answers the same rows. Before any entry, a drop that has
+            // only started counts too (issue #9615): it may already have taken the sub-indexes away, and an empty answer is the
+            // one a statement planned again can still replace at no cost to the caller
+            if (index instanceof TypeIndex typeIndex && (!typeIndex.isValid() || (count == 0 && typeIndex.isDropping())))
+              throw new IndexException("Index '" + indexName + "' was dropped or rebuilt while it was being read");
             updateIndexStats();
-          else
+          } else
             count++;
 
           return;
         }
         cursor = nextCursors.removeFirst();
       }
-      if (cursor.hasNext()) {
-        final Object value = cursor.next();
-        nextEntry = new Pair(cursor.getKeys(), value);
-        nextEntryScore = cursor.getFloatScore();
-        count++;
-        return;
+      try {
+        while (cursor.hasNext()) {
+          final Object value = cursor.next();
+          final Object[] keys = cursor.getKeys();
+          if (verifyKeys && !keysSatisfyCondition(keys))
+            continue;
+          nextEntry = new Pair(keys, value);
+          nextEntryScore = cursor.getFloatScore();
+          count++;
+          return;
+        }
+      } catch (final IllegalArgumentException e) {
+        throw staleIndexOr(e);
       }
 
       cursor = null;
@@ -284,7 +524,17 @@ public class FetchFromIndexStep extends AbstractExecutionStep {
       return;
     }
     inited = true;
+    // Sampled before the first entry is read, so no commit that published after it can have been seen (#9369)
+    entriesSequence = ((DatabaseInternal) db).getPageManager().getPublicationSequence();
     init(condition, db);
+  }
+
+  /**
+   * The page manager's publication sequence before this step read its first index entry: a commit that published after it
+   * may have changed the records the entries name. See {@code PageManager.getPublicationSequence()}.
+   */
+  long entriesSequence() {
+    return entriesSequence;
   }
 
   private void init(final BooleanExpression condition, final Database db) {
@@ -295,6 +545,7 @@ public class FetchFromIndexStep extends AbstractExecutionStep {
     // This cursor answers straight from the index, without loading each record through its bucket, so apply the
     // same per-type read check a normal record load would go through.
     SecurityHelper.checkAccessOnIndex((DatabaseInternal) db, index, SecurityDatabaseUser.ACCESS.READ_RECORD);
+    indexUnique = index.isUnique();
     try {
       if (condition == null) {
         processFlatIteration();
@@ -389,7 +640,24 @@ public class FetchFromIndexStep extends AbstractExecutionStep {
     final PCollection toKey = indexKeyTo((AndBlock) condition, additionalRangeCondition);
     final boolean fromKeyIncluded = indexKeyFromIncluded((AndBlock) condition, additionalRangeCondition);
     final boolean toKeyIncluded = indexKeyToIncluded((AndBlock) condition, additionalRangeCondition);
-    init(fromKey, fromKeyIncluded, toKey, toKeyIncluded);
+    final boolean[] fromScalarSlots = scalarKeySlots((AndBlock) condition, additionalRangeCondition, true);
+    final boolean[] toScalarSlots = scalarKeySlots((AndBlock) condition, additionalRangeCondition, false);
+    init(fromKey, fromKeyIncluded, toKey, toKeyIncluded, fromScalarSlots, toScalarSlots);
+  }
+
+  /**
+   * Marks the key slots filled by a comparison ({@code =}, {@code <}, {@code >}, ...). Only the multi-value operators
+   * ({@code IN}, {@code CONTAINSANY}, ...) expand a list into one lookup per element; a comparison against a list
+   * matches nothing on a scan, so the index must not answer it with the rows of every element (#9370).
+   */
+  private static boolean[] scalarKeySlots(final AndBlock keyCondition, final BinaryCondition additional, final boolean from) {
+    final List<BooleanExpression> subBlocks = keyCondition.getSubBlocks();
+    final boolean[] slots = new boolean[subBlocks.size()];
+    int count = 0;
+    for (final BooleanExpression exp : subBlocks)
+      if ((from ? exp.resolveKeyFrom(additional) : exp.resolveKeyTo(additional)) != null)
+        slots[count++] = exp instanceof BinaryCondition;
+    return slots;
   }
 
   /**
@@ -512,9 +780,9 @@ public class FetchFromIndexStep extends AbstractExecutionStep {
   }
 
   private void init(final PCollection fromKey, final boolean fromKeyIncluded, final PCollection toKey,
-      final boolean toKeyIncluded) {
-    final List<PCollection> secondValueCombinations = cartesianProduct(fromKey);
-    final List<PCollection> thirdValueCombinations = cartesianProduct(toKey);
+      final boolean toKeyIncluded, final boolean[] fromScalarSlots, final boolean[] toScalarSlots) {
+    final List<PCollection> secondValueCombinations = cartesianProduct(fromKey, fromScalarSlots);
+    final List<PCollection> thirdValueCombinations = cartesianProduct(toKey, toScalarSlots);
 
     final boolean[] fromNullRejectingSlots = nullRejectingSlotMask(true);
     final boolean[] toNullRejectingSlots = nullRejectingSlotMask(false);
@@ -550,6 +818,11 @@ public class FetchFromIndexStep extends AbstractExecutionStep {
       final Object[][] seek = { convertedFrom, convertedTo, { fromKeyIncluded, toKeyIncluded } };
       if (!mapInexactIntegralBounds(seek, rangeKeySize))
         continue;
+
+      // A bound a DOUBLE or FLOAT key cannot hold is rounded by the index: the seek covers the keys around it and the entries are
+      // checked afterwards (#8970). Decided per run, as the plan is reused with other parameter values
+      if (widenLossyFloatingBounds(seek))
+        verifyKeys = true;
 
       if (!valuesConvertToIndexKeyTypes(seek[0]) || !valuesConvertToIndexKeyTypes(seek[1]))
         // This combination's bound has no defined ordering against the index's declared key type: it matches no
@@ -602,6 +875,99 @@ public class FetchFromIndexStep extends AbstractExecutionStep {
       cursor = nextCursors.removeFirst();
       fetchNextEntry();
     }
+  }
+
+  /**
+   * Widens the bounds of one seek that a DOUBLE or FLOAT key cannot hold (issue #8970), see {@link FloatingKeyBound}: the index
+   * rounds such a bound to the nearest key, which is not the bound a scan compares with. The lower side becomes the key below the
+   * rounded one and the upper side the key above it, both inclusive, so the seek holds every key the exact comparison can select;
+   * {@link #keysSatisfyCondition} drops the others. An index with no key order (a hash one) cannot be widened, it keeps the rounded
+   * key and its entries are checked all the same.
+   *
+   * @return true when a bound is one the key type cannot hold, and so the entries of the seek have to be checked
+   */
+  private boolean widenLossyFloatingBounds(final Object[][] seek) {
+    if (!(index instanceof IndexInternal internalIndex))
+      return false;
+    final byte[] keyTypes = internalIndex.getBinaryKeyTypes();
+    if (keyTypes == null)
+      return false;
+    // Answered once per run: the seeks of an IN list of thousands of values all ask it
+    if (floatingKeys == FLOATING_KEYS_UNKNOWN)
+      floatingKeys = hasFloatingKeyType(keyTypes) && canVerifyKeys() ? FLOATING_KEYS_VERIFIABLE : FLOATING_KEYS_NOT_APPLICABLE;
+    if (floatingKeys != FLOATING_KEYS_VERIFIABLE)
+      return false;
+    final boolean ordered = index.supportsOrderedIterations();
+    boolean lossy = false;
+    for (int side = 0; side < 2; side++) {
+      final Object[] key = seek[side];
+      if (key == null)
+        continue;
+      Object[] widened = null;
+      for (int i = 0; i < key.length && i < keyTypes.length; i++) {
+        if (!FloatingKeyBound.isLossy(keyTypes[i], key[i]))
+          continue;
+        lossy = true;
+        if (widened == null)
+          // a copy: the array can be the one the other side, or another seek, holds
+          widened = key.clone();
+        // An unordered index is read at the rounded key, which it reports back as the key of its entries: the check needs the key
+        // as stored, not the bound as written
+        widened[i] = !ordered ? FloatingKeyBound.rounded(keyTypes[i], key[i])
+            : side == 0 ? FloatingKeyBound.below(keyTypes[i], key[i]) : FloatingKeyBound.above(keyTypes[i], key[i]);
+      }
+      if (widened != null) {
+        seek[side] = widened;
+        if (ordered)
+          seek[2][side] = Boolean.TRUE;
+      }
+    }
+    return lossy;
+  }
+
+  private static boolean hasFloatingKeyType(final byte[] keyTypes) {
+    for (final byte keyType : keyTypes)
+      if (FloatingKeyBound.isFloating(keyType))
+        return true;
+    return false;
+  }
+
+  /**
+   * Whether the entries of this index can be checked against the condition on their keys alone: every property is read as a
+   * plain value (not an item or a key of a collection) and none is case-insensitive, which stores a folded key where the record
+   * holds the original.
+   */
+  private boolean canVerifyKeys() {
+    // The AndBlock is the shape the SQL planner builds for a property index. The other shapes (a lone condition on the pseudo
+    // field `key`, for a query on the index itself) are not about the values of a type's property and keep the index's rounding
+    if (!(condition instanceof AndBlock))
+      return false;
+    final IndexMetadata metadata = index instanceof IndexInternal internalIndex ? internalIndex.getMetadata() : null;
+    final List<String> propertyNames = index.getPropertyNames();
+    for (int i = 0; i < propertyNames.size(); i++) {
+      if (!propertyNames.get(i).equals(Index.basePropertyName(propertyNames.get(i))))
+        return false;
+      if (metadata != null && metadata.isCaseInsensitive(i))
+        return false;
+    }
+    return true;
+  }
+
+  /**
+   * Evaluates the condition of the step on the key of an entry, the way a scan evaluates it on the record that holds that key
+   * (issue #8970). Only for the entries of a seek widened by {@link #widenLossyFloatingBounds}.
+   */
+  private boolean keysSatisfyCondition(final Object[] keys) {
+    if (keyRow == null) {
+      keyPropertyNames = index.getPropertyNames();
+      keyRow = new ResultInternal(context.getDatabase());
+    }
+    // One row for the whole run: a key shorter than the index (a prefix) must not leave the values of the previous entry behind
+    for (int i = 0; i < keyPropertyNames.size(); i++)
+      keyRow.setProperty(keyPropertyNames.get(i), i < keys.length ? keys[i] : null);
+    if (!Boolean.TRUE.equals(condition.evaluate((Result) keyRow, context)))
+      return false;
+    return additionalRangeCondition == null || Boolean.TRUE.equals(additionalRangeCondition.evaluate((Result) keyRow, context));
   }
 
   /**
@@ -870,11 +1236,11 @@ public class FetchFromIndexStep extends AbstractExecutionStep {
     return result;
   }
 
-  private List<PCollection> cartesianProduct(final PCollection key) {
-    return cartesianProduct(new PCollection(), key);//TODO
+  private List<PCollection> cartesianProduct(final PCollection key, final boolean[] scalarSlots) {
+    return cartesianProduct(new PCollection(), key, scalarSlots);
   }
 
-  private List<PCollection> cartesianProduct(final PCollection head, final PCollection key) {
+  private List<PCollection> cartesianProduct(final PCollection head, final PCollection key, final boolean[] scalarSlots) {
     if (key.getExpressions().isEmpty())
       return List.of(head);
 
@@ -883,7 +1249,11 @@ public class FetchFromIndexStep extends AbstractExecutionStep {
     // A multi-value key expands into one index lookup per element. MultiValue covers every shape a
     // parameter can take, including primitive arrays (long[]/int[]/double[]) that are not Iterable,
     // consistent with the multi-value handling in processInCondition().
-    if (!(value instanceof Identifiable) && MultiValue.isMultiValue(value)) {
+    final int slot = head.getExpressions().size();
+    // The mask has one entry per key slot the condition produces, so it always covers the slot; a slot past it (a key built some
+    // other way) is treated as a multi-value one, the behaviour before #9370
+    final boolean scalar = slot < scalarSlots.length && scalarSlots[slot];
+    if (!scalar && !(value instanceof Identifiable) && MultiValue.isMultiValue(value)) {
       final List<PCollection> result = new ArrayList<>();
       // `tail` does not depend on `elemInKey`: it is `key` with its (already-consumed) first expression
       // dropped, the same for every element `value` expands into. Computing it once here instead of once
@@ -898,7 +1268,7 @@ public class FetchFromIndexStep extends AbstractExecutionStep {
           newHead.add(exp.copy());
 
         newHead.add(toExpression(unwrapSubQueryResult(elemInKey)));
-        result.addAll(cartesianProduct(newHead, tail));
+        result.addAll(cartesianProduct(newHead, tail, scalarSlots));
       }
       return result;
     } else {
@@ -909,7 +1279,7 @@ public class FetchFromIndexStep extends AbstractExecutionStep {
       newHead.add(nextElementInKey);
       final PCollection tail = key.copy();
       tail.getExpressions().removeFirst();
-      return cartesianProduct(newHead, tail);
+      return cartesianProduct(newHead, tail, scalarSlots);
     }
 
   }
@@ -949,6 +1319,48 @@ public class FetchFromIndexStep extends AbstractExecutionStep {
 //      return result;
 //    }
 //    return OType.convert(val, types[0].getDefaultJavaType());
+  }
+
+  /**
+   * True when the index lookup is an equality on EVERY property of the index, so a unique index returns at most one
+   * record (an UPSERT must not run on a key prefix, a range, an IN list or a null value). The planner only hands an index the
+   * conditions on its own properties, one per property, so counting the equality sub-blocks is enough; any other
+   * predicate stays in a separate filter step. Any other condition shape (BETWEEN, CONTAINS, ...) is not a full-key
+   * equality, which is the safe answer for an UPSERT.
+   */
+  boolean isFullKeyEquality() {
+    final List<String> properties = index.getPropertyNames();
+    final int keyCount = properties.size();
+    if (condition instanceof BinaryCondition binaryCondition)
+      return keyCount == 1 && binaryCondition.getOperator() instanceof EqualsCompareOperator && hasNonNullValue(binaryCondition);
+
+    if (condition instanceof AndBlock andBlock) {
+      final List<BooleanExpression> subBlocks = andBlock.getSubBlocks();
+      if (subBlocks.size() != keyCount)
+        return false;
+      final Set<String> covered = new HashSet<>(keyCount * 2);
+      for (final BooleanExpression exp : subBlocks) {
+        if (!(exp instanceof BinaryCondition binaryCondition) || !(binaryCondition.getOperator() instanceof EqualsCompareOperator))
+          return false;
+        if (!hasNonNullValue(binaryCondition))
+          return false;
+        final Identifier alias = binaryCondition.getLeft().getDefaultAlias();
+        if (alias == null)
+          return false;
+        covered.add(alias.getStringValue());
+      }
+      // every index property must be bound by its own equality, not just as many equalities as properties
+      for (final String property : properties)
+        if (!covered.contains(Index.basePropertyName(property)))
+          return false;
+      return true;
+    }
+    return false;
+  }
+
+  /** A null key is not unique even on a UNIQUE index (null strategy), so it cannot identify a single record. */
+  private boolean hasNonNullValue(final BinaryCondition binaryCondition) {
+    return binaryCondition.getRight().execute((Result) null, context) != null;
   }
 
   private boolean allEqualities(final AndBlock condition) {
@@ -1187,6 +1599,14 @@ public class FetchFromIndexStep extends AbstractExecutionStep {
     count = 0;
 
     inited = false;
+    indexUnique = false;
+    verifyKeys = false;
+    floatingKeys = FLOATING_KEYS_UNKNOWN;
+    keyRow = null;
+    keyPropertyNames = null;
+    checkedKey = NOT_CHECKED;
+    checkedLookupKey = null;
+    pointLookup = null;
     customIterator = null;
     nextEntry = null;
     nextEntryScore = 0f;

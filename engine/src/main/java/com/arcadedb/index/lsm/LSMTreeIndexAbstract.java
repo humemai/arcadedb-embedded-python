@@ -150,7 +150,7 @@ public abstract class LSMTreeIndexAbstract extends PaginatedComponent {
       throw new IllegalArgumentException("Index null strategy is null");
 
     if (keyTypes == null || keyTypes.length == 0)
-      throw new IllegalArgumentException("Key types empty ");
+      throw new IllegalArgumentException("Key types empty");
 
     this.mainIndex = mainIndex;
     this.serializer = database.getSerializer();
@@ -172,12 +172,23 @@ public abstract class LSMTreeIndexAbstract extends PaginatedComponent {
   /**
    * Called at cloning time. The STORAGE types are what travels between the components of one index: a new file that
    * belongs to an index already on disk (a compacted sub-index, or the mutable a split creates) must keep encoding
-   * keys the way the existing files do, so it inherits them instead of re-deriving them from the schema.
+   * keys the way the existing files do, so it inherits them instead of re-deriving them from the schema. The null strategy
+   * travels the same way (#9717): it is not in any file header, the schema reads it back from the mutable component, so a
+   * new component left on the field default would silently turn an ERROR or INDEX index into a SKIP one, in memory and in
+   * schema.json, at the first compaction.
    */
   protected LSMTreeIndexAbstract(final LSMTreeIndex mainIndex, final DatabaseInternal database, final String name,
       final boolean unique, final String filePath, final String ext, final Type[] keyTypes, final byte[] storageKeyTypes,
-      final int pageSize, final int version) throws IOException {
+      final int pageSize, final int version, final NULL_STRATEGY nullStrategy) throws IOException {
     super(database, name, filePath, TEMP_EXT + ext, ComponentFile.MODE.READ_WRITE, pageSize, version);
+    if (nullStrategy == null)
+      throw new IllegalArgumentException("Index null strategy is null");
+
+    // The same refusal the creation constructor makes: a clone is what a compaction writes to disk and ships to the
+    // replicas, so empty key types copied here would turn one broken instance into a broken file (issue #10046)
+    if (storageKeyTypes == null || storageKeyTypes.length == 0)
+      throw new IllegalArgumentException("Key types empty");
+
     this.mainIndex = mainIndex;
     this.serializer = database.getSerializer();
     this.comparator = serializer.getComparator();
@@ -185,6 +196,7 @@ public abstract class LSMTreeIndexAbstract extends PaginatedComponent {
     this.keyTypes = keyTypes;
     this.storageKeyTypes = storageKeyTypes;
     this.binaryKeyTypes = declaredKeyTypes(storageKeyTypes);
+    this.nullStrategy = nullStrategy;
     REMOVED_ENTRY_RID = new RID(-1, -1L);
   }
 
@@ -289,6 +301,26 @@ public abstract class LSMTreeIndexAbstract extends PaginatedComponent {
   @Override
   public Object getMainComponent() {
     return mainIndex;
+  }
+
+  /**
+   * The part of an index file name a compaction keeps when it names the replacement file {@code <base>_<nanoTime>}: the
+   * name without its trailing {@code _<digits>} stamp. A file with no stamp - a MANUAL index is created under exactly the
+   * name its creator chose, which may hold no underscore at all or a non-numeric tail like {@code Manual_Idx} - keeps
+   * its whole name instead of losing a tail that was never a stamp (issue #9434).
+   */
+  public static String compactionBaseName(final String fileName) {
+    final int last_ = fileName.lastIndexOf('_');
+    if (last_ < 1 || last_ == fileName.length() - 1)
+      return fileName;
+    // The stamp is a System.nanoTime(), which may be negative: its origin is arbitrary
+    final int firstDigit = fileName.charAt(last_ + 1) == '-' ? last_ + 2 : last_ + 1;
+    if (firstDigit == fileName.length())
+      return fileName;
+    for (int i = firstDigit; i < fileName.length(); i++)
+      if (!Character.isDigit(fileName.charAt(i)))
+        return fileName;
+    return fileName.substring(0, last_);
   }
 
   /**

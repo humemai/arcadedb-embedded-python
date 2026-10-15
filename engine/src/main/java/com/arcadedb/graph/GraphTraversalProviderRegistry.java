@@ -18,6 +18,7 @@
  */
 package com.arcadedb.graph;
 
+import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.database.Database;
 import com.arcadedb.database.DatabaseInternal;
 import com.arcadedb.database.TransactionContext;
@@ -25,6 +26,7 @@ import com.arcadedb.graph.olap.GraphAnalyticalView;
 import com.arcadedb.log.LogManager;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
@@ -32,6 +34,7 @@ import java.util.WeakHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.LockSupport;
+import java.util.function.Predicate;
 import java.util.logging.Level;
 
 /**
@@ -64,6 +67,69 @@ public class GraphTraversalProviderRegistry {
   // the next query will see the updated flag. The alternative (always locking) would add contention
   // on every query plan compilation across all databases, even when no providers exist.
   private static volatile boolean hasAnyProviders = false;
+
+  // The recording open on this thread while a plan is built, null otherwise (issue #9587)
+  private static final ThreadLocal<ViewsPassedOver> PASSED_OVER = new ThreadLocal<>();
+
+  /**
+   * The providers the lookups of one plan passed over: each could serve the request but was not ready (restoring, building, or
+   * stale and not to be used stale). A plan built without a view picks it at no later point, so a cached plan keeps walking
+   * the records after the view turns ready (issue #9587); whoever caches the plan keeps this list and plans again once one of
+   * them is ready. Opened by {@link #recordViewsPassedOver()} and closed on the same thread; a recording opened inside
+   * another one hands what it saw to the enclosing one when it is closed.
+   */
+  public static final class ViewsPassedOver implements AutoCloseable {
+    private static final GraphTraversalProvider[] NONE = new GraphTraversalProvider[0];
+
+    private final ViewsPassedOver          enclosing;
+    private       GraphTraversalProvider[] views = NONE;
+
+    private ViewsPassedOver(final ViewsPassedOver enclosing) {
+      this.enclosing = enclosing;
+    }
+
+    private void add(final GraphTraversalProvider provider) {
+      for (final GraphTraversalProvider view : views)
+        if (view == provider)
+          return;
+      views = Arrays.copyOf(views, views.length + 1);
+      views[views.length - 1] = provider;
+    }
+
+    /**
+     * @return the providers passed over so far, empty when none was
+     */
+    public GraphTraversalProvider[] getViews() {
+      return views;
+    }
+
+    @Override
+    public void close() {
+      if (enclosing == null) {
+        PASSED_OVER.remove();
+        return;
+      }
+      PASSED_OVER.set(enclosing);
+      for (final GraphTraversalProvider view : views)
+        enclosing.add(view);
+    }
+  }
+
+  /**
+   * Starts recording, on the calling thread, the providers that the lookups of this class pass over because they are not
+   * ready. To be closed on the same thread, in a try-with-resources.
+   */
+  public static ViewsPassedOver recordViewsPassedOver() {
+    final ViewsPassedOver recording = new ViewsPassedOver(PASSED_OVER.get());
+    PASSED_OVER.set(recording);
+    return recording;
+  }
+
+  private static void passedOver(final GraphTraversalProvider provider) {
+    final ViewsPassedOver recording = PASSED_OVER.get();
+    if (recording != null)
+      recording.add(provider);
+  }
 
   /**
    * Registers a traversal provider for a database.
@@ -118,7 +184,18 @@ public class GraphTraversalProviderRegistry {
   }
 
   /**
-   * Finds the first ready provider that covers all the given edge types.
+   * Finds the first ready provider that covers all the given edge types <b>and every vertex type</b>.
+   * <p>
+   * A provider built over a subset of the vertex types maps only the vertices of those types, so the edges that leave
+   * it are missing from its adjacency: a traversal handed such a provider answers the covered part of the graph (issue
+   * #9301: 0 rows where the edges exist). Callers walking edges therefore get only a provider that can answer for
+   * every vertex the walk can reach; a caller that handles an uncovered vertex type itself asks for
+   * {@link #findProviderAllowingPartialVertexCoverage} instead.
+   * <p>
+   * A view whose deferred restore from disk is dispatched by this very call (the first lookup after a reopen), or is
+   * already in flight, is waited for, up to {@link GlobalConfiguration#GAV_QUERY_RESTORE_AWAIT_TIMEOUT}: it is ready a fraction
+   * of a second later, and the caller would otherwise read every record (issue #9240). Applies to the three lookups of this
+   * class that select a view. A view that is only rebuilding after a commit is never waited for.
    * <p>
    * None is returned while the calling thread's transaction on {@code database} holds uncommitted changes: a
    * provider serves the committed graph only, so a query reading through it would not see its own transaction's
@@ -130,11 +207,48 @@ public class GraphTraversalProviderRegistry {
    * @return a matching ready provider, or null if none found
    */
   public static GraphTraversalProvider findProvider(final Database database, final String... edgeTypes) {
+    return findReadyProvider(database, provider -> provider.coversVertexType(null), true, edgeTypes);
+  }
+
+  /**
+   * Like {@link #findProvider}, but never waits for a view whose restore is in flight: it answers null for it, as the lookup did
+   * before {@link GlobalConfiguration#GAV_QUERY_RESTORE_AWAIT_TIMEOUT} (issue #9240). For a caller that waits on its own, with an
+   * abort check of its own, by {@link #awaitRestoring} and asks again.
+   */
+  public static GraphTraversalProvider findProviderWithoutWaiting(final Database database, final String... edgeTypes) {
+    return findReadyProvider(database, provider -> provider.coversVertexType(null), false, edgeTypes);
+  }
+
+  /**
+   * Like {@link #findProvider}, but the provider may cover only some of the vertex types. For a caller that checks the
+   * vertex types it walks against {@link GraphTraversalProvider#coversVertexType(String)} (or reads the records of a
+   * vertex the provider does not map) itself; every other caller must use {@link #findProvider}.
+   */
+  public static GraphTraversalProvider findProviderAllowingPartialVertexCoverage(final Database database,
+      final String... edgeTypes) {
+    return findReadyProvider(database, provider -> true, true, edgeTypes);
+  }
+
+  /**
+   * Like {@link #findProviderAllowingPartialVertexCoverage(Database, String...)}, but only a provider accepted by
+   * {@code coversWalk} is selected, so that with several views over the edge types one that cannot answer the walk
+   * (it lacks an endpoint type) does not hide a later one that can. The predicate is a pure coverage check and runs
+   * before {@link GraphTraversalProvider#isReady()}.
+   */
+  public static GraphTraversalProvider findProviderAllowingPartialVertexCoverage(final Database database,
+      final Predicate<GraphTraversalProvider> coversWalk, final String... edgeTypes) {
+    return findReadyProvider(database, coversWalk, true, edgeTypes);
+  }
+
+  private static GraphTraversalProvider findReadyProvider(final Database database,
+      final Predicate<GraphTraversalProvider> coversVertexTypes, final boolean awaitRestore, final String[] edgeTypes) {
     // Fast path: single volatile read avoids lock, unwrap, and WeakHashMap lookup
     // when no providers are registered (the common case for most databases)
     if (!hasAnyProviders)
       return null;
 
+    // Nothing is recorded as passed over here: a plan built in this state is never cached (see isWithheld()), so no cached plan
+    // depends on it. A caller that starts caching such plans must record the covering providers too (issue #9587)
     if (hasUncommittedChanges(database))
       return null;
 
@@ -148,6 +262,10 @@ public class GraphTraversalProviderRegistry {
     // in the body) stops at the first match, so isReady() - which now dispatches a GraphAnalyticalView's
     // deferred restore-from-disk as a side effect, see #6641 - is never called on a provider past that point.
     GraphTraversalProvider found = null;
+    // Shared by every provider this call waits for, set by the first wait (issue #9240)
+    long deadlineNanos = 0;
+    boolean deadlineSet = false;
+    boolean mayWait = awaitRestore;
     final Iterator<GraphTraversalProvider> iterator = list.iterator();
     while (found == null && iterator.hasNext()) {
       final GraphTraversalProvider provider = iterator.next();
@@ -155,8 +273,35 @@ public class GraphTraversalProviderRegistry {
       // while isReady()'s dispatch is not. Checking coverage first means isReady() - and its cost - only
       // ever runs on a provider that could actually be selected, not on every registered one #6632's
       // "a view a session never actually needs shouldn't cost anything" goal for a multi-view database.
-      if (coversEdgeTypes(provider, edgeTypes) && provider.isReady())
+      if (!coversEdgeTypes(provider, edgeTypes) || !coversVertexTypes.test(provider))
+        continue;
+      if (provider.isReady())
         found = provider;
+      else if (mayWait && provider.isRestoring()) {
+        // isReady() just dispatched the deferred restore of this view, or found it already in flight: the view is ready a
+        // fraction of a second later, which is cheaper to wait for than the record-by-record path the caller falls back to
+        if (!deadlineSet) {
+          final long awaitMs = database.getConfiguration().getValueAsLong(GlobalConfiguration.GAV_QUERY_RESTORE_AWAIT_TIMEOUT);
+          if (awaitMs <= 0) {
+            // not waiting: this view is skipped as before the setting existed, and a later ready view can still be selected
+            mayWait = false;
+            passedOver(provider);
+            continue;
+          }
+          deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(awaitMs);
+          deadlineSet = true;
+        }
+        parkWhileRestoring(List.of(provider), deadlineNanos, null);
+        if (provider.isReady())
+          found = provider;
+        else {
+          LogManager.instance().log(GraphTraversalProviderRegistry.class, Level.FINE,
+              "GraphTraversalProvider '%s' is still restoring after the wait (arcadedb.gavQueryRestoreAwaitTimeout): the query takes the record path",
+              provider.getName());
+          passedOver(provider);
+        }
+      } else
+        passedOver(provider);
     }
     if (found != null && found.isStale())
       LogManager.instance().log(GraphTraversalProviderRegistry.class, Level.FINE,
@@ -218,7 +363,16 @@ public class GraphTraversalProviderRegistry {
     if (restoring == null)
       return false;
 
-    final long deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
+    parkWhileRestoring(restoring, System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs), abortCheck);
+    return true;
+  }
+
+  /**
+   * Parks the calling thread until none of {@code restoring} is restoring any more, the deadline passes, or the thread is
+   * interrupted (the flag is left set). {@code abortCheck} runs at every poll and is expected to throw to abort.
+   */
+  private static void parkWhileRestoring(final List<GraphTraversalProvider> restoring, final long deadlineNanos,
+      final Runnable abortCheck) {
     while (anyRestoring(restoring)) {
       if (abortCheck != null)
         abortCheck.run();
@@ -232,7 +386,6 @@ public class GraphTraversalProviderRegistry {
       if (Thread.currentThread().isInterrupted())
         break;
     }
-    return true;
   }
 
   private static boolean anyRestoring(final List<GraphTraversalProvider> providers) {

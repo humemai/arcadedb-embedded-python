@@ -28,6 +28,8 @@ import com.arcadedb.graph.IterableGraph;
 import com.arcadedb.graph.MutableVertex;
 import com.arcadedb.graph.Vertex;
 import com.arcadedb.log.LogManager;
+import com.arcadedb.query.opencypher.temporal.CypherDuration;
+import com.arcadedb.query.opencypher.traversal.TraversalPath;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultSet;
 import com.arcadedb.schema.DocumentType;
@@ -42,6 +44,9 @@ import com.arcadedb.utility.DateUtils;
 
 import java.lang.reflect.Array;
 import java.time.LocalDate;
+import java.time.LocalTime;
+import java.time.OffsetTime;
+import java.time.ZonedDateTime;
 import java.time.temporal.ChronoUnit;
 import java.time.temporal.Temporal;
 import java.util.ArrayList;
@@ -412,6 +417,27 @@ public class JsonSerializer {
     return array;
   }
 
+  /**
+   * A path as its {@code {_type, nodes, relationships, length}} object rather than its toString() (issue #9913). The nodes
+   * and relationships are written whole whatever {@link #setUseCollectionSizeForEdges} says: that setting keeps a
+   * vertex's edge lists from being dumped, while the relationships of a path are part of the value itself.
+   */
+  private JSONObject serializePath(final TraversalPath path) {
+    final JSONArray nodes = new JSONArray();
+    for (final Vertex vertex : path.getVertices())
+      nodes.put(serializeDocument(vertex));
+    final JSONArray relationships = new JSONArray();
+    for (final Edge edge : path.getEdges())
+      relationships.put(serializeDocument(edge));
+
+    final JSONObject json = new JSONObject();
+    json.put(TraversalPath.TYPE_KEY, TraversalPath.PATH_TYPE);
+    json.put(TraversalPath.NODES_KEY, nodes);
+    json.put(TraversalPath.RELATIONSHIPS_KEY, relationships);
+    json.put(TraversalPath.LENGTH_KEY, path.length());
+    return json;
+  }
+
   private Object serializeMap(final Database database, final Map<Object, Object> value) {
     final Object result;
     if (useCollectionSize) {
@@ -421,7 +447,7 @@ public class JsonSerializer {
           .setDateTimeFormat(database.getSchema().getDateTimeFormat());
       final TemporalFormats formats = new TemporalFormats(database);
       for (final Map.Entry<Object, Object> entry : value.entrySet())
-        map.put(entry.getKey().toString(), formatNestedTemporal(serializeObject(database, entry.getValue()), formats));
+        map.put(String.valueOf(entry.getKey()), formatNestedTemporal(serializeObject(database, entry.getValue()), formats));
       result = map;
     }
     return result;
@@ -518,6 +544,20 @@ public class JsonSerializer {
   }
 
   /**
+   * True for the values of the types that keep more than an instant: a time of day, a zoned datetime and a duration. A
+   * {@code ZonedDateTime} under a DATETIME declaration is still an instant (issue #8572). Public so that
+   * {@code Result#valueToJSON} asks the same question and the two renderings of one row cannot drift (issue #9810).
+   *
+   * @param value the value to classify
+   * @param type  the declared property type, or {@code null} when the value comes from a projection with no declaration
+   */
+  public static boolean isNativeCypherTemporal(final Object value, final Type type) {
+    if (value instanceof OffsetTime || value instanceof LocalTime || value instanceof CypherDuration)
+      return true;
+    return value instanceof ZonedDateTime && (type == null || type == Type.ZONED_DATETIME);
+  }
+
+  /**
    * Converts a value to JSON-compatible type, handling Documents, Collections, Dates, etc.
    * This method was moved from the deprecated JSONSerializer class.
    */
@@ -529,7 +569,10 @@ public class JsonSerializer {
       for (final Iterator it = c.iterator(); it.hasNext(); )
         array.put(convertToJSONType(it.next(), null));
       value = array;
-    } else if (type == Type.DATE && (value instanceof Date || value instanceof Calendar || value instanceof Temporal))
+    } else if (isNativeCypherTemporal(value, type))
+      // A time of day, a zoned datetime and a duration have no epoch form: the text keeps what they hold (issue #8572)
+      value = value.toString();
+    else if (type == Type.DATE && (value instanceof Date || value instanceof Calendar || value instanceof Temporal))
       // Issue #4601: a DATE value is encoded as epoch DAYS on the wire (the server decodes a DATE number
       // as days). A plain Date.getTime() would emit milliseconds, which the server reads as days and the
       // resulting out-of-range value is silently dropped to null.
@@ -539,11 +582,11 @@ public class JsonSerializer {
     else if (value instanceof Temporal)
       value = DateUtils.dateTimeToTimestamp(value, type != null ? DateUtils.getPrecisionFromType(type) :
           ChronoUnit.MILLIS);
-    else if (value instanceof Map) {
-      final Map<String, Object> m = (Map<String, Object>) value;
+    else if (value instanceof Map<?, ?> m) {
+      // a member name is derived from the key, whatever its class (#9805)
       final JSONObject map = new JSONObject();
-      for (final Map.Entry<String, Object> entry : m.entrySet())
-        map.put(entry.getKey(), convertToJSONType(entry.getValue(), null));
+      for (final Map.Entry<?, ?> entry : m.entrySet())
+        map.put(String.valueOf(entry.getKey()), convertToJSONType(entry.getValue(), null));
       value = map;
     }
 
@@ -690,6 +733,8 @@ public class JsonSerializer {
       value = serializeIterator(database, iter, null);
     else if (value instanceof Map)
       value = serializeMap(database, (Map<Object, Object>) value);
+    else if (value instanceof TraversalPath path)
+      value = serializePath(path);
     else if (value.getClass().isArray())
       value = serializeArray(database, value);
 
@@ -772,6 +817,8 @@ public class JsonSerializer {
    */
   private static Object formatTemporalForPrecision(final Object value, final Type propertyType,
       final String baseDateTimeFormat, final String baseDateFormat) {
+    if (isNativeCypherTemporal(value, propertyType))
+      return value.toString();
     if (propertyType == Type.DATE && (value instanceof Date || value instanceof Calendar || value instanceof Temporal))
       // UTC, because that is the anchor the whole DATE round trip uses: DateUtils.date() materialises a stored day
       // count as UTC midnight and Type#convertToDate converts back the same way

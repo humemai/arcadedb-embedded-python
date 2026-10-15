@@ -23,6 +23,7 @@ import com.arcadedb.Profiler;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.network.BoundedHttpExchange;
 import com.arcadedb.serializer.json.JSONArray;
+import com.arcadedb.serializer.json.JSONException;
 import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.server.ArcadeDBServer;
 import com.arcadedb.server.http.HttpServer;
@@ -31,12 +32,12 @@ import com.arcadedb.server.http.handler.ExecutionResponse;
 import com.arcadedb.server.info.SchemaInfo;
 import com.arcadedb.server.info.ServerInfo;
 import com.arcadedb.server.security.ServerSecurityUser;
+import com.arcadedb.server.support.SupportLineReader;
 import com.arcadedb.server.support.SupportPortalClient;
 import com.arcadedb.server.support.SupportPortalException;
 import io.undertow.server.HttpServerExchange;
 import io.undertow.util.HttpString;
 
-import java.io.BufferedReader;
 import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
@@ -98,6 +99,56 @@ public class AiChatHandler extends AbstractServerHttpHandler {
    * relies on the module's tests not running in parallel.
    */
   static volatile long streamSilenceMs = 5 * 60_000L;
+
+  /**
+   * The most of a buffered answer of the gateway that is read, body of a refusal included: the request deadline bounds the time,
+   * not the bytes, and 120 seconds of bytes on a LAN is no bound on a heap (issue #9627). Same cap as the support calls to the
+   * portal. Mutable and package-private only so a test can shorten it; JVM-wide, so such a test restores it afterwards.
+   */
+  static volatile long maxResponseBytes = SupportPortalClient.MAX_RESPONSE_BYTES;
+
+  /** The most of a refusal's body that is read on a streamed call, as {@link SupportPortalClient#openStream} does. */
+  static final int MAX_ERROR_BODY_BYTES = 64 * 1024;
+
+  /** The most of a gateway's error body that goes into an exception message or a log line. */
+  static final int MAX_ERROR_EXCERPT_CHARS = 1024;
+
+  /** The start of a gateway's error body, for a message or a log line: the body itself is peer text of up to the cap. */
+  static String excerpt(final String body) {
+    if (body == null)
+      return "";
+    return body.length() <= MAX_ERROR_EXCERPT_CHARS ? body : body.substring(0, MAX_ERROR_EXCERPT_CHARS) + "...";
+  }
+
+  /**
+   * The JSON body of a 401/403 of the gateway, or an empty object when it is not one (a body cut at the cap, or plain text), so
+   * the caller falls back to its default {@code code} and message instead of failing on the parse.
+   */
+  static JSONObject refusalBody(final String body) {
+    try {
+      return new JSONObject(body);
+    } catch (final JSONException e) {
+      return new JSONObject();
+    }
+  }
+
+  /**
+   * The JSON answer of the gateway. A body that is not JSON fails with only its {@link #excerpt}: the parser's own message
+   * carries the whole input, up to {@link #maxResponseBytes}, into the log line that reports it.
+   */
+  static JSONObject parseAnswer(final String body) {
+    try {
+      return new JSONObject(body);
+    } catch (final JSONException e) {
+      throw new IllegalStateException("The AI gateway answered with a body that is not a JSON object: " + excerpt(body));
+    }
+  }
+
+  /** A buffered answer of the gateway, cancelled once it exceeds {@link #maxResponseBytes}. */
+  static HttpResponse.BodyHandler<String> limitedBody() {
+    final long max = maxResponseBytes;
+    return info -> new SupportPortalClient.LimitedStringBody(max, "The AI gateway");
+  }
 
   private static final byte[] HEARTBEAT_FRAME = ": keepalive\n\n".getBytes(StandardCharsets.UTF_8);
 
@@ -290,8 +341,7 @@ public class AiChatHandler extends AbstractServerHttpHandler {
 
     if (response.statusCode() == 401 || response.statusCode() == 403) {
       try (InputStream body = responseBody) {
-        final String bodyStr = new String(body.readAllBytes(), StandardCharsets.UTF_8);
-        final JSONObject errBody = new JSONObject(bodyStr);
+        final JSONObject errBody = refusalBody(new String(body.readNBytes(MAX_ERROR_BODY_BYTES), StandardCharsets.UTF_8));
         final String code = errBody.getString("code", "token_invalid");
         final String errorMsg = errBody.getString("error", "Invalid or expired subscription token");
         final JSONObject errorResponse = new JSONObject();
@@ -303,8 +353,8 @@ public class AiChatHandler extends AbstractServerHttpHandler {
 
     if (response.statusCode() != 200) {
       try (InputStream body = responseBody) {
-        final String bodyStr = new String(body.readAllBytes(), StandardCharsets.UTF_8);
-        throw new RuntimeException("Gateway returned status " + response.statusCode() + ": " + bodyStr);
+        final String bodyStr = new String(body.readNBytes(MAX_ERROR_BODY_BYTES), StandardCharsets.UTF_8);
+        throw new RuntimeException("Gateway returned status " + response.statusCode() + ": " + excerpt(bodyStr));
       }
     }
 
@@ -321,7 +371,9 @@ public class AiChatHandler extends AbstractServerHttpHandler {
     boolean finished = false;
 
     try (InputStream body = responseBody;
-         BufferedReader reader = new BufferedReader(new InputStreamReader(body, StandardCharsets.UTF_8))) {
+         InputStreamReader input = new InputStreamReader(body, StandardCharsets.UTF_8)) {
+      // Each line capped (issue #9627): the silence bound does not end a gateway that keeps sending without a newline
+      final SupportLineReader reader = SupportLineReader.failingOver(input, AiPortalChat.maxEventChars);
       String line;
       while ((line = reader.readLine()) != null) {
         if (line.startsWith(":")) {
@@ -356,45 +408,7 @@ public class AiChatHandler extends AbstractServerHttpHandler {
             gatewaySessionId = event.getString("sessionId", null);
             // Internal control event - do not forward to Studio.
           }
-          case "tool_call" -> {
-            final String toolId = event.getString("id", null);
-            final String toolName = event.getString("name", "");
-            final JSONObject toolArgs = event.getJSONObject("arguments", new JSONObject());
-
-            // Synthesize tool_start for Studio's live UI (keeps Studio's existing renderer happy).
-            forwardEvent(output, new JSONObject()
-                .put("type", "tool_start")
-                .put("tool", toolName)
-                .put("args", toolArgs));
-
-            // Execute locally. Returns JSON string (success or {"error":"..."}).
-            final String toolResult = dispatcher.execute(toolName, toolArgs);
-
-            // Synthesize tool_end. If the result encodes an error, propagate it.
-            final JSONObject toolEnd = new JSONObject()
-                .put("type", "tool_end")
-                .put("tool", toolName)
-                .put("args", toolArgs);
-            String toolError = null;
-            try {
-              final JSONObject parsed = new JSONObject(toolResult);
-              toolError = parsed.getString("error", null);
-            } catch (final Exception ignored) { /* result is not a JSON object */ }
-            if (toolError != null && !toolError.isEmpty()) {
-              toolEnd.put("error", toolError);
-              LogManager.instance().log(this, Level.WARNING,
-                  "AI tool '%s' failed locally: %s", toolName, toolError);
-            }
-            forwardEvent(output, toolEnd);
-
-            // POST the result back to the gateway so the paused LLM loop resumes.
-            if (gatewaySessionId == null) {
-              LogManager.instance().log(this, Level.WARNING,
-                  "AI gateway sent tool_call before session event; cannot deliver result");
-              break;
-            }
-            postToolResult(gatewaySessionId, toolId, toolResult);
-          }
+          case "tool_call" -> relayToolCall(output, event, gatewaySessionId, dispatcher);
           case "done" -> {
             // Inject chatId before forwarding the done event
             event.put("chatId", chat.getString("id"));
@@ -659,6 +673,58 @@ public class AiChatHandler extends AbstractServerHttpHandler {
     }
   }
 
+  /**
+   * Runs one {@code tool_call} of the gateway here and answers it. The gateway's model loop is paused on the call until a
+   * result arrives on {@code /api/chat/tool_result/:sessionId}, so every call read is answered with one (issue #8721): a call
+   * that cannot be run - arguments that are not a JSON object, a tool that threw - is answered with an {@code {"error":...}}
+   * result the model can recover from, and a result is POSTed even when relaying {@code tool_start}/{@code tool_end} to Studio
+   * fails, before that failure ends the stream.
+   */
+  private void relayToolCall(final OutputStream output, final JSONObject event, final String gatewaySessionId,
+      final ToolDispatcher dispatcher) throws IOException {
+    final String toolId = textOf(event, "id", null);
+    final String toolName = textOf(event, "name", "");
+    final JSONObject toolArgs = ToolDispatcher.arguments(event);
+    final JSONObject shownArgs = toolArgs != null ? toolArgs : new JSONObject();
+
+    String toolResult = null;
+    try {
+      // Synthesize tool_start for Studio's live UI (keeps Studio's existing renderer happy).
+      forwardEvent(output, new JSONObject().put("type", "tool_start").put("tool", toolName).put("args", shownArgs));
+
+      // Execute locally. Always a JSON string: the tool's result, or {"error":"..."}.
+      toolResult = dispatcher.executeSafely(toolName, toolArgs);
+
+      // Synthesize tool_end. If the result encodes an error, propagate it.
+      final JSONObject toolEnd = new JSONObject().put("type", "tool_end").put("tool", toolName).put("args", shownArgs);
+      String toolError = null;
+      try {
+        toolError = new JSONObject(toolResult).getString("error", null);
+      } catch (final Exception ignored) { /* result is not a JSON object */ }
+      if (toolError != null && !toolError.isEmpty()) {
+        toolEnd.put("error", toolError);
+        LogManager.instance().log(this, Level.WARNING, "AI tool '%s' failed locally: %s", toolName, toolError);
+      }
+      forwardEvent(output, toolEnd);
+    } finally {
+      // POST the result back to the gateway so the paused LLM loop resumes - also when Studio could not be written to
+      if (gatewaySessionId == null)
+        LogManager.instance().log(this, Level.WARNING, "AI gateway sent tool_call before session event; cannot deliver result");
+      else
+        postToolResult(gatewaySessionId, toolId,
+            toolResult != null ? toolResult : new JSONObject().put("error", "The tool did not complete").toString());
+    }
+  }
+
+  /** A text member of a gateway event, or the default when it is missing or not text (a malformed event must not throw). */
+  private static String textOf(final JSONObject event, final String name, final String defaultValue) {
+    try {
+      return event.getString(name, defaultValue);
+    } catch (final RuntimeException e) {
+      return defaultValue;
+    }
+  }
+
   private static void forwardEvent(final OutputStream output, final JSONObject event) throws IOException {
     output.write(("data: " + event + "\n\n").getBytes(StandardCharsets.UTF_8));
     output.flush();
@@ -671,20 +737,22 @@ public class AiChatHandler extends AbstractServerHttpHandler {
    * own timeout-driven error response).
    */
   private void postToolResult(final String sessionId, final String toolId, final String resultJson) {
-    final JSONObject body = new JSONObject().put("id", toolId).put("result", resultJson);
-    final HttpRequest req = HttpRequest.newBuilder()
-        .uri(URI.create(config.getGatewayUrl() + "/api/chat/tool_result/" + sessionId))
-        .header("Content-Type", "application/json")
-        .header("Authorization", "Bearer " + config.getSubscriptionToken())
-        .POST(HttpRequest.BodyPublishers.ofString(body.toString()))
-        .timeout(Duration.ofMillis(toolResultTimeoutMs))
-        .build();
     try {
-      final HttpResponse<String> resp = BoundedHttpExchange.send(HTTP_CLIENT, req, HttpResponse.BodyHandlers.ofString(),
+      // Built inside the try: a session id the URI refuses must not throw out of relayToolCall's finally, where it would
+      // replace the failure that is ending the stream
+      final JSONObject body = new JSONObject().put("id", toolId).put("result", resultJson);
+      final HttpRequest req = HttpRequest.newBuilder()
+          .uri(URI.create(config.getGatewayUrl() + "/api/chat/tool_result/" + sessionId))
+          .header("Content-Type", "application/json")
+          .header("Authorization", "Bearer " + config.getSubscriptionToken())
+          .POST(HttpRequest.BodyPublishers.ofString(body.toString()))
+          .timeout(Duration.ofMillis(toolResultTimeoutMs))
+          .build();
+      final HttpResponse<String> resp = BoundedHttpExchange.send(HTTP_CLIENT, req, limitedBody(),
           toolResultTimeoutMs);
       if (resp.statusCode() != 200) {
         LogManager.instance().log(this, Level.WARNING,
-            "AI gateway tool_result POST returned %d: %s", resp.statusCode(), resp.body());
+            "AI gateway tool_result POST returned %d: %s", resp.statusCode(), excerpt(resp.body()));
       }
     } catch (final Exception e) {
       LogManager.instance().log(this, Level.WARNING,
@@ -743,12 +811,11 @@ public class AiChatHandler extends AbstractServerHttpHandler {
         .timeout(Duration.ofMillis(gatewayTimeoutMs))//
         .build();
 
-    final HttpResponse<String> response = BoundedHttpExchange.send(HTTP_CLIENT, request,
-        HttpResponse.BodyHandlers.ofString(), gatewayTimeoutMs);
+    final HttpResponse<String> response = BoundedHttpExchange.send(HTTP_CLIENT, request, limitedBody(), gatewayTimeoutMs);
 
     if (response.statusCode() == 401 || response.statusCode() == 403) {
       // Parse the gateway error to get the specific code (token_invalid, token_expired, etc.)
-      final JSONObject errBody = new JSONObject(response.body());
+      final JSONObject errBody = refusalBody(response.body());
       final String code = errBody.getString("code", "token_invalid");
       final String errorMsg = errBody.getString("error", "Invalid or expired subscription token");
       final JSONObject errorResponse = new JSONObject();
@@ -758,8 +825,8 @@ public class AiChatHandler extends AbstractServerHttpHandler {
     }
 
     if (response.statusCode() != 200)
-      throw new RuntimeException("Gateway returned status " + response.statusCode() + ": " + response.body());
+      throw new RuntimeException("Gateway returned status " + response.statusCode() + ": " + excerpt(response.body()));
 
-    return new JSONObject(response.body());
+    return parseAnswer(response.body());
   }
 }

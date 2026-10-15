@@ -985,6 +985,8 @@ class GraphAnalyticalViewTest extends TestHelper {
     database.getSchema().createVertexType("Company");
     database.getSchema().createEdgeType("FOLLOWS");
     database.getSchema().createEdgeType("WORKS_AT");
+    // an unlisted type counts against the view only once it holds a vertex a walk could reach
+    database.transaction(() -> database.newVertex("Company").save());
 
     GraphTraversalProviderRegistry.clearAll(database);
 
@@ -994,7 +996,7 @@ class GraphAnalyticalViewTest extends TestHelper {
         .withEdgeTypes("FOLLOWS")
         .build();
 
-    // coversVertexType(null) should be false — Company is not covered
+    // coversVertexType(null) should be false — Company is not covered and holds a vertex
     assertThat(gav.coversVertexType(null)).isFalse();
     // coversEdgeType(null) should be false — WORKS_AT is not covered
     assertThat(gav.coversEdgeType(null)).isFalse();
@@ -1002,8 +1004,9 @@ class GraphAnalyticalViewTest extends TestHelper {
     // findProvider with null should NOT find this GAV
     assertThat(GraphTraversalProviderRegistry.findProvider(database)).isNull();
 
-    // But findProvider with specific types should still work
-    assertThat(GraphTraversalProviderRegistry.findProvider(database, "FOLLOWS")).isSameAs(gav);
+    // Company is not covered, so a walk over FOLLOWS could leave the view: only a caller that handles it may have it (#9301)
+    assertThat(GraphTraversalProviderRegistry.findProvider(database, "FOLLOWS")).isNull();
+    assertThat(GraphTraversalProviderRegistry.findProviderAllowingPartialVertexCoverage(database, "FOLLOWS")).isSameAs(gav);
 
     gav.drop();
   }
@@ -2818,6 +2821,9 @@ class GraphAnalyticalViewTest extends TestHelper {
     // small the whole background chain can resolve inside that window and hand back a legitimately READY
     // view. Parking the dispatched task on BUILD_PERMITS - which it acquires before it reads anything -
     // pins the observation to the instant the gate is actually being asked about, instead of racing it.
+    // The lookup does not wait for the restore (arcadedb.gavQueryRestoreAwaitTimeout, issue #9240): this test is about the
+    // answer of a lookup that does not.
+    database.getConfiguration().setValue(GlobalConfiguration.GAV_QUERY_RESTORE_AWAIT_TIMEOUT, 0L);
     GraphAnalyticalView.acquireAllBuildPermitsForTest();
     try {
       assertThat(restored.isReady())
@@ -2891,6 +2897,7 @@ class GraphAnalyticalViewTest extends TestHelper {
 
     // Permits are saturated for exactly these two assertions - see the sibling commit-variant test above
     // for why isReady() would otherwise race the background chain it dispatches itself.
+    database.getConfiguration().setValue(GlobalConfiguration.GAV_QUERY_RESTORE_AWAIT_TIMEOUT, 0L);
     GraphAnalyticalView.acquireAllBuildPermitsForTest();
     try {
       assertThat(restored.isReady())

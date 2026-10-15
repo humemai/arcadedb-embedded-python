@@ -27,7 +27,6 @@ import com.arcadedb.database.RID;
 import com.arcadedb.database.Transaction;
 import com.arcadedb.schema.EdgeType;
 import com.arcadedb.schema.Property;
-import com.arcadedb.serializer.BinaryTypes;
 import com.arcadedb.serializer.json.JSONObject;
 
 import java.util.Map;
@@ -81,12 +80,6 @@ public class MutableEdge extends MutableDocument implements Edge {
   }
 
   @Override
-  public void reload() {
-    super.reload();
-    init();
-  }
-
-  @Override
   public Object get(final String propertyName) {
     if ("@in".equals(propertyName))
       return in;
@@ -99,6 +92,15 @@ public class MutableEdge extends MutableDocument implements Edge {
   public void setBuffer(final Binary buffer) {
     super.setBuffer(buffer);
     init();
+  }
+
+  /**
+   * Same reason as {@code MutableVertex.parseRecordPrefix()}, with the variable-length prefix of {@link ImmutableEdge}:
+   * a stale {@code propertiesStartingPosition} can point past the properties of the reloaded buffer (issue #9985).
+   */
+  @Override
+  protected void parseRecordPrefix(final Binary content) {
+    parseVertexPointers(content);
   }
 
   @Override
@@ -143,30 +145,37 @@ public class MutableEdge extends MutableDocument implements Edge {
 
   @Override
   public MutableEdge set(final String name, final Object value) {
-    if ("@in".equals(name)) {
-      final RID newIn = toRID(value);
-      if (newIn == null)
-        throw new IllegalArgumentException("Cannot set @in to null: edges require both endpoints");
-      if (rid != null && !newIn.equals(this.in) && database instanceof DatabaseInternal dbInt)
-        dbInt.getGraphEngine().moveEdge(this, Vertex.DIRECTION.IN, newIn);
-      else
-        this.in = newIn;
-      dirty = true;
-      propertiesAssigned = true;
-      return this;
-    } else if ("@out".equals(name)) {
-      final RID newOut = toRID(value);
-      if (newOut == null)
-        throw new IllegalArgumentException("Cannot set @out to null: edges require both endpoints");
-      if (rid != null && !newOut.equals(this.out) && database instanceof DatabaseInternal dbInt)
-        dbInt.getGraphEngine().moveEdge(this, Vertex.DIRECTION.OUT, newOut);
-      else
-        this.out = newOut;
-      dirty = true;
-      propertiesAssigned = true;
-      return this;
-    }
     return (MutableEdge) super.set(name, value);
+  }
+
+  /**
+   * {@code @in} and {@code @out} re-point the edge. Declared here, at the one funnel every setter of
+   * {@link MutableDocument} goes through, so the positional overloads, {@code set(Map)}, {@code fromMap} and
+   * {@code merge} all move the edge the same way (issue #9799).
+   */
+  @Override
+  protected boolean isAssignableMetadata(final String name) {
+    return Property.IN_PROPERTY.equals(name) || Property.OUT_PROPERTY.equals(name);
+  }
+
+  @Override
+  protected void setMetadata(final String name, final Object value) {
+    final Vertex.DIRECTION direction = Property.IN_PROPERTY.equals(name) ? Vertex.DIRECTION.IN : Vertex.DIRECTION.OUT;
+    final RID newEndpoint = toRID(value);
+    if (newEndpoint == null)
+      throw new IllegalArgumentException(
+          "Cannot set " + name + " to " + (value == null ? "null" : "'" + abbreviate(value.toString()) + "'")
+              + ": an edge endpoint must be a record, a RID or a RID string");
+
+    // A move needs an endpoint to move FROM: an instance whose endpoint is still unknown is being initialized, as when
+    // JavaBinarySerializer rebuilds an edge from its toMap() before the trailing endpoint block is read
+    final RID current = direction == Vertex.DIRECTION.IN ? in : out;
+    if (rid != null && current != null && !newEndpoint.equals(current) && database instanceof DatabaseInternal dbInt)
+      dbInt.getGraphEngine().moveEdge(this, direction, newEndpoint);
+    else if (direction == Vertex.DIRECTION.IN)
+      this.in = newEndpoint;
+    else
+      this.out = newEndpoint;
   }
 
   @Override
@@ -197,8 +206,7 @@ public class MutableEdge extends MutableDocument implements Edge {
 
   @Override
   public MutableEdge save() {
-    if (getIdentity() != null && getIdentity().getPosition() < 0)
-      // LIGHTWEIGHT
+    if (isLightweight())
       return this;
 
     return (MutableEdge) super.save();
@@ -206,11 +214,26 @@ public class MutableEdge extends MutableDocument implements Edge {
 
   @Override
   public MutableEdge save(final String bucketName) {
-    if (getIdentity() != null && getIdentity().getPosition() < 0)
-      // LIGHTWEIGHT
+    if (isLightweight())
       return this;
 
     return (MutableEdge) super.save(bucketName);
+  }
+
+  /** A lightweight edge has nothing to write, and so nothing a listener could have refused. */
+  @Override
+  public boolean saveReportingVeto() {
+    return isLightweight() || super.saveReportingVeto();
+  }
+
+  @Override
+  public boolean saveReportingVeto(final String bucketName) {
+    return isLightweight() || super.saveReportingVeto(bucketName);
+  }
+
+  /** A lightweight edge owns no record: its identity is a negative position. */
+  private boolean isLightweight() {
+    return getIdentity() != null && getIdentity().getPosition() < 0;
   }
 
   @Override
@@ -238,9 +261,16 @@ public class MutableEdge extends MutableDocument implements Edge {
     this.buffer = null;
   }
 
-  private static RID toRID(final Object value) {
+  /** Keeps an arbitrary caller value from flooding the exception message and the logs that carry it. */
+  private static String abbreviate(final String text) {
+    return text.length() <= 64 ? text : text.substring(0, 64) + "...";
+  }
+
+  private RID toRID(final Object value) {
     if (value instanceof RID r) return r;
     if (value instanceof Identifiable i) return i.getIdentity();
+    // The textual form a JSON payload (fromJSON, an HTTP document) carries the endpoint in
+    if (value instanceof String s && RID.is(s)) return RID.create(database, s);
     return null;
   }
 
@@ -276,11 +306,17 @@ public class MutableEdge extends MutableDocument implements Edge {
   }
 
   private void init() {
-    if (buffer != null) {
-      buffer.position(1);
-      out = (RID) database.getSerializer().deserializeValue(database, buffer, BinaryTypes.TYPE_COMPRESSED_RID, null);
-      in = (RID) database.getSerializer().deserializeValue(database, buffer, BinaryTypes.TYPE_COMPRESSED_RID, null);
-      this.propertiesStartingPosition = buffer.position();
-    }
+    // READ THE FIELD ONCE, LIKE EVERY OTHER BUFFER DEREFERENCE
+    final Binary content = buffer;
+    if (content != null)
+      parseVertexPointers(content);
+  }
+
+  private void parseVertexPointers(final Binary content) {
+    ImmutableEdge.checkVertexPointersPrefix(content, rid);
+    content.position(1);
+    out = ImmutableEdge.readVertexPointer(database, content, rid);
+    in = ImmutableEdge.readVertexPointer(database, content, rid);
+    this.propertiesStartingPosition = content.position();
   }
 }

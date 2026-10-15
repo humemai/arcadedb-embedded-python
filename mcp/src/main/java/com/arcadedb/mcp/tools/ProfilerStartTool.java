@@ -19,6 +19,7 @@
 package com.arcadedb.mcp.tools;
 
 import com.arcadedb.mcp.MCPConfiguration;
+import com.arcadedb.mcp.MCPToolArgumentException;
 import com.arcadedb.serializer.json.JSONArray;
 import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.server.ArcadeDBServer;
@@ -63,11 +64,11 @@ public class ProfilerStartTool {
     MCPToolUtils.checkServerAdmin(user, "profiler_start");
 
     final ServerQueryProfiler profiler = server.getQueryProfiler();
-    final int timeout = args.getInt("timeoutSeconds", DEFAULT_TIMEOUT_SECONDS);
+    final int timeout = MCPToolUtils.intArgument(args, "timeoutSeconds", DEFAULT_TIMEOUT_SECONDS);
     // The declared schema range is advisory - the MCP client is the one that would enforce it - so re-check it
     // here, as every sibling tool does with its own window (issue #6762).
     if (timeout < 1 || timeout > MAX_TIMEOUT_SECONDS)
-      throw new IllegalArgumentException("'timeoutSeconds' must be between 1 and " + MAX_TIMEOUT_SECONDS);
+      throw new MCPToolArgumentException("'timeoutSeconds' must be between 1 and " + MAX_TIMEOUT_SECONDS);
 
     if (profiler.isRecording()) {
       final JSONObject result = new JSONObject();

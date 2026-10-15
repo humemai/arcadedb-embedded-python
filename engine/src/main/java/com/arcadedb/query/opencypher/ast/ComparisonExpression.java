@@ -18,10 +18,11 @@
  */
 package com.arcadedb.query.opencypher.ast;
 
-import com.arcadedb.schema.Type;
 import com.arcadedb.database.Identifiable;
 import com.arcadedb.database.RID;
 import com.arcadedb.function.graph.IdFunction;
+import com.arcadedb.graph.LightEdgeRID;
+import com.arcadedb.query.opencypher.InlineProperties;
 import com.arcadedb.query.opencypher.query.OpenCypherQueryEngine;
 import com.arcadedb.query.opencypher.temporal.CypherDateTime;
 import com.arcadedb.query.opencypher.temporal.CypherLocalDateTime;
@@ -30,6 +31,7 @@ import com.arcadedb.query.opencypher.temporal.TemporalUtil;
 import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.query.sql.executor.MultiValue;
 import com.arcadedb.query.sql.executor.Result;
+import com.arcadedb.schema.Type;
 import com.arcadedb.serializer.BinaryComparator;
 
 import java.math.BigDecimal;
@@ -38,6 +40,7 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.temporal.Temporal;
+import java.util.Calendar;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
@@ -117,9 +120,62 @@ public class ComparisonExpression implements BooleanExpression {
       rightValue = right.evaluate(result, context);
     }
 
-    return compareValuesTernary(leftValue, rightValue);
+    return evaluateWithValues(leftValue, rightValue, result, context);
   }
 
+  /**
+   * {@link #evaluateWithValues(Object, Object)} for a caller that evaluated this comparison's own operands against
+   * {@code result}: also applies the declared-type coercion, which needs the row to find the record an operand reads.
+   * Without a context only a property of a bound variable ({@code n.v}) is resolved; with one, every spelling of a stored
+   * property read is (#9701).
+   */
+  public Object evaluateWithValues(final Object leftValue, final Object rightValue, final Result result) {
+    return evaluateWithValues(leftValue, rightValue, result, null);
+  }
+
+  public Object evaluateWithValues(final Object leftValue, final Object rightValue, final Result result,
+      final CommandContext context) {
+    final Object plain = compareValuesTernary(leftValue, rightValue);
+
+    // A declaration defines the text form of its values: a property declared STRING holds the text of what was written into
+    // it ('1' for 1), any other declaration reads a text written into it as its own type (5 for '5' in an INTEGER). = and <>
+    // also compare the stored value with what the other operand would be stored as, so a pattern finds what it stored
+    // (issues #9695, #9794). On top of the plain comparison, not instead of it, so an equality it already grants (a RID
+    // spelled as text against its id()) stands. Only a text met by a non-text pays for the schema lookup
+    if (((operator == Operator.EQUALS && !Boolean.TRUE.equals(plain)) || (operator == Operator.NOT_EQUALS && !Boolean.FALSE.equals(
+        plain))) && InlineProperties.isTextAgainstNonText(leftValue, rightValue)) {
+      final Object storedRight = toDeclaredValue(left, rightValue, result, context);
+      if (storedRight != rightValue)
+        return compareValuesTernary(leftValue, storedRight);
+      final Object storedLeft = toDeclaredValue(right, leftValue, result, context);
+      if (storedLeft != leftValue)
+        return compareValuesTernary(storedLeft, rightValue);
+    }
+
+    return plain;
+  }
+
+  /**
+   * The value {@code operand} would be stored as in the property {@code propertySide} reads, when that is a property of a
+   * record declared with a scalar type; the operand itself otherwise, so the Cypher typing of {@code =} is untouched
+   * wherever no declaration says what the stored value stands for. Every spelling of the read counts ({@code n.v},
+   * {@code n['v']}, {@code properties(n).v}, {@code a.link.v}, see {@link PropertyReadExpression}), so they all answer as
+   * {@code n.v} does (#9701). A value projected first ({@code WITH n.v AS v}) carries no record, and keeps the Cypher typing.
+   */
+  static Object toDeclaredValue(final Expression propertySide, final Object operand, final Result result,
+      final CommandContext context) {
+    final PropertyReadExpression.PropertyRead read = PropertyReadExpression.of(propertySide, result, context);
+    if (read == null || read.record() == null)
+      return operand;
+    final Object stored = InlineProperties.declaredValue(read.record(), read.key(), operand);
+    return stored != null ? stored : operand;
+  }
+
+  /**
+   * Compares two already evaluated values with this operator's Cypher semantics, without the declared-type coercion of
+   * issues #9695 and #9794, which needs the row the operands were read from: a caller that evaluated this comparison's own operands
+   * uses {@link #evaluateWithValues(Object, Object, Result)}.
+   */
   public Object evaluateWithValues(final Object leftValue, final Object rightValue) {
     return compareValuesTernary(leftValue, rightValue);
   }
@@ -162,9 +218,11 @@ public class ComparisonExpression implements BooleanExpression {
 
     // Graph entities compare by record identity even when different implementations represent them.
     // This is common when a Graph Analytical View vertex is compared with a regular OLTP vertex (#6010).
+    // Two parallel lightweight edges of one type over the same ordered pair share their RID but are two
+    // relationships, which the RID cannot tell apart and LightEdgeRID.isSameEdge can (issue #10008)
     if (left instanceof Identifiable leftIdentifiable
         && right instanceof Identifiable rightIdentifiable) {
-      final boolean equal = leftIdentifiable.getIdentity().equals(rightIdentifiable.getIdentity());
+      final boolean equal = LightEdgeRID.isSameEdge(leftIdentifiable.getIdentity(), rightIdentifiable.getIdentity());
       if (operator == Operator.EQUALS)
         return equal;
       if (operator == Operator.NOT_EQUALS)
@@ -183,8 +241,10 @@ public class ComparisonExpression implements BooleanExpression {
     // zoned datetime it takes that operand's zone, so it equals every datetime at its instant rather than only the
     // UTC ones: datetimes at one instant in different zones are distinct values (issue #8300).
     // Only against a genuinely zoned operand: two zone-less ones are both UTC already.
-    final boolean leftZoneless = left instanceof Date || left instanceof Instant;
-    final boolean rightZoneless = right instanceof Date || right instanceof Instant;
+    // A datetime read from a stored property is the same: it carries a zone the engine materialized, not one chosen
+    // (issue #9325), and the property read has already wrapped it, so it is flagged zone-less on the wrapper.
+    final boolean leftZoneless = left instanceof Date || left instanceof Calendar || left instanceof Instant || isStoredZoneless(left);
+    final boolean rightZoneless = right instanceof Date || right instanceof Calendar || right instanceof Instant || isStoredZoneless(right);
     if (leftZoneless && !rightZoneless && rightTemporal instanceof CypherDateTime zoned)
       leftTemporal = adoptZone(left, (CypherDateTime) leftTemporal, zoned.getValue().getZone());
     else if (rightZoneless && !leftZoneless && leftTemporal instanceof CypherDateTime zoned)
@@ -420,7 +480,7 @@ public class ComparisonExpression implements BooleanExpression {
    * (typically a bound parameter) is coerced once and served from a single-slot memo thereafter.
    */
   private Object coerceTemporal(final Object value) {
-    if (!(value instanceof Temporal || value instanceof Date))
+    if (!TemporalUtil.isNativeTemporal(value))
       return value;
     final Object[] memo = temporalCoercionMemo;
     if (memo != null && memo[0] == value && (long) memo[2] == dateMillis(value))
@@ -430,9 +490,16 @@ public class ComparisonExpression implements BooleanExpression {
     return coerced;
   }
 
+  private static boolean isStoredZoneless(final Object value) {
+    return value instanceof CypherDateTime dateTime && dateTime.isZoneless();
+  }
+
   private CypherDateTime adoptZone(final Object raw, final CypherDateTime coerced, final ZoneId zone) {
     final Object[] memo = zoneAdoptionMemo;
-    if (memo != null && memo[0] == raw && (long) memo[3] == dateMillis(raw) && memo[1].equals(zone))
+    // A stored datetime is wrapped afresh per row: equal immutable wrappers share one adoption. equals() ignores the
+    // zone-less flag, which is fine because an adoption only runs for the zone-less side of a comparison
+    if (memo != null && (memo[0] == raw || (raw instanceof CypherDateTime && isStoredZoneless(raw) && isStoredZoneless(memo[0]) && raw.equals(memo[0]))) && (long) memo[3] == dateMillis(raw)
+        && memo[1].equals(zone))
       return (CypherDateTime) memo[2];
     final CypherDateTime adjusted = new CypherDateTime(coerced.getValue().withZoneSameInstant(zone));
     zoneAdoptionMemo = new Object[] { raw, zone, adjusted, dateMillis(raw) };
@@ -445,7 +512,9 @@ public class ComparisonExpression implements BooleanExpression {
    * the memo with the value it had before. Its millis are part of the key; any other operand keys as 0.
    */
   private static long dateMillis(final Object value) {
-    return value instanceof Date date ? date.getTime() : 0L;
+    if (value instanceof Date date)
+      return date.getTime();
+    return value instanceof Calendar calendar ? calendar.getTimeInMillis() : 0L;
   }
 
   private Boolean numericCompare(final long leftNum, final long rightNum) {

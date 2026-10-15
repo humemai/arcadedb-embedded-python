@@ -20,12 +20,18 @@ package com.arcadedb.schema;
 
 import com.arcadedb.database.Database;
 import com.arcadedb.database.DatabaseInternal;
+import com.arcadedb.database.DocumentValidator;
+import com.arcadedb.database.DocumentValidator.RegexpUsability;
 import com.arcadedb.engine.timeseries.ColumnDefinition;
 import com.arcadedb.exception.SchemaException;
+import com.arcadedb.log.LogManager;
 import com.arcadedb.query.sql.parser.Expression;
 import com.arcadedb.security.SecurityDatabaseUser;
 
 import java.util.*;
+import java.util.logging.Level;
+import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
 
 public class LocalProperty extends AbstractProperty {
 
@@ -46,6 +52,14 @@ public class LocalProperty extends AbstractProperty {
   private void checkForSchemaMutation() {
     ((DatabaseInternal) owner.getSchema().getEmbedded().getDatabase())
         .checkPermissionsOnDatabase(SecurityDatabaseUser.DATABASE_ACCESS.UPDATE_SCHEMA);
+  }
+
+  /**
+   * See {@link LocalSchema#recordChange(Runnable)}: a property setter used to end in a bare save, which under HA left the
+   * constraint on the leader alone (issue #9747).
+   */
+  private void publish(final Runnable change) {
+    owner.getSchema().getEmbedded().recordChange(change);
   }
 
   /**
@@ -109,6 +123,12 @@ public class LocalProperty extends AbstractProperty {
         // order of the two, so whoever arrives second sees the other's result rather than a snapshot taken before it.
         checkStillDeclaredIn(ownerType);
 
+        // A default applies to a record that does not carry the property, which no LIGHTWEIGHT edge type below this one can
+        // honour (issue #9846). A null default fills in nothing, so it is not one - neither a Java null nor the SQL
+        // DEFAULT null, kept as its text, which is how a default is taken back under such a type (issue #9975)
+        if (convertedValue != DEFAULT_NOT_SET && Property.fillsInAValue(convertedValue))
+          ownerType.checkNoLightweightEdgeTypeBelow(this, "default-valued");
+
         // One publication, so no reader can see the new value with the old (or no) compiled expression.
         this.defaultValue = new DefaultValue(convertedValue, compiled);
         ownerType.setPropertyHasDefault(name, convertedValue != DEFAULT_NOT_SET);
@@ -119,14 +139,15 @@ public class LocalProperty extends AbstractProperty {
   }
 
   @Override
-  public Property setOfType(String ofType) {
+  public Property setOfType(final String ofType) {
     checkForSchemaMutation();
     final boolean changed = !Objects.equals(this.ofType, ofType);
     if (changed) {
       final LocalSchema schema = (LocalSchema) owner.getSchema();
+      String resolved = ofType;
       if (type == Type.LIST || type == Type.MAP) {
         if (Type.getTypeByName(ofType) != null) {
-          ofType = ofType.toUpperCase(Locale.ENGLISH);
+          resolved = ofType.toUpperCase(Locale.ENGLISH);
         } else {
           if (!schema.existsType(ofType))
             throw new SchemaException("Error on set property " + owner.getName() + "." + name + " " + type + " type to '" + ofType
@@ -138,8 +159,8 @@ public class LocalProperty extends AbstractProperty {
               + "' because the type is not defined");
       }
 
-      this.ofType = ofType;
-      owner.getSchema().getEmbedded().saveConfiguration();
+      final String newOfType = resolved;
+      publish(() -> this.ofType = newOfType);
     }
     return this;
   }
@@ -148,10 +169,8 @@ public class LocalProperty extends AbstractProperty {
   public Property setReadonly(final boolean readonly) {
     checkForSchemaMutation();
     final boolean changed = !Objects.equals(this.readonly, readonly);
-    if (changed) {
-      this.readonly = readonly;
-      owner.getSchema().getEmbedded().saveConfiguration();
-    }
+    if (changed)
+      publish(() -> this.readonly = readonly);
     return this;
   }
 
@@ -159,10 +178,13 @@ public class LocalProperty extends AbstractProperty {
   public Property setMandatory(final boolean mandatory) {
     checkForSchemaMutation();
     final boolean changed = !Objects.equals(this.mandatory, mandatory);
-    if (changed) {
-      this.mandatory = mandatory;
-      owner.getSchema().getEmbedded().saveConfiguration();
-    }
+    if (changed)
+      publish(() -> {
+        // Checked in the session that publishes it, against the subtypes as they are under the write lock (issue #9846)
+        if (mandatory)
+          ((LocalDocumentType) owner).checkNoLightweightEdgeTypeBelow(this, "MANDATORY");
+        this.mandatory = mandatory;
+      });
     return this;
   }
 
@@ -173,10 +195,8 @@ public class LocalProperty extends AbstractProperty {
   public Property setNotNull(final boolean notNull) {
     checkForSchemaMutation();
     final boolean changed = !Objects.equals(this.notNull, notNull);
-    if (changed) {
-      this.notNull = notNull;
-      owner.getSchema().getEmbedded().saveConfiguration();
-    }
+    if (changed)
+      publish(() -> this.notNull = notNull);
     return this;
   }
 
@@ -184,10 +204,8 @@ public class LocalProperty extends AbstractProperty {
   public Property setHidden(final boolean hidden) {
     checkForSchemaMutation();
     final boolean changed = !Objects.equals(this.hidden, hidden);
-    if (changed) {
-      this.hidden = hidden;
-      owner.getSchema().getEmbedded().saveConfiguration();
-    }
+    if (changed)
+      publish(() -> this.hidden = hidden);
     return this;
   }
 
@@ -197,24 +215,25 @@ public class LocalProperty extends AbstractProperty {
     final boolean changed = !Objects.equals(this.external, external);
     if (changed) {
       final LocalDocumentType localOwner = (LocalDocumentType) owner;
-      if (external) {
-        // ORDERING IS LOAD-BEARING: paired buckets must exist BEFORE any reader can observe
-        // ownExternalPropertyCount > 0. hasExternalProperties() short-circuits on the counter, and the
-        // serializer's write path uses that to decide whether to route a value through the external bucket.
-        // If we incremented first and another thread saw count > 0 before ensureExternalBucketsRecursive()
-        // ran, it could try to write into a bucket that doesn't exist yet. Schema mutations are typically
-        // serialised by the schema lock, but this ordering keeps the property setter safe even without it.
-        localOwner.ensureExternalBucketsRecursive();
-        this.external = external;
-        localOwner.ownExternalPropertyCount.incrementAndGet();
-      } else {
-        // Flip the flag first so concurrent serialisations stop writing externally; the counter is the gate
-        // hasExternalProperties() consults, so decrement last to keep the "count > 0 implies bucket exists"
-        // invariant directional.
-        this.external = external;
-        localOwner.ownExternalPropertyCount.decrementAndGet();
-      }
-      owner.getSchema().getEmbedded().saveConfiguration();
+      publish(() -> {
+        if (external) {
+          // ORDERING IS LOAD-BEARING: paired buckets must exist BEFORE any reader can observe
+          // ownExternalPropertyCount > 0. hasExternalProperties() short-circuits on the counter, and the
+          // serializer's write path uses that to decide whether to route a value through the external bucket.
+          // If we incremented first and another thread saw count > 0 before ensureExternalBucketsRecursive()
+          // ran, it could try to write into a bucket that doesn't exist yet. Schema mutations are typically
+          // serialised by the schema lock, but this ordering keeps the property setter safe even without it.
+          localOwner.ensureExternalBucketsRecursive();
+          this.external = external;
+          localOwner.ownExternalPropertyCount.incrementAndGet();
+        } else {
+          // Flip the flag first so concurrent serialisations stop writing externally; the counter is the gate
+          // hasExternalProperties() consults, so decrement last to keep the "count > 0 implies bucket exists"
+          // invariant directional.
+          this.external = external;
+          localOwner.ownExternalPropertyCount.decrementAndGet();
+        }
+      });
     }
     return this;
   }
@@ -236,8 +255,7 @@ public class LocalProperty extends AbstractProperty {
       throw new IllegalArgumentException(
           "Unsupported compression '" + compression + "' (supported: none, fast, max, auto)");
     if (!Objects.equals(this.compression, normalized)) {
-      this.compression = normalized;
-      owner.getSchema().getEmbedded().saveConfiguration();
+      publish(() -> this.compression = normalized);
     }
     return this;
   }
@@ -247,23 +265,12 @@ public class LocalProperty extends AbstractProperty {
     checkForSchemaMutation();
     final boolean changed = !Objects.equals(this.max, max);
     if (changed) {
-      switch (type) {
-      case LINK:
-      case BOOLEAN:
-      case EMBEDDED:
-        throw new IllegalArgumentException("Maximum value not applicable for type " + type);
-
-      case STRING:
-      case BINARY:
-      case LIST:
-      case MAP:
-        if (Integer.parseInt(max) < 0)
-          throw new IllegalArgumentException("Maximum value for type " + type + " is 0");
-        break;
-      }
-
-      this.max = max;
-      owner.getSchema().getEmbedded().saveConfiguration();
+      checkBound(max, "Maximum");
+      publish(() -> {
+        // and again under the write lock: a concurrent change of the date formats the bound is read through (#9976)
+        checkBound(max, "Maximum");
+        this.max = max;
+      });
     }
     return this;
   }
@@ -273,36 +280,115 @@ public class LocalProperty extends AbstractProperty {
     checkForSchemaMutation();
     final boolean changed = !Objects.equals(this.min, min);
     if (changed) {
-      switch (type) {
-      case LINK:
-      case BOOLEAN:
-      case EMBEDDED:
-        throw new IllegalArgumentException("Minimum value not applicable for type " + type);
-
-      case STRING:
-      case BINARY:
-      case LIST:
-      case MAP:
-        if (Integer.parseInt(min) < 0)
-          throw new IllegalArgumentException("Minimum value for type " + type + " is 0");
-        break;
-      }
-
-      this.min = min;
-      owner.getSchema().getEmbedded().saveConfiguration();
+      checkBound(min, "Minimum");
+      publish(() -> {
+        // and again under the write lock: a concurrent change of the date formats the bound is read through (#9976)
+        checkBound(min, "Minimum");
+        this.min = min;
+      });
     }
     return this;
+  }
+
+  /**
+   * Refuses a MIN or MAX the property's type cannot use (a type with no order and no size) or cannot read (a bound the
+   * write path would fail to parse), so that an accepted declaration never makes every later write of the property fail
+   * (issue #9026). Clearing the bound ({@code null}) is always allowed.
+   * <p>
+   * A schema loaded from disk is not refused: a database written before this rule may carry such a bound, and refusing it
+   * would make the database unopenable. The load only warns, and {@code ALTER PROPERTY ... MAX null} is the remedy.
+   * <p>
+   * The refusal is an {@link IllegalArgumentException}, the exception {@code setMin}/{@code setMax} always raised for a
+   * BOOLEAN, LINK or EMBEDDED property; an unknown property TYPE is a {@link SchemaException} from {@code createProperty}.
+   */
+  private void checkBound(final String bound, final String side) {
+    if (bound == null)
+      return;
+
+    final String reason;
+    if (!DocumentValidator.isBoundApplicable(type))
+      reason = side + " value not applicable for type " + type;
+    else {
+      final String unreadable = DocumentValidator.unreadableBound(owner.getSchema().getEmbedded().getDatabase(), type, bound);
+      reason = unreadable == null ? null : side + " value '" + bound + "' of property '" + owner.getName() + "." + name + "' " + unreadable;
+    }
+    if (reason == null)
+      return;
+
+    if (owner.getSchema().getEmbedded().isReadingFromFile()) {
+      LogManager.instance().log(this, Level.WARNING,
+          "%s: the bound in the stored schema is not usable and a write of a value may fail on it. Remove it with ALTER PROPERTY `%s`.`%s` %s null",
+          reason, owner.getName(), name, side.equals("Maximum") ? "MAX" : "MIN");
+      return;
+    }
+
+    throw new IllegalArgumentException(reason);
   }
 
   @Override
   public Property setRegexp(final String regexp) {
     checkForSchemaMutation();
-    final boolean changed = !Objects.equals(this.regexp, regexp);
+    final boolean changed = !Objects.equals(getRegexp(), regexp);
     if (changed) {
-      this.regexp = regexp;
-      owner.getSchema().getEmbedded().saveConfiguration();
+      // the check can cost a search, so it runs before the write lock is taken, against the class a value is held as now
+      final Database database = owner.getSchema().getEmbedded().getDatabase();
+      final Class<?> heldWhenChecked = type.getJavaImplementation(database);
+      checkRegexp(regexp);
+      final Regexp compiled = Regexp.of(regexp);
+      publish(() -> {
+        // a concurrent ALTER DATABASE may have changed that class meanwhile, and only takes effect under this lock (#9976)
+        if (type.getJavaImplementation(database) != heldWhenChecked)
+          checkRegexp(regexp);
+        this.regexp = compiled;
+      });
     }
     return this;
+  }
+
+  /**
+   * Refuses a REGEXP the property's type cannot use (see {@link DocumentValidator#regexpUsability}) or that is not a valid
+   * pattern, so that an accepted declaration never makes every later write of the property fail (issues #9808, #9853): the
+   * REGEXP twin of {@link #checkBound}. Clearing it ({@code null}) is always allowed. A pattern on a number or a temporal
+   * that could neither be shown to match some value nor shown to match none is accepted with a warning, so the operator
+   * learns of it at the declaration and not at the first write.
+   * <p>
+   * A schema loaded from disk is not refused: a database written before this rule may carry such a pattern, and refusing it
+   * would make the database unopenable. The load only warns, and {@code ALTER PROPERTY ... REGEXP null} is the remedy. It
+   * does not search the text forms of a number or a temporal either: that is paid at the declaration, not at every open.
+   */
+  private void checkRegexp(final String regexp) {
+    if (regexp == null)
+      return;
+
+    final boolean readingFromFile = owner.getSchema().getEmbedded().isReadingFromFile();
+    final RegexpUsability usability = DocumentValidator.regexpUsability(owner.getSchema().getEmbedded().getDatabase(), type,
+        regexp, !readingFromFile);
+    String reason = usability.refusal();
+    if (reason == null && type == Type.STRING)
+      // every other type compiled it in regexpUsability, which reports an invalid pattern as its refusal
+      try {
+        Pattern.compile(regexp);
+      } catch (final PatternSyntaxException e) {
+        reason = "is not a valid regular expression: " + e.getDescription();
+      }
+
+    if (reason == null) {
+      if (usability.doubt() != null)
+        LogManager.instance().log(this, Level.WARNING,
+            "The REGEXP '%s' of property '%s.%s' %s: if no value matches it, every write of the property fails. Remove it with ALTER PROPERTY `%s`.`%s` REGEXP null",
+            regexp, owner.getName(), name, usability.doubt(), owner.getName(), name);
+      return;
+    }
+
+    reason = "The REGEXP '" + regexp + "' of property '" + owner.getName() + "." + name + "' " + reason;
+    if (readingFromFile) {
+      LogManager.instance().log(this, Level.WARNING,
+          "%s: a write of a value may fail on it. Remove it with ALTER PROPERTY `%s`.`%s` REGEXP null", reason, owner.getName(),
+          name);
+      return;
+    }
+
+    throw new IllegalArgumentException(reason);
   }
 
   /**
@@ -336,16 +422,14 @@ public class LocalProperty extends AbstractProperty {
   public Object setCustomValue(final String key, final Object value) {
     checkForSchemaMutation();
     checkTimeSeriesRoleNotCustomised(key, value);
-    final Object prev;
-    if (value == null)
-      prev = custom.remove(key);
-    else
-      prev = custom.put(key, value);
 
-    if (!Objects.equals(prev, value))
-      owner.getSchema().getEmbedded().saveConfiguration();
+    // An unchanged value is not a schema change: answered here, without a recording session (under HA, a Raft round
+    // trip) for nothing
+    final Object current = custom.get(key);
+    if (Objects.equals(current, value))
+      return current;
 
-    return prev;
+    return owner.getSchema().getEmbedded().recordFileChanges(() -> replaceCustomValue(key, value));
   }
 
   @Override
@@ -364,7 +448,8 @@ public class LocalProperty extends AbstractProperty {
    */
   LocalProperty copyWithName(final String newName) {
     final LocalProperty copy = new LocalProperty((LocalDocumentType) owner, newName, type);
-    copy.custom = new HashMap<>(custom);
+    // unmodifiable, so the two properties can share it
+    copy.custom = custom;
     copy.readonly = readonly;
     copy.mandatory = mandatory;
     copy.notNull = notNull;

@@ -22,6 +22,7 @@ package com.arcadedb.query.sql.parser;
 
 import com.arcadedb.schema.DocumentType;
 import com.arcadedb.schema.EdgeType;
+import com.arcadedb.schema.LocalEdgeType;
 import com.arcadedb.schema.Schema;
 import com.arcadedb.schema.TypeBuilder;
 
@@ -39,34 +40,42 @@ public class CreateEdgeTypeStatement extends CreateTypeAbstractStatement {
   }
 
   @Override
-  protected DocumentType createType(final Schema schema) {
+  protected DocumentType createType(final Schema schema, final String typeName) {
     final EdgeType type;
     if (totalBucketNo != null) {
       var builder = applyFlags(
-          schema.buildEdgeType().withName(name.getStringValue()).withTotalBuckets(totalBucketNo.getValue().intValue()));
+          schema.buildEdgeType().withName(typeName).withTotalBuckets(totalBucketNo.getValue().intValue()));
       if (pageSize != null)
         builder = builder.withPageSize(pageSize.getValue().intValue());
       type = builder.create();
     } else {
       if (buckets == null || buckets.isEmpty()) {
         if (pageSize != null || unidirectional || lightweight || unique) {
-          var builder = applyFlags(schema.buildEdgeType().withName(name.getStringValue()));
+          var builder = applyFlags(schema.buildEdgeType().withName(typeName));
           if (pageSize != null)
             builder = builder.withPageSize(pageSize.getValue().intValue());
           type = builder.create();
         } else {
-          type = schema.createEdgeType(name.getStringValue());
+          type = schema.createEdgeType(typeName);
         }
       } else {
         // CHECK THE BUCKETS FIRST
         var builder = applyFlags(
-            schema.buildEdgeType().withName(name.getStringValue()).withBuckets(getBuckets(schema)));
+            schema.buildEdgeType().withName(typeName).withBuckets(getBuckets(schema)));
         if (pageSize != null)
           builder = builder.withPageSize(pageSize.getValue().intValue());
         type = builder.create();
       }
     }
     return type;
+  }
+
+  @Override
+  protected void checkSuperTypesBeforeCreate(final String typeName, final DocumentType[] superclasses) {
+    // A lightweight edge has no record, so it cannot honour a MANDATORY or default-valued property of a super type (#9846)
+    if (lightweight)
+      for (final DocumentType superclass : superclasses)
+        LocalEdgeType.checkCanBeLightweight(typeName, superclass);
   }
 
   private TypeBuilder<EdgeType> applyFlags(final TypeBuilder<EdgeType> builder) {

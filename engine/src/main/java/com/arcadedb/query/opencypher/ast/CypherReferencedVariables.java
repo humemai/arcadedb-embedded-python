@@ -25,6 +25,7 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.function.Consumer;
 
 /**
  * Every variable name a statement could read, and whether that list is known to be the whole of it. Not the
@@ -86,8 +87,8 @@ public final class CypherReferencedVariables {
    */
   private static final Set<Class<?>> NAMELESS_PREDICATES = Set.of(
       BooleanCoercionExpression.class, ComparisonExpression.class, InExpression.class, IsNullExpression.class,
-      IsTypedExpression.class, LabelCheckExpression.class, LogicalExpression.class, PatternPredicateExpression.class,
-      RegexExpression.class, StringMatchExpression.class);
+      IsNormalizedExpression.class, IsTypedExpression.class, LabelCheckExpression.class, LogicalExpression.class,
+      PatternPredicateExpression.class, RegexExpression.class, StringMatchExpression.class);
 
   /**
    * The types {@code Collector.visit} handles in an arm of its own rather than through the nameless sets. The first
@@ -140,11 +141,22 @@ public final class CypherReferencedVariables {
    * {@link #referencesAny} reports as "reads everything".
    */
   public static CypherReferencedVariables of(final Expression expression) {
-    if (expression == null)
-      return UNKNOWN;
+    return expression == null ? UNKNOWN : collect(collector -> CypherExpressionWalker.walk(expression, collector));
+  }
 
+  /** {@link #of(Expression)}, for a predicate: a {@code WHERE} condition. */
+  public static CypherReferencedVariables of(final BooleanExpression predicate) {
+    return predicate == null ? UNKNOWN : collect(collector -> CypherExpressionWalker.walk(predicate, collector));
+  }
+
+  /** {@link #of(Expression)}, for a graph pattern: the names it binds or joins on, and those its inline expressions read. */
+  public static CypherReferencedVariables of(final PathPattern pattern) {
+    return pattern == null ? UNKNOWN : collect(collector -> CypherExpressionWalker.walk(pattern, collector));
+  }
+
+  private static CypherReferencedVariables collect(final Consumer<Collector> walk) {
     final Collector collector = new Collector();
-    CypherExpressionWalker.walk(expression, collector);
+    walk.accept(collector);
     if (!collector.complete)
       return UNKNOWN;
 

@@ -22,6 +22,7 @@ import com.arcadedb.database.Identifiable;
 import com.arcadedb.database.RID;
 import com.arcadedb.exception.CommandExecutionException;
 import com.arcadedb.graph.Vertex;
+import com.arcadedb.index.ConsistentKeyLookup;
 import com.arcadedb.index.IndexCursor;
 import com.arcadedb.index.TypeIndex;
 import com.arcadedb.query.sql.executor.CommandContext;
@@ -264,6 +265,16 @@ public class NodeIndexSeek extends AbstractPhysicalOperator {
               finished = true;
               return;
             }
+            if (wholeKey && seekIndex == 0) {
+              // every key of the seek is read with its records against ONE committed state, so a commit that deletes and
+              // re-creates a key cannot make it vanish or appear twice, nor serve a slot it freed for two keys (#9397). The records of
+              // up to ConsistentKeyLookup.MAX_ENTRIES entries are loaded up front, which a LIMIT may not need: the price of one state
+              cursor = ConsistentKeyLookup.lookupCursor(context.getDatabase(), index, seekKeys);
+              if (cursor != null) {
+                seekIndex = seekKeys.size();
+                continue;
+              }
+            }
             final Object[] key = seekKeys.get(seekIndex++);
             // A key covering every index property identifies at most one entry per RID; a shorter one
             // matches a contiguous range of the ordered index, which only the range cursor can walk.
@@ -325,7 +336,7 @@ public class NodeIndexSeek extends AbstractPhysicalOperator {
     // Show every key column the seek resolves, so a prefix seek on a composite index is recognizable
     for (int i = 0; i < keyValues.size(); i++)
       sb.append(", ").append(i < indexProperties.size() ? indexProperties.get(i) : propertyName)
-          .append("=").append(keyValues.get(i));
+          .append("=").append(keyValues.get(i) instanceof Expression expression ? expression.getText() : keyValues.get(i));
     if (whereFilter != null)
       sb.append(", filter: ").append(whereFilter.getText());
     sb.append(", cost=").append(String.format(Locale.US, "%.2f", estimatedCost));

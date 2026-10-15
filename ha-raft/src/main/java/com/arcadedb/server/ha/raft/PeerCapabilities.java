@@ -95,12 +95,49 @@ public final class PeerCapabilities {
   public static final String TX_PREPARED_AT_INDEX = "tx-prepared-at-index";
 
   /**
+   * This node decodes the trailing file-rename section of {@code SCHEMA_ENTRY} and moves the renamed component files
+   * before it loads the schema the entry publishes (issue #9762).
+   * <p>
+   * Like {@link #SECURITY_GROUPS_ENTRY}, its consumer REFUSES rather than degrades: a type rename shipped without its
+   * file renames would publish a schema naming bucket files the peer does not have, and the peer would drop the type's
+   * buckets on its next reload. So {@code ALTER TYPE ... NAME} is refused, before a single file moves, while any peer
+   * has not advertised this token.
+   * <p>
+   * Deliberately with no operator override (issue #9891), unlike the security entries'
+   * {@code arcadedb.ha.securityEntryCapabilityGate}. "Every unknown is a no" makes a DOWN peer refuse a type rename as
+   * much as an OLD one, and that is accepted rather than worked around: that override exists because a token revocation
+   * can be urgent in the middle of an incident, while a type rename is a refactoring that can wait for the peer to come
+   * back; and what an override would buy is a peer that, if it turns out to be old after all, refuses the entry and
+   * halts. The refusal says there is no override, so nobody reaches for the security setting instead. A cluster that must
+   * rename with a peer permanently gone removes that peer from the Raft configuration first.
+   */
+  public static final String SCHEMA_FILE_RENAMES = "schema-file-renames";
+
+  /**
+   * This node decodes {@code DATABASE_CONFIGURATION_ENTRY}, the Raft log entry type (id 9) that replicates the
+   * settings changed in the {@code configuration.json} of one database (issue #9763). Same contract as {@link #SECURITY_GROUPS_ENTRY}: it
+   * guards the type byte itself, so a cluster with a peer that lacks it refuses the change instead of degrading it.
+   */
+  public static final String DATABASE_CONFIGURATION_ENTRY = "database-configuration-entry";
+
+  /**
+   * This node reads the {@code tx-fulltext-corpus-deltas} extension section of {@code TX_ENTRY} and applies what it carries to
+   * the BM25 corpus counters of its own full-text indexes (issue #10018).
+   * <p>
+   * The section is framed, so a build with the extension framing (issue #7138) skips it; a build older than that halts on any
+   * trailing bytes, which is why a writer emits it only when every peer advertises this token. Withholding it is harmless: the
+   * counters of a node that did not receive the deltas are repaired by its own drift check.
+   */
+  public static final String TX_FULLTEXT_CORPUS_DELTAS = "tx-fulltext-corpus-deltas";
+
+  /**
    * Everything this build can decode. Immutable, and deliberately a whitelist written out by hand rather than
    * derived from anything: a capability is a promise about the wire format, and the only thing that can make it
    * true is a human having checked that the decoder is present.
    */
   public static final Set<String> LOCAL = Set.of(SCHEMA_DELTA, SECURITY_PRECONDITION, SECURITY_GROUPS_ENTRY,
-      SECURITY_API_TOKENS_ENTRY, TX_PREPARED_AT_INDEX);
+      SECURITY_API_TOKENS_ENTRY, TX_PREPARED_AT_INDEX, SCHEMA_FILE_RENAMES, DATABASE_CONFIGURATION_ENTRY,
+      TX_FULLTEXT_CORPUS_DELTAS);
 
   private PeerCapabilities() {
     // utility class

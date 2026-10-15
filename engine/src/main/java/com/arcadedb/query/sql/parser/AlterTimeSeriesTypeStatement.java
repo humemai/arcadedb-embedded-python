@@ -26,8 +26,8 @@ import com.arcadedb.query.sql.executor.InternalResultSet;
 import com.arcadedb.query.sql.executor.ResultInternal;
 import com.arcadedb.query.sql.executor.ResultSet;
 import com.arcadedb.schema.DocumentType;
-import com.arcadedb.schema.LocalSchema;
 import com.arcadedb.schema.LocalTimeSeriesType;
+import com.arcadedb.schema.TimeSeriesType;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -42,6 +42,8 @@ public class AlterTimeSeriesTypeStatement extends DDLStatement {
   public Identifier              name;
   public boolean                 addPolicy;
   public List<DownsamplingTier>  tiers = new ArrayList<>();
+  /** Set by {@code ALTER TIMESERIES TYPE <name> PRECISION <unit>}, upper-cased; null for the downsampling forms. */
+  public String                  precision;
 
   public AlterTimeSeriesTypeStatement() {
   }
@@ -60,16 +62,42 @@ public class AlterTimeSeriesTypeStatement extends DDLStatement {
     if (!(type instanceof LocalTimeSeriesType tsType))
       throw new CommandExecutionException("Type '" + name.getStringValue() + "' is not a TimeSeries type");
 
+    if (precision != null)
+      return alterPrecision(context, tsType);
+
     if (addPolicy)
       tsType.setDownsamplingTiers(tiers);
     else
       tsType.setDownsamplingTiers(new ArrayList<>());
-
-    ((LocalSchema) context.getDatabase().getSchema()).saveConfiguration();
+    // No save here: the setter saves, and replicates, the schema itself (issue #9747)
 
     final ResultInternal result = new ResultInternal(context.getDatabase());
     result.setProperty("operation", addPolicy ? "add downsampling policy" : "drop downsampling policy");
     result.setProperty("typeName", name.getStringValue());
+    return new InternalResultSet(result);
+  }
+
+  /**
+   * Confirms that the timestamps of a type declared with another precision before issue #9800 are milliseconds, the
+   * unit every time computation uses, which resumes the retention and downsampling suspended on it. The declaration
+   * only changes: no stored timestamp is rewritten, so no other unit can be the target.
+   */
+  private ResultSet alterPrecision(final CommandContext context, final LocalTimeSeriesType tsType) {
+    if (!TimeSeriesType.MILLISECOND_PRECISION.equals(precision))
+      throw new CommandExecutionException("Cannot set the precision of TimeSeries type '" + name.getStringValue()
+          + "' to " + precision + ": timestamps are stored, ingested, retained and queried in milliseconds, so only "
+          + "MILLISECOND can be declared");
+
+    final String previous = tsType.getPrecision();
+    // No save here: the setter saves, and replicates, the schema itself (issue #9747)
+    if (!TimeSeriesType.MILLISECOND_PRECISION.equalsIgnoreCase(previous))
+      tsType.setPrecision(precision);
+
+    final ResultInternal result = new ResultInternal(context.getDatabase());
+    result.setProperty("operation", "set precision");
+    result.setProperty("typeName", name.getStringValue());
+    result.setProperty("previousPrecision", previous);
+    result.setProperty("precision", precision);
     return new InternalResultSet(result);
   }
 
@@ -78,7 +106,9 @@ public class AlterTimeSeriesTypeStatement extends DDLStatement {
     builder.append("ALTER TIMESERIES TYPE ");
     name.toString(params, builder);
 
-    if (addPolicy) {
+    if (precision != null)
+      builder.append(" PRECISION ").append(precision);
+    else if (addPolicy) {
       builder.append(" ADD DOWNSAMPLING POLICY");
       for (final DownsamplingTier tier : tiers) {
         // Rendered through the unit, not the bare millisecond count: downsamplingTierClause's grammar rule
@@ -98,6 +128,7 @@ public class AlterTimeSeriesTypeStatement extends DDLStatement {
     result.name = name == null ? null : name.copy();
     result.addPolicy = addPolicy;
     result.tiers = new ArrayList<>(tiers);
+    result.precision = precision;
     return result;
   }
 
@@ -108,11 +139,12 @@ public class AlterTimeSeriesTypeStatement extends DDLStatement {
     if (o == null || getClass() != o.getClass())
       return false;
     final AlterTimeSeriesTypeStatement that = (AlterTimeSeriesTypeStatement) o;
-    return addPolicy == that.addPolicy && Objects.equals(name, that.name) && Objects.equals(tiers, that.tiers);
+    return addPolicy == that.addPolicy && Objects.equals(name, that.name) && Objects.equals(tiers, that.tiers)
+        && Objects.equals(precision, that.precision);
   }
 
   @Override
   public int hashCode() {
-    return Objects.hash(name, addPolicy, tiers);
+    return Objects.hash(name, addPolicy, tiers, precision);
   }
 }

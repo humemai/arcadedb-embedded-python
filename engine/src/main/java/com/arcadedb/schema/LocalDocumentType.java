@@ -32,6 +32,8 @@ import com.arcadedb.database.bucketselectionstrategy.PartitionedBucketSelectionS
 import com.arcadedb.database.bucketselectionstrategy.RoundRobinBucketSelectionStrategy;
 import com.arcadedb.database.bucketselectionstrategy.ThreadBucketSelectionStrategy;
 import com.arcadedb.engine.Bucket;
+import com.arcadedb.engine.ComponentFile;
+import com.arcadedb.engine.FileManager;
 import com.arcadedb.engine.LocalBucket;
 import com.arcadedb.exception.SchemaException;
 import com.arcadedb.index.Index;
@@ -41,6 +43,7 @@ import com.arcadedb.index.TypeIndex;
 import com.arcadedb.index.lsm.LSMTreeIndexAbstract;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.security.SecurityDatabaseUser;
+import com.arcadedb.serializer.json.JSONArray;
 import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.utility.CollectionUtils;
 import com.arcadedb.utility.FileUtils;
@@ -49,6 +52,7 @@ import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -61,8 +65,13 @@ public class LocalDocumentType implements DocumentType {
    * Serialises renames of THIS type against each other (issue #7937). Deliberately a lock of the type instance and
    * not the database write lock: every bucket rename waits for the whole database's page flush queue to drain, and
    * holding the schema write lock across N such drains is the stall the engine keeps outside every lock. Two
-   * renames of DIFFERENT types do not contend. Reentrant because {@code LocalVertexType.rename()} calls
-   * {@code super.rename()} - and again to roll back - inside its own critical section.
+   * renames of DIFFERENT types do not contend. Reentrant because {@code LocalVertexType.renameFiles()} calls
+   * {@link #renameDocumentPart} - and again to roll back - inside its own critical section.
+   * <p>
+   * Which call publishes is said by the entry point, not read off this lock (issues #9762, #9891): {@link #rename} is the
+   * public, publishing one and refuses to run on a thread that already holds this lock, and {@link #renameDocumentPart}
+   * is the nested one that only moves files and refuses to run on a thread that does not. A hold count would have taken
+   * a future caller that locks this and then calls {@code rename()} for a nested call, and never published its rename.
    * <p>
    * Lock hierarchy: this lock is taken BEFORE the database write lock, never after. No path may hold the database
    * write lock and then call {@code rename()} (today only {@code ALTER TYPE} does, without holding it).
@@ -76,8 +85,10 @@ public class LocalDocumentType implements DocumentType {
   // (issues #6678, #7033, #7119, #7299).
   protected volatile String                         name;
   protected final LocalSchema                       schema;
-  protected final List<LocalDocumentType>           superTypes                   = new ArrayList<>();
-  protected final List<LocalDocumentType>           subTypes                     = new ArrayList<>();
+  // Mutated in place by linkSuperType/unlinkSuperType under the schema lock and walked lock-free by instanceOf() from query
+  // planning: copy-on-write, so a reader walks a consistent snapshot of a list that changes only on DDL (#9989)
+  protected final List<LocalDocumentType>           superTypes                   = new CopyOnWriteArrayList<>();
+  protected final List<LocalDocumentType>           subTypes                     = new CopyOnWriteArrayList<>();
   // Sixth member of the copy-on-write family: reassigned by setAliases under the schema mutation lock and read
   // lock-free by instanceOf(String) from openCypher label resolution during query planning. Volatile for the
   // publication edge, and always assigned an unmodifiable COPY: setAliases used to store the caller's set by
@@ -90,10 +101,26 @@ public class LocalDocumentType implements DocumentType {
   // ConcurrentModificationException straight out of a plain HashMap. Concurrent, so a reader crossing an in-flight
   // mutation sees a weakly consistent view of it rather than a corrupt one (#6799).
   protected final Map<String, Property>             properties                   = new ConcurrentHashMap<>();
-  protected final Map<Integer, List<IndexInternal>> bucketIndexesByBucket        = new HashMap<>();
+  // Read on every write of a record (getPolymorphicBucketIndexByBucketId) with no lock held, mutated in place by CREATE and
+  // DROP INDEX: concurrent, and so is each list it holds (#9989)
+  protected final Map<Integer, List<IndexInternal>> bucketIndexesByBucket        = new ConcurrentHashMap<>();
   protected final Map<List<String>, TypeIndex>      indexesByProperties          = new ConcurrentHashMap<>();
-  protected final RecordEventsRegistry              events                       = new RecordEventsRegistry();
-  protected final Map<String, Object>               custom                       = new HashMap<>();
+  /**
+   * The property lists of the indexes {@link TypeIndexBuilder} is populating right now (issue #9331). The index is registered
+   * bucket by bucket, each bucket index before its entries are committed, so for the whole build it covers only part of
+   * the records: a query that picked it answered with the rows of the buckets built so far, empty ones included.
+   * <p>
+   * A count per property list and not a flag: ArcadeDB keeps one index per property set, so two builds on the same properties
+   * are two attempts at the same index, and the marker has to outlive the first to finish. The index belongs to the type the
+   * builder runs on, which is also the type the readiness check asks (the TypeIndex is minted on it), subtypes included.
+   */
+  private final Map<List<String>, AtomicInteger>    indexesUnderConstruction     = new ConcurrentHashMap<>();
+  // Counted in the database's BEFORE READ listener total, so a read of a database nobody listens to skips finding the
+  // registry of every record's type (issue #9997)
+  protected final RecordEventsRegistry              events;
+  // changed by ALTER TYPE ... CUSTOM and read by toJSON() after the schema lock is released: copy-on-write, an unmodifiable
+  // map replaced as a whole, so neither a reader nor a schema reload ever sees it half changed (#9989)
+  protected volatile Map<String, Object>            custom                       = Collections.emptyMap();
   // The four bucket lists are copy-on-write: reassigned under the schema mutation lock and read lock-free by query
   // planning through getBuckets(polymorphic)/getBucketIds(polymorphic), both branches of the ternary - the
   // non-polymorphic pair feeds SelectExecutionPlanner's partition pruning and FetchFromSchemaTypesStep exactly as the
@@ -154,10 +181,15 @@ public class LocalDocumentType implements DocumentType {
   // {@code now - last} subtraction does not overflow on the first call.
   private static final long                         REPARTITION_WARN_INTERVAL_MS      = 60_000L;
   private final AtomicLong                          lastRepartitionWarnMs             = new AtomicLong(0L);
+  // Whether this type or a super type declares a property of a type that converts a stored String when read (issue
+  // #8572), stamped with the schema's types serial it was computed at and answered only under it (issue #9997)
+  private volatile StoredStringConversions          storedStringConversions;
 
   public LocalDocumentType(final LocalSchema schema, final String name) {
     this.schema = schema;
     this.name = name;
+    // NO SCHEMA ONLY FOR A TYPE BUILT DETACHED FROM ANY DATABASE (A TEST FIXTURE): NO READ OF A DATABASE REACHES IT
+    this.events = schema != null ? schema.newTypeEventsRegistry() : new RecordEventsRegistry();
   }
 
   @Override
@@ -173,6 +205,39 @@ public class LocalDocumentType implements DocumentType {
   @Override
   public RecordEvents getEvents() {
     return events;
+  }
+
+  /**
+   * Whether a String read from a record of this type can be converted because its property is declared as a native
+   * temporal type (issue #8572): false when neither this type nor a super type declares a property of a type that
+   * converts a stored String, which lets the read of every String skip the polymorphic property lookup that finding out
+   * would cost (issue #9997). Exact rather than sticky: the answer is computed from the properties and served only under
+   * the schema's types serial it was computed at, which moves on every property and super type change.
+   * <p>
+   * The serial is schema-wide, so a change to any type retires the answer of every type, which each recomputes on its
+   * next read: one walk of its polymorphic properties per DDL statement, cheap next to the DDL itself.
+   */
+  public boolean mayConvertStoredStrings() {
+    if (schema == null)
+      return true;
+    // THE SERIAL IS READ BEFORE THE PROPERTIES: AN ANSWER COMPUTED WHILE A PROPERTY CHANGE IS LANDING CARRIES THE SERIAL
+    // BEFORE THE CHANGE, WHICH THE CHANGE MOVES, SO IT IS NEVER SERVED AGAIN
+    final long serial = schema.getTypesChangeSerial();
+    final StoredStringConversions cached = storedStringConversions;
+    if (cached != null && cached.serial() == serial)
+      return cached.value();
+
+    boolean value = false;
+    for (final Property property : getPolymorphicProperties())
+      if (property.getType().isConvertedFromStoredString()) {
+        value = true;
+        break;
+      }
+    storedStringConversions = new StoredStringConversions(serial, value);
+    return value;
+  }
+
+  private record StoredStringConversions(long serial, boolean value) {
   }
 
   @Override
@@ -331,14 +396,120 @@ public class LocalDocumentType implements DocumentType {
   public void rename(final String newName) {
     checkForSchemaMutation();
 
+    // Refused rather than nested (issue #9891): this thread is already inside a rename of this type, which publishes once
+    // with what it moved, so a rename() from in there would either publish a second time from inside the first one's
+    // session or - had it been taken for a nested call - never publish at all. A subclass moves the document part
+    // through renameDocumentPart() instead.
+    if (renameLock.isHeldByCurrentThread())
+      throw new IllegalStateException("Type '" + name + "' is already being renamed by this thread: rename() publishes the "
+          + "rename and cannot be called from inside one");
+
     // A second rename of this same type waits here and then starts from whatever name the first one left, instead of
     // capturing a name the first is in the middle of replacing and racing it over the same bucket files (#7937).
     renameLock.lock();
     try {
-      renameInternal(newName);
+      renameAndPublish(newName);
     } finally {
       renameLock.unlock();
     }
+  }
+
+  /**
+   * Moves every file of the type under the new name. The document type's own steps; {@link LocalVertexType} adds its edge
+   * buckets and super-node stripe pool, calling {@link #renameDocumentPart} for this part. Runs with {@link #renameLock}
+   * held.
+   */
+  protected void renameFiles(final String newName) {
+    renameInternal(newName);
+  }
+
+  /**
+   * The document part of a rename that is already running on this thread (issue #9891): moves the type's own buckets and
+   * index files and publishes nothing, the enclosing {@link #rename} publishing everything once. For a subclass's
+   * {@link #renameFiles}, both forward and to roll back. Refused on a thread that does not hold {@link #renameLock}: there
+   * is no enclosing rename there, so the files would move and nothing would ever publish them.
+   */
+  protected final void renameDocumentPart(final String newName) {
+    if (!renameLock.isHeldByCurrentThread())
+      throw new IllegalStateException("The document part of type '" + name + "' can only be renamed from inside a rename "
+          + "of the type: call rename(), which publishes it");
+    renameInternal(newName);
+  }
+
+  /**
+   * The outermost rename of this type (issue #9762). The files are moved first, outside every lock (see {@link #rename}),
+   * and then a schema recording session publishes the result: the schema, and which file now carries which component
+   * name. Under HA that session is what ships the rename to the followers - a bare schema save renamed the type and its
+   * buckets on the leader alone, so a follower kept answering to the old name, and the next schema entry named bucket
+   * files it did not have and made it drop the type's buckets on its next reload. A {@code SCHEMA_ENTRY} carries files to
+   * create and to remove, not renames, so the session records them explicitly and the follower moves the same files
+   * before it loads a schema naming them.
+   * <p>
+   * Refused before a single file moves when the change could not be published (a replica, or a peer that cannot decode
+   * the renames). A refusal from the session itself - leadership lost in between - finds the files already moved and puts
+   * them back; a failure after the session ran its callback is the replication layer's to handle, the schema having been
+   * saved locally with the new names.
+   */
+  private void renameAndPublish(final String newName) {
+    final String oldName = name;
+    final DatabaseInternal database = ((DatabaseInternal) schema.getDatabase()).getWrappedDatabaseInstance();
+    // Best effort: leadership or the peer set can still change before the session opens. A refusal from the session is
+    // then met by the rollback below; this check only keeps the common refusal from moving any file at all.
+    database.checkFileRenamesCanBePublished();
+
+    final Map<Integer, String> componentNamesBefore = componentNamesOfFiles(database.getFileManager());
+
+    renameFiles(newName);
+
+    final boolean[] sessionStarted = new boolean[1];
+    try {
+      schema.recordFileChanges(() -> {
+        sessionStarted[0] = true;
+        final FileManager fileManager = database.getFileManager();
+        // The type's files as they are NOW, not only the ones listed before the move: a component attached to the type
+        // in between (an index built concurrently) was moved with the others but has no "before" name. Recording a file
+        // under the name it already has costs a follower nothing - it skips a file already carrying the name.
+        for (final Map.Entry<Integer, String> entry : componentNamesOfFiles(fileManager).entrySet())
+          if (!entry.getValue().equals(componentNamesBefore.get(entry.getKey())))
+            fileManager.recordRename(entry.getKey(), entry.getValue());
+        return null;
+      });
+    } catch (final RuntimeException e) {
+      if (!sessionStarted[0])
+        try {
+          renameFiles(oldName);
+        } catch (final RuntimeException rollbackFailure) {
+          // The files are now neither all under the new name nor all back under the old one, and the schema names the
+          // old ones: said where an operator looks, not only in a suppressed exception the caller may never print
+          LogManager.instance().log(this, Level.SEVERE,
+              "Renaming type '%s' to '%s' was refused after its files were moved, and moving them back failed: check the "
+                  + "file names of its buckets and indexes against the schema", rollbackFailure, oldName, newName);
+          e.addSuppressed(rollbackFailure);
+        }
+      throw e;
+    }
+  }
+
+  /**
+   * File id to component name of every file a rename of this type can move: its buckets with the ones a subclass involves
+   * (edge buckets, stripe pool) and the components of its indexes. Only this type's files, so a concurrent rename of
+   * another type is never published early by this one. A file dropped concurrently is simply absent from the map.
+   */
+  private Map<Integer, String> componentNamesOfFiles(final FileManager fileManager) {
+    final Map<Integer, String> names = new LinkedHashMap<>();
+    for (final Bucket bucket : getInvolvedBuckets())
+      putComponentName(fileManager, bucket.getFileId(), names);
+    for (final TypeIndex index : getAllIndexes(false))
+      for (final IndexInternal subIndex : index.getIndexesOnBuckets())
+        for (final Integer fileId : subIndex.getFileIds())
+          putComponentName(fileManager, fileId, names);
+    return names;
+  }
+
+  private static void putComponentName(final FileManager fileManager, final int fileId, final Map<Integer, String> names) {
+    final ComponentFile file = fileManager.getFileIfExists(fileId);
+    if (file != null)
+      names.put(fileId, file.getComponentName());
   }
 
   private void renameInternal(final String newName) {
@@ -556,6 +727,11 @@ public class LocalDocumentType implements DocumentType {
     return new ArrayList<>(subTypes);
   }
 
+  /** Allocation-free variant of {@code !getSubTypes().isEmpty()}, for the record write path. */
+  public boolean hasSubTypes() {
+    return !subTypes.isEmpty();
+  }
+
   /**
    * Returns the list of aliases defined for the type.
    */
@@ -690,7 +866,7 @@ public class LocalDocumentType implements DocumentType {
    */
   @Override
   public LocalProperty createProperty(final String propertyName, final String propertyType) {
-    return createProperty(propertyName, Type.getTypeByName(propertyType));
+    return createProperty(propertyName, propertyTypeByName(propertyName, propertyType));
   }
 
   /**
@@ -701,7 +877,29 @@ public class LocalDocumentType implements DocumentType {
    */
   @Override
   public Property createProperty(final String propertyName, final Class<?> propertyType) {
-    return createProperty(propertyName, Type.getTypeByClass(propertyType));
+    return createProperty(propertyName, propertyTypeByClass(propertyName, propertyType));
+  }
+
+  /**
+   * Resolves the type of a property about to be created from its name, refusing a name that names no {@link Type}.
+   * {@link Type#getTypeByName} answers null for it, and a null type used to reach the {@link #properties} map and break
+   * every later schema save of the database (issue #9042).
+   */
+  private Type propertyTypeByName(final String propertyName, final String propertyType) {
+    final Type type = propertyType != null ? Type.getTypeByName(propertyType) : null;
+    if (type == null)
+      throw new SchemaException("Cannot create the property '" + propertyName + "' in type '" + name + "' because '" + propertyType
+          + "' is not a known property type");
+    return type;
+  }
+
+  /** The {@link Class} counterpart of {@link #propertyTypeByName}: a class no {@link Type} maps to is refused. */
+  private Type propertyTypeByClass(final String propertyName, final Class<?> propertyType) {
+    final Type type = Type.getTypeByClass(propertyType);
+    if (type == null)
+      throw new SchemaException("Cannot create the property '" + propertyName + "' in type '" + name + "' because the class '"
+          + (propertyType != null ? propertyType.getName() : null) + "' maps to no property type");
+    return type;
   }
 
   /**
@@ -838,6 +1036,11 @@ public class LocalDocumentType implements DocumentType {
   public LocalProperty createProperty(final String propertyName, final Type propertyType, final String ofType) {
     checkForSchemaMutation();
 
+    if (propertyType == null)
+      // Refused before anything changes: a property with a null type cannot be serialized, so once in the map it made
+      // every later schema save of the database fail until a reopen (issue #9042)
+      throw new SchemaException("Cannot create the property '" + propertyName + "' in type '" + name + "' because its type is not known");
+
     return recordFileChanges(() -> {
       if (this instanceof LocalEdgeType edgeType && edgeType.isLightweight())
         // A lightweight edge is a pair of pointers inside the two vertices: there is no record to hold a value, so a
@@ -871,6 +1074,8 @@ public class LocalDocumentType implements DocumentType {
         property.setOfType(ofType);
 
       properties.put(propertyName, property);
+      // AFTER THE PROPERTY IS VISIBLE: AN ANSWER DERIVED FROM THE PROPERTIES BEFORE IT IS NEVER SERVED AGAIN (#9997)
+      schema.typesChanged();
       return property;
     });
   }
@@ -883,7 +1088,7 @@ public class LocalDocumentType implements DocumentType {
    */
   @Override
   public Property getOrCreateProperty(final String propertyName, final String propertyType) {
-    return getOrCreateProperty(propertyName, Type.getTypeByName(propertyType), null);
+    return getOrCreateProperty(propertyName, propertyTypeByName(propertyName, propertyType), null);
   }
 
   /**
@@ -895,7 +1100,7 @@ public class LocalDocumentType implements DocumentType {
    */
   @Override
   public Property getOrCreateProperty(final String propertyName, final String propertyType, final String ofType) {
-    return getOrCreateProperty(propertyName, Type.getTypeByName(propertyType), ofType);
+    return getOrCreateProperty(propertyName, propertyTypeByName(propertyName, propertyType), ofType);
   }
 
   /**
@@ -906,7 +1111,7 @@ public class LocalDocumentType implements DocumentType {
    */
   @Override
   public Property getOrCreateProperty(final String propertyName, final Class<?> propertyType) {
-    return getOrCreateProperty(propertyName, Type.getTypeByClass(propertyType), null);
+    return getOrCreateProperty(propertyName, propertyTypeByClass(propertyName, propertyType), null);
   }
 
   /**
@@ -929,6 +1134,10 @@ public class LocalDocumentType implements DocumentType {
    */
   @Override
   public Property getOrCreateProperty(final String propertyName, final Type propertyType, final String ofType) {
+    if (propertyType == null)
+      // checked before the drop below, which would otherwise remove the existing property and then fail to recreate it
+      throw new SchemaException("Cannot create the property '" + propertyName + "' in type '" + name + "' because its type is not known");
+
     final Property p = getPolymorphicPropertyIfExists(propertyName);
     if (p != null) {
       if (p.getType().equals(propertyType) && Objects.equals(p.getOfType(), ofType))
@@ -1014,6 +1223,7 @@ public class LocalDocumentType implements DocumentType {
 
       final Property removed = properties.remove(propertyName);
       if (removed != null) {
+        schema.typesChanged();
         // Keep the EXTERNAL counter consistent so hasExternalProperties() stays O(1).
         if (removed.isExternal())
           ownExternalPropertyCount.decrementAndGet();
@@ -1093,6 +1303,7 @@ public class LocalDocumentType implements DocumentType {
 
       properties.remove(propertyName);
       properties.put(newPropertyName, renamed);
+      schema.typesChanged();
       if (propertiesWithDefaultDefined.get().contains(propertyName)) {
         setPropertyHasDefault(propertyName, false);
         setPropertyHasDefault(newPropertyName, true);
@@ -1183,9 +1394,25 @@ public class LocalDocumentType implements DocumentType {
         .withNullStrategy(nullStrategy).withCallback(callback).withIgnoreIfExists(true).create();
   }
 
+  /**
+   * The type's own buckets plus the paired {@code <bucket>_ext} buckets holding the values of its EXTERNAL properties
+   * (issue #9637). Both the per-file permission map ({@link LocalSchema#getInvolvedTypeByBucketId(int)}) and the explicit
+   * type lock are built from this list: leaving the paired buckets out made every access to them default-allow and every
+   * explicitly-locked write of an EXTERNAL value fail the commit-time lock coverage check.
+   */
   @Override
   public List<Bucket> getInvolvedBuckets() {
-    return getBuckets(false);
+    if (externalBucketIdByPrimaryBucketId.isEmpty())
+      return getBuckets(false);
+
+    final List<Bucket> result = new ArrayList<>(buckets.size() + externalBucketIdByPrimaryBucketId.size());
+    result.addAll(buckets);
+    for (final Integer externalBucketId : externalBucketIdByPrimaryBucketId.values()) {
+      final Bucket external = schema.getBucketByIdIfExists(externalBucketId);
+      if (external != null)
+        result.add(external);
+    }
+    return result;
   }
 
   @Override
@@ -1262,24 +1489,21 @@ public class LocalDocumentType implements DocumentType {
    * of the public {@link com.arcadedb.schema.DocumentType} interface so user-level SQL can't reach
    * it directly. Persisted to {@code schema.json} only when {@code true}.
    * <p>
-   * When the value transitions, {@link LocalSchema#saveConfiguration} is invoked so the change
-   * survives a server restart. During schema load that call is a no-op (the schema's own
-   * {@code readingFromFile} guard postpones the write), so this is safe to call regardless of
-   * the load state.
+   * When the value transitions it is flipped inside a schema recording session, which saves {@code schema.json} so the
+   * change survives a restart and, under HA, ships it to the followers (issue #9747). During schema load the session is
+   * a plain call, so this is safe to call regardless of the load state.
    *
-   * @return {@code true} when the value transitioned and the schema was therefore saved. Lets a caller that was
-   * going to save anyway skip a second full rewrite of {@code schema.json} in the same call; every other caller is
-   * free to ignore it.
+   * @return {@code true} when this call flipped the value
    */
   public boolean setNeedsRepartition(final boolean needsRepartition) {
-    // CAS guarantees that the save fires exactly once per real transition: only the thread that
-    // observes the opposite value and successfully flips it proceeds; any concurrent caller
-    // requesting the same target value either loses the race (CAS returns false) or finds the
-    // value already at the target. Both cases skip the {@code schema.saveConfiguration()} call.
-    if (!this.needsRepartition.compareAndSet(!needsRepartition, needsRepartition))
+    // A value already at the target is not a schema change and opens no session. Two callers racing past this check
+    // both open one; the CAS inside lets only one of them flip the flag.
+    if (this.needsRepartition.get() == needsRepartition)
       return false;
-    schema.saveConfiguration();
-    return true;
+    // Flipped inside a schema recording session rather than followed by a bare saveConfiguration(): under HA only the
+    // session ships the schema, so a REBUILD TYPE that cleared the flag on the leader left every follower declining to
+    // prune the type's queries (issue #9747). Nested in the frame of a bucket add or drop, the outermost frame saves.
+    return schema.<Boolean>recordFileChanges(() -> this.needsRepartition.compareAndSet(!needsRepartition, needsRepartition));
   }
 
   /**
@@ -1313,22 +1537,31 @@ public class LocalDocumentType implements DocumentType {
     lastRepartitionWarnMs.set(value);
   }
 
+  /**
+   * Persists the strategy (issue #5637) by assigning it inside one schema recording session, which saves
+   * {@code schema.json} and, under HA, ships it to the followers. The bare save this method used to end with rewrote the
+   * leader's file only, so a partitioned type stayed round-robin on every follower, and on the node that became leader
+   * after a failover (issue #9747). While the schema is read back the value assigned is the one just read, and nothing
+   * is saved.
+   * <p>
+   * The session saves even when the strategy is unchanged, on purpose: re-issuing the same
+   * {@code ALTER TYPE ... BucketSelectionStrategy} is the operator's way of forcing the in-memory strategy back onto
+   * disk after a save that failed (saveConfiguration() logs an IOException and returns), and a skip-if-unchanged guard
+   * would turn that repair into a silent no-op.
+   */
   @Override
   public DocumentType setBucketSelectionStrategy(final BucketSelectionStrategy selectionStrategy) {
-    return setBucketSelectionStrategy(selectionStrategy, true);
+    checkForSchemaMutation();
+    if (schema.isReadingFromFile())
+      return applyBucketSelectionStrategy(selectionStrategy);
+    return recordFileChanges(() -> applyBucketSelectionStrategy(selectionStrategy));
   }
 
   /**
-   * @param persistOnItsOwn {@code false} for a caller that is already inside a {@link LocalSchema#recordFileChanges}
-   *                        block, which saves the schema when it completes. That save carries the strategy just as
-   *                        this method's own would - the field is assigned before either runs - so persisting here
-   *                        as well would rewrite {@code schema.json} twice for one operation. Every caller that is
-   *                        the whole operation passes {@code true}: the point of issue #5637 is that this mutator
-   *                        must not depend on somebody else writing for it.
+   * Assigns the strategy without saving: the caller is either inside a {@link LocalSchema#recordFileChanges} block, which
+   * saves the schema when it completes, or the schema load.
    */
-  private DocumentType setBucketSelectionStrategy(final BucketSelectionStrategy selectionStrategy,
-      final boolean persistOnItsOwn) {
-    checkForSchemaMutation();
+  private DocumentType applyBucketSelectionStrategy(final BucketSelectionStrategy selectionStrategy) {
     // Bind and vet the strategy BEFORE publishing it (issue #7119). The field is read lock-free by
     // getBucketIdByRecord/getBucketIndexByKeys, so assigning first would let a concurrent insert reach a strategy
     // whose bucket count is still 0 (ThreadBucketSelectionStrategy divides by it) or whose type is still null
@@ -1358,43 +1591,13 @@ public class LocalDocumentType implements DocumentType {
     // LocalSchema right after this call, and {@code hasAnyRecord()} would walk every bucket
     // and call {@code count()} (per-bucket I/O) producing a value that's about to be
     // overwritten anyway.
-    boolean alreadySaved = false;
     if (!schema.isReadingFromFile()
         && selectionStrategy instanceof PartitionedBucketSelectionStrategy newPartitioned
         && partitionShapeChanged(previous, newPartitioned)
         && hasAnyRecord())
-      // Use the typed setter so the schema-save-on-transition contract fires consistently with
-      // every other site that mutates this flag. Direct field assignment would only work because
-      // the wrapping DDL happens to save the schema afterward; relying on that is brittle.
-      // Its answer says whether that contract already wrote the file, which is the same write the
-      // block below would make - the strategy field was assigned before this, so the flag's save
-      // carries it. Only a real transition saves, so this stays false when the flag was already set.
-      alreadySaved = setNeedsRepartition(true);
-
-    // Persist the strategy itself (issue #5637). This is the one schema mutator that used to leave the write to
-    // somebody else - every sibling either calls saveConfiguration() directly (setAliases, LocalProperty's setters)
-    // or goes through recordFileChanges, which calls it - so a type partitioned by `ALTER TYPE ...
-    // BucketSelectionStrategy` and nothing else reopened as round-robin. That is worse than an unsuitable partition
-    // being accepted: a correctly configured type lost its pruning across a restart AND started placing new records
-    // round-robin among rows the partition hash had placed, with nothing said anywhere. The flag ABOUT the
-    // partitioning persisted (see setNeedsRepartition above) while the partitioning did not.
-    //
-    // Skipped while the schema is being read back, where the value being assigned is the one just read from
-    // schema.json: saveConfiguration() would only mark the schema dirty, and LocalSchema flushes that at the end of
-    // load, rewriting an identical file on every single open of any partitioned database.
-    //
-    // Deliberately NOT also skipped when the new strategy is equivalent to the previous one, which several sibling
-    // mutators do guard on. Re-issuing the same `ALTER TYPE ... BucketSelectionStrategy` is the operator's way of
-    // forcing the in-memory strategy back onto disk, and the two can genuinely diverge: saveConfiguration() reports
-    // an IOException by logging SEVERE and returning, so a transient disk failure leaves a type partitioned in
-    // memory and round-robin in schema.json - exactly the shape this issue is about. A skip-if-unchanged guard would
-    // read the in-memory value, conclude nothing changed, and turn that repair into a silent no-op. The cost of not
-    // guarding is one rewrite of schema.json per redundant DDL statement, on a path measured in statements per
-    // database lifetime. What IS skipped are two writes that would be redundant within one operation rather than
-    // across two DDL statements: the one the needsRepartition flip just made in this same call, and the one an
-    // enclosing recordFileChanges block is going to make on its way out (see persistOnItsOwn).
-    if (!schema.isReadingFromFile() && !alreadySaved && persistOnItsOwn)
-      schema.saveConfiguration();
+      // The typed setter, so the flag moves the same way at every site that mutates it. Nested in the enclosing
+      // recording session, which saves it with the strategy.
+      setNeedsRepartition(true);
 
     return this;
   }
@@ -1867,13 +2070,38 @@ public class LocalDocumentType implements DocumentType {
     return Objects.hash(name);
   }
 
+  /** Marks the index on {@code propertyNames} as being populated, see {@link #indexesUnderConstruction}. */
+  void beginIndexConstruction(final List<String> propertyNames) {
+    // One map operation: a computeIfAbsent() then an increment could take the counter an end is just removing, and the build
+    // would count on a detached one
+    indexesUnderConstruction.compute(propertyNames, (key, count) -> {
+      if (count == null)
+        return new AtomicInteger(1);
+      count.incrementAndGet();
+      return count;
+    });
+  }
+
+  void endIndexConstruction(final List<String> propertyNames) {
+    indexesUnderConstruction.computeIfPresent(propertyNames, (k, count) -> count.decrementAndGet() <= 0 ? null : count);
+  }
+
+  /**
+   * Whether the index on {@code propertyNames} is still being populated, and so cannot answer a query yet.
+   */
+  public boolean isIndexUnderConstruction(final List<String> propertyNames) {
+    // The emptiness test is the fast path: this runs for every index of every query planned, and nothing is being built nearly
+    // always
+    return !indexesUnderConstruction.isEmpty() && indexesUnderConstruction.containsKey(propertyNames);
+  }
+
   protected void addIndexInternal(final IndexInternal index, final int bucketId, final String[] propertyNames,
       TypeIndex propIndex) {
     index.getMetadata().typeName = name;
     index.getMetadata().propertyNames = List.of(propertyNames);
     index.getMetadata().associatedBucketId = bucketId;
 
-    final List<IndexInternal> list = bucketIndexesByBucket.computeIfAbsent(bucketId, k -> new ArrayList<>());
+    final List<IndexInternal> list = bucketIndexesByBucket.computeIfAbsent(bucketId, k -> new CopyOnWriteArrayList<>());
     list.add(index);
 
     if (propIndex == null) {
@@ -2031,6 +2259,11 @@ public class LocalDocumentType implements DocumentType {
 
   public Integer getExternalBucketIdFor(final int primaryBucketId) {
     return externalBucketIdByPrimaryBucketId.get(primaryBucketId);
+  }
+
+  /** True when {@code bucketId} is one of the paired external-property buckets this type owns. O(own buckets). */
+  public boolean isExternalBucket(final int bucketId) {
+    return externalBucketIdByPrimaryBucketId.containsValue(bucketId);
   }
 
   /** True when this type still owns at least one paired external-property bucket. */
@@ -2323,9 +2556,10 @@ public class LocalDocumentType implements DocumentType {
   public Object setCustomValue(final String key, final Object value) {
     checkForSchemaMutation();
     return recordFileChanges(() -> {
-      if (value == null)
-        return custom.remove(key);
-      return custom.put(key, value);
+      final Map<String, Object> copy = new HashMap<>(custom);
+      final Object previous = value == null ? copy.remove(key) : copy.put(key, value);
+      custom = Collections.unmodifiableMap(copy);
+      return previous;
     });
   }
 
@@ -2431,14 +2665,32 @@ public class LocalDocumentType implements DocumentType {
         final JSONObject indexJSON = entry.toJSON();
         if (custom != null)
           indexJSON.put("typeIndexName", custom);
+        LocalSchema.putLogicalIndexName(entry, indexJSON);
         indexesByFileName.put(entry.getMostRecentFileName(), indexJSON);
       }
     }
+
+    // An index the last load could not serve for a missing header page keeps its definition (issue #10046), until an index
+    // on the same bucket and properties replaces it - which is what REBUILD INDEX or CREATE INDEX leaves behind.
+    final Map<String, JSONObject> unavailable = schema.getUnavailableIndexDefinitions(name);
+    if (!unavailable.isEmpty()) {
+      final Set<String> served = new HashSet<>();
+      for (final JSONObject indexJSON : indexesByFileName.values())
+        served.add(bucketAndProperties(indexJSON));
+      for (final Map.Entry<String, JSONObject> entry : unavailable.entrySet())
+        if (!indexesByFileName.containsKey(entry.getKey()) && !served.contains(bucketAndProperties(entry.getValue())))
+          indexesByFileName.put(entry.getKey(), entry.getValue());
+    }
+
     for (final Map.Entry<String, JSONObject> entry : indexesByFileName.entrySet())
       indexes.put(entry.getKey(), entry.getValue());
 
     type.put("custom", new JSONObject(new TreeMap<>(custom)));
     return type;
+  }
+
+  private static String bucketAndProperties(final JSONObject indexJSON) {
+    return indexJSON.getString("bucket", "") + "|" + indexJSON.getJSONArray("properties", new JSONArray()).toString();
   }
 
   protected <RET> RET recordFileChanges(final Callable<Object> callback) {
@@ -2480,6 +2732,8 @@ public class LocalDocumentType implements DocumentType {
     superTypes.remove(superType);
     superType.subTypes.remove(this);
     superType.rebuildPolymorphicBucketsCache();
+    // THE INHERITED PROPERTIES CHANGED (#9997)
+    schema.typesChanged();
   }
 
   /**
@@ -2511,6 +2765,17 @@ public class LocalDocumentType implements DocumentType {
       superType.rebuildPolymorphicBucketsCache();
   }
 
+  /**
+   * Links {@code superType} above this type.
+   *
+   * @param createIndexes {@code true} for a NEW linkage, which is validated (time series hierarchy, a LIGHTWEIGHT edge type
+   *                      below this one against the super type's MANDATORY or default-valued properties, issue #9846) and
+   *                      propagates the super type's indexes. {@code false} marks the two callers that RE-ESTABLISH a linkage
+   *                      that already holds - the schema load, which replays what was accepted when it was declared, and the
+   *                      re-attachment of a dropped type's sub types to its parents, whose properties they already inherit
+   *                      through it - so there is nothing new to validate or to build, and a database written before a check
+   *                      existed must still open
+   */
   DocumentType addSuperType(final DocumentType superType, final boolean createIndexes) {
     checkForSchemaMutation();
     if (this.equals(superType))
@@ -2564,6 +2829,19 @@ public class LocalDocumentType implements DocumentType {
       // modify a list this walk is iterating, straight into a ConcurrentModificationException.
       checkTimeSeriesHierarchy(superType);
 
+      // A lightweight edge type, this one or one below it, would inherit everything the super type carries, including a
+      // MANDATORY or default-valued property that no lightweight edge can honour (#9846). Under the same lock, and for the
+      // same reason, as the check above: it walks the subTypes lists linkSuperType mutates. Skipped for createIndexes=false,
+      // which marks a linkage that already holds (see addSuperType(DocumentType, boolean)).
+      if (createIndexes) {
+        final Property constraint = embeddedSuperType.findPropertyAppliedToEmptyRecord();
+        if (constraint != null) {
+          final LocalEdgeType lightweight = findLightweightEdgeTypeInSubtree();
+          if (lightweight != null)
+            LocalEdgeType.checkCanBeLightweight(lightweight.getName(), embeddedSuperType);
+        }
+      }
+
       // CHECK FOR CONFLICT WITH PROPERTIES NAMES. Here for the same reason checkTimeSeriesHierarchy is, and the
       // reason it used to be outside the callback is that it only logs: getPolymorphicPropertyNames() recurses over
       // the super type's (mutable) superTypes lists, which linkSuperType/unlinkSuperType structurally modify, so a
@@ -2614,6 +2892,55 @@ public class LocalDocumentType implements DocumentType {
   }
 
   /**
+   * This type if it is a LIGHTWEIGHT edge type, otherwise the first type below it that is, or {@code null}. A lightweight
+   * edge type inherits every property its super types carry, so a property that cannot live on one cannot live on any
+   * type above it either (issue #9846). Walks the {@link #subTypes} lists that {@code linkSuperType}/{@code unlinkSuperType}
+   * mutate under the database write lock, so it has to run under it too.
+   */
+  LocalEdgeType findLightweightEdgeTypeInSubtree() {
+    return findLightweightEdgeTypeInSubtree(new HashSet<>());
+  }
+
+  /** A type reachable through more than one path (a diamond) is walked once, so a wide lattice costs its size, not its path count. */
+  private LocalEdgeType findLightweightEdgeTypeInSubtree(final Set<LocalDocumentType> visited) {
+    if (!visited.add(this))
+      return null;
+
+    if (this instanceof LocalEdgeType edgeType && edgeType.isLightweight())
+      return edgeType;
+
+    for (final LocalDocumentType subType : subTypes) {
+      final LocalEdgeType found = subType.findLightweightEdgeTypeInSubtree(visited);
+      if (found != null)
+        return found;
+    }
+    return null;
+  }
+
+  /**
+   * Refuses to make {@code property}, declared here, apply to a record that does not carry it - {@code MANDATORY} or
+   * default-valued - while a LIGHTWEIGHT edge type below this one would inherit it: that edge has no record, so the
+   * constraint would be declared and never applied (issue #9846). Called from the property setters inside the schema
+   * session that publishes the change, so it is ordered against {@code addSuperType} and {@code CREATE EDGE TYPE ...
+   * LIGHTWEIGHT} by the same lock.
+   *
+   * @param constraint {@code "MANDATORY"} or {@code "default-valued"}, for the message
+   */
+  void checkNoLightweightEdgeTypeBelow(final Property property, final String constraint) {
+    // The schema load replays what was accepted when it was declared, and a database written before this check may hold the
+    // combination: it must still open
+    if (schema.getEmbedded().isReadingFromFile())
+      return;
+
+    final LocalEdgeType lightweight = findLightweightEdgeTypeInSubtree();
+    if (lightweight != null)
+      throw new SchemaException("Cannot make the property '" + name + "." + property.getName() + "' " + constraint
+          + " because edge type '" + lightweight.getName() + "' is declared LIGHTWEIGHT and inherits it: a lightweight edge has no "
+          + "record, so the constraint would never be applied to it. Declare the type without LIGHTWEIGHT, or keep the property "
+          + ("MANDATORY".equals(constraint) ? "optional" : "without a default"));
+  }
+
+  /**
    * The in-memory linkage, and nothing else: the three lines {@link #unlinkSuperType} undoes, kept next to it so the
    * two stay symmetric. The super type receives this type's whole polymorphic subtree, which is what a polymorphic read
    * on it has to reach from now on.
@@ -2622,6 +2949,8 @@ public class LocalDocumentType implements DocumentType {
     superTypes.add(superType);
     superType.subTypes.add(this);
     superType.updatePolymorphicBucketsCache(true, cachedPolymorphicBuckets, cachedPolymorphicBucketIds);
+    // THE INHERITED PROPERTIES CHANGED (#9997)
+    schema.typesChanged();
   }
 
   /**
@@ -2657,7 +2986,7 @@ public class LocalDocumentType implements DocumentType {
     // Neither is a CommandParsingException, so the HTTP status is unchanged too. (AlterTypeStatement's one catch
     // names both, but it guards the BucketSelectionStrategy branch, not this.)
     if (!superType.getBucketSelectionStrategy().getName().equalsIgnoreCase(getBucketSelectionStrategy().getName()))
-      setBucketSelectionStrategy(superType.getBucketSelectionStrategy().copy(), false);
+      applyBucketSelectionStrategy(superType.getBucketSelectionStrategy().copy());
   }
 
   /**

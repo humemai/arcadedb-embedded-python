@@ -22,6 +22,7 @@ package com.arcadedb.query.sql.parser;
 
 import com.arcadedb.database.Database;
 import com.arcadedb.exception.CommandExecutionException;
+import com.arcadedb.query.OperationType;
 import com.arcadedb.query.sql.executor.BasicCommandContext;
 import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.query.sql.executor.ExecutionPlan;
@@ -31,6 +32,7 @@ import com.arcadedb.query.sql.executor.UpdateExecutionPlan;
 
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 public class ProfileStatement extends Statement {
 
@@ -121,9 +123,19 @@ public class ProfileStatement extends Statement {
     return statement != null ? statement.hashCode() : 0;
   }
 
+  /**
+   * PROFILE executes the wrapped statement, so it is exactly what that statement is (issue #9313): it writes nothing
+   * itself and has no operation of its own, and the wrapped statement - nested in it - contributes its own (issue
+   * #9628). EXPLAIN, which only plans, is the one that stays idempotent whatever it wraps.
+   */
   @Override
-  public boolean isIdempotent() {
+  protected boolean isIdempotentItself() {
     return true;
+  }
+
+  @Override
+  protected Set<OperationType> getOperationTypesItself() {
+    return Set.of();
   }
 
   /**

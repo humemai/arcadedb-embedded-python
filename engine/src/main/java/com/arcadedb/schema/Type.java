@@ -28,6 +28,10 @@ import com.arcadedb.database.ImmutableEmbeddedDocument;
 import com.arcadedb.database.MutableEmbeddedDocument;
 import com.arcadedb.database.RID;
 import com.arcadedb.log.LogManager;
+import com.arcadedb.query.opencypher.temporal.CypherDateTime;
+import com.arcadedb.query.opencypher.temporal.CypherDuration;
+import com.arcadedb.query.opencypher.temporal.CypherLocalTime;
+import com.arcadedb.query.opencypher.temporal.CypherTime;
 import com.arcadedb.query.sql.executor.MultiValue;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.serializer.BinaryComparator;
@@ -110,6 +114,15 @@ public enum Type {
 
   ARRAY_OF_DOUBLES("Double[]", 23, BinaryTypes.TYPE_ARRAY_OF_DOUBLES, double[].class,
       new Class<?>[] { double[].class, Double[].class }),
+
+  OFFSET_TIME("Offset_time", 24, BinaryTypes.TYPE_OFFSET_TIME, OffsetTime.class, new Class<?>[] { OffsetTime.class }),
+
+  LOCAL_TIME("Local_time", 25, BinaryTypes.TYPE_LOCAL_TIME, LocalTime.class, new Class<?>[] { LocalTime.class }),
+
+  ZONED_DATETIME("Zoned_datetime", 26, BinaryTypes.TYPE_ZONED_DATETIME, ZonedDateTime.class,
+      new Class<?>[] { ZonedDateTime.class, OffsetDateTime.class }),
+
+  DURATION("Duration", 27, BinaryTypes.TYPE_DURATION, CypherDuration.class, new Class<?>[] { CypherDuration.class }),
   ;
 
   /**
@@ -131,7 +144,7 @@ public enum Type {
   private static final BigInteger LONG_MIN_INTEGER = BigInteger.valueOf(Long.MIN_VALUE);
   // Don't change the order, the type discover get broken if you change the order.
   private static final Type[]              TYPES               = new Type[] { LIST, MAP, LINK, STRING, DATETIME };
-  private static final Type[]              TYPES_BY_ID         = new Type[24];
+  private static final Type[]              TYPES_BY_ID         = new Type[28];
   // Values previously stored in javaTypes
   private static final Map<Class<?>, Type> TYPES_BY_USERTYPE   = new HashMap<Class<?>, Type>();
   private static final Map<String, Type>   TYPES_BY_NAME       = new HashMap<String, Type>();
@@ -176,7 +189,7 @@ public enum Type {
     TYPES_BY_USERTYPE.put(Date.class, DATETIME);
     TYPES_BY_USERTYPE.put(Calendar.class, DATETIME);
     TYPES_BY_USERTYPE.put(LocalDateTime.class, DATETIME);
-    TYPES_BY_USERTYPE.put(ZonedDateTime.class, DATETIME);
+    TYPES_BY_USERTYPE.put(ZonedDateTime.class, ZONED_DATETIME);
     TYPES_BY_USERTYPE.put(OffsetDateTime.class, DATETIME);
     TYPES_BY_USERTYPE.put(Instant.class, DATETIME);
     TYPES_BY_USERTYPE.put(String.class, STRING);
@@ -197,6 +210,9 @@ public enum Type {
     TYPES_BY_USERTYPE.put(long[].class, ARRAY_OF_LONGS);
     TYPES_BY_USERTYPE.put(float[].class, ARRAY_OF_FLOATS);
     TYPES_BY_USERTYPE.put(double[].class, ARRAY_OF_DOUBLES);
+    TYPES_BY_USERTYPE.put(OffsetTime.class, OFFSET_TIME);
+    TYPES_BY_USERTYPE.put(LocalTime.class, LOCAL_TIME);
+    TYPES_BY_USERTYPE.put(CypherDuration.class, DURATION);
 
     BYTE.castable.add(BOOLEAN);
     SHORT.castable.addAll(Arrays.asList(BOOLEAN, BYTE));
@@ -610,7 +626,7 @@ public enum Type {
 
     final Class<?> valueClass = value.getClass();
 
-    if (property == null ||
+    if (property == null || property.getType() == ZONED_DATETIME ||
         !(value instanceof LocalDateTime) &&
             !(value instanceof ZonedDateTime) &&
             !(value instanceof Instant)) {
@@ -629,6 +645,9 @@ public enum Type {
         // not reversible. Refuse it rather than store that (issue #9041).
         if (property != null && valueClass.isArray())
           throw inconvertible(value, "STRING", property);
+        // A zoned datetime keeps the text form Cypher gave it before it had a native type (issue #8572)
+        if (value instanceof ZonedDateTime zoned)
+          return new CypherDateTime(zoned).toString();
         return value.toString();
       }
       else if (value instanceof Binary binary && targetClass.isAssignableFrom(byte[].class))
@@ -889,6 +908,15 @@ public enum Type {
           throw new IllegalArgumentException(
               "Cannot convert object of type '" + value.getClass().getName() + "' into an EmbeddedDocument");
 
+      } else if (targetClass.equals(OffsetTime.class)) {
+        if (value instanceof String text)
+          return CypherTime.parse(text).getValue();
+      } else if (targetClass.equals(LocalTime.class)) {
+        if (value instanceof String text)
+          return CypherLocalTime.parse(text).getValue();
+      } else if (targetClass.equals(CypherDuration.class)) {
+        if (value instanceof String text)
+          return CypherDuration.parse(text);
       } else if (targetClass.equals(Date.class)) {
         return convertToDate(database, value);
       } else if (targetClass.equals(Calendar.class)) {
@@ -936,7 +964,8 @@ public enum Type {
           if (property != null)
             return truncateToPropertyPrecision(time, property);
         } else if (value instanceof Number number) {
-          return DateUtils.date(database, DateUtils.numberToEpochUnits(number), LocalDateTime.class);
+          // epoch MILLIS of a DATETIME, not the day count DateUtils.date() reads (issue #9324)
+          return DateUtils.localDateTimeFromEpochMillis(DateUtils.numberToEpochUnits(number));
         } else if (value instanceof LocalDate date) {
           return truncateToPropertyPrecision(date.atStartOfDay(), property);
         } else if (value instanceof Instant instant) {
@@ -999,6 +1028,14 @@ public enum Type {
             // denotes the same instant whether it arrives ISO- or space-separated, and anchors an offset-free input
             // to the database's zone. Before issue #8090 this branch answered NULL for every string: the schema
             // patterns it tried carry no zone, so a ZonedDateTime could never be resolved from one.
+            if (property != null && property.getType() == ZONED_DATETIME) {
+              // The declared type keeps the zone the text names, a region included (issue #8572)
+              try {
+                return CypherDateTime.parse(valueAsString).getValue();
+              } catch (final RuntimeException e) {
+                // not Cypher datetime text: the general parse below decides
+              }
+            }
             return truncateToPropertyPrecision(DateUtils.parseZonedDateTime(database, valueAsString), property);
         }
       } else if (targetClass.equals(Instant.class)) {
@@ -1412,6 +1449,10 @@ public enum Type {
     if (a == null || b == null)
       throw new IllegalArgumentException("Cannot increment a null value");
 
+    // A BYTE has no case of its own below: widen it to SHORT so that it combines like any other integral type (issue #9281)
+    if (a instanceof Byte || b instanceof Byte)
+      return increment(a instanceof Byte ? Short.valueOf(a.shortValue()) : a, b instanceof Byte ? Short.valueOf(b.shortValue()) : b);
+
     switch (a) {
     case Integer i -> {
       switch (b) {
@@ -1589,6 +1630,10 @@ public enum Type {
   public static Number decrement(final Number a, final Number b) {
     if (a == null || b == null)
       throw new IllegalArgumentException("Cannot decrement a null value");
+
+    // A BYTE has no case of its own below: widen it to SHORT so that it combines like any other integral type (issue #9281)
+    if (a instanceof Byte || b instanceof Byte)
+      return decrement(a instanceof Byte ? Short.valueOf(a.shortValue()) : a, b instanceof Byte ? Short.valueOf(b.shortValue()) : b);
 
     switch (a) {
     case Integer i -> {
@@ -2201,9 +2246,15 @@ public enum Type {
    * {@code BigDecimal("1").equals(BigDecimal("1.0"))} is {@code false} (different scale). When the same logical value
    * reaches a grouping step represented with different numeric types (e.g. an Integer from an index scan and a
    * BigDecimal from arithmetic), this would split a single logical group into several. To avoid that, every finite
-   * {@link Number} is normalised to a {@link BigDecimal} with trailing zeros stripped, so numerically-equal values
-   * share the same {@code equals}/{@code hashCode}. Non-finite floating point values (NaN, +/-Infinity) cannot be
+   * {@link Number} is normalised to one representation of its value, so numerically-equal values share the same
+   * {@code equals}/{@code hashCode}: a {@link Long} for an integer within the {@code long} range, a {@link BigDecimal}
+   * with trailing zeros stripped for any other value. Non-finite floating point values (NaN, +/-Infinity) cannot be
    * represented as BigDecimal and are returned unchanged; all non-numeric values are returned unchanged.
+   * <p>
+   * The value is the one the stripped BigDecimal of {@link BigDecimal#valueOf(double)} - the decimal form - holds, as it
+   * always was: the {@code Long} only stands in for the BigDecimal of an integer, so two numbers share a key exactly when
+   * their stripped BigDecimals are equal. It spares the integral keys - the most common numeric GROUP BY key - a
+   * BigDecimal and the divisions that strip it on every row (issue #9496).
    *
    * @param value the value to normalise (may be {@code null})
    *
@@ -2211,12 +2262,16 @@ public enum Type {
    */
   public static Object normalizeNumberForKey(final Object value) {
     if (value instanceof Number) {
+      if (value instanceof Long)
+        return value;
+      if (value instanceof Integer || value instanceof Short || value instanceof Byte)
+        return ((Number) value).longValue();
       if (value instanceof BigDecimal bigDecimal)
-        return bigDecimal.stripTrailingZeros();
+        return integralAsLong(bigDecimal.stripTrailingZeros());
       if (value instanceof BigInteger bigInteger)
         // Stripped like every other arm, so a BigInteger 100 keys the same as an Integer 100 or a Double 100.0
         // (issue #7623) rather than landing at scale 0 while the decimal paths land at scale -2.
-        return new BigDecimal(bigInteger).stripTrailingZeros();
+        return integralAsLong(new BigDecimal(bigInteger).stripTrailingZeros());
       if (value instanceof Double || value instanceof Float) {
         // A Float reaches its key through the decimal form, as it does everywhere else a Float meets a wider type:
         // .doubleValue() would key 0.05f as 0.05000000074505806 while the Double 0.05 keys as 0.05, splitting one
@@ -2224,15 +2279,28 @@ public enum Type {
         final double d = value instanceof Float float1 ? widenFloat(float1) : ((Number) value).doubleValue();
         if (Double.isNaN(d) || Double.isInfinite(d))
           return value;
-        return BigDecimal.valueOf(d).stripTrailingZeros();
+        // AN INTEGRAL DOUBLE UP TO 2^53 IS AN INTEGER ITS DECIMAL FORM WRITES EXACTLY (THE SHORTEST DIGITS THAT TELL IT FROM
+        // ITS NEIGHBOURS, WHICH ARE AT MOST 1 APART): BigDecimal.valueOf(d) WOULD HOLD THAT INTEGER, KEYED AS ITS Long
+        if (d == Math.rint(d) && Math.abs(d) <= EXACT_INTEGRAL_DOUBLE)
+          return (long) d;
+        return integralAsLong(BigDecimal.valueOf(d).stripTrailingZeros());
       }
-      // Integer/Long/Short/Byte/AtomicInteger/AtomicLong and other integral numbers. Stripped like the decimal
-      // paths above, so an Integer 100 and a Double 100.0 land on the same scale -2 key instead of disagreeing
-      // (unscaled 100 at scale 0 vs unscaled 1 at scale -2) and splitting one GROUP BY/DISTINCT group in two
-      // (issue #7623).
-      return BigDecimal.valueOf(((Number) value).longValue()).stripTrailingZeros();
+      // Integer/Long/Short/Byte/AtomicInteger/AtomicLong and other integral numbers: an Integer 100 and a Double 100.0
+      // land on the same key instead of splitting one GROUP BY/DISTINCT group in two (issue #7623).
+      return ((Number) value).longValue();
     }
     return value;
+  }
+
+  /** A stripped BigDecimal holding an integer within the {@code long} range as that {@link Long}, any other as it is. */
+  private static Object integralAsLong(final BigDecimal stripped) {
+    // STRIPPED, AN INTEGER HAS A SCALE OF 0 OR LESS, AND precision - scale DIGITS: UP TO 18 ALWAYS FIT A long, 19 MAY
+    if (stripped.scale() > 0)
+      return stripped;
+    final int digits = stripped.precision() - stripped.scale();
+    if (digits <= 18 || digits == 19 && stripped.compareTo(LONG_MIN_DECIMAL) >= 0 && stripped.compareTo(LONG_MAX_DECIMAL) <= 0)
+      return stripped.longValue();
+    return stripped;
   }
 
   /**
@@ -2435,6 +2503,14 @@ public enum Type {
     return this == LIST || this == MAP;
   }
 
+  /**
+   * Whether a String stored under a property of this type is converted to it when read: the value as it was written before
+   * the property was declared, or before the type existed (issue #8572).
+   */
+  public boolean isConvertedFromStoredString() {
+    return this == OFFSET_TIME || this == LOCAL_TIME || this == ZONED_DATETIME || this == DURATION;
+  }
+
   public Class<?> getDefaultJavaType() {
     return javaDefaultType;
   }
@@ -2502,20 +2578,34 @@ public enum Type {
     else if (value instanceof LocalDate date)
       return new Date(date.toEpochDay() * DateUtils.MS_IN_A_DAY);
     else if (value instanceof String valueAsString) {
+      if (database != null)
+        return parseDate(database, valueAsString, database.getSchema().getDateTimeFormat(), database.getSchema().getDateFormat());
       if (FileUtils.isLong(valueAsString))
-        return new Date(Long.parseLong(value.toString()));
-      else if (database != null) {
-        final Date fromDateTimeFormat = parseFully(database.getSchema().getDateTimeFormat(), valueAsString);
-        if (fromDateTimeFormat != null)
-          return fromDateTimeFormat;
-        final Date fromDateFormat = parseFully(database.getSchema().getDateFormat(), valueAsString);
-        if (fromDateFormat != null)
-          return fromDateFormat;
-        return dateFromSharedChain(database, valueAsString);
-      } else
-        return dateFromSharedChain(null, valueAsString);
+        return new Date(Long.parseLong(valueAsString));
+      return dateFromSharedChain(null, valueAsString);
     }
     throw new IllegalArgumentException("Object of class " + value.getClass() + " cannot be converted to Date");
+  }
+
+  /**
+   * Reads {@code value} as a {@link Date} exactly the way {@link #convert} reads a String into one, with the two schema
+   * patterns given instead of the ones in force: how a change of {@code arcadedb.dateFormat} or
+   * {@code arcadedb.dateTimeFormat} asks whether the MIN and MAX of a date property, read through those patterns on every
+   * write, stay readable under the new one before it is put in force (issue #9976 follow-up).
+   *
+   * @throws IllegalArgumentException when the text cannot be read as a date
+   */
+  public static Date parseDate(final Database database, final String value, final String dateTimeFormat,
+      final String dateFormat) {
+    if (FileUtils.isLong(value))
+      return new Date(Long.parseLong(value));
+    final Date fromDateTimeFormat = parseFully(dateTimeFormat, value);
+    if (fromDateTimeFormat != null)
+      return fromDateTimeFormat;
+    final Date fromDateFormat = parseFully(dateFormat, value);
+    if (fromDateFormat != null)
+      return fromDateFormat;
+    return dateFromSharedChain(database, value);
   }
 
   /**
@@ -2559,6 +2649,13 @@ public enum Type {
     return Date.from(DateUtils.parseZonedDateTime(database, valueAsString, false).toInstant());
   }
 
+  /** A DATE property holds whole days, which a datetime-valued implementation of it must be truncated to (issue #9324). */
+  private static ChronoUnit precisionOf(final Property property) {
+    if (property.getType() == ZONED_DATETIME)
+      return ChronoUnit.NANOS;
+    return property.getType() == DATE ? ChronoUnit.DAYS : DateUtils.getPrecisionFromType(property.getType());
+  }
+
   /**
    * Truncates a parsed datetime to the precision the target property declares, so a literal carrying more digits
    * than the column can hold reads back identically before and after a reload instead of briefly keeping digits the
@@ -2566,15 +2663,15 @@ public enum Type {
    * already do; only the string branches were missing it. A no-op when the value is not bound to a property.
    */
   private static LocalDateTime truncateToPropertyPrecision(final LocalDateTime value, final Property property) {
-    return property == null ? value : value.truncatedTo(DateUtils.getPrecisionFromType(property.getType()));
+    return property == null ? value : value.truncatedTo(precisionOf(property));
   }
 
   private static ZonedDateTime truncateToPropertyPrecision(final ZonedDateTime value, final Property property) {
-    return property == null ? value : value.truncatedTo(DateUtils.getPrecisionFromType(property.getType()));
+    return property == null ? value : value.truncatedTo(precisionOf(property));
   }
 
   private static Instant truncateToPropertyPrecision(final Instant value, final Property property) {
-    return property == null ? value : value.truncatedTo(DateUtils.getPrecisionFromType(property.getType()));
+    return property == null ? value : value.truncatedTo(precisionOf(property));
   }
 
   /** A primitive array of numbers (not {@code byte[]}, which is binary content, nor {@code boolean[]}/{@code char[]}). */

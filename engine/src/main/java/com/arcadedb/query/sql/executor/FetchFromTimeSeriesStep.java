@@ -19,6 +19,7 @@
 package com.arcadedb.query.sql.executor;
 
 import com.arcadedb.engine.timeseries.ColumnDefinition;
+import com.arcadedb.engine.timeseries.FieldFilter;
 import com.arcadedb.engine.timeseries.TagFilter;
 import com.arcadedb.engine.timeseries.TimeSeriesEngine;
 import com.arcadedb.engine.timeseries.TimeSeriesGateway;
@@ -48,6 +49,12 @@ public class FetchFromTimeSeriesStep extends AbstractExecutionStep {
   private final long                fromTs;
   private final long                toTs;
   private final TagFilter           tagFilter;
+  /**
+   * Issue #9612: range predicates on numeric FIELD columns the engine evaluates on block statistics and on the primitive
+   * columns, so a sample the WHERE clause drops is never turned into a row. Only on the unbounded ascending read; the
+   * residual filter above this step still runs over the rows it keeps.
+   */
+  private final FieldFilter         fieldFilter;
   /**
    * Issue #5414: when true the engine is scanned newest-first, so a last-point query
    * ({@code ORDER BY <ts> DESC LIMIT n}, {@code ts.last()}) stops after the newest blocks instead of
@@ -80,11 +87,23 @@ public class FetchFromTimeSeriesStep extends AbstractExecutionStep {
 
   public FetchFromTimeSeriesStep(final LocalTimeSeriesType tsType, final long fromTs, final long toTs,
       final TagFilter tagFilter, final boolean descending, final int limit, final CommandContext context) {
+    this(tsType, fromTs, toTs, tagFilter, null, descending, limit, context);
+  }
+
+  /**
+   * @param fieldFilter range predicates on numeric FIELD columns (issue #9612), or {@code null}; only honoured by the
+   *                    unbounded ascending read, so it must be {@code null} when {@code descending} or {@code limit > 0}
+   */
+  public FetchFromTimeSeriesStep(final LocalTimeSeriesType tsType, final long fromTs, final long toTs,
+      final TagFilter tagFilter, final FieldFilter fieldFilter, final boolean descending, final int limit, final CommandContext context) {
     super(context);
+    if (fieldFilter != null && (descending || limit > 0))
+      throw new IllegalArgumentException("A field filter is only pushed into the unbounded ascending TimeSeries read");
     this.tsType = tsType;
     this.fromTs = fromTs;
     this.toTs = toTs;
     this.tagFilter = tagFilter;
+    this.fieldFilter = fieldFilter;
     this.descending = descending;
     this.limit = limit;
   }
@@ -101,15 +120,14 @@ public class FetchFromTimeSeriesStep extends AbstractExecutionStep {
           if (engine == null)
             throw new CommandExecutionException(
                 "TimeSeries engine for type '" + tsType.getName() + "' is not initialized");
-          // The bound belongs to the FETCH in both directions (issues #5414, #7663). iterateQuery is kept for the
-          // genuinely unbounded ascending read and for nothing else: its own javadoc says the sealed layer
-          // materialises every matching row before the iterator is handed out, so it saves the sort and the second
-          // copy against query(), never the series.
+          // The bound belongs to the FETCH in both directions (issues #5414, #7663). iterateQuery is the genuinely
+          // unbounded ascending read: it streams the sealed layer one block per shard (issue #9420), so a SELECT with
+          // no LIMIT holds a block per shard and the mutable buckets, not the series.
           resultIterator = descending
               ? engine.queryDescending(fromTs, toTs, null, tagFilter, limit, null).iterator()
               : limit > 0
                   ? engine.queryAscending(fromTs, toTs, null, tagFilter, limit, null).iterator()
-                  : engine.iterateQuery(fromTs, toTs, null, tagFilter);
+                  : engine.iterateQuery(fromTs, toTs, null, tagFilter, fieldFilter, null);
           fetched = true;
         } catch (final CommandExecutionException e) {
           throw e;
@@ -164,6 +182,11 @@ public class FetchFromTimeSeriesStep extends AbstractExecutionStep {
               if (col.getRole() == ColumnDefinition.ColumnRole.TIMESTAMP && value instanceof Long)
                 value = DateUtils.dateTime(context.getDatabase(), (Long) value, ChronoUnit.MILLIS, LocalDateTime.class,
                     ChronoUnit.MILLIS);
+              // Issue #9725: every other DATE/DATETIME column holds an epoch count in its own unit, handed back as the object a
+              // document property of the same type reads as. As the raw count it could not be written back by INSERT, which
+              // reads a number as epoch millis, nor matched by the literal that wrote it
+              else if (value instanceof Long epoch && col.isTemporal())
+                value = col.temporalOf(context.getDatabase(), epoch);
 
               // The absent marker becomes SQL NULL at the SQL boundary (issue #7743). NaN is what the storage
               // layers use for "no measurement here" - it is what a null field value is stored as on a
@@ -217,6 +240,8 @@ public class FetchFromTimeSeriesStep extends AbstractExecutionStep {
     // push-down happened.
     if (tagFilter != null)
       sb.append(" TAGS ").append(tagFilter.describe(nonTsColumnNames()));
+    if (fieldFilter != null)
+      sb.append(" FIELDS ").append(fieldFilter.describe());
     // Shown for either direction: the ascending cap is as much a plan decision as the descending one, and a plan
     // that hides it reads as if no push-down happened (issue #7663).
     if (limit > 0)
@@ -241,6 +266,6 @@ public class FetchFromTimeSeriesStep extends AbstractExecutionStep {
 
   @Override
   public ExecutionStep copy(final CommandContext context) {
-    return new FetchFromTimeSeriesStep(tsType, fromTs, toTs, tagFilter, descending, limit, context);
+    return new FetchFromTimeSeriesStep(tsType, fromTs, toTs, tagFilter, fieldFilter, descending, limit, context);
   }
 }

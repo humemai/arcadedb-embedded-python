@@ -18,8 +18,15 @@
  */
 package com.arcadedb.engine.timeseries;
 
+import com.arcadedb.database.Database;
+import com.arcadedb.database.DatabaseInternal;
 import com.arcadedb.engine.timeseries.codec.TimeSeriesCodec;
 import com.arcadedb.schema.Type;
+import com.arcadedb.utility.DateUtils;
+
+import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.time.DateTimeException;
 
 /**
  * Defines a column in a TimeSeries type.
@@ -37,6 +44,8 @@ public final class ColumnDefinition {
   private final ColumnRole      role;
   private final TimeSeriesCodec compressionHint;
   private final boolean         explicitCodec;
+  // The kind of the storage row this column's type is encoded as, resolved once: storableValue runs for every value of every sample
+  private final byte            kind;
 
   /**
    * A column whose codec is DERIVED from its data type and role, through {@link #defaultCodecFor}.
@@ -51,6 +60,7 @@ public final class ColumnDefinition {
     this.role = role;
     this.compressionHint = defaultCodecFor(dataType, role);
     this.explicitCodec = false;
+    this.kind = TimeSeriesBatch.kindOf(dataType);
   }
 
   /**
@@ -68,6 +78,7 @@ public final class ColumnDefinition {
     this.role = role;
     this.compressionHint = compressionHint != null ? compressionHint : defaultCodecFor(dataType, role);
     this.explicitCodec = compressionHint != null;
+    this.kind = TimeSeriesBatch.kindOf(dataType);
   }
 
   public String getName() {
@@ -225,12 +236,32 @@ public final class ColumnDefinition {
    * the literal has to be coerced instead.
    */
   public Object coerceValue(final Object value) {
+    return coerceValue(null, value);
+  }
+
+  /**
+   * {@link #coerceValue(Object)}, reading a date or an instant given as text through {@code database}, as an {@code INSERT} reads
+   * it, so a literal finds the row an {@code INSERT} with the same literal wrote (issue #9833). With {@code null} the text is read
+   * with the defaults into a {@code java.util.Date}, in the JVM's default time zone, which names another instant whenever that
+   * zone is not UTC.
+   */
+  public Object coerceValue(final Database database, final Object value) {
     if (value == null)
       return null;
     if (dataType == Type.STRING)
       return value instanceof String s ? s : value.toString();
     if (dataType == Type.BOOLEAN)
       return value instanceof Boolean b ? b : Boolean.parseBoolean(value.toString());
+    // A date or an instant in any form the engine reads - a temporal object, or text that is not a bare number - names the
+    // epoch count this column stores for it (issue #9724). It used to reach Long.valueOf, fail, and come back unchanged, so
+    // a tag filter compared a String or a LocalDateTime against the stored Long and matched nothing. A NUMBER is already a
+    // count in the column's unit at this layer, the unit the engine API, the line protocol and every HTTP surface speak.
+    if (isTemporal() && !(value instanceof Number) && !(value instanceof String text && isIntegerText(text)))
+      try {
+        return epochOf(database, value);
+      } catch (final IllegalArgumentException e) {
+        return value;
+      }
     if (value instanceof Number n)
       return switch (dataType) {
         case DOUBLE -> n.doubleValue();
@@ -242,6 +273,268 @@ public final class ColumnDefinition {
         default -> value;
       };
     return boxString(value.toString());
+  }
+
+  /**
+   * Whether this column holds a {@code DATE} or a {@code DATETIME} of some precision, stored as an epoch count in its own unit:
+   * days for a DATE, the precision the type names for the others.
+   */
+  public boolean isTemporal() {
+    return switch (dataType) {
+      case DATE, DATETIME, DATETIME_SECOND, DATETIME_MICROS, DATETIME_NANOS -> true;
+      default -> false;
+    };
+  }
+
+  /**
+   * The epoch count this DATE/DATETIME column stores for a value given at the SQL boundary, read exactly as a document property
+   * of the same declared type reads it (issues #9643, #9724, #9725): the value is converted to the Java type that property holds
+   * and then encoded the way the binary serializer encodes it. A number is therefore epoch MILLIS for every DATETIME precision and
+   * epoch DAYS for a DATE (issue #9324), text is parsed by the same chain, and an instant the precision cannot represent is
+   * refused instead of saturated.
+   * <p>
+   * {@code INSERT}, the tag push-down and the field filter all go through here, so the literal that wrote a row is the literal
+   * that finds it.
+   *
+   * @param database may be {@code null}, which reads text with the default formats and a {@code java.util.Date} for a DATETIME
+   *
+   * @throws IllegalArgumentException when the value is not a date or an instant, or is outside the range the column can store
+   */
+  public long epochOf(final Database database, final Object value) {
+    if (!isTemporal())
+      throw new IllegalArgumentException("Column '" + name + "' of type " + dataType + " is not a date or a datetime");
+    final Object converted = Type.convert(database, value, database != null ? dataType.getJavaImplementation(database) :
+        dataType.getDefaultJavaType());
+    if (converted == null)
+      throw new IllegalArgumentException("Cannot convert a value of type " + value.getClass().getName() + " to the " + dataType
+          + " column '" + name + "'");
+    final Long epoch = dataType == Type.DATE ? DateUtils.dateToEpochDays(converted)
+        : DateUtils.dateTimeToTimestampExact(database, converted, DateUtils.getPrecisionFromType(dataType));
+    if (epoch == null)
+      throw new IllegalArgumentException("Cannot convert a value of type " + value.getClass().getName() + " to the " + dataType
+          + " column '" + name + "'");
+    return epoch;
+  }
+
+  /**
+   * The value the append path can encode for this column, for a writer that hands over what it parsed without converting it: the
+   * line protocol and gRPC give a quoted datetime as text, a typed tag as text, whatever the client sent (issue #9809). The storage
+   * layer casts a value to the {@code Number} (or {@code String}) its column kind names, so anything else used to surface as a bare
+   * {@code ClassCastException} from the middle of the append.
+   * <ul>
+   * <li>a DATE/DATETIME column keeps a number as it is, a count in the column's unit, the contract of every writer that is not SQL; text
+   * of digits is that same count, the rule {@link #coerceValue} applies to a tag filter, and any other date or instant is read by
+   * {@link #epochOf}, the conversion {@code INSERT} uses, so the same text names the same instant on every surface</li>
+   * <li>any other numeric column keeps a number that its type can hold (a {@code 300} is refused by a BYTE column, where the append
+   * would store {@code 44}) and parses text, as {@code INSERT} does</li>
+   * <li>a BOOLEAN column keeps a boolean and parses {@code true} / {@code false} (any case), so a typed tag sent as {@code "true"} is
+   * not stored as {@code false}; any other text, and a number, is refused rather than stored as {@code false}</li>
+   * <li>a STRING column keeps a string of at most {@link TimeSeriesBucket#MAX_STRING_BYTES} UTF-8 bytes, the limit the row refuses
+   * a longer one at, after the rest of the batch is assembled</li>
+   * </ul>
+   *
+   * @param database may be {@code null}, which reads text with the default formats (see {@link #epochOf})
+   *
+   * @throws IllegalArgumentException naming this column, when the value cannot be stored in it
+   */
+  public Object storableValue(final Database database, final Object value) {
+    if (value == null)
+      return null;
+    // The common case, a number into a numeric column (every kind up to BYTE, the datetimes among them), answers before any dispatch
+    if (kind <= TimeSeriesBatch.KIND_BYTE && value instanceof Number number) {
+      if (fits(number))
+        return value;
+      throw new IllegalArgumentException("Cannot convert a value of type " + value.getClass().getSimpleName() + " to the " + dataType
+          + " column '" + name + "': the number is out of range");
+    }
+    return switch (kind) {
+      case TimeSeriesBatch.KIND_BOOLEAN -> booleanOf(value);
+      case TimeSeriesBatch.KIND_STRING -> {
+        if (value instanceof String text)
+          yield withinStringLimit(text);
+        throw unstorable(value, null);
+      }
+      case TimeSeriesBatch.KIND_TEXT -> withinStringLimit(value instanceof String text ? text : value.toString());
+      default -> {
+        if (value instanceof Number)
+          yield value;
+        if (!(value instanceof String) && !isTemporal())
+          throw unstorable(value, null);
+        try {
+          yield isTemporal() ? temporalCount(database, value) : parseNumericText((String) value);
+        } catch (final RuntimeException e) {
+          throw unstorable(value, e);
+        }
+      }
+    };
+  }
+
+  /**
+   * Whether the number is one the column's type can hold, for the kinds up to BYTE (the numeric ones). A floating point value for an
+   * integral column is range-checked as a double, so NaN and the infinities are refused too. Only the RANGE is checked: a fractional
+   * value in range keeps its integral part (1.5 is stored as 1 in an INTEGER column), as the append has always done.
+   */
+  private boolean fits(final Number number) {
+    return switch (kind) {
+      case TimeSeriesBatch.KIND_INTEGER -> within(number, Integer.MIN_VALUE, Integer.MAX_VALUE);
+      case TimeSeriesBatch.KIND_SHORT -> within(number, Short.MIN_VALUE, Short.MAX_VALUE);
+      case TimeSeriesBatch.KIND_BYTE -> within(number, Byte.MIN_VALUE, Byte.MAX_VALUE);
+      case TimeSeriesBatch.KIND_LONG -> fitsLong(number);
+      case TimeSeriesBatch.KIND_FLOAT -> floatingFits(number, Float.MAX_VALUE);
+      default -> floatingFits(number, Double.MAX_VALUE); // DOUBLE
+    };
+  }
+
+  /**
+   * Whether a floating point column holds the number. NaN and the infinities are values of such a column (a sensor reading can be
+   * NaN, and the engine keeps it), so a Java floating point number is refused only when it is finite and larger than the column's
+   * type, which would otherwise be stored as an infinity nobody sent. An arbitrary-precision number must convert to a finite one.
+   */
+  private static boolean floatingFits(final Number number, final double max) {
+    if (number instanceof BigDecimal || number instanceof BigInteger) {
+      final double value = number.doubleValue();
+      return Double.isFinite(value) && Math.abs(value) <= max;
+    }
+    if (max == Double.MAX_VALUE)
+      return true; // A Double, a Float or a Java integer always fits a DOUBLE
+    final double value = number.doubleValue();
+    return !Double.isFinite(value) || Math.abs(value) <= max;
+  }
+
+  /**
+   * Whether the number is one a LONG holds. A Java integer always is; an arbitrary-precision one is asked exactly, because its
+   * {@code doubleValue()} rounds a value just past the bound back onto it; anything else is a floating point value, whose integral
+   * part must be in range (NaN and the infinities are not).
+   */
+  private static boolean fitsLong(final Number number) {
+    if (isWholeJavaInteger(number))
+      return true;
+    if (number instanceof BigInteger integer)
+      return integer.bitLength() < 64;
+    if (number instanceof BigDecimal decimal)
+      return decimal.toBigInteger().bitLength() < 64;
+    final double value = number.doubleValue();
+    return value >= -0x1p63 && value < 0x1p63;
+  }
+
+  private static boolean isWholeJavaInteger(final Number number) {
+    return number instanceof Long || number instanceof Integer || number instanceof Short || number instanceof Byte;
+  }
+
+  private static boolean within(final Number number, final long min, final long max) {
+    if (isWholeJavaInteger(number)) {
+      final long value = number.longValue();
+      return value >= min && value <= max;
+    }
+    // The bounds of the narrow kinds are far below 2^53, so a double (even of a big number) compares exactly
+    final double value = number.doubleValue();
+    return value >= min && value <= max;
+  }
+
+  private String withinStringLimit(final String text) {
+    // At most 3 bytes per char, so a short text needs no count
+    if (text.length() * 3 > TimeSeriesBucket.MAX_STRING_BYTES) {
+      final int bytes = utf8Length(text);
+      if (bytes > TimeSeriesBucket.MAX_STRING_BYTES)
+        throw new IllegalArgumentException("Cannot store a text of " + bytes + " UTF-8 bytes in the " + dataType + " column '" + name
+            + "': the limit is " + TimeSeriesBucket.MAX_STRING_BYTES + " bytes, so the text is longer than a row can hold");
+    }
+    return text;
+  }
+
+  private static int utf8Length(final String text) {
+    int bytes = 0;
+    for (int i = 0; i < text.length(); i++) {
+      final char c = text.charAt(i);
+      if (c < 0x80)
+        bytes += 1;
+      else if (c < 0x800)
+        bytes += 2;
+      else if (Character.isHighSurrogate(c) && i + 1 < text.length() && Character.isLowSurrogate(text.charAt(i + 1))) {
+        bytes += 4;
+        ++i;
+      } else
+        bytes += 3;
+    }
+    return bytes;
+  }
+
+  private Boolean booleanOf(final Object value) {
+    if (value instanceof Boolean flag)
+      return flag;
+    if (value instanceof String text) {
+      if ("true".equalsIgnoreCase(text))
+        return Boolean.TRUE;
+      if ("false".equalsIgnoreCase(text))
+        return Boolean.FALSE;
+    }
+    throw unstorable(value, null);
+  }
+
+  private Long temporalCount(final Database database, final Object value) {
+    return value instanceof String text && isIntegerText(text) ? Long.parseLong(text) : epochOf(database, value);
+  }
+
+  private Object parseNumericText(final String text) {
+    return switch (dataType) {
+      case DOUBLE -> Double.parseDouble(text);
+      case FLOAT -> Float.parseFloat(text);
+      case INTEGER -> Integer.parseInt(text);
+      case SHORT -> Short.parseShort(text);
+      case BYTE -> Byte.parseByte(text);
+      default -> Long.parseLong(text);
+    };
+  }
+
+  /**
+   * The refusal of a value this column cannot store: it names the column and the type, which the {@code ClassCastException} it
+   * replaces never did.
+   */
+  IllegalArgumentException unstorable(final Object value, final Throwable cause) {
+    // The simple name: this text goes back to the client, which has no use for a package
+    return new IllegalArgumentException("Cannot convert a value of type " + value.getClass().getSimpleName() + " to the " + dataType
+        + " column '" + name + "'", cause);
+  }
+
+  /**
+   * The object a document property of this DATE/DATETIME type hands back for the epoch count the column stores, which is what
+   * the SQL boundary returns for it (issue #9725): the same instant, in the same Java class, as the twin document property, so a
+   * value read from a row can be written back as it is and compared against the literal that wrote it.
+   * <p>
+   * A count no date can stand for - which only the engine API, the line protocol or gRPC can have written, since they store the
+   * number they are given - is handed back as that number rather than failing the read of every row around it.
+   */
+  public Object temporalOf(final Database database, final long epoch) {
+    try {
+      return ((DatabaseInternal) database).getSerializer().deserializeTemporal(database, epoch, dataType.getBinaryType());
+    } catch (final DateTimeException | ArithmeticException e) {
+      return epoch;
+    }
+  }
+
+  private static boolean isIntegerText(final String text) {
+    final int length = text.length();
+    if (length == 0)
+      return false;
+    // ASCII digits only: the count Long.valueOf reads, never a digit of another script
+    final int start = text.charAt(0) == '-' || text.charAt(0) == '+' ? 1 : 0;
+    if (start == length)
+      return false;
+    for (int i = start; i < length; i++) {
+      final char c = text.charAt(i);
+      if (c < '0' || c > '9')
+        return false;
+    }
+    return true;
+  }
+
+  /**
+   * Whether this column stores its values as exact integers ({@code SIMPLE8B}): the integral types, BOOLEAN and the
+   * datetimes. Their block statistics and their aggregates are kept as longs (issue #9720), so a value past 2^53 is answered
+   * exactly rather than through a double.
+   */
+  public boolean storesExactIntegers() {
+    return compressionHint == TimeSeriesCodec.SIMPLE8B;
   }
 
   /**
@@ -262,16 +555,18 @@ public final class ColumnDefinition {
    * Numeric view of a value as THIS column stores it, for the {@code GORILLA_XOR} encoder and for the
    * min/max/sum block statistics the aggregation push-down answers from (issue #7743).
    * <p>
-   * The one thing it adds over {@link #numericValueOf(Object)} is the null: a floating-point column stores it
-   * as {@link TimeSeriesNaN#ABSENT}, because it can, and every other column as zero, because it cannot. Both
-   * halves have to be spelled here rather than at each call site, because the statistics describe the bytes and
-   * would otherwise declare a minimum of zero for a block whose encoder wrote no zero.
+   * The one thing it adds over {@link #numericValueOf(Object)} is the null, which is {@link TimeSeriesNaN#ABSENT} on every
+   * column: a floating-point column stores it as the NaN itself, and an integral one as a zero its block's null bitmap marks
+   * absent (issue #9721). Spelled here rather than at each call site, because the statistics describe the samples and would
+   * otherwise declare a minimum of zero for a block whose only zero is a missing measurement.
    *
    * @see TimeSeriesBatch#rawNull(byte) the same rule on the mutable side
    */
   public double storedNumericValueOf(final Object value) {
+    // An integral column carries absence in the null bitmap of its block since issue #9721, so a null is absent on every
+    // numeric column: the statistics describe the samples that have a value
     if (value == null)
-      return storesAbsentMarker() ? TimeSeriesNaN.ABSENT : 0.0;
+      return TimeSeriesNaN.ABSENT;
     return numericValueOf(value);
   }
 
@@ -329,6 +624,48 @@ public final class ColumnDefinition {
           TimeSeriesCodec.SIMPLE8B;
       default -> TimeSeriesCodec.DICTIONARY;
     };
+  }
+
+  /**
+   * Why this column's codec cannot be honoured by the storage layer, or {@code null} when it can (issue #9310).
+   * <p>
+   * The codec is first consulted when a shard seals, and {@code TimeSeriesSealedStore.compressColumn} only knows
+   * three encoders, so a codec it cannot run - or can run only on a numeric column - used to be accepted at
+   * {@code CREATE} and then fail in every later compaction, permanently and type-wide. The rules mirror that switch:
+   * <ul>
+   * <li>TIMESTAMP: {@code DELTA_OF_DELTA} only. The timestamp column is always encoded with it, so any other name
+   * would be stored, rendered back and ignored.</li>
+   * <li>TAG and FIELD: {@code DICTIONARY} for any type; {@code GORILLA_XOR} only for DOUBLE/FLOAT and
+   * {@code SIMPLE8B} only for the integer-like types (integers, boolean, datetimes), i.e. the codec
+   * {@link #defaultCodecFor} picks, because those are the ones whose values round-trip through the encoder.</li>
+   * <li>{@code NONE} and {@code DELTA_OF_DELTA} on a non-timestamp column have no encoder.</li>
+   * </ul>
+   * Keep this in step with {@code TimeSeriesSealedStore.compressColumn}; {@code Issue9310TimeSeriesCodecValidationTest}
+   * drives every accepted combination through a compaction and checks the values read back, so a drift fails there. A new
+   * data type must be classified in {@link #defaultCodecFor}, which this method defers to for the numeric codecs.
+   */
+  public static String codecRefusal(final String name, final Type dataType, final ColumnRole role, final TimeSeriesCodec codec) {
+    if (role == ColumnRole.TIMESTAMP)
+      return codec == TimeSeriesCodec.DELTA_OF_DELTA ? null
+          : "Column '" + name + "' is the TIMESTAMP column, which is always encoded with DELTA_OF_DELTA, so it cannot declare codec " + codec;
+    return switch (codec) {
+      case DICTIONARY -> null;
+      // Each numeric codec only for the types its encoder AND decoder round-trip: SIMPLE8B stores integers, so a DOUBLE
+      // would read back as raw long bits; GORILLA_XOR stores doubles, so a LONG would lose precision past 2^53 and read
+      // back as a Double. A TAG defaults to DICTIONARY whatever its type, so the type's numeric codec is its FIELD default.
+      case GORILLA_XOR, SIMPLE8B -> {
+        final TimeSeriesCodec numeric = defaultCodecFor(dataType, ColumnRole.FIELD);
+        yield numeric == codec ? null
+            : "Column '" + name + "' of type " + dataType + " cannot use codec " + codec
+                + ", which would not read the values back unchanged. Use DICTIONARY" + (isNumericCodec(numeric) ? " or " + numeric : "");
+      }
+      default -> "Column '" + name + "' cannot use codec " + codec + ", which has no encoder for a " + role
+          + " column. Supported codecs: GORILLA_XOR, SIMPLE8B, DICTIONARY";
+    };
+  }
+
+  private static boolean isNumericCodec(final TimeSeriesCodec codec) {
+    return codec == TimeSeriesCodec.GORILLA_XOR || codec == TimeSeriesCodec.SIMPLE8B;
   }
 
   /**

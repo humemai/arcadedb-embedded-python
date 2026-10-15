@@ -47,12 +47,14 @@ class TypeTest extends TestHelper {
     assertThat(Type.getById((byte) 0)).isEqualTo(Type.BOOLEAN);
     assertThat(Type.getById((byte) 7)).isEqualTo(Type.STRING);
     assertThat(Type.getById((byte) 23)).isEqualTo(Type.ARRAY_OF_DOUBLES);
+    assertThat(Type.getById((byte) 24)).isEqualTo(Type.OFFSET_TIME);
+    assertThat(Type.getById((byte) 27)).isEqualTo(Type.DURATION);
   }
 
   @Test
   void getByIdOutOfRange() {
     assertThat(Type.getById((byte) -1)).isNull();
-    assertThat(Type.getById((byte) 24)).isNull();
+    assertThat(Type.getById((byte) 28)).isNull();
     assertThat(Type.getById((byte) 100)).isNull();
   }
 
@@ -1643,5 +1645,20 @@ class TypeTest extends TestHelper {
     final Object result = Type.convert(null, instant, LocalDate.class);
     assertThat(result).isInstanceOf(LocalDate.class);
     assertThat((LocalDate) result).isEqualTo(expected);
+  }
+
+  // ───── Byte arithmetic (issue #9281) ─────
+
+  @Test
+  void incrementDecrementByte() {
+    assertThat(Type.increment((byte) 100, (byte) 50)).isEqualTo(150);
+    assertThat(Type.increment((byte) 100, 1L)).isEqualTo(101L);
+    assertThat(Type.increment(5, (byte) 3)).isEqualTo(8);
+    assertThat(Type.increment(5.5d, (byte) 3)).isEqualTo(8.5d);
+    assertThat(Type.decrement((byte) 100, (byte) 50)).isEqualTo(50);
+    assertThat(Type.decrement((byte) -100, (byte) 100)).isEqualTo(-200);
+    assertThat(Type.decrement(10L, (byte) 3)).isEqualTo(7L);
+    assertThat(Type.increment((byte) 3, 1.5f)).isEqualTo(4.5f);
+    assertThat(Type.increment((byte) 3, new BigDecimal("1.5"))).isEqualTo(new BigDecimal("4.5"));
   }
 }

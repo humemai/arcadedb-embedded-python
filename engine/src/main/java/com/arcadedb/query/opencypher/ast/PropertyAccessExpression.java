@@ -23,12 +23,13 @@ import com.arcadedb.database.RID;
 import com.arcadedb.database.Record;
 import com.arcadedb.exception.CommandExecutionException;
 import com.arcadedb.exception.RecordNotFoundException;
+import com.arcadedb.query.opencypher.InlineProperties;
 import com.arcadedb.query.opencypher.executor.DeletedEntityMarker;
 import com.arcadedb.query.opencypher.temporal.*;
+import com.arcadedb.query.opencypher.traversal.TraversalPath;
 import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.query.sql.executor.Result;
 
-import java.time.temporal.Temporal;
 import java.util.Date;
 import java.util.Map;
 
@@ -36,7 +37,7 @@ import java.util.Map;
  * Expression representing property access on a variable.
  * Example: n.name, person.age
  */
-public class PropertyAccessExpression implements Expression {
+public class PropertyAccessExpression implements PropertyReadExpression {
   private final String variableName;
   private final String propertyName;
 
@@ -65,10 +66,13 @@ public class PropertyAccessExpression implements Expression {
     } else if (variable instanceof Result) {
       // Handle Result types (nested results)
       return ((Result) variable).getProperty(propertyName);
+    } else if (variable instanceof TraversalPath path) {
+      // path.nodes / path.relationships / path.length on a procedure's path, which used to be a map (issue #9913)
+      return path.getMember(propertyName);
     } else if (variable instanceof CypherTemporalValue) {
       // Handle temporal value property access (e.g., date.year, time.hour)
       return ((CypherTemporalValue) variable).getTemporalProperty(propertyName);
-    } else if (variable instanceof Temporal || variable instanceof Date) {
+    } else if (TemporalUtil.isNativeTemporal(variable)) {
       // Native java.time / java.util.Date value (e.g. a temporal parameter or a stored
       // ZonedDateTime/Date) → wrap into its Cypher temporal type for component access (date.year, ...).
       final Object coerced = TemporalUtil.fromCoreJavaType(variable);
@@ -125,6 +129,11 @@ public class PropertyAccessExpression implements Expression {
    */
   private static String brokenLinkMessage(final RID rid, final String propertyName, final String reason) {
     return "TypeError: Cannot access property '" + propertyName + "' on " + rid + ": " + reason;
+  }
+
+  @Override
+  public PropertyRead propertyRead(final Result row, final CommandContext context) {
+    return new PropertyRead(InlineProperties.boundRecord(row.getProperty(variableName)), propertyName);
   }
 
   @Override

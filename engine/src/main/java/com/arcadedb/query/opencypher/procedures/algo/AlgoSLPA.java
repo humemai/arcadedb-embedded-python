@@ -92,7 +92,7 @@ public class AlgoSLPA extends AbstractAlgoProcedure {
   public Stream<Result> execute(final Object[] args, final Result inputRow, final CommandContext context) {
     validateArgs(args);
 
-    final Map<String, Object> config = args.length > 0 ? extractMap(args[0], "config") : null;
+    final Map<String, Object> config = extractMap(argOrDefault(args, 0, null), "config");
 
     final int iterations = config != null && config.get("iterations") instanceof Number num ?
         extractInt(num, "iterations", 1) : 20;
@@ -102,7 +102,7 @@ public class AlgoSLPA extends AbstractAlgoProcedure {
         num.longValue() : -1L;
     final Random rng = seedVal < 0 ? new Random() : new Random(seedVal);
 
-    final String[] relTypes = config != null ? extractRelTypes(config.get("relTypes")) : null;
+    final String[] relTypes = config != null ? extractRelTypes(config.get("relTypes"), context) : null;
 
     final Database db = context.getDatabase();
     final WorkGuard guard = newWorkGuard(context);

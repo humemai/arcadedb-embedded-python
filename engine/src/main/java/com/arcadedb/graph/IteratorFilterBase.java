@@ -20,6 +20,7 @@ package com.arcadedb.graph;
 
 import com.arcadedb.database.DatabaseInternal;
 import com.arcadedb.database.RID;
+import com.arcadedb.database.Record;
 import com.arcadedb.log.LogManager;
 
 import java.util.logging.Level;
@@ -29,17 +30,34 @@ public abstract class IteratorFilterBase<T> extends ResettableIteratorBase<T> {
   protected       RID          nextEdge;
   protected       RID          nextVertex;
   protected       RID          next;
+  // THE RECORD hasNext() LOOKED UP TO VALIDATE THE VERTEX RID OF next, HANDED OUT BY next() INSTEAD OF A SECOND LOOKUP
+  protected       Record       validatedVertex;
   // NULL WHEN NONE OF THE REQUESTED TYPES IS AN EDGE TYPE. A PRIMITIVE MASK INSTEAD OF A Set<Integer>, SO REJECTING AN
   // ENTRY OF ANOTHER TYPE COSTS NEITHER AN RID DECODE NOR A BOXED LOOKUP (#8417)
   protected final EdgeBucketMask validBuckets;
   protected       int            fullStackTracePrinted = 0;
+  // THE VERTEX AND DIRECTION OF THE LIST WALKED, FOR remove(). A CONSTRUCTOR ARGUMENT RATHER THAN AN OPTION, SO AN ITERATOR
+  // THAT COULD ONLY UNLINK THE WALKED SIDE CANNOT BE BUILT (#9779)
+  private final   RID              listOwner;
+  private final   Vertex.DIRECTION listDirection;
 
-  protected IteratorFilterBase(final DatabaseInternal database, final EdgeSegment current, final String[] edgeTypes) {
+  protected IteratorFilterBase(final DatabaseInternal database, final EdgeSegment current, final String[] edgeTypes,
+      final RID listOwner, final Vertex.DIRECTION listDirection) {
     super(database, current);
     validBuckets = EdgeBucketMask.of(database, edgeTypes);
+    this.listOwner = listOwner;
+    this.listDirection = listDirection;
+  }
+
+  /**
+   * The byte position in {@link #currentContainer} of the entry the last {@code hasNext()} stopped on.
+   */
+  protected int getEntryPosition() {
+    return lastElementPosition;
   }
 
   protected boolean hasNext(final boolean edge) {
+    checkNotInvalidated();
     if (next != null)
       return true;
 
@@ -88,7 +106,7 @@ public abstract class IteratorFilterBase<T> extends ResettableIteratorBase<T> {
 
           // VALIDATE RID
           try {
-            database.lookupByRID(nextVertex, false);
+            validatedVertex = database.lookupByRID(nextVertex, false);
           } catch (final Exception e) {
             handleCorruption(e, nextEdge, nextVertex);
             continue;
@@ -119,13 +137,26 @@ public abstract class IteratorFilterBase<T> extends ResettableIteratorBase<T> {
       LogManager.instance().log(this, Level.WARNING, "Error on loading edge %s. Skip it. Error: %s", edge, e.getMessage());
   }
 
+  /** To call from {@code next()} once {@code hasNext()} has stopped on the entry it hands out. */
+  protected final void entryReturned() {
+    entryReturned(currentContainer, lastElementPosition, currentPosition.get(), nextEdge, nextVertex);
+  }
+
+  /**
+   * Deletes the edge of the entry the last {@code next()} returned, see {@link ResettableIteratorBase#removeReturnedEntry}.
+   * It used to take the entry out of the list and nothing else (#9779): no {@code DELETE_RECORD} check, the edge record
+   * left alive and the far endpoint's list still pointing at it.
+   */
   @Override
   public void remove() {
-    if (currentContainer != null) {
-      currentContainer.removeEntry(lastElementPosition, currentPosition.get());
-      database.updateRecord(currentContainer);
-      currentPosition.set(lastElementPosition);
-    }
+    removeReturnedEntry(listOwner, listDirection);
+  }
+
+  @Override
+  protected void entriesShiftedBack(final int removed) {
+    if (next != null)
+      // THE ENTRY hasNext() ALREADY PEEKED FOLLOWS THE REMOVED ONE IN THE SAME SEGMENT
+      lastElementPosition -= removed;
   }
 
   public RID getNextVertex() {

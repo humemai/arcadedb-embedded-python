@@ -550,7 +550,9 @@ public class JsonlImporterFormat extends AbstractImporterFormat {
               + "records are unaffected", null, failures);
     }
 
-    schema.saveConfiguration();
+    // No saveConfiguration() here (issue #9764): the recording session the restore ran in saves the schema and, under
+    // Raft HA, ships it. A bare save reached this node's schema.json only. The import runs against an open database, so
+    // that session is never the pass-through of a schema still loading, which would save nothing.
 
     // Counted off the EXPORT rather than off the target's schema: the target's own counts include whatever predated
     // the import - a function library registered programmatically from native Java code is in every database's
@@ -598,9 +600,9 @@ public class JsonlImporterFormat extends AbstractImporterFormat {
         final Type dataType = Type.getTypeByName(column.getString("dataType"));
         final ColumnDefinition.ColumnRole role = ColumnDefinition.ColumnRole.valueOf(column.getString("role"));
         final String compression = column.getString("compression", null);
-        builder.withColumn(compression != null ?
-            new ColumnDefinition(columnName, dataType, role, TimeSeriesCodec.valueOf(compression)) :
-            new ColumnDefinition(columnName, dataType, role));
+        final TimeSeriesCodec codec = compression != null ? TimeSeriesCodec.valueOf(compression) : null;
+        final ColumnDefinition definition = restoredColumn(typeName, columnName, dataType, role, codec);
+        builder.withColumn(definition);
       } catch (final IllegalArgumentException | NullPointerException e) {
         throw new ImportException(
             "Column '" + columnName + "' of TIMESERIES type '" + typeName + "' declares a data type, role or "
@@ -608,8 +610,10 @@ public class JsonlImporterFormat extends AbstractImporterFormat {
       }
     }
 
+    // A type exported before issue #9800 can carry a precision CREATE no longer accepts. The restore keeps it, and
+    // with it the suspension of retention and downsampling that protects data whose unit was never established
     if (type.has("precision"))
-      builder.withPrecision(type.getString("precision"));
+      builder.withLegacyPrecision(type.getString("precision"));
     // 0 is the builder's own "use the default" (it resolves to ASYNC_WORKER_THREADS), which is the right answer
     // for an export written before the count was persisted.
     builder.withShards(type.getInt("shardCount", 0));
@@ -652,6 +656,26 @@ public class JsonlImporterFormat extends AbstractImporterFormat {
           + "stores them");
 
     return created;
+  }
+
+  /**
+   * The column a restore builds from an exported one. An export written before issue #9310 can name a codec the storage
+   * layer never honoured or could not run (NONE, a numeric codec on a text column, anything but delta-of-delta on the
+   * TIMESTAMP): {@link TimeSeriesTypeBuilder} now refuses those, and the samples are positional values that do not depend
+   * on the codec, so the column falls back to the default codec for its type and role instead of failing a restore of
+   * data that reads back correctly.
+   */
+  static ColumnDefinition restoredColumn(final String typeName, final String columnName, final Type dataType,
+      final ColumnDefinition.ColumnRole role, final TimeSeriesCodec codec) {
+    if (codec == null)
+      return new ColumnDefinition(columnName, dataType, role);
+    final String refusal = ColumnDefinition.codecRefusal(columnName, dataType, role, codec);
+    if (refusal == null)
+      return new ColumnDefinition(columnName, dataType, role, codec);
+    if (role != ColumnDefinition.ColumnRole.TIMESTAMP)
+      LogManager.instance().log(JsonlImporterFormat.class, Level.WARNING,
+          "Restoring TIMESERIES type '%s' with the default codec for column '%s': %s", typeName, columnName, refusal);
+    return new ColumnDefinition(columnName, dataType, role);
   }
 
   /**

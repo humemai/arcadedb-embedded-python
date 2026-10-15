@@ -142,6 +142,17 @@ public interface IndexInternal extends Index {
   }
 
   /**
+   * The keys a lookup of {@code keys} reads, in this index's own form: narrowed to the declared key types and folded where
+   * the index folds (COLLATE ci), so two values that are one key here come back equal, and every key comes back comparable
+   * by this index's comparator. An index that keeps its keys as given returns them unchanged.
+   *
+   * @throws IllegalArgumentException when a declared key type cannot read a value: such a value is no key of this index
+   */
+  default Object[] convertLookupKeys(final Object[] keys) {
+    return keys;
+  }
+
+  /**
    * Recomputes any persisted per-index statistics (e.g. BM25 corpus counters) by rescanning the live data, repairing drift that
    * incremental maintenance cannot reverse (rolled-back transactions, analyzer changes). Most indexes keep no such statistics and
    * this is a no-op. Exposed to SQL via {@code REBUILD INDEX <name> {statsOnly: true}} so operators can repair drift without a
@@ -188,6 +199,25 @@ public interface IndexInternal extends Index {
    * retired instance's background work outlives both. Most indexes run nothing of the sort and this is a no-op.
    */
   default void onSuperseded() {
+  }
+
+  /**
+   * Whether this instance holds in-memory state that took work to build and that a freshly built successor would start
+   * without (issue #10021): for an LSM vector index, the resident graph. A schema reload replaces every instance, and this is
+   * how it tells the ones whose first search is about to become expensive from the ones that were never used. Most indexes
+   * hold nothing of the sort and answer {@code false}.
+   */
+  default boolean isWarm() {
+    return false;
+  }
+
+  /**
+   * Loads now what the first search of this instance would otherwise load on its own thread (issue #10021). Called in the
+   * background on the successor of an index that {@link #isWarm()} when a schema reload published it. Safe to call from any
+   * thread and concurrently with searches, and a no-op where there is nothing to load.
+   */
+  default void warmUp() {
+    // No-op: an index with nothing resident to load has nothing to warm.
   }
 
   /**

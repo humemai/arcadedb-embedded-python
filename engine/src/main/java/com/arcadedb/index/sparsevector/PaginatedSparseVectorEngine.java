@@ -63,17 +63,12 @@ import java.util.logging.Level;
  * publication mid-query. Flush, compaction, and engine close serialize on a single mutator lock
  * to keep the segment-set publication ordering well-defined.
  * <p>
- * <b>Tombstone semantics: whole-document deletes only.</b> Both the BMW DAAT scorer
- * ({@link BmwScorer}) and the test-only brute-force reference scorer treat any tombstone
- * seen on an aligned dim cursor as a delete of the entire RID, not just of that one dim. A
- * workload that wants to drop only one dim from a multi-dim document while keeping the others
- * live must remove all of that document's postings and re-insert the survivors in the same
- * write batch - otherwise the document disappears from any query that mentions the dim that was
- * tombstoned. This is intentional for the document-as-sparse-vector use case (and what the
- * {@code LSMSparseVectorIndex} put / remove path exposes today, where a vertex/document delete
- * tombstones the document's whole posting set), but it is a constraint partial-dim writers must
- * be aware of. See the per-method notes on {@link #put(int, com.arcadedb.database.RID, float)}
- * and {@link #remove(int, com.arcadedb.database.RID)}.
+ * <b>Tombstone semantics: per dim.</b> A tombstone removes the posting of one (dim, RID) pair; the BMW DAAT
+ * scorer ({@link BmwScorer}) and the test-only brute-force reference scorer score a document on the dims that
+ * still hold a live posting for it (issue #9343). A document delete tombstones all the dims of the document, and
+ * an UPDATE of the document's dims (remove of the old postings, put of the new ones, same RID) leaves it
+ * answering on the new dims only. See the per-method notes on
+ * {@link #put(int, com.arcadedb.database.RID, float)} and {@link #remove(int, com.arcadedb.database.RID)}.
  *
  * @author Luca Garulli (l.garulli@arcadedata.com)
  */
@@ -217,6 +212,26 @@ public final class PaginatedSparseVectorEngine implements AutoCloseable {
   static final int EXPLICIT_PARTITION_OVERSUBSCRIPTION = 4;
 
   /**
+   * Ranges a query that has exactly {@code sparseVectorScoringMinPostingsForPartitioning} postings is
+   * split into on the default path; the range count then grows with the posting mass (see
+   * {@link #rangesByMass}).
+   */
+  static final int RANGES_AT_MIN_POSTINGS = 2;
+
+  /**
+   * Ranges a query of {@code totalPostings} postings can fill on the default (adaptive) path, one per
+   * {@code minPostings / RANGES_AT_MIN_POSTINGS} postings (issue #9482). The threshold says when the
+   * fan-out starts to pay for itself, so a range smaller than its share of it does not: a query just
+   * past the threshold is split in two rather than across the whole pool, and the workers it leaves
+   * alone stay free for the next query. Wide queries are unaffected - the pool size or the block
+   * layout is the limit long before this one is.
+   */
+  static int rangesByMass(final long totalPostings, final long minPostings) {
+    final long perRange = Math.max(1L, minPostings / RANGES_AT_MIN_POSTINGS);
+    return (int) Math.min(Integer.MAX_VALUE, totalPostings / perRange);
+  }
+
+  /**
    * A decided split: where the cuts go, and how many workers were actually claimed for it.
    * <p>
    * The two travel together because they are not derivable from each other. An explicit partition
@@ -226,7 +241,7 @@ public final class PaginatedSparseVectorEngine implements AutoCloseable {
    * the figure the pool actually recorded is what makes the reserve and the release the same number
    * by construction rather than by two places computing it alike.
    */
-  private record PartitionPlan(RID[] boundaries, int reservedWorkers) {
+  record PartitionPlan(RID[] boundaries, int reservedWorkers) {
   }
 
   /**
@@ -345,16 +360,10 @@ public final class PaginatedSparseVectorEngine implements AutoCloseable {
    * Adds (or updates) a posting for {@code (dim, rid)} with {@code weight}.
    * <p>
    * <b>Tombstone semantics.</b> The engine's only delete primitive is the per-(dim, rid)
-   * tombstone produced by {@link #remove(int, RID)}. The BMW DAAT scorer
-   * ({@link BmwScorer}) and the test-only brute-force reference scorer both treat any
-   * tombstone seen on an aligned dim cursor as a delete of the entire document - they skip the
-   * RID for the rest of the query, regardless of how many other dims still have live postings
-   * under that RID. <b>Partial-dim updates are not supported.</b> A workload that needs to
-   * "remove dim 2 from doc X while keeping dims 1 and 3 live" must remove all of doc X's
-   * postings and re-insert dim 1 and dim 3 within the same write batch, otherwise doc X will
-   * disappear from any query that mentions dim 2. The whole-document delete is the supported
-   * use case (and what the SQL/Studio surface produces today, since the index is built per
-   * document and reflects document-level deletes).
+   * tombstone produced by {@link #remove(int, RID)}, and it removes that one posting only (issue #9343): the
+   * BMW scorers and the test-only brute-force reference scorer score a document on the dims that still hold a
+   * live posting for it. Replacing the dims of a document is therefore a {@code remove} of the old postings
+   * and a {@code put} of the new ones, in any order across dims.
    */
   public void put(final int dim, final RID rid, final float weight) {
     ensureOpen();
@@ -370,19 +379,9 @@ public final class PaginatedSparseVectorEngine implements AutoCloseable {
 
   /**
    * Tombstones the posting for {@code (dim, rid)}. See the tombstone-semantics note on
-   * {@link #put(int, RID, float)}: this is a whole-document delete signal in the scorer's view,
-   * not a partial-dim update.
-   * <p>
-   * <b>Caller contract.</b> The supported call site is the wrapper's
-   * {@link LSMSparseVectorIndex#remove(Object[], com.arcadedb.database.Identifiable)} expansion,
-   * which always tombstones <i>all</i> dims of a document together (one scalar
-   * {@code (dim, rid)} per non-zero dim of the original sparse vector). A caller that
-   * tombstones <i>some</i> dims of a multi-dim document and not others will silently make that
-   * document disappear from any query mentioning a tombstoned dim - the scorer treats any
-   * tombstone-aligned cursor as a whole-doc delete, regardless of whether other dims still hold
-   * live postings. There is no runtime guard against this misuse (we don't have cross-transaction
-   * doc-level state at this level); if you are calling this directly, document why the
-   * partial-dim semantic is acceptable for your call site.
+   * {@link #put(int, RID, float)}: only that dim of the document is removed. The wrapper's
+   * {@link LSMSparseVectorIndex#remove(Object[], com.arcadedb.database.Identifiable)} expansion tombstones
+   * <i>all</i> dims of a document together to delete it as a whole.
    */
   public void remove(final int dim, final RID rid) {
     ensureOpen();
@@ -542,7 +541,7 @@ public final class PaginatedSparseVectorEngine implements AutoCloseable {
    * document is still scored exactly once. Only the speedup suffers, and it shows up as one range
    * finishing long after its siblings.
    */
-  private PartitionPlan planPartitionBoundaries(final int[] queryDims, final PaginatedSegmentReader[] segSnapshot)
+  PartitionPlan planPartitionBoundaries(final int[] queryDims, final PaginatedSegmentReader[] segSnapshot)
       throws IOException {
     final int configured = GlobalConfiguration.SPARSE_VECTOR_SCORING_MAX_PARTITIONS.getValueAsInteger();
     if (configured == 1 || segSnapshot.length == 0)
@@ -566,7 +565,8 @@ public final class PaginatedSparseVectorEngine implements AutoCloseable {
     }
     if (widest == null)
       return null;
-    if (totalPostings < GlobalConfiguration.SPARSE_VECTOR_SCORING_MIN_POSTINGS_FOR_PARTITIONING.getValueAsLong())
+    final long minPostings = GlobalConfiguration.SPARSE_VECTOR_SCORING_MIN_POSTINGS_FOR_PARTITIONING.getValueAsLong();
+    if (totalPostings < minPostings)
       return null;
 
     final SparseVectorScoringPool pool = SparseVectorScoringPool.getInstance();
@@ -593,7 +593,7 @@ public final class PaginatedSparseVectorEngine implements AutoCloseable {
       reserved = pool.reserveWorkers(partitions - 1);
       pool.warnExplicitSplitUnderLoad(partitions);
     } else {
-      final int wanted = Math.min(pool.getMaxParallelism(), byLayout) - 1;
+      final int wanted = Math.min(Math.min(pool.getMaxParallelism(), byLayout), rangesByMass(totalPostings, minPostings)) - 1;
       final int granted = pool.tryReserveWorkers(wanted);
       if (granted < 1) {
         // Nothing free: every worker is already promised to another query. Staying serial here is the

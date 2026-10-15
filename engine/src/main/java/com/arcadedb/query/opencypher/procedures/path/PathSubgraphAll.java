@@ -24,8 +24,6 @@ import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultInternal;
 
-import com.arcadedb.utility.NumberUtils;
-
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -35,7 +33,8 @@ import java.util.stream.Stream;
 /**
  * Procedure: path.subgraphAll(startNode, config)
  * <p>
- * Returns all nodes and relationships reachable from a starting node within the configured constraints.
+ * Returns all nodes reachable from a starting node within the configured constraints, and every relationship between those
+ * nodes - of any type, whatever the {@code relationshipFilter} that found the nodes, as APOC's does (issue #10048).
  * </p>
  * <p>
  * Example Cypher usage:
@@ -96,18 +95,22 @@ public class PathSubgraphAll extends AbstractPathProcedure {
     validateArgs(args);
 
     final Vertex startNode = extractVertex(args[0], "startNode");
-    final Map<String, Object> config = extractConfig(args.length > 1 ? args[1] : null);
+    final Map<String, Object> config = optionalMapArg(args, 1, "config");
 
-    final String[] relTypes = extractRelTypes(config.get("relationshipFilter"));
-    final String[] labelFilter = extractLabels(config.get("labelFilter"));
-    final int maxLevel = config.containsKey("maxLevel") ? NumberUtils.saturateToInt((Number) config.get("maxLevel")) : Integer.MAX_VALUE;
+    final int minLevel = extractComponentMinLevel(config);
+    final int maxLevel = extractMaxLevel(config);
+    final int limit = extractLimit(config);
+    // Read and checked, and then left to APOC's rule: this walk is node-global whatever the option says. APOC drops
+    // `optional` here: the answer is two lists, and an empty one is the answer of a walk that found nothing
+    extractUniqueness(config, PathUniqueness.NODE_GLOBAL);
+    final Filters filters = extractFilters(config, startNode.getDatabase(), minLevel);
 
     final boolean withRelationships = requestedYieldFields == null || requestedYieldFields.contains("relationships");
 
     final List<Vertex> reachableNodes = new ArrayList<>();
     final List<Edge> reachableEdges = withRelationships ? new ArrayList<>() : null;
 
-    collectReachableComponent(startNode, relTypes, labelFilter, maxLevel, reachableNodes, reachableEdges);
+    collectReachableComponent(startNode, filters, minLevel, maxLevel, limit, reachableNodes, reachableEdges, context);
 
     final ResultInternal result = new ResultInternal();
     result.setProperty("nodes", reachableNodes);

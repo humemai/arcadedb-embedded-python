@@ -19,6 +19,8 @@
 package com.arcadedb.graph;
 
 import com.arcadedb.database.DatabaseInternal;
+import com.arcadedb.database.RID;
+import com.arcadedb.database.Record;
 import com.arcadedb.exception.SchemaException;
 import com.arcadedb.log.LogManager;
 
@@ -26,8 +28,10 @@ import java.util.NoSuchElementException;
 import java.util.logging.Level;
 
 public class VertexIteratorFilter extends IteratorFilterBase<Vertex> {
-  public VertexIteratorFilter(final DatabaseInternal database, final EdgeSegment current, final String[] edgeTypes) {
-    super(database, current, edgeTypes);
+  /** With the vertex and direction of the list walked, so {@link #remove()} can delete the edge of the entry. */
+  public VertexIteratorFilter(final DatabaseInternal database, final EdgeSegment current, final String[] edgeTypes,
+      final RID vertex, final Vertex.DIRECTION direction) {
+    super(database, current, edgeTypes, vertex, direction);
   }
 
   @Override
@@ -42,7 +46,13 @@ public class VertexIteratorFilter extends IteratorFilterBase<Vertex> {
     if (next == null)
       throw new NoSuchElementException();
 
+    entryReturned();
     try {
+      final Record validated = validatedVertex;
+      validatedVertex = null;
+      if (validated instanceof Vertex vertex && next.equals(validated.getIdentity()))
+        // THE LOOKUP hasNext() DID TO VALIDATE THE RID IS THE ONE THIS CALL WOULD DO AGAIN
+        return vertex;
       return (Vertex) database.lookupByRID(next, false);
     } catch (final SchemaException e) {
       LogManager.instance().log(this, Level.WARNING, "Error on loading vertex %s from edge %s", e, next, nextEdge);

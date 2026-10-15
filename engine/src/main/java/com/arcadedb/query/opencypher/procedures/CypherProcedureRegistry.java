@@ -24,6 +24,7 @@ import com.arcadedb.query.opencypher.procedures.db.DbIndexFulltextQueryNodes;
 import com.arcadedb.query.opencypher.procedures.db.DbIndexFulltextQueryRelationships;
 import com.arcadedb.query.opencypher.procedures.db.DbIndexVectorQueryNodes;
 import com.arcadedb.query.opencypher.procedures.db.DbLabels;
+import com.arcadedb.query.opencypher.procedures.db.DbMigrateLegacyTemporals;
 import com.arcadedb.query.opencypher.procedures.db.DbPropertyKeys;
 import com.arcadedb.query.opencypher.procedures.db.DbRelationshipTypes;
 import com.arcadedb.query.opencypher.procedures.db.DbSchemaVisualization;
@@ -65,6 +66,7 @@ import com.arcadedb.query.opencypher.procedures.algo.AlgoSameCommunity;
 import com.arcadedb.query.opencypher.procedures.algo.AlgoSteinerTree;
 import com.arcadedb.query.opencypher.procedures.algo.AlgoTotalNeighbors;
 import com.arcadedb.query.opencypher.procedures.algo.AlgoDegreeCentrality;
+import com.arcadedb.query.opencypher.procedures.algo.AlgoCCHShortestPath;
 import com.arcadedb.query.opencypher.procedures.algo.AlgoDijkstra;
 import com.arcadedb.query.opencypher.procedures.algo.AlgoEigenvectorCentrality;
 import com.arcadedb.query.opencypher.procedures.algo.AlgoGraphSummary;
@@ -315,6 +317,7 @@ public final class CypherProcedureRegistry {
 
   private static void registerAlgorithmProcedures() {
     register(new AlgoDijkstra());
+    register(new AlgoCCHShortestPath());
     register(new AlgoAStar());
     register(new AlgoAllSimplePaths());
     register(new AlgoBellmanFord());
@@ -397,6 +400,7 @@ public final class CypherProcedureRegistry {
     register(new DbIndexFulltextQueryNodes());
     register(new DbIndexFulltextQueryRelationships());
     register(new DbLabels());
+    register(new DbMigrateLegacyTemporals());
     register(new DbRelationshipTypes());
     register(new DbPropertyKeys());
     register(new DbSchemaVisualization("db.schema"));

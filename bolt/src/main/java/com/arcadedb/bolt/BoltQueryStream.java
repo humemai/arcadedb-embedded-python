@@ -19,6 +19,8 @@
 package com.arcadedb.bolt;
 
 import com.arcadedb.log.LogManager;
+import com.arcadedb.query.RunningQuery;
+import com.arcadedb.query.sql.executor.QueryAdmissionGate;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultSet;
 
@@ -68,6 +70,16 @@ final class BoltQueryStream {
   Map<String, Object> planMetadata;
   String              planMetadataKey;
 
+  /** The query admission slot this stream holds (issue #9518), given back by {@link #close}. Null for a synthetic stream. */
+  QueryAdmissionGate.Ticket admission;
+
+  /**
+   * The registry entry of the statement (issue #9689): listed by {@code list queries} / {@code SHOW TRANSACTIONS} and
+   * terminated through them from RUN to the last PULL, and bound to the connection's thread only while RUN, PULL or
+   * DISCARD do its work. Closed by {@link #close}, last. Null for a synthetic stream.
+   */
+  RunningQuery runningQuery;
+
   BoltQueryStream(final long qid) {
     this.qid = qid;
   }
@@ -101,5 +113,20 @@ final class BoltQueryStream {
     syntheticResults = null;
     planMetadata = null;
     planMetadataKey = null;
+    if (admission != null) {
+      // AFTER THE RESULT SET: THE NEXT QUERY STARTS ONCE THIS ONE HAS GIVEN BACK THE HEAP ITS BUFFERS RESERVED
+      admission.close();
+      admission = null;
+    }
+    if (runningQuery != null) {
+      // LAST: THE ENTRY LEAVING THE LIST IS THE PROOF THE WORK IS OVER (issue #9689)
+      runningQuery.close();
+      runningQuery = null;
+    }
+  }
+
+  /** Publishes the statement's entry on the calling thread while its work runs there; null when it has none. */
+  RunningQuery.Binding bind() {
+    return runningQuery != null ? runningQuery.bind() : null;
   }
 }

@@ -121,11 +121,12 @@ public class AlterPropertyStatement extends DDLStatement {
       } else if ("max".equalsIgnoreCase(setting)) {
         oldValue = property.getMax();
         requireStoredValuesWithin(db, typez, property, finalValue, null, "" + finalValue, null, "MAX " + finalValue);
-        property.setMax("" + finalValue);
+        // MAX null clears the bound, it does not store the text "null" (#9172)
+        property.setMax(finalValue == null ? null : "" + finalValue);
       } else if ("min".equalsIgnoreCase(setting)) {
         oldValue = property.getMin();
         requireStoredValuesWithin(db, typez, property, finalValue, "" + finalValue, null, null, "MIN " + finalValue);
-        property.setMin("" + finalValue);
+        property.setMin(finalValue == null ? null : "" + finalValue);
       } else if ("default".equalsIgnoreCase(setting)) {
         // Issue #6134: report the definition rather than evaluating the outgoing default. Evaluating it would make
         // ALTER PROPERTY - the one statement that can repair a broken default - fail on exactly the schemas that
@@ -135,7 +136,7 @@ public class AlterPropertyStatement extends DDLStatement {
       } else if ("regexp".equalsIgnoreCase(setting)) {
         oldValue = property.getRegexp();
         requireStoredValuesWithin(db, typez, property, finalValue, null, null, "" + finalValue, "REGEXP " + finalValue);
-        property.setRegexp("" + finalValue);
+        property.setRegexp(finalValue == null ? null : "" + finalValue);
       } else {
         throw new CommandExecutionException("Setting '" + setting + "' not supported");
       }
@@ -162,7 +163,11 @@ public class AlterPropertyStatement extends DDLStatement {
       return;
     DocumentValidator.requireReadableBound(db, type, property, min, "MIN");
     DocumentValidator.requireReadableBound(db, type, property, max, "MAX");
-    ExistingRecordsCheck.requireValues(db, type, property, StoredValueConstraints.of(db, false, min, max, regexp), what);
+    // compiled first, so an invalid pattern is reported as one before it is judged against the type
+    final StoredValueConstraints constraints = StoredValueConstraints.of(db, false, min, max, regexp);
+    // before the scan: a pattern the type cannot use is refused for what it is, not for the first record it meets (#9808)
+    DocumentValidator.requireUsableRegexp(db, type, property, regexp);
+    ExistingRecordsCheck.requireValues(db, type, property, constraints, what);
   }
 
   @Override

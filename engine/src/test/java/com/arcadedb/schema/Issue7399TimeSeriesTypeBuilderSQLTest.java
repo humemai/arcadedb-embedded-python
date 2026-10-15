@@ -189,18 +189,18 @@ class Issue7399TimeSeriesTypeBuilderSQLTest extends TestHelper {
     // silently recreated it with the DEFAULT codec (issue #5475's failure, re-entered). CREATE TIMESERIES TYPE
     // carries a CODEC clause since issue #7689, so the codec renders and survives the round trip instead.
     final TimeSeriesTypeBuilder builder = builder("ExplicitCodec")
-        .withColumn(new ColumnDefinition("value", Type.DOUBLE, ColumnDefinition.ColumnRole.FIELD, TimeSeriesCodec.NONE));
+        .withColumn(new ColumnDefinition("value", Type.DOUBLE, ColumnDefinition.ColumnRole.FIELD, TimeSeriesCodec.DICTIONARY));
 
     final String sql = builder.toSQL().getFirst();
-    assertThat(sql).contains("`value` DOUBLE CODEC NONE");
+    assertThat(sql).contains("`value` DOUBLE CODEC DICTIONARY");
     assertParses(sql);
 
     // Both paths agree on the codec, which is the parity the remote builder rides on.
-    assertThat(builder.create().getTsColumn("value").getCompressionHint()).isEqualTo(TimeSeriesCodec.NONE);
+    assertThat(builder.create().getTsColumn("value").getCompressionHint()).isEqualTo(TimeSeriesCodec.DICTIONARY);
 
     database.command("sql", sql.replace("`ExplicitCodec`", "`ExplicitCodecViaSQL`"));
     assertThat(((TimeSeriesType) database.getSchema().getType("ExplicitCodecViaSQL")).getTsColumn("value")
-        .getCompressionHint()).isEqualTo(TimeSeriesCodec.NONE);
+        .getCompressionHint()).isEqualTo(TimeSeriesCodec.DICTIONARY);
   }
 
   @Test
@@ -238,15 +238,15 @@ class Issue7399TimeSeriesTypeBuilderSQLTest extends TestHelper {
     // form. A builder that stored the caller's spelling verbatim therefore reported "nanosecond" when it created
     // the type in place and "NANOSECOND" when the same builder code ran against a remote schema - a divergence in
     // exactly the invariant the remote builder exists to establish. All three paths are pinned together here.
-    assertThat(builder("LowerCasePrecision").withField("value", Type.DOUBLE).withPrecision("nanosecond").toSQL().getFirst())
-        .contains("PRECISION NANOSECOND");
+    assertThat(builder("LowerCasePrecision").withField("value", Type.DOUBLE).withPrecision("millisecond").toSQL().getFirst())
+        .contains("PRECISION MILLISECOND");
 
-    assertThat(builder("LowerCaseCreated").withField("value", Type.DOUBLE).withPrecision("nanosecond").create()
-        .getPrecision()).isEqualTo("NANOSECOND");
+    assertThat(builder("LowerCaseCreated").withField("value", Type.DOUBLE).withPrecision("millisecond").create()
+        .getPrecision()).isEqualTo("MILLISECOND");
 
-    for (final String sql : builder("LowerCaseViaSQL").withField("value", Type.DOUBLE).withPrecision("nanosecond").toSQL())
+    for (final String sql : builder("LowerCaseViaSQL").withField("value", Type.DOUBLE).withPrecision("millisecond").toSQL())
       database.command("sql", sql);
-    assertThat(((TimeSeriesType) database.getSchema().getType("LowerCaseViaSQL")).getPrecision()).isEqualTo("NANOSECOND");
+    assertThat(((TimeSeriesType) database.getSchema().getType("LowerCaseViaSQL")).getPrecision()).isEqualTo("MILLISECOND");
   }
 
   @Test

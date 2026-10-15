@@ -26,15 +26,17 @@ import com.arcadedb.database.Record;
 import com.arcadedb.exception.ErrorCategory;
 import com.arcadedb.exception.RecordNotFoundException;
 import com.arcadedb.graph.MutableEdge;
-import com.arcadedb.index.Index;
-import com.arcadedb.index.IndexCursor;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.network.binary.ChannelBinaryServer;
+import com.arcadedb.network.binary.ServerIsNotTheLeaderException;
+import com.arcadedb.query.RunningQuery;
+import com.arcadedb.query.sql.executor.QueryAdmissionGate;
 import com.arcadedb.schema.DocumentType;
 import com.arcadedb.schema.LocalEdgeType;
 import com.arcadedb.schema.LocalVertexType;
 import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.server.ArcadeDBServer;
+import com.arcadedb.server.ErrorConcealment;
 import com.arcadedb.server.network.PreAuthConnectionGate;
 import com.arcadedb.server.security.ServerSecurityException;
 import com.arcadedb.server.security.ServerSecurityUser;
@@ -56,22 +58,6 @@ import java.util.function.UnaryOperator;
 import java.util.logging.Level;
 
 public class RedisNetworkExecutor extends Thread {
-
-  /**
-   * Argument counts (command name included) real Redis enforces before it runs a command: {min, max}, max -1 = no upper
-   * bound. Without it a surplus argument was read as the INCR/DECR amount, a missing one defaulted to 1, and a missing
-   * argument of GET/SET/INCR surfaced as {@code Index 1 out of bounds for length 1} (#9059). Intentionally partial: only
-   * the commands this wrapper dispatches with a fixed shape are listed.
-   */
-  private static final Map<String, int[]> ARITY = Map.ofEntries(//
-      Map.entry("DECR", new int[] { 2, 2 }), Map.entry("DECRBY", new int[] { 3, 3 }),//
-      Map.entry("INCR", new int[] { 2, 2 }), Map.entry("INCRBY", new int[] { 3, 3 }),//
-      Map.entry("INCRBYFLOAT", new int[] { 3, 3 }),//
-      Map.entry("GET", new int[] { 2, 2 }), Map.entry("GETDEL", new int[] { 2, 2 }),//
-      Map.entry("EXISTS", new int[] { 2, -1 }), Map.entry("SET", new int[] { 3, -1 }),//
-      Map.entry("HDEL", new int[] { 2, -1 }), Map.entry("HEXISTS", new int[] { 3, 3 }),//
-      Map.entry("HGET", new int[] { 3, 3 }), Map.entry("HMGET", new int[] { 3, -1 }),//
-      Map.entry("HSET", new int[] { 3, -1 }), Map.entry("HMSET", new int[] { 3, -1 }));
 
   /** Commands whose arguments are opaque bytes (issue #9057); see the argument loop in the command dispatch. */
   private static final Set<String> BINARY_SAFE_COMMANDS = Set.of("SET", "ECHO", "PING");
@@ -310,6 +296,8 @@ public class RedisNetworkExecutor extends Thread {
       // Redis is traced like the other protocols (protocol=redis comes from ProtocolContext, set in
       // run()). No query language applies to a native Redis command, so language is null. No-op
       // unless the tracing plugin is active.
+      QueryAdmissionGate.Ticket admission = null;
+      RunningQuery runningQuery = null;
       try (final QueryTracer.Span span = QueryTracer.Holder.begin(
           selectedDatabaseName, null, "command", cmdString)) {
 
@@ -345,7 +333,18 @@ public class RedisNetworkExecutor extends Thread {
           return;
         }
 
-        checkArity(cmdString, list.size());
+        RedisCommandArity.checkWire(cmdString, list.size());
+
+        // Waits for the query admission gate (issue #9518) like the requests of every other protocol. PING and SELECT touch no
+        // data and must stay answerable on a server busy with queries
+        if (!"PING".equals(cmdString) && !"SELECT".equals(cmdString)) {
+          admission = QueryAdmissionGate.getInstance().admit();
+          // Listed by "list queries" / SHOW TRANSACTIONS and stopped by a terminate, over the same window as the slot
+          // (issue #9689). The command line is put together only if somebody lists it
+          runningQuery = server.getRunningQueries().register(selectedDatabaseName, authenticatedUser.getName(), "redis", null, null,
+              RunningQuery.Client.of(getName(), channel.socket.getRemoteSocketAddress()));
+          runningQuery.setStatement("redis", () -> describe(list));
+        }
 
         switch (cmdString) {
           case "DECR":
@@ -421,7 +420,16 @@ public class RedisNetworkExecutor extends Thread {
         value.append('-');
         value.append(respErrorPrefix(e));
         value.append(' ');
-        value.append(respErrorMessage(e));
+        value.append(respClientMessage(e));
+      } finally {
+        try {
+          if (admission != null)
+            admission.close();
+        } finally {
+          // LAST: THE ENTRY LEAVING THE LIST IS THE PROOF THE WORK IS OVER
+          if (runningQuery != null)
+            runningQuery.close();
+        }
       }
 
       appendCrLf();
@@ -430,14 +438,18 @@ public class RedisNetworkExecutor extends Thread {
       LogManager.instance().log(this, Level.SEVERE, "Redis wrapper: Invalid command %s", command);
   }
 
-  private static void checkArity(final String cmdString, final int argumentCount) {
-    final int[] arity = ARITY.get(cmdString);
-    if (arity != null && (argumentCount < arity[0] || (arity[1] >= 0 && argumentCount > arity[1])))
-      throw wrongArity(cmdString);
-  }
-
-  private static RedisException wrongArity(final String cmdString) {
-    return new RedisException("wrong number of arguments for '" + cmdString.toLowerCase(Locale.ROOT) + "' command");
+  /** The command line as a client would type it, for the listing of running statements (issue #9689). */
+  private static String describe(final List<Object> command) {
+    final StringBuilder text = new StringBuilder();
+    for (final Object part : command) {
+      if (!text.isEmpty())
+        text.append(' ');
+      text.append(part instanceof String ? (String) part : String.valueOf(part));
+      // The listing shows a bounded prefix anyway: a command carrying a large value is not copied whole
+      if (text.length() > RunningQuery.MAX_TEXT_LENGTH * 2)
+        break;
+    }
+    return text.toString();
   }
 
   /**
@@ -459,11 +471,44 @@ public class RedisNetworkExecutor extends Thread {
     if (error instanceof RedisException redisException && redisException.getKind() != null)
       return redisException.getKind();
 
+    // A follower refusing leader-only work, naming the leader (issue #9845): what Redis answers a write sent to a
+    // replica, and what a Sentinel-aware client reconnects to the master on. TRYAGAIN would have it retry the replica.
+    if (ServerIsNotTheLeaderException.redirectIn(error) != null)
+      return "READONLY";
+
     return switch (ErrorCategory.of(error)) {
       case RETRY -> "TRYAGAIN";
       case SECURITY -> "NOPERM";
       default -> "ERR";
     };
+  }
+
+  /**
+   * The text of the error reply for {@code error}. A {@link RedisException} is RESP text this executor words itself
+   * ("wrong number of arguments", "value is not an integer or out of range", WRONGPASS...), and a
+   * {@link ServerSecurityException} is the server's refusal of the principal: both are bounded, carry no stored data
+   * and are what the client needs, so they go out in every mode. Anything else is the ENGINE's text - for a duplicated
+   * key, the stored key values - and production mode conceals it behind {@link ArcadeDBServer#CONCEALED_ERROR_MESSAGE},
+   * writing the detail to the server log instead, as every other surface does (issue #8749). The kind word before it
+   * ({@link #respErrorPrefix}) is what a client branches on and stays.
+   */
+  private String respClientMessage(final Exception error) {
+    final String message = respErrorMessage(error);
+    if (error instanceof RedisException || error instanceof ServerSecurityException)
+      return message;
+    return withLeaderRedirect(ErrorConcealment.clientMessage(ErrorConcealment.isConcealing(server), this, "Redis", message, error),
+        error);
+  }
+
+  /**
+   * {@code text}, followed by the leader's address when {@code error} is a follower's refusal that names one - the
+   * failure {@link #respErrorPrefix} answers with {@code READONLY} (issue #9845). Appended after concealment, as the
+   * gRPC transport does: it is an address the cluster put there, not engine detail, and the only thing that makes the
+   * refusal actionable.
+   */
+  static String withLeaderRedirect(final String text, final Throwable error) {
+    // A RESP simple error is one line: leaderSentence strips the address's control characters, line breaks included
+    return ServerIsNotTheLeaderException.withLeaderSentence(text, error);
   }
 
   /**
@@ -520,7 +565,7 @@ public class RedisNetworkExecutor extends Thread {
     // HDEL <db>.<rid> may stand alone (the record is named by the bucket); every other form needs at least one key, and the
     // table can only express the lower bound of 2
     if (list.size() < 3 && (pos < 0 || !bucketName.startsWith("#", pos + 1)))
-      throw wrongArity("HDEL");
+      throw RedisCommandArity.wrongArity("HDEL");
 
     if (pos < 0) {
       // Transient mode: delete from globalVariables atomically. A key that is a RID deletes that record of the database
@@ -533,8 +578,8 @@ public class RedisNetworkExecutor extends Thread {
       final List<String> variables = new ArrayList<>();
       for (int i = 2; i < list.size(); i++) {
         final String key = (String) list.get(i);
-        if (isRid(key))
-          rids.add(parseRid(key));
+        if (RedisRecords.isRid(key))
+          rids.add(RedisRecords.parseRid(key));
         else
           variables.add(key);
       }
@@ -543,7 +588,7 @@ public class RedisNetworkExecutor extends Thread {
           // counted locally and published once: a transaction retried after a conflict must not add its discarded attempt
           int removed = 0;
           for (final RID rid : rids)
-            removed += deleteByRid(database, rid) ? 1 : 0;
+            removed += RedisRecords.deleteByRid(database, rid) ? 1 : 0;
           deleted[0] = removed;
         });
       // the two phases are not one atomic unit: variable removal cannot fail, but it is not undone with the records
@@ -556,70 +601,37 @@ public class RedisNetworkExecutor extends Thread {
       final String databaseName = bucketName.substring(0, pos);
       final String keyType = bucketName.substring(pos + 1);
 
-      final Database database = getAuthorizedDatabase(databaseName);
+      final DatabaseInternal database = getAuthorizedDatabase(databaseName);
 
       if (keyType.startsWith("#")) {
         // The RID of the bucket argument, plus every RID among the keys: each record is deleted once (#9056)
         final Set<RID> rids = new LinkedHashSet<>();
-        rids.add(parseRid(keyType));
+        rids.add(RedisRecords.parseRid(keyType));
         for (int i = 2; i < list.size(); i++) {
           final String key = (String) list.get(i);
-          if (isRid(key))
-            rids.add(parseRid(key));
+          if (RedisRecords.isRid(key))
+            rids.add(RedisRecords.parseRid(key));
         }
         database.transaction(() -> {
           int removed = 0;
           for (final RID rid : rids)
-            removed += deleteByRid(database, rid) ? 1 : 0;
+            removed += RedisRecords.deleteByRid(database, rid) ? 1 : 0;
           deleted[0] = removed;
         });
       } else {
-        final Index index = database.getSchema().getIndexByName(keyType);
-
-        for (int i = 2; i < list.size(); i++) {
-          final String key = (String) list.get(i);
-
-          final IndexCursor cursor = index.get(RedisIndexKeys.parse(key));
-          if (cursor.hasNext()) {
-            cursor.next().getRecord().delete();
-            deleted[0]++;
-          }
-        }
+        // one unit of work like the RID form above and the query language: a failure on key k undoes keys 1..k-1 and a conflict is
+        // retried, where one implicit commit per key left the first keys deleted behind an error reply (#9837). The count is
+        // published once, so a retried attempt does not add its discarded count
+        database.transaction(() -> {
+          int removed = 0;
+          for (int i = 2; i < list.size(); i++)
+            removed += RedisRecords.deleteByKey(database, keyType, (String) list.get(i)) ? 1 : 0;
+          deleted[0] = removed;
+        });
       }
     }
     value.append(":");
     value.append(deleted[0]);
-  }
-
-  /** {@code #<bucket-id>:<position>}, both non-negative: the only shape of key HDEL reads as a record rather than a variable. */
-  private static boolean isRid(final String key) {
-    final int colon = key.indexOf(':');
-    if (colon < 2 || key.charAt(0) != '#' || colon == key.length() - 1)
-      return false;
-    for (int i = 1; i < key.length(); i++)
-      if (i != colon && (key.charAt(i) < '0' || key.charAt(i) > '9'))
-        return false;
-    return true;
-  }
-
-  private static RID parseRid(final String text) {
-    try {
-      return new RID(text);
-    } catch (final RuntimeException e) {
-      throw new RedisException("invalid RID '" + text + "', it must be #<bucket-id>:<bucket-position>");
-    }
-  }
-
-  /** Deletes the record at {@code rid}; false when there is none, so the reply counts only what was really deleted. */
-  private static boolean deleteByRid(final Database database, final RID rid) {
-    final Record record;
-    try {
-      record = database.lookupByRID(rid, true);
-    } catch (final RecordNotFoundException e) {
-      return false;
-    }
-    record.delete();
-    return true;
   }
 
   private void hExists(final List<Object> list) {
@@ -711,30 +723,39 @@ public class RedisNetworkExecutor extends Thread {
 
     // Check if transient mode: second argument is JSON (starts with '{')
     if (secondArg.startsWith("{")) {
-      // Transient mode: store JSON objects in globalVariables atomically
+      // Transient mode: store JSON objects in globalVariables. Every element is parsed and validated BEFORE the first is written:
+      // setGlobalVariable is a plain map put that no transaction undoes, so a malformed element k used to leave elements 1..k-1
+      // stored behind an error reply (#9837). The same order as the RID parsing of hDel's transient branch. The stores that follow
+      // cannot fail, but they are still one put at a time: a concurrent reader may see some of the elements and not the others
       final DatabaseInternal database = getAuthorizedDatabase(databaseName);
-      final int[] stored = {0};
-      database.transaction(() -> {
-        for (int i = 2; i < list.size(); i++) {
-          final JSONObject json = new JSONObject((String) list.get(i));
-          if (!json.has("id")) {
-            throw new RedisException("JSON object must have an 'id' field for transient storage");
-          }
-          final String key = json.get("id").toString();
-          database.setGlobalVariable(key, json.toString());
-          stored[0]++;
+      final int count = list.size() - 2;
+      final String[] keys = new String[count];
+      final String[] values = new String[count];
+      for (int i = 0; i < count; i++) {
+        final JSONObject json = new JSONObject((String) list.get(i + 2));
+        if (!json.has("id")) {
+          throw new RedisException("JSON object must have an 'id' field for transient storage");
         }
-      });
+        keys[i] = json.get("id").toString();
+        values[i] = json.toString();
+      }
+      for (int i = 0; i < count; i++)
+        database.setGlobalVariable(keys[i], values[i]);
       value.append(":");
-      value.append(stored[0]);
+      value.append(count);
     } else {
       // Persistent mode: store documents in database type
       // the table minimum of 3 is the transient JSON form; the persistent form also needs a type and one document
       if (list.size() < 4)
-        throw wrongArity((String) list.get(0));
+        throw RedisCommandArity.wrongArity((String) list.get(0));
       final String typeName = secondArg;
       final Database database = getAuthorizedDatabase(databaseName);
+      // Counted into a local inside the block and published only once it has returned, so a retried attempt does not carry the
+      // rolled-back one's count (issue #8037). The reply is the number of records stored: a create a BeforeRecordCreateListener
+      // vetoed is not one (issue #9974)
+      final int[] count = { 0 };
       database.transaction(() -> {
+        int created = 0;
         for (int i = 3; i < list.size(); i++) {
           final JSONObject v = new JSONObject((String) list.get(i));
 
@@ -750,11 +771,13 @@ public class RedisNetworkExecutor extends Thread {
             document = database.newDocument(typeName);
 
           document.fromJSON(v);
-          document.save();
+          if (document.saveReportingVeto())
+            created++;
         }
+        count[0] = created;
       });
       value.append(":");
-      value.append(list.size() - 3);
+      value.append(count[0]);
     }
   }
 
@@ -1361,10 +1384,9 @@ public class RedisNetworkExecutor extends Thread {
 
       final Database database = getAuthorizedDatabase(databaseName);
 
-      final Index index = database.getSchema().getIndexByName(keyType);
-
-      final IndexCursor cursor = index.get(RedisIndexKeys.parse(key));
-      record = cursor.hasNext() ? cursor.next().asDocument() : null;
+      // "not found" only for a key that is not there: never for one a concurrent CREATE or DROP INDEX hid (#9811)
+      final Identifiable found = RedisIndexKeys.lookup(database, keyType, key);
+      record = found != null ? found.asDocument() : null;
     }
     return record;
   }
@@ -1403,11 +1425,9 @@ public class RedisNetworkExecutor extends Thread {
 
       final Database database = getAuthorizedDatabase(databaseName);
 
-      final Index index = database.getSchema().getIndexByName(keyType);
-
       for (final Object key : keys) {
-        final IndexCursor cursor = index.get(RedisIndexKeys.parse(key.toString()));
-        records.add(cursor.hasNext() ? cursor.next().asDocument() : null);
+        final Identifiable found = RedisIndexKeys.lookup(database, keyType, key.toString());
+        records.add(found != null ? found.asDocument() : null);
       }
     }
     return records;

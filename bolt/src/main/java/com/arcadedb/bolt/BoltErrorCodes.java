@@ -80,6 +80,17 @@ public final class BoltErrorCodes {
   // generic DatabaseError a driver reads as an unexplained server fault.
   public static final String TRANSACTION_TIMED_OUT_ERROR = "Neo.ClientError.Transaction.TransactionTimedOut";
 
+  // The statement was stopped on request (TERMINATE TRANSACTIONS, "terminate query", issue #9689): what Neo4j answers
+  // for a transaction a user killed. A ClientError since Neo4j 5, precisely so that no driver retries it.
+  public static final String TRANSACTION_TERMINATED_ERROR = "Neo.ClientError.Transaction.Terminated";
+
+  // A write sent to a follower: only the cluster leader can run it (a ServerIsNotTheLeaderException that names the leader).
+  // Not TRANSIENT_CONFLICT_ERROR, which its NeedRetryException ancestry would earn: a driver retries that on the server it
+  // already holds, which is the one server that will refuse again. Neo4j's own title for this condition, and a routing
+  // (neo4j://) driver answers it by dropping the writer from its routing table and re-routing - the action that resolves
+  // it (issue #9845).
+  public static final String NOT_A_LEADER_ERROR = "Neo.ClientError.Cluster.NotALeader";
+
   // Request errors
   public static final String PROTOCOL_ERROR = "Neo.ClientError.Request.Invalid";
 

@@ -19,6 +19,7 @@
 package com.arcadedb.server;
 
 import com.arcadedb.GlobalConfiguration;
+import com.arcadedb.serializer.json.JSONObject;
 
 import java.io.IOException;
 import java.net.http.HttpClient;
@@ -106,6 +107,55 @@ public interface HAServerPlugin extends ServerPlugin {
    * and never take a lock.
    */
   default void onUnverifiedClosedCopyRefused(final String databaseName) {
+  }
+
+  /**
+   * The operator's override of issue #9449: lifts the quarantine (and the read floor that goes with it) standing on
+   * {@code databaseName}, accepting this node's copy as it is WITHOUT a resync, and records who did it. Shared by
+   * {@code POST /api/v1/cluster/accept-diverged/{database}} and the gRPC {@code AcceptDivergedDatabase} RPC, so the two
+   * transports cannot drift on what the override does. The caller authorizes (root only); this method does not.
+   * <p>
+   * Only where no peer can serve a resync may it be done: on the sole voter of its cluster, or on a node whose every
+   * voter holds the same database quarantined (issue #9553). Anywhere else the quarantine is lifted by a resync from a
+   * peer, and lifting it by hand would leave this copy silently different from the others.
+   *
+   * @param acceptedBy who asked, for the audit line in the server log
+   *
+   * @return what was lifted: {@code database}, {@code localServer}, {@code appliedIndex}, and {@code divergenceCause}
+   * and {@code readFloor} when they stood
+   *
+   * @throws ServerControlPlane.NotFoundException              when no quarantine and no read floor stands on the database
+   * @throws ServerControlPlane.OperationNotAvailableException when a peer can serve a resync, or the HA
+   *                                                           implementation has no such override
+   * @throws IOException                                       when the change could not be persisted; nothing is lifted
+   */
+  default JSONObject acceptDivergedDatabase(final String databaseName, final String acceptedBy) throws IOException {
+    throw new ServerControlPlane.OperationNotAvailableException(
+        "This HA implementation cannot lift a database quarantine by hand");
+  }
+
+  /**
+   * The operator's override of issue #9498: lifts the node-wide stale-snapshot read floor (issue #6111), which stands
+   * while the replication snapshot marker runs ahead of the entries this node applied, accepting this node's databases as
+   * they are WITHOUT a resync, and records who did it. Shared by {@code POST /api/v1/cluster/accept-stale-snapshot} and
+   * the gRPC {@code AcceptStaleSnapshot} RPC. The caller authorizes (root only); this method does not.
+   * <p>
+   * Only on the sole voter of its cluster, which has no peer to resync from. Anywhere else the floor is lifted by a resync
+   * from a peer, and lifting it by hand would leave this node silently short of entries the others applied.
+   *
+   * @param acceptedBy who asked, for the audit line in the server log
+   *
+   * @return what was lifted: {@code localServer}, {@code readFloor}, {@code snapshotIndex} and the {@code appliedIndex}
+   * now recorded
+   *
+   * @throws ServerControlPlane.NotFoundException              when no stale-snapshot read floor stands
+   * @throws ServerControlPlane.OperationNotAvailableException when a peer can serve a resync, a download is running, or
+   *                                                           the HA implementation has no such override
+   * @throws IOException                                       when the change could not be persisted; nothing is lifted
+   */
+  default JSONObject acceptStaleSnapshot(final String acceptedBy) throws IOException {
+    throw new ServerControlPlane.OperationNotAvailableException(
+        "This HA implementation cannot lift a stale-snapshot read floor by hand");
   }
 
   String getLeaderName();
@@ -411,16 +461,39 @@ public interface HAServerPlugin extends ServerPlugin {
    * receiver checked the derived token, so on a default-configured cluster the forward carried no usable
    * credentials at all.
    *
+   * <p>
+   * The plugin is looked up among the server's registered plugins as well when {@link ArcadeDBServer#getHA()} names
+   * none yet (issue #9554). An HA plugin registers itself there only at the end of its start, but the HTTP listener is
+   * up before it begins, and the replication layer it starts can be elected leader - so its peers forward to it - well
+   * before it returns. Falling back to the raw setting in that window answered every correct forward
+   * 401 "Invalid cluster token" on a cluster whose token is derived.
+   *
    * @return the effective token, or null/blank when this server has none
    */
   static String effectiveClusterToken(final ArcadeDBServer server) {
     if (server == null)
       return null;
-    final HAServerPlugin ha = server.getHA();
+    HAServerPlugin ha = server.getHA();
+    if (ha == null)
+      ha = registeredHAPlugin(server);
     final String fromPlugin = ha != null ? ha.getClusterToken() : null;
     if (fromPlugin != null && !fromPlugin.isBlank())
       return fromPlugin;
     return server.getConfiguration().getValueAsString(GlobalConfiguration.HA_CLUSTER_TOKEN);
+  }
+
+  /**
+   * The HA plugin registered with {@code server}'s plugin manager, whether or not it has registered itself as the
+   * server's HA implementation yet, or null when there is none.
+   * <p>
+   * A plugin found here may not have derived its token yet - discovered but not started - and then answers null:
+   * the caller falls back to the raw setting, which is what it read before this lookup existed. That is intended.
+   */
+  private static HAServerPlugin registeredHAPlugin(final ArcadeDBServer server) {
+    for (final ServerPlugin plugin : server.getPlugins())
+      if (plugin instanceof final HAServerPlugin ha)
+        return ha;
+    return null;
   }
 
   /**

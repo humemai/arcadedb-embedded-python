@@ -21,6 +21,7 @@ package com.arcadedb.query.opencypher.procedures.algo;
 import com.arcadedb.database.Database;
 import com.arcadedb.database.RID;
 import com.arcadedb.graph.Edge;
+import com.arcadedb.graph.EdgeWeight;
 import com.arcadedb.graph.GraphTraversalProvider;
 import com.arcadedb.graph.Vertex;
 import com.arcadedb.graph.olap.GraphAlgorithms;
@@ -36,7 +37,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.PriorityQueue;
 import java.util.Set;
-import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
 /**
@@ -104,9 +104,9 @@ public class AlgoDijkstraSingleSource extends AbstractAlgoProcedure {
     validateArgs(args);
 
     final Vertex startNode      = extractVertex(args[0], "startNode");
-    final String[] relTypes     = extractRelTypes(args[1]);
+    final String[] relTypes     = extractRelTypes(args[1], context);
     final String weightProperty = extractString(args[2], "weightProperty");
-    final Vertex.DIRECTION dir  = args.length > 3 ? parseDirection(extractString(args[3], "direction")) : Vertex.DIRECTION.OUT;
+    final Vertex.DIRECTION dir  = parseDirection(extractString(argOrDefault(args, 3, "OUT"), "direction"));
 
     final Database db = context.getDatabase();
 
@@ -121,7 +121,7 @@ public class AlgoDijkstraSingleSource extends AbstractAlgoProcedure {
     // upper bound rather than the base node mapping (issue #6792) - so this procedure no longer has to refuse
     // the whole call just because a commit landed since the view was last built (issue #6791).
     if (provider instanceof GraphAnalyticalView gav && gav.servesEdgeProperty(weightProperty, relTypes)) {
-      final Stream<Result> accelerated = executeWithCSR(context, gav, startNode.getIdentity(), relTypes, weightProperty, dir);
+      final Stream<Result> accelerated = executeWithCSR(gav, startNode.getIdentity(), relTypes, weightProperty, dir);
       // Null means the kernel refused outright: a node it popped could not be answered exactly even through
       // the overlay-aware fallback GraphAlgorithms.dijkstraSingleSource takes while an overlay is active
       // (issue #6791) - an ambiguous parallel-edge deletion is the one case that can still happen.
@@ -132,10 +132,10 @@ public class AlgoDijkstraSingleSource extends AbstractAlgoProcedure {
     }
 
     // Fall back to OLTP path
-    return executeWithOLTP(db, startNode, relTypes, weightProperty, dir);
+    return executeWithOLTP(db, startNode, relTypes, weightProperty, dir, context);
   }
 
-  private Stream<Result> executeWithCSR(final CommandContext context, final GraphAnalyticalView gav, final RID startRid,
+  private Stream<Result> executeWithCSR(final GraphAnalyticalView gav, final RID startRid,
       final String[] relTypes, final String weightProperty, final Vertex.DIRECTION dir) {
     // The exclusive bound of the dense id space, not the live node count: while an overlay is active the two
     // diverge (issue #6792) - an added node's id sits above the base mapping regardless of how many nodes are
@@ -152,12 +152,15 @@ public class AlgoDijkstraSingleSource extends AbstractAlgoProcedure {
         gav, src, weightProperty, dir, relTypes);
     if (dist == null)
       return null; // a popped node could not be answered exactly; the caller reads the edges instead
-    long reachable = 0;
+    // The reached ids up front rather than a filter() on the stream: a filtered stream no longer knows its size, and
+    // the exact size is what lets a count-only CALL answer without building a row per node (issue #9453)
+    final int[] reached = new int[n];
+    int reachable = 0;
     for (int i = 0; i < n; i++)
-      if (i != src && dist[i] < Double.POSITIVE_INFINITY) reachable++;
-    context.setVariable(CommandContext.RESULT_COUNT_HINT_VAR, reachable);
+      if (i != src && dist[i] < Double.POSITIVE_INFINITY)
+        reached[reachable++] = i;
 
-    return IntStream.range(0, n).filter(i -> i != src && dist[i] < Double.POSITIVE_INFINITY).mapToObj(i -> {
+    return Arrays.stream(reached, 0, reachable).mapToObj(i -> {
       final ResultInternal r = new ResultInternal();
       r.setProperty("node", gav.getRID(i));
       r.setProperty("cost", dist[i]);
@@ -166,7 +169,7 @@ public class AlgoDijkstraSingleSource extends AbstractAlgoProcedure {
   }
 
   private Stream<Result> executeWithOLTP(final Database db, final Vertex startNode,
-      final String[] relTypes, final String weightProperty, final Vertex.DIRECTION dir) {
+      final String[] relTypes, final String weightProperty, final Vertex.DIRECTION dir, final CommandContext context) {
     final List<Vertex> vertices = loadVertices(db, null, newMemoryBudget(db));
 
     final int n = vertices.size();
@@ -187,20 +190,17 @@ public class AlgoDijkstraSingleSource extends AbstractAlgoProcedure {
       final Vertex v = vertices.get(i);
       final List<int[]> nbrs = new ArrayList<>();
       final List<Double> wts = new ArrayList<>();
-      for (final Edge edge : v.getEdges(dir)) {
+      // the incoming side of a unidirectional edge type is on the other end only (issue #8629)
+      for (final Edge edge : edgesOf(context, v, dir, relTypes)) {
         if (relTypeSet != null && !relTypeSet.contains(edge.getTypeName()))
           continue;
         final RID neighborRid = neighborRid(edge, v.getIdentity(), dir);
         final Integer nbrIdx = ridToIdx.get(neighborRid);
         if (nbrIdx == null)
           continue;
-        double weight = 1.0;
-        if (weightProperty != null) {
-          final Object w = edge.get(weightProperty);
-          if (w instanceof Number num)
-            weight = num.doubleValue();
-        }
-        if (weight < 0)
+        // the rule every weighted path finder shares (issue #9443): a NaN weight used to slip past `weight < 0`
+        final double weight = weightProperty != null ? EdgeWeight.of(edge.get(weightProperty)) : EdgeWeight.MISSING;
+        if (!EdgeWeight.isWalkable(weight))
           continue;
         nbrs.add(new int[]{ nbrIdx });
         wts.add(weight);
@@ -238,7 +238,14 @@ public class AlgoDijkstraSingleSource extends AbstractAlgoProcedure {
       }
     }
 
-    return IntStream.range(0, n).filter(i -> i != src && dist[i] < Double.POSITIVE_INFINITY).mapToObj(i -> {
+    // Sized, like the CSR path: see the comment there (issue #9453)
+    final int[] reached = new int[n];
+    int reachable = 0;
+    for (int i = 0; i < n; i++)
+      if (i != src && dist[i] < Double.POSITIVE_INFINITY)
+        reached[reachable++] = i;
+
+    return Arrays.stream(reached, 0, reachable).mapToObj(i -> {
       final ResultInternal r = new ResultInternal();
       r.setProperty("node", vertices.get(i).getIdentity());
       r.setProperty("cost", dist[i]);

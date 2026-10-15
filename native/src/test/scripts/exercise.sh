@@ -27,7 +27,8 @@ set -euo pipefail
 # the agent only records what the instrumented JVM actually does, so smoke.sh and trace.sh must
 # drive identical HTTP/SQL/Cypher/wire-protocol traffic against the process they each start.
 #
-# Every wire-protocol check below (Postgres/Redis/Bolt/Mongo/gRPC) is best-effort BY DEFAULT: if
+# Every wire-protocol check below (Postgres/Redis/Bolt/Mongo/gRPC), and the observability-plugin
+# checks at the end (Prometheus, OTLP metrics, tracing), is best-effort BY DEFAULT: if
 # the corresponding plugin was not enabled on this server run (the port never opens) or the local
 # machine lacks the client tool, the check prints a WARN and is skipped rather than failing the
 # script. This keeps local/macOS/Windows runs, where client tools are not guaranteed to be
@@ -45,6 +46,9 @@ set -euo pipefail
 #   WIRE_STRICT - "1" to hard-fail instead of WARN-skip on wire-protocol checks, see above
 #   SRV_PID    - if set and the process dies while waiting for HTTP readiness, fail fast
 #   SERVER_LOG - if set, tailed on failure
+#   OTLP_SINK_DIR    - the directory otlp_sink.py records into (see otlp-sink.sh); if set, the OTLP
+#                      metrics and tracing checks also assert an export reached it
+#   OTLP_EXPORT_WAIT - seconds to wait for each of those exports, default 60
 
 HOST="${HOST:-127.0.0.1}"
 HTTP="${HTTP:-2480}"
@@ -116,6 +120,38 @@ grep -q '42' <<<"$OUT" || {
   echo "[exercise] FAIL: SQL, got $OUT"
   exit 1
 }
+
+# Each of these copies an SQL AST node on its way to a plan (the WHERE-SELECT of UPDATE/DELETE, the LET sub-query,
+# CREATE VERTEX, the MATCH path items). Those copies used to instantiate themselves reflectively, which the native image
+# cannot do for classes outside its reachability metadata, so they all failed there and passed on the JVM (#9495).
+sql_expect() {
+  local label="$1" expected="$2" command="$3" out
+  out="$(req -X POST "http://$HOST:$HTTP/api/v1/command/$DB" -d "{\"language\":\"sql\",\"command\":\"$command\"}")" || true
+  grep -q "$expected" <<<"$out" || {
+    echo "[exercise] FAIL: SQL $label, got $out"
+    exit 1
+  }
+}
+
+echo "[exercise] SQL DML and AST copies"
+sql_expect "UPDATE" '"count":1' "UPDATE T SET n = 43 WHERE n = 42"
+sql_expect "LET sub-query" '43' "SELECT \$a AS a LET \$a = (SELECT n FROM T WHERE n = 43)"
+sql_expect "CREATE VERTEX TYPE" 'SmokeV' "CREATE VERTEX TYPE SmokeV"
+sql_expect "CREATE VERTEX" 'Grace' "CREATE VERTEX SmokeV SET name = 'Grace'"
+sql_expect "MATCH" 'Grace' "MATCH {type: SmokeV, as: p, where: (name = 'Grace')} RETURN p.name AS name"
+sql_expect "DELETE" '"count":1' "DELETE FROM T WHERE n = 43"
+# the math_* functions call java.lang.Math through Method.invoke, refused for unregistered methods (#9495)
+sql_expect "math_ function" '"r":5' "SELECT math_abs(-5) AS r"
+# a full-text index creates its analyzer by class name and Lucene creates its token attributes reflectively: neither is
+# in the GraalVM metadata repository for this Lucene version, so every FULL_TEXT index used to fail here (#9495)
+sql_expect "CREATE PROPERTY" 'name' "CREATE PROPERTY SmokeV.name STRING"
+sql_expect "FULL_TEXT index" 'SmokeV' "CREATE INDEX ON SmokeV (name) FULL_TEXT"
+sql_expect "FULL_TEXT search" 'Grace' "SELECT name FROM SmokeV WHERE SEARCH_INDEX('SmokeV[name]', 'grace') = true"
+sql_expect "CREATE TYPE" 'SmokeDoc' "CREATE DOCUMENT TYPE SmokeDoc"
+sql_expect "CREATE PROPERTY" 'body' "CREATE PROPERTY SmokeDoc.body STRING"
+sql_expect "FULL_TEXT analyzer" 'SmokeDoc' "CREATE INDEX ON SmokeDoc (body) FULL_TEXT METADATA {\\\"analyzer\\\": \\\"org.apache.lucene.analysis.en.EnglishAnalyzer\\\"}"
+sql_expect "FULL_TEXT insert" 'running' "INSERT INTO SmokeDoc SET body = 'running foxes'"
+sql_expect "FULL_TEXT stemmed" 'running' "SELECT body FROM SmokeDoc WHERE SEARCH_INDEX('SmokeDoc[body]', 'run') = true"
 
 echo "[exercise] Cypher round-trip"
 OUT="$(req -X POST "http://$HOST:$HTTP/api/v1/command/$DB" \
@@ -245,6 +281,90 @@ if command -v grpcurl >/dev/null 2>&1; then
   fi
 else
   wire_fail "grpcurl not installed, skipping gRPC reflection check"
+fi
+
+# Observability plugins (arcadedb-metrics, arcadedb-tracing). Same best-effort/strict split as the
+# wire protocols above: each is opt-in, so on a run that did not enable it the check WARN-skips, and
+# under WIRE_STRICT=1 (native-image.yml's Linux legs, which enable all three) it is a hard failure.
+# A plugin that is missing from the image is never discovered, so enabling it changes nothing and
+# the assertion below is what turns that into a red build rather than a silent no-op.
+echo "[exercise] Prometheus scrape (/prometheus)"
+# Not `req`: its -f would turn a 500 into an empty body and hide the one thing worth reading, the error
+# the server returned. Micrometer binds JVM/process meters reflectively, so a missing reflection
+# registration in the image shows up here as an HTTP 500 naming the method, not as a 404.
+PROM_CODE="$(curl -sS -o "$EX_WORK/prometheus.out" -w '%{http_code}' -u "$DB_USER:$PASS" \
+  "http://$HOST:$HTTP/prometheus" 2>/dev/null)" || PROM_CODE="000"
+case "$PROM_CODE" in
+  200)
+    # The SQL/Cypher round-trips above guarantee the engine query counter and the HTTP request timer exist.
+    if grep -q '# TYPE arcadedb_engine_queries_total counter' "$EX_WORK/prometheus.out" \
+      && grep -q 'arcadedb_http_requests' "$EX_WORK/prometheus.out"; then
+      echo "[exercise] Prometheus scrape -> ArcadeDB metrics present"
+    else
+      wire_fail "Prometheus scrape answered 200 but carries no ArcadeDB engine/HTTP metrics"
+    fi
+    ;;
+  404 | 000)
+    wire_fail "Prometheus endpoint /prometheus not answering, HTTP $PROM_CODE (PrometheusMetricsPlugin not enabled or missing from the image?)"
+    ;;
+  *)
+    wire_fail "Prometheus scrape answered HTTP $PROM_CODE: $(head -c 600 "$EX_WORK/prometheus.out" 2>/dev/null)"
+    ;;
+esac
+
+# The OTLP metrics registry and the tracing plugin expose no endpoint to probe. Two observables:
+# the line each logs once its SDK has been built (the step that fails inside a native image when
+# reflection or resource metadata is missing at startup), and - when the caller started the
+# stand-in collector otlp_sink.py and pointed the exporters at it (OTLP_SINK_DIR, see otlp-sink.sh)
+# - an export that actually reached it: the span batch flush over OTLP/gRPC and the metrics push
+# over OTLP/HTTP protobuf, which is where the metadata the exporters need at RUN time is proven.
+#
+# Returns non-zero (after its WARN) when the plugin is not running, so the caller skips the export
+# check of a plugin that was never enabled instead of waiting for an export that cannot come.
+plugin_log_check() {
+  local label="$1" needle="$2"
+  echo "[exercise] $label"
+  if [ -z "${SERVER_LOG:-}" ] || [ ! -r "$SERVER_LOG" ]; then
+    wire_fail "$label: SERVER_LOG not available, cannot assert"
+    return 1
+  elif grep -q "$needle" "$SERVER_LOG"; then
+    echo "[exercise] $label -> '$needle'"
+  else
+    wire_fail "$label: '$needle' not found in the server log (plugin not enabled or missing from the image?)"
+    return 1
+  fi
+}
+
+# otlp_export_check <label> <kind> <what-started-it>: waits for the sink to record an export of
+# <kind> (metrics|traces) whose payload carries the "service.name" resource attribute key, which
+# every OTLP export of either kind holds as a plain protobuf string. Bounded by OTLP_EXPORT_WAIT
+# seconds (default 60): the metrics push runs every 2 s and the span batch every 5 s, so a healthy
+# exporter delivers in seconds and the bound only decides how long a broken one takes to fail.
+otlp_export_check() {
+  local label="$1" kind="$2" cause="$3"
+  echo "[exercise] $label"
+  if [ -z "${OTLP_SINK_DIR:-}" ]; then
+    wire_fail "$label: no OTLP sink running (OTLP_SINK_DIR unset or python3 missing), cannot assert the export"
+    return 0
+  fi
+  local requests="$OTLP_SINK_DIR/$kind.requests" body="$OTLP_SINK_DIR/$kind.body"
+  for _ in $(seq 1 "${OTLP_EXPORT_WAIT:-60}"); do
+    if [ -s "$requests" ] && grep -aq 'service.name' "$body" 2>/dev/null; then
+      echo "[exercise] $label -> $(wc -l <"$requests" | tr -d ' ') export(s) received, first: $(head -1 "$requests")"
+      return 0
+    fi
+    sleep 1
+  done
+  wire_fail "$label: the OTLP sink received no $kind export carrying service.name in ${OTLP_EXPORT_WAIT:-60}s ($cause)$( [ -n "${SERVER_LOG:-}" ] && grep -iE 'otlp|opentelemetry|exporter' "$SERVER_LOG" | tail -5 | sed 's/^/ | /')"
+}
+
+if plugin_log_check "OTLP metrics export" "OTLP metrics export enabled"; then
+  otlp_export_check "OTLP metrics push" metrics "the registry pushes every arcadedb.serverMetrics.otlp.step"
+fi
+if plugin_log_check "OpenTelemetry tracing" "OpenTelemetry tracing enabled"; then
+  # The SQL/Cypher round-trips above are traced as long as samplingRate is above 0, as every CI leg that enables
+  # tracing sets it; with the default of 0 no span is ever recorded, so there is nothing to export
+  otlp_export_check "OpenTelemetry span export" traces "spans are only recorded with arcadedb.serverMetrics.tracing.samplingRate above 0"
 fi
 
 echo "[exercise] PASS"

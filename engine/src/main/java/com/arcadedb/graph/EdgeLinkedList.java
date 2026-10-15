@@ -33,7 +33,6 @@ import com.arcadedb.exception.RecordNotFoundException;
 import com.arcadedb.exception.SchemaException;
 import com.arcadedb.exception.SerializationException;
 import com.arcadedb.log.LogManager;
-import com.arcadedb.schema.Schema;
 import com.arcadedb.serializer.json.JSONArray;
 import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.utility.Pair;
@@ -55,6 +54,10 @@ public class EdgeLinkedList {
   protected final Vertex vertex;
   protected final Vertex.DIRECTION direction;
   private EdgeSegment lastSegment;
+  // THE TWINS OF THE LIGHTWEIGHT EDGES THE ITERATIONS OF THIS LIST READ, COUNTED ONLY WHEN ASKED (ISSUE #10008). A CHAIN
+  // OF A STRIPED LIST SHARES THE ONE OF THE WHOLE LIST, WHICH IS WHAT IT COUNTS
+  private EdgeLinkedList  censusOwner;
+  private LightEdgeCensus census;
 
   public EdgeLinkedList(final Vertex vertex, final Vertex.DIRECTION direction, final EdgeSegment lastSegment) {
     this.vertex = vertex;
@@ -65,13 +68,37 @@ public class EdgeLinkedList {
   public Iterator<Pair<RID, RID>> entryIterator(final String... edgeTypes) {
     if (edgeTypes == null || edgeTypes.length == 0)
       return new EdgeVertexIterator(lastSegment, vertex.getIdentity(), direction);
-    return new EdgeVertexIteratorFilter((DatabaseInternal) vertex.getDatabase(), lastSegment, edgeTypes);
+    return new EdgeVertexIteratorFilter((DatabaseInternal) vertex.getDatabase(), lastSegment, edgeTypes, vertex.getIdentity(),
+        direction);
   }
 
   public Iterator<Edge> edgeIterator(final String... edgeTypes) {
     if (edgeTypes == null || edgeTypes.length == 0)
-      return new EdgeIterator(lastSegment, vertex.getIdentity(), direction);
-    return new EdgeIteratorFilter((DatabaseInternal) vertex.getDatabase(), vertex, direction, lastSegment, edgeTypes);
+      return withCensus(new EdgeIterator(lastSegment, vertex.getIdentity(), direction));
+    return withCensus(new EdgeIteratorFilter((DatabaseInternal) vertex.getDatabase(), vertex, direction, lastSegment, edgeTypes));
+  }
+
+  /**
+   * The census of the lightweight edges of this list (see {@link LightEdgeCensus}), created on the first lightweight
+   * edge an iteration hands out: one small object per list read that holds lightweight edges, the counting itself
+   * deferred until an edge needs its occurrence twice.
+   */
+  LightEdgeCensus lightEdgeCensus() {
+    if (censusOwner != null)
+      return censusOwner.lightEdgeCensus();
+    if (census == null)
+      census = new LightEdgeCensus((DatabaseInternal) vertex.getDatabase(), vertex.getIdentity(), direction);
+    return census;
+  }
+
+  /** Makes this chain of a striped list count its twins with the whole list it belongs to. */
+  void shareCensusWith(final EdgeLinkedList owner) {
+    this.censusOwner = owner;
+  }
+
+  private <T extends ResettableIteratorBase<Edge>> T withCensus(final T iterator) {
+    iterator.setCensusSource(this);
+    return iterator;
   }
 
   /**
@@ -88,8 +115,9 @@ public class EdgeLinkedList {
    */
   public Iterator<Edge> edgeIteratorKnowingEndpoints(final String... edgeTypes) {
     if (edgeTypes == null || edgeTypes.length == 0)
-      return new EdgeIterator(lastSegment, vertex.getIdentity(), direction, true);
-    return new EdgeIteratorFilter((DatabaseInternal) vertex.getDatabase(), vertex, direction, lastSegment, edgeTypes, true);
+      return withCensus(new EdgeIterator(lastSegment, vertex.getIdentity(), direction, true));
+    return withCensus(
+        new EdgeIteratorFilter((DatabaseInternal) vertex.getDatabase(), vertex, direction, lastSegment, edgeTypes, true));
   }
 
   /**
@@ -195,13 +223,15 @@ public class EdgeLinkedList {
     else
       iterator = new EdgeIteratorFilter((DatabaseInternal) vertex.getDatabase(), vertex, direction, lastSegment, edgeTypes);
     iterator.setNeighborVertexFilter(neighbor);
+    iterator.setCensusSource(this);
     return iterator;
   }
 
   public Iterator<Vertex> vertexIterator(final String... edgeTypes) {
     if (edgeTypes == null || edgeTypes.length == 0)
-      return new VertexIterator((DatabaseInternal) vertex.getDatabase(), lastSegment);
-    return new VertexIteratorFilter((DatabaseInternal) vertex.getDatabase(), lastSegment, edgeTypes);
+      return new VertexIterator((DatabaseInternal) vertex.getDatabase(), lastSegment, vertex.getIdentity(), direction);
+    return new VertexIteratorFilter((DatabaseInternal) vertex.getDatabase(), lastSegment, edgeTypes, vertex.getIdentity(),
+        direction);
   }
 
   public Iterator<RID> ridIterator(final String... edgeTypes) {
@@ -363,30 +393,43 @@ public class EdgeLinkedList {
    *                  {@code MultiValue.getSize} - do not see a {@code SchemaException}.
    */
   public long count(final String... edgeTypes) {
-    long total = 0;
-
-    final Set<Integer> fileIdToFilter;
+    // THE SAME PRIMITIVE BUCKET MASK THE FILTERED ITERATORS USE (#8417): NO BOXED SET BUILT AND PROBED PER CALL (#9539)
+    final EdgeBucketMask mask;
     if (edgeTypes != null && edgeTypes.length > 0) {
-      fileIdToFilter = new HashSet<>();
-      final Schema schema = vertex.getDatabase().getSchema();
-      for (final String edgeType : edgeTypes) {
-        if (!schema.existsType(edgeType))
-          continue;
-        fileIdToFilter.addAll(schema.getType(edgeType).getBucketIds(true));
-      }
-      if (fileIdToFilter.isEmpty())
+      mask = EdgeBucketMask.of((DatabaseInternal) vertex.getDatabase(), edgeTypes);
+      if (mask == null)
         return 0;
     } else
-      fileIdToFilter = null;
+      mask = null;
 
+    long total = 0;
     EdgeSegment current = lastSegment;
     final ChainCycleGuard guard = newCycleGuard();
     while (current != null) {
-      total += current.count(fileIdToFilter);
+      total += current.count(mask);
       current = previousOf(current, guard);
     }
 
     return total;
+  }
+
+  /**
+   * Counts the entries of the list against several filters in one walk of the chain: {@code counts[i]} is incremented
+   * for every entry whose edge bucket {@code edgeMasks[i]} accepts (null for any) and whose far-end vertex bucket
+   * {@code neighborMasks[i]} accepts (null for any), leaving out the self loops of the filters {@code skipSelfLoops}
+   * flags (null for none). Neither the edge nor the neighbor record is loaded, so a light edge counts like a regular
+   * one and a label on the far end is checked on the bucket the entry already carries (issue #9539). See
+   * {@link EdgeSegment#countInto}.
+   */
+  public void countInto(final EdgeBucketMask[] edgeMasks, final EdgeBucketMask[] neighborMasks, final boolean[] skipSelfLoops,
+      final long[] counts) {
+    final RID owner = skipSelfLoops != null ? vertex.getIdentity() : null;
+    EdgeSegment current = lastSegment;
+    final ChainCycleGuard guard = newCycleGuard();
+    while (current != null) {
+      current.countInto(edgeMasks, neighborMasks, skipSelfLoops, owner, counts);
+      current = previousOf(current, guard);
+    }
   }
 
   public void add(final RID edgeRID, final RID vertexRID) {

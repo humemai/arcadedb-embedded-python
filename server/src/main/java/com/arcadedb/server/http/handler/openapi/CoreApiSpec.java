@@ -19,6 +19,7 @@
 package com.arcadedb.server.http.handler.openapi;
 
 import com.arcadedb.server.http.HttpSessionManager;
+import com.arcadedb.server.http.handler.AbstractServerHttpHandler;
 import com.arcadedb.server.http.handler.DatabaseAbstractHandler;
 import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.Operation;
@@ -59,6 +60,11 @@ public class CoreApiSpec implements OpenApiContributor {
   // Grafana and Prometheus operations too.
   private static final String SESSION_EXPIRED_HEADER = SpecBuilders.SESSION_EXPIRED_HEADER;
   private static final String COMMIT_INDEX_HEADER = "X-ArcadeDB-Commit-Index";
+  /** The 409 a query or command answers when it was stopped by 'terminate query' (issue #9680). */
+  private static final String QUERY_TERMINATED_409_DESCRIPTION = """
+      Query terminated: the statement was stopped by 'terminate query', 'terminate queries' or 'terminate transaction' \
+      (POST /api/v1/server) and what it wrote was rolled back. Not retryable: somebody stopped this work on purpose""";
+  private static final String STREAMED_RETRY_AFTER = AbstractServerHttpHandler.STREAMED_RETRY_AFTER_MEMBER;
 
   // Issue #8062. Set by DatabaseAbstractHandler on any session-bound request whose transaction published a
   // commit while it ran - a statement with an explicit BATCH boundary. Declared on the three data-plane
@@ -212,7 +218,8 @@ public class CoreApiSpec implements OpenApiContributor {
     final Operation postOp = new Operation();
     postOp.setSummary("Execute server command");
     postOp.setDescription("""
-        Executes administrative commands on the server (root user only). \
+        Executes administrative commands on the server (root user only, except 'list databases' and the \
+        commands on running work below). \
         Available commands: create database, drop database, open database, close database, \
         restore database <name> <url>, import database <name> <url>, \
         create user, drop user, shutdown, set server setting, get server events, align database, \
@@ -229,7 +236,20 @@ public class CoreApiSpec implements OpenApiContributor {
         direction: it never makes THIS server join another cluster, and an address that resolves to this \
         server is answered 400 rather than accepted as a no-op. To make a running server join a cluster \
         it is not configured for, issue this same command on a server that is already a member of that \
-        cluster, or declare arcadedb.ha.serverList and restart""");
+        cluster, or declare arcadedb.ha.serverList and restart. \
+        Running work (any authenticated user; root sees and stops every statement, another user only their own, \
+        and someone else's is answered 'not found'): 'list queries [database <name>] [tag <label>]' lists the \
+        statements this server is running, with the label a client gave them in the X-ArcadeDB-Query-Tag request \
+        header; 'terminate query <id>' and 'terminate queries tag <label>' stop them and wait for them to end, up to \
+        the payload's 'wait' in milliseconds (default 5000, at most 10000), answering each with a status: \
+        'terminated' (it stopped and what it wrote was rolled back), 'completed' (it ended on its own before it \
+        noticed: what it did stands), 'terminating' (not stopped yet) or 'not found'; 'list transactions' lists the \
+        open transaction sessions and 'terminate transaction <session id>' rolls one back and ends it. A command \
+        terminated inside a session ends the session too, rolling it back, while a terminated read leaves the session to \
+        its client: the answer for a statement that ran in a session carries its 'sessionId' and 'sessionOpen' (for a \
+        'terminating' statement only the state at the time of the answer: a command ends its session as it stops). A \
+        terminated request is answered 409 'Query terminated'. \
+        These commands are never forwarded to the leader: each server lists and stops its own work""");
     postOp.setOperationId("executeServerCommand");
     postOp.addTagsItem("Server");
     postOp.setRequestBody(SpecBuilders.jsonBody("Command request with command and optional parameters", "CommandRequest", true));
@@ -366,6 +386,7 @@ public class CoreApiSpec implements OpenApiContributor {
         List.of("sql", "cypher", "gremlin", "graphql", "mongo")));
     getOp.addParametersItem(SpecBuilders.pathParam("command", "Query or command to execute"));
     getOp.addParametersItem(SpecBuilders.headerParam(SESSION_HEADER, SESSION_REQUEST_DESCRIPTION, false));
+    getOp.addParametersItem(SpecBuilders.queryTagHeaderParam());
     getOp.addParametersItem(ndJsonAcceptParam());
     getOp.setResponses(createGetQueryResponses());
     addNdJsonAlternative(getOp.getResponses());
@@ -386,6 +407,7 @@ public class CoreApiSpec implements OpenApiContributor {
     postOp.addTagsItem("Query");
     postOp.addParametersItem(SpecBuilders.pathParam("database", "Database name"));
     postOp.addParametersItem(SpecBuilders.headerParam(SESSION_HEADER, SESSION_REQUEST_DESCRIPTION, false));
+    postOp.addParametersItem(SpecBuilders.queryTagHeaderParam());
     postOp.addParametersItem(ndJsonAcceptParam());
     postOp.setRequestBody(SpecBuilders.jsonBody("Query request with command and optional parameters", "QueryRequest", true));
     postOp.setResponses(createQueryResponses());
@@ -408,6 +430,7 @@ public class CoreApiSpec implements OpenApiContributor {
     postOp.addTagsItem("Command");
     postOp.addParametersItem(SpecBuilders.pathParam("database", "Database name"));
     postOp.addParametersItem(SpecBuilders.headerParam(SESSION_HEADER, SESSION_REQUEST_DESCRIPTION, false));
+    postOp.addParametersItem(SpecBuilders.queryTagHeaderParam());
     postOp.addParametersItem(ndJsonAcceptParam());
     postOp.setRequestBody(SpecBuilders.jsonBody("Command request with command and optional parameters", "CommandRequest", true));
     postOp.setResponses(createCommandResponses());
@@ -429,6 +452,7 @@ public class CoreApiSpec implements OpenApiContributor {
     postOp.addTagsItem("Transaction");
     postOp.addParametersItem(SpecBuilders.pathParam("database", "Database name"));
     postOp.addParametersItem(SpecBuilders.headerParam(SESSION_HEADER, BEGIN_SESSION_REQUEST_DESCRIPTION, false));
+    postOp.addParametersItem(SpecBuilders.queryTagHeaderParam());
     postOp.setResponses(createBeginResponses());
     pathItem.setPost(postOp);
 
@@ -512,6 +536,7 @@ public class CoreApiSpec implements OpenApiContributor {
     post.addParametersItem(SpecBuilders.pathParam("database", "Database name"));
     post.addParametersItem(batchNdJsonAcceptParam());
     post.addParametersItem(SpecBuilders.headerParam(SESSION_HEADER, BATCH_SESSION_REQUEST_DESCRIPTION, false));
+    post.addParametersItem(SpecBuilders.queryTagHeaderParam());
     post.addParametersItem(SpecBuilders.queryParam("batchSize",
         "Records buffered per GraphBatch flush. Default 100000.", false, "integer"));
     post.addParametersItem(SpecBuilders.queryParam("lightEdges",
@@ -702,6 +727,7 @@ public class CoreApiSpec implements OpenApiContributor {
       // session-less and says so in this header rather than answering 404 (issue #7714).
       responses.get("200").addHeaderObject(SESSION_EXPIRED_HEADER,
           SpecBuilders.sessionExpiredHeader());
+    responses.addApiResponse("409", SpecBuilders.errorResponse(QUERY_TERMINATED_409_DESCRIPTION));
     responses.addApiResponse("413", SpecBuilders.errorResponse(
         "The result exceeds 'arcadedb.server.httpQueryMaxResultRows': narrow or page the query"));
     responses.addApiResponse("500", SpecBuilders.errorResponse("Internal server error"));
@@ -714,6 +740,7 @@ public class CoreApiSpec implements OpenApiContributor {
     responses.addApiResponse("400", SpecBuilders.errorResponse("Bad request"));
     responses.addApiResponse("401", SpecBuilders.errorResponse("Unauthorized"));
     responses.addApiResponse("404", SpecBuilders.errorResponse(STALE_SESSION_404_DESCRIPTION));
+    responses.addApiResponse("409", SpecBuilders.errorResponse(QUERY_TERMINATED_409_DESCRIPTION));
     responses.addApiResponse("413", SpecBuilders.errorResponse(
         "The result exceeds 'arcadedb.server.httpQueryMaxResultRows': narrow or page the command"));
     responses.addApiResponse("500", SpecBuilders.errorResponse("Internal server error"));
@@ -903,18 +930,29 @@ public class CoreApiSpec implements OpenApiContributor {
     final Schema<Object> error = SpecBuilders.object("""
         A failure raised after the 200 had already been sent. The status code cannot be taken back at that \
         point, so the failure is reported in band and no 'stats' line follows.""");
-    error.addProperty("message", SpecBuilders.string("Why the stream failed"));
+    error.addProperty("message", SpecBuilders.string("""
+        Why the stream failed. Outside production mode the failure's own message; in production mode the \
+        classified label also carried in 'error', because the raw text can carry file paths and engine internals \
+        the buffered error body conceals for the same failure (issue #8899)."""));
     error.addProperty("status", SpecBuilders.integer("""
         HTTP status the buffered encoding would have answered the same failure with, decided by the same error \
         mapping: 503 for a retryable conflict, 409 for a duplicated key, 403 for a security refusal, 413 when \
         arcadedb.server.httpQueryMaxResultRows cut the result short, 500 for an unexpected failure (issue \
         #8235). Key on this rather than on 'message' to decide whether to retry."""));
+    error.addProperty("error", SpecBuilders.string("""
+        Classified label of the failure, the value the buffered error body carries in its 'error' member."""));
     error.addProperty("exception", SpecBuilders.string("""
         Class name of the reported exception, the value the buffered error body carries in its 'exception' \
         member."""));
     error.addProperty("exceptionArgs", SpecBuilders.string("""
         Structured arguments of the failure, as the buffered error body carries them: present only for a failure \
         that has any, e.g. 'index|keys|rid' for a duplicated key."""));
+    error.addProperty(STREAMED_RETRY_AFTER, streamedRetryAfterSchema());
+    error.addProperty("detail", SpecBuilders.string("""
+        Cause chain of the failure, as the buffered error body carries it. Absent in production mode."""));
+    error.addProperty("requestId", SpecBuilders.string("""
+        Correlation id echoing X-Request-Id, for cross-referencing the failure against the server log. Absent when \
+        the request carried no correlation id."""));
     error.setRequired(List.of("message", "status"));
     schema.addProperty("error", error);
     return schema;
@@ -1370,6 +1408,7 @@ public class CoreApiSpec implements OpenApiContributor {
     error.addProperty("exceptionArgs", SpecBuilders.string("""
         Structured arguments of the failure, as the buffered error body carries them: present only for a failure \
         that has any, e.g. 'index|keys|rid' for a duplicated key."""));
+    error.addProperty(STREAMED_RETRY_AFTER, streamedRetryAfterSchema());
     // Carried on a FAILED load too, and not by accident: a batch is not atomic, so a load that failed
     // mid-stream still committed the chunks before the failure, and a READ_YOUR_WRITES client has to be able
     // to read them back. That is the same rule the buffered encoding follows by emitting the header on its
@@ -1380,6 +1419,19 @@ public class CoreApiSpec implements OpenApiContributor {
             + "that were committed before the failure"));
     schema.addProperty("error", error);
     return schema;
+  }
+
+  /**
+   * The {@code retryAfter} member of a streamed error line (issue #8899): the back-off the buffered encoding sends as
+   * a {@code Retry-After} header, which a response that has already started can no longer carry. Declared once for
+   * both streams so the query and the batch line cannot describe it differently.
+   */
+  private static Schema<?> streamedRetryAfterSchema() {
+    return SpecBuilders.integer("""
+        Seconds to wait before retrying, the value the buffered encoding sends as a Retry-After header for the same \
+        failure: present only for a refusal that carries one - 503 when the node cannot execute the request yet \
+        (e.g. a snapshot install), 409 when an identical request is still in flight. A header cannot be added \
+        once the stream has started, so the back-off travels in band (issue #8899).""");
   }
 
   private Schema<?> createBatchErrorSchema() {

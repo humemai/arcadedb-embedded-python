@@ -19,6 +19,7 @@
 package com.arcadedb.server.ha.raft;
 
 import com.arcadedb.database.DatabaseInternal;
+import com.arcadedb.database.LocalDatabase;
 import com.arcadedb.database.RID;
 import com.arcadedb.exception.CommandParsingException;
 import com.arcadedb.exception.CommandSQLParsingException;
@@ -33,6 +34,7 @@ import com.arcadedb.exception.TransactionException;
 import com.arcadedb.network.binary.ServerIsNotTheLeaderException;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultSet;
+import com.arcadedb.server.ServerDatabase;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -45,6 +47,17 @@ class RaftReplicatedDatabaseTest {
   @Test
   void implementsDatabaseInternal() {
     assertThat(DatabaseInternal.class.isAssignableFrom(RaftReplicatedDatabase.class)).isTrue();
+  }
+
+  /**
+   * Issue #9959: {@code DatabaseInternal.saveConfiguration(String)} falls back to the whole-difference save, so a
+   * database class that saves the configuration and does not forward the keyed save would ship, under Raft HA, a change
+   * another statement has not submitted yet. Every one of them declares it.
+   */
+  @Test
+  void everyDatabaseThatSavesTheConfigurationDeclaresTheKeyedSave() throws NoSuchMethodException {
+    for (final Class<?> database : List.of(LocalDatabase.class, ServerDatabase.class, RaftReplicatedDatabase.class))
+      assertThat(database.getDeclaredMethod("saveConfiguration", String.class).getDeclaringClass()).isEqualTo(database);
   }
 
   @Test
@@ -304,5 +317,24 @@ class RaftReplicatedDatabaseTest {
     final RuntimeException result = RaftReplicatedDatabase.reconstructLeaderException(409, body);
 
     assertThat(result).isInstanceOf(TransactionException.class);
+  }
+
+  /**
+   * Issue #9473: a key value containing the '|' separator. Splitting into three parts put "b]|#7:1" in the RID slot,
+   * the RID failed to parse, and the forwarded duplicate lost its type on the follower.
+   */
+  @Test
+  void reconstructLeaderExceptionDuplicatedKeyWithAPipeInTheKeys() {
+    final String body = "{\"error\":\"Found duplicate key in index\","
+        + "\"exception\":\"com.arcadedb.exception.DuplicatedKeyException\","
+        + "\"exceptionArgs\":\"Account_name|[a|b]|#7:1\"}";
+
+    final RuntimeException result = RaftReplicatedDatabase.reconstructLeaderException(409, body);
+
+    assertThat(result).isInstanceOf(DuplicatedKeyException.class);
+    final DuplicatedKeyException dup = (DuplicatedKeyException) result;
+    assertThat(dup.getIndexName()).isEqualTo("Account_name");
+    assertThat(dup.getKeys()).isEqualTo("[a|b]");
+    assertThat(dup.getCurrentIndexedRID()).isEqualTo(new RID(7, 1L));
   }
 }

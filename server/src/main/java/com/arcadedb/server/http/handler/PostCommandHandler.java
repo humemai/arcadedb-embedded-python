@@ -37,6 +37,7 @@ import com.arcadedb.schema.Type;
 import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.server.ForwardedRequestIdContext;
 import com.arcadedb.server.http.HttpServer;
+import com.arcadedb.server.http.RequestRefusedBeforeExecutionException;
 import com.arcadedb.server.monitor.QueryProfile;
 import com.arcadedb.server.monitor.ServerQueryProfiler;
 import com.arcadedb.server.security.ServerSecurityUser;
@@ -143,9 +144,10 @@ public class PostCommandHandler extends AbstractQueryHandler {
 
   /**
    * Returns the value of a request field that must be a JSON string, or {@code null} when absent. A present
-   * value of the wrong JSON type (number, array, object) is rejected with an {@link IllegalArgumentException},
-   * which the HTTP layer maps to a clean 400 Bad Request instead of leaking a raw {@link ClassCastException}
-   * as HTTP 500 (issue #5222).
+   * value of the wrong JSON type (number, array, object) is rejected with a {@link RequestRefusedBeforeExecutionException},
+   * an {@link IllegalArgumentException} which the HTTP layer maps to a clean 400 Bad Request instead of leaking a raw
+   * {@link ClassCastException} as HTTP 500 (issue #5222), and which leaves the session's transaction as it was because the
+   * statement has not reached the engine (issue #9852).
    */
   private static String requireStringField(final Map<String, Object> map, final String field) {
     return requireStringField(map, field, null);
@@ -157,7 +159,7 @@ public class PostCommandHandler extends AbstractQueryHandler {
       return defaultValue;
     if (value instanceof String s)
       return s;
-    throw new IllegalArgumentException("Field '" + field + "' must be a string");
+    throw new RequestRefusedBeforeExecutionException("Field '" + field + "' must be a string");
   }
 
   /**
@@ -217,7 +219,7 @@ public class PostCommandHandler extends AbstractQueryHandler {
     // QueryEngine.isExecutedByTheLeader() or analyze(query).isDDL() is true.
 
     if (requestMap.get("command") == null)
-      throw new IllegalArgumentException("command missing");
+      throw new RequestRefusedBeforeExecutionException("command missing");
 
     final String language = requireStringField(requestMap, "language");
     // Do NOT HTML-decode the command: the command is already transported losslessly as a JSON string,
@@ -238,7 +240,7 @@ public class PostCommandHandler extends AbstractQueryHandler {
     if (streaming) {
       ndJsonRowSerializer(serializer, includeTypeHints);
       if (profileExecution != null)
-        throw new IllegalArgumentException("'profileExecution' reports the plan and the timings in the response "
+        throw new RequestRefusedBeforeExecutionException("'profileExecution' reports the plan and the timings in the response "
             + "envelope, which the streaming encoding does not have: request it with 'Accept: application/json'");
     }
 
@@ -306,6 +308,9 @@ public class PostCommandHandler extends AbstractQueryHandler {
 
     if ("detailed".equalsIgnoreCase(profileExecution))
       paramMap.put("$profileExecution", true);
+
+    // The text the caller sent, not the one rewritten with a LIMIT: it is what the caller will recognize (issue #9680)
+    describeRunningQuery(language, originalCommand);
 
     boolean awaitResponse = true;
     if (requestMap.containsKey("awaitResponse") && requestMap.get("awaitResponse") instanceof Boolean) {

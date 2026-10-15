@@ -43,8 +43,11 @@ import com.arcadedb.index.Index;
 import com.arcadedb.index.IndexInternal;
 import com.arcadedb.index.IndexReplayConclusion;
 import com.arcadedb.index.TypeIndex;
+import com.arcadedb.index.fulltext.FullTextCorpusDeltas;
 import com.arcadedb.index.lsm.LSMTreeIndexAbstract;
 import com.arcadedb.log.LogManager;
+import com.arcadedb.query.RunningQuery;
+import com.arcadedb.query.sql.executor.QueryAdmissionGate;
 import com.arcadedb.schema.LocalSchema;
 import com.arcadedb.utility.IntHashSet;
 import com.arcadedb.utility.IntIntHashMap;
@@ -160,6 +163,16 @@ public class TransactionContext implements Transaction {
   // a stable order. See IndexReplayConclusion.
   private       Map<IndexInternal, IndexReplayConclusion> indexReplayConclusion = null;
   private       Map<PageId, ImmutablePage>           immutablePages        = new HashMap<>(PAGES_CACHE_CAPACITY);
+  // #9070: per multi-page record this REPEATABLE_READ transaction assembled and validated, the (page, version) pairs of the
+  // images it was assembled from. Pinned pages are taken one at a time, by different reads, so a chain whose pages happen
+  // to all be pinned can still pair a head of one commit with tails of another: only a chain validated on exactly these
+  // images is the transaction's snapshot of the record. Lazily allocated, so a READ_COMMITTED transaction never pays.
+  private       Map<RID, long[]>                     snapshotChunkChains;
+  // #9620: per multi-page record this REPEATABLE_READ transaction first read when no image of its chain could be assembled
+  // from the pages the transaction holds (a neighbour's read pinned one of them before a concurrent rewrite), the content
+  // it was served from the newest committed images. Every later read of the record in the transaction answers it. Lazily
+  // allocated: only that corner ever fills it.
+  private       Map<RID, byte[]>                     snapshotRecordContents;
   private       RidHashSet                            deletedRecordsInTx    = new RidHashSet(DELETED_SET_CAPACITY);
   private       Map<PageId, MutablePage>             modifiedPages;
   private       Map<PageId, MutablePage>             newPages;
@@ -199,6 +212,8 @@ public class TransactionContext implements Transaction {
   // page get different slots (hence different RIDs) and commute instead of conflicting. Held in parallel primitive
   // arrays - grown by doubling and reused across transactions - so inserting N records allocates nothing per record,
   // and released as a block when the transaction ends (see releaseInsertSlotReservations).
+  // #9694: the slot recorded for a page this transaction CREATED, which the bucket keeps off-limits to the others.
+  private static final int                           NEW_PAGE_RESERVATION = -1;
   private       LocalBucket[]                        insertReservationBuckets;
   private       int[]                                insertReservationPages;
   private       int[]                                insertReservationSlots;
@@ -342,6 +357,8 @@ public class TransactionContext implements Transaction {
   private       List<Runnable>                       afterCommitCallbacks        = null;
   private       Set<String>                          registeredCallbackKeys      = null;
   private       Map<String, Object>                  attachments                 = null;
+  // #10040: the client opened this transaction and ends it with its own COMMIT/ROLLBACK, see setClientManaged()
+  private       boolean                              clientManaged               = false;
 
   // #5279: above this many tracked insert reservations the parallel arrays are dropped instead of being reused, so a
   // one-off bulk insert does not keep its (per-record) tracking arrays alive on a long-lived transaction context.
@@ -876,6 +893,22 @@ public class TransactionContext implements Transaction {
     attachments.put(key, value);
   }
 
+  /**
+   * Whether the CLIENT opened this transaction - a Postgres {@code BEGIN}, an HTTP {@code /begin}, a Bolt {@code BEGIN},
+   * a gRPC {@code BeginTransaction} - and so decides with its own {@code COMMIT} or {@code ROLLBACK} what becomes of every
+   * statement it sends meanwhile, as opposed to a transaction a server opened around one request on the client's behalf
+   * (issue #10040). An HA replica runs a write sent inside such a transaction locally, in it, instead of forwarding it
+   * to the leader as a request of its own that a ROLLBACK could not undo. Released by {@link #reset()}.
+   */
+  public boolean isClientManaged() {
+    return clientManaged;
+  }
+
+  /** Declares this transaction opened by the client. See {@link #isClientManaged()}. */
+  public void setClientManaged(final boolean clientManaged) {
+    this.clientManaged = clientManaged;
+  }
+
   public boolean hasCallbackKey(final String key) {
     return registeredCallbackKeys != null && registeredCallbackKeys.contains(key);
   }
@@ -984,6 +1017,8 @@ public class TransactionContext implements Transaction {
    */
   public boolean addUpdatedRecord(final Record record) throws IOException {
     final RID rid = record.getIdentity();
+    // #9070: the transaction's own write is what it reads from now on, never the snapshot of the chain it read before
+    forgetSnapshotChunkChain(rid);
 
     // #7149: the delete wins. A record this transaction already deleted cannot exist at commit, so a write to it
     // can never be observed - exactly as the symmetric order already behaves, where removeRecordFromCache() drops
@@ -1086,6 +1121,71 @@ public class TransactionContext implements Transaction {
     if (page == null)
       page = immutablePages.get(pageId);
     return page;
+  }
+
+  /**
+   * Releases an immutable page pinned by {@code REPEATABLE_READ} so the next {@link #getPage} pins the newest committed
+   * copy. Only for a page no earlier read of this transaction relied on: a multi-page record read that pinned it itself
+   * and found it torn by a concurrent commit (#9070). The transaction's own modified and new pages are never released.
+   */
+  public void unpinPage(final PageId pageId) {
+    // Only the immutable pin: a modified or new copy of the same page is what getPage answers first anyway, and stays
+    immutablePages.remove(pageId);
+  }
+
+  /**
+   * The (page, version) pairs a multi-page record was assembled from the last time this transaction validated it, or
+   * null when it never did (#9070). See {@link #setSnapshotChunkChain}. An EMPTY array means the record was read from pages
+   * not all pinned (#9620): it was read in this transaction, but there is no chain to compare a later read with, so it
+   * matches none.
+   */
+  public long[] getSnapshotChunkChain(final RID rid) {
+    return snapshotChunkChains == null ? null : snapshotChunkChains.get(rid);
+  }
+
+  /**
+   * Records that the chain of the multi-page record {@code rid}, read from the pinned pages listed as (page, version)
+   * pairs, was validated as one committed state, so a later read from the very same images is the transaction's
+   * snapshot of the record even after a concurrent commit rewrote it (#9070).
+   */
+  public void setSnapshotChunkChain(final RID rid, final long[] pagesAndVersions) {
+    if (snapshotChunkChains == null)
+      snapshotChunkChains = new HashMap<>();
+    snapshotChunkChains.put(rid, pagesAndVersions);
+  }
+
+  /**
+   * The content a multi-page record was served with at its first read in this transaction, when that read could not be
+   * assembled from the pages the transaction holds (#9620), or null. See {@link #setSnapshotRecordContent}.
+   */
+  public byte[] getSnapshotRecordContent(final RID rid) {
+    return snapshotRecordContents == null ? null : snapshotRecordContents.get(rid);
+  }
+
+  /**
+   * Records the content a multi-page record was served with at its first read in this transaction, assembled from the
+   * newest committed images because a page of its chain was pinned by the read of another record before a concurrent
+   * commit rewrote it (#9620). The pages stay as they are, so the reads that pinned them stay repeatable, and every later
+   * read of this record answers this content.
+   * <p>
+   * The content is held until the transaction ends, like the pages it pins: a REPEATABLE_READ transaction that reads many
+   * large records this way holds each of them once. Refusing the read instead, which is what bounded it before, is the
+   * failure this exists to remove.
+   */
+  public void setSnapshotRecordContent(final RID rid, final byte[] content) {
+    if (snapshotRecordContents == null)
+      snapshotRecordContents = new HashMap<>();
+    snapshotRecordContents.put(rid, content);
+  }
+
+  /** Drops the snapshot of a multi-page record this transaction writes or deletes (#9070, #9620). */
+  private void forgetSnapshotChunkChain(final RID rid) {
+    if (rid == null)
+      return;
+    if (snapshotChunkChains != null)
+      snapshotChunkChains.remove(rid);
+    if (snapshotRecordContents != null)
+      snapshotRecordContents.remove(rid);
   }
 
   /**
@@ -1539,10 +1639,26 @@ public class TransactionContext implements Transaction {
   /**
    * Registers an insert slot {@link LocalBucket} handed to this transaction on an existing page, so it is given
    * back when the transaction ends - whatever the outcome (issue #5279). Called once per created record
-   * that lands on a reused page; a record on a brand-new page needs no reservation because the page number itself is
-   * already reserved atomically.
+   * that lands on a reused page; a record on a brand-new page needs no slot reservation, because the whole page is
+   * already this transaction's (see {@link #trackNewPageReservation}).
    */
   public void trackInsertSlotReservation(final LocalBucket bucket, final int pageNumber, final int slot) {
+    // A negative slot would be read back as NEW_PAGE_RESERVATION and release the wrong thing (#9694)
+    if (slot < 0)
+      throw new IllegalArgumentException("Invalid insert slot " + slot + " on page " + pageNumber);
+    trackReservation(bucket, pageNumber, slot);
+  }
+
+  /**
+   * Registers a page {@link LocalBucket} created for this transaction, so the bucket keeps every other transaction's
+   * allocator off it until this one ends (issue #9694). Held in the same arrays as the insert slots, under
+   * {@link #NEW_PAGE_RESERVATION} in place of a slot.
+   */
+  public void trackNewPageReservation(final LocalBucket bucket, final int pageNumber) {
+    trackReservation(bucket, pageNumber, NEW_PAGE_RESERVATION);
+  }
+
+  private void trackReservation(final LocalBucket bucket, final int pageNumber, final int slot) {
     if (insertReservationBuckets == null) {
       insertReservationBuckets = new LocalBucket[16];
       insertReservationPages = new int[16];
@@ -1569,7 +1685,10 @@ public class TransactionContext implements Transaction {
       final LocalBucket bucket = insertReservationBuckets[i];
       insertReservationBuckets[i] = null;
       try {
-        bucket.releaseInsertSlot(insertReservationPages[i], insertReservationSlots[i]);
+        if (insertReservationSlots[i] == NEW_PAGE_RESERVATION)
+          bucket.releaseNewPage(insertReservationPages[i]);
+        else
+          bucket.releaseInsertSlot(insertReservationPages[i], insertReservationSlots[i]);
       } catch (final Exception e) {
         // A RELEASE FAILURE (E.G. THE BUCKET WAS DROPPED MEANWHILE) MUST NEVER ABORT THE TRANSACTION TEARDOWN
         LogManager.instance()
@@ -1991,6 +2110,8 @@ public class TransactionContext implements Transaction {
     updatedRecordsIndexSnapshot = null;
     newPageCounters.clear();
     immutablePages.clear();
+    snapshotChunkChains = null;
+    snapshotRecordContents = null;
     commitLockTimeout = null;
     useWALOverride = null;
   }
@@ -2181,6 +2302,13 @@ public class TransactionContext implements Transaction {
       throw new TransactionException("Transaction cannot be committed: " + rollbackOnlyReason
           + ". Roll it back and retry");
 
+    // Issue #9680: a statement terminated on request does not publish what it wrote, even when it reached its commit
+    // without passing a check on the way. Same placement as the refusal above and for the same reason: the status has
+    // not moved yet, so the caller's error handling rolls the transaction back.
+    final RunningQuery runningQuery = RunningQuery.current();
+    if (runningQuery != null)
+      runningQuery.checkNotTerminated("the commit");
+
     // Issue #8270: a database opened by an HA server before it is wrapped for replication refuses anything that
     // would change it, and so does a transaction that BEGAN while it did, whatever has happened since. Same
     // placement as the rollback-only refusal above and for the same reason: the status has not moved yet, so the
@@ -2262,11 +2390,11 @@ public class TransactionContext implements Transaction {
       if (!hasChanges()) {
         // #7934 review: returning without reset() does NOT strand an index replay conclusion registered earlier in
         // this phase (the deferred UPDATE no longer indexes here since #8983: save() queued its index changes).
-        // Every caller of this method concludes the transaction on the null it gets back: commit()
-        // through resetAndFireCallbacks(), and the Raft path through an explicit tx.reset() on its own read-only
-        // arm. Both reach reset(), which publishes. Publishing is also the right answer rather than a tolerated
-        // one: a replay that indexed anything dirtied the record's own page, so "a buffer exists" and "nothing
-        // changed" cannot both be true, and an empty buffer publishes nothing.
+        // Every caller of this method concludes the transaction on the null it gets back: commit() through
+        // resetAndFireCallbacks(), and the Raft path through concludeCommitWithoutPublishing() on its own read-only
+        // arm. Both reach reset(), which publishes. Publishing is also the right answer rather than a tolerated one:
+        // a replay that indexed anything dirtied the record's own page, so "a buffer exists" and "nothing changed"
+        // cannot both be true, and an empty buffer publishes nothing.
         if (lockedFiles != null) {
           database.getTransactionManager().unlockFilesInOrder(lockedFiles, getRequester());
           lockedFiles = null;
@@ -2337,12 +2465,12 @@ public class TransactionContext implements Transaction {
       for (MutablePage page : modifiedPages.values()) {
         final LocalBucket bucket = localSchema.getBucketById(page.getPageId().getFileId(), false);
         if (bucket != null)
-          bucket.compressPage(page, false);
+          bucket.compressPageAtCommit(page);
       }
       for (MutablePage page : newPages.values()) {
         final LocalBucket bucket = localSchema.getBucketById(page.getPageId().getFileId(), false);
         if (bucket != null)
-          bucket.compressPage(page, false);
+          bucket.compressPageAtCommit(page);
       }
 
       List<PageId> pagesToRebase = null;
@@ -2493,6 +2621,20 @@ public class TransactionContext implements Transaction {
    * record before the locks are released.
    */
   public void publishCommittedPages(final TransactionPhase1 changes) {
+    // The pages become visible before the delta reaches the BM25 counters: a scan that overlaps that window reads documents the
+    // counters do not hold yet, and must not call its result exact (see FullTextIndexMetadata#commitApplyStarted)
+    final FullTextCorpusDeltas corpusDeltas = FullTextCorpusDeltas.peek(this);
+    if (corpusDeltas != null)
+      corpusDeltas.commitApplyStarted();
+    try {
+      publishCommittedPagesInternal(changes);
+    } finally {
+      if (corpusDeltas != null)
+        corpusDeltas.commitApplyFinished();
+    }
+  }
+
+  private void publishCommittedPagesInternal(final TransactionPhase1 changes) {
     try {
       if (database.getMode() == ComponentFile.MODE.READ_ONLY)
         throw new TransactionException("Cannot commit changes because the database is open in read-only mode");
@@ -2564,6 +2706,12 @@ public class TransactionContext implements Transaction {
           // UPDATE THE CACHE COUNTER ONLY IF ALREADY COMPUTED
           bucket.setCachedRecordCount(bucket.getCachedRecordCount() + delta);
       });
+
+      // THE BM25 CORPUS COUNTERS OF THE FULL-TEXT INDEXES THIS TRANSACTION WROTE MOVE WITH ITS PAGES, LIKE THE RECORD COUNT ABOVE:
+      // A ROLLBACK NEVER REACHES THIS POINT (#10018)
+      final FullTextCorpusDeltas corpusDeltas = FullTextCorpusDeltas.peek(this);
+      if (corpusDeltas != null)
+        corpusDeltas.applyCommitted();
     } catch (final IOException | InterruptedException e) {
       fenceIfPastPointOfNoReturn(e);
       LogManager.instance()
@@ -2614,9 +2762,34 @@ public class TransactionContext implements Transaction {
     concludePhase2(false, cause);
   }
 
-  private void finishCommitBookkeeping() {
+  /**
+   * Concludes, as COMMITTED, a transaction whose pages this thread does not publish: either it had nothing to publish
+   * (phase 1 found no changes), or the replication layer publishes them on another thread, from the entry's WAL bytes
+   * (issue #8784). The transaction ends the way {@link #commit()} and {@link #completeCommit()} end one - its records
+   * marked clean, the commit counted, the after-commit callbacks fired - rather than the way a bare {@link #reset()}
+   * ends it, which drops the callbacks and leaves the commit counter where it was, so a retry loop reads a commit that
+   * happened as one that did not.
+   * <p>
+   * The components' {@code onAfterCommit()} hooks are NOT run: they react to pages this context published, and here it
+   * published none.
+   * <p>
+   * For the replication layer only, and exactly once, right after {@link #commit1stPhase(boolean)}, in place of phase 2.
+   * It does not refuse a second call: a transaction that has already ended - concluded here, or by {@link #commit()} /
+   * {@link #completeCommit()} - is {@code INACTIVE} just like one whose phase 1 found nothing to write, so no status check
+   * can tell them apart, and a second call would count the commit twice.
+   */
+  public void concludeCommitWithoutPublishing() {
+    markModifiedRecordsClean();
+    resetAndFireCallbacks();
+  }
+
+  private void markModifiedRecordsClean() {
     for (final Record r : modifiedRecordsCache.values())
       ((RecordInternal) r).unsetDirty();
+  }
+
+  private void finishCommitBookkeeping() {
+    markModifiedRecordsClean();
 
     for (final int fileId : lockedFiles) {
       final PaginatedComponent file = (PaginatedComponent) database.getSchema().getFileByIdIfExists(fileId);
@@ -2914,6 +3087,8 @@ public class TransactionContext implements Transaction {
     modifiedRecordsCache = clearOrReplace(modifiedRecordsCache, RECORDS_CACHE_CAPACITY);
     immutableRecordsCache = clearOrReplace(immutableRecordsCache, RECORDS_CACHE_CAPACITY);
     immutablePages = clearOrReplace(immutablePages, PAGES_CACHE_CAPACITY);
+    snapshotChunkChains = null;
+    snapshotRecordContents = null;
     bucketRecordDelta.clear();
     if (deletedRecordsInTx.size() > DELETED_SET_CAPACITY * 3 / 4)
       deletedRecordsInTx = new RidHashSet(DELETED_SET_CAPACITY);
@@ -2923,6 +3098,7 @@ public class TransactionContext implements Transaction {
     afterCommitCallbacks = null;
     registeredCallbackKeys = null;
     attachments = null;
+    clientManaged = false;
     commitLockTimeout = null;
     useWALOverride = null;
     txId = -1;
@@ -2938,6 +3114,23 @@ public class TransactionContext implements Transaction {
       return new HashMap<>(initialCapacity);
     map.clear();
     return map;
+  }
+
+  /**
+   * Drops the pages and records {@code REPEATABLE_READ} pinned for these files, so the next read of them is served from
+   * the committed state again. The pages this transaction modified are kept. Pages are pinned the first time they are
+   * read, so a transaction that read an index page before a commit and the record page after it holds two states that
+   * never coexisted (#9369); a caller that has caught that - an index entry whose record is gone - uses this to read both
+   * again against one state. This deliberately weakens the snapshot of those files for the rest of the transaction, and only
+   * a caller that detected a torn read may use it. {@code immutableRecordsCache} only holds records read through this
+   * transaction's pinned pages, never one it modified: those live in its modified-record bookkeeping, which this does not touch.
+   */
+  public void unpinFiles(final Collection<Integer> fileIds) {
+    LogManager.instance().log(this, Level.FINE, "Releasing the pinned pages of files %s: a commit overlapped a read of this transaction", null, fileIds);
+    // A bucket is a file, so its id is the file id the pinned pages are keyed by
+    final Set<Integer> files = new HashSet<>(fileIds);
+    immutablePages.values().removeIf(page -> files.contains(page.getPageId().getFileId()));
+    immutableRecordsCache.values().removeIf(r -> files.contains(r.getIdentity().getBucketId()));
   }
 
   public void removeFile(final int fileId) {
@@ -3002,6 +3195,12 @@ public class TransactionContext implements Transaction {
         (newPages != null && !newPages.isEmpty()) //
     )
       throw new TransactionException("Explicit lock must be acquired before any modification");
+
+    // An explicit lock is held across the requests of its transaction, so a request waiting for one must not hold a query
+    // admission slot meanwhile (issue #9518): the lock holder's next request would queue for a slot the lock waiters
+    // hold, and every waiter would time out on the lock first. The slot goes back before the wait, as before a forward to
+    // the leader; the rest of this request runs without one, and the transaction's next requests are admitted as usual
+    QueryAdmissionGate.getInstance().releaseCurrentSlot();
 
     // EXPLICIT_LOCK_TIMEOUT, not COMMIT_LOCK_TIMEOUT: an explicit `LOCK` is taken up front, before any work, and an
     // application that asks for one is telling the engine how long it is prepared to wait for a busy resource. The
@@ -3311,6 +3510,7 @@ public class TransactionContext implements Transaction {
    */
   public void addDeletedRecord(final RID rid) {
     deletedRecordsInTx.add(rid);
+    forgetSnapshotChunkChain(rid);
     // A record deleted after an in-tx update no longer needs its indexed-state snapshot (#4935): the delete
     // removes the index entries through its own path, so drop the retained memory right away.
     if (updatedRecordsIndexSnapshot != null)

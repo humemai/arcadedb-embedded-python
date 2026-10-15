@@ -173,13 +173,24 @@ Included and working in the native binary:
   [JS scripting caveat](#js-scripting-is-included-but-with-a-security-caveat) below for the one
   thing to be aware of)
 - The `console` and `graphql` modules
+- **Raft HA** (`arcadedb-ha-raft`): the same clustering as the JVM distribution, enabled the same way
+  (`-Darcadedb.ha.enabled=true` and `-Darcadedb.ha.serverList=...`). `ha-smoke.sh` boots three native
+  nodes, writes through the leader and reads the row back from every node
+- **Metrics** (`arcadedb-metrics`): the Prometheus scrape endpoint (`/prometheus`, activated by naming
+  `com.arcadedb.metrics.prometheus.PrometheusMetricsPlugin` in `arcadedb.server.plugins`) and OTLP metrics
+  push (`-Darcadedb.serverMetrics.otlp.enabled=true`)
+- **Tracing** (`arcadedb-tracing`): OpenTelemetry spans over OTLP, activated by
+  `-Darcadedb.serverMetrics.tracing.enabled=true`
 
-Deliberately excluded from the native build (`native/pom.xml`'s dependency list omits them):
+Deliberately excluded from the native build (`native/pom.xml`'s dependency list omits it):
 
 - **Gremlin** (Apache TinkerPop) - not on the native module's classpath
-- **`arcadedb-tracing`** (OpenTelemetry) - not on the native module's classpath
 
-If your deployment needs Gremlin or OpenTelemetry tracing, use the JVM distribution instead.
+If your deployment needs Gremlin, use the JVM distribution instead.
+
+A plugin named in `arcadedb.server.plugins` that is not in the image is skipped without a log line, so a
+setting that silently does nothing usually means the module is missing from the build, not that it is
+misconfigured.
 
 ## Target matrix
 
@@ -259,9 +270,13 @@ so the Dockerfiles can be validated end to end from any branch without publishin
 ### Building the images locally
 
 ```bash
-./native/scripts/build-native-docker.sh                    # host arch, build + smoke, no push
-./native/scripts/build-native-docker.sh --port 2481        # ... if something already holds 2480
+./native/scripts/build-native-docker.sh                    # host arch, build + e2e battery, no push
+./native/scripts/build-native-docker.sh --no-e2e           # build the image only
 ./native/scripts/build-native-docker.sh --skip-binary-build  # iterate on the Dockerfiles only
+
+# the Java e2e battery against any image, JVM or native
+./mvnw install -DskipTests -pl e2e -am
+./mvnw verify -Pintegration -pl e2e -Darcadedb.test.image=arcadedb:26.11.1-SNAPSHOT-native-arm64-local
 ```
 
 `native/scripts/build-native-docker.sh` produces the same per-arch image the workflow publishes,
@@ -271,8 +286,8 @@ and `docker` jobs: build a throwaway builder image
 for amd64 - the musl toolchain with its musl-built static zlib; run the ordinary Maven native
 build **inside** it with the repository bind-mounted, so the Linux binary lands in `native/target`
 on the host; stage the build context the way the workflow's "Stage build context" step does; build
-the runtime image with `buildx --load`; then run `exercise.sh` against the container and scan its
-startup log, the same two assertions the workflow's "Smoke the container" step makes.
+the runtime image with `buildx --load`; then run the Java e2e battery against it, as the workflow's
+`docker` job does.
 
 The container step is what makes this work on a machine that is not Linux at all. Native Image
 cannot cross-compile, so a macOS host has no other way to produce the Linux binary these images
@@ -381,12 +396,56 @@ native-image builder to a Truffle version that keeps the blocklist enforced.
 
 ### Binary size
 
-The native binary is currently large - around 732 MiB - mostly because `native/pom.xml` passes
+The native binary is currently large - around 907 MiB for macOS arm64 (it was around 732 MiB before
+Raft HA, metrics and tracing joined the image, #9407) - mostly because `native/pom.xml` passes
 `-H:IncludeResources=.*` to the build, which embeds every classpath resource (Studio's web assets,
 config templates, Lucene codec files, etc.) into the image. This is deliberately broad for
 correctness first; tightening `-H:IncludeResources` to the specific resource patterns each embedded
 module actually needs at runtime is a known follow-up, not something this experimental add-on has
 done yet.
+
+### Builder memory
+
+`native-image` sizes its own heap from the memory it can see. Measured on macOS arm64 with Raft HA,
+metrics and tracing in the image (#9407): a 9 GB builder heap ran out of memory ("Terminating due to
+java.lang.OutOfMemoryError: Java heap space"), a 12 GB heap built it with a peak RSS of 13.6 GB (a
+quarter of the time spent in GC), and a 24 GB heap peaked at 11.6 GB. The default can pick far too little
+when other processes hold memory (one run chose 8.16 GB from "available memory" and failed). Pin it
+with `NATIVE_IMAGE_OPTIONS="-J-Xmx24g"` when building locally. The Docker build script now requires a
+Docker VM of about 16 GiB (the check enforces 15 GiB, because Docker reports slightly less than it
+allots).
+
+### What CI verifies
+
+The packaged image is held to the same Java e2e battery as the JVM image (`e2e` module,
+Testcontainers; see "The e2e battery" below). On top of that the bare binaries are smoke-tested:
+the single-node smoke (`smoke.sh`/`exercise.sh`, including Prometheus, OTLP metrics and tracing)
+and the three-node HA smoke run on the two required Linux legs; macOS and Windows run the base smoke only. The tracing and OTLP
+metrics checks assert both that the plugin started (its SDK was built) and that an export reached a
+collector: `smoke.sh` starts `otlp_sink.py`, a stdlib-only stand-in collector (OTLP/HTTP protobuf for
+metrics, a minimal cleartext HTTP/2 gRPC endpoint for traces), points both exporters at it with a 2 s
+metrics push interval (`arcadedb.serverMetrics.otlp.step`), and `exercise.sh` waits for a metrics push
+and a span batch carrying the `service.name` resource attribute. `trace.sh` runs the same sink in its
+first phase, so the exporters' run-time metadata is recorded too.
+
+### The e2e battery
+
+`e2e` (run with `-Pintegration`) starts one container for all its tests. The image is the only
+parameter: `-Darcadedb.test.image=<name:tag>`, else the `ARCADEDB_DOCKER_IMAGE` environment variable
+(what CI and the other e2e suites already use), else `arcadedata/arcadedb:latest`. The server is
+configured through environment variables named after the settings (`arcadedb.server.rootPassword`,
+`arcadedb.server.plugins`, ...), which `GlobalConfiguration` reads in both images; `JAVA_OPTS` would
+not reach the native binary, whose entrypoint is the binary itself with no shell script around it.
+
+A tag containing `-native` (or `-Darcadedb.test.native=true`) marks the image as native: Gremlin is
+not bundled there, so the Gremlin tests are skipped and the Gremlin plugin is not configured, and
+`ThaiAnalyzer` is skipped (see above). Everything else runs unchanged on both images, including the
+native-specific regressions of #9495 (`SqlStatementsIT`, `FullTextIT` over every bundled analyzer),
+and the battery ends with `ServerLogIT`, which fails on a `ClassNotFoundException`,
+`MissingReflectionRegistrationError` or log-handler failure anywhere in the server log.
+
+The bare-binary smoke scripts stay for what a container cannot cover: the macOS and Windows
+binaries, the OTLP exporters (`smoke.sh`'s stand-in collector) and the Raft cluster (`ha-smoke.sh`).
 
 ### JVector and SIMD
 
@@ -418,9 +477,52 @@ The build's `native-maven-plugin` configuration enables GraalVM's
 [reachability metadata repository](https://github.com/oracle/graalvm-reachability-metadata) (Netty,
 gRPC, Undertow, Jackson, HdrHistogram, Apache HttpClient) alongside a hand-generated
 `reachability-metadata.json` produced by running the assembled JVM server under the native-image
-tracing agent (`native/src/test/scripts/trace.sh`) while exercising the smoke-test surface. This
-combination has been sufficient so far - no manual edits to the generated JSON have been required
-when adding new smoke-tested surface. Regenerate it with `trace.sh` if you add a code path that
-reflects, serializes, or loads resources in a way the current metadata doesn't cover; the script
-needs GraalVM's own `java` (point `JAVA_HOME` at it, same requirement as above) because it launches
-the server with `-agentlib:native-image-agent`.
+tracing agent (`native/src/test/scripts/trace.sh`) while exercising the smoke-test surface. The
+script has two phases: one server driven by `exercise.sh` (SQL, Cypher, JS, every wire protocol,
+Prometheus, OTLP metrics, tracing), then a three-node Raft cluster driven by `ha-smoke.sh`. The
+second phase is not optional: Ratis only reaches most of its reflective code (the leader's log
+appenders, the follower apply path) once there are peers, and a single node never exercises it. The
+agent holds an exclusive lock on its output directory, so each cluster node writes its own and
+`native-image-configure` folds them into the committed file. Regenerate it with `trace.sh` if you
+add a code path that reflects, serializes, or loads resources in a way the current metadata doesn't
+cover; the script needs GraalVM's own `java` (point `JAVA_HOME` at it, same requirement as above)
+because it launches the server with `-agentlib:native-image-agent`.
+
+One part is hand-curated because the agent cannot record it. Ratis ships a relocated copy of Netty
+(`org.apache.ratis.thirdparty.io.netty`), and Netty's `PlatformDependent0` reads a handful of JDK
+internals through `Unsafe` (`java.nio.Bits.UNALIGNED`, `java.nio.Buffer.address`,
+`sun.misc.Unsafe.theUnsafe`, `sun.nio.ch.SelectorImpl`'s key sets and similar). The agent does not
+log `Unsafe` field-offset lookups, and the reachability metadata repository registers those entries
+only under a `typeReached` condition on the unshaded `io.netty` class, which the relocated copy never
+satisfies. They are therefore listed unconditionally in `reachability-metadata.json`. Regenerating
+with `trace.sh` keeps them, because both phases merge into the existing file rather than replacing it.
+Without them the Raft server fails to start with a `MissingReflectionRegistrationError` on the first
+of them it touches, and the node exits, which `ha-smoke.sh` reports as a node that exited early.
+
+Two more groups are listed in full rather than as far as a trace happened to reach them (#9495), and
+`NativeImageReflectionMetadataTest` (engine module) fails on the JVM when one of them is missing:
+
+- every SQL function and method the engine registers by class, since each call creates it through
+  its no-arg constructor (`cchShortestPath()` was missing and failed only in the native binary);
+- every Lucene analyzer and token attribute with a public no-arg constructor. A full-text index
+  creates its analyzer from the class name in its metadata and Lucene creates its token attributes
+  through a reflective factory, and the metadata repository has no entries for the Lucene version
+  ArcadeDB ships, so without them no `FULL_TEXT` index could be created. A Lucene upgrade that adds
+  an analyzer turns that test red until the entry is added;
+- the methods the Snowball stemmers' `Among` tables name (`FinnishStemmer`, `HindiStemmer`,
+  `IndonesianStemmer`): they are looked up with `MethodHandles.findVirtual` in the stemmer's static
+  initializer, so a missing one makes the whole class fail to load.
+- every public static method of `java.lang.Math`: the `math_*` SQL functions (`math_abs`, `math_max`,
+  ...) call them through `Method.invoke`, which the image refuses with a
+  `MissingReflectionRegistrationError` for an unregistered method.
+
+One analyzer still does not work in the native binary: `org.apache.lucene.analysis.th.ThaiAnalyzer`
+fails with "This JRE does not have support for Thai segmentation", because the JDK's dictionary-based
+Thai `BreakIterator` is not available in the image (`-H:IncludeLocales=th` plus the `jdk.localedata`
+dictionary resource were tried and are not enough). The other 44 analyzers with a public no-arg
+constructor were verified against the binary.
+
+ArcadeDB's own code must not instantiate classes reflectively where a plain `new` will do: the SQL
+AST `copy()` methods used `getClass().getConstructor()`, which made every `UPDATE`/`DELETE` fail in
+the native binary while passing on the JVM (#9495). `Issue9495ReflectionFreeCopyTest` refuses that
+pattern in the SQL parser sources.

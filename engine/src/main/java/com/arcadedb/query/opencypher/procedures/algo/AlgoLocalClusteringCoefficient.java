@@ -91,7 +91,7 @@ public class AlgoLocalClusteringCoefficient extends AbstractAlgoProcedure {
   public Stream<Result> execute(final Object[] args, final Result inputRow, final CommandContext context) {
     validateArgs(args);
 
-    final String[] relTypes = args.length > 0 ? extractRelTypes(args[0]) : null;
+    final String[] relTypes = extractRelTypes(argOrDefault(args, 0, null), context);
 
     final Database db = context.getDatabase();
 
@@ -120,7 +120,6 @@ public class AlgoLocalClusteringCoefficient extends AbstractAlgoProcedure {
     final double[] lcc = relTypes != null ?
         GraphAlgorithms.localClusteringCoefficient(gav, guard::check, relTypes) :
         GraphAlgorithms.localClusteringCoefficient(gav, guard::check);
-    context.setVariable(CommandContext.RESULT_COUNT_HINT_VAR, (long) n);
 
     return IntStream.range(0, n).mapToObj(i -> {
       final ResultInternal r = new ResultInternal();

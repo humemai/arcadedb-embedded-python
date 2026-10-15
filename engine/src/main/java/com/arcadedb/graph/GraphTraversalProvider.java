@@ -146,6 +146,25 @@ public interface GraphTraversalProvider {
   RID getRID(int nodeId);
 
   /**
+   * Returns the bucket id of the record behind a dense node ID, or -1 if not mapped. Unlike {@code getRID(nodeId)
+   * .getBucketId()} it builds no RID, which matters in a loop over every neighbour of a traversal (issue #9738).
+   */
+  default int getBucketId(final int nodeId) {
+    final RID rid = getRID(nodeId);
+    return rid != null ? rid.getBucketId() : -1;
+  }
+
+  /**
+   * The numbering the dense node IDs belong to: the same object, by identity, for as long as every ID handed out keeps
+   * naming the same record. A rebuild that numbers the nodes afresh answers a different one; IDs appended for new
+   * vertices keep it. A walk that spans time - a result streamed in rounds - compares it before handing out what it read,
+   * so it never mixes IDs of two numberings, which would answer the wrong records without failing (issue #9738).
+   */
+  default Object getNodeIdSpace() {
+    return this;
+  }
+
+  /**
    * Returns neighbor dense node IDs for a given node, direction, and edge types.
    * This is the primary acceleration method — O(1) array access vs O(n) linked list traversal.
    */
@@ -156,6 +175,18 @@ public interface GraphTraversalProvider {
    * Avoids materializing the neighbor array when only the count is needed.
    */
   long countEdges(int nodeId, Vertex.DIRECTION direction, String... edgeTypes);
+
+  /**
+   * The number of edges of the given types in the whole provider, sub-types included and every edge type with none given,
+   * when the provider can tell it without visiting the nodes; -1 when it cannot, and the caller sums {@link #countEdges}
+   * over the nodes instead. An edge is counted once, at its source. The count is of the edges this provider holds: a provider
+   * built over some of the vertex types leaves out the edges that reach the others, so it is the database's count, the
+   * answer to {@code MATCH ()-[:T]->() RETURN count(*)}, only for a provider whose node domain is every vertex
+   * ({@code coversVertexType(null)}), which is what the Cypher edge count requires before asking (issue #9600).
+   */
+  default long countAllEdges(final String... edgeTypes) {
+    return -1;
+  }
 
   /**
    * Checks if nodeA is connected to nodeB via the given direction and edge types.

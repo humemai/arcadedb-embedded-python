@@ -41,6 +41,7 @@ import com.arcadedb.log.LogManager;
 import com.arcadedb.schema.DocumentType;
 import com.arcadedb.schema.EdgeType;
 import com.arcadedb.schema.Property;
+import com.arcadedb.security.SecurityDatabaseUser;
 import com.arcadedb.serializer.BinaryTypes;
 import com.arcadedb.utility.LRUCache;
 import com.arcadedb.utility.LongHashSet;
@@ -87,14 +88,16 @@ import java.util.logging.Level;
  * </ul>
  * <p>
  * <b>Memory bounding is partial, by design (issue #5664).</b> The two head-chunk RID caches and the deferred
- * incoming-edge buffer above are bounded, but {@code deferredOutHead}, {@code deferredInHead} and
- * {@code knownNewVertexKeys} still grow with the number of DISTINCT VERTICES the batch touches (not with the
- * edge count, and not with {@code batchSize}); they are only cleared by {@code batchUpdateVertexHeadChunks()}
- * at {@link #close()}. They are also load-bearing rather than merely an optimization: since #5664 they are the
- * authoritative fallback consulted when a bounded RID cache evicts an entry, which is what keeps an eviction
- * from silently orphaning an earlier segment. So a stream touching hundreds of millions of distinct vertices
- * still carries per-vertex state proportional to that count. Bounding those too means draining vertex head
- * pointers mid-batch, a materially larger change; it is deliberately not attempted here.
+ * incoming-edge buffer above are bounded, but {@code deferredHeads} and {@code knownNewVertexKeys} still grow
+ * with the number of DISTINCT VERTICES the batch touches (not with the edge count, and not with
+ * {@code batchSize}); they are only cleared by {@code batchUpdateVertexHeadChunks()} at {@link #close()}. They
+ * are also load-bearing rather than merely an optimization: since #5664 they are the authoritative fallback
+ * consulted when a bounded RID cache evicts an entry, which is what keeps an eviction from silently orphaning an
+ * earlier segment. So a stream touching hundreds of millions of distinct vertices still carries per-vertex state
+ * proportional to that count: 32 to 48 bytes a vertex for {@code deferredHeads} since issue #9575, which keeps
+ * both heads of a vertex in one primitive slot. Bounding it means draining vertex head pointers mid-batch, which
+ * rewrites a vertex once per drain that touches it instead of once per batch: on edges that arrive in random
+ * order that is a rewrite per edge, so it is deliberately not done.
  * <p>
  * <b>Super-node promotion (#5667):</b> unlike the standard {@code Vertex.newEdge()} path, a bulk load through
  * this class never promotes a hot vertex to the striped super-node layout (see
@@ -181,6 +184,12 @@ public class GraphBatch implements AutoCloseable {
    * primitive arrays (and the transient doubling copy when they grow) from scaling with the full stream length.
    */
   private static final int DEFAULT_MAX_DEFERRED_INCOMING_EDGES = 5_000_000;
+
+  /** {@link #declaredPropertyFlags}: the edge type declares at least one property, own or inherited. */
+  private static final int TYPE_DECLARES_PROPERTIES = 1;
+
+  /** {@link #declaredPropertyFlags}: the edge type declares an EXTERNAL property, own or inherited (issue #9814). */
+  private static final int TYPE_DECLARES_EXTERNAL = 2;
 
   /**
    * Test-only fault-injection hook. Invoked just before each {@link #createVertices} commit with
@@ -340,10 +349,10 @@ public class GraphBatch implements AutoCloseable {
   //      concurrent WRITER touches these fields during a parallel round; the read-only access from
   //      multiple async slots is fine.
   //   3. batchUpdateVertexHeadChunks() reads these single-threaded at flush end.
-  // LongObjectHashMap (zero-boxing, ~5x less memory than ConcurrentHashMap<Long, RID>) is safe
-  // under this lifecycle because writes are never concurrent and concurrent reads never race a write.
-  private final LongObjectHashMap<RID> deferredOutHead = new LongObjectHashMap<>();
-  private final LongObjectHashMap<RID> deferredInHead = new LongObjectHashMap<>();
+  // DeferredHeadChunks (both directions in one slot, RIDs packed, no boxing) is safe under this lifecycle because
+  // writes are never concurrent and concurrent reads never race a write. It holds an entry per vertex the batch
+  // touches, which on a 200M-vertex load is the batch's largest structure (issue #9575).
+  private final DeferredHeadChunks deferredHeads;
 
   // --- Known-new vertices: created by createVertices(), guaranteed no existing segments ---
   // Allows skipping vertex record loads when creating first segment.
@@ -361,6 +370,8 @@ public class GraphBatch implements AutoCloseable {
   // --- Statistics ---
   private long totalVerticesCreated;
   private long totalEdgesCreated;
+  // How many of them the graph analytical views were told about (issue #9572)
+  private long totalEdgesReported;
   private long totalFlushes;
   private long totalFlushTimeNs;
   private long totalOrphanEdgeRecordsReclaimed;
@@ -412,8 +423,9 @@ public class GraphBatch implements AutoCloseable {
       final boolean lightEdges, final boolean bidirectional, final int commitEvery,
       final boolean useWAL, final WALFile.FlushType walFlush, final boolean preAllocateEdgeChunks,
       final boolean parallelFlush, final int commitRetries, final long commitRetryDelayMs,
-      final int chunkCacheCapacity, final int maxDeferredIncomingEdges) {
+      final int chunkCacheCapacity, final int maxDeferredIncomingEdges, final long maxVertexCount) {
     this.database = database;
+    this.deferredHeads = new DeferredHeadChunks(maxVertexCount);
     this.guardOwner = guardOwner;
     this.batchSize = batchSize;
     this.edgeListInitialSize = edgeListInitialSize;
@@ -802,6 +814,13 @@ public class GraphBatch implements AutoCloseable {
     if (edgeCount + 1 >= batchSize)
       requireNoCallerTransaction("newEdge");
 
+    // A light edge has no record, so the type's record counter, which the count push-downs answer from, would read 0 for
+    // edges that exist (issue #9378): the type has to declare it, and a batch no longer decides it on its own
+    if (!typeIsLightweight && lightEdges && !GraphEngine.describesProperties(edgeProperties) && !typeAppliesSchemaToEmptyEdge(edgeTypeName))
+      throw new IllegalArgumentException("Edge type '" + edgeTypeName
+          + "' does not declare LIGHTWEIGHT, so a batch built with withLightEdges(true) cannot store its property-less edges as light edges. "
+          + "Declare the type with CREATE EDGE TYPE " + edgeTypeName + " LIGHTWEIGHT, or build the batch without withLightEdges(true)");
+
     final int idx = edgeCount;
     edgeSrcBucketIds[idx] = sourceVertexRID.getBucketId();
     edgeSrcPositions[idx] = sourceVertexRID.getPosition();
@@ -816,13 +835,22 @@ public class GraphBatch implements AutoCloseable {
           + "' is declared LIGHTWEIGHT, so its edges cannot have properties. Use a regular edge type if the edge "
           + "needs to carry data");
 
-    edgeHasProperties[idx] = hasProps;
-    this.edgeProperties[idx] = hasProps ? propertyPairs(edgeProperties) : null;
     // A LIGHTWEIGHT type is stored lightweight whatever the builder was told: the storage shape belongs to the
     // schema, and withLightEdges() is only the legacy per-batch override for types that do not declare one.
     // An edge type with a default or a MANDATORY property is never stored lightweight by that override: those apply to an
     // edge without properties too (issue #9019). Types with only optional properties keep their compact property-less edges.
-    edgeIsLightweight[idx] = typeIsLightweight || (lightEdges && !hasProps && !typeAppliesSchemaToEmptyEdge(edgeTypeName));
+    final boolean isLightweight = typeIsLightweight || (lightEdges && !hasProps && !typeAppliesSchemaToEmptyEdge(edgeTypeName));
+
+    // A light edge allocates no record, so the bulk record writer never checks CREATE_RECORD for it (issue #9619): refused
+    // here, BEFORE it is buffered, so nothing is left for a later flush to write. Checked per edge, not cached per batch: the
+    // user bound to the thread can change between two calls, and the check (a no-op without security, a context lookup
+    // and an array read with it) costs about what the type-cache lookups above already do.
+    if (isLightweight)
+      database.checkPermissionsOnFile(typeBucketId, SecurityDatabaseUser.ACCESS.CREATE_RECORD);
+
+    edgeHasProperties[idx] = hasProps;
+    this.edgeProperties[idx] = hasProps ? propertyPairs(edgeProperties) : null;
+    edgeIsLightweight[idx] = isLightweight;
     edgeIsBidirectional[idx] = typeIsBidirectional;
 
     edgeCount++;
@@ -854,12 +882,7 @@ public class GraphBatch implements AutoCloseable {
   }
 
   private boolean typeAppliesSchemaToEmptyEdge(final String edgeTypeName) {
-    return emptyEdgeSchemaCache.computeIfAbsent(edgeTypeName, name -> {
-      for (final Property property : edgeType(name).getPolymorphicProperties())
-        if (property.isMandatory() || property.getDefaultValueDefinition() != null)
-          return true;
-      return false;
-    });
+    return emptyEdgeSchemaCache.computeIfAbsent(edgeTypeName, name -> edgeType(name).findPropertyAppliedToEmptyRecord() != null);
   }
 
   /** The edge type {@code name}, or a clear refusal for a name that is missing or not an edge type. */
@@ -1382,6 +1405,9 @@ public class GraphBatch implements AutoCloseable {
    * dictionary IDs and type tags. Edges are then serialized directly into Binary buffers
    * without MutableEdge allocation or HashMap operations, except for an edge of a type with declared properties, which goes
    * through {@link #applySchema} once for the conversion, defaults and constraints (issue #9019).
+   * <p>
+   * An edge type that declares an EXTERNAL property (own or inherited) is written through {@code save()} instead, because the
+   * template path cannot place a value in the paired bucket (issue #9814): correct, but slower than the bulk write.
    */
   private void createEdgeRecordsBulk(final RID[] edgeRIDs, final int nonLightCount) {
     // Collect indices of non-light edges
@@ -1394,35 +1420,13 @@ public class GraphBatch implements AutoCloseable {
     // An edge type with declared properties gets what every other write path gives it: the value converted to the declared
     // type, the defaults, and the constraints (issue #9019). The bulk writer casts raw values to the declared binary type,
     // which wraps a SHORT, throws on a BYTE and never runs a validation.
-    final Map<Integer, Boolean> declaresProperties = new HashMap<>();
+    // The same pass notes, once per bucket, whether the type has an EXTERNAL property (issue #9814)
+    final Map<Integer, Integer> bucketTypeFlags = new HashMap<>();
     for (int k = 0; k < nonLightCount; k++) {
       final int i = nonLightIndices[k];
-      final Boolean declared = declaresProperties.computeIfAbsent(edgeTypeBucketIds[i],
-          bucketId -> !database.getSchema().getTypeByBucketId(bucketId).getPolymorphicProperties().isEmpty());
-      if (declared)
+      final int flags = bucketTypeFlags.computeIfAbsent(edgeTypeBucketIds[i], this::declaredPropertyFlags);
+      if ((flags & TYPE_DECLARES_PROPERTIES) != 0)
         applySchema(i);
-    }
-
-    // Serialize all edge records using templates
-    final Binary[] serializedBuffers = new Binary[nonLightCount];
-
-    for (int k = 0; k < nonLightCount; k++) {
-      final int i = nonLightIndices[k];
-      final Object[] props = edgeProperties[i];
-
-      if (props != null && props.length > 0) {
-        final EdgeSerializationTemplate template = getOrCreateTemplate(props, edgeTypeBucketIds[i]);
-        serializedBuffers[k] = serializeEdgeDirect(
-            edgeSrcBucketIds[i], edgeSrcPositions[i],
-            edgeDstBucketIds[i], edgeDstPositions[i],
-            props, template);
-      } else {
-        // No properties — serialize minimal edge
-        serializedBuffers[k] = serializeEdgeDirect(
-            edgeSrcBucketIds[i], edgeSrcPositions[i],
-            edgeDstBucketIds[i], edgeDstPositions[i],
-            null, new EdgeSerializationTemplate(new String[0], new int[0], new byte[0], true));
-      }
     }
 
     // Group by bucket and bulk-write
@@ -1435,7 +1439,33 @@ public class GraphBatch implements AutoCloseable {
       }
     }
 
-    if (singleBucket) {
+    // The template serializer writes straight to the bucket and never reaches BinarySerializer.serializeProperties(), the only
+    // place that honors Property.isExternal(): an EXTERNAL value written that way is stored INLINE and the paired bucket stays
+    // empty, silently breaking the contract of small primary records (issue #9814). Such a type takes the ordinary save() path,
+    // the one a multi-type flush already takes.
+    if (singleBucket && (bucketTypeFlags.get(firstBucket) & TYPE_DECLARES_EXTERNAL) == 0) {
+      // Serialize all edge records using templates
+      final Binary[] serializedBuffers = new Binary[nonLightCount];
+
+      for (int k = 0; k < nonLightCount; k++) {
+        final int i = nonLightIndices[k];
+        final Object[] props = edgeProperties[i];
+
+        if (props != null && props.length > 0) {
+          final EdgeSerializationTemplate template = getOrCreateTemplate(props, edgeTypeBucketIds[i]);
+          serializedBuffers[k] = serializeEdgeDirect(
+              edgeSrcBucketIds[i], edgeSrcPositions[i],
+              edgeDstBucketIds[i], edgeDstPositions[i],
+              props, template);
+        } else {
+          // No properties — serialize minimal edge
+          serializedBuffers[k] = serializeEdgeDirect(
+              edgeSrcBucketIds[i], edgeSrcPositions[i],
+              edgeDstBucketIds[i], edgeDstPositions[i],
+              null, new EdgeSerializationTemplate(new String[0], new int[0], new byte[0], true));
+        }
+      }
+
       final LocalBucket bucket = (LocalBucket) database.getSchema().getBucketById(firstBucket);
       final RID[] bulkRIDs = new RID[nonLightCount];
       bucket.createRecordsBulk(serializedBuffers, 0, nonLightCount, bulkRIDs);
@@ -1459,7 +1489,7 @@ public class GraphBatch implements AutoCloseable {
               edgeProperties[i]);
       }
     } else {
-      // Multiple buckets — fall back to per-edge standard creation
+      // Multiple buckets, or a type with EXTERNAL properties: fall back to per-edge standard creation
       for (int k = 0; k < nonLightCount; k++) {
         final int i = nonLightIndices[k];
         final EdgeType edgeType = (EdgeType) database.getSchema().getTypeByBucketId(edgeTypeBucketIds[i]);
@@ -1473,6 +1503,20 @@ public class GraphBatch implements AutoCloseable {
         edgeRIDs[i] = edge.getIdentity();
       }
     }
+  }
+
+  /**
+   * What the type owning {@code bucketId} declares, as {@code TYPE_DECLARES_*} flags: any property at all (polymorphically,
+   * so inherited ones count) and, among them, an EXTERNAL one (issue #9814). Evaluated once per bucket per flush.
+   */
+  private int declaredPropertyFlags(final int bucketId) {
+    int flags = 0;
+    for (final Property property : database.getSchema().getTypeByBucketId(bucketId).getPolymorphicProperties()) {
+      flags |= TYPE_DECLARES_PROPERTIES;
+      if (property.isExternal())
+        return flags | TYPE_DECLARES_EXTERNAL;
+    }
+    return flags;
   }
 
   /**
@@ -1551,7 +1595,7 @@ public class GraphBatch implements AutoCloseable {
     if (database.isTransactionActive() && hasPendingWork()) {
       LogManager.instance().log(this, Level.WARNING,
           "GraphBatch.close() was called inside a transaction the caller opened: %d buffered edge(s), %d deferred incoming edge(s) and the head pointers of %d vertices are kept, the batch stays open until close() is called again outside it",
-          null, edgeCount, inEdgeCount, deferredOutHead.size() + deferredInHead.size());
+          null, edgeCount, inEdgeCount, deferredHeads.size());
       throw callerTransactionRefusal("close");
     }
 
@@ -1585,11 +1629,13 @@ public class GraphBatch implements AutoCloseable {
           connectDeferredIncomingEdges();
 
         // Batch-update all vertex head chunk pointers in one pass
-        if (!deferredOutHead.isEmpty() || !deferredInHead.isEmpty())
+        if (!deferredHeads.isEmpty())
           batchUpdateVertexHeadChunks();
       } finally {
         // Restore database settings, even on an exceptional exit (issue #5378)
         restoreDatabaseSettings();
+        // Also on a failed batch: what it did commit is in the graph
+        reportEdgesWritten();
       }
 
       LogManager.instance().log(this, Level.INFO,
@@ -1622,7 +1668,22 @@ public class GraphBatch implements AutoCloseable {
     database.setReadYourWrites(savedReadYourWrites);
     restoreAsyncSettings();
     maintenanceSuspension.close();
+    reportEdgesWritten();
     releaseBatchGuard();
+  }
+
+  /**
+   * Tells the graph analytical views which edge types this batch wrote (issue #9572). Its edges reach the edge lists
+   * without a record event apiece - a lightweight edge has no record, and a regular one is created in bulk - so this is
+   * the only way a view learns of them. Once, when the batch ends: until then the head pointers and the incoming side of
+   * the edges are deferred, so the graph does not hold them whole and a view rebuilt earlier would miss them anyway.
+   */
+  private void reportEdgesWritten() {
+    if (totalEdgesCreated == totalEdgesReported)
+      return;
+    totalEdgesReported = totalEdgesCreated;
+    // Never throws: the outcome of the batch is the caller's to handle, not a listener's
+    database.getGraphEngine().edgesWrittenInBulk(Set.copyOf(edgeTypeFirstBucketCache.keySet()));
   }
 
   /**
@@ -1774,16 +1835,9 @@ public class GraphBatch implements AutoCloseable {
   private void batchUpdateVertexHeadChunks() {
     LogManager.instance().log(this, Level.INFO,
         "Batch updating %d OUT + %d IN vertex head chunk pointers...",
-        null, deferredOutHead.size(), deferredInHead.size());
+        null, deferredHeads.outSize(), deferredHeads.inSize());
 
     final long startNs = System.nanoTime();
-
-    // Collect all vertex keys that need updating. Using LongHashSet (zero-boxing,
-    // open-addressing) instead of HashSet<Long> avoids ~70 bytes/entry of overhead
-    // and Long boxing on every addAll, which matters during 100K+ entry bulk loads.
-    final LongHashSet allKeys = new LongHashSet(deferredOutHead.size() + deferredInHead.size());
-    deferredOutHead.forEach((k, v) -> allKeys.add(k));
-    deferredInHead.forEach((k, v) -> allKeys.add(k));
 
     // Sort by vertex key for page locality.
     // NOTE (concurrency): Arrays.parallelSort forks to the JDK common ForkJoinPool, which is
@@ -1792,7 +1846,9 @@ public class GraphBatch implements AutoCloseable {
     // foreground operational task, not a hot per-query path - and the sort dominates its own
     // critical section. Migrate to QueryEngineManager.getExecutorService() if profiling later
     // shows common-pool contention with user code during overlapping bulk loads.
-    final long[] sortedKeys = allKeys.toArray();
+    // Every vertex with a deferred head in either direction: one entry carries both, so the union is the key set. The
+    // array and the sort's scratch space are 8 bytes a vertex each, on top of the table, for the length of the sort.
+    final long[] sortedKeys = deferredHeads.keys();
     Arrays.parallelSort(sortedKeys);
 
     beginTx();
@@ -1804,11 +1860,11 @@ public class GraphBatch implements AutoCloseable {
 
       MutableVertex vertex = ((Vertex) database.lookupByRID(new RID(bucketId, position), true)).modify();
 
-      final RID outHead = deferredOutHead.get(vertexKey);
+      final RID outHead = deferredHeads.getOut(vertexKey);
       if (outHead != null)
         vertex.setOutEdgesHeadChunk(outHead);
 
-      final RID inHead = deferredInHead.get(vertexKey);
+      final RID inHead = deferredHeads.getIn(vertexKey);
       if (inHead != null)
         vertex.setInEdgesHeadChunk(inHead);
 
@@ -1822,8 +1878,7 @@ public class GraphBatch implements AutoCloseable {
     }
 
     database.commit();
-    deferredOutHead.clear();
-    deferredInHead.clear();
+    deferredHeads.clear();
     knownNewVertexKeys.clear();
 
     final double ms = (System.nanoTime() - startNs) / 1_000_000.0;
@@ -1878,7 +1933,7 @@ public class GraphBatch implements AutoCloseable {
   }
 
   private boolean hasPendingWork() {
-    return edgeCount > 0 || inEdgeCount > 0 || !deferredOutHead.isEmpty() || !deferredInHead.isEmpty();
+    return edgeCount > 0 || inEdgeCount > 0 || !deferredHeads.isEmpty();
   }
 
   /**
@@ -1897,7 +1952,7 @@ public class GraphBatch implements AutoCloseable {
     int i = 0;
     int edgesInBatch = 0;
 
-    // getOrCreateOutSegmentDeferred/persistNewSegment/addEdgesToSegmentBulkLazy write deferredOutHead and
+    // getOrCreateOutSegmentDeferred/persistNewSegment/addEdgesToSegmentBulkLazy write the OUT side of deferredHeads and
     // outChunkRIDCache as they process a group, BEFORE the transaction holding that group's writes commits. If
     // that commit never happens, the maps are left naming segment records the rollback undid - and
     // batchUpdateVertexHeadChunks() at close() then stamps one of those dead RIDs onto the vertex, which CHECK
@@ -1905,7 +1960,7 @@ public class GraphBatch implements AutoCloseable {
     //
     // Exactly the hazard #5950 cycle 3 fixed for the IN direction (see connectIncomingEdgesSequential's
     // inHeadUndoLog) and cycle 4 for the parallel OUT direction (the per-bucket local maps); this path was the
-    // one left. Same remedy: snapshot each touched vertex's PRE-slice deferredOutHead value once per slice, and
+    // one left. Same remedy: snapshot each touched vertex's PRE-slice OUT head in deferredHeads once per slice, and
     // on failure restore it exactly - "was absent" via remove(), "had segment X" back to X (issue #6083).
     //
     // LongObjectHashMap, not HashMap<Long, RID>: this is allocated on EVERY sequential flush and takes an entry
@@ -1946,10 +2001,10 @@ public class GraphBatch implements AutoCloseable {
 
         // Get or create segment — deferred vertex update, no vertex load for known-new vertices
         final long vertexKey = packVertexKey(srcBucket, srcPos);
-        // Snapshot BEFORE getOrCreateOutSegmentDeferred can mutate deferredOutHead for this vertex. A promoted
+        // Snapshot BEFORE getOrCreateOutSegmentDeferred can mutate the OUT side of deferredHeads for this vertex. A promoted
         // vertex (below) touches neither map, so the snapshot is harmlessly unused in that case.
         if (!outHeadUndoLog.containsKey(vertexKey))
-          outHeadUndoLog.put(vertexKey, deferredOutHead.get(vertexKey));
+          outHeadUndoLog.put(vertexKey, deferredHeads.getOut(vertexKey));
         final EdgeSegment outChunk = getOrCreateOutSegmentDeferred(srcBucket, srcPos, vertexKey, totalBytesNeeded);
 
         // NOTE (edge-append merge): this bulk path intentionally neither tracks (trackEdgeAppend) nor poisons its
@@ -1998,16 +2053,16 @@ public class GraphBatch implements AutoCloseable {
       }
 
       // Inside the try, unlike before issue #6083: a final commit that fails rolls back the last slice's
-      // segments too, and the undo log is the only thing that can take their RIDs back out of deferredOutHead.
+      // segments too, and the undo log is the only thing that can take their RIDs back out of the OUT side of deferredHeads.
       database.commit();
       flushDurableOutEdges = edgeCount;
     } catch (final RuntimeException e) {
       outHeadUndoLog.forEach((key, previous) -> {
         if (previous == null)
-          deferredOutHead.remove(key);
+          deferredHeads.removeOut(key);
         else
-          deferredOutHead.put(key, previous);
-        // Just an accelerator cache - evicting is always safe, forces a deferredOutHead/disk fallback.
+          deferredHeads.putOut(key, previous);
+        // Just an accelerator cache - evicting is always safe, forces a fallback to the OUT side of deferredHeads or the disk.
         outChunkRIDCache.remove(key);
       });
       throw e;
@@ -2183,11 +2238,11 @@ public class GraphBatch implements AutoCloseable {
     int edgesInBatch = 0;
 
     // getOrCreateInSegmentDeferred/persistNewSegment/addIncomingEdgesToSegmentBulkLazy mutate
-    // deferredInHead/inChunkRIDCache as a side effect of processing a group, BEFORE the transaction
+    // the IN side of deferredHeads/inChunkRIDCache as a side effect of processing a group, BEFORE the transaction
     // containing that group's writes commits. If the commit that would make those writes durable never
     // happens (an exception anywhere in this slice), the maps are left pointing at segment records from
     // a transaction the caller is about to roll back. Snapshot each touched vertex's PRE-slice
-    // deferredInHead value (only once per vertex per slice) so a failure can restore it exactly -
+    // IN head in deferredHeads (only once per vertex per slice) so a failure can restore it exactly -
     // "was absent" restores via remove(), "had segment X" restores X - before rethrowing (issue #5950
     // review cycle 3).
     //
@@ -2226,11 +2281,11 @@ public class GraphBatch implements AutoCloseable {
         }
 
         final long vertexKey = packVertexKey(dstBucket, dstPos);
-        // Snapshot BEFORE getOrCreateInSegmentDeferred can mutate deferredInHead for this vertex (issue
+        // Snapshot BEFORE getOrCreateInSegmentDeferred can mutate the IN side of deferredHeads for this vertex (issue
         // #5950 review cycle 3) - see the undo-log comment above. A promoted vertex (below) never touches
-        // deferredInHead/inChunkRIDCache, so this snapshot is harmlessly unused in that case.
+        // the IN side of deferredHeads/inChunkRIDCache, so this snapshot is harmlessly unused in that case.
         if (!inHeadUndoLog.containsKey(vertexKey))
-          inHeadUndoLog.put(vertexKey, deferredInHead.get(vertexKey));
+          inHeadUndoLog.put(vertexKey, deferredHeads.getIn(vertexKey));
         final EdgeSegment inChunk = getOrCreateInSegmentDeferred(dstBucket, dstPos, vertexKey, totalBytesNeeded);
 
         if (lastSegmentPromoted) {
@@ -2273,10 +2328,10 @@ public class GraphBatch implements AutoCloseable {
     } catch (final RuntimeException e) {
       inHeadUndoLog.forEach((key, previous) -> {
         if (previous == null)
-          deferredInHead.remove(key);
+          deferredHeads.removeIn(key);
         else
-          deferredInHead.put(key, previous);
-        // Just an accelerator cache - evicting is always safe, forces a deferredInHead/disk fallback.
+          deferredHeads.putIn(key, previous);
+        // Just an accelerator cache - evicting is always safe, forces a fallback to the IN side of deferredHeads or the disk.
         inChunkRIDCache.remove(key);
       });
       throw e;
@@ -2296,7 +2351,7 @@ public class GraphBatch implements AutoCloseable {
     // destination bucket id), and a bucket runs on exactly one thread at a time - including across its
     // own internal CME retries, which rerun connectIncomingEdgesRangeLocal from scratch into the SAME
     // local maps - so no synchronization is needed for these. They are merged into the class-level,
-    // NOT-thread-safe deferredInHead/inChunkRIDCache only in the single-threaded pass below, and only
+    // NOT-thread-safe deferredHeads/inChunkRIDCache only in the single-threaded pass below, and only
     // for buckets that are actually in completedIncomingBuckets: a bucket that exhausts its retries
     // must not poison the authoritative state with RIDs from its rolled-back transaction, which a
     // subsequent retry of connectDeferredIncomingEdges() would then dereference and crash on (issue
@@ -2352,7 +2407,7 @@ public class GraphBatch implements AutoCloseable {
     for (final Map.Entry<Integer, Map<Long, RID>> entry : bucketDeferredInHead.entrySet()) {
       if (!completedIncomingBuckets.contains(entry.getKey()))
         continue;
-      entry.getValue().forEach(deferredInHead::put);
+      entry.getValue().forEach(deferredHeads::putIn);
       bucketInChunkCache.get(entry.getKey()).forEach(inChunkRIDCache::put);
     }
 
@@ -2424,12 +2479,12 @@ public class GraphBatch implements AutoCloseable {
       // Checked unconditionally (not just for known-new vertices): a pre-existing vertex touched
       // earlier in this batch is equally vulnerable to inChunkRIDCache eviction, and its on-disk head
       // is stale mid-batch too (issue #5950 review, second sub-case).
-      final RID deferredChunkRID = cachedChunkRID == null ? deferredInHead.get(vertexKey) : null;
+      final RID deferredChunkRID = cachedChunkRID == null ? deferredHeads.getIn(vertexKey) : null;
       if (cachedChunkRID != null) {
         inChunk = (EdgeSegment) database.lookupByRID(cachedChunkRID, true);
         isNew = false;
       } else if (deferredChunkRID != null) {
-        // inChunkRIDCache entry was LRU-evicted: deferredInHead is unbounded and always authoritative
+        // inChunkRIDCache entry was LRU-evicted: the IN side of deferredHeads is unbounded and always authoritative
         // for the current head, so reuse it instead of creating an unlinked duplicate segment (issue
         // #5950 review: silent edge loss otherwise). Repopulate the cache so a vertex touched again
         // later in this parallel round doesn't keep paying for the fallback lookup (issue #5950
@@ -2600,7 +2655,7 @@ public class GraphBatch implements AutoCloseable {
 
         // Defer vertex head chunk update
         inChunkRIDCache.put(vertexKey, newChunk.getIdentity());
-        deferredInHead.put(vertexKey, newChunk.getIdentity());
+        deferredHeads.putIn(vertexKey, newChunk.getIdentity());
         return;
       }
     }
@@ -2650,11 +2705,11 @@ public class GraphBatch implements AutoCloseable {
     // the vertex was already given a segment earlier in this batch (large batch, many other vertices
     // touched in between) - both for a known-new vertex (whose on-disk head stays null until close())
     // and for a pre-existing vertex (whose on-disk head, if any, predates this batch and is stale once
-    // this batch has overflowed it). deferredOutHead is unbounded for the whole batch and always
+    // this batch has overflowed it). The OUT side of deferredHeads is unbounded for the whole batch and always
     // reflects the vertex's true current head once touched, so it must be checked BEFORE falling back
     // to knownNewVertexKeys / an on-disk read for either case (issue #5950 review, both sub-cases:
     // a second, unlinked segment would otherwise silently orphan the earlier one's committed edges).
-    final RID deferredRID = deferredOutHead.get(vertexKey);
+    final RID deferredRID = deferredHeads.getOut(vertexKey);
     if (deferredRID != null) {
       outChunkRIDCache.put(vertexKey, deferredRID);
       lastSegmentIsNew = false;
@@ -2703,9 +2758,9 @@ public class GraphBatch implements AutoCloseable {
       return (EdgeSegment) database.lookupByRID(cachedRID, true);
     }
 
-    // See getOrCreateOutSegmentDeferred: deferredInHead must be checked unconditionally, before
+    // See getOrCreateOutSegmentDeferred: the IN side of deferredHeads must be checked unconditionally, before
     // knownNewVertexKeys / an on-disk read, for both the known-new and pre-existing vertex cases.
-    final RID deferredRID = deferredInHead.get(vertexKey);
+    final RID deferredRID = deferredHeads.getIn(vertexKey);
     if (deferredRID != null) {
       inChunkRIDCache.put(vertexKey, deferredRID);
       lastSegmentIsNew = false;
@@ -2745,10 +2800,10 @@ public class GraphBatch implements AutoCloseable {
 
     if (direction == Vertex.DIRECTION.OUT) {
       outChunkRIDCache.put(vertexKey, segment.getIdentity());
-      deferredOutHead.put(vertexKey, segment.getIdentity());
+      deferredHeads.putOut(vertexKey, segment.getIdentity());
     } else {
       inChunkRIDCache.put(vertexKey, segment.getIdentity());
-      deferredInHead.put(vertexKey, segment.getIdentity());
+      deferredHeads.putIn(vertexKey, segment.getIdentity());
     }
   }
 
@@ -2995,10 +3050,10 @@ public class GraphBatch implements AutoCloseable {
         // Defer vertex head chunk update — just update caches
         if (direction == Vertex.DIRECTION.OUT) {
           outChunkRIDCache.put(vertexKey, newChunk.getIdentity());
-          deferredOutHead.put(vertexKey, newChunk.getIdentity());
+          deferredHeads.putOut(vertexKey, newChunk.getIdentity());
         } else {
           inChunkRIDCache.put(vertexKey, newChunk.getIdentity());
-          deferredInHead.put(vertexKey, newChunk.getIdentity());
+          deferredHeads.putIn(vertexKey, newChunk.getIdentity());
         }
 
         // All remaining edges written at once, done
@@ -3191,7 +3246,7 @@ public class GraphBatch implements AutoCloseable {
     //      failed attempt wrote into a class-level map still points at records that rollback undid, and
     //      the retry reads those maps FIRST - dereferencing a RID that was never made durable.
     //   2. A bucket that exhausts its 3 retries would otherwise still have its entries merged below,
-    //      poisoning deferredOutHead - the authoritative head-chunk fallback the review-cycle-1/2 fix
+    //      poisoning the OUT side of deferredHeads - the authoritative head-chunk fallback the review-cycle-1/2 fix
     //      depends on - for the whole rest of the batch.
     // Unlike the IN side this set is method-local, not an instance field: a failed flush() drops the
     // outgoing buffer outright (see flush()'s catch block), so there is no cross-call resume to support.
@@ -3230,7 +3285,7 @@ public class GraphBatch implements AutoCloseable {
     for (final Map.Entry<Integer, Map<Long, RID>> entry : bucketDeferredOutHead.entrySet()) {
       if (!completedOutgoingBuckets.contains(entry.getKey()))
         continue;
-      entry.getValue().forEach(deferredOutHead::put);
+      entry.getValue().forEach(deferredHeads::putOut);
       bucketOutChunkCache.get(entry.getKey()).forEach(outChunkRIDCache::put);
     }
 
@@ -3329,12 +3384,12 @@ public class GraphBatch implements AutoCloseable {
       // Checked unconditionally (not just for known-new vertices): a pre-existing vertex touched
       // earlier in this batch is equally vulnerable to outChunkRIDCache eviction, and its on-disk head
       // is stale mid-batch too (issue #5950 review, second sub-case).
-      final RID deferredChunkRID = cachedChunkRID == null ? deferredOutHead.get(vertexKey) : null;
+      final RID deferredChunkRID = cachedChunkRID == null ? deferredHeads.getOut(vertexKey) : null;
       if (cachedChunkRID != null) {
         outChunk = (EdgeSegment) database.lookupByRID(cachedChunkRID, true);
         isNew = false;
       } else if (deferredChunkRID != null) {
-        // outChunkRIDCache entry was LRU-evicted: deferredOutHead is unbounded and always authoritative
+        // outChunkRIDCache entry was LRU-evicted: the OUT side of deferredHeads is unbounded and always authoritative
         // for the current head, so reuse it instead of creating an unlinked duplicate segment (issue
         // #5950 review: silent edge loss otherwise). Repopulate the cache so a vertex touched again
         // later in this parallel round doesn't keep paying for the fallback lookup (issue #5950
@@ -3554,6 +3609,7 @@ public class GraphBatch implements AutoCloseable {
     private long               commitRetryDelayMs    = 1000;
     private int                chunkCacheCapacity       = DEFAULT_CHUNK_CACHE_CAPACITY;
     private int                maxDeferredIncomingEdges = DEFAULT_MAX_DEFERRED_INCOMING_EDGES;
+    private long               maxVertexCount           = 0;
 
     Builder(final DatabaseInternal database, final LocalDatabase guardOwner) {
       this.database = database;
@@ -3586,6 +3642,21 @@ public class GraphBatch implements AutoCloseable {
     }
 
     /**
+     * The most distinct vertices the edges of this batch can touch, when the caller knows a bound (a bulk loader that
+     * has just created them does). The batch keeps the head of the edge lists of every vertex it touches until
+     * {@link GraphBatch#close()}, in a table that grows by half: the bound stops its last growth at the size the bound
+     * needs instead of overshooting it, and nothing is allocated for vertices the batch never touches (issue #9575).
+     * 0, the default, means no bound. A bound that turns out too low costs nothing but the overshoot it was meant to
+     * save.
+     */
+    public Builder withMaxVertices(final long count) {
+      if (count < 0)
+        throw new IllegalArgumentException("Max vertices must not be negative: " + count);
+      this.maxVertexCount = count;
+      return this;
+    }
+
+    /**
      * Initial size in bytes for new edge segments. Larger values reduce segment splits.
      * Default: 2048 (vs standard 64). Max: 8192.
      */
@@ -3602,7 +3673,9 @@ public class GraphBatch implements AutoCloseable {
      * (no record stored, only connectivity pointers). Saves ~33% I/O for property-less edges.
      *
      * @deprecated Declare {@code LIGHTWEIGHT} on the edge type instead. An edge type that declares it is stored
-     * lightweight whatever this flag says; this flag remains only for types that declare nothing.
+     * lightweight whatever this flag says; with the flag set, a property-less edge of a type that does not declare it is
+     * refused with an {@link IllegalArgumentException}, because its light edges would be invisible to the count push-downs
+     * (issue #9378).
      */
     @Deprecated
     public Builder withLightEdges(final boolean lightEdges) {
@@ -3749,7 +3822,7 @@ public class GraphBatch implements AutoCloseable {
       try {
         return new GraphBatch(database, guardOwner, effectiveBatchSize, edgeListInitialSize, lightEdges,
             bidirectional, effectiveCommitEvery, effectiveUseWAL, walFlush, preAllocateEdgeChunks, parallelFlush,
-            commitRetries, commitRetryDelayMs, chunkCacheCapacity, maxDeferredIncomingEdges);
+            commitRetries, commitRetryDelayMs, chunkCacheCapacity, maxDeferredIncomingEdges, maxVertexCount);
       } catch (final RuntimeException | Error e) {
         if (guardOwner != null)
           guardOwner.batchFinished();

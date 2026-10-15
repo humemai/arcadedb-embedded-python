@@ -18,6 +18,8 @@
  */
 package com.arcadedb.engine.timeseries;
 
+import com.arcadedb.GlobalConfiguration;
+import com.arcadedb.database.Database;
 import com.arcadedb.database.DatabaseInternal;
 import com.arcadedb.engine.timeseries.LineProtocolParser.Sample;
 import com.arcadedb.schema.DocumentType;
@@ -27,6 +29,7 @@ import com.arcadedb.security.SecurityDatabaseUser;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -54,6 +57,20 @@ import java.util.TreeSet;
  * @author Luca Garulli (l.garulli@arcadedata.com)
  */
 public final class TimeSeriesGateway {
+
+  /**
+   * At most this many entries are kept in {@link WriteReport#undeclaredKeys()}. The keys come from the client, so
+   * a producer sending a fresh key per sample would otherwise grow the report - and the response rendering it -
+   * without bound. The entries locate the problem; {@code dropped} still counts every sample.
+   */
+  public static final int MAX_REPORTED_UNDECLARED_KEYS = 100;
+
+  /**
+   * Cap on the entries {@link WriteReport#unreadableValues()} names, for the same reason as
+   * {@link #MAX_REPORTED_UNDECLARED_KEYS}: a client sending one unreadable value in every line must not grow the report without
+   * bound. {@code dropped} still counts every sample.
+   */
+  public static final int MAX_REPORTED_UNREADABLE_VALUES = 100;
 
   private TimeSeriesGateway() {
   }
@@ -96,15 +113,31 @@ public final class TimeSeriesGateway {
 
   /**
    * What a {@link #write(DatabaseInternal, List)} call did. {@code dropped} counts individual samples, and every
-   * parsed sample is either inserted or skipped into exactly one of the three sets, so
-   * {@code written + dropped == samples.size()}.
+   * parsed sample is either inserted or skipped for exactly one reason, so {@code written + dropped == samples.size()}.
    * <p>
-   * The three sets are kept apart on purpose: an unknown type means "create the type first", a non-TimeSeries
+   * The three type sets are kept apart on purpose: an unknown type means "create the type first", a non-TimeSeries
    * type means "only TIMESERIES types take samples", and an unavailable one means the type is right but its
    * storage failed to load (issue #6356 follow-up). They preserve first-occurrence order.
+   * <p>
+   * {@code undeclaredKeys} names the keys that made a sample of an otherwise valid type be dropped under
+   * {@link GlobalConfiguration#TIMESERIES_UNDECLARED_KEYS} {@code = reject} (issue #8646), each rendered as
+   * {@code <measurement>.<key> (tag|field)}, in first-occurrence order and capped at
+   * {@link #MAX_REPORTED_UNDECLARED_KEYS}.
+   * <p>
+   * {@code unreadableValues} names the values a column could not store, each rendered as
+   * {@code <measurement>.<column> (tag|field): <reason>} where the reason names the column and its type (issue #9809), in
+   * first-occurrence order and capped at {@link #MAX_REPORTED_UNREADABLE_VALUES}. The sample carrying one is dropped alone, like a
+   * sample with an undeclared key: the rest of the request is written. An entry is a distinct reason, not a sample: many samples
+   * refused for the same reason are one entry, and {@code dropped} is what counts them.
    */
   public record WriteReport(int written, int dropped, Set<String> unknownTypes, Set<String> nonTimeSeriesTypes,
-                            Set<String> unavailableTypes) {
+                            Set<String> unavailableTypes, Set<String> undeclaredKeys, Set<String> unreadableValues) {
+
+    /** The report of a write with no unreadable values, the shape this record had before issue #9809. */
+    public WriteReport(final int written, final int dropped, final Set<String> unknownTypes, final Set<String> nonTimeSeriesTypes,
+        final Set<String> unavailableTypes, final Set<String> undeclaredKeys) {
+      this(written, dropped, unknownTypes, nonTimeSeriesTypes, unavailableTypes, undeclaredKeys, Set.of());
+    }
 
     /** Whether every sample handed in was appended. */
     public boolean isComplete() {
@@ -116,7 +149,52 @@ public final class TimeSeriesGateway {
    * The samples of one measurement in a single request, paired with the type they resolved to so the schema
    * lookup and the {@code instanceof} narrowing happen once per measurement, not per sample.
    */
-  private record MeasurementBatch(LocalTimeSeriesType type, List<Sample> samples) {
+  private record MeasurementBatch(LocalTimeSeriesType type, List<Sample> samples, Set<String> tagNames,
+                                  Set<String> fieldNames) {
+
+    private static MeasurementBatch of(final LocalTimeSeriesType type) {
+      final Set<String> tagNames = new HashSet<>();
+      final Set<String> fieldNames = new HashSet<>();
+      for (final ColumnDefinition col : type.getTsColumns())
+        if (col.getRole() == ColumnDefinition.ColumnRole.TAG)
+          tagNames.add(col.getName());
+        else if (col.getRole() == ColumnDefinition.ColumnRole.FIELD)
+          fieldNames.add(col.getName());
+      return new MeasurementBatch(type, new ArrayList<>(), tagNames, fieldNames);
+    }
+
+    /**
+     * Whether every tag and field key of {@code sample} names a column of this type IN THAT ROLE. A key declared
+     * as a field but sent as a tag (or the reverse) is undeclared too: the column loop in {@code write} reads a
+     * TAG column only from the sample's tags and a FIELD column only from its fields, so the value would be
+     * discarded exactly like a misspelled key. Offending keys are added to {@code undeclared} up to the cap.
+     */
+    private boolean acceptsKeysOf(final Sample sample, final Set<String> undeclared) {
+      boolean accepted = true;
+      for (final String key : sample.getTags().keySet())
+        if (!tagNames.contains(key)) {
+          accepted = false;
+          if (undeclared.size() < MAX_REPORTED_UNDECLARED_KEYS)
+            undeclared.add(sample.getMeasurement() + "." + key + " (tag)");
+        }
+      for (final String key : sample.getFields().keySet())
+        if (!fieldNames.contains(key)) {
+          accepted = false;
+          if (undeclared.size() < MAX_REPORTED_UNDECLARED_KEYS)
+            undeclared.add(sample.getMeasurement() + "." + key + " (field)");
+        }
+      return accepted;
+    }
+  }
+
+  /**
+   * Whether a time-series write carrying a tag, field or property its type does not declare is refused
+   * ({@link GlobalConfiguration#TIMESERIES_UNDECLARED_KEYS} is {@code reject}, the default) rather than stored with the
+   * key discarded. The one place the policy is parsed, so line protocol, gRPC, SQL INSERT and Prometheus cannot diverge
+   * (issues #8646, #9365).
+   */
+  public static boolean rejectsUndeclaredKeys(final Database database) {
+    return !"ignore".equalsIgnoreCase(database.getConfiguration().getValueAsString(GlobalConfiguration.TIMESERIES_UNDECLARED_KEYS));
   }
 
   /**
@@ -131,6 +209,12 @@ public final class TimeSeriesGateway {
    * append - because {@code TimeSeriesShard.appendSamples} commits its own shard transaction: a denial
    * discovered mid-write would leave the measurements before it already durable. It is also applied before the
    * engine-availability check so a denied caller cannot learn from the report that the type exists.
+   * <p>
+   * A sample carrying a tag or field key its type does not declare in that role is dropped and named in
+   * {@link WriteReport#undeclaredKeys()} unless {@link GlobalConfiguration#TIMESERIES_UNDECLARED_KEYS} is
+   * {@code ignore} for the database (issue #8646). Storing it would file the point under another series than the
+   * one the client sent: a misspelled tag key leaves the declared tag column null, and the write used to be
+   * answered as complete. The check runs during grouping, so a sample is never half-appended.
    * <p>
    * <b>This call is not atomic.</b> The transaction opened here does not make it so: every {@code appendBatch}
    * below has already committed its own shard writes by the time it returns, so a failure on a later
@@ -149,7 +233,10 @@ public final class TimeSeriesGateway {
     final Set<String> unknownTypes = new LinkedHashSet<>();
     final Set<String> nonTimeSeriesTypes = new LinkedHashSet<>();
     final Set<String> unavailableTypes = new LinkedHashSet<>();
+    final Set<String> undeclaredKeys = new LinkedHashSet<>();
+    final Set<String> unreadableValues = new LinkedHashSet<>();
     final Map<String, MeasurementBatch> byMeasurement = new LinkedHashMap<>();
+    final boolean rejectUndeclared = rejectsUndeclaredKeys(database);
 
     for (final Sample sample : samples) {
       final String measurement = sample.getMeasurement();
@@ -158,31 +245,32 @@ public final class TimeSeriesGateway {
           || unavailableTypes.contains(measurement))
         continue;
 
-      final MeasurementBatch batch = byMeasurement.get(measurement);
-      if (batch != null) {
-        batch.samples().add(sample);
-        continue;
+      MeasurementBatch batch = byMeasurement.get(measurement);
+      if (batch == null) {
+        if (!database.getSchema().existsType(measurement)) {
+          unknownTypes.add(measurement);
+          continue;
+        }
+
+        final DocumentType docType = database.getSchema().getType(measurement);
+        if (!(docType instanceof LocalTimeSeriesType tsType)) {
+          nonTimeSeriesTypes.add(measurement);
+          continue;
+        }
+        tsType.checkAccess(SecurityDatabaseUser.ACCESS.CREATE_RECORD);
+        if (!tsType.isEngineAvailable()) {
+          unavailableTypes.add(measurement);
+          continue;
+        }
+
+        batch = MeasurementBatch.of(tsType);
+        byMeasurement.put(measurement, batch);
       }
 
-      if (!database.getSchema().existsType(measurement)) {
-        unknownTypes.add(measurement);
+      if (rejectUndeclared && !batch.acceptsKeysOf(sample, undeclaredKeys))
         continue;
-      }
 
-      final DocumentType docType = database.getSchema().getType(measurement);
-      if (!(docType instanceof LocalTimeSeriesType tsType)) {
-        nonTimeSeriesTypes.add(measurement);
-        continue;
-      }
-      tsType.checkAccess(SecurityDatabaseUser.ACCESS.CREATE_RECORD);
-      if (!tsType.isEngineAvailable()) {
-        unavailableTypes.add(measurement);
-        continue;
-      }
-
-      final MeasurementBatch created = new MeasurementBatch(tsType, new ArrayList<>());
-      created.samples().add(sample);
-      byMeasurement.put(measurement, created);
+      batch.samples().add(sample);
     }
 
     int inserted = 0;
@@ -203,33 +291,27 @@ public final class TimeSeriesGateway {
         final List<ColumnDefinition> columns = batch.type().getTsColumns();
         final List<Sample> group = batch.samples();
         final int count = group.size();
+        if (count == 0)
+          // Every sample of this measurement was dropped for an undeclared key
+          continue;
 
         final long[] timestamps = new long[count];
-        final Object[][] columnValues = new Object[columns.size() - 1][count]; // exclude timestamp
+        for (int s = 0; s < count; s++)
+          timestamps[s] = group.get(s).getTimestampMs();
 
-        for (int s = 0; s < count; s++) {
-          final Sample sample = group.get(s);
-          timestamps[s] = sample.getTimestampMs();
+        // A sample whose value a column cannot store is left out HERE, before anything of it reaches the engine, and named: the
+        // storage layer would otherwise cast it in the middle of the append and fail the whole request (issue #9809). The
+        // conversion is the one the Prometheus remote write shares (issue #10030)
+        final TimeSeriesStorableRows rows = TimeSeriesStorableRows.convert(database, group.getFirst().getMeasurement(), columns, timestamps,
+            count, false, (row, valueColumn, col) -> col.getRole() == ColumnDefinition.ColumnRole.TAG ?
+                group.get(row).getTags().get(col.getName()) :
+                group.get(row).getFields().get(col.getName()), unreadableValues);
 
-          int colIdx = 0;
-          for (int i = 0; i < columns.size(); i++) {
-            final ColumnDefinition col = columns.get(i);
-            if (col.getRole() == ColumnDefinition.ColumnRole.TIMESTAMP)
-              continue;
+        if (rows.size() == 0)
+          continue;
 
-            final Object value;
-            if (col.getRole() == ColumnDefinition.ColumnRole.TAG)
-              value = sample.getTags().get(col.getName());
-            else
-              value = sample.getFields().get(col.getName());
-
-            columnValues[colIdx][s] = value;
-            colIdx++;
-          }
-        }
-
-        engine.appendBatch(timestamps, columnValues);
-        inserted += count;
+        engine.appendBatch(rows.timestamps(), rows.columnValues());
+        inserted += rows.size();
       }
       if (beganHere)
         database.commit();
@@ -239,7 +321,8 @@ public final class TimeSeriesGateway {
       throw e;
     }
 
-    return new WriteReport(inserted, samples.size() - inserted, unknownTypes, nonTimeSeriesTypes, unavailableTypes);
+    return new WriteReport(inserted, samples.size() - inserted, unknownTypes, nonTimeSeriesTypes, unavailableTypes,
+        undeclaredKeys, unreadableValues);
   }
 
   /**
@@ -305,17 +388,20 @@ public final class TimeSeriesGateway {
    * selects nothing. Values are coerced to the column's declared type so they match what both storage layers
    * hand back (issue #5475).
    *
+   * @param database the database the type lives in, which reads a DATE/DATETIME tag value given as text. See {@link #andTag}
+   *
    * @throws IllegalArgumentException if a name is not a TAG column of this type, or a value cannot be stored as
    *                                  a tag. See {@link #andTag}
    */
-  public static TagFilter buildTagFilter(final Map<String, Object> tags, final List<ColumnDefinition> columns) {
+  public static TagFilter buildTagFilter(final Database database, final Map<String, Object> tags,
+      final List<ColumnDefinition> columns) {
     if (tags == null || tags.isEmpty())
       return null;
 
     TagFilter filter = null;
 
     for (final Map.Entry<String, Object> tag : tags.entrySet())
-      filter = andTag(filter, tag.getKey(), tag.getValue(), columns);
+      filter = andTag(database, filter, tag.getKey(), tag.getValue(), columns);
 
     return filter;
   }
@@ -323,7 +409,7 @@ public final class TimeSeriesGateway {
   /**
    * ANDs one tag condition onto {@code filter}, resolving {@code tagName} to its position among the
    * non-timestamp columns. Three tag selections converge here - the gRPC {@code TimeSeries*} RPCs through
-   * {@link #buildTagFilter(Map, List)}, the {@code tags} object of {@code POST /ts/{database}/query} (and of
+   * {@link #buildTagFilter(Database, Map, List)}, the {@code tags} object of {@code POST /ts/{database}/query} (and of
    * the Grafana query endpoint), and the repeated {@code tag=name:value} parameter of
    * {@code GET /ts/{database}/latest} - so they cannot drift apart on how a tag is resolved, which is how two
    * of them came to disagree in the first place (issue #7321). The PromQL evaluator is the one reader that
@@ -331,7 +417,10 @@ public final class TimeSeriesGateway {
    * strings.
    * <p>
    * The value is coerced to the column's declared type so it matches what both storage layers hand back
-   * (issue #5475).
+   * (issue #5475). A DATE/DATETIME value given as text is read through {@code database}, in its time zone and with
+   * its formats, exactly as the {@code INSERT} that wrote the tag read it (issue #9879). Read without it, the text
+   * was parsed in the JVM's default time zone and, on any JVM whose zone is not the database's, named another epoch
+   * than the stored one, so the filter selected nothing.
    * <p>
    * It is first held to {@link #requireStorableTagValue}, the same rule the write path applies. A value that
    * could never have been written is not a selection that matches nothing - it is a malformed request, and
@@ -351,6 +440,10 @@ public final class TimeSeriesGateway {
    * selection ({@code PromQLEvaluator.excludesEverySeries}) rather than a malformed request, so it decides the
    * whole type in one go instead of being refused.
    *
+   * @param database the database the type lives in. {@code null} reads a DATE/DATETIME text value with the JVM
+   *                 defaults, which is only right when the JVM's zone is the database's: every protocol entry point
+   *                 passes its database
+   *
    * @return a new filter - {@link TagFilter} is immutable, so the return value must be used
    *
    * @throws IllegalArgumentException if no TAG column carries {@code tagName}, or if {@code tagValue} cannot be
@@ -358,8 +451,8 @@ public final class TimeSeriesGateway {
    *                                  {@code INVALID_ARGUMENT} through {@code GrpcErrorMapper}, and the HTTP
    *                                  handlers as a 400
    */
-  public static TagFilter andTag(final TagFilter filter, final String tagName, final Object tagValue,
-      final List<ColumnDefinition> columns) {
+  public static TagFilter andTag(final Database database, final TagFilter filter, final String tagName,
+      final Object tagValue, final List<ColumnDefinition> columns) {
     requireStorableTagValue(tagName, tagValue);
 
     int nonTsIdx = 0;
@@ -367,7 +460,7 @@ public final class TimeSeriesGateway {
       if (col.getRole() == ColumnDefinition.ColumnRole.TIMESTAMP)
         continue;
       if (col.getRole() == ColumnDefinition.ColumnRole.TAG && col.getName().equals(tagName)) {
-        final Object coerced = col.coerceValue(tagValue);
+        final Object coerced = col.coerceValue(database, tagValue);
         return filter == null ? TagFilter.eq(nonTsIdx, coerced) : filter.and(nonTsIdx, coerced);
       }
       nonTsIdx++;
@@ -689,6 +782,26 @@ public final class TimeSeriesGateway {
           + ": a tag is stored by its text form, and this one has none that means anything. "
           + "Use a string, a number or a boolean.");
     return value;
+  }
+
+  /**
+   * The text a tag value is WRITTEN with: {@link #requireStorableTagValue}'s rule, plus the refusal of an empty text
+   * (issue #8647). Line protocol has no way to carry an empty tag value - the server rejects {@code host=} as a
+   * malformed line, as InfluxDB does - and the gRPC ingest path refuses it to match, so a client that encodes a
+   * write refuses it too, where the caller can still see which tag it was. A {@code null} value is not a tag at
+   * all: callers skip it before coming here.
+   * <p>
+   * Write-only on purpose: a read filter goes through {@link #requireStorableTagValue} alone, so a sample stored
+   * with an empty tag before this rule existed can still be selected.
+   *
+   * @throws IllegalArgumentException if the value cannot be stored as a tag, or its text form is empty
+   */
+  public static String requireWritableTagText(final String tagName, final Object value) {
+    final String text = String.valueOf(requireStorableTagValue(tagName, value));
+    if (text.isEmpty())
+      throw new IllegalArgumentException("Tag '" + tagName + "' has an empty value, which the server refuses. "
+          + "Leave the tag out (or set it to null) to write a sample without it.");
+    return text;
   }
 
   /**

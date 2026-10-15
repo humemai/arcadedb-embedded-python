@@ -120,7 +120,7 @@ function displayServerSettings() {
         title: "Value",
         width: "20%",
         render: function (data, type, row) {
-          return "<a href='#' onclick='updateServerSetting(\"" + row[0] + '", "' + row[1] + "\")' style='color: green;'><b>" + data + "</b></a>";
+          return "<a href='#'" + studioAction("updateServerSetting", [String(row[0]), String(row[1])]) + " style='color: green;'><b>" + data + "</b></a>";
         },
       },
       { title: "Description", width: "33%" },
@@ -337,12 +337,19 @@ function displayMetrics() {
   // are: pool.size, pool.active, queue.depth, queue.capacity_remaining, tasks.completed,
   // tasks.caller_run_fallbacks, tasks.reclaimed. The sparse-vector pool adds pool.reserved, queries.in_flight and
   // queries.split, which explain its per-query decision to parallelise or not (#4085). The per-server pools
-  // (security_refresh, and on an HA node security_seed and security_catch_up) add tasks.coalesced (#7856).
+  // (security_refresh, and on an HA node security_seed and security_catch_up) add tasks.coalesced (#7856). The
+  // other HA per-instance pools (#8856) add tasks.rejected where they refuse work (snapshot_install,
+  // channel_recovery) and tasks.coalesced where they skip work already queued (channel_recovery).
+  // "query_admission" is not a pool but the gate HTTP queries wait at (#9518): Active / Size are the running queries and
+  // arcadedb.queryMaxConcurrent, Queue Depth the waiting ones, Rejected the ones refused with a 503.
   var ex = serverData.metrics.executors || {};
   var executorRowLabels = { "query": "Query Parallelism", "sparse_vector": "Sparse Vector Scoring",
       "parallel_scan": "Parallel Scan Producers", "async_command": "Async DDL Commands",
       "security_refresh": "Security Permission Refresh", "security_seed": "HA Security Seed",
-      "security_catch_up": "HA Security Catch-Up" };
+      "security_catch_up": "HA Security Catch-Up", "snapshot_install": "HA Snapshot Install",
+      "sm_lifecycle": "HA State Machine Lifecycle", "database_deleter": "HA Dropped Database Deleter",
+      "channel_recovery": "HA Channel Recovery", "stalled_resync": "HA Stalled Replica Resync",
+      "query_admission": "Query Admission Gate" };
   var executorPoolNames = Object.keys(ex).sort();
   var executorsHtml = "";
   for (var i = 0; i < executorPoolNames.length; i++) {
@@ -370,6 +377,10 @@ function displayMetrics() {
     // them. Only those pools publish it, so the singleton pools show "-" - and it is not highlighted, since a
     // coalesced refresh is the design working; the number to worry about is one climbing on a quiet node.
     executorsHtml += "<td class='text-end'>" + gaugeOrDash(pool, "tasks.coalesced") + "</td>";
+    // Rejected (#8856): tasks an abort-policy per-server pool refused while running, which nothing ran in their
+    // place. Unlike Coalesced this is loss, so a non-zero value is highlighted like the fallback cell.
+    var rejectedCellClass = (pool["tasks.rejected"] || 0) > 0 ? "text-end text-warning fw-bold" : "text-end";
+    executorsHtml += "<td class='" + rejectedCellClass + "'>" + gaugeOrDash(pool, "tasks.rejected") + "</td>";
     // Split-decision columns (#4085). Only the sparse-vector pool decides per query whether to
     // parallelise, so a pool that does not report them shows "-" rather than a zero that would read
     // as "nothing is splitting" when the concept simply does not apply. "Queries Split" is the
@@ -380,7 +391,7 @@ function displayMetrics() {
     executorsHtml += "<td class='text-end'>" + gaugeOrDash(pool, "queries.split") + "</td>";
     executorsHtml += "</tr>";
   }
-  $("#srvMetricExecutorsTable").html(executorsHtml || "<tr><td colspan='11' class='text-muted text-center'>No executor pool metrics available.</td></tr>");
+  $("#srvMetricExecutorsTable").html(executorsHtml || "<tr><td colspan='12' class='text-muted text-center'>No executor pool metrics available.</td></tr>");
 
   // Sparse Vector Indexes table - rendered from metrics.sparseVectorIndexes. Shape:
   //   { dbName: { typeIndexName: { memtablePostings, segmentCount, totalPostings } } }
@@ -415,7 +426,7 @@ function displayMetrics() {
 
 function updateServerSetting(key, value) {
   let html = "<b>" + escapeHtml(key) + "</b> = <input class='form-control mt-2' id='updateSettingInput' value='" + escapeHtml(value) + "' " +
-    "onkeydown='if (event.which === 13) document.getElementById(\"globalModalConfirmBtn\").click()'>";
+    "data-enter-click='globalModalConfirmBtn'>";
   html += "<br><p><i>The update will not be persistent and will be reset at the next restart of the server.</i></p>";
 
   globalPrompt("Update Server Setting", html, "Update", function() {
@@ -537,6 +548,198 @@ function loadServerSessions() {
     .fail(function (jqXHR, textStatus, errorThrown) {
       globalNotifyError(jqXHR.responseText);
     });
+}
+
+// ---------------------------------------------------------------------------------------------
+// Running queries (issue #9689): the "list queries" / "terminate query" server commands
+// ---------------------------------------------------------------------------------------------
+
+var runningQueriesRefreshTimer = null;
+// Which "list queries" answer the table may show: only the latest request's, so a slow one never brings back a row a
+// later answer (one sent after a terminate) has already removed
+var runningQueriesRequestSequence = 0;
+
+/** Whether the answer to request {@code sequence} is still the one to show, {@code latest} being the last one sent. */
+function isCurrentRunningQueriesResponse(sequence, latest) {
+  return sequence === latest;
+}
+
+/** How long a statement has been running, for a person: 350 ms, 12.3 s, 4m 05s, 2h 03m. */
+function formatRunningQueryElapsed(ms) {
+  if (ms == null || isNaN(ms) || ms < 0) return "";
+  if (ms < 1000) return Math.round(ms) + " ms";
+  if (ms < 60000) return (ms / 1000).toFixed(1) + " s";
+  const totalSeconds = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return hours + "h " + String(minutes).padStart(2, "0") + "m";
+  return minutes + "m " + String(seconds).padStart(2, "0") + "s";
+}
+
+/** The rows of the running-queries table, from the "list queries" result: plain values, oldest statement first. */
+function buildRunningQueryRows(queries) {
+  const rows = [];
+  if (!Array.isArray(queries)) return rows;
+  for (const q of queries) {
+    if (q == null) continue;
+    let status = q.terminating ? "terminating" : "running";
+    if (q.forwardedTo) status += " (on " + q.forwardedTo + ")";
+    rows.push([
+      q.id || "",
+      q.database || "",
+      q.user || "",
+      q.protocol || "",
+      q.language || "",
+      q.text || "",
+      q.tag || "",
+      q.elapsedMs != null ? q.elapsedMs : null,
+      status,
+    ]);
+  }
+  rows.sort(function (a, b) {
+    return (b[7] || 0) - (a[7] || 0);
+  });
+  return rows;
+}
+
+/** The server command that terminates a running statement: its id is the only argument, so it must be a single token. */
+function buildTerminateQueryCommand(id) {
+  if (id == null) return null;
+  const trimmed = String(id).trim();
+  if (trimmed === "" || /\s/.test(trimmed)) return null;
+  return "terminate query " + trimmed;
+}
+
+/** What the server answered a terminate with, for the notification. */
+function describeTerminateOutcome(status) {
+  switch (status) {
+    case "terminated":
+      return { text: "The query has been terminated and what it wrote rolled back", type: "success" };
+    case "completed":
+      return { text: "The query completed before it could be terminated: what it did stands", type: "warning" };
+    case "terminating":
+      return { text: "The query has been asked to stop and has not stopped yet", type: "warning" };
+    default:
+      return { text: "The query is no longer running", type: "info" };
+  }
+}
+
+function loadRunningQueries() {
+  const sequence = ++runningQueriesRequestSequence;
+  jQuery
+    .ajax({
+      type: "POST",
+      url: "api/v1/server",
+      data: JSON.stringify({ command: "list queries" }),
+      beforeSend: function (xhr) {
+        xhr.setRequestHeader("Authorization", globalCredentials);
+      },
+    })
+    .done(function (data) {
+      if (!isCurrentRunningQueriesResponse(sequence, runningQueriesRequestSequence)) return;
+      const rows = buildRunningQueryRows(data.result);
+
+      if ($.fn.dataTable.isDataTable("#serverRunningQueries")) {
+        const table = $("#serverRunningQueries").DataTable();
+        table.clear();
+        table.rows.add(rows);
+        table.draw(false);
+        return;
+      }
+
+      $("#serverRunningQueries").DataTable({
+        paging: true,
+        ordering: true,
+        order: [[7, "desc"]],
+        pageLength: 25,
+        language: { emptyTable: "No queries running" },
+        columns: [
+          { title: "Id", width: "9%", render: renderEscaped },
+          { title: "Database", width: "8%", render: renderEscaped },
+          { title: "User", width: "7%", render: renderEscaped },
+          { title: "Protocol", width: "6%", render: renderEscaped },
+          { title: "Language", width: "6%", render: renderEscaped },
+          {
+            title: "Statement",
+            width: "38%",
+            render: function (data, type) {
+              if (type !== "display") return data;
+              return '<code style="white-space: pre-wrap; word-break: break-word;">' + escapeHtml(data) + "</code>";
+            },
+          },
+          { title: "Tag", width: "7%", render: renderEscaped },
+          {
+            title: "Elapsed",
+            width: "7%",
+            render: function (data, type) {
+              return type === "display" ? escapeHtml(formatRunningQueryElapsed(data)) : data;
+            },
+          },
+          { title: "Status", width: "7%", render: renderEscaped },
+          {
+            title: "",
+            width: "5%",
+            orderable: false,
+            data: null,
+            render: function (data, type, row) {
+              if (type !== "display") return "";
+              return (
+                '<button class="btn btn-sm btn-outline-danger running-query-terminate" data-id="' +
+                escapeHtml(row[0]) +
+                '" title="Terminate this query"><i class="fa fa-stop"></i></button>'
+              );
+            },
+          },
+        ],
+        data: rows,
+      });
+    })
+    .fail(function (jqXHR) {
+      globalNotifyError(jqXHR.responseText);
+    });
+}
+
+function renderEscaped(data, type) {
+  return type === "display" ? escapeHtml(data == null ? "" : String(data)) : data;
+}
+
+function terminateRunningQuery(id) {
+  const command = buildTerminateQueryCommand(id);
+  if (command == null) return;
+
+  globalConfirm("Terminate Query", "Terminate the query <b>" + escapeHtml(id) + "</b>? Its transaction is rolled back.", "warning", function () {
+    jQuery
+      .ajax({
+        type: "POST",
+        url: "api/v1/server",
+        data: JSON.stringify({ command: command, wait: 5000 }),
+        beforeSend: function (xhr) {
+          xhr.setRequestHeader("Authorization", globalCredentials);
+        },
+      })
+      .done(function (data) {
+        const outcome = describeTerminateOutcome(data.result ? data.result.status : null);
+        globalNotify("Terminate Query", escapeHtml(outcome.text), outcome.type);
+        loadRunningQueries();
+      })
+      .fail(function (jqXHR) {
+        globalNotifyError(jqXHR.responseText);
+      });
+  });
+}
+
+function startRunningQueriesRefreshTimer() {
+  if (runningQueriesRefreshTimer != null) {
+    clearInterval(runningQueriesRefreshTimer);
+    runningQueriesRefreshTimer = null;
+  }
+  const seconds = parseInt($("#runningQueriesRefresh").val(), 10);
+  if (seconds > 0)
+    runningQueriesRefreshTimer = setInterval(function () {
+      // Only while the tab is on screen: a hidden table needs no polling
+      if (studioCurrentTab == "server" && $("#tab-server-queries-sel").hasClass("active")) loadRunningQueries();
+    }, seconds * 1000);
 }
 
 function formatDateTime(timestamp) {
@@ -678,6 +881,8 @@ function refreshCurrentServerTab() {
   var activeTab = $("#tabs-database .nav-link.active").attr("id");
   if (activeTab === "tab-server-sessions-sel")
     loadServerSessions();
+  else if (activeTab === "tab-server-queries-sel")
+    loadRunningQueries();
   else if (activeTab === "tab-server-events-sel")
     getServerEvents();
   else if (activeTab === "tab-server-backup-sel")
@@ -721,7 +926,7 @@ function loadBackupConfig() {
 
       if (data.config == null || data.config === "null") {
         $("#backupStatusMessage").html(
-          'Auto-backup is not configured. <a href="#" onclick="enableBackupConfig()">Click here</a> to create a default configuration.'
+          'Auto-backup is not configured. <a href="#"' + studioAction("enableBackupConfig") + ' data-prevent-default>Click here</a> to create a default configuration.'
         );
         $("#backupConfigForm").hide();
         $("#backupConfigStatus").show();
@@ -1134,6 +1339,8 @@ document.addEventListener("DOMContentLoaded", function (event) {
     var activeTab = this.id;
     if (activeTab == "tab-server-sessions-sel") {
       loadServerSessions();
+    } else if (activeTab == "tab-server-queries-sel") {
+      loadRunningQueries();
     } else if (activeTab == "tab-server-events-sel") {
       getServerEvents();
     } else if (activeTab == "tab-server-backup-sel") {
@@ -1145,6 +1352,10 @@ document.addEventListener("DOMContentLoaded", function (event) {
         loadMCPConfig();
       }
     }
+  });
+
+  $(document).on("click", ".running-query-terminate", function () {
+    terminateRunningQuery($(this).attr("data-id"));
   });
 
   $("#serverEventsFile").change(function () {

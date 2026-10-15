@@ -80,6 +80,11 @@ public class CypherSemanticValidator {
       return;
     }
 
+    if (statement instanceof ConditionalStatement conditional) {
+      validateConditional(conditional);
+      return;
+    }
+
     final CypherSemanticValidator v = new CypherSemanticValidator();
     v.validateVariableTypes(statement);
     v.validateVariableBinding(statement);
@@ -108,6 +113,25 @@ public class CypherSemanticValidator {
       // A branch with no RETURN carries no columns to compare and is not a query this validates on its own.
       if (query.getReturnClause() != null)
         validate(query);
+  }
+
+  /**
+   * A conditional query (issue #9940) validates each branch as the query it is, and requires them all to return the same
+   * columns: which branch runs is decided per execution, so a caller could not know otherwise what it gets back.
+   */
+  private static void validateConditional(final ConditionalStatement conditional) {
+    List<String> firstColumns = null;
+    for (final CypherStatement branch : conditional.getAllBranches()) {
+      validate(branch);
+      final ReturnClause returnClause = branch.getReturnClause();
+      final List<String> columns = returnClause != null ? returnClause.getItems() : List.of();
+      if (firstColumns == null)
+        firstColumns = columns;
+      else if (!firstColumns.equals(columns))
+        throw new CommandParsingException(
+            "DifferentColumnsInConditionalQuery: every branch of a conditional query (WHEN ... THEN ... ELSE ...) must return the "
+                + "same columns in the same order");
+    }
   }
 
   /**
@@ -414,6 +438,8 @@ public class CypherSemanticValidator {
 
   private void validateVariableBinding(final CypherStatement statement) {
     final Set<String> boundVars = new HashSet<>();
+    // What a LET can see: boundVars, except that WITH * passes the incoming names through instead of dropping them
+    final Set<String> visibleVars = new HashSet<>();
 
     final List<ClauseEntry> clausesInOrder = statement.getClausesInOrder();
     if (clausesInOrder != null && !clausesInOrder.isEmpty()) {
@@ -440,14 +466,22 @@ public class CypherSemanticValidator {
           case WITH:
             // WITH resets scope to only the projected aliases
             final WithClause withClause = entry.getTypedClause();
+            if (withClause.isLetBinding())
+              checkLetDeclaresNewVariables(withClause, visibleVars, boundVars);
             boundVars.clear();
+            boolean star = false;
             for (final ReturnClause.ReturnItem item : withClause.getItems()) {
+              if (item.isStar())
+                star = true;
               final String alias = item.getAlias();
               if (alias != null)
                 boundVars.add(alias);
               else if (item.getExpression() instanceof VariableExpression)
                 boundVars.add(((VariableExpression) item.getExpression()).getVariableName());
             }
+            if (!star)
+              visibleVars.clear();
+            visibleVars.addAll(boundVars);
             break;
           case UNWIND:
             final UnwindClause unwindClause = entry.getTypedClause();
@@ -460,6 +494,7 @@ public class CypherSemanticValidator {
           default:
             break;
         }
+        visibleVars.addAll(boundVars);
       }
     } else {
       // Fallback: walk match then create
@@ -471,6 +506,19 @@ public class CypherSemanticValidator {
       if (statement.getCreateClause() != null && !statement.getCreateClause().isEmpty())
         for (final PathPattern path : statement.getCreateClause().getPathPatterns())
           checkCreateBinding(path, boundVars);
+    }
+  }
+
+  /**
+   * A GQL {@code LET} declares new variables (issue #9940): naming one already in scope is refused, as Neo4j does, instead
+   * of silently shadowing it the way the {@code WITH *, expr AS x} it is rewritten to would.
+   */
+  private static void checkLetDeclaresNewVariables(final WithClause letClause, final Set<String> visibleVars,
+      final Set<String> boundVars) {
+    for (final ReturnClause.ReturnItem item : letClause.getItems()) {
+      final String alias = item.isStar() ? null : item.getAlias();
+      if (alias != null && (visibleVars.contains(alias) || boundVars.contains(alias)))
+        throw new CommandParsingException("VariableAlreadyBound: Variable '" + alias + "' already declared, LET cannot redeclare it");
     }
   }
 
@@ -1159,9 +1207,9 @@ public class CypherSemanticValidator {
       // Pattern predicates in WHERE must not introduce new variables
       final PathPattern path = ((PatternPredicateExpression) boolExpr).getPathPattern();
       if (path != null) {
-        // A single-node pattern in WHERE is invalid: WHERE (n) is not a valid predicate
-        if (path.isSingleNode())
-          throw new CommandParsingException("InvalidArgumentType: Single node pattern is not a valid predicate in WHERE");
+        // A single-node pattern in WHERE is no predicate: WHERE (n) with n a node is refused by
+        // FunctionArgumentChecks#checkSingleNodePredicate, which knows the kind of n at that point. WHERE (flag) with flag bound to a value
+        // is a parenthesized expression, resolved at runtime (issue #9542).
         checkPatternPredicateVariables(path, scope);
       }
     } else if (boolExpr instanceof IsNullExpression) {
@@ -2253,15 +2301,78 @@ public class CypherSemanticValidator {
    */
   private final class FunctionArgumentChecks implements CypherExpressionWalker.Visitor {
     private final Map<String, VarType> scope;
+    // The patterns the clause being walked declares itself: they are the source of the kinds in scope, so they are
+    // never checked against them. Everything else reached here is a pattern that only uses names (a WHERE predicate,
+    // a pattern comprehension) and must agree with the kind each name was declared as (issue #9292).
+    private final Set<PathPattern> declaringPatterns;
 
     private FunctionArgumentChecks(final Map<String, VarType> scope) {
+      this(scope, Set.of());
+    }
+
+    private FunctionArgumentChecks(final Map<String, VarType> scope, final Set<PathPattern> declaringPatterns) {
       this.scope = scope;
+      this.declaringPatterns = declaringPatterns;
     }
 
     @Override
     public void visit(final Expression expression) {
       checkFunctionArgTypes(expression, scope);
       checkPropertyAccessOnPath(expression, scope);
+    }
+
+    @Override
+    public CypherExpressionWalker.Visitor forLocalBindings(final String... variables) {
+      final Map<String, VarType> shadowed = new HashMap<>(scope);
+      for (final String variable : variables)
+        if (variable != null)
+          shadowed.remove(variable);
+      return new FunctionArgumentChecks(shadowed, declaringPatterns);
+    }
+
+    @Override
+    public void visitPattern(final PathPattern path) {
+      if (declaringPatterns.contains(path))
+        return;
+      if (path.isSingleNode())
+        checkSingleNodePredicate(path.getFirstNode());
+      for (final NodePattern node : path.getNodes())
+        checkUsedAs(node.getVariable(), VarType.NODE);
+      for (final RelationshipPattern rel : path.getRelationships())
+        if (!(rel instanceof QuantifiedPathPattern))
+          checkUsedAs(rel.getVariable(), VarType.RELATIONSHIP);
+    }
+
+    /**
+     * {@code WHERE (name)} is a parenthesized variable, not a pattern, unless {@code name} is a graph entity: a node,
+     * a relationship or a path is no Boolean, and a lone node pattern is no predicate. A name of unknown kind (a
+     * {@code WITH}, an {@code UNWIND}, a {@code collect}) is left to the runtime check, which sees the value (issue #9542).
+     */
+    private void checkSingleNodePredicate(final NodePattern node) {
+      // a label or a property map makes it a node pattern whatever the variable holds
+      if (node.hasLabels() || node.hasProperties())
+        throw new CommandParsingException("InvalidArgumentType: Single node pattern is not a valid predicate in WHERE");
+      final String name = node.getVariable();
+      if (name == null)
+        return;
+      final VarType declared = scope.get(name);
+      if (declared == VarType.NODE || declared == VarType.RELATIONSHIP || declared == VarType.PATH)
+        throw new CommandParsingException("InvalidArgumentType: Single node pattern is not a valid predicate in WHERE");
+    }
+
+    /**
+     * A name already bound as a node cannot be a relationship in a later pattern, nor the reverse. Only that pair is
+     * checked: the other kinds a {@code WITH} can leave behind are approximations, and guessing there is how a check
+     * starts rejecting valid queries.
+     */
+    private void checkUsedAs(final String name, final VarType used) {
+      if (name == null)
+        return;
+      final VarType declared = scope.get(name);
+      if ((declared == VarType.NODE || declared == VarType.RELATIONSHIP) && declared != used)
+        throw new CommandParsingException(
+            "VariableTypeConflict: Variable '" + name + "' already defined as " + declared + ", cannot redefine as "
+                + used);
     }
 
     /**
@@ -2290,8 +2401,35 @@ public class CypherSemanticValidator {
       // This walk only needs the resulting kinds, not to re-decide a question those phases already settle.
       final Map<String, VarType> advanced = new HashMap<>(scope);
       applyClauseToVarTypes(entry, advanced, new HashSet<>());
-      return new FunctionArgumentChecks(advanced);
+      return new FunctionArgumentChecks(advanced, declaredPatterns(entry));
     }
+  }
+
+  /**
+   * The patterns a clause declares variables through (the ones {@link #applyClauseToVarTypes} reads), by identity.
+   */
+  private static Set<PathPattern> declaredPatterns(final ClauseEntry entry) {
+    final Set<PathPattern> patterns = Collections.newSetFromMap(new IdentityHashMap<>());
+    switch (entry.getType()) {
+    case MATCH -> {
+      final MatchClause matchClause = entry.getTypedClause();
+      if (matchClause.hasPathPatterns())
+        patterns.addAll(matchClause.getPathPatterns());
+    }
+    case CREATE -> {
+      final CreateClause createClause = entry.getTypedClause();
+      if (createClause != null && !createClause.isEmpty())
+        patterns.addAll(createClause.getPathPatterns());
+    }
+    case MERGE -> {
+      final MergeClause mergeClause = entry.getTypedClause();
+      if (mergeClause != null)
+        patterns.add(mergeClause.getPathPattern());
+    }
+    default -> {
+    }
+    }
+    return patterns;
   }
 
   // ================================================

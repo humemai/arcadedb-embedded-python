@@ -21,6 +21,7 @@ package com.arcadedb.gremlin;
 import com.arcadedb.database.Database;
 import com.arcadedb.graph.GraphTraversalProvider;
 import com.arcadedb.graph.GraphTraversalProviderRegistry;
+import com.arcadedb.index.IndexException;
 import com.arcadedb.index.TypeIndex;
 import com.arcadedb.schema.DocumentType;
 import com.arcadedb.schema.EdgeType;
@@ -155,11 +156,17 @@ public class ArcadeTraversalStrategy extends AbstractTraversalStrategy<Traversal
                 // WALKS UP THE HIERARCHY: A SUPER TYPE'S INDEX SPANS ITS SIBLING SUB-TYPES TOO, WHICH THE STEP FILTERS
                 // OUT BY BUCKET (#8249)
                 final TypeIndex index = graph.database.getSchema().getType(typeNameToMatch).getPolymorphicIndexByProperties(key);
-                if (index == null || !index.getType().isExactKeyLookup())
-                  continue; // A FULL_TEXT INDEX ANSWERS BY TOKEN AND MISSES A VALUE WITH NONE (#8439)
-                if (c.getBiPredicate() != Compare.eq && !index.supportsOrderedIterations())
-                  continue; // A HASH INDEX ANSWERS EQUALITY ONLY: A RANGE FALLS BACK TO THE TYPE SCAN (#9144)
-                final int rank = c.getBiPredicate() == Compare.eq ? (index.isUnique() ? 0 : 1) : 2;
+                // EXACT KEY, ORDERED AND UNFOLDED FOR A RANGE, AND USABLE NOW: AN INDEX A CONCURRENT DDL IS CREATING OR
+                // DROPPING IS NOT A CANDIDATE, AND ITS METADATA IS NOT READ AGAIN BELOW (#9651)
+                if (!ArcadeFilterByIndexStep.canAnswer(index, c.getBiPredicate()))
+                  continue;
+                boolean unique;
+                try {
+                  unique = index.isUnique();
+                } catch (final IndexException e) {
+                  continue;
+                }
+                final int rank = c.getBiPredicate() == Compare.eq ? (unique ? 0 : 1) : 2;
                 if (rank < chosenRank) {
                   chosenRank = rank;
                   chosenIndex = index;
@@ -195,7 +202,7 @@ public class ArcadeTraversalStrategy extends AbstractTraversalStrategy<Traversal
               replaceWith = new ArcadeFilterByIndexStep(prevStepGraph.getTraversal(), prevStepGraph.getReturnClass(),
                   prevStepGraph.isStartStep(), chosenIndex, chosen.getBiPredicate(),
                   chosen.getValue().getClass().isArray() ? (Object[]) chosen.getValue() : new Object[] { chosen.getValue() },
-                  typeNameToMatch);
+                  typeNameToMatch, chosen.getKey());
 
             if (replaceWith != null) {
               // #8258: a label on the GraphStep being replaced must survive on the new step, otherwise

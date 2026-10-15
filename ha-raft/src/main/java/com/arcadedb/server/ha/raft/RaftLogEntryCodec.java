@@ -18,7 +18,9 @@
  */
 package com.arcadedb.server.ha.raft;
 
+import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.compression.CompressionFactory;
+import com.arcadedb.index.fulltext.FullTextCorpusDeltas;
 import com.arcadedb.network.binary.ReplicatedEntryTooLargeException;
 import org.apache.ratis.thirdparty.com.google.protobuf.ByteString;
 
@@ -57,7 +59,7 @@ public final class RaftLogEntryCodec {
    * at or above {@code GlobalConfiguration.maxReplicatedRaftEntrySize}'s default, or an INCOMPRESSIBLE
    * transaction that replicates fine today (raw size ~= compressed size) would start being rejected here.
    */
-  static final int MAX_ENTRY_BYTES = 64 * 1024 * 1024;
+  static final int MAX_ENTRY_BYTES = GlobalConfiguration.MAX_REPLICATED_UNCOMPRESSED_ENTRY_BYTES;
 
   /**
    * Ceiling a CONSUMER accepts when decoding (512 MB), deliberately well above {@link #MAX_ENTRY_BYTES}.
@@ -146,6 +148,12 @@ public final class RaftLogEntryCodec {
    * prepared the transaction (issue #8686).
    */
   static final String TX_PREPARED_AT_SECTION = "tx-prepared-at-index";
+
+  /**
+   * Name of the extension section of a {@code TX_ENTRY} that carries what the transaction did to the BM25 corpus counters of the
+   * full-text indexes it wrote (issue #10018).
+   */
+  static final String TX_FULLTEXT_CORPUS_SECTION = "tx-fulltext-corpus-deltas";
 
   /**
    * Appends one self-describing extension section to an entry being encoded. Call this AFTER the type's own
@@ -305,8 +313,9 @@ public final class RaftLogEntryCodec {
       /**
        * The JSON document of a node-scoped security entry: the user list of a {@code SECURITY_USERS_ENTRY}, the
        * group document of a {@code SECURITY_GROUPS_ENTRY}, or the API-token document of a
-       * {@code SECURITY_API_TOKENS_ENTRY} (issue #7373). Which one it is comes from {@link #type()}; the slot is
-       * shared because the three have the identical wire shape. Null for every other entry type.
+       * {@code SECURITY_API_TOKENS_ENTRY} (issue #7373), or the changed {@code configuration.json} settings of a
+       * {@code DATABASE_CONFIGURATION_ENTRY} (issue #9763). Which one it is comes from {@link #type()}; the slot is
+       * shared because the four carry one JSON document each. Null for every other entry type.
        */
       String usersJson,
       boolean forceSnapshot,
@@ -352,8 +361,50 @@ public final class RaftLogEntryCodec {
        * predates the section. The leader refuses a transaction whose index is older than the last schema-changing
        * entry it applied, because that transaction was prepared against a schema the cluster has already moved past.
        */
-      long txPreparedAtIndex
+      long txPreparedAtIndex,
+      /**
+       * The component files a {@code SCHEMA_ENTRY} renames, file id to the new COMPONENT name (issue #9762) - the file
+       * name minus the {@code .fileId.pageSize.vVersion.ext} tail, which the receiver recomposes from its own file. Empty
+       * on every other entry type, on a schema change that renamed nothing, and on an entry written by a node that
+       * predates the section. The receiver moves these files before it loads the schema the entry publishes, which names
+       * them by their new names.
+       */
+      Map<Integer, String> filesToRename,
+      /**
+       * What a {@code TX_ENTRY} did to the BM25 corpus counters of the full-text indexes it wrote, per logical index (issue
+       * #10018). Applied by every node that did not run the transaction itself, so all of them move the counters together.
+       * Empty on every other entry type, on a transaction that wrote no full-text index, and on one written by a node that
+       * predates the section.
+       */
+      List<FullTextCorpusDeltas.CorpusDelta> corpusDeltas
   ) {
+
+    /** Every entry but a {@code TX_ENTRY} carrying corpus deltas: nothing to apply to the counters. */
+    public DecodedEntry(final RaftLogEntryType type, final String databaseName, final byte[] walData,
+        final Map<Integer, Integer> bucketRecordDelta, final String schemaJson, final Map<Integer, String> filesToAdd,
+        final Map<Integer, String> filesToRemove, final List<byte[]> walEntries,
+        final List<Map<Integer, Integer>> bucketDeltas, final String usersJson, final boolean forceSnapshot,
+        final String bootstrapFingerprint, final long bootstrapLastTxId, final List<TsSealedBlob> sealedFileBlobs,
+        final boolean moreChunksFollow, final List<TsSealedChunk> sealedFileChunks, final SchemaDelta.Payload schemaDelta,
+        final String securityPrecondition, final long txPreparedAtIndex, final Map<Integer, String> filesToRename) {
+      this(type, databaseName, walData, bucketRecordDelta, schemaJson, filesToAdd, filesToRemove, walEntries, bucketDeltas,
+          usersJson, forceSnapshot, bootstrapFingerprint, bootstrapLastTxId, sealedFileBlobs, moreChunksFollow,
+          sealedFileChunks, schemaDelta, securityPrecondition, txPreparedAtIndex, filesToRename, Collections.emptyList());
+    }
+
+    /** Every entry but a {@code SCHEMA_ENTRY} carrying renames: no file is renamed. */
+    public DecodedEntry(final RaftLogEntryType type, final String databaseName, final byte[] walData,
+        final Map<Integer, Integer> bucketRecordDelta, final String schemaJson, final Map<Integer, String> filesToAdd,
+        final Map<Integer, String> filesToRemove, final List<byte[]> walEntries,
+        final List<Map<Integer, Integer>> bucketDeltas, final String usersJson, final boolean forceSnapshot,
+        final String bootstrapFingerprint, final long bootstrapLastTxId, final List<TsSealedBlob> sealedFileBlobs,
+        final boolean moreChunksFollow, final List<TsSealedChunk> sealedFileChunks, final SchemaDelta.Payload schemaDelta,
+        final String securityPrecondition, final long txPreparedAtIndex) {
+      this(type, databaseName, walData, bucketRecordDelta, schemaJson, filesToAdd, filesToRemove, walEntries,
+          bucketDeltas, usersJson, forceSnapshot, bootstrapFingerprint, bootstrapLastTxId, sealedFileBlobs,
+          moreChunksFollow, sealedFileChunks, schemaDelta, securityPrecondition, txPreparedAtIndex,
+          Collections.emptyMap());
+    }
 
     /** The same entry with the values the trailing extension sections carried; the decoder reads them after the body. */
     DecodedEntry withTrailingSections(final TrailingSections sections) {
@@ -362,16 +413,24 @@ public final class RaftLogEntryCodec {
           new DecodedEntry(type, databaseName, walData, bucketRecordDelta, schemaJson, filesToAdd, filesToRemove,
               walEntries, bucketDeltas, usersJson, forceSnapshot, bootstrapFingerprint, bootstrapLastTxId,
               sealedFileBlobs, moreChunksFollow, sealedFileChunks, schemaDelta, sections.securityPrecondition(),
-              sections.txPreparedAtIndex());
+              sections.txPreparedAtIndex(), filesToRename, sections.corpusDeltas());
     }
   }
 
+  /**
+   * The base version written in the schema-delta slot of a {@code SCHEMA_ENTRY} that carries NO delta but has to write
+   * the slot anyway, because a section after it is present (issue #9762). Read back together with two zero lengths, which
+   * no real delta has - a delta is a non-empty JSON document - so the pair cannot be mistaken for one.
+   */
+  static final long NO_SCHEMA_DELTA_BASE_VERSION = Long.MIN_VALUE;
+
   /** What the framed extension sections of one entry carried; a field an entry did not carry stays at its "absent" value. */
-  record TrailingSections(String securityPrecondition, long txPreparedAtIndex) {
-    static final TrailingSections NONE = new TrailingSections(null, -1L);
+  record TrailingSections(String securityPrecondition, long txPreparedAtIndex,
+                          List<FullTextCorpusDeltas.CorpusDelta> corpusDeltas) {
+    static final TrailingSections NONE = new TrailingSections(null, -1L, Collections.emptyList());
 
     boolean isEmpty() {
-      return securityPrecondition == null && txPreparedAtIndex < 0;
+      return securityPrecondition == null && txPreparedAtIndex < 0 && corpusDeltas.isEmpty();
     }
   }
 
@@ -444,6 +503,19 @@ public final class RaftLogEntryCodec {
    */
   public static ByteString encodeTxEntry(final String databaseName, final byte[] walData,
       final Map<Integer, Integer> bucketRecordDelta, final long preparedAtIndex) {
+    return encodeTxEntry(databaseName, walData, bucketRecordDelta, preparedAtIndex, Collections.emptyList());
+  }
+
+  /**
+   * As {@link #encodeTxEntry(String, byte[], Map, long)}, also stating what the transaction did to the BM25 corpus counters of
+   * the full-text indexes it wrote (issue #10018), as a second framed extension section. An empty list writes no section.
+   * <p>
+   * Only to be written once every peer advertises {@link PeerCapabilities#TX_FULLTEXT_CORPUS_DELTAS}, for the reason
+   * {@link #writeExtensionSection} gives.
+   */
+  public static ByteString encodeTxEntry(final String databaseName, final byte[] walData,
+      final Map<Integer, Integer> bucketRecordDelta, final long preparedAtIndex,
+      final List<FullTextCorpusDeltas.CorpusDelta> corpusDeltas) {
     try {
       final ByteArrayOutputStream baos = new ByteArrayOutputStream();
       final DataOutputStream dos = new DataOutputStream(baos);
@@ -469,6 +541,21 @@ public final class RaftLogEntryCodec {
         final DataOutputStream sectionOut = new DataOutputStream(section);
         sectionOut.writeUTF(TX_PREPARED_AT_SECTION);
         sectionOut.writeLong(preparedAtIndex);
+        sectionOut.flush();
+        writeExtensionSection(dos, section.toByteArray());
+      }
+
+      if (!corpusDeltas.isEmpty()) {
+        final ByteArrayOutputStream section = new ByteArrayOutputStream(
+            TX_FULLTEXT_CORPUS_SECTION.length() + 8 + 40 * corpusDeltas.size());
+        final DataOutputStream sectionOut = new DataOutputStream(section);
+        sectionOut.writeUTF(TX_FULLTEXT_CORPUS_SECTION);
+        sectionOut.writeInt(corpusDeltas.size());
+        for (final FullTextCorpusDeltas.CorpusDelta delta : corpusDeltas) {
+          sectionOut.writeUTF(delta.indexName());
+          sectionOut.writeLong(delta.docs());
+          sectionOut.writeLong(delta.length());
+        }
         sectionOut.flush();
         writeExtensionSection(dos, section.toByteArray());
       }
@@ -584,6 +671,28 @@ public final class RaftLogEntryCodec {
       final List<byte[]> walEntries, final List<Map<Integer, Integer>> bucketDeltas,
       final List<TsSealedBlob> sealedFileBlobs, final boolean moreChunksFollow,
       final List<TsSealedChunk> sealedFileChunks, final SchemaDelta.Payload schemaDelta) {
+    return encodeSchemaEntry(databaseName, schemaJson, filesToAdd, filesToRemove, walEntries, bucketDeltas,
+        sealedFileBlobs, moreChunksFollow, sealedFileChunks, schemaDelta, Collections.emptyMap());
+  }
+
+  /**
+   * @param filesToRename the component files the change renamed, file id to new component name (issue #9762), or empty.
+   *                      Written as the last trailing section, after the schema-delta slot - which is therefore
+   *                      written whenever this section is, holding {@link #NO_SCHEMA_DELTA_BASE_VERSION} and two zero
+   *                      lengths when the entry carries no delta, the same way the sealed-slice count is forced out for
+   *                      a delta. An empty map writes nothing, so an entry without renames is byte-identical to what the
+   *                      previous codec produced. A node predating the section refuses an entry carrying it (#7219's
+   *                      trailing-bytes backstop), which is why the leader writes it only once every peer advertises
+   *                      {@link PeerCapabilities#SCHEMA_FILE_RENAMES}, and refuses the rename otherwise: there is no
+   *                      degraded form of a rename to ship instead.
+   */
+  public static ByteString encodeSchemaEntry(final String databaseName, final String schemaJson,
+      final Map<Integer, String> filesToAdd, final Map<Integer, String> filesToRemove,
+      final List<byte[]> walEntries, final List<Map<Integer, Integer>> bucketDeltas,
+      final List<TsSealedBlob> sealedFileBlobs, final boolean moreChunksFollow,
+      final List<TsSealedChunk> sealedFileChunks, final SchemaDelta.Payload schemaDelta,
+      final Map<Integer, String> filesToRename) {
+    final boolean renames = filesToRename != null && !filesToRename.isEmpty();
     try {
       final ByteArrayOutputStream baos = new ByteArrayOutputStream();
       final DataOutputStream dos = new DataOutputStream(baos);
@@ -652,7 +761,7 @@ public final class RaftLogEntryCodec {
       // before it. Writing a zero here is understood by every decoder that already handles this section - it
       // is the same value an entry with an empty slice list would carry - so the entry stays readable.
       final int chunkCount = sealedFileChunks != null ? sealedFileChunks.size() : 0;
-      if (chunkCount > 0 || schemaDelta != null) {
+      if (chunkCount > 0 || schemaDelta != null || renames) {
         dos.writeInt(chunkCount);
         for (int i = 0; i < chunkCount; i++) {
           final TsSealedChunk chunk = sealedFileChunks.get(i);
@@ -686,7 +795,16 @@ public final class RaftLogEntryCodec {
         dos.writeInt(deltaBytes.length);        // uncompressed length
         dos.writeInt(compressedDelta.length);   // compressed length
         dos.write(compressedDelta);
+      } else if (renames) {
+        // The slot is positional: a rename section after it needs it written, empty
+        dos.writeLong(NO_SCHEMA_DELTA_BASE_VERSION);
+        dos.writeInt(0);
+        dos.writeInt(0);
       }
+
+      // File rename section (issue #9762). Last, written only when there is something to rename.
+      if (renames)
+        writeFileMap(dos, filesToRename);
 
       dos.flush();
       return ByteString.copyFrom(baos.toByteArray());
@@ -853,6 +971,35 @@ public final class RaftLogEntryCodec {
   }
 
   /**
+   * Encodes the changed {@code configuration.json} settings of {@code databaseName} (a JSON document, see
+   * {@code LocalDatabase.pendingConfigurationChanges()}) as a
+   * {@code DATABASE_CONFIGURATION_ENTRY} (issue #9763).
+   * <p>
+   * Binary format: type byte, databaseName (UTF), document length (int) and UTF-8 bytes. Length-prefixed rather than
+   * {@code writeUTF}, whose 64KB limit a document has no reason to respect.
+   * <p>
+   * Only to be written once every peer advertises {@link PeerCapabilities#DATABASE_CONFIGURATION_ENTRY}: a peer that
+   * predates the type halts on it.
+   */
+  public static ByteString encodeDatabaseConfigurationEntry(final String databaseName, final String configurationJson) {
+    try {
+      final ByteArrayOutputStream baos = new ByteArrayOutputStream();
+      final DataOutputStream dos = new DataOutputStream(baos);
+
+      dos.writeByte(RaftLogEntryType.DATABASE_CONFIGURATION_ENTRY.getId());
+      dos.writeUTF(databaseName);
+      final byte[] bytes = configurationJson.getBytes(StandardCharsets.UTF_8);
+      dos.writeInt(bytes.length);
+      dos.write(bytes);
+
+      dos.flush();
+      return ByteString.copyFrom(baos.toByteArray());
+    } catch (final IOException e) {
+      throw new IllegalStateException("Failed to encode DATABASE_CONFIGURATION entry", e);
+    }
+  }
+
+  /**
    * Encodes a drop-database entry into a ByteString.
    * <p>
    * Binary format: type byte, databaseName (UTF).
@@ -869,6 +1016,25 @@ public final class RaftLogEntryCodec {
       return ByteString.copyFrom(baos.toByteArray());
     } catch (final IOException e) {
       throw new IllegalStateException("Failed to encode DROP_DATABASE entry", e);
+    }
+  }
+
+  /**
+   * Reads only the database name of the {@code (type, databaseName)} envelope header, without decoding the body
+   * (issue #9547). A schema entry can carry a whole compacted index, so a check that needs nothing but the database it
+   * targets must not pay for decompressing it.
+   *
+   * @throws RaftLogEntryDecodeException when the header itself cannot be read
+   */
+  public static String peekDatabaseName(final ByteString data) {
+    try (final InputStream input = data.newInput();
+        final DataInputStream dis = new DataInputStream(input)) {
+      dis.readByte();
+      return dis.readUTF();
+    } catch (final IOException e) {
+      throw new RaftLogEntryDecodeException(
+          "Failed to read the Raft log entry envelope header (the entry ended before its type byte or database name): "
+              + e.getMessage(), null, null, e);
     }
   }
 
@@ -921,6 +1087,7 @@ public final class RaftLogEntryCodec {
           Collections.emptyList(), null, null, -1L);
       case SECURITY_USERS_ENTRY, SECURITY_GROUPS_ENTRY, SECURITY_API_TOKENS_ENTRY -> decodeSecurityEntry(dis, type);
       case BOOTSTRAP_FINGERPRINT_ENTRY -> decodeBootstrapFingerprintEntry(dis, databaseName);
+      case DATABASE_CONFIGURATION_ENTRY -> decodeDatabaseConfigurationEntry(dis, databaseName);
     };
 
     return result.withTrailingSections(readTrailingExtensionSections(dis, type));
@@ -947,6 +1114,7 @@ public final class RaftLogEntryCodec {
 
     String securityPrecondition = null;
     long txPreparedAtIndex = -1L;
+    List<FullTextCorpusDeltas.CorpusDelta> corpusDeltas = Collections.emptyList();
     while (dis.available() > 0) {
       if (dis.available() < EXTENSION_HEADER_BYTES)
         throw new IllegalStateException("Corrupted Raft log entry: " + dis.available()
@@ -970,8 +1138,41 @@ public final class RaftLogEntryCodec {
       final long preparedAt = readTxPreparedAtIndex(section);
       if (preparedAt >= 0)
         txPreparedAtIndex = preparedAt;
+
+      final List<FullTextCorpusDeltas.CorpusDelta> deltas = readFullTextCorpusDeltas(section);
+      if (deltas != null)
+        corpusDeltas = deltas;
     }
-    return new TrailingSections(securityPrecondition, txPreparedAtIndex);
+    return new TrailingSections(securityPrecondition, txPreparedAtIndex, corpusDeltas);
+  }
+
+  /**
+   * Reads the BM25 corpus deltas out of one extension section, or returns null when the section is something else (issue
+   * #10018). Same two-step shape as {@link #readTxPreparedAtIndex}: a section that is not ours is skipped, one that IS ours and
+   * cannot be read is corruption, because applying the entry without it would silently leave this node's counters behind.
+   */
+  private static List<FullTextCorpusDeltas.CorpusDelta> readFullTextCorpusDeltas(final byte[] section) {
+    final DataInputStream dis = new DataInputStream(new ByteArrayInputStream(section));
+    try {
+      if (!TX_FULLTEXT_CORPUS_SECTION.equals(dis.readUTF()))
+        return null;
+    } catch (final IOException e) {
+      return null;
+    }
+
+    try {
+      final int count = dis.readInt();
+      checkCollectionSize(count, "TX_ENTRY full-text corpus deltas");
+      final List<FullTextCorpusDeltas.CorpusDelta> deltas = new ArrayList<>(count);
+      for (int i = 0; i < count; i++)
+        deltas.add(new FullTextCorpusDeltas.CorpusDelta(dis.readUTF(), dis.readLong(), dis.readLong()));
+      return deltas;
+    } catch (final IOException e) {
+      throw new IllegalStateException(
+          "Corrupted Raft log entry: the '" + TX_FULLTEXT_CORPUS_SECTION + "' extension section carries no readable deltas. "
+              + "Refusing the entry rather than applying it without them, which would leave the BM25 counters of this node "
+              + "behind the rest of the cluster", e);
+    }
   }
 
   /**
@@ -1183,6 +1384,10 @@ public final class RaftLogEntryCodec {
       final long baseVersion = dis.readLong();
       final int uncompressedLen = dis.readInt();
       final int compressedLen = dis.readInt();
+      if (baseVersion == NO_SCHEMA_DELTA_BASE_VERSION && uncompressedLen == 0 && compressedLen == 0)
+        // An empty slot, written only because a section after it is present (issue #9762)
+        return decodeSchemaEntryRenames(dis, databaseName, schemaJson, filesToAdd, filesToRemove, walEntries,
+            bucketDeltas, sealedFileBlobs, moreChunksFollow, sealedFileChunks, null);
       checkByteLength(compressedLen, dis.available(), "SCHEMA_ENTRY schema delta compressed");
       checkDecompressedLength(uncompressedLen, compressedLen, "SCHEMA_ENTRY schema delta uncompressed");
       final byte[] compressed = new byte[compressedLen];
@@ -1191,7 +1396,28 @@ public final class RaftLogEntryCodec {
       schemaDelta = new SchemaDelta.Payload(baseVersion, new String(raw, StandardCharsets.UTF_8));
     }
 
-    // Nothing is written after the delta section by any producer in this codec, so bytes left here belong to a
+    return decodeSchemaEntryRenames(dis, databaseName, schemaJson, filesToAdd, filesToRemove, walEntries, bucketDeltas,
+        sealedFileBlobs, moreChunksFollow, sealedFileChunks, schemaDelta);
+  }
+
+  /** The file rename section of a {@code SCHEMA_ENTRY} (issue #9762), the last one, and the trailing-bytes backstop. */
+  private static DecodedEntry decodeSchemaEntryRenames(final DataInputStream dis, final String databaseName,
+      final String schemaJson, final Map<Integer, String> filesToAdd, final Map<Integer, String> filesToRemove,
+      final List<byte[]> walEntries, final List<Map<Integer, Integer>> bucketDeltas,
+      final List<TsSealedBlob> sealedFileBlobs, final boolean moreChunksFollow,
+      final List<TsSealedChunk> sealedFileChunks, final SchemaDelta.Payload schemaDelta) throws IOException {
+    // Same presence rule as every section before it: absent on an entry that renamed nothing and on one produced by an
+    // older codec
+    Map<Integer, String> filesToRename = Collections.emptyMap();
+    if (dis.available() > 0) {
+      filesToRename = readFileMap(dis);
+      for (final Map.Entry<Integer, String> rename : filesToRename.entrySet())
+        if (rename.getValue() == null || rename.getValue().isEmpty())
+          throw new IllegalStateException("SCHEMA_ENTRY for database '" + databaseName + "' renames file id "
+              + rename.getKey() + " to no name (corrupted replication payload)");
+    }
+
+    // Nothing is written after the rename section by any producer in this codec, so bytes left here belong to a
     // section a NEWER node added. Refusing beats accepting (issue #7219): every other section of this entry has
     // already been read, so accepting would apply a change this node can only see part of - and the part it
     // cannot see is, by construction, the part that carries meaning. A refusal is a RaftLogEntryDecodeException
@@ -1210,7 +1436,7 @@ public final class RaftLogEntryCodec {
 
     return new DecodedEntry(RaftLogEntryType.SCHEMA_ENTRY, databaseName, null, null,
         schemaJson, filesToAdd, filesToRemove, walEntries, bucketDeltas, null, false, null, -1L, sealedFileBlobs,
-        moreChunksFollow, sealedFileChunks, schemaDelta, null, -1L);
+        moreChunksFollow, sealedFileChunks, schemaDelta, null, -1L, filesToRename);
   }
 
   private static DecodedEntry decodeInstallDatabaseEntry(final DataInputStream dis, final String databaseName) throws IOException {
@@ -1253,6 +1479,18 @@ public final class RaftLogEntryCodec {
     return new DecodedEntry(type, "",
         null, null, null, null, null, null, null, json, false, null, -1L, Collections.emptyList(), false,
         Collections.emptyList(), null, null, -1L);
+  }
+
+  /** Decodes a {@code DATABASE_CONFIGURATION_ENTRY} (issue #9763); the document rides in the {@code usersJson} slot. */
+  private static DecodedEntry decodeDatabaseConfigurationEntry(final DataInputStream dis, final String databaseName)
+      throws IOException {
+    final int length = dis.readInt();
+    checkByteLength(length, dis.available(), RaftLogEntryType.DATABASE_CONFIGURATION_ENTRY.name());
+    final byte[] bytes = new byte[length];
+    dis.readFully(bytes);
+    return new DecodedEntry(RaftLogEntryType.DATABASE_CONFIGURATION_ENTRY, databaseName,
+        null, null, null, null, null, null, null, new String(bytes, StandardCharsets.UTF_8), false, null, -1L,
+        Collections.emptyList(), false, Collections.emptyList(), null, null, -1L);
   }
 
   private static void writeFileMap(final DataOutputStream dos, final Map<Integer, String> fileMap) throws IOException {

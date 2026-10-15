@@ -52,6 +52,10 @@ public class PostBeginHandler extends DatabaseAbstractHandler {
         return new ExecutionResponse(409, "{ \"error\" : \"Transaction already started\" }");
     }
 
+    // Read before anything is created: the envelope already refused a label that cannot be one, and nothing below may fail
+    // between publishing the session and handing its id to the client (issue #9775)
+    final String tag = queryTag(exchange);
+
     DatabaseContext.INSTANCE.init((DatabaseInternal) database);
 
     // isolationLevel is optional: when a payload is present but omits it, fall back to the default isolation.
@@ -64,8 +68,12 @@ public class PostBeginHandler extends DatabaseAbstractHandler {
       database.begin();
 
     final TransactionContext tx = ((DatabaseInternal) database).getTransaction();
+    // The client ends this transaction with its own /commit or /rollback: an HA replica runs its writes in it (issue #10040)
+    tx.setClientManaged(true);
 
     final HttpSession session = httpServer.getSessionManager().createSession(user, tx);
+    // The statements the session runs are listed with this label unless they carry their own (issue #9680)
+    session.setTag(tag);
 
     // USE THE SESSION ID AS REQUESTER TO ALLOW UNLOCK FILES FROM A DIFFERENT THREAD (SAME SESSION ID)
     tx.setRequester(session.id);
@@ -87,5 +95,11 @@ public class PostBeginHandler extends DatabaseAbstractHandler {
   @Override
   protected boolean mustExecuteOnWorkerThread() {
     return true;
+  }
+
+  /** Manages a session or answers a probe: never held behind the queries in the admission gate (issue #9518). */
+  @Override
+  protected boolean goesThroughAdmissionGate() {
+    return false;
   }
 }

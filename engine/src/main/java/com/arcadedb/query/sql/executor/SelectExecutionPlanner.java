@@ -73,6 +73,7 @@ import com.arcadedb.query.sql.parser.Node;
 import com.arcadedb.query.sql.parser.OrBlock;
 import com.arcadedb.query.sql.parser.OrderBy;
 import com.arcadedb.query.sql.parser.OrderByItem;
+import com.arcadedb.query.sql.parser.ParenthesisExpression;
 import com.arcadedb.query.sql.parser.PInteger;
 import com.arcadedb.query.sql.parser.Projection;
 import com.arcadedb.query.sql.parser.ProjectionItem;
@@ -89,8 +90,11 @@ import com.arcadedb.query.sql.parser.ValueExpression;
 import com.arcadedb.query.sql.parser.WhereClause;
 import com.arcadedb.engine.timeseries.AggregationType;
 import com.arcadedb.engine.timeseries.ColumnDefinition;
+import com.arcadedb.engine.timeseries.FieldFilter;
 import com.arcadedb.engine.timeseries.MultiColumnAggregationRequest;
 import com.arcadedb.engine.timeseries.TagFilter;
+import com.arcadedb.engine.timeseries.TimeSeriesEngine;
+import com.arcadedb.engine.timeseries.codec.TimeSeriesCodec;
 import com.arcadedb.function.sql.DefaultSQLFunctionFactory;
 import com.arcadedb.function.sql.time.SQLFunctionTimeBucket;
 import com.arcadedb.function.sql.time.SQLFunctionTsLast;
@@ -116,6 +120,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -134,8 +139,9 @@ import static com.arcadedb.schema.Schema.INDEX_TYPE.FULL_TEXT;
  * @author Luigi Dell'Aquila (luigi.dellaquila-(at)-gmail.com)
  */
 public class SelectExecutionPlanner {
-
   private static final String            LOCAL_NODE_NAME = "local";
+  /** The variable a scoring indexed function such as {@code SEARCH_INDEX} sets on every row it matches. */
+  private static final String            SCORE_VARIABLE  = "$score";
   private final        SelectStatement   statement;
   private              QueryPlanningInfo info;
   /**
@@ -149,9 +155,25 @@ public class SelectExecutionPlanner {
    */
   private              String            rangeMinMaxSource;
   private              String            rangeMinMaxAlias;
+  /**
+   * Set for the last attempt of a statement whose index kept going away while it was planned and read (issue #9615): the plan
+   * then reads the types it targets without their key indexes, which a concurrent DDL cannot take away under it.
+   */
+  private              boolean           withoutKeyIndexes;
 
   public SelectExecutionPlanner(final SelectStatement oSelectStatement) {
     this.statement = oSelectStatement;
+  }
+
+  /**
+   * Plans the statement as if its types had no key index (LSM_TREE, HASH), see {@link #withoutKeyIndexes}: a scan filtered by
+   * the condition answers exactly what such an index would. A FULL_TEXT, geospatial or vector index stays plannable, because
+   * the predicates it answers ({@code CONTAINSTEXT} by analyzer tokens, a shape, a similarity) mean something else on a scan,
+   * and so does an index the statement names ({@code FROM index:...}): there is no other way to answer either.
+   */
+  public SelectExecutionPlanner withoutKeyIndexes() {
+    this.withoutKeyIndexes = true;
+    return this;
   }
 
   private void init(final CommandContext context) {
@@ -1618,7 +1640,7 @@ public class SelectExecutionPlanner {
       final Set<String> filterClusters = info.buckets;
       final List<Rid> rids = new ArrayList<>();
       for (final Rid rid : target.getRids()) {
-        if (filterClusters == null || isFromClusters(rid, filterClusters, context.getDatabase()))
+        if (filterClusters == null || isFromClusters(rid, filterClusters, context))
           rids.add(rid);
       }
 
@@ -1762,7 +1784,7 @@ public class SelectExecutionPlanner {
       rid.setBucket(bucket);
       rid.setPosition(position);
 
-      if (filterClusters == null || isFromClusters(rid, filterClusters, context.getDatabase())) {
+      if (filterClusters == null || isFromClusters(rid, filterClusters, context)) {
         handleRidsAsTarget(result, List.of(rid), context);
       } else {
         result.chain(new EmptyStep(context));//nothing to return
@@ -1784,7 +1806,7 @@ public class SelectExecutionPlanner {
         rid.setLegacy(true);
         rid.setBucket(bucket);
         rid.setPosition(position);
-        if (filterClusters == null || isFromClusters(rid, filterClusters, context.getDatabase())) {
+        if (filterClusters == null || isFromClusters(rid, filterClusters, context)) {
           rids.add(rid);
         }
       }
@@ -1807,12 +1829,20 @@ public class SelectExecutionPlanner {
    *
    * @return
    */
-  private boolean isFromClusters(final Rid rid, final Set<String> filterClusters, final Database database) {
+  private boolean isFromClusters(final Rid rid, final Set<String> filterClusters, final CommandContext context) {
     if (filterClusters == null) {
       throw new IllegalArgumentException();
     }
-    final String bucketName = database.getSchema().getBucketById(rid.getBucket().getValue().intValue()).getName();
-    return filterClusters.contains("*") || filterClusters.contains(bucketName);
+    // Resolved with the statement's context, which the expression form {"@rid": <expr>} needs (issue #9802)
+    final RID resolved = rid.toRecordId((Result) null, context);
+    if (resolved == null)
+      return false;
+    if (filterClusters.contains("*"))
+      return true;
+    // A RID naming a bucket this schema does not know is in none of the filter's buckets
+    // Fully qualified like the other lookups here: the SQL parser's Bucket node is the imported one
+    final com.arcadedb.engine.Bucket bucket = context.getDatabase().getSchema().getBucketByIdIfExists(resolved.getBucketId());
+    return bucket != null && filterClusters.contains(bucket.getName());
   }
 
   private void handleNoTarget(final SelectExecutionPlan result, final CommandContext context) {
@@ -2164,8 +2194,12 @@ public class SelectExecutionPlanner {
       final TagFilter tagFilter = extractTagFilter(info.flattenedWhereClause, tsType.getTsColumns(),
           tsType.getTimestampColumn(), context);
 
+      // Issue #9612: range predicates on numeric FIELD columns, which the engine judges on block statistics and on the
+      // primitive columns instead of building a row for every sample
+      final FieldFilter fieldFilter = extractFieldFilter(info.flattenedWhereClause, tsType.getTsColumns(), context);
+
       // Try push-down aggregation before falling back to full row fetch
-      if (tryTimeSeriesAggregationPushDown(plan, tsType, fromTs, toTs, info, context))
+      if (tryTimeSeriesAggregationPushDown(plan, tsType, fromTs, toTs, fieldFilter, info, context))
         return;
 
       // Issue #5414: last-point queries scan the series newest-first so they can stop after the
@@ -2179,8 +2213,13 @@ public class SelectExecutionPlanner {
       // Issue #7663: the ascending read carries a cap too. ORDER BY ts ASC LIMIT n, and a bare LIMIT n, used to
       // walk the whole range and let LimitExecutionStep drop the surplus - after it had been decompressed, boxed
       // and held.
-      plan.chain(new FetchFromTimeSeriesStep(tsType, fromTs, toTs, tagFilter, false,
-          timeSeriesAscendingScanLimit(tsType, info, context), context));
+      //
+      // The field filter goes to the unbounded read only: a capped read stops at the first n rows the engine returns, and
+      // takes a cap only when isTimeSeriesWhereFullyPushedDown proved the engine returns no row the WHERE drops - which a
+      // field predicate never lets it prove. The residual FilterStep still runs over the rows the field filter kept.
+      final int ascendingLimit = timeSeriesAscendingScanLimit(tsType, info, context);
+      plan.chain(new FetchFromTimeSeriesStep(tsType, fromTs, toTs, tagFilter, ascendingLimit > 0 ? null : fieldFilter, false,
+          ascendingLimit, context));
       return;
     }
 
@@ -2732,7 +2771,7 @@ public class SelectExecutionPlanner {
    * The returned set is intersected with the caller-supplied {@code filterClusters} so explicit
    * cluster filters in the SQL (e.g., {@code SELECT FROM Doc IN BUCKET 'doc_3'}) are honoured.
    */
-  private static Set<String> derivePartitionPrunedClusters(final DocumentType docType, final Set<String> filterClusters,
+  private Set<String> derivePartitionPrunedClusters(final DocumentType docType, final Set<String> filterClusters,
       final QueryPlanningInfo info, final CommandContext context) {
     final BucketSelectionStrategy strategy = docType.getBucketSelectionStrategy();
     if (!(strategy instanceof PartitionedBucketSelectionStrategy partitioned))
@@ -2773,10 +2812,17 @@ public class SelectExecutionPlanner {
     // fall back to the caller's filterClusters. The union of bucket names across blocks is the
     // pruned set the OR-disjuncts collectively need to cover.
     final Set<String> derivedBuckets = new HashSet<>();
+    // A plan depends on the values of its parameters when a parameter sits in a block that binds every partition coordinate:
+    // pruning then happens or not, and to which bucket, by the value bound (a null prunes nothing, another value prunes to
+    // its own bucket). A block that leaves a coordinate open never prunes, whatever is bound, so its plan can be cached.
+    boolean prunedOnParameter = false;
     for (final AndBlock andBlock : info.flattenedWhereClause) {
       final Object[] keyValues = new Object[partitionProps.size()];
       final boolean[] bound = new boolean[partitionProps.size()];
+      final boolean[] written = new boolean[partitionProps.size()];
       int boundCount = 0;
+      int writtenCount = 0;
+      boolean parameterInBlock = false;
 
       for (final BooleanExpression expr : andBlock.getSubBlocks()) {
         if (!(expr instanceof BinaryCondition bc) || !(bc.getOperator() instanceof EqualsCompareOperator))
@@ -2797,17 +2843,29 @@ public class SelectExecutionPlanner {
           continue;
         final int idx = idxBoxed;
 
-        // Only a literal is bound here, not everything Expression.isEarlyCalculated() would admit. The
-        // bucket derived below is baked into the plan, so the value it comes from must be fixed for the
-        // life of that plan and free to compute: a parameter is not (a cached plan would reuse the first
-        // execution's bucket id for every subsequent binding, which is what the isEarlyCalculated form
-        // used to exclude by hand), and a function call is neither - it would be invoked at plan time,
-        // once more than the query asked for, and a non-deterministic one would fix a bucket that its
-        // per-row value no longer agrees with. That the plan is not cached today when the WHERE holds a
-        // function is an accident of FunctionCall.isCacheable() being true only for traversals; pruning
-        // no longer leans on it. See issue #6179.
-        if (literalSide == null || !literalSide.isLiteral())
+        // Only a literal or a parameter is bound here, not everything Expression.isEarlyCalculated() would
+        // admit. The bucket derived below is baked into the plan, so the value it comes from must be free to
+        // compute and fixed for the life of that plan. A literal is both. A parameter is free to compute but
+        // not fixed - a cached plan would reuse the first execution's bucket id for every later binding - so a
+        // plan pruned on a parameter is marked as depending on its parameters and never cached. It is pruned
+        // all the same because the pruning is not only an optimization: vector.neighbors() and its sparse twin
+        // restrict their own search to the pruned buckets, so a parameter that did not prune answered
+        // differently from the literal it stands for - which is also what a literal the statement cache
+        // extracted into a parameter would have done (issue #8307). A function call is neither - it would be
+        // invoked at plan time, once more than the query asked for, and a non-deterministic one would fix a
+        // bucket that its per-row value no longer agrees with. That the plan is not cached today when the
+        // WHERE holds a function is an accident of FunctionCall.isCacheable() being true only for traversals;
+        // pruning no longer leans on it. See issue #6179.
+        if (literalSide == null)
           continue;
+        final boolean parameter = isBareInputParameter(literalSide);
+        if (!parameter && !literalSide.isLiteral())
+          continue;
+        parameterInBlock |= parameter;
+        if (!written[idx]) {
+          written[idx] = true;
+          writtenCount++;
+        }
 
         if (!bound[idx]) {
           final Object literalValue;
@@ -2830,15 +2888,28 @@ public class SelectExecutionPlanner {
         }
       }
 
-      if (boundCount != partitionProps.size())
+      // a block that writes every coordinate but cannot prune with these values prunes with others: not cacheable
+      final boolean valueDecides = parameterInBlock && writtenCount == partitionProps.size();
+      if (boundCount != partitionProps.size()) {
+        if (valueDecides)
+          planDependsOnInputParameters = true;
         return filterClusters;  // Block left a partition coordinate open; cannot prune.
+      }
 
       // keyValues was filled in partitionProps order right above, so the strategy's own check is satisfied.
       final int bucketIndex = partitioned.getBucketIdByKeys(partitionProps, keyValues, false);
-      if (bucketIndex < 0 || bucketIndex >= typeBuckets.size())
+      if (bucketIndex < 0 || bucketIndex >= typeBuckets.size()) {
+        if (valueDecides)
+          planDependsOnInputParameters = true;
         return filterClusters;  // Strategy returned an out-of-range index; abort defensively.
+      }
       derivedBuckets.add(typeBuckets.get(bucketIndex).getName());
+      prunedOnParameter |= parameterInBlock;
     }
+
+    // the buckets hold for this execution's bindings only
+    if (prunedOnParameter)
+      planDependsOnInputParameters = true;
 
     // No partition prune was derivable (no AndBlock fully bound the partition properties); fall
     // back to the caller's filterClusters. The hint-stashing block below is skipped intentionally:
@@ -2932,13 +3003,14 @@ public class SelectExecutionPlanner {
   private static RID extractRidValue(final Expression expr, final CommandContext context) {
     if (expr == null)
       return null;
-    // Direct RID literal: #X:Y
-    if (expr.getRid() != null) {
-      final Rid rid = expr.getRid();
-      return context.getDatabase().newRID(rid.getBucket().getValue().intValue(), rid.getPosition().getValue().longValue());
-    }
-    // Evaluate the expression (handles string parameters like "#215:45086720")
     try {
+      // RID node: the literal #X:Y, or the expression form {"@rid": <expr>}, which needs THIS context for its
+      // database and its parameters (issue #9802). Like the branch below, a RID that cannot be resolved at plan time
+      // costs the optimization and nothing else
+      if (expr.getRid() != null)
+        return expr.getRid().toRecordId((Result) null, context);
+
+      // Evaluate the expression (handles string parameters like "#215:45086720")
       final Object value = expr.execute((Result) null, context);
       if (value instanceof RID rid)
         return rid;
@@ -3130,7 +3202,17 @@ public class SelectExecutionPlanner {
           // now, so a stringified literal would never match (issue #5475).
           // Equalities inside one block are AND'ed, so their values are INTERSECTED (issue #8917); an empty
           // intersection is a block that matches nothing and contributes no value to the union below
-          final Object coerced = col.coerceValue(value);
+          final Object coerced;
+          if (col.isTemporal()) {
+            // A DATE/DATETIME tag stores an epoch count, which the literal is turned into exactly as INSERT turned the one that
+            // wrote the row (issue #9724). One the column cannot read is not pushed down: the filter above the fetch decides it
+            try {
+              coerced = col.epochOf(context.getDatabase(), value);
+            } catch (final IllegalArgumentException e) {
+              break;
+            }
+          } else
+            coerced = col.coerceValue(value);
           final Set<Object> existing = blockMap.get(nonTsIdx);
           if (existing == null) {
             final Set<Object> values = new HashSet<>();
@@ -3168,6 +3250,99 @@ public class SelectExecutionPlanner {
       filter = filter == null ? TagFilter.in(nonTsIdx, unionValues) : filter.andIn(nonTsIdx, unionValues);
     }
     return filter;
+  }
+
+  /**
+   * Issue #9612: the range predicates of the WHERE clause on numeric FIELD columns ({@code uu > 90}, {@code ui BETWEEN 1 AND
+   * 5}, {@code uu = 5}) as a {@link FieldFilter}, or {@code null} when there is none. Only for a WHERE of one AND block: the
+   * predicates of an OR are not a conjunction, and a union of ranges is not what the engine evaluates.
+   * <p>
+   * Every predicate {@link #fieldFilterOf} accepts becomes a condition and the rest are ignored here: a scan returns a
+   * superset, and whether the WHERE is reproduced EXACTLY - which an aggregation needs - is
+   * {@link #isTimeSeriesWhereFullyPushedDown(LocalTimeSeriesType, QueryPlanningInfo, CommandContext, boolean)}'s question.
+   */
+  private static FieldFilter extractFieldFilter(final List<AndBlock> flattenedWhere, final List<ColumnDefinition> columns,
+      final CommandContext context) {
+    if (flattenedWhere == null || flattenedWhere.size() != 1)
+      return null;
+    FieldFilter filter = null;
+    for (final BooleanExpression expr : flattenedWhere.getFirst().getSubBlocks()) {
+      final FieldFilter one = fieldFilterOf(expr, columns, context);
+      if (one != null)
+        filter = filter == null ? one : filter.and(one);
+    }
+    return filter;
+  }
+
+  /**
+   * The {@link FieldFilter} of one predicate, or {@code null} when it is not a range predicate the engine evaluates exactly
+   * as SQL does: {@code <field> op <operand>} or {@code <operand> op <field>} with {@code op} one of {@code > >= < <= =}, or
+   * {@code <field> BETWEEN <operand> AND <operand>}, where the field is a numeric FIELD column and each operand is known at
+   * planning time (a literal or a parameter) and of a type {@link FieldFilter#supports} accepts for the column. A null operand
+   * matches no row in SQL and is refused here, as is any operand that reads the record ({@code uu > us}).
+   */
+  private static FieldFilter fieldFilterOf(final BooleanExpression expr, final List<ColumnDefinition> columns, final CommandContext context) {
+    try {
+      if (expr instanceof BetweenCondition between) {
+        final int columnIndex = fieldColumnIndex(between.getFirst(), columns);
+        if (columnIndex < 0)
+          return null;
+        final Object low = plannedOperand(between.getSecond(), context);
+        final Object high = plannedOperand(between.getThird(), context);
+        final ColumnDefinition column = columns.get(columnIndex);
+        if (!FieldFilter.supports(column, low) || !FieldFilter.supports(column, high))
+          return null;
+        return FieldFilter.range(nonTsIndexOf(columns, columnIndex), column, (Number) low, true, (Number) high, true);
+      }
+      if (!(expr instanceof BinaryCondition binary))
+        return null;
+      final BinaryCompareOperator op = binary.operator;
+      if (!(op instanceof GtOperator || op instanceof GeOperator || op instanceof LtOperator || op instanceof LeOperator
+          || op instanceof EqualsCompareOperator))
+        return null;
+      int columnIndex = fieldColumnIndex(binary.left, columns);
+      final boolean fieldOnLeft = columnIndex >= 0;
+      if (!fieldOnLeft)
+        columnIndex = fieldColumnIndex(binary.right, columns);
+      if (columnIndex < 0)
+        return null;
+      final Object operand = plannedOperand(fieldOnLeft ? binary.right : binary.left, context);
+      final ColumnDefinition column = columns.get(columnIndex);
+      if (!FieldFilter.supports(column, operand))
+        return null;
+      final Number value = (Number) operand;
+      final int nonTsIdx = nonTsIndexOf(columns, columnIndex);
+      // "operand > field" is "field < operand": the comparison is read from the field's side
+      final boolean greater = fieldOnLeft ? op instanceof GtOperator || op instanceof GeOperator : op instanceof LtOperator || op instanceof LeOperator;
+      final boolean inclusive = op instanceof GeOperator || op instanceof LeOperator;
+      if (op instanceof EqualsCompareOperator)
+        return FieldFilter.range(nonTsIdx, column, value, true, value, true);
+      return greater ? FieldFilter.range(nonTsIdx, column, value, inclusive, null, false) : FieldFilter.range(nonTsIdx, column, null, false, value, inclusive);
+    } catch (final RuntimeException e) {
+      // an operand that cannot be evaluated at planning time is the generic filter's to evaluate; logged, so a planner bug
+      // that lands here is not mistaken for a predicate the push-down was never meant to take
+      LogManager.instance().log(SelectExecutionPlanner.class, Level.FINE, "TimeSeries field predicate '%s' left to the SQL filter: %s", null,
+          expr, e.toString());
+      return null;
+    }
+  }
+
+  /** The schema index of the FIELD column {@code expr} names as a bare identifier, or -1. */
+  private static int fieldColumnIndex(final Expression expr, final List<ColumnDefinition> columns) {
+    if (expr == null || !expr.isBaseIdentifier())
+      return -1;
+    final String name = expr.toString().trim();
+    for (int i = 0; i < columns.size(); i++)
+      if (columns.get(i).getRole() == ColumnDefinition.ColumnRole.FIELD && columns.get(i).getName().equals(name))
+        return i;
+    return -1;
+  }
+
+  /** The value of an operand that does not read the record, or {@code null} when it does (or evaluates to null). */
+  private static Object plannedOperand(final Expression expr, final CommandContext context) {
+    if (expr == null || !expr.isEarlyCalculated(context))
+      return null;
+    return expr.execute((Result) null, context);
   }
 
   private static int nonTsIndexOf(final List<ColumnDefinition> columns, final int columnIndex) {
@@ -3422,6 +3597,16 @@ public class SelectExecutionPlanner {
    */
   private boolean isTimeSeriesWhereFullyPushedDown(final LocalTimeSeriesType tsType, final QueryPlanningInfo info,
       final CommandContext context) {
+    return isTimeSeriesWhereFullyPushedDown(tsType, info, context, false);
+  }
+
+  /**
+   * Same as above, also counting as consumed the range predicates on numeric FIELD columns that {@link #extractFieldFilter}
+   * turns into a {@link FieldFilter} when {@code withFieldFilter} is set (issue #9612): only for a consumer that hands that
+   * filter to the engine.
+   */
+  private boolean isTimeSeriesWhereFullyPushedDown(final LocalTimeSeriesType tsType, final QueryPlanningInfo info,
+      final CommandContext context, final boolean withFieldFilter) {
     if (info.flattenedWhereClause == null || info.flattenedWhereClause.isEmpty())
       return true;
     // An OR pushes the union of the per-block tag values, a superset that relies on the residual
@@ -3435,6 +3620,9 @@ public class SelectExecutionPlanner {
 
     for (final BooleanExpression expr : info.flattenedWhereClause.getFirst().getSubBlocks()) {
       if (extractTimeRange(expr, timestampColumn, context) != null)
+        continue;
+
+      if (withFieldFilter && fieldFilterOf(expr, columns, context) != null)
         continue;
 
       if (!(expr instanceof BinaryCondition binary) || !(binary.operator instanceof EqualsCompareOperator))
@@ -3532,11 +3720,13 @@ public class SelectExecutionPlanner {
 
   /**
    * Attempts to push down aggregation into the TimeSeries engine.
-   * Eligible queries have: ts.timeBucket GROUP BY, simple aggregate functions (avg, max, min, sum, count),
-   * no DISTINCT, no HAVING, no UNWIND, no LET.
+   * Eligible queries have: simple aggregate functions (avg, max, min, sum, count), grouped by the ts.timeBucket, by TAG
+   * columns, or not grouped at all (issue #9612: one row over the whole range, answered from the block statistics of every
+   * block wholly inside it), no DISTINCT, no UNWIND, no LET, and a WHERE the engine reproduces exactly: a time range, tag
+   * equalities and range predicates on numeric FIELD columns (issue #9612).
    */
   private boolean tryTimeSeriesAggregationPushDown(final SelectExecutionPlan plan, final LocalTimeSeriesType tsType,
-      final long fromTs, final long toTs, final QueryPlanningInfo info, final CommandContext context) {
+      final long fromTs, final long toTs, final FieldFilter fieldFilter, final QueryPlanningInfo info, final CommandContext context) {
     // Must have aggregate projection (set by splitProjectionsForGroupBy)
     if (info.aggregateProjection == null)
       return false;
@@ -3549,8 +3739,10 @@ public class SelectExecutionPlanner {
     if (info.distinct)
       return false;
 
-    // Must have exactly one GROUP BY
-    if (info.groupBy == null || info.groupBy.getItems() == null || info.groupBy.getItems().size() != 1)
+    // Group by the time bucket, by TAG columns, or by both (issue #9489): at most one bucket and as many tags as the engine groups
+    // by. Or by nothing at all (issue #9612): the answer is then one row over the whole range
+    final boolean ungrouped = info.groupBy == null || info.groupBy.getItems() == null || info.groupBy.getItems().isEmpty();
+    if (!ungrouped && info.groupBy.getItems().size() > 1 + TimeSeriesEngine.MAX_GROUP_COLUMNS)
       return false;
 
     // No unsupported clauses
@@ -3569,11 +3761,25 @@ public class SelectExecutionPlanner {
     final List<MultiColumnAggregationRequest> requests = new ArrayList<>();
     final Map<String, String> requestAliasToOutputAlias = new HashMap<>();
     final List<ColumnDefinition> columns = tsType.getTsColumns();
+    // The projection in the order the query wrote it, and the bare TAG columns it names (output name -> column name)
+    final List<AggregateFromTimeSeriesStep.OutputColumn> outputs = new ArrayList<>();
+    final Map<String, String> projectedTags = new LinkedHashMap<>();
 
     for (final ProjectionItem item : originalProjection.getItems()) {
       final FunctionCall funcCall = extractFunctionCall(item.expression);
-      if (funcCall == null)
-        return false; // not a simple function call — bail out
+      if (funcCall == null) {
+        // The only other item a grouped answer carries is a bare TAG column, which must be one of the grouping keys (checked below)
+        if (item.expression == null || !item.expression.isBaseIdentifier())
+          return false; // not a simple function call or a tag — bail out
+        final String tagName = item.expression.toString().trim();
+        if (!isTimeSeriesTagColumn(columns, tagName))
+          return false;
+        final String outputName = item.getProjectionAliasAsString();
+        if (projectedTags.put(outputName, tagName) != null)
+          return false; // two columns under one name
+        outputs.add(new AggregateFromTimeSeriesStep.OutputColumn(outputName, AggregateFromTimeSeriesStep.OutputColumn.Kind.TAG, -1));
+        continue;
+      }
 
       final String funcName = funcCall.getName().getStringValue();
 
@@ -3582,6 +3788,7 @@ public class SelectExecutionPlanner {
         if (timeBucketAlias != null)
           return false; // duplicate timeBucket
         timeBucketAlias = item.getProjectionAliasAsString();
+        outputs.add(new AggregateFromTimeSeriesStep.OutputColumn(timeBucketAlias, AggregateFromTimeSeriesStep.OutputColumn.Kind.BUCKET, -1));
         // Extract interval from first parameter
         if (funcCall.getParams().size() < 2)
           return false;
@@ -3646,6 +3853,7 @@ public class SelectExecutionPlanner {
         }
 
         final String alias = item.getProjectionAliasAsString();
+        outputs.add(new AggregateFromTimeSeriesStep.OutputColumn(alias, AggregateFromTimeSeriesStep.OutputColumn.Kind.AGGREGATE, requests.size()));
         // The factory turns the schema index into the ROW index the request carries, and gives a COUNT no
         // column at all - the two rules every producer of a request has to get right (issue #8140).
         requests.add(aggType == AggregationType.COUNT
@@ -3655,19 +3863,79 @@ public class SelectExecutionPlanner {
       }
     }
 
-    // Must have found both timeBucket and at least one aggregate
-    if (timeBucketAlias == null || intervalStr == null || requests.isEmpty())
+    // Must have found at least one aggregate
+    if (requests.isEmpty())
       return false;
 
-    // Verify GROUP BY references the timeBucket alias
-    final String groupByStr = info.groupBy.getItems().get(0).toString().trim();
-    if (!groupByStr.equals(timeBucketAlias))
+    // Without a GROUP BY every projected column must be an aggregate: a bucket or a bare tag would be one arbitrary value
+    if (ungrouped && (timeBucketAlias != null || !projectedTags.isEmpty()))
       return false;
 
-    // Parse interval
+    // Every GROUP BY key is the time bucket (by its alias) or a TAG column (by its projected name, or its own name when it is not projected)
+    boolean groupsByBucket = false;
+    final List<String> groupTags = new ArrayList<>();
+    // The keys as the query wrote them: info.groupBy has already swapped a key the projection does not show for a generated alias
+    final GroupBy writtenGroupBy = ungrouped ? null : statement.getGroupBy() != null && statement.getGroupBy().getItems() != null
+        && statement.getGroupBy().getItems().size() == info.groupBy.getItems().size() ? statement.getGroupBy() : info.groupBy;
+    for (final Object groupByItem : ungrouped ? List.of() : writtenGroupBy.getItems()) {
+      final String key = groupByItem.toString().trim();
+      final String tagName;
+      if (timeBucketAlias != null && key.equals(timeBucketAlias)) {
+        if (groupsByBucket)
+          return false;
+        groupsByBucket = true;
+        continue;
+      } else if (projectedTags.containsKey(key))
+        tagName = projectedTags.get(key);
+      else if (isTimeSeriesTagColumn(columns, key))
+        tagName = key;
+      else
+        return false;
+      if (groupTags.contains(tagName))
+        return false;
+      groupTags.add(tagName);
+    }
+
+    // A time bucket in the projection must be grouped by (otherwise it is one arbitrary value per group), and so must every projected
+    // tag: the answer has one row per group
+    if ((timeBucketAlias != null) != groupsByBucket)
+      return false;
+    for (final String projectedTag : projectedTags.values())
+      if (!groupTags.contains(projectedTag))
+        return false;
+    // Without a bucket the query groups by tags alone, which is answered as one bucket per group
+    if (!ungrouped && timeBucketAlias == null && groupTags.isEmpty())
+      return false;
+    if (groupTags.size() > TimeSeriesEngine.MAX_GROUP_COLUMNS)
+      return false;
+    if (timeBucketAlias != null && intervalStr == null)
+      return false;
+
+    // The grouping columns as the engine numbers them: among the columns that are not the timestamp, which is what a tag filter uses too
+    final int[] groupColumns = new int[groupTags.size()];
+    for (int g = 0; g < groupColumns.length; g++) {
+      int nonTimestampIndex = 0;
+      int found = -1;
+      for (final ColumnDefinition column : columns) {
+        if (column.getRole() == ColumnDefinition.ColumnRole.TIMESTAMP)
+          continue;
+        if (column.getName().equals(groupTags.get(g))) {
+          // Only a dictionary-coded column can be grouped by id; any other tag stays on the generic path
+          if (column.getCompressionHint() == TimeSeriesCodec.DICTIONARY)
+            found = nonTimestampIndex;
+          break;
+        }
+        nonTimestampIndex++;
+      }
+      if (found < 0)
+        return false;
+      groupColumns[g] = found;
+    }
+
+    // Parse interval (a query grouping by tags alone has none: one bucket per group)
     final long bucketIntervalMs;
     try {
-      bucketIntervalMs = SQLFunctionTimeBucket.parseInterval(intervalStr);
+      bucketIntervalMs = intervalStr != null ? SQLFunctionTimeBucket.parseInterval(intervalStr) : 0L;
     } catch (final IllegalArgumentException e) {
       return false;
     }
@@ -3678,13 +3946,13 @@ public class SelectExecutionPlanner {
     // bucketIntervalMs as "one bucket over the whole range" - so the SAME query answered one row when it was
     // pushed down and threw when it was not. Bailing out here is what makes the two plans agree: the normal
     // aggregation path then evaluates ts.timeBucket() per row and raises that existing refusal (issue #7675).
-    if (bucketIntervalMs <= 0)
+    if (intervalStr != null && bucketIntervalMs <= 0)
       return false;
 
     // Same for the grid options: a malformed one is the generic path's to refuse, with the message the function gives
     final long bucketOffsetMs;
     try {
-      bucketOffsetMs = SQLFunctionTimeBucket.resolveOffset(bucketOptions, intervalStr, bucketIntervalMs);
+      bucketOffsetMs = intervalStr != null ? SQLFunctionTimeBucket.resolveOffset(bucketOptions, intervalStr, bucketIntervalMs) : 0L;
     } catch (final IllegalArgumentException e) {
       return false;
     }
@@ -3692,17 +3960,32 @@ public class SelectExecutionPlanner {
     // Extract tag filter from WHERE clause for push-down
     final TagFilter tagFilter = extractTagFilter(info.flattenedWhereClause, columns, tsType.getTimestampColumn(), context);
 
-    // Verify all WHERE conditions are consumed by push-down (time-range or tag equality).
-    // If any field-value predicate remains (e.g., WHERE value > 100), bail out to avoid
-    // silently dropping it — the standard filter step will handle it instead.
-    final boolean whereFullyConsumed = isTimeSeriesWhereFullyPushedDown(tsType, info, context)
+    // Verify all WHERE conditions are consumed by push-down (time range, tag equality, or a range predicate on a numeric
+    // field the field filter carries, issue #9612). If any other predicate remains (e.g., WHERE value > other), bail out to
+    // avoid silently dropping it — the standard filter step will handle it instead.
+    final boolean whereFullyConsumed = isTimeSeriesWhereFullyPushedDown(tsType, info, context, true)
         || isOrOfEqualitiesOnOneTag(tsType, info, context);
     if (info.flattenedWhereClause != null && !whereFullyConsumed)
       return false;
+    // isOrOfEqualitiesOnOneTag consumes no field predicate, and extractFieldFilter builds none for an OR
+    final FieldFilter pushedFieldFilter = info.flattenedWhereClause != null && info.flattenedWhereClause.size() == 1 ? fieldFilter : null;
 
     // Chain the push-down step
-    plan.chain(new AggregateFromTimeSeriesStep(tsType, fromTs, toTs, requests, bucketIntervalMs, bucketOffsetMs,
-        timeBucketAlias, requestAliasToOutputAlias, tagFilter, context));
+    if (ungrouped)
+      plan.chain(new AggregateFromTimeSeriesStep(tsType, fromTs, toTs, requests, tagFilter, pushedFieldFilter, outputs, context));
+    else if (groupTags.isEmpty())
+      plan.chain(new AggregateFromTimeSeriesStep(tsType, fromTs, toTs, requests, bucketIntervalMs, bucketOffsetMs,
+          timeBucketAlias, requestAliasToOutputAlias, tagFilter, pushedFieldFilter, null, null, null, context));
+    else {
+      // A projected tag points at its position among the grouping keys
+      final List<AggregateFromTimeSeriesStep.OutputColumn> groupedOutputs = new ArrayList<>(outputs.size());
+      for (final AggregateFromTimeSeriesStep.OutputColumn output : outputs)
+        groupedOutputs.add(output.kind() == AggregateFromTimeSeriesStep.OutputColumn.Kind.TAG ?
+            new AggregateFromTimeSeriesStep.OutputColumn(output.name(), output.kind(), groupTags.indexOf(projectedTags.get(output.name()))) :
+            output);
+      plan.chain(new AggregateFromTimeSeriesStep(tsType, fromTs, toTs, requests, bucketIntervalMs, bucketOffsetMs, timeBucketAlias,
+          requestAliasToOutputAlias, tagFilter, pushedFieldFilter, groupColumns, groupTags.toArray(new String[0]), groupedOutputs, context));
+    }
 
     // Null out the aggregate projections so handleProjections doesn't add duplicate steps
     info.preAggregateProjection = null;
@@ -3758,6 +4041,8 @@ public class SelectExecutionPlanner {
     final List<InternalExecutionPlan> resultSubPlans = new ArrayList<>();
 
     boolean indexedFunctionsFound = false;
+    // Decided before the branches are planned: it lets each of them take the rows the LIMIT needs (issue #10022)
+    final boolean mergeByScore = branchesMergeByScore(typez, info, context);
 
     for (AndBlock block : info.flattenedWhereClause) {
       List<BinaryCondition> indexedFunctionConditions = block.getIndexedFunctionConditions(typez, context);
@@ -3840,11 +4125,38 @@ public class SelectExecutionPlanner {
           }
         }
 
-        FetchFromIndexedFunctionStep step = new FetchFromIndexedFunctionStep(blockCandidateFunction, info.target, context);
         if (!blockCandidateFunction.executeIndexedFunctionAfterIndexSearch(info.target, context)) {
           block = block.copy();
           block.getSubBlocks().remove(blockCandidateFunction);
         }
+        // The @rid conjuncts are decided by the function on its candidates' RIDs, before a record is loaded, instead of by
+        // the filter after the fetch (issue #9909)
+        final List<BooleanExpression> ridConditions = pushableRidConditions(block, info);
+        if (!ridConditions.isEmpty()) {
+          final AndBlock residual = new AndBlock();
+          for (final BooleanExpression condition : block.getSubBlocks())
+            if (!containsInstance(ridConditions, condition))
+              residual.getSubBlocks().add(condition);
+          block = residual;
+        }
+        final IndexedFunctionPushdown.Order order = indexedFunctionRidOrder(blockCandidateFunction, info, context);
+        // An OR splits the WHERE into branches whose rows are concatenated and deduplicated, so no branch alone knows how many
+        // of its rows the LIMIT will take (issue #9895) - unless the branches are merged by score (issue #10022): a record
+        // among the best n of the merge is among the best n of the branch that gives it its score, since every record ranked
+        // above it there is ranked above it in the merge too
+        final int functionLimit =
+            (info.flattenedWhereClause.size() == 1 || mergeByScore) && coversWholeHierarchy(filterClusters, typez, info,
+                ridConditions, context) ? indexedFunctionRowLimit(blockCandidateFunction, block, info, order, context) : -1;
+        final FetchFromIndexedFunctionStep step = new FetchFromIndexedFunctionStep(blockCandidateFunction, info.target,
+            functionLimit, ridConditions, order, context);
+        if (order != IndexedFunctionPushdown.Order.FUNCTION)
+          // The function answers in the RID order the ORDER BY asks for, and nothing after the fetch reorders the rows
+          info.orderApplied = true;
+        else if (functionLimit > -1 && info.orderBy != null)
+          // A limit is handed over with an ORDER BY only when it is exactly $score DESC (isOrderByScoreDescending), the order
+          // the fetch produces its rows in: a sort would only drain the fetch past the rows the LIMIT takes, into the matches
+          // the limit spared
+          info.orderApplied = true;
         if (info.flattenedWhereClause.size() == 1) {
           plan.chain(step);
           plan.chain(new FilterByClustersStep(filterClusters, context));
@@ -3874,9 +4186,17 @@ public class SelectExecutionPlanner {
     }
 
     if (resultSubPlans.size() > 1) { // if resultSubPlans.size() == 1 the step was already chained (see above)
-      plan.chain(new ParallelExecStep(resultSubPlans, context));
-      plan.chain(new FilterByClustersStep(filterClusters, context));
-      plan.chain(new DistinctExecutionStep(context));
+      if (mergeByScore) {
+        // Best first across the branches, each record once, lazily: the ORDER BY $score DESC, if any, is already applied
+        plan.chain(new MergeByScoreStep(resultSubPlans, context));
+        plan.chain(new FilterByClustersStep(filterClusters, context));
+        if (info.orderBy != null)
+          info.orderApplied = true;
+      } else {
+        plan.chain(new ParallelExecStep(resultSubPlans, context));
+        plan.chain(new FilterByClustersStep(filterClusters, context));
+        plan.chain(new DistinctExecutionStep(context));
+      }
       indexedFunctionsFound = true;
     }
 
@@ -3888,6 +4208,245 @@ public class SelectExecutionPlanner {
     } else {
       return false;
     }
+  }
+
+  /**
+   * Whether the branches of the WHERE's OR can be merged by score (issue #10022) - {@link MergeByScoreStep} - instead of run
+   * one after the other, deduplicated and, for an {@code ORDER BY $score DESC}, sorted, which loads every match of every
+   * branch before the first row. That takes:
+   * <ul>
+   *   <li>every branch fetched by a single indexed function that answers best first and sets {@code $score} to the score it
+   *       ranked each record by ({@link BinaryCondition#indexedFunctionAnswersByScore}), evaluated again by the branch's
+   *       filter, which is what sets it;</li>
+   *   <li>nothing else in a branch's filter that could set {@code $score} to another value. Every function that sets it
+   *       reads the database and so is not deterministic: a filter made of cacheable conditions only calls none of them. A
+   *       per-record LET is evaluated in the branch as well, so a branch that reads one is not merged either;</li>
+   *   <li>an order the merge produces: {@code ORDER BY $score DESC}, or none - then the merged rows are best first, as those
+   *       of a single such condition are - and nothing that changes the rows before it: no UNWIND, expand, DISTINCT,
+   *       GROUP BY or aggregate, whose answer the order of the branches cannot change.</li>
+   * </ul>
+   */
+  private boolean branchesMergeByScore(final DocumentType type, final QueryPlanningInfo info, final CommandContext context) {
+    if (info.flattenedWhereClause.size() < 2 || info.deferredLetWhereClause != null)
+      return false;
+    if (info.expand || info.unwind != null || info.distinct || info.groupBy != null || info.aggregateProjection != null)
+      return false;
+    if (info.orderBy != null && !isOrderByScoreDescending(info))
+      return false;
+    for (final AndBlock block : info.flattenedWhereClause) {
+      final List<BinaryCondition> functions = filterIndexedFunctionsWithoutIndex(block.getIndexedFunctionConditions(type, context),
+          info.target, context);
+      if (functions == null || functions.size() != 1)
+        return false;
+      final BinaryCondition function = functions.getFirst();
+      if (!function.indexedFunctionAnswersByScore(context) || !function.executeIndexedFunctionAfterIndexSearch(info.target, context))
+        return false;
+      // By identity, as the residual of indexedFunctionRowLimit: the function's condition is the very instance the block holds
+      for (final BooleanExpression condition : block.getSubBlocks())
+        if (condition != function && !condition.isCacheable())
+          return false;
+      if (refersToLet(block.getSubBlocks(), info.perRecordLetClause))
+        return false;
+    }
+    return true;
+  }
+
+  /**
+   * How many rows of an indexed function's answer the statement can consume, or -1 when that is not known to be a prefix of
+   * the function's own best-first order (issue #9895). {@code SEARCH_INDEX(...) ... LIMIT n} returns n rows, but its
+   * function used to score, sort and load every match first; with a limit it can keep only the best n.
+   * <p>
+   * That is only right when the rows the LIMIT takes are the first ones the function produces, so every condition below
+   * excludes something that can drop, add or reorder a row between the fetch and the LIMIT:
+   * <ul>
+   *   <li>a residual filter other than the function's own condition, which the plan evaluates again on each row and which
+   *       holds for every row the function returns - a filter could reject a row the limit counted;</li>
+   *   <li>UNWIND and expand, which turn one row into any number; DISTINCT, GROUP BY and aggregates, which fold rows;</li>
+   *   <li>an ORDER BY other than {@code $score DESC}, the order the function produces its rows in, or than the
+   *       {@code @rid} order it was asked to produce them in (issue #9909);</li>
+   *   <li>a SKIP or LIMIT that cannot be evaluated at planning time. The plan is not cached (the fetch step is not
+   *       cacheable), so a parameter is resolved for this execution only.</li>
+   * </ul>
+   * A bucket filter narrower than the target type (a {@code FROM BUCKET} target, partition pruning) is excluded by the
+   * caller. The type filter that follows the fetch is the function's to respect: it is told the target and keeps the limit
+   * only when every record it can return passes.
+   */
+  private static int indexedFunctionRowLimit(final BinaryCondition function, final AndBlock residual, final QueryPlanningInfo info,
+      final IndexedFunctionPushdown.Order order, final CommandContext context) {
+    if (info.limit == null || info.deferredLetWhereClause != null)
+      return -1;
+    if (info.expand || info.unwind != null || info.distinct || info.groupBy != null || info.aggregateProjection != null)
+      return -1;
+    // By identity: the residual is the planner's own block, or a copy of it made only to remove the function (and then
+    // empty), so the function's condition is the very instance the block holds
+    for (final BooleanExpression condition : residual.getSubBlocks())
+      if (condition != function)
+        return -1;
+    if (info.orderBy != null && order == IndexedFunctionPushdown.Order.FUNCTION && !isOrderByScoreDescending(info))
+      return -1;
+
+    try {
+      final int limit = info.limit.getValue(context);
+      if (limit < 0)
+        return -1;
+      final int skip = info.skip == null ? 0 : info.skip.getValue(context);
+      if (skip < 0)
+        return -1;
+      // SKIP is served out of the same rows, so the function has to produce both
+      return Math.addExact(skip, limit);
+    } catch (final RuntimeException e) {
+      // SKIP/LIMIT depend on runtime state, or overflow: the function produces every row, as without a limit
+      return -1;
+    }
+  }
+
+  /**
+   * Whether the bucket filter chained after an indexed fetch keeps every record of {@code type} and its subtypes that the
+   * fetch can return: a {@code FROM BUCKET} target or a partition-pruned type narrows it, and then it can drop rows a limit
+   * counted. A bucket the {@code @rid} conditions decided by the fetch itself reject as a whole does not count: no record of
+   * it comes out (issue #9909). The existing pruning by {@code @rid} range is what leaves those buckets out of the filter.
+   * They are asked of the very conditions the fetch decides, resolved against this execution, which is the only one the
+   * plan serves (the fetch step is not cacheable).
+   */
+  private boolean coversWholeHierarchy(final Set<String> filterClusters, final DocumentType type, final QueryPlanningInfo info,
+      final List<BooleanExpression> ridConditions, final CommandContext context) {
+    if (filterClusters == null)
+      return true;
+    final Schema schema = context.getDatabase().getSchema();
+    final Set<Integer> filtered = new HashSet<>(filterClusters.size());
+    for (final String bucketName : filterClusters)
+      if (bucketName != null && schema.existsBucket(bucketName))
+        filtered.add(schema.getBucketByName(bucketName).getFileId());
+    RIDFilter ridFilter = null;
+    for (final Integer bucketId : type.getBucketIds(true)) {
+      if (filtered.contains(bucketId))
+        continue;
+      if (ridFilter == null)
+        ridFilter = planTimeRidFilter(ridConditions, context);
+      if (ridFilter != null && !ridFilter.acceptsBucket(bucketId))
+        continue;
+      return false;
+    }
+    return true;
+  }
+
+  /** The pushed {@code @rid} conditions resolved for this execution, or null when there are none or they cannot be yet. */
+  private static RIDFilter planTimeRidFilter(final List<BooleanExpression> ridConditions, final CommandContext context) {
+    if (ridConditions.isEmpty())
+      return null;
+    try {
+      return RIDFilter.resolve(ridConditions, context);
+    } catch (final RuntimeException e) {
+      // a variable a global LET computes after planning: the bucket filter keeps its say over the limit
+      LogManager.instance().log(SelectExecutionPlanner.class, Level.FINE, "@rid conditions not resolvable at planning time", e);
+      return null;
+    }
+  }
+
+  /**
+   * The conjuncts of {@code block} an indexed function can decide on its candidates' RIDs before it loads their records
+   * (issue #9909): an {@code @rid} comparison or {@code [NOT] IN} (see {@link RIDFilter#isPushable}) whose right-hand side
+   * is known before the fetch - a literal, a bound parameter, or a variable a global LET of the statement computes. They are
+   * resolved at each execution, so the plan does not depend on this one's values.
+   */
+  private static List<BooleanExpression> pushableRidConditions(final AndBlock block, final QueryPlanningInfo info) {
+    List<BooleanExpression> pushable = null;
+    for (final BooleanExpression condition : block.getSubBlocks())
+      if (RIDFilter.isPushable(condition) && isKnownBeforeFetch(condition, info)) {
+        if (pushable == null)
+          pushable = new ArrayList<>(2);
+        pushable.add(condition);
+      }
+    return pushable == null ? List.of() : pushable;
+  }
+
+  private static boolean isKnownBeforeFetch(final BooleanExpression condition, final QueryPlanningInfo info) {
+    if (condition instanceof final BinaryCondition binary)
+      return binary.getRight().isLiteral(true) || isVariableKnownBeforeFetch(binary.getRight().getMathExpression(), info);
+    final InCondition in = (InCondition) condition;
+    if (in.getRightParam() != null)
+      return true;
+    return in.getRightMathExpression().isLiteral(true) || isVariableKnownBeforeFetch(in.getRightMathExpression(), info);
+  }
+
+  /**
+   * Whether {@code expression} is a bare variable that holds the same value for every row of the fetch: one a global LET of
+   * the statement computes, which {@link #handleGlobalLet} chains ahead of the fetch. An allow-list rather than a list of
+   * the variables that change: any other variable - a per-record LET, one the execution assigns per row or per traversal
+   * step ($current, $score, $matched, $depth...), one set by the caller - keeps its condition in the filter after the
+   * fetch, where it is right whatever it holds, and only the pushdown is lost.
+   */
+  private static boolean isVariableKnownBeforeFetch(final MathExpression expression, final QueryPlanningInfo info) {
+    final String variable = variableName(expression);
+    return variable != null && isGlobalLetVariable(variable, info);
+  }
+
+  /**
+   * By identity: the pushed conditions were taken from this very block, and two conjuncts can be equal without being the
+   * same one (a condition written twice is pushed twice and removed twice, which is still the same filter).
+   */
+  private static boolean containsInstance(final List<BooleanExpression> conditions, final BooleanExpression condition) {
+    for (final BooleanExpression c : conditions)
+      if (c == condition)
+        return true;
+    return false;
+  }
+
+  /**
+   * The order the indexed function is asked to produce its rows in (issue #9909): RID order when the statement orders by
+   * {@code @rid} alone, the WHERE has a single block (the branches of an OR are merged after the fetch) and nothing between
+   * the fetch and the ORDER BY changes the rows, and the function supports it. Then no sort runs, and a LIMIT stops the
+   * loading after the rows it takes - what keyset pagination ({@code @rid > :cursor ... ORDER BY @rid LIMIT n}) needs.
+   */
+  private IndexedFunctionPushdown.Order indexedFunctionRidOrder(final BinaryCondition function, final QueryPlanningInfo info,
+      final CommandContext context) {
+    if (info.orderBy == null || info.flattenedWhereClause.size() != 1 || info.deferredLetWhereClause != null)
+      return IndexedFunctionPushdown.Order.FUNCTION;
+    if (info.expand || info.unwind != null || info.groupBy != null || info.aggregateProjection != null)
+      return IndexedFunctionPushdown.Order.FUNCTION;
+    final boolean ascending = isOrderByRidAsc(info);
+    if (!ascending && !isOrderByRidDesc(info))
+      return IndexedFunctionPushdown.Order.FUNCTION;
+    if (!function.indexedFunctionSupportsRIDOrder(context))
+      return IndexedFunctionPushdown.Order.FUNCTION;
+    return ascending ? IndexedFunctionPushdown.Order.RID_ASC : IndexedFunctionPushdown.Order.RID_DESC;
+  }
+
+  /**
+   * Whether the ORDER BY is exactly {@code $score DESC}, the order a scoring indexed function produces its rows in, and the
+   * projection does not give {@code $score} another meaning. A name that is a projection alias is resolved through that
+   * projection item, as {@link #resolveOrderByProperty} resolves it: {@code SELECT $score AS s ... ORDER BY s DESC} sorts by
+   * the score, and so does {@code SELECT $score AS s ... ORDER BY $score DESC}, which the planner rewrites to the alias it
+   * projects the key under ({@link #addOrderByProjections}) - while {@code SELECT n AS $score ... ORDER BY $score} does not
+   * (issue #10022).
+   */
+  private static boolean isOrderByScoreDescending(final QueryPlanningInfo info) {
+    if (info.orderBy.getItems() == null || info.orderBy.getItems().size() != 1)
+      return false;
+    final OrderByItem item = info.orderBy.getItems().getFirst();
+    if (item.modifier != null || item.recordAttr != null || item.getDirectionParameter() != null
+        || !OrderByItem.DESC.equalsIgnoreCase(item.getType()))
+      return false;
+    String sortedBy = item.expression != null ? item.expression.toString() : item.getAlias();
+    if (sortedBy == null)
+      return false;
+    if (info.projection != null && info.projection.getItems() != null) {
+      ProjectionItem match = null;
+      for (final ProjectionItem projected : info.projection.getItems()) {
+        if (projected.isAll() || !sortedBy.equals(projected.getProjectionAliasAsString()))
+          continue;
+        if (match != null)
+          // two items under one name: which one the sort sees is not for the plan to guess
+          return false;
+        match = projected;
+      }
+      if (match != null) {
+        if (match.getExpression() == null)
+          return false;
+        sortedBy = match.getExpression().toString();
+      }
+    }
+    return SCORE_VARIABLE.equals(sortedBy);
   }
 
   /**
@@ -4767,6 +5326,17 @@ public class SelectExecutionPlanner {
     LogManager.instance().log(this, Level.FINE, "Index '%s' skipped while planning: %s", index.getName(), e.getMessage());
   }
 
+  /** Whether a scan filtered by the condition answers exactly what {@code index} does, see {@link #withoutKeyIndexes()}. */
+  private static boolean isKeyIndex(final TypeIndex index) {
+    try {
+      final Schema.INDEX_TYPE type = index.getType();
+      return type != null && type.isExactKeyLookup();
+    } catch (final IndexException e) {
+      // The index went away meanwhile: answering true removes it from the candidates, where it does not belong anyway
+      return true;
+    }
+  }
+
   private static boolean isPlannable(final Index index) {
     try {
       if (index instanceof TypeIndex typeIndex)
@@ -4783,8 +5353,11 @@ public class SelectExecutionPlanner {
    * effort: the callers read an index's metadata under a try/catch of IndexException, and any new planner path that reads
    * index metadata must do the same.
    */
-  private static List<TypeIndex> plannableIndexes(final Collection<TypeIndex> indexes) {
-    return TypeIndex.filterReadyForQueries(indexes);
+  private List<TypeIndex> plannableIndexes(final Collection<TypeIndex> indexes) {
+    final List<TypeIndex> ready = TypeIndex.filterReadyForQueries(indexes);
+    if (withoutKeyIndexes)
+      ready.removeIf(SelectExecutionPlanner::isKeyIndex);
+    return ready;
   }
 
   /**
@@ -5203,6 +5776,22 @@ public class SelectExecutionPlanner {
     return false;
   }
 
+  /**
+   * True when the expression is a bare input parameter ({@code ?} or {@code :name}), possibly wrapped in parentheses,
+   * with no method or selector applied to it.
+   */
+  private static boolean isBareInputParameter(final Expression expression) {
+    MathExpression math = expression.getMathExpression();
+    while (true) {
+      if (math instanceof ParenthesisExpression parenthesis && parenthesis.expression != null)
+        math = parenthesis.expression.getMathExpression();
+      else if (math instanceof BaseExpression base && base.modifier == null && base.expression != null)
+        math = base.expression.getMathExpression();
+      else
+        return math instanceof BaseExpression base && base.modifier == null && base.inputParam != null;
+    }
+  }
+
   private static Object literalValue(final Expression expression, final CommandContext context) {
     return expression != null && expression.isLiteral() ? expression.execute((Result) null, context) : null;
   }
@@ -5241,14 +5830,18 @@ public class SelectExecutionPlanner {
   }
 
   /**
-   * True when a condition answered through {@code field.toLowerCase()} must still be checked on what the index returns:
-   * an equality or IN whose operand is not a lower-case literal (a parameter cannot be judged now). A range or BETWEEN is
-   * index-aware only with lower-case literal bounds, and an operand that is its own lower-case form is probed as written,
-   * so neither needs the check (issue #8560).
+   * True when a condition answered by a case-insensitive index must still be checked on what the index returns: the plain
+   * property's equality or IN (issue #9403), and through {@code field.toLowerCase()} an equality or IN whose operand is
+   * not a lower-case literal (a parameter cannot be judged now). A range or BETWEEN is index-aware only with lower-case
+   * literal bounds, and an operand that is its own lower-case form is probed as written, so neither needs the check
+   * (issue #8560).
    */
   private static boolean needsLowerCaseResidual(final BooleanExpression expression, final IndexSearchInfo info) {
+    // The plain property compared to a value is case sensitive, but the folded probe also returns the rows that differ
+    // from it only in case: the condition stays as a filter, so the answer is the one a scan gives (issue #9403)
     if (!isLowerCaseRewrite(expression, info))
-      return false;
+      return (expression instanceof BinaryCondition condition && condition.getOperator() instanceof EqualsCompareOperator)
+          || expression instanceof InCondition;
     final CommandContext context = info.getContext();
     if (expression instanceof BinaryCondition condition)
       return condition.getOperator() instanceof EqualsCompareOperator && !BinaryCondition.isLowerCaseLiteral(condition.getRight(), context);
@@ -5391,11 +5984,22 @@ public class SelectExecutionPlanner {
    * folded column: it is refused even when the ORDER BY only reads a column that is not folded.
    */
   public static boolean holdsFoldedKeys(final Index index) {
-    return index instanceof IndexInternal internal && internal.getMetadata() != null && internal.getMetadata().hasAnyCaseInsensitive();
+    if (!(index instanceof IndexInternal internal))
+      return false;
+    // Read once: a TypeIndex with no metadata of its own asks its first sub-index, which a concurrent DROP INDEX can take
+    // away between two calls, so a null check and a second read can disagree (issue #9332)
+    final IndexMetadata metadata = internal.getMetadata();
+    return metadata != null && metadata.hasAnyCaseInsensitive();
   }
 
-  private static boolean isIndexCaseInsensitive(final Index index, final int propertyIndex) {
-    final IndexMetadata metadata = ((IndexInternal) index).getMetadata();
+  /**
+   * Whether the key at {@code propertyIndex} of {@code index} is stored case-folded (COLLATE ci). False for an index whose
+   * metadata is gone, see {@link #holdsFoldedKeys(Index)}.
+   */
+  public static boolean isIndexCaseInsensitive(final Index index, final int propertyIndex) {
+    if (!(index instanceof IndexInternal internal))
+      return false;
+    final IndexMetadata metadata = internal.getMetadata();
     return metadata != null && metadata.isCaseInsensitive(propertyIndex);
   }
 

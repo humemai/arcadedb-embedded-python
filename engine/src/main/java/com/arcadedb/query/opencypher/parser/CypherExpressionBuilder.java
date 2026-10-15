@@ -26,16 +26,14 @@ import com.arcadedb.log.LogManager;
 import com.arcadedb.query.opencypher.ast.*;
 import com.arcadedb.query.opencypher.grammar.Cypher25Lexer;
 import com.arcadedb.query.opencypher.grammar.Cypher25Parser;
-import com.arcadedb.query.opencypher.temporal.CypherDate;
-import com.arcadedb.query.opencypher.temporal.CypherLocalDateTime;
 import com.arcadedb.query.opencypher.temporal.CypherTemporalValue;
 import com.arcadedb.query.opencypher.temporal.TemporalUtil;
+import com.arcadedb.query.opencypher.traversal.TraversalPath;
 import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.query.sql.executor.Result;
 
-import java.time.LocalDate;
-import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.LinkedHashMap;
 
 import org.antlr.v4.runtime.CharStreams;
@@ -425,6 +423,8 @@ class CypherExpressionBuilder {
         return parseLabelComparisonExpression(expr7);
       if (comp instanceof Cypher25Parser.TypeComparisonContext)
         return parseIsTypedExpression((Cypher25Parser.TypeComparisonContext) comp);
+      if (comp instanceof Cypher25Parser.NormalFormComparisonContext normalForm)
+        return parseIsNormalizedExpression(normalForm);
       // No comparison, delegate to expression6
       return parseExpressionFromText(expr7.expression6(), noBlocksBelow);
     }
@@ -1611,7 +1611,7 @@ class CypherExpressionBuilder {
   // Package-private (not private) so CypherExpressionWalker, in this same package, can descend into
   // baseExpression - the fix for issue #6567 depends on the walk reaching it: without this arm the
   // walker had already treated startNode(r).name as a leaf and never seen the "r" inside.
-  static class ChainedPropertyAccessExpression implements Expression {
+  static class ChainedPropertyAccessExpression implements PropertyReadExpression {
     private final Expression baseExpression;
     private final String propertyName;
 
@@ -1622,6 +1622,13 @@ class CypherExpressionBuilder {
 
     public Expression getBaseExpression() {
       return baseExpression;
+    }
+
+    /** {@code a.link.v} and {@code properties(n).v} read the property {@code v} of the record the base evaluates to. */
+    @Override
+    public PropertyRead propertyRead(final Result row, final CommandContext context) {
+      final Document record = PropertyReadExpression.recordOf(baseExpression, row, context);
+      return record != null ? new PropertyRead(record, propertyName) : null;
     }
 
     @Override
@@ -1643,9 +1650,9 @@ class CypherExpressionBuilder {
         return PropertyAccessExpression.readLinkedProperty(rid, propertyName);
 
       // Handle Document types
-      if (baseValue instanceof Document) {
-        return ((Document) baseValue).get(propertyName);
-      }
+      // Read like the variable-bound access path, so a temporal is the Cypher type its schema declares (issue #9647)
+      if (baseValue instanceof Document document)
+        return TemporalUtil.convertFromStorage(document, propertyName);
 
       // Handle Map types
       if (baseValue instanceof Map) {
@@ -1657,15 +1664,20 @@ class CypherExpressionBuilder {
         return ((Result) baseValue).getProperty(propertyName);
       }
 
+      // path.nodes / path.relationships / path.length on a procedure's path, which used to be a map (issue #9913)
+      if (baseValue instanceof TraversalPath path)
+        return path.getMember(propertyName);
+
       // Handle temporal types (e.g., date().year, datetime().hour)
       if (baseValue instanceof CypherTemporalValue) {
         return ((CypherTemporalValue) baseValue).getTemporalProperty(propertyName);
       }
-      if (baseValue instanceof LocalDate) {
-        return new CypherDate((LocalDate) baseValue).getTemporalProperty(propertyName);
-      }
-      if (baseValue instanceof LocalDateTime) {
-        return new CypherLocalDateTime((LocalDateTime) baseValue).getTemporalProperty(propertyName);
+      // A native temporal (a parameter, a value read off a map): every class fromCoreJavaType wraps, java.util.Calendar
+      // included (issue #9647), where only LocalDate and LocalDateTime used to be accepted
+      if (TemporalUtil.isNativeTemporal(baseValue)) {
+        final Object coerced = TemporalUtil.fromCoreJavaType(baseValue);
+        if (coerced instanceof CypherTemporalValue temporal)
+          return temporal.getTemporalProperty(propertyName);
       }
 
       // Type validation: property access only works on property-bearing types. Primitive types
@@ -1785,6 +1797,7 @@ class CypherExpressionBuilder {
     else
       subquery = originalText.substring(7, originalText.length() - 1).trim(); // fallback
 
+    CypherASTBuilder.checkMatchMode(ctx.matchMode());
     final CypherStatement parsedBody = parseSubqueryBody(ctx.queryWithLocalDefinitions(), ctx.patternList(),
         ctx.whereClause());
 
@@ -1870,6 +1883,11 @@ class CypherExpressionBuilder {
       builder.addMatch(CypherASTBuilder.newMatchClause(astBuilder.visitPatternList(patternCtx), false,
           whereCtx != null ? astBuilder.visitWhereClause(whereCtx) : null));
       return builder.build();
+    } catch (final FeatureNotImplementedException e) {
+      // A construct the engine refuses by name is refused in a body too. Falling back to the text deferred it to the first
+      // row, where the body is rewritten before it is parsed again, and the refusal came out as an unrelated syntax error
+      // (issue #9940)
+      throw e;
     } catch (final CommandParsingException e) {
       // The builder refusing a body it does not support is the case this fallback is for, and it is not news.
       LogManager.instance().log(CypherExpressionBuilder.class, Level.FINE,
@@ -1936,6 +1954,7 @@ class CypherExpressionBuilder {
     else
       subquery = originalText.substring(6, originalText.length() - 1).trim(); // fallback "COUNT{" prefix
 
+    CypherASTBuilder.checkMatchMode(ctx.matchMode());
     final CypherStatement parsedBody = parseSubqueryBody(ctx.queryWithLocalDefinitions(), ctx.patternList(),
         ctx.whereClause());
 
@@ -2135,6 +2154,16 @@ class CypherExpressionBuilder {
   }
 
   /**
+   * Parse {@code IS [NOT] [form] NORMALIZED} and wrap it for use in Expression contexts (issue #9940). The predicate itself is
+   * built by {@link CypherASTBuilder#buildIsNormalizedExpression}, shared with the boolean path.
+   */
+  Expression parseIsNormalizedExpression(final Cypher25Parser.NormalFormComparisonContext ctx) {
+    final Cypher25Parser.Expression7Context expr7 = (Cypher25Parser.Expression7Context) ctx.getParent();
+    return new BooleanWrapperExpression(
+        CypherASTBuilder.buildIsNormalizedExpression(parseExpressionFromText(expr7.expression6()), ctx));
+  }
+
+  /**
    * Parse string/list comparison from Expression7Context that has a comparisonExpression6.
    * Handles STARTS WITH, ENDS WITH, CONTAINS, =~ (regex), and IN operators
    * when they appear in expression positions (e.g., RETURN expressions).
@@ -2189,6 +2218,7 @@ class CypherExpressionBuilder {
     final Expression leftExpr = parseExpressionFromText(ctx.expression6());
     final Cypher25Parser.LabelComparisonContext labelCtx = (Cypher25Parser.LabelComparisonContext) ctx.comparisonExpression6();
     final Cypher25Parser.LabelExpressionContext labelExprCtx = labelCtx.labelExpression();
+    CypherASTBuilder.rejectDirectedPredicate(labelExprCtx);
 
     // A negation, the wildcard or a mix of '&' and '|' is evaluated as the tree it is (issue #8992).
     final LabelPredicate predicate = ParserUtils.buildLabelPredicate(labelExprCtx);
@@ -2628,8 +2658,7 @@ class CypherExpressionBuilder {
     BooleanExpression labelCheck = null;
     final LabelPredicate labelPredicate = ParserUtils.buildRelationshipTypePredicate(ctx.labelExpression());
     if (labelPredicate != null) {
-      if (ctx.pathLength() != null)
-        ParserUtils.rejectOnVariableLengthRelationship(ctx.labelExpression());
+      // Evaluated per hop on a variable-length relationship too, through the inline WHERE it is ANDed into (#9117).
       final List<String> required = labelPredicate.requiredLabels();
       types = required.isEmpty() ? null : required;
       if (variable == null)
@@ -2766,7 +2795,7 @@ class CypherExpressionBuilder {
   /**
    * Try to parse text as a literal value (number, string, boolean, null).
    */
-  Object tryParseLiteral(final String text) {
+  static Object tryParseLiteral(final String text) {
     // Null
     if ("null".equalsIgnoreCase(text)) {
       return null; // Return null as a marker that we found a literal

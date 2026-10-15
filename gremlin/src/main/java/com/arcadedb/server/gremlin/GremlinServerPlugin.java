@@ -19,6 +19,7 @@
 package com.arcadedb.server.gremlin;
 
 import com.arcadedb.ContextConfiguration;
+import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.gremlin.ArcadeGraph;
 import com.arcadedb.gremlin.io.ArcadeIoRegistry;
 import com.arcadedb.log.LogManager;
@@ -27,10 +28,14 @@ import com.arcadedb.server.ServerException;
 import com.arcadedb.server.ServerPlugin;
 import org.apache.tinkerpop.gremlin.server.GremlinServer;
 import org.apache.tinkerpop.gremlin.server.Settings;
+import org.apache.tinkerpop.gremlin.server.channel.WebSocketChannelizer;
 
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.IOException;
 import java.lang.reflect.Field;
+import java.net.InetAddress;
+import java.net.ServerSocket;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -39,13 +44,20 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Level;
 
 public class GremlinServerPlugin implements ServerPlugin {
+  private static final long                 START_TIMEOUT_SECONDS      = 60;
   private static final String               CONFIG_GREMLIN_SERVER_YAML = "gremlin-server.yaml";
   private static final String               IO_REGISTRIES_KEY          = "ioRegistries";
   private static final String               ARCADE_IO_REGISTRY         = ArcadeIoRegistry.class.getName();
@@ -61,6 +73,9 @@ public class GremlinServerPlugin implements ServerPlugin {
   private              GremlinServer        gremlinServer;
   private              ExecutorService      gremlinExecutorService;
   private volatile     int                  boundPort;
+  // The configured channelizer when it cannot conceal engine error text, from the moment it is chosen until the Gremlin
+  // Server built with it has stopped; null otherwise. A runtime switch to production mode is refused while it is set
+  private volatile     String               nonConcealingChannelizer;
 
   @Override
   public void configure(final ArcadeDBServer arcadeDBServer, final ContextConfiguration configuration) {
@@ -118,6 +133,16 @@ public class GremlinServerPlugin implements ServerPlugin {
       if (key.startsWith("gremlin."))
         applyServerSetting(settings, key.substring("gremlin.".length()), configuration.getValue(key, null));
 
+    // Production mode conceals the text of an engine failure on every surface (issues #9317, #9639)
+    settings.channelizer = resolveChannelizer(settings.channelizer, server.isProductionMode());
+    // Set before the server is built, so a switch to production mode is refused for as long as it could be serving with
+    // this channelizer (issue #9749). The plugin starts before the HTTP listener, so no runtime switch races the read above
+    nonConcealingChannelizer = ConcealingWebSocketChannelizer.class.getName().equals(settings.channelizer) ? null : settings.channelizer;
+
+    // GremlinServer cannot report an OS-chosen port, so a configured 0 becomes a concrete free port here
+    if (settings.port == 0)
+      settings.port = findFreePort(settings.host);
+
     // Ensure databases referenced in the graphs section of gremlin-server.yaml are created/opened.
     // This restores the pre-2026.2.1 behaviour where a static `graphs:` entry in gremlin-server.yaml
     // would cause ArcadeGraph to create the database on first access (issue #3661).
@@ -136,8 +161,26 @@ public class GremlinServerPlugin implements ServerPlugin {
 
     gremlinServer = new GremlinServer(settings, gremlinExecutorService);
     try {
-      gremlinServer.start();
+      // start() only reports a failure of the bootstrap itself: the bind is asynchronous, and an address already in use
+      // arrives as an exceptional completion of the returned future. Waiting on it makes a failed bind fail the start
+      // like the Bolt, Postgres, Redis, MongoDB and HTTP listeners do, instead of leaving the plugin "started" and its
+      // port advertised with nothing listening on it (issue #9319).
+      within(gremlinServer::start);
+    } catch (final InterruptedException e) {
+      Thread.currentThread().interrupt();
+      releaseAfterFailedStart();
+      throw new ServerException("Interrupted while starting the GremlinServer plugin", e);
+    } catch (final ExecutionException e) {
+      releaseAfterFailedStart();
+      final Throwable cause = e.getCause() != null ? e.getCause() : e;
+      throw new ServerException("Error on starting GremlinServer plugin on " + settings.host + ":" + settings.port + ": "
+          + cause.getMessage(), cause);
+    } catch (final TimeoutException e) {
+      releaseAfterFailedStart();
+      throw new ServerException("The GremlinServer plugin did not finish starting on " + settings.host + ":" + settings.port
+          + " within " + START_TIMEOUT_SECONDS + " seconds", e);
     } catch (final Exception e) {
+      releaseAfterFailedStart();
       throw new ServerException("Error on starting GremlinServer plugin", e);
     }
     boundPort = settings.port;
@@ -149,6 +192,109 @@ public class GremlinServerPlugin implements ServerPlugin {
         engineNames.addAll(settings.scriptEngines.keySet());
       arcadeGraphManager.bindScriptEnginesLive(gremlinServer.getServerGremlinExecutor().getGremlinExecutor(), engineNames);
     }
+  }
+
+  /**
+   * The channelizer the Gremlin Server is built with. The default WebSocket channelizer (or none) becomes
+   * {@link ConcealingWebSocketChannelizer}, which rewrites every server-failure answer in production mode. Any other
+   * channelizer - TinkerPop's {@code WsAndHttpChannelizer}, {@code HttpChannelizer}, {@code UnifiedChannelizer}, or a
+   * custom class - answers with {@code Throwable.getMessage()}, which for a duplicated key is the customer's stored key
+   * values: in production mode it fails the start, like an invalid {@code gremlin.*} setting does, instead of serving
+   * that text under a setting that promises otherwise (issue #9639). Outside production mode it is used as configured,
+   * with a WARNING that production mode will refuse it.
+   */
+  static String resolveChannelizer(final String configured, final boolean productionMode) {
+    final String channelizer = configured != null ? configured.trim() : "";
+    final String concealing = ConcealingWebSocketChannelizer.class.getName();
+    if (channelizer.isEmpty() || channelizer.equals(WebSocketChannelizer.class.getName()) || channelizer.equals(concealing))
+      return concealing;
+    if (productionMode)
+      throw new ServerException("Gremlin Server channelizer '" + channelizer + "' (selected by 'channelizer' in gremlin-server.yaml"
+          + " or the 'gremlin.channelizer' setting) cannot conceal engine error messages, which 'arcadedb.server.mode=production'"
+          + " requires: use the default channelizer (" + WebSocketChannelizer.class.getName() + ") or run the server in another mode");
+    LogManager.instance().log(GremlinServerPlugin.class, Level.WARNING,
+        "Gremlin Server channelizer '%s' does not conceal engine error messages: the server will refuse to start with it in production mode, and to switch to production mode while it runs",
+        null, channelizer);
+    return channelizer;
+  }
+
+  /**
+   * A free port for a configured port of {@code 0}. GremlinServer never reports the port it bound when it was asked for
+   * an OS-chosen one (and offers no public way to read it), so the port is chosen here, before the server is built, and
+   * configured like any other: the advertised port is then the one the server listens on, and a port taken in the
+   * meantime fails the start loudly like any other bind failure.
+   */
+  private static int findFreePort(final String host) {
+    try (final ServerSocket probe = new ServerSocket(0, 1, host != null && !host.isBlank() ? InetAddress.getByName(host) : null)) {
+      return probe.getLocalPort();
+    } catch (final IOException e) {
+      throw new ServerException("Cannot find a free port for the Gremlin Server on '" + host + "': " + e.getMessage(), e);
+    }
+  }
+
+  /**
+   * Runs a lifecycle operation of the Gremlin Server and waits for its future, the whole of it under one deadline: in
+   * TinkerPop 3.8.2 {@code start()} and {@code stop()} run hooks and close processors before they return the future, so a
+   * deadline applied only to the future never starts counting if the call itself blocks.
+   */
+  private static <T> T within(final Callable<CompletableFuture<T>> operation)
+      throws InterruptedException, ExecutionException, TimeoutException {
+    final ExecutorService executor = Executors.newSingleThreadExecutor(runnable -> {
+      final Thread thread = new Thread(runnable, "arcadedb-gremlin-lifecycle");
+      thread.setDaemon(true);
+      return thread;
+    });
+    try {
+      final Future<T> future = executor.submit(() -> operation.call().get());
+      try {
+        return future.get(START_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+      } catch (final TimeoutException e) {
+        future.cancel(true);
+        throw e;
+      } catch (final ExecutionException e) {
+        // the operation's own failure arrives wrapped once by each future
+        Throwable cause = e;
+        while (cause instanceof ExecutionException && cause.getCause() != null)
+          cause = cause.getCause();
+        throw new ExecutionException(cause);
+      }
+    } finally {
+      executor.shutdownNow();
+    }
+  }
+
+  /** The failed start leaves nothing running: the half-started server and its executor are stopped here, not left to the caller. */
+  private void releaseAfterFailedStart() {
+    try {
+      stopService();
+    } catch (final Exception e) {
+      // BEST EFFORT: THE START FAILURE IS WHAT THE CALLER MUST SEE
+      LogManager.instance().log(this, Level.WARNING, "Error releasing the Gremlin Server after a failed start: %s", null,
+          e.toString());
+    }
+  }
+
+  /**
+   * Refuses a runtime switch of {@code arcadedb.server.mode} to {@code production} while the Gremlin Server runs with a
+   * channelizer that cannot conceal engine error text (issue #9749). The channelizer is fixed once the server listens, so
+   * the switch would otherwise leave it answering with {@code Throwable.getMessage()} - stored duplicated-key values
+   * included - under a setting every other surface honours per request. The start refuses the same combination
+   * (issue #9639); the default channelizer conceals per message and accepts the switch.
+   */
+  @Override
+  public void checkServerSettingChange(final GlobalConfiguration setting, final Object value) {
+    final String channelizer = nonConcealingChannelizer;
+    if (channelizer != null && setting == GlobalConfiguration.SERVER_MODE && "production".equals(value))
+      throw new IllegalArgumentException("Cannot switch '" + GlobalConfiguration.SERVER_MODE.getKey()
+          + "' to production while the Gremlin Server runs with channelizer '" + channelizer
+          + "', which cannot conceal engine error messages: restart the server in production mode with the default channelizer ("
+          + WebSocketChannelizer.class.getName() + ")");
+  }
+
+  /** Active only while the Gremlin Server is listening, so a plugin whose bind failed is not reported as started. */
+  @Override
+  public boolean isActive() {
+    return boundPort > 0;
   }
 
   /**
@@ -342,8 +488,25 @@ public class GremlinServerPlugin implements ServerPlugin {
       if (graphManager instanceof ArcadeGraphManager) {
         ((ArcadeGraphManager) graphManager).closeAll();
       }
-      gremlinServer.stop().join();
+      boolean stopped = false;
+      try {
+        // Bounded like the start: a server whose bind failed must not be able to hang the shutdown
+        within(gremlinServer::stop);
+        stopped = true;
+      } catch (final InterruptedException e) {
+        Thread.currentThread().interrupt();
+      } catch (final ExecutionException | TimeoutException e) {
+        LogManager.instance().log(this, Level.SEVERE,
+            "Error or timeout stopping the Gremlin Server, which may still be running and holding its port: %s", null,
+            e.toString());
+      }
+      // A server that did not confirm its stop keeps its handle, so a later stopService() can try again
+      if (stopped)
+        gremlinServer = null;
     }
+    // Only a server that confirmed its stop no longer serves with the channelizer
+    if (gremlinServer == null)
+      nonConcealingChannelizer = null;
     if (gremlinExecutorService != null) {
       gremlinExecutorService.shutdownNow();
       gremlinExecutorService = null;

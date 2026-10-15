@@ -80,7 +80,11 @@ public abstract class CreateTypeAbstractStatement extends DDLStatement {
 
   protected abstract String commandType();
 
-  protected abstract DocumentType createType(Schema schema);
+  /**
+   * Creates the type under {@code typeName}, the name this execution resolved - never read {@code name} for it, which still
+   * holds a {@code $variable} as written.
+   */
+  protected abstract DocumentType createType(Schema schema, String typeName);
 
   /**
    * Batchable into a DDL script's bulk schema scope (issue #6990). Creating a type registers it and creates its buckets. No record is read or written, so a batch of them is exactly the case this feature exists for.
@@ -90,44 +94,69 @@ public abstract class CreateTypeAbstractStatement extends DDLStatement {
     return true;
   }
 
+  /**
+   * Resolves a {@code $variable} type name into a local, never into {@code name}: a parsed statement is cached and shared by
+   * every execution of its text, concurrent ones included. The resolution used to be written into the field and put back
+   * on the success paths only, so a refused execution left the statement naming the type it had resolved, and an
+   * overlapping execution could create the type another one resolved (issue #9741).
+   */
   @Override
   public ResultSet executeDDL(final CommandContext context) {
-
-    Identifier prevName= name;
+    final String typeName;
     if (name.getStringValue().startsWith("$")) {
-      String variable = (String) context.getVariable(name.getStringValue());
-      name = new Identifier(variable);
-    }
+      final Object resolved = context.getVariable(name.getStringValue());
+      if (resolved == null)
+        throw new CommandExecutionException("Variable '" + name.getStringValue() + "' naming the type to create is not defined");
+      typeName = resolved.toString();
+    } else
+      typeName = name.getStringValue();
 
     final Schema schema = context.getDatabase().getSchema();
-    if (schema.existsType(name.getStringValue())) {
+    if (schema.existsType(typeName)) {
       if (ifNotExists) {
         // One row, exactly as the creating branch below, with created=false telling the two apart. IF NOT
         // EXISTS is there to make a retry safe, so answering an empty result set the second time - which a
         // client checking the row count reads as failure - defeated its purpose (issue #7143).
         final ResultInternal existing = new ResultInternal(context.getDatabase());
         existing.setProperty("operation", commandType());
-        existing.setProperty("typeName", name.getStringValue());
+        existing.setProperty("typeName", typeName);
         existing.setProperty("created", false);
-        name = prevName;
         return new InternalResultSet(existing);
       } else {
-        throw new CommandExecutionException("Type " + name + " already exists");
+        throw new CommandExecutionException("Type " + typeName + " already exists");
       }
     }
     checkSuperTypes(schema, context);
 
     final ResultInternal result = new ResultInternal(context.getDatabase());
     result.setProperty("operation", commandType());
-    result.setProperty("typeName", name.getStringValue());
+    result.setProperty("typeName", typeName);
     result.setProperty("created", true);
 
     final DocumentType[] superclasses = getSuperTypes(schema);
 
-    final DocumentType type = createType(schema);
+    // Refused here, before anything is created, whenever the statement can already tell (#9846)
+    checkSuperTypesBeforeCreate(typeName, superclasses);
 
-    for (final DocumentType c : superclasses)
-      type.addSuperType(c);
+    final DocumentType type = createType(schema, typeName);
+
+    try {
+      for (final DocumentType c : superclasses)
+        type.addSuperType(c);
+    } catch (final RuntimeException e) {
+      // The safety net for the refusals only addSuperType can know about (a partition the subtype cannot take, a time series
+      // hierarchy): the type is already registered by then, and a refused CREATE must leave nothing behind. This is a
+      // compensating drop, a second schema session, not an atomic undo: one frame around create plus link is not possible,
+      // because addSuperType waits for async quiescence OUTSIDE its frame (the write lock is what an async worker needs to
+      // commit), so holding the lock across it would stall. The refusals that can be known beforehand are checked before
+      // the create (checkSuperTypesBeforeCreate), which leaves no window at all
+      try {
+        schema.dropType(typeName);
+      } catch (final RuntimeException dropFailure) {
+        e.addSuppressed(dropFailure);
+      }
+      throw e;
+    }
 
     if (!customProperties.isEmpty()) {
       final Map<String, Object> applied = new LinkedHashMap<>();
@@ -140,8 +169,14 @@ public abstract class CreateTypeAbstractStatement extends DDLStatement {
       result.setProperty("custom", applied);
     }
 
-    name = prevName;
     return new InternalResultSet(result);
+  }
+
+  /**
+   * Validates the super types against what this statement declares, BEFORE the type is created. The default accepts all.
+   */
+  protected void checkSuperTypesBeforeCreate(final String typeName, final DocumentType[] superclasses) {
+    // Nothing to refuse for a statement that declares nothing about its super types. CreateEdgeTypeStatement overrides this
   }
 
   protected DocumentType[] getSuperTypes(final Schema schema) {

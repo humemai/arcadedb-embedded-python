@@ -23,6 +23,7 @@ import com.arcadedb.database.RID;
 import com.arcadedb.function.sql.DefaultSQLFunctionFactory;
 import com.arcadedb.exception.TimeoutException;
 import com.arcadedb.graph.Edge;
+import com.arcadedb.graph.EdgeIdentityMultiset;
 import com.arcadedb.graph.IncomingEdgeLookup;
 import com.arcadedb.graph.Vertex;
 import com.arcadedb.query.opencypher.InlineProperties;
@@ -47,7 +48,6 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Deque;
-import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -83,7 +83,6 @@ public class QuantifiedPathStep extends AbstractExecutionStep {
   private final String                sourceVariable;
   private final String                targetVariable;
   private final String                pathVariable;
-  private final boolean               pathVariableBindsGroup;
   private final QuantifiedPathPattern group;
   private final NodePattern           targetNodePattern;
   private final Set<String>           clauseVariables; // see MatchRelationshipStep's fields of the same names
@@ -99,25 +98,25 @@ public class QuantifiedPathStep extends AbstractExecutionStep {
   /**
    * @param sourceVariable         variable holding the group's left boundary vertex
    * @param targetVariable         variable the group's right boundary vertex binds to
-   * @param pathVariable           enclosing named path variable, or null
-   * @param pathVariableBindsGroup true when {@code pathVariable} names nothing but this group, in which
-   *                               case it binds to a {@code LIST<PATH>} with one path per repetition
-   *                               (ISO/IEC 39075 §15.4 grouped path assignment); false when the path
-   *                               spans further segments and must stay a single concatenated path
+   * @param pathVariable           enclosing named path variable, or null. It binds one PATH running through every
+   *                               repetition, whether or not the group is the only thing the path spans (issue #9940).
+   *                               A path variable declared before a path pattern binds that pattern's one path, in GQL as
+   *                               in Neo4j Cypher 25; only variables declared INSIDE a quantified group are group (list)
+   *                               variables. A LIST of per-repetition paths is what a subpath variable declared inside the
+   *                               group, {@code ((q = (a)-[r]->(b)))+}, would bind - a form this engine refuses
    * @param group                  the quantified path pattern to repeat
    * @param targetNodePattern      right boundary node pattern, for label/property filtering; may be null
    * @param clauseVariables        the owning MATCH clause's own variables - half the isomorphism scope
    * @param clauseRelationshipVariables every relationship variable the clause writes - the other half
    */
   public QuantifiedPathStep(final String sourceVariable, final String targetVariable, final String pathVariable,
-      final boolean pathVariableBindsGroup, final QuantifiedPathPattern group, final NodePattern targetNodePattern,
+      final QuantifiedPathPattern group, final NodePattern targetNodePattern,
       final Set<String> clauseVariables, final Set<String> clauseRelationshipVariables,
       final CommandContext context) {
     super(context);
     this.sourceVariable = sourceVariable;
     this.targetVariable = targetVariable;
     this.pathVariable = pathVariable != null && !pathVariable.isEmpty() ? pathVariable : null;
-    this.pathVariableBindsGroup = pathVariableBindsGroup;
     this.group = group;
     this.targetNodePattern = targetNodePattern;
     this.clauseVariables = clauseVariables;
@@ -219,7 +218,8 @@ public class QuantifiedPathStep extends AbstractExecutionStep {
     private final Vertex                boundTarget;
     private final List<Result>          out;
     private final WorkGuard             guard;
-    private final Set<RID>              usedEdges;
+    // NOT A Set<RID>: PARALLEL LIGHTWEIGHT TWINS SHARE THEIR RID AND ARE STILL TWO RELATIONSHIPS (ISSUE #9983)
+    private final EdgeIdentityMultiset  usedEdges;
     private final List<Repetition>      repetitions = new ArrayList<>();
     private final Map<String, Object>[] relationshipProperties;
     private final Predicate<Edge>[]     relationshipPredicates;
@@ -424,7 +424,7 @@ public class QuantifiedPathStep extends AbstractExecutionStep {
 
   private static boolean matchesResolved(final Document record, final Map<String, Object> resolved) {
     for (final Map.Entry<String, Object> entry : resolved.entrySet())
-      if (!InlineProperties.matchesResolvedValue(record.get(entry.getKey()), entry.getValue()))
+      if (!InlineProperties.matchesProperty(record, entry.getKey(), entry.getValue()))
         return false;
     return true;
   }
@@ -506,22 +506,16 @@ public class QuantifiedPathStep extends AbstractExecutionStep {
     row.setProperty(targetVariable, end);
 
     if (pathVariable != null) {
-      if (pathVariableBindsGroup) {
-        final List<TraversalPath> paths = new ArrayList<>(repetitions.size());
-        for (final Repetition repetition : repetitions)
-          paths.add(toPath(repetition));
-        row.setProperty(pathVariable, paths);
-      } else {
-        TraversalPath concatenated = input.getProperty(pathVariable) instanceof TraversalPath existing ?
-            existing : null;
-        for (final Repetition repetition : repetitions) {
-          final TraversalPath segment = toPath(repetition);
-          concatenated = concatenated == null ? segment : new TraversalPath(concatenated, segment);
-        }
-        if (concatenated == null)
-          concatenated = new TraversalPath(end);
-        row.setProperty(pathVariable, concatenated);
+      // A path variable binds a PATH, also when the group is all the path spans: it used to bind a LIST<PATH> there, one
+      // path per repetition, so length(p) and nodes(p) read a list instead of the path (issue #9940)
+      TraversalPath concatenated = input.getProperty(pathVariable) instanceof TraversalPath existing ? existing : null;
+      for (final Repetition repetition : repetitions) {
+        final TraversalPath segment = toPath(repetition);
+        concatenated = concatenated == null ? segment : new TraversalPath(concatenated, segment);
       }
+      if (concatenated == null)
+        concatenated = new TraversalPath(end);
+      row.setProperty(pathVariable, concatenated);
     }
     return row;
   }
@@ -538,14 +532,14 @@ public class QuantifiedPathStep extends AbstractExecutionStep {
    * cannot reuse one. Only the clause's own variables are examined: Cypher scopes relationship isomorphism
    * to a single MATCH clause.
    */
-  private Set<RID> collectBoundRelationships(final Result input) {
-    final Set<RID> used = new HashSet<>();
+  private EdgeIdentityMultiset collectBoundRelationships(final Result input) {
+    final EdgeIdentityMultiset used = new EdgeIdentityMultiset();
     collectBoundRelationships(input, clauseVariables, used);
     collectBoundRelationships(input, clauseRelationshipVariables, used);
     return used;
   }
 
-  private void collectBoundRelationships(final Result input, final Set<String> scope, final Set<RID> used) {
+  private void collectBoundRelationships(final Result input, final Set<String> scope, final EdgeIdentityMultiset used) {
     final List<String> groupVariables = group.getGroupVariables();
     for (final String property : scope) {
       if (property.equals(targetVariable) || property.equals(pathVariable) || groupVariables.contains(property))
@@ -554,7 +548,7 @@ public class QuantifiedPathStep extends AbstractExecutionStep {
     }
   }
 
-  private static void collectRelationships(final Object value, final Set<RID> used) {
+  private static void collectRelationships(final Object value, final EdgeIdentityMultiset used) {
     if (value instanceof Edge edge)
       used.add(edge.getIdentity());
     else if (value instanceof TraversalPath path) {

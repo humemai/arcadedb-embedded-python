@@ -18,15 +18,15 @@
  */
 package com.arcadedb.graph;
 
+import com.arcadedb.database.Binary;
 import com.arcadedb.database.Database;
 import com.arcadedb.database.ImmutableDocument;
 import com.arcadedb.database.RID;
 import com.arcadedb.schema.DocumentType;
-import com.arcadedb.schema.Property;
-import com.arcadedb.serializer.JsonSerializer;
 import com.arcadedb.serializer.json.JSONObject;
 
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 
@@ -48,6 +48,27 @@ public class ImmutableLightEdge extends ImmutableDocument implements LightEdge {
     this.in = in;
   }
 
+  /**
+   * Builds the edge as it is read off the edge list of {@code direction} at {@code position} of {@code segment}, so
+   * that its identity can tell it from a twin of the same triple (see {@link LightEdgeRID#getOccurrence()}).
+   */
+  public ImmutableLightEdge(final Database graph, final DocumentType type, final int edgeTypeBucketId, final RID out,
+                            final RID in, final RID segment, final int position, final Vertex.DIRECTION direction) {
+    this(graph, type, edgeTypeBucketId, out, in, segment, position, direction, -1, null);
+  }
+
+  /**
+   * Same as above, for an iteration that offers the census of the list it reads (see {@link LightEdgeCensus}), so that
+   * resolving the occurrence of many of its edges walks the list once rather than once per edge.
+   */
+  ImmutableLightEdge(final Database graph, final DocumentType type, final int edgeTypeBucketId, final RID out,
+      final RID in, final RID segment, final int position, final Vertex.DIRECTION direction, final int chunkUsed,
+      final LightEdgeCensus census) {
+    this(graph, type, edgeTypeBucketId, out, in);
+    // THE PRIMARY CONSTRUCTOR ALWAYS BUILDS A LightEdgeRID
+    ((LightEdgeRID) getIdentity()).readFrom(segment, position, direction, chunkUsed, census);
+  }
+
   @Override
   public Object get(final String propertyName) {
     return null;
@@ -66,6 +87,12 @@ public class ImmutableLightEdge extends ImmutableDocument implements LightEdge {
   @Override
   public Object getIfPresent(final String propertyName, final Object absentValue) {
     return absentValue;
+  }
+
+  @Override
+  public Binary locateProperties(final int[] slotByNameId, final int[] positions, final int wanted) {
+    // NO CONTENT TO LOCATE IN: THE CALLER ASKS getIfPresent(), WHICH ANSWERS EVERY PROPERTY ABSENT
+    return null;
   }
 
   public MutableEdge modify() {
@@ -122,7 +149,7 @@ public class ImmutableLightEdge extends ImmutableDocument implements LightEdge {
 
   @Override
   public Map<String, Object> toMap(final boolean includeMetadata) {
-    return Collections.emptyMap();
+    return includeMetadata ? lightEdgeMetadata() : new LinkedHashMap<>();
   }
 
   @Override
@@ -141,16 +168,7 @@ public class ImmutableLightEdge extends ImmutableDocument implements LightEdge {
    */
   @Override
   public JSONObject toJSON(final boolean includeMetadata) {
-    final JSONObject json = new JsonSerializer(database).map2json(Collections.emptyMap(), type, includeMetadata);
-    if (includeMetadata) {
-      // SAME KEY ORDER THE INHERITED IMPLEMENTATION PRODUCED: @cat FIRST, WHICH IT WROTE AS "d" AND THIS OVERRIDE
-      // REPLACED IN PLACE WITH "e"
-      json.put(Property.CAT_PROPERTY, "e");
-      json.put(Property.TYPE_PROPERTY, type.getName());
-      json.put(Property.RID_PROPERTY, getIdentity().toString());
-      json.put("@in", in).put("@out", out);
-    }
-    return json;
+    return includeMetadata ? new JSONObject(lightEdgeMetadata()) : new JSONObject();
   }
 
   @Override

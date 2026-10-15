@@ -343,6 +343,44 @@ class HaChaosIT extends ContainersTestTemplate {
       return null;
     }
 
+    /**
+     * Reads the node's in-place restart counts from {@code GET /api/v1/cluster} (issue #9429), rather than counting the
+     * restart's log line, which a rewording would have turned into a silent zero. A node that does not answer, or whose
+     * answer does not carry the counts, fails the step as a harness error: a missing count must never read as "no
+     * reformat". The counts restart from zero with the process; the runner reports a decrease as a harness error too.
+     */
+    @Override
+    public InPlaceRestarts inPlaceRestarts(final int node) {
+      final JSONObject cluster;
+      try {
+        cluster = clusterStatus(node, 10_000);
+      } catch (final Exception e) {
+        throw new ChaosFailure(ResultKind.HARNESS,
+            "Could not read the in-place restart counts of node " + node + ": " + e.getClass().getSimpleName() + ": "
+                + e.getMessage());
+      }
+      return ClusterStatusSummary.inPlaceRestarts(cluster, node);
+    }
+
+    /** {@code GET /api/v1/cluster} on the node as root; throws on a non-200 answer. */
+    private JSONObject clusterStatus(final int node, final int timeoutMs) throws IOException {
+      final Endpoint endpoint = endpoint(node);
+      final HttpURLConnection connection = (HttpURLConnection) URI.create(
+          "http://" + endpoint.host() + ":" + endpoint.port() + "/api/v1/cluster").toURL().openConnection();
+      connection.setRequestProperty("Authorization",
+          "Basic " + Base64.getEncoder().encodeToString(("root:" + PASSWORD).getBytes(StandardCharsets.UTF_8)));
+      connection.setConnectTimeout(timeoutMs);
+      connection.setReadTimeout(timeoutMs);
+      try {
+        final int status = connection.getResponseCode();
+        if (status != 200)
+          throw new IOException("HTTP " + status);
+        return new JSONObject(new String(connection.getInputStream().readAllBytes(), StandardCharsets.UTF_8));
+      } finally {
+        connection.disconnect();
+      }
+    }
+
     private static String describeExit(final int node, final InspectContainerResponse.ContainerState container,
         final String what) {
       return "node " + node + " " + what + ": exitCode=" + container.getExitCodeLong() + " OOMKilled="

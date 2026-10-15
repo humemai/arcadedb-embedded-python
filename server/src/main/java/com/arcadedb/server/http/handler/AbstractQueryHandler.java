@@ -29,6 +29,7 @@ import com.arcadedb.graph.Vertex;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.query.OperationType;
 import com.arcadedb.query.QueryEngine;
+import com.arcadedb.query.opencypher.traversal.TraversalPath;
 import com.arcadedb.query.sql.executor.ExecutionPlan;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultSet;
@@ -41,6 +42,7 @@ import com.arcadedb.serializer.JsonSerializer;
 import com.arcadedb.serializer.json.JSONArray;
 import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.server.http.HttpServer;
+import com.arcadedb.server.http.RequestRefusedBeforeExecutionException;
 import io.undertow.server.HttpServerExchange;
 import io.undertow.util.Headers;
 
@@ -286,7 +288,7 @@ public abstract class AbstractQueryHandler extends DatabaseAbstractHandler {
    */
   protected static JsonSerializer ndJsonRowSerializer(final String serializer, final boolean includeTypeHints) {
     if ("graph".equals(serializer) || "studio".equals(serializer))
-      throw new IllegalArgumentException("Serializer '" + serializer + "' aggregates the whole result into a single "
+      throw new RequestRefusedBeforeExecutionException("Serializer '" + serializer + "' aggregates the whole result into a single "
           + "graph document and has no row stream: request it with 'Accept: application/json', or stream with "
           + "serializer 'record'");
 
@@ -367,14 +369,14 @@ public abstract class AbstractQueryHandler extends DatabaseAbstractHandler {
       } catch (final RuntimeException e) {
         LogManager.instance().log(this, Level.WARNING, "Error while streaming the result of a query on database '%s'",
             e, database != null ? database.getName() : null);
-        writeClassifiedError(stream, e);
+        writeClassifiedError(exchange, stream, e);
         return new SerializationOutcome(returned, false);
       }
 
       if (ceilingLowered && truncated) {
         // What the buffered path answers 413 for. A 200 is already on the wire, so the refusal goes in band and
         // the stats trailer is withheld - which is exactly how a consumer tells this from a complete stream.
-        writeClassifiedError(stream, resultSetTooLarge(maxResultRows));
+        writeClassifiedError(exchange, stream, resultSetTooLarge(maxResultRows));
         return new SerializationOutcome(returned, true);
       }
 
@@ -388,18 +390,28 @@ public abstract class AbstractQueryHandler extends DatabaseAbstractHandler {
   }
 
   /**
-   * Writes the in-band {@code error} line of a stream whose 200 is already on the wire, carrying the status, the
-   * reported exception class and the {@code exceptionArgs} the buffered encoding would have answered the same failure
-   * with (issue #8235). Decided by {@link #classifyError}, the one classifier every handler answers with, so the two
-   * encodings cannot disagree about what a failure is. {@code message} is kept as it always was - the failure's own
-   * message, or its simple class name when it has none - so a consumer that reads only that member sees no change.
+   * Writes the in-band {@code error} line of a stream whose 200 is already on the wire: the body the buffered encoding
+   * would have answered the same failure with - status, classified label in {@code error}, reported exception class,
+   * {@code exceptionArgs} (issue #8235), and the {@code Retry-After} back-off as {@code retryAfter} (issue #8899) -
+   * built by {@link #buildStreamedErrorLine} from {@link #classifyError}, the one classifier every handler answers
+   * with, so the two encodings cannot disagree about what a failure is and the batch stream's line has the same members.
+   * <p>
+   * {@code message}, which the Java driver ({@code RemoteStreamingResultSet}) and older consumers read, follows the
+   * buffered encoding's concealment rule (issue #8899, was #8875): outside production mode it is the failure's own
+   * message (or its simple class name when it has none), exactly as it always was, and the cause chain travels in
+   * {@code detail}; in production mode it is the classified label, since the raw text can carry file paths and
+   * engine internals that the buffered body conceals for the same failure.
    */
-  private void writeClassifiedError(final NdJsonResultStream stream, final Throwable failure) throws IOException {
+  private void writeClassifiedError(final HttpServerExchange exchange, final NdJsonResultStream stream,
+      final Throwable failure) throws IOException {
     final ErrorClassification classification = classifyError(failure);
-    final Throwable reported = classification.reported();
-    stream.writeError(failure.getMessage() != null ? failure.getMessage() : failure.getClass().getSimpleName(),
-        classification.status(), reported != null ? reported.getClass().getName() : null,
-        classification.exceptionArgs());
+    final JSONObject error = buildStreamedErrorLine(exchange, classification);
+    // Set last, on purpose: 'message' is this stream's own member, not one of the buffered body's ('error' carries
+    // the label there), so nothing built above uses the name and this cannot overwrite it.
+    error.put("message", isProductionMode() ?
+        classification.message() :
+        failure.getMessage() != null ? failure.getMessage() : failure.getClass().getSimpleName());
+    stream.writeError(error);
   }
 
   /**
@@ -693,6 +705,11 @@ public abstract class AbstractQueryHandler extends DatabaseAbstractHandler {
     } else if (value instanceof Result result) {
       return analyzeResultContent(database, serializerImpl, includedVertices, resultVertices, includedEdges, vertices, edges,
           result, limit);
+    } else if (value instanceof TraversalPath path) {
+      // A path's nodes and relationships, so the graph view draws a returned path, whether a MATCH pattern bound it or
+      // a procedure yielded it (issue #9913)
+      return analyzePropertyValue(database, serializerImpl, includedVertices, resultVertices, includedEdges, vertices, edges,
+          path.toAlternatingList(), limit);
     } else if (value instanceof Collection<?> collection) {
       for (final Iterator<?> it = collection.iterator(); it.hasNext(); ) {
         // The cap is tested INSIDE the collection, not only between rows and between properties. One row can
@@ -746,6 +763,9 @@ public abstract class AbstractQueryHandler extends DatabaseAbstractHandler {
    * {@code $bytes} accepts standard or URL-safe base64 (RFC 4648 sections 4 and 5); {@code $int8}
    * accepts a {@link List} of {@link Number}, {@code float[]}, {@code double[]}, {@code int[]}, or
    * {@code long[]} of values in {@code [-128, 127]}.
+   * <p>
+   * A marker that does not decode is refused with a {@link RequestRefusedBeforeExecutionException}: it is read from the request
+   * alone, so it fails before a statement reaches the engine and must leave the session's transaction as it was (issue #9852).
    */
   protected static Map<String, Object> decodeTypedJsonMarkers(final Map<String, Object> paramMap) {
     if (paramMap == null || paramMap.isEmpty())
@@ -765,7 +785,7 @@ public abstract class AbstractQueryHandler extends DatabaseAbstractHandler {
 
   private static Object decodeTypedJsonMarker(final Object value, final int depth) {
     if (depth > MAX_TYPED_MARKER_DEPTH)
-      throw new IllegalArgumentException(
+      throw new RequestRefusedBeforeExecutionException(
           "Parameter nesting exceeds " + MAX_TYPED_MARKER_DEPTH + " levels - typed-marker decoder refuses to recurse further.");
     if (value instanceof Map<?, ?> m && m.size() == 1) {
       final Map.Entry<?, ?> only = m.entrySet().iterator().next();
@@ -780,7 +800,7 @@ public abstract class AbstractQueryHandler extends DatabaseAbstractHandler {
       for (final Map.Entry<?, ?> entry : m.entrySet()) {
         final Object key = entry.getKey();
         if (!(key instanceof String sk))
-          throw new IllegalArgumentException(
+          throw new RequestRefusedBeforeExecutionException(
               "Parameter map keys must be strings, found " + (key == null ? "null" : key.getClass().getSimpleName()));
         final Object original = entry.getValue();
         final Object decoded = decodeTypedJsonMarker(original, depth + 1);
@@ -820,9 +840,9 @@ public abstract class AbstractQueryHandler extends DatabaseAbstractHandler {
 
   private static byte[] decodeBytesMarker(final Object payload) {
     if (payload == null)
-      throw new IllegalArgumentException("Parameter '$bytes' value must be a base64 string, got null");
+      throw new RequestRefusedBeforeExecutionException("Parameter '$bytes' value must be a base64 string, got null");
     if (!(payload instanceof String b64))
-      throw new IllegalArgumentException(
+      throw new RequestRefusedBeforeExecutionException(
           "Parameter '$bytes' value must be a base64 string, found " + payload.getClass().getSimpleName());
     // Try standard base64 (RFC 4648 section 4) first; on failure retry with URL-safe (section 5)
     // so clients using - and _ in place of + and / are accepted transparently.
@@ -832,7 +852,7 @@ public abstract class AbstractQueryHandler extends DatabaseAbstractHandler {
       try {
         return Base64.getUrlDecoder().decode(b64);
       } catch (final IllegalArgumentException urlSafeErr) {
-        throw new IllegalArgumentException(
+        throw new RequestRefusedBeforeExecutionException(
             "Parameter '$bytes' is not valid base64 (standard or URL-safe): " + standardErr.getMessage(), standardErr);
       }
     }
@@ -847,7 +867,7 @@ public abstract class AbstractQueryHandler extends DatabaseAbstractHandler {
       for (int i = 0; i < list.size(); i++) {
         final Object elem = list.get(i);
         if (!(elem instanceof Number n))
-          throw new IllegalArgumentException(
+          throw new RequestRefusedBeforeExecutionException(
               "Parameter '$int8' element at index " + i + " must be a number, found "
                   + (elem == null ? "null" : elem.getClass().getSimpleName()));
         out[i] = toInt8(n.doubleValue(), i);
@@ -878,7 +898,7 @@ public abstract class AbstractQueryHandler extends DatabaseAbstractHandler {
         out[i] = toInt8(longs[i], i);
       return out;
     }
-    throw new IllegalArgumentException(
+    throw new RequestRefusedBeforeExecutionException(
         "Parameter '$int8' value must be an array of integers in [-128, 127], found "
             + (payload == null ? "null" : payload.getClass().getSimpleName()));
   }
@@ -889,10 +909,10 @@ public abstract class AbstractQueryHandler extends DatabaseAbstractHandler {
     // and any value with a non-zero fractional part. Infinity slips through here but is caught by
     // the range check below since +/-Infinity exceeds [-128, 127].
     if (v != Math.floor(v))
-      throw new IllegalArgumentException(
+      throw new RequestRefusedBeforeExecutionException(
           "Parameter '$int8' element at index " + index + " is not an integer value: " + v);
     if (v < -128.0 || v > 127.0)
-      throw new IllegalArgumentException(
+      throw new RequestRefusedBeforeExecutionException(
           "Parameter '$int8' element at index " + index + " is out of byte range [-128, 127]: " + v);
     return (byte) v;
   }
@@ -959,7 +979,7 @@ public abstract class AbstractQueryHandler extends DatabaseAbstractHandler {
     }
 
     if (!idempotent)
-      throw new IllegalArgumentException("The streaming encoding is available only for a read-only statement, "
+      throw new RequestRefusedBeforeExecutionException("The streaming encoding is available only for a read-only statement, "
           + "because its rows reach the client before the statement has finished: run this one with "
           + "'Accept: application/json'");
   }

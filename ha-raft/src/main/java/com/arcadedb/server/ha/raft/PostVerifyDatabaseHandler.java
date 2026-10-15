@@ -20,6 +20,7 @@ package com.arcadedb.server.ha.raft;
 
 import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.database.DatabaseInternal;
+import com.arcadedb.engine.NodeLocalFiles;
 import com.arcadedb.engine.PageSnapshot;
 import com.arcadedb.engine.PaginatedComponent;
 import com.arcadedb.engine.timeseries.ListedSealedStore;
@@ -43,7 +44,6 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.net.HttpURLConnection;
-import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -343,7 +343,12 @@ public class PostVerifyDatabaseHandler extends AbstractServerHttpHandler {
 
       final String url = (https ? "https" : "http") + "://" + endpoint
           + "/api/v1/cluster/verify/" + databaseName;
-      final var conn = (HttpURLConnection) new URI(url).toURL().openConnection();
+      // The initiating user's identity is forwarded so that authorization on the peer evaluates against the actual
+      // caller (the same substitution LeaderCommandForwarder makes for a session token), together with the token or not
+      // at all; and a plain dial on an SSL cluster is said, like every other peer dial (issue #9999).
+      final String clusterToken = raftHAServer.getClusterToken();
+      final HttpURLConnection conn = PeerRequest.openConnection(url, useSsl, PostVerifyDatabaseHandler.class,
+          "asking it to verify database '" + databaseName + "'", clusterToken, user.getName());
       // Validate the peer certificate against the configured trust store, consistent with the
       // snapshot download path.
       if (conn instanceof HttpsURLConnection httpsConn)
@@ -354,17 +359,11 @@ public class PostVerifyDatabaseHandler extends AbstractServerHttpHandler {
         conn.setConnectTimeout(PEER_CONNECT_TIMEOUT_MS);
         conn.setReadTimeout(PEER_READ_TIMEOUT_MS);
 
-        final String clusterToken = raftHAServer.getClusterToken();
-        if (clusterToken != null) {
-          conn.setRequestProperty("X-ArcadeDB-Cluster-Token", clusterToken);
-          // Forward the initiating user's identity so that authorization on the peer evaluates
-          // against the actual caller (the same substitution LeaderCommandForwarder makes for a session token).
-          conn.setRequestProperty("X-ArcadeDB-Forwarded-User", user.getName());
+        if (PeerRequest.hasToken(clusterToken))
           // One hop, whatever this address turns out to name: the node that serves this query answers with its
-          // own checksums instead of fanning out again (issue #6221). Set inside the token branch because the
+          // own checksums instead of fanning out again (issue #6221). Set only with the token because the
           // marker is only honored on a token-authenticated request.
           conn.setRequestProperty(LeaderForwardContext.FORWARDED_TO_LEADER_HEADER, "true");
-        }
 
         conn.setDoOutput(true);
         try (final var os = conn.getOutputStream()) {
@@ -618,7 +617,7 @@ public class PostVerifyDatabaseHandler extends AbstractServerHttpHandler {
    * worth having - but it is reported as incomplete sealed-store coverage rather than passed off as a full one.
    * <p>
    * Both page-file enumerations skip an index-compaction temporary (#7955). This handler reads the REGISTERED files
-   * rather than the directory, so none of the scratch families {@code SnapshotManager.isNodeLocalScratchFileName}
+   * rather than the directory, so none of the scratch families {@code SnapshotManager.isNodeLocalFileName}
    * excludes can reach it - a {@code .tmp} or a {@code .ts.sealed.incoming} is never a {@code ComponentFile}. A
    * {@code temp_*} compaction output is the one exception: {@code PaginatedComponent}'s constructor registers it,
    * so it is in {@code getFiles()} and in every window opened while the compaction runs, and only on the node doing
@@ -661,7 +660,7 @@ public class PostVerifyDatabaseHandler extends AbstractServerHttpHandler {
             try {
               // #7955: AN INDEX COMPACTION IN FLIGHT HAS A REGISTERED temp_* COMPONENT FILE, SO THE WINDOW CARRIES
               // IT - AND ONLY THE NODE THAT HAPPENS TO BE COMPACTING HAS ONE. SEE isTemporaryFileName
-              if (PaginatedComponent.isTemporaryFileName(file.fileName()))
+              if (isNotCompared(file.fileName()))
                 continue;
               collectFileInfo(snapshotChecksums, snapshotFiles, file.fileName(), snapshot.calculateChecksum(file.fileId()),
                   file.size());
@@ -700,7 +699,7 @@ public class PostVerifyDatabaseHandler extends AbstractServerHttpHandler {
       db.getPageManager().suspendFlushAndExecute(db, () -> {
         runChecksummingHook(null);
         for (final var file : db.getFileManager().getFiles())
-          if (file != null && !PaginatedComponent.isTemporaryFileName(file.getFileName())) {
+          if (file != null && !isNotCompared(file.getFileName())) {
             try {
               collectFileInfo(localChecksums, localFiles, file.getFileName(), file.calculateChecksum(), file.getSize());
             } catch (final Exception e) {
@@ -718,6 +717,17 @@ public class PostVerifyDatabaseHandler extends AbstractServerHttpHandler {
       return null;
     });
     return sealedStoresCovered[0];
+  }
+
+  /**
+   * Whether a registered page file is left out of the comparison because only this node has it, or only this node's
+   * copy of it: an index-compaction temporary (#7955), or a component the engine declares node-local - in practice an
+   * LSM vector index's {@code .vecgraph}, which every node builds for itself without the WAL, so its pages differ on a
+   * healthy cluster (#9751). The vectors it is built from live in the index's own pages, which ARE compared. The same
+   * declaration {@code SnapshotManager.computeFileChecksums} applies, so the two collectors cannot disagree on it.
+   */
+  static boolean isNotCompared(final String fileName) {
+    return PaginatedComponent.isTemporaryFileName(fileName) || NodeLocalFiles.isNodeLocalFileName(fileName);
   }
 
   /**

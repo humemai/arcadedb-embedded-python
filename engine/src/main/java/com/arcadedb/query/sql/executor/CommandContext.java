@@ -22,6 +22,7 @@ import com.arcadedb.ContextConfiguration;
 import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.database.DatabaseInternal;
 import com.arcadedb.graph.IncomingEdgeLookup;
+import com.arcadedb.query.RunningQuery;
 import com.arcadedb.utility.ExcludeFromJacocoGeneratedReport;
 import com.arcadedb.utility.TimeBoundRegex;
 
@@ -169,6 +170,16 @@ public interface CommandContext {
     return parent != null ? parent.getIncomingEdgeLookup() : null;
   }
 
+  /**
+   * The registry entry of the statement this command belongs to, whose termination the command's
+   * {@link WorkGuard}s obey (issue #9680): the parent's, and at the root the one published on the thread that runs the
+   * statement. Null when nothing registered the statement, as for every embedded call.
+   */
+  default RunningQuery getRunningQuery() {
+    final CommandContext parent = getParent();
+    return parent != null ? parent.getRunningQuery() : RunningQuery.current();
+  }
+
   CommandContext setParent(CommandContext parentContext);
 
   CommandContext setChild(CommandContext context);
@@ -204,10 +215,6 @@ public interface CommandContext {
 
   /** Context variable name set to {@code true} when CSR (Graph Analytical View) acceleration was used during execution. */
   String CSR_ACCELERATED_VAR = "_csrAccelerated";
-
-  /** Context variable set by algorithm procedures to the total number of results they will yield.
-   *  Used by CallStep to optimize count-only queries by skipping per-row Result object creation. */
-  String RESULT_COUNT_HINT_VAR = "_resultCountHint";
 
   /** Partition-pruned bucket file ids ({@link com.arcadedb.utility.IntHashSet}) for the FROM type named in {@link #PARTITION_PRUNED_TYPE_NAME_VAR}. Single-valued: only one partitioned FROM type per query (issue #4087). */
   String PARTITION_PRUNED_BUCKET_FILE_IDS_VAR = "_partitionPrunedBucketFileIds";

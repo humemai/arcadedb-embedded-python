@@ -21,6 +21,7 @@
 package com.arcadedb.query.sql.parser;
 
 import com.arcadedb.database.Database;
+import com.arcadedb.query.OperationType;
 import com.arcadedb.query.sql.executor.BasicCommandContext;
 import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.query.sql.executor.ExplainExecutionPlan;
@@ -29,6 +30,7 @@ import com.arcadedb.query.sql.executor.ResultSet;
 
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 public class ExplainStatement extends Statement {
 
@@ -112,9 +114,37 @@ public class ExplainStatement extends Statement {
     return statement != null ? statement.hashCode() : 0;
   }
 
+  /**
+   * Plans the wrapped statement and runs none of it: nested in another statement, it is a read (issue #9628). The public
+   * overrides below are deliberate and are the only ones left in the parser: at top level EXPLAIN stays idempotent but
+   * reports the wrapped statement's DDL flag and operation types (issue #9313), which the generic fold cannot express
+   * because it never looks inside a statement that does not execute what it holds.
+   */
+  @Override
+  protected boolean isIdempotentItself() {
+    return true;
+  }
+
+  @Override
+  protected boolean executesNestedStatements() {
+    return false;
+  }
+
   @Override
   public boolean isIdempotent() {
+    // EXPLAIN never executes the wrapped statement, so it stays idempotent whatever it wraps. This is the opposite of
+    // PROFILE, which executes it and therefore follows it (issue #9313). The pair was already confused once (#7789).
     return true;
+  }
+
+  @Override
+  public boolean isDDL() {
+    return statement.isDDL();
+  }
+
+  @Override
+  public Set<OperationType> getOperationTypes() {
+    return statement.getOperationTypes();
   }
 
   /**

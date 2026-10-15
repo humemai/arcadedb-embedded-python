@@ -18,6 +18,8 @@
  */
 package com.arcadedb.server.support;
 
+import com.arcadedb.GlobalConfiguration;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -38,6 +40,10 @@ import java.util.regex.Pattern;
  * <li>the value of {@code Authorization}, {@code Proxy-Authorization} and {@code Cookie} headers (the rest of the line);
  * {@code Bearer <token>} anywhere; the arguments after {@code --password} style options; {@code IDENTIFIED BY x};</li>
  * <li>the password of URLs with credentials ({@code scheme://user:pass@host});</li>
+ * <li>the passwords inside a {@code defaultDatabases} value ({@code db[user:password[:group]]}), the one setting whose
+ * value EMBEDS credentials: the name is not secret, so no keyword sees it; the database, user and group names are kept
+ * and only the password field is replaced, by {@link GlobalConfiguration#publishableValue(Object)} itself. The value is
+ * recognised after the setting's name, and also by its own shape inside a quoted span, whatever the words around it;</li>
  * <li>PEM blocks ({@code -----BEGIN ...-----} to {@code -----END ...-----}), also across lines;</li>
  * <li>well known token shapes: ArcadeDB API tokens ({@code at-<hex>}), portal keys ({@code wsk_...}), JWTs, AWS access key
  * ids, GitHub tokens.</li>
@@ -58,7 +64,8 @@ public final class SupportRedactor {
 
   // Cheap pre-filter: a line that matches none of these cannot be changed by any rule below.
   private static final Pattern PRE_FILTER = Pattern.compile(
-      "(?i)" + KEYWORDS + "|authorization|bearer|identified\\s+by|-----|://[^/\\s]*@|wsk_|eyJ|AKIA|gh[pousr]_|\\bat-[0-9a-f]{20}");
+      "(?i)" + KEYWORDS + "|defaultdatabases|authorization|bearer|identified\\s+by|-----|://[^/\\s]*@|wsk_|eyJ|AKIA|gh[pousr]_|\\bat-[0-9a-f]{20}"
+          + "|\\[[^\\[\\]:]*+:");
 
   // Possessive: a long quoted value must neither backtrack nor recurse once per character (a 64K-character string overflows the
   // stack with a plain (?:a|b)* and is polynomial without the possessive quantifiers)
@@ -71,6 +78,14 @@ public final class SupportRedactor {
   private static final Pattern BENIGN_SUFFIX = Pattern.compile(
       "(?i)(?:length|len|size|count|max|min|timeout|ttl|expiry|expiration|expires|enabled|disabled|path|file|dir|directory|policy|"
           + "type|algorithm|mode|interval|retries|attempts|url|uri|ms|secs|seconds|minutes|header|name|field|class|provider)$");
+
+  // (name)(separator)(value) of arcadedb.server.defaultDatabases in any spelling: -D, key=value, ARCADEDB_SERVER_DEFAULTDATABASES, JSON.
+  // An unquoted value runs bracket block to bracket block, also across whitespace around a ';' (the server splits the value
+  // on ';' alone, so "A[u:p] ;B[v:q]" is two entries), so neither a space in a password nor one before the next entry cuts it short
+  private static final String  DATABASE_ENTRY    = "[^\\s\\[\\]\"']*+\\[[^\\]]*+\\]";
+  private static final Pattern DEFAULT_DATABASES = Pattern.compile(
+      "(?i)(defaultdatabases)((?:\\\\?[\"'])?\\s*[=:]\\s*)(" + QUOTED_VALUE + "|" + DATABASE_ENTRY + "(?:\\s*+;\\s*+" + DATABASE_ENTRY + "|"
+          + DATABASE_ENTRY + ")*+\\S*+|\\S+)");
 
   private static final Pattern HEADER_VALUE = Pattern.compile(
       "(?i)\\b(authorization|proxy-authorization|set-cookie|cookie|x-api-key|x-auth-token)(\\\\?[\"']?\\s*[:=]\\s*)(.*)");
@@ -178,7 +193,11 @@ public final class SupportRedactor {
       return out.toString();
     }
 
-    /** Redacts the JVM input arguments: {@code -Dx.password=abc} and {@code --password abc} (the next argument). */
+    /**
+     * Redacts the JVM input arguments: {@code -Dx.password=abc} and {@code --password abc} (the next argument). A
+     * {@code -D<setting>=<value>} argument that names an ArcadeDB setting is first published under that setting's own
+     * rule ({@link #publishableArgument(String)}), the rule the configuration section of the same report applies.
+     */
     public List<String> redactArguments(final List<String> arguments) {
       final List<String> result = new ArrayList<>(arguments.size());
       boolean maskNext = false;
@@ -191,11 +210,95 @@ public final class SupportRedactor {
             continue;
           }
         }
-        result.add(redact(arg));
+        result.add(redact(publishableArgument(arg)));
         if (arg.indexOf('=') < 0 && PASSWORD_OPTION_ONLY.matcher(arg).matches() && !BENIGN_SUFFIX.matcher(arg).find())
           maskNext = true;
       }
       return result;
+    }
+
+    /**
+     * A JVM argument of the form {@code -D<setting>=<value>} republished under the setting's own rule
+     * ({@link GlobalConfiguration#publishableValue(Object)}), so a value that EMBEDS credentials -
+     * {@code arcadedb.server.defaultDatabases}' {@code db[user:password]} triples - is redacted here exactly as it is in
+     * the configuration section of diagnostics.json (issue #9625). The name-based rules cannot see those: the secret is
+     * in the value, not in the name. A hidden setting is masked whatever its name, so a future one is covered without
+     * a new keyword. Any other argument is returned as it is, for the usual rules.
+     */
+    String publishableArgument(final String arg) {
+      if (!arg.startsWith("-D"))
+        return arg;
+      final int eq = arg.indexOf('=');
+      if (eq < 3)
+        return arg;
+      final GlobalConfiguration cfg = GlobalConfiguration.findByKey(arg.substring(2, eq));
+      if (cfg == null)
+        return arg;
+
+      final String value = arg.substring(eq + 1);
+      final String publishable = cfg.isHidden() ? MASK : String.valueOf(cfg.publishableValue(value));
+      if (publishable.equals(value) || isAlreadyMasked(value))
+        return arg;
+      count++;
+      return arg.substring(0, eq + 1) + publishable;
+    }
+
+    /**
+     * The backstop of the rule above (issue #9773): a defaultDatabases VALUE recognised by its own shape rather than by
+     * the setting's name next to it, so a line that quotes it under any other wording ("Error in default databases
+     * format: '...'", with a space) is covered without a rule per sentence. Bounded to a quoted span, so ordinary
+     * bracketed text is never touched, and to a span that reads as the value: {@code ';'}-separated entries whose names
+     * carry no whitespace, at least one of them opening a {@code [user:...} block. Every quote is tried as an opener, so a
+     * stray apostrophe earlier in the line ("can't") does not pair the quotes the wrong way round.
+     */
+    private String redactQuotedDefaultDatabases(final String line) {
+      if (line.indexOf('[') < 0)
+        return line;
+
+      StringBuilder out = null;
+      int copied = 0;
+      for (int open = nextQuote(line, 0); open >= 0; ) {
+        int close = closingQuote(line, open, open + 1);
+        if (close < 0) {
+          open = nextQuote(line, open + 1);
+          continue;
+        }
+        // AN ESCAPED SPAN (\"...\") ENDS BEFORE THE BACKSLASH OF ITS CLOSING QUOTE
+        final boolean escaped = isEscaped(line, open);
+        int end = escaped ? close - 1 : close;
+        if (!looksLikeDefaultDatabases(line.substring(open + 1, end))) {
+          open = nextQuote(line, open + 1);
+          continue;
+        }
+
+        // A QUOTE INSIDE A CREDENTIAL BLOCK IS PART OF THE PASSWORD, AS THE SERVER READS IT: A SPAN THAT STOPPED INSIDE AN
+        // OPEN BLOCK GOES ON TO THE BLOCK'S ']' AND THE NEXT MATCHING QUOTE, OR TO THE END OF THE LINE WHEN EITHER IS
+        // MISSING, WHICH FAILS CLOSED. EACH CHARACTER IS LOOKED AT ONCE MORE AT MOST: THE SCAN RESUMES PAST THE SPAN
+        for (int scanned = open + 1; end < line.length() && blockOpenAt(line, scanned, end); ) {
+          scanned = end;
+          final int bracket = line.indexOf(']', end);
+          close = bracket < 0 ? -1 : closingQuote(line, open, bracket + 1);
+          if (close < 0) {
+            close = line.length();
+            end = line.length();
+          } else
+            end = escaped ? close - 1 : close;
+        }
+
+        final String value = line.substring(open + 1, end);
+        final String publishable = String.valueOf(GlobalConfiguration.SERVER_DEFAULT_DATABASES.publishableValue(value));
+        if (!publishable.equals(value)) {
+          if (out == null)
+            out = new StringBuilder(line.length());
+          out.append(line, copied, open + 1).append(publishable);
+          copied = end;
+          count++;
+        }
+        open = close + 1 < line.length() ? nextQuote(line, close + 1) : -1;
+      }
+      if (out == null)
+        return line;
+      return out.append(line, copied, line.length()).toString();
     }
 
     private String redactPlain(final String line) {
@@ -204,8 +307,30 @@ public final class SupportRedactor {
 
       String current = line;
 
+      // The passwords inside a defaultDatabases value, before the keyword rules: a user named "token" must not let
+      // KEY_VALUE swallow the rest of the value
+      Matcher m = DEFAULT_DATABASES.matcher(current);
+      if (m.find()) {
+        final StringBuilder out = new StringBuilder(current.length());
+        m.reset();
+        while (m.find()) {
+          final String value = m.group(3);
+          final String publishable = publishableDefaultDatabases(value);
+          if (publishable.equals(value)) {
+            m.appendReplacement(out, Matcher.quoteReplacement(m.group()));
+            continue;
+          }
+          m.appendReplacement(out, Matcher.quoteReplacement(m.group(1) + m.group(2) + publishable));
+          count++;
+        }
+        m.appendTail(out);
+        current = out.toString();
+      }
+
       // Header values: the whole rest of the line
-      Matcher m = HEADER_VALUE.matcher(current);
+      current = redactQuotedDefaultDatabases(current);
+
+      m = HEADER_VALUE.matcher(current);
       if (m.find()) {
         final StringBuilder out = new StringBuilder(current.length());
         m.reset();
@@ -334,6 +459,85 @@ public final class SupportRedactor {
   /** Redacts one text with a throw-away session: for callers that do not need the count. */
   public static String redact(final String text) {
     return new Session().redact(text);
+  }
+
+  /** A defaultDatabases value, possibly quoted, with its passwords replaced; the quotes are kept. */
+  private static String publishableDefaultDatabases(final String value) {
+    final String open;
+    if (value.startsWith("\\\"") || value.startsWith("\\'"))
+      open = value.substring(0, 2);
+    else if (value.startsWith("\"") || value.startsWith("'"))
+      open = value.substring(0, 1);
+    else
+      open = "";
+    final boolean closed = !open.isEmpty() && value.length() >= 2 * open.length() && value.endsWith(open);
+    final String inner = value.substring(open.length(), closed ? value.length() - open.length() : value.length());
+    return open + GlobalConfiguration.SERVER_DEFAULT_DATABASES.publishableValue(inner) + (closed ? open : "");
+  }
+
+  /**
+   * The quote, from {@code from} on, that closes the span {@code open} opened: the same character, escaped the same way, so
+   * an escaped span (a JSON string quoted in a log line) closes on an escaped quote and a plain one does not.
+   */
+  private static int closingQuote(final String text, final int open, final int from) {
+    final char quote = text.charAt(open);
+    final boolean escaped = isEscaped(text, open);
+    for (int i = text.indexOf(quote, from); i >= 0; i = text.indexOf(quote, i + 1))
+      if (isEscaped(text, i) == escaped)
+        return i;
+    return -1;
+  }
+
+  private static boolean isEscaped(final String text, final int position) {
+    return position > 0 && text.charAt(position - 1) == '\\';
+  }
+
+  /** Tells whether a credential block opened in {@code [from, to)} is still open at {@code to}. */
+  private static boolean blockOpenAt(final String text, final int from, final int to) {
+    final int lastOpen = text.lastIndexOf('[', to - 1);
+    if (lastOpen < from)
+      return false;
+    final int closed = text.indexOf(']', lastOpen);
+    return closed < 0 || closed >= to;
+  }
+
+  private static int nextQuote(final String text, final int from) {
+    for (int i = from; i < text.length(); i++) {
+      final char c = text.charAt(i);
+      if (c == '\'' || c == '"')
+        return i;
+    }
+    return -1;
+  }
+
+  /**
+   * Tells whether a quoted span reads as a defaultDatabases value: {@code ';'}-separated entries, each name free of
+   * whitespace, and at least one entry opening a credential block with a {@code ':'} in it. One pass: a log line can be
+   * long, and a scan per entry would be quadratic in the number of {@code ';'}.
+   */
+  static boolean looksLikeDefaultDatabases(final String value) {
+    boolean credentials = false;
+    boolean inName = true;
+    boolean inBlock = false;
+    for (int i = 0; i < value.length(); i++) {
+      final char c = value.charAt(i);
+      if (c == ';') {
+        inName = true;
+        inBlock = false;
+      } else if (inName) {
+        if (c == '[') {
+          inName = false;
+          inBlock = true;
+        } else if (Character.isWhitespace(c))
+          return false;
+      } else if (inBlock) {
+        if (c == ']')
+          inBlock = false;
+        else if (c == ':')
+          credentials = true;
+      }
+    }
+    return credentials;
   }
 
   private static boolean queryStringBefore(final String text, final int start) {

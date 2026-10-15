@@ -32,14 +32,17 @@ import com.arcadedb.engine.Dictionary;
 import com.arcadedb.engine.ErrorRecordCallback;
 import com.arcadedb.engine.FileManager;
 import com.arcadedb.engine.LocalBucket;
+import com.arcadedb.engine.NodeLocalFiles;
 import com.arcadedb.engine.PageManager;
 import com.arcadedb.engine.PageVersionReservations;
 import com.arcadedb.engine.PageSnapshot;
+import com.arcadedb.engine.PaginatedComponent;
 import com.arcadedb.engine.TransactionManager;
 import com.arcadedb.engine.WALFile;
 import com.arcadedb.engine.WALFileFactory;
 import com.arcadedb.engine.WALFileFactoryEmbedded;
 import com.arcadedb.engine.timeseries.TimeSeriesBucket;
+import com.arcadedb.engine.timeseries.TimeSeriesEngine;
 import com.arcadedb.engine.timeseries.TimeSeriesTagDictionary;
 import com.arcadedb.exception.ArcadeDBException;
 import com.arcadedb.exception.BrokenChunkChainException;
@@ -47,6 +50,7 @@ import com.arcadedb.exception.CommandExecutionException;
 import com.arcadedb.exception.ConcurrentModificationException;
 import com.arcadedb.exception.DatabaseIsClosedException;
 import com.arcadedb.exception.DatabaseIsReadOnlyException;
+import com.arcadedb.exception.DatabaseIsReopeningException;
 import com.arcadedb.exception.DatabaseMetadataException;
 import com.arcadedb.exception.DatabaseNotFoundException;
 import com.arcadedb.exception.DatabaseOperationException;
@@ -68,6 +72,7 @@ import com.arcadedb.graph.VertexInternal;
 import com.arcadedb.graph.olap.GraphAnalyticalView;
 import com.arcadedb.graph.olap.GraphAnalyticalViewPersistence;
 import com.arcadedb.graph.olap.GraphAnalyticalViewRegistry;
+import com.arcadedb.index.ConsistentKeyLookup;
 import com.arcadedb.index.Index;
 import com.arcadedb.index.IndexCursor;
 import com.arcadedb.index.IndexInternal;
@@ -101,6 +106,9 @@ import com.arcadedb.schema.VertexType;
 import com.arcadedb.security.SecurityDatabaseUser;
 import com.arcadedb.security.SecurityManager;
 import com.arcadedb.serializer.BinarySerializer;
+import com.arcadedb.serializer.json.JSONArray;
+import com.arcadedb.serializer.json.JSONException;
+import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.utility.CollectionUtils;
 import com.arcadedb.utility.CoarseClock;
 import com.arcadedb.utility.FileUtils;
@@ -236,6 +244,11 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
   protected final    Lock                                      asyncLock                 = new ReentrantLock();
   protected          boolean                                   autoTransaction           = false;
   protected volatile boolean                                   open                      = false;
+  /**
+   * Set by {@link #closeForReopen()}: this instance was closed so that the same database could be reopened (#8199). Never
+   * reset, because an instance is single-use: it is opened once, by the factory that builds it, and a reopen is a new one.
+   */
+  private volatile boolean                                     closedForReopen           = false;
   private            boolean                                   readYourWrites            = true;
   // Database-wide durability settings (issue #8352): null until set, so every thread follows the configuration its
   // transaction context was created with. A thread's own setting (Transaction.setUseWAL() and siblings) wins.
@@ -249,6 +262,21 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
   private final      CypherPlanCache                           cypherPlanCache;
   private final      GraphStatisticsCache                      graphStatisticsCache      = new GraphStatisticsCache();
   private final      File                                      configurationFile;
+  /** Serializes the writers of {@link #configurationFile} (issue #9763: the HA apply read-modify-writes it). */
+  private final      Object                                    configurationFileLock     = new Object();
+  /**
+   * Orders a replicated configuration change against an undo of a setting whose save failed or had an unknown
+   * outcome, so the undo reads {@code configuration.json} and puts the setting back as one step the apply cannot
+   * interleave with (issue #9904).
+   */
+  private final      Object                                    configurationApplyLock    = new Object();
+  /**
+   * The {@link #changeSetting(String, Runnable) change} whose value each setting holds, by key, when that value was
+   * stored by one: what tells an undo whether its change is still the latest, and whether the value it would put back
+   * belongs to a change that was itself refused (issue #9951). A setting written since by anything else (the apply of a
+   * replicated change, a restore from {@code configuration.json}) has no entry. Guarded by {@link #configurationApplyLock}.
+   */
+  private final      Map<String, SettingToken>                 settingTokens             = new HashMap<>();
   // VOLATILE: the HA wrap installs the wrapper from the plugin's thread, and handles resolved before it
   // (ServerDatabase.commit(), issue #8282) read it from connection threads with no lock in common
   private volatile   DatabaseInternal                          wrappedDatabaseInstance   = this;
@@ -417,6 +445,18 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
 
   @Override
   public void close() {
+    closeInternal(false);
+  }
+
+  /**
+   * Closes this instance because the same database is about to be reopened under its name, by whoever closes it - an HA
+   * snapshot reinstall swapping its files, say. An operation still holding this handle is then refused with the
+   * retryable {@link DatabaseIsReopeningException} instead of the permanent {@link DatabaseIsClosedException}, since the
+   * database resolved again is the reopened one (issue #8199).
+   */
+  @Override
+  public void closeForReopen() {
+    closedForReopen = true;
     closeInternal(false);
   }
 
@@ -817,18 +857,14 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
   public long countType(final String typeName, final boolean polymorphic) {
     stats.countType.incrementAndGet();
 
-    return (Long) executeInReadLock((Callable<Object>) () -> {
+    final Object counted = executeInReadLock((Callable<Object>) () -> {
       final DocumentType type = schema.getType(typeName);
 
       // TimeSeries types store data in their own engine, not in regular buckets
       if (type instanceof LocalTimeSeriesType tsType) {
         // Counting samples never loads a record through a bucket, so apply the equivalent per-type read check here.
         checkPermissionsOnType(typeName, SecurityDatabaseUser.ACCESS.READ_RECORD);
-        try {
-          return tsType.requireEngine().countSamples();
-        } catch (final IOException e) {
-          throw new DatabaseOperationException("Error counting TimeSeries samples for type '" + typeName + "'", e);
-        }
+        return tsType.requireEngine();
       }
 
       long total = 0;
@@ -837,6 +873,21 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
 
       return total;
     });
+
+    if (counted instanceof TimeSeriesEngine engine) {
+      // Counted OUTSIDE the database read lock (issue #9716): the count waits on each shard's compaction read lock,
+      // and a compaction holding that lock's write side commits, which takes the database read lock. Waiting for the
+      // compaction lock while holding the database lock would let a close() queued for the write lock in between
+      // park all three. The query paths that read a TimeSeries type take the compaction lock without it, too. A close()
+      // that lands after this check still races the count, as it races those paths: it fails with the exception below.
+      checkDatabaseIsOpen();
+      try {
+        return engine.countSamples();
+      } catch (final IOException e) {
+        throw new DatabaseOperationException("Error counting TimeSeries samples for type '" + typeName + "'", e);
+      }
+    }
+    return (Long) counted;
   }
 
   @Override
@@ -1130,14 +1181,24 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
       if (idx == null)
         throw new IllegalArgumentException(
             "No index has been created on type '" + type + "' properties " + Arrays.toString(keyNames));
-      if (!idx.getType().isExactKeyLookup())
+      // An index a concurrent DDL has taken away, or is still populating, is no index yet (#9331): isReadyForQueries() is
+      // false for both and getType() of the former is null, which a bare dereference would turn into a NullPointerException
+      final Schema.INDEX_TYPE indexType = idx.isReadyForQueries() ? idx.getType() : null;
+      if (indexType == null)
+        throw new IllegalArgumentException(
+            "No index has been created on type '" + type + "' properties " + Arrays.toString(keyNames));
+      if (!indexType.isExactKeyLookup())
         // A FULL_TEXT (or vector, geospatial) index does not answer "value equals key": handing its answer back as one
         // attached edges to every vertex sharing a token with the key, and to none when the key has no token (#8439)
         throw new IllegalArgumentException(
             "No key index has been created on type '" + type + "' properties " + Arrays.toString(keyNames) + ": index '"
-                + idx.getName() + "' is " + idx.getType() + " and cannot look up a record by exact key");
+                + idx.getName() + "' is " + indexType + " and cannot look up a record by exact key");
 
-      return idx.get(keyValues);
+      // the entries and their records are read against one committed state: a commit that deletes and re-creates the key
+      // cannot make it vanish, appear twice or name a record that is gone by the time the caller loads it (#9397). And the
+      // index is read whole or not at all: a lookup a concurrent DROP INDEX left short raises instead of answering "no such
+      // key" (#9811)
+      return ConsistentKeyLookup.getForQuery(this, idx, keyValues);
     });
   }
 
@@ -1246,10 +1307,8 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
 
   @Override
   public void createRecord(final MutableDocument record) {
-    executeInReadLock(() -> {
-      createRecordNoLock(record, null, false);
-      return null;
-    });
+    // the same path as the caller that counts: createRecordReportingVeto(), so the two cannot drift (issue #9974)
+    createRecordReportingVeto(record, null);
   }
 
   @Override
@@ -1259,14 +1318,11 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
 
   @Override
   public void createRecord(final Record record, final String bucketName) {
-    executeInReadLock(() -> {
-      createRecordNoLock(record, bucketName, false);
-      return null;
-    });
+    createRecordReportingVeto(record, bucketName);
   }
 
   @Override
-  public void createRecordNoLock(final Record record, final String bucketName, final boolean discardRecordAfter) {
+  public boolean createRecordNoLock(final Record record, final String bucketName, final boolean discardRecordAfter) {
     markModified();
     if (record.getIdentity() != null)
       throw new IllegalArgumentException("Cannot create record " + record.getIdentity() + " because it is already " +
@@ -1282,10 +1338,10 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
 
     // INVOKE EVENT CALLBACKS
     if (!events.onBeforeCreate(record))
-      return;
+      return false;
     if (record instanceof Document doc)
       if (!((RecordEventsRegistry) doc.getType().getEvents()).onBeforeCreate(record))
-        return;
+        return false;
 
     boolean success = false;
     final boolean implicitTransaction = checkTransactionIsActive(autoTransaction);
@@ -1367,6 +1423,7 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
           wrappedDatabaseInstance.rollback();
       }
     }
+    return true;
   }
 
   /**
@@ -1575,6 +1632,31 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
 
   @Override
   public void updateRecord(final Record record) {
+    // the same path as the caller that counts: updateRecordReportingVeto(), so the two cannot drift (issue #9974)
+    updateRecordReportingVeto(record);
+  }
+
+  @Override
+  public boolean updateRecordReportingVeto(final Record record) {
+    return updateRecord(record, false, false);
+  }
+
+  @Override
+  public boolean updateRecordWithEventsNoLock(final Record record, final boolean discardRecordAfter) {
+    return updateRecord(record, true, discardRecordAfter);
+  }
+
+  /**
+   * The one owner of an update's contract - preconditions, validation, the before/after-update events and the
+   * {@code updateRecord} statistic - shared by the synchronous update and the asynchronous one, the shape the delete
+   * already has in {@link #deleteRecordNoLock(Record)}. The asynchronous task used to re-implement the validation and
+   * the events around the bare page write and miss the statistic, so the metrics endpoint undercounted every
+   * asynchronous update (issue #9987).
+   *
+   * @param writeNow true for the asynchronous worker: no database read lock, and the record is written to its page
+   *                 now, inside the caller's transaction, rather than queued for the commit
+   */
+  private boolean updateRecord(final Record record, final boolean writeNow, final boolean discardRecordAfter) {
     if (record.getIdentity() == null)
       throw new IllegalArgumentException("Cannot update the record because it is not persistent");
 
@@ -1586,94 +1668,102 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
 
     // INVOKE EVENT CALLBACKS
     if (!events.onBeforeUpdate(record))
-      return;
+      return false;
     if (record instanceof Document document)
       if (!((RecordEventsRegistry) document.getType().getEvents()).onBeforeUpdate(record))
-        return;
+        return false;
 
-    executeInReadLock(() -> {
-      if (isTransactionActive()) {
-        // MARK THE RECORD FOR UPDATE IN TX AND DEFER THE SERIALIZATION AT COMMIT TIME. THIS SPEEDS UP CASES WHEN THE
-        // SAME RECORDS ARE UPDATE MULTIPLE TIME INSIDE
-        // THE SAME TX. THE MOST CLASSIC EXAMPLE IS INSERTING EDGES: THE RECORD CHUNK IS UPDATED EVERYTIME A NEW EDGE
-        // IS CREATED IN THE SAME CHUNK.
-        // THE PAGE IS EARLY LOADED IN TX CACHE TO USE THE PAGE MVCC IN CASE OF CONCURRENT OPERATIONS ON THE MODIFIED
-        // RECORD
-        try {
-          final TransactionContext tx = getTransaction();
-          // #7149: false means this transaction has already deleted the record, so there is nothing to write and
-          // nothing to index - the delete wins, and the index entries went with it. Returning here also keeps the
-          // after-update events from firing for a write that never happened.
-          // #8066: remembered before queueing, so a refused update takes back only what THIS call queued
-          final boolean alreadyQueued = tx.isUpdateQueued(record.getIdentity());
-          if (!tx.addUpdatedRecord(record))
-            return null;
+    if (writeNow)
+      return applyUpdate(record, true, discardRecordAfter);
+    return executeInReadLock(() -> applyUpdate(record, false, false));
+  }
 
-          if (record instanceof Document document) {
-            // UPDATE THE INDEX IN MEMORY BEFORE UPDATING THE PAGE
-            final List<IndexInternal> indexes = indexer.getInvolvedIndexes(document);
-            if (!indexes.isEmpty()) {
-              // UPDATE THE INDEXES TOO.
-              // #4935: when the same record is updated more than once in this tx, diff against the previous
-              // in-tx indexed state (snapshot below), not the committed buffer returned by
-              // getOriginalDocument() - the buffer stays frozen until commit because serialization is
-              // deferred, so diffing against it leaks a phantom index entry for every intermediate value.
-              // The snapshot holds ONLY the indexed property values (not a full detach of the document) to
-              // stay light on allocations for wide documents and bulk updates.
-              final RID rid = record.getIdentity();
-              final Document previous = tx.getLastIndexedSnapshot(rid);
-              final Document originalRecord = previous != null ? previous : getOriginalDocument(record);
-              // updateDocument returns a refreshed snapshot (built from the key values it already extracted
-              // for the diff) ONLY when an index actually changed: otherwise the previous diff source
-              // (committed buffer or an earlier snapshot) still describes the indexed state, and updates
-              // that touch only non-indexed properties pay no snapshot cost at all.
-              // #8066: same invariant as the create path (#7467) - a refused row leaves no trace. Without the undo the
-              // new key stays queued in the transaction's index changes and the chunk's commit dies naming the row
-              // the caller was already told was refused, discarding every row that was accepted.
-              final TransactionIndexContext indexChanges = tx.getIndexChanges();
-              indexChanges.armRecordUndo();
-              final Document refreshedSnapshot;
-              try {
-                refreshedSnapshot = indexer.updateDocument(originalRecord, document, indexes);
-              } catch (final RuntimeException | Error e) {
-                indexChanges.undoRecordChanges();
-                // The deferred write must not reach the commit either: it would store the refused values in a body
-                // no index entry describes. A record already queued by an earlier update keeps its queue entry,
-                // because the earlier update's indexed state is still what the index holds.
-                // (The page pinned and the off-page fingerprint recorded by addUpdatedRecord stay: the next update of
-                // the record overwrites them, so they are harmless.)
-                if (!alreadyQueued)
-                  tx.removeRecordFromCache(rid);
-                throw e;
-              } finally {
-                indexChanges.disarmRecordUndo();
-              }
-              if (refreshedSnapshot != null)
-                tx.setLastIndexedSnapshot(rid, refreshedSnapshot);
+  /**
+   * The write half of {@link #updateRecord(Record, boolean, boolean)}, after the before-update listeners let it through.
+   */
+  private boolean applyUpdate(final Record record, final boolean writeNow, final boolean discardRecordAfter) {
+    if (!writeNow && isTransactionActive()) {
+      // MARK THE RECORD FOR UPDATE IN TX AND DEFER THE SERIALIZATION AT COMMIT TIME. THIS SPEEDS UP CASES WHEN THE
+      // SAME RECORDS ARE UPDATE MULTIPLE TIME INSIDE
+      // THE SAME TX. THE MOST CLASSIC EXAMPLE IS INSERTING EDGES: THE RECORD CHUNK IS UPDATED EVERYTIME A NEW EDGE
+      // IS CREATED IN THE SAME CHUNK.
+      // THE PAGE IS EARLY LOADED IN TX CACHE TO USE THE PAGE MVCC IN CASE OF CONCURRENT OPERATIONS ON THE MODIFIED
+      // RECORD
+      try {
+        final TransactionContext tx = getTransaction();
+        // #7149: false means this transaction has already deleted the record, so there is nothing to write and
+        // nothing to index - the delete wins, and the index entries went with it. Returning here also keeps the
+        // after-update events from firing for a write that never happened.
+        // #8066: remembered before queueing, so a refused update takes back only what THIS call queued
+        final boolean alreadyQueued = tx.isUpdateQueued(record.getIdentity());
+        if (!tx.addUpdatedRecord(record))
+          return false;
+
+        if (record instanceof Document document) {
+          // UPDATE THE INDEX IN MEMORY BEFORE UPDATING THE PAGE
+          final List<IndexInternal> indexes = indexer.getInvolvedIndexes(document);
+          if (!indexes.isEmpty()) {
+            // UPDATE THE INDEXES TOO.
+            // #4935: when the same record is updated more than once in this tx, diff against the previous
+            // in-tx indexed state (snapshot below), not the committed buffer returned by
+            // getOriginalDocument() - the buffer stays frozen until commit because serialization is
+            // deferred, so diffing against it leaks a phantom index entry for every intermediate value.
+            // The snapshot holds ONLY the indexed property values (not a full detach of the document) to
+            // stay light on allocations for wide documents and bulk updates.
+            final RID rid = record.getIdentity();
+            final Document previous = tx.getLastIndexedSnapshot(rid);
+            final Document originalRecord = previous != null ? previous : getOriginalDocument(record);
+            // updateDocument returns a refreshed snapshot (built from the key values it already extracted
+            // for the diff) ONLY when an index actually changed: otherwise the previous diff source
+            // (committed buffer or an earlier snapshot) still describes the indexed state, and updates
+            // that touch only non-indexed properties pay no snapshot cost at all.
+            // #8066: same invariant as the create path (#7467) - a refused row leaves no trace. Without the undo the
+            // new key stays queued in the transaction's index changes and the chunk's commit dies naming the row
+            // the caller was already told was refused, discarding every row that was accepted.
+            final TransactionIndexContext indexChanges = tx.getIndexChanges();
+            indexChanges.armRecordUndo();
+            final Document refreshedSnapshot;
+            try {
+              refreshedSnapshot = indexer.updateDocument(originalRecord, document, indexes);
+            } catch (final RuntimeException | Error e) {
+              indexChanges.undoRecordChanges();
+              // The deferred write must not reach the commit either: it would store the refused values in a body
+              // no index entry describes. A record already queued by an earlier update keeps its queue entry,
+              // because the earlier update's indexed state is still what the index holds.
+              // (The page pinned and the off-page fingerprint recorded by addUpdatedRecord stay: the next update of
+              // the record overwrites them, so they are harmless.)
+              if (!alreadyQueued)
+                tx.removeRecordFromCache(rid);
+              throw e;
+            } finally {
+              indexChanges.disarmRecordUndo();
             }
+            if (refreshedSnapshot != null)
+              tx.setLastIndexedSnapshot(rid, refreshedSnapshot);
           }
-        } catch (final IOException e) {
-          throw new DatabaseOperationException("Error on update the record " + record.getIdentity() + " in " +
-              "transaction", e);
         }
-      } else
-        updateRecordNoLock(record, false);
+      } catch (final IOException e) {
+        throw new DatabaseOperationException("Error on update the record " + record.getIdentity() + " in " +
+            "transaction", e);
+      }
+    } else
+      updateRecordNoLock(record, discardRecordAfter);
 
-      // Counted HERE rather than before the branch (#7149): the statistic reports records this database actually
-      // updated, and the two ways out above that are not an update - a listener vetoing the write, and a write to a
-      // record this transaction already deleted - both leave without reaching it. Both also skip the after-update
-      // events right below, so the two stay in step.
-      stats.updateRecord.incrementAndGet();
-      // THE IN-TRANSACTION BRANCH DEFERS THE WRITE TO COMMIT AND NEVER REACHES updateRecordNoLock()
-      markModified();
+    // Counted HERE rather than before the branch (#7149): the statistic reports records this database actually
+    // updated, and the two ways out above that are not an update - a listener vetoing the write, and a write to a
+    // record this transaction already deleted - both leave without reaching it. Both also skip the after-update
+    // events right below, so the two stay in step. NOT in updateRecordNoLock(): the commit flushes every deferred
+    // update through it, so an update made in a transaction would be counted twice (#9987).
+    stats.updateRecord.incrementAndGet();
+    // THE IN-TRANSACTION BRANCH DEFERS THE WRITE TO COMMIT AND NEVER REACHES updateRecordNoLock()
+    markModified();
 
-      // INVOKE EVENT CALLBACKS
-      events.onAfterUpdate(record);
-      if (record instanceof Document document)
-        ((RecordEventsRegistry) document.getType().getEvents()).onAfterUpdate(record);
+    // INVOKE EVENT CALLBACKS
+    events.onAfterUpdate(record);
+    if (record instanceof Document document)
+      ((RecordEventsRegistry) document.getType().getEvents()).onAfterUpdate(record);
 
-      return null;
-    });
+    return true;
   }
 
   public Document getOriginalDocument(final Record record) {
@@ -1761,23 +1851,18 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
 
   @Override
   public void deleteRecord(final Record record) {
-    executeInReadLock(() -> {
-      deleteRecordNoLock(record);
-      return null;
-    });
+    // the same path as the caller that counts: deleteRecordReportingVeto(), so the two cannot drift (issue #9837)
+    deleteRecordReportingVeto(record);
   }
 
   @Override
-  public void deleteEdgeSkippingEndpoint(final Edge edge, final RID skipEndpoint) {
-    executeInReadLock(() -> {
-      deleteRecordNoLock(edge, skipEndpoint);
-      return null;
-    });
+  public boolean deleteEdgeSkippingEndpoint(final Edge edge, final RID skipEndpoint, final Vertex.DIRECTION skipDirection) {
+    return executeInReadLock(() -> deleteRecordNoLock(edge, skipEndpoint, skipDirection));
   }
 
   @Override
   public boolean deleteRecordNoLock(final Record record) {
-    return deleteRecordNoLock(record, null);
+    return deleteRecordNoLock(record, null, null);
   }
 
   /**
@@ -1805,16 +1890,29 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
   /**
    * @param skipEdgeEndpoint when {@code record} is an edge, the endpoint vertex whose edge list must NOT be
    *                         touched by the disconnection (#5760, see
-   *                         {@link #deleteEdgeSkippingEndpoint(Edge, RID)}). Ignored for any other record type,
-   *                         and always {@code null} on the ordinary delete path.
+   *                         {@link #deleteEdgeSkippingEndpoint(Edge, RID, Vertex.DIRECTION)}). Ignored for any other
+   *                         record type, and always {@code null} on the ordinary delete path.
+   * @param skipEdgeDirection  the one list of {@code skipEdgeEndpoint} to leave alone, {@code null} for both of them
    */
-  private boolean deleteRecordNoLock(final Record record, final RID skipEdgeEndpoint) {
+  private boolean deleteRecordNoLock(final Record record, final RID skipEdgeEndpoint,
+      final Vertex.DIRECTION skipEdgeDirection) {
     markModified();
     if (record.getIdentity() == null)
       throw new IllegalArgumentException("Cannot delete a non persistent record");
 
     if (mode == ComponentFile.MODE.READ_ONLY)
       throw new DatabaseIsReadOnlyException("Cannot delete record " + record.getIdentity());
+
+    // REFUSE UP FRONT (issue #9305). LocalBucket.deleteRecord checks DELETE_RECORD too, but it is the LAST thing a delete
+    // does: by then the index entries, the EXTERNAL values and the edges are already gone, and a caller that owns its
+    // transaction and carries on after the refusal would commit that half-applied delete.
+    //
+    // Unconditional, record-less RIDs included (issue #9619): a lightweight edge owns no slot, so LocalBucket.deleteRecord
+    // never runs for it and THIS is the only place its DELETE_RECORD grant can be enforced. Its LightEdgeRID carries the
+    // edge type's first bucket id, the file id the grant array is keyed on, and every bucket of a type carries the same
+    // access array, so the first bucket answers for the type.
+    checkPermissionsOnFile(schema.getBucketById(record.getIdentity().getBucketId()).getFileId(),
+        SecurityDatabaseUser.ACCESS.DELETE_RECORD);
 
     // INVOKE EVENT CALLBACKS. This is the ONE place the delete listeners are dispatched from: every caller, the
     // asynchronous delete task included, reaches the listeners through here (issue #7003).
@@ -1854,6 +1952,10 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
           LogManager.instance().log(this, Level.WARNING,
               "Cannot read record %s for index/external cleanup on delete (corrupted buffer): %s. Deleting the record anyway; "
                   + "run a database check to repair any dangling index entries.", record.getIdentity(), e.getMessage());
+        } catch (final SecurityException e) {
+          // A user that is refused on the paired external bucket: the index entries are already gone (issue #9305)
+          doomAfterRefusedDelete(record, e);
+          throw e;
         } catch (final BrokenChunkChainException e) {
           // The loader itself confirmed the chunk chain is structurally broken (#6258), so there is nothing left to
           // disambiguate here: the body cannot be assembled and never will be. Same tolerant path as the branch below,
@@ -1877,7 +1979,7 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
 
       try {
         if (record instanceof Edge edge) {
-          graphEngine.deleteEdge(edge, skipEdgeEndpoint);
+          graphEngine.deleteEdge(edge, skipEdgeEndpoint, skipEdgeDirection);
         } else if (record instanceof Vertex) {
           try {
             graphEngine.deleteVertex((VertexInternal) record, forceBrokenChainDelete);
@@ -1913,6 +2015,13 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
         }
       } catch (final RecordNotFoundException e) {
         throw asConcurrentDeleteIfReadHere(record, e);
+      } catch (final SecurityException e) {
+        // The up-front check above covers the record's own bucket; this refusal came from a bucket reached only after the
+        // delete had started (the edges of a vertex, say), so index entries, external values or links are already gone and
+        // nothing undoes them. Make the commit fail rather than let a caller that goes on publish the half-applied delete
+        // (issue #9305).
+        doomAfterRefusedDelete(record, e);
+        throw e;
       }
 
       success = true;
@@ -1941,6 +2050,10 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
     return true;
   }
 
+  private void doomAfterRefusedDelete(final Record record, final SecurityException e) {
+    getTransaction().setRollbackOnly("delete of " + record.getIdentity() + " was refused after it had started: " + e.getMessage());
+  }
+
   /** The INDEX/EXTERNAL cleanup could not read the record, so the delete proceeds without it. */
   private void logBrokenChainForceDelete(final RID rid, final Exception e) {
     LogManager.instance().log(this, Level.WARNING,
@@ -1963,8 +2076,8 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
 
   /**
    * Deletes all external-bucket records referenced by the given document's TYPE_EXTERNAL property pointers, in the same
-   * transaction as the primary delete. No-op if the type has no EXTERNAL properties or the document was not loaded with
-   * a buffer.
+   * transaction as the primary delete. No-op if the type that owns the record's bucket never had paired external buckets
+   * or the document was not loaded with a buffer.
    */
   private void cascadeDeleteExternalValues(final Document document) {
     cascadeDeleteExternalValues(document, false);
@@ -1975,10 +2088,8 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
    *                without the user-delete permission check, like the primary body (issue #8922)
    */
   private void cascadeDeleteExternalValues(final Document document, final boolean retract) {
-    if (!(document.getType() instanceof LocalDocumentType localType))
-      return;
-    if (!localType.hasExternalProperties())
-      return;
+    // No hasExternalProperties() pre-gate (#9683): it is false between setExternal(false) and REBUILD TYPE, and wrong for a
+    // record a polymorphic scan tagged with its parent type. findExistingExternalRids gates on the bucket owner instead.
     final Map<String, RID> externalRids = serializer.findExistingExternalRids(this, document);
     RuntimeException failure = null;
     for (final RID extRid : externalRids.values()) {
@@ -2036,13 +2147,32 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
   }
 
   @Override
-  public boolean transaction(final TransactionScope txBlock, final boolean joinCurrentTx, int attempts,
+  public boolean transaction(final TransactionScope txBlock, final boolean joinCurrentTx, final int attempts,
       final OkCallback ok,
       final ErrorCallback error) {
     if (txBlock == null)
       throw new IllegalArgumentException("Transaction block is null");
 
+    // The outermost call owns the RetryScope, which outlives the rollbacks between its attempts (issue #9322)
+    // A thread that never touched this database has no context yet: begin() creates it on first use, so it is created here
+    // instead, or the first retried call of the thread would run without a scope
+    final DatabaseContext.DatabaseContextTL existing = DatabaseContext.INSTANCE.getContextIfExists(databasePath);
+    final DatabaseContext.DatabaseContextTL context = existing != null ? existing : DatabaseContext.INSTANCE.init(this);
+    context.enterRetryScope();
+    try {
+      return transactionWithRetries(txBlock, joinCurrentTx, attempts, ok, error, context);
+    } finally {
+      context.exitRetryScope();
+    }
+  }
+
+  private boolean transactionWithRetries(final TransactionScope txBlock, final boolean joinCurrentTx, int attempts,
+      final OkCallback ok, final ErrorCallback error, final DatabaseContext.DatabaseContextTL context) {
+
     ArcadeDBException lastException = null;
+
+    // Where this call's slots begin, so each of its own retries meets the slots its first attempt filled
+    final int retryScopeBase = context != null ? context.retryScopeCursor() : 0;
 
     if (attempts < 1)
       attempts = 1;
@@ -2054,6 +2184,9 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
 
     for (int retry = 0; retry < attempts; ++retry) {
       boolean createdNewTx = true;
+
+      if (retry > 0 && context != null)
+        context.restoreRetryScopeCursor(retryScopeBase);
 
       // Declared OUTSIDE the try so the catch can read them; sampled just after begin(), so they refer to the
       // transaction this attempt's block actually runs in. See the guard in the catch below (#7916).
@@ -2882,7 +3015,366 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
    * configuration files cannot tolerate - it reads the file by name, with no lock excluding this writer.
    */
   public void saveConfiguration() throws IOException {
-    FileUtils.atomicWriteFile(configurationFile, configuration.toJSON());
+    synchronized (configurationFileLock) {
+      FileUtils.atomicWriteFile(configurationFile, configuration.toJSON());
+    }
+  }
+
+  /**
+   * Saves the configuration after {@code key} changed (issue #9959). A database of its own writes the whole
+   * configuration to its file, as {@link #saveConfiguration()} does: there is nothing to replicate. The key matters to
+   * the Raft HA wrapper, which replicates the change to that setting alone.
+   */
+  @Override
+  public void saveConfiguration(final String key) throws IOException {
+    saveConfiguration();
+  }
+
+  /**
+   * The settings this database holds in memory that its {@code configuration.json} does not hold yet, as a document
+   * {@link #applyConfigurationChanges(String)} takes: {@code {"configuration": {changed settings}, "removed": [keys]}},
+   * keys without the {@code arcadedb.} prefix as in the file. {@code null} when memory and file agree.
+   * <p>
+   * Issue #9763: under Raft HA this is what {@code ALTER DATABASE} replicates. Only the changed settings, never the
+   * whole document: a node composing a whole document from its own view would overwrite, cluster-wide, a change
+   * another node committed that it had not applied yet, and a value a node holds in its own file only would be lost
+   * on every other change.
+   */
+  public String pendingConfigurationChanges() throws IOException {
+    return pendingConfigurationChanges(null);
+  }
+
+  /**
+   * The change to ONE setting this database holds in memory that its {@code configuration.json} does not hold yet, in
+   * the document {@link #pendingConfigurationChanges()} produces, {@code null} when memory and file agree on it.
+   * {@code key} is the setting's key as the configuration stores it ({@code arcadedb.} prefix included).
+   * <p>
+   * Issue #9959: what {@code ALTER DATABASE} and the "set database setting" command replicate under Raft HA. The whole
+   * difference between memory and file also holds what ANOTHER statement on this node has put in force and not
+   * submitted yet: shipped with this statement's entry, it was in force cluster-wide even when that statement's own save
+   * was then refused and the caller told nothing had changed.
+   */
+  public String pendingConfigurationChange(final String key) throws IOException {
+    // A declared setting under its declared key, the one the configuration stores it under, however the caller spelled it
+    final GlobalConfiguration setting = GlobalConfiguration.findByKey(key);
+    return pendingConfigurationChanges(ContextConfiguration.jsonKey(setting != null ? setting.getKey() : key));
+  }
+
+  /** The difference between memory and {@code configuration.json}, restricted to {@code onlyFileKey} when not null. */
+  private String pendingConfigurationChanges(final String onlyFileKey) throws IOException {
+    final JSONObject saved = readSavedConfiguration().getJSONObject("configuration", new JSONObject());
+    final JSONObject current = new JSONObject(configuration.toJSON()).getJSONObject("configuration", new JSONObject());
+
+    final JSONObject changed = new JSONObject();
+    for (final String key : current.keySet()) {
+      if (onlyFileKey != null && !onlyFileKey.equals(key))
+        continue;
+      final Object value = current.get(key);
+      if (!saved.has(key) || !String.valueOf(saved.get(key)).equals(String.valueOf(value)))
+        changed.put(key, value);
+    }
+    final JSONArray removed = new JSONArray();
+    for (final String key : saved.keySet())
+      if ((onlyFileKey == null || onlyFileKey.equals(key)) && !current.has(key))
+        removed.put(key);
+
+    if (changed.keySet().isEmpty() && removed.length() == 0)
+      return null;
+    return new JSONObject().put("configuration", changed).put("removed", removed).toString();
+  }
+
+  /**
+   * Applies a document {@link #pendingConfigurationChanges()} produced, in memory with the per-database effects, and
+   * to {@code configuration.json} (issue #9763). Every setting the document does not name keeps its value, in memory
+   * and in the file. The file is updated from its own content, not from memory, so a change made on this node that
+   * is still on its way through the replication is not written ahead of it.
+   */
+  public void applyConfigurationChanges(final String changesJson) throws IOException {
+    synchronized (configurationApplyLock) {
+      applyConfigurationChangesLocked(changesJson);
+    }
+  }
+
+  private void applyConfigurationChangesLocked(final String changesJson) throws IOException {
+    final JSONObject changes = new JSONObject(changesJson);
+    final JSONObject changed = changes.getJSONObject("configuration", new JSONObject());
+    final JSONArray removed = changes.getJSONArray("removed", new JSONArray());
+
+    final ContextConfiguration incoming = new ContextConfiguration();
+    incoming.fromJSON(new JSONObject().put("configuration", changed).toString());
+    configuration.merge(incoming);
+    for (int i = 0; i < removed.length(); i++)
+      configuration.setValue(GlobalConfiguration.PREFIX + removed.getString(i), null);
+    configurationChanged();
+    // The values just installed belong to no change made on this node: an undo of one finds it superseded (issue #9951)
+    for (final String key : changed.keySet())
+      settingTokens.remove(tokenKey(GlobalConfiguration.PREFIX + key));
+    for (int i = 0; i < removed.length(); i++)
+      settingTokens.remove(tokenKey(GlobalConfiguration.PREFIX + removed.getString(i)));
+
+    // Read-modify-write, so under the lock every writer of the file takes
+    synchronized (configurationFileLock) {
+      final JSONObject saved = readSavedConfiguration();
+      final JSONObject savedSettings = saved.getJSONObject("configuration", new JSONObject());
+      for (final String key : changed.keySet())
+        savedSettings.put(key, changed.get(key));
+      for (int i = 0; i < removed.length(); i++)
+        savedSettings.remove(removed.getString(i));
+      saved.put("configuration", savedSettings);
+      FileUtils.atomicWriteFile(configurationFile, saved.toString());
+    }
+  }
+
+  /**
+   * The {@code configuration.json} on disk, or an empty document when there is none yet. A file that is not valid JSON
+   * counts as empty, with a warning: what it held is unreadable anyway, and refusing would fail every replicated change
+   * on this node instead of letting the next one write a valid file.
+   */
+  private JSONObject readSavedConfiguration() throws IOException {
+    if (!configurationFile.exists())
+      return new JSONObject();
+    final String content = FileUtils.readFileAsString(configurationFile);
+    if (content.isBlank())
+      return new JSONObject();
+    try {
+      return new JSONObject(content);
+    } catch (final JSONException e) {
+      LogManager.instance().log(this, Level.WARNING, "Database configuration file '%s' is not valid JSON, treated as empty: %s",
+          configurationFile, e.getMessage());
+      return new JSONObject();
+    }
+  }
+
+  /** Re-derives what {@link #open()} derives from the configuration, after it changed in memory (issue #9763). */
+  private void configurationChanged() {
+    serializer.setDateImplementation(configuration.getValue(GlobalConfiguration.DATE_IMPLEMENTATION));
+    serializer.setDateTimeImplementation(configuration.getValue(GlobalConfiguration.DATE_TIME_IMPLEMENTATION));
+
+    statementCache.clear();
+    cypherStatementCache.clear();
+  }
+
+  /**
+   * One change to one setting, as {@link #changeSetting(String, Runnable)} made it: the value the setting held before
+   * ({@code null}: not set) and the value the change stored. What {@link #undoSettingChange(SettingChange)} needs to put
+   * the previous value back only while nothing else changed the setting since (issue #9919). {@code token} identifies
+   * this change, {@code previousToken} the change whose value it replaced ({@code null}: a value no change on this node
+   * stored), so an undo can tell whether that value belongs to a change that was itself refused (issue #9951).
+   */
+  public record SettingChange(String key, Object previousValue, Object valueSet, SettingToken previousToken,
+                              SettingToken token) {
+    /** A change made without {@link #changeSetting(String, Runnable)}: no token, so nothing to undo it against. */
+    public SettingChange(final String key, final Object previousValue, final Object valueSet) {
+      this(key, previousValue, valueSet, null, null);
+    }
+  }
+
+  /**
+   * Identifies one {@link #changeSetting(String, Runnable) change} to a setting (issue #9951). Compared by identity, so
+   * a change storing the same value as another is still told apart from it. Its state is guarded by
+   * {@link #configurationApplyLock}.
+   */
+  public static final class SettingToken {
+    /** The change was refused while another change to the setting had already replaced its value. */
+    private boolean refusedWhileSuperseded;
+  }
+
+  /**
+   * Runs {@code change}, which stores a new value for {@code key} (side effects included), and returns the value it
+   * replaced and the value it stored, read under the lock {@link #applyConfigurationChanges(String)} holds. Capturing
+   * the previous value and storing the new one are then one step for the apply: under Raft HA a change to the same
+   * setting committed by another node cannot land between them, where the previous value captured would be one the
+   * apply had already replaced, and an undo of a refused save would put it back (issue #9919).
+   * <p>
+   * {@code change} runs under that lock, so it must only store the value and re-derive in-memory state from it: the
+   * setting's {@link GlobalConfiguration} callback and the per-database side effects (serializer, statement caches),
+   * as {@link #restoreSetting(String, Object)} already does under the same lock. Nothing that replicates or waits on
+   * the replication, and nothing that writes {@code configuration.json}: the caller saves once this returns, so a value
+   * this method puts back after a failed re-derivation never reached the file. That keeps the lock order acyclic: the Raft state machine takes this lock holding no database lock,
+   * and under it only {@code configurationFileLock}.
+   * <p>
+   * The per-database state derived from the configuration is re-derived here once {@code change} has stored the value,
+   * so a writer that only stores it - {@code set database setting} over HTTP and gRPC - leaves the open database running
+   * with it too, not only once reopened (issue #9949). If that fails, the previous value goes back before the error is
+   * rethrown, so the configuration never names a value the database is not running with.
+   */
+  public SettingChange changeSetting(final String key, final Runnable change) {
+    synchronized (configurationApplyLock) {
+      final String tokenKey = tokenKey(key);
+      final Object previousValue = settingValue(key);
+      final SettingToken previousToken = settingTokens.get(tokenKey);
+      try {
+        change.run();
+        try {
+          configurationChanged();
+        } catch (final RuntimeException | Error e) {
+          // null: the setting was not set, and setValue() then removes it rather than storing an explicit entry
+          configuration.setValue(key, previousValue);
+          try {
+            configurationChanged();
+          } catch (final RuntimeException | Error restoreFailure) {
+            // the failure that caused the restore is the one to report
+            e.addSuppressed(restoreFailure);
+          }
+          throw e;
+        }
+      } catch (final RuntimeException | Error e) {
+        // A change that fails puts the previous value back (restoreSetting(), which forgets the token): that value is
+        // the previous change's again, so an undo of that change must still find it the latest (issue #9951)
+        if (previousToken != null)
+          settingTokens.put(tokenKey, previousToken);
+        throw e;
+      }
+      final SettingToken token = new SettingToken();
+      settingTokens.put(tokenKey, token);
+      return new SettingChange(key, previousValue, settingValue(key), previousToken, token);
+    }
+  }
+
+  /**
+   * Undoes a {@link #changeSetting(String, Runnable) change} whose save was refused outright: the previous value goes
+   * back, side effects included, unless another writer changed the setting since (issue #9919) - under Raft HA the
+   * apply of a change to the same setting another node committed, or another change to it on this node whose save is
+   * still under way - and that value stands: putting the previous one back would leave this node on a value no other
+   * node holds, and that its own {@code configuration.json} does not hold. "Changed since" is told by the change's
+   * token, not by comparing values, so another writer that stored the SAME value is not mistaken for no writer at all
+   * (issue #9951); a value that differs from the one the change stored counts as changed too, for a writer that
+   * bypassed {@link #changeSetting(String, Runnable)}.
+   * <p>
+   * The previous value is itself not put back when it was stored by a change that was refused meanwhile, while this
+   * one had already replaced it (issue #9951): it is held by no other node and not by {@code configuration.json}. The
+   * setting then takes what {@code configuration.json} holds, as {@link #restoreSettingFromSavedConfiguration(String)}
+   * does. The checks and the put run under the lock the apply holds, so an apply cannot land between them.
+   * {@link #restoreSetting(String, Object)} does the rest, a value already saved included.
+   */
+  public void undoSettingChange(final SettingChange change) {
+    synchronized (configurationApplyLock) {
+      final String tokenKey = tokenKey(change.key());
+      if (change.token() != null && settingTokens.get(tokenKey) != change.token()
+          || !Objects.equals(settingValue(change.key()), change.valueSet())) {
+        // Changed since by another writer: its value stands. Should this change's value come back through the undo of
+        // the change that replaced it, that undo must know it was refused
+        if (change.token() != null)
+          change.token().refusedWhileSuperseded = true;
+        return;
+      }
+      if (change.previousToken() != null && change.previousToken().refusedWhileSuperseded) {
+        // The value this change replaced belongs to a refused change: settle on what the file holds
+        restoreSettingFromSavedConfigurationLocked(change.key());
+        return;
+      }
+      if (restoreSettingLocked(change.key(), change.previousValue()) && change.token() != null) {
+        // The value back in force is the previous change's again, so an undo of that change still finds it the latest
+        if (change.previousToken() != null)
+          settingTokens.put(tokenKey, change.previousToken());
+        else
+          settingTokens.remove(tokenKey);
+      }
+    }
+  }
+
+  /**
+   * Puts ONE setting back to {@code previousValue} ({@code null}: not set, so it falls back to the default) after a
+   * change to it could not be saved, side effects included (issue #9763). Not when {@code configuration.json} already
+   * holds the value in force: under HA a concurrent change made on this node may have shipped it in its own entry,
+   * which committed, and undoing it here would leave this node alone on the previous value. Every other setting is
+   * left untouched, so
+   * a change to another setting that lands meanwhile, such as a replicated configuration entry, is kept: the put is
+   * one atomic map operation, with no snapshot of the rest of the configuration taken or written back.
+   */
+  public void restoreSetting(final String key, final Object previousValue) {
+    synchronized (configurationApplyLock) {
+      if (restoreSettingLocked(key, previousValue))
+        // A value no change made on this node stored (issue #9951)
+        settingTokens.remove(tokenKey(key));
+    }
+  }
+
+  /** {@link #restoreSetting(String, Object)} without the token bookkeeping. Whether the value was put back. */
+  private boolean restoreSettingLocked(final String key, final Object previousValue) {
+    if (isSaved(key))
+      // The value in force already reached configuration.json: another save shipped it, so it is committed and stays
+      return false;
+    configuration.setValue(key, previousValue);
+    configurationChanged();
+    return true;
+  }
+
+  /**
+   * Puts ONE setting back to the value this database's {@code configuration.json} holds for it, side effects
+   * included, after a save whose outcome is unknown: the change was handed to the replication and may still commit,
+   * or never (issue #9904). Under Raft HA the file on this node is written by the apply of a replicated configuration
+   * entry, the one this node submitted included, so it holds what the replication has installed here so far:
+   * <ul>
+   *   <li>the change was applied here already: the file holds the new value, which stays in force;</li>
+   *   <li>it was not applied yet: the previous value is back, and the apply installs the new one if the change does
+   *       commit later;</li>
+   *   <li>it never commits: the previous value is back, matching every other node, and nothing is left pending for
+   *       the next change made on this node to carry along.</li>
+   * </ul>
+   * Reading the file and putting the value back happen under the lock {@link #applyConfigurationChanges} holds, so an
+   * apply cannot land between them and be overwritten. A setting the file does not name falls back to its default.
+   * A file that cannot be read leaves the setting as it is, logged: with no record of what was installed, keeping
+   * the value just asked for is no worse a guess than the previous one.
+   */
+  public void restoreSettingFromSavedConfiguration(final String key) {
+    synchronized (configurationApplyLock) {
+      restoreSettingFromSavedConfigurationLocked(key);
+    }
+  }
+
+  private void restoreSettingFromSavedConfigurationLocked(final String key) {
+    final JSONObject savedSettings;
+    try {
+      savedSettings = readSavedConfiguration().getJSONObject("configuration", new JSONObject());
+    } catch (final IOException | RuntimeException e) {
+      LogManager.instance().log(this, Level.WARNING,
+          "Cannot read '%s' to settle setting '%s' after a change whose replication outcome is unknown: it keeps the value just set",
+          e, configurationFile, key);
+      return;
+    }
+    final String fileKey = key.startsWith(GlobalConfiguration.PREFIX) ? key.substring(GlobalConfiguration.PREFIX.length()) : key;
+
+    Object savedValue = null;
+    if (savedSettings.has(fileKey) && GlobalConfiguration.findByKey(key) == null)
+      // A setting nothing declares is stored as given, and fromJSON() skips it: take the file's value as it is
+      savedValue = savedSettings.get(fileKey);
+    else if (savedSettings.has(fileKey)) {
+      // Read back the way open() and the apply read the file, so the value is coerced and stored the same way
+      final ContextConfiguration saved = new ContextConfiguration();
+      saved.fromJSON(new JSONObject().put("configuration", new JSONObject().put(fileKey, savedSettings.get(fileKey))).toString());
+      savedValue = saved.hasValue(key) ? saved.getValue(key, null) : null;
+    }
+    configuration.setValue(key, savedValue);
+    configurationChanged();
+    // The value the file holds belongs to no change made on this node (issue #9951)
+    settingTokens.remove(tokenKey(key));
+  }
+
+  /** The key {@link #settingTokens} holds {@code key}'s token under: the declared spelling, as the configuration stores it. */
+  private static String tokenKey(final String key) {
+    final GlobalConfiguration cfg = GlobalConfiguration.findByKey(key);
+    return cfg != null ? cfg.getKey() : key;
+  }
+
+  /** The value this database's configuration stores for {@code key}, {@code null} when it stores none. */
+  private Object settingValue(final String key) {
+    return configuration.hasValue(key) ? configuration.getValue(key, null) : null;
+  }
+
+  /** Whether {@code configuration.json} holds the value {@code key} has in memory. Unreadable file: no. */
+  private boolean isSaved(final String key) {
+    final String fileKey = key.startsWith(GlobalConfiguration.PREFIX) ? key.substring(GlobalConfiguration.PREFIX.length()) : key;
+    final JSONObject saved;
+    try {
+      saved = readSavedConfiguration().getJSONObject("configuration", new JSONObject());
+    } catch (final IOException e) {
+      return false;
+    }
+    final JSONObject current = new JSONObject(configuration.toJSON()).getJSONObject("configuration", new JSONObject());
+    if (!current.has(fileKey))
+      return !saved.has(fileKey);
+    return saved.has(fileKey) && String.valueOf(saved.get(fileKey)).equals(String.valueOf(current.get(fileKey)));
   }
 
   /**
@@ -3085,6 +3577,16 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
       }
     }
 
+    if (!drop)
+      try {
+        // WHILE THE DATABASE IS STILL OPEN: THE SCHEMA CANNOT BE SERIALIZED ONCE THE CLOSE HAS BEGUN
+        schema.saveUnsavedFullTextCounters();
+      } catch (final Exception e) {
+        // BEST EFFORT, AND THE CLOSE CARRIES ON: THE COUNTERS ARE AN ESTIMATE THE FIRST SEARCH OF THE NEXT SESSION CHECKS AGAINST
+        // THE DATA, WHILE A CLOSE THAT FAILS HERE WOULD LEAVE THE FILES OPEN
+        LogManager.instance().log(this, Level.WARNING, "Error on saving the full-text corpus counters of database '%s'", e, name);
+      }
+
     for (final Index idx : schema.getIndexes()) {
       final IndexInternal index = (IndexInternal) idx;
 
@@ -3160,7 +3662,8 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
         // the files of a dropped database are about to be deleted, so its queued pages must leave the pipeline
         // here or the wait below would sit through a backlog that nobody will ever need on disk. The later call
         // then finds nothing left to purge and only does the forgetting, which is all a drop still needs from it.
-        PageManager.INSTANCE.removeModifiedPagesOfDatabase(this);
+        // dropped=true: the deferred batches of a database suspended at this point have their WAL acks released (#9881)
+        PageManager.INSTANCE.removeModifiedPagesOfDatabase(this, true);
 
       // #4928: bounded wait. When it gives up (wedged flush / unwritable disk), this close becomes
       // CRASH-EQUIVALENT: the WAL files and the lock file are preserved below, so the next open runs
@@ -3200,7 +3703,8 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
         // the page manager's snapshot barrier monitor. Skipping it on the common path pinned one dead
         // LocalDatabase (and everything it references) per closed database for the lifetime of
         // PageManager.INSTANCE, which any process cycling through databases pays forever.
-        PageManager.INSTANCE.removeModifiedPagesOfDatabase(this);
+        // dropped=drop: on a plain close the deferred batches keep their WAL acks, so the preserved WAL replays them (#9881)
+        PageManager.INSTANCE.removeModifiedPagesOfDatabase(this, drop);
 
         PageManager.INSTANCE.removeAllReadPagesOfDatabase(this);
       } catch (final Throwable t) {
@@ -3344,7 +3848,7 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
    * {@link #performRecovery()} once the schema is loaded.
    */
   private boolean prepareRecovery() throws IOException {
-    lockFile = new File(databasePath + "/database.lck");
+    lockFile = new File(databasePath + "/" + NodeLocalFiles.DATABASE_LOCK_FILE_NAME);
 
     if (lockFile.exists()) {
       if (mode == ComponentFile.MODE.READ_ONLY) {
@@ -3394,6 +3898,39 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
     transactionManager.checkIntegrity();
   }
 
+  /**
+   * Removes any index-compaction temporary ({@code *.temp_<ext>}, see {@link PaginatedComponent#isTemporaryFileName})
+   * left in the database directory (#8849). The compaction that owned it is gone - a crash or kill mid-compaction, a
+   * snapshot shipped by a leader that predates #8019, a backup taken during a compaction and restored - and the
+   * component scan never registers it, because its extension is not in {@link #SUPPORTED_FILE_EXT}. Without this sweep
+   * it would occupy disk for the life of the node.
+   * <p>
+   * Safe because a temporary is never referenced across an open: both producers rename it to its final extension
+   * ({@link PaginatedComponent#removeTempSuffix()}) BEFORE the schema is pointed at it, so neither the schema nor a
+   * registered component can name a {@code temp_} file. Index files live only in the primary directory, never under
+   * the external-property bucket path, so that is the only directory swept.
+   */
+  private void deleteOrphanCompactionTemporaries() {
+    final File[] orphans = new File(databasePath).listFiles((dir, name) -> PaginatedComponent.isTemporaryFileName(name));
+    if (orphans == null)
+      return;
+    for (final File orphan : orphans) {
+      if (!orphan.isFile())
+        continue;
+      final long size = orphan.length();
+      try {
+        // Files.delete AND NOT File.delete: A FAILURE (PERMISSIONS, A FILE HELD OPEN ON WINDOWS) THEN CARRIES ITS
+        // REASON INTO THE WARNING. IT NEVER FAILS THE OPEN - A LEFTOVER TEMPORARY COSTS DISK, NOT CORRECTNESS
+        Files.delete(orphan.toPath());
+        LogManager.instance().log(this, Level.INFO, "Deleted orphan index-compaction temporary file '%s' (%d bytes) from database '%s'",
+            null, orphan.getName(), size, name);
+      } catch (final IOException e) {
+        LogManager.instance().log(this, Level.WARNING, "Cannot delete orphan index-compaction temporary file '%s' (%d bytes) from database '%s'",
+            e, orphan.getName(), size, name);
+      }
+    }
+  }
+
   /** Removes any {@code .pshadow} scratch file left behind by a snapshot window that a crash interrupted (#6075). */
   private void deleteOrphanSnapshotShadows() {
     final File[] orphans = new File(databasePath).listFiles(
@@ -3412,11 +3949,6 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
       DatabaseContext.INSTANCE.init(this);
       setLockingEnabled(configuration.getValueAsBoolean(GlobalConfiguration.BACKUP_ENABLED));
 
-      // #6075 (challenge C8): the copy-on-write shadow of a snapshot window is pure scratch - recovery never reads
-      // it - so a crash mid-window leaves nothing but an orphan file to delete here. Its extension is deliberately
-      // absent from SUPPORTED_FILE_EXT, so the FileManager scan below never mistakes one for a data file.
-      deleteOrphanSnapshotShadows();
-
       fileManager = new FileManager(databasePath, mode, SUPPORTED_FILE_EXT, resolveExternalBucketPath());
       fileManager.setDroppedFileHandler(file -> PageManager.INSTANCE.deferFileDrop(wrappedDatabaseInstance, file));
       transactionManager = new TransactionManager(wrappedDatabaseInstance);
@@ -3429,16 +3961,40 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
         // OWN THE DATABASE BEFORE READING IT: LOADING THE SCHEMA OF A CRASHED DATABASE WRITES TO IT.
         final boolean recoveryPending = prepareRecovery();
 
+        // #6075 (challenge C8): the copy-on-write shadow of a snapshot window is pure scratch - recovery never reads
+        // it - so a crash mid-window leaves nothing but an orphan file to delete. Only an owner of the database can say
+        // that nobody has a window open (#9412): after the exclusive lock, and never for a READ_ONLY open, which takes
+        // none. The extension is deliberately absent from SUPPORTED_FILE_EXT, so the FileManager scan never mistakes
+        // one for a data file.
+        if (mode == ComponentFile.MODE.READ_WRITE)
+          deleteOrphanSnapshotShadows();
+
+        // #8849: AN INDEX-COMPACTION TEMPORARY NEVER OUTLIVES THE PROCESS THAT BUILT IT, SO ONE FOUND AT OPEN IS AN
+        // ORPHAN. ONLY A READ_WRITE OPEN DELETES IT: THAT IS THE ONE THAT NOW HOLDS THE EXCLUSIVE LOCK ON database.lck
+        if (mode == ComponentFile.MODE.READ_WRITE)
+          deleteOrphanCompactionTemporaries();
+
         if (fileManager.getFiles().isEmpty())
           schema.create(mode);
         else
-          schema.load(mode, true);
+          // THE TIMESERIES ENGINES READ THEIR PAGES WHEN THEY ARE BUILT, SO ON A CRASHED DATABASE THEY ARE BUILT AFTER
+          // THE WAL REPLAY, NOT FROM THE STALE PAGES THE SCHEMA LOAD FINDS ON DISK (ISSUE #9452)
+          schema.load(mode, true, recoveryPending);
 
         serializer.setDateImplementation(configuration.getValue(GlobalConfiguration.DATE_IMPLEMENTATION));
         serializer.setDateTimeImplementation(configuration.getValue(GlobalConfiguration.DATE_TIME_IMPLEMENTATION));
 
-        if (recoveryPending)
-          performRecovery();
+        if (recoveryPending) {
+          try {
+            performRecovery();
+          } catch (final RuntimeException | Error e) {
+            // The open fails: the engines it deferred are not built over a replay that did not finish. The schema is left loaded
+            // with those TimeSeries types registered and engine-less, and is closed by the failed-open cleanup below
+            schema.discardDeferredTimeSeriesEngines();
+            throw e;
+          }
+          schema.openDeferredTimeSeriesEngines();
+        }
 
         if (security != null)
           security.updateSchema(this);
@@ -3622,7 +4178,7 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
 
   protected void checkDatabaseIsOpen(final boolean updateIntent, final String databaseReadOnlyErrorMessage) {
     if (!open)
-      throw new DatabaseIsClosedException(name);
+      throw closedForReopen ? new DatabaseIsReopeningException(name) : new DatabaseIsClosedException(name);
     if (fenceReason != null)
       // #5053: a commit failed AFTER its WAL append - the WAL holds a record whose pages were never
       // published, so the live in-memory state diverges from what recovery will reconstruct. Every further

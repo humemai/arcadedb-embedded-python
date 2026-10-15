@@ -23,6 +23,7 @@ import com.arcadedb.exception.RecordNotFoundException;
 import com.arcadedb.graph.Edge;
 import com.arcadedb.graph.GhostEdgeReporter;
 import com.arcadedb.graph.Vertex;
+import com.arcadedb.query.opencypher.traversal.TraversalPath;
 import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultInternal;
@@ -31,7 +32,6 @@ import com.arcadedb.utility.NumberUtils;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -100,11 +100,11 @@ public class AlgoAllSimplePaths extends AbstractAlgoProcedure {
 
     final Vertex startNode = extractVertex(args[0], "startNode");
     final Vertex endNode = extractVertex(args[1], "endNode");
-    final String[] relTypes = extractRelTypes(args[2]);
+    final String[] relTypes = extractRelTypes(args[2], context);
     final int maxDepth = NumberUtils.saturateToInt((Number) args[3]);
-    final Map<String, Object> options = args.length > 4 ? extractMap(args[4], "options") : null;
-    final Set<String> skipRelTypes = extractSkipTypes(options, "skipRelTypes");
-    final Set<String> skipVertexTypes = extractSkipTypes(options, "skipVertexTypes");
+    final Map<String, Object> options = extractMap(argOrDefault(args, 4, null), "options");
+    final Set<String> skipRelTypes = extractSkipTypes(options, "skipRelTypes", true, context);
+    final Set<String> skipVertexTypes = extractSkipTypes(options, "skipVertexTypes", false, context);
 
     if (maxDepth < 1)
       throw new IllegalArgumentException(getName() + "(): maxDepth must be at least 1");
@@ -120,30 +120,15 @@ public class AlgoAllSimplePaths extends AbstractAlgoProcedure {
         context, newWorkGuard(context));
 
     return allPaths.stream().map(pathElements -> {
-      final List<Object> nodes = new ArrayList<>();
-      final List<Object> relationships = new ArrayList<>();
-
-      for (final Object element : pathElements) {
-        if (element instanceof Vertex) {
-          nodes.add(element);
-        } else if (element instanceof Edge) {
-          relationships.add(element);
-        }
-      }
-
-      final Map<String, Object> path = new HashMap<>();
-      path.put("_type", "path");
-      path.put("nodes", nodes);
-      path.put("relationships", relationships);
-      path.put("length", relationships.size());
-
+      // a TraversalPath, the value every Cypher path is, so the path functions read it (issue #9913)
       final ResultInternal result = new ResultInternal();
-      result.setProperty("path", path);
+      result.setProperty("path", TraversalPath.ofWalk(pathElements));
       return result;
     });
   }
 
-  private Set<String> extractSkipTypes(final Map<String, Object> options, final String optionKey) {
+  private Set<String> extractSkipTypes(final Map<String, Object> options, final String optionKey, final boolean edgeTypes,
+      final CommandContext context) {
     if (options == null || options.isEmpty())
       return Collections.emptySet();
 
@@ -151,7 +136,8 @@ public class AlgoAllSimplePaths extends AbstractAlgoProcedure {
     if (value == null)
       return Collections.emptySet();
 
-    final String[] types = extractRelTypes(value);
+    // Checked against the schema like relTypes (issue #9769): a misspelt type to skip would otherwise skip nothing
+    final String[] types = edgeTypes ? extractRelTypes(value, context) : extractNodeLabels(value, context);
     if (types == null || types.length == 0)
       return Collections.emptySet();
 
@@ -217,9 +203,8 @@ public class AlgoAllSimplePaths extends AbstractAlgoProcedure {
       }
     }
 
-    final Iterable<Edge> inEdges = relTypes != null && relTypes.length > 0
-        ? current.getEdges(Vertex.DIRECTION.IN, relTypes)
-        : current.getEdges(Vertex.DIRECTION.IN);
+    // the incoming side of a unidirectional edge type is on the other end only (issue #8629)
+    final Iterable<Edge> inEdges = edgesOf(context, current, Vertex.DIRECTION.IN, relTypes);
 
     for (final Edge edge : inEdges) {
       if (!skipRelTypes.isEmpty() && skipRelTypes.contains(edge.getTypeName()))

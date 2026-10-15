@@ -23,7 +23,9 @@ import com.arcadedb.function.FunctionArity;
 import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.query.sql.executor.Result;
 
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Stream;
 
@@ -106,6 +108,15 @@ public interface Procedure {
    * {@code Stream.of(result)} after the mutation completes).
    * </p>
    *
+   * <p>
+   * A read procedure whose stream knows its exact size ({@link java.util.Spliterator#SIZED}, as
+   * {@code IntStream.range(0, n).mapToObj(...)} or {@code list.stream()} do) may never be traversed: when the query
+   * only counts the rows ({@code CALL ... YIELD ... RETURN count(*)}), the {@code CALL} step takes the size and
+   * drops the stream (issue #9453). So a SIZED stream must hold exactly the rows the procedure means to yield, and
+   * must not rely on traversal for validation or side effects. Keep the size where the row count is cheap to know -
+   * build the stream from a precomputed array of ids rather than a {@code filter()}, which loses it.
+   * </p>
+   *
    * @param args     the procedure arguments (already evaluated)
    * @param inputRow the current input row (may be null for standalone CALL)
    * @param context  the command execution context
@@ -179,6 +190,64 @@ public interface Procedure {
    */
   default void validateArgs(final Object[] args) {
     checkArity(args);
+  }
+
+  /**
+   * Returns the argument at {@code index}, or {@code defaultValue} when the caller passed {@code null} there or stopped
+   * short of it.
+   * <p>
+   * The reading half of the contract {@link #checkArity} checks: once the count is within bounds, a shorter array means
+   * the caller left out trailing arguments that are declared with a default - as APOC declares {@code config = {}} - so
+   * the slot carries that default rather than an index past the end of the array (issues #7427, #8102). An explicit
+   * {@code null} resolves to the same default as an absent argument: one rule for every procedure, where each procedure
+   * family used to keep a private helper of its own and they disagreed on it (issue #8124), and the rule under which a
+   * {@code null} in a defaulted slot can neither reach an unboxing nor a {@code toString()} as a
+   * {@code NullPointerException}.
+   *
+   * @param args         the arguments, already checked by {@link #validateArgs}
+   * @param index        the position of the argument
+   * @param defaultValue the value of an absent or {@code null} argument
+   */
+  default Object argOrDefault(final Object[] args, final int index, final Object defaultValue) {
+    final Object value = index < args.length ? args[index] : null;
+    return value != null ? value : defaultValue;
+  }
+
+  /**
+   * Returns the numeric argument at {@code index}, {@code defaultValue} when it is absent or {@code null} (see
+   * {@link #argOrDefault}), and refuses any other value naming the parameter, where a cast used to surface as a bare
+   * {@code ClassCastException} and a lenient read silently answered with the default.
+   *
+   * @param paramName the parameter name the error message reports
+   *
+   * @throws IllegalArgumentException when the argument is neither a number nor {@code null}
+   */
+  default Number optionalNumberArg(final Object[] args, final int index, final String paramName, final Number defaultValue) {
+    final Object value = argOrDefault(args, index, defaultValue);
+    if (value == null || value instanceof Number)
+      // null only when the declared default is null: the caller decides what an absent number means
+      return (Number) value;
+    throw new IllegalArgumentException(
+        getName() + "(): " + paramName + " must be a number, got " + value.getClass().getSimpleName());
+  }
+
+  /**
+   * Returns the map argument at {@code index}, the empty map when it is absent or {@code null} (see
+   * {@link #argOrDefault}), and refuses any other value naming the parameter.
+   *
+   * @param paramName the parameter name the error message reports
+   *
+   * @throws IllegalArgumentException when the argument is neither a map nor {@code null}
+   */
+  @SuppressWarnings("unchecked")
+  default Map<String, Object> optionalMapArg(final Object[] args, final int index, final String paramName) {
+    final Object value = argOrDefault(args, index, null);
+    if (value == null)
+      return Collections.emptyMap();
+    if (value instanceof Map<?, ?> map)
+      return (Map<String, Object>) map;
+    throw new IllegalArgumentException(
+        getName() + "(): " + paramName + " must be a map, got " + value.getClass().getSimpleName());
   }
 
   /**

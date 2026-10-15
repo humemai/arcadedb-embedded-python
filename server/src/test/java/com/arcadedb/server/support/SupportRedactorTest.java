@@ -223,7 +223,11 @@ class SupportRedactorTest {
     final int n = SupportLogCollector.MAX_LINE_CHARS;
     final String[] lines = { "-".repeat(n - 10) + " token x", "-a".repeat(n / 2) + " token", "a.".repeat(n / 2) + "token",
         "-token".repeat(n / 6), "token".repeat(n / 5) + " = x", "password=\"" + "a".repeat(n - 20), "password=\\\"" + "a".repeat(n - 20),
-        "eyJ".repeat(n / 3), "a://".repeat(n / 4), "a://b:" + "c".repeat(n - 20), "x".repeat(n - 20) + " --token" };
+        "eyJ".repeat(n / 3), "a://".repeat(n / 4), "a://b:" + "c".repeat(n - 20), "x".repeat(n - 20) + " --token",
+        // the quoted defaultDatabases shape (#9773): every quote is tried as an opener, and a span is read in one pass
+        "[a:".repeat(n / 3), "'[a:".repeat(n / 4), "'a[b:c];".repeat(n / 8), "\"'".repeat(n / 2 - 2) + "[a:",
+        "'" + "a;".repeat(n / 2 - 8) + "b[c:d]'", "\"" + "'".repeat(n - 10) + "[a:b]\"", "[".repeat(n - 1), "[a".repeat(n / 2),
+        "'A[u:" + "'".repeat(n - 10), "'a[b:c'".repeat(n / 7), "'a[b:c]".repeat(n / 7), "\\'a[b:c]".repeat(n / 8) };
     final StallAwareStopwatch watch = StallAwareStopwatch.start();
     for (final String line : lines)
       new SupportRedactor.Session().redactLine(line);
@@ -260,5 +264,119 @@ class SupportRedactorTest {
   @Test
   void aShortBearerTokenIsMaskedToo() {
     assertThat(redact("sent bearer abc123 to the portal")).doesNotContain("abc123");
+  }
+  /**
+   * Issue #9625: {@code arcadedb.server.defaultDatabases} carries the credentials in its VALUE, not in its name, so the
+   * keyword rules let {@code -Darcadedb.server.defaultDatabases=Universe[albert:einstein]} through verbatim into
+   * {@code jvm.inputArguments} of diagnostics.json. The database and user names stay, the password goes.
+   */
+  @Test
+  void defaultDatabasesJvmArgumentKeepsTheNamesAndHidesThePasswords() {
+    final SupportRedactor.Session session = new SupportRedactor.Session();
+    final List<String> result = session.redactArguments(List.of(//
+        "-Darcadedb.server.defaultDatabases=Universe[albert:einstein]",//
+        "-Darcadedb.server.defaultDatabases=Universe[albert:einstein:admin,elon:musk];Beer[ada:lovelace]{import:/tmp/x.tgz}",//
+        "-Darcadedb.server.defaultDatabases=Imported[root]",//
+        "-Xmx4g"));
+    assertThat(result).containsExactly(//
+        "-Darcadedb.server.defaultDatabases=Universe[albert:*****]",//
+        "-Darcadedb.server.defaultDatabases=Universe[albert:*****:admin,elon:*****];Beer[ada:*****]{import:/tmp/x.tgz}",//
+        "-Darcadedb.server.defaultDatabases=Imported[root]",//
+        "-Xmx4g");
+    assertThat(String.join(" ", result)).doesNotContain("einstein").doesNotContain("musk").doesNotContain("lovelace");
+    // the password-free form has nothing to mask and is not counted
+    assertThat(session.getCount()).isEqualTo(2);
+  }
+
+  /** Issue #9625: any -D argument naming an ArcadeDB setting is published under that setting's own rule, case-insensitively. */
+  @Test
+  void settingArgumentsArePublishedUnderTheSettingsOwnRule() {
+    final SupportRedactor.Session session = new SupportRedactor.Session();
+    final List<String> result = session.redactArguments(List.of(//
+        "-DARCADEDB.SERVER.DEFAULTDATABASES=Universe[albert:einstein]",//
+        "-Darcadedb.server.rootPassword=Sup3rS3cret!",//
+        "-Darcadedb.server.httpIncomingPort=2480",//
+        "-Darcadedb.server.defaultDatabases=Universe[albert:einstein",//
+        "-Dunrelated.property=value"));
+    assertThat(result).containsExactly(//
+        "-DARCADEDB.SERVER.DEFAULTDATABASES=Universe[albert:*****]",//
+        "-Darcadedb.server.rootPassword=***",//
+        "-Darcadedb.server.httpIncomingPort=2480",//
+        // an unclosed credential block fails closed on the remainder, as publishableValue does
+        "-Darcadedb.server.defaultDatabases=Universe[*****",//
+        "-Dunrelated.property=value");
+    assertThat(session.getCount()).isEqualTo(3);
+  }
+
+  /**
+   * Issue #9625: a log line (or a thread dump, a message) that echoes the command line or the setting must not carry the
+   * password either: the same rule applies to free text, in the -D, key=value, environment variable and JSON spellings.
+   */
+  @Test
+  void defaultDatabasesInFreeTextKeepsTheNamesAndHidesThePasswords() {
+    final SupportRedactor.Session session = new SupportRedactor.Session();
+    assertThat(session.redactLine("Starting with arcadedb.server.defaultDatabases=Universe[albert:einstein]"))
+        .isEqualTo("Starting with arcadedb.server.defaultDatabases=Universe[albert:*****]");
+    assertThat(session.redactLine("java -Darcadedb.server.defaultDatabases=A[u:p1];B[v:p2,w:p3] -Xmx4g -jar x.jar"))
+        .isEqualTo("java -Darcadedb.server.defaultDatabases=A[u:*****];B[v:*****,w:*****] -Xmx4g -jar x.jar");
+    assertThat(session.redactLine("ARCADEDB_SERVER_DEFAULTDATABASES=Universe[albert:einstein:admin]"))
+        .isEqualTo("ARCADEDB_SERVER_DEFAULTDATABASES=Universe[albert:*****:admin]");
+    assertThat(session.redactLine("{\"arcadedb.server.defaultDatabases\": \"Universe[albert:einstein]\", \"x\": 1}"))
+        .isEqualTo("{\"arcadedb.server.defaultDatabases\": \"Universe[albert:*****]\", \"x\": 1}");
+    assertThat(session.redactLine("defaultDatabases='Universe[albert:einstein]' set"))
+        .isEqualTo("defaultDatabases='Universe[albert:*****]' set");
+    // a password with a space in it is masked whole, not cut at the space
+    assertThat(session.redactLine("defaultDatabases=A[u:ein stein,v:p q];B[w:x y] then more"))
+        .isEqualTo("defaultDatabases=A[u:*****,v:*****];B[w:*****] then more");
+    // whitespace around the ';' between two entries does not hide the second one: the server splits on ';' alone
+    assertThat(session.redactLine("defaultDatabases=A[u:p1] ;B[v:p2] ; C[w:p3]; D[x:p4] done"))
+        .isEqualTo("defaultDatabases=A[u:*****] ;B[v:*****] ; C[w:*****]; D[x:*****] done");
+    assertThat(session.getCount()).isEqualTo(7);
+
+    // nothing to hide: unchanged and not counted, including a value already redacted upstream
+    final SupportRedactor.Session clean = new SupportRedactor.Session();
+    assertThat(clean.redactLine("arcadedb.server.defaultDatabases=Imported[root]")).isEqualTo("arcadedb.server.defaultDatabases=Imported[root]");
+    assertThat(clean.redactLine("arcadedb.server.defaultDatabases=Universe[albert:*****]"))
+        .isEqualTo("arcadedb.server.defaultDatabases=Universe[albert:*****]");
+    assertThat(clean.getCount()).isZero();
+  }
+
+  /**
+   * Issue #9773: the server's two error lines quoted the value as "default databases", with a space, so the rule keyed
+   * on the setting's name never saw them. The value is now also recognised by its own shape inside a quoted span,
+   * whatever the words around it.
+   */
+  @Test
+  void aQuotedDefaultDatabasesValueIsRecognisedByItsShape() {
+    final SupportRedactor.Session session = new SupportRedactor.Session();
+    // the two lines of the issue, as LogFormatter writes them
+    assertThat(session.redactLine("2026-10-10 09:12:33.401 WARNING Error in default databases format: 'Universe[elon:musk];Broken'"))
+        .isEqualTo("2026-10-10 09:12:33.401 WARNING Error in default databases format: 'Universe[elon:*****];Broken'");
+    assertThat(session.redactLine(
+        "2026-10-10 09:12:33.402 WARNING Missing closing '}' in default databases format: 'Universe[elon:musk]{import:file:///x'"))
+        .isEqualTo(
+            "2026-10-10 09:12:33.402 WARNING Missing closing '}' in default databases format: 'Universe[elon:*****]{import:file:///x'");
+    // a stray apostrophe earlier in the line does not pair the quotes the wrong way round
+    assertThat(session.redactLine("can't load \"A[u:p1];B[v:p2,w:p3:admin]\" at boot"))
+        .isEqualTo("can't load \"A[u:*****];B[v:*****,w:*****:admin]\" at boot");
+    assertThat(session.redactLine("can't load 'A[u:p1]' at boot")).isEqualTo("can't load 'A[u:*****]' at boot");
+    // a quote inside the credential block is part of the password (the server reads it so): it must not close the span
+    assertThat(session.redactLine("format: 'A[u:pa'ss]' done")).isEqualTo("format: 'A[u:*****]' done");
+    assertThat(session.redactLine("format: \"A[u:pa\"ss,v:x]\" done")).isEqualTo("format: \"A[u:*****,v:*****]\" done");
+    // a block that never closes runs to the end of the line: fail closed
+    assertThat(session.redactLine("format: 'A[u:pa'ss and more")).isEqualTo("format: 'A[*****");
+    // an escaped span, as a JSON string quoted in a log line, closes on the escaped quote
+    assertThat(session.redactLine("{\\\"x\\\": \\\"A[u:p1];B[v:p2]\\\"}")).isEqualTo("{\\\"x\\\": \\\"A[u:*****];B[v:*****]\\\"}");
+    assertThat(session.getCount()).isEqualTo(8);
+
+    // bracketed text that is not the value stays as it is
+    final SupportRedactor.Session clean = new SupportRedactor.Session();
+    assertThat(clean.redactLine("2026-09-30 12:00:00.000 INFO  [HttpServer] Listening on 0.0.0.0:2480 for 'Universe'"))
+        .isEqualTo("2026-09-30 12:00:00.000 INFO  [HttpServer] Listening on 0.0.0.0:2480 for 'Universe'");
+    assertThat(clean.redactLine("[main] took 3:02 for [batch:4] unquoted")).isEqualTo("[main] took 3:02 for [batch:4] unquoted");
+    assertThat(clean.redactLine("Error on executing query 'SELECT FROM V WHERE list[0:3] = 1'"))
+        .isEqualTo("Error on executing query 'SELECT FROM V WHERE list[0:3] = 1'");
+    assertThat(clean.redactLine("Default database 'Imported[root]' opened")).isEqualTo("Default database 'Imported[root]' opened");
+    assertThat(clean.getCount()).isZero();
   }
 }

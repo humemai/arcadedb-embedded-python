@@ -26,6 +26,7 @@ import com.arcadedb.database.Database;
 import com.arcadedb.database.DatabaseFactory;
 import com.arcadedb.database.DatabaseInternal;
 import com.arcadedb.database.LocalDatabase;
+import com.arcadedb.query.RunningQueryRegistry;
 import com.arcadedb.schema.LocalSchema;
 import com.arcadedb.engine.ComponentFile;
 import com.arcadedb.engine.MaintenanceCoordinator;
@@ -169,9 +170,12 @@ public class ArcadeDBServer {
    * placeholder rather than an empty segment, so the pipe-separated {@code exceptionArgs} keeps its three parts for
    * every consumer that splits it. HTTP ({@code exceptionArgs}) and gRPC (the {@code arcadedb-dup-keys} trailer) must both apply it, or the setting means one thing on each surface.
    * The PostgreSQL wire protocol applies it by answering with {@link #CONCEALED_ERROR_MESSAGE} in the {@code M} field and keeping the
-   * SQLSTATE (issue #8931); the MongoDB wire protocol words its own errors and keeps the engine message in the server log.
-   * Any new surface that serialises {@code getKeys()} or the exception message must apply it too: nothing enforces
-   * it, and the /ws insert session, Bolt and Redis do not yet (issue #8749).
+   * SQLSTATE (issue #8931); the MongoDB wire protocol words its own errors and keeps the engine message in the server log;
+   * the Gremlin Server rewrites every server-failure answer to {@link #CONCEALED_ERROR_MESSAGE} (issue #9317) and refuses to start in production mode with a channelizer that cannot (issue #9639).
+   * The /ws insert session (its error frames and its per-row {@code errors} entries), the /ws subscription listener, Bolt,
+   * the Redis RESP protocol and MCP answer with {@link #CONCEALED_ERROR_MESSAGE} through {@link ErrorConcealment} (issue
+   * #8749). Any new surface that serialises {@code getKeys()} or the exception message must apply it too: nothing
+   * enforces it.
    */
   public static final String                                CONCEALED_DUPLICATED_KEYS            = "[concealed]";
 
@@ -241,6 +245,9 @@ public class ArcadeDBServer {
   private             AiConfiguration                       aiConfiguration;
   private             SupportService                        supportService;
   private             ServerQueryProfiler                   queryProfiler;
+  // The statements this server is running, listed and terminated by the "list queries" / "terminate query" commands
+  // (issue #9680). One per server rather than per JVM: each node answers for its own work.
+  private final       RunningQueryRegistry                  runningQueries = newRunningQueryRegistry();
   // Admission for backups of a database, shared by every entry point that can start one on this server: the
   // auto-backup schedule, its immediate trigger, and the HTTP "trigger backup" command (issue #6753). Created with
   // the server rather than with the auto-backup plugin, because the HTTP command backs a database up whether or not
@@ -270,6 +277,11 @@ public class ArcadeDBServer {
    * hook itself and will never release the lock, so the hook does not wait for it at all.
    */
   private volatile    Thread                                lifecycleOwner;
+  /** The JVM shutdown hook this server registered (issue #9548). Assigned once, in {@code init()}. */
+  private volatile    Thread                                shutdownHook;
+  /** Whether {@link #shutdownHook} is currently added to the runtime; guarded by {@link #shutdownHookLock}. */
+  private             boolean                               shutdownHookInstalled;
+  private final       Object                                shutdownHookLock                     = new Object();
   private final       List<ReplicationCallback>             testEventListeners                   = new ArrayList<>();
   private volatile    STATUS                                status                               = STATUS.OFFLINE;
   /**
@@ -379,9 +391,62 @@ public class ArcadeDBServer {
     return configuration;
   }
 
+  /**
+   * Asks every plugin whether {@code setting} may take {@code value} while the server runs, before an operator's change
+   * is stored (see {@link ServerPlugin#checkServerSettingChange}). The first refusal propagates to the caller.
+   *
+   * @throws ServerSettingRefusedException when a plugin refuses the change
+   */
+  public void checkServerSettingChange(final GlobalConfiguration setting, final Object value) {
+    if (pluginManager == null)
+      return;
+    for (final ServerPlugin plugin : pluginManager.getPlugins()) {
+      try {
+        plugin.checkServerSettingChange(setting, value);
+      } catch (final ServerSettingRefusedException e) {
+        throw e;
+      } catch (final IllegalArgumentException e) {
+        throw new ServerSettingRefusedException(e.getMessage(), e);
+      }
+    }
+  }
+
+  /**
+   * Stores a declared server setting an operator changes while the server runs, the one operation every surface that does
+   * so goes through (HTTP and gRPC {@code SET SERVER SETTING} by way of the control plane, the MCP {@code set_server_setting}
+   * tool): the plugins are asked first (issue #9749), then the value is stored, then the key is recorded as one the operator
+   * supplied (issue #9836), because the support diagnostics tell a chosen value from a computed one by that record and by
+   * nothing else. A surface that stores a setting without it leaves a customised server looking vanilla.
+   * <p>
+   * The check is not atomic with the store, and need not be: what a plugin refuses on is state fixed while it runs, and
+   * plugins start before any admin surface listens.
+   *
+   * @param setting the declared setting to change
+   * @param value   its new value, already coerced to the setting's type
+   *
+   * @throws ServerSettingRefusedException when a plugin refuses the change; nothing is stored or recorded
+   */
+  public void storeOperatorSetting(final GlobalConfiguration setting, final Object value) {
+    checkServerSettingChange(setting, value);
+    // setValue also runs the side effect of a declared SCOPE.SERVER setting (arcadedb.server.logFormat swapping the console
+    // formatter), so one whose effect is not a value somebody later reads takes effect here too (issue #7121)
+    configuration.setValue(setting, value);
+    markOperatorSetting(setting.getKey());
+  }
+
   /** The configured {@code arcadedb.server.mode}: {@code development}, {@code test} or {@code production}. */
   public String getMode() {
     return configuration.getValueAsString(GlobalConfiguration.SERVER_MODE);
+  }
+
+  /**
+   * The body of the server start event. Formatted with {@link Locale#ROOT} (issue #9968): the event log is served to any
+   * REST client by {@code GET /api/v1/server}, and under the JVM default locale the CPU count came out in the locale's own
+   * digits, so two nodes of one cluster reported a different string.
+   */
+  public static String startedMessage(final String mode, final int cpus, final long maxMemory) {
+    return String.format(Locale.ROOT, "ArcadeDB Server started in '%s' mode (CPUs=%d MAXRAM=%s)", mode, cpus,
+        FileUtils.getSizeAsString(maxMemory));
   }
 
   /**
@@ -462,6 +527,8 @@ public class ArcadeDBServer {
     lifecycleLock.lock();
     try {
       recordLifecycleOwner();
+      // Back after a stop() of this same instance took it away (issue #9548)
+      installShutdownHook();
       startInternal();
     } catch (final RuntimeException | Error e) {
       // A start that fails after the metrics install (a plugin, the HTTP service, the databases) does not
@@ -661,8 +728,7 @@ public class ArcadeDBServer {
 
     final String mode = getMode();
 
-    final String msg = "ArcadeDB Server started in '%s' mode (CPUs=%d MAXRAM=%s)".formatted(mode,
-        Runtime.getRuntime().availableProcessors(), FileUtils.getSizeAsString(Runtime.getRuntime().maxMemory()));
+    final String msg = startedMessage(mode, Runtime.getRuntime().availableProcessors(), Runtime.getRuntime().maxMemory());
     LogManager.instance().log(this, Level.INFO, msg);
 
     getEventLog().reportEvent(ServerEventLog.EVENT_TYPE.INFO, "Server", null, msg);
@@ -842,9 +908,68 @@ public class ArcadeDBServer {
     try {
       recordLifecycleOwner();
       stopInternal();
+      // Only after a stop that completed: the databases are closed, so the hook has nothing left to order (issue #9548).
+      // A stopInternal() that throws skips this on purpose and leaves the hook in place: whatever it failed to close is
+      // still the hook's to close at the JVM exit, in its order.
+      removeShutdownHook();
     } finally {
       clearLifecycleOwner();
       lifecycleLock.unlock();
+    }
+  }
+
+  /** The JVM shutdown hook this server registered, which the engine's own hook waits for (issue #9548). */
+  // @VisibleForTesting
+  Thread getShutdownHook() {
+    return shutdownHook;
+  }
+
+  /**
+   * Adds this server's JVM shutdown hook, and registers it as the owner of the server's databases (issue #9548): the
+   * engine's own hook closes every open database, and the JVM runs it concurrently with this one. {@link #stopInternal()}
+   * stops the plugins - the Raft HA service, whose apply thread writes into the databases - BEFORE it closes the
+   * databases, and the engine's hook used to close them in between: a leader committing across the shutdown then failed
+   * to publish an entry the cluster had committed and quarantined its own database. Registered, this hook is waited for,
+   * and the engine's hook closes only what is still open after it.
+   * <p>
+   * Called at construction and again by {@link #start()}, so a server stopped and started again in the same JVM gets its
+   * hook back after {@link #removeShutdownHook()} took it away. A no-op once the JVM is shutting down.
+   */
+  // @VisibleForTesting
+  void installShutdownHook() {
+    synchronized (shutdownHookLock) {
+      if (shutdownHookInstalled)
+        return;
+      try {
+        Runtime.getRuntime().addShutdownHook(shutdownHook);
+      } catch (final IllegalStateException e) {
+        // The JVM is already shutting down: hooks can no longer be added, and this server is not going to run anyway
+        return;
+      }
+      DatabaseFactory.registerOwningShutdownHook(shutdownHook);
+      shutdownHookInstalled = true;
+    }
+  }
+
+  /**
+   * Takes the shutdown hook away once a {@link #stop()} has closed the databases (issue #9548): the hook has
+   * nothing left to do, and an embedder or a test suite that creates and stops many servers would otherwise keep one
+   * hook - and the whole server it captures - per instance for the life of the JVM. Once the JVM is shutting down the
+   * runtime refuses the removal, and the hook stays registered with the engine too: a stop running on another thread
+   * then (an emergency stop, a {@code System.exit()} from a Ratis thread) is exactly the ordering the engine's hook has
+   * to keep waiting for.
+   */
+  private void removeShutdownHook() {
+    synchronized (shutdownHookLock) {
+      if (!shutdownHookInstalled)
+        return;
+      try {
+        Runtime.getRuntime().removeShutdownHook(shutdownHook);
+      } catch (final IllegalStateException e) {
+        return;
+      }
+      DatabaseFactory.unregisterOwningShutdownHook(shutdownHook);
+      shutdownHookInstalled = false;
     }
   }
 
@@ -1105,12 +1230,23 @@ public class ArcadeDBServer {
    */
   public Closeable registerExecutorPoolMetrics(final String poolTag, final String description,
       final Supplier<PoolStats> stats, final LongSupplier coalesced) {
+    return registerExecutorPoolMetrics(poolTag, description, stats, coalesced, null);
+  }
+
+  /**
+   * As {@link #registerExecutorPoolMetrics(String, String, Supplier, LongSupplier)}, for a pool whose extra gauges
+   * depend on how it handles saturation (issue #8856): {@code coalesced} and {@code rejected} may each be
+   * {@code null}, and the gauge is then not published. See
+   * {@link PoolMetrics#bindInstancePool(MeterRegistry, String, String, Supplier, LongSupplier, LongSupplier)}.
+   */
+  public Closeable registerExecutorPoolMetrics(final String poolTag, final String description,
+      final Supplier<PoolStats> stats, final LongSupplier coalesced, final LongSupplier rejected) {
     synchronized (instancePoolMetrics) {
       if (!metricsInstalled)
         return () -> {
         };
       final Closeable handle = PoolMetrics.bindInstancePool(Metrics.globalRegistry, poolTag, description, stats,
-          coalesced);
+          coalesced, rejected);
       instancePoolMetrics.add(handle);
       return handle;
     }
@@ -1817,6 +1953,19 @@ public class ArcadeDBServer {
     return httpServer;
   }
 
+  private static RunningQueryRegistry newRunningQueryRegistry() {
+    final RunningQueryRegistry registry = new RunningQueryRegistry();
+    // The one rule every surface listing or terminating statements applies - HTTP, Cypher SHOW/TERMINATE TRANSACTIONS,
+    // a Postgres pg_cancel_backend: the server administrator sees everything, other users their own (issue #9689)
+    registry.setAdministrator(ServerSecurityUser::isServerAdministrator);
+    return registry;
+  }
+
+  /** The statements this server is running (issue #9680). */
+  public RunningQueryRegistry getRunningQueries() {
+    return runningQueries;
+  }
+
   @Override
   public String toString() {
     return getServerName();
@@ -2070,12 +2219,26 @@ public class ArcadeDBServer {
       if (defaultDbMode == null)
         defaultDbMode = READ_WRITE;
 
-      // CREATE DEFAULT DATABASES
+      // CREATE DEFAULT DATABASES. Every line below that quotes the setting quotes ONE entry, and through the setting's own
+      // publication rule (issue #9773): the server log is on disk, forwarded by log collectors and copied into support
+      // bundles, and an entry carries the password its user authenticates with
       final String[] dbs = defaultDatabases.split(";");
       for (final String db : dbs) {
         final int credentialBegin = db.indexOf('[');
         if (credentialBegin < 0) {
-          LogManager.instance().log(this, Level.WARNING, "Error in default databases format: '%s'", defaultDatabases);
+          LogManager.instance().log(this, Level.WARNING,
+              "Error in default databases format: entry '%s' has no credentials block (expected name[user:password[:group]]), "
+                  + "it and the entries after it are not loaded", GlobalConfiguration.SERVER_DEFAULT_DATABASES.publishableValue(db));
+          break;
+        }
+
+        // A '[' never closed used to reach db.substring(credentialBegin + 1, -1) below and abort the startup with a
+        // StringIndexOutOfBoundsException that named neither the setting nor the entry
+        final int credentialEnd = db.indexOf(']', credentialBegin);
+        if (credentialEnd < 0) {
+          LogManager.instance().log(this, Level.WARNING,
+              "Missing closing ']' in default databases format: entry '%s', it and the entries after it are not loaded",
+              GlobalConfiguration.SERVER_DEFAULT_DATABASES.publishableValue(db));
           break;
         }
 
@@ -2100,7 +2263,6 @@ public class ArcadeDBServer {
           continue;
         }
 
-        final int credentialEnd = db.indexOf(']', credentialBegin);
         final String credentials = db.substring(credentialBegin + 1, credentialEnd);
 
         if (!credentials.isEmpty())
@@ -2112,8 +2274,8 @@ public class ArcadeDBServer {
           // PARSE IMPORTS
           final int commandsEnd = db.indexOf('}', credentialEnd + 2);
           if (commandsEnd < 0) {
-            LogManager.instance().log(this, Level.WARNING, "Missing closing '}' in default databases format: '%s'",
-                db);
+            LogManager.instance().log(this, Level.WARNING, "Missing closing '}' in default databases format: entry '%s'",
+                GlobalConfiguration.SERVER_DEFAULT_DATABASES.publishableValue(db));
             break;
           }
           final String commands = db.substring(credentialEnd + 2, commandsEnd);
@@ -2464,7 +2626,7 @@ public class ArcadeDBServer {
     configuration.getValueAsString(GlobalConfiguration.SERVER_PLUGINS);
     pluginManager = new PluginManager(this, configuration);
 
-    Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+    final Thread hook = new Thread(() -> {
       // Mark logger as shutting down to prevent NPE when handlers are closed (issue #2813)
       DefaultLogger.setShuttingDown(true);
       try {
@@ -2490,7 +2652,9 @@ public class ArcadeDBServer {
           // the logger may already be closing down
         }
       }
-    }, "arcadedb-shutdown-hook"));
+    }, "arcadedb-shutdown-hook");
+    shutdownHook = hook;
+    installShutdownHook();
 
     hostAddress = assignHostAddress();
   }

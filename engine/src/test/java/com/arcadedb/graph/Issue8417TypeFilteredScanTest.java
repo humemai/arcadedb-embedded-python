@@ -33,7 +33,6 @@ import org.junit.jupiter.api.Test;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -99,7 +98,8 @@ class Issue8417TypeFilteredScanTest {
       final AtomicInteger decodes = new AtomicInteger();
 
       final List<RID> vertices = new ArrayList<>();
-      new VertexIteratorFilter((DatabaseInternal) database, countingHead(ids[0], decodes), new String[] { "Parent" })
+      new VertexIteratorFilter((DatabaseInternal) database, countingHead(ids[0], decodes), new String[] { "Parent" }, ids[0],
+          Vertex.DIRECTION.IN)
           .forEachRemaining(v -> vertices.add(v.getIdentity()));
       assertThat(vertices).containsExactly(ids[1]);
       assertThat(decodes.get()).isEqualTo(2);
@@ -114,7 +114,8 @@ class Issue8417TypeFilteredScanTest {
 
       decodes.set(0);
       final List<Pair<RID, RID>> entries = new ArrayList<>();
-      new EdgeVertexIteratorFilter((DatabaseInternal) database, countingHead(ids[0], decodes), new String[] { "Parent" })
+      new EdgeVertexIteratorFilter((DatabaseInternal) database, countingHead(ids[0], decodes), new String[] { "Parent" }, ids[0],
+          Vertex.DIRECTION.IN)
           .forEachRemaining(entries::add);
       assertThat(entries).hasSize(1);
       assertThat(entries.getFirst().getFirst()).isEqualTo(ids[2]);
@@ -133,7 +134,7 @@ class Issue8417TypeFilteredScanTest {
       // EXHAUST A CHUNK OF FOREIGN ENTRIES AND HOP BEFORE IT FINDS ANYTHING
       final EdgeSegment head = (EdgeSegment) database.lookupByRID(((VertexInternal) unit).getInEdgesHeadChunk(), true);
       assertThat(head.getPrevious()).isNotNull();
-      assertThat(head.count(new HashSet<>(database.getSchema().getType("Parent").getBucketIds(true)))).isZero();
+      assertThat(head.count(EdgeBucketMask.of((DatabaseInternal) database, new String[] { "Parent" }))).isZero();
 
       assertThat(ridsOf(unit.getVertices(Vertex.DIRECTION.IN, "Parent").iterator())).containsExactly(ids[1]);
       assertThat(ridsOf(unit.getEdges(Vertex.DIRECTION.IN, "Parent").iterator())).containsExactly(ids[2]);
@@ -206,8 +207,8 @@ class Issue8417TypeFilteredScanTest {
     database.transaction(() -> {
       final RID headRID = ((VertexInternal) ids[0].asVertex()).getInEdgesHeadChunk();
       final VertexIteratorFilter it = new VertexIteratorFilter((DatabaseInternal) database,
-          (EdgeSegment) database.lookupByRID(headRID, true), new String[] { "Parent" });
-      // remove() unlinks the entry the iterator returned last, which the skip must keep pointing at
+          (EdgeSegment) database.lookupByRID(headRID, true), new String[] { "Parent" }, ids[0], Vertex.DIRECTION.IN);
+      // remove() deletes the edge of the entry the iterator returned last, which the skip must keep pointing at
       assertThat(it.next().getIdentity()).isEqualTo(ids[1]);
       it.remove();
       assertThat(it.hasNext()).isFalse();
@@ -216,6 +217,8 @@ class Issue8417TypeFilteredScanTest {
       final Vertex unit = ids[0].asVertex();
       assertThat(unit.countEdges(Vertex.DIRECTION.IN, "Parent")).isZero();
       assertThat(unit.countEdges(Vertex.DIRECTION.IN, "Case_unit")).isEqualTo(HUB);
+      // the edge is deleted, not only unlinked from the walked list (#9779)
+      assertThat(ids[1].asVertex().countEdges(Vertex.DIRECTION.OUT, "Parent")).isZero();
     });
   }
 

@@ -22,6 +22,7 @@ import com.arcadedb.database.Database;
 import com.arcadedb.database.Identifiable;
 import com.arcadedb.database.RID;
 import com.arcadedb.graph.Edge;
+import com.arcadedb.graph.IncomingEdgeLookup;
 import com.arcadedb.graph.MutableEdge;
 import com.arcadedb.graph.MutableVertex;
 import com.arcadedb.graph.Vertex;
@@ -35,6 +36,7 @@ import com.arcadedb.query.sql.executor.ResultInternal;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -87,8 +89,7 @@ public class RefactorCloneNodesWithRelationships implements CypherProcedure {
 
   /**
    * One, not two: APOC declares the trailing {@code config} with a default, so a call that omits it is a call this
-   * procedure has to accept (issue #7427). {@link RefactorProcedureArgs#extractOptionalConfig} supplies the empty
-   * map in its place.
+   * procedure has to accept (issue #7427). {@link #optionalMapArg} supplies the empty map in its place.
    */
   @Override
   public int getMinArgs() {
@@ -120,7 +121,7 @@ public class RefactorCloneNodesWithRelationships implements CypherProcedure {
     validateArgs(args);
 
     final List<Vertex> nodes = RefactorProcedureArgs.extractVertices(getName(), args[0]);
-    final Map<String, Object> config = RefactorProcedureArgs.extractOptionalConfig(getName(), args);
+    final Map<String, Object> config = optionalMapArg(args, 1, "config");
     final Set<String> skipProperties = extractSkipProperties(config);
     final Database database = context.getDatabase();
 
@@ -153,7 +154,15 @@ public class RefactorCloneNodesWithRelationships implements CypherProcedure {
       // this node, on the row that reaches it. Appending rewrites the vertex record's edge-list head pointer,
       // so enumerating the row's own instance reads a pre-append snapshot and skips the edges earlier rows
       // added (issue #7177, the defect #7174 fixed in merge.relationship).
-      for (final Edge edge : CypherVertexReload.latest(database, original).getEdges()) {
+      //
+      // The edges are read through the query's lookup, which completes them with the incoming edges of the
+      // unidirectional types: those are stored on their source only, and a clone without them would lose them (issue
+      // #8629). Collected before the first copy is appended, so the walk never meets an edge this call created.
+      final List<Edge> edges = new ArrayList<>();
+      for (final Iterator<Edge> it = IncomingEdgeLookup.getEdges(context, CypherVertexReload.latest(database, original),
+          Vertex.DIRECTION.BOTH); it.hasNext(); )
+        edges.add(it.next());
+      for (final Edge edge : edges) {
         if (!processedEdges.add(edge.getIdentity()))
           continue;
         try {

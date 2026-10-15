@@ -30,6 +30,7 @@ import com.arcadedb.schema.VertexType;
 import com.arcadedb.serializer.json.JSONObject;
 
 import java.util.*;
+import java.util.function.BiConsumer;
 import java.util.stream.Collectors;
 
 import static com.arcadedb.schema.Property.RID_PROPERTY;
@@ -85,10 +86,28 @@ public class ResultInternal implements Result {
   }
 
   /**
+   * What {@link #setProperty} keeps of {@code value} in a row of {@code database}: so the aggregation of a GROUP BY,
+   * which reads the values of the projection before it without making its row (issue #9496), reads them as the row
+   * would answer them, {@code toPropertyValue(toStoredValue(database, value))}.
+   */
+  static Object toStoredValue(final Database database, Object value) {
+    if (value instanceof Optional optional)
+      value = optional.orElse(null);
+
+    if (value instanceof Result result && result.isElement())
+      return result.getElement().get();
+    else if (database != null && value instanceof RID rid && !(value instanceof DatabaseRID))
+      // Egress wrap: a bare RID stored in a projection becomes user-visible, bind it to this result's database so shortcut methods like asVertex() route
+      // through the correct database even if the thread-local active database changes later.
+      return new DatabaseRID(database, rid.getBucketId(), rid.getPosition());
+    return value;
+  }
+
+  /**
    * The one rule every property getter of a row applies to a stored value, shared with {@link #copyBindings} so the
    * two can never diverge: an {@link Identifiable} that is not a loaded {@link Record} is answered as its identity.
    */
-  private static Object toPropertyValue(final Object value) {
+  static Object toPropertyValue(final Object value) {
     if (!(value instanceof Record) && value instanceof Identifiable identifiable && identifiable.getIdentity() != null)
       return identifiable.getIdentity();
     return value;
@@ -194,20 +213,10 @@ public class ResultInternal implements Result {
   }
 
   public ResultInternal setProperty(final String name, Object value) {
-    if (value instanceof Optional optional)
-      value = optional.orElse(null);
-
     if (content == null)
       throw new IllegalStateException("Impossible to mutate result set");
 
-    if (value instanceof Result result && result.isElement())
-      content.put(name, result.getElement().get());
-    else if (database != null && value instanceof RID rid && !(value instanceof DatabaseRID))
-      // Egress wrap: a bare RID stored in a projection becomes user-visible, bind it to this result's database so shortcut methods like asVertex() route
-      // through the correct database even if the thread-local active database changes later.
-      content.put(name, new DatabaseRID(database, rid.getBucketId(), rid.getPosition()));
-    else
-      content.put(name, value);
+    content.put(name, toStoredValue(database, value));
 
     // Re-setting a previously removed property lifts the tombstone.
     if (tombstones != null)
@@ -517,7 +526,7 @@ public class ResultInternal implements Result {
     final JSONObject result = new JSONObject();
 
     if (element != null)
-      putStructuralAttributes(result);
+      putStructuralAttributes(result::put);
 
     for (final String prop : getPropertyNames())
       result.put(prop, valueToJSON(getProperty(prop)));
@@ -526,8 +535,36 @@ public class ResultInternal implements Result {
   }
 
   /**
+   * The row's properties seeded, when asked, with the record attributes {@link #toJSON()} seeds - from the same method, so
+   * the map and the JSON of one row cannot disagree about which attributes it kept (issue #9964).
+   */
+  @Override
+  public Map<String, Object> toPropertyMap(final boolean includeMetadata) {
+    // getPropertyNames() and getProperty() inlined, with their precedence: once content is present the element is never
+    // consulted. Walking the store directly spares the name set and the second lookup per name, on a path that runs once per
+    // row of an INSERT ... FROM SELECT
+    final boolean fromContent = content != null && !content.isEmpty();
+    final Set<String> elementNames = !fromContent && element != null ? element.getPropertyNames() : Collections.emptySet();
+    final Map<String, Object> map = new LinkedHashMap<>(
+        (fromContent ? content.size() : elementNames.size()) + (includeMetadata ? 5 : 0));
+    if (includeMetadata && element != null)
+      putStructuralAttributes(map::put);
+
+    if (fromContent) {
+      for (final Map.Entry<String, Object> entry : content.entrySet()) {
+        final String name = entry.getKey();
+        map.put(name, tombstones != null && tombstones.contains(name) ? null : toPropertyValue(entry.getValue()));
+      }
+    } else
+      for (final String name : elementNames)
+        if (tombstones == null || !tombstones.contains(name))
+          map.put(name, toPropertyValue(element.get(name)));
+    return map;
+  }
+
+  /**
    * Writes the backing record's structural attributes - {@code @cat}, {@code @type}, {@code @rid} and, for an edge,
-   * {@code @in} / {@code @out} - into {@code json}, in the same shape the record's own {@code toJSON(true)} emits
+   * {@code @in} / {@code @out} - into {@code sink}, in the same shape the record's own {@code toJSON(true)} emits
    * them, so a row that reshapes nothing serializes exactly as the record does (issue #7895).
    * <p>
    * The category is read from the instance first and from the schema type second: a {@link DetachedDocument} of a
@@ -538,32 +575,32 @@ public class ResultInternal implements Result {
    * {@code removeProperty()}'s {@link #tombstones}, and the {@code SELECT *, !@rid} exclusion the projection
    * records in {@link #projectionExcludes} - which is not a tombstone and has to be asked separately.
    */
-  private void putStructuralAttributes(final JSONObject json) {
+  private void putStructuralAttributes(final BiConsumer<String, Object> sink) {
     final DocumentType type = element.getType();
     final boolean isEdge = element instanceof Edge || type instanceof EdgeType;
     final boolean isVertex = !isEdge && (element instanceof Vertex || type instanceof VertexType);
 
-    putStructuralAttribute(json, Property.CAT_PROPERTY, isEdge ? "e" : isVertex ? "v" : "d");
-    putStructuralAttribute(json, Property.TYPE_PROPERTY, element.getTypeName());
+    putStructuralAttribute(sink, Property.CAT_PROPERTY, isEdge ? "e" : isVertex ? "v" : "d");
+    putStructuralAttribute(sink, Property.TYPE_PROPERTY, element.getTypeName());
 
     final RID rid = element.getIdentity();
     if (rid != null)
-      putStructuralAttribute(json, RID_PROPERTY, rid.toString());
+      putStructuralAttribute(sink, RID_PROPERTY, rid.toString());
 
     // Only a real Edge can name its endpoints: a DetachedDocument of an edge type carries none, which is also
     // why JsonSerializer.setMetadata() gives it the category alone.
     if (element instanceof Edge edge) {
-      putStructuralAttribute(json, Property.IN_PROPERTY, edge.getIn());
-      putStructuralAttribute(json, Property.OUT_PROPERTY, edge.getOut());
+      putStructuralAttribute(sink, Property.IN_PROPERTY, edge.getIn());
+      putStructuralAttribute(sink, Property.OUT_PROPERTY, edge.getOut());
     }
   }
 
-  private void putStructuralAttribute(final JSONObject json, final String name, final Object value) {
+  private void putStructuralAttribute(final BiConsumer<String, Object> sink, final String name, final Object value) {
     if (tombstones != null && tombstones.contains(name))
       return;
     if (projectionExcludes != null && projectionExcludes.contains(name))
       return;
-    json.put(name, value);
+    sink.accept(name, value);
   }
 
   public Optional<Document> getElement() {

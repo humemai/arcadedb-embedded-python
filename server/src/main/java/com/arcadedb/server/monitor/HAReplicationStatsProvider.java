@@ -18,6 +18,8 @@
  */
 package com.arcadedb.server.monitor;
 
+import com.arcadedb.schema.FullSchemaLoadReason;
+
 import java.util.List;
 
 /**
@@ -113,10 +115,63 @@ public interface HAReplicationStatsProvider {
   }
 
   /**
+   * How many times this node restarted its Raft layer in place since the process started (issue #9429), by storage
+   * outcome. The health monitor restarts a CLOSED or EXCEPTION division keeping its log ({@code recovered}); a node
+   * found diverged from the leader discards its Raft storage and is refilled by snapshot ({@code reformatted}). A
+   * reformat is the expensive and the suspicious one: outside a genuine divergence it means a node threw away a log it
+   * could have kept. Both only grow, and both restart from zero with the process.
+   *
+   * @param recovered   completed in-place restarts that kept the Raft log
+   * @param reformatted completed in-place restarts that reformatted the Raft storage
+   */
+  record InPlaceRestartStats(int recovered, int reformatted) {
+    public static final InPlaceRestartStats NONE = new InPlaceRestartStats(0, 0);
+  }
+
+  /**
+   * How often this replica fell back from the incremental schema refresh to a full {@code LocalSchema.load()} on its apply
+   * thread since the process started, and what that cost, by {@link FullSchemaLoadReason} (issue #10020). A full load
+   * re-instantiates every component of the database, so a count that keeps climbing is the answer to "why does my replica
+   * lag after DDL" and "why do searches rebuild after DDL".
+   * <p>
+   * Three parallel arrays indexed by {@link FullSchemaLoadReason#ordinal()}, so a scrape allocates nothing per reason.
+   * {@code completed} and {@code totalNanos} only move for a load that finished; {@code fallbacks} also counts one that
+   * threw, which is the difference between the two.
+   *
+   * @param fallbacks  full loads started
+   * @param completed  full loads that finished
+   * @param totalNanos wall-clock nanoseconds spent in the loads that finished
+   */
+  record SchemaFullLoadStats(long[] fallbacks, long[] completed, long[] totalNanos) {
+    public static final SchemaFullLoadStats NONE = new SchemaFullLoadStats(new long[FullSchemaLoadReason.values().length],
+        new long[FullSchemaLoadReason.values().length], new long[FullSchemaLoadReason.values().length]);
+
+    public long fallbacks(final FullSchemaLoadReason reason) {
+      return fallbacks[reason.ordinal()];
+    }
+
+    public long completed(final FullSchemaLoadReason reason) {
+      return completed[reason.ordinal()];
+    }
+
+    public long totalNanos(final FullSchemaLoadReason reason) {
+      return totalNanos[reason.ordinal()];
+    }
+  }
+
+  /**
    * Returns a live snapshot of replication health. Called on each metrics scrape, so implementations
    * must be cheap and non-blocking.
    */
   HAReplicationStats getHAReplicationStats();
+
+  /**
+   * Returns this node's full-schema-load fallback counts (issue #10020): a few atomic reads, so cheap enough for every
+   * scrape. Defaults to none for implementations without a replicated schema apply.
+   */
+  default SchemaFullLoadStats getSchemaFullLoadStats() {
+    return SchemaFullLoadStats.NONE;
+  }
 
   /**
    * Returns the in-flight phase-2 hold state. Cheap and non-blocking - it scans a map sized by
@@ -124,6 +179,14 @@ public interface HAReplicationStatsProvider {
    */
   default PendingPhase2Stats getPendingPhase2Stats() {
     return new PendingPhase2Stats(0, 0, -1);
+  }
+
+  /**
+   * Returns this node's in-place Raft restart counts (issue #9429). Two atomic reads, so cheap enough for every scrape.
+   * Defaults to none for implementations without a Raft layer to restart.
+   */
+  default InPlaceRestartStats getInPlaceRestartStats() {
+    return InPlaceRestartStats.NONE;
   }
 
   /**

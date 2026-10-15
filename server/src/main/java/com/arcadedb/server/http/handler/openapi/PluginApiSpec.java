@@ -68,7 +68,9 @@ public class PluginApiSpec implements OpenApiContributor {
       "/api/v1/cluster", "/api/v1/cluster/peer", "/api/v1/cluster/peer/{peerId}",
       "/api/v1/cluster/leader", "/api/v1/cluster/stepdown", "/api/v1/cluster/leave",
       "/api/v1/cluster/verify/{database}", "/api/v1/cluster/resync/{database}",
-      "/api/v1/cluster/accept-copy/{database}", "/api/v1/cluster/bootstrap-state", "/api/v1/cluster/capabilities",
+      "/api/v1/cluster/accept-copy/{database}", "/api/v1/cluster/accept-diverged/{database}",
+      "/api/v1/cluster/accept-stale-snapshot",
+      "/api/v1/cluster/bootstrap-state", "/api/v1/cluster/capabilities",
       "/api/v1/cluster/security-seed",
       "/api/v1/ha/snapshot/{database}", "/api/v1/ha/snapshot/{database}/checksums");
 
@@ -96,6 +98,8 @@ public class PluginApiSpec implements OpenApiContributor {
     openAPI.getPaths().addPathItem("/api/v1/cluster/verify/{database}", createVerifyPath());
     openAPI.getPaths().addPathItem("/api/v1/cluster/resync/{database}", createResyncPath());
     openAPI.getPaths().addPathItem("/api/v1/cluster/accept-copy/{database}", createAcceptCopyPath());
+    openAPI.getPaths().addPathItem("/api/v1/cluster/accept-diverged/{database}", createAcceptDivergedPath());
+    openAPI.getPaths().addPathItem("/api/v1/cluster/accept-stale-snapshot", createAcceptStaleSnapshotPath());
     openAPI.getPaths().addPathItem("/api/v1/cluster/bootstrap-state", createBootstrapStatePath());
     openAPI.getPaths().addPathItem("/api/v1/cluster/capabilities", createCapabilitiesPath());
     openAPI.getPaths().addPathItem("/api/v1/cluster/security-seed", createSecuritySeedPath());
@@ -335,6 +339,57 @@ public class PluginApiSpec implements OpenApiContributor {
     post.setResponses(SpecBuilders.standardResponses("200",
         SpecBuilders.jsonResponse("Copy accepted", "ClusterActionResponse"),
         "400", "401", "403", "404", "500"));
+
+    final PathItem pathItem = new PathItem();
+    pathItem.setPost(post);
+    return pathItem;
+  }
+
+  private PathItem createAcceptDivergedPath() {
+    final Operation post = SpecBuilders.operation("acceptClusterDivergedDatabase", "Cluster",
+        "Lift a database quarantine no peer can resync",
+        """
+            Lifts the quarantine standing on one database, and the read floor that goes with it, accepting this \
+            node's copy as it is without a resync. A quarantined database keeps the node not-ready and its Raft \
+            log un-checkpointed until a resync from a peer restores it; a node that is the only voter of its \
+            cluster has no peer, so a quarantine restored from disk, or raised while the cluster still had peers, \
+            never lifts there, and neither does one that every voter of the cluster holds on the same database, \
+            since no node then serves a copy to resync from (the no-healthy-copy-on-any-voter alert). The entry \
+            the quarantine skipped is NOT replayed: if the copy is missing it, it stays missing. The change is \
+            persisted and logged with who made it, at which applied index, over which cause. Root only. Answers \
+            404 when no quarantine and no read floor stands on the database, and 409 on a node that is not the \
+            sole voter while some voter does not report the database quarantined, where the resync is the way \
+            out; nothing standing is checked first, so a node with peers and no quarantine answers 404. The body \
+            is ignored. \
+            """ + RAFT_REQUIRED);
+    post.addParametersItem(SpecBuilders.pathParam("database", "Database name"));
+    post.setResponses(SpecBuilders.standardResponses("200",
+        SpecBuilders.jsonResponse("Quarantine lifted", "ClusterActionResponse"),
+        "400", "401", "403", "404", "409", "500"));
+
+    final PathItem pathItem = new PathItem();
+    pathItem.setPost(post);
+    return pathItem;
+  }
+
+  private PathItem createAcceptStaleSnapshotPath() {
+    final Operation post = SpecBuilders.operation("acceptClusterStaleSnapshot", "Cluster",
+        "Lift the node-wide stale-snapshot read floor no peer can resync",
+        """
+            Lifts the node-wide stale-snapshot read floor, accepting this node's databases as they are without a \
+            resync. The floor stands while the replication snapshot marker runs ahead of the entries this node \
+            applied: the node reports not-ready and LINEARIZABLE reads are clamped until a full resync from a peer \
+            fills the gap. A leader cannot resync from itself, so on a node that is the only voter of its cluster the \
+            floor never lifts. The entries between the floor and the marker are NOT replayed: if a database is \
+            missing them, it stays missing. The marker index is persisted as the applied position, so a restart does \
+            not raise the floor again, and the change is logged with who made it, the floor and the marker index. A \
+            database quarantined on its own keeps its quarantine (see accept-diverged). Root only. Answers 404 when no \
+            floor stands, and 409 on a node that is not the sole voter, where the resync is the way out, or while a \
+            snapshot download is running. The body is ignored. \
+            """ + RAFT_REQUIRED);
+    post.setResponses(SpecBuilders.standardResponses("200",
+        SpecBuilders.jsonResponse("Read floor lifted", "ClusterActionResponse"),
+        "400", "401", "403", "404", "409", "500"));
 
     final PathItem pathItem = new PathItem();
     pathItem.setPost(post);
@@ -637,6 +692,33 @@ public class PluginApiSpec implements OpenApiContributor {
             + "although it has applied everything it could locally commit. It does not count toward quorum while "
             + "this is true, even though 'localReplicationLag' can read 0. See the 'follower-stuck-at-stale-term' "
             + "alert for the operator-facing explanation"));
+    // Issues #9013 and #8953: the replication path of a node whose Raft layer was restarted in place. raftState reads
+    // RUNNING throughout, because the new division is running; these say whether the leader has been seen reaching it.
+    schema.addProperty("localReplicationPathUnproven", SpecBuilders.bool(
+        "True when this node's Raft layer was restarted in place and has taken no replicated entry since, and no newer "
+            + "term with a known leader either. It holds back the automatic Raft-storage reformat of a node stuck at a "
+            + "stale term, so with 'localStuckAtStaleTerm' it means 'restart this node by hand' rather than 'will "
+            + "self-heal'. On its own it is not an incident: an idle cluster sends a restarted node no entry either"));
+    schema.addProperty("localLeaderUnreachableSinceRestart", SpecBuilders.bool(
+        "True when 'localReplicationPathUnproven' has held, while no leader made itself known to this node or while "
+            + "'leaderCommitIndex' is past every entry this node holds, for more than twice the election timeout. The "
+            + "leader's appends are not reaching this node and it does not count toward quorum. Always false on the "
+            + "leader. No leader known is also what every node of a cluster without a quorum sees; the "
+            + "'follower-leader-unreachable-since-restart' alert says which case applies in 'details.leaderKnown' and is "
+            + "critical only when a known leader reports entries this node does not hold"));
+    // Issue #9429: the in-place restart counts were reachable only through an INFO log line.
+    final Schema<Object> inPlaceRestarts = SpecBuilders.object("""
+        How many times this node's Raft layer has been restarted in place since the process started, by what happened \
+        to its Raft storage. Both counts only grow, and both start again from 0 when the process restarts. Also \
+        published as the 'arcadedb.ha.in_place_restarts.recovered' and '.reformatted' metrics.""");
+    inPlaceRestarts.addProperty("recovered", SpecBuilders.integer(
+        "Restarts that kept the Raft log: the health monitor's recovery of a CLOSED or EXCEPTION division, for example "
+            + "after a long JVM pause"));
+    inPlaceRestarts.addProperty("reformatted", SpecBuilders.integer(
+        "Restarts that discarded the Raft storage, after which the node is refilled from a leader snapshot: the "
+            + "divergence reformat. An increase outside a known divergence is worth investigating"));
+    inPlaceRestarts.setRequired(List.of("recovered", "reformatted"));
+    schema.addProperty("localInPlaceRestarts", inPlaceRestarts);
     // Issue #8342: a follower whose log stops receiving entries while the term does not change also reads
     // 'localReplicationLag' 0 and 'localStuckAtStaleTerm' false; only the leader's commit index shows the gap.
     schema.addProperty("leaderCommitIndex", SpecBuilders.integer(
@@ -685,6 +767,7 @@ public class PluginApiSpec implements OpenApiContributor {
     schema.setRequired(List.of("implementation", "clusterName", "localPeerId", "capabilities", "raftState",
         "leaderContactElapsedMs", "isLeader", "leaderReady", "leaderId", "leaderHttpAddress", "electionCount", "lastElectionTime",
         "uptime", "localAppliedIndex", "localCommitIndex", "localReplicationLag", "localStuckAtStaleTerm",
+        "localReplicationPathUnproven", "localLeaderUnreachableSinceRestart", "localInPlaceRestarts",
         "leaderCommitIndex", "localStalledBehindLeader", "peers",
         "databases", "localResync", "criticalHalt", "raftLogFailure", "crashLoopEscalated", "bootstrapInstalls",
         "bootstrapDeciding", "securityConvergence", "alerts"));
@@ -878,8 +961,11 @@ public class PluginApiSpec implements OpenApiContributor {
         Why this database was quarantined. 'WAL_VERSION_GAP' means an intermediate transaction never reached \
         this node; 'UNDECODABLE_LOG_ENTRY' a corrupt local log segment or an entry written by a newer node, \
         which is not a replication fault; 'APPLY_ERROR' an unexpected error while applying a committed entry; \
-        'SNAPSHOT_INSTALL_INCOMPLETE' an install that did not reach the snapshot's index.""");
-    cause.setEnum(List.of("WAL_VERSION_GAP", "UNDECODABLE_LOG_ENTRY", "APPLY_ERROR", "SNAPSHOT_INSTALL_INCOMPLETE"));
+        'SNAPSHOT_INSTALL_INCOMPLETE' an install that did not reach the snapshot's index; \
+        'UNPUBLISHED_SCHEMA_CHANGE' a schema change or compaction this node ran locally whose replication was \
+        refused or could not be published, so no other node holds it.""");
+    cause.setEnum(List.of("WAL_VERSION_GAP", "UNDECODABLE_LOG_ENTRY", "APPLY_ERROR", "SNAPSHOT_INSTALL_INCOMPLETE",
+        "UNPUBLISHED_SCHEMA_CHANGE"));
     // Declared since issue #7741 added it to the response. The vocabulary is written out here rather than read
     // from DivergenceCause for the same reason the alert severities are - this module cannot see ha-raft - and
     // Issue7577ClusterStatusSchemaMatchesTheHandlerTest over there is what keeps the two the same set.
@@ -937,13 +1023,23 @@ public class PluginApiSpec implements OpenApiContributor {
     schema.addProperty("leaderId", SpecBuilders.string(
         "Leader after the action. Present on leadership transfer."));
     schema.addProperty("database", SpecBuilders.string(
-        "Database the action applied to. Present on resync and accept-copy."));
+        "Database the action applied to. Present on resync, accept-copy and accept-diverged."));
     schema.addProperty("localServer", SpecBuilders.string(
-        "Server that performed the action. Present on resync and accept-copy."));
+        "Server that performed the action. Present on resync, accept-copy, accept-diverged and accept-stale-snapshot."));
     schema.addProperty("appliedIndex", SpecBuilders.integer(
-        "Last Raft index applied to the accepted copy, or -1 when none is recorded. Present on accept-copy."));
+        "Last Raft index applied to the accepted copy, or -1 when none is recorded. Present on accept-copy and "
+            + "accept-diverged. On accept-stale-snapshot, the applied position now recorded for the node."));
     schema.addProperty("overriddenRefusal", SpecBuilders.string(
         "Why the leader had refused to reopen the copy, when a refusal was standing. Present on accept-copy."));
+    schema.addProperty("divergenceCause", SpecBuilders.string(
+        "Why the lifted quarantine had been raised (WAL_VERSION_GAP, UNDECODABLE_LOG_ENTRY, APPLY_ERROR, "
+            + "SNAPSHOT_INSTALL_INCOMPLETE, UNPUBLISHED_SCHEMA_CHANGE), when one stood. Present on accept-diverged."));
+    schema.addProperty("readFloor", SpecBuilders.integer(
+        "The read floor that was lifted with the quarantine, when one stood. Present on accept-diverged, and on "
+            + "accept-stale-snapshot as the node-wide floor that was lifted."));
+    schema.addProperty("snapshotIndex", SpecBuilders.integer(
+        "The snapshot marker index the node-wide read floor was short of, or -1 when no marker was on disk. Present on "
+            + "accept-stale-snapshot."));
     // 'result' is the one member every one of these routes writes; the others say in their own
     // descriptions which action produces them (issue #7578).
     schema.setRequired(List.of("result"));

@@ -19,12 +19,14 @@
 package com.arcadedb.mcp.tools;
 
 import com.arcadedb.database.Database;
+import com.arcadedb.mcp.MCPToolArgumentException;
 import com.arcadedb.query.QueryEngine;
 import com.arcadedb.query.sql.executor.ResultSet;
 import com.arcadedb.schema.DocumentType;
 import com.arcadedb.schema.EdgeType;
 import com.arcadedb.serializer.JsonSerializer;
 import com.arcadedb.serializer.json.JSONArray;
+import com.arcadedb.serializer.json.JSONException;
 import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.server.ArcadeDBServer;
 import com.arcadedb.mcp.MCPConfiguration;
@@ -78,9 +80,9 @@ public class SampleRecordsTool {
       throw new SecurityException("Read operations are not allowed by MCP configuration");
 
     final String databaseName = MCPToolUtils.requireString(args, "database");
-    final int limit = args.getInt("limit", DEFAULT_LIMIT);
+    final int limit = MCPToolUtils.intArgument(args, "limit", DEFAULT_LIMIT);
     if (limit < 1 || limit > MAX_LIMIT)
-      throw new IllegalArgumentException("'limit' must be between 1 and " + MAX_LIMIT);
+      throw new MCPToolArgumentException("'limit' must be between 1 and " + MAX_LIMIT);
 
     final MCPToolUtils.DatabaseAccess access = MCPToolUtils.resolveDatabase(
         server, user, databaseName, config, MCPToolUtils.RequiredAccess.READ);
@@ -115,7 +117,7 @@ public class SampleRecordsTool {
         .map(DocumentType::getName)
         .sorted()
         .toList();
-    final JSONArray requestedTypes = args.getJSONArray("types", null);
+    final JSONArray requestedTypes = MCPToolUtils.optionalArray(args, "types");
     if (requestedTypes == null) {
       return new ResolvedTypes(
           eligibleTypes.stream().limit(MAX_TYPES).toList(),
@@ -123,15 +125,20 @@ public class SampleRecordsTool {
           eligibleTypes.size() > MAX_TYPES);
     }
     if (requestedTypes.length() > MAX_TYPES)
-      throw new IllegalArgumentException("'types' must contain at most " + MAX_TYPES + " entries");
+      throw new MCPToolArgumentException("'types' must contain at most " + MAX_TYPES + " entries");
 
     final LinkedHashSet<String> typeNames = new LinkedHashSet<>();
     for (int i = 0; i < requestedTypes.length(); i++) {
-      final String typeName = requestedTypes.getString(i);
+      final String typeName;
+      try {
+        typeName = requestedTypes.getString(i);
+      } catch (final JSONException e) {
+        throw new MCPToolArgumentException("'types' must contain only non-blank type names");
+      }
       if (typeName == null || typeName.isBlank())
-        throw new IllegalArgumentException("'types' must contain only non-blank type names");
+        throw new MCPToolArgumentException("'types' must contain only non-blank type names");
       if (!database.getSchema().existsType(typeName))
-        throw new IllegalArgumentException(
+        throw new MCPToolArgumentException(
             "Type '" + typeName + "' does not exist in database '" + databaseName + "'");
       typeNames.add(typeName);
     }

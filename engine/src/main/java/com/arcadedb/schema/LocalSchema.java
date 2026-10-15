@@ -23,6 +23,7 @@ import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.database.Database;
 import com.arcadedb.database.DatabaseContext;
 import com.arcadedb.database.DatabaseInternal;
+import com.arcadedb.database.DocumentValidator;
 import com.arcadedb.database.LocalDatabase;
 import com.arcadedb.database.Document;
 import com.arcadedb.database.MutableDocument;
@@ -37,6 +38,7 @@ import com.arcadedb.engine.ComponentFactory;
 import com.arcadedb.engine.ComponentFile;
 import com.arcadedb.engine.Dictionary;
 import com.arcadedb.engine.LocalBucket;
+import com.arcadedb.engine.OwnTransaction;
 import com.arcadedb.engine.PaginatedComponent;
 import com.arcadedb.engine.timeseries.TimeSeriesBucket;
 import com.arcadedb.engine.timeseries.TimeSeriesMaintenanceScheduler;
@@ -51,6 +53,7 @@ import com.arcadedb.function.FunctionDefinition;
 import com.arcadedb.function.FunctionLibraryDefinition;
 import com.arcadedb.function.FunctionLibraryFactory;
 import com.arcadedb.function.polyglot.PolyglotFunctionDefinition;
+import com.arcadedb.function.polyglot.PolyglotFunctionLibraryDefinition;
 import com.arcadedb.index.Index;
 import com.arcadedb.index.IndexException;
 import com.arcadedb.index.IndexFactory;
@@ -61,6 +64,7 @@ import com.arcadedb.index.hash.HashIndexBucket;
 import com.arcadedb.index.fulltext.LSMTreeFullTextIndex;
 import com.arcadedb.index.geospatial.LSMTreeGeoIndex;
 import com.arcadedb.index.lsm.LSMTreeIndex;
+import com.arcadedb.index.lsm.LSMTreeIndexAbstract;
 import com.arcadedb.index.sparsevector.LSMSparseVectorIndex;
 import com.arcadedb.index.sparsevector.SparseSegmentComponent;
 import com.arcadedb.index.lsm.LSMTreeIndexAbstract.NULL_STRATEGY;
@@ -120,6 +124,13 @@ public class LocalSchema implements Schema {
    * Cannot collide with a bucket name: {@link #checkValidBucketName} rejects ':' as illegal on Windows.
    */
   static final String                                        STATISTICS_FORMAT_VERSION_KEY = "@arcadedb:statisticsFormat";
+  /**
+   * Schema setting naming how openCypher temporals are stored (issue #9636): {@code native} for the self-describing
+   * binary types, absent for a schema written by a release that stored them as text.
+   */
+  static final String                                        TEMPORAL_STORAGE_SETTING      = "temporalStorage";
+  static final String                                        TEMPORAL_STORAGE_NATIVE       = "native";
+  static final String                                        TEMPORAL_STORAGE_TEXT         = "text";
   public static final int                                    BUILD_TX_BATCH_SIZE           = 100_000;
 
   // The rest of the NTFS/Windows-reserved character set beyond '/', '\' and '*', which checkValidBucketName()
@@ -277,6 +288,9 @@ public class LocalSchema implements Schema {
   // cannot be null - LocalDocumentType uses the TypeIndex's own name, and ManualIndexBuilder.create() rejects a null
   // one up front, it being the only route by which a caller-supplied name reaches this map unmediated.
   protected final     Map<String, IndexInternal>             indexMap                      = new ConcurrentHashMap<>();
+  // #10046: per type, the definitions of the bucket indexes whose file the last load refused for a missing header page,
+  // keyed by file name. Re-emitted by LocalDocumentType.toJSON() so a save does not lose them, see readConfiguration().
+  private volatile    Map<String, Map<String, JSONObject>>   unavailableIndexDefinitions   = Map.of();
 
   /**
    * The index and bucket components an in-flight schema load has instantiated but whose {@code onAfterSchemaLoad()}
@@ -368,6 +382,13 @@ public class LocalSchema implements Schema {
   protected final     Map<String, JSONObject>               extensions                    = new LinkedHashMap<>();
   private final       Map<String, TriggerListenerAdapter> triggerAdapters = new HashMap<>();
   /**
+   * The TimeSeries types whose engine waits for the WAL replay of the open in progress, {@code null} when engines are
+   * built as their types are read. See {@link #openDeferredTimeSeriesEngines()}.
+   */
+  // Written by load() and openDeferredTimeSeriesEngines(), both on the single thread that opens the database, and by close();
+  // volatile for the close() that can come from another thread
+  private volatile    List<LocalTimeSeriesType>             timeSeriesEnginesAwaitingReplay;
+  /**
    * The schema members that live beside {@code "types"} (triggers, materialized views, continuous aggregates,
    * function libraries, extensions) as a load in flight has restored them, or {@code null} when nothing is staging.
    * Published by {@link #publishStagedMembers()} at the same barrier as the type graph and discarded by
@@ -383,6 +404,14 @@ public class LocalSchema implements Schema {
   private             String                                 dateTimeFormat                = GlobalConfiguration.DATE_TIME_FORMAT.getValueAsString();
   private             TimeZone                               timeZone                      = TimeZone.getDefault();
   private             ZoneId                                 zoneId                        = ZoneId.systemDefault();
+  /**
+   * True for a database whose records may hold an openCypher {@code time()}, {@code localtime()}, zoned
+   * {@code datetime()} or {@code duration()} as its ISO text, the way every release before the native temporal types
+   * stored them (issue #9636). Decided by the schema file: one written before {@link #TEMPORAL_STORAGE_SETTING} existed
+   * has none and comes from such a release; a database created since starts and stays native. Cleared only by the
+   * one-off conversion ({@code CALL db.migrateLegacyTemporals()}), once the text is rewritten in the native types.
+   */
+  private volatile    boolean                                legacyTemporalText            = false;
   private             boolean                                readingFromFile               = false;
   private final       AtomicLong                             dirtyGeneration               = new AtomicLong(0);
   private volatile    long                                   savedGeneration               = 0;
@@ -439,12 +468,17 @@ public class LocalSchema implements Schema {
    */
   private final       Set<String>                            reportedUpgradeWarnings       = ConcurrentHashMap.newKeySet();
   private              MaterializedViewScheduler              materializedViewScheduler;
+  /**
+   * Warms, in the background, the indexes a reload re-created cold (issue #10021). Holds no thread until it is asked to.
+   */
+  private final           IndexWarmUpScheduler                   indexWarmUp;
   private              TimeSeriesMaintenanceScheduler         timeSeriesMaintenanceScheduler;
 
   public LocalSchema(final DatabaseInternal database, final String databasePath, final SecurityManager security) {
     this.database = database;
     this.databasePath = databasePath;
     this.security = security;
+    this.indexWarmUp = new IndexWarmUpScheduler(database.getName());
 
     componentFactory = new ComponentFactory(database);
     componentFactory.registerComponent(Dictionary.DICT_EXT, new Dictionary.PaginatedComponentFactoryHandler());
@@ -502,6 +536,16 @@ public class LocalSchema implements Schema {
   }
 
   public void load(final ComponentFile.MODE mode, final boolean initialize) throws IOException {
+    load(mode, initialize, false);
+  }
+
+  /**
+   * @param deferTimeSeriesEngines registers the TimeSeries types without building their engines, for an open that
+   *                               replays the WAL after this load (issue #9452). The caller MUST then call
+   *                               {@link #openDeferredTimeSeriesEngines()} once the replay is over
+   */
+  public void load(final ComponentFile.MODE mode, final boolean initialize, final boolean deferTimeSeriesEngines)
+      throws IOException {
     // Claim the staging window FIRST. beginStagedPublication() refuses a load that overlaps another, and a refusal
     // has to leave the schema exactly as it found it.
     // stageFileIds=true: the previous generation keeps its file-id slots until the barrier, which is what keeps the
@@ -514,6 +558,7 @@ public class LocalSchema implements Schema {
     final Dictionary previousDictionary = dictionary;
     boolean published = false;
     try {
+      timeSeriesEnginesAwaitingReplay = deferTimeSeriesEngines ? new ArrayList<>() : null;
       // NOTHING is cleared (issue #7963). The previous generation - type graph (issue #7961), by-name maps and
       // file-id array alike - stays published, whole, until the new one replaces it at the barrier below, so a query
       // running on a live HA follower while this rebuild runs keeps resolving its buckets and indexes instead of
@@ -582,8 +627,12 @@ public class LocalSchema implements Schema {
 
       updateSecurity();
     } finally {
-      if (!published && previousDictionary != null)
-        dictionary = previousDictionary;
+      if (!published) {
+        if (previousDictionary != null)
+          dictionary = previousDictionary;
+        // Engines left waiting by a load that did not publish must not leak into the next one
+        timeSeriesEnginesAwaitingReplay = null;
+      }
       endStagedPublication();
     }
   }
@@ -695,7 +744,7 @@ public class LocalSchema implements Schema {
     // before the replacement is published would close them under readers still holding the old graph.
     stagedTypes.clear();
     supersededTypes = published.types();
-    stagedMembers = new StagedMembers(timeZone, zoneId, dateFormat, dateTimeFormat, versionSerial.get());
+    stagedMembers = new StagedMembers(timeZone, zoneId, dateFormat, dateTimeFormat, legacyTemporalText, versionSerial.get());
   }
 
   /**
@@ -736,8 +785,11 @@ public class LocalSchema implements Schema {
           // resolved the previous one before it had written its page before, and the file size covers it.
           if (component instanceof PaginatedComponent paginated && paginated.getComponentFile() != null) {
             final Component previous = table[fileId];
+            // Everything else a running transaction reserved on the previous instance - the page numbers it was
+            // handed, the new pages and slots it owns until it ends - has to survive the swap too, or the new
+            // instance hands them out again (issue #9835). The component knows what that is; see carryOverFrom().
             if (previous instanceof PaginatedComponent previousPaginated && previous.getName().equals(component.getName()))
-              paginated.updatePageCount(previousPaginated.getCommittedPageCount());
+              paginated.carryOverFrom(previousPaginated);
             try {
               paginated.updatePageCount((int) (paginated.getComponentFile().getSize() / paginated.getPageSize()));
             } catch (final IOException e) {
@@ -753,11 +805,21 @@ public class LocalSchema implements Schema {
     // What the maps serve right now, taken before they change, so the instances this publication retires can be
     // released once it is done (issue #8310). Skipped when nothing is staged, which leaves nothing to replace.
     final Set<IndexInternal> previousIndexes;
+    // The names of the indexes whose successor has to be warmed once published (issue #10021): the replaced instances that
+    // had something resident, plus the ones a previous reload already asked to warm and has not got to yet - re-created
+    // twice before warm, they must not fall out of the chain. Read here, while the instances are still the published ones.
+    final Set<String> namesToWarm;
+    // Read ONCE for the whole publication: the two decisions below (who to warm, and after how long) must agree, and the setting
+    // can be changed at any moment
+    final long warmUpDelayMs = warmUpDelayMs();
     if (rebuildingEverything || !stagedIndexMap.isEmpty()) {
       previousIndexes = Collections.newSetFromMap(new IdentityHashMap<>(indexMap.size()));
       previousIndexes.addAll(indexMap.values());
-    } else
+      namesToWarm = indexesToWarm(previousIndexes, warmUpDelayMs);
+    } else {
       previousIndexes = null;
+      namesToWarm = null;
+    }
 
     // Buckets first, and the order is not arbitrary: a published index names the bucket it is associated with, so
     // publishing indexes first would let a reader resolve an index by name a few instructions before the bucket it
@@ -829,16 +891,24 @@ public class LocalSchema implements Schema {
       final Set<LocalDocumentType> survivors = Collections.newSetFromMap(new IdentityHashMap<>(publishedTypes.size()));
       survivors.addAll(publishedTypes.values());
 
-      for (final LocalDocumentType type : superseded.values())
-        if (type instanceof final LocalTimeSeriesType tsType && !survivors.contains(tsType)) {
+      for (final LocalDocumentType type : superseded.values()) {
+        if (survivors.contains(type))
+          continue;
+
+        // ITS LISTENERS ARE NO LONGER REACHED BY ANY READ: THEY MUST NOT KEEP THE DATABASE ON THE DISPATCH PATH (#9997)
+        type.events.detachFromDatabase();
+
+        if (type instanceof final LocalTimeSeriesType tsType) {
+          // Retired, not closed (issue #9886): the replacement engine is built on the same registered files
           try {
-            tsType.close();
+            tsType.closeSuperseded();
           } catch (final Exception e) {
             LogManager.instance().log(this, Level.WARNING,
-                "Error closing TimeSeries type '%s' superseded by a schema reload: %s", null, tsType.getName(),
+                "Error retiring TimeSeries type '%s' superseded by a schema reload: %s", null, tsType.getName(),
                 e.getMessage());
           }
         }
+      }
     }
 
     // The same for the indexes, and for the same reason: nothing reaches them through the schema any more, and
@@ -852,6 +922,73 @@ public class LocalSchema implements Schema {
       retireIndexesNoLongerPublished(previousIndexes);
 
     endStagedPublication();
+
+    // After the staging window closes, not before: the warm-up thread resolves components through the schema, and must not
+    // do it while this publication still holds the window open
+    if (namesToWarm != null)
+      requestWarmUpOf(namesToWarm, warmUpDelayMs);
+  }
+
+  /**
+   * The names, among {@code previousIndexes}, whose successor has to be warmed in the background (issue #10021): the
+   * instances that are {@link IndexInternal#isWarm() warm}, and those a previous reload asked to warm and the warm-up has
+   * not finished with. Empty when the warm-up is disabled, which is also what makes the reload of a database that is being
+   * opened - where nothing was published before it - ask for nothing.
+   */
+  private Set<String> indexesToWarm(final Collection<IndexInternal> previousIndexes, final long warmUpDelayMs) {
+    if (warmUpDelayMs < 0)
+      return Collections.emptySet();
+
+    Set<String> names = null;
+    for (final IndexInternal index : previousIndexes)
+      if (index.isWarm()) {
+        if (names == null)
+          names = new HashSet<>();
+        names.add(index.getName());
+      }
+
+    // Also asked of the scheduler even when nothing was warm: a reload that re-creates an index a previous reload had already queued
+    // finds an instance that is not warm (the queue has not run), and returning only the warm names would drop it from the chain.
+    // The empty set this can return is not a no-op either: requestWarmUpOf() hands the scheduler an empty list, which CANCELS
+    // whatever was waiting, and that is right when none of the queued names exists any more.
+    final Set<String> unfinished = indexWarmUp.unfinishedNames();
+    if (names == null)
+      return unfinished;
+    names.addAll(unfinished);
+    return names;
+  }
+
+  /** Schedules the warm-up of whatever {@link #indexMap} now serves under {@code names}. */
+  private void requestWarmUpOf(final Set<String> names, final long delayMs) {
+    if (delayMs < 0)
+      return;
+
+    final List<IndexWarmUpScheduler.Task> tasks = new ArrayList<>(names.size());
+    for (final String name : names) {
+      final IndexInternal successor = indexMap.get(name);
+      // A name the new generation does not carry is an index the reload dropped; one that cannot answer is not worth a load
+      if (successor != null && successor.isValid())
+        tasks.add(new IndexWarmUpScheduler.Task(name, successor::warmUp));
+    }
+
+    // Sorted, so the order the indexes are loaded in does not depend on a hash: the same schema warms the same way every time
+    tasks.sort(Comparator.comparing(IndexWarmUpScheduler.Task::name));
+    indexWarmUp.request(tasks, delayMs);
+  }
+
+  private long warmUpDelayMs() {
+    return database.getConfiguration().getValueAsInteger(GlobalConfiguration.VECTOR_INDEX_WARM_UP_AFTER_SCHEMA_RELOAD_DELAY_MS);
+  }
+
+  /**
+   * Waits until the background warm-up of the indexes the last schema reload re-created has finished (issue #10021). The
+   * warm-up exists so that nothing has to wait for it; this is for a caller that wants the indexes warm before it carries on,
+   * such as a test, or a readiness check after a restart sequence.
+   *
+   * @return {@code false} when the timeout elapsed first
+   */
+  public boolean awaitIndexWarmUp(final long timeoutMs) {
+    return indexWarmUp.awaitIdle(timeoutMs);
   }
 
   /**
@@ -898,6 +1035,7 @@ public class LocalSchema implements Schema {
       zoneId = stagedMembers.previousZoneId;
       dateFormat = stagedMembers.previousDateFormat;
       dateTimeFormat = stagedMembers.previousDateTimeFormat;
+      legacyTemporalText = stagedMembers.previousLegacyTemporalText;
       versionSerial.set(stagedMembers.previousVersion);
     }
     stagedMembers = null;
@@ -905,7 +1043,7 @@ public class LocalSchema implements Schema {
     // (PR #8001 review). A load that dies after readConfiguration() has initialised a TimeSeries engine per type
     // would otherwise leak one engine, and its file handles, per failed reload.
     if (published.types() != publishedFromStaging) {
-      closeTimeSeriesTypesOf(stagedTypes);
+      retireTimeSeriesTypesOf(stagedTypes);
       // And the indexes it built that never went live (issue #8310), for the same reason. The staged map can carry
       // instances the published generation is still serving - an incremental refresh re-registers the ones it did
       // not touch - which is why this goes through the identity check rather than releasing the map wholesale.
@@ -957,15 +1095,20 @@ public class LocalSchema implements Schema {
     return isStagingPublication() ? stagedTypes : published.types();
   }
 
-  /** Closes the TimeSeries engines of a graph that is about to be discarded. */
-  private void closeTimeSeriesTypesOf(final Map<String, LocalDocumentType> graph) {
+  /**
+   * Retires the TimeSeries engines of a graph that is about to be discarded by a reload. Retired, not closed (issue
+   * #9886): every caller discards the graph in favour of another built on the same registered files - the published
+   * one a failed load keeps, or the one a rebuild is about to produce - so closing those files would close them under
+   * the engines still serving the type. The database close releases them.
+   */
+  private void retireTimeSeriesTypesOf(final Map<String, LocalDocumentType> graph) {
     for (final DocumentType type : graph.values())
       if (type instanceof final LocalTimeSeriesType tsType)
         try {
-          tsType.close();
+          tsType.closeSuperseded();
         } catch (final Exception e) {
           LogManager.instance().log(this, Level.WARNING,
-              "Error closing TimeSeries type '%s' during schema reload: %s", null, tsType.getName(), e.getMessage());
+              "Error retiring TimeSeries type '%s' during schema reload: %s", null, tsType.getName(), e.getMessage());
         }
   }
 
@@ -1116,20 +1259,35 @@ public class LocalSchema implements Schema {
    *                       full rebuild instead. May be {@code null}
    *
    * @return {@code true} when the schema was refreshed incrementally, {@code false} when the caller must fall back
-   * to {@link #load(ComponentFile.MODE, boolean)}. When {@code false} is returned nothing has been modified.
+   * to {@link #load(ComponentFile.MODE, boolean)}. When {@code false} is returned nothing has been modified. A caller
+   * that wants to say WHY it fell back calls {@link #tryLoadIncremental} instead.
    */
   public boolean loadIncremental(final ComponentFile.MODE mode, final Collection<Integer> removedFileIds,
+      final Collection<Integer> touchedFileIds) throws IOException {
+    return tryLoadIncremental(mode, removedFileIds, touchedFileIds) == null;
+  }
+
+  /**
+   * {@link #loadIncremental} that says why it declined (issue #10020): a replica falling back to the full load on its
+   * apply thread is the event an operator has to be able to tie an apply-lag spike, or a vector search rebuilding after a
+   * DDL, back to.
+   *
+   * @return {@code null} when the schema was refreshed incrementally, otherwise the reason the caller must fall back to
+   * {@link #load(ComponentFile.MODE, boolean)}, and what triggered it. When a refusal is returned nothing has been
+   * modified.
+   */
+  public IncrementalLoadRefusal tryLoadIncremental(final ComponentFile.MODE mode, final Collection<Integer> removedFileIds,
       final Collection<Integer> touchedFileIds) throws IOException {
 
     // Nothing was ever loaded in this lifecycle, so there is no baseline to add to.
     if (dictionary == null || !loadInRamCompleted)
-      return false;
+      return IncrementalLoadRefusal.of(FullSchemaLoadReason.NOT_LOADED, "");
 
     // A retired file leaves a stale entry behind in bucketMap/indexMap (removeFile() only clears the file-id array),
     // and the mutable index that superseded it has to re-read its page 0 anyway. Both are what the full rebuild is
     // for, and both are the ordering the comments on issues #4743 and #5443 in applySchemaEntry pin down.
     if (removedFileIds != null && !removedFileIds.isEmpty())
-      return false;
+      return IncrementalLoadRefusal.of(FullSchemaLoadReason.FILE_RETIRED, "file ids " + removedFileIds);
 
     // FIRST PASS decides, without modifying anything, so a refusal leaves the caller's fallback a consistent state.
 
@@ -1140,7 +1298,8 @@ public class LocalSchema implements Schema {
         continue;
 
       if (NON_INCREMENTAL_COMPONENT_EXTENSIONS.contains(file.getFileExtension()))
-        return false;
+        return IncrementalLoadRefusal.of(FullSchemaLoadReason.NON_INCREMENTAL_NEW_FILE,
+            "file '" + file.getFileName() + "' (id " + file.getFileId() + ", extension '" + file.getFileExtension() + "')");
 
       toInstantiate.add(file);
     }
@@ -1160,7 +1319,7 @@ public class LocalSchema implements Schema {
           continue;
 
         if (!database.getFileManager().existsFile(fileId))
-          return false;
+          return IncrementalLoadRefusal.of(FullSchemaLoadReason.TOUCHED_FILE_MISSING, "file id " + fileId);
 
         final ComponentFile file = database.getFileManager().getFile(fileId);
 
@@ -1171,7 +1330,8 @@ public class LocalSchema implements Schema {
         // narrowing dropped a touched bloom filter out of the loop before the guard could refuse the entry, and
         // left the compacted index refusing by accident rather than by rule.
         if (NON_INCREMENTAL_TOUCHED_COMPONENT_EXTENSIONS.contains(file.getFileExtension()))
-          return false;
+          return IncrementalLoadRefusal.of(FullSchemaLoadReason.NON_INCREMENTAL_TOUCHED_FILE,
+              "file '" + file.getFileName() + "' (id " + fileId + ", extension '" + file.getFileExtension() + "')");
 
         if (!(current.getMainComponent() instanceof IndexInternal))
           continue;
@@ -1243,7 +1403,7 @@ public class LocalSchema implements Schema {
 
       updateSecurity();
 
-      return true;
+      return null;
     } finally {
       // No file-id rollback to do: every slot this load took is in the staged overlay, and endStagedPublication()
       // drops it (issue #7962). Before the overlay existed the slots were taken immediately and had to be put back
@@ -1272,12 +1432,20 @@ public class LocalSchema implements Schema {
    * forever. Every legitimate compacted component gets its mainIndex set by the owning mutable index while
    * reading its header (SUB-INDEX FILE ID), so a compacted component still unclaimed after the whole schema
    * load is provably an orphan.
+   * <p>
+   * With one exception: a compacted file of the same index as a mutable file the load left out because its header page
+   * has not arrived yet (issue #10046). That mutable is the one that would claim it, so the compacted file is kept - with
+   * its bloom filter - until a later load finds the header, or the index is rebuilt.
    */
   private void sweepOrphanCompactedIndexFiles(final List<Component> snapshot) {
+    final Set<String> awaitingHeader = headerlessMutableIndexBaseNames();
     for (final Component component : snapshot) {
       if (component instanceof LSMTreeIndexBloomFilter filter) {
         // A filter is owned by exactly one compacted index; without it nothing can ever read the file again.
         final Component owner = filter.getOwnerName() != null ? getFileByName(filter.getOwnerName()) : null;
+        if (owner instanceof LSMTreeIndexCompacted compactedOwner && awaitingHeader.contains(
+            LSMTreeIndexAbstract.compactionBaseName(compactedOwner.getName())))
+          continue;
         if (!(owner instanceof LSMTreeIndexCompacted compactedOwner) || compactedOwner.getMainIndex() == null) {
           LogManager.instance().log(this, Level.INFO,
               "Dropping orphan index bloom filter file '%s' (fileId=%d)", null, filter.getName(), filter.getFileId());
@@ -1288,6 +1456,14 @@ public class LocalSchema implements Schema {
 
       if (!(component instanceof LSMTreeIndexCompacted compacted) || compacted.getMainIndex() != null)
         continue;
+
+      if (awaitingHeader.contains(LSMTreeIndexAbstract.compactionBaseName(compacted.getName()))) {
+        LogManager.instance().log(this, Level.WARNING,
+            "Keeping unclaimed compacted index file '%s' (fileId=%d): a mutable file of the same index has no header page yet. "
+                + "If it never arrives, run 'REBUILD INDEX' on that index",
+            null, compacted.getName(), compacted.getFileId());
+        continue;
+      }
 
       LogManager.instance().log(this, Level.INFO,
           "Dropping orphan compacted index file '%s' (fileId=%d) left behind by an interrupted compaction", null,
@@ -1303,8 +1479,39 @@ public class LocalSchema implements Schema {
     }
   }
 
+  /**
+   * The definitions, keyed by file name, of the bucket indexes of {@code typeName} that the last load found bound to a file
+   * with no header page (issue #10046): not served, but kept in the schema file until they can be again.
+   */
+  Map<String, JSONObject> getUnavailableIndexDefinitions(final String typeName) {
+    final Map<String, JSONObject> definitions = unavailableIndexDefinitions.get(typeName);
+    return definitions != null ? definitions : Map.of();
+  }
+
+  /**
+   * The compaction base names ({@link LSMTreeIndexAbstract#compactionBaseName}) of the mutable LSM index files the file
+   * manager holds and this load did not turn into a component: the ones refused for a missing header (issue #10046).
+   */
+  private Set<String> headerlessMutableIndexBaseNames() {
+    Set<String> names = null;
+    for (final ComponentFile file : database.getFileManager().getFiles()) {
+      if (file == null)
+        continue;
+      final String ext = file.getFileExtension();
+      if ((LSMTreeIndexMutable.UNIQUE_INDEX_EXT.equals(ext) || LSMTreeIndexMutable.NOTUNIQUE_INDEX_EXT.equals(ext))
+          && lookupFile(file.getFileId()) == null) {
+        if (names == null)
+          names = new HashSet<>();
+        names.add(LSMTreeIndexAbstract.compactionBaseName(file.getComponentName()));
+      }
+    }
+    return names != null ? names : Collections.emptySet();
+  }
+
   // KEY PREFIX IN reportedUpgradeWarnings: A TYPE LEFT BEHIND BY AN OLDER VERSION (#8169) IS AN UPGRADE LEFTOVER TOO
   private static final String BUCKETLESS_TYPE_WARNING_PREFIX = "bucketless-type:";
+  // KEY PREFIX IN reportedUpgradeWarnings: A LIGHTWEIGHT EDGE TYPE WITH A CONSTRAINT IT CANNOT APPLY, ACCEPTED BEFORE #9846
+  private static final String UNENFORCED_LIGHTWEIGHT_CONSTRAINT_WARNING_PREFIX = "unenforced-lightweight-constraint:";
 
   /**
    * #8187: a {@code schema.json} written by a version affected by #8169 carries a dropped type as a real entry with no
@@ -1343,8 +1550,44 @@ public class LocalSchema implements Schema {
     return zoneId;
   }
 
+  /**
+   * Saved with the schema and, under HA, replicated with it (issue #9747): see {@link #recordChange(Runnable)}.
+   */
   public void setZoneId(final ZoneId zoneId) {
-    this.zoneId = zoneId;
+    database.checkPermissionsOnDatabase(SecurityDatabaseUser.DATABASE_ACCESS.UPDATE_DATABASE_SETTINGS);
+    if (!Objects.equals(this.zoneId, zoneId))
+      recordChange(() -> this.zoneId = zoneId);
+  }
+
+  /**
+   * Whether this database's records may hold openCypher temporals as the ISO text releases before the native temporal
+   * types wrote (issue #9636). openCypher then restores such a text, on a property the schema does not declare, the
+   * way those releases read it back.
+   */
+  public boolean isLegacyTemporalText() {
+    return legacyTemporalText;
+  }
+
+  /**
+   * Marks the openCypher temporals of this database as stored natively, once {@code db.migrateLegacyTemporals()} has
+   * rewritten the legacy text (issue #9636). Saved with the schema. There is no way back: a String written after this
+   * point is a String.
+   * <p>
+   * Flipped inside a schema recording session, not by a bare {@link #saveConfiguration()}: under HA the session is what
+   * ships the schema to the followers, and a bare save only rewrote the leader's own file, so every follower stayed
+   * legacy and answered the same openCypher read differently (issue #9712).
+   */
+  public void markTemporalStorageNative() {
+    database.checkPermissionsOnDatabase(SecurityDatabaseUser.DATABASE_ACCESS.UPDATE_DATABASE_SETTINGS);
+    // Read outside the write lock on purpose: two callers racing past it both set the same value, one save more. And no
+    // reset on a failed session: past the callback the leader holds the change and the HA session handles a change it
+    // could not publish (issue #9558); putting the flag back would only make memory disagree with this node's file
+    if (!legacyTemporalText)
+      return;
+    recordFileChanges(() -> {
+      legacyTemporalText = false;
+      return null;
+    });
   }
 
   @Override
@@ -1355,7 +1598,15 @@ public class LocalSchema implements Schema {
   @Override
   public void setDateFormat(final String dateFormat) {
     database.checkPermissionsOnDatabase(SecurityDatabaseUser.DATABASE_ACCESS.UPDATE_DATABASE_SETTINGS);
-    this.dateFormat = dateFormat;
+    if (!Objects.equals(this.dateFormat, dateFormat))
+      recordChange(() -> {
+        // the MIN and MAX of a date property are read through this pattern on every write (issue #9976 follow-up). Checked
+        // under the write lock, which a concurrent ALTER PROPERTY ... MIN takes too
+        DocumentValidator.requireDateConstraintsSatisfiableUnder(database, "the date format to '" + dateFormat + "'",
+            database.getSerializer().getDateImplementation(), database.getSerializer().getDateTimeImplementation(),
+            this.dateTimeFormat, dateFormat);
+        this.dateFormat = dateFormat;
+      });
   }
 
   @Override
@@ -1366,7 +1617,28 @@ public class LocalSchema implements Schema {
   @Override
   public void setDateTimeFormat(final String dateTimeFormat) {
     database.checkPermissionsOnDatabase(SecurityDatabaseUser.DATABASE_ACCESS.UPDATE_DATABASE_SETTINGS);
-    this.dateTimeFormat = dateTimeFormat;
+    if (!Objects.equals(this.dateTimeFormat, dateTimeFormat))
+      recordChange(() -> {
+        DocumentValidator.requireDateConstraintsSatisfiableUnder(database, "the datetime format to '" + dateTimeFormat + "'",
+            database.getSerializer().getDateImplementation(), database.getSerializer().getDateTimeImplementation(),
+            dateTimeFormat, this.dateFormat);
+        this.dateTimeFormat = dateTimeFormat;
+      });
+  }
+
+  /**
+   * Applies a schema change that creates or drops no file inside a schema recording session (issue #9747). The session
+   * saves {@code schema.json} on its way out and, under HA, is what ships the schema to the followers. A bare
+   * {@link #saveConfiguration()} did the former and not the latter: the change existed on the leader alone, so a
+   * constraint was not enforced by a follower - nor by the node that became leader after a failover - and the date
+   * settings answered differently per node. Validate before calling, so a refused value touches nothing. During the
+   * schema load the session is a plain call. Nested in another frame on this thread, the outermost one saves.
+   */
+  void recordChange(final Runnable change) {
+    recordFileChanges(() -> {
+      change.run();
+      return null;
+    });
   }
 
   @Override
@@ -1378,11 +1650,14 @@ public class LocalSchema implements Schema {
   @Override
   public void setExtension(final String name, final JSONObject value) {
     database.checkPermissionsOnDatabase(SecurityDatabaseUser.DATABASE_ACCESS.UPDATE_SCHEMA);
-    if (value == null)
-      extensions.remove(name);
-    else
-      extensions.put(name, value);
-    saveConfiguration();
+    // Inside a schema recording session, not followed by a bare saveConfiguration(): under HA only the session ships the
+    // schema, so the extension existed on the leader alone (issue #9747)
+    recordChange(() -> {
+      if (value == null)
+        extensions.remove(name);
+      else
+        extensions.put(name, value);
+    });
   }
 
   @Override
@@ -1760,7 +2035,10 @@ public class LocalSchema implements Schema {
       // instance applies its pages on this node only - the type exists everywhere, its records only here.
       final DatabaseInternal db = database.getWrappedDatabaseInstance();
       long copied = 0;
-      db.begin();
+      // The transaction THIS copy owns, and the only one it may roll back (issue #9851): a nested transaction is an independent
+      // one, so once a commit has popped it `db.isTransactionActive()` answers for the CALLER's, and the rollback guarded by it
+      // discarded the caller's uncommitted work - on the successful path too. Re-taken after every batch commit.
+      OwnTransaction copyTransaction = OwnTransaction.begin(db);
       try {
         for (final Iterator<Record> iter = db.iterateType(typeName, false); iter.hasNext(); ) {
 
@@ -1778,16 +2056,17 @@ public class LocalSchema implements Schema {
           ++copied;
 
           if (transactionBatchSize > 0 && copied % transactionBatchSize == 0) {
-            db.commit();
-            db.begin();
+            copyTransaction.commit();
+            copyTransaction = OwnTransaction.begin(db);
           }
         }
 
-        db.commit();
+        copyTransaction.commit();
 
       } finally {
-        if (db.isTransactionActive())
-          db.rollback();
+        // A no-op when the last commit succeeded, when a commit threw (it pops its context either way) and when the begin() after
+        // a batch commit threw: the handle then still names the committed context, which is no longer on the thread's stack.
+        copyTransaction.rollbackIfMine();
       }
 
       // COPY INDEXES. Deliberately outside the record-copy transaction: each index build opens its own transaction
@@ -1876,9 +2155,15 @@ public class LocalSchema implements Schema {
   public void dropIndex(final String indexName) {
     database.checkPermissionsOnDatabase(SecurityDatabaseUser.DATABASE_ACCESS.UPDATE_SCHEMA);
 
-    checkIndexIsNotBackingAConstraint(indexName);
-
-    dropIndexInternal(indexName);
+    // The guard and the drop run in one schema session, under the write lock that orders every other schema change (#9848,
+    // the same shape as #7672 on dropProperty). A guard evaluated before the lock could pass against a state that a
+    // concurrent ALTER TYPE ... WITH unique = true changes before the drop gets the lock, and the drop would then remove the
+    // index that ALTER had just built.
+    recordFileChanges(() -> {
+      checkIndexIsNotBackingAConstraint(indexName);
+      dropIndexInternal(indexName);
+      return null;
+    });
   }
 
   /**
@@ -2142,6 +2427,9 @@ public class LocalSchema implements Schema {
   public void alterMaterializedView(final String viewName, final MaterializedViewRefreshMode newMode,
       final long newIntervalMs) {
     database.checkPermissionsOnDatabase(SecurityDatabaseUser.DATABASE_ACCESS.UPDATE_SCHEMA);
+    // The same refusals the remote alter makes before rendering ALTER MATERIALIZED VIEW (issue #8726): an interval on a
+    // non-PERIODIC mode used to be stored here although nothing schedules it, and a null mode reached the view
+    MaterializedViewBuilder.validateRefresh(newMode, newIntervalMs);
 
     // See dropMaterializedView for why the monitor is not held across recordFileChanges, and why the teardown of the
     // old refresh resources and the setup of the new ones both run inside it (#7457)
@@ -2439,6 +2727,10 @@ public class LocalSchema implements Schema {
   }
 
   public void close() {
+    // First, and waiting (bounded) for a load in flight: it reads the index files, which the database closes right after this
+    indexWarmUp.close();
+    // An open that failed before the replay finished leaves the engines it deferred behind
+    timeSeriesEnginesAwaitingReplay = null;
     // Save dirty configuration before clearing everything
     if (dirtyGeneration.get() > savedGeneration) {
       try {
@@ -2655,37 +2947,16 @@ public class LocalSchema implements Schema {
   public void dropType(final String typeName) {
     database.checkPermissionsOnDatabase(SecurityDatabaseUser.DATABASE_ACCESS.UPDATE_SCHEMA);
 
-    // THE GUARDS BELOW COMPARE THE CANONICAL NAME, NOT THE STRING THE CALLER TYPED (#8169). getType() further down
-    // resolves aliases, so typeName can be an alias - and comparing the raw argument let DROP TYPE <alias> walk
-    // straight past these checks and drop a materialized view's backing or source type out from under it.
-    final LocalDocumentType resolvedType = getTypeOrNull(typeName);
-    final String canonicalTypeName = resolvedType != null ? resolvedType.getName() : typeName;
-
-    // Prevent dropping a type that is a backing type or source type for a materialized view or continuous aggregate
-    synchronized (this) {
-      for (final MaterializedViewImpl view : materializedViews.values()) {
-        if (view.getBackingTypeName().equals(canonicalTypeName))
-          throw new SchemaException(
-              "Cannot drop type '" + typeName + "' because it is the backing type for materialized view '" + view.getName() + "'. " +
-                  "Drop the materialized view first with: DROP MATERIALIZED VIEW " + view.getName());
-        if (view.getSourceTypeNames().contains(canonicalTypeName))
-          throw new SchemaException(
-              "Cannot drop type '" + typeName + "' because it is a source type for materialized view '" + view.getName() + "'. " +
-                  "Drop the materialized view first with: DROP MATERIALIZED VIEW " + view.getName());
-      }
-      for (final ContinuousAggregateImpl ca : continuousAggregates.values()) {
-        if (ca.getBackingTypeName().equals(canonicalTypeName))
-          throw new SchemaException(
-              "Cannot drop type '" + typeName + "' because it is the backing type for continuous aggregate '" + ca.getName() + "'. " +
-                  "Drop the continuous aggregate first with: DROP CONTINUOUS AGGREGATE " + ca.getName());
-        if (ca.getSourceTypeName().equals(canonicalTypeName))
-          throw new SchemaException(
-              "Cannot drop type '" + typeName + "' because it is the source type for continuous aggregate '" + ca.getName() + "'. " +
-                  "Drop the continuous aggregate first with: DROP CONTINUOUS AGGREGATE " + ca.getName());
-      }
-    }
+    // A CHEAP EARLY-OUT ONLY: THE DECISION THAT COUNTS IS THE ONE REPEATED INSIDE THE CALLBACK, UNDER THE WRITE LOCK
+    // (#9978). A view or an aggregate registered on this type after this check and before the lock below is taken would
+    // otherwise be left naming a type the drop then removes - the shape #7672 fixed on dropProperty
+    checkTypeHasNoDependants(typeName);
 
     recordFileChanges(() -> {
+      // UNDER THE WRITE LOCK EVERY VIEW AND AGGREGATE REGISTRATION TAKES TOO, SO NOTHING CAN COME TO DEPEND ON THE TYPE
+      // BETWEEN THIS VERDICT AND THE DROP (#9978). Before anything below changes, so a refusal leaves the type intact
+      final String canonicalTypeName = checkTypeHasNoDependants(typeName);
+
       boolean setMultipleUpdate = !multipleUpdate;
       if (!multipleUpdate)
         multipleUpdate = true;
@@ -2711,6 +2982,10 @@ public class LocalSchema implements Schema {
           for (final LocalDocumentType parent : superTypes)
             sub.addSuperType(parent, false);
         }
+        // THE SUB TYPES NO LONGER INHERIT THE PROPERTIES OF THE DROPPED TYPE: THE LINE ABOVE BYPASSES unlinkSuperType(), SO
+        // AN ANSWER DERIVED FROM THEIR INHERITED PROPERTIES IS RETIRED HERE, NOT LEFT TO THE SAVE AT THE END (#9997)
+        if (!type.subTypes.isEmpty())
+          typesChanged();
 
         // DELETE ALL ASSOCIATED INDEXES. typeBeingDropped (set above) makes dropIndexInternal() skip the
         // partition-suitability report it would otherwise trigger on this type - directly, and through the nested
@@ -2752,6 +3027,9 @@ public class LocalSchema implements Schema {
         if (!typeMap().remove(type.getName(), type))
           throw new SchemaException("Type '" + typeName + "' not found");
 
+        // NO READ REACHES ITS LISTENERS ANY MORE: THEY MUST NOT KEEP THE DATABASE ON THE DISPATCH PATH (#9997)
+        type.events.detachFromDatabase();
+
         // #8187: A TYPE CREATED LATER UNDER THIS NAME IS A DIFFERENT TYPE AND IS REPORTED ON ITS OWN MERITS
         reportedUpgradeWarnings.remove(BUCKETLESS_TYPE_WARNING_PREFIX + type.getName());
       } finally {
@@ -2763,6 +3041,66 @@ public class LocalSchema implements Schema {
       }
       return null;
     });
+  }
+
+  /**
+   * Refuses to drop a type that is the backing or a source type of a materialized view or a continuous aggregate.
+   * <p>
+   * The guards compare the CANONICAL name, not the string the caller typed (#8169): {@link #getType} resolves aliases,
+   * so {@code typeName} can be an alias - and comparing the raw argument let {@code DROP TYPE <alias>} walk straight
+   * past these checks and drop a materialized view's backing or source type out from under it.
+   * <p>
+   * {@link #dropType} runs it twice: before the write lock as a cheap early-out, and again inside its
+   * {@code recordFileChanges} callback, which is the verdict that counts (#9978). The monitor orders the walk against
+   * the registries' synchronized accessors; it is taken under the write lock there, the order every schema save uses
+   * (#7457).
+   *
+   * @return the canonical name of the type
+   */
+  private String checkTypeHasNoDependants(final String typeName) {
+    final LocalDocumentType resolvedType = getTypeOrNull(typeName);
+    final String canonicalTypeName = resolvedType != null ? resolvedType.getName() : typeName;
+
+    synchronized (this) {
+      for (final MaterializedViewImpl view : materializedViews.values()) {
+        if (view.getBackingTypeName().equals(canonicalTypeName))
+          throw new SchemaException(
+              "Cannot drop type '" + typeName + "' because it is the backing type for materialized view '" + view.getName() + "'. " +
+                  "Drop the materialized view first with: DROP MATERIALIZED VIEW " + view.getName());
+        if (isSourceTypeName(view.getSourceTypeNames(), canonicalTypeName))
+          throw new SchemaException(
+              "Cannot drop type '" + typeName + "' because it is a source type for materialized view '" + view.getName() + "'. " +
+                  "Drop the materialized view first with: DROP MATERIALIZED VIEW " + view.getName());
+      }
+      for (final ContinuousAggregateImpl ca : continuousAggregates.values()) {
+        if (ca.getBackingTypeName().equals(canonicalTypeName))
+          throw new SchemaException(
+              "Cannot drop type '" + typeName + "' because it is the backing type for continuous aggregate '" + ca.getName() + "'. " +
+                  "Drop the continuous aggregate first with: DROP CONTINUOUS AGGREGATE " + ca.getName());
+        if (canonicalTypeName.equals(canonicalTypeNameOf(ca.getSourceTypeName())))
+          throw new SchemaException(
+              "Cannot drop type '" + typeName + "' because it is the source type for continuous aggregate '" + ca.getName() + "'. " +
+                  "Drop the continuous aggregate first with: DROP CONTINUOUS AGGREGATE " + ca.getName());
+      }
+    }
+    return canonicalTypeName;
+  }
+
+  /**
+   * A view or an aggregate stores its source types as its query names them, and a query can name a type by an alias:
+   * each stored name is resolved before it is compared, so a type is protected whichever of its names the dependant
+   * was defined with - including definitions persisted before this check resolved them.
+   */
+  private boolean isSourceTypeName(final List<String> sourceTypeNames, final String canonicalTypeName) {
+    for (final String sourceTypeName : sourceTypeNames)
+      if (canonicalTypeName.equals(canonicalTypeNameOf(sourceTypeName)))
+        return true;
+    return false;
+  }
+
+  private String canonicalTypeNameOf(final String typeName) {
+    final LocalDocumentType type = getTypeOrNull(typeName);
+    return type != null ? type.getName() : typeName;
   }
 
   @Override
@@ -2990,6 +3328,77 @@ public class LocalSchema implements Schema {
   }
 
   /**
+   * Builds the storage engine of a TimeSeries type read from the schema and schedules its maintenance. A failure leaves
+   * the type registered without an engine rather than dropping it from the schema (issue #6356).
+   */
+  private void openTimeSeriesEngine(final LocalTimeSeriesType tsType) {
+    try {
+      tsType.initEngine();
+    } catch (final IOException e) {
+      // Register the type anyway rather than letting it vanish from the schema (issue #6356): the
+      // exception this catches means one derived file (a .ts.sealed most commonly, rebuildable under HA
+      // by recompacting the replicated mutable pages) failed to open, not that the type or its mutable
+      // data is gone. Registering it keeps the type VISIBLE - CHECK DATABASE already has a branch for
+      // exactly this (DatabaseChecker#checkTimeSeries: "the storage engine is not initialised") that a
+      // type missing from the schema map could never reach - and every read/write against it now fails
+      // loudly through LocalTimeSeriesType#requireEngine() instead of the type silently reappearing empty
+      // on the next write. Not registering it here is what issue #6356 reported: the database opened
+      // cleanly with the type simply gone and nothing said why.
+      tsType.markEngineUnavailable(e.getMessage());
+      LogManager.instance().log(this, Level.SEVERE,
+          "Error initializing TimeSeries engine for type '%s', the type is registered but its storage is "
+              + "unavailable until this is resolved: %s", e, tsType.getName(), e.getMessage());
+    }
+    // Schedule automatic retention/downsampling if policies are defined. Kept OUTSIDE the try above and
+    // behind its own catch: this can only run once the engine is actually available, and a scheduling
+    // failure (the executor rejecting the task, e.g. mid-shutdown) is unrelated to whether the engine
+    // itself works - it must not be mistaken for one and must not escape to the outer catch in this
+    // method, which would abort every type the load has not reached yet for a reason that has nothing to
+    // do with any of them.
+    if (tsType.isEngineAvailable()) {
+      try {
+        getTimeSeriesMaintenanceScheduler().schedule(database, tsType);
+      } catch (final RejectedExecutionException e) {
+        LogManager.instance().log(this, Level.WARNING,
+            "Could not schedule automatic TimeSeries maintenance for type '%s': %s", e, tsType.getName(), e.getMessage());
+      }
+    }
+  }
+
+  /**
+   * Forgets the engines a {@link #load(ComponentFile.MODE, boolean, boolean)} deferred, for an open whose WAL replay failed: they
+   * must not be built over a replay that did not finish (issue #9452).
+   */
+  public void discardDeferredTimeSeriesEngines() {
+    timeSeriesEnginesAwaitingReplay = null;
+  }
+
+  /**
+   * Builds the engines of the TimeSeries types a {@link #load(ComponentFile.MODE, boolean, boolean)} deferred, once the
+   * WAL replay of the open is over (issue #9452). Before the replay the pages of a crashed database are whatever the
+   * dead process had flushed, and an engine built on them acts on a past that the WAL is about to overwrite: the shard
+   * repair took a compaction whose last step was committed but not flushed for an interrupted one and truncated its
+   * sealed blocks, which the replay then followed by clearing the mutable pages that still held the same rows; the tag
+   * dictionary loaded a map without the values interned since the last flush, and interned them again under new ids.
+   */
+  public void openDeferredTimeSeriesEngines() {
+    final List<LocalTimeSeriesType> pending = timeSeriesEnginesAwaitingReplay;
+    timeSeriesEnginesAwaitingReplay = null;
+    if (pending != null)
+      for (final LocalTimeSeriesType tsType : pending)
+        try {
+          openTimeSeriesEngine(tsType);
+        } catch (final RuntimeException e) {
+          // One type must not leave the ones after it without an engine: it stays registered and fails loudly, as a type whose
+          // engine could not be opened does (issue #6356)
+          tsType.markEngineUnavailable(e.toString());
+          LogManager.instance().log(this, Level.SEVERE,
+              "Error initializing TimeSeries engine for type '%s' after the recovery, the type is registered but its storage is "
+                  + "unavailable until this is resolved: %s", e, tsType.getName(), e.getMessage());
+        }
+  }
+
+  /**
    * Rebuilds the logical schema from {@code schema.json}.
    *
    * @return {@code false} when the file could not be read into a schema (issue #8230). The failure is logged and the
@@ -3009,7 +3418,7 @@ public class LocalSchema implements Schema {
     // staging assumption. It is NOT covered by a test, so anything relying on it needs to bring one.
     final Map<String, LocalDocumentType> graph = typeMap();
     if (graph == published.types())
-      closeTimeSeriesTypesOf(graph);
+      retireTimeSeriesTypesOf(graph);
     graph.clear();
 
     loadInRamCompleted = false;
@@ -3067,6 +3476,8 @@ public class LocalSchema implements Schema {
 
       dateFormat = settings.getString("dateFormat");
       dateTimeFormat = settings.getString("dateTimeFormat");
+      // A schema written before the setting existed comes from a release that stored the openCypher temporals as text
+      legacyTemporalText = !TEMPORAL_STORAGE_NATIVE.equals(settings.getString(TEMPORAL_STORAGE_SETTING, TEMPORAL_STORAGE_TEXT));
 
       final JSONObject types = root.getJSONObject("types");
 
@@ -3089,37 +3500,11 @@ public class LocalSchema implements Schema {
           case "t" -> {
             final LocalTimeSeriesType tsType = new LocalTimeSeriesType(this, typeName);
             tsType.fromJSON(schemaType);
-            try {
-              tsType.initEngine();
-            } catch (final IOException e) {
-              // Register the type anyway rather than letting it vanish from the schema (issue #6356): the
-              // exception this catches means one derived file (a .ts.sealed most commonly, rebuildable under HA
-              // by recompacting the replicated mutable pages) failed to open, not that the type or its mutable
-              // data is gone. Registering it keeps the type VISIBLE - CHECK DATABASE already has a branch for
-              // exactly this (DatabaseChecker#checkTimeSeries: "the storage engine is not initialised") that a
-              // type missing from the schema map could never reach - and every read/write against it now fails
-              // loudly through LocalTimeSeriesType#requireEngine() instead of the type silently reappearing empty
-              // on the next write. Not registering it here is what issue #6356 reported: the database opened
-              // cleanly with the type simply gone and nothing said why.
-              tsType.markEngineUnavailable(e.getMessage());
-              LogManager.instance().log(this, Level.SEVERE,
-                  "Error initializing TimeSeries engine for type '%s', the type is registered but its storage is "
-                      + "unavailable until this is resolved: %s", e, typeName, e.getMessage());
-            }
-            // Schedule automatic retention/downsampling if policies are defined. Kept OUTSIDE the try above and
-            // behind its own catch: this can only run once the engine is actually available, and a scheduling
-            // failure (the executor rejecting the task, e.g. mid-shutdown) is unrelated to whether the engine
-            // itself works - it must not be mistaken for one and must not escape to the outer catch in this
-            // method, which would abort every type the load has not reached yet for a reason that has nothing to
-            // do with any of them.
-            if (tsType.isEngineAvailable()) {
-              try {
-                getTimeSeriesMaintenanceScheduler().schedule(database, tsType);
-              } catch (final RejectedExecutionException e) {
-                LogManager.instance().log(this, Level.WARNING,
-                    "Could not schedule automatic TimeSeries maintenance for type '%s': %s", e, typeName, e.getMessage());
-              }
-            }
+            // Not built here when the open has a WAL to replay (issue #9452): see openDeferredTimeSeriesEngines()
+            if (timeSeriesEnginesAwaitingReplay != null)
+              timeSeriesEnginesAwaitingReplay.add(tsType);
+            else
+              openTimeSeriesEngine(tsType);
             yield tsType;
           }
           case null, default -> throw new ConfigurationException("Type '" + kind + "' is not supported");
@@ -3174,9 +3559,10 @@ public class LocalSchema implements Schema {
         }
         type.restoreExternalBuckets(primaryToExternal);
 
-        type.custom.clear();
-        if (schemaType.has("custom"))
-          type.custom.putAll(schemaType.getJSONObject("custom").toMap());
+        // built aside and published whole, so a reader of a type reloaded in place never sees its custom values cleared
+        type.custom = schemaType.has("custom") ?
+            Collections.unmodifiableMap(new HashMap<>(schemaType.getJSONObject("custom").toMap())) :
+            Collections.emptyMap();
       }
 
       // CREATE THE PROPERTIES AFTER ALL THE TYPES HAVE BEEN CREATED TO FIND ALL THE REFERENCES LINKED WITH `TO`
@@ -3203,12 +3589,15 @@ public class LocalSchema implements Schema {
 
       warnAboutTypesThatCannotHoldRecords(types.keySet());
 
+      restoreManualIndexNames(root);
+
       // PARSE INDEXES. Warnings for indexes that are not yet present in {@code indexMap} are
       // deferred: the orphan-relinking pass below can match them by bucket prefix when index
       // files have been renamed (e.g. by LSM compaction). Logging upfront produces noisy
       // "Cannot find index" warnings for cases that are then silently relinked, which masks
       // the genuine cases where the file is truly missing (issue #4063).
       final Map<String, List<String>> deferredMissingIndexWarnings = new LinkedHashMap<>();
+      final Map<String, Map<String, JSONObject>> unavailableIndexes = new HashMap<>();
       // The BM25 corpus counters of a full-text index are TYPE-wide, so every bucket sub-index of one logical index has to
       // share ONE FullTextIndexMetadata, as the creation path does. Building one per bucket sub-index here made each copy
       // count only its own bucket's inserts, ran the once-per-session stale check (a full type scan) once per bucket, and
@@ -3227,7 +3616,8 @@ public class LocalSchema implements Schema {
           orderedIndexes.sort(Comparator.naturalOrder());
 
           for (final String indexName : orderedIndexes)
-            if (lookupIndex(indexName) instanceof LSMTreeFullTextIndex ftIndex && ftIndex.getFullTextMetadata() != null)
+            if (lookupIndexEntry(indexName, typeIndexesJSON.getJSONObject(indexName)) instanceof LSMTreeFullTextIndex ftIndex
+                && ftIndex.getFullTextMetadata() != null)
               liveFullTextMetadata.putIfAbsent(
                   fullTextMetadataKey(typeName, typeIndexesJSON.getJSONObject(indexName).getJSONArray("properties")),
                   ftIndex.getFullTextMetadata());
@@ -3240,7 +3630,15 @@ public class LocalSchema implements Schema {
             for (int i = 0; i < properties.length; ++i)
               properties[i] = schemaIndexProperties.getString(i);
 
-            IndexInternal index = lookupIndex(indexName);
+            // The entry is keyed by the index's CURRENT file, which a compaction renames; an LSM index whose name no
+            // longer matches its file carries the name it answers to as well (issue #9213). A component this load
+            // built is still registered under its file name and gets that name back here; one an incremental load
+            // left untouched is already registered under it.
+            IndexInternal index = lookupIndexEntry(indexName, indexJSON);
+            if (index != null)
+              restoreLogicalIndexName(indexName, indexJSON.getString(LOGICAL_INDEX_NAME, null), index);
+            final String registeredName = index != null ? index.getName() : indexName;
+
             if (index != null) {
               index.setMetadata(indexJSON);
               // Apply the user-supplied TypeIndex name (issue #4139) here so it works for every
@@ -3271,20 +3669,20 @@ public class LocalSchema implements Schema {
                     index = new LSMTreeFullTextIndex((LSMTreeIndex) index,
                         shareFullTextMetadata(fullTextMetadataKey(typeName, schemaIndexProperties), loadedMeta,
                             liveFullTextMetadata, loadedFullTextMetadata));
-                    publishIndexDuringLoad(indexName, index);
+                    publishIndexDuringLoad(registeredName, index);
                   } else if (configuredIndexType.equalsIgnoreCase(Schema.INDEX_TYPE.GEOSPATIAL.toString())) {
                     final int precision = indexJSON.getInt("precision", GeoIndexMetadata.DEFAULT_PRECISION);
                     // A definition with no tokenization field predates the FRONTIER layout (#5478), so its entries are
                     // the full ancestor chain: reading it as anything else would make put/remove miss them.
                     index = new LSMTreeGeoIndex((LSMTreeIndex) index, precision, GeoIndexMetadata.readTokenization(indexJSON));
-                    publishIndexDuringLoad(indexName, index);
+                    publishIndexDuringLoad(registeredName, index);
                   } else if (configuredIndexType.equalsIgnoreCase(Schema.INDEX_TYPE.LSM_SPARSE_VECTOR.toString())) {
                     final LSMSparseVectorIndexMetadata sparseMeta = new LSMSparseVectorIndexMetadata(typeName, properties, -1);
                     sparseMeta.fromJSON(indexJSON);
                     // Same reason as the full-text branch above (issue #5742).
                     sparseMeta.inheritCommonSettingsFrom(index.getMetadata());
                     index = new LSMSparseVectorIndex((LSMTreeIndex) index, sparseMeta);
-                    publishIndexDuringLoad(indexName, index);
+                    publishIndexDuringLoad(registeredName, index);
                   } else {
                     orphanIndexes.put(indexName, indexJSON);
                     indexJSON.put("type", typeName);
@@ -3299,6 +3697,8 @@ public class LocalSchema implements Schema {
               final String bucketName = indexJSON.getString("bucket");
               final Bucket bucket = lookupBucket(bucketName);
               if (bucket == null) {
+                // Orphans stay keyed by the FILE name, like the schema entry: the relinking pass below matches them to a
+                // bucket by that name's "<bucketName>_" prefix, which a restored logical name need not share.
                 orphanIndexes.put(indexName, indexJSON);
                 indexJSON.put("type", typeName);
                 LogManager.instance()
@@ -3309,6 +3709,16 @@ public class LocalSchema implements Schema {
                 reportUpgradeWarning(index, typeName, properties);
               }
 
+            } else if (database.getFileManager().getFileByComponentName(indexName) != null) {
+              // The file is there, but its load was refused for a missing header page (issue #10046): the index cannot
+              // serve, and queries scan instead. Its definition is KEPT, unlike a missing file's below: dropping it from
+              // the schema would lose a user index for good (#4743), where the file may yet be completed - an HA entry
+              // still to apply writes its header - or the index rebuilt from this very definition.
+              unavailableIndexes.computeIfAbsent(typeName, k -> new TreeMap<>()).put(indexName, indexJSON.copy());
+              LogManager.instance().log(this, Level.SEVERE,
+                  "Index '%s' of type '%s' is unavailable: its file has no header page. Queries on the type scan instead of "
+                      + "using it. Its definition is kept until the file is complete or an index on the same properties is "
+                      + "created again with 'REBUILD INDEX' or 'CREATE INDEX'", null, indexName, typeName);
             } else {
               orphanIndexes.put(indexName, indexJSON);
               indexJSON.put("type", typeName);
@@ -3407,6 +3817,8 @@ public class LocalSchema implements Schema {
       // unrelinkable index reference would log "Cannot find indexes [...]" on every later
       // SCHEMA_ENTRY apply because applySchemaEntry calls load() each time and the persisted
       // schema.json kept the dangling reference).
+      unavailableIndexDefinitions = unavailableIndexes.isEmpty() ? Map.of() : unavailableIndexes;
+
       for (final Map.Entry<String, List<String>> entry : deferredMissingIndexWarnings.entrySet()) {
         final List<String> stillMissing = new ArrayList<>(entry.getValue().size());
         for (final String n : entry.getValue())
@@ -3475,6 +3887,8 @@ public class LocalSchema implements Schema {
           ldt.setNeedsRepartition(persisted);
         }
       }
+
+      reportUnenforcedLightweightConstraints(types.keySet());
 
       if (saveConfiguration)
         saveConfiguration();
@@ -3578,7 +3992,41 @@ public class LocalSchema implements Schema {
    *
    * @return how many members could not be restored, for a caller that reports warnings
    */
-  public synchronized int restoreSchemaMembersFromJSON(final JSONObject root, final SchemaMemberSource source) {
+  public int restoreSchemaMembersFromJSON(final JSONObject root, final SchemaMemberSource source) {
+    if (source == SchemaMemberSource.SCHEMA_FILE)
+      // The database's own schema.json being read back: what it names is already this node's (and, under HA, the
+      // cluster's) state, so there is nothing to publish. Its one caller is the schema-file loader, which already
+      // holds this schema's monitor
+      return restoreSchemaMembersFromJSONLocked(root, source);
+
+    // Issue #9764: an imported file is a schema change, so it runs inside a schema recording session, which saves the
+    // schema and, under Raft HA, ships it as a SCHEMA_ENTRY. A bare saveConfiguration() reached this node's schema.json
+    // only, and the followers never got the triggers, views, aggregates and function libraries.
+    //
+    // THE FRAME IS ENTERED BEFORE THE MONITOR IS TAKEN (#7457): entering it waits for the database write lock, and a
+    // thread holding the monitor while waiting for that lock deadlocks against any DDL that is saving.
+    //
+    // A FAILURE IS RETHROWN AFTER THE FRAME, NOT THROUGH IT, as in bulkChange(). The members restored before it are
+    // installed and no schema rollback exists; failing the frame would keep them on this node only. Closing it normally
+    // saves and ships that prefix, so every node holds the same thing, and the caller still sees the failure.
+    final RuntimeException[] failure = new RuntimeException[1];
+    final Integer failures = recordFileChanges(() -> {
+      try {
+        return restoreSchemaMembersFromJSONLocked(root, source);
+      } catch (final RuntimeException e) {
+        failure[0] = e;
+        return null;
+      }
+    });
+
+    if (failure[0] != null)
+      throw failure[0];
+
+    // Null only when the callback failed, which threw just above
+    return failures;
+  }
+
+  private synchronized int restoreSchemaMembersFromJSONLocked(final JSONObject root, final SchemaMemberSource source) {
     // The schema file IS the database's own state: what it names is already installed, so re-reading it replaces
     // rather than merges. An imported file is a second database's state arriving into a live one, which keeps
     // whatever the export did not name.
@@ -3948,14 +4396,16 @@ public class LocalSchema implements Schema {
     final ZoneId   previousZoneId;
     final String   previousDateFormat;
     final String   previousDateTimeFormat;
+    final boolean  previousLegacyTemporalText;
     final long     previousVersion;
 
     StagedMembers(final TimeZone timeZone, final ZoneId zoneId, final String dateFormat, final String dateTimeFormat,
-        final long version) {
+        final boolean legacyTemporalText, final long version) {
       this.previousTimeZone = timeZone;
       this.previousZoneId = zoneId;
       this.previousDateFormat = dateFormat;
       this.previousDateTimeFormat = dateTimeFormat;
+      this.previousLegacyTemporalText = legacyTemporalText;
       this.previousVersion = version;
     }
   }
@@ -3996,6 +4446,45 @@ public class LocalSchema implements Schema {
 
   public synchronized void saveConfiguration() {
     saveConfiguration(false);
+  }
+
+  /**
+   * Marks the schema as having a change to write, which the next transaction end or the close does. For a change made
+   * outside a schema recording session that must still reach the file, e.g. the corpus counters repaired by a query.
+   */
+  public void markDirty() {
+    // A database opened read-only never writes its schema: the change stays in memory, as it did before it could be marked
+    if (database.getMode() == ComponentFile.MODE.READ_ONLY)
+      return;
+    dirtyGeneration.updateAndGet(cur -> Math.max(cur, savedGeneration + 1));
+  }
+
+  /**
+   * Runs {@code change} of the persisted statistics of an index inside a schema recording session, so that under HA it is
+   * shipped to the followers like any other schema change instead of existing in the leader's file alone.
+   */
+  public void recordIndexStatisticsChange(final Runnable change) {
+    recordChange(change);
+  }
+
+  /**
+   * Persists the BM25 corpus counters that the commits since the last schema save moved. A commit changes them without
+   * dirtying the schema, because that would rewrite {@code schema.json} after every commit, so the database close asks for
+   * this while it is still open: a schema serialized once the database has begun to close cannot resolve its buckets.
+   */
+  public void saveUnsavedFullTextCounters() {
+    if (database.getMode() == ComponentFile.MODE.READ_WRITE && hasUnsavedFullTextCounters())
+      saveConfiguration(true);
+  }
+
+  private boolean hasUnsavedFullTextCounters() {
+    // getIndexes() holds the bucket-level indexes (the LSMTreeFullTextIndex wrappers) next to the logical TypeIndex objects, and
+    // every bucket index of a logical index shares one metadata, so any of them answers for the lot
+    for (final Index index : getIndexes())
+      if (index instanceof LSMTreeFullTextIndex ftIndex && ftIndex.getFullTextMetadata() != null
+          && ftIndex.getFullTextMetadata().isCountersDirty())
+        return true;
+    return false;
   }
 
   /**
@@ -4043,7 +4532,14 @@ public class LocalSchema implements Schema {
    * the in-memory version equal to the one the file holds instead of a generation ahead of it (issue #7604).
    */
   private synchronized void writeNextGeneration() throws IOException {
+    // The generations are read BEFORE the document is serialized and recorded only once the file is on disk: a counter changed
+    // meanwhile, or a write that fails, leaves it unsaved
+    final Map<FullTextIndexMetadata, Long> counterGenerations = new IdentityHashMap<>();
+    for (final Index index : getIndexes())
+      if (index instanceof LSMTreeFullTextIndex ftIndex && ftIndex.getFullTextMetadata() != null)
+        counterGenerations.computeIfAbsent(ftIndex.getFullTextMetadata(), FullTextIndexMetadata::getCountersGeneration);
     update(toJSON(versionSerial.get() + 1));
+    counterGenerations.forEach(FullTextIndexMetadata::markCountersSaved);
   }
 
   public synchronized JSONObject toJSON() {
@@ -4062,6 +4558,7 @@ public class LocalSchema implements Schema {
     settings.put("zoneId", zoneId.getId());
     settings.put("dateFormat", dateFormat);
     settings.put("dateTimeFormat", dateTimeFormat);
+    settings.put(TEMPORAL_STORAGE_SETTING, legacyTemporalText ? TEMPORAL_STORAGE_TEXT : TEMPORAL_STORAGE_NATIVE);
 
     // Every keyed map below is written in key order (issue #8206): hash-map order depends on table capacity, which
     // differs between a map grown by DDL and one rebuilt by a reload, so replicas would write different files.
@@ -4134,6 +4631,14 @@ public class LocalSchema implements Schema {
       root.put("migratedFileIds", migratedJSON);
     }
 
+    final Map<String, String> manualNames = manualIndexLogicalNames();
+    if (!manualNames.isEmpty()) {
+      final JSONObject manualJSON = new JSONObject();
+      for (final Map.Entry<String, String> entry : manualNames.entrySet())
+        manualJSON.put(entry.getKey(), entry.getValue());
+      root.put(MANUAL_INDEXES, manualJSON);
+    }
+
     return root;
   }
 
@@ -4178,18 +4683,62 @@ public class LocalSchema implements Schema {
         f.onAfterLoad();
   }
 
+  /**
+   * Registers a function library. A library written to the schema file (js, sql, cypher: {@code getLanguage() != null})
+   * is registered inside a schema recording session for the reason {@link #defineFunction} is (issue #9422): a bare map
+   * insertion reached {@code schema.json} only if some unrelated DDL happened to save it later, and was never proposed
+   * to the HA followers. Registering a polyglot library takes security-admin on top of UPDATE_SCHEMA, as
+   * {@code DEFINE FUNCTION ... LANGUAGE js} does. A library backed by native Java code is never in the schema file, so
+   * its registration stays in memory only and costs no schema save.
+   * <p>
+   * The library is serialized when the schema is saved: functions added to it afterwards through
+   * {@link FunctionLibraryDefinition#registerFunction} directly are not a schema change and are neither saved nor
+   * replicated; use {@link #defineFunction} (or {@code DEFINE FUNCTION}) for that.
+   */
   @Override
   public Schema registerFunctionLibrary(final FunctionLibraryDefinition library) {
     database.checkPermissionsOnDatabase(SecurityDatabaseUser.DATABASE_ACCESS.UPDATE_SCHEMA);
-    if (functionLibraries.putIfAbsent(library.getName(), library) != null)
-      throw new IllegalArgumentException("Function library '" + library.getName() + "' already registered");
+    if (library.getLanguage() == null) {
+      if (functionLibraries.putIfAbsent(library.getName(), library) != null)
+        throw new IllegalArgumentException("Function library '" + library.getName() + "' already registered");
+      return this;
+    }
+
+    if (library instanceof PolyglotFunctionLibraryDefinition)
+      database.checkPermissionsOnDatabase(SecurityDatabaseUser.DATABASE_ACCESS.UPDATE_SECURITY);
+
+    recordFileChanges(() -> {
+      if (functionLibraries.putIfAbsent(library.getName(), library) != null)
+        throw new IllegalArgumentException("Function library '" + library.getName() + "' already registered");
+      return null;
+    });
     return this;
   }
 
+  /**
+   * Removes a function library. A library written to the schema file ({@code DEFINE FUNCTION}: js, sql, cypher) is
+   * removed inside a schema recording session for the reason {@link #defineFunction} is (issue #8879): a bare map
+   * removal was neither saved, so the library came back on reopen, nor replicated, so under HA the followers kept it.
+   * A library backed by native Java code is never in the schema file, so its removal stays in memory only and costs no
+   * schema save.
+   */
   @Override
   public Schema unregisterFunctionLibrary(final String name) {
     database.checkPermissionsOnDatabase(SecurityDatabaseUser.DATABASE_ACCESS.UPDATE_SCHEMA);
-    functionLibraries.remove(name);
+    final FunctionLibraryDefinition library = functionLibraries.get(name);
+    if (library == null)
+      return this;
+
+    if (library.getLanguage() == null) {
+      functionLibraries.remove(name, library);
+      return this;
+    }
+
+    // remove(name, library): only the library whose language was checked above, never one swapped in since
+    recordFileChanges(() -> {
+      functionLibraries.remove(name, library);
+      return null;
+    });
     return this;
   }
 
@@ -4288,6 +4837,97 @@ public class LocalSchema implements Schema {
 
   public Integer getMigratedFileId(final int oldFileId) {
     return migratedFileIds.get(oldFileId);
+  }
+
+  /**
+   * Key of the bucket-level index entry in {@code schema.json} carrying the name an LSM index answers to, written only
+   * when that name differs from the file the entry is keyed by (issue #9213). See {@link LSMTreeIndex#restoreLogicalName}.
+   */
+  static final String LOGICAL_INDEX_NAME = "logicalName";
+
+  /**
+   * Key of the schema member that maps the current file of a MANUAL (type-less) LSM index to the name its creator gave
+   * it, written only for an index whose name differs from its file's, i.e. one a compaction has swapped (issue #9434).
+   * A manual index has no type entry to carry a {@link #LOGICAL_INDEX_NAME}, so without this a restart named it after
+   * its post-compaction file.
+   */
+  static final String MANUAL_INDEXES = "manualIndexes";
+
+  /** Current file name -> logical name of every manual LSM index a compaction renamed, in file name order. */
+  private Map<String, String> manualIndexLogicalNames() {
+    final Map<String, String> result = new TreeMap<>();
+    for (final IndexInternal index : indexesDuringLoad()) {
+      if (index.getTypeName() != null)
+        continue;
+      final LSMTreeIndex lsm = lsmTreeIndexOf(index);
+      if (lsm != null && !lsm.getName().equals(lsm.getMostRecentFileName()))
+        result.put(lsm.getMostRecentFileName(), lsm.getName());
+    }
+    return result;
+  }
+
+  /** Gives the manual LSM indexes this load has just built from their files the names they were created with (issue #9434). */
+  private void restoreManualIndexNames(final JSONObject root) {
+    if (!root.has(MANUAL_INDEXES) || root.isNull(MANUAL_INDEXES))
+      return;
+    final JSONObject manual = root.getJSONObject(MANUAL_INDEXES);
+    for (final String fileName : manual.keySet()) {
+      final IndexInternal index = lookupIndex(fileName);
+      if (index != null)
+        restoreLogicalIndexName(fileName, manual.getString(fileName), index);
+    }
+  }
+
+  /**
+   * The {@link LSMTreeIndex} behind a bucket-level index - itself, or the one a full-text, geospatial or sparse vector
+   * index wraps - or {@code null} for any other index type.
+   */
+  static LSMTreeIndex lsmTreeIndexOf(final IndexInternal index) {
+    return index.getComponent() instanceof LSMTreeIndexMutable mutable ? mutable.getMainIndex() : null;
+  }
+
+  /**
+   * Adds {@link #LOGICAL_INDEX_NAME} to a bucket-level index entry when the LSM index answers to a name other than its
+   * current file's, which is the case after any compaction (issue #9213). An index that never compacted gets nothing, so
+   * its entry is unchanged.
+   */
+  static void putLogicalIndexName(final IndexInternal index, final JSONObject indexJSON) {
+    final LSMTreeIndex lsm = lsmTreeIndexOf(index);
+    if (lsm != null && !lsm.getName().equals(lsm.getMostRecentFileName()))
+      indexJSON.put(LOGICAL_INDEX_NAME, lsm.getName());
+  }
+
+  /**
+   * The index a bucket-level {@code schema.json} entry resolves to: by the file it is keyed by, or - for an LSM index an
+   * earlier load or the live schema already registered under its logical name - by {@link #LOGICAL_INDEX_NAME}.
+   */
+  private IndexInternal lookupIndexEntry(final String fileName, final JSONObject indexJSON) {
+    final IndexInternal byFile = lookupIndex(fileName);
+    if (byFile != null)
+      return byFile;
+    return lookupIndex(indexJSON.getString(LOGICAL_INDEX_NAME, null));
+  }
+
+  /**
+   * Gives an LSM index this load has just built from its file the name it answered to when the schema was saved, and
+   * re-keys it under that name (issue #9213). Without this a restart, and the full {@code load()} an HA follower takes
+   * for a compaction entry, named the index after its post-compaction file while the live instance kept its name.
+   * <p>
+   * Only an instance still named after its file is touched: that is one this load built, not yet published, so no
+   * transaction can have queued entries under the file name. One an incremental load kept is found by its logical name
+   * by the caller and never reaches here with a different name.
+   */
+  private void restoreLogicalIndexName(final String fileName, final String logicalName, final IndexInternal index) {
+    if (logicalName == null || logicalName.equals(index.getName()))
+      return;
+
+    final LSMTreeIndex lsm = lsmTreeIndexOf(index);
+    if (lsm == null || !fileName.equals(lsm.getName()))
+      return;
+
+    lsm.restoreLogicalName(logicalName);
+    publishIndexDuringLoad(logicalName, index);
+    removeIndexDuringLoad(fileName);
   }
 
   /**
@@ -4756,6 +5396,25 @@ public class LocalSchema implements Schema {
   }
 
   /**
+   * Logs, once per opened database and per type, a LIGHTWEIGHT edge type whose schema declares a MANDATORY or default-valued
+   * property it inherits but can never apply (issue #9975). The load accepts the combination on purpose - a database written
+   * before #9846 refused it must still open - so this WARNING is the only moment an operator learns of it short of reading the
+   * edges back. A read of the loaded schema and nothing more: it can neither change it nor fail the load.
+   */
+  private void reportUnenforcedLightweightConstraints(final Set<String> typeNames) {
+    for (final String typeName : typeNames) {
+      try {
+        final String warning = LocalEdgeType.unenforcedConstraintWarning(getTypeOrNull(typeName));
+        if (warning != null && reportedUpgradeWarnings.add(UNENFORCED_LIGHTWEIGHT_CONSTRAINT_WARNING_PREFIX + typeName))
+          LogManager.instance().log(this, Level.WARNING, "%s (database '%s')", null, warning, database.getName());
+      } catch (final Exception e) {
+        // Never let advisory reporting break a schema load
+        LogManager.instance().log(this, Level.FINE, "Cannot check type '%s' for unenforced constraints", e, typeName);
+      }
+    }
+  }
+
+  /**
    * Logs, once per opened database and per LOGICAL index, the reason an index should be rebuilt. How much that
    * matters is carried by the message itself: an index whose on-disk layout merely predates a change the engine
    * cannot apply in place keeps working exactly as it did, while one whose physical key order predates #5321 answers
@@ -4816,9 +5475,24 @@ public class LocalSchema implements Schema {
     return typesChangeSerial.get();
   }
 
-  /** Moves the serial every answer derived from the types is stamped with, so none computed before is served again. */
-  private void typesChanged() {
+  /**
+   * Moves the serial every answer derived from the types is stamped with, so none computed before is served again. Called
+   * after the change is visible: by the schema when the type graph is replaced or its buckets move, and by a type when its
+   * own or its inherited properties change (issue #9997).
+   */
+  void typesChanged() {
     typesChangeSerial.incrementAndGet();
+  }
+
+  /**
+   * The events registry of a new type of this schema: its BEFORE READ listeners are counted in the database's total, which
+   * is what lets a read skip finding the registry of the record's type while nobody listens (issue #9997).
+   */
+  RecordEventsRegistry newTypeEventsRegistry() {
+    // A CAST, NOT A FALLBACK: LocalDatabase ALWAYS HOLDS A RecordEventsRegistry AND THE READ PATH CASTS ITS EVENTS TO ONE
+    // (LocalBucket.fireBeforeReadEvents). A REGISTRY OF ITS OWN WOULD COUNT ITS LISTENERS WHERE NO READ LOOKS, AND THE
+    // READS WOULD SKIP THEM
+    return ((RecordEventsRegistry) database.getEmbedded().getEvents()).newTypeRegistry();
   }
 
   private void rebuildBucketTypeMap() {
@@ -4832,8 +5506,13 @@ public class LocalSchema implements Schema {
     // COMPUTE INVOLVED BUCKETS FOR SECURITY
     final Map<Integer, LocalDocumentType> newBucketId2InvolvedTypeMap = new HashMap<>();
     for (final LocalDocumentType t : typeMap().values()) {
-      for (final Bucket b : t.getInvolvedBuckets())
-        newBucketId2InvolvedTypeMap.put(b.getFileId(), t);
+      for (final Bucket b : t.getInvolvedBuckets()) {
+        // A type's own bucket answers to that type, whatever another type's naming convention claims (a vertex type's
+        // stripe pool is found by name, issue #9780): the grants that cover a user bucket stay the grants of its type
+        final LocalDocumentType owner = newBucketId2TypeMap.get(b.getFileId());
+        if (owner == null || owner == t)
+          newBucketId2InvolvedTypeMap.put(b.getFileId(), t);
+      }
     }
 
     if (isStagingPublication()) {

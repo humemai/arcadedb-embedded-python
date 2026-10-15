@@ -29,6 +29,7 @@ import com.arcadedb.query.opencypher.ast.NodePattern;
 import com.arcadedb.query.opencypher.ast.RelationshipPattern;
 import com.arcadedb.query.opencypher.executor.CypherFunctionFactory;
 import com.arcadedb.query.opencypher.executor.ExpressionEvaluator;
+import com.arcadedb.query.opencypher.traversal.GraphTraverser;
 import com.arcadedb.query.opencypher.traversal.TraversalPath;
 import com.arcadedb.query.opencypher.ast.PathMode;
 import com.arcadedb.query.opencypher.traversal.VariableLengthPathTraverser;
@@ -251,7 +252,15 @@ public class ExpandPathStep extends AbstractExecutionStep {
 
             if (sourceObj instanceof Vertex) {
               final Vertex sourceVertex = (Vertex) sourceObj;
-              currentPaths = createTraverser(lastResult).traversePaths(sourceVertex);
+              // A relationship list an earlier clause bound to this variable is the whole path: expanding the
+              // graph instead ignored the binding and returned every walk the pattern allows (issue #9828)
+              final VariableLengthPathTraverser traverser = createTraverser(lastResult);
+              if (GraphTraverser.isBoundRelationshipList(lastResult, relationshipVariable)) {
+                final TraversalPath bound = traverser.matchBoundPath(sourceVertex,
+                    lastResult.getProperty(relationshipVariable), reverseResultPath, relationshipVariable);
+                currentPaths = bound != null ? List.of(bound).iterator() : null;
+              } else
+                currentPaths = traverser.traversePaths(sourceVertex);
             } else {
               currentPaths = null;
             }
@@ -316,19 +325,15 @@ public class ExpandPathStep extends AbstractExecutionStep {
       // Skip our own variables
       if (prop.equals(relationshipVariable) || prop.equals(pathVariable) || prop.equals(targetVariable))
         continue;
+      // LightEdgeRID.isSameEdge, not RID equality: a parallel lightweight twin shares the RID but is another
+      // relationship (issues #9573, #9983)
       final Object val = result.getProperty(prop);
-      if (val instanceof Edge) {
-        for (final Edge pathEdge : path.getEdges())
-          if (pathEdge.getIdentity().equals(((Edge) val).getIdentity()))
-            return true;
-      }
+      if (val instanceof Edge edge && path.containsEdge(edge))
+        return true;
       if (val instanceof List) {
         for (final Object item : (List<Object>) val)
-          if (item instanceof Edge) {
-            for (final Edge pathEdge : path.getEdges())
-              if (pathEdge.getIdentity().equals(((Edge) item).getIdentity()))
-                return true;
-          }
+          if (item instanceof Edge edge && path.containsEdge(edge))
+            return true;
       }
     }
     return false;

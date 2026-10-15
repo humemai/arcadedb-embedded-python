@@ -18,6 +18,7 @@
  */
 package com.arcadedb.server.http.handler;
 
+import com.arcadedb.ContextConfiguration;
 import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.database.DatabaseContext;
 import com.arcadedb.database.DatabaseFactory;
@@ -28,6 +29,7 @@ import com.arcadedb.exception.*;
 import com.arcadedb.index.fulltext.FullTextQueryParseException;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.network.binary.ServerIsNotTheLeaderException;
+import com.arcadedb.query.RunningQuery;
 import com.arcadedb.query.sql.executor.CommandTimeoutOverride;
 import com.arcadedb.serializer.json.JSONArray;
 import com.arcadedb.serializer.json.JSONException;
@@ -44,6 +46,7 @@ import com.arcadedb.server.http.HttpServer;
 import com.arcadedb.server.http.HttpSessionException;
 import com.arcadedb.server.http.HttpSessionManager;
 import com.arcadedb.server.http.IdempotencyCache;
+import com.arcadedb.server.http.RequestRefusedBeforeExecutionException;
 import com.arcadedb.server.http.RequestStillInFlightException;
 import com.arcadedb.server.http.RequestBodyTooLargeException;
 import com.arcadedb.server.http.ResultSetTooLargeException;
@@ -76,11 +79,13 @@ import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.IdentityHashMap;
+import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
@@ -109,6 +114,11 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
   // parsed from it: the request body is consumed once and cannot be read again from the exchange.
   public static final AttachmentKey<String> RAW_PAYLOAD = AttachmentKey.create(String.class);
   /**
+   * The id the statement of this request has on the cluster peer that forwarded it here, from
+   * {@link LeaderForwardContext#FORWARDED_QUERY_HEADER} under a valid cluster token (issue #9689).
+   */
+  private static final AttachmentKey<String> FORWARDED_QUERY_ID = AttachmentKey.create(String.class);
+  /**
    * Key under which the HTTP request's {@link Observation.Context} carries the raw request path (issue #7295), so an
    * attached tracer can decide - before any span exists - to leave a request untraced, e.g. the readiness and health
    * probes. It is a plain context entry, never a key value: key values become span attributes and meter tags, and the
@@ -130,6 +140,15 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
   private static final HttpString REPLAY_PROTECTION_HEADER = HttpString.tryFromString(IdempotencyCache.HEADER_REPLAY_PROTECTION);
   protected static final String   EVENT_STREAM_CONTENT_TYPE = "text/event-stream";
   private static final HttpString X_ACCEL_BUFFERING_HEADER  = HttpString.tryFromString("X-Accel-Buffering");
+  private static final HttpString CSP_HEADER                = HttpString.tryFromString("Content-Security-Policy");
+  private static final HttpString CSP_REPORT_ONLY_HEADER    = HttpString.tryFromString("Content-Security-Policy-Report-Only");
+  /**
+   * The directives that govern an inline {@code <script>} element, narrowest first: the first one a policy declares is the
+   * one the browser consults (issue #9966). {@code script-src-attr} governs inline event handlers, not elements.
+   */
+  private static final String[]   INLINE_SCRIPT_DIRECTIVES  = { "script-src-elem", "script-src", "default-src" };
+  /** The last policy reported as refusing every script, so the warning is logged once per configured policy. */
+  private static volatile String  lastRefusingPolicyReported;
   // Response header set by session-establishing routes (e.g. /begin). Its presence means the response
   // is session-scoped and must not be replayed from the idempotency cache (the session id would be lost).
   private static final HttpString SESSION_ID_HEADER = HttpString.tryFromString(HttpSessionManager.ARCADEDB_SESSION_ID);
@@ -147,6 +166,8 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
   private static final String     IN_FLIGHT_ERROR_LABEL         =
       "A request with the same " + IdempotencyCache.HEADER_REQUEST_ID + " is still executing";
   private static final HttpString RETRY_AFTER_HEADER            = HttpString.tryFromString("Retry-After");
+  // The same back-off in band, on the error line of a streamed response that can no longer send the header (#8899).
+  public static final  String     STREAMED_RETRY_AFTER_MEMBER   = "retryAfter";
   // Tags the forward-ordinal section of an idempotency key (issue #8323).
   private static final byte[]     FORWARD_ORDINAL_KEY_TAG = "forward-ordinal".getBytes(StandardCharsets.US_ASCII);
   // Ends that section: non-zero, so its input can never equal an untagged key's, which always ends in a zero byte.
@@ -245,6 +266,123 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
   }
 
   /**
+   * Sets the configured Content-Security-Policy on an HTML document response (issue #9681), or nothing when the
+   * setting is empty. {@code inlineScriptSource} is a CSP source expression (a {@code 'sha256-...'} hash) the page
+   * needs for its own inline script, or {@code null}: see {@link #allowInlineScript(String, String)}.
+   */
+  protected void setContentSecurityPolicy(final HttpServerExchange exchange, final String inlineScriptSource) {
+    final ContextConfiguration config = httpServer.getServer().getConfiguration();
+    String policy = config.getValueAsString(GlobalConfiguration.SERVER_HTTP_CONTENT_SECURITY_POLICY);
+    if (policy == null || policy.isBlank())
+      return;
+
+    policy = policy.trim();
+    if (inlineScriptSource != null)
+      policy = allowInlineScript(policy, inlineScriptSource);
+
+    final HttpString header = config.getValueAsBoolean(GlobalConfiguration.SERVER_HTTP_CONTENT_SECURITY_POLICY_REPORT_ONLY) ?
+        CSP_REPORT_ONLY_HEADER :
+        CSP_HEADER;
+    exchange.getResponseHeaders().put(header, policy);
+  }
+
+  /**
+   * Adds {@code source} to the directive the browser consults for an inline {@code <script>} element of a page served
+   * with {@code policy}: the first one the policy declares of {@link #INLINE_SCRIPT_DIRECTIVES}, each of which replaces
+   * the next for that element rather than adding to it (issue #9966). When only {@code default-src} is declared, a new
+   * {@code script-src} carrying its sources is added instead, so the other resource types {@code default-src} governs are
+   * left as they are. The policy is returned unchanged when:
+   * <ul>
+   * <li>it declares none of them: it places no limit on scripts;</li>
+   * <li>that directive refuses every script ({@code 'none'}, or no source at all): appending a source would turn the
+   * operator's refusal into a permission, since browsers ignore {@code 'none'} next to another source. The page's script
+   * then does not run, which is what the operator asked for, and the log says so once;</li>
+   * <li>it already lets the script run through {@code 'unsafe-inline'}, with no hash or nonce beside it: a hash added there
+   * would make browsers ignore {@code 'unsafe-inline'} and refuse every other inline script the operator allowed;</li>
+   * <li>it already carries {@code source}.</li>
+   * </ul>
+   */
+  static String allowInlineScript(final String policy, final String source) {
+    final String[] directives = policy.split(";");
+    int governing = -1;
+    int precedence = INLINE_SCRIPT_DIRECTIVES.length;
+    for (int i = 0; i < directives.length; i++) {
+      final String name = directiveName(directives[i].trim());
+      for (int p = 0; p < precedence; p++)
+        if (INLINE_SCRIPT_DIRECTIVES[p].equals(name)) {
+          governing = i;
+          precedence = p;
+          break;
+        }
+    }
+
+    if (governing < 0)
+      return policy;
+
+    final String directive = directives[governing].trim();
+    final String name = INLINE_SCRIPT_DIRECTIVES[precedence];
+    final String sources = directive.substring(name.length()).trim();
+    if (refusesEveryScript(sources)) {
+      if (!policy.equals(lastRefusingPolicyReported)) {
+        lastRefusingPolicyReported = policy;
+        LogManager.instance().log(AbstractServerHttpHandler.class, Level.WARNING,
+            "The Content-Security-Policy refuses every script through '%s', so a page that needs its own inline script (the API "
+                + "documentation at /api/v1/docs) cannot run it. Policy left as configured: %s", name, policy);
+      }
+      return policy;
+    }
+    if (allowsEveryInlineScript(sources) || containsSource(sources, source))
+      return policy;
+
+    if (!"default-src".equals(name)) {
+      directives[governing] = directive + " " + source;
+      return String.join("; ", trimAll(directives));
+    }
+
+    final String scriptSrc = "script-src " + sources + " " + source;
+    final String joined = String.join("; ", trimAll(directives));
+    return joined + "; " + scriptSrc;
+  }
+
+  /** Whether a source list allows no script at all: empty, or {@code 'none'} alone. */
+  private static boolean refusesEveryScript(final String sources) {
+    return sources.isEmpty() || "'none'".equalsIgnoreCase(sources);
+  }
+
+  /**
+   * Whether a source list lets every inline script run: {@code 'unsafe-inline'} with no hash, nonce or
+   * {@code 'strict-dynamic'} beside it, any of which makes browsers ignore it.
+   */
+  private static boolean allowsEveryInlineScript(final String sources) {
+    boolean unsafeInline = false;
+    for (final String token : sources.split("\\s+")) {
+      final String lower = token.toLowerCase(Locale.ROOT);
+      if ("'unsafe-inline'".equals(lower))
+        unsafeInline = true;
+      else if (lower.startsWith("'sha256-") || lower.startsWith("'sha384-") || lower.startsWith("'sha512-")
+          || lower.startsWith("'nonce-") || "'strict-dynamic'".equals(lower))
+        return false;
+    }
+    return unsafeInline;
+  }
+
+  private static boolean containsSource(final String sources, final String source) {
+    for (final String token : sources.split("\\s+"))
+      if (token.equals(source))
+        return true;
+    return false;
+  }
+
+  private static String directiveName(final String directive) {
+    final int space = directive.indexOf(' ');
+    return (space < 0 ? directive : directive.substring(0, space)).toLowerCase(Locale.ROOT);
+  }
+
+  private static String[] trimAll(final String[] directives) {
+    return Arrays.stream(directives).map(String::trim).filter(d -> !d.isEmpty()).toArray(String[]::new);
+  }
+
+  /**
    * Lowers a row cap to the hard ceiling, so no caller can widen a single response past it: the value stated by
    * the caller (or by the query, or by the configured default) wins while it stays at or below the ceiling, and
    * an explicitly unlimited cap - {@code <= 0} - is bounded by it like any other. Returns the cap unchanged when
@@ -273,11 +411,12 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
    * a {@code limit} shares this so the same input gets the same answer: {@link Number#intValue()} truncates the
    * high bits, so {@code 3000000000} would arrive as a negative value and be read as "unlimited", silently
    * turning off the very cap the field governs (issue #5711). Out of range, NaN and a non-numeric value are all
-   * client errors, mapped to HTTP 400 by the {@link IllegalArgumentException} arm below.
+   * client errors, mapped to HTTP 400 by the {@link IllegalArgumentException} arm below, and refused before anything reached the
+   * engine, so they leave the session's transaction as it was (issue #9852).
    */
   protected static int requireIntLimit(final Object value, final String field) {
     if (!(value instanceof Number n))
-      throw new IllegalArgumentException("Field '" + field + "' must be an integer");
+      throw new RequestRefusedBeforeExecutionException("Field '" + field + "' must be an integer");
     final double magnitude = n.doubleValue();
     if (Double.isNaN(magnitude) || magnitude > Integer.MAX_VALUE || magnitude < Integer.MIN_VALUE)
       throw unusableLimit(field, null);
@@ -288,8 +427,8 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
    * Rejection of a row limit that is not an integer this server can apply, worded identically wherever the limit
    * arrives from so the surfaces report the same thing.
    */
-  protected static IllegalArgumentException unusableLimit(final String field, final Throwable cause) {
-    return new IllegalArgumentException(
+  protected static RequestRefusedBeforeExecutionException unusableLimit(final String field, final Throwable cause) {
+    return new RequestRefusedBeforeExecutionException(
         "Field '" + field + "' must be an integer between " + Integer.MIN_VALUE + " and " + Integer.MAX_VALUE, cause);
   }
 
@@ -389,7 +528,7 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
 
   @Override
   public void handleRequest(final HttpServerExchange exchange) {
-    if (mustExecuteOnWorkerThread(exchange) && exchange.isInIoThread()) {
+    if ((mustExecuteOnWorkerThread(exchange) || mayWaitForAdmission()) && exchange.isInIoThread()) {
       exchange.dispatch(this);
       return;
     }
@@ -499,6 +638,16 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
             .send(exchange);
         return;
       }
+      // The query-tag header is part of every request's envelope, so it is refused here, before any route runs and before
+      // anything is allocated for the request: a route that checks it late gives back what it took first, or does not -
+      // /begin used to publish its transaction session and then refuse the header, leaving a session whose id no client
+      // was ever sent (issue #9775). The message names the header and is not the concealed free-form detail.
+      try {
+        queryTag(exchange);
+      } catch (final IllegalArgumentException e) {
+        sendErrorResponse(exchange, 400, e.getMessage(), null, null);
+        return;
+      }
       // The supplier is an SPI: tolerate an array shorter than 2 (or null) instead of indexing blindly.
       final String[] traceContext = LogManager.instance().currentTraceContext();
       final String traceId = traceContext != null && traceContext.length > 0 ? traceContext[0] : null;
@@ -564,6 +713,11 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
             exchange.getRequestHeaders().getFirst(ForwardedRequestIdContext.FORWARD_ORDINAL_HEADER));
         trustedClientKey = ForwardedRequestIdContext.parseClientKey(
             exchange.getRequestHeaders().getFirst(ForwardedRequestIdContext.CLIENT_KEY_HEADER));
+        // Which statement of the peer's this request is, so a terminate there reaches the work here (issue #9689). Under
+        // the same gate: from a client it would let a request pass itself off as another node's statement
+        final String forwardedQuery = exchange.getRequestHeaders().getFirst(LeaderForwardContext.FORWARDED_QUERY_HEADER);
+        if (isForwardedQueryId(forwardedQuery))
+          exchange.putAttachment(FORWARDED_QUERY_ID, forwardedQuery.strip());
 
         final HeaderValues forwardedUserValues = exchange.getRequestHeaders().get("X-ArcadeDB-Forwarded-User");
         if (forwardedUserValues != null && !forwardedUserValues.isEmpty()) {
@@ -937,6 +1091,15 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
     // all. This arm is what makes the cap mean the same thing for a chunked or HTTP/2 body as for a
     // Content-Length one (issue #7772). A 4xx and not a 5xx: the server is working exactly as configured, and
     // repeating the request unchanged can only be refused again.
+    // 409: the statement was terminated on request (issue #9680). Looked for along the whole cause chain rather than one
+    // level down like the arms below: a termination is unambiguous wherever it surfaces, and the engine may wrap it in a
+    // planner or commit failure more than once. Not a 5xx - the server did what it was asked - and not the 503 a client's
+    // retry policy keys on: re-running work somebody deliberately stopped is the one thing the client must not do.
+    int depth = 0;
+    for (Throwable t = e; t != null && depth++ < 16; t = t.getCause())
+      if (t instanceof QueryTerminatedException terminated)
+        return new ErrorClassification(409, "Query terminated", terminated, null, ErrorLogKind.USER);
+
     // Named for the bytes ON THE WIRE, to keep it apart from the decoded-size arm below: the two caps are
     // different settings refusing at different points, and both are reachable on the same request.
     final RequestTooBigException wireBodyTooLarge = firstOf(e, cause, RequestTooBigException.class);
@@ -1117,20 +1280,28 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
       return retryable(heapBudget);
     }
 
+    // 503: the query admission gate did not start the query, because it waited in the queue too long or found the queue
+    // full (issue #9518). Nothing of it ran, so the identical request re-issued later can succeed. Ahead of the generic
+    // CommandExecutionException arm below for the same reason as the arm above.
+    final QueryAdmissionException admission = firstOf(e, cause, QueryAdmissionException.class);
+    if (admission != null) {
+      return retryable(admission);
+    }
+
     // 503: an HA snapshot-reinstall resync (issue #5977 pattern) closed and reinstalled the database out from
     // under a handle a request had already resolved (or resolved while one was in flight). The condition is
     // transient by construction - a handle resolved a moment later sees the reinstalled database - so it must be
     // reported the same retryable way a Raft conflict already is, instead of the opaque 500 it fell through to
     // before, which RemoteHttpComponent's NeedRetryException-driven auto-retry never saw (issue #6770).
     //
-    // Scope: this maps EVERY DatabaseIsClosedException to 503, not only the resync race above. A concurrent
-    // DROP/CLOSE DATABASE admin action throws the same exception type on a still in-flight request, and that
-    // close is permanent rather than transient - a retry costs one wasted round trip before falling through to
-    // the arm below (issue #6778, #6770 follow-up). Scoping THIS 503 itself to the resync case needs a
-    // resync-vs-permanent-close signal that does not exist yet, so that half of #6778 is not attempted here.
-    final DatabaseIsClosedException databaseClosed = firstOf(e, cause, DatabaseIsClosedException.class);
-    if (databaseClosed != null) {
-      return retryable(databaseClosed);
+    // Scope: only the reinstall's own close, which closes the handle FOR REOPEN and so raises the
+    // DatabaseIsReopeningException subtype. A concurrent DROP/CLOSE DATABASE admin action, or a shutdown, raises the
+    // plain DatabaseIsClosedException on a still in-flight request, and that close is permanent: answered as the 404
+    // below, the same verdict the retry it used to be given ended in once it re-resolved the name (issues #6778,
+    // #8199). ErrorCategory draws the same line for every other wire protocol.
+    final DatabaseIsReopeningException databaseReopening = firstOf(e, cause, DatabaseIsReopeningException.class);
+    if (databaseReopening != null) {
+      return retryable(databaseReopening);
     }
 
     // 404: the wasted retry the comment above describes re-resolves the database with allowLoad=false
@@ -1140,6 +1311,17 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
     final DatabaseNotAvailableException notAvailable = firstOf(e, cause, DatabaseNotAvailableException.class);
     if (notAvailable != null) {
       return new ErrorClassification(404, "Database not found", notAvailable, null, ErrorLogKind.USER);
+    }
+
+    // The close the arm above leaves out (issue #8199). A server shutting down closes every database under the requests
+    // still in flight: transient for a client, which retries on another node or once this one is back, so it keeps the
+    // 503 it has always had. Otherwise a DROP/CLOSE DATABASE closed the handle a request had resolved: permanent, a 404,
+    // not retryable against the same name.
+    final DatabaseIsClosedException databaseClosed = firstOf(e, cause, DatabaseIsClosedException.class);
+    if (databaseClosed != null) {
+      if (isServerShuttingDown())
+        return retryable(databaseClosed);
+      return new ErrorClassification(404, "Database is closed", databaseClosed, null, ErrorLogKind.USER);
     }
 
     final RecordNotFoundException notFound = firstOf(e, cause, RecordNotFoundException.class);
@@ -1359,6 +1541,16 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
   }
 
   /**
+   * Whether this server is shutting down, which is what turns a closed database into a transient failure (issue #8199).
+   * Read without synchronization: the shutdown sets the status before it closes a database, so a request failing on a
+   * database the shutdown closed always sees it.
+   */
+  private boolean isServerShuttingDown() {
+    final ArcadeDBServer server = httpServer != null ? httpServer.getServer() : null;
+    return server != null && server.getStatus() == ArcadeDBServer.STATUS.SHUTTING_DOWN;
+  }
+
+  /**
    * The first of {@code e} and its unwrapped {@code cause} that is an instance of {@code type}, or {@code null}
    * when neither is. {@code e} is tested first so a mapping reports the outermost throwable of its own type,
    * which is the one carrying the message and the structured arguments the client is given.
@@ -1374,7 +1566,8 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
   /**
    * A 503 for a failure the caller can retry as-is - a Raft conflict, a resync race, or a TimeSeries read a
    * downsample overtook, all transient by construction. Shared by the {@link NeedRetryException},
-   * {@link DatabaseIsClosedException} and {@link TimeSeriesWalkCoarsenedException} arms of {@link #classifyError}.
+   * {@link DatabaseIsReopeningException} and {@link TimeSeriesWalkCoarsenedException} arms of {@link #classifyError}, and
+   * by a database closed by a shutdown.
    */
   private static ErrorClassification retryable(final Throwable retryable) {
     return new ErrorClassification(503, "Cannot execute command", retryable, null, ErrorLogKind.RETRYABLE);
@@ -1915,6 +2108,87 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
   private static final Pattern ACCEPT_PARAMETER = Pattern.compile(";");
 
   /**
+   * Request header carrying the opaque label a client gives a statement, or a transaction session at {@code /begin}, so
+   * that it can find the statement in {@code list queries} and terminate it (issue #9680). A header rather than a body
+   * field: it reaches every route alike, including the GET query route and the batch route that carry no JSON body, it is
+   * read before the payload is parsed, and the leader forward carries it with the other request headers.
+   */
+  public static final String QUERY_TAG_HEADER = "X-ArcadeDB-Query-Tag";
+
+  /** Longest label accepted: it is for telling statements apart, and it ends up in listings and logs. */
+  static final int MAX_QUERY_TAG_LENGTH = 256;
+
+  /** The label the request carries in {@link #QUERY_TAG_HEADER}, or {@code null}. Refuses one that cannot be a label. */
+  protected static String queryTag(final HttpServerExchange exchange) {
+    final HeaderValues values = exchange.getRequestHeaders().get(QUERY_TAG_HEADER);
+    return values == null || values.isEmpty() ? null : validateQueryTag(values.getFirst());
+  }
+
+  /**
+   * {@code raw} stripped, or {@code null} when blank. Longer than {@link #MAX_QUERY_TAG_LENGTH} or carrying a control
+   * character is refused with a 400, since the label is echoed into listings and log lines.
+   */
+  static String validateQueryTag(final String raw) {
+    if (raw == null)
+      return null;
+    final String tag = raw.strip();
+    if (tag.isEmpty())
+      return null;
+    if (tag.length() > MAX_QUERY_TAG_LENGTH)
+      throw new IllegalArgumentException("Header " + QUERY_TAG_HEADER + " is longer than " + MAX_QUERY_TAG_LENGTH + " characters");
+    for (int i = 0; i < tag.length(); i++)
+      if (Character.isISOControl(tag.charAt(i)))
+        throw new IllegalArgumentException("Header " + QUERY_TAG_HEADER + " contains a control character");
+    return tag;
+  }
+
+  /**
+   * Whether a peer's {@link LeaderForwardContext#FORWARDED_QUERY_HEADER} value can be an id of a running statement: bounded,
+   * one token, nothing a listing would print as something else (issue #9689).
+   */
+  static boolean isForwardedQueryId(final String value) {
+    if (value == null)
+      return false;
+    final String id = value.strip();
+    if (id.isEmpty() || id.length() > MAX_QUERY_TAG_LENGTH)
+      return false;
+    for (int i = 0; i < id.length(); i++) {
+      final char c = id.charAt(i);
+      if (Character.isISOControl(c) || Character.isWhitespace(c))
+        return false;
+    }
+    return true;
+  }
+
+  /**
+   * Opens the registry entry of the statement this request runs, on the calling thread (issue #9680). The caller closes
+   * it in a {@code finally} block once the request's work is over, its rollback and cleanup included: its absence from
+   * {@code list queries} is what tells a client that the server stopped working on it.
+   *
+   * @param sessionTag the label of the transaction session the request runs in, used when the request carries none
+   */
+  protected RunningQuery registerRunningQuery(final HttpServerExchange exchange, final ServerSecurityUser user,
+      final String databaseName, final String sessionId, final String sessionTag) {
+    final String requestTag = queryTag(exchange);
+    final RunningQuery runningQuery = httpServer.getServer().getRunningQueries()
+        .register(databaseName, user != null ? user.getName() : null, "http", sessionId, requestTag != null ? requestTag : sessionTag,
+            RunningQuery.Client.of(null, exchange.getSourceAddress()));
+    // What the request is until the handler says which statement it runs: a commit, a batch load or a search has none
+    runningQuery.setStatement(null, exchange.getRequestMethod() + " " + exchange.getRequestPath());
+    final String forwardedFrom = exchange.getAttachment(FORWARDED_QUERY_ID);
+    if (forwardedFrom != null)
+      runningQuery.setForwardedFrom(forwardedFrom);
+    return runningQuery;
+  }
+
+  /** Records which statement the request runs on its registry entry, once the handler has parsed it (issue #9680). */
+  protected static void describeRunningQuery(final String language, final String text) {
+    final RunningQuery runningQuery = RunningQuery.current();
+    if (runningQuery != null)
+      runningQuery.setStatement(language, text);
+  }
+
+  /**
    * True when the caller selected the streaming encoding by sending {@code Accept: application/x-ndjson}.
    * <p>
    * Negotiated rather than routed on purpose (issue #7306): the buffered {@code application/json} body is what
@@ -2093,6 +2367,16 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
    */
   protected boolean mustExecuteOnWorkerThread(final HttpServerExchange exchange) {
     return mustExecuteOnWorkerThread();
+  }
+
+  /**
+   * Whether this handler may park its thread in the query admission gate (issue #9518), which an Undertow IO thread must
+   * never do: it serves every other connection multiplexed onto it. A handler that answers true is always dispatched to a
+   * worker thread. Deciding per request whether the gate would make it wait cannot be exact - a slot taken between the
+   * check and the admission leaves the request waiting anyway - so the answer is per handler.
+   */
+  protected boolean mayWaitForAdmission() {
+    return false;
   }
 
   /**
@@ -2284,6 +2568,29 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
       json.put("detail", encodeError(buildDetailChain(e)));
 
     return json.toString();
+  }
+
+  /**
+   * Builds the body of the in-band {@code error} line a streamed (NDJSON) response writes once its 200 is already on
+   * the wire: the body the buffered encoding sends for the same failure ({@link #buildErrorBody}, so production mode
+   * conceals the free-form {@code detail} exactly as there), plus the {@code status} it would have been sent under
+   * and, for a classification that carries one, the {@code Retry-After} back-off as a {@code retryAfter} member in
+   * seconds - a header can no longer be added once the response has started (issue #8899).
+   */
+  protected JSONObject buildStreamedErrorLine(final HttpServerExchange exchange, final ErrorClassification classification) {
+    final JSONObject error = new JSONObject(buildErrorBody(!isProductionMode(), classification.message(),
+        classification.reported(), classification.exceptionArgs(), getCorrelationId(exchange)))
+        .put("status", classification.status());
+    if (classification.retryAfter() != null)
+      // Defensive: the value doubles as the raw header, which HTTP also allows as a date. Every producer sends
+      // integer seconds today, but a throw here would cut the stream instead of reporting the failure, so a value
+      // that is not a number is left out of the line rather than allowed to lose the line itself.
+      try {
+        error.put(STREAMED_RETRY_AFTER_MEMBER, Long.parseLong(classification.retryAfter().trim()));
+      } catch (final NumberFormatException e) {
+        // Not in seconds: the client gets the line without a back-off hint
+      }
+    return error;
   }
 
   /**

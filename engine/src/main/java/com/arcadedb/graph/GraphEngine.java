@@ -28,6 +28,7 @@ import com.arcadedb.database.LocalDatabase;
 import com.arcadedb.database.MutableDocument;
 import com.arcadedb.database.RID;
 import com.arcadedb.database.Record;
+import com.arcadedb.database.RecordEventsRegistry;
 import com.arcadedb.database.RecordInternal;
 import com.arcadedb.database.TransactionContext;
 import com.arcadedb.exception.BrokenChunkChainException;
@@ -47,6 +48,7 @@ import com.arcadedb.schema.DocumentType;
 import com.arcadedb.schema.EdgeType;
 import com.arcadedb.schema.InternalBucketNaming;
 import com.arcadedb.schema.VertexType;
+import com.arcadedb.security.SecurityDatabaseUser;
 import com.arcadedb.utility.MultiIterator;
 import com.arcadedb.utility.Pair;
 
@@ -96,10 +98,78 @@ public class GraphEngine {
     }
   };
 
-  private final DatabaseInternal database;
+  // THE ONE-FILTER ARGUMENTS OF countUndirectedEdges(): ANY FAR END, AND THE SELF LOOPS LEFT OUT OF THE INCOMING LIST.
+  // SHARED: countInto() ONLY READS ITS FILTER ARRAYS, IT WRITES THE COUNTS ALONE
+  private static final EdgeBucketMask[] NO_NEIGHBOR_MASK = new EdgeBucketMask[1];
+  private static final boolean[]        SKIP_SELF_LOOPS  = { true };
+
+  /**
+   * Told about the edge writes no record event reports (issue #9572). Internal: these are not record events, so no
+   * trigger or user listener sees them.
+   */
+  public interface EdgeWriteListener {
+    /**
+     * A lightweight edge was created. It has no record, so no record listener hears of its creation; its DELETION does
+     * reach them, through the ordinary record delete path. Called inside the creating transaction, as an after-create
+     * record event would be.
+     */
+    void onLightEdgeCreated(Edge edge);
+
+    /**
+     * {@link GraphBatch} finished writing edges of these types, which it writes straight into the edge lists, light
+     * and regular alike, without a record event per edge. Called once the edges are durable and fully linked, outside
+     * any transaction.
+     */
+    void onEdgesWrittenInBulk(Set<String> edgeTypeNames);
+  }
+
+  private static final EdgeWriteListener[] NO_EDGE_WRITE_LISTENERS = new EdgeWriteListener[0];
+
+  private final    DatabaseInternal    database;
+  // COPY-ON-WRITE: READ ON EVERY LIGHTWEIGHT EDGE CREATED, WRITTEN ONLY WHEN A GRAPH ANALYTICAL VIEW STARTS OR STOPS
+  // TRACKING CHANGES
+  private volatile EdgeWriteListener[] edgeWriteListeners = NO_EDGE_WRITE_LISTENERS;
 
   public GraphEngine(final DatabaseInternal database) {
     this.database = database;
+  }
+
+  /** Internal: public only because the graph analytical views live in another package. */
+  public synchronized void registerEdgeWriteListener(final EdgeWriteListener listener) {
+    final EdgeWriteListener[] current = edgeWriteListeners;
+    final EdgeWriteListener[] updated = Arrays.copyOf(current, current.length + 1);
+    updated[current.length] = listener;
+    edgeWriteListeners = updated;
+  }
+
+  public synchronized void unregisterEdgeWriteListener(final EdgeWriteListener listener) {
+    final EdgeWriteListener[] current = edgeWriteListeners;
+    for (int i = 0; i < current.length; i++)
+      if (current[i] == listener) {
+        final EdgeWriteListener[] updated = new EdgeWriteListener[current.length - 1];
+        System.arraycopy(current, 0, updated, 0, i);
+        System.arraycopy(current, i + 1, updated, i, current.length - i - 1);
+        edgeWriteListeners = updated;
+        return;
+      }
+  }
+
+  /** How many listeners are registered: one per graph analytical view tracking changes. */
+  public int getEdgeWriteListenerCount() {
+    return edgeWriteListeners.length;
+  }
+
+  /**
+   * See {@link EdgeWriteListener#onEdgesWrittenInBulk}. Each listener is told on its own: the batch is already written,
+   * so one that fails costs that view its update, never the other views theirs or the caller its outcome.
+   */
+  void edgesWrittenInBulk(final Set<String> edgeTypeNames) {
+    for (final EdgeWriteListener listener : edgeWriteListeners)
+      try {
+        listener.onEdgesWrittenInBulk(edgeTypeNames);
+      } catch (final RuntimeException e) {
+        LogManager.instance().log(this, Level.WARNING, "Cannot notify %s of the edges a batch wrote", e, listener);
+      }
   }
 
   /**
@@ -159,28 +229,18 @@ public class GraphEngine {
         database.getSchema().dropBucket(inEdgesBucket);
     }
 
-    // DROP THE SUPER-NODE STRIPE POOL, IF THE TYPE EVER PROMOTED A VERTEX (#5156)
-    // EXACT best-effort sweep: pool buckets are created contiguously (createStripePool loops 0..stripes-1),
-    // so walking until the first gap AT OR PAST the configured count covers a pool of ANY size, past or
-    // present - no fixed cap to leak beyond. Gaps below the configured count (a partially-created pool) are
-    // stepped over; a failed dropBucket is logged and does not abort the sweep (drops are individually
-    // durable, not transactional as a group), and the loop still advances past it.
+    // DROP THE SUPER-NODE STRIPE POOL, IF THE TYPE EVER PROMOTED A VERTEX (#5156). StripedEdgeList.getStripePool walks the
+    // pool of any size, past or present; a failed dropBucket is logged and does not abort the sweep (drops are
+    // individually durable, not transactional as a group).
     final int configuredStripes = database.getConfiguration().getValueAsInteger(GlobalConfiguration.GRAPH_SUPERNODE_STRIPES);
-    for (int i = 0; ; i++) {
-      final String stripeBucketName = StripedEdgeList.stripeBucketName(type.getName(), i);
-      if (!database.getSchema().existsBucket(stripeBucketName)) {
-        if (i == 0)
-          // POOLS ARE CREATED FROM SLOT 0: no slot 0 = this type never promoted, skip the whole sweep
-          break;
-        if (i >= configuredStripes)
-          break;
+    for (final Bucket stripe : StripedEdgeList.getStripePool(database.getSchema(), type.getName(), configuredStripes)) {
+      if (stripe == null)
         continue;
-      }
       try {
-        database.getSchema().dropBucket(stripeBucketName);
+        database.getSchema().dropBucket(stripe.getName());
       } catch (final Exception e) {
         LogManager.instance()
-            .log(this, Level.WARNING, "Error dropping super-node stripe bucket '%s' of type '%s'", e, stripeBucketName, type.getName());
+            .log(this, Level.WARNING, "Error dropping super-node stripe bucket '%s' of type '%s'", e, stripe.getName(), type.getName());
       }
     }
   }
@@ -315,12 +375,28 @@ public class GraphEngine {
   }
 
   public void connectOutgoingEdge(final VertexInternal fromVertex, final Identifiable toVertex, final Edge edge) {
+    // A lightweight edge allocates no record, so LocalBucket.createRecord - where CREATE_RECORD is enforced for every
+    // other record - never runs for it (issue #9619). This append is the one point every lightweight create passes
+    // through (Vertex.newEdge, the deprecated newLightEdge, SQL CREATE EDGE via ConnectEdgeStep, openCypher, Gremlin,
+    // the async create task), so the grant is checked here, before either edge list is touched. The RID carries the
+    // edge type's first bucket id, and a bucket's id IS its file id (LocalBucket builds every RID it hands out from its
+    // fileId, and getBucketById resolves through lookupFile), so it is the key the grant array is indexed on as-is. A
+    // record-backed edge was already checked when its record was saved.
+    if (edge instanceof LightEdge)
+      database.checkPermissionsOnFile(edge.getIdentity().getBucketId(), SecurityDatabaseUser.ACCESS.CREATE_RECORD);
+
     // No eager modify(): materialising the MutableVertex anchors the vertex page in the transaction, putting
     // the vertex FILE into the commit lock set of EVERY append and serialising all writers on a hot vertex
     // across the whole replication round. The rare paths that really rewrite the vertex record (first chunk,
     // head flip, super-node promotion) call modify() themselves, re-validating the head at that point.
     getOrCreateEdgeList(fromVertex, Vertex.DIRECTION.OUT).add(edge.getIdentity(), toVertex.getIdentity());
     recordCreated(edge.getType(), edge, fromVertex.getIdentity(), toVertex.getIdentity());
+    // EVERY LIGHTWEIGHT EDGE IS CREATED THROUGH HERE (Java API, SQL, Cypher, async): A REGULAR ONE WAS ALREADY REPORTED
+    // BY ITS RECORD'S save(). A LISTENER THAT THROWS FAILS THE CREATION, AS A RECORD LISTENER DOES: THE APPEND ABOVE IS
+    // IN THE SAME TRANSACTION, SO ITS ROLLBACK TAKES THE EDGE BACK OUT
+    if (edge instanceof LightEdge)
+      for (final EdgeWriteListener listener : edgeWriteListeners)
+        listener.onLightEdgeCreated(edge);
   }
 
   public List<Edge> newEdges(VertexInternal sourceVertex, final List<CreateEdgeOperation> connections,
@@ -729,6 +805,34 @@ public class GraphEngine {
   }
 
   /**
+   * The edges an undirected relationship pattern matches from {@code vertex}: {@link #countEdges} in direction
+   * {@link Vertex.DIRECTION#BOTH}, with a self loop counted once. The vertex API counts a self loop in each of the two
+   * lists it sits in, as a graph degree does; a pattern {@code (n)-[:T]-(m)} matches the relationship once, as Neo4j and
+   * the openCypher TCK do (issues #8750, #9540). Same cost as {@link #countEdges}: each list is walked once, the incoming
+   * one telling the self loops apart on the far-end position its entries carry.
+   */
+  public long countUndirectedEdges(final VertexInternal vertex, final String... edgeTypes) {
+    // THE HEADS ARE READ FROM THE TRANSACTION'S INSTANCE: A HANDLE TAKEN BEFORE AN APPEND WOULD HIDE THE NEWEST EDGES
+    final VertexInternal source = getMostUpdatedVertex(vertex);
+    final EdgeBucketMask mask;
+    if (edgeTypes != null && edgeTypes.length > 0) {
+      mask = EdgeBucketMask.of(database, edgeTypes);
+      if (mask == null)
+        return 0L;
+    } else
+      mask = null;
+
+    final long[] counts = new long[1];
+    final EdgeLinkedList outEdges = getEdgeHeadChunk(source, Vertex.DIRECTION.OUT);
+    if (outEdges != null)
+      outEdges.countInto(new EdgeBucketMask[] { mask }, NO_NEIGHBOR_MASK, null, counts);
+    final EdgeLinkedList inEdges = getEdgeHeadChunk(source, Vertex.DIRECTION.IN);
+    if (inEdges != null)
+      inEdges.countInto(new EdgeBucketMask[] { mask }, NO_NEIGHBOR_MASK, SKIP_SELF_LOOPS, counts);
+    return counts[0];
+  }
+
+  /**
    * Disconnects an edge from both its endpoints and deletes the edge record.
    * <p>
    * #5670: the two endpoint blocks tolerate a VANISHED ENDPOINT VERTEX (nothing left to disconnect) but NOT a
@@ -742,45 +846,52 @@ public class GraphEngine {
    * that window a retry instead.
    */
   public void deleteEdge(final Edge edge) {
-    deleteEdge(edge, null);
+    deleteEdge(edge, null, null);
   }
 
   /**
-   * {@link #deleteEdge(Edge)} for a caller that is about to drop one endpoint's edge list WHOLESALE, so the removal
-   * of this edge from that list would be pure waste (#5760).
+   * {@link #deleteEdge(Edge)} for a caller that takes care of one endpoint's edge list ITSELF, so removing this edge
+   * from that list here would be pure waste or, worse, a second removal of the same entry.
    * <p>
    * NOT a general-purpose "delete an edge but keep one side attached" entry point, and it cannot become one: the
-   * only reason skipping is sound is that the caller destroys the skipped list immediately afterwards. Pass a
-   * {@code skipEndpoint} whose list SURVIVES and the result is a back-reference to a deleted edge - precisely the
-   * corruption #5670 exists to prevent. It is public only because {@code LocalDatabase} dispatches to it from
-   * another package; the sole legitimate caller is {@link #deleteVertex}, and a new one has to satisfy that same
-   * "the skipped list is about to be dropped" precondition.
-   * <p>
-   * {@code skipEndpoint} is the RID of a vertex whose edge list must NOT be touched. One of an edge's two
-   * endpoints is always the vertex being deleted, and disconnecting it means walking the chain from the head
-   * probing each chunk for the entry, anchoring the chunk that holds it, compacting it, and writing it back -
-   * per edge, over a list that
-   * {@link #deleteRemainingChunks} deletes in its entirety a moment later. Skipping it removes the work rather than
-   * making it cheaper.
+   * only reason skipping is sound is that the caller handles the skipped list right afterwards. Pass a
+   * {@code skipEndpoint} whose list SURVIVES with the entry in it and the result is a back-reference to a deleted edge -
+   * precisely the corruption #5670 exists to prevent. It is public only because {@code LocalDatabase} dispatches to it
+   * from another package. Two callers satisfy the precondition, each in its own way:
+   * <ul>
+   * <li>{@link #deleteVertex} (#5760), with {@code skipDirection == null}: the skipped lists are dropped WHOLESALE a
+   * moment later. One of an edge's two endpoints is always the vertex being deleted, and disconnecting it means
+   * walking the chain from the head probing each chunk for the entry, anchoring the chunk that holds it, compacting it,
+   * and writing it back - per edge, over a list that {@link #deleteRemainingChunks} deletes in its entirety a moment
+   * later. Skipping it removes the work rather than making it cheaper.</li>
+   * <li>{@code Iterator.remove()} of the edge-list iterators (#9779), with the direction of the list being walked: the
+   * iterator takes out the very entry it stands on, by position, once this delete has succeeded. Letting this method
+   * remove it too, by RID, removed it a second time: once the iterator's own copy of the segment was the
+   * transaction's, its positional removal took out the entry AFTER it, dropping a sibling edge.</li>
+   * </ul>
    * <p>
    * Matched by RID against the endpoint recorded ON THE EDGE, not by which list the edge was found in: an entry
-   * whose {@code out}/{@code in} does NOT name the vertex being deleted is a reference into somebody else's list
+   * whose {@code out}/{@code in} does NOT name the skipped vertex is a reference into somebody else's list
    * and is disconnected normally.
    * <p>
-   * A SELF-LOOP therefore skips BOTH sides, which is correct for the same reason as one side: {@code A -> A} is
-   * reachable from both of A's lists and both are dropped. What is NOT skipped is the self-side READ - the strict
-   * collection walk in {@link #deleteEdgesOf} that refuses to delete a vertex whose own list is not fully readable
-   * (#5670/#5680) - because that walk is what decides which edges exist to disconnect at all.
+   * With {@code skipDirection == null} a SELF-LOOP skips BOTH sides, which is correct for the vertex delete for the
+   * same reason as one side: {@code A -> A} is reachable from both of A's lists and both are dropped. With a direction
+   * only that side is skipped: an iterator walks ONE of A's lists, and the other one still holds the loop. What is NOT
+   * skipped is the self-side READ - the strict collection walk in {@link #deleteEdgesOf} that refuses to delete a
+   * vertex whose own list is not fully readable (#5670/#5680) - because that walk is what decides which edges exist to
+   * disconnect at all.
+   *
+   * @param skipDirection the one list of {@code skipEndpoint} to leave alone, or {@code null} for both of them
    */
-  public void deleteEdge(final Edge edge, final RID skipEndpoint) {
+  public void deleteEdge(final Edge edge, final RID skipEndpoint, final Vertex.DIRECTION skipDirection) {
     final Database database = edge.getDatabase();
     if (edge.getType() instanceof EdgeType edgeType && !edgeType.isBidirectional()
         && this.database.getTransactionIfExists() instanceof TransactionContext tx
         && tx.getUnidirectionalEdgeChangesIfAny() instanceof UnidirectionalEdgeChanges changes && changes.isRecording())
       changes.edgeDeleted(edge.getIdentity());
 
-    disconnectEndpoint(edge, Vertex.DIRECTION.OUT, skipEndpoint);
-    disconnectEndpoint(edge, Vertex.DIRECTION.IN, skipEndpoint);
+    disconnectEndpoint(edge, Vertex.DIRECTION.OUT, skipEndpoint, skipDirection);
+    disconnectEndpoint(edge, Vertex.DIRECTION.IN, skipEndpoint, skipDirection);
 
     final RID edgeRID = edge.getIdentity();
     if (edgeRID != null && !(edge instanceof LightEdge))
@@ -808,11 +919,12 @@ public class GraphEngine {
   }
 
   /**
-   * Removes {@code edge} from the edge list of its endpoint in {@code direction}, unless that endpoint is the one
-   * the caller is dropping wholesale (see {@link #deleteEdge(Edge, RID)}).
+   * Removes {@code edge} from the edge list of its endpoint in {@code direction}, unless that list is the one the
+   * caller handles itself (see {@link #deleteEdge(Edge, RID, Vertex.DIRECTION)}).
    */
-  private void disconnectEndpoint(final Edge edge, final Vertex.DIRECTION direction, final RID skipEndpoint) {
-    if (skipEndpoint != null && skipEndpoint.equals(
+  private void disconnectEndpoint(final Edge edge, final Vertex.DIRECTION direction, final RID skipEndpoint,
+      final Vertex.DIRECTION skipDirection) {
+    if (skipEndpoint != null && (skipDirection == null || skipDirection == direction) && skipEndpoint.equals(
         direction == Vertex.DIRECTION.OUT ? edge.getOut() : edge.getIn()))
       return;
 
@@ -903,8 +1015,11 @@ public class GraphEngine {
    * unrelated edge is handed later. On a UNIQUE index the leak is not even silent - the old key stays taken and
    * the replacement is rejected as a duplicate, which made a move impossible on such a type.
    * <p>
-   * Delete/create events are deliberately NOT fired: a move is not a delete, and a listener that vetoed the
-   * delete would leave this method creating a second edge on top of one that was never removed.
+   * The delete is not offered to the {@code beforeDelete} listeners: one that vetoed it would leave this method creating a
+   * second edge on top of one that was never removed. The {@code afterDelete} listeners are told, though: the replacement
+   * is saved as an ordinary record, so its creation reaches the create listeners, and hearing of a new edge without the
+   * removal of the one it replaces made every listener that keeps state - a Graph Analytical View's overlay, a change
+   * feed - hold both (found with issue #9572).
    */
   public void moveEdge(final MutableEdge edge, final Vertex.DIRECTION direction, final RID newVertexRID) {
     if (direction != Vertex.DIRECTION.IN && direction != Vertex.DIRECTION.OUT)
@@ -924,12 +1039,22 @@ public class GraphEngine {
 
     final MutableEdge newEdge = new MutableEdge(database, edgeType, newOut, newIn);
     if (!properties.isEmpty())
-      newEdge.set(properties);
+      // Every property, an `@special` one included, which set(Map) would skip as metadata. Only a reserved name is
+      // left behind: an edge persisted before #9799 can carry a phantom "@in"/"@out" key, which would otherwise be
+      // taken for an endpoint assignment and point the replacement somewhere else
+      for (final Map.Entry<String, Object> entry : properties.entrySet())
+        if (!MutableDocument.isReservedName(entry.getKey()))
+          newEdge.set(entry.getKey(), entry.getValue());
     newEdge.save();
 
     connectOutgoingEdge(fromVertex, toVertex, newEdge);
     if (edgeType.isBidirectional())
       connectIncomingEdge(toVertex, newOut, newEdge.getIdentity());
+
+    // Once the replacement exists, so a move that fails half-way has told no listener of a removal. Still the record being
+    // replaced: its identity and endpoints change only on the next line
+    ((RecordEventsRegistry) database.getEvents()).onAfterDelete(edge);
+    ((RecordEventsRegistry) edge.getType().getEvents()).onAfterDelete(edge);
 
     edge.updateIdentity(newEdge.getIdentity(), newOut, newIn);
   }
@@ -1099,7 +1224,7 @@ public class GraphEngine {
    * #5760 removes the two costs this method used to pay for the walk, both of which fall out of ONE observation:
    * the vertex's own lists are dropped wholesale at the end, so nothing this method does to them is worth doing.
    * <ul>
-   *   <li>Each edge is disconnected from its FAR endpoint only ({@link #deleteEdge(Edge, RID)}). The self side was
+   *   <li>Each edge is disconnected from its FAR endpoint only ({@link #deleteEdge(Edge, RID, Vertex.DIRECTION)}). The self side was
    *   a chain walk, a chunk anchor, a compaction and a write-back per edge, over a list
    *   {@link #deleteRemainingChunks} deletes entirely moments later.</li>
    *   <li>The walk STREAMS. It used to materialise every edge into an {@code ArrayList} first, and had to: the
@@ -1534,7 +1659,7 @@ public class GraphEngine {
    * edge the vertex has and deleted in a second pass. The second pass was not a style choice: while the removals
    * still disconnected each edge from THIS vertex too, they relinked and deleted chunks underneath the iterator,
    * and a single pass would have been a walk over a list being restructured. It is
-   * {@link #deleteEdge(Edge, RID)} skipping this vertex that makes one pass legal - the deletions below now write
+   * {@link #deleteEdge(Edge, RID, Vertex.DIRECTION)} skipping this vertex that makes one pass legal - the deletions below now write
    * the FAR endpoints' lists and the edge records, never this list - and the accumulator, one live object per edge
    * held for the whole delete, goes away with it.
    * <p>
@@ -1719,7 +1844,7 @@ public class GraphEngine {
   /**
    * Deletes one edge of a vertex that is itself being deleted: the full record deletion (index cleanup, external
    * values, delete events) with the disconnection from {@code vertex} skipped - see
-   * {@link #deleteEdge(Edge, RID)} for why, and {@link #deleteEdgesOf} for why this is not inside the walk's
+   * {@link #deleteEdge(Edge, RID, Vertex.DIRECTION)} for why, and {@link #deleteEdgesOf} for why this is not inside the walk's
    * {@code try}.
    * <p>
    * Routed through the edge's OWN database handle rather than this engine's, so a wrapped instance
@@ -1728,7 +1853,7 @@ public class GraphEngine {
    */
   private void deleteEdgeOfDeletedVertex(final Edge edge, final VertexInternal vertex, final boolean force) {
     try {
-      ((DatabaseInternal) edge.getDatabase()).deleteEdgeSkippingEndpoint(edge, vertex.getIdentity());
+      ((DatabaseInternal) edge.getDatabase()).deleteEdgeSkippingEndpoint(edge, vertex.getIdentity(), null);
     } catch (final RecordNotFoundException e) {
       // ALREADY DELETED, IGNORE IT
     } catch (final BrokenChunkChainException e) {
@@ -2532,6 +2657,13 @@ public class GraphEngine {
   public static int[][] buildAdjacencyList(final List<Vertex> vertices, final Map<RID, Integer> ridToIdx,
       final Vertex.DIRECTION dir, final String[] relTypes, final LongConsumer entryCount) {
     final int n = vertices.size();
+    if (dir != Vertex.DIRECTION.OUT && n > 0) {
+      final String[] unidirectional = IncomingEdgeLookup.getUnidirectionalTypes(vertices.getFirst().getDatabase().getSchema(),
+          relTypes);
+      if (unidirectional.length > 0)
+        return buildTransposedAdjacencyList(vertices, ridToIdx, dir, relTypes, unidirectional, entryCount);
+    }
+
     final int[] counts = new int[n];
     for (int i = 0; i < n; i++) {
       final Vertex v = vertices.get(i);
@@ -2580,6 +2712,89 @@ public class GraphEngine {
       }
     }
     return adj;
+  }
+
+  /**
+   * {@link #buildAdjacencyList(List, Map, Vertex.DIRECTION, String[], LongConsumer)} over edge types some of which are
+   * declared unidirectional (issue #8629). Such a type writes the outgoing pointer only, so the incoming side of a
+   * vertex holds no trace of its edges; but the rows only ever list vertices of the set, and every edge between two of
+   * them sits in the outgoing list of its source, so the incoming rows are the transpose of the outgoing lists of the
+   * same vertices - what a Graph Analytical View derives its backward CSR from. No scan and no index are needed, and the
+   * algorithms answer the same with and without a view. The incoming list of a vertex is still read for the
+   * bidirectional types, leaving out any pointer a bulk load stored for a unidirectional one, which the transpose already
+   * answers for.
+   * <p>
+   * Two passes as for the other types, the first counting and the second filling, over the same edges in the same
+   * order: a row gets its entries from its own lists and from the transposed edges of the vertices before and after it,
+   * in the order the walk meets them both times.
+   */
+  private static int[][] buildTransposedAdjacencyList(final List<Vertex> vertices, final Map<RID, Integer> ridToIdx,
+      final Vertex.DIRECTION dir, final String[] relTypes, final String[] unidirectional, final LongConsumer entryCount) {
+    final int n = vertices.size();
+    final EdgeBucketMask unidirectionalBuckets = EdgeBucketMask.of((DatabaseInternal) vertices.getFirst().getDatabase(),
+        unidirectional);
+    final int[] counts = new int[n];
+    walkTransposedAdjacency(vertices, ridToIdx, dir, relTypes, unidirectional, unidirectionalBuckets, counts, null);
+    if (entryCount != null) {
+      long total = 0;
+      for (int i = 0; i < n; i++)
+        total += counts[i];
+      entryCount.accept(total);
+    }
+    final int[][] adj = new int[n][];
+    for (int i = 0; i < n; i++)
+      adj[i] = new int[counts[i]];
+    // THE SECOND PASS RE-COUNTS INTO A ZEROED ARRAY, USED AS THE FILL POSITION OF EACH ROW
+    walkTransposedAdjacency(vertices, ridToIdx, dir, relTypes, unidirectional, unidirectionalBuckets, new int[n], adj);
+    return adj;
+  }
+
+  /**
+   * One pass of {@link #buildTransposedAdjacencyList}: counts the entries of each row into {@code sizes}, and also writes
+   * them into {@code adj} when it is not null. A ghost edge (a pointer to a record that is gone) is skipped in both passes
+   * alike, so the fill never exceeds the count.
+   */
+  private static void walkTransposedAdjacency(final List<Vertex> vertices, final Map<RID, Integer> ridToIdx,
+      final Vertex.DIRECTION dir, final String[] relTypes, final String[] unidirectional,
+      final EdgeBucketMask unidirectionalBuckets, final int[] sizes, final int[][] adj) {
+    final boolean both = dir == Vertex.DIRECTION.BOTH;
+    final boolean typed = relTypes != null && relTypes.length > 0;
+    for (int i = 0; i < vertices.size(); i++) {
+      final Vertex v = vertices.get(i);
+      // BOTH: THE OUTGOING ROW OF EVERY TYPE. IN: ONLY THE UNIDIRECTIONAL EDGES, WHICH ARE TRANSPOSED INTO THEIR TARGET'S ROW
+      final Iterable<Edge> outgoing = both ? (typed ? v.getEdges(Vertex.DIRECTION.OUT, relTypes) : v.getEdges(Vertex.DIRECTION.OUT)) :
+          v.getEdges(Vertex.DIRECTION.OUT, unidirectional);
+      for (final Edge e : outgoing) {
+        try {
+          final Integer j = ridToIdx.get(e.getIn());
+          if (j == null)
+            continue;
+          if (both)
+            addAdjacencyEntry(sizes, adj, i, j);
+          if (unidirectionalBuckets != null && unidirectionalBuckets.matches(e.getIdentity().getBucketId()))
+            addAdjacencyEntry(sizes, adj, j, i);
+        } catch (final RecordNotFoundException rnf) {
+          GhostEdgeReporter.reportSkipped(rnf);
+        }
+      }
+      for (final Edge e : typed ? v.getEdges(Vertex.DIRECTION.IN, relTypes) : v.getEdges(Vertex.DIRECTION.IN)) {
+        try {
+          if (unidirectionalBuckets != null && unidirectionalBuckets.matches(e.getIdentity().getBucketId()))
+            continue;
+          final Integer j = ridToIdx.get(e.getOut());
+          if (j != null)
+            addAdjacencyEntry(sizes, adj, i, j);
+        } catch (final RecordNotFoundException rnf) {
+          GhostEdgeReporter.reportSkipped(rnf);
+        }
+      }
+    }
+  }
+
+  private static void addAdjacencyEntry(final int[] sizes, final int[][] adj, final int row, final int neighbor) {
+    if (adj != null)
+      adj[row][sizes[row]] = neighbor;
+    ++sizes[row];
   }
 
   protected RID moveToType(final Vertex vertex, final String typeName) {

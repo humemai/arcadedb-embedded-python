@@ -18,28 +18,38 @@
  */
 package com.arcadedb.server.http.handler;
 
+import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.database.Database;
 import com.arcadedb.database.DatabaseInternal;
 import com.arcadedb.engine.timeseries.ColumnDefinition;
 import com.arcadedb.engine.timeseries.TimeSeriesEngine;
+import com.arcadedb.engine.timeseries.TimeSeriesGateway;
+import com.arcadedb.engine.timeseries.TimeSeriesStorableRows;
 import com.arcadedb.schema.DocumentType;
 import com.arcadedb.schema.LocalTimeSeriesType;
 import com.arcadedb.security.SecurityDatabaseUser;
 import com.arcadedb.schema.TimeSeriesTypeBuilder;
 import com.arcadedb.schema.Type;
+import com.arcadedb.serializer.json.JSONArray;
 import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.server.http.HttpServer;
 import com.arcadedb.server.http.RequestBodyTooLargeException;
+import com.arcadedb.server.http.handler.prometheus.PrometheusTypes;
 import com.arcadedb.server.http.handler.prometheus.PrometheusTypes.Label;
 import com.arcadedb.server.http.handler.prometheus.PrometheusTypes.Sample;
 import com.arcadedb.server.http.handler.prometheus.PrometheusTypes.TimeSeries;
 import com.arcadedb.server.http.handler.prometheus.PrometheusTypes.WriteRequest;
 import com.arcadedb.server.security.ServerSecurityUser;
 import io.undertow.server.HttpServerExchange;
+import io.undertow.util.Headers;
 import io.undertow.util.HttpString;
 
-import java.util.Arrays;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * HTTP handler for Prometheus remote_write protocol.
@@ -76,6 +86,10 @@ import java.util.List;
  */
 public class PostPrometheusWriteHandler extends AbstractBinaryHttpHandler {
 
+  /** Bounds the labels named in an error response, which come from the client. */
+  private static final int MAX_REPORTED_UNDECLARED_LABELS = 100;
+  private static final int MAX_REPORTED_LABEL_LENGTH      = 100;
+
   public PostPrometheusWriteHandler(final HttpServer httpServer) {
     super(httpServer);
   }
@@ -111,6 +125,14 @@ public class PostPrometheusWriteHandler extends AbstractBinaryHttpHandler {
 
     exchange.getResponseHeaders().put(new HttpString("X-Prometheus-Remote-Write-Version"), "0.1.0");
 
+    // Remote write 2.0 names its message in the Content-Type (issue #9624). A receiver that cannot parse the message
+    // named there must answer 415, which is what makes a 2.0 sender fall back to 1.0; decoding the 2.0 body as a 1.0
+    // WriteRequest finds no series in it, and the 204 that used to follow made the sender drop the batch as delivered.
+    final String protoMessage = PrometheusTypes.protoMessage(exchange.getRequestHeaders().getFirst(Headers.CONTENT_TYPE));
+    if (protoMessage != null && !WriteRequest.PROTO_MESSAGE.equals(protoMessage))
+      return new ExecutionResponse(415, new JSONObject().put("error", "Unsupported remote-write protobuf message '" + protoMessage
+          + "': this endpoint implements " + WriteRequest.PROTO_MESSAGE + " (remote write 1.0)").toString());
+
     // THIS request's bytes, off the exchange rather than off a field shared with every concurrent request; see
     // AbstractBinaryHttpHandler.RAW_BINARY_PAYLOAD and issue #7683. Prometheus remote-write is exactly the
     // path where that matters: several shippers pointed at one endpoint is the normal deployment.
@@ -132,10 +154,25 @@ public class PostPrometheusWriteHandler extends AbstractBinaryHttpHandler {
       return new ExecutionResponse(400, "{ \"error\" : \"Invalid Snappy-compressed data\"}");
     }
 
-    // Decode protobuf WriteRequest
-    final WriteRequest writeRequest = WriteRequest.decode(decompressed);
-    if (writeRequest.getTimeSeries().isEmpty())
+    // Decode protobuf WriteRequest. The decoder signals a malformed body with IllegalStateException, which no arm of
+    // the error classification maps, so it would be answered 500 and logged as a server fault (issue #9624): it is the
+    // client's mistake, the same class as the invalid Snappy data answered 400 just above.
+    final WriteRequest writeRequest;
+    try {
+      writeRequest = WriteRequest.decode(decompressed);
+    } catch (final IllegalStateException e) {
+      return new ExecutionResponse(400, new JSONObject().put("error", "Malformed protobuf " + WriteRequest.PROTO_MESSAGE + ": " + e.getMessage()).toString());
+    }
+    if (writeRequest.getTimeSeries().isEmpty()) {
+      // An empty request, or one carrying only metric metadata, is a legitimate 1.0 no-op. A non-empty body with no 1.0
+      // field at all is a message in another schema - a 2.0 Request sent without the proto= parameter - and answering
+      // 204 would make the sender discard it as delivered (issue #9624).
+      if (decompressed.length > 0 && !writeRequest.hasRecognizedContent())
+        return new ExecutionResponse(400, new JSONObject().put("error", "The body carries no " + WriteRequest.PROTO_MESSAGE
+            + " field (remote write 1.0): if it is a remote write 2.0 io.prometheus.write.v2.Request, configure the sender for 1.0")
+            .toString());
       return new ExecutionResponse(204, "");
+    }
 
     final DatabaseInternal database = (DatabaseInternal) db;
 
@@ -169,6 +206,15 @@ public class PostPrometheusWriteHandler extends AbstractBinaryHttpHandler {
     // the same flag, because either one applied to a transaction this handler did not open would settle the
     // caller's session transaction behind its back.
     final boolean ownTransaction = !database.isTransactionActive();
+    final boolean rejectUndeclared = TimeSeriesGateway.rejectsUndeclaredKeys(database);
+    // TAG column names per type, built once per request instead of scanning the columns for every label of every series
+    final Map<String, Set<String>> tagNamesByType = new HashMap<>();
+    // `metric.label` of every label that made a series be dropped, bounded because the labels come from the client
+    final Set<String> undeclaredLabels = new LinkedHashSet<>();
+    // `metric.column (tag|field): reason` of every value a column could not store, bounded the same way (issue #9972)
+    final Set<String> unreadableValues = new LinkedHashSet<>();
+    int droppedSeries = 0;
+    int droppedSamples = 0;
     if (ownTransaction)
       database.begin();
     try {
@@ -189,6 +235,16 @@ public class PostPrometheusWriteHandler extends AbstractBinaryHttpHandler {
         final TimeSeriesEngine engine = tsType.requireEngine(SecurityDatabaseUser.ACCESS.CREATE_RECORD);
         final List<ColumnDefinition> columns = tsType.getTsColumns();
 
+        // A label the type has no TAG column for would be silently dropped, filing the samples under a different
+        // series than the one sent (issue #9365). Prometheus cannot extend an existing type, so it follows the same
+        // policy as the line protocol (issue #8646): reject drops the series and names the label, ignore discards it.
+        if (rejectUndeclared && collectUndeclaredLabels(ts.getLabels(),
+            tagNamesByType.computeIfAbsent(typeName, k -> tagNamesOf(columns)), typeName, undeclaredLabels)) {
+          ++droppedSeries;
+          droppedSamples += ts.getSamples().size();
+          continue;
+        }
+
         // Append this series' samples as ONE batch. All samples of a remote-write TimeSeries share the
         // same type and labels, so they can go in a single shard transaction. Appending one at a time
         // would cost a transaction per sample - and on a Raft HA leader, a replicated quorum round trip
@@ -202,27 +258,27 @@ public class PostPrometheusWriteHandler extends AbstractBinaryHttpHandler {
         for (int s = 0; s < count; s++)
           timestamps[s] = tsSamples.get(s).timestampMs();
 
-        // Fill the value grid column by column, matching its column-major layout. A TAG value comes from
-        // the series labels, which are per-series and not per-sample, so it is resolved ONCE and broadcast
-        // down the column: findLabelValue is a linear scan that re-sanitizes every label name it visits,
-        // so resolving it per sample would repeat identical work for every sample of every tag column.
-        final Object[][] columnValues = new Object[columns.size() - 1][count];
+        // Every value goes through the conversion TimeSeriesGateway.write uses for the line protocol and gRPC, the one engine-level
+        // implementation of it (issues #9972, #10030): a label is always text, so a type declaring a tag as INTEGER, BOOLEAN or DATE
+        // used to reach the storage layer with a String and fail the whole request with a 500 (or, for BOOLEAN, store false). The
+        // labels belong to the series, not to the sample, so the tags are SHARED: each is resolved and converted once and broadcast
+        // down its column - findLabelValue is a linear scan that re-sanitizes every label name it visits, so resolving it per
+        // sample would repeat identical work for every sample of every tag column. A tag the column cannot hold drops the series; a
+        // sample value a field cannot hold drops that sample alone. Both are named in unreadableValues and answered 400 below.
+        final List<Label> labels = ts.getLabels();
+        final TimeSeriesStorableRows rows = TimeSeriesStorableRows.convert(database, typeName, columns, timestamps, count, true,
+            (row, valueColumn, col) -> col.getRole() == ColumnDefinition.ColumnRole.TAG ?
+                findLabelValue(labels, col.getName()) :
+                tsSamples.get(row).value(), // the "value" field
+            unreadableValues);
 
-        int colIdx = 0;
-        for (final ColumnDefinition col : columns) {
-          if (col.getRole() == ColumnDefinition.ColumnRole.TIMESTAMP)
-            continue;
+        if (rows.sharedValueRefused())
+          ++droppedSeries;
+        droppedSamples += rows.refused();
+        if (rows.size() == 0)
+          continue;
 
-          if (col.getRole() == ColumnDefinition.ColumnRole.TAG)
-            Arrays.fill(columnValues[colIdx], findLabelValue(ts.getLabels(), col.getName()));
-          else
-            for (int s = 0; s < count; s++)
-              columnValues[colIdx][s] = tsSamples.get(s).value(); // the "value" field
-
-          colIdx++;
-        }
-
-        engine.appendBatch(timestamps, columnValues);
+        engine.appendBatch(rows.timestamps(), rows.columnValues());
       }
       if (ownTransaction)
         database.commit();
@@ -232,7 +288,58 @@ public class PostPrometheusWriteHandler extends AbstractBinaryHttpHandler {
       throw e;
     }
 
+    if (!undeclaredLabels.isEmpty() || !unreadableValues.isEmpty()) {
+      // 400, which Prometheus does not retry: the series and samples that were valid are already stored, and re-sending
+      // the batch cannot make an undeclared label declared or a value its column cannot hold storable
+      final StringBuilder message = new StringBuilder("partial write: ").append(droppedSeries).append(" series and ")
+          .append(droppedSamples).append(" sample(s) dropped");
+      if (!undeclaredLabels.isEmpty())
+        message.append("; undeclared label(s): ").append(String.join(", ", undeclaredLabels)).append(" (declare them on the type, fix the label, or set ")
+            .append(GlobalConfiguration.TIMESERIES_UNDECLARED_KEYS.getKey()).append("=ignore to discard them)");
+      if (!unreadableValues.isEmpty())
+        message.append("; unreadable value(s): ").append(String.join("; ", unreadableValues));
+      message.append('.');
+
+      final JSONObject error = new JSONObject();
+      error.put("error", message.toString());
+      error.put("dropped", droppedSeries);
+      error.put("droppedSamples", droppedSamples);
+      error.put("undeclaredLabels", new JSONArray(undeclaredLabels));
+      error.put("unreadableValues", new JSONArray(unreadableValues));
+      return new ExecutionResponse(400, error.toString());
+    }
+
     return new ExecutionResponse(204, "");
+  }
+
+  private static Set<String> tagNamesOf(final List<ColumnDefinition> columns) {
+    final Set<String> names = new HashSet<>();
+    for (final ColumnDefinition col : columns)
+      if (col.getRole() == ColumnDefinition.ColumnRole.TAG)
+        names.add(col.getName());
+    return names;
+  }
+
+  /**
+   * Whether {@code labels} carries a non-empty label the type has no TAG column for, adding each such label to
+   * {@code undeclared} (as {@code type.label}, up to {@link #MAX_REPORTED_UNDECLARED_LABELS}). An empty value is an
+   * absent label in the Prometheus data model, so it never counts (issue #9363).
+   */
+  private static boolean collectUndeclaredLabels(final List<Label> labels, final Set<String> tagNames,
+      final String typeName, final Set<String> undeclared) {
+    boolean found = false;
+    for (final Label label : labels) {
+      if ("__name__".equals(label.name()) || label.value() == null || label.value().isEmpty())
+        continue;
+      final String column = sanitizeColumnName(label.name());
+      if (!tagNames.contains(column)) {
+        found = true;
+        if (undeclared.size() < MAX_REPORTED_UNDECLARED_LABELS)
+          // label names come from the client: bound each one as well as the count
+          undeclared.add(typeName + "." + (column.length() > MAX_REPORTED_LABEL_LENGTH ? column.substring(0, MAX_REPORTED_LABEL_LENGTH) + "..." : column));
+      }
+    }
+    return found;
   }
 
   private LocalTimeSeriesType getOrCreateType(final DatabaseInternal database, final String typeName,
@@ -270,7 +377,9 @@ public class PostPrometheusWriteHandler extends AbstractBinaryHttpHandler {
   private static String findLabelValue(final List<Label> labels, final String tagName) {
     for (final Label l : labels) {
       if (sanitizeColumnName(l.name()).equals(tagName))
-        return l.value();
+        // An empty value is an absent label in the Prometheus data model, so it is stored as null, the same series as
+        // one that omits the label (issue #9363)
+        return l.value() == null || l.value().isEmpty() ? null : l.value();
     }
     return null;
   }

@@ -21,8 +21,11 @@ package com.arcadedb.server.http.handler;
 import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.database.DatabaseInternal;
 import com.arcadedb.database.RID;
+import com.arcadedb.exception.QueryAdmissionException;
 import com.arcadedb.graph.GraphBatch;
 import com.arcadedb.log.LogManager;
+import com.arcadedb.query.RunningQuery;
+import com.arcadedb.query.sql.executor.QueryAdmissionGate;
 import com.arcadedb.network.SilenceBoundedInputStream;
 import com.arcadedb.network.binary.ServerIsNotTheLeaderException;
 import com.arcadedb.serializer.json.JSONObject;
@@ -49,7 +52,6 @@ import io.undertow.util.HeaderValues;
 import io.undertow.util.Headers;
 import io.undertow.util.HttpString;
 import org.xnio.Options;
-import org.xnio.XnioExecutor;
 import org.xnio.XnioIoThread;
 
 import java.io.BufferedReader;
@@ -73,8 +75,8 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 import java.util.Locale;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 import java.util.logging.Level;
 
@@ -505,6 +507,8 @@ public class PostBatchHandler extends AbstractServerHttpHandler {
     // Applies to the forwarding path too: while the leader is busy the follower cannot drain the client
     // socket either, so its own watchdog would kill the upload it is relaying (issue #5470).
     final Integer previousReadTimeout = relaxConnectionReadTimeout(exchange);
+    QueryAdmissionGate.Ticket admission = null;
+    RunningQuery runningQuery = null;
     try {
       // On a follower of a replicated database the request must run on the leader: the bulk
       // path mutates shared state (schema dictionary, type metadata) that only the leader can
@@ -514,6 +518,24 @@ public class PostBatchHandler extends AbstractServerHttpHandler {
       final HAServerPlugin ha = httpServer.getServer().getHA();
       if (ha != null && !ha.isLeader())
         return forwardBatchToLeader(exchange, ha, databaseName, user, contentType, inputStream, streaming);
+
+      // A load is work like a command: it waits for the query admission gate (issue #9518) like one, inside the session
+      // lock and once the read timeout is relaxed, so the client socket is not dropped while the request waits. Only where
+      // it runs: a follower that relays it to the leader does no work here and takes no slot
+      try {
+        admission = QueryAdmissionGate.getInstance().admit();
+      } catch (final QueryAdmissionException e) {
+        // Refused before a byte of the body was read: the upload is declined, not drained first, as the other refusals do
+        inputStream.close();
+        throw e;
+      }
+      // Listed and terminable like a command (issue #9680): a terminated load stops at its next commit, which refuses it
+      // The session as the manager resolves it for this principal, never the raw header: a session id is matched by the
+      // transaction commands, and a load must not be listed under a session its caller does not own
+      final String sessionHeader = exchange.getRequestHeaders().getFirst(SESSION_ID_HEADER);
+      final HttpSession session = sessionHeader != null ? httpServer.getSessionManager().getSessionById(user, sessionHeader) : null;
+      runningQuery = registerRunningQuery(exchange, user, databaseName, session != null ? session.id : null,
+          session != null ? session.getTag() : null);
 
       final DatabaseInternal database = httpServer.getServer().getDatabase(databaseName, false, false);
       final boolean isCsv = contentType.contains("text/csv");
@@ -548,7 +570,14 @@ public class PostBatchHandler extends AbstractServerHttpHandler {
         emitCommitIndexBookmark(exchange, haDb);
       }
     } finally {
-      restoreConnectionReadTimeout(exchange, previousReadTimeout);
+      try {
+        if (admission != null)
+          admission.close();
+        restoreConnectionReadTimeout(exchange, previousReadTimeout);
+      } finally {
+        if (runningQuery != null)
+          runningQuery.close();
+      }
     }
   }
 
@@ -959,10 +988,8 @@ public class PostBatchHandler extends AbstractServerHttpHandler {
         // through), 'exceptionArgs' carries the duplicate's index|keys|rid or the leader address, and the message
         // chain travels in 'detail' - which production mode conceals here exactly as it does there, instead of
         // the raw message this line used to carry in every mode (issue #8236, PR #8237 review).
-        final ErrorClassification classification = classifyError(reported);
-        final JSONObject error = new JSONObject(buildErrorBody(!isProductionMode(), classification.message(),
-            classification.reported(), classification.exceptionArgs(), getCorrelationId(exchange)))
-            .put("status", classification.status());
+        // 'retryAfter' carries the back-off the buffered encoding sends as a Retry-After header (issue #8899).
+        final JSONObject error = buildStreamedErrorLine(exchange, classifyError(reported));
         // What a client reconciles with, and what the buffered encoding still delivers for this same failure:
         // its counters travel in the error body, and its bookmark is emitted by the finally in execute(). Both
         // were dropped here, which is the one place this encoding was worse than the one it extends
@@ -1013,10 +1040,9 @@ public class PostBatchHandler extends AbstractServerHttpHandler {
    * releases a reader parked on it (issue #7738).
    * <p>
    * It exists for the follower's relay of a streamed batch answer. That forward carries no request timeout (issue
-   * #8325): the wait for the leader's response HEADERS, which on HTTP/1.1 the JDK client hands back only once the
-   * relayed upload has been published whole, is bounded by {@link LeaderDial#sendBoundedWhileProgressing} from the
-   * upload's last byte (issue #8719), and every later wait by this stream alone.
-   * {@code BodyHandlers.ofInputStream} has no per-read timeout and the client sets no socket read timeout, so a
+   * #8325): the wait for the leader's response HEADERS is bounded by {@link DuplexHttpExchange} from the upload's last
+   * byte (issue #8719), and every later wait by this stream alone. The response body has no per-read timeout of its
+   * own and the forward sets no socket read timeout once the headers are in, so a
    * leader that answered its 200 and then stalled - deadlocked, in a long GC, blocked on a full volume - parked
    * the follower's worker thread in {@code readLine()} for as long as the leader kept the connection open.
    * <p>
@@ -1044,15 +1070,20 @@ public class PostBatchHandler extends AbstractServerHttpHandler {
     ReadBoundedInputStream(final InputStream in, final long timeoutMs, final Timer timer) {
       super(in, timeoutMs, timer);
     }
+
+    /** As above, and a read is not silent while {@code activity} moves (issue #9216). */
+    ReadBoundedInputStream(final InputStream in, final long timeoutMs, final Timer timer, final LongSupplier activity) {
+      super(in, timeoutMs, timer, activity);
+    }
   }
 
-  /** The {@link ReadBoundedInputStream.Timer} of this exchange's XNIO thread, where the write watchdog runs too. */
+  /**
+   * The {@link ReadBoundedInputStream.Timer} of this exchange's XNIO thread, where the write watchdog runs too. Scheduled
+   * through {@link IoThreadTimer}, which hands the timer to the I/O thread rather than racing its selector (#9216, #9439).
+   */
   private static ReadBoundedInputStream.Timer ioThreadTimer(final HttpServerExchange exchange) {
     final XnioIoThread ioThread = exchange.getIoThread();
-    return (task, delayMs) -> {
-      final XnioExecutor.Key key = ioThread.executeAfter(task, delayMs, TimeUnit.MILLISECONDS);
-      return key::remove;
-    };
+    return (task, delayMs) -> IoThreadTimer.schedule(ioThread, task, delayMs);
   }
 
   /**
@@ -1419,7 +1450,8 @@ public class PostBatchHandler extends AbstractServerHttpHandler {
     private final long              maxBodySize;
     /**
      * Written only by the thread reading the body, and stored with {@link #BYTES_READ} in opaque mode: a forwarded body
-     * is read on the JDK client's publisher thread while the handler thread waiting for the leader's answer samples
+     * is read on another thread - the JDK client's publisher, or {@link DuplexHttpExchange}'s upload thread on the
+     * streaming encoding (issue #9216) - while the handler thread waiting for the leader's answer samples
      * {@link #progress()} to tell an upload that is still moving from one that stopped (issue #8719). Opaque rather
      * than volatile, so the local load path, which reads the same stream, pays no barrier per read: the sampler needs
      * a value that eventually changes, not one ordered with anything else.
@@ -1428,7 +1460,7 @@ public class PostBatchHandler extends AbstractServerHttpHandler {
     private       boolean           endOfBody;
     /**
      * The failure that ended this body, or {@code null} while it is still readable. Volatile: a forwarded body is
-     * read on the JDK client's publisher thread and asked about on the handler thread (issue #8161).
+     * read on another thread and asked about on the handler thread (issue #8161).
      */
     private volatile IOException    bodyFailure;
 
@@ -1509,9 +1541,9 @@ public class PostBatchHandler extends AbstractServerHttpHandler {
     /**
      * The refusal this body ended with when it was cut off at {@code arcadedb.server.httpBodyContentMaxSize}, or
      * {@code null} when it was not. Read by the leader-forwarding relay (issue #8161), where the refusal is raised on
-     * the JDK client's publishing thread and reaches the caller of {@code HttpClient.send} only as the cause of a
-     * plain {@link IOException} that says nothing about which side failed; the stream itself is the one witness that
-     * cannot be mistaken about it.
+     * the thread relaying the upload and reaches the caller waiting for the leader only as the cause of a plain
+     * {@link IOException} - or, once the leader's answer is being relayed, as a failed read of it (issue #8674) - that
+     * says nothing about which side failed; the stream itself is the one witness that cannot be mistaken about it.
      */
     RequestTooBigException refusedOverCap() {
       return bodyFailure instanceof RequestTooBigException tooBig ? tooBig : null;
@@ -1645,8 +1677,8 @@ public class PostBatchHandler extends AbstractServerHttpHandler {
     }
 
     /**
-     * {@link #getBytesRead()} for a thread other than the one reading the body: the leader forward samples it while the
-     * JDK client's publisher thread relays the upload (issue #8719).
+     * {@link #getBytesRead()} for a thread other than the one reading the body: the leader forward samples it while
+     * another thread relays the upload (issues #8719, #9216).
      */
     long progress() {
       return (long) BYTES_READ.getOpaque(this);
@@ -1892,9 +1924,8 @@ public class PostBatchHandler extends AbstractServerHttpHandler {
    * for the streaming answer would be handed the leader's buffered one under an {@code application/json}
    * content type - a silent downgrade of the very thing it negotiated, and a body its NDJSON reader cannot
    * parse. With it the leader streams, and {@link #relayNdJsonFromLeader} passes those lines straight through
-   * as they arrive. Not while the upload is still being relayed, though: on HTTP/1.1 the JDK client hands back the
-   * leader's answer only once the relayed upload has been published whole (issue #8719), so the client sees the
-   * leader's acknowledgements from the end of its upload on.
+   * as they arrive - while the upload is still being relayed too, because the streaming forward is sent full duplex
+   * by {@link DuplexHttpExchange} (issue #9216), so the client sees the leader's acknowledgements as they happen.
    *
    * @param streaming whether the client negotiated {@code Accept: application/x-ndjson}
    */
@@ -2020,7 +2051,7 @@ public class PostBatchHandler extends AbstractServerHttpHandler {
     // that stays silent that long is given up on, however far into the stream it stalls - but one that keeps talking,
     // or keeps taking the upload, is never cut off.
     //
-    // Enforced by LeaderDial.sendBounded (sendBoundedWhileProgressing on the streaming encoding) rather than by the JDK
+    // Enforced by LeaderDial.sendBounded (DuplexHttpExchange on the streaming encoding) rather than by the JDK
     // request timeout (issue #8325), whose coverage depends
     // on the JDK: on 21-25 it stops at the response headers, so a buffered answer whose body stalls half-way was
     // read with no bound at all; on 26+ it covers the whole body, so on the streaming encoding it became a cap on the
@@ -2042,26 +2073,28 @@ public class PostBatchHandler extends AbstractServerHttpHandler {
         streaming ? null : Duration.ofMillis(deadlineMs), intendedLeaderId);
 
     try {
-      if (streaming)
-        // On HTTP/1.1 the JDK client (21, 25, 27) hands back the leader's answer only once the relayed upload has
-        // been published whole, even when the leader has already answered 200 and its first progress lines (pinned by
-        // Issue8674StreamedRelayBodyCapTerminalLineTest). A deadline counted from the send would therefore cap the
-        // length of the whole upload, and a load whose upload outlasted it was answered 504 while the leader was
-        // working (issue #8719). It is counted from the last byte the upload relayed instead: an upload that keeps
-        // moving is never cut off, one that stands still that long with no answer is, and once the upload has ended
-        // the same budget bounds the wait for the answer. Restoring the acknowledgements DURING the upload needs a
-        // transport that delivers the response while the request body is still being sent (issue #9216).
+      if (streaming) {
+        // Sent full duplex (issue #9216): the upload goes out on a thread of its own and the leader's answer is handed
+        // back as soon as its headers arrive, so the client sees the leader's progress lines while it is still
+        // uploading, as it does on the leader. The JDK client (21, 25, 27) hands back an HTTP/1.1 answer only once the
+        // relayed upload has been published whole (pinned by Issue8674StreamedRelayBodyCapTerminalLineTest), which is
+        // why it is not used here.
         //
-        // The counter is the bytes read from the CLIENT, not those the leader accepted. It stands for both because the
-        // JDK publisher is flow-controlled: it reads the body only on demand from the connection, so a leader that
-        // stops taking the upload stops the counter too, within one flow-control window.
+        // The wait for the answer is counted from the last byte the upload relayed, not from the send (issue #8719): an
+        // upload that keeps moving is never cut off, one that stands still that long with no answer is, and once the
+        // upload has ended the same budget bounds the wait for the answer. The counter is the bytes read from the
+        // CLIENT, not those the leader accepted. It stands for both because the upload writes each piece before reading
+        // the next, so a leader that stops taking the upload stops the counter too, within one socket buffer.
         //
         // A leader that refused instead of streaming is relayed as a buffered answer, and an unnamed "not the leader"
         // among those is held until this node's view moves, as on the buffered encoding below (issue #8486).
-        return LeaderCommandForwarder.holdUnnamedNotTheLeaderRefusal(relayNdJsonFromLeader(exchange, databaseName, url,
-                LeaderDial.sendBoundedWhileProgressing(dial.client(), request, HttpResponse.BodyHandlers.ofInputStream(),
-                    deadlineMs, body::progress),
-                deadlineMs, body), ha, holdLeaderId, httpServer.getServer().getConfiguration());
+        try (final DuplexHttpExchange leaderResponse = DuplexHttpExchange.send(dial.client(), request, body, deadlineMs,
+            body::progress)) {
+          return LeaderCommandForwarder.holdUnnamedNotTheLeaderRefusal(
+              relayNdJsonFromLeader(exchange, databaseName, url, leaderResponse, deadlineMs, body), ha, holdLeaderId,
+              httpServer.getServer().getConfiguration());
+        }
+      }
 
       final HttpResponse<String> response = LeaderDial.sendBounded(dial.client(), request,
           HttpResponse.BodyHandlers.ofString(), deadlineMs);
@@ -2111,7 +2144,7 @@ public class PostBatchHandler extends AbstractServerHttpHandler {
     } catch (final HttpTimeoutException e) {
       // The leader accepted the connection but did not answer within deadlineMs - the failure #7526/#7542 were
       // filed about: previously nothing bounded this wait at all. The body may have been cut by our own cap first.
-      // Not unit-tested: a cap trip aborts send() with an IOException at once, so reaching this arm needs a race.
+      // Not unit-tested: a cap trip aborts the send with an IOException at once, so reaching this arm needs a race.
       rethrowIfRefusedOverCap(body, databaseName);
       LogManager.instance().log(this, Level.WARNING, "Leader at %s did not answer /batch forward within %,dms", url, deadlineMs);
       // On the streaming encoding the window restarts with every byte of the upload relayed (issue #8719), so the
@@ -2199,7 +2232,7 @@ public class PostBatchHandler extends AbstractServerHttpHandler {
    * leader that accepts the connection and never answers parks the Undertow worker thread serving
    * {@code POST /api/v1/batch} until the OS tears the socket down. The production forward
    * ({@link #forwardBatchToLeader}) supplies one on the buffered encoding only, and bounds the exchange itself through
-   * {@link LeaderDial#sendBounded} or {@link LeaderDial#sendBoundedWhileProgressing} (issues #8325, #8719); the
+   * {@link LeaderDial#sendBounded} or {@link DuplexHttpExchange} (issues #8325, #8719); the
    * shorter overloads above pass {@code null} for the tests that exercise the request shape without a deadline of
    * their own.
    *
@@ -2230,7 +2263,11 @@ public class PostBatchHandler extends AbstractServerHttpHandler {
     };
 
     HttpRequest.BodyPublisher publisher = HttpRequest.BodyPublishers.ofInputStream(oneShotBody);
-    if (contentLength >= 0)
+    // fromPublisher refuses a length of zero with an IllegalArgumentException, which an upload declaring
+    // "Content-Length: 0" used to raise outside every catch arm of the forward: an empty body is sent as one.
+    if (contentLength == 0)
+      publisher = HttpRequest.BodyPublishers.noBody();
+    else if (contentLength > 0)
       publisher = HttpRequest.BodyPublishers.fromPublisher(publisher, contentLength);
 
     final HttpRequest.Builder forward = HttpRequest.newBuilder()
@@ -2282,8 +2319,11 @@ public class PostBatchHandler extends AbstractServerHttpHandler {
       final String url, final HttpResponse<InputStream> response, final long readTimeoutMs,
       final CountingInputStream body) throws IOException {
 
+    // The upload's progress counts as activity (issue #9216): the answer now arrives while the upload is still being
+    // relayed, and a leader taking a long upload in says nothing between two commit boundaries. Its silence is a stall
+    // only once it has neither written anything nor taken a byte of the upload for the whole budget.
     final ReadBoundedInputStream leaderBody = new ReadBoundedInputStream(response.body(), readTimeoutMs,
-        ioThreadTimer(exchange));
+        ioThreadTimer(exchange), body::progress);
 
     final String leaderContentType = response.headers().firstValue("Content-Type").orElse("");
     if (response.statusCode() != 200
@@ -2339,8 +2379,8 @@ public class PostBatchHandler extends AbstractServerHttpHandler {
       // This node's own body cap cut the relayed upload after the leader had started answering (issue #8674): the 200
       // is on the wire, so the 413 #8161 answers with can only travel in band, as the line the leader writes for the
       // same body. Asked of the stream, not of the failure: the JDK reports the cut as a plain IOException, or not at
-      // all when the leader's answer then simply ends. Unreachable on JDK 21/25/27, which hand back the response only
-      // once the upload is published whole (#8719); kept for a client that does not (#9216).
+      // all when the leader's answer then simply ends. Reached since the streaming forward went full duplex (#9216): the
+      // leader's answer is relayed while the upload is still going, so the cap can trip after the 200 is on the wire.
       final RequestTooBigException tooBig = body.refusedOverCap();
       if (tooBig != null && !ended) {
         LogManager.instance().log(this, getUserSevereErrorLogLevel(),
@@ -2373,8 +2413,8 @@ public class PostBatchHandler extends AbstractServerHttpHandler {
       final long readTimeoutMs, final String databaseName) {
     if (leaderBody.hasExpired())
       LogManager.instance().log(this, Level.WARNING,
-          "The leader at %s sent nothing for %,d ms while streaming the answer of a batch load on database '%s', "
-              + "so the relay is abandoned and the connection to the leader closed rather than holding a worker "
+          "The leader at %s sent nothing, and took none of the upload, for %,d ms while streaming the answer of a "
+              + "batch load on database '%s', so the relay is abandoned and the connection to the leader closed rather than holding a worker "
               + "thread indefinitely. The client's stream ends without a terminal line. Raise '%s' if the leader "
               + "legitimately stays silent that long", null, url, readTimeoutMs, databaseName,
           GlobalConfiguration.HA_PROXY_BATCH_READ_TIMEOUT.getKey());
@@ -2393,10 +2433,7 @@ public class PostBatchHandler extends AbstractServerHttpHandler {
    */
   private void writeRelayedCapRefusal(final HttpServerExchange exchange, final String databaseName,
       final OutputStream out, final RequestTooBigException tooBig, final long[] lastProgress) {
-    final ErrorClassification classification = classifyError(tooBig);
-    final JSONObject error = new JSONObject(buildErrorBody(!isProductionMode(), classification.message(),
-        classification.reported(), classification.exceptionArgs(), getCorrelationId(exchange)))
-        .put("status", classification.status());
+    final JSONObject error = buildStreamedErrorLine(exchange, classifyError(tooBig));
     final long vertices = lastProgress[0];
     final long edges = lastProgress[1];
     error.put("verticesCreated", vertices);

@@ -95,7 +95,7 @@ public class AlgoLouvain extends AbstractAlgoProcedure {
   public Stream<Result> execute(final Object[] args, final Result inputRow, final CommandContext context) {
     validateArgs(args);
 
-    final Map<String, Object> config = args.length > 0 ? extractMap(args[0], "config") : null;
+    final Map<String, Object> config = extractMap(argOrDefault(args, 0, null), "config");
     final int maxIterations = config != null && config.get("maxIterations") instanceof Number n ?
         extractInt(n, "maxIterations", 1) : 10;
     final double tolerance = config != null && config.get("tolerance") instanceof Number n ?
@@ -123,7 +123,8 @@ public class AlgoLouvain extends AbstractAlgoProcedure {
     final double[] nodeDegree = new double[n];
     for (int i = 0; i < n; i++) {
       final Vertex v = vertices.get(i);
-      for (final Edge edge : v.getEdges(Vertex.DIRECTION.BOTH)) {
+      // the incoming side of a unidirectional edge type is on the other end only (issue #8629)
+      for (final Edge edge : edgesOf(context, v, Vertex.DIRECTION.BOTH)) {
         try {
           double w = 1.0;
           if (weightProperty != null) {
@@ -158,7 +159,7 @@ public class AlgoLouvain extends AbstractAlgoProcedure {
 
         // Compute neighbor community weights
         final Map<Integer, Double> neighborCommunityWeight = new HashMap<>();
-        for (final Edge edge : v.getEdges(Vertex.DIRECTION.BOTH)) {
+        for (final Edge edge : edgesOf(context, v, Vertex.DIRECTION.BOTH)) {
           try {
             final Vertex neighbor = edge.getOut().equals(v.getIdentity()) ?
                 edge.getInVertex() : edge.getOutVertex();

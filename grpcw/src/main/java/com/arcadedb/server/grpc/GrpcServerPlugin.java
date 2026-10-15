@@ -27,8 +27,10 @@ import com.arcadedb.server.ServerPlugin;
 import com.arcadedb.utility.StringUtils;
 import com.arcadedb.server.http.HttpAuthSessionManager;
 import com.arcadedb.server.http.HttpServer;
+import com.arcadedb.server.network.MultiAddressServerSocket;
 import com.arcadedb.server.security.ServerSecurity;
 import com.arcadedb.server.security.credential.DefaultCredentialsValidator;
+import io.grpc.Codec;
 import io.grpc.CompressorRegistry;
 import io.grpc.DecompressorRegistry;
 import io.grpc.InsecureServerCredentials;
@@ -46,6 +48,8 @@ import io.micrometer.core.instrument.Metrics;
 
 import java.io.File;
 import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -57,7 +61,8 @@ import java.util.logging.Level;
  * Configuration options:
  * - grpc.enabled: Enable/disable gRPC server (default: true)
  * - grpc.port: Port for standard gRPC server (default: 50051)
- * - grpc.host: Host to bind (default: 0.0.0.0)
+ * - grpc.host: Host to bind, every local address it resolves to (default: 0.0.0.0). Applies to the standard server only;
+ *   the xDS server has no host setting and listens on every interface
  * - grpc.mode: Server mode - "standard", "xds", or "both" (default: standard)
  * - grpc.xds.port: Port for XDS server (default: 50052)
  * - grpc.tls.enabled: Enable TLS (default: false)
@@ -66,6 +71,8 @@ import java.util.logging.Level;
  * - grpc.maxMessageSize: Max message size in MB (default: 100)
  * - grpc.reflection.enabled: Enable gRPC reflection (default: true)
  * - grpc.health.enabled: Enable health checking (default: true)
+ * - grpc.compression.enabled: Understand compressed requests and offer compression (default: true); off, nothing is compressed
+ * - grpc.compression.force: Compress every response to a client that accepts the codec (default: false), only with compression enabled
  */
 public class GrpcServerPlugin implements ServerPlugin {
 
@@ -81,31 +88,6 @@ public class GrpcServerPlugin implements ServerPlugin {
   // ServerPlugin lifecycle. Restart-in-place is not supported (it would require nulling grpcService/healthManager too).
   private final AtomicBoolean stopped = new AtomicBoolean(false);
 
-  // Configuration keys as simple strings
-  private static final String CONFIG_PREFIX              = "arcadedb.grpc.";
-  private static final String CONFIG_ENABLED             = CONFIG_PREFIX + "enabled";
-  // Registered as GlobalConfiguration.GRPC_PORT: HA resolves a peer's dialable gRPC address from the same
-  // key and default, so the two must not be able to drift apart (issue #6091).
-  private static final String CONFIG_PORT                = GlobalConfiguration.GRPC_PORT.getKey();
-  private static final String CONFIG_HOST                = CONFIG_PREFIX + "host";
-  private static final String CONFIG_MODE                = CONFIG_PREFIX + "mode";
-  private static final String CONFIG_XDS_PORT            = CONFIG_PREFIX + "xds.port";
-  private static final String CONFIG_TLS_ENABLED         = CONFIG_PREFIX + "tls.enabled";
-  private static final String CONFIG_TLS_CERT            = CONFIG_PREFIX + "tls.cert";
-  private static final String CONFIG_TLS_KEY             = CONFIG_PREFIX + "tls.key";
-  private static final String CONFIG_MAX_MESSAGE_SIZE    = CONFIG_PREFIX + "maxMessageSize";
-  private static final String CONFIG_MAX_METADATA_SIZE   = CONFIG_PREFIX + "maxMetadataSize";
-  private static final String CONFIG_MAX_CONCURRENT_TX   = CONFIG_PREFIX + "maxConcurrentTransactions";
-  private static final String CONFIG_MAX_CONCURRENT_TX_PER_PRINCIPAL = CONFIG_PREFIX + "maxConcurrentTransactionsPerPrincipal";
-  private static final String CONFIG_REFLECTION_ENABLED  = CONFIG_PREFIX + "reflection.enabled";
-  private static final String CONFIG_HEALTH_ENABLED      = CONFIG_PREFIX + "health.enabled";
-  private static final String CONFIG_COMPRESSION_ENABLED = CONFIG_PREFIX + "compression.enabled";
-  private static final String CONFIG_COMPRESSION_FORCE   = CONFIG_PREFIX + "compression.force";
-  private static final String CONFIG_COMPRESSION_TYPE    = CONFIG_PREFIX + "compression.type";
-  private static final String CONFIG_TX_MAX_IDLE_MS      = CONFIG_PREFIX + "tx.maxIdleMs";
-  private static final String CONFIG_TX_MAX_AGE_MS       = CONFIG_PREFIX + "tx.maxAgeMs";
-  private static final String CONFIG_TX_REAPER_PERIOD_MS = CONFIG_PREFIX + "tx.reaperPeriodMs";
-
   @Override
   public void configure(ArcadeDBServer server, ContextConfiguration configuration) {
     this.arcadeServer = server;
@@ -116,13 +98,13 @@ public class GrpcServerPlugin implements ServerPlugin {
     ContextConfiguration config = arcadeServer.getConfiguration();
 
     // Get configuration values with defaults
-    boolean enabled = getConfigBoolean(config, CONFIG_ENABLED, true);
+    boolean enabled = getConfigBoolean(config, GlobalConfiguration.GRPC_ENABLED);
     if (!enabled) {
       LogManager.instance().log(this, Level.INFO, "gRPC server is disabled");
       return;
     }
 
-    String mode = getConfigString(config, CONFIG_MODE, "standard").toLowerCase(Locale.ROOT);
+    String mode = getConfigString(config, GlobalConfiguration.GRPC_MODE).toLowerCase(Locale.ROOT);
 
     try {
       switch (mode) {
@@ -132,7 +114,8 @@ public class GrpcServerPlugin implements ServerPlugin {
         startStandardServer(config);
         startXdsServer(config);
       }
-      default -> LogManager.instance().log(this, Level.SEVERE, "Invalid gRPC mode: %s. Use 'standard', 'xds', or 'both'", mode);
+      default -> throw new ConfigurationException(
+          "Invalid gRPC mode '" + mode + "' in " + GlobalConfiguration.GRPC_MODE.getKey() + ": use 'standard', 'xds' or 'both'");
       }
 
       registerShutdownHook();
@@ -166,16 +149,16 @@ public class GrpcServerPlugin implements ServerPlugin {
     // The default comes from the SERVER's configuration, not from the GlobalConfiguration enum, which carries
     // only what a system property or an environment variable put there: arcadedb.grpc.port is SCOPE.SERVER, so a
     // port named in the server configuration file used to be ignored in favour of the compiled-in one (#7233).
-    int port = getConfigInt(config, CONFIG_PORT, config.getValueAsInteger(GlobalConfiguration.GRPC_PORT));
-    String host = getConfigString(config, CONFIG_HOST, "0.0.0.0");
+    int port = getConfigInt(config, GlobalConfiguration.GRPC_PORT);
+    String host = getConfigString(config, GlobalConfiguration.GRPC_HOST);
 
     NettyServerBuilder serverBuilder;
 
     // Configure TLS if enabled
-    if (getConfigBoolean(config, CONFIG_TLS_ENABLED, false)) {
-      serverBuilder = configureStandardTls(port, config);
+    if (getConfigBoolean(config, GlobalConfiguration.GRPC_TLS_ENABLED)) {
+      serverBuilder = configureStandardTls(host, port, config);
     } else {
-      serverBuilder = NettyServerBuilder.forPort(port);
+      serverBuilder = newListeningBuilder(host, port);
     }
 
     // Configure keepalive settings to prevent GOAWAY ENHANCE_YOUR_CALM errors
@@ -201,19 +184,17 @@ public class GrpcServerPlugin implements ServerPlugin {
     status.append("gRPC server started on ").append(host).append(":").append(grpcServer.getPort());
     status.append(" (mode: standard");
 
-    if (getConfigBoolean(config, CONFIG_TLS_ENABLED, false)) {
+    if (getConfigBoolean(config, GlobalConfiguration.GRPC_TLS_ENABLED)) {
       status.append(", TLS enabled");
     }
 
-    if (getConfigBoolean(config, CONFIG_COMPRESSION_ENABLED, true)) {
-
-      status.append(", compression: ");
-
-      if (getConfigBoolean(config, CONFIG_COMPRESSION_FORCE, false)) {
-        status.append("forced-").append(getConfigString(config, CONFIG_COMPRESSION_TYPE, "gzip"));
-      } else {
-        status.append("available");
-      }
+    status.append(", compression: ");
+    if (!getConfigBoolean(config, GlobalConfiguration.GRPC_COMPRESSION_ENABLED)) {
+      status.append("disabled");
+    } else if (getConfigBoolean(config, GlobalConfiguration.GRPC_COMPRESSION_FORCE)) {
+      status.append("forced-").append(getConfigString(config, GlobalConfiguration.GRPC_COMPRESSION_TYPE));
+    } else {
+      status.append("available");
     }
 
     status.append(")");
@@ -221,7 +202,7 @@ public class GrpcServerPlugin implements ServerPlugin {
   }
 
   private void startXdsServer(ContextConfiguration config) throws IOException {
-    int port = getConfigInt(config, CONFIG_XDS_PORT, 50052);
+    int port = getConfigInt(config, GlobalConfiguration.GRPC_XDS_PORT);
 
     // XDS server for service mesh integration. Credentials are derived from grpc.tls.* and fail closed when TLS is
     // requested but misconfigured, so xds/both modes honor TLS instead of always running insecure.
@@ -231,11 +212,17 @@ public class GrpcServerPlugin implements ServerPlugin {
     // Configure the XDS server as a ServerBuilder
     configureServer(xdsBuilder, config);
 
+    final String host = getConfigString(config, GlobalConfiguration.GRPC_HOST);
+    if (host != null && !host.isEmpty() && !"0.0.0.0".equals(host) && !"::".equals(host))
+      LogManager.instance().log(this, Level.WARNING, "%s=%s restricts the standard gRPC server only: the xDS server listens on every interface",
+          GlobalConfiguration.GRPC_HOST.getKey(), host);
+
     xdsServer = xdsBuilder
         .maxInboundMetadataSize(getMaxMetadataSizeBytes(config))
         .build().start();
 
-    LogManager.instance().log(this, Level.INFO, "gRPC XDS server started on port %s (xDS management enabled)", port);
+    LogManager.instance().log(this, Level.INFO, "gRPC XDS server started on all interfaces, port %s (xDS management enabled; %s does not apply)",
+        port, GlobalConfiguration.GRPC_HOST.getKey());
   }
 
   // synchronized so the check-then-act initialization of the shared grpcService/healthManager fields stays thread-safe
@@ -251,17 +238,14 @@ public class GrpcServerPlugin implements ServerPlugin {
     if (this.grpcService == null) {
       // Idle-transaction reaper thresholds (issue #4802): reclaim abandoned transactions left open by clients that
       // disconnected without committing or rolling back.
-      final long txMaxIdleMs = getConfigLong(config, CONFIG_TX_MAX_IDLE_MS, ArcadeDbGrpcService.DEFAULT_TX_MAX_IDLE_MS);
-      final long txMaxAgeMs = getConfigLong(config, CONFIG_TX_MAX_AGE_MS, ArcadeDbGrpcService.DEFAULT_TX_MAX_AGE_MS);
-      final long txReaperPeriodMs = getConfigLong(config, CONFIG_TX_REAPER_PERIOD_MS,
-          ArcadeDbGrpcService.DEFAULT_TX_REAPER_PERIOD_MS);
+      final long txMaxIdleMs = getConfigLong(config, GlobalConfiguration.GRPC_TX_MAX_IDLE_MS);
+      final long txMaxAgeMs = getConfigLong(config, GlobalConfiguration.GRPC_TX_MAX_AGE_MS);
+      final long txReaperPeriodMs = getConfigLong(config, GlobalConfiguration.GRPC_TX_REAPER_PERIOD_MS);
 
       // Concurrent-transaction caps (issue #5048): bound the per-transaction executor allocation so an authenticated
       // client cannot loop beginTransaction to exhaust threads/memory. A non-positive value disables the corresponding bound.
-      final int maxConcurrentTx = getConfigInt(config, CONFIG_MAX_CONCURRENT_TX,
-          ArcadeDbGrpcService.DEFAULT_MAX_CONCURRENT_TX);
-      final int maxConcurrentTxPerPrincipal = getConfigInt(config, CONFIG_MAX_CONCURRENT_TX_PER_PRINCIPAL,
-          ArcadeDbGrpcService.DEFAULT_MAX_CONCURRENT_TX_PER_PRINCIPAL);
+      final int maxConcurrentTx = getConfigInt(config, GlobalConfiguration.GRPC_MAX_CONCURRENT_TRANSACTIONS);
+      final int maxConcurrentTxPerPrincipal = getConfigInt(config, GlobalConfiguration.GRPC_MAX_CONCURRENT_TRANSACTIONS_PER_PRINCIPAL);
 
       this.grpcService = new ArcadeDbGrpcService(databasePath, arcadeServer, txMaxIdleMs, txMaxAgeMs, txReaperPeriodMs,
           maxConcurrentTx, maxConcurrentTxPerPrincipal);
@@ -279,7 +263,7 @@ public class GrpcServerPlugin implements ServerPlugin {
     serverBuilder.addService(adminService);
 
     // Add health service if enabled. Reuse a single manager across both server builders (issue #5050).
-    if (getConfigBoolean(config, CONFIG_HEALTH_ENABLED, true)) {
+    if (getConfigBoolean(config, GlobalConfiguration.GRPC_HEALTH_ENABLED)) {
       if (healthManager == null) {
         healthManager = new HealthStatusManager();
 
@@ -293,16 +277,20 @@ public class GrpcServerPlugin implements ServerPlugin {
     }
 
     // Add reflection service if enabled
-    if (getConfigBoolean(config, CONFIG_REFLECTION_ENABLED, true)) {
+    if (getConfigBoolean(config, GlobalConfiguration.GRPC_REFLECTION_ENABLED)) {
       serverBuilder.addService(ProtoReflectionService.newInstance());
     }
 
-    serverBuilder.compressorRegistry(CompressorRegistry.getDefaultInstance())
-        .decompressorRegistry(DecompressorRegistry.getDefaultInstance());
+    // Issue #9782: arcadedb.grpc.compression.enabled decides what the endpoint understands and offers. Off, both registries are
+    // empty: a compressed request is refused (UNIMPLEMENTED, "Can't find decompressor") and no response can be compressed,
+    // whatever the client advertises or compression.force says
+    final boolean compressionEnabled = getConfigBoolean(config, GlobalConfiguration.GRPC_COMPRESSION_ENABLED);
+    serverBuilder.compressorRegistry(compressorRegistry(compressionEnabled))
+        .decompressorRegistry(decompressorRegistry(compressionEnabled));
 
     // Configure max message size. Clamp the lower bound to 1 MB (a non-positive value would be rejected by gRPC at
     // startup) and compute in long so a large MB value (>= 2048) does not overflow int and wrap negative.
-    final int maxMessageSizeMB = Math.max(1, getConfigInt(config, CONFIG_MAX_MESSAGE_SIZE, 100));
+    final int maxMessageSizeMB = Math.max(1, getConfigInt(config, GlobalConfiguration.GRPC_MAX_MESSAGE_SIZE));
     final long maxMessageSizeBytes = (long) maxMessageSizeMB * 1024 * 1024;
 
     serverBuilder.maxInboundMessageSize((int) Math.min(maxMessageSizeBytes, Integer.MAX_VALUE));
@@ -330,11 +318,20 @@ public class GrpcServerPlugin implements ServerPlugin {
     // threads by this tag, so an untagged RPC is served from the copy the cluster is discarding. Registered
     // unconditionally and on this shared path, so both the standard and the xDS builder get it.
     serverBuilder.intercept(new GrpcProtocolContextInterceptor());
+    // The query admission gate (issue #9518). Added after the interceptors above so it runs outside them and inside the
+    // authentication one added below: an unauthenticated call is refused before it can take a slot or wait for one.
+    serverBuilder.intercept(new GrpcAdmissionInterceptor(arcadeServer));
 
-    // Add compression interceptor if force compression is enabled
-    if (getConfigBoolean(config, CONFIG_COMPRESSION_FORCE, false)) {
-      String compressionType = getConfigString(config, CONFIG_COMPRESSION_TYPE, "gzip");
-      serverBuilder.intercept(new GrpcCompressionInterceptor(true, compressionType));
+    // Add compression interceptor if force compression is enabled, and compression is: forcing a codec the endpoint has switched
+    // off would be silently ignored by the empty registry above at best, so the combination is refused loudly instead (#9782)
+    if (getConfigBoolean(config, GlobalConfiguration.GRPC_COMPRESSION_FORCE)) {
+      if (compressionEnabled) {
+        final String compressionType = getConfigString(config, GlobalConfiguration.GRPC_COMPRESSION_TYPE);
+        serverBuilder.intercept(new GrpcCompressionInterceptor(true, compressionType));
+      } else
+        LogManager.instance().log(this, Level.WARNING,
+            "%s=true is ignored because %s=false: the gRPC endpoint does not compress its responses",
+            GlobalConfiguration.GRPC_COMPRESSION_FORCE.getKey(), GlobalConfiguration.GRPC_COMPRESSION_ENABLED.getKey());
     }
 
     // Add authentication interceptor if security is configured
@@ -352,11 +349,26 @@ public class GrpcServerPlugin implements ServerPlugin {
     }
   }
 
-  private NettyServerBuilder configureStandardTls(int port, ContextConfiguration config) {
+  /** What the endpoint can compress its responses with: everything gRPC ships with, or nothing when compression is disabled (#9782). */
+  static CompressorRegistry compressorRegistry(final boolean compressionEnabled) {
+    return compressionEnabled ? CompressorRegistry.getDefaultInstance() : CompressorRegistry.newEmptyInstance();
+  }
+
+  /**
+   * What the endpoint can decompress requests with. Disabled, nothing is advertised and gzip is refused, but {@code identity} is
+   * still understood without being advertised: gRPC requires every server to accept it, and a client that names it explicitly in
+   * {@code grpc-encoding} would otherwise be answered UNIMPLEMENTED for sending no compression at all (#9782).
+   */
+  static DecompressorRegistry decompressorRegistry(final boolean compressionEnabled) {
+    return compressionEnabled ? DecompressorRegistry.getDefaultInstance()
+        : DecompressorRegistry.emptyInstance().with(Codec.Identity.NONE, false);
+  }
+
+  private NettyServerBuilder configureStandardTls(final String host, final int port, final ContextConfiguration config) {
     final File[] certKey = resolveTlsCertKey(config);
     try {
       // Configure Netty with TLS using SslContext
-      return NettyServerBuilder.forPort(port)
+      return newListeningBuilder(host, port)
           .sslContext(GrpcSslContexts
               .forServer(certKey[0], certKey[1])
               .build());
@@ -366,6 +378,29 @@ public class GrpcServerPlugin implements ServerPlugin {
           "gRPC TLS is enabled but the SSL context could not be built from cert '" + certKey[0] + "' and key '" + certKey[1]
               + "'. Refusing to start with cleartext.", e);
     }
+  }
+
+  /**
+   * Creates the builder listening on every local address {@code host} resolves to (issue #9318). {@code forPort(int)}
+   * binds the wildcard address, so {@code grpc.host=127.0.0.1} used to leave the endpoint open on every interface
+   * while the startup line reported the restriction. Same resolution as the other wire listeners (issue #9224).
+   */
+  static NettyServerBuilder newListeningBuilder(final String host, final int port) {
+    final List<String> hosts = MultiAddressServerSocket.resolveListenHosts(host);
+    NettyServerBuilder builder = null;
+    for (final String listenHost : hosts) {
+      final InetSocketAddress address = new InetSocketAddress(listenHost, port);
+      if (address.isUnresolved())
+        throw new ConfigurationException("gRPC host '" + host + "' could not be resolved");
+      if (builder == null)
+        builder = NettyServerBuilder.forAddress(address);
+      else
+        builder.addListenAddress(address);
+    }
+    // never fall back to forPort(): it binds the wildcard address, the failure this method exists to prevent (issue #9318)
+    if (builder == null)
+      throw new ConfigurationException("gRPC host '" + host + "' resolved to no address to bind");
+    return builder;
   }
 
   private ServerCredentials configureTlsCredentials(ContextConfiguration config) {
@@ -386,12 +421,14 @@ public class GrpcServerPlugin implements ServerPlugin {
    * accepts plaintext while an operator believes TLS is active.
    */
   private File[] resolveTlsCertKey(ContextConfiguration config) {
-    final String certPath = getConfigString(config, CONFIG_TLS_CERT, null);
-    final String keyPath = getConfigString(config, CONFIG_TLS_KEY, null);
+    final String certPath = getConfigString(config, GlobalConfiguration.GRPC_TLS_CERT);
+    final String keyPath = getConfigString(config, GlobalConfiguration.GRPC_TLS_KEY);
 
     if (certPath == null || keyPath == null)
-      throw new SecurityException("gRPC TLS is enabled (" + CONFIG_TLS_ENABLED + "=true) but the certificate ("
-          + CONFIG_TLS_CERT + ") or key (" + CONFIG_TLS_KEY + ") path is not configured. Refusing to start with cleartext.");
+      throw new SecurityException(
+          "gRPC TLS is enabled (" + GlobalConfiguration.GRPC_TLS_ENABLED.getKey() + "=true) but the certificate ("
+              + GlobalConfiguration.GRPC_TLS_CERT.getKey() + ") or key (" + GlobalConfiguration.GRPC_TLS_KEY.getKey()
+              + ") path is not configured. Refusing to start with cleartext.");
 
     final File certFile = new File(certPath);
     final File keyFile = new File(keyPath);
@@ -409,7 +446,7 @@ public class GrpcServerPlugin implements ServerPlugin {
    * relies on the service mesh to provide mTLS at the transport layer.
    */
   private ServerCredentials resolveXdsCredentials(ContextConfiguration config) {
-    if (getConfigBoolean(config, CONFIG_TLS_ENABLED, false))
+    if (getConfigBoolean(config, GlobalConfiguration.GRPC_TLS_ENABLED))
       return configureTlsCredentials(config);
     return InsecureServerCredentials.create();
   }
@@ -510,36 +547,50 @@ public class GrpcServerPlugin implements ServerPlugin {
     );
   }
 
-  // Configuration helper methods
-  private String getConfigString(ContextConfiguration config, String key, String defaultValue) {
-
-    return config.getValueAsString(key, defaultValue);
+  // Configuration helper methods. Every key is a declared GlobalConfiguration setting (issue #9316), so the server
+  // configuration file, the environment and -D all reach it; the plugin never reads a bare key.
+  /**
+   * The value of a declared setting: the overlay first (server configuration file, SET SERVER SETTING), then a system
+   * property read NOW, then what the enum holds (a -D at JVM start, an environment variable, the default). The live
+   * system property is what the plugin always honoured while the keys were bare strings: the enum alone reads -D once, at
+   * class load, so a property set afterwards (the transaction-reaper integration tests do) would be silently ignored.
+   */
+  private Object resolve(final ContextConfiguration config, final GlobalConfiguration setting) {
+    final Object overlayOrProperty = config.getValue(setting.getKey(), (Object) null);
+    return overlayOrProperty != null ? overlayOrProperty : config.getValue(setting);
   }
 
-  private int getConfigInt(ContextConfiguration config, String key, int defaultValue) {
-
-    String value = getConfigString(config, key, null);
-    if (value != null) {
-      try {
-        return Integer.parseInt(value);
-      } catch (NumberFormatException e) {
-        LogManager.instance().log(this, Level.WARNING, "Invalid integer value for %s: %s", key, value);
-      }
-    }
-    return defaultValue;
+  private String getConfigString(final ContextConfiguration config, final GlobalConfiguration setting) {
+    final Object value = resolve(config, setting);
+    return value == null ? null : value.toString();
   }
 
-  private long getConfigLong(ContextConfiguration config, String key, long defaultValue) {
-
-    String value = getConfigString(config, key, null);
+  private int getConfigInt(final ContextConfiguration config, final GlobalConfiguration setting) {
+    final Object value = resolve(config, setting);
+    if (value instanceof Number number)
+      return number.intValue();
     if (value != null) {
       try {
-        return Long.parseLong(value.trim());
-      } catch (NumberFormatException e) {
-        LogManager.instance().log(this, Level.WARNING, "Invalid long value for %s: %s", key, value);
+        return Integer.parseInt(value.toString().trim());
+      } catch (final NumberFormatException e) {
+        LogManager.instance().log(this, Level.WARNING, "Invalid integer value for %s: %s", setting.getKey(), value);
       }
     }
-    return defaultValue;
+    return ((Number) setting.getDefValue()).intValue();
+  }
+
+  private long getConfigLong(final ContextConfiguration config, final GlobalConfiguration setting) {
+    final Object value = resolve(config, setting);
+    if (value instanceof Number number)
+      return number.longValue();
+    if (value != null) {
+      try {
+        return Long.parseLong(value.toString().trim());
+      } catch (final NumberFormatException e) {
+        LogManager.instance().log(this, Level.WARNING, "Invalid long value for %s: %s", setting.getKey(), value);
+      }
+    }
+    return ((Number) setting.getDefValue()).longValue();
   }
 
   /**
@@ -547,8 +598,8 @@ public class GrpcServerPlugin implements ServerPlugin {
    * small; a cap far above a few KB only invites metadata-flood memory pressure. A non-positive configured value is
    * clamped to 1 KB.
    */
-  int getMaxMetadataSizeBytes(ContextConfiguration config) {
-    final int kb = getConfigInt(config, CONFIG_MAX_METADATA_SIZE, 16);
+  int getMaxMetadataSizeBytes(final ContextConfiguration config) {
+    final int kb = getConfigInt(config, GlobalConfiguration.GRPC_MAX_METADATA_SIZE);
     // Guard against int overflow for an absurdly large configured value (kb * 1024 would wrap negative and make
     // gRPC reject the builder at startup).
     if (kb >= Integer.MAX_VALUE / 1024)
@@ -556,18 +607,35 @@ public class GrpcServerPlugin implements ServerPlugin {
     return Math.max(1, kb) * 1024;
   }
 
-  private boolean getConfigBoolean(ContextConfiguration config, String key, boolean defaultValue) {
-    String value = getConfigString(config, key, null);
-    if (value != null) {
-      // Boolean.parseBoolean() turns "yes", "1" or a typo into false without a word, which for arcadedb.grpc.tls.enabled
-      // starts a plaintext endpoint: only the two spellings are a boolean, anything else refuses to start (issue #8935)
-      try {
-        return StringUtils.parseStrictBoolean(value);
-      } catch (final IllegalArgumentException e) {
-        throw new ConfigurationException("Invalid boolean value for " + key + ": '" + value + "', expected true or false");
-      }
+  private boolean getConfigBoolean(final ContextConfiguration config, final GlobalConfiguration setting) {
+    // The enum swallows a -D or an environment value that is not boolean text (it reports it and keeps the default), which
+    // for arcadedb.grpc.tls.enabled, whose default is false, would start a plaintext endpoint. The raw text of those two
+    // sources is therefore checked here as well (issue #8935).
+    rejectNonBooleanText(setting, System.getProperty(setting.getKey()));
+    rejectNonBooleanText(setting, System.getenv(setting.getKey()));
+
+    final Object value = resolve(config, setting);
+    if (value instanceof Boolean bool)
+      return bool;
+    if (value == null)
+      return (Boolean) setting.getDefValue();
+
+    // Boolean.parseBoolean() turns "yes", "1" or a typo into false without a word, which for arcadedb.grpc.tls.enabled
+    // starts a plaintext endpoint: only the two spellings are a boolean, anything else refuses to start (issue #8935)
+    return parseStrictBoolean(setting, value.toString());
+  }
+
+  private static void rejectNonBooleanText(final GlobalConfiguration setting, final String text) {
+    if (text != null)
+      parseStrictBoolean(setting, text);
+  }
+
+  private static boolean parseStrictBoolean(final GlobalConfiguration setting, final String text) {
+    try {
+      return StringUtils.parseStrictBoolean(text);
+    } catch (final IllegalArgumentException e) {
+      throw new ConfigurationException("Invalid boolean value for " + setting.getKey() + ": '" + text + "', expected true or false");
     }
-    return defaultValue;
   }
 
   public static class ServerStatus {

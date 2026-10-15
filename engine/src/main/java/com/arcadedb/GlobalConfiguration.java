@@ -110,6 +110,12 @@ public enum GlobalConfiguration {
         ASYNC_WORKER_THREADS.setValue(1);
         TX_WAL_FILES.setValue(1);
 
+        // A SCAN OF LARGE RECORDS READS AHEAD LITTLE: ABOUT TWO RECORDS OF 86KB PER BATCH INSTEAD OF A DOZEN (#9404)
+        QUERY_BATCH_MAX_BYTES.setValue(200L * 1024);
+        QUERY_SCAN_READ_AHEAD_MAX_RAM.setValue(16L);
+        // HALF OF THE 16 HTTP WORKER THREADS BELOW AT MOST WAIT IN THE QUERY ADMISSION QUEUE, WHEN THE GATE IS ENABLED (#9518)
+        QUERY_QUEUE_MAX_SIZE.setValue(8);
+
         QUERY_PARALLELISM_POOL_THREADS.setValue(2);
         QUERY_PARALLELISM_QUEUE_SIZE.setValue(64);
         SPARSE_VECTOR_SCORING_POOL_THREADS.setValue(1);
@@ -195,7 +201,7 @@ public enum GlobalConfiguration {
       Integer.class, 65535),
 
   DATE_IMPLEMENTATION("arcadedb.dateImplementation", SCOPE.DATABASE,
-      "Default date implementation to use on deserialization. By default java.time.LocalDate is used, but the following are supported: java.util.Date, java.util.Calendar, java.time.LocalDate",
+      "Default date implementation to use on deserialization. By default java.time.LocalDate is used, but the following are supported: java.util.Date, java.util.Calendar, java.time.LocalDate, java.time.LocalDateTime",
       Class.class, LocalDate.class),
 
   DATE_FORMAT("arcadedb.dateFormat", SCOPE.DATABASE, "Default date format using Java SimpleDateFormat syntax", String.class,
@@ -248,6 +254,17 @@ public enum GlobalConfiguration {
   TIMESERIES_TAG_DICTIONARY_MAX_SIZE("arcadedb.timeSeriesTagDictionaryMaxSize", SCOPE.DATABASE,
       "Maximum number of distinct values one TimeSeries type's tag dictionary may hold. TAG columns are dictionary-encoded in the mutable row so each occupies a 4-byte id instead of a reserved 258-byte slot; the dictionary is kept in RAM, so this caps its footprint and turns a mis-declared high-cardinality TAG into a clear error instead of unbounded growth. Default is 1M distinct values, roughly 100MB",
       Integer.class, 1_000_000),
+
+  TIMESERIES_UNDECLARED_KEYS("arcadedb.timeSeriesUndeclaredKeys", SCOPE.DATABASE, """
+      What a time-series write (InfluxDB line protocol over HTTP, the gRPC TimeSeriesWrite RPCs, SQL INSERT and \
+      Prometheus remote write) does with a sample carrying a tag, field, property or label its TIMESERIES type does not \
+      declare in that role. 'reject' (default) drops the sample and reports it naming the key - a partial write for the \
+      network protocols (the valid samples of the request are stored and the answer is a 400, which Prometheus does not \
+      retry, so the dropped series are not re-sent), a failed statement for SQL INSERT (issues #8646, #9365) - because storing it would file the point under a \
+      different series than the client sent - a misspelled tag key leaves the declared tag null (issue #8646). \
+      'ignore' stores the sample with the undeclared keys discarded, which is what schema-less producers such as \
+      Telegraf, that send extra tags the type was never meant to hold, need.""",
+      String.class, "reject", Set.of("reject", "ignore")),
 
   TIMESERIES_DECODED_BLOCK_CACHE_RAM("arcadedb.timeSeriesDecodedBlockCacheRAM", SCOPE.DATABASE, """
       Memory budget, in MEGABYTES and PER SHARD, for caching decoded TimeSeries sealed-block columns. A sealed block \
@@ -410,8 +427,12 @@ public enum GlobalConfiguration {
       worth splitting into parallel ranges. Below this the fan-out (per-range cursor stacks, task \
       dispatch, result merge) costs more than the traversal it parallelises, so the query stays on \
       the caller thread. Counted as the summed document frequency of the query's dims, which is \
-      available from segment metadata without reading a page. Re-read on every query.""",
-      Long.class, 200_000L),
+      available from segment metadata without reading a page. On the default split (arcadedb.sparseVectorScoringMaxPartitions \
+      = 0) the number of ranges also follows this figure, one range per half of it, so a query just \
+      past the threshold is split in two instead of claiming the whole pool and the workers it leaves \
+      alone stay free for other queries. Raise it on a small or shared pool where the extra CPU of \
+      a split matters more than the latency. Re-read on every query.""",
+      Long.class, 50_000L),
 
   SPARSE_VECTOR_SCORING_TIMEOUT_SECONDS("arcadedb.sparseVectorScoringTimeoutSeconds", SCOPE.JVM,
       """
@@ -711,6 +732,15 @@ public enum GlobalConfiguration {
   SQL_STATEMENT_CACHE("arcadedb.sqlStatementCache", SCOPE.DATABASE, "Maximum number of parsed statements to keep in cache",
       Integer.class, 300),
 
+  QUERY_LITERAL_PARAMETERIZATION("arcadedb.queryLiteralParameterization", SCOPE.DATABASE,
+      """
+          Extract the literal values of a SQL or OpenCypher query into generated parameters before the statement and plan \
+          cache lookups, so queries that differ only in the values written in their text (generated queries, query builders) \
+          share one parsed statement and one plan instead of being parsed and planned again for every value. Literals whose \
+          value shapes the result or the plan (projected column names, SKIP/LIMIT, DDL) are never extracted. \
+          Turn it off to key the caches on the exact query text""",
+      Boolean.class, true),
+
   SQL_LET_SUBQUERY_CACHE_SIZE("arcadedb.sql.letSubqueryCacheSize", SCOPE.DATABASE,
       """
       Maximum number of distinct correlated bindings whose result a per-record LET subquery \
@@ -846,7 +876,9 @@ public enum GlobalConfiguration {
       not one per function, and not one per worker of a parallel type scan. Full-text search and REGEXP property \
       validation run outside a command context and share one deadline across an entire scan (not per item). The MongoDB \
       wire protocol plugin applies a regex filter the same way: one budget per command, counting only the time spent \
-      inside the regular expressions. A large, \
+      inside the regular expressions. SQL LIKE/ILIKE match their pattern without a regular expression, so they never \
+      backtrack catastrophically, but a huge value against a long pattern can still cost the product of their lengths, \
+      and this bound applies to them as well (per row, or shared across the items of a multi-value property). A large, \
       legitimately slow (non-catastrophic) operation can hit this bound too, so raise it for workloads that need more \
       than 1s. Set to 0 to disable (not recommended).""",
       Long.class, 1000),
@@ -891,8 +923,9 @@ public enum GlobalConfiguration {
 
   QUERY_MAX_HEAP_ELEMENTS_ALLOWED_PER_OP("arcadedb.queryMaxHeapElementsAllowedPerOp", SCOPE.DATABASE, """
       Maximum number of elements (records/groups) allowed in a single query for memory-intensive operations (eg. ORDER BY, GROUP BY \
-      and DISTINCT in heap; in OpenCypher also the rows a Cartesian product or a hash join buffers, UNION, collect(), and the eager \
-      materialization ahead of a write). If exceeded, the query fails with a CommandExecutionException. Negative number means no limit. \
+      and DISTINCT in heap, the result of a LET subquery, the records a MATCH prefetches and the \
+      values an aggregate that keeps them holds, like list(), set(), percentile() or the ts.* windows; in OpenCypher also the rows \
+      a Cartesian product or a hash join buffers, UNION, collect(), and the eager materialization ahead of a write). If exceeded, the query fails with a CommandExecutionException. Negative number means no limit. \
       This setting is intended as a safety measure against excessive resource consumption from a single query (eg. prevent OutOfMemory). \
       When left at the default it auto-scales with the JVM max heap (roughly one element every 2KB of heap, never below 500000), so \
       large-cardinality analytical queries (eg. top-N-by-aggregate over millions of distinct keys) complete out of the box on servers \
@@ -911,8 +944,9 @@ public enum GlobalConfiguration {
 
   QUERY_MAX_HEAP_RAM("arcadedb.queryMaxHeapRAM", SCOPE.JVM, """
       Maximum heap (in MB) the in-memory buffers of all the queries running in the JVM may hold at once, across every \
-      database: the rows an ORDER BY sorts, the keys a DISTINCT or a UNION remembers, the groups a GROUP BY keeps, and in \
-      OpenCypher also the values collect() gathers, the rows a Cartesian product or a hash join buffers and the eager \
+      database: the rows an ORDER BY sorts, the keys a DISTINCT or a UNION remembers, the groups a GROUP BY keeps, the result \
+      of a LET subquery, the records a TRAVERSE has visited or a MATCH prefetches, the record addresses an UPDATE reads ahead \
+      of its writes, the values an aggregate like list() or percentile() holds, and in OpenCypher also the values collect() gathers, the rows a Cartesian product or a hash join buffers and the eager \
       materialization ahead of a write. Every buffer reserves its estimated size from this budget as it grows and gives it \
       back when it is released, so many large queries running together cannot exhaust the heap even when each one stays \
       below arcadedb.queryMaxHeapElementsAllowedPerOp. A query whose buffers would take the reservations past the budget \
@@ -926,6 +960,44 @@ public enum GlobalConfiguration {
         final long maxHeap = Runtime.getRuntime().maxMemory();
         return maxHeap == Long.MAX_VALUE ? 0L : maxHeap / 2 / 1024 / 1024;
       }),
+
+  QUERY_MAX_CONCURRENT("arcadedb.queryMaxConcurrent", SCOPE.JVM, """
+      Maximum number of requests of remote clients (HTTP, Postgres, Bolt, Redis, gRPC, Gremlin Server, MCP, MongoDB) that \
+      may run at once in the JVM, across every database (issue #9518). A request that arrives when this many are running, \
+      or when the heap the running queries hold reserved is above arcadedb.queryAdmissionHeapWatermark, waits in a queue \
+      and starts in arrival order (FIFO) as soon as both allow it, instead of running at once and risking a refusal from \
+      arcadedb.queryMaxHeapRAM. The wait happens before anything of the request runs, never in the middle of it, and a \
+      query started from inside a running one shares its slot. A request that waits longer than arcadedb.queryQueueTimeout, \
+      or that finds arcadedb.queryQueueMaxSize requests already waiting, fails with a QueryAdmissionException, which is \
+      transient (HTTP answers it with 503). Waiting requests park the thread that received them, so keep \
+      arcadedb.queryQueueMaxSize below arcadedb.server.httpWorkerThreads to leave HTTP threads for the other requests. The \
+      MongoDB protocol runs its requests on threads shared by other connections, so it does not wait: a request that \
+      cannot start at once is refused. The embedded API does not go through the gate. When left at the default it is \
+      twice the number of cores, at least 4. 0 or a negative value disables the gate: every request runs at once""",
+      Integer.class, 0, null, value -> Math.max(4, 2 * Runtime.getRuntime().availableProcessors())),
+
+  QUERY_ADMISSION_HEAP_WATERMARK("arcadedb.queryAdmissionHeapWatermark", SCOPE.JVM, """
+      Percentage of arcadedb.queryMaxHeapRAM above which the query admission gate (arcadedb.queryMaxConcurrent) stops \
+      starting new queries and lets them wait in its queue until the running ones give heap back (issue #9518). A running \
+      query keeps growing after it started, so this is headroom, not a guarantee: the heap budget still refuses the query \
+      that would exceed it. When no query admitted by the gate is running, the next one starts whatever the heap, so a \
+      budget held by other work cannot stall the queue for good. Ignored when the gate or the heap budget is disabled. \
+      0 or a negative value admits on the number of running queries alone""",
+      Integer.class, 80),
+
+  QUERY_QUEUE_TIMEOUT("arcadedb.queryQueueTimeout", SCOPE.JVM, """
+      Maximum time in milliseconds a query waits in the queue of the query admission gate (arcadedb.queryMaxConcurrent) \
+      before it fails with a QueryAdmissionException (HTTP 503) without having run (issue #9518). 0 or a negative value \
+      does not wait: a query that cannot start at once is refused""",
+      Long.class, 30_000L),
+
+  QUERY_QUEUE_MAX_SIZE("arcadedb.queryQueueMaxSize", SCOPE.JVM, """
+      Maximum number of queries that may wait in the queue of the query admission gate (arcadedb.queryMaxConcurrent) at \
+      once (issue #9518). A query that finds the queue full fails at once with a QueryAdmissionException (HTTP 503) \
+      without having run. Each waiting query parks the HTTP worker thread that received it, so this bounds how many of \
+      those threads the queue can take away from the other requests. 0 or a negative value disables the queue: a query \
+      that cannot start at once is refused""",
+      Integer.class, 256),
 
   QUERY_MAX_RANGE_SIZE("arcadedb.queryMaxRangeSize", SCOPE.DATABASE, """
       Maximum number of elements a range() expression is allowed to produce. If exceeded, the query is rejected with a \
@@ -983,6 +1055,33 @@ public enum GlobalConfiguration {
       scanned in parallel too. The rows are still returned in the order of a sequential scan. 0 disables the split: \
       each bucket is then scanned by one worker""",
       Integer.class, 32),
+
+  QUERY_BATCH_MAX_BYTES("arcadedb.queryBatchMaxBytes", SCOPE.DATABASE,
+      """
+      Maximum bytes the scan of one bucket reads ahead of the query in one batch (issue #9404): the most one scan may hold, \
+      however idle the JVM is. A scan prefetches up to 1,024 records per bucket, which is cheap for small records but holds 1,024 \
+      whole records when they span several pages (a vertex with a big nested document): that memory is no query's buffer, so no \
+      budget accounts for it, and a few dozen concurrent queries exhaust the heap. The batch ends as soon as the bytes it copied \
+      out of the pages reach this size, whatever the record count (the size is reached or exceeded by at most one record, and a \
+      single record larger than the limit is still assembled whole); records that fit their own page are views of the cached \
+      page and are not counted. The limit applies to each bucket scan on its own, so a type with N buckets can read ahead up to N \
+      times this - but never more than arcadedb.queryScanReadAheadMaxRAM allows all the scans together. A scan starts with this \
+      size and reads less as the JVM-wide pool and the query heap budget (arcadedb.queryMaxHeapRAM) fill: at most a \
+      thirty-second of what is left of the pool, a sixty-fourth of what is left of the budget, down to one record at a time. \
+      Those shares are read once per batch and are not reservations, so scans that start together each take their share of the \
+      same remainder. A batch always holds at least one record. A change applies to the scans opened after it. 0 or a negative \
+      value disables the byte bound, and the shrinking with it (record count only)""",
+      Long.class, 1024L * 1024),
+
+  QUERY_SCAN_READ_AHEAD_MAX_RAM("arcadedb.queryScanReadAheadMaxRAM", SCOPE.JVM,
+      """
+      Maximum memory (in MB) the scans of all the queries running in the JVM may hold read ahead at once, across every bucket of \
+      every database (issue #9404). A scan reads its records in batches of up to arcadedb.queryBatchMaxBytes; this limit bounds \
+      the sum of those batches, so many concurrent scans cannot hold that many times the bound. Each scan starts with its full \
+      batch size and gets a smaller one as the pool fills - a thirty-second of what is left of it - down to one record at a time. \
+      The limit is soft: a batch always holds at least one record. The bytes are given back when a batch is handed over, and \
+      by the garbage collector for a scan the caller abandoned. 0 or a negative value disables the pool""",
+      Long.class, 200L),
 
   QUERY_PARALLEL_SCAN_MAX_BATCH_BYTES("arcadedb.queryParallelScanMaxBatchBytes", SCOPE.DATABASE,
       """
@@ -1409,6 +1508,18 @@ public enum GlobalConfiguration {
       Set to 0 to retry as soon as the next trigger fires.""",
       Integer.class, 30_000),
 
+  VECTOR_INDEX_WARM_UP_AFTER_SCHEMA_RELOAD_DELAY_MS("arcadedb.vectorIndex.warmUpAfterSchemaReloadDelayMs", SCOPE.DATABASE,
+      """
+      A schema reload (on an HA replica, every schema entry the incremental refresh declines) replaces every index with \
+      a freshly built instance, and a vector index starts out with nothing resident: the next search reads all of its \
+      pages to rebuild the location map, then loads or rebuilds the graph on the query thread. This is how long, in \
+      milliseconds, the database waits after a reload, with no further reload, before warming in the background - on \
+      one thread, one index after the other - the vector indexes whose replaced instance had a graph resident. The wait \
+      is what makes a burst of DDL statements cost one warm-up and not one per statement. A search that arrives meanwhile \
+      joins the load in progress. Indexes that were never searched are not warmed. \
+      Set to 0 to start right after the reload, or to -1 to disable and leave it to the first search.""",
+      Integer.class, 1_000),
+
   VECTOR_INDEX_REBUILD_PERMIT_TIMEOUT_MS("arcadedb.vectorIndex.rebuildPermitTimeoutMs", SCOPE.JVM,
       """
       Maximum time in milliseconds an async vector index rebuild waits to acquire a JVM-wide rebuild permit \
@@ -1586,6 +1697,12 @@ public enum GlobalConfiguration {
       OTLP metrics export endpoint. Metrics are pushed over OTLP/HTTP (protobuf), not gRPC, so this is the collector's \
       HTTP receiver (port 4318, path /v1/metrics), not the gRPC port 4317. A URL without a path gets /v1/metrics \
       appended""", String.class, "http://localhost:4318/v1/metrics"),
+
+  SERVER_METRICS_OTLP_STEP("arcadedb.serverMetrics.otlp.step", SCOPE.SERVER, """
+      How often the server metrics are pushed to the OTLP endpoint, in milliseconds. Also the window a step-based \
+      meter (a rate, a max) is measured over. Not positive keeps Micrometer's default of one minute; a positive value \
+      below 1000 is raised to 1000, so a typo cannot push to the collector in a busy loop. Read when the metrics \
+      plugin starts""", Long.class, 60_000L),
 
   SERVER_METRICS_TRACING_ENABLED("arcadedb.serverMetrics.tracing.enabled", SCOPE.SERVER,
       "Enable OpenTelemetry distributed tracing (requires the optional tracing plugin on the classpath). Note: query/command spans include the statement text as the db.statement span attribute, which may contain sensitive data, so secure the OTLP collector endpoint",
@@ -1766,6 +1883,43 @@ public enum GlobalConfiguration {
       Set to 0 or a negative value for unlimited (WARNING: removes the protection). Default is 100""",
       Integer.class, 100),
 
+  SERVER_HTTP_TERMINATE_ON_CLIENT_DISCONNECT("arcadedb.server.httpTerminateOnClientDisconnect", SCOPE.SERVER,
+      """
+      Terminates the statement of an HTTP request whose client closes the connection while it runs, so a client that gives \
+      up (its own deadline, a killed process, curl --max-time) does not leave the server working on an answer nobody will \
+      read (issue #9689). Applies to HTTP/1.x connections without TLS, once the request body has been read. A client that \
+      half-closes its side of the connection after sending the request and still waits for the response is taken for one \
+      that left, as Undertow itself takes it: set to false for such clients. In a transaction session opened with /begin, a \
+      terminated command (POST /command, /batch) also rolls the session's transaction back and ends the session, as its \
+      failure would; a terminated read (GET or POST /query) or /ts, vector, PromQL or Grafana request leaves the session \
+      and its transaction as they were (issue #9798). Default is true""",
+      Boolean.class, true),
+
+  SERVER_HTTP_CONTENT_SECURITY_POLICY("arcadedb.server.httpContentSecurityPolicy", SCOPE.SERVER,
+      """
+      Content-Security-Policy sent with Studio's HTML pages and the Swagger UI page at /api/v1/docs (issue #9681). The \
+      default refuses inline script (no 'unsafe-inline' in script-src), so an HTML-injection bug in Studio cannot run \
+      script with the logged-in user's token. Inline styles stay allowed (style-src 'unsafe-inline'): Studio, Bootstrap \
+      and the chart library set style attributes throughout. The default also allows three outside origins, Google \
+      Fonts (fonts.googleapis.com, fonts.gstatic.com) for Studio's typeface and raw.githubusercontent.com for the list \
+      of sample datasets; an air-gapped or stricter installation can drop them: Studio then falls back to a system font \
+      and its quick start reports that the sample datasets cannot be loaded. The Swagger UI page adds the hash of its own \
+      bootstrap script to the directive that governs it, the first one declared of script-src-elem, script-src and \
+      default-src, unless that directive refuses every script ('none'), which is left as configured. Set to an empty \
+      string to send no policy""",
+      String.class,
+      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+          + "font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob:; "
+          + "connect-src 'self' https://raw.githubusercontent.com; object-src 'none'; base-uri 'self'; "
+          + "frame-ancestors 'self'; form-action 'self'"),
+
+  SERVER_HTTP_CONTENT_SECURITY_POLICY_REPORT_ONLY("arcadedb.server.httpContentSecurityPolicyReportOnly", SCOPE.SERVER,
+      """
+      Sends 'arcadedb.server.httpContentSecurityPolicy' as Content-Security-Policy-Report-Only instead of \
+      Content-Security-Policy: the browser reports violations in its console but blocks nothing. Use it to try a \
+      custom policy before enforcing it. Default is false""",
+      Boolean.class, false),
+
   SERVER_HTTP_BODY_CONTENT_MAX_SIZE("arcadedb.server.httpBodyContentMaxSize", SCOPE.SERVER,
       """
       Maximum size in bytes for HTTP request body content, measured ON THE WIRE. Set to -1 for unlimited size \
@@ -1868,7 +2022,9 @@ public enum GlobalConfiguration {
       Hard ceiling on the number of rows the gRPC unary ExecuteQuery materializes. A request limit at or below \
       this cap is honored; a result that would exceed it fails the call with RESOURCE_EXHAUSTED (consistent with \
       the StreamQuery MATERIALIZE_ALL path) rather than silently truncating, and a client cannot bypass it with a \
-      larger limit. Bounds heap usage and protects against limitless-query DoS. The default is lower than \
+      larger limit. It bounds the unary ExecuteCommand the same way: it is the default when the request \
+      carries no max_rows, and a larger max_rows cannot bypass it. \
+      Bounds heap usage and protects against limitless-query DoS. The default is lower than \
       grpcStreamMaxMaterializedRows because the unary response is built and returned as a single gRPC message \
       (also bounded by the max inbound/outbound message size), whereas StreamQuery emits incrementally. \
       Set to -1 or 0 for unlimited (WARNING: removes DoS protection). Default is 100000.""",
@@ -2094,6 +2250,18 @@ public enum GlobalConfiguration {
 
   HA_LOG_SEGMENT_SIZE("arcadedb.ha.logSegmentSize", SCOPE.SERVER,
       "Maximum Raft log segment size (e.g. '64MB', '128MB')", String.class, "64MB"),
+
+  HA_LOG_CACHE_SIZE("arcadedb.ha.logCacheSize", SCOPE.SERVER,
+      """
+      Heap budget for the Raft log entries each server keeps decoded in memory (e.g. '128MB'). Empty (the default) \
+      means an eighth of the maximum JVM heap, capped at 200MB. The budget also decides how many closed log \
+      segments are cached: the open segment plus as many closed ones as fit (at least one), each of up to \
+      arcadedb.ha.logSegmentSize bytes. That count is what a restarted server loads into the heap before it starts \
+      catching up, so on a small heap keep arcadedb.ha.logSegmentSize at no more than half of this value. \
+      Entries outside the cache are read back from disk when needed (issue #9549), so a leader serving a follower \
+      that lags by more than the cached segments reads them from disk: raise this value, not only the heap, to keep \
+      more of the log tail decoded in memory.""",
+      String.class, ""),
 
   HA_APPEND_BUFFER_SIZE("arcadedb.ha.appendBufferSize", SCOPE.SERVER,
       """
@@ -2431,7 +2599,9 @@ public enum GlobalConfiguration {
       already-upgraded node halt every node still on the old build: a routine admin action turning a routine \
       upgrade into a partial outage. With this on, the operation is refused instead, with HTTP 409 / gRPC \
       FAILED_PRECONDITION naming the peer that is holding the cluster back. Nothing is submitted, so nothing \
-      halts, and the change succeeds unchanged once the last node is up - no sequencing by hand. \
+      halts, and the change succeeds unchanged once the last node is up - no sequencing by hand. The same \
+      interlock covers a database setting changed with ALTER DATABASE or 'set database setting', replicated as a \
+      DATABASE_CONFIGURATION_ENTRY since issue #9763. \
       \
       The peer is asked over POST /api/v1/cluster/capabilities, the #7219 handshake. Every unknown counts as a \
       no: a peer that is unreachable, whose address identifies no single node, or that runs a build without that \
@@ -2482,6 +2652,16 @@ public enum GlobalConfiguration {
   HA_SNAPSHOT_MAX_CONCURRENT("arcadedb.ha.snapshotMaxConcurrent", SCOPE.SERVER,
       "Maximum number of concurrent snapshot downloads served by the leader. Requests over this limit receive HTTP 503.",
       Integer.class, 2),
+
+  HA_SNAPSHOT_COMPRESSION_LEVEL("arcadedb.ha.snapshotCompressionLevel", SCOPE.SERVER,
+      """
+      DEFLATE compression level the leader applies to the ZIP stream of a database snapshot shipped to a follower: \
+      0 (stored, no compression) to 9 (smallest, slowest), or -1 for the JDK default (level 6). The compression runs \
+      on a single HTTP worker thread per transfer, so at the JDK default it can cap a resync at a few MB/s on a fast \
+      private network. The default 1 (fastest DEFLATE) keeps most of the size reduction of database pages at a \
+      fraction of the CPU; 0 sends the files stored. A value outside -1..9 is ignored and the default is used. \
+      Only the serving side reads it, the follower accepts any level.""",
+      Integer.class, 1),
 
   HA_SNAPSHOT_DOWNLOAD_TIMEOUT("arcadedb.ha.snapshotDownloadTimeout", SCOPE.SERVER,
       "Read timeout in ms for downloading a database snapshot from the leader during follower resync.",
@@ -2616,6 +2796,16 @@ public enum GlobalConfiguration {
       the health monitor escalates after this many non-sticking restarts (reformat + rejoin once, then give \
       up with a SEVERE alert) instead of restarting forever (issue #5291).""",
       Integer.class, 10),
+
+  HA_RATIS_CLOSE_TIMEOUT_MS("arcadedb.ha.ratisCloseTimeoutMs", SCOPE.SERVER,
+      """
+      Maximum time in milliseconds the server waits for the Ratis server to close, on shutdown and before an \
+      in-place Ratis restart. A close normally takes milliseconds; one that does not finish in time is logged \
+      at SEVERE with the stack it is stuck in and left running on its own thread. A shutdown then proceeds, \
+      and an in-place restart fails (counting toward arcadedb.ha.ratisRestartMaxRetries) for as long as that \
+      close is still running, because its storage lock and gRPC ports may still be held (issue #9561). \
+      0 or a negative value waits without a bound, the behavior before this setting existed.""",
+      Long.class, 30_000L),
 
   HA_JVM_PAUSE_CLOSE_THRESHOLD_MS("arcadedb.ha.jvmPauseCloseThresholdMs", SCOPE.SERVER,
       """
@@ -3007,6 +3197,76 @@ public enum GlobalConfiguration {
       dialable address for it (see the 'grpc' field of arcadedb.ha.serverList). Default is 50051""",
       Integer.class, 50051),
 
+  // The remaining gRPC plugin keys are declared for the same reason GRPC_PORT is, and for a stronger one (issue #9316): a key
+  // that is not a constant of this enum is reachable from -D only. The server configuration file drops it with a warning
+  // (ContextConfiguration.fromJSON resolves every key through findByKey) and the environment-variable loop never asks for it,
+  // so 'arcadedb.grpc.tls.enabled=true' written in either left a plaintext endpoint listening.
+  GRPC_ENABLED("arcadedb.grpc.enabled", SCOPE.SERVER,
+      "Whether the gRPC plugin starts. Default is true", Boolean.class, true),
+
+  GRPC_HOST("arcadedb.grpc.host", SCOPE.SERVER,
+      "Host name or address the gRPC plugin binds to. Default is '0.0.0.0'. Applies to the standard server only: the xDS server (mode 'xds' or 'both') has no host setting and listens on every interface", String.class, "0.0.0.0"),
+
+  GRPC_MODE("arcadedb.grpc.mode", SCOPE.SERVER,
+      "gRPC server mode: 'standard', 'xds' or 'both'. Default is 'standard'", String.class, "standard"),
+
+  GRPC_XDS_PORT("arcadedb.grpc.xds.port", SCOPE.SERVER,
+      "TCP/IP port number used by the xDS gRPC server when the mode is 'xds' or 'both'. Default is 50052", Integer.class, 50052),
+
+  GRPC_TLS_ENABLED("arcadedb.grpc.tls.enabled", SCOPE.SERVER, """
+      When true, the gRPC endpoint accepts only TLS connections, using the certificate and key set by \
+      arcadedb.grpc.tls.cert and arcadedb.grpc.tls.key. The plugin refuses to start, instead of falling back to cleartext, \
+      when either is missing or unreadable. Only true and false are accepted. Default is false""",
+      Boolean.class, false),
+
+  GRPC_TLS_CERT("arcadedb.grpc.tls.cert", SCOPE.SERVER,
+      "Path of the PEM certificate chain served by the gRPC endpoint when arcadedb.grpc.tls.enabled is true", String.class, null),
+
+  GRPC_TLS_KEY("arcadedb.grpc.tls.key", SCOPE.SERVER,
+      "Path of the PEM private key served by the gRPC endpoint when arcadedb.grpc.tls.enabled is true", String.class, null),
+
+  GRPC_MAX_MESSAGE_SIZE("arcadedb.grpc.maxMessageSize", SCOPE.SERVER,
+      "Maximum inbound gRPC message size, in megabytes (minimum 1). Default is 100", Integer.class, 100),
+
+  GRPC_MAX_METADATA_SIZE("arcadedb.grpc.maxMetadataSize", SCOPE.SERVER,
+      "Maximum inbound gRPC metadata (headers) size, in kilobytes (minimum 1). Default is 16", Integer.class, 16),
+
+  GRPC_MAX_CONCURRENT_TRANSACTIONS("arcadedb.grpc.maxConcurrentTransactions", SCOPE.SERVER,
+      "Maximum number of gRPC transactions open at the same time. A non-positive value disables the bound. Default is 1000",
+      Integer.class, 1000),
+
+  GRPC_MAX_CONCURRENT_TRANSACTIONS_PER_PRINCIPAL("arcadedb.grpc.maxConcurrentTransactionsPerPrincipal", SCOPE.SERVER,
+      "Maximum number of gRPC transactions one user may have open at the same time. A non-positive value disables the bound. "
+          + "Default is 100", Integer.class, 100),
+
+  GRPC_REFLECTION_ENABLED("arcadedb.grpc.reflection.enabled", SCOPE.SERVER,
+      "Whether the gRPC server reflection service is exposed. Default is true", Boolean.class, true),
+
+  GRPC_HEALTH_ENABLED("arcadedb.grpc.health.enabled", SCOPE.SERVER,
+      "Whether the standard gRPC health service is exposed. Default is true", Boolean.class, true),
+
+  GRPC_COMPRESSION_ENABLED("arcadedb.grpc.compression.enabled", SCOPE.SERVER,
+      "Whether the gRPC endpoint supports message compression: when false it refuses compressed requests and never compresses a"
+          + " response, whatever arcadedb.grpc.compression.force says. Default is true", Boolean.class, true),
+
+  GRPC_COMPRESSION_FORCE("arcadedb.grpc.compression.force", SCOPE.SERVER,
+      "Whether the gRPC endpoint compresses every response to a client that accepts the codec. Ignored, with a warning, when"
+          + " arcadedb.grpc.compression.enabled is false. Default is false", Boolean.class, false),
+
+  GRPC_COMPRESSION_TYPE("arcadedb.grpc.compression.type", SCOPE.SERVER,
+      "Compression algorithm used when arcadedb.grpc.compression.force is true. Default is 'gzip'", String.class, "gzip"),
+
+  GRPC_TX_MAX_IDLE_MS("arcadedb.grpc.tx.maxIdleMs", SCOPE.SERVER,
+      "Milliseconds a gRPC transaction may sit idle before the reaper rolls it back. Default is 300000 (5 minutes)", Long.class,
+      300_000L),
+
+  GRPC_TX_MAX_AGE_MS("arcadedb.grpc.tx.maxAgeMs", SCOPE.SERVER,
+      "Maximum age in milliseconds of a gRPC transaction, busy or not, before the reaper rolls it back. 0 disables the bound. "
+          + "Default is 0", Long.class, 0L),
+
+  GRPC_TX_REAPER_PERIOD_MS("arcadedb.grpc.tx.reaperPeriodMs", SCOPE.SERVER,
+      "Milliseconds between two runs of the gRPC idle-transaction reaper. Default is 30000", Long.class, 30_000L),
+
   // REDIS
   REDIS_PORT("arcadedb.redis.port", SCOPE.SERVER,
       "TCP/IP port number used for incoming connections for Redis plugin. Default is 6379", Integer.class, 6379),
@@ -3080,6 +3340,20 @@ public enum GlobalConfiguration {
       not block)""",
       Long.class, 60_000L),
 
+  GAV_QUERY_RESTORE_AWAIT_TIMEOUT("arcadedb.gavQueryRestoreAwaitTimeout", SCOPE.DATABASE,
+      """
+      Milliseconds a query waits, while it is planned or starts, for a Graph Analytical View (GAV/CSR) whose deferred \
+      restore from disk is still in flight, so the first count push-down, MATCH, shortest path or other graph function \
+      after a database reopen runs on the restored view instead of reading every record. This covers every caller that \
+      looks a view up (the SQL and OpenCypher planners and their push-down steps, and the SQL graph functions); the \
+      algo.* procedures have their own budget (arcadedb.gavAlgoRestoreAwaitTimeout). The wait ends early when the \
+      restore finishes, and it applies only to a view that covers the request: a view that is only rebuilding after a \
+      commit is never waited for. 0 does not wait: the call takes the record path, as it did before this setting \
+      existed (a ready view that follows a restoring one is still used). The wait is not tied to the command timeout of the \
+      query (the lookup has no command to ask), only a thread interrupt ends it early, so keep it small. The default of \
+      5 seconds suits a persisted CSR, which restores much faster than the record-by-record read it replaces""",
+      Long.class, 5_000L),
+
   GAV_PERSIST_CSR("arcadedb.gavPersistCsr", SCOPE.DATABASE,
       """
       When true (default), a Graph Analytical View (GAV/CSR) that is READY (with no pending overlay changes) when \
@@ -3090,6 +3364,18 @@ public enum GlobalConfiguration {
       previous behavior: an async rebuild triggered on open. Set to false to disable persisting the CSR file \
       (e.g. to avoid its disk footprint or the extra write at close)""",
       Boolean.class, true),
+
+  GAV_CCH_MAX_ARCS_PER_EDGE("arcadedb.gavCchMaxArcsPerEdge", SCOPE.DATABASE,
+      """
+      Upper bound on the size of a Customizable Contraction Hierarchy (CCH) attached to a Graph Analytical View, as \
+      supergraph arcs (edges plus shortcuts) per edge of the routed graph. Road, logistics and utility networks need a \
+      small multiple of their edge count; graphs without small separators (social graphs, graphs with supernodes) need \
+      far more, and building them would exhaust the heap. A hierarchy that would exceed the bound is not built: the \
+      view reports it as UNSUITABLE and shortest-path queries keep answering through bidirectional Dijkstra. Graphs \
+      small enough to need fewer than 100,000 arcs are always accepted. Each arc costs about 52 bytes of heap \
+      (topology plus the directed metric) and 20 more once undirected (BOTH) queries are served too, so the worst \
+      case at the default is about 830 bytes, or 1.2 KB, per routed edge""",
+      Integer.class, 16),
   ;
 
   /**
@@ -3423,6 +3709,14 @@ public enum GlobalConfiguration {
       key = PREFIX + key;
     return BY_KEY.get(key);
   }
+
+  /**
+   * Uncompressed payload, in bytes, a producer may pack into one replicated Raft entry (64 MB), whatever the
+   * configured caps say: every node has to materialize the entry in full to apply it, so the LZ4 compression on the
+   * wire is no bound (issue #5933). The ha-raft codec enforces it ({@code RaftLogEntryCodec.MAX_ENTRY_BYTES}), and
+   * engine code that sizes its own replicated commits reads it from here, so the two cannot drift (issue #8905).
+   */
+  public static final int MAX_REPLICATED_UNCOMPRESSED_ENTRY_BYTES = 64 * 1024 * 1024;
 
   /**
    * Maximum size, in bytes, of a SINGLE replicated Raft log entry: the smaller of
@@ -4223,6 +4517,10 @@ public enum GlobalConfiguration {
    * reassembling it: reassembly silently normalises what it did not think to preserve - a trailing {@code ';'},
    * {@code ','} or {@code ':'} vanished, so the value reported back was not the value configured.
    * <p>
+   * A MALFORMED entry fails closed instead, because the server's own error line for it quotes it through this method
+   * (issue #9773): an unclosed {@code '['} masks the rest of the entry, and an entry with no {@code '['} at all is
+   * masked from its first {@code ':'} on, which is where a credential block written without its brackets starts.
+   * <p>
    * The field boundaries mirror {@code ArcadeDBServer.parseCredentials} exactly - {@code ','} between
    * credentials, then {@code ':'} between fields - so what is treated as a password here is what the server
    * authenticates with. That parity is the point, and it is positional on both sides: the server uses field 1
@@ -4254,8 +4552,18 @@ public enum GlobalConfiguration {
       final int end) {
     final int credentialsBegin = databases.indexOf('[', begin);
     if (credentialsBegin < 0 || credentialsBegin >= end) {
-      // A bare database name. There is no credential block, so there is nothing in it to hide.
-      redacted.append(databases, begin, end);
+      // No credential block. ArcadeDBServer.loadDefaultDatabases refuses such an entry, so whatever it holds is a
+      // mistake, and the commonest one is a block written without its brackets: "mydb:jay:hunter2". ':' is the format's
+      // own field separator, so the entry is published up to its first ':' and masked from there on, the way an
+      // unclosed '[' masks the remainder below (issue #9773: the server's own error line quotes this entry). A bare
+      // database name, the other way to forget the credentials, carries no ':' and is copied through as written.
+      final int separator = databases.indexOf(':', begin);
+      // NOTHING AFTER THE ':' IS NOTHING TO HIDE, AS FOR AN EMPTY PASSWORD INSIDE A BLOCK
+      if (separator < 0 || separator >= end - 1) {
+        redacted.append(databases, begin, end);
+        return;
+      }
+      redacted.append(databases, begin, separator + 1).append("*****");
       return;
     }
 
@@ -4346,5 +4654,18 @@ public enum GlobalConfiguration {
 
   public SCOPE getScope() {
     return scope;
+  }
+
+  /**
+   * Whether this setting is a security control: it decides what the server may reach or read on behalf of a query, so
+   * changing it needs the administrative {@code updateSecurity} permission and not merely the per-database
+   * {@code updateDatabaseSettings} one that is meant for tuning. Declare any new database-scoped setting of that kind here.
+   */
+  public boolean isSecuritySensitive() {
+    return switch (this) {
+      case OPENCYPHER_LOAD_CSV_ALLOW_FILE_URLS, OPENCYPHER_LOAD_CSV_IMPORT_DIRECTORY, OPENCYPHER_LOAD_CSV_ALLOW_REMOTE_URLS,
+           OPENCYPHER_LOAD_CSV_BLOCKED_IP_RANGES -> true;
+      default -> false;
+    };
   }
 }

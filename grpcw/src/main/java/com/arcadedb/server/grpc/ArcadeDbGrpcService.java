@@ -20,6 +20,7 @@ package com.arcadedb.server.grpc;
 
 import com.arcadedb.ContextConfiguration;
 import com.arcadedb.GlobalConfiguration;
+import com.arcadedb.query.opencypher.traversal.TraversalPath;
 import com.arcadedb.query.sql.parser.Identifier;
 import com.arcadedb.query.sql.parser.MatchStatement;
 import com.arcadedb.query.sql.parser.OrderBy;
@@ -51,6 +52,7 @@ import com.arcadedb.engine.timeseries.TimeSeriesGateway.TypeResolution;
 import com.arcadedb.engine.timeseries.TimeSeriesGateway.WriteReport;
 import com.arcadedb.exception.DatabaseOperationException;
 import com.arcadedb.exception.DuplicatedKeyException;
+import com.arcadedb.exception.QueryTerminatedException;
 import com.arcadedb.exception.RecordNotFoundException;
 import com.arcadedb.exception.SchemaException;
 import com.arcadedb.graph.Edge;
@@ -60,6 +62,8 @@ import com.arcadedb.graph.MutableVertex;
 import com.arcadedb.graph.Vertex;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.network.binary.ServerIsNotTheLeaderException;
+import com.arcadedb.query.RunningQuery;
+import com.arcadedb.query.RunningQueryRegistry;
 import com.arcadedb.query.sql.executor.QueryStatistics;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultSet;
@@ -104,9 +108,6 @@ import java.io.IOException;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
-import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
@@ -147,7 +148,6 @@ import java.util.logging.Level;
 public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImplBase {
   /** The {@code protocol} tag every query this service runs is metered under. */
   private static final String GRPC_PROTOCOL = GrpcProtocolContextInterceptor.GRPC_PROTOCOL;
-
 
   // Pick serializer once
   private static final JsonSerializer FAST = JsonSerializer.createJsonSerializer().setIncludeVertexEdges(false)
@@ -200,6 +200,9 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
     final String          owner;
     final long            createdAtMs;
     volatile long         lastAccessMs;
+    // A statement running in this transaction was terminated (issue #9689): it is rolled back, and a commit that claimed
+    // the transaction while the statement still ran - its task queued behind the statement's - must not publish anything
+    volatile boolean      terminated;
     // The ENGINE's transaction object behind this gRPC transaction, captured once on the dedicated thread right
     // after database.begin() (issue #8134). Its commit counter is the only witness that a statement with a
     // BATCH boundary published part of the caller's block: LocalDatabase.begin() reuses the same context object
@@ -265,8 +268,6 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
 
   // Database directory path
   private final String databasePath;
-
-  private static final int DEFAULT_MAX_COMMAND_ROWS = 1000;
 
   // Idle reaper defaults (milliseconds). A registered transaction idle longer than maxIdle, or older than maxAge
   // (when > 0), is rolled back and released so an abandoned client cannot leak its executor thread, open
@@ -568,6 +569,9 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
     // nothing left to replay and must not be described as half-published.
     final GrpcSessionPartialCommitInterceptor.Verdict partialCommit =
         GrpcSessionPartialCommitInterceptor.currentVerdict();
+    // The RPC's registry entry, published on the gRPC thread by GrpcAdmissionInterceptor: the statement runs on the
+    // transaction's thread, so the entry goes with it there, where its checks and its commits read it (issue #9689)
+    final RunningQuery runningQuery = RunningQuery.current();
     try {
       return txCtx.executor.submit(() -> {
         requireTransactionStillActive(txCtx);
@@ -577,9 +581,14 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         // where GrpcProtocolContextInterceptor tags the work, and RaftReplicatedDatabase tells a client from the
         // engine by the tag when it refuses requests on a database being replaced from the leader's snapshot.
         ProtocolContext.set(GRPC_PROTOCOL);
+        final RunningQuery.Binding binding = runningQuery != null ? runningQuery.bind() : null;
         try {
           return task.call();
         } finally {
+          if (binding != null)
+            binding.close();
+          if (runningQuery != null && runningQuery.isTerminated())
+            endTerminatedTransaction(txCtx, runningQuery);
           ProtocolContext.clear();
           // In a finally, because the statement that publishes half the block is often the same one that then
           // fails: a verdict only reported on the success path would miss the case the guard exists for.
@@ -650,6 +659,32 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
             reaped);
     } catch (final Exception e) {
       LogManager.instance().log(this, Level.WARNING, "Error while reaping idle gRPC transactions", e);
+    }
+  }
+
+  /**
+   * Ends the client transaction a terminated statement ran in, on the transaction's own thread (issue #9689): its
+   * transaction is rolled back and the transaction removed, so a later commit is told it does not exist instead of
+   * publishing what the stopped statement left in it. The client that stops a statement wants none of it to stand,
+   * whether or not the statement reached a check before it ended - the same rule as for an HTTP transaction session.
+   */
+  private void endTerminatedTransaction(final TransactionContext txCtx, final RunningQuery runningQuery) {
+    // First, whoever owns the transaction now: a commit or rollback that claimed it while this statement ran has its
+    // task queued behind this one on the same thread, and reads the flag before it touches anything
+    txCtx.terminated = true;
+    try {
+      if (txCtx.db != null && txCtx.db.isTransactionActive())
+        txCtx.db.rollback();
+      runningQuery.setRolledBack();
+    } catch (final Exception e) {
+      LogManager.instance().log(this, Level.WARNING, "Error rolling back the transaction of a terminated statement txId=%s", e,
+          txCtx.txId);
+    } finally {
+      // Released here only if nobody claimed it meanwhile: a commit or rollback that did releases it itself
+      if (activeTransactions.remove(txCtx.txId, txCtx)) {
+        releaseTransactionSlot(txCtx.owner);
+        txCtx.shutdown();
+      }
     }
   }
 
@@ -827,6 +862,9 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
             "executeCommandInternal(): external transaction - tx already active, not beginning");
       } else if (hasTx && tx.getBegin()) {
         db.begin();
+        // The client asked for this transaction and ends it with its own commit/rollback flag: an HA replica runs the
+        // statement in it rather than forwarding it, which would commit it on the leader whatever the flag says (#10040)
+        ((DatabaseInternal) db).getTransaction().setClientManaged(true);
         beganHere = true;
       } else if (autoWrap) {
         // Server-side safety: keep UPDATE/UPSERT/MERGE pipelines atomic
@@ -839,7 +877,13 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       long affected = 0L;
 
       final boolean returnRows = req.getReturnRows();
-      final int maxRows = req.getMaxRows() > 0 ? req.getMaxRows() : DEFAULT_MAX_COMMAND_ROWS;
+      // The configured ceiling that bounds ExecuteQuery (0 or -1 = unlimited) also bounds ExecuteCommand: a request
+      // without max_rows gets it as its default, and a larger max_rows cannot bypass it, exactly as for ExecuteQuery.
+      // It replaces a private hard-coded 1000 that made the client's schema and metadata commands, which send no
+      // max_rows, fail on any database with more than 1000 types (issue #9861).
+      final int configuredMaxRows = serverConfiguration().getValueAsInteger(GlobalConfiguration.SERVER_GRPC_QUERY_MAX_RESULT_ROWS);
+      final int ceilingRows = configuredMaxRows > 0 ? configuredMaxRows : Integer.MAX_VALUE;
+      final int maxRows = req.getMaxRows() > 0 ? Math.min(req.getMaxRows(), ceilingRows) : ceilingRows;
 
       ExecuteCommandResponse.Builder out = ExecuteCommandResponse.newBuilder()
           .setSuccess(true)
@@ -1324,7 +1368,8 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
 
       final var dbRef = db;
 
-      LogManager.instance().log(this, Level.FINE, "updateRecord(): el = %s; type = %s", el, el.getRecordType());
+      // THE RECORD BY ITS IDENTITY, NOT ITS CONTENT: SEE LOG_SHOW_VALUES (#9984)
+      LogManager.instance().log(this, Level.FINE, "updateRecord(): el = %s; type = %s", summarizeJava(el), el.getRecordType());
 
       if (el instanceof Vertex elAsVertex) {
 
@@ -1662,7 +1707,9 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
 
           Result result = resultSet.next();
 
-          LogManager.instance().log(this, Level.FINE, "executeQuery(): result = %s", result);
+          // THE ROW BY ITS SHAPE, NOT ITS CONTENT: SEE LOG_SHOW_VALUES (#9984)
+          if (LogManager.instance().isLoggable(this, Level.FINE))
+            LogManager.instance().log(this, Level.FINE, "executeQuery(): result = %s", summarizeResult(result));
 
           final long serRowStart = System.nanoTime();
           // Convert Result to GrpcRecord, preserving aliases and all properties
@@ -1842,6 +1889,8 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         } finally {
           ProtocolContext.clear();
         }
+        // The client ends this transaction with its own Commit/Rollback: an HA replica runs its writes in it (issue #10040)
+        ((DatabaseInternal) database).getTransaction().setClientManaged(true);
 
         // #8134: the engine's transaction object, taken on the thread whose DatabaseContext owns it and
         // therefore the only thread that can see it. Held for the transaction's whole life so that every RPC
@@ -1962,6 +2011,11 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
 
       // Execute commit ON THE SAME THREAD that began the transaction
       Future<?> commitFuture = txCtx.executor.submit(() -> {
+        // A statement of this transaction was terminated while this commit waited behind it: what it wrote was rolled
+        // back, and nothing of the transaction is published (issue #9689)
+        if (txCtx.terminated)
+          throw new QueryTerminatedException(
+              "Transaction " + txId + " was ended: a statement running in it was terminated, and everything it wrote rolled back");
         // A client request, on a thread no listener callback runs on (issue #8363): see submitToActiveTransaction.
         ProtocolContext.set(GRPC_PROTOCOL);
         try {
@@ -2140,8 +2194,16 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
           // outer catch mask it as a generic INTERNAL error with the interrupt flag swallowed.
           Thread.currentThread().interrupt();
           terminated = true;
-          responseObserver.onError(
-              Status.CANCELLED.withDescription("Stream query execution was interrupted").asRuntimeException());
+          // The executor is still iterating the result set: stop it at its next batch boundary instead of letting it
+          // write into the call this CANCELLED terminal closes (issue #8752). Not future.cancel(true): an interrupt
+          // aimed at the transaction's thread would hit its file I/O
+          // Flagged BEFORE taking the monitor: monitors are not fair, so a producer sending in a tight loop could
+          // otherwise keep winning it and write the whole rest of the result set before this handler gets in
+          stopInTransactionStream(future, cancelled);
+          synchronized (scso) {
+            responseObserver.onError(
+                Status.CANCELLED.withDescription("Stream query execution was interrupted").asRuntimeException());
+          }
           return;
         } catch (final ExecutionException ee) {
           final Throwable cause = ee.getCause() != null ? ee.getCause() : ee;
@@ -2570,7 +2632,8 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
    */
   private boolean hasOrderBy(final Database db, final String sql) {
     try {
-      final Statement statement = ((DatabaseInternal) db).getStatementCache().get(sql);
+      // the parameterized lookup (issue #8307): whether there is an ORDER BY does not depend on the literal values
+      final Statement statement = ((DatabaseInternal) db).getStatementCache().getParameterized(sql).statement();
 
       final OrderBy orderBy;
       if (statement instanceof SelectStatement select)
@@ -2589,16 +2652,20 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
   }
 
   private void safeOnNext(ServerCallStreamObserver<QueryResult> scso, AtomicBoolean cancelled, QueryResult payload) {
-    if (cancelled.get())
-      return;
-    try {
-      scso.onNext(payload);
-    } catch (StatusRuntimeException e) {
-      if (e.getStatus().getCode() == Status.Code.CANCELLED) {
-        cancelled.set(true);
+    // Check and send under the call's monitor, which the interruption terminal also takes: a producer cannot be
+    // inside onNext while the handler closes the call (issue #8752)
+    synchronized (scso) {
+      if (cancelled.get())
         return;
+      try {
+        scso.onNext(payload);
+      } catch (StatusRuntimeException e) {
+        if (e.getStatus().getCode() == Status.Code.CANCELLED) {
+          cancelled.set(true);
+          return;
+        }
+        throw e;
       }
-      throw e;
     }
   }
 
@@ -2752,9 +2819,29 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
     // cache the first-chunk effective options to validate consistency
     final AtomicReference<InsertOptions> firstOptsRef = new AtomicReference<>();
 
+    // Issue #9875: listed by "list queries" from the first chunk to the end of the stream, and stopped by "terminate query"
+    final StreamingLoadEntry entry = new StreamingLoadEntry(runningQueries(), "InsertStream");
+    // Ends a terminated load, on a thread of the call's own: what the mode can still retract is retracted, the client is
+    // told, and the entry goes. Once: whatever runs it next finds no context left
+    final Runnable endTerminated = () -> {
+      final InsertContext ctx = ctxRef.getAndSet(null);
+      if (ctx != null)
+        retractTerminatedInsert(ctx, extTxCtxRef.get(), entry);
+      out.onError(mapError(entry.terminated(terminatedInsertOutcome(firstOptsRef.get(), extTxCtxRef.get() != null)), "insertStream"));
+      entry.close();
+    };
+
     call.setOnCancelHandler(() -> {
       cancelled.set(true);
       out.markTerminated();
+    });
+    // A load terminated between two chunks was closed by the termination listener: this is where it is cleaned up. The
+    // close callback is serialized with onNext/onCompleted like every listener callback of the call, and the rollback
+    // re-binds the stream's parked transaction on whichever thread runs it (InsertContext.close())
+    setOnCloseHandler(call, () -> {
+      if (entry.isTerminated())
+        endTerminated.run();
+      entry.close();
     });
 
     // Pull the very first inbound message
@@ -2769,6 +2856,12 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
           return;
         }
 
+        // A chunk that arrived after the load was terminated: nothing more is written
+        if (entry.isTerminated()) {
+          endTerminated.run();
+          return;
+        }
+
         // Issue #4806: a previous chunk failed at the transaction level and rolled the transaction
         // back. Do not insert further rows into the broken transaction; just keep draining the
         // remaining inbound chunks so the stream still reaches onCompleted and delivers the summary.
@@ -2778,7 +2871,13 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
           return;
         }
 
+        // Bound for the chunk: the rows' checks and the commits it attempts - on this thread or on the client
+        // transaction's - obey a termination, and the termination listener leaves a running chunk alone
+        final StreamingLoadEntry.Bound bound = entry.enter();
         try {
+          // Terminated between the check above and the lock: the finally below ends the load
+          if (entry.isTerminated())
+            return;
 
           InsertContext ctx = ctxRef.get();
 
@@ -2837,6 +2936,21 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
 
             firstOptsRef.set(effective);
 
+            // Once the database has authenticated the caller: the entry names who runs the load, and where
+            final InsertOptions listed = effective;
+            entry.open(ctx.db.getName(), resolvedUsername(c.hasCredentials() ? c.getCredentials() : effective.getCredentials()),
+                txCtx != null ? txCtx.txId : null, () -> insertLoadText("InsertStream", listed, null),
+                () -> entry.runIfIdle(() -> {
+                  // Between two chunks: the call is closed now, and the close handler retracts on the call's thread, as
+                  // soon as the transport reports the call closed - it does not wait for the client. Until then the
+                  // stream's transaction stays open, holding what it wrote; a commit the client sends meanwhile on its
+                  // own transaction is refused from here on
+                  final TransactionContext ext = extTxCtxRef.get();
+                  if (ext != null)
+                    ext.terminated = true;
+                  out.onError(mapError(entry.terminated(terminatedInsertOutcome(listed, ext != null)), "insertStream"));
+                }));
+
             LogManager.instance().log(this, Level.FINE, "insertStream: initialized context with options:\n%s",
                 effective);
           } else {
@@ -2886,6 +3000,10 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
             cts = insertRows(runCtx, c.getRowsList().iterator());
           totals.add(cts);
         } catch (Exception e) {
+          // Terminated (issue #9875): not a failure of the chunk to report in the summary, but the end of the load,
+          // which the finally below carries out
+          if (entry.isTerminated())
+            return;
           // Issue #4806: per-row errors are handled row-by-row inside insertRows, so an exception
           // reaching here is a transaction-level failure (typically a mid-stream PER_BATCH/PER_ROW
           // commit that has already rolled the transaction back, or a structural error such as an
@@ -2907,7 +3025,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
           // were in the discarded Counts, so the summary under-reports inserted for this chunk. The
           // tests use single-row chunks; a precise per-chunk reconciliation is a separate follow-up.
           totals.received += c.getRowsCount();
-          totals.err(-1, commitErrorCode(e), insertErrorMessage(e), "");
+          totals.err(insertError(-1, commitErrorCode(e), e));
           // A structural failure (e.g. "options changed mid-stream") leaves the transaction still
           // active and bound to this pooled gRPC thread. Roll it back here (on the failing thread,
           // where it is bound) so its locks are released immediately and it is not leaked into a later
@@ -2926,30 +3044,45 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
             totals.updated = 0;
           }
         } finally {
-          // Issue #5041 (TX-4): detach the transaction from this (shared) pool thread before
-          // returning, so it is not left parked in the thread-local DatabaseContext between
-          // callbacks where an unrelated request reusing the thread would roll it back. onNext /
-          // onCompleted re-bind it via bindToCurrentThread().
-          final InsertContext parkedCtx = ctxRef.get();
-          if (parkedCtx != null)
-            parkedCtx.unbindFromCurrentThread();
-          if (!cancelled.get())
-            call.request(1);
+          bound.close();
+          if (entry.isTerminated())
+            // Seen by the chunk, or requested while it ran: the load ends here, on the thread its transaction is bound to
+            endTerminated.run();
+          else {
+            // Issue #5041 (TX-4): detach the transaction from this (shared) pool thread before
+            // returning, so it is not left parked in the thread-local DatabaseContext between
+            // callbacks where an unrelated request reusing the thread would roll it back. onNext /
+            // onCompleted re-bind it via bindToCurrentThread().
+            final InsertContext parkedCtx = ctxRef.get();
+            if (parkedCtx != null)
+              parkedCtx.unbindFromCurrentThread();
+            if (!cancelled.get())
+              call.request(1);
+          }
         }
       }
 
       @Override
       public void onError(Throwable t) {
         out.markTerminated();
-        InsertContext ctx = ctxRef.get();
-        if (ctx != null)
-          ctx.closeQuietly();
+        if (entry.isTerminated())
+          endTerminated.run();
+        else {
+          InsertContext ctx = ctxRef.get();
+          if (ctx != null)
+            ctx.closeQuietly();
+        }
+        entry.close();
       }
 
       @Override
       public void onCompleted() {
 
+        final StreamingLoadEntry.Bound bound = entry.enter();
         try {
+          // Terminated: nothing is committed, the finally below ends the load
+          if (entry.isTerminated())
+            return;
 
           InsertContext ctx = ctxRef.get();
 
@@ -2982,6 +3115,9 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
               ctx.bindToCurrentThread();
               ctx.flushCommit(true); // commit if not validate-only
             } catch (Exception commitEx) {
+              // A commit refused because the load was terminated is the end of the load, not a commit failure to report
+              if (entry.isTerminated())
+                return;
               recordCommitException(totals, commitEx);
             }
           }
@@ -2995,14 +3131,97 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
             out.onCompleted();
           }
         } catch (Exception e) {
-          out.onError(mapError(e, "insertStream"));
+          if (!entry.isTerminated())
+            out.onError(mapError(e, "insertStream"));
         } finally {
+          bound.close();
+          // A commit that succeeded before the termination was seen stands, and the client has its summary already
+          if (entry.isTerminated())
+            endTerminated.run();
           InsertContext ctx = ctxRef.get();
           if (ctx != null)
             ctx.closeQuietly();
+          // LAST: THE ENTRY LEAVING THE LIST IS THE PROOF THE WORK IS OVER
+          entry.close();
         }
       }
     };
+  }
+
+  /**
+   * Runs {@code handler} once the server closed the call and the client saw it (issue #9875). gRPC's own observer always
+   * supports it; an observer that does not - a test double built on the abstract class - leaves the stream to its other
+   * ends, onCompleted and onError, which close the running-query entry as well.
+   */
+  private static void setOnCloseHandler(final ServerCallStreamObserver<?> call, final Runnable handler) {
+    try {
+      call.setOnCloseHandler(handler);
+    } catch (final UnsupportedOperationException e) {
+      LogManager.instance().log(ArcadeDbGrpcService.class, Level.FINE, "Call observer %s takes no close handler", call.getClass());
+    }
+  }
+
+  /** The server's running statements, or {@code null} when this service runs without a server (embedded tests). */
+  private RunningQueryRegistry runningQueries() {
+    return arcadeServer != null ? arcadeServer.getRunningQueries() : null;
+  }
+
+  /** What the listing shows for a streamed insert (issue #9875): the RPC, the target type and the transaction mode. */
+  private static String insertLoadText(final String rpc, final InsertOptions options, final String sessionId) {
+    return rpc + (sessionId != null ? " session " + sessionId : "") + " into " + options.getTargetClass() + " ("
+        + (options.getValidateOnly() ? "validate only" : options.getTransactionMode().name().toLowerCase(Locale.ENGLISH)) + ")";
+  }
+
+  /**
+   * What the client of a terminated streamed insert is told became of what it sent (issue #9875), mode by mode - see
+   * {@link #retractTerminatedInsert}.
+   */
+  private static String terminatedInsertOutcome(final InsertOptions options, final boolean externalTransaction) {
+    if (externalTransaction)
+      return "the client transaction it wrote into was rolled back and ended";
+    if (options == null || options.getValidateOnly())
+      return "nothing was written";
+    return switch (options.getTransactionMode()) {
+      case PER_ROW -> "the rows committed before the termination stand, the rest were not applied";
+      case PER_BATCH -> "the batches committed before the termination stand, the open batch was rolled back";
+      default -> "its transaction was rolled back, nothing it sent was committed";
+    };
+  }
+
+  /**
+   * Retracts what a terminated streamed insert can still retract (issue #9875), on a thread of the stream's own: the
+   * transaction it holds is rolled back - the whole load under {@code PER_STREAM} and {@code PER_REQUEST}, the open batch
+   * under {@code PER_BATCH}, nothing under {@code PER_ROW}, whose rows commit one by one - and a client transaction it
+   * wrote into is ended, as a terminated statement's is (issue #9689), so a later commit cannot publish half a load.
+   */
+  private void retractTerminatedInsert(final InsertContext ctx, final TransactionContext extTxCtx,
+      final StreamingLoadEntry entry) {
+    if (ctx.externalTransaction) {
+      endTransactionOfTerminatedLoad(extTxCtx, entry.get());
+      return;
+    }
+    final TransactionMode mode = ctx.opts.getTransactionMode();
+    final boolean wholeLoadRolledBack = ctx.tx != null && !ctx.opts.getValidateOnly()//
+        && (mode == TransactionMode.PER_STREAM || mode == TransactionMode.PER_REQUEST);
+    ctx.closeQuietly();
+    if (wholeLoadRolledBack)
+      entry.setRolledBack();
+  }
+
+  /**
+   * Ends the client transaction a terminated load wrote into, on the transaction's own thread, unless a statement of the
+   * load already ended it there ({@link #submitToActiveTransaction}) or the client did.
+   */
+  private void endTransactionOfTerminatedLoad(final TransactionContext txCtx, final RunningQuery runningQuery) {
+    if (txCtx == null || runningQuery == null || activeTransactions.get(txCtx.txId) != txCtx)
+      return;
+    try {
+      txCtx.executor.submit(() -> endTerminatedTransaction(txCtx, runningQuery)).get();
+    } catch (final RejectedExecutionException | ExecutionException e) {
+      LogManager.instance().log(this, Level.WARNING, "Cannot end the transaction of a terminated load txId=%s", e, txCtx.txId);
+    } catch (final InterruptedException e) {
+      Thread.currentThread().interrupt();
+    }
   }
 
   /**
@@ -3019,34 +3238,48 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
     if (rolledBack == 0)
       totals.failed++;
 
-    totals.errors.add(InsertError.newBuilder()
-        .setRowIndex(-1)
-        .setCode(commitErrorCode(e))
-        .setMessage(insertErrorMessage(e))
-        .setField("")
-        .build());
+    totals.errors.add(insertError(-1, commitErrorCode(e), e));
   }
 
   /**
    * Classifies a transaction-level exception into the structured {@link InsertError} code:
    * {@code CONFLICT} for a {@link DuplicatedKeyException}, {@code CONTRACT_VIOLATION} for a stream
    * contract rejection ({@link IllegalArgumentException}, e.g. "options changed mid-stream", which is
-   * not a commit failure at all), and {@code COMMIT_FAILED} otherwise. Shared by the mid-stream onNext
+   * not a commit failure at all), {@code NOT_LEADER} for a refusal by a follower that names the leader (issue #9930;
+   * {@link #insertError} puts the address beside it), and {@code COMMIT_FAILED} otherwise. Shared by the mid-stream onNext
    * failure path (Issue #4806) and the deferred whole-stream commit path (Issue #4198) so the two stay
    * in sync.
    */
   private static String commitErrorCode(final Exception e) {
     if (e instanceof DuplicatedKeyException)
       return "CONFLICT";
+    if (ServerIsNotTheLeaderException.redirectIn(e) != null)
+      return "NOT_LEADER";
     if (e instanceof IllegalArgumentException)
       return "CONTRACT_VIOLATION";
     return "COMMIT_FAILED";
   }
 
   /**
-   * Returns a non-null human-readable message for an exception, falling back to the simple class name
-   * when {@link Exception#getMessage()} is null.
+   * Builds the {@link InsertError} for a failure that is not a duplicated key: {@code code} unless {@code e} is a
+   * refusal by a node that is not the leader and names the one that is, which is {@code NOT_LEADER} with the leader in
+   * {@code leader_address} - a client is to send the load there rather than report a broken server (issue #9930, the
+   * gRPC counterpart of #9868). A field of its own rather than a sentence in the message: the message is concealed in
+   * production mode, and {@code getMessage()} never carried the address anyway. The address is the one the gRPC
+   * trailers already hand out for the same refusal, so it reveals nothing those do not.
+   * <p>
+   * {@code code} is used only when {@code e} names no leader: a refusal that does always answers {@code NOT_LEADER},
+   * whatever the caller passed ({@link #commitErrorCode} already returns it for the commit paths, the row and bidi chunk
+   * paths pass {@code DB_ERROR}). {@code redirectIn} returns only a refusal whose address is neither null nor blank.
    */
+  private InsertError insertError(final long rowIndex, final String code, final Throwable e) {
+    final InsertError.Builder error = InsertError.newBuilder().setRowIndex(rowIndex).setMessage(insertErrorMessage(e)).setField("");
+    final ServerIsNotTheLeaderException refusal = ServerIsNotTheLeaderException.redirectIn(e);
+    if (refusal == null)
+      return error.setCode(code).build();
+    return error.setCode("NOT_LEADER").setLeaderAddress(refusal.getLeaderAddress()).build();
+  }
+
   /**
    * The free-form text of an {@code InsertError} - the per-row and per-chunk failure channel that
    * {@code insertStream} and {@code insertBidirectional} report through - concealed and logged in production mode.
@@ -3121,9 +3354,34 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
     final int[] vertexBatchSize = { GRAPH_BATCH_VERTEX_BUFFER };
     final Boolean[] returnIdMapping = { null };
 
+    // Issue #9875: listed by "list queries" from the first chunk to the end of the stream, and stopped by "terminate query"
+    final StreamingLoadEntry entry = new StreamingLoadEntry(runningQueries(), "GraphBatchLoad");
+    // Ends a terminated load: the batch is dropped like after any other failure - what it flushed stays committed, and
+    // the trailers say how much - and the entry goes. Idempotent: whatever runs it next finds no batch left, and the
+    // synchronized observer drops a second terminal call. Never under a
+    // running chunk (the termination listener runs it only between two), so it reads the stream's state safely
+    final Runnable endTerminated = () -> {
+      errorSent[0] = true;
+      final GraphBatch abandoned = batchRef.getAndSet(null);
+      try {
+        if (abandoned != null)
+          abandoned.abandon();
+        out.onError(graphBatchLoadError(entry.terminated(
+                "what it flushed before the termination stays committed (see the result trailer), the rest was dropped"),
+            partialCommitTrailer(abandoned, counts, tempIdMap, startedAt), ha(), conceal));
+      } finally {
+        entry.close();
+      }
+    };
+
     call.setOnCancelHandler(() -> {
       cancelled.set(true);
       out.markTerminated();
+    });
+    setOnCloseHandler(call, () -> {
+      if (entry.isTerminated())
+        endTerminated.run();
+      entry.close();
     });
     call.request(1);
 
@@ -3133,7 +3391,18 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       public void onNext(final GraphBatchChunk chunk) {
         if (cancelled.get())
           return;
+        // A chunk that arrived after the load was terminated: nothing more is written
+        if (entry.isTerminated()) {
+          endTerminated.run();
+          return;
+        }
+        // Bound for the chunk: the commits of the flushes it triggers obey a termination, and the termination listener
+        // leaves a running chunk alone
+        final StreamingLoadEntry.Bound bound = entry.enter();
         try {
+          // Terminated between the check above and the lock: the finally below ends the load
+          if (entry.isTerminated())
+            return;
           GraphBatch batch = batchRef.get();
           if (batch == null) {
             // First chunk: initialize
@@ -3191,10 +3460,16 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
               return;
             }
             batchRef.set(batch);
+
+            // Once the database has authenticated the caller: the entry names who runs the load, and where
+            entry.open(db.getName(), resolvedUsername(chunk.getCredentials()), null, () -> "GraphBatchLoad",
+                () -> entry.runIfIdle(endTerminated));
           }
 
           // Process records in this chunk
           for (final GraphBatchRecord rec : chunk.getRecordsList()) {
+            // Before each record: a terminated load stops here
+            entry.checkNotTerminated();
             if (rec.getKind() == GraphBatchRecord.Kind.EDGE) {
               // Flush remaining vertices on transition to edge phase
               if (!inEdgePhase[0]) {
@@ -3238,6 +3513,12 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
           out.onError(graphBatchLoadError(e, trailers, ha(), conceal));
           return;
         } finally {
+          bound.close();
+          // Requested while the chunk ran: the load ends here. endTerminated sets errorSent, so no chunk is asked for below
+          if (entry.isTerminated())
+            endTerminated.run();
+          else if (errorSent[0])
+            entry.close();
           if (!cancelled.get() && !errorSent[0])
             call.request(1);
         }
@@ -3246,14 +3527,24 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       @Override
       public void onError(final Throwable t) {
         out.markTerminated();
-        closeQuietly(batchRef.getAndSet(null));
+        if (entry.isTerminated())
+          endTerminated.run();
+        else
+          closeQuietly(batchRef.getAndSet(null));
+        entry.close();
       }
 
       @Override
       public void onCompleted() {
-        if (errorSent[0])
+        if (errorSent[0]) {
+          entry.close();
           return;
+        }
+        final StreamingLoadEntry.Bound bound = entry.enter();
         try {
+          // Terminated: the batch is not closed, the finally below drops it
+          if (entry.isTerminated())
+            return;
           final GraphBatch batch = batchRef.get();
           if (batch == null) {
             out.onNext(GraphBatchResult.newBuilder().build());
@@ -3267,6 +3558,8 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
 
           // Close batch -> flushes edges, connects incoming edges
           batch.close();
+          // Closed: nothing is left for a termination to drop
+          batchRef.compareAndSet(batch, null);
 
           final GraphBatchResult.Builder result = GraphBatchResult.newBuilder()
               .setVerticesCreated(counts[0])
@@ -3294,7 +3587,13 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
           // buffered that the counters must not claim: the batch is asked what it actually flushed.
           final Metadata trailers = partialCommitTrailer(batchRef.get(), counts, tempIdMap, startedAt);
           out.onError(graphBatchLoadError(e, trailers, ha(), conceal));
-          closeQuietly(batchRef.get());
+          closeQuietly(batchRef.getAndSet(null));
+        } finally {
+          bound.close();
+          if (entry.isTerminated())
+            endTerminated.run();
+          // LAST: THE ENTRY LEAVING THE LIST IS THE PROOF THE WORK IS OVER
+          entry.close();
         }
       }
     };
@@ -3419,11 +3718,26 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
     final Set<String> unknownTypes = new LinkedHashSet<>();
     final Set<String> nonTimeSeriesTypes = new LinkedHashSet<>();
     final Set<String> unavailableTypes = new LinkedHashSet<>();
+    final Set<String> undeclaredKeys = new LinkedHashSet<>();
+    final Set<String> unreadableValues = new LinkedHashSet<>();
+
+    // Issue #9875: listed by "list queries" from the first chunk to the end of the stream, and stopped by "terminate query"
+    final StreamingLoadEntry entry = new StreamingLoadEntry(runningQueries(), "TimeSeriesWriteStream");
+    // Ends a terminated load. Nothing to retract: every append commits its own shard transactions as it is made
+    final Runnable endTerminated = () -> {
+      failed.set(true);
+      try {
+        out.onError(mapError(entry.terminated("the samples appended before the termination stay written"), "TimeSeriesWriteStream"));
+      } finally {
+        entry.close();
+      }
+    };
 
     call.setOnCancelHandler(() -> {
       cancelled.set(true);
       out.markTerminated();
     });
+    setOnCloseHandler(call, entry::close);
 
     call.request(1);
 
@@ -3433,9 +3747,20 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       public void onNext(final TimeSeriesWriteChunk chunk) {
         if (cancelled.get() || failed.get())
           return;
+        // A chunk that arrived after the load was terminated: nothing more is appended
+        if (entry.isTerminated()) {
+          endTerminated.run();
+          return;
+        }
 
         ProtocolContext.set("grpc");
+        // Bound for the chunk: the commits of its appends obey a termination, and the termination listener leaves a
+        // running chunk alone
+        final StreamingLoadEntry.Bound bound = entry.enter();
         try {
+          // Terminated between the check above and the lock: the finally below ends the load
+          if (entry.isTerminated())
+            return;
           Database db = dbRef.get();
           if (db == null) {
             if (chunk.getDatabase().isEmpty())
@@ -3446,8 +3771,13 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
             // security lookup on the per-chunk hot path for no gain, since the stream is one authenticated call.
             db = getDatabase(chunk.getDatabase(), chunk.getCredentials());
             dbRef.set(db);
+
+            // Once the database has authenticated the caller: the entry names who runs the load, and where
+            entry.open(db.getName(), resolvedUsername(chunk.getCredentials()), null, () -> "TimeSeriesWriteStream",
+                () -> entry.runIfIdle(endTerminated));
           }
 
+          entry.checkNotTerminated();
           final List<Sample> samples = GrpcTimeSeriesSupport.toSamples(chunk.getPointsList(), chunk.getType(),
               chunk.getPrecision());
           final WriteReport report = TimeSeriesGateway.write((DatabaseInternal) db, samples);
@@ -3458,16 +3788,32 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
           unknownTypes.addAll(report.unknownTypes());
           nonTimeSeriesTypes.addAll(report.nonTimeSeriesTypes());
           unavailableTypes.addAll(report.unavailableTypes());
+          // Capped across the stream as the gateway caps it per call, so a long stream cannot grow the summary
+          for (final String key : report.undeclaredKeys())
+            if (undeclaredKeys.size() < TimeSeriesGateway.MAX_REPORTED_UNDECLARED_KEYS)
+              undeclaredKeys.add(key);
+          for (final String value : report.unreadableValues())
+            if (unreadableValues.size() < TimeSeriesGateway.MAX_REPORTED_UNREADABLE_VALUES)
+              unreadableValues.add(value);
 
           call.request(1);
         } catch (final Exception e) {
           // Stop appending and terminate now. Unlike insertStream there is nothing to roll back and nothing to
           // drain for: every chunk before this one is already durable, so the client's useful next step is the
           // error, and the counts it can read from a subsequent query.
+          // Terminated: the finally below tells the client, with what became of the samples already appended
+          if (entry.isTerminated())
+            return;
           failed.set(true);
           out.onError(mapError(e, "TimeSeriesWriteStream"));
         } finally {
+          bound.close();
           ProtocolContext.clear();
+          // Requested while the chunk ran, or the chunk failed: the load is over
+          if (entry.isTerminated())
+            endTerminated.run();
+          else if (failed.get())
+            entry.close();
         }
       }
 
@@ -3476,12 +3822,28 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         cancelled.set(true);
         LogManager.instance().log(this, Level.FINE, "TimeSeriesWriteStream client error: %s", t.getMessage());
         out.markTerminated();
+        entry.close();
       }
 
       @Override
       public void onCompleted() {
-        if (cancelled.get() || failed.get())
+        if (cancelled.get() || failed.get()) {
+          entry.close();
           return;
+        }
+        if (entry.isTerminated()) {
+          endTerminated.run();
+          return;
+        }
+        // The summary is the end of the load: the entry goes after it
+        try {
+          sendTimeSeriesWriteSummary();
+        } finally {
+          entry.close();
+        }
+      }
+
+      private void sendTimeSeriesWriteSummary() {
         out.onNext(TimeSeriesWriteSummary.newBuilder()
             .setReceived(totals[0])
             .setWritten(totals[1])
@@ -3489,6 +3851,8 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
             .addAllUnknownTypes(unknownTypes)
             .addAllNonTimeSeriesTypes(nonTimeSeriesTypes)
             .addAllUnavailableTypes(unavailableTypes)
+            .addAllUndeclaredKeys(undeclaredKeys)
+            .addAllUnreadableValues(unreadableValues)
             .setExecutionTimeMs(System.currentTimeMillis() - startedAt)
             .build());
         out.onCompleted();
@@ -3525,6 +3889,8 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
     // Set before every terminal in the try; `cancelled` is set asynchronously and cannot guard a throwing terminal.
     boolean terminated = false;
 
+    Future<?> streamFuture = null;
+
     ProtocolContext.set("grpc");
     try {
       final String incomingTxId = req.hasTransaction() ? req.getTransaction().getTransactionId() : null;
@@ -3537,10 +3903,11 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
             (DatabaseInternal) getDatabase(req.getDatabase(), req.getCredentials()));
       else
         try {
-          submitToActiveTransaction(txCtx, () -> {
+          streamFuture = submitToActiveTransaction(txCtx, () -> {
             streamTimeSeries(call, cancelled, serverTimedOut, req, (DatabaseInternal) txCtx.db);
             return null;
-          }).get();
+          });
+          streamFuture.get();
         } catch (final ExecutionException e) {
           // Surface the real failure - the resolution status, the RESOURCE_EXHAUSTED ceiling,
           // requireTransactionStillActive's FAILED_PRECONDITION - instead of letting the catch below map every
@@ -3549,10 +3916,17 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         } catch (final InterruptedException e) {
           Thread.currentThread().interrupt();
           terminated = true;
-          if (!cancelled.get())
-            resp.onError(Status.CANCELLED
-                .withDescription("TimeSeriesQuery was interrupted while streaming inside the transaction")
-                .asRuntimeException());
+          // A client cancel already closed the call, so it needs no terminal; either way the executor must stop
+          // streaming into it (issue #8752)
+          final boolean clientCancelled = cancelled.get();
+          // Flagged before taking the monitor, for the same fairness reason as in streamQuery
+          stopInTransactionStream(streamFuture, cancelled);
+          synchronized (call) {
+            if (!clientCancelled)
+              resp.onError(Status.CANCELLED
+                  .withDescription("TimeSeriesQuery was interrupted while streaming inside the transaction")
+                  .asRuntimeException());
+          }
           return;
         }
 
@@ -3576,6 +3950,19 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
     } finally {
       ProtocolContext.clear();
     }
+  }
+
+  /**
+   * Stops a stream running on a transaction's executor after the handler waiting for it was interrupted (issue #8752):
+   * the producer checks {@code cancelled} before every row and every batch, so it quits at its next boundary instead of
+   * iterating the rest of the result set into a call the handler is about to close. {@code cancel(false)} only keeps a
+   * not-yet-started task from running; the thread is never interrupted, because that would reach the transaction's
+   * file I/O and close its channels.
+   */
+  private static void stopInTransactionStream(final Future<?> future, final AtomicBoolean cancelled) {
+    cancelled.set(true);
+    if (future != null)
+      future.cancel(false);
   }
 
   /**
@@ -3631,7 +4018,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
     // Unset means unbounded, which is not the same as 0: 0 is a real epoch timestamp.
     final long fromTs = req.hasFromTimestamp() ? req.getFromTimestamp() : Long.MIN_VALUE;
     final long toTs = req.hasToTimestamp() ? req.getToTimestamp() : Long.MAX_VALUE;
-    final TagFilter tagFilter = TimeSeriesGateway.buildTagFilter(GrpcTimeSeriesSupport.toTagMap(req.getTags()),
+    final TagFilter tagFilter = TimeSeriesGateway.buildTagFilter(db, GrpcTimeSeriesSupport.toTagMap(req.getTags()),
         columns);
 
     final int batchSize = req.getBatchSize() > 0 ? Math.min(req.getBatchSize(), TS_MAX_BATCH_SIZE)
@@ -3896,16 +4283,20 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       final AtomicBoolean cancelled, final AtomicBoolean serverTimedOut,
       final TimeSeriesQueryResult.Builder payload) {
     waitUntilReady(call, cancelled, serverTimedOut);
-    if (cancelled.get())
-      return;
-    try {
-      call.onNext(payload.build());
-    } catch (final StatusRuntimeException e) {
-      if (e.getStatus().getCode() == Status.Code.CANCELLED) {
-        cancelled.set(true);
+    final TimeSeriesQueryResult message = payload.build();
+    // Same monitor as the interruption terminal in timeSeriesQuery (issue #8752)
+    synchronized (call) {
+      if (cancelled.get())
         return;
+      try {
+        call.onNext(message);
+      } catch (final StatusRuntimeException e) {
+        if (e.getStatus().getCode() == Status.Code.CANCELLED) {
+          cancelled.set(true);
+          return;
+        }
+        throw e;
       }
-      throw e;
     }
   }
 
@@ -3943,7 +4334,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       throw GrpcTimeSeriesSupport.resolutionFailure(req.getType(), resolved);
 
     final List<ColumnDefinition> columns = resolved.columns();
-    final TagFilter tagFilter = TimeSeriesGateway.buildTagFilter(GrpcTimeSeriesSupport.toTagMap(req.getTags()),
+    final TagFilter tagFilter = TimeSeriesGateway.buildTagFilter(db, GrpcTimeSeriesSupport.toTagMap(req.getTags()),
         columns);
     // What the read actually did, published to whatever the server's metrics subsystem feeds (issue #7717),
     // under the same surface tag its HTTP sibling uses. Without this the new counters would answer for
@@ -3977,6 +4368,8 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         .addAllUnknownTypes(report.unknownTypes())
         .addAllNonTimeSeriesTypes(report.nonTimeSeriesTypes())
         .addAllUnavailableTypes(report.unavailableTypes())
+        .addAllUndeclaredKeys(report.undeclaredKeys())
+        .addAllUnreadableValues(report.unreadableValues())
         .setExecutionTimeMs(System.currentTimeMillis() - startedAt)
         .build();
   }
@@ -4218,6 +4611,26 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
     // because isReady() may return false, causing responses to be stuck.
     final Consumer<InsertResponse> sendResponse = out::onNext;
 
+    // Issue #9875: listed by "list queries" from START to the end of the stream, and stopped by "terminate query"
+    final StreamingLoadEntry entry = new StreamingLoadEntry(runningQueries(), "InsertBidirectional");
+
+    // Ends a terminated load on the stream's executor, where its transaction lives: what the mode can still retract is
+    // retracted, the client is told, and the entry goes. Once: whatever runs it next finds no context left
+    final Runnable endTerminated = () -> {
+      final InsertContext ctx = ref.getAndSet(null);
+      final String outcome = terminatedInsertOutcome(ctx != null ? ctx.opts : null, extTxCtxRef.get() != null);
+      try {
+        if (ctx != null) {
+          sessionWatermark.remove(ctx.sessionId);
+          retractTerminatedInsert(ctx, extTxCtxRef.get(), entry);
+        }
+        out.onError(mapError(entry.terminated(outcome), "insertBidirectional"));
+      } finally {
+        entry.close();
+        streamExecutor.shutdown();
+      }
+    };
+
     // Cleanup helper that can be called multiple times safely
     final Runnable cleanupAndShutdown = () -> {
       cancelled.set(true);
@@ -4229,9 +4642,11 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
             sessionWatermark.remove(ctx.sessionId);
             ctx.closeQuietly();
           }
+          entry.close();
         }));
       } catch (RejectedExecutionException ignore) {
         // Executor already shut down - cleanup was already done
+        entry.close();
       }
       streamExecutor.shutdown();
     };
@@ -4253,6 +4668,9 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
           if (cancelled.get())
             return;
 
+          // Bound for the message: the rows' checks and the commits it attempts - on this thread or on the client
+          // transaction's - obey a termination (issue #9875)
+          final StreamingLoadEntry.Bound bound = entry.bind();
           try {
             switch (reqMsg.getMsgCase()) {
 
@@ -4267,6 +4685,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
                     sessionWatermark.remove(existing.sessionId);
                     existing.closeQuietly();
                   }
+                  entry.close();
                   streamExecutor.shutdown();
                   return;
                 }
@@ -4305,6 +4724,20 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
                 ref.set(ctx);
                 extTxCtxRef.set(txCtx);
                 sessionWatermark.put(ctx.sessionId, 0L);
+
+                // Once the database has authenticated the caller: the entry names who runs the load, and where. A
+                // termination is carried out on this executor, after the message running now, which sees it by itself
+                entry.open(ctx.db.getName(), resolvedUsername(startMsg.getCredentials()), txCtx != null ? txCtx.txId : null,
+                    () -> insertLoadText("InsertBidirectional", opts, ctx.sessionId), () -> {
+                      // Messages queued behind the running one now return at once, so endTerminated, queued last, is
+                      // what closes the entry - unless the running message sees the termination and runs it first
+                      cancelled.set(true);
+                      try {
+                        streamExecutor.submit(grpcContext.wrap(endTerminated));
+                      } catch (final RejectedExecutionException ignore) {
+                        // The stream already ended, and whatever ended it closes the entry
+                      }
+                    });
 
                 sendResponse.accept(
                     InsertResponse.newBuilder().setStarted(Started.newBuilder().setSessionId(ctx.sessionId).build()).build());
@@ -4358,6 +4791,10 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
                       .build());
 
                 } catch (Exception e) {
+                  // Terminated: not a failed chunk to acknowledge, but the end of the load, which the finally below
+                  // carries out
+                  if (entry.isTerminated())
+                    return;
                   // surface as failed chunk and continue (or switch to resp.onError(...) if you
                   // want to fail fast)
 
@@ -4368,9 +4805,9 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
                   // A whole-chunk exception is transaction-level, not attributable to a single row, so report
                   // row_index=-1 ("not applicable") per the InsertError contract, matching the non-bidi
                   // insertStream path. Per-row failures are already reported chunk-relative inside insertRows.
-                  perChunk.errors.add(InsertError.newBuilder().setRowIndex(-1).setCode(
-                          "DB_ERROR")
-                      .setMessage(insertErrorMessage(e)).build());
+                  // A follower's refusal of the chunk's commit is NOT_LEADER with the leader's address, not a
+                  // server fault (issue #9930)
+                  perChunk.errors.add(insertError(-1, "DB_ERROR", e));
                   ctx.totals.add(perChunk);
                   // intentionally do not advance watermark on failure; client may replay safely
 
@@ -4397,6 +4834,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
                   sessionWatermark.remove(ctx.sessionId);
                   ctx.closeQuietly();
                   ref.set(null);
+                  entry.close();
                   // Issue #5041: COMMIT (success or failure) is terminal - stop the per-stream
                   // executor so its thread does not leak when the client does not half-close.
                   streamExecutor.shutdown();
@@ -4416,9 +4854,15 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
               sessionWatermark.remove(ctx.sessionId);
               ctx.closeQuietly();
             }
+            entry.close();
             // Issue #5041: an unexpected failure is terminal - stop the per-stream executor so its
             // thread does not leak after the error is delivered to the client.
             streamExecutor.shutdown();
+          } finally {
+            bound.close();
+            // Seen by the message, or requested while it ran: the load ends here
+            if (entry.isTerminated())
+              endTerminated.run();
           }
         };
 
@@ -4452,9 +4896,11 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
               sessionWatermark.remove(ctx.sessionId);
               ctx.closeQuietly();
             }
+            entry.close();
           }));
         } catch (RejectedExecutionException ignore) {
           // Executor already shut down
+          entry.close();
         }
         streamExecutor.shutdown();
       }
@@ -4496,31 +4942,34 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
     return Identifier.quote(name);
   }
 
-  // Match an existing row by key and merge onto it; false when none matched (caller then inserts).
+  /** What an upsert by key did: a veto is not "no match", or the caller would insert a second record for the key. */
+  private enum UpsertOutcome {NO_MATCH, UPDATED, VETOED}
+
+  // Match an existing row by key and merge onto it; NO_MATCH when none matched (caller then inserts).
   // MutableVertex and MutableEdge both extend MutableDocument, so asDocument().modify() returns the
-  // record's real mutable subtype; save() therefore persists a vertex/edge through its own path.
-  private boolean tryUpsertByRecord(final InsertContext ctx, final GrpcRecord r, final boolean isEdge) {
+  // record's real mutable subtype; saveReportingVeto() therefore persists a vertex/edge through its own path.
+  private UpsertOutcome tryUpsertByRecord(final InsertContext ctx, final GrpcRecord r, final boolean isEdge) {
     final List<String> keys = ctx.keyCols;
     if (keys.isEmpty())
-      return false;
+      return UpsertOutcome.NO_MATCH;
 
     final String where = String.join(" AND ", keys.stream().map(k -> quoteName(k) + " = ?").toList());
     final Object[] params = keys.stream().map(k -> recordValue(r, k)).toArray();
 
     try (final ResultSet rs = ctx.db.query("sql", "SELECT FROM " + quoteName(ctx.opts.getTargetClass()) + " WHERE " + where, params)) {
       if (!rs.hasNext())
-        return false;
+        return UpsertOutcome.NO_MATCH;
 
       final Result res = rs.next();
       if (!res.isElement())
-        return false;
+        return UpsertOutcome.NO_MATCH;
 
       final MutableDocument existing = res.getElement().get().asDocument().modify();
       // The upsert writes the request's values, not values computed from the record read: no stale-read refusal (#8610)
       existing.clearBasedOnStaleRead();
       applyConflictUpdates(ctx, r, isEdge, existing);
-      existing.save();
-      return true;
+      // an update a BeforeRecordUpdateListener vetoed is not counted as one (issue #9974)
+      return existing.saveReportingVeto() ? UpsertOutcome.UPDATED : UpsertOutcome.VETOED;
     }
   }
 
@@ -4551,9 +5000,42 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       errors.addAll(o.errors);
     }
 
+    /**
+     * Counts the outcome of an upsert by key, answering whether a record matched (so nothing is to be inserted). A write a listener
+     * vetoed is counted as ignored: the row was refused on purpose, not applied and not failed (issue #9974).
+     */
+    boolean upserted(final UpsertOutcome outcome) {
+      switch (outcome) {
+      case UPDATED -> updated++;
+      case VETOED -> ignored++;
+      case NO_MATCH -> {
+        return false;
+      }
+      }
+      return true;
+    }
+
+    /** Counts a create, which a {@code BeforeRecordCreateListener} may have vetoed (issue #9974). */
+    void inserted(final boolean created) {
+      if (created)
+        inserted++;
+      else
+        ignored++;
+    }
+
+    /**
+     * For a failure that is no exception the server could have been refused with (a conflict, a missing endpoint, a
+     * contract check). One built from an exception goes through {@link ArcadeDbGrpcService#insertError} and {@link #err(InsertError)},
+     * which answer a leader refusal as {@code NOT_LEADER} with the leader's address (issue #9930).
+     */
     void err(long rowIndex, String code, String msg, String field) {
       failed++;
       errors.add(InsertError.newBuilder().setRowIndex(rowIndex).setCode(code).setMessage(msg).setField(field).build());
+    }
+
+    void err(final InsertError error) {
+      failed++;
+      errors.add(error);
     }
   }
 
@@ -4615,7 +5097,14 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         return c;
       }
 
+    // The entry of the stream the rows come from (issue #9875), bound by the stream on this thread
+    final RunningQuery runningQuery = RunningQuery.current();
+
     while (it.hasNext()) {
+
+      // Before each row: a terminated load stops here, and the stream retracts what its mode can
+      if (runningQuery != null)
+        runningQuery.checkNotTerminated("the insert");
 
       GrpcRecord r = it.next();
 
@@ -4629,22 +5118,21 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         final ConflictMode mode = ctx.opts.getConflictMode();
 
         if (isVertex) {
-          if (mode == ConflictMode.CONFLICT_UPDATE && tryUpsertByRecord(ctx, r, false)) {
-            c.updated++;
+          if (mode == ConflictMode.CONFLICT_UPDATE && c.upserted(tryUpsertByRecord(ctx, r, false))) {
+            // matched: counted as updated, or as ignored when a listener vetoed the update
           } else if (mode == ConflictMode.CONFLICT_IGNORE && keyExistsByRecord(ctx, r)) {
             c.ignored++;
           } else {
             final MutableVertex v = ctx.db.newVertex(ctx.opts.getTargetClass());
             applyGrpcRecord(v, r);
-            v.save();
-            c.inserted++;
+            c.inserted(v.saveReportingVeto());
           }
         } else if (isEdge) {
           // Edges must honor conflict_mode / key_columns like documents and vertices. newEdge()
           // persists and links the edge immediately, so the upsert/ignore check has to run before the
           // edge is created, otherwise a match would leave a dangling edge.
-          if (mode == ConflictMode.CONFLICT_UPDATE && tryUpsertByRecord(ctx, r, true)) {
-            c.updated++;
+          if (mode == ConflictMode.CONFLICT_UPDATE && c.upserted(tryUpsertByRecord(ctx, r, true))) {
+            // matched: counted as updated, or as ignored when a listener vetoed the update
           } else if (mode == ConflictMode.CONFLICT_IGNORE && keyExistsByRecord(ctx, r)) {
             c.ignored++;
           } else {
@@ -4663,20 +5151,18 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
               // Create edge from the OUT vertex. The `in` RID is stored in the edge record; use DatabaseRID so edge.getIn() resolves across threads.
               final MutableEdge e = outV.newEdge(ctx.opts.getTargetClass(), ctx.db.newRID(inRid));
               applyGrpcRecord(e, r); // sets edge properties
-              e.save();
-              c.inserted++;
+              c.inserted(e.saveReportingVeto());
             }
           }
         } else {
-          if (mode == ConflictMode.CONFLICT_UPDATE && tryUpsertByRecord(ctx, r, false)) {
-            c.updated++;
+          if (mode == ConflictMode.CONFLICT_UPDATE && c.upserted(tryUpsertByRecord(ctx, r, false))) {
+            // matched: counted as updated, or as ignored when a listener vetoed the update
           } else if (mode == ConflictMode.CONFLICT_IGNORE && keyExistsByRecord(ctx, r)) {
             c.ignored++;
           } else {
             final MutableDocument d = ctx.db.newDocument(ctx.opts.getTargetClass());
             applyGrpcRecord(d, r);
-            d.save();
-            c.inserted++;
+            c.inserted(d.saveReportingVeto());
           }
         }
 
@@ -4690,9 +5176,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
           // same new key, which is not deterministically reproducible single-threaded.
           case CONFLICT_UPDATE -> {
             try {
-              if (tryUpsertByRecord(ctx, r, isEdge))
-                c.updated++;
-              else
+              if (!c.upserted(tryUpsertByRecord(ctx, r, isEdge)))
                 // The match vanished between the conflict and the retry (transient MVCC window): report
                 // it as a retriable CONFLICT rather than guessing.
                 c.err(c.received - 1, "CONFLICT", insertErrorMessage(dup), "");
@@ -4701,13 +5185,16 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
               c.err(c.received - 1, "CONFLICT", insertErrorMessage(retryDup), "");
             } catch (Exception retryEx) {
               // Anything else (IO error, etc.) is a real failure - do not mask it as a CONFLICT.
-              c.err(c.received - 1, "DB_ERROR", insertErrorMessage(retryEx), "");
+              c.err(insertError(c.received - 1, "DB_ERROR", retryEx));
             }
           }
           case CONFLICT_ERROR -> c.err(c.received - 1, "CONFLICT", insertErrorMessage(dup), "");
         }
+      } catch (QueryTerminatedException e) {
+        // Not a failure of the row: the end of the load
+        throw e;
       } catch (Exception e) {
-        c.err(c.received - 1, "DB_ERROR", insertErrorMessage(e), "");
+        c.err(insertError(c.received - 1, "DB_ERROR", e));
       }
 
       inBatch++;
@@ -4743,7 +5230,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       if (k.startsWith("@"))
         return;
       Object javaVal = fromGrpcValue(grpcVal);
-      if (LogManager.instance().isDebugEnabled())
+      if (LogManager.instance().isLoggable(this, Level.FINE))
         LogManager.instance().log(this, Level.FINE, "APPLY-DOC %s <= %s -> %s", k, summarizeGrpc(grpcVal),
             summarizeJava(javaVal));
       doc.set(k, javaVal);
@@ -4756,7 +5243,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       if (k.startsWith("@"))
         return;
       Object javaVal = fromGrpcValue(grpcVal);
-      if (LogManager.instance().isDebugEnabled())
+      if (LogManager.instance().isLoggable(this, Level.FINE))
         LogManager.instance()
             .log(this, Level.FINE, "APPLY-VERTEX %s <= %s -> %s", k, summarizeGrpc(grpcVal), summarizeJava(javaVal));
       vertex.set(k, javaVal);
@@ -4769,7 +5256,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       if (k.startsWith("@"))
         return;
       Object javaVal = fromGrpcValue(grpcVal);
-      if (LogManager.instance().isDebugEnabled())
+      if (LogManager.instance().isLoggable(this, Level.FINE))
         LogManager.instance().log(this, Level.FINE, "APPLY-EDGE %s <= %s -> %s", k, summarizeGrpc(grpcVal),
             summarizeJava(javaVal));
       edge.set(k, javaVal);
@@ -4791,7 +5278,8 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       case DOUBLE_VALUE:
         return dbgDec("fromGrpcValue", v, v.getDoubleValue(), null);
       case STRING_VALUE:
-        return dbgDec("fromGrpcValue", v, v.getStringValue(), null);
+        // Issue #9969: a zoned datetime or a time of day travels as text tagged with its logical type
+        return dbgDec("fromGrpcValue", v, GrpcTemporalCodec.decodeString(v.getStringValue(), v.getLogicalType()), null);
       case BYTES_VALUE:
         return dbgDec("fromGrpcValue", v, v.getBytesValue().toByteArray(), null);
       case TIMESTAMP_VALUE: {
@@ -4842,10 +5330,10 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
 
     // This method runs per value on the read hot path (recursively for collections/maps), so all
     // FINE logging is guarded to avoid building the delegated varargs array at the default log level.
-    final boolean debug = LogManager.instance().isDebugEnabled();
+    final boolean debug = LogManager.instance().isLoggable(this, Level.FINE);
 
     if (debug)
-      LogManager.instance().log(this, Level.FINE, "toGrpcValue(): Converting\n   value = %s\n   class = %s", o,
+      LogManager.instance().log(this, Level.FINE, "toGrpcValue(): Converting\n   value = %s\n   class = %s", summarizeJava(o),
           o == null ? "null" : o.getClass().getName());
 
     if (o instanceof JsonElement je) {
@@ -4876,37 +5364,11 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
     if (o instanceof byte[] v)
       return dbgEnc("toGrpcValue", o, b.setBytesValue(ByteString.copyFrom(v)).build(), null);
 
-    if (o instanceof Date v) {
-      return dbgEnc("toGrpcValue", o,
-          GrpcValue.newBuilder().setTimestampValue(GrpcTypeConverter.msToTimestamp(v.getTime())).setLogicalType(
-              "datetime").build(), null);
-    }
-
-    // Issue #4149: emit Java time temporals as proto Timestamp instead of falling through to
-    // String.valueOf(o), which silently dropped sub-millisecond precision.
-    if (o instanceof LocalDate ld) {
-      final long seconds = ld.atStartOfDay(ZoneOffset.UTC).toEpochSecond();
-      return dbgEnc("toGrpcValue", o, GrpcValue.newBuilder()
-          .setTimestampValue(Timestamp.newBuilder().setSeconds(seconds).setNanos(0).build())
-          .setLogicalType("date").build(), null);
-    }
-    if (o instanceof LocalDateTime ldt) {
-      final Instant instant = ldt.toInstant(ZoneOffset.UTC);
-      return dbgEnc("toGrpcValue", o, GrpcValue.newBuilder()
-          .setTimestampValue(Timestamp.newBuilder().setSeconds(instant.getEpochSecond()).setNanos(instant.getNano()).build())
-          .setLogicalType("datetime").build(), null);
-    }
-    if (o instanceof Instant instant) {
-      return dbgEnc("toGrpcValue", o, GrpcValue.newBuilder()
-          .setTimestampValue(Timestamp.newBuilder().setSeconds(instant.getEpochSecond()).setNanos(instant.getNano()).build())
-          .setLogicalType("datetime").build(), null);
-    }
-    if (o instanceof ZonedDateTime zdt) {
-      final Instant instant = zdt.toInstant();
-      return dbgEnc("toGrpcValue", o, GrpcValue.newBuilder()
-          .setTimestampValue(Timestamp.newBuilder().setSeconds(instant.getEpochSecond()).setNanos(instant.getNano()).build())
-          .setLogicalType("datetime").build(), null);
-    }
+    // Issue #9969: the encoder GrpcTypeConverter and the client's ProtoUtils share, so a ZonedDateTime keeps its zone and an
+    // OffsetTime/LocalTime arrives typed instead of as an untyped string.
+    final GrpcValue temporal = GrpcTemporalCodec.encode(o);
+    if (temporal != null)
+      return dbgEnc("toGrpcValue", o, temporal, null);
 
     if (o instanceof RID rid) {
       return dbgEnc("toGrpcValue", o,
@@ -5113,6 +5575,10 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       return GrpcValue.newBuilder().setMapValue(mb.build()).build();
     }
 
+    // a path as its {_type, nodes, relationships, length} map rather than its toString() (issue #9913)
+    if (o instanceof TraversalPath path)
+      return toGrpcValue(path.toMap(), pc);
+
     if (o instanceof Map<?, ?> m) {
       GrpcMap.Builder mb = GrpcMap.newBuilder();
       for (var e : m.entrySet()) {
@@ -5160,7 +5626,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       LogManager.instance()
           .log(this, Level.FINE, "GRPC-ENC [toGrpcValue] FALLBACK-TO-STRING for class=%s value=%s",
               o.getClass().getName(),
-              String.valueOf(o));
+              summarizeJava(o));
 
     return dbgEnc("toGrpcValue", o, GrpcValue.newBuilder().setStringValue(String.valueOf(o)).build(), null);
   }
@@ -5850,14 +6316,14 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
     // Iterate over ALL properties from the Result, including aliases.
     // Null-valued projections must be included (unset GrpcValue) so clients can always
     // address every projected alias by key, matching the HTTP serializer's {"key": null} behavior.
-    final boolean debug = LogManager.instance().isDebugEnabled();
+    final boolean debug = LogManager.instance().isLoggable(this, Level.FINE);
     for (String propertyName : result.getPropertyNames()) {
       final Object value = result.getProperty(propertyName);
 
       if (debug)
         LogManager.instance()
             .log(this, Level.FINE, "convertResultToGrpcRecord(): Converting %s\n  value = %s\n  class = %s",
-                propertyName, value, value == null ? "null" : value.getClass().getName());
+                propertyName, summarizeJava(value), value == null ? "null" : value.getClass().getName());
 
       final GrpcValue gv = projectionConfig != null ?
           toGrpcValue(value, projectionConfig) :
@@ -5920,7 +6386,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         builder.setRid(doc.getIdentity().toString());
 
       // set all properties
-      final boolean debug = LogManager.instance().isDebugEnabled();
+      final boolean debug = LogManager.instance().isLoggable(this, Level.FINE);
       for (String propertyName : doc.getPropertyNames()) {
 
         Object value = doc.get(propertyName);
@@ -5930,7 +6396,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
           if (debug)
             LogManager.instance()
                 .log(this, Level.FINE, "convertToGrpcRecord(): Converting %s\n  value = %s\n  class = %s", propertyName
-                    , value,
+                    , summarizeJava(value),
                     value.getClass());
 
           GrpcValue gv = toGrpcValue(value);
@@ -5974,10 +6440,10 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
 
     final Object propValue = result.getProperty(propName);
 
-    if (LogManager.instance().isDebugEnabled())
+    if (LogManager.instance().isLoggable(this, Level.FINE))
       LogManager.instance()
           .log(this, Level.FINE, "convertPropToGrpcValue(): Converting %s\n  value = %s\n  class = %s", propName,
-              propValue,
+              summarizeJava(propValue),
               propValue == null ? "null" : propValue.getClass());
 
     return toGrpcValue(propValue, pc);
@@ -5987,10 +6453,10 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
 
     final Object propValue = result.getProperty(propName);
 
-    if (LogManager.instance().isDebugEnabled())
+    if (LogManager.instance().isLoggable(this, Level.FINE))
       LogManager.instance()
           .log(this, Level.FINE, "convertPropToGrpcValue(): Converting %s\n  value = %s\n  class = %s", propName,
-              propValue,
+              summarizeJava(propValue),
               propValue == null ? "null" : propValue.getClass());
 
     return toGrpcValue(propValue);
@@ -6115,6 +6581,11 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
           case INT64_VALUE -> new Date(v.getInt64Value());
           case STRING_VALUE -> {
             final String s = v.getStringValue();
+            // Issue #9969: a ZonedDateTime travels as zoned text; its instant is exact, so it must not be re-read through the
+            // string chain, which rebases an offset onto the database's zone
+            if (GrpcTemporalCodec.ZONED_DATETIME.equalsIgnoreCase(v.getLogicalType())
+                && GrpcTemporalCodec.decodeString(s, v.getLogicalType()) instanceof ZonedDateTime zdt)
+              yield Date.from(zdt.toInstant());
             try {
               yield new Date(Long.parseLong(s));
             } catch (NumberFormatException ignored) {
@@ -6346,6 +6817,10 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
             // (not java.util.Date) so sub-millisecond precision survives - Type.convert() truncates
             // to the column's declared precision.
             final String s = v.getStringValue();
+            // Issue #9969: see the DATE/DATETIME branch
+            if (GrpcTemporalCodec.ZONED_DATETIME.equalsIgnoreCase(v.getLogicalType())
+                && GrpcTemporalCodec.decodeString(s, v.getLogicalType()) instanceof ZonedDateTime zdt)
+              yield zdt.toInstant();
             try {
               yield Instant.ofEpochMilli(Long.parseLong(s));
             } catch (final NumberFormatException ignored) {
@@ -6374,27 +6849,56 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
   }
 
   // ---- Debug helpers ----
+
+  /**
+   * The FINE traces of the conversions describe a value by its shape - type, length, size - and show what it holds only
+   * when this is set, the same opt-in the client's {@code ProtoUtils} reads. The traces became reachable once their
+   * guards started following the logging configuration (#9984), and turning a logger to FINE to watch the wire must
+   * not also start copying record content into the log.
+   */
+  private static final boolean LOG_SHOW_VALUES = Boolean.getBoolean("arcadedb.grpc.log.showString");
+
   private static String summarizeJava(Object o) {
     if (o == null)
       return "null";
     try {
       if (o instanceof CharSequence s)
-        return "String(" + s.length() + ")=\"" + (s.length() > 120 ? s.subSequence(0, 120) + "…" : s) + "\"";
+        return LOG_SHOW_VALUES ?
+            "String(" + s.length() + ")=\"" + (s.length() > 120 ? s.subSequence(0, 120) + "…" : s) + "\"" :
+            "String(" + s.length() + ")";
       if (o instanceof byte[] b)
         return "bytes[" + b.length + "]";
       if (o instanceof Collection<?> c)
         return o.getClass().getSimpleName() + "[size=" + c.size() + "]";
       if (o instanceof Map<?, ?> m)
         return o.getClass().getSimpleName() + "[size=" + m.size() + "]";
-      return o.getClass().getSimpleName() + "(" + String.valueOf(o) + ")";
+      if (o instanceof Identifiable id)
+        return o.getClass().getSimpleName() + "(" + id.getIdentity() + ")";
+      return LOG_SHOW_VALUES ? o.getClass().getSimpleName() + "(" + o + ")" : o.getClass().getSimpleName();
     } catch (Exception e) {
       return o.getClass().getSimpleName();
     }
   }
 
+  private static String summarizeResult(final Result result) {
+    if (LOG_SHOW_VALUES)
+      return String.valueOf(result);
+    return "Result(rid=" + result.getIdentity().map(Object::toString).orElse("none") + ", properties=" + result.getPropertyNames() + ")";
+  }
+
   private static String summarizeGrpc(GrpcValue v) {
     if (v == null)
       return "GrpcValue(null)";
+    if (!LOG_SHOW_VALUES)
+      return switch (v.getKindCase()) {
+        case STRING_VALUE -> "STRING(" + v.getStringValue().length() + ")";
+        case BYTES_VALUE -> "BYTES[" + v.getBytesValue().size() + "]";
+        case LIST_VALUE -> "LIST[size=" + v.getListValue().getValuesCount() + "]";
+        case MAP_VALUE -> "MAP[size=" + v.getMapValue().getEntriesCount() + "]";
+        case EMBEDDED_VALUE -> "EMBEDDED[type=" + v.getEmbeddedValue().getType() + ", size=" + v.getEmbeddedValue().getFieldsCount() + "]";
+        case LINK_VALUE -> "LINK(" + v.getLinkValue().getRid() + ")";
+        default -> v.getKindCase().name();
+      };
     switch (v.getKindCase()) {
       case BOOL_VALUE:
         return "BOOL(" + v.getBoolValue() + ")";
@@ -6432,7 +6936,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
 
   private GrpcValue dbgEnc(String where, Object in, GrpcValue out, String ctx) {
     // Guard the eager summary building so nothing is allocated at the default (non-debug) log level.
-    if (LogManager.instance().isDebugEnabled())
+    if (LogManager.instance().isLoggable(this, Level.FINE))
       LogManager.instance()
           .log(this, Level.FINE, "GRPC-ENC [%s]%s in=%s -> out=%s", where, ctx == null ? "" : " " + ctx,
               summarizeJava(in),
@@ -6442,7 +6946,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
 
   private Object dbgDec(String where, GrpcValue in, Object out, String ctx) {
     // Guard the eager summary building so nothing is allocated at the default (non-debug) log level.
-    if (LogManager.instance().isDebugEnabled())
+    if (LogManager.instance().isLoggable(this, Level.FINE))
       LogManager.instance()
           .log(this, Level.FINE, "GRPC-DEC [%s]%s in=%s -> out=%s", where, ctx == null ? "" : " " + ctx,
               summarizeGrpc(in),

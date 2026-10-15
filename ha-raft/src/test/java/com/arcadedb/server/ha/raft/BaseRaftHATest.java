@@ -43,6 +43,7 @@ import java.net.Socket;
 import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
@@ -389,6 +390,35 @@ public abstract class BaseRaftHATest extends BaseGraphServerTest {
     }
   }
 
+  /**
+   * Starts a stopped server again and then patches every node's HTTP-address map with the ports the servers bound.
+   * Every restart in a subclass goes through here, never through a bare {@code getServer(i).start()}:
+   * {@code HardcodedTestServerPortsTest} flags one.
+   * <p>
+   * The restarted node builds a fresh {@link RaftHAServer} from the {@code 2480 + i} hints of
+   * {@link #getServerAddresses()}, so the patch {@link #startServers()} applied is gone on that node. With 2480 held by
+   * another process (a local ArcadeDB, an IDE's server, another worktree's build) every hint names the neighbouring
+   * node, and the restarted node's peer HTTP calls reach the wrong peer: a leader-initiated snapshot install asks a
+   * neighbour for the leader's state, is refused as answered by the wrong peer, and never completes (issues #8643,
+   * #9243). The patch runs once {@code start()} returns, so a peer call fired while it was still running can hit a stale
+   * hint once; the callers that matter retry.
+   */
+  @Override
+  protected void startServer(final int serverIndex) {
+    super.startServer(serverIndex);
+    patchPeerHttpAddressesWithBoundPorts();
+  }
+
+  /**
+   * Starts a stopped server again WITHOUT patching any node's HTTP-address map, so every node keeps what it has and the
+   * restarted node keeps what its {@code HA_SERVER_LIST} declared. Only for a test whose subject is that map, such as
+   * one asserting how a node copes with a peer address that a membership change removed (issue #8689). Everything else
+   * uses {@link #startServer(int)}.
+   */
+  protected void startServerKeepingDeclaredPeerHttpAddresses(final int serverIndex) {
+    super.startServer(serverIndex);
+  }
+
   @Override
   protected int getServerCount() {
     return 2;
@@ -706,6 +736,94 @@ public abstract class BaseRaftHATest extends BaseGraphServerTest {
     return null;
   }
 
+  /** The index of the server {@code config} belongs to, read from its name ({@code "ArcadeDB_1"} is 1). */
+  protected static int serverIndexOf(final ContextConfiguration config) {
+    final String serverName = config.getValueAsString(GlobalConfiguration.SERVER_NAME);
+    try {
+      return Integer.parseInt(serverName.substring(serverName.lastIndexOf('_') + 1));
+    } catch (final NumberFormatException e) {
+      throw new IllegalStateException("Server name '" + serverName + "' does not end with '_<index>', as the fixture names its servers", e);
+    }
+  }
+
+  /** {@link #findLeaderIndex()}, failing the test when no leader is elected. */
+  protected int requireLeaderIndex() {
+    final int leader = findLeaderIndex();
+    if (leader < 0)
+      throw new AssertionError("a Raft leader must be elected");
+    return leader;
+  }
+
+  /** The lowest-indexed server that is not {@code leader}. */
+  protected int firstFollowerOf(final int leader) {
+    for (int i = 0; i < getServerCount(); i++)
+      if (i != leader)
+        return i;
+    throw new IllegalStateException("no follower in a " + getServerCount() + "-node cluster");
+  }
+
+  /**
+   * Makes follower {@code serverIndex} refuse every write it would forward to the leader, as a same-host cluster that
+   * declares no HTTP ports does: with nothing declared, every peer's HTTP address derives to this node's own endpoint,
+   * and {@code RaftReplicatedDatabase} refuses the forward with a
+   * {@link com.arcadedb.network.binary.ServerIsNotTheLeaderException} naming the leader rather than POSTing the write
+   * back to itself (issue #6191). It is the refusal an ordinary client write meets on a follower, which is what a test
+   * outside this package needs to drive one through a wire protocol (issue #9870).
+   * <p>
+   * The capability monitor is paused for the window, since it would learn the real addresses back (issue #9255). Run
+   * the returned action, in a {@code finally}, to restore both.
+   *
+   * @throws IllegalStateException when the leader address the node now resolves is not its own, so the forward would
+   *                               not be refused and a test relying on it would pass or fail for another reason
+   */
+  protected Runnable refuseForwardedWritesOn(final int serverIndex) {
+    final RaftHAServer raft = getRaftPlugin(serverIndex).getRaftHAServer();
+    // The live map, a ConcurrentHashMap: clearing and refilling it while forwarding threads resolve addresses is safe
+    final Map<RaftPeerId, String> httpAddresses = raft.getHttpAddresses();
+    final Map<RaftPeerId, String> declared = new HashMap<>(httpAddresses);
+    raft.stopCapabilityMonitor();
+    httpAddresses.clear();
+    final Runnable restore = () -> {
+      httpAddresses.putAll(declared);
+      raft.startCapabilityMonitor();
+    };
+    if (raft.isLeader() || !raft.isOwnHttpAddress(raft.getLeaderHttpAddress())) {
+      restore.run();
+      throw new IllegalStateException("Server " + serverIndex + " does not resolve the leader to its own HTTP address (leader="
+          + raft.getLeaderName() + ", resolved=" + raft.getLeaderHttpAddress() + "): its forwards would not be refused");
+    }
+    return restore;
+  }
+
+  /**
+   * Quarantines {@code databaseName} on a server as an apply error would, for a test outside this package that needs a
+   * quarantine standing (issue #9449, the gRPC override). The state machine's writer is package-private.
+   */
+  protected void quarantineDatabase(final int serverIndex, final String databaseName) {
+    getRaftPlugin(serverIndex).getRaftHAServer().getStateMachine()
+        .markStateDiverged(databaseName, DivergenceCause.APPLY_ERROR);
+  }
+
+  /** Whether {@code databaseName} is quarantined on a server; see {@link #quarantineDatabase(int, String)}. */
+  protected boolean isDatabaseQuarantined(final int serverIndex, final String databaseName) {
+    return getRaftPlugin(serverIndex).getRaftHAServer().getStateMachine().isDatabaseDiverged(databaseName);
+  }
+
+  /**
+   * Publishes the node-wide stale-snapshot read floor of issue #6111 on a server, as {@code reinitialize()} does when the
+   * snapshot marker runs ahead of the persisted applied index, for a test outside this package that needs one standing
+   * (issue #9498, the gRPC override). Only {@code reinitialize()} raises it in production, and a live server cannot be
+   * made to restart onto a stale marker from a test, so it goes through the state machine's test hook.
+   */
+  protected void raiseStaleSnapshotFloor(final int serverIndex, final long floor) {
+    getRaftPlugin(serverIndex).getRaftHAServer().getStateMachine().publishStaleSnapshotFloor(floor);
+  }
+
+  /** The node-wide stale-snapshot read floor of a server, {@code -1} when none stands; see {@link #raiseStaleSnapshotFloor}. */
+  protected long getStaleSnapshotFloor(final int serverIndex) {
+    return getRaftPlugin(serverIndex).getRaftHAServer().getStateMachine().getStaleSnapshotAppliedFloor();
+  }
+
   /**
    * Ensures the replicas about to be compared have caught up, then compares them. The base {@code endTest()}
    * calls the comparison directly, without a Raft-aware wait.
@@ -831,13 +949,7 @@ public abstract class BaseRaftHATest extends BaseGraphServerTest {
     }
 
     LogManager.instance().log(this, Level.INFO, "TEST: Starting server %d again", serverIndex);
-    getServer(serverIndex).start();
-    // The restarted node builds a fresh RaftHAServer from the 2480 + i hints of getServerAddresses(), and with 2480 held
-    // by another process every hint names the wrong node: a leader-initiated snapshot install then asks a neighbour for
-    // the leader's state, is refused as answered by the wrong peer, and never completes (issue #8643). Patched once
-    // start() returns, so a query fired while it was still running can hit a stale hint once; the install retries it.
-    // Bare getServer(i).start() calls elsewhere still lack this: issue #9243
-    patchPeerHttpAddressesWithBoundPorts();
+    startServer(serverIndex);
 
     // Wait for the restarted peer to catch up to the current leader's last applied index. The line says which
     // happened: "caught up" after a wait that gave up was the same lie issue #7518 removed from the wait itself.

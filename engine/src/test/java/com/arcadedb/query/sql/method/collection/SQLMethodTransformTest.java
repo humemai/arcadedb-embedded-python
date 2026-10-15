@@ -295,8 +295,8 @@ class SQLMethodTransformTest {
       }
 
       @Override
-      public void createRecordNoLock(Record record, String bucketName, boolean discardRecordAfter) {
-
+      public boolean createRecordNoLock(Record record, String bucketName, boolean discardRecordAfter) {
+        return true;
       }
 
       @Override
@@ -305,8 +305,18 @@ class SQLMethodTransformTest {
       }
 
       @Override
+      public boolean updateRecordReportingVeto(Record record) {
+        return true;
+      }
+
+      @Override
       public void updateRecordNoLock(Record record, boolean discardRecordAfter) {
 
+      }
+
+      @Override
+      public boolean updateRecordWithEventsNoLock(final Record record, final boolean discardRecordAfter) {
+        return true;
       }
 
       @Override
@@ -315,8 +325,8 @@ class SQLMethodTransformTest {
       }
 
       @Override
-      public void deleteEdgeSkippingEndpoint(Edge edge, RID skipEndpoint) {
-
+      public boolean deleteEdgeSkippingEndpoint(Edge edge, RID skipEndpoint, Vertex.DIRECTION skipDirection) {
+        return true;
       }
 
       @Override

@@ -24,6 +24,7 @@ import com.arcadedb.database.Document;
 import com.arcadedb.database.Identifiable;
 import com.arcadedb.database.RID;
 import com.arcadedb.database.Record;
+import com.arcadedb.database.TransactionContext;
 import com.arcadedb.engine.Bucket;
 import com.arcadedb.engine.ComponentFile;
 import com.arcadedb.engine.PaginatedComponent;
@@ -40,9 +41,11 @@ import com.arcadedb.index.lsm.LSMTreeIndex;
 import com.arcadedb.index.lsm.LSMTreeIndexAbstract;
 import com.arcadedb.index.lsm.FullTextPostingRID;
 import com.arcadedb.log.LogManager;
+import com.arcadedb.query.sql.executor.WorkGuard;
 import com.arcadedb.schema.FullTextIndexMetadata;
 import com.arcadedb.schema.IndexBuilder;
 import com.arcadedb.schema.IndexMetadata;
+import com.arcadedb.schema.LocalSchema;
 import com.arcadedb.schema.Schema;
 import com.arcadedb.schema.Type;
 import com.arcadedb.serializer.json.JSONArray;
@@ -60,6 +63,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.PriorityQueue;
@@ -405,6 +409,9 @@ public class LSMTreeFullTextIndex implements Index, IndexInternal {
     // Parse query text to handle field-specific terms (field:term)
     final String queryText = keys.length > 0 && keys[0] != null ? keys[0].toString() : "";
     final List<QueryTerm> queryTerms = parseQueryTerms(queryText);
+    // No command context on the direct path: the guard stops a terminated statement (issue #9894)
+    final WorkGuard guard = WorkGuard.forCommandDeadline(null);
+    int ticks = 0;
 
     for (final QueryTerm term : queryTerms) {
       // Analyze the term value
@@ -421,6 +428,7 @@ public class LSMTreeFullTextIndex implements Index, IndexInternal {
         }
 
         while (rids.hasNext()) {
+          guard.checkPeriodically(++ticks);
           final RID rid = rids.next().getIdentity();
 
           // Accumulate score for this RID based on term frequency in the query
@@ -477,16 +485,23 @@ public class LSMTreeFullTextIndex implements Index, IndexInternal {
    * @param tokenBoosts scoring tokens (stored-key form) mapped to their effective boost
    * @param candidates  documents to score, or {@code null} to score every matching document
    */
-  private Map<RID, double[]> computeBM25Scores(final Map<String, Float> tokenBoosts, final Set<RID> candidates) {
-    return computeBM25Scores(tokenBoosts, candidates, null);
+  private Map<RID, double[]> computeBM25Scores(final Map<String, Float> tokenBoosts, final Set<RID> candidates,
+      final WorkGuard guard) {
+    return computeBM25Scores(tokenBoosts, candidates, null, guard);
   }
 
   /**
    * Scores this bucket's candidates with either bucket-local statistics ({@code scoringContext == null}) or one type-wide
    * context supplied by {@link FullTextSearch}. The latter keeps scores comparable when a logical type spans several buckets.
+   * <p>
+   * {@code guard} is checked every 1024 postings read or candidates seeded: scoring a broad query walks every posting of
+   * every scoring token, and a statement terminated or past its deadline has to stop inside that walk (issue #9894).
    */
   private Map<RID, double[]> computeBM25Scores(final Map<String, Float> tokenBoosts, final Set<RID> candidates,
-      final BM25ScoringContext scoringContext) {
+      final BM25ScoringContext scoringContext, final WorkGuard guard) {
+    // Once per bucket on entry, then every 1024 postings: a bucket's walk can be shorter than the interval
+    guard.check();
+    int ticks = 0;
     ensureCounters();
     final long totalDocs = scoringContext != null ? scoringContext.totalDocs() : resolveTotalDocs();
     final double avgdl = scoringContext != null ? scoringContext.avgDocLength() : resolveAvgDocLength();
@@ -499,8 +514,10 @@ public class LSMTreeFullTextIndex implements Index, IndexInternal {
     // is built. Reading is via getScore() below.
     final Map<RID, double[]> scoreMap = candidates != null ? new HashMap<>(candidates.size()) : new HashMap<>();
     if (candidates != null)
-      for (final RID c : candidates)
+      for (final RID c : candidates) {
+        guard.checkPeriodically(++ticks);
         scoreMap.put(c, new double[1]);
+      }
 
     // Reused across tokens to avoid per-token allocations (candidate path only).
     final List<FullTextPostingRID> hits = new ArrayList<>();
@@ -519,6 +536,7 @@ public class LSMTreeFullTextIndex implements Index, IndexInternal {
         hits.clear();
         try (final IndexCursor cursor = underlyingIndex.get(storedKey)) {
           while (cursor.hasNext()) {
+            guard.checkPeriodically(++ticks);
             final Identifiable id = cursor.next();
             // Skip deletion markers (negative bucket id): they are not live documents and must not inflate the document frequency.
             if (id.getIdentity().getBucketId() < 0)
@@ -541,6 +559,7 @@ public class LSMTreeFullTextIndex implements Index, IndexInternal {
         if (scoringContext == null) {
           try (final IndexCursor dfCursor = underlyingIndex.get(storedKey)) {
             while (dfCursor.hasNext()) {
+              guard.checkPeriodically(++ticks);
               if (dfCursor.next().getIdentity().getBucketId() >= 0) // skip deletion markers
                 ++df;
             }
@@ -551,6 +570,7 @@ public class LSMTreeFullTextIndex implements Index, IndexInternal {
         final double idf = BM25Scorer.idf(totalDocs, df);
         try (final IndexCursor scoreCursor = underlyingIndex.get(storedKey)) {
           while (scoreCursor.hasNext()) {
+            guard.checkPeriodically(++ticks);
             final Identifiable id = scoreCursor.next();
             if (id instanceof FullTextPostingRID s)
               scoreMap.computeIfAbsent(s.getIdentity(), k -> new double[1])[0] +=
@@ -593,7 +613,9 @@ public class LSMTreeFullTextIndex implements Index, IndexInternal {
           "Full-text get() scoring %d terms on index '%s' with two posting scans each; use SEARCH_INDEX(...) for a single-pass scan.",
           null, tokenBoosts.size(), getName());
 
-    return buildScoredCursor(computeBM25Scores(tokenBoosts, null), keys, limit);
+    // The direct path has no command context: the guard still stops a statement that was terminated (issue #9894)
+    final WorkGuard guard = WorkGuard.forCommandDeadline(null);
+    return buildScoredCursor(computeBM25Scores(tokenBoosts, null, guard), keys, limit, guard);
   }
 
   /**
@@ -640,7 +662,8 @@ public class LSMTreeFullTextIndex implements Index, IndexInternal {
    * set is requested it selects the top-K with a bounded min-heap (O(N log K)) instead of fully sorting the whole set
    * (O(N log N)) - a meaningful win for the common {@code ORDER BY $score DESC LIMIT k} shape over a large candidate set.
    */
-  private IndexCursor buildScoredCursor(final Map<RID, double[]> scoreMap, final Object[] keys, final int limit) {
+  private IndexCursor buildScoredCursor(final Map<RID, double[]> scoreMap, final Object[] keys, final int limit,
+      final WorkGuard guard) {
     final Comparator<IndexCursorEntry> bestFirst = (o1, o2) -> {
       final int cmp = Float.compare(o2.floatScore, o1.floatScore);
       if (cmp != 0)
@@ -652,7 +675,9 @@ public class LSMTreeFullTextIndex implements Index, IndexInternal {
     if (limit > -1 && limit < size) {
       // Bounded min-heap whose head is the WORST kept entry (reversed comparator), so we can evict it when a better one arrives.
       final PriorityQueue<IndexCursorEntry> heap = new PriorityQueue<>(limit, bestFirst.reversed());
+      int ticks = 0;
       for (final Map.Entry<RID, double[]> e : scoreMap.entrySet()) {
+        guard.checkPeriodically(++ticks);
         final IndexCursorEntry entry = new IndexCursorEntry(keys, canonicalRID(e.getKey()), (float) e.getValue()[0]);
         if (heap.size() < limit)
           heap.add(entry);
@@ -667,10 +692,15 @@ public class LSMTreeFullTextIndex implements Index, IndexInternal {
     }
 
     final ArrayList<IndexCursorEntry> list = new ArrayList<>(size);
-    for (final Map.Entry<RID, double[]> entry : scoreMap.entrySet())
+    int ticks = 0;
+    for (final Map.Entry<RID, double[]> entry : scoreMap.entrySet()) {
+      guard.checkPeriodically(++ticks);
       list.add(new IndexCursorEntry(keys, canonicalRID(entry.getKey()), (float) entry.getValue()[0]));
-    if (list.size() > 1)
+    }
+    if (list.size() > 1) {
+      guard.check();
       list.sort(bestFirst);
+    }
     return new TempIndexCursor(list);
   }
 
@@ -694,7 +724,16 @@ public class LSMTreeFullTextIndex implements Index, IndexInternal {
    */
   public IndexCursor scoreCandidatesBM25(final Set<RID> candidates, final Map<String, Float> tokenBoosts, final Object[] keys,
       final int limit) {
-    return buildScoredCursor(computeBM25Scores(tokenBoosts, candidates), keys, limit);
+    return scoreCandidatesBM25(candidates, tokenBoosts, keys, limit, WorkGuard.forCommandDeadline(null));
+  }
+
+  /**
+   * {@link #scoreCandidatesBM25(Set, Map, Object[], int)} stopping through {@code guard} when the statement it runs for is
+   * terminated or past its deadline (issue #9894).
+   */
+  public IndexCursor scoreCandidatesBM25(final Set<RID> candidates, final Map<String, Float> tokenBoosts, final Object[] keys,
+      final int limit, final WorkGuard guard) {
+    return buildScoredCursor(computeBM25Scores(tokenBoosts, candidates, guard), keys, limit, guard);
   }
 
   /**
@@ -702,8 +741,8 @@ public class LSMTreeFullTextIndex implements Index, IndexInternal {
    * posting matching the scoring tokens is eligible, which is the direct TypeIndex.get() path.
    */
   IndexCursor scoreBM25WithContext(final Set<RID> candidates, final Map<String, Float> tokenBoosts, final Object[] keys,
-      final int limit, final BM25ScoringContext scoringContext) {
-    return buildScoredCursor(computeBM25Scores(tokenBoosts, candidates, scoringContext), keys, limit);
+      final int limit, final BM25ScoringContext scoringContext, final WorkGuard guard) {
+    return buildScoredCursor(computeBM25Scores(tokenBoosts, candidates, scoringContext, guard), keys, limit, guard);
   }
 
   /**
@@ -834,8 +873,11 @@ public class LSMTreeFullTextIndex implements Index, IndexInternal {
   /**
    * Lazily rebuilds the (type-wide) corpus counters when they are not trustworthy (e.g. a BM25 index reopened before the schema
    * carrying the counters was persisted, or an index that predates BM25 support). The {@code countersValid} flag is the
-   * authority: when set the counters are used as-is. Recompute is done in memory only; persistence is deferred to the next schema
-   * save or an explicit {@link #recomputeBM25Counters()}, so the read/query path never calls {@code saveConfiguration}.
+   * authority: when set the counters are used as-is. A recompute done here changes this node's counters only and marks the schema
+   * dirty: it is written by the next schema save or by the close (so a repair is paid once, not on every restart), and the read/query
+   * path never calls {@code saveConfiguration} itself. An explicit {@link #recomputeBM25Counters()} also advances the counters epoch
+   * and is shipped to the other nodes of an HA cluster. The repair made here is not: on an HA follower the write is local, so the
+   * follower and the leader hold different persisted counters until the next explicit recompute (an epoch bump) reaches the follower.
    */
   private void ensureCounters() {
     if (ftMetadata == null)
@@ -864,18 +906,72 @@ public class LSMTreeFullTextIndex implements Index, IndexInternal {
         // global IDF as well as avgdl; a direct bucket-level lookup uses resolveTotalDocs() instead.
         final long liveCount = underlyingIndex.getMutableIndex().getDatabase().countType(typeName, false);
         final long persisted = ftMetadata.getTotalDocs();
-        if (liveCount != persisted) {
-          // Surface the drift so operators can notice it (e.g. counters inflated by rolled-back inserts) without reading EXPLAIN.
+        final boolean rescan = ftMetadata.consumeRescanRequired();
+        if (liveCount != persisted || rescan) {
+          // Surface the drift so operators can notice it (e.g. counters left inflated by a crash) without reading EXPLAIN.
           // Escalate to WARNING when the divergence is large (> 10% of the live count): small drift self-heals quietly here, but a
-          // big gap usually signals a heavy-rollback workload worth a scheduled REBUILD INDEX ... WITH statsOnly = true.
+          // big gap usually signals a workload worth a scheduled REBUILD INDEX ... WITH statsOnly = true.
           final boolean large = liveCount > 0 && Math.abs(persisted - liveCount) * 10 > liveCount;
-          LogManager.instance().log(this, large ? Level.WARNING : Level.INFO,
-              "BM25 corpus counters for type '%s' diverged from live data (persisted=%d, live=%d); recomputing.%s", null, typeName,
-              persisted, liveCount, large ? " Consider REBUILD INDEX ... WITH statsOnly = true if this recurs." : "");
+          // The message is an argument, not the format: an index name may contain a '%'
+          LogManager.instance().log(this, large ? Level.WARNING : Level.INFO, "%s", null,
+              corpusDriftMessage(logicalIndexName(), typeName, persisted, liveCount, rescan));
           computeCorpusCounters(false);
         }
       }
     }
+  }
+
+  /**
+   * The warning of a drift check that found the corpus counters of a logical index off. It names the LOGICAL index, because a type
+   * may carry several full-text indexes (one on {@code text}, one on {@code questions_text}) and the type name alone says neither
+   * which one drifted nor which {@code REBUILD INDEX} repairs it, and it carries that statement, ready to run.
+   */
+  static String corpusDriftMessage(final String indexName, final String typeName, final long persisted, final long live,
+      final boolean scanRacedWriters) {
+    final String repair = "REBUILD INDEX `" + indexName + "` WITH statsOnly = true";
+    if (persisted == live && scanRacedWriters)
+      return "BM25 corpus counters of full-text index '" + indexName + "' on type '" + typeName + "' come from a scan that raced "
+          + "concurrent writers (count=" + live + "); recomputing. To repair them on every node run: " + repair;
+    return "BM25 corpus counters of full-text index '" + indexName + "' on type '" + typeName + "' diverged from live data "
+        + "(persisted=" + persisted + ", live=" + live + "); recomputing. To repair them on every node run: " + repair;
+  }
+
+  /**
+   * The BM25 corpus counters of a full-text index as {@code schema:index:<name>} shows them, without running the drift check
+   * that reading them through a query would: an operator can look at a drift before anything repairs it.
+   *
+   * @return the counters and the state of the drift check, or null when {@code index} is not a BM25 full-text index
+   */
+  public static Map<String, Object> describeCorpusCounters(final Index index) {
+    final FullTextIndexMetadata metadata = metadataOf(index);
+    if (metadata == null || !metadata.isBM25())
+      return null;
+    final Map<String, Object> result = new LinkedHashMap<>();
+    // One pair, not two reads: no commit's delta is half applied in what is reported
+    final long[] pair = metadata.getCountersPair();
+    result.put("totalDocs", pair[0]);
+    result.put("sumDocLength", pair[1]);
+    result.put("avgDocLength", pair[0] > 0 ? (double) pair[1] / pair[0] : 1.0);
+    result.put("countersValid", metadata.isCountersValid());
+    result.put("staleCheckDone", metadata.isStaleCheckDone());
+    result.put("scans", metadata.getScans());
+    result.put("epoch", metadata.getCountersEpoch());
+    return result;
+  }
+
+  /**
+   * The counters a full-text index shares with its sibling bucket indexes, whether {@code index} is the logical one or one bucket's.
+   *
+   * @return the shared metadata, or null when {@code index} is not a full-text index
+   */
+  public static FullTextIndexMetadata metadataOf(final Index index) {
+    if (index instanceof LSMTreeFullTextIndex ftIndex)
+      return ftIndex.getFullTextMetadata();
+    if (index instanceof TypeIndex typeIndex)
+      for (final IndexInternal bucketIndex : typeIndex.getIndexesOnBuckets())
+        if (bucketIndex instanceof LSMTreeFullTextIndex ftIndex && ftIndex.getFullTextMetadata() != null)
+          return ftIndex.getFullTextMetadata();
+    return null;
   }
 
   /**
@@ -919,6 +1015,11 @@ public class LSMTreeFullTextIndex implements Index, IndexInternal {
     final List<String> props = getPropertyNames();
     long docs = 0L;
     long sumLen = 0L;
+    // Writers keep bumping the shared counters while the scan runs: remember where they stood so the result is published as a delta
+    final long docsAtStart = ftMetadata.getTotalDocs();
+    final long lenAtStart = ftMetadata.getSumDocLength();
+    final long mutationsAtStart = ftMetadata.getMutations();
+    final boolean commitApplyingAtStart = ftMetadata.isCommitApplying();
     final Iterator<Record> it = db.iterateType(typeName, true);
     while (it.hasNext()) {
       final Record record = it.next();
@@ -934,13 +1035,41 @@ public class LSMTreeFullTextIndex implements Index, IndexInternal {
       sumLen += len;
     }
 
-    ftMetadata.setCounters(docs, sumLen);
+    // The scan reads this transaction's own uncommitted writes, whose effect the commit applies to the counters: leave them out
+    // of the result, or they are counted twice (and counted at all if the transaction rolls back). Only while the transaction is
+    // BEGUN: from the publish of its pages the effect is already in the counters, and what the scan reads is counted. A transaction
+    // is confined to the thread that runs the scan, so its status cannot change while the scan reads it
+    final TransactionContext tx = db.getTransaction();
+    final FullTextCorpusDeltas pending = tx.getStatus() == TransactionContext.STATUS.BEGUN ? FullTextCorpusDeltas.peek(tx) : null;
+    if (pending != null) {
+      docs -= pending.pendingDocs(ftMetadata);
+      sumLen -= pending.pendingLength(ftMetadata);
+    }
+
+    final long scannedDocs = docs;
+    final long scannedLen = sumLen;
+    final LocalSchema schema = db.getSchema().getEmbedded();
+    if (persist)
+      // An explicit recompute is a schema change: inside a recording session the result is saved and, under HA, shipped to the
+      // followers, which adopt it because its epoch is newer than the one they hold
+      schema.recordIndexStatisticsChange(() -> {
+        ftMetadata.publishScannedCounters(scannedDocs, scannedLen, docsAtStart, lenAtStart, mutationsAtStart);
+        ftMetadata.advanceCountersEpoch();
+      });
+    else {
+      // The read/query path never saves the schema, but a repair must not be paid again after a restart: leave it to the next
+      // schema save, or to the close
+      ftMetadata.publishScannedCounters(scannedDocs, scannedLen, docsAtStart, lenAtStart, mutationsAtStart);
+      schema.markDirty();
+    }
+    // A commit between making its pages visible and applying its delta, at either end of the scan, leaves documents the scan read
+    // out of the counters (or about to be counted twice): the result is not exact, and the drift check is armed to find out
+    if (commitApplyingAtStart || ftMetadata.isCommitApplying())
+      ftMetadata.requireRescan();
     // Report the result so operators can correlate the cold-start latency above with the corpus size that drove it.
     LogManager.instance().log(this, Level.INFO,
         "Recomputed BM25 corpus statistics for type '%s': %d documents, %d total tokens (avgdl=%.2f)", null, typeName, docs,
         sumLen, docs > 0 ? (double) sumLen / docs : 1.0);
-    if (persist)
-      underlyingIndex.getMutableIndex().getDatabase().getSchema().getEmbedded().saveConfiguration();
   }
 
   /**
@@ -1143,28 +1272,49 @@ public class LSMTreeFullTextIndex implements Index, IndexInternal {
   }
 
   /**
-   * Updates the persisted corpus counters when a document is indexed. {@code numDocs} is {@code rids.length}: the standard
-   * indexing path passes exactly one RID per document (one document being indexed), so each RID is counted as a distinct
-   * document of length {@code docLen}.
+   * Counts the documents being indexed in the corpus counters. {@code numDocs} is {@code rids.length}: the standard indexing path
+   * passes exactly one RID per document (one document being indexed), so each RID is counted as a distinct document of length
+   * {@code docLen}.
    * <p>
-   * This runs at index time, before the transaction commits, and is NOT reversed on rollback, so a rolled-back insert leaves the
-   * counters slightly inflated. The counters feed only {@code avgDocLength} (a robust normalizer); {@link #recomputeBM25Counters}
-   * (also reachable via {@code REBUILD INDEX <name> WITH statsOnly = true}) repairs any drift exactly.
-   * <p>
-   * Because the increment is pre-commit, a BM25 {@code get()} issued LATER in the SAME open transaction sees the bumped
-   * {@code totalDocs}/{@code sumDocLength}, so a just-inserted (not yet committed) document is reflected in {@code avgDocLength}
-   * for that transaction. This only shifts the length normalizer marginally and resolves at commit; it is not a correctness issue.
-   * <p>
-   * FOLLOW-UP (not done deliberately): the drift could be avoided by deferring this update to an after-commit callback
-   * ({@code TransactionContext.addAfterCommitCallback}) so a rolled-back transaction never bumps the counters. That is left for a
-   * separate change because the counters must stay consistent across an HA cluster: the current update runs inside the index
-   * write that every node replays, whereas an after-commit callback fires only on the committing node and would diverge replica
-   * counters. Reversing on rollback (rather than deferring) would need a rollback hook that does not exist today.
+   * Inside a transaction the effect is only accumulated, and applied once the transaction commits (see
+   * {@link FullTextCorpusDeltas}): a rolled-back insert, or one retried after a {@code ConcurrentModificationException}, never
+   * touches the counters, and a BM25 query issued later in the SAME open transaction scores with the committed statistics. Without
+   * a transaction the index write is immediate, and so is the count.
    */
   private void countDocuments(final int numDocs, final int docLen) {
-    if (ftMetadata != null)
+    // Counted at once only when the transaction is not in BEGUN, which is exactly when LSMTreeIndex.put() writes the postings at
+    // once too (see its status test). A record write is always BEGUN, and the postings a commit applies reach the underlying index
+    // through putReplay(), never through here, so a commit that fails while applying them has counted nothing. With no
+    // transaction at all the underlying put throws before this is reached. What is left is an index write issued while a commit is
+    // in its phases, which is applied immediately like the postings it goes with, and so is its count
+    if (ftMetadata == null)
+      return;
+    final TransactionContext tx = underlyingIndex.getMutableIndex().getDatabase().getTransaction();
+    if (tx.getStatus() == TransactionContext.STATUS.BEGUN)
+      FullTextCorpusDeltas.record(tx, ftMetadata, logicalIndexName(), numDocs, (long) numDocs * docLen);
+    else
       for (int i = 0; i < numDocs; i++)
         ftMetadata.addDocument(docLen);
+  }
+
+  /**
+   * Takes one document out of the corpus counters, the way {@link #countDocuments} counts one in.
+   */
+  private void uncountDocument(final int docLen) {
+    if (ftMetadata == null)
+      return;
+    final TransactionContext tx = underlyingIndex.getMutableIndex().getDatabase().getTransaction();
+    if (tx.getStatus() == TransactionContext.STATUS.BEGUN)
+      FullTextCorpusDeltas.record(tx, ftMetadata, logicalIndexName(), -1, -(long) docLen);
+    else
+      ftMetadata.removeDocument(docLen);
+  }
+
+  /**
+   * The name a replica resolves in its own schema to find the counters this index shares with its sibling bucket indexes.
+   */
+  private String logicalIndexName() {
+    return typeIndex != null ? typeIndex.getName() : underlyingIndex.getName();
   }
 
   /**
@@ -1233,8 +1383,8 @@ public class LSMTreeFullTextIndex implements Index, IndexInternal {
     // key it would need the same N decrements, but no caller does that.) docLen is recomputed from the keys supplied at remove
     // time: if a field is null now but was set at index time (or the analyzer changed), this under-decrements sumDocLength and
     // avgDocLength drifts. Since avgDocLength is only a length normalizer this is tolerable; recomputeBM25Counters() repairs it.
-    if (underlyingIndex.isStoreTermFrequency() && ftMetadata != null)
-      ftMetadata.removeDocument(docLen);
+    if (underlyingIndex.isStoreTermFrequency())
+      uncountDocument(docLen);
   }
 
   /**
@@ -1340,6 +1490,10 @@ public class LSMTreeFullTextIndex implements Index, IndexInternal {
   @Override
   public void setMetadata(final JSONObject indexJSON) {
     underlyingIndex.setMetadata(indexJSON);
+    // A schema reload on a node that already holds this index (an HA follower applying the schema its leader shipped) keeps the
+    // live counters, which the replicated transactions maintain; only counters recomputed since, on the leader, replace them
+    if (ftMetadata != null)
+      ftMetadata.adoptPersistedCounters(indexJSON);
   }
 
   @Override
@@ -1645,6 +1799,16 @@ public class LSMTreeFullTextIndex implements Index, IndexInternal {
    * @throws IllegalArgumentException if sourceRids is null, empty, or exceeds maxSourceDocs
    */
   public IndexCursor searchMoreLikeThis(final Set<RID> sourceRids, final MoreLikeThisConfig config) {
+    return searchMoreLikeThis(sourceRids, config, WorkGuard.forCommandDeadline(null));
+  }
+
+  /**
+   * {@link #searchMoreLikeThis(Set, MoreLikeThisConfig)} stopping through {@code guard} while it walks the postings of the
+   * selected terms, when the statement it runs for is terminated or past its deadline (issue #9894).
+   */
+  public IndexCursor searchMoreLikeThis(final Set<RID> sourceRids, final MoreLikeThisConfig config, final WorkGuard guard) {
+    // Once per bucket on entry, then every 1024 postings: a bucket's walk can be shorter than the interval
+    guard.check();
     if (sourceRids == null)
       throw new IllegalArgumentException("sourceRids cannot be null");
     if (sourceRids.isEmpty())
@@ -1684,10 +1848,12 @@ public class LSMTreeFullTextIndex implements Index, IndexInternal {
 
     // Step 3: Get document frequencies for each term
     final Map<String, Integer> docFreqs = new HashMap<>();
+    int ticks = 0;
     for (final String term : termFreqs.keySet()) {
       int docCount = 0;
       try (final IndexCursor termCursor = underlyingIndex.get(new String[] { term })) {
         while (termCursor.hasNext()) {
+          guard.checkPeriodically(++ticks);
           termCursor.next();
           docCount++;
         }
@@ -1712,6 +1878,7 @@ public class LSMTreeFullTextIndex implements Index, IndexInternal {
     for (final String term : topTerms) {
       try (final IndexCursor termCursor = underlyingIndex.get(new String[] { term })) {
         while (termCursor.hasNext()) {
+          guard.checkPeriodically(++ticks);
           final RID rid = termCursor.next().getIdentity();
           scoreMap.merge(rid, 1, Integer::sum);
         }
@@ -1729,8 +1896,10 @@ public class LSMTreeFullTextIndex implements Index, IndexInternal {
     for (final Map.Entry<RID, Integer> entry : scoreMap.entrySet())
       results.add(new IndexCursorEntry(null, canonicalRID(entry.getKey()), entry.getValue()));
 
-    if (results.size() > 1)
+    if (results.size() > 1) {
+      guard.check();
       results.sort(Comparator.comparingInt((IndexCursorEntry e) -> e.score).reversed());
+    }
 
     return new TempIndexCursor(results);
   }

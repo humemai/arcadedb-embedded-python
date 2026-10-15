@@ -243,6 +243,12 @@ public class DatabaseChecker {
     result.put("reclaimedUnreferencedFiles", new LinkedHashSet<String>());
     result.put("deletedRecordsAfterFix", new LinkedHashSet<>());
     result.put("corruptedRecords", new LinkedHashSet<>());
+    // Issue #9266: stripe directories (a super-node's edge list head) this release cannot read - an unknown placement
+    // hash version or a truncated header/body - one RID each, the reason in the warning that names it. Seeded like
+    // every other family. NOT folded into corruptedRecords, which fix mode deletes raw and turns into affectedBuckets:
+    // the repair is the rebuild of the owning vertex's edge list from the surviving edge records, the same one any
+    // unreadable list gets, after which the full-scope orphan reclaim removes the superseded directory.
+    result.put("unreadableStripeDirectories", new LinkedHashSet<RID>());
     result.put("corruptedIndexes", new LinkedHashSet<>());
     // Issue #6340: the TimeSeries pass, seeded like every other family so a clean run publishes zeros rather than
     // omitting the keys - "did this run look at the TimeSeries files at all?" has to be answerable from the result
@@ -314,6 +320,14 @@ public class DatabaseChecker {
         timeSeriesTypes.add(tsType);
       else
         documentTypes.add(type);
+    }
+
+    // #9975: a LIGHTWEIGHT edge type with a MANDATORY or default-valued property it can never apply, which only a database
+    // written before #9846 can hold. A finding of the schema, answered without reading a record, so no step of its own
+    for (final DocumentType edgeType : edgeTypes) {
+      final String warning = LocalEdgeType.unenforcedConstraintWarning(edgeType);
+      if (warning != null)
+        addWarning(warning);
     }
 
     // #7952: the types this run has an existence-constraint question to ask about. Resolved from the SCHEMA alone,
@@ -662,6 +676,17 @@ public class DatabaseChecker {
     final Collection<RID> unreachable = (Collection<RID>) stats.get("unreachableEdgeRecordsFound");
     if (unreachable != null)
       ((LinkedHashSet<RID>) result.get("unreachableEdgeRecordsFound")).addAll(unreachable);
+  }
+
+  /**
+   * Issue #9266: the vertex and the edge passes can both meet the same unreadable directory (the edge pass through a
+   * back-reference probe, the vertex pass through the owner itself), so the merge is a set union and the result
+   * reports each directory once.
+   */
+  private void mergeUnreadableStripeDirectories(final Map<String, Object> stats) {
+    final Collection<RID> directories = (Collection<RID>) stats.get("unreadableStripeDirectories");
+    if (directories != null)
+      ((LinkedHashSet<RID>) result.get("unreadableStripeDirectories")).addAll(directories);
   }
 
   /**
@@ -1108,6 +1133,7 @@ public class DatabaseChecker {
       ((LinkedHashSet<String>) result.get("warnings")).addAll((Collection<String>) stats.get("warnings"));
       ((LinkedHashSet<RID>) result.get("corruptedRecords")).addAll((Collection<RID>) stats.get("corruptedRecords"));
       mergeUnreachableEdgeRecords(stats);
+      mergeUnreadableStripeDirectories(stats);
       mergeDeletedRecords(stats);
       mergeMissingReferences((Map<RID, Long>) stats.get("missingReferences"),
           (Map<RID, String>) stats.get("missingReferenceErrors"));
@@ -1224,6 +1250,7 @@ public class DatabaseChecker {
       ((LinkedHashSet<String>) result.get("warnings")).addAll((Collection<String>) stats.get("warnings"));
       ((LinkedHashSet<RID>) result.get("corruptedRecords")).addAll((Collection<RID>) stats.get("corruptedRecords"));
       mergeUnreachableEdgeRecords(stats);
+      mergeUnreadableStripeDirectories(stats);
       mergeDeletedRecords(stats);
       mergeMissingReferences((Map<RID, Long>) stats.get("missingReferences"),
           (Map<RID, String>) stats.get("missingReferenceErrors"));
@@ -1248,6 +1275,7 @@ public class DatabaseChecker {
 
       ((LinkedHashSet<String>) result.get("warnings")).addAll((Collection<String>) stats.get("warnings"));
       ((LinkedHashSet<RID>) result.get("corruptedRecords")).addAll((Collection<RID>) stats.get("corruptedRecords"));
+      mergeUnreadableStripeDirectories(stats);
       mergeDeletedRecords(stats);
       mergeMissingReferences((Map<RID, Long>) stats.get("missingReferences"),
           (Map<RID, String>) stats.get("missingReferenceErrors"));

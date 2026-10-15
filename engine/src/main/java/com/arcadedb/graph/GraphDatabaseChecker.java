@@ -19,13 +19,19 @@
 package com.arcadedb.graph;
 
 import com.arcadedb.GlobalConfiguration;
+import com.arcadedb.database.Binary;
 import com.arcadedb.database.DatabaseInternal;
 import com.arcadedb.database.RID;
 import com.arcadedb.database.Record;
 import com.arcadedb.engine.Bucket;
 import com.arcadedb.engine.LocalBucket;
 import com.arcadedb.engine.RepairTransaction;
+import com.arcadedb.exception.DatabaseIsClosedException;
+import com.arcadedb.exception.DatabaseIsReadOnlyException;
+import com.arcadedb.exception.DatabaseOperationInProgressException;
+import com.arcadedb.exception.NeedRetryException;
 import com.arcadedb.exception.RecordNotFoundException;
+import com.arcadedb.exception.TimeoutException;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.schema.DocumentType;
 import com.arcadedb.schema.EdgeType;
@@ -451,22 +457,14 @@ public class GraphDatabaseChecker {
         addSegmentBucketIfInternal(ids, InternalBucketNaming.outEdgesBucketName(vb.getName()));
         addSegmentBucketIfInternal(ids, InternalBucketNaming.inEdgesBucketName(vb.getName()));
       }
-      // Super-node stripe pool (per type). Pools are created contiguously from slot 0 (see
-      // GraphEngine.dropVertexType): sweep until the first gap AT OR PAST the configured pool size, stepping over
-      // gaps below it (a partially-created pool). No slot 0 means the type never promoted - skip the whole sweep.
-      // NOTE: the bound is the LIVE GRAPH_SUPERNODE_STRIPES, not the size persisted at promotion (same assumption
-      // as dropVertexType). If it was shrunk since promotion, buckets past the new size are simply not scanned -
-      // never deleted, and their live segments are still marked via the phase-1 directory walk - so orphans there
-      // just leak; not a data-loss path.
-      for (int i = 0; ; i++) {
-        final String stripeBucketName = StripedEdgeList.stripeBucketName(type.getName(), i);
-        if (!schema.existsBucket(stripeBucketName)) {
-          if (i == 0 || i >= configuredStripes)
-            break;
-          continue;
-        }
-        addSegmentBucketIfInternal(ids, stripeBucketName);
-      }
+      // Super-node stripe pool (per type), walked by StripedEdgeList.getStripePool like the type's drop and rename.
+      // NOTE: the bound is the LIVE GRAPH_SUPERNODE_STRIPES, not the size persisted at promotion. A pool is walked past
+      // it as long as it stays contiguous; buckets past a gap beyond it are simply not scanned - never deleted, and
+      // their live segments are still marked via the phase-1 directory walk - so orphans there just leak; not a
+      // data-loss path.
+      for (final Bucket stripe : StripedEdgeList.getStripePool(schema, type.getName(), configuredStripes))
+        if (stripe != null)
+          addSegmentBucketIfInternal(ids, stripe.getName());
     }
     return ids;
   }
@@ -483,6 +481,47 @@ public class GraphDatabaseChecker {
     if (schema.getTypeByBucketId(b.getFileId()) != null)
       return; // USER DATA BUCKET colliding with the naming scheme
     ids.add(b.getFileId());
+  }
+
+  /**
+   * Issue #9266: called where an edge list was found unreadable. When the list is headed by a stripe directory this
+   * release cannot read - a placement hash version it does not support, a truncated header or body - the directory
+   * is reported as a per-record finding ({@code unreadableStripeDirectories}) with the reason in the warning, rather
+   * than leaving the operator to decode a {@code DatabaseMetadataException} message.
+   * <p>
+   * Nothing else changes for it: the caller has already reported the list and, in fix mode, registered the vertex for
+   * a rebuild from the surviving edge records - the same repair as for any unreadable chain, and the only one that
+   * cannot lose an edge, since the directory itself cannot be decoded. The superseded directory and its stripe chains
+   * become unreachable and are reclaimed by the orphan segment pass of a full-scope fix.
+   * <p>
+   * Costs one raw read of the head record, only on the failure path.
+   */
+  private void noteUnreadableStripeDirectory(final RID vertex, final RID head, final CheckReport report) {
+    if (head == null)
+      return;
+    final String problem = describeUnreadableStripeDirectory(head);
+    // The warning follows the set: once the corrupted cap is reached a new directory is neither retained nor warned
+    // about, the same cap every other per-record finding of this class honours.
+    if (problem != null && CollectionUtils.addBounded(report.unreadableStripeDirectories, report.maxCorrupted, head)
+        .isFirstSighting())
+      report.warn("vertex " + vertex + " edge list head " + head + " is a stripe directory this release cannot read: it " + problem);
+  }
+
+  /**
+   * Reads the raw record (no {@code RecordFactory}, whose directory constructor would throw) and answers why it is an
+   * unreadable stripe directory, or {@code null} when it is not a stripe directory at all, is a readable one, or
+   * cannot be read even raw - the generic warning the caller already emitted covers those.
+   */
+  private String describeUnreadableStripeDirectory(final RID head) {
+    try {
+      final Binary raw = database.getSchema().getBucketById(head.getBucketId()).getRecord(head).copyOfContent();
+      if (raw.size() < 1 || raw.getByte(0) != StripeDirectory.RECORD_TYPE)
+        return null;
+      return StripeDirectory.describeUnreadableContent(raw);
+    } catch (final Exception e) {
+      LogManager.instance().log(this, Level.FINE, "Cannot read the raw edge list head %s to classify it: %s", null, head, e);
+      return null;
+    }
   }
 
   /**
@@ -723,6 +762,7 @@ public class GraphDatabaseChecker {
       putProbeCounters(stats, probeCache);
       stats.put("deletedRecordsAfterFix", deletedRecords);
       stats.put("corruptedRecords", report.corruptedRecords);
+      stats.put("unreadableStripeDirectories", report.unreadableStripeDirectories);
       stats.put("duplicateLightEdges", report.duplicateLightEdges);
       stats.put("invalidLinks", report.invalidLinks);
       stats.put("warnings", report.warnings);
@@ -935,6 +975,31 @@ public class GraphDatabaseChecker {
     }
   }
 
+  /**
+   * Prunes the adjacency entry the walk stands on. {@code remove()} deletes the edge the entry names and, when that
+   * delete fails, keeps the entry and lets the failure out (#9779). For this repair the entry IS the damage, so when the
+   * edge cannot be deleted because something else around it is broken, the entry is still taken out, as the iterator
+   * did before #9779. What says nothing about the entry is not damage and propagates: a refused delete, a retryable
+   * conflict (a lock timeout included), a timeout, a database closed or read only under the check, a concurrent operation.
+   * <p>
+   * A delete that failed half way (the far endpoint disconnected, the record not yet freed) leaves that much applied in
+   * the repair transaction. That is trusted, as every other repair here is: the walk goes on over the entries that remain,
+   * and a far endpoint left without its back-reference is what the back-reference arm of this same check repairs.
+   */
+  private static void pruneEntry(final Iterator<Pair<RID, RID>> entries, final RID edgeRID, final CheckReport report) {
+    try {
+      entries.remove();
+    } catch (final SecurityException | NeedRetryException | TimeoutException | DatabaseIsClosedException
+                   | DatabaseIsReadOnlyException | DatabaseOperationInProgressException e) {
+      throw e;
+    } catch (final RuntimeException e) {
+      if (!(entries instanceof EdgeVertexIterator list))
+        throw e;
+      report.warn("edge " + edgeRID + " could not be deleted, removing its entry only (error: " + describe(e) + ")");
+      list.removeEntryKeepingEdge();
+    }
+  }
+
   private static Edge asEdgeOrDanglingEntry(final RID edgeRID) {
     try {
       return edgeRID.asEdge(true);
@@ -987,6 +1052,7 @@ public class GraphDatabaseChecker {
         final RID headChunkRID = ((VertexInternal) vertex).getInEdgesHeadChunk();
         report.warn("vertex " + vertexIdentity + " in edges record " + headChunkRID
             + " is not valid" + (fix ? ", rebuilding the edge list from the surviving edge records" : ""));
+        noteUnreadableStripeDirectory(vertexIdentity, headChunkRID, report);
         if (fix)
           reconnectInEdges.add(vertexIdentity);
       } else {
@@ -1126,9 +1192,11 @@ public class GraphDatabaseChecker {
                     // The FAR vertex's OUT list is unreadable: never blame this edge record for it (before this
                     // guard the probe failure flagged the edge as corrupted and fix mode deleted a VALID edge).
                     // Register the far vertex so its list is rebuilt from the surviving edge records instead.
-                    if (reconnectOutEdges.add(inVertex.getIdentity()))
+                    if (reconnectOutEdges.add(inVertex.getIdentity())) {
                       report.warn("vertex " + inVertex.getIdentity() + " outgoing edge list is unreadable (error: "
                               + describe(probeError) + ")" + (fix ? ", rebuilding it from the surviving edge records" : ""));
+                      noteUnreadableStripeDirectory(inVertex.getIdentity(), inVertex.getOutEdgesHeadChunk(), report);
+                    }
                   }
                   if (connected != null && !connected && !reconnectOutEdges.contains(inVertex.getIdentity())) {
                     report.warn("edge " + edgeRID + " was not connected from the incoming vertex " + edge.getOut() + " to the vertex "
@@ -1161,7 +1229,7 @@ public class GraphDatabaseChecker {
             }
 
             if (fix && removeEntry) {
-              in.remove();
+              pruneEntry(in, edgeRID, report);
               // EVERY image, not just this vertex's (#6062). The remove is not local to the list being walked:
               // EdgeVertexIterator.remove() DELETES the edge record first, and GraphEngine.deleteEdge takes the
               // edge out of BOTH endpoints' lists - so a prune here can change a list this cache holds an image of,
@@ -1220,6 +1288,7 @@ public class GraphDatabaseChecker {
         final RID headChunkRID = ((VertexInternal) vertex).getOutEdgesHeadChunk();
         report.warn("vertex " + vertexIdentity + " out edges record " + headChunkRID
             + " is not valid" + (fix ? ", rebuilding the edge list from the surviving edge records" : ""));
+        noteUnreadableStripeDirectory(vertexIdentity, headChunkRID, report);
         if (fix)
           reconnectOutEdges.add(vertexIdentity);
       } else {
@@ -1374,9 +1443,11 @@ public class GraphDatabaseChecker {
                     // The FAR vertex's IN list is unreadable: never blame this edge record for it (before this
                     // guard the probe failure flagged the edge as corrupted and fix mode deleted a VALID edge).
                     // Register the far vertex so its list is rebuilt from the surviving edge records instead.
-                    if (reconnectInEdges.add(outVertex.getIdentity()))
+                    if (reconnectInEdges.add(outVertex.getIdentity())) {
                       report.warn("vertex " + outVertex.getIdentity() + " incoming edge list is unreadable (error: "
                               + describe(probeError) + ")" + (fix ? ", rebuilding it from the surviving edge records" : ""));
+                      noteUnreadableStripeDirectory(outVertex.getIdentity(), outVertex.getInEdgesHeadChunk(), report);
+                    }
                   }
                   if (connected != null && !connected && !reconnectInEdges.contains(outVertex.getIdentity())) {
                     report.warn("edge " + edgeRID + " was not connected from the outgoing vertex " + edge.getIn() + " back to the vertex "
@@ -1408,7 +1479,7 @@ public class GraphDatabaseChecker {
             }
 
             if (fix && removeEntry) {
-              out.remove();
+              pruneEntry(out, edgeRID, report);
               // See the twin in checkIncomingEdges: the prune deletes the edge record, so it can change any list
               // this cache holds an image of, and every image is dropped rather than guessed at (#6062).
               probeCache.clear();
@@ -1613,9 +1684,11 @@ public class GraphDatabaseChecker {
                 // at fault, so NOTHING is flagged corrupted here (before this guard the vertex was deleted by
                 // fix mode over its broken chain). checkVertices runs after this phase and rebuilds the list
                 // from the surviving edge records.
-                if (unreadableListVertices.add(inVertex.getIdentity()))
+                if (unreadableListVertices.add(inVertex.getIdentity())) {
                   report.warn("vertex " + inVertex.getIdentity() + " incoming edge list is unreadable (error: " + describe(e)
                           + "), left to the vertex check to rebuild");
+                  noteUnreadableStripeDirectory(inVertex.getIdentity(), inVertex.getInEdgesHeadChunk(), report);
+                }
               }
 
             final VertexInternal outVertex = loadEndpointVertex(edge, edgeRID, Vertex.DIRECTION.OUT, report,
@@ -1634,9 +1707,11 @@ public class GraphDatabaseChecker {
                 }
               } catch (final Exception e) {
                 // Same as the incoming side: an unreadable LIST is not a corrupted edge or vertex.
-                if (unreadableListVertices.add(outVertex.getIdentity()))
+                if (unreadableListVertices.add(outVertex.getIdentity())) {
                   report.warn("vertex " + outVertex.getIdentity() + " outgoing edge list is unreadable (error: " + describe(e)
                           + "), left to the vertex check to rebuild");
+                  noteUnreadableStripeDirectory(outVertex.getIdentity(), outVertex.getOutEdgesHeadChunk(), report);
+                }
               }
 
             // #6090: classify what the two probes established, and report it.
@@ -1775,6 +1850,7 @@ public class GraphDatabaseChecker {
       putProbeCounters(stats, probeCache);
       stats.put("deletedRecordsAfterFix", deletedRecords);
       stats.put("corruptedRecords", report.corruptedRecords);
+      stats.put("unreadableStripeDirectories", report.unreadableStripeDirectories);
       stats.put("invalidLinks", report.invalidLinks);
       stats.put("missingReferenceBack", missingReferenceBack.get());
       // #6090: the readable form of the counter above - see the method Javadoc for what each one means.
@@ -2083,6 +2159,13 @@ public class GraphDatabaseChecker {
   private static final class CheckReport {
     final LinkedHashSet<String> warnings         = new LinkedHashSet<>();
     final LinkedHashSet<RID>    corruptedRecords = new LinkedHashSet<>();
+    /**
+     * #9266: stripe directories this release cannot read (unknown placement hash version, truncated header or
+     * body), one entry per directory RID. Deliberately NOT {@link #corruptedRecords}: fix mode raw-deletes every RID
+     * there, and the record the operator needs back is the vertex whose list it heads, which is rebuilt from the
+     * surviving edge records instead. Bounded by the corrupted cap.
+     */
+    final LinkedHashSet<RID>    unreadableStripeDirectories = new LinkedHashSet<>();
     // PLAIN longs, not AtomicLong: a check run is single-threaded (scanType walks sequentially) and the sets beside
     // them are not thread-safe either, so an atomic counter here would advertise a concurrency this class does not
     // have and cannot support. They were atomics only because the previous shape passed them as parameters, which

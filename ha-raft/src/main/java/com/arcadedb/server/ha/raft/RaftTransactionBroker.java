@@ -18,6 +18,7 @@
  */
 package com.arcadedb.server.ha.raft;
 
+import com.arcadedb.index.fulltext.FullTextCorpusDeltas;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.network.binary.ReplicatedEntryTooLargeException;
 import org.apache.ratis.client.RaftClient;
@@ -99,12 +100,28 @@ public class RaftTransactionBroker {
    */
   public long replicateTransaction(final String dbName, final byte[] walData,
       final Map<Integer, Integer> bucketDeltas, final long preparedAtIndex) {
-    final ByteString entry = RaftLogEntryCodec.encodeTxEntry(dbName, walData, bucketDeltas, preparedAtIndex);
+    return replicateTransaction(dbName, walData, bucketDeltas, preparedAtIndex, Collections.emptyList());
+  }
+
+  /**
+   * As {@link #replicateTransaction(String, byte[], Map, long)}, also carrying what the transaction did to the BM25 corpus
+   * counters of the full-text indexes it wrote (issue #10018), so every node moves them together.
+   */
+  public long replicateTransaction(final String dbName, final byte[] walData,
+      final Map<Integer, Integer> bucketDeltas, final long preparedAtIndex,
+      final List<FullTextCorpusDeltas.CorpusDelta> corpusDeltas) {
+    final ByteString entry = RaftLogEntryCodec.encodeTxEntry(dbName, walData, bucketDeltas, preparedAtIndex, corpusDeltas);
     return groupCommitter.submitAndWait(entry.toByteArray());
   }
 
   /**
    * Replicates schema changes (file additions/removals, schema JSON, embedded WAL entries).
+   * <p>
+   * Every {@code SCHEMA_ENTRY} - this method, the instalments and the sealed slices - must be submitted by the LEADER, from
+   * inside a schema session {@code RaftReplicatedDatabase} has bound to the current Raft term ({@code recordFileChanges} or
+   * {@code runWithCompactionReplication}). The leader refuses any other before appending it (issue #9547, see
+   * {@code ArcadeStateMachine.staleSchemaProposalRefusal}): one from another node's client, or one of its own outside a
+   * session bound to the current term. A new producer that does not fit has to be designed against that rule, not around it.
    */
   public void replicateSchema(final String dbName, final String schemaJson,
       final Map<Integer, String> filesToAdd, final Map<Integer, String> filesToRemove,
@@ -150,8 +167,23 @@ public class RaftTransactionBroker {
       final List<byte[]> walEntries, final List<Map<Integer, Integer>> bucketDeltas,
       final List<RaftLogEntryCodec.TsSealedBlob> sealedFileBlobs,
       final List<RaftLogEntryCodec.TsSealedChunk> sealedFileChunks, final SchemaDelta.Payload schemaDelta) {
+    replicateSchema(dbName, schemaJson, filesToAdd, filesToRemove, walEntries, bucketDeltas, sealedFileBlobs,
+        sealedFileChunks, schemaDelta, Collections.emptyMap());
+  }
+
+  /**
+   * @param filesToRename the component files the change renamed, file id to new component name (issue #9762). They
+   *                      publish, like the schema they make readable, so on a split they ride the LAST chunk.
+   */
+  public void replicateSchema(final String dbName, final String schemaJson,
+      final Map<Integer, String> filesToAdd, final Map<Integer, String> filesToRemove,
+      final List<byte[]> walEntries, final List<Map<Integer, Integer>> bucketDeltas,
+      final List<RaftLogEntryCodec.TsSealedBlob> sealedFileBlobs,
+      final List<RaftLogEntryCodec.TsSealedChunk> sealedFileChunks, final SchemaDelta.Payload schemaDelta,
+      final Map<Integer, String> filesToRename) {
     final ByteString entry = RaftLogEntryCodec.encodeSchemaEntry(dbName, schemaJson,
-        filesToAdd, filesToRemove, walEntries, bucketDeltas, sealedFileBlobs, false, sealedFileChunks, schemaDelta);
+        filesToAdd, filesToRemove, walEntries, bucketDeltas, sealedFileBlobs, false, sealedFileChunks, schemaDelta,
+        filesToRename);
 
     final long cap = groupCommitter.maxEntrySize();
     if (entry.size() <= cap) {
@@ -160,7 +192,7 @@ public class RaftTransactionBroker {
     }
 
     for (final ByteString chunk : splitSchemaEntry(dbName, schemaJson, filesToAdd, filesToRemove, walEntries,
-        bucketDeltas, sealedFileBlobs, sealedFileChunks, cap, entry.size(), false, schemaDelta))
+        bucketDeltas, sealedFileBlobs, sealedFileChunks, cap, entry.size(), false, schemaDelta, filesToRename))
       groupCommitter.submitAndWait(chunk.toByteArray());
   }
 
@@ -307,6 +339,21 @@ public class RaftTransactionBroker {
       final List<RaftLogEntryCodec.TsSealedBlob> sealedFileBlobs,
       final List<RaftLogEntryCodec.TsSealedChunk> sealedFileChunks, final long cap, final int singleEntrySize,
       final boolean moreAfterLast, final SchemaDelta.Payload schemaDelta) {
+    return splitSchemaEntry(dbName, schemaJson, filesToAdd, filesToRemove, walEntries, bucketDeltas, sealedFileBlobs,
+        sealedFileChunks, cap, singleEntrySize, moreAfterLast, schemaDelta, Collections.emptyMap());
+  }
+
+  /**
+   * @param filesToRename the renamed component files (issue #9762). They make the published schema readable, so they go
+   *                      on the LAST chunk with it and are measured into that chunk's header budget.
+   */
+  // @VisibleForTesting
+  static List<ByteString> splitSchemaEntry(final String dbName, final String schemaJson,
+      final Map<Integer, String> filesToAdd, final Map<Integer, String> filesToRemove,
+      final List<byte[]> walEntries, final List<Map<Integer, Integer>> bucketDeltas,
+      final List<RaftLogEntryCodec.TsSealedBlob> sealedFileBlobs,
+      final List<RaftLogEntryCodec.TsSealedChunk> sealedFileChunks, final long cap, final int singleEntrySize,
+      final boolean moreAfterLast, final SchemaDelta.Payload schemaDelta, final Map<Integer, String> filesToRename) {
 
     // Worst-case non-WAL payload: the first entry carries filesToAdd, the last one the schema JSON,
     // filesToRemove, the sealed blobs and the final sealed slices. Measured by encoding both headers with no
@@ -315,7 +362,7 @@ public class RaftTransactionBroker {
         Collections.emptyMap(), Collections.emptyList(), Collections.emptyList(), Collections.emptyList()).size();
     final int lastHeaderSize = RaftLogEntryCodec.encodeSchemaEntry(dbName, schemaJson, Collections.emptyMap(),
         filesToRemove, Collections.emptyList(), Collections.emptyList(), sealedFileBlobs, moreAfterLast,
-        sealedFileChunks, schemaDelta).size();
+        sealedFileChunks, schemaDelta, filesToRename).size();
     final long walBudget = cap - Math.max(firstHeaderSize, lastHeaderSize);
 
     if (walEntries == null || walEntries.isEmpty() || walBudget <= 0)
@@ -381,7 +428,8 @@ public class RaftTransactionBroker {
           last ? sealedFileBlobs : Collections.emptyList(),
           !last || moreAfterLast,
           last ? sealedFileChunks : Collections.emptyList(),
-          last ? schemaDelta : null);
+          last ? schemaDelta : null,
+          last ? filesToRename : Collections.emptyMap());
 
       if (chunk.size() > cap)
         // A single WAL entry (or the header plus one WAL entry) still does not fit. Fail loudly rather
@@ -436,6 +484,18 @@ public class RaftTransactionBroker {
    */
   public long replicateDropDatabase(final String dbName) {
     final ByteString entry = RaftLogEntryCodec.encodeDropDatabaseEntry(dbName);
+    return groupCommitter.submitAndWait(entry.toByteArray());
+  }
+
+  /**
+   * Replicates the settings changed in the {@code configuration.json} of {@code dbName}, as
+   * {@code LocalDatabase.pendingConfigurationChanges()} produced them, so every node holds them
+   * (issue #9763).
+   *
+   * @return the Raft log index the entry committed at, for the caller to wait on its local apply
+   */
+  public long replicateDatabaseConfiguration(final String dbName, final String changesJson) {
+    final ByteString entry = RaftLogEntryCodec.encodeDatabaseConfigurationEntry(dbName, changesJson);
     return groupCommitter.submitAndWait(entry.toByteArray());
   }
 

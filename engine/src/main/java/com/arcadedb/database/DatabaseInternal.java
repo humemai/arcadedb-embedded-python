@@ -18,17 +18,21 @@
  */
 package com.arcadedb.database;
 
+import com.arcadedb.ContextConfiguration;
 import com.arcadedb.database.async.AsyncQuiesce;
 import com.arcadedb.engine.FileManager;
 import com.arcadedb.engine.LocalBucket;
 import com.arcadedb.engine.PageManager;
 import com.arcadedb.engine.TransactionManager;
 import com.arcadedb.engine.WALFileFactory;
+import com.arcadedb.exception.DatabaseIsClosedException;
+import com.arcadedb.exception.DatabaseIsReopeningException;
 import com.arcadedb.exception.DatabaseOperationException;
 import com.arcadedb.exception.TransactionException;
 import com.arcadedb.exception.ValidationException;
 import com.arcadedb.graph.Edge;
 import com.arcadedb.graph.GraphEngine;
+import com.arcadedb.graph.Vertex;
 import com.arcadedb.query.opencypher.optimizer.statistics.GraphStatisticsCache;
 import com.arcadedb.query.opencypher.query.CypherPlanCache;
 import com.arcadedb.query.opencypher.query.CypherStatementCache;
@@ -87,6 +91,15 @@ public interface DatabaseInternal extends Database {
    */
   default void closeForDrop() {
     throw new UnsupportedOperationException("Only an embedded database instance can be closed for drop");
+  }
+
+  /**
+   * Closes the database because the same database is about to be reopened under its name: an operation still holding
+   * this handle is refused with the retryable {@link DatabaseIsReopeningException} instead of the permanent
+   * {@link DatabaseIsClosedException} (issue #8199). Only the embedded instance supports it, like {@link #closeForDrop()}.
+   */
+  default void closeForReopen() {
+    throw new UnsupportedOperationException("Only an embedded database instance can be closed for reopen");
   }
 
   DatabaseContext.DatabaseContextTL getContext();
@@ -196,7 +209,28 @@ public interface DatabaseInternal extends Database {
 
   void createRecord(Record record, String bucketName);
 
-  void createRecordNoLock(Record record, String bucketName, boolean discardRecordAfter);
+  /**
+   * Creates the record without taking the database read lock, dispatching the before/after-create listeners itself.
+   *
+   * @return {@code true} when the record was created, {@code false} when a before-create listener vetoed it (the record is then
+   * left without an identity)
+   */
+  boolean createRecordNoLock(Record record, String bucketName, boolean discardRecordAfter);
+
+  /**
+   * Creates the record exactly as {@link #createRecord(Record, String)} does, under the database read lock, but answers what the
+   * engine answered, which {@link #createRecord(Record, String)} and {@link MutableDocument#save()} throw away. A caller that COUNTS
+   * creations - the integer a protocol replies - must use this one (or {@link MutableDocument#saveReportingVeto()}), or a create a
+   * listener vetoed is counted as done (issue #9974). The create-side twin of {@link #deleteRecordReportingVeto(Record)}.
+   *
+   * @param bucketName the bucket to create the record in, {@code null} for the one the type selects
+   *
+   * @return {@code true} when the record was created, {@code false} when a before-create listener vetoed it. Every other refusal
+   * (a constraint, a permission, a duplicated key, a read-only database) is thrown, as by {@link #createRecord(Record, String)}.
+   */
+  default boolean createRecordReportingVeto(final Record record, final String bucketName) {
+    return executeInReadLock(() -> createRecordNoLock(record, bucketName, false));
+  }
 
   /**
    * Emergency repair: recreates {@code record} at {@code position} in {@code bucket}, i.e. at the exact RID a
@@ -235,7 +269,35 @@ public interface DatabaseInternal extends Database {
 
   void updateRecord(Record record);
 
+  /**
+   * Updates the record exactly as {@link #updateRecord(Record)} does, but answers what the engine answered, which
+   * {@link #updateRecord(Record)} and {@link MutableDocument#save()} throw away. A caller that COUNTS updates must use this one (or
+   * {@link MutableDocument#saveReportingVeto()}), or an update a listener vetoed is counted as done (issue #9974).
+   *
+   * @return {@code true} when the update was applied (in a transaction: queued for the commit), {@code false} when a before-update
+   * listener vetoed it or this transaction has already deleted the record (#7149). Every other refusal is thrown, as by
+   * {@link #updateRecord(Record)}.
+   */
+  boolean updateRecordReportingVeto(Record record);
+
+  /**
+   * Writes an updated record to its page now, and nothing else: no validation, no events, no statistics. The building
+   * block the commit uses to flush the updates it deferred, which were validated, announced and counted when they were
+   * made. To UPDATE a record, use {@link #updateRecordReportingVeto(Record)} or
+   * {@link #updateRecordWithEventsNoLock(Record, boolean)}.
+   */
   void updateRecordNoLock(Record record, boolean discardRecordAfter);
+
+  /**
+   * Updates the record exactly as {@link #updateRecordReportingVeto(Record)} does - preconditions, validation, the
+   * before/after-update listeners, the {@code updateRecord} statistic - but without the database read lock and writing
+   * the record to its page now, inside the caller's transaction, instead of queueing it for the commit. The update
+   * sibling of {@link #createRecordNoLock} and {@link #deleteRecordNoLock}, used the same way by the asynchronous update
+   * task (issue #9987).
+   *
+   * @return {@code true} when the update was applied, {@code false} when a before-update listener vetoed it
+   */
+  boolean updateRecordWithEventsNoLock(Record record, boolean discardRecordAfter);
 
   /**
    * Deletes the record without taking the database read lock, dispatching the before/after-delete listeners itself.
@@ -247,6 +309,19 @@ public interface DatabaseInternal extends Database {
   boolean deleteRecordNoLock(Record record);
 
   /**
+   * Deletes the record exactly as {@link #deleteRecord(Record)} does, under the database read lock, but answers what the engine
+   * answered, which {@link #deleteRecord(Record)} and {@link Record#delete()} (both {@code void}) throw away. A caller that
+   * COUNTS deletions - the integer a protocol replies - must use this one, or a delete a listener vetoed is counted as done
+   * (issue #9837).
+   *
+   * @return {@code true} when the record was deleted, {@code false} when a before-delete listener vetoed it. Every other refusal
+   * (a permission, a conflict, a read-only database) is thrown, as by {@link #deleteRecord(Record)}.
+   */
+  default boolean deleteRecordReportingVeto(final Record record) {
+    return executeInReadLock(() -> deleteRecordNoLock(record));
+  }
+
+  /**
    * Deletes an edge record the way {@code edge.delete()} does - index cleanup, external values, delete events and
    * the graph disconnection - except that it does NOT disconnect the edge from the endpoint vertex named by
    * {@code skipEndpoint}.
@@ -254,10 +329,16 @@ public interface DatabaseInternal extends Database {
    * #5760: for {@code GraphEngine.deleteVertex}, which passes the vertex it is deleting. That vertex's edge lists
    * are dropped in their entirety a moment later, so removing each edge from them one at a time - a chain walk, a
    * chunk anchor, a compaction and a write-back per edge - is pure waste. See
-   * {@link com.arcadedb.graph.GraphEngine#deleteEdge(Edge, RID)} for the contract, including why a self-loop skips
-   * both sides and why the self-side READ is untouched.
+   * {@link com.arcadedb.graph.GraphEngine#deleteEdge(Edge, RID, Vertex.DIRECTION)} for the contract, including why a
+   * self-loop skips both sides and why the self-side READ is untouched.
+   * <p>
+   * #9779: also for the edge-list iterators' {@code remove()}, which pass the direction of the list they walk and take
+   * the entry out of it themselves.
+   *
+   * @param skipDirection the one list of {@code skipEndpoint} to leave alone, or {@code null} for both of them
+   * @return false when a before-delete listener vetoed the delete, so nothing was deleted or disconnected
    */
-  void deleteEdgeSkippingEndpoint(Edge edge, RID skipEndpoint);
+  boolean deleteEdgeSkippingEndpoint(Edge edge, RID skipEndpoint, Vertex.DIRECTION skipDirection);
 
   Record invokeAfterReadEvents(Record record);
 
@@ -302,13 +383,39 @@ public interface DatabaseInternal extends Database {
 
   <RET> RET recordFileChanges(final Callable<Object> callback);
 
+  /**
+   * Refuses, before a single file is moved, a schema change that renames component files when this database could not
+   * publish the renames (issue #9762). A type rename moves its files first and opens a {@link #recordFileChanges} frame
+   * only to publish them, so a refusal from that frame would come after the files were already moved. Nothing to refuse
+   * on an embedded database; a replicated one refuses on a node that is not the leader, and when a peer could not decode
+   * the renames.
+   */
+  default void checkFileRenamesCanBePublished() {
+  }
+
   long getLastUpdatedOn();
 
   long getLastUsedOn();
 
   long getOpenedOn();
 
+  /**
+   * Saves the configuration. Under Raft HA this replicates EVERY setting this node holds in memory and its
+   * {@code configuration.json} does not, including one a concurrent statement put in force and has not submitted yet:
+   * a caller that changed one setting saves it with {@link #saveConfiguration(String)} instead (issue #9959).
+   */
   void saveConfiguration() throws IOException;
+
+  /**
+   * Saves the configuration after the setting {@code key} (as stored, {@code arcadedb.} prefix included) changed. Under
+   * Raft HA only that setting is replicated, never another change this node holds in memory and has not saved yet,
+   * such as one a concurrent statement is still about to submit (issue #9959). Elsewhere the same as
+   * {@link #saveConfiguration()}. A database that wraps another must forward this method, not inherit the default: the
+   * default would turn the keyed save back into the whole-difference one.
+   */
+  default void saveConfiguration(final String key) throws IOException {
+    saveConfiguration();
+  }
 
   Map<String, Object> alignToReplicas();
 
@@ -342,6 +449,22 @@ public interface DatabaseInternal extends Database {
    */
   default boolean isReplicated() {
     return false;
+  }
+
+  /**
+   * The configuration the replication layer sizes its entries against: where engine code that must fit its work into
+   * one replicated entry reads the cap from, as {@code GlobalConfiguration.maxReplicatedRaftEntrySize(...)} and the
+   * sealed-store helpers next to it (issue #9430).
+   * <p>
+   * Not {@link #getConfiguration()}: a database's configuration falls back to the JVM-global values, not to the
+   * server's, while the replication layer enforces the cap from the server's. A cap set only in
+   * {@code config/server-configuration.json} was therefore enforced at submit and invisible to the engine, which
+   * kept producing entries sized for the default. The default answers the database's own configuration, which is
+   * right for a database nothing replicates; a replicated wrapper overrides it with the configuration its
+   * replication layer was built from.
+   */
+  default ContextConfiguration getReplicationConfiguration() {
+    return getConfiguration();
   }
 
   /**

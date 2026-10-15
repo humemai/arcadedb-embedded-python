@@ -18,6 +18,11 @@
  */
 package com.arcadedb.query.sql.executor;
 
+import com.arcadedb.database.Document;
+import com.arcadedb.database.Identifiable;
+import com.arcadedb.database.RID;
+import com.arcadedb.database.Record;
+import com.arcadedb.exception.RecordNotFoundException;
 import com.arcadedb.graph.EdgeIdentitySet;
 import com.arcadedb.query.sql.parser.PInteger;
 import com.arcadedb.query.sql.parser.TraverseProjectionItem;
@@ -48,6 +53,19 @@ public abstract class AbstractTraverseStep extends AbstractExecutionStep {
   // set only for the record-less ones a LIGHTWEIGHT edge produces - RidHashSet alone keyed every one of them to the
   // same (edge type bucket, placeholder position) pair and collapsed a type's edges into one (issue #7480).
   final EdgeIdentitySet traversed;
+
+  /**
+   * What one record visited costs the heap: its slot in {@link #traversed}, two primitives in an open-addressing table
+   * kept between a half and three quarters full.
+   */
+  static final int VISITED_ENTRY_BYTES = 24;
+
+  // The visited set is the buffer a TRAVERSE holds for its whole life: one entry per record reached, released only when
+  // the step closes. Its bytes are charged to the heap budget all queries share (issue #9792); the frontier is not counted
+  // apart, as it never holds a record the visited set does not. It is not capped in number by
+  // queryMaxHeapElementsAllowedPerOp: an entry is a couple of primitives, not the ~2KB element that cap is sized on, so a
+  // traversal of a large graph would fail it with heap to spare.
+  private OperationHeapLimit visitedLimit;
 
   public AbstractTraverseStep(final List<TraverseProjectionItem> projections, final WhereClause whileClause,
       final WhereClause postFilter,
@@ -92,13 +110,45 @@ public abstract class AbstractTraverseStep extends AbstractExecutionStep {
         }
         localFetched++;
         final Result result = results.removeFirst();
-        if (result.isElement()) {
-          traversed.add(result.getElement().get().getIdentity());
-        }
+        if (result.isElement())
+          markTraversed(result.getElement().get().getIdentity());
         return result;
       }
 
     };
+  }
+
+  /**
+   * Adds {@code rid} to the records visited, charging a new one to the heap budget: past it the query fails rather than
+   * the visited set growing until the heap is exhausted.
+   *
+   * @return true if the record was not visited before
+   */
+  protected final boolean markTraversed(final RID rid) {
+    if (!traversed.add(rid))
+      return false;
+    if (visitedLimit == null)
+      visitedLimit = OperationHeapLimit.of(context, "visited records", "TRAVERSE");
+    try {
+      visitedLimit.charge(visitedEntryBytes());
+    } catch (final RuntimeException e) {
+      // THE QUERY FAILS, POSSIBLY BEFORE ITS CALLER HOLDS A RESULT SET TO CLOSE: GIVE THE HEAP BACK NOW
+      visitedLimit.release();
+      throw e;
+    }
+    return true;
+  }
+
+  /** What one more record visited costs the heap, across every structure the strategy keeps per visited record. */
+  protected int visitedEntryBytes() {
+    return VISITED_ENTRY_BYTES;
+  }
+
+  @Override
+  public void close() {
+    if (visitedLimit != null)
+      visitedLimit.release();
+    super.close();
   }
 
   private void fetchNextBlock(final CommandContext context, final int nRecords) {
@@ -121,6 +171,51 @@ public abstract class AbstractTraverseStep extends AbstractExecutionStep {
       fetchNextResults(context, nRecords);
       if (context.isProfiling())
         cost += System.nanoTime() - begin;
+    }
+  }
+
+  /**
+   * The entry point a row arriving from the previous step starts the walk from, or {@code null} when it cannot start one.
+   * One answer for both strategies, because they differ in the order they visit nodes and in nothing else: the two private
+   * copies this replaces had drifted apart, and the breadth-first one dropped a one-column row holding a bare RID
+   * ({@code SELECT @rid ...}, a LINK property) where the depth-first one loaded the record, so the same query answered the
+   * whole traversal under one strategy and nothing under the other (issue #9778).
+   */
+  protected static Result toTraverseResult(final Result item) {
+    TraverseResult res = null;
+    if (item instanceof TraverseResult result)
+      res = result;
+    else if (item.isElement() && item.getElement().get().getIdentity() != null) {
+      res = new TraverseResult(item.getElement().get());
+      res.depth = 0;
+    } else if (item.getPropertyNames().size() == 1) {
+      final Object val = item.getProperty(item.getPropertyNames().iterator().next());
+      if (val instanceof Identifiable identifiable && loadEntryPoint(identifiable) instanceof Document document) {
+        res = new TraverseResult(document);
+        res.depth = 0;
+        res.setMetadata("$depth", 0);
+      }
+    } else {
+      res = new TraverseResult();
+      for (final String key : item.getPropertyNames())
+        res.setProperty(key, item.getProperty(key));
+
+      for (final String md : item.getMetadataKeys())
+        res.setMetadata(md, item.getMetadata(md));
+    }
+
+    return res;
+  }
+
+  /**
+   * The record a one-column entry-point row points at, or {@code null} when there is none to start from: a LINK whose record
+   * was deleted has nothing to walk, the same as a LINK left null, so it is skipped rather than failing the whole query.
+   */
+  private static Record loadEntryPoint(final Identifiable identifiable) {
+    try {
+      return identifiable.getRecord();
+    } catch (final RecordNotFoundException e) {
+      return null;
     }
   }
 

@@ -26,6 +26,8 @@ import com.arcadedb.database.DatabaseInternal;
 import com.arcadedb.database.TransactionContext;
 import com.arcadedb.exception.TransactionException;
 import com.arcadedb.log.LogManager;
+import com.arcadedb.query.RunningQuery;
+import com.arcadedb.query.sql.executor.QueryAdmissionGate;
 import com.arcadedb.security.SecurityDatabaseUser;
 import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.server.ForwardedRequestIdContext;
@@ -217,6 +219,9 @@ public abstract class DatabaseAbstractHandler extends AbstractServerHttpHandler 
     emitCommitIndexBookmarkOnResponseCommit(exchange, haDbForRead);
 
     final AtomicReference<ExecutionResponse> response = new AtomicReference<>();
+    QueryAdmissionGate.Ticket admission = null;
+    RunningQuery runningQuery = null;
+    HttpClientDisconnectWatch disconnectWatch = null;
     try {
       // Set read consistency context for HA follower reads.
       // Must be inside the try block so the finally always clears the ThreadLocal.
@@ -249,6 +254,18 @@ public abstract class DatabaseAbstractHandler extends AbstractServerHttpHandler 
         }
       }
       boolean finalAtomicTransaction = atomicTransaction;
+      // A label that cannot be one was refused with the request envelope, before the request could take a slot it would
+      // only give back (issues #9680, #9775)
+      admission = admit(exchange);
+      // Once admitted, so a statement waiting for its slot is not listed as running, and a terminate never races a
+      // request that has not started yet (issue #9680)
+      if (registersRunningQuery())
+        runningQuery = registerRunningQuery(exchange, user, database != null ? database.getName() : null,
+            activeSession != null ? activeSession.id : null, activeSession != null ? activeSession.getTag() : null);
+      if (runningQuery != null && httpServer.getServer().getConfiguration()
+          .getValueAsBoolean(GlobalConfiguration.SERVER_HTTP_TERMINATE_ON_CLIENT_DISCONNECT))
+        // A client that goes away while the statement runs terminates it: nobody is left to read the answer (issue #9689)
+        disconnectWatch = HttpClientDisconnectWatch.arm(exchange, runningQuery);
       if (activeSession != null) {
         // EXECUTE THE CODE LOCKING THE CURRENT SESSION. THIS AVOIDS USING THE SAME SESSION FROM MULTIPLE THREADS AT THE SAME TIME
         activeSession.execute(user, () -> {
@@ -257,7 +274,7 @@ public abstract class DatabaseAbstractHandler extends AbstractServerHttpHandler 
           else
             response.set(execute(exchange, user, database, payload));
           return null;
-        }, participatesInSessionTransaction(), endsSession());
+        }, rollsBackSessionTransactionOnFailure(), endsSession(), participatesInSessionTransaction());
       } else {
         if (finalAtomicTransaction)
           executeInTransaction(exchange, user, database, payload, response, retries);
@@ -273,26 +290,83 @@ public abstract class DatabaseAbstractHandler extends AbstractServerHttpHandler 
       emitCommitIndexBookmark(exchange, haDbForRead);
 
     } finally {
-      // Clear read consistency context
-      if (haDbForRead != null)
-        haDbForRead.clearReadConsistencyContext();
+      try {
+        // Clear read consistency context
+        if (haDbForRead != null)
+          haDbForRead.clearReadConsistencyContext();
 
-      if (activeSession != null)
-        // DETACH CURRENT CONTEXT/TRANSACTIONS FROM CURRENT THREAD
-        DatabaseContext.INSTANCE.removeContext(database.getDatabasePath());
-      else if (database != null) {
+        if (activeSession != null)
+          // DETACH CURRENT CONTEXT/TRANSACTIONS FROM CURRENT THREAD
+          DatabaseContext.INSTANCE.removeContext(database.getDatabasePath());
+        else if (database != null) {
+          try {
+            if (!atomicTransaction)
+              // NO TRANSACTION, ROLLBACK TO MAKE SURE ANY PENDING OPERATION IS REMOVED
+              database.rollbackAllNested();
+          } finally {
+            // DO NOT CLEAN THE CURRENT SESSION BECAUSE IT COULD HAVE AN OPEN TX
+            cleanTL(database, null);
+          }
+        }
+      } finally {
         try {
-          if (!atomicTransaction)
-            // NO TRANSACTION, ROLLBACK TO MAKE SURE ANY PENDING OPERATION IS REMOVED
-            database.rollbackAllNested();
+          // LAST: THE SLOT COVERS THE WHOLE REQUEST, ITS COMMIT AND ITS CLEANUP INCLUDED
+          if (admission != null)
+            admission.close();
         } finally {
-          // DO NOT CLEAN THE CURRENT SESSION BECAUSE IT COULD HAVE AN OPEN TX
-          cleanTL(database, null);
+          // AFTER EVERYTHING ELSE: THE ENTRY LEAVING THE LIST IS THE PROOF THE WORK IS OVER (issue #9680)
+          if (runningQuery != null)
+            endRunningQuery(exchange, runningQuery, activeSession, disconnectWatch);
         }
       }
     }
 
     return response.get();
+  }
+
+  /**
+   * Whether the requests of this handler are listed by {@code list queries} and can be terminated (issue #9680). The
+   * same requests the admission gate holds back, since both mean "a request that does work": session management and
+   * probes are neither.
+   */
+  protected boolean registersRunningQuery() {
+    return goesThroughAdmissionGate();
+  }
+
+  /**
+   * Closes the registry entry of the request. A request terminated while it ran in a transaction session also ends the
+   * session, rolling back its transaction, before the entry goes (issue #9680) - when the route is one whose failure
+   * rolls that transaction back ({@link #rollsBackSessionTransactionOnFailure()}).
+   * <p>
+   * The session goes because a client that stops a statement wants none of it to stand, and in a session the
+   * statement's writes are the session's: they would otherwise survive a statement that ended before it reached a check,
+   * to be published by the next {@code /commit}. Ending the session makes the answer the same whenever the termination
+   * landed, and a later {@code /commit} is told the session is gone instead of committing what is left of it.
+   * <p>
+   * A route that cannot leave anything half applied in the caller's transaction - a read, or a {@code /ts}, vector or
+   * observability route that stands outside it - has nothing of its own in the session to undo, so a terminate ends the
+   * statement and leaves the transaction alone, exactly as a failure of the same route does (issue #9798). The question is
+   * the route's, asked once: a terminate is a failure of the statement, and the two paths that can end the caller's
+   * transaction must agree. It matters most for the client-disconnect watch, which terminates a statement whenever a
+   * connection closes: an HTTP client's read timeout on a long read must not roll back the writes the client made in its
+   * {@code /begin} transaction, which it reaches again from any connection.
+   */
+  private void endRunningQuery(final HttpServerExchange exchange, final RunningQuery runningQuery,
+      final HttpSession activeSession, final HttpClientDisconnectWatch disconnectWatch) {
+    try {
+      // First: the connection is Undertow's again, and a client going away from here on no longer reaches the statement
+      if (disconnectWatch != null)
+        disconnectWatch.disarm();
+      if (activeSession != null && runningQuery.isTerminated() && rollsBackSessionTransactionOnFailure()
+          && httpServer.getSessionManager().removeSession(activeSession.id) != null) {
+        activeSession.cancel();
+        runningQuery.setRolledBack();
+        if (!exchange.isResponseStarted())
+          exchange.getResponseHeaders().put(SESSION_CLOSED_HEADER, "true");
+      }
+    } finally {
+      runningQuery.close();
+    }
   }
 
   /**
@@ -444,6 +518,58 @@ public abstract class DatabaseAbstractHandler extends AbstractServerHttpHandler 
    */
   protected boolean participatesInSessionTransaction() {
     return true;
+  }
+
+  /**
+   * Whether a failure raised by this handler rolls the session's transaction back (issue #9784).
+   * <p>
+   * A different question from {@link #participatesInSessionTransaction()}, which says whether the request RUNS INSIDE the
+   * caller's transaction and is therefore refused once a failed command has rolled it back (issue #9312). The two used to be
+   * one flag, which is right for a command and for the routes that stand outside the transaction altogether, and wrong for a
+   * route that runs inside it but provably writes nothing: its failure leaves nothing half applied, so rolling back destroys
+   * work the client wrote before it, for no benefit. {@code GET} and {@code POST /api/v1/query} are those routes. They keep
+   * joining the transaction - a query must see the writes the caller made in it - and stop destroying it when they fail.
+   * <p>
+   * Defaults to {@link #participatesInSessionTransaction()}, which is what every handler did before the split.
+   *
+   * @see GetQueryHandler
+   * @see PostQueryHandler
+   */
+  protected boolean rollsBackSessionTransactionOnFailure() {
+    return participatesInSessionTransaction();
+  }
+
+  /**
+   * Waits until the query admission gate (issue #9518) lets the request start: in arrival order, when a slot is free and
+   * the running queries leave enough of the heap budget. The caller holds the ticket until the request is done - its
+   * auto-commit and its cleanup included - so the next request starts only once this one has given back the heap its
+   * buffers reserved. Null when the handler does not go through the gate.
+   * <p>
+   * Taken BEFORE the session lock, never inside it: a request waiting for its slot while holding its session's lock would
+   * keep a concurrent {@code /rollback} from ending the session for as long as it waits. Taken first, the only wait a slot
+   * holder can still do is the bounded wait for its session lock, held by a request that already runs, so there is no cycle.
+   * A request that reached this point on an IO thread - the gate was enabled after it was dispatched - does not wait there:
+   * it is refused if it cannot start at once.
+   */
+  private QueryAdmissionGate.Ticket admit(final HttpServerExchange exchange) {
+    if (!goesThroughAdmissionGate())
+      return null;
+    final QueryAdmissionGate gate = QueryAdmissionGate.getInstance();
+    return exchange.isInIoThread() ? gate.admit(0) : gate.admit();
+  }
+
+  /**
+   * Whether the requests of this handler wait for the query admission gate (issue #9518). True for every request that runs
+   * work in a database; a handler that only manages a session or answers a health probe answers false, because it must
+   * never be held behind the queries it would release or report on.
+   */
+  protected boolean goesThroughAdmissionGate() {
+    return true;
+  }
+
+  @Override
+  protected boolean mayWaitForAdmission() {
+    return goesThroughAdmissionGate() && QueryAdmissionGate.getInstance().isEnabled();
   }
 
   protected boolean requiresDatabase() {

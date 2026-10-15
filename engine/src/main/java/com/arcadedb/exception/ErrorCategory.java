@@ -90,6 +90,14 @@ public enum ErrorCategory {
   TIMEOUT,
 
   /**
+   * The statement was stopped on request - {@code terminate query}, a Postgres {@code CancelRequest}, Cypher
+   * {@code TERMINATE TRANSACTIONS} - by its own user or by the server administrator (issue #9689). Never retryable:
+   * re-running work somebody deliberately stopped is the one thing a client must not do, which is why it is told apart
+   * from {@link #TIMEOUT}, a deadline the statement ran out of on its own.
+   */
+  TERMINATED,
+
+  /**
    * Anything else: the server, not the caller, is at fault.
    */
   SERVER;
@@ -97,7 +105,8 @@ public enum ErrorCategory {
   /**
    * The category of {@code error}, or {@link #SERVER} when nothing in its cause chain is recognised.
    * <p>
-   * The order of the tests is behaviour, not style. {@link #RETRY} is decided first so a chain carrying both a
+   * The order of the tests is behaviour, not style. {@link #TERMINATED} is decided before anything else, see its
+   * comment. {@link #RETRY} is decided next so a chain carrying both a
    * conflict and an arithmetic error keeps the transient classification a driver acts on - the same precedence
    * {@code BoltNetworkExecutor.classifyExecutionError} documents. {@link #ARITHMETIC} is decided before
    * {@link #PARSING} so the {@code CommandParsingException} that GraphQL and the query engines wrap execution
@@ -133,11 +142,18 @@ public enum ErrorCategory {
    * HTTP handler already gives (503), instead of a gRPC {@code INTERNAL} a retry-driven client reads as a server
    * fault (issue #8166, review of PR #8197).
    * <p>
+   * {@link DatabaseIsReopeningException} rides with them too: the handle the request was using was closed so the same
+   * database could be reopened under its name (an HA snapshot reinstall), so the request re-issued resolves the reopened
+   * database and succeeds. Only that subtype: a plain {@link DatabaseIsClosedException} is a {@code DROP}, a
+   * {@code CLOSE DATABASE} or a shutdown, which no retry fixes, and stays {@link #SERVER} (issue #8199).
+   * <p>
    * {@link QueryHeapBudgetExceededException} rides with them for the same reason: the query was refused heap because
    * the queries running at the same time hold the budget they all share, and fits it on its own, so the same request
    * re-issued once they complete can succeed (issue #8591). Nor is it a {@link NeedRetryException}: a commit loop
    * retrying on the spot would only meet the same full budget. It is decided before {@link #VALIDATION} and before
    * the {@link CommandExecutionException} fall-through to {@link #SERVER}, which it extends.
+   * {@link QueryAdmissionException} rides with it too: the query admission gate did not start the query because the
+   * server was busy, so nothing of it ran and the same request re-issued later can succeed (issue #9518).
    * <p>
    * Each arm walks the chain separately, which is deliberate and not the same as one walk testing every type per
    * frame. Priority here is by category, not by depth: a chain whose {@link NeedRetryException} sits *below* an
@@ -146,9 +162,15 @@ public enum ErrorCategory {
    * nothing worth reclaiming - they run only on a failure path, and each is capped by {@link CauseChain}.
    */
   public static ErrorCategory of(final Throwable error) {
+    // First, before RETRY: whatever else the chain carries - a wrapper some engine puts around every failure, a conflict
+    // the rollback ran into - a statement stopped on request must never be reported as something a client retries
+    if (CauseChain.contains(error, QueryTerminatedException.class))
+      return TERMINATED;
     if (CauseChain.contains(error, NeedRetryException.class) //
+        || CauseChain.contains(error, DatabaseIsReopeningException.class) //
         || CauseChain.contains(error, TimeSeriesWalkCoarsenedException.class) //
-        || CauseChain.contains(error, QueryHeapBudgetExceededException.class))
+        || CauseChain.contains(error, QueryHeapBudgetExceededException.class) //
+        || CauseChain.contains(error, QueryAdmissionException.class))
       return RETRY;
     if (CauseChain.contains(error, ArithmeticErrorException.class))
       return ARITHMETIC;

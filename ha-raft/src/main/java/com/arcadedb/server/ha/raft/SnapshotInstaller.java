@@ -44,8 +44,6 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.UncheckedIOException;
 import java.net.HttpURLConnection;
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.nio.BufferUnderflowException;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
@@ -123,6 +121,40 @@ public final class SnapshotInstaller {
    * only {@link #rollbackAfterFailedValidation} publishes it, and every swap-state cleanup deletes it.
    */
   static final String SNAPSHOT_VALIDATION_FAILED_FILE = SNAPSHOT_SWAP_STATE_FILE + ".validation-failed";
+  /**
+   * Every regular file the install writes into a database directory (the {@code SNAPSHOT_*_DIR} entries are
+   * directories). None of them is part of the database, so the cross-node checksum scan
+   * ({@code SnapshotManager.computeFileChecksums}) leaves them out: issue #9307 was the verdict record above, added
+   * without being added there. Exact names on purpose, not the {@code .snapshot} prefix: a bucket may legally be named
+   * {@code .snapshot...}, and its component files must stay in the answer. {@code SnapshotManagerTest} fails when a
+   * new {@code SNAPSHOT_*_FILE} constant is not listed here, so a new regular file the install writes into a database
+   * directory must be declared under that naming convention ({@code SNAPSHOT_*_DIR} for a directory): a marker named
+   * otherwise escapes the guard.
+   */
+  private static final Set<String> SNAPSHOT_MACHINERY_FILES = Set.of(SNAPSHOT_PENDING_FILE, SNAPSHOT_COMPLETE_FILE,
+      SNAPSHOT_QUARANTINE_FILE, SNAPSHOT_SWAP_STATE_FILE, SNAPSHOT_SWAP_STATE_TMP_FILE, SNAPSHOT_VALIDATION_FAILED_FILE);
+  /**
+   * The directories the snapshot install keeps in a database directory: the staging, the retained backup and the
+   * orphans. With {@link #SNAPSHOT_MACHINERY_FILES} this is every entry the swap leaves in place (issue #9446), so a new
+   * {@code SNAPSHOT_*_DIR} must be listed here: an entry missing from both sets is treated as database data, backed up
+   * by the swap and cleared by a rollback. {@code Issue9446SnapshotPrefixedBucketTest} fails when one is not.
+   */
+  private static final Set<String> SNAPSHOT_MACHINERY_DIRS = Set.of(SNAPSHOT_NEW_DIR, SNAPSHOT_BACKUP_DIR, SNAPSHOT_ORPHANS_DIR);
+
+  /** Whether {@code name} is one of the files the snapshot install keeps in a database directory, see {@link #SNAPSHOT_MACHINERY_FILES}. */
+  static boolean isSnapshotMachineryFileName(final String name) {
+    return SNAPSHOT_MACHINERY_FILES.contains(name);
+  }
+
+  /**
+   * Whether {@code name} is an entry the snapshot install keeps in a database directory, file or directory, rather than
+   * part of the database. The swap, the rollback and the legacy recovery classification use it to leave the installer's
+   * own state where it is. Exact names, not the {@code .snapshot} prefix (issue #9446): a bucket may legally be named
+   * {@code .snapshot...}, and its component files are data the swap must back up, clear and restore like any other.
+   */
+  static boolean isSnapshotMachineryEntryName(final String name) {
+    return SNAPSHOT_MACHINERY_FILES.contains(name) || SNAPSHOT_MACHINERY_DIRS.contains(name);
+  }
 
   private enum SwapPhase {
     BACKING_UP, INSTALLING, INSTALLED,
@@ -171,12 +203,6 @@ public final class SnapshotInstaller {
    * trigger a zip-bomb defense exception. Package-private for unit testing.
    */
   static final long MAX_ZIP_ENTRY_UNCOMPRESSED_BYTES = 10L * 1024 * 1024 * 1024;
-
-  /**
-   * Logged at most once: warns that SSL is enabled but the snapshot is being downloaded over plain
-   * HTTP because no HTTPS endpoint could be resolved for the leader.
-   */
-  private static final AtomicBoolean PLAIN_HTTP_FALLBACK_WARNED = new AtomicBoolean(false);
 
   /**
    * The lowest Raft applied index a snapshot this thread downloads may be served at (issue #8454), or {@code -1}
@@ -1039,12 +1065,15 @@ public final class SnapshotInstaller {
    * Closes a resolved local instance and takes it out of the server registry - the mutating half of
    * {@link #closeLocalDatabaseIfOpen}, shared with {@link #closeRegisteredDatabaseForRepair}.
    * <p>
-   * Closes the embedded instance ({@code getEmbedded().close()}) rather than the wrapper: every caller is doing a
-   * local file swap or repair, which must not carry the HA wrapper's replicated-close semantics.
+   * Closes the embedded instance rather than the wrapper: every caller is doing a local file swap or repair, which must
+   * not carry the HA wrapper's replicated-close semantics. Closed FOR REOPEN, because every caller reopens the database
+   * under the same name once its files are in place: a request still holding this handle is refused with the retryable
+   * {@code DatabaseIsReopeningException}, which every wire protocol reports as such, and not with the permanent
+   * {@code DatabaseIsClosedException} a DROP or CLOSE DATABASE raises (issue #8199).
    */
   private static void closeAndDeregister(final ArcadeDBServer server, final DatabaseInternal db,
       final String databaseName) {
-    db.getEmbedded().close();
+    db.getEmbedded().closeForReopen();
     server.removeDatabase(databaseName);
   }
 
@@ -1240,7 +1269,8 @@ public final class SnapshotInstaller {
   }
 
   /**
-   * Deletes every non-{@code .snapshot*} entry in the live database directory. Used before restoring
+   * Deletes every entry of the live database directory that is not snapshot machinery
+   * ({@link #isSnapshotMachineryEntryName}). Used before restoring
    * a backup so files that exist only in a failed snapshot are not left behind. Not transactional: a
    * crash partway leaves dbPath partially cleared, but the caller keeps the {@code .snapshot-pending}
    * marker on failure so {@link #recoverPendingSnapshotSwaps} restores the backup on the next startup.
@@ -1248,7 +1278,7 @@ public final class SnapshotInstaller {
   private static void clearLiveDatabaseFiles(final Path dbPath) throws IOException {
     try (final DirectoryStream<Path> stream = Files.newDirectoryStream(dbPath)) {
       for (final Path entry : stream) {
-        if (entry.getFileName().toString().startsWith(".snapshot"))
+        if (isSnapshotMachineryEntryName(entry.getFileName().toString()))
           continue;
         if (Files.isDirectory(entry))
           FileUtils.deleteRecursively(entry.toFile());
@@ -1879,7 +1909,7 @@ public final class SnapshotInstaller {
 
   /** Whether an entry of the database directory belongs to the database, rather than to the snapshot machinery. */
   private static boolean isLiveDatabaseEntry(final Path entry) {
-    return !entry.getFileName().toString().startsWith(".snapshot");
+    return !isSnapshotMachineryEntryName(entry.getFileName().toString());
   }
 
   /**
@@ -2050,15 +2080,9 @@ public final class SnapshotInstaller {
         if (endpoint != null)
           https = true;
       }
-      if (endpoint == null) {
+      // A plain endpoint under SSL is said once, by the latch every peer dial shares (PeerRequest, issue #9999)
+      if (endpoint == null)
         endpoint = leaderHttpAddrSupplier.get();
-        if (useSSL && endpoint != null && PLAIN_HTTP_FALLBACK_WARNED.compareAndSet(false, true))
-          LogManager.instance().log(SnapshotInstaller.class, Level.WARNING,
-              "SSL is enabled but no HTTPS endpoint is known for snapshot download of '%s'; falling back to plain HTTP on %s. "
-                  + "Declare an httpsPort (the optional 5th field 'host:raftPort:httpPort:priority:httpsPort') in '%s' to "
-                  + "transfer snapshots encrypted.",
-              null, databaseName, endpoint, GlobalConfiguration.HA_SERVER_LIST.getKey());
-      }
       if (endpoint == null) {
         lastException = new IOException("Leader HTTP address not yet known (Raft election in progress)");
         LogManager.instance().log(SnapshotInstaller.class, Level.WARNING,
@@ -2069,7 +2093,7 @@ public final class SnapshotInstaller {
 
       final String snapshotUrl = (https ? "https://" : "http://") + endpoint + "/api/v1/ha/snapshot/" + databaseName;
       try {
-        downloadSnapshot(databaseName, snapshotNewDir, snapshotUrl, clusterToken, https, server);
+        downloadSnapshot(databaseName, snapshotNewDir, snapshotUrl, clusterToken, https, useSSL, server);
         return; // Success
       } catch (final IOException e) {
         lastException = e;
@@ -2089,16 +2113,15 @@ public final class SnapshotInstaller {
   }
 
   private static void downloadSnapshot(final String databaseName, final Path targetDir, final String snapshotUrl,
-      final String clusterToken, final boolean https, final ArcadeDBServer server) throws IOException {
+      final String clusterToken, final boolean https, final boolean sslEnabled, final ArcadeDBServer server)
+      throws IOException {
 
     HALog.log(SnapshotInstaller.class, HALog.BASIC, "Downloading snapshot from %s", snapshotUrl);
 
-    final HttpURLConnection connection;
-    try {
-      connection = (HttpURLConnection) new URI(snapshotUrl).toURL().openConnection();
-    } catch (final URISyntaxException e) {
-      throw new IOException("Invalid snapshot URL: " + snapshotUrl, e);
-    }
+    // The token with the principal it stands for, like every other peer dial: the snapshot handler authenticates the
+    // token alone, but a credential that is half a pair here is a credential some later handler reads wrong (issue #9999)
+    final HttpURLConnection connection = PeerRequest.openConnection(snapshotUrl, sslEnabled, SnapshotInstaller.class,
+        "downloading the snapshot of database '" + databaseName + "'", clusterToken, RaftHAServer.FORWARDED_ROOT_USER);
 
     if (connection instanceof HttpsURLConnection) {
       if (!https)
@@ -2112,9 +2135,6 @@ public final class SnapshotInstaller {
     connection.setReadTimeout(
         server != null ? server.getConfiguration().getValueAsInteger(GlobalConfiguration.HA_SNAPSHOT_DOWNLOAD_TIMEOUT)
             : 300_000);
-
-    if (clusterToken != null && !clusterToken.isEmpty())
-      connection.setRequestProperty("X-ArcadeDB-Cluster-Token", clusterToken);
 
     try {
       final int responseCode = connection.getResponseCode();
@@ -2685,7 +2705,7 @@ public final class SnapshotInstaller {
         // Only BACKING_UP may move originals. INSTALLING's live files belong to the new snapshot.
         try (final DirectoryStream<Path> stream = Files.newDirectoryStream(dbDir)) {
           for (final Path entry : stream) {
-            if (entry.getFileName().toString().startsWith(".snapshot"))
+            if (isSnapshotMachineryEntryName(entry.getFileName().toString()))
               continue;
             Files.move(entry, backupDir.resolve(entry.getFileName().toString()), StandardCopyOption.REPLACE_EXISTING);
             snapshotSwapProgress("BACKING_UP:" + entry.getFileName());

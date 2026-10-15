@@ -22,10 +22,14 @@ import com.arcadedb.Constants;
 import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.database.DatabaseContext;
 import com.arcadedb.log.LogManager;
+import com.arcadedb.network.binary.ServerIsNotTheLeaderException;
+import com.arcadedb.query.RunningQuery;
+import com.arcadedb.query.sql.executor.QueryAdmissionGate;
 import com.arcadedb.serializer.json.JSONArray;
 import com.arcadedb.serializer.json.JSONException;
 import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.server.ArcadeDBServer;
+import com.arcadedb.server.ErrorConcealment;
 import com.arcadedb.mcp.tools.ExecuteCommandTool;
 import com.arcadedb.mcp.tools.FullTextSearchTool;
 import com.arcadedb.mcp.tools.GetSchemaTool;
@@ -89,6 +93,12 @@ public class MCPDispatcher {
       2. Call list_databases when you do not know the target database name.
       3. Call get_schema before querying an unfamiliar database. If your client supports MCP Resources, prefer reading arcadedb://{database}/schema instead.
       4. Use query for read-only SQL or Cypher retrieval.""";
+
+  // THE TOOLS THAT RUN WORK IN A DATABASE: THEY WAIT FOR THE QUERY ADMISSION GATE LIKE ANY OTHER CLIENT REQUEST (ISSUE #9518).
+  // LISTING DATABASES, READING THE SCHEMA, THE SERVER STATUS, THE PROFILER AND THE SETTINGS DO NOT: THEY MUST STAY ANSWERABLE ON
+  // A SERVER BUSY WITH QUERIES
+  private static final Set<String> ADMITTED_TOOL_NAMES = Set.of("query", "execute_command", "sample_records", "vector_search",
+      "full_text_search", "hybrid_search", "upsert_entity", "upsert_relationship");
 
   private static final Set<String> RAG_TOOL_NAMES = Set.of(
       "list_databases",
@@ -165,8 +175,12 @@ public class MCPDispatcher {
    * Routes one parsed JSON-RPC message. A null message means an empty body. One-way notifications and responses
    * are discarded without consulting server state; messages that require a reply are authenticated before any
    * server state is disclosed.
+   *
+   * @param client the client that sent the message, as {@code list queries} names it beside the user: the peer address
+   *               for the HTTP transport, {@link MCPStdioServer#STDIO_CLIENT} for the stdio one (issue #9962). Passed
+   *               per message rather than held, because one HTTP dispatcher serves every client of the endpoint
    */
-  public MCPResponse dispatch(final JSONObject request, final ServerSecurityUser user) {
+  public MCPResponse dispatch(final JSONObject request, final ServerSecurityUser user, final RunningQuery.Client client) {
     // A response acknowledges a server-to-client request and must never receive another response. ArcadeDB
     // does not currently issue such requests, so valid responses are accepted and discarded.
     if (isResponse(request))
@@ -227,7 +241,7 @@ public class MCPDispatcher {
       return switch (method) {
         case "initialize" -> result(id, initialize(effectiveProfile(user)));
         case "tools/list" -> result(id, new JSONObject().put("tools", toolsForProfile(effectiveProfile(user))));
-        case "tools/call" -> toolsCall(id, params, user, effectiveProfile(user));
+        case "tools/call" -> toolsCall(id, params, user, effectiveProfile(user), client);
         case "resources/list" -> resourcesList(id, user);
         case "resources/read" -> resourcesRead(id, params, user);
         case "prompts/list" -> promptsList(id, effectiveProfile(user)::allows);
@@ -269,8 +283,7 @@ public class MCPDispatcher {
     try {
       return result(id, MCPResources.list(server, user, config));
     } catch (final Exception e) {
-      LogManager.instance().log(this, Level.WARNING, "MCP[%s] resources/list -> error: %s", transport, e.getMessage());
-      return error(id, -32603, "Internal error: " + e.getMessage(), 200);
+      return error(id, -32603, "Internal error: " + failureMessage("resources/list", e), 200);
     }
   }
 
@@ -297,8 +310,7 @@ public class MCPDispatcher {
     } catch (final MCPResourceNotFoundException e) {
       return error(id, -32002, e.getMessage(), 200);
     } catch (final Exception e) {
-      LogManager.instance().log(this, Level.WARNING, "MCP[%s] resources/read -> error: %s", transport, e.getMessage());
-      return error(id, -32603, "Internal error: " + e.getMessage(), 200);
+      return error(id, -32603, "Internal error: " + failureMessage("resources/read", e), 200);
     }
   }
 
@@ -306,8 +318,7 @@ public class MCPDispatcher {
     try {
       return result(id, MCPPrompts.list(config, toolAllowed));
     } catch (final Exception e) {
-      LogManager.instance().log(this, Level.WARNING, "MCP[%s] prompts/list -> error: %s", transport, e.getMessage());
-      return error(id, -32603, "Internal error: " + e.getMessage(), 200);
+      return error(id, -32603, "Internal error: " + failureMessage("prompts/list", e), 200);
     }
   }
 
@@ -329,13 +340,55 @@ public class MCPDispatcher {
     } catch (final IllegalArgumentException | IllegalStateException | UnsupportedOperationException | JSONException e) {
       return error(id, -32602, "Invalid params: " + e.getMessage(), 200);
     } catch (final Exception e) {
-      LogManager.instance().log(this, Level.WARNING, "MCP[%s] prompts/get -> error: %s", transport, e.getMessage());
-      return error(id, -32603, "Internal error: " + e.getMessage(), 200);
+      return error(id, -32603, "Internal error: " + failureMessage("prompts/get", e), 200);
     }
   }
 
+  private JSONObject runTool(final String toolName, final ServerSecurityUser user, final JSONObject args) throws Exception {
+    return switch (toolName) {
+      case "list_databases" -> ListDatabasesTool.execute(server, user, args, config);
+      case "get_schema" -> GetSchemaTool.execute(server, user, args, config);
+      case "query" -> QueryTool.execute(server, user, args, config);
+      case "execute_command" -> ExecuteCommandTool.execute(server, user, args, config);
+      case "sample_records" -> SampleRecordsTool.execute(server, user, args, config);
+      case "vector_search" -> VectorSearchTool.execute(server, user, args, config);
+      case "full_text_search" -> FullTextSearchTool.execute(server, user, args, config);
+      case "hybrid_search" -> HybridSearchTool.execute(server, user, args, config);
+      case "upsert_entity" -> UpsertEntityTool.execute(server, user, args, config);
+      case "upsert_relationship" -> UpsertRelationshipTool.execute(server, user, args, config);
+      case "server_status" -> ServerStatusTool.execute(server, user, args, config);
+      case "profiler_start" -> ProfilerStartTool.execute(server, user, args, config);
+      case "profiler_stop" -> ProfilerStopTool.execute(server, user, args, config);
+      case "profiler_status" -> ProfilerStatusTool.execute(server, user, args, config);
+      case "get_server_settings" -> GetServerSettingsTool.execute(server, user, args, config);
+      case "set_server_setting" -> SetServerSettingTool.execute(server, user, args, config);
+      default -> throw new MCPToolArgumentException("Unknown tool: " + toolName);
+    };
+  }
+
+  /**
+   * Opens the registry entry of a tool call that does work on a database (issue #9774), published on this thread so the
+   * statements the tool runs obey a terminate. Listed as the statement the tool runs when it runs one, by the tool and its
+   * arguments - with the secrets {@link #formatArgs} masks for the request log masked - otherwise, built only if somebody lists it.
+   */
+  private RunningQuery registerRunningQuery(final String toolName, final JSONObject args, final ServerSecurityUser user,
+      final RunningQuery.Client client) {
+    // read without coercion: a member of the wrong type is the tool's to refuse, with its own message. The client is
+    // what tells two agents apart, since an MCP endpoint typically serves all of them as one principal (issue #9962)
+    final RunningQuery entry = server.getRunningQueries()
+        .register(textMember(args, "database"), user.getName(), "mcp", null, null, client);
+    final String text = "query".equals(toolName) ? textMember(args, "query") :
+        "execute_command".equals(toolName) ? textMember(args, "command") : null;
+    if (text != null) {
+      final String language = textMember(args, "language");
+      entry.setStatement(language != null ? language : "cypher", text);
+    } else
+      entry.setStatement("mcp", () -> toolName + " " + formatArgs(toolName, args));
+    return entry;
+  }
+
   private MCPResponse toolsCall(final Object id, final JSONObject params, final ServerSecurityUser user,
-      final EffectiveToolProfile profile) {
+      final EffectiveToolProfile profile, final RunningQuery.Client client) {
     // Guarded for the same reason as the request members in dispatch: a member present but of the wrong JSON type
     // raises out of the read, and these reads sit above the try below. A malformed member here is invalid params
     // rather than a failed tool call, so it answers with a JSON-RPC error rather than an isError tool envelope.
@@ -359,30 +412,32 @@ public class MCPDispatcher {
 
     try {
       if (!REGISTERED_TOOL_NAMES.contains(toolName))
-        throw new IllegalArgumentException("Unknown tool: " + toolName);
+        throw new MCPToolArgumentException("Unknown tool: " + toolName);
       if (!profile.allows(toolName))
         throw new SecurityException(
             "Tool '" + toolName + "' is not available in " + profile.description());
 
-      final JSONObject toolResult = switch (toolName) {
-        case "list_databases" -> ListDatabasesTool.execute(server, user, args, config);
-        case "get_schema" -> GetSchemaTool.execute(server, user, args, config);
-        case "query" -> QueryTool.execute(server, user, args, config);
-        case "execute_command" -> ExecuteCommandTool.execute(server, user, args, config);
-        case "sample_records" -> SampleRecordsTool.execute(server, user, args, config);
-        case "vector_search" -> VectorSearchTool.execute(server, user, args, config);
-        case "full_text_search" -> FullTextSearchTool.execute(server, user, args, config);
-        case "hybrid_search" -> HybridSearchTool.execute(server, user, args, config);
-        case "upsert_entity" -> UpsertEntityTool.execute(server, user, args, config);
-        case "upsert_relationship" -> UpsertRelationshipTool.execute(server, user, args, config);
-        case "server_status" -> ServerStatusTool.execute(server, user, args, config);
-        case "profiler_start" -> ProfilerStartTool.execute(server, user, args, config);
-        case "profiler_stop" -> ProfilerStopTool.execute(server, user, args, config);
-        case "profiler_status" -> ProfilerStatusTool.execute(server, user, args, config);
-        case "get_server_settings" -> GetServerSettingsTool.execute(server, user, args, config);
-        case "set_server_setting" -> SetServerSettingTool.execute(server, user, args, config);
-        default -> throw new IllegalArgumentException("Unknown tool: " + toolName);
-      };
+      final JSONObject toolResult;
+      if (!ADMITTED_TOOL_NAMES.contains(toolName))
+        toolResult = runTool(toolName, user, args);
+      else {
+        final QueryAdmissionGate.Ticket admission = QueryAdmissionGate.getInstance().admit();
+        RunningQuery entry = null;
+        try {
+          // Listed by "list queries" / SHOW TRANSACTIONS and stopped by a terminate over the same window as the slot, like the
+          // work of every other protocol (issue #9774)
+          entry = registerRunningQuery(toolName, args, user, client);
+          toolResult = runTool(toolName, user, args);
+        } finally {
+          try {
+            admission.close();
+          } finally {
+            // LAST: THE ENTRY LEAVING THE LIST IS THE PROOF THE WORK IS OVER
+            if (entry != null)
+              entry.close();
+          }
+        }
+      }
 
       LogManager.instance()
           .log(this, Level.INFO, "MCP[%s] tools/call '%s' -> %s", transport, toolName, formatResult(toolName, toolResult));
@@ -400,11 +455,47 @@ public class MCPDispatcher {
       LogManager.instance()
           .log(this, Level.INFO, "MCP[%s] tools/call '%s' -> permission denied: %s", transport, toolName, e.getMessage());
       return toolError(id, e.getMessage());
-    } catch (final Exception e) {
+    } catch (final MCPToolArgumentException e) {
+      // The tools' own argument validation ("'database' is required", "Unknown tool"): text this server words about the
+      // request, which the caller needs to correct it, so it is kept in every mode. An IllegalArgumentException of any
+      // other origin - the engine's - is engine text, and goes through the concealment below (issue #8749)
       LogManager.instance()
           .log(this, Level.WARNING, "MCP[%s] tools/call '%s' -> error: %s", transport, toolName, e.getMessage());
       return toolError(id, e.getMessage());
+    } catch (final Exception e) {
+      return toolError(id, failureMessage("tools/call '" + toolName + "'", e));
     }
+  }
+
+  /**
+   * The text an error answer carries for a failure the ENGINE raised - a query or command the {@code query} and
+   * {@code execute_command} tools ran, a resource read: the message, or, in production mode, the placeholder every
+   * surface uses ({@link ArcadeDBServer#CONCEALED_ERROR_MESSAGE}), with the detail written to the server log. A
+   * duplicated key's message carries the stored key values, and before issue #8749 MCP returned it in every mode.
+   */
+  private String clientMessage(final String message, final Throwable cause) {
+    return ErrorConcealment.clientMessage(ErrorConcealment.isConcealing(server), this, "MCP[" + transport + "]", message, cause);
+  }
+
+  /**
+   * The text an error answer carries for a failed {@code operation}, logged once: in production mode the concealment
+   * logs the detail itself (on one line, a server fault with its stack trace), otherwise the message goes out and is
+   * logged as a warning, as it always was.
+   * <p>
+   * A follower's refusal of leader-only work that names the leader also gets the leader's address, in every mode
+   * (issue #9960): the tool error is the whole channel an agent reads - the transport answers HTTP 200 for it - and
+   * neither the refusal's message nor the placeholder says where to go. Appended after concealment, as every other
+   * transport does: it is an address the cluster put there, not engine detail.
+   */
+  String failureMessage(final String operation, final Exception e) {
+    final String text;
+    if (ErrorConcealment.isConcealing(server))
+      text = clientMessage(operation + " -> " + e.getMessage(), e);
+    else {
+      LogManager.instance().log(this, Level.WARNING, "MCP[%s] %s -> error: %s", transport, operation, e.getMessage());
+      text = e.getMessage();
+    }
+    return ServerIsNotTheLeaderException.withLeaderSentence(text, e);
   }
 
   private EffectiveToolProfile effectiveProfile(final ServerSecurityUser user) {
@@ -595,6 +686,11 @@ public class MCPDispatcher {
     return result(id, result);
   }
 
+  /** The member when it is a string, {@code null} otherwise. */
+  private static String textMember(final JSONObject json, final String name) {
+    return json.opt(name) instanceof String string ? string : null;
+  }
+
   /**
    * Reads a member that the protocol types as a string, deciding on the value's own JSON type rather than on what
    * a converting accessor makes of it. {@link JSONObject#getString(String, String)} delegates to Gson, which
@@ -668,12 +764,12 @@ public class MCPDispatcher {
    * dispatched independently and only the elements that are requests contribute a response, so a batch made
    * only of notifications and/or responses yields an empty array and the transport answers with no body.
    */
-  public JSONArray dispatchBatch(final JSONArray batch, final ServerSecurityUser user) {
+  public JSONArray dispatchBatch(final JSONArray batch, final ServerSecurityUser user, final RunningQuery.Client client) {
     final JSONArray responses = new JSONArray();
     for (int i = 0; i < batch.length(); i++) {
       final Object element = batch.get(i);
       if (element instanceof JSONObject request) {
-        final MCPResponse response = dispatch(request, user);
+        final MCPResponse response = dispatch(request, user, client);
         if (response.json() != null)
           responses.put(response.json());
       } else

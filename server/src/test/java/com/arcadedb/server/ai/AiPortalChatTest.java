@@ -80,6 +80,8 @@ class AiPortalChatTest {
     @Override
     public String execute(final String toolName, final JSONObject args) {
       calls.add(toolName + args);
+      if (toolName.equals("boom"))
+        throw new IllegalStateException("tool exploded");
       return toolName.equals("bad") ? "{\"error\":\"nope\"}" : "{\"result\":[{\"n\":1}]}";
     }
   }
@@ -171,6 +173,36 @@ class AiPortalChatTest {
     assertThat(results.getJSONObject(0).getString("result")).contains("\"n\":1");
     assertThat(results.getJSONObject(1).getString("result")).contains("nope");
     assertThat(opened).isEqualTo(1);
+  }
+
+  /**
+   * Issue #8721, the portal's side of it: a tool that throws, or a call whose arguments are not a JSON object, is an error
+   * result the model sees on the next round, not the end of the whole answer.
+   */
+  @Test
+  void aToolThatThrowsOrUnusableArgumentsBecomeAnErrorResultForTheNextRound() throws IOException {
+    portal.script = body -> body.getInt("round") == 0
+        ? FakeAiPortal.answer("", List.of(FakeAiPortal.toolCall("t1", "boom", new JSONObject()),
+        new JSONObject().put("id", "t2").put("name", "get_schema").put("arguments", "not json"),
+        new JSONObject().put("id", "t3").put("name", "get_type").put("arguments", new JSONObject().put("name", "User").toString())))
+        : FakeAiPortal.answer("Recovered", List.of());
+    final RecordingTools tools = new RecordingTools();
+
+    final AiPortalChat.Answer answer = new AiPortalChat(client, 5_000).run(request(), tools, sink);
+
+    assertThat(answer.response()).isEqualTo("Recovered");
+    assertThat(tools.calls).as("the call with unusable arguments is not run; string-encoded arguments are")
+        .containsExactly("boom{}", "get_type{\"name\":\"User\"}");
+    final List<JSONObject> ends = events.stream().filter(e -> e.getString("type").equals("tool_end")).toList();
+    assertThat(ends).hasSize(3);
+    assertThat(ends.get(0).getString("error")).contains("tool exploded");
+    assertThat(ends.get(1).getString("error")).contains("not a JSON object");
+    assertThat(ends.get(2).getString("error", null)).isNull();
+
+    final JSONArray results = portal.sends.get(1).getJSONArray("toolResults");
+    assertThat(results.length()).isEqualTo(3);
+    assertThat(new JSONObject(results.getJSONObject(0).getString("result")).getString("error")).contains("tool exploded");
+    assertThat(new JSONObject(results.getJSONObject(1).getString("result")).getString("error")).contains("not a JSON object");
   }
 
   @Test
@@ -272,5 +304,41 @@ class AiPortalChatTest {
     assertThat(client.usage().getString("tier")).isEqualTo("assistant");
     assertThat(client.stop("turn-9")).isTrue();
     assertThat(portal.stops).containsExactly("turn-9");
+  }
+
+  /**
+   * Issue #9627: the turn was read with {@code BufferedReader.readLine()}, which accumulates a line until it meets a newline, and
+   * the silence bound does not end a stream that keeps sending. A portal that streams a line without one filled the heap. The line
+   * is now capped: an over-long one ends the turn as a portal error, and the stream is closed instead of being read to its end.
+   */
+  @Test
+  void aTurnLineLongerThanTheCapEndsTheTurnInsteadOfFillingTheHeap() {
+    final long sent = 32L * 1024 * 1024;
+    portal.newlineFreeBytes = sent;
+    final int saved = AiPortalChat.maxEventChars;
+    AiPortalChat.maxEventChars = 64 * 1024;
+    try {
+      assertThatThrownBy(() -> new AiPortalChat(client, 5_000).run(request(), new RecordingTools(), sink))
+          .isInstanceOf(SupportPortalException.class)
+          .satisfies(e -> assertThat(((SupportPortalException) e).getCode()).isEqualTo("portal_error"))
+          .hasMessageContaining("longer than");
+    } finally {
+      AiPortalChat.maxEventChars = saved;
+    }
+    // The reader closed the stream at the cap: the portal could not deliver the rest of the line
+    assertThat(portal.newlineFreeBytesSent.get()).isLessThan(sent / 2);
+  }
+
+  @Test
+  void aTurnLineUpToTheCapIsReadAsBefore() throws IOException {
+    portal.script = body -> FakeAiPortal.answer("x".repeat(10_000), List.of());
+    final int saved = AiPortalChat.maxEventChars;
+    AiPortalChat.maxEventChars = 64 * 1024;
+    try {
+      final AiPortalChat.Answer answer = new AiPortalChat(client, 5_000).run(request(), new RecordingTools(), sink);
+      assertThat(answer.response()).hasSize(10_000);
+    } finally {
+      AiPortalChat.maxEventChars = saved;
+    }
   }
 }

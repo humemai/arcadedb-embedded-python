@@ -18,15 +18,19 @@
  */
 package com.arcadedb.query.sql.executor;
 
+import com.arcadedb.GlobalConfiguration;
+import com.arcadedb.database.Database;
 import com.arcadedb.database.Document;
 import com.arcadedb.database.MutableDocument;
 import com.arcadedb.database.RID;
 import com.arcadedb.database.TransactionContext;
 import com.arcadedb.engine.timeseries.ColumnDefinition;
 import com.arcadedb.engine.timeseries.TimeSeriesEngine;
+import com.arcadedb.engine.timeseries.TimeSeriesGateway;
 import com.arcadedb.exception.CommandExecutionException;
 import com.arcadedb.exception.TimeoutException;
 import com.arcadedb.index.IndexCursor;
+import com.arcadedb.index.IndexException;
 import com.arcadedb.index.TypeIndex;
 import com.arcadedb.index.lsm.LSMTreeIndexAbstract;
 import com.arcadedb.log.LogManager;
@@ -88,23 +92,29 @@ public class SaveElementStep extends AbstractExecutionStep {
     this.skipDuplicateKey = skipDuplicateKey;
   }
 
+  /**
+   * Only the rows the engine actually wrote are passed on: a create or an update a {@code BeforeRecordCreateListener} /
+   * {@code BeforeRecordUpdateListener} vetoed is dropped here, so the {@link CountStep} of an {@code UPDATE} counts the records it
+   * changed rather than the ones it matched, and an {@code INSERT} does not return a record that was never created (issue #9974).
+   */
   @Override
   public ResultSet syncPull(final CommandContext context, final int nRecords) throws TimeoutException {
-    final ResultSet upstream = getPrev().syncPull(context, nRecords);
-    return new ResultSet() {
+    final ExecutionStepInternal prevStep = checkForPrevious();
+    // saves one row ahead of what it returns: only valid under a plan that drains every pull (see SkippingResultSet)
+    return new SkippingResultSet(prevStep, context, nRecords) {
+      // the undeclared-key policy, read once per execution instead of once per inserted row (issue #9365)
+      private final boolean   rejectUndeclared = TimeSeriesGateway.rejectsUndeclaredKeys(context.getDatabase());
+
       // Every record pulled through one INSERT statement targets the same type, so the unique-index list is
       // resolved once per distinct type name seen rather than on every single row of a CONTENT [...] batch.
       private String          cachedTypeName;
       private List<TypeIndex> cachedUniqueIndexes;
 
+      /**
+       * @return the row to pass on, {@code null} when a listener vetoed the write
+       */
       @Override
-      public boolean hasNext() {
-        return upstream.hasNext();
-      }
-
-      @Override
-      public Result next() {
-        final Result result = upstream.next();
+      protected Result process(final Result result) {
         if (result != null && result.isElement()) {
           final Document doc = result.getElement().orElse(null);
 
@@ -119,7 +129,7 @@ public class SaveElementStep extends AbstractExecutionStep {
             // own cannot serve correctly either (issue #6356).
             // Gated accessor: appending a sample is a record creation on a type that owns no bucket, so the
             // per-type check is the only thing that can enforce a "createRecord" denial on it.
-            saveToTimeSeries(tsType, tsType.requireEngine(SecurityDatabaseUser.ACCESS.CREATE_RECORD), doc, context);
+            saveToTimeSeries(tsType, tsType.requireEngine(SecurityDatabaseUser.ACCESS.CREATE_RECORD), doc, context, rejectUndeclared);
             scheduleContinuousAggregateRefresh(context, tsType);
             return result;
           }
@@ -136,24 +146,18 @@ public class SaveElementStep extends AbstractExecutionStep {
           if (skipDuplicateKey) {
             if (!docType.getName().equals(cachedTypeName)) {
               cachedTypeName = docType.getName();
-              cachedUniqueIndexes = docType.getAllIndexes(true).stream().filter(TypeIndex::isUnique).toList();
+              cachedUniqueIndexes = docType.getAllIndexes(true).stream().filter(TypeIndex::isUniqueIfPresent).toList();
             }
             final DuplicateKeyConflict conflict = findDuplicateKeyConflict(modifiableDoc, cachedUniqueIndexes);
             if (conflict != null)
               return skippedResult(modifiableDoc, conflict);
           }
 
-          if (bucket == null)
-            modifiableDoc.save();
-          else
-            modifiableDoc.save(bucket.getStringValue());
+          final boolean saved = bucket == null ? modifiableDoc.saveReportingVeto() : modifiableDoc.saveReportingVeto(bucket.getStringValue());
+          if (!saved)
+            return null;
         }
         return result;
-      }
-
-      @Override
-      public void close() {
-        upstream.close();
       }
     };
   }
@@ -176,20 +180,41 @@ public class SaveElementStep extends AbstractExecutionStep {
    */
   private static DuplicateKeyConflict findDuplicateKeyConflict(final MutableDocument doc, final List<TypeIndex> uniqueIndexes) {
     for (final TypeIndex index : uniqueIndexes) {
-      final List<String> keyProperties = index.getPropertyNames();
-      final Object[] keyValues = new Object[keyProperties.size()];
-      for (int i = 0; i < keyProperties.size(); i++)
-        keyValues[i] = doc.get(keyProperties.get(i));
-
-      if (LSMTreeIndexAbstract.isKeyNull(keyValues))
+      // A concurrent CREATE/DROP INDEX (issue #8859): an index still being populated holds only part of the keys, and one
+      // dropped since the list was built is gone. Neither can tell a duplicate, the commit-time check still enforces uniqueness
+      if (!index.isReadyForQueries())
         continue;
 
-      try (final IndexCursor existing = index.get(keyValues, 1)) {
-        if (existing.hasNext())
-          return new DuplicateKeyConflict(index.getName(), keyValues, existing.next().getIdentity());
+      try {
+        final List<String> keyProperties = index.getPropertyNames();
+        final Object[] keyValues = new Object[keyProperties.size()];
+        for (int i = 0; i < keyProperties.size(); i++)
+          keyValues[i] = doc.get(keyProperties.get(i));
+
+        if (LSMTreeIndexAbstract.isKeyNull(keyValues))
+          continue;
+
+        try (final IndexCursor existing = index.get(keyValues, 1)) {
+          if (existing.hasNext())
+            return new DuplicateKeyConflict(index.getName(), keyValues, existing.next().getIdentity());
+        }
+      } catch (final IndexException e) {
+        // Going away: TypeIndex#drop drops the sub-indexes before it flags the wrapper invalid, so for a moment the index is
+        // valid and has lost some of them. The probe is a shortcut, the commit-time check still enforces uniqueness
+        logSkippedIndex(index, e);
+      } catch (final IllegalArgumentException e) {
+        // the page manager's answer for the file of an index dropped under the probe
+        if (!TypeIndex.isFileNotFound(e))
+          throw e;
+        logSkippedIndex(index, e);
       }
     }
     return null;
+  }
+
+  private static void logSkippedIndex(final TypeIndex index, final Exception e) {
+    LogManager.instance().log(SaveElementStep.class, Level.FINE, "Index '%s' skipped by the duplicate key probe: %s", null,
+        index.getName(), e.getMessage());
   }
 
   private record DuplicateKeyConflict(String indexName, Object[] keys, RID existingRID) {
@@ -223,9 +248,19 @@ public class SaveElementStep extends AbstractExecutionStep {
    * point.
    */
   private void saveToTimeSeries(final LocalTimeSeriesType tsType, final TimeSeriesEngine engine, final Document doc,
-      final CommandContext context) {
+      final CommandContext context, final boolean rejectUndeclared) {
     final List<ColumnDefinition> columns = tsType.getTsColumns();
     final ZoneId zoneId = context.getDatabase().getSchema().getZoneId();
+
+    // The row is built from the DECLARED columns, so a property the type does not declare (typically a misspelled tag)
+    // would be dropped and the sample filed under a different series than the one sent, with the statement answering
+    // success (issue #9365). Same policy as the line protocol and gRPC writes, issue #8646.
+    if (rejectUndeclared)
+      for (final String property : doc.getPropertyNames())
+        if (!tsType.isDeclaredColumn(property))
+          throw new CommandExecutionException("Cannot insert into the TIMESERIES type '" + tsType.getName() + "': property '"
+              + property + "' is not a declared column. Declare it on the type, fix the name, or set "
+              + GlobalConfiguration.TIMESERIES_UNDECLARED_KEYS.getKey() + "=ignore to discard such properties");
 
     final long[] timestamps = new long[1];
     int nonTsCount = 0;
@@ -242,7 +277,7 @@ public class SaveElementStep extends AbstractExecutionStep {
       if (col.getRole() == ColumnDefinition.ColumnRole.TIMESTAMP) {
         timestamps[0] = toEpochMs(value, zoneId);
       } else {
-        columnValues[colIdx][0] = convertValue(value, col.getDataType());
+        columnValues[colIdx][0] = convertValue(context.getDatabase(), col, value);
         colIdx++;
       }
     }
@@ -306,9 +341,10 @@ public class SaveElementStep extends AbstractExecutionStep {
     throw new CommandExecutionException("Cannot convert to timestamp: " + (value != null ? value.getClass().getName() : "null"));
   }
 
-  private static Object convertValue(final Object value, final Type targetType) {
+  private static Object convertValue(final Database database, final ColumnDefinition column, final Object value) {
     if (value == null)
       return null;
+    final Type targetType = column.getDataType();
     return switch (targetType) {
       // A Float widens through its decimal form, as Type.convert() already does: .doubleValue() would persist the
       // single precision rounding error into the DOUBLE property, where it outlives the statement (issue #7609).
@@ -319,11 +355,29 @@ public class SaveElementStep extends AbstractExecutionStep {
       case INTEGER -> value instanceof Number n ? n.intValue() : Integer.parseInt(value.toString());
       case FLOAT -> value instanceof Number n ? n.floatValue() : Float.parseFloat(value.toString());
       case SHORT -> value instanceof Number n ? n.shortValue() : Short.parseShort(value.toString());
+      // The engine stores a datetime column as an epoch count in the column's own unit and casts it to Number, while
+      // the document layer has already turned the property into the temporal object its declared type calls for
+      // (issue #9643). Encoded exactly as the binary serializer encodes the same value on a document property, by the
+      // one conversion the tag push-down uses too (issue #9724): DATE as epoch days, the DATETIME family in the precision
+      // the type names, an instant that precision cannot hold refused rather than saturated (issue #9725).
+      case DATE, DATETIME, DATETIME_SECOND, DATETIME_MICROS, DATETIME_NANOS -> {
+        try {
+          yield column.epochOf(database, value);
+        } catch (final IllegalArgumentException e) {
+          throw unconvertibleDateTime(column.getName(), value, targetType, e);
+        }
+      }
       // DECIMAL needs no branch of its own: Type.convert()'s BigDecimal case already builds it with
       // new BigDecimal(value.toString()), so it reads the float's decimal rather than its bits and never
       // carried the error this DOUBLE case had to be fixed for (issue #7609).
       default -> value;
     };
+  }
+
+  private static CommandExecutionException unconvertibleDateTime(final String columnName, final Object value,
+      final Type targetType, final Exception cause) {
+    return new CommandExecutionException("Cannot convert a value of type " + value.getClass().getName() + " to the " + targetType
+        + " TimeSeries column '" + columnName + "'", cause);
   }
 
   @Override

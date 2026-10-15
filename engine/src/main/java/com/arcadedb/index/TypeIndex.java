@@ -41,6 +41,7 @@ import com.arcadedb.serializer.json.JSONObject;
 import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
 
 /**
@@ -55,6 +56,14 @@ public class TypeIndex implements RangeIndex, IndexInternal {
   private final List<IndexInternal> indexesOnBuckets = new CopyOnWriteArrayList<>();
   private final DocumentType        type;
   private volatile boolean          valid            = true;
+  // Raised by drop() before it takes the first sub-index away, while valid is still true: a reader can tell that what it read
+  // through the index may be missing the sub-indexes already gone (#9651)
+  private volatile boolean          dropping         = false;
+  // Moved around every change of indexesOnBuckets, odd while one is under way: what getForQuery() checks before and after a
+  // read to know nobody changed the sub-indexes under it, without copying the list on a hot path (#9811). The changes come from
+  // DDL, which runs under the schema's write lock, so one writer at a time; the before/after comparison alone would still catch
+  // overlapping writers, only the "odd means under way" shortcut relies on there being one
+  private final AtomicLong          subIndexChanges  = new AtomicLong();
   private       IndexInternal       associatedIndex;
   private       IndexMetadata       metadata;
 
@@ -81,7 +90,7 @@ public class TypeIndex implements RangeIndex, IndexInternal {
     if (!supportsOrderedIterations())
       throw new UnsupportedOperationException("Index '" + getName() + "' does not support ordered iterations");
 
-    return new MultiIndexCursor(indexesOnBuckets, ascendingOrder, -1);
+    return new MultiIndexCursor(subIndexesToRead(), ascendingOrder, -1);
   }
 
   @Override
@@ -90,7 +99,21 @@ public class TypeIndex implements RangeIndex, IndexInternal {
     if (!supportsOrderedIterations())
       throw new UnsupportedOperationException("Index '" + getName() + "' does not support ordered iterations");
 
-    return new MultiIndexCursor(indexesOnBuckets, fromKeys, ascendingOrder, inclusive, -1);
+    return new MultiIndexCursor(subIndexesToRead(), fromKeys, ascendingOrder, inclusive, -1);
+  }
+
+  /**
+   * The sub-indexes a cursor reads, as one snapshot. The live list is copy-on-write, so a loop over it already walks a snapshot,
+   * but a cursor that asked the list again afterwards (for its first element's key types) read it as a concurrent drop left it:
+   * emptied, which raised a {@link NoSuchElementException} that a Gremlin traversal takes for the end of the stream,
+   * answering an empty result as a success (#9651). An index with no sub-index left is being dropped, and says so the way
+   * every reader already expects.
+   */
+  private List<IndexInternal> subIndexesToRead() {
+    final List<IndexInternal> snapshot = List.copyOf(indexesOnBuckets);
+    if (snapshot.isEmpty())
+      throw new IndexException("Index '" + getName() + "' is not valid. Probably has been drop or rebuilt");
+    return snapshot;
   }
 
   @Override
@@ -100,9 +123,10 @@ public class TypeIndex implements RangeIndex, IndexInternal {
     if (!supportsOrderedIterations())
       throw new UnsupportedOperationException("Index '" + getName() + "' does not support ordered iterations");
 
-    final List<IndexCursor> cursors = new ArrayList<>(indexesOnBuckets.size());
+    final List<IndexInternal> subIndexes = subIndexesToRead();
+    final List<IndexCursor> cursors = new ArrayList<>(subIndexes.size());
     try {
-      for (final Index index : indexesOnBuckets)
+      for (final Index index : subIndexes)
         cursors.add(((RangeIndex) index).range(ascending, beginKeys, beginKeysInclusive, endKeys, endKeysInclusive));
 
       return new MultiIndexCursor(cursors, -1, ascending);
@@ -116,6 +140,47 @@ public class TypeIndex implements RangeIndex, IndexInternal {
           cursor.close();
       throw e;
     }
+  }
+
+  /**
+   * {@link #get(Object[])} for a reader that answers a client with what it finds - a protocol's key lookup, a query - rather
+   * than for index maintenance (issue #9811). It answers only a lookup that read the whole index, and raises the
+   * {@link IndexException} every guarded reader already treats as "read again" ({@link #isStaleRead}) otherwise:
+   * <ul>
+   * <li>before the read, an index not {@link #isReadyForQueries() ready}: one being created or rebuilt holds the entries of
+   * the buckets built so far only, one being dropped is losing its sub-indexes;</li>
+   * <li>after the read, an index that is no longer the one it read (dropped, or its sub-indexes changed): a drop takes the sub-indexes
+   * away one at a time while the index still answers as valid, so a lookup in that window comes back short - empty, for a
+   * key that exists - without any error;</li>
+   * <li>during the read, the page manager's "File with id n was not found" of a sub-index a drop deleted under it.</li>
+   * </ul>
+   * {@link #get(Object[])} itself stays raw: the uniqueness check at commit reads through it, and a commit must not fail
+   * because an index it does not even need any more is being dropped. The check after the read is sound because every arm of
+   * {@code get} collects its entries before it returns. It costs two reads of a counter, and no copy of the sub-index list.
+   */
+  public IndexCursor getForQuery(final Object[] keys) {
+    if (!isReadyForQueries())
+      throw new IndexException("Index '" + getName() + "' is not ready for queries: it is being built, rebuilt or dropped");
+
+    final long changesBefore = subIndexChanges.get();
+    if ((changesBefore & 1) != 0)
+      throw new IndexException("Index '" + getName() + "' is being changed by a concurrent DDL");
+    final IndexCursor cursor;
+    try {
+      cursor = get(keys);
+    } catch (final IndexException e) {
+      throw e;
+    } catch (final RuntimeException e) {
+      if (isStaleRead(this, e))
+        throw new IndexException("Index '" + getName() + "' was dropped or rebuilt while it was read", e);
+      throw e;
+    }
+
+    if (!valid || dropping || subIndexChanges.get() != changesBefore) {
+      cursor.close();
+      throw new IndexException("Index '" + getName() + "' was dropped or rebuilt while it was read");
+    }
+    return cursor;
   }
 
   @Override
@@ -395,28 +460,48 @@ public class TypeIndex implements RangeIndex, IndexInternal {
       // Throwing here would surface a confusing "is not valid" error for an idempotent operation.
       return;
 
+    dropping = true;
     final List<IndexInternal> acquired = new ArrayList<>(indexesOnBuckets.size());
-    for (final IndexInternal index : new ArrayList<>(indexesOnBuckets))
-      if (index.setStatus(new INDEX_STATUS[] { INDEX_STATUS.AVAILABLE, INDEX_STATUS.UNAVAILABLE }, INDEX_STATUS.UNAVAILABLE))
-        acquired.add(index);
-      else {
-        // NOT AVAILABLE, RESET ACQUIRED STATUSES
-        for (IndexInternal i : acquired)
-          i.setStatus(new INDEX_STATUS[] { INDEX_STATUS.UNAVAILABLE }, INDEX_STATUS.AVAILABLE);
-        throw new NeedRetryException(
-            "Cannot drop index '" + getName() + "' because one or more underlying files are not available");
-      }
+    try {
+      for (final IndexInternal index : new ArrayList<>(indexesOnBuckets))
+        if (index.setStatus(new INDEX_STATUS[] { INDEX_STATUS.AVAILABLE, INDEX_STATUS.UNAVAILABLE }, INDEX_STATUS.UNAVAILABLE))
+          acquired.add(index);
+        else
+          throw new NeedRetryException(
+              "Cannot drop index '" + getName() + "' because one or more underlying files are not available");
+    } catch (final RuntimeException | Error e) {
+      // NOTHING WAS TAKEN AWAY: RESET THE ACQUIRED STATUSES AND THE FLAG, THE INDEX ANSWERS QUERIES AGAIN
+      for (final IndexInternal i : acquired)
+        i.setStatus(new INDEX_STATUS[] { INDEX_STATUS.UNAVAILABLE }, INDEX_STATUS.AVAILABLE);
+      dropping = false;
+      throw e;
+    }
 
     // Order: sub-indexes dropped, then valid = false, then the list cleared. The wrapper must stay valid during the first step
     // (LocalSchema#dropIndex resolves and unregisters the wrapper through its sub-indexes), so until valid = false a reader
     // sees a valid wrapper with some sub-indexes missing: it usually gets an IndexException or a null type, which the callers
     // treat as "not a candidate". A query that already chose this index and reads it in that instant can miss the rows of the
     // sub-indexes already dropped: the index is going away, and that query was planned before the drop completed.
-    for (final Index index : new ArrayList<>(indexesOnBuckets))
-      type.getSchema().dropIndex(index.getName());
+    // A failure from here on leaves `dropping` raised on purpose: some sub-indexes may be gone, and an index missing part of
+    // its entries must not answer a query as if it were whole. The drop is retried, and only a completed one clears the
+    // wrapper (valid = false)
+    try {
+      for (final Index index : new ArrayList<>(indexesOnBuckets))
+        type.getSchema().dropIndex(index.getName());
+    } catch (final RuntimeException | Error e) {
+      LogManager.instance().log(this, Level.WARNING,
+          "Drop of index '%s' failed after removing part of its sub-indexes: it stays unusable by queries until the drop is run again",
+          e, getName());
+      throw e;
+    }
 
     valid = false;
-    indexesOnBuckets.clear();
+    subIndexChanges.incrementAndGet();
+    try {
+      indexesOnBuckets.clear();
+    } finally {
+      subIndexChanges.incrementAndGet();
+    }
   }
 
   @Override
@@ -449,6 +534,24 @@ public class TypeIndex implements RangeIndex, IndexInternal {
   public boolean isUnique() {
     checkIsValid();
     return getFirstUnderlyingIndex().isUnique();
+  }
+
+  /**
+   * {@link #isUnique()} for a caller that walks the indexes of a type while a concurrent DDL runs (issue #8859): an index being
+   * created has no sub-index yet and one being dropped is invalid, and both make {@link #isUnique()} throw. Such an index has no
+   * uniqueness to enforce for the caller, so the answer is false. Never throws.
+   */
+  public boolean isUniqueIfPresent() {
+    if (!valid)
+      return false;
+    final IndexInternal first = firstOrNull();
+    if (first == null)
+      return false;
+    try {
+      return first.isUnique();
+    } catch (final IndexException e) {
+      return false;
+    }
   }
 
   @Override
@@ -579,6 +682,13 @@ public class TypeIndex implements RangeIndex, IndexInternal {
     return getFirstUnderlyingIndex().getKeyTypes();
   }
 
+  /** Every bucket index of this type index converts keys alike: they share the definition. */
+  @Override
+  public Object[] convertLookupKeys(final Object[] keys) {
+    checkIsValid();
+    return getFirstUnderlyingIndex().convertLookupKeys(keys);
+  }
+
   @Override
   public byte[] getBinaryKeyTypes() {
     checkIsValid();
@@ -629,7 +739,12 @@ public class TypeIndex implements RangeIndex, IndexInternal {
     if (index instanceof TypeIndex)
       throw new IllegalArgumentException("Invalid subIndex " + index);
 
-    indexesOnBuckets.add(index);
+    subIndexChanges.incrementAndGet();
+    try {
+      indexesOnBuckets.add(index);
+    } finally {
+      subIndexChanges.incrementAndGet();
+    }
     index.setTypeIndex(this);
   }
 
@@ -638,7 +753,12 @@ public class TypeIndex implements RangeIndex, IndexInternal {
     if (index instanceof TypeIndex)
       throw new IllegalArgumentException("Invalid subIndex " + index);
 
-    indexesOnBuckets.remove(index);
+    subIndexChanges.incrementAndGet();
+    try {
+      indexesOnBuckets.remove(index);
+    } finally {
+      subIndexChanges.incrementAndGet();
+    }
     index.setTypeIndex(null);
   }
 
@@ -736,21 +856,78 @@ public class TypeIndex implements RangeIndex, IndexInternal {
   }
 
   /**
+   * True once a drop of this index has started, even while it still answers as valid: {@link #drop()} takes the sub-indexes away
+   * first and invalidates the index last, so a reader in between can read part of the index, or none of it, without an error.
+   */
+  public boolean isDropping() {
+    return dropping;
+  }
+
+  /**
    * True when a query can use this index: it was not dropped or rebuilt and its per-bucket sub-indexes exist. DDL runs
    * concurrently with queries: an index being created is registered before its sub-indexes exist (no type yet) and one being
    * dropped stays registered for a while after it was invalidated. Best effort, the index can still go away right after the
    * call, so a caller that reads the metadata of an index must also be ready for an {@link IndexException}. Never throws.
+   * <p>
+   * An index still being populated by {@code TypeIndexBuilder} is not ready either (issue #9331). The answer is for the
+   * planners and lookups: writes, uniqueness checks and index maintenance do not consult it.
    */
   public boolean isReadyForQueries() {
-    if (!valid)
+    if (!valid || dropping)
       return false;
     try {
       final IndexInternal first = firstOrNull();
-      return first != null && first.getType() != null;
+      if (first == null || first.getType() == null)
+        return false;
+      // Complete: while TypeIndexBuilder populates it, the index holds the entries of the buckets built so far only (#9331)
+      return !(type instanceof LocalDocumentType local) || !local.isIndexUnderConstruction(first.getPropertyNames());
     } catch (final IndexException e) {
       LogManager.instance().log(this, Level.FINE, "Index '%s' is not ready for queries: %s", null, getName(), e.getMessage());
       return false;
     }
+  }
+
+  /**
+   * Whether {@code e} is the page manager's answer for the file of an index deleted under a lookup or an open cursor ("File with
+   * id n was not found", see {@code FileManager#getFile}). The one place that knows the wording, for the readers that turn it
+   * into a stale-index signal when the index is no longer valid (issue #9331).
+   */
+  public static boolean isFileNotFound(final IllegalArgumentException e) {
+    final String message = e.getMessage();
+    return message != null && message.startsWith("File with id");
+  }
+
+  /**
+   * Whether a reader that read through this index since it took {@code snapshot} ({@link #getIndexesOnBuckets()}) read all of
+   * it: the index is still valid, no drop has started, and it has the very sub-indexes it had then. A drop takes the
+   * sub-indexes away one at a time while the index still answers as valid, so a scan running in that window can come back short
+   * without any error (see {@link #drop()}); a reader that must not answer short checks this once the scan is over, and reads
+   * again without the index when it is false (#9651).
+   */
+  public boolean isUnchangedSince(final IndexInternal[] snapshot) {
+    if (!valid || dropping)
+      return false;
+    final IndexInternal[] current = getIndexesOnBuckets();
+    if (current.length != snapshot.length)
+      return false;
+    for (int i = 0; i < current.length; i++)
+      if (current[i] != snapshot[i])
+        return false;
+    return true;
+  }
+
+  /**
+   * Whether {@code e}, raised by a read of {@code index}, is how the read fails when a concurrent DDL dropped or rebuilt the
+   * index under it: an {@link IndexException}, or the page manager's "File with id n was not found" ({@link #isFileNotFound})
+   * once the index is no longer valid or a drop of it is under way. A reader that has not returned anything yet can then read without the index (a scan,
+   * or another index on the same properties) instead of failing (issues #9331, #9651). Any other exception is the caller's.
+   */
+  public static boolean isStaleRead(final Index index, final RuntimeException e) {
+    if (e instanceof IndexException)
+      return true;
+    // a drop under way removes the sub-index files while the index still answers as valid
+    return e instanceof IllegalArgumentException iae && isFileNotFound(iae) && !(index instanceof TypeIndex typeIndex
+        && typeIndex.isValid() && !typeIndex.dropping);
   }
 
   /**
@@ -769,13 +946,13 @@ public class TypeIndex implements RangeIndex, IndexInternal {
 
   /**
    * The property names of this index when it can answer an exact key lookup (not a FULL_TEXT, vector or geospatial one, which
-   * answer by token or similarity), null when it cannot or when it went away while being read: a concurrent DDL can drop or
-   * rebuild an index right after {@link #isReadyForQueries()} said yes (issue #8918).
+   * answer by token or similarity), null when it cannot, when it is still being populated, or when it went away while being
+   * read: a concurrent DDL can drop or rebuild an index right after {@link #isReadyForQueries()} said yes (issue #8918).
    */
   public List<String> getPropertyNamesIfExactKeyLookup() {
     try {
       final Schema.INDEX_TYPE indexType = getType();
-      return indexType != null && indexType.isExactKeyLookup() ? getPropertyNames() : null;
+      return indexType != null && indexType.isExactKeyLookup() && isReadyForQueries() ? getPropertyNames() : null;
     } catch (final IndexException e) {
       return null;
     }

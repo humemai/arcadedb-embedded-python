@@ -24,13 +24,11 @@ import com.arcadedb.database.Identifiable;
 import com.arcadedb.database.Record;
 import com.arcadedb.exception.CommandExecutionException;
 import com.arcadedb.exception.CommandSQLParsingException;
-import com.arcadedb.function.FunctionRegistry;
-import com.arcadedb.query.sql.SQLQueryEngine;
 import com.arcadedb.query.sql.executor.AggregationContext;
 import com.arcadedb.query.sql.executor.CommandContext;
+import com.arcadedb.query.sql.executor.IndexedFunctionPushdown;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultInternal;
-import com.arcadedb.utility.NumberUtils;
 
 import java.util.Collections;
 import java.util.List;
@@ -58,6 +56,9 @@ public class BaseExpression extends MathExpression {
    * @see #rendersParentheses()
    */
   public boolean        parenthesized = false;
+  // A STRING LITERAL WAS CUT OUT OF ITS QUOTES AND UN-ESCAPED ON EVERY EVALUATION: ONCE PER ROW IN A WHERE (ISSUE #9496).
+  // ONE RECORD OF FINAL FIELDS, SO A THREAD THAT SEES THE REFERENCE SEES BOTH OF THEM
+  private transient DecodedLiteral decodedLiteral;
 
   public BaseExpression() {
   }
@@ -212,16 +213,6 @@ public class BaseExpression extends MathExpression {
     else if (number != null)
       result = number.getValue();
     else if (identifier != null) {
-      // Dotted SQL function call written without back-ticks, e.g. `vector.fuse(...)`. The grammar
-      // parses it as identifier + .method(...) but the user intended a namespaced function. Issue
-      // #4233.
-      final FunctionCall namespaced = asNamespacedFunctionCall(context);
-      if (namespaced != null) {
-        Object fnResult = namespaced.execute(currentRecord, context);
-        if (modifier != null && modifier.next != null)
-          fnResult = modifier.next.execute(currentRecord, fnResult, context);
-        return fnResult;
-      }
       // POSTGRES $N PARAMETER: SAME TEST AS THE Result OVERLOAD
       final Map<String, Object> params = context != null ? context.getInputParameters() : null;
       final String positionalKey = postgresPositionalParameterKey(identifier, params);
@@ -231,7 +222,7 @@ public class BaseExpression extends MathExpression {
     } else if (expression != null)
       result = expression.execute(currentRecord != null ? currentRecord.getRecord() : null, context);
     else if (string != null && string.length() > 1)
-      result = decode(string.substring(1, string.length() - 1));
+      result = decodedString();
     else if (inputParam != null)
       result = inputParam.getValue(context.getInputParameters());
 
@@ -253,16 +244,6 @@ public class BaseExpression extends MathExpression {
       final Map<String, Object> params = context != null ? context.getInputParameters() : null;
 
       if (identifier != null) {
-        // Dotted SQL function call written without back-ticks, e.g. `vector.fuse(...)`. The grammar
-        // parses it as identifier + .method(...) but the user intended a namespaced function. Issue
-        // #4233.
-        final FunctionCall namespaced = asNamespacedFunctionCall(context);
-        if (namespaced != null) {
-          Object fnResult = namespaced.execute(currentRecord, context);
-          if (modifier != null && modifier.next != null)
-            fnResult = modifier.next.execute(currentRecord, fnResult, context);
-          return fnResult;
-        }
         // CHECK FOR SPECIAL CASE FOR POSTGRES DRIVER THAT TRANSLATES POSITIONAL PARAMETERS (?) WITH $N
         // THIS IS DIFFERENT FROM ORIENTDB CODE BASE
         // @author Luca Garulli
@@ -271,7 +252,7 @@ public class BaseExpression extends MathExpression {
         // POSTGRES PARAMETERS JDBC DRIVER START FROM 1
         result = positionalKey != null ? params.get(positionalKey) : identifier.execute(currentRecord, context);
       } else if (string != null && string.length() > 1) {
-        result = decode(string.substring(1, string.length() - 1));
+        result = decodedString();
       } else if (inputParam != null) {
         result = inputParam.getValue(params);
       }
@@ -283,63 +264,19 @@ public class BaseExpression extends MathExpression {
     return result;
   }
 
-  /**
-   * Recognises the namespaced-function pattern <code>&lt;identifier&gt;.&lt;methodCall&gt;(...)</code>
-   * when the combined <code>&lt;identifier&gt;.&lt;methodName&gt;</code> is a registered SQL function
-   * (e.g. <code>vector.fuse</code>, <code>vector.neighbors</code>). Returns a {@link FunctionCall} ready
-   * to execute, or {@code null} when the shape or name does not match.
-   * <p>
-   * The synthesised {@code FunctionCall} is cached on the node so the registry lookup happens at
-   * most once per parsed expression. Returning {@code null} leaves the existing identifier +
-   * method-call path untouched.
-   */
-  private FunctionCall asNamespacedFunctionCall(final CommandContext context) {
-    if (cachedNamespacedCall != null)
-      return cachedNamespacedCall == NAMESPACED_CALL_NONE ? null : cachedNamespacedCall;
-
-    cachedNamespacedCall = NAMESPACED_CALL_NONE;
-
-    if (identifier == null || modifier == null || modifier.methodCall == null)
-      return null;
-    if (identifier.levelZero != null || identifier.suffix == null || identifier.suffix.identifier == null
-        || identifier.suffix.recordAttribute != null || identifier.suffix.star)
-      return null;
-    // A back-ticked name is a property, never a namespace: `map`.values() reads the property called map (issue #9076)
-    if (identifier.suffix.identifier.quoted)
-      return null;
-
-    final String namespace = identifier.suffix.identifier.getValue();
-    if (namespace == null || namespace.isEmpty() || namespace.charAt(0) == '$')
-      return null;
-
-    final MethodCall mc = modifier.methodCall;
-    if (mc.methodName == null)
-      return null;
-    final String combined = namespace + "." + mc.methodName.getStringValue();
-
-    if (context == null || context.getDatabase() == null)
-      return null;
-
-    final SQLQueryEngine engine = (SQLQueryEngine) context.getDatabase().getQueryEngine("sql");
-    if (engine == null)
-      return null;
-
-    final boolean registered =
-        engine.getFunctionFactory().getFunctionInstance(combined) != null
-        || FunctionRegistry.getStateless(combined) != null;
-    if (!registered)
-      return null;
-
-    final FunctionCall fc = new FunctionCall();
-    final Identifier name = new Identifier(combined);
-    fc.name = name;
-    fc.params = mc.params;
-    cachedNamespacedCall = fc;
-    return fc;
+  /** A string literal without its quotes and un-escaped, and the {@link #string} it was decoded from. */
+  private record DecodedLiteral(String source, String value) {
   }
 
-  private transient FunctionCall cachedNamespacedCall;
-  private static final FunctionCall NAMESPACED_CALL_NONE = new FunctionCall();
+  private String decodedString() {
+    final String source = string;
+    final DecodedLiteral cached = decodedLiteral;
+    if (cached != null && cached.source().equals(source))
+      return cached.value();
+    final String value = decode(source.substring(1, source.length() - 1));
+    decodedLiteral = new DecodedLiteral(source, value);
+    return value;
+  }
 
   @Override
   public boolean isIndexedFunctionCall(final CommandContext context) {
@@ -358,12 +295,12 @@ public class BaseExpression extends MathExpression {
   }
 
   public Iterable<Record> executeIndexedFunction(final FromClause target, final CommandContext context,
-      final BinaryCompareOperator operator, final Object right) {
+      final BinaryCompareOperator operator, final Object right, final IndexedFunctionPushdown pushdown) {
     if (expression != null)
-      return expression.executeIndexedFunction(target, context, operator, right);
+      return expression.executeIndexedFunction(target, context, operator, right, pushdown);
     if (this.identifier == null)
       return null;
-    return identifier.executeIndexedFunction(target, context, operator, right);
+    return identifier.executeIndexedFunction(target, context, operator, right, pushdown);
   }
 
   @Override
@@ -481,19 +418,18 @@ public class BaseExpression extends MathExpression {
    * {@code identifier} is exactly that shape AND a parameter is actually bound at that position - the single test
    * {@link #execute(Result, CommandContext)} and {@link #isPostgresPositionalParameter(CommandContext)} must agree
    * on, kept as one method so they cannot drift apart again (issue #8288 review).
+   * <p>
+   * It runs before every property read, so the shape is the identifier's, worked out once from the query text (issue #9925):
+   * since literals became generated parameters the map is rarely empty, and parsing the name here cost every row.
    */
   private static String postgresPositionalParameterKey(final BaseIdentifier identifier, final Map<String, Object> params) {
-    if (params == null || params.isEmpty() || identifier == null || identifier.getSuffix() == null
-        || identifier.getSuffix().identifier == null)
+    if (params == null || identifier == null)
       return null;
-    final String v = identifier.getSuffix().identifier.getValue();
-    if (v == null || !v.startsWith("$") || v.length() < 2)
+    final SuffixIdentifier suffix = identifier.getSuffix();
+    if (suffix == null || suffix.identifier == null)
       return null;
-    final Integer pos = NumberUtils.parsePositiveInteger(v.substring(1));
-    if (pos == null)
-      return null;
-    final String key = String.valueOf(pos - 1);
-    return params.containsKey(key) ? key : null;
+    final String key = suffix.identifier.positionalParameterKey();
+    return key != null && params.containsKey(key) ? key : null;
   }
 
   /**

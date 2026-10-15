@@ -25,16 +25,25 @@ import com.arcadedb.database.RID;
 import com.arcadedb.exception.RecordNotFoundException;
 import com.arcadedb.graph.DenseNodeIdProvider;
 import com.arcadedb.graph.Edge;
+import com.arcadedb.graph.EdgeWeight;
 import com.arcadedb.graph.GhostEdgeReporter;
 import com.arcadedb.graph.GraphEngine;
 import com.arcadedb.graph.GraphTraversalProvider;
 import com.arcadedb.graph.GraphTraversalProviderRegistry;
+import com.arcadedb.graph.ImmutableLightEdge;
+import com.arcadedb.graph.IncomingEdgeLookup;
+import com.arcadedb.graph.LightEdgeRID;
 import com.arcadedb.graph.NeighborView;
 import com.arcadedb.graph.NodeEdgeWeights;
 import com.arcadedb.graph.Vertex;
+import com.arcadedb.graph.VertexInternal;
 import com.arcadedb.query.opencypher.procedures.CypherProcedure;
+import com.arcadedb.query.opencypher.procedures.ProcedureSchemaTypes;
+import com.arcadedb.query.opencypher.traversal.TraversalPath;
+import com.arcadedb.query.sql.executor.BasicCommandContext;
 import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.query.sql.executor.WorkGuard;
+import com.arcadedb.schema.EdgeType;
 import com.arcadedb.utility.NumberUtils;
 
 import java.util.ArrayList;
@@ -44,6 +53,7 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * Abstract base class for algorithm procedures.
@@ -136,14 +146,77 @@ public abstract class AbstractAlgoProcedure implements CypherProcedure {
     return arg.toString();
   }
 
-  @SuppressWarnings("unchecked")
-  protected String[] extractRelTypes(final Object arg) {
+  /**
+   * Parses a relationship-type filter (a name, a comma- or pipe-separated list, or a collection; null or blank means every
+   * type) and checks every name against the schema. A name that is not an edge type is refused rather than answered with
+   * an empty graph (issue #9769): a typo ({@code 'KNOWN'} for {@code 'KNOWS'}), or a weight property passed where the
+   * relationship types go, would otherwise walk nothing and return no rows, which reads as a correct answer.
+   */
+  protected String[] extractRelTypes(final Object arg, final CommandContext context) {
+    if (arg instanceof Map<?, ?>)
+      throw new IllegalArgumentException(
+          getName() + "(): expected the relationship types (a name, a list of names or null), got a map");
+    final String[] relTypes = parseTypeNames(arg);
+    if (relTypes != null)
+      requireEdgeTypes(context.getDatabase(), relTypes);
+    return relTypes;
+  }
+
+  /**
+   * Parses a list of type names (a name, a comma- or pipe-separated list, or a collection) without checking them against
+   * the schema; null or blank answers null.
+   */
+  private static String[] parseTypeNames(final Object arg) {
     return switch (arg) {
       case null -> null;
       case String s -> splitRelTypeString(s);
-      case Collection<?> coll -> coll.stream().map(Object::toString).toArray(String[]::new);
+      case Collection<?> coll -> {
+        // Blank and null entries are dropped as the separated-string form drops empty parts; none left means every type
+        final String[] names = coll.stream().filter(Objects::nonNull).map(o -> o.toString().trim()).filter(s -> !s.isEmpty())
+            .toArray(String[]::new);
+        yield names.length == 0 ? null : names;
+      }
       default -> new String[]{arg.toString()};
     };
+  }
+
+  /**
+   * Refuses any name that is not an edge type of the schema. Shared by {@link #extractRelTypes} and by the procedures
+   * that take a single relationship type as a plain string.
+   */
+  protected void requireEdgeTypes(final Database db, final String... relTypes) {
+    requireTypes(db, relTypes, true);
+  }
+
+  /**
+   * The weight property of a procedure whose relationship types come first. A name that is an edge type is refused: it is
+   * a call written in the order {@code algo.mst} and {@code algo.apsp} took before #9769, {@code (weightProperty,
+   * relTypes)}, where {@code (null, 'ROAD')} meant "every weight 1 over ROAD" and would now silently read ROAD as the
+   * weight property of every edge type.
+   */
+  protected String extractWeightProperty(final Object arg, final CommandContext context) {
+    final String weightProperty = extractString(arg, "weightProperty");
+    if (weightProperty != null && context.getDatabase().getSchema().getTypeOrNull(weightProperty) instanceof EdgeType)
+      throw new IllegalArgumentException(getName() + "(): '" + weightProperty
+          + "' is a relationship type, not a weight property: the relationship types come first, then the weight property");
+    return weightProperty;
+  }
+
+  /** As {@link #extractRelTypes}, for a node-label filter: every name must be a vertex type of the schema. */
+  protected String[] extractNodeLabels(final Object arg, final CommandContext context) {
+    if (arg instanceof Map<?, ?>)
+      throw new IllegalArgumentException(getName() + "(): expected the node labels (a name, a list of names or null), got a map");
+    final String[] labels = parseTypeNames(arg);
+    if (labels != null)
+      requireTypes(context.getDatabase(), labels, false);
+    return labels;
+  }
+
+  private void requireTypes(final Database db, final String[] names, final boolean edges) {
+    if (edges)
+      ProcedureSchemaTypes.requireEdgeTypes(getName(), db.getSchema(), names);
+    else
+      ProcedureSchemaTypes.requireVertexTypes(getName(), db.getSchema(), names);
   }
 
   private static String[] splitRelTypeString(final String s) {
@@ -265,6 +338,9 @@ public abstract class AbstractAlgoProcedure implements CypherProcedure {
    * the right order of magnitude - so there is nothing to "correct" here short of measuring a specific JVM.
    */
   protected static final long MATRIX_ROW_OVERHEAD_BYTES = 32L;
+
+  /** The edge types of a walk over every type. */
+  protected static final String[] NO_EDGE_TYPES = new String[0];
 
   /**
    * Entry-count checkpoint interval for the CSR-adjacency fallback branch of {@link GraphData#adjacency}, taken
@@ -642,7 +718,8 @@ public abstract class AbstractAlgoProcedure implements CypherProcedure {
 
   private GraphTraversalProvider findReadyProvider(final Database db, final String[] relTypes) {
     // Try exact match first (covers all requested types)
-    final GraphTraversalProvider provider = GraphTraversalProviderRegistry.findProvider(db, relTypes);
+    // Without the registry's own wait: this caller waits for the restore with the command's abort check, within its own budget
+    final GraphTraversalProvider provider = GraphTraversalProviderRegistry.findProviderWithoutWaiting(db, relTypes);
     if (provider != null && provider.coversVertexType(null))
       return provider;
 
@@ -650,6 +727,9 @@ public abstract class AbstractAlgoProcedure implements CypherProcedure {
     // all edge types and all vertex types, the terms of the exact match above. A partial-coverage
     // provider would silently produce wrong results (issue #9240).
     if (relTypes != null && relTypes.length != 0)
+      return null;
+    // A view serves the committed graph only: refused while this transaction holds changes, as the registry lookup above
+    if (GraphTraversalProviderRegistry.isWithheld(db))
       return null;
     // Coverage checked before readiness: coversEdgeType() is a pure config check, while a
     // GraphAnalyticalView's isReady() (see #6641) dispatches its deferred restore-from-disk as a
@@ -721,10 +801,34 @@ public abstract class AbstractAlgoProcedure implements CypherProcedure {
         // and then remember to skip the holes in it, and every procedure written before overlays existed is
         // correct in front of one (issue #6792). wrap() is a no-op for a compact id space.
         final GraphTraversalProvider dense = DenseNodeIdProvider.wrap(provider);
-        return new GraphData(dense, dense.getNodeIdUpperBound(), memory);
+        return new GraphData(dense, dense.getNodeIdUpperBound(), memory, incomingSideContext(db, context));
       }
     }
-    return new GraphData(loadVertices(db, nodeLabels, memory), memory);
+    return new GraphData(loadVertices(db, nodeLabels, memory), memory, incomingSideContext(db, context));
+  }
+
+  /**
+   * The context a walk of the records reads the incoming side of the unidirectional edge types through (issue #8629):
+   * the call's own, so its scans are shared with the rest of the query, or a context of its own for a caller that has
+   * none.
+   */
+  protected static CommandContext incomingSideContext(final Database db, final CommandContext context) {
+    if (context != null)
+      return context;
+    final BasicCommandContext own = new BasicCommandContext();
+    own.setDatabase(db);
+    return own;
+  }
+
+  /**
+   * The edges of {@code vertex} in {@code direction} over {@code edgeTypes} (all when null or empty), completed with the
+   * incoming edges of the unidirectional types among them (issue #8629): an algorithm asks about the graph, not about
+   * what a vertex happens to store, and answers the same whichever way an edge type is stored.
+   */
+  protected static Iterable<Edge> edgesOf(final CommandContext context, final Vertex vertex, final Vertex.DIRECTION direction,
+      final String... edgeTypes) {
+    final String[] types = edgeTypes != null ? edgeTypes : NO_EDGE_TYPES;
+    return () -> IncomingEdgeLookup.getEdges(context, vertex, direction, types);
   }
 
   /**
@@ -744,25 +848,26 @@ public abstract class AbstractAlgoProcedure implements CypherProcedure {
     private final List<Vertex>           vertices;
     private final Map<RID, Integer>      ridToIdx;
     private final MemoryBudget           memory;
+    // WHAT THE RECORD WALKS READ THE INCOMING SIDE OF THE UNIDIRECTIONAL EDGE TYPES THROUGH (ISSUE #8629)
+    private final CommandContext         context;
 
-    private GraphData(final GraphTraversalProvider provider, final int nodeCount, final MemoryBudget memory) {
+    private GraphData(final GraphTraversalProvider provider, final int nodeCount, final MemoryBudget memory,
+        final CommandContext context) {
       this.provider = provider;
       this.vertices = null;
       this.ridToIdx = null;
       this.nodeCount = nodeCount;
       this.memory = memory;
+      this.context = context;
     }
 
-    private GraphData(final List<Vertex> vertices, final MemoryBudget memory) {
-      this(vertices, GraphEngine.buildRidIndex(vertices), memory);
-    }
-
-    private GraphData(final List<Vertex> vertices, final Map<RID, Integer> ridToIdx, final MemoryBudget memory) {
+    private GraphData(final List<Vertex> vertices, final MemoryBudget memory, final CommandContext context) {
       this.provider = null;
       this.vertices = vertices;
-      this.ridToIdx = ridToIdx;
+      this.ridToIdx = GraphEngine.buildRidIndex(vertices);
       this.nodeCount = vertices.size();
       this.memory = memory;
+      this.context = context;
     }
 
     /**
@@ -890,8 +995,11 @@ public abstract class AbstractAlgoProcedure implements CypherProcedure {
       // OLTP fallback matches that contract rather than carrying a long a single degree() consumer would need.
       // A vertex with more than Integer.MAX_VALUE edges in one direction would already be precluded by the
       // engine's other structural limits well before this cast could matter.
+      // The incoming side of a unidirectional edge type is counted from the edges that end in the vertex, as a view
+      // counts it (issue #8629); the lookup answers the vertex API's count when no such type is involved
+      final String[] types = relTypes != null ? relTypes : NO_EDGE_TYPES;
       for (int i = 0; i < nodeCount; i++)
-        degrees[i] = (int) vertices.get(i).countEdges(dir, relTypes);
+        degrees[i] = (int) IncomingEdgeLookup.countEdges(context, vertices.get(i), dir, types);
       return degrees;
     }
 
@@ -1151,9 +1259,7 @@ public abstract class AbstractAlgoProcedure implements CypherProcedure {
           return new NodeEdgeWeights(EMPTY_NEIGHBORS, EMPTY_WEIGHTS);
 
         final RID vertexRid = vertex.getIdentity();
-        final Iterable<Edge> edges = relTypes != null && relTypes.length > 0 ?
-            vertex.getEdges(dir, relTypes) :
-            vertex.getEdges(dir);
+        final Iterable<Edge> edges = edgesOf(context, vertex, dir, relTypes);
         int degree = 0;
         for (final Edge edge : edges) {
           // Throttled by EDGE rather than by vertex: one supernode can hold millions of them, and the walk
@@ -1187,15 +1293,39 @@ public abstract class AbstractAlgoProcedure implements CypherProcedure {
   }
 
   /**
-   * Path finders that return vertex RIDs only (A*, Bellman-Ford) lose the edges that were walked. This rebuilds them: for
-   * every pair of consecutive vertices the lightest edge in the given direction (optionally restricted to one edge type)
-   * is picked (an edge without the weight property counts {@code missingWeight}), so the returned weight is the sum of the path's edge weights and the path exposes its relationships.
+   * Path finders that return vertex RIDs only (A*, Dijkstra, the shortest path finder) lose the edges that were walked.
+   * This rebuilds them: for every pair of consecutive vertices the lightest edge in the given direction (optionally
+   * restricted to one edge type) is picked, weighed by the rule the finders walked it by ({@link EdgeWeight}), so the
+   * returned weight is the sum of the path's edge weights and the path exposes its relationships. An edge the finders
+   * do not walk (negative, NaN or infinite weight) is never picked: it would report a weight the path never had.
    */
   protected WeightedPath attachEdges(final List<RID> pathRids, final String relType, final Vertex.DIRECTION dir,
-      final String weightProperty, final double missingWeight) {
+      final String weightProperty) {
+    return attachEdges(pathRids, relType != null && !relType.isEmpty() ? new String[] { relType } : null, dir,
+        weightProperty, true);
+  }
+
+  /** Same as {@link #attachEdges(List, String, Vertex.DIRECTION, String)} over several edge types. */
+  protected WeightedPath attachEdges(final List<RID> pathRids, final String[] edgeTypeFilter, final Vertex.DIRECTION dir,
+      final String weightProperty) {
+    return attachEdges(pathRids, edgeTypeFilter, dir, weightProperty, true);
+  }
+
+  /**
+   * Same as {@link #attachEdges(List, String, Vertex.DIRECTION, String)} for Bellman-Ford, the one path finder that walks
+   * negative weights: the raw value is read, and only an edge without a numeric weight is priced
+   * {@link EdgeWeight#MISSING}.
+   */
+  protected WeightedPath attachEdgesWithNegativeWeights(final List<RID> pathRids, final String relType,
+      final Vertex.DIRECTION dir, final String weightProperty) {
+    return attachEdges(pathRids, relType != null && !relType.isEmpty() ? new String[] { relType } : null, dir,
+        weightProperty, false);
+  }
+
+  private WeightedPath attachEdges(final List<RID> pathRids, final String[] edgeTypeFilter, final Vertex.DIRECTION dir,
+      final String weightProperty, final boolean walkableOnly) {
     // callers hand a LinkedList: index it once as an array-backed list
     final List<RID> vertexRids = new ArrayList<>(pathRids);
-    final String[] edgeTypeFilter = relType != null && !relType.isEmpty() ? new String[] { relType } : null;
 
     final List<RID> pathWithEdges = new ArrayList<>(vertexRids.size() * 2 - 1);
     pathWithEdges.add(vertexRids.get(0));
@@ -1207,13 +1337,23 @@ public abstract class AbstractAlgoProcedure implements CypherProcedure {
 
       Edge bestEdge = null;
       double bestWeight = Double.POSITIVE_INFINITY;
-      for (final Edge edge : edgeTypeFilter != null ? from.getEdges(dir, edgeTypeFilter) : from.getEdges(dir)) {
+      // The edges joining the two, found from the end that stores each of them: the incoming side of a unidirectional
+      // edge type is on the other end only (issue #8629), and no edge that does not reach the next vertex is loaded
+      for (final Iterator<Edge> edges = IncomingEdgeLookup.getEdgesConnectedTo((VertexInternal) from, dir, toRid,
+          edgeTypeFilter != null ? edgeTypeFilter : NO_EDGE_TYPES); edges.hasNext(); ) {
+        final Edge edge = edges.next();
         try {
           final RID otherRid = edge.getOut().equals(from.getIdentity()) ? edge.getIn() : edge.getOut();
           if (!toRid.equals(otherRid))
             continue;
           final Object w = weightProperty != null ? edge.get(weightProperty) : null;
-          final double edgeWeight = w instanceof Number num ? num.doubleValue() : missingWeight;
+          final double edgeWeight;
+          if (walkableOnly) {
+            edgeWeight = EdgeWeight.of(w);
+            if (!EdgeWeight.isWalkable(edgeWeight))
+              continue;
+          } else
+            edgeWeight = w instanceof Number num ? num.doubleValue() : EdgeWeight.MISSING;
           if (bestEdge == null || edgeWeight < bestWeight) {
             bestWeight = edgeWeight;
             bestEdge = edge;
@@ -1233,25 +1373,30 @@ public abstract class AbstractAlgoProcedure implements CypherProcedure {
   }
 
   /**
-   * Builds a path representation from a list of RIDs.
+   * Builds the path a finder walked from its vertex RIDs interleaved with the edges joining them, as
+   * {@link #attachEdges} returns them.
+   * <p>
+   * The path is a {@link TraversalPath}, the same value a MATCH pattern binds, so {@code nodes()},
+   * {@code relationships()} and {@code length()} read it, and a Bolt client receives a path. It used to be a
+   * {@code {_type: "path", nodes, relationships, length}} map, which the path functions answered {@code []} and
+   * {@code 0} on (issue #9913); {@code path.nodes} and the other reads of that map still answer through
+   * {@link TraversalPath#getMember}.
+   * <p>
+   * A lightweight edge has no record to look up: it is rebuilt from the type and the endpoints its RID carries. Looking
+   * it up failed the whole call with "Record #bucket:-1 not found" whenever the path walked one (found with #9914).
+   *
+   * @throws IllegalStateException when two consecutive vertices have no edge between them, which a finder that walked
+   *                               the path cannot produce
    */
-  protected Map<String, Object> buildPath(final List<RID> rids, final Database database) {
-    final List<Object> nodes = new ArrayList<>();
-    final List<Object> relationships = new ArrayList<>();
-
+  protected TraversalPath buildPath(final List<RID> rids, final Database database) {
+    final List<Object> elements = new ArrayList<>(rids.size());
     for (final RID rid : rids) {
-      final Document doc = database.lookupByRID(rid, true).asDocument();
-      if (doc instanceof Vertex)
-        nodes.add(doc);
-      else if (doc instanceof Edge)
-        relationships.add(doc);
+      if (rid instanceof LightEdgeRID light)
+        elements.add(new ImmutableLightEdge(database, database.getSchema().getTypeByBucketId(light.getBucketId()),
+            light.getBucketId(), light.getOutRID(), light.getInRID()));
+      else
+        elements.add(database.lookupByRID(rid, true));
     }
-
-    final Map<String, Object> path = new HashMap<>();
-    path.put("_type", "path");
-    path.put("nodes", nodes);
-    path.put("relationships", relationships);
-    path.put("length", relationships.size());
-    return path;
+    return TraversalPath.ofWalk(elements);
   }
 }

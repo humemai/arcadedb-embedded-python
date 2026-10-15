@@ -19,6 +19,7 @@
 package com.arcadedb.server.http.handler;
 
 import com.arcadedb.database.TransactionContext;
+import com.arcadedb.server.TestServerHelper;
 import com.arcadedb.server.http.HttpSession;
 import com.arcadedb.server.http.HttpSessionManager;
 import com.arcadedb.server.security.ServerSecurityUser;
@@ -70,7 +71,8 @@ class Issue7734TimeSeriesRouteKeepsSessionTransactionTest {
   @BeforeEach
   void setUp() {
     manager = new HttpSessionManager(60_000);
-    user = mock(ServerSecurityUser.class);
+    user = TestServerHelper.securityUser("tester");
+    // A subclass mock, held to the #8851 inline-mock guard rather than #9464's: TransactionContext is an engine type
     transaction = mock(TransactionContext.class);
     when(transaction.isActive()).thenReturn(true);
     session = manager.createSession(user, transaction);
@@ -135,7 +137,15 @@ class Issue7734TimeSeriesRouteKeepsSessionTransactionTest {
 
     assertThat(new PostCommandHandler(null).participatesInSessionTransaction())
         .as("a command runs INSIDE the caller's transaction and a failure must roll it back").isTrue();
+    assertThat(new PostCommandHandler(null).rollsBackSessionTransactionOnFailure()).isTrue();
+
+    // The two query routes run inside the caller's transaction too (read-your-writes, and refused once a failed command rolled it
+    // back) but cannot have written anything, so their failures stop destroying it (issue #9784). Two questions, two answers.
     assertThat(new GetQueryHandler(null).participatesInSessionTransaction()).isTrue();
     assertThat(new PostQueryHandler(null).participatesInSessionTransaction()).isTrue();
+    assertThat(new GetQueryHandler(null).rollsBackSessionTransactionOnFailure())
+        .as("a read that fails has nothing half applied to distrust").isFalse();
+    assertThat(new PostQueryHandler(null).rollsBackSessionTransactionOnFailure())
+        .as("a read that fails has nothing half applied to distrust").isFalse();
   }
 }

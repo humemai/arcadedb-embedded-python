@@ -361,9 +361,9 @@ class GAVEligibilityTest {
 
   @Test
   void countPushDownNotUsedWithComplexWhere() {
-    // Complex WHERE (not a simple inequality) prevents count-push-down
+    // A WHERE comparing two nodes (not a simple inequality) prevents count-push-down
     final ResultSet result = database.query("opencypher",
-        "PROFILE MATCH (p1:Person)-[:KNOWS]-(p2:Person) WHERE p1.name = 'Alice' RETURN count(*) AS count");
+        "PROFILE MATCH (p1:Person)-[:KNOWS]-(p2:Person) WHERE p1.name < p2.name RETURN count(*) AS count");
 
     while (result.hasNext())
       result.next();
@@ -374,18 +374,41 @@ class GAVEligibilityTest {
   }
 
   @Test
-  void countPushDownNotUsedWithEdgeVariable() {
-    // Named edge variable prevents count-push-down
-    final ResultSet result = database.query("opencypher",
-        "PROFILE MATCH (:Person)-[r:KNOWS]->(:Person) RETURN count(*) AS count");
-
-    while (result.hasNext())
-      result.next();
-
-    final String planString = result.getExecutionPlan().get().prettyPrint(0, 2);
-    // Should NOT use count-push-down due to edge variable
-    assertThat(planString).doesNotContain("COUNT CHAIN PATHS");
+  void countPushDownAppliesAWhereOnOneNodePerVertex() {
+    // A WHERE that reads one node is a per-vertex filter the chain count applies (issue #9595)
+    final String match = "MATCH (p1:Person)-[:KNOWS]-(p2:Person) WHERE p1.name = 'Alice'";
+    final ResultSet result = database.query("opencypher", "PROFILE " + match + " RETURN count(*) AS count");
+    final long count = ((Number) result.next().getProperty("count")).longValue();
+    assertThat(result.getExecutionPlan().get().prettyPrint(0, 2)).contains("COUNT CHAIN PATHS");
     result.close();
+
+    try (final ResultSet pipeline = database.query("opencypher", match + " RETURN sum(1) AS count")) {
+      assertThat(count).isEqualTo(((Number) pipeline.next().getProperty("count")).longValue());
+    }
+  }
+
+  @Test
+  void countPushDownTakesAnEdgeVariableNothingElseReads() {
+    // A relationship named once and read by nothing but count() binds every row: the count is count(*) (issue #9600)
+    for (final String count : new String[] { "count(*)", "count(r)" }) {
+      final String query = "MATCH (:Person)-[r:KNOWS]->(:Person) RETURN " + count + " AS count";
+      try (final ResultSet result = database.query("opencypher", "PROFILE " + query)) {
+        final long value = ((Number) result.next().getProperty("count")).longValue();
+        assertThat(result.getExecutionPlan().get().prettyPrint(0, 2)).as(query).contains("COUNT CHAIN PATHS");
+        try (final ResultSet pipeline = database.query("opencypher", "MATCH (:Person)-[r:KNOWS]->(:Person) RETURN sum(1) AS count")) {
+          assertThat(value).as(query).isEqualTo(((Number) pipeline.next().getProperty("count")).longValue());
+        }
+      }
+    }
+
+    // ...but not one an inline predicate reads, nor one named twice
+    for (final String query : new String[] { "MATCH (:Person)-[r:KNOWS WHERE r.since > 0]->(:Person) RETURN count(r) AS count",
+        "MATCH (:Person)-[r:KNOWS]->(:Person), (:Person)-[r]->(:Person) RETURN count(*) AS count" })
+      try (final ResultSet result = database.query("opencypher", "PROFILE " + query)) {
+        while (result.hasNext())
+          result.next();
+        assertThat(result.getExecutionPlan().get().prettyPrint(0, 2)).as(query).doesNotContain("COUNT CHAIN PATHS");
+      }
   }
 
   // --- Triangle counting optimization (Q3) ---
@@ -630,24 +653,19 @@ class GAVEligibilityTest {
 
   @Test
   void antiJoinWithoutInequalityCorrectCount() {
-    // Without inequality, p1 can equal p3 (self-loops through 2-hop KNOWS)
-    // Alice-Bob-Alice: NOT Alice-KNOWS-Alice? Alice's KNOWS = {Bob}. Alice not in {Bob} → passes.
-    //   But Alice has no HAS_INTEREST → contributes 0
-    // Alice-Bob-Charlie: NOT Alice-KNOWS-Charlie? Charlie not in {Bob} → passes.
-    //   Charlie has HAS_INTEREST Java → contributes 1
-    // Bob-Alice-Bob: NOT Bob-KNOWS-Bob? Bob's KNOWS = {Alice, Charlie}. Bob not in set → passes.
-    //   But Bob has no HAS_INTEREST → contributes 0
-    // Charlie-Bob-Alice: NOT Charlie-KNOWS-Alice? Alice not in {Bob} → passes.
-    //   Alice has no HAS_INTEREST → contributes 0
-    // Charlie-Bob-Charlie: NOT Charlie-KNOWS-Charlie? Charlie's KNOWS = {Bob}. Charlie not in {Bob} → passes.
-    //   Charlie has HAS_INTEREST → contributes 1
-    // Total: 2 (Alice-Bob-Charlie + Charlie-Bob-Charlie)
+    // Without an inequality p1 may equal p3 only when the two hops use DIFFERENT relationships. KNOWS has two edges here
+    // (Alice-Bob, Bob-Charlie), so Alice-Bob-Alice and Charlie-Bob-Charlie would each walk ONE edge twice, which Cypher's
+    // relationship uniqueness rule forbids inside a single MATCH (Neo4j drops them). What is left:
+    // Alice-Bob-Charlie: NOT Alice-KNOWS-Charlie? Charlie is not a neighbour of Alice, so it passes.
+    //   Charlie has HAS_INTEREST Java -> contributes 1
+    // Charlie-Bob-Alice: Alice has no HAS_INTEREST -> contributes 0
+    // Total: 1 (the old expectation of 2 counted Charlie-Bob-Charlie, which reuses the Bob-Charlie edge)
     final ResultSet result = database.query("opencypher",
         "MATCH (p1:Person)-[:KNOWS]-(p2:Person)-[:KNOWS]-(p3:Person)-[:HAS_INTEREST]->(t:Tag) WHERE NOT (p1)-[:KNOWS]-(p3) RETURN count(*) AS count");
 
     assertThat(result.hasNext()).isTrue();
     final long count = result.next().getProperty("count");
-    assertThat(count).isEqualTo(2L);
+    assertThat(count).isEqualTo(1L);
     result.close();
   }
 

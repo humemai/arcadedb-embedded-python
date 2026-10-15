@@ -71,6 +71,7 @@ import com.arcadedb.server.monitor.ProfilingResultSet;
 import com.arcadedb.server.monitor.ServerQueryProfiler;
 
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -105,8 +106,20 @@ public class ServerDatabase implements DatabaseInternal {
       // out of reach of 'delete backup' and 'restore backup'. Resolved on CALL rather than captured here, so a
       // 'set backup config' that moves the directory is seen by the next statement, and so the control plane's
       // chain stays the single authority instead of being copied into a field at open time.
-      wrapped.setWrapper(BackupDirectoryResolver.WRAPPER_NAME,
-          (BackupDirectoryResolver) () -> new ServerControlPlane(server).resolveBackupDirectory().toString());
+      wrapped.setWrapper(BackupDirectoryResolver.WRAPPER_NAME, new BackupDirectoryResolver() {
+        @Override
+        public String resolveBackupDirectory() {
+          return new ServerControlPlane(server).resolveBackupDirectory().toString();
+        }
+
+        // AND THE RETENTION OF THE DIRECTORY IT WROTE INTO (issue #9844): the statement used to apply none, so a database
+        // absent from the auto-backup configuration grew its archive directory forever. The control plane's own pruning,
+        // so 'BACKUP DATABASE' and 'trigger backup' follow one policy
+        @Override
+        public int applyRetention(final String backupDirectory, final String databaseName) {
+          return new ServerControlPlane(server).pruneBackups(Path.of(backupDirectory), databaseName);
+        }
+      });
     }
   }
 
@@ -202,6 +215,15 @@ public class ServerDatabase implements DatabaseInternal {
   @Override
   public boolean isReplicated() {
     return current().isReplicated();
+  }
+
+  /**
+   * Delegated with {@link #isReplicated()}: a server handle around a replicated database must answer the cap its
+   * replication layer enforces, not the database's own configuration (issue #9430).
+   */
+  @Override
+  public ContextConfiguration getReplicationConfiguration() {
+    return current().getReplicationConfiguration();
   }
 
   /**
@@ -422,8 +444,13 @@ public class ServerDatabase implements DatabaseInternal {
     current().createRecord(record, bucketName);
   }
 
-  public void createRecordNoLock(final Record record, final String bucketName, final boolean discardRecordAfter) {
-    current().createRecordNoLock(record, bucketName, false);
+  public boolean createRecordNoLock(final Record record, final String bucketName, final boolean discardRecordAfter) {
+    return current().createRecordNoLock(record, bucketName, discardRecordAfter);
+  }
+
+  @Override
+  public boolean createRecordReportingVeto(final Record record, final String bucketName) {
+    return current().createRecordReportingVeto(record, bucketName);
   }
 
   @Override
@@ -435,8 +462,18 @@ public class ServerDatabase implements DatabaseInternal {
     current().updateRecord(record);
   }
 
+  @Override
+  public boolean updateRecordReportingVeto(final Record record) {
+    return current().updateRecordReportingVeto(record);
+  }
+
   public void updateRecordNoLock(final Record record, final boolean discardRecordAfter) {
     current().updateRecordNoLock(record, discardRecordAfter);
+  }
+
+  @Override
+  public boolean updateRecordWithEventsNoLock(final Record record, final boolean discardRecordAfter) {
+    return current().updateRecordWithEventsNoLock(record, discardRecordAfter);
   }
 
   @Override
@@ -445,8 +482,8 @@ public class ServerDatabase implements DatabaseInternal {
   }
 
   @Override
-  public void deleteEdgeSkippingEndpoint(final Edge edge, final RID skipEndpoint) {
-    current().deleteEdgeSkippingEndpoint(edge, skipEndpoint);
+  public boolean deleteEdgeSkippingEndpoint(final Edge edge, final RID skipEndpoint, final Vertex.DIRECTION skipDirection) {
+    return current().deleteEdgeSkippingEndpoint(edge, skipEndpoint, skipDirection);
   }
 
   @Override
@@ -747,8 +784,18 @@ public class ServerDatabase implements DatabaseInternal {
   }
 
   @Override
+  public void checkFileRenamesCanBePublished() {
+    current().checkFileRenamesCanBePublished();
+  }
+
+  @Override
   public void saveConfiguration() throws IOException {
     current().saveConfiguration();
+  }
+
+  @Override
+  public void saveConfiguration(final String key) throws IOException {
+    current().saveConfiguration(key);
   }
 
   public StatementCache getStatementCache() {

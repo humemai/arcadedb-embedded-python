@@ -50,23 +50,21 @@ import com.arcadedb.exception.DatabaseNotFoundException;
 import com.arcadedb.exception.ErrorCategory;
 import com.arcadedb.exception.InvalidPropertyTypeException;
 import com.arcadedb.exception.NeedRetryException;
+import com.arcadedb.exception.QueryAdmissionException;
 import com.arcadedb.exception.TimeoutException;
-import com.arcadedb.index.Index;
-import com.arcadedb.index.TypeIndex;
 import com.arcadedb.log.LogManager;
+import com.arcadedb.network.binary.ServerIsNotTheLeaderException;
+import com.arcadedb.query.RunningQuery;
+import com.arcadedb.query.opencypher.query.CypherSchemaCommands;
 import com.arcadedb.query.opencypher.query.ShowCommandTail;
 import com.arcadedb.query.sql.executor.ExecutionPlan;
 import com.arcadedb.query.sql.executor.ExecutionStep;
+import com.arcadedb.query.sql.executor.QueryAdmissionGate;
 import com.arcadedb.query.sql.executor.QueryStatistics;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultSet;
-import com.arcadedb.schema.DocumentType;
-import com.arcadedb.schema.EdgeType;
-import com.arcadedb.schema.Property;
-import com.arcadedb.schema.Schema;
-import com.arcadedb.security.SecurityDatabaseUser;
-import com.arcadedb.security.SecurityHelper;
 import com.arcadedb.server.ArcadeDBServer;
+import com.arcadedb.server.ErrorConcealment;
 import com.arcadedb.server.ServerControlPlane;
 import com.arcadedb.server.network.PreAuthConnectionGate;
 import com.arcadedb.server.HAServerPlugin;
@@ -93,12 +91,12 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collection;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
 
 import static com.arcadedb.query.opencypher.executor.steps.FinalProjectionStep.PROJECTION_NAME_METADATA;
@@ -180,6 +178,9 @@ public class BoltNetworkExecutor extends Thread {
    * rather than quietly act on whichever stream happens to be current.
    */
   private static final long OMITTED_QID = -1;
+  private static final AtomicLong LAST_CONNECTION_ID = new AtomicLong();
+  /** How {@code SHOW TRANSACTIONS} and {@code list queries} name this connection (issue #9689). */
+  private final String connectionId = "bolt-" + LAST_CONNECTION_ID.incrementAndGet();
 
   public BoltNetworkExecutor(final ArcadeDBServer server, final Socket socket, final BoltNetworkListener listener) {
     this(server, socket, listener, null);
@@ -275,7 +276,7 @@ public class BoltNetworkExecutor extends Thread {
           // query-execution handlers - so this fallback intentionally keeps the generic DATABASE_ERROR.
           LogManager.instance().log(this, Level.WARNING, "BOLT error processing message", e);
           try {
-            sendFailure(BoltException.DATABASE_ERROR, e.getMessage());
+            sendFailure(BoltException.DATABASE_ERROR, loggedClientMessage(e.getMessage()));
             state = State.FAILED;
           } catch (final IOException ioe) {
             break;
@@ -836,14 +837,14 @@ public class BoltNetworkExecutor extends Thread {
         applySystemQueryTail(query, params, stream);
       } catch (final CommandParsingException e) {
         stream.close(this, "RUN failure");
-        sendFailure(classifyParsingError(e), e.getMessage() != null ? e.getMessage() : "Query parsing error");
+        sendExecutionFailure(classifyParsingError(e), clientMessage(e.getMessage() != null ? e.getMessage() : "Query parsing error", e), e);
         state = State.FAILED;
         return;
       } catch (final Exception e) {
         stream.close(this, "RUN failure");
         LogManager.instance().log(this, Level.WARNING, "BOLT system query error", e);
-        sendFailure(classifyExecutionError(e, BoltErrorCodes.DATABASE_ERROR),
-            e.getMessage() != null ? e.getMessage() : "Database error");
+        sendExecutionFailure(classifyExecutionError(e, BoltErrorCodes.DATABASE_ERROR),
+            loggedClientMessage(e.getMessage() != null ? e.getMessage() : "Database error"), e);
         state = State.FAILED;
         return;
       }
@@ -859,6 +860,7 @@ public class BoltNetworkExecutor extends Thread {
       return;
     }
 
+    RunningQuery.Binding binding = null;
     try {
       // Determine if this is a write query using the query analyzer
       stream.writeOperation = isWriteQuery(query);
@@ -872,6 +874,19 @@ public class BoltNetworkExecutor extends Thread {
       final String upperQuery = trimmedQuery.toUpperCase(Locale.ROOT);
       final boolean explainMode = upperQuery.startsWith("EXPLAIN ");
       final boolean profileMode = !explainMode && upperQuery.startsWith("PROFILE ");
+
+      // Waits for the query admission gate (issue #9518). The slot belongs to the stream and goes back when the stream is closed -
+      // drained by PULL, discarded, reset or dropped with the connection - so the rows still to send keep it, as they keep the
+      // heap their buffers reserved. A second stream of the same transaction runs on this connection's thread and shares it
+      stream.admission = QueryAdmissionGate.getInstance().admit();
+
+      // Listed and terminable from now until the stream is closed, after the last PULL (issue #9689). Bound to this
+      // thread only while RUN, PULL or DISCARD do its work: between messages the thread serves the other streams of the
+      // transaction, and what they run must not carry this entry
+      stream.runningQuery = server.getRunningQueries().open(database.getName(), user != null ? user.getName() : null, "bolt",
+          null, null, RunningQuery.Client.of(connectionId, socket.getRemoteSocketAddress()));
+      stream.runningQuery.setStatement("opencypher", query);
+      binding = stream.runningQuery.bind();
 
       // Use command() for writes, query() for reads
       if (stream.writeOperation) {
@@ -926,7 +941,7 @@ public class BoltNetworkExecutor extends Thread {
     } catch (final CommandParsingException e) {
       stream.close(this, "RUN failure");
       final String parseMsg = e.getMessage() != null ? e.getMessage() : "Query parsing error";
-      sendFailure(classifyParsingError(e), parseMsg);
+      sendExecutionFailure(classifyParsingError(e), clientMessage(parseMsg, e), e);
       state = State.FAILED;
     } catch (final Exception e) {
       // MVCC conflicts (NeedRetryException) are expected under contention and auto-retried by the driver,
@@ -934,8 +949,11 @@ public class BoltNetworkExecutor extends Thread {
       stream.close(this, "RUN failure");
       LogManager.instance().log(this, isRetryableConflict(e) ? Level.FINE : Level.WARNING, "BOLT query error", e);
       final String errorMsg = e.getMessage() != null ? e.getMessage() : "Database error";
-      sendFailure(classifyExecutionError(e, BoltErrorCodes.DATABASE_ERROR), errorMsg);
+      sendExecutionFailure(classifyExecutionError(e, BoltErrorCodes.DATABASE_ERROR), loggedClientMessage(errorMsg), e);
       state = State.FAILED;
+    } finally {
+      if (binding != null)
+        binding.close();
     }
   }
 
@@ -967,7 +985,8 @@ public class BoltNetworkExecutor extends Thread {
     if (stream == null)
       return;
 
-    try {
+    // The statement's work goes on while its rows are pulled: its entry is this thread's meanwhile (issue #9689)
+    try (final RunningQuery.Binding ignored = stream.bind()) {
       final long n = message.getN();
       long count = 0;
 
@@ -1028,7 +1047,10 @@ public class BoltNetworkExecutor extends Thread {
       // by the driver, so log at FINE to avoid flooding WARNING with recoverable flow; real errors stay WARNING.
       LogManager.instance().log(this, isRetryableConflict(e) ? Level.FINE : Level.WARNING, "BOLT PULL error", e);
       final String errorMsg = e.getMessage() != null ? e.getMessage() : "Error fetching records";
-      sendFailure(classifyExecutionError(e, BoltErrorCodes.DATABASE_ERROR), errorMsg);
+      sendExecutionFailure(classifyExecutionError(e, BoltErrorCodes.DATABASE_ERROR), loggedClientMessage(errorMsg), e);
+      // The failed stream can neither be pulled nor discarded any more: released now, with its admission slot (issue #9518),
+      // rather than held until the client RESETs or disconnects
+      closeStream(stream, "PULL failure");
       state = State.FAILED;
     }
   }
@@ -1058,8 +1080,13 @@ public class BoltNetworkExecutor extends Thread {
       // Statistics are computed eagerly when the write is materialized in the query plan, so they
       // are valid to read before draining/closing the result set.
       stats = stream.resultSet.getStatistics();
-      while (stream.resultSet.hasNext()) {
-        stream.resultSet.next();
+      try (final RunningQuery.Binding ignored = stream.bind()) {
+        while (stream.resultSet.hasNext())
+          stream.resultSet.next();
+      } catch (final RuntimeException e) {
+        // AS FOR A FAILED PULL: THE STREAM AND ITS ADMISSION SLOT (ISSUE #9518) GO NOW, NOT AT THE CLIENT'S RESET
+        closeStream(stream, "DISCARD failure");
+        throw e;
       }
     }
 
@@ -1106,6 +1133,8 @@ public class BoltNetworkExecutor extends Thread {
 
     try {
       database.begin();
+      // The client ends this transaction with its own COMMIT/ROLLBACK: an HA replica runs its writes in it (issue #10040)
+      ((DatabaseInternal) database).getTransaction().setClientManaged(true);
       explicitTransaction = true;
       nextQid = 0; // qids are numbered per explicit transaction
 
@@ -1126,7 +1155,7 @@ public class BoltNetworkExecutor extends Thread {
       // fallback: opening a transaction can fail on an MVCC conflict, a lock timeout, a deadline or a security
       // refusal, and hand-coding TransactionNotFound for all of them told a driver's retry predicate that a
       // retryable conflict was a permanent client error (issue #7915).
-      sendFailure(classifyExecutionError(e, BoltErrorCodes.TRANSACTION_ERROR), errorMsg);
+      sendExecutionFailure(classifyExecutionError(e, BoltErrorCodes.TRANSACTION_ERROR), clientMessage(errorMsg, e), e);
       state = State.FAILED;
     }
   }
@@ -1168,7 +1197,7 @@ public class BoltNetworkExecutor extends Thread {
 
     } catch (final Exception e) {
       final String message = e.getMessage() != null ? e.getMessage() : "Commit error";
-      sendFailure(classifyExecutionError(e, BoltErrorCodes.TRANSACTION_ERROR), message);
+      sendExecutionFailure(classifyExecutionError(e, BoltErrorCodes.TRANSACTION_ERROR), clientMessage(message, e), e);
       state = State.FAILED;
     }
   }
@@ -1203,7 +1232,7 @@ public class BoltNetworkExecutor extends Thread {
       // The third of the three transaction handlers, routed through the one classifier for the same reason the
       // other two are (issue #7915): closeAllStreams() and rollback() both raise engine exceptions, and a
       // timeout or a security refusal reported as TransactionNotFound is a diagnosis the caller cannot act on.
-      sendFailure(classifyExecutionError(e, BoltErrorCodes.TRANSACTION_ERROR), message);
+      sendExecutionFailure(classifyExecutionError(e, BoltErrorCodes.TRANSACTION_ERROR), clientMessage(message, e), e);
       state = State.FAILED;
     }
   }
@@ -1398,7 +1427,8 @@ public class BoltNetworkExecutor extends Thread {
       // request on this connection take ensureDatabase()'s already-open fast path.
       database = null;
       final String message = e.getMessage() != null ? e.getMessage() : "Unknown error";
-      sendFailure(classifyDatabaseSelectionError(e), "Cannot open database: " + targetName + " - " + message);
+      sendExecutionFailure(classifyDatabaseSelectionError(e),
+          "Cannot open database: " + targetName + " - " + clientMessage(message, e), e);
       state = State.FAILED;
       return false;
     }
@@ -1595,43 +1625,15 @@ public class BoltNetworkExecutor extends Thread {
       stream.syntheticResults = served.rows();
       return true;
 
-    } else if (normalized.startsWith("show index")
-        || normalized.startsWith("show all index")
-        || normalized.startsWith("show range index")
-        || normalized.startsWith("show text index")
-        || normalized.startsWith("show point index")
-        || normalized.startsWith("show lookup index")
-        || normalized.startsWith("show fulltext index")
-        || normalized.startsWith("show vector index")
-        || normalized.startsWith("show sparse_vector index")) {
-      // SHOW INDEXES / SHOW ... INDEXES - list indexes from ArcadeDB schema
-      stream.fields = List.of("id", "name", "state", "populationPercent", "type", "entityType",
-          "labelsOrTypes", "properties", "indexProvider", "owningConstraint", "lastRead", "readCount");
-      stream.syntheticResults = buildShowIndexesResults(normalized);
-      return true;
-
-    } else if (normalized.startsWith("show constraint")
-        || normalized.startsWith("show all constraint")
-        || normalized.startsWith("show unique constraint")
-        || normalized.startsWith("show uniqueness constraint")
-        || normalized.startsWith("show exist constraint")
-        || normalized.startsWith("show existence constraint")
-        || normalized.startsWith("show node exist constraint")
-        || normalized.startsWith("show node existence constraint")
-        || normalized.startsWith("show node key constraint")
-        || normalized.startsWith("show relationship exist constraint")
-        || normalized.startsWith("show relationship existence constraint")
-        || normalized.startsWith("show relationship key constraint")
-        || normalized.startsWith("show rel exist constraint")
-        || normalized.startsWith("show rel key constraint")
-        || normalized.startsWith("show key constraint")
-        || normalized.startsWith("show property type constraint")
-        || normalized.startsWith("show node property type constraint")
-        || normalized.startsWith("show relationship property type constraint")) {
-      // SHOW CONSTRAINTS / SHOW ... CONSTRAINTS - list constraints from ArcadeDB schema
-      stream.fields = List.of("id", "name", "type", "entityType", "labelsOrTypes", "properties",
-          "ownedIndex", "propertyType");
-      stream.syntheticResults = buildShowConstraintsResults(normalized);
+    } else if (normalized.startsWith("show ") && (normalized.contains(" index") || normalized.contains(" constraint"))) {
+      // SHOW [type] INDEXES / SHOW [kind] CONSTRAINTS: the rows are the engine's (#9706), so a constraint is listed by the
+      // name DROP CONSTRAINT takes whichever protocol asks. Served here rather than run as a query so the columns are
+      // reported when no row comes back, as Neo4j drivers expect; the tail is applied below like on every other SHOW
+      final ShowCommandTail.Table table = CypherSchemaCommands.untailedTable((DatabaseInternal) database, query);
+      if (table == null)
+        return false;
+      stream.fields = table.fields();
+      stream.syntheticResults = new ArrayList<>(table.rows());
       return true;
 
     } else if (BoltSystemProcedures.isSystemCall(normalized, "dbms.licenseagreementdetails")) {
@@ -1643,213 +1645,6 @@ public class BoltNetworkExecutor extends Thread {
     }
 
     return false;
-  }
-
-  /**
-   * Builds the SHOW INDEXES result rows by iterating the ArcadeDB schema.
-   * <p>
-   * Each row mirrors Neo4j's SHOW INDEXES output shape so the Neo4j driver can parse it.
-   * The {@code filter} argument is the normalized query text and is used to honor typed
-   * variants like {@code SHOW VECTOR INDEXES}, {@code SHOW FULLTEXT INDEXES}, etc.
-   */
-  private List<List<Object>> buildShowIndexesResults(final String filter) {
-    final List<List<Object>> rows = new ArrayList<>();
-    if (database == null)
-      return rows;
-
-    final Schema schema = database.getSchema();
-    final Set<String> visited = new HashSet<>();
-    int idSeq = 1;
-
-    // Types the user cannot read are hidden, as schema:types and schema:indexes hide them in SQL
-    final SecurityDatabaseUser reader = SecurityHelper.currentUser((DatabaseInternal) database);
-    for (final DocumentType type : schema.getTypes()) {
-      if (type.getName().contains("~") || !SecurityHelper.canAccessType(reader, type, SecurityDatabaseUser.ACCESS.READ_RECORD))
-        continue;
-
-      final String entityType = type instanceof EdgeType ? "RELATIONSHIP" : "NODE";
-      for (final TypeIndex typeIndex : type.getAllIndexes(false)) {
-        if (!visited.add(typeIndex.getName()))
-          continue;
-
-        final String neoType = mapIndexTypeToNeo4j(typeIndex.getType());
-        if (!indexTypeMatchesFilter(filter, neoType))
-          continue;
-
-        final String owningConstraint = typeIndex.isUnique() ? typeIndex.getName() : null;
-        final List<Object> row = new ArrayList<>(12);
-        row.add((long) idSeq++);
-        row.add(typeIndex.getName());
-        row.add("ONLINE");
-        row.add(100.0);
-        row.add(neoType);
-        row.add(entityType);
-        row.add(List.of(type.getName()));
-        row.add(new ArrayList<>(typeIndex.getPropertyNames()));
-        row.add(mapIndexTypeToProvider(typeIndex.getType()));
-        row.add(owningConstraint);
-        row.add(null);
-        row.add(null);
-        rows.add(row);
-      }
-    }
-    return rows;
-  }
-
-  /**
-   * Builds the SHOW CONSTRAINTS result rows by iterating the ArcadeDB schema.
-   * <p>
-   * ArcadeDB models constraints on the {@link Property} object: {@code mandatory},
-   * {@code notNull}, and indirectly unique via a unique {@link Index}. This method
-   * maps those to Neo4j constraint types so the Neo4j driver can parse the result.
-   */
-  private List<List<Object>> buildShowConstraintsResults(final String filter) {
-    final List<List<Object>> rows = new ArrayList<>();
-    if (database == null)
-      return rows;
-
-    final Schema schema = database.getSchema();
-    int idSeq = 1;
-
-    // Types the user cannot read are hidden, as schema:types and schema:indexes hide them in SQL
-    final SecurityDatabaseUser reader = SecurityHelper.currentUser((DatabaseInternal) database);
-    for (final DocumentType type : schema.getTypes()) {
-      if (type.getName().contains("~") || !SecurityHelper.canAccessType(reader, type, SecurityDatabaseUser.ACCESS.READ_RECORD))
-        continue;
-
-      final boolean isEdge = type instanceof EdgeType;
-      final String entityType = isEdge ? "RELATIONSHIP" : "NODE";
-
-      // Uniqueness constraints: derived from unique indexes.
-      for (final TypeIndex typeIndex : type.getAllIndexes(false)) {
-        if (!typeIndex.isUnique())
-          continue;
-
-        final String constraintType = isEdge ? "RELATIONSHIP_UNIQUENESS" : "UNIQUENESS";
-        if (!constraintTypeMatchesFilter(filter, constraintType))
-          continue;
-
-        final List<Object> row = new ArrayList<>(8);
-        row.add((long) idSeq++);
-        row.add(typeIndex.getName());
-        row.add(constraintType);
-        row.add(entityType);
-        row.add(List.of(type.getName()));
-        row.add(new ArrayList<>(typeIndex.getPropertyNames()));
-        row.add(typeIndex.getName());
-        row.add(null);
-        rows.add(row);
-      }
-
-      // Property existence (mandatory / notNull) and property type constraints.
-      for (final Property property : type.getProperties()) {
-        final boolean mandatory = property.isMandatory();
-        final boolean notNull = property.isNotNull();
-
-        if (mandatory || notNull) {
-          final String constraintType = isEdge ? "RELATIONSHIP_PROPERTY_EXISTENCE" : "NODE_PROPERTY_EXISTENCE";
-          if (constraintTypeMatchesFilter(filter, constraintType)) {
-            final List<Object> row = new ArrayList<>(8);
-            row.add((long) idSeq++);
-            row.add(buildConstraintName(type.getName(), property.getName(), "existence"));
-            row.add(constraintType);
-            row.add(entityType);
-            row.add(List.of(type.getName()));
-            row.add(List.of(property.getName()));
-            row.add(null);
-            row.add(null);
-            rows.add(row);
-          }
-        }
-
-        if (property.getType() != null) {
-          final String constraintType = isEdge ? "RELATIONSHIP_PROPERTY_TYPE" : "NODE_PROPERTY_TYPE";
-          if (constraintTypeMatchesFilter(filter, constraintType)) {
-            final List<Object> row = new ArrayList<>(8);
-            row.add((long) idSeq++);
-            row.add(buildConstraintName(type.getName(), property.getName(), "type"));
-            row.add(constraintType);
-            row.add(entityType);
-            row.add(List.of(type.getName()));
-            row.add(List.of(property.getName()));
-            row.add(null);
-            row.add(property.getType().name());
-            rows.add(row);
-          }
-        }
-      }
-    }
-    return rows;
-  }
-
-  private static String mapIndexTypeToNeo4j(final Schema.INDEX_TYPE type) {
-    if (type == null)
-      return "RANGE";
-    return switch (type) {
-      case LSM_TREE -> "RANGE";
-      case HASH -> "HASH";
-      case FULL_TEXT -> "FULLTEXT";
-      case LSM_VECTOR -> "VECTOR";
-      case LSM_SPARSE_VECTOR -> "SPARSE_VECTOR";
-      case GEOSPATIAL -> "POINT";
-    };
-  }
-
-  private static String mapIndexTypeToProvider(final Schema.INDEX_TYPE type) {
-    if (type == null)
-      return "range-1.0";
-    return switch (type) {
-      case LSM_TREE -> "range-1.0";
-      case HASH -> "hash-1.0";
-      case FULL_TEXT -> "fulltext-1.0";
-      case LSM_VECTOR -> "vector-2.0";
-      case LSM_SPARSE_VECTOR -> "sparse-vector-1.0";
-      case GEOSPATIAL -> "point-1.0";
-    };
-  }
-
-  private static boolean indexTypeMatchesFilter(final String filter, final String neoType) {
-    if (filter.startsWith("show range index"))
-      return "RANGE".equals(neoType);
-    if (filter.startsWith("show text index"))
-      return "TEXT".equals(neoType);
-    if (filter.startsWith("show point index"))
-      return "POINT".equals(neoType);
-    if (filter.startsWith("show lookup index"))
-      return "LOOKUP".equals(neoType);
-    if (filter.startsWith("show fulltext index"))
-      return "FULLTEXT".equals(neoType);
-    if (filter.startsWith("show vector index"))
-      return "VECTOR".equals(neoType);
-    if (filter.startsWith("show sparse_vector index"))
-      return "SPARSE_VECTOR".equals(neoType);
-    return true;
-  }
-
-  private static boolean constraintTypeMatchesFilter(final String filter, final String neoType) {
-    if (filter.startsWith("show unique constraint") || filter.startsWith("show uniqueness constraint"))
-      return neoType.endsWith("UNIQUENESS");
-    if (filter.startsWith("show node exist") || filter.startsWith("show node existence"))
-      return "NODE_PROPERTY_EXISTENCE".equals(neoType);
-    if (filter.startsWith("show relationship exist") || filter.startsWith("show relationship existence")
-        || filter.startsWith("show rel exist"))
-      return "RELATIONSHIP_PROPERTY_EXISTENCE".equals(neoType);
-    if (filter.startsWith("show exist constraint") || filter.startsWith("show existence constraint"))
-      return neoType.endsWith("PROPERTY_EXISTENCE");
-    if (filter.startsWith("show key constraint") || filter.startsWith("show node key constraint")
-        || filter.startsWith("show relationship key constraint") || filter.startsWith("show rel key constraint"))
-      return neoType.endsWith("_KEY");
-    if (filter.startsWith("show node property type"))
-      return "NODE_PROPERTY_TYPE".equals(neoType);
-    if (filter.startsWith("show relationship property type"))
-      return "RELATIONSHIP_PROPERTY_TYPE".equals(neoType);
-    if (filter.startsWith("show property type constraint"))
-      return neoType.endsWith("PROPERTY_TYPE");
-    return true;
-  }
-
-  private static String buildConstraintName(final String typeName, final String propertyName, final String kind) {
-    return "constraint_" + typeName + "_" + propertyName + "_" + kind;
   }
 
   /**
@@ -2096,11 +1891,66 @@ public class BoltNetworkExecutor extends Thread {
   }
 
   /**
+   * The text a FAILURE carries for a failure the ENGINE raised: the message, or, in production mode, the placeholder
+   * every surface uses ({@link ArcadeDBServer#CONCEALED_ERROR_MESSAGE}), with the detail written to the server log. The
+   * Neo4j status code beside it is what a driver acts on and stays. A duplicated key's message carries the stored key
+   * values, and before issue #8749 Bolt sent it in every mode. Text this executor words itself (a protocol state, a
+   * refused credential, a database name) does not go through here.
+   */
+  private String clientMessage(final String message, final Throwable cause) {
+    return ErrorConcealment.clientMessage(ErrorConcealment.isConcealing(server), this, "BOLT", message, cause);
+  }
+
+  /** {@link #withLeaderRedirect(String, Throwable, HAServerPlugin)} against this server's cluster view. */
+  private String withLeaderRedirect(final String text, final Throwable error) {
+    return withLeaderRedirect(text, error, server.getHA());
+  }
+
+  /**
+   * {@code text}, followed by where the leader is when {@code error} is a follower's refusal that names one - the
+   * failure {@link #classifyExecutionError} answers with NotALeader (issue #9845). The status code tells a routing
+   * driver to re-route; the address is what a direct ({@code bolt://}) client or an operator reading the log has to
+   * act on, and before this both were dropped. The Bolt address from the routing table is named when the cluster
+   * resolves one, else the address the refusal carries.
+   * <p>
+   * Appended to the text AFTER concealment, as the gRPC transport does: the address is one the cluster put there,
+   * not engine detail, and it is the only thing that makes the refusal actionable.
+   */
+  static String withLeaderRedirect(final String text, final Throwable error, final HAServerPlugin ha) {
+    final ServerIsNotTheLeaderException refusal = ServerIsNotTheLeaderException.redirectIn(error);
+    if (refusal == null)
+      return text;
+    // One routing-table read: a concurrent election cannot make the address named here disagree with itself
+    final HAServerPlugin.RoutingTable routing = ha != null ? ha.getRoutingTable(HAServerPlugin.ROUTING_PROTOCOL.BOLT) : null;
+    final String boltLeader = routing != null ? routing.writer() : null;
+    if (boltLeader != null && !boltLeader.isBlank())
+      return text + ". Reconnect to the leader at '" + ServerIsNotTheLeaderException.wireSafe(boltLeader) + "' (Bolt address) and retry";
+    // What the refusal carries is the leader's HTTP address (or its server name), not a Bolt endpoint: say so
+    return text + ". " + refusal.leaderSentence() + " (HTTP address; use its Bolt port). Retry there";
+  }
+
+  /** {@link #clientMessage} for a failure the handler has already logged with its stack trace: nothing is logged twice. */
+  private String loggedClientMessage(final String message) {
+    return ErrorConcealment.loggedClientMessage(ErrorConcealment.isConcealing(server), message);
+  }
+
+  /**
    * Send a FAILURE response message.
    */
   private void sendFailure(final String code, final String message) throws IOException {
     final FailureMessage failure = new FailureMessage(code, message);
     sendMessage(failure);
+  }
+
+  /**
+   * Send the FAILURE for a caught {@code error}: {@code text}, followed by where the leader is when the error is a
+   * follower's refusal that names one (issue #9845). Every arm that reports an exception whose code a {@code classify*}
+   * method decided goes through here rather than through {@link #sendFailure}, so the code and the redirect cannot be
+   * wired apart: a classifier that answers NotALeader without the address leaves a {@code bolt://} client nothing to
+   * reconnect to. Before issue #9870 each of seven arms appended the redirect by hand, and a new arm could skip it.
+   */
+  private void sendExecutionFailure(final String code, final String text, final Throwable error) throws IOException {
+    sendFailure(code, withLeaderRedirect(text, error));
   }
 
   /**
@@ -2123,6 +1973,11 @@ public class BoltNetworkExecutor extends Thread {
    *       however it was reached - by a map literal or by copying a value SQL had stored (issue #7729). Tested
    *       only once the category is known, so the {@link ErrorCategory#RETRY}-first precedence documented on
    *       {@link ErrorCategory#of} still decides a chain carrying both;</li>
+   *   <li>a {@link ServerIsNotTheLeaderException} naming the leader - a write sent to a follower. Its
+   *       {@link NeedRetryException} ancestry puts it in {@link ErrorCategory#RETRY}, whose
+   *       DeadlockDetected a managed-transaction driver retries on the same follower until its budget runs out.
+   *       Neo4j's NotALeader is what a routing driver re-routes on (issue #9845). A refusal naming no leader (raised
+   *       mid-election) stays a retryable conflict, as on HTTP;</li>
    *   <li>which of Neo4j's parse-time titles a {@link ErrorCategory#PARSING} failure earns - delegated to
    *       {@link #classifyParsingError}, the same method the statement path calls when the parsing exception
    *       arrives unwrapped;</li>
@@ -2135,6 +1990,11 @@ public class BoltNetworkExecutor extends Thread {
 
     if (category == ErrorCategory.VALIDATION && CauseChain.contains(error, InvalidPropertyTypeException.class))
       return BoltErrorCodes.TYPE_ERROR;
+
+    // A follower's refusal of leader-only work that names the leader: a redirect, not a conflict to retry in place (#9845)
+    // (redirectIn asks for the RETRY category itself, so a termination still wins)
+    if (ServerIsNotTheLeaderException.redirectIn(error) != null)
+      return BoltErrorCodes.NOT_A_LEADER_ERROR;
 
     return switch (category) {
       // A conflict a managed-transaction driver auto-retries (NeedRetryException: a page-version
@@ -2155,6 +2015,8 @@ public class BoltNetworkExecutor extends Thread {
       // Transaction.Terminated, which means "explicitly killed by the user" and is excluded from driver retry
       // predicates for exactly that reason (issue #7123).
       case TIMEOUT -> BoltErrorCodes.TRANSACTION_TIMED_OUT_ERROR;
+      // Stopped on request (issue #9689): the one Transaction.* title meaning "killed on purpose", which drivers never retry
+      case TERMINATED -> BoltErrorCodes.TRANSACTION_TERMINATED_ERROR;
       case SERVER -> defaultCode;
     };
   }
@@ -2190,11 +2052,12 @@ public class BoltNetworkExecutor extends Thread {
 
   /**
    * Whether the error (or any wrapped cause) is one of ArcadeDB's optimistic-concurrency conflicts
-   * ({@link NeedRetryException}). Such conflicts are expected under contention and auto-retried by the
-   * driver, so callers both classify them as transient and log them at a lower level.
+   * ({@link NeedRetryException}), or a query the admission gate did not start because the server is busy
+   * ({@link QueryAdmissionException}, issue #9518). Both are expected under load and retried by the driver, so callers
+   * both classify them as transient and log them at a lower level: a busy server must not flood its own log.
    */
   static boolean isRetryableConflict(final Throwable error) {
-    return CauseChain.contains(error, NeedRetryException.class);
+    return CauseChain.contains(error, NeedRetryException.class) || CauseChain.contains(error, QueryAdmissionException.class);
   }
 
   /**
@@ -2209,20 +2072,27 @@ public class BoltNetworkExecutor extends Thread {
    */
   private void sendRecord(final List<Object> data) throws IOException {
     final RecordMessage record = new RecordMessage(data);
-    sendMessage(record);
+    sendMessage(record, false);
   }
 
   /**
    * Send a message to the client.
    */
   private void sendMessage(final BoltMessage message) throws IOException {
+    sendMessage(message, true);
+  }
+
+  /**
+   * Send a message to the client. RECORDs are sent unflushed: the SUCCESS/FAILURE that ends the PULL flushes them all.
+   */
+  private void sendMessage(final BoltMessage message, final boolean flush) throws IOException {
     if (debug) {
       LogManager.instance().log(this, Level.FINE, "BOLT >> %s", message);
     }
 
     final PackStreamWriter writer = new PackStreamWriter().boltMajorVersion(getMajorVersion(protocolVersion));
     message.writeTo(writer);
-    output.writeMessage(writer.toByteArray());
+    output.writeMessage(writer.toByteArray(), flush);
   }
 
   /**

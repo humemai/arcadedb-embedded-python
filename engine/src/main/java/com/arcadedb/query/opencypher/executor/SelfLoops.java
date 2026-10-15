@@ -20,12 +20,11 @@ package com.arcadedb.query.opencypher.executor;
 
 import com.arcadedb.database.RID;
 import com.arcadedb.graph.Edge;
+import com.arcadedb.graph.EdgeIdentitySet;
 import com.arcadedb.graph.Vertex;
 
-import java.util.HashSet;
 import java.util.Iterator;
 import java.util.NoSuchElementException;
-import java.util.Set;
 
 /**
  * An undirected pattern hop must yield each relationship once, but ArcadeDB stores every edge in two
@@ -118,6 +117,47 @@ public final class SelfLoops {
   }
 
   /**
+   * The vertices one pattern hop reaches from {@code vertex}, as identities: {@link Vertex#getConnectedVertexRIDs}, with
+   * a self loop reached once on an undirected hop rather than once per list it sits in (issues #8750, #9540). Same
+   * parity rule as {@link #deduplicating(Iterator, RID)}.
+   */
+  public static Iterable<RID> connectedVertexRIDs(final Vertex vertex, final Vertex.DIRECTION direction,
+      final String... edgeTypes) {
+    final Iterable<RID> connected = vertex.getConnectedVertexRIDs(direction, edgeTypes);
+    if (direction != Vertex.DIRECTION.BOTH)
+      return connected;
+    final RID self = vertex.getIdentity();
+    return () -> new Iterator<>() {
+      private final Iterator<RID> rids         = connected.iterator();
+      private       RID           nextRid      = null;
+      private       int           selfLoopSeen = 0;
+
+      @Override
+      public boolean hasNext() {
+        if (nextRid != null)
+          return true;
+        while (rids.hasNext()) {
+          final RID candidate = rids.next();
+          if (candidate.equals(self) && (++selfLoopSeen & 1) == 0)
+            continue; // the same self-loop already yielded this vertex from the other list
+          nextRid = candidate;
+          return true;
+        }
+        return false;
+      }
+
+      @Override
+      public RID next() {
+        if (!hasNext())
+          throw new NoSuchElementException();
+        final RID result = nextRid;
+        nextRid = null;
+        return result;
+      }
+    };
+  }
+
+  /**
    * Wraps a BOTH-direction edge iterator so a self-loop is yielded once per relationship instead of
    * once per adjacency list.
    * <p>
@@ -132,8 +172,8 @@ public final class SelfLoops {
    */
   public static Iterator<Edge> deduplicatingEdges(final Iterator<Edge> edges) {
     return new Iterator<>() {
-      private Edge      nextEdge = null;
-      private Set<RID>  emitted  = null;
+      private Edge            nextEdge = null;
+      private EdgeIdentitySet emitted  = null;
 
       @Override
       public boolean hasNext() {
@@ -143,9 +183,10 @@ public final class SelfLoops {
           final Edge candidate = edges.next();
           if (candidate.getOut().equals(candidate.getIn())) {
             // A self-loop sits in both the outgoing and the incoming list of its vertex, so walking
-            // both lists reaches the very same relationship twice.
+            // both lists reaches the very same relationship twice. Not a Set<RID>: two parallel lightweight
+            // self-loops share their RID and are still two relationships (issue #9983)
             if (emitted == null)
-              emitted = new HashSet<>();
+              emitted = new EdgeIdentitySet();
             if (!emitted.add(candidate.getIdentity()))
               continue;
           }

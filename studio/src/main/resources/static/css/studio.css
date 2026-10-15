@@ -909,7 +909,8 @@ body.col-resizing * {
   transition: background-color 0.1s;
 }
 
-.history-entry:hover {
+.history-entry:hover,
+.history-entry:focus-within {
   background-color: var(--color-brand-light);
 }
 
@@ -918,10 +919,20 @@ body.col-resizing * {
   flex-shrink: 0;
 }
 
+/* A BUTTON (ISSUE #8740): STRIP THE NATIVE CHROME SO IT STILL LOOKS LIKE THE PLAIN ROW IT REPLACED */
 .history-entry-content {
   flex: 1;
   min-width: 0;
   overflow: hidden;
+  display: block;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
 .history-meta {
@@ -997,7 +1008,8 @@ body.col-resizing * {
   position: relative;
 }
 
-.saved-query-entry:hover {
+.saved-query-entry:hover,
+.saved-query-entry:focus-within {
   background-color: var(--color-brand-light);
 }
 
@@ -1017,13 +1029,33 @@ body.col-resizing * {
   gap: 6px;
 }
 
+/* THE NAME, RUN AND DELETE CONTROLS ARE BUTTONS (ISSUE #8740): STRIP THE NATIVE CHROME SO THEY LOOK AS BEFORE */
+.saved-query-load,
+.saved-query-name .saved-query-delete,
+.saved-query-name .saved-query-run {
+  margin: 0;
+  border: 0;
+  background: none;
+  font-family: inherit;
+  line-height: inherit;
+  cursor: pointer;
+}
+
+.saved-query-load {
+  padding: 0;
+  min-width: 0;
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  text-align: left;
+}
+
 /* THE PADDING GIVES EACH ICON A FINGER-SIZED HIT AREA, SO A TAP ON "RUN" CANNOT LAND ON "DELETE" */
 .saved-query-name .saved-query-delete,
 .saved-query-name .saved-query-run {
   opacity: 0;
   font-size: 0.7rem;
   padding: 4px 6px;
-  cursor: pointer;
   transition: opacity 0.15s;
 }
 
@@ -1035,9 +1067,21 @@ body.col-resizing * {
   color: var(--color-brand);
 }
 
+/* KEYBOARD FOCUS ANYWHERE IN THE ENTRY REVEALS THE ICONS TOO, OR TAB WOULD LAND ON AN INVISIBLE BUTTON (ISSUE #8740) */
 .saved-query-entry:hover .saved-query-delete,
-.saved-query-entry:hover .saved-query-run {
+.saved-query-entry:hover .saved-query-run,
+.saved-query-entry:focus-within .saved-query-delete,
+.saved-query-entry:focus-within .saved-query-run {
   opacity: 1;
+}
+
+.saved-query-load:focus-visible,
+.saved-query-name .saved-query-delete:focus-visible,
+.saved-query-name .saved-query-run:focus-visible,
+.history-entry-content:focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 1px;
+  border-radius: 3px;
 }
 
 /* NO HOVER ON TOUCH DEVICES: KEEP THE RUN AND DELETE BUTTONS VISIBLE THERE */
@@ -1076,7 +1120,16 @@ body.col-resizing * {
   border-bottom: 1px solid var(--border-light);
 }
 
+/* A BUTTON (ISSUE #9375): THE WIDTH, BORDER, BACKGROUND, FONT AND ALIGNMENT STRIP THE NATIVE CHROME SO IT STILL LOOKS
+   LIKE THE FULL-WIDTH ROW IT REPLACED */
 .reference-section-header {
+  width: 100%;
+  margin: 0;
+  border: 0;
+  background: none;
+  font-family: inherit;
+  line-height: inherit;
+  text-align: left;
   padding: 8px 12px;
   font-size: 0.78rem;
   font-weight: 600;
@@ -1088,7 +1141,8 @@ body.col-resizing * {
   user-select: none;
 }
 
-.reference-section-header:hover {
+.reference-section-header:hover,
+.reference-section-header:focus-visible {
   background-color: var(--bg-reference);
 }
 
@@ -1111,9 +1165,16 @@ body.col-resizing * {
   display: block;
 }
 
+/* A BUTTON (ISSUE #9375): display, width, border AND text-align STRIP THE NATIVE CHROME SO IT STILL LOOKS LIKE THE
+   FULL-WIDTH BLOCK IT REPLACED */
 .reference-example {
+  display: block;
+  width: 100%;
+  margin: 0 0 4px;
+  border: 0;
+  text-align: left;
+  line-height: inherit;
   padding: 4px 8px;
-  margin-bottom: 4px;
   border-radius: 4px;
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
   font-size: 0.72rem;
@@ -1126,6 +1187,29 @@ body.col-resizing * {
 
 .reference-example:hover {
   background-color: #dbeafe;
+}
+
+.reference-section-header:focus-visible,
+.reference-example:focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: -2px;
+  border-radius: 3px;
+}
+
+/* A BUTTON INSIDE THE FIRST CELL OF A PROFILER ROW (ISSUE #9508) */
+.profiler-query-button {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
 /* CodeMirror Autocomplete Hints */
@@ -1557,6 +1641,8 @@ body.col-resizing * {
 }
 
 .api-detail-tag-tryit {
+  border: 0;
+  font-family: inherit;
   background-color: var(--color-brand);
   color: #fff !important;
   cursor: pointer;
@@ -1811,7 +1897,18 @@ body.col-resizing * {
   padding: 8px 14px 4px;
 }
 
+/* A BUTTON (ISSUE #9508): width, border, background, font AND text-align STRIP THE NATIVE CHROME SO IT STILL LOOKS LIKE
+   THE FULL-WIDTH ROW IT REPLACED */
 .api-endpoint {
+  width: 100%;
+  margin: 0;
+  border: 0;
+  background: none;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  color: inherit;
+  text-align: left;
   display: flex;
   align-items: baseline;
   gap: 8px;
@@ -1823,6 +1920,16 @@ body.col-resizing * {
 
 .api-endpoint:hover {
   background-color: var(--color-brand-light);
+}
+
+.api-endpoint:focus-visible,
+.docs-toc-header:focus-visible,
+.api-playground-resp-headers-toggle:focus-visible,
+.api-detail-tag-tryit:focus-visible,
+.profiler-query-button:focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: -2px;
+  border-radius: 3px;
 }
 
 .api-endpoint.active {
@@ -1881,7 +1988,15 @@ body.col-resizing * {
   border-bottom: 1px solid var(--border-light);
 }
 
+/* A BUTTON (ISSUE #9508) */
 .docs-toc-header {
+  width: 100%;
+  margin: 0;
+  border: 0;
+  background: none;
+  font-family: inherit;
+  line-height: inherit;
+  text-align: left;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2149,7 +2264,12 @@ body.col-resizing * {
   margin-bottom: 8px;
 }
 
+/* A BUTTON (ISSUE #9508) */
 .api-playground-resp-headers-toggle {
+  border: 0;
+  background: none;
+  font-family: inherit;
+  text-align: left;
   font-size: 0.75rem;
   font-weight: 600;
   color: var(--text-muted);
@@ -4005,14 +4125,52 @@ body.col-resizing * {
 
 /* Quick Start Panel */
 .quick-start-card {
+  position: relative;
   cursor: pointer;
   transition: border-color 0.2s, box-shadow 0.2s;
   border: 1px solid var(--border-ddd, #dee2e6);
 }
 
-.quick-start-card:hover {
+.quick-start-card:hover,
+.quick-start-card:focus-within {
   border-color: #00aeee;
   box-shadow: 0 2px 8px rgba(0, 174, 238, 0.15);
+}
+
+/* THE IMPORT BUTTON WRAPS THE DATASET NAME ONLY (ISSUE #9375): STRIP THE NATIVE CHROME SO THE NAME LOOKS AS BEFORE, AND
+   STRETCH ITS ::after OVER THE WHOLE CARD SO A CLICK ANYWHERE ON THE CARD STILL LANDS ON THE BUTTON */
+.quick-start-card-button {
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.quick-start-card-button::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+}
+
+.quick-start-card-button:focus-visible {
+  outline: none;
+}
+
+.quick-start-card-button:focus-visible::after {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* THE INFO LINK SITS ABOVE THE STRETCHED BUTTON LAYER, OR A CLICK ON IT WOULD START THE IMPORT */
+.quick-start-card-info {
+  position: relative;
+  z-index: 2;
 }
 
 .quick-start-divider {

@@ -31,6 +31,7 @@ import com.arcadedb.graphql.parser.Directives;
 import com.arcadedb.graphql.parser.Document;
 import com.arcadedb.graphql.parser.FieldDefinition;
 import com.arcadedb.graphql.parser.GraphQLParser;
+import com.arcadedb.graphql.parser.GraphQLParserTreeConstants;
 import com.arcadedb.graphql.parser.InputValueDefinition;
 import com.arcadedb.graphql.parser.ListType;
 import com.arcadedb.graphql.parser.ObjectTypeDefinition;
@@ -73,8 +74,13 @@ public class GraphQLSchema {
   /**
    * Scalars introspection publishes and resolves. {@code Long} is not a GraphQL built-in, but a LONG / ARRAY_OF_LONGS
    * property is described with it, so it is declared here for {@code __type} and {@code __schema} to resolve (#7876).
+   * {@code JSON} (a MAP, or an EMBEDDED property with no declared type) and {@code BigDecimal} (a DECIMAL) are declared
+   * for the same reason (#8756).
+   * <p>
+   * These custom scalars are descriptive: they tell a client what the result serializes, and this module applies no
+   * coercion of its own for them, neither to a result value nor to an argument.
    */
-  private static final String[]    BUILT_IN_SCALARS    = { "String", "Int", "Float", "Boolean", "ID", "Long" };
+  private static final String[]    BUILT_IN_SCALARS    = { "String", "Int", "Float", "Boolean", "ID", "Long", "JSON", "BigDecimal" };
   private static final Set<String> BUILT_IN_SCALAR_SET = Set.of(BUILT_IN_SCALARS);
 
   private final Database                          database;
@@ -134,6 +140,37 @@ public class GraphQLSchema {
     return new InternalResultSet();
   }
 
+  /**
+   * Collapses the top-level selections of an operation into the one field they select and returns the merged selection set
+   * (the first selection's own when there is just one). Selections sharing a response key are one field per the GraphQL
+   * specification (CollectFields / MergeSelectionSets), so their sub-selections are concatenated and merged level by level
+   * by the code that consumes them (#7770, #8744). Different response keys are several queries, and the same key over a
+   * different field or different arguments cannot be merged (FieldsInSetCanMerge): both stay rejected. The first selection of the list
+   * stands for the merged field.
+   */
+  private static SelectionSet mergeTopLevelSelections(final List<Selection> selections, final Map<String, Object> variables) {
+    if (selections.size() < 2)
+      return selections.isEmpty() ? null : selections.getFirst().getSelectionSet();
+
+    final Selection first = selections.getFirst();
+    final Map<String, Object> firstArguments = getArguments(first.getArguments(), variables);
+    SelectionSet merged = null;
+    for (final Selection selection : selections) {
+      if (!Objects.equals(first.getName(), selection.getName()) || !Objects.equals(first.getFieldName(), selection.getFieldName())
+          || !Objects.equals(firstArguments, getArguments(selection.getArguments(), variables)))
+        throw new CommandParsingException("Error on executing multiple queries");
+
+      final SelectionSet set = selection.getSelectionSet();
+      if (set == null)
+        continue;
+      if (merged == null)
+        merged = new SelectionSet(GraphQLParserTreeConstants.JJTSELECTIONSET);
+      merged.getSelections().addAll(set.getSelections());
+    }
+
+    return merged;
+  }
+
   private ResultSet executeQuery(final OperationDefinition op, final Map<String, Object> parameters,
       final GraphQLFragments documentFragments) {
     String from = null;
@@ -153,8 +190,8 @@ public class GraphQLSchema {
 
     // THE OPERATION'S OWN SELECTIONS ARE FIELDS OF THE Query TYPE, WHICH A TOP-LEVEL FRAGMENT CAN BE WRITTEN ON
     final List<Selection> operationSelections = fragments.expand(op.getSelectionSet().getSelections(), "Query"::equals);
-    if (operationSelections.size() > 1)
-      throw new CommandParsingException("Error on executing multiple queries");
+    // SELECTIONS SHARING A RESPONSE KEY ARE ONE FIELD WHOSE SUB-SELECTIONS ARE MERGED, NOT SEVERAL QUERIES (#9356)
+    final SelectionSet operationSelectionSet = mergeTopLevelSelections(operationSelections, variables);
     if (operationSelections.isEmpty()) {
       // EXCLUDED BY @skip OR @include, THE ONLY FIELD IS WHAT A VALID DOCUMENT ASKED FOR: A RESPONSE WITH NO FIELD. WITHOUT
       // THEM THERE IS STILL NO FIELD WHEN THE FRAGMENTS CANNOT APPLY TO Query, WHICH THE SPECIFICATION REJECTS
@@ -171,9 +208,9 @@ public class GraphQLSchema {
 
       // HANDLE INTROSPECTION QUERIES
       if ("__schema".equals(queryName))
-        return executeIntrospectionSchema(selection, fragments);
+        return executeIntrospectionSchema(operationSelectionSet, fragments);
       else if ("__type".equals(queryName))
-        return executeIntrospectionType(selection, variables, fragments);
+        return executeIntrospectionType(selection, operationSelectionSet, variables, fragments);
       else if ("__typename".equals(queryName))
         return executeIntrospectionTypename(selection);
       if (queryDefinition != null) {
@@ -205,13 +242,13 @@ public class GraphQLSchema {
             if ("sql".equals(directiveName) ||
                 "gremlin".equals(directiveName) ||
                 "cypher".equals(directiveName))
-              return parseNativeQueryDirective(directiveName, directive, selection, returnType, variables, fragments);
+              return parseNativeQueryDirective(directiveName, directive, selection, operationSelectionSet, returnType, variables, fragments);
           }
         }
       }
 
       final Arguments queryArguments = selection.getArguments();
-      projection = selection.getSelectionSet();
+      projection = operationSelectionSet;
 
       final Map<String, Object> boundParameters = new HashMap<>();
       final String where = buildWhereClause(queryArguments, typeArgumentNames, variables, boundParameters);
@@ -435,7 +472,7 @@ public class GraphQLSchema {
   }
 
   private GraphQLResultSet parseNativeQueryDirective(final String language, final Directive directive, final Selection selection,
-      final ObjectTypeDefinition returnType, final Map<String, Object> variables, final GraphQLFragments fragments) {
+      final SelectionSet selectionSet, final ObjectTypeDefinition returnType, final Map<String, Object> variables, final GraphQLFragments fragments) {
     if (directive.getArguments() == null)
       throw new CommandParsingException(language.toUpperCase(Locale.ENGLISH) + " directive has no `statement` argument");
 
@@ -450,7 +487,7 @@ public class GraphQLSchema {
         statement = statementValue != null ? statementValue.toString() : null;
 
         arguments = getArguments(selection.getArguments(), variables);
-        projection = selection.getSelectionSet();
+        projection = selectionSet;
       }
     }
 
@@ -481,31 +518,29 @@ public class GraphQLSchema {
     return arguments;
   }
 
-  private ResultSet executeIntrospectionSchema(final Selection selection, final GraphQLFragments fragments) {
+  private ResultSet executeIntrospectionSchema(final SelectionSet selectionSet, final GraphQLFragments fragments) {
     final InternalResultSet resultSet = new InternalResultSet();
     final ResultInternal schemaResult = new ResultInternal();
 
-    // Resolved through Selection.getSelectionSet()/getFieldName() so an aliased selection (`s: __schema { ... }`,
+    // The selection set comes through Selection.getSelectionSet() so an aliased selection (`s: __schema { ... }`,
     // `t: types { ... }`) is served exactly as the plain one, and the result is keyed by the alias the client wrote,
     // as the GraphQL spec requires for response keys (issue #7036)
-    final SelectionSet selectionSet = selection.getSelectionSet();
-
     if (selectionSet != null) {
       for (final Selection sub : fragments.expand(selectionSet.getSelections(), "__Schema"::equals)) {
         final String fieldName = sub.getFieldName();
         final String responseKey = sub.getName();
         if ("types".equals(fieldName))
-          schemaResult.setProperty(responseKey, buildTypeList(sub, fragments));
+          setMerged(schemaResult, responseKey, buildTypeList(sub, fragments));
         else if ("queryType".equals(fieldName))
-          schemaResult.setProperty(responseKey, buildQueryTypeResult(sub.getSelectionSet(), fragments, 0));
+          setMerged(schemaResult, responseKey, buildQueryTypeResult(sub.getSelectionSet(), fragments, 0));
         else if ("mutationType".equals(fieldName))
-          schemaResult.setProperty(responseKey, null);
+          setMerged(schemaResult, responseKey, null);
         else if ("subscriptionType".equals(fieldName))
-          schemaResult.setProperty(responseKey, null);
+          setMerged(schemaResult, responseKey, null);
         else if ("directives".equals(fieldName))
-          schemaResult.setProperty(responseKey, Collections.emptyList());
+          setMerged(schemaResult, responseKey, Collections.emptyList());
         else if ("__typename".equals(fieldName))
-          schemaResult.setProperty(responseKey, "__Schema");
+          setMerged(schemaResult, responseKey, "__Schema");
       }
     }
 
@@ -513,7 +548,8 @@ public class GraphQLSchema {
     return resultSet;
   }
 
-  private ResultSet executeIntrospectionType(final Selection selection, final Map<String, Object> variables,
+  private ResultSet executeIntrospectionType(final Selection selection, final SelectionSet selectionSet,
+      final Map<String, Object> variables,
       final GraphQLFragments fragments) {
     final Arguments arguments = selection.getArguments();
     String typeName = null;
@@ -528,7 +564,7 @@ public class GraphQLSchema {
     if (typeName == null)
       throw new CommandParsingException("__type query requires a 'name' argument");
 
-    final ResultInternal typeResult = buildTypeResult(typeName, selection.getSelectionSet(), fragments, 0);
+    final ResultInternal typeResult = buildTypeResult(typeName, selectionSet, fragments, 0);
 
     if (typeResult == null)
       throw new CommandParsingException("Type '" + typeName + "' not found");
@@ -619,9 +655,9 @@ public class GraphQLSchema {
 
   /**
    * Describes a database property with the same wrapper chain {@link #buildTypeInfo} produces for a schema-declared
-   * field (#7876, extending #7116 to types with no {@code .gql} declaration): a LIST or ARRAY_OF_* property is a
-   * {@code LIST} wrapper around its element type, and a property both MANDATORY and NOTNULL is wrapped in
-   * {@code NON_NULL}. Every hop is built from the selection set the client wrote for it (#7888).
+   * field (#7876, extending #7116 to types with no {@code .gql} declaration): a property both MANDATORY and NOTNULL is
+   * wrapped in {@code NON_NULL} around the descriptor of its value, see {@link #buildDatabaseValueTypeInfo}. Every hop is
+   * built from the selection set the client wrote for it (#7888).
    * <p>
    * NON_NULL is a promise that the field never resolves to {@code null}, which code generators turn into non-nullable
    * client types. MANDATORY alone still allows an explicit {@code null}, and NOTNULL alone allows the property to be
@@ -631,29 +667,41 @@ public class GraphQLSchema {
   private ResultInternal buildDatabaseFieldTypeInfo(final Property prop, final SelectionSet selectionSet,
       final GraphQLFragments fragments, final int fieldsDepth) {
     final Type type = prop.getType();
-    final Function<SelectionSet, ResultInternal> unwrapped;
-    if (type == Type.LIST) {
-      final String ofType = prop.getOfType();
-      unwrapped = listSelectionSet -> buildIntrospectionType(null, "LIST", listSelectionSet, fragments, null,
-          elementSelectionSet -> buildDatabaseListElementInfo(ofType, elementSelectionSet, fragments, fieldsDepth));
-    } else {
-      final String arrayElement = mapDatabaseArrayElementToGraphQL(type);
-      if (arrayElement != null)
-        unwrapped = listSelectionSet -> buildIntrospectionType(null, "LIST", listSelectionSet, fragments, null,
-            elementSelectionSet -> buildIntrospectionLeafType(arrayElement, "SCALAR", elementSelectionSet, fragments));
-      else
-        unwrapped = namedSelectionSet -> buildIntrospectionLeafType(mapDatabaseTypeToGraphQL(type), "SCALAR", namedSelectionSet,
-            fragments);
-    }
+    final String ofType = prop.getOfType();
     return prop.isMandatory() && prop.isNotNull() ?
-        buildIntrospectionType(null, "NON_NULL", selectionSet, fragments, null, unwrapped) :
-        unwrapped.apply(selectionSet);
+        buildIntrospectionType(null, "NON_NULL", selectionSet, fragments, null,
+            valueSelectionSet -> buildDatabaseValueTypeInfo(type, ofType, valueSelectionSet, fragments, fieldsDepth)) :
+        buildDatabaseValueTypeInfo(type, ofType, selectionSet, fragments, fieldsDepth);
   }
 
   /**
-   * The element of a LIST property: its declared {@code ofType} when that names a primitive type, or a database type
-   * (described as {@code __type(name:)} would, like a named type reached through {@link #buildTypeInfo}). With no
-   * {@code ofType}, or one naming neither, the element keeps the historic {@code String}.
+   * Describes a value of a database type as the GraphQL result serializes it (#8756): a LIST, an ARRAY_OF_* or a BINARY
+   * (serialized as an array of its byte values) is a {@code LIST} wrapper around its element; an EMBEDDED whose
+   * {@code ofType} names a database type is that OBJECT type, since the resolver returns the nested document for a
+   * sub-selection to walk; anything else is the scalar {@link #mapDatabaseTypeToGraphQL} names for it.
+   */
+  private ResultInternal buildDatabaseValueTypeInfo(final Type type, final String ofType, final SelectionSet selectionSet,
+      final GraphQLFragments fragments, final int fieldsDepth) {
+    if (type == Type.LIST)
+      return buildIntrospectionType(null, "LIST", selectionSet, fragments, null,
+          elementSelectionSet -> buildDatabaseListElementInfo(ofType, elementSelectionSet, fragments, fieldsDepth));
+
+    final String arrayElement = mapDatabaseArrayElementToGraphQL(type);
+    if (arrayElement != null)
+      return buildIntrospectionType(null, "LIST", selectionSet, fragments, null,
+          elementSelectionSet -> buildIntrospectionLeafType(arrayElement, "SCALAR", elementSelectionSet, fragments));
+
+    if (type == Type.EMBEDDED && ofType != null && !ofType.isEmpty() && database.getSchema().existsType(ofType))
+      return buildDatabaseTypeResult(database.getSchema().getType(ofType), selectionSet, fragments, fieldsDepth);
+
+    return buildIntrospectionLeafType(mapDatabaseTypeToGraphQL(type), "SCALAR", selectionSet, fragments);
+  }
+
+  /**
+   * The element of a LIST property: its declared {@code ofType} when that names a primitive type (described as a value of
+   * that type is, so a LIST of BINARY is a list of lists), or a database type (described as {@code __type(name:)} would,
+   * like a named type reached through {@link #buildTypeInfo}). With no {@code ofType}, or one naming neither, the element
+   * keeps the historic {@code String}.
    */
   private ResultInternal buildDatabaseListElementInfo(final String ofType, final SelectionSet selectionSet,
       final GraphQLFragments fragments, final int fieldsDepth) {
@@ -662,7 +710,8 @@ public class GraphQLSchema {
       // "Date" is stored as the primitive DATE even when a document type called Date exists
       final Type elementType = Type.getTypeByName(ofType);
       if (elementType != null)
-        return buildIntrospectionLeafType(mapDatabaseTypeToGraphQL(elementType), "SCALAR", selectionSet, fragments);
+        // A primitive element declares no ofType of its own: a LIST of EMBEDDED is a list of open JSON objects
+        return buildDatabaseValueTypeInfo(elementType, null, selectionSet, fragments, fieldsDepth);
       if (database.getSchema().existsType(ofType))
         return buildDatabaseTypeResult(database.getSchema().getType(ofType), selectionSet, fragments, fieldsDepth);
     }
@@ -734,15 +783,15 @@ public class GraphQLSchema {
       final String fieldName = sub.getFieldName();
       final String responseKey = sub.getName();
       if ("name".equals(fieldName))
-        result.setProperty(responseKey, name);
+        setMerged(result, responseKey, name);
       else if ("kind".equals(fieldName))
-        result.setProperty(responseKey, kind);
+        setMerged(result, responseKey, kind);
       else if ("fields".equals(fieldName))
-        result.setProperty(responseKey, fields != null ? fields.apply(sub) : null);
+        setMerged(result, responseKey, fields != null ? fields.apply(sub) : null);
       else if ("ofType".equals(fieldName))
-        result.setProperty(responseKey, ofType != null ? ofType.apply(sub.getSelectionSet()) : null);
+        setMerged(result, responseKey, ofType != null ? ofType.apply(sub.getSelectionSet()) : null);
       else if ("__typename".equals(fieldName))
-        result.setProperty(responseKey, "__Type");
+        setMerged(result, responseKey, "__Type");
     }
     return result;
   }
@@ -770,11 +819,11 @@ public class GraphQLSchema {
     for (final Selection sub : fieldSelections) {
       final String fieldName = sub.getFieldName();
       if ("name".equals(fieldName))
-        result.setProperty(sub.getName(), name);
+        setMerged(result, sub.getName(), name);
       else if ("type".equals(fieldName))
-        result.setProperty(sub.getName(), type.apply(sub.getSelectionSet()));
+        setMerged(result, sub.getName(), type.apply(sub.getSelectionSet()));
       else if ("__typename".equals(fieldName))
-        result.setProperty(sub.getName(), "__Field");
+        setMerged(result, sub.getName(), "__Field");
     }
     return result;
   }
@@ -791,6 +840,40 @@ public class GraphQLSchema {
     return fieldSelectionSet != null ? fragments.expand(fieldSelectionSet.getSelections(), "__Field"::equals) : null;
   }
 
+  /**
+   * Writes one introspection value under its response key, merging it into what an earlier selection with the same key already
+   * wrote rather than replacing it (issue #8744). The specification (CollectFields / MergeSelectionSets) merges the
+   * sub-selections of fields sharing a response key, which a fragment spread makes ordinary: {@code fields { name } ...F} with
+   * {@code F} selecting {@code fields { type { name } }}. Every introspection value is a pure function of the schema and of the
+   * selection it was built from, so merging the two built values is the same as building once from the merged selections: two
+   * objects merge key by key, two lists (built over the same types or fields, in the same order) element by element.
+   * <p>
+   * Anything else is two selections under one key that do not resolve to the same field ({@code x: name x: kind}), a validation
+   * error in the specification that this module does not perform: the first one written is kept, as {@link GraphQLResultSet}
+   * does for data selections.
+   */
+  private static void setMerged(final ResultInternal target, final String responseKey, final Object value) {
+    // A KEY WRITTEN WITH null (mutationType, THE ofType OF A NAMED TYPE) IS PRESENT TOO: hasProperty() READS THE CONTENT MAP'S
+    // KEYS, SO A LATER SELECTION UNDER THE SAME KEY NEVER REPLACES IT
+    if (!target.hasProperty(responseKey))
+      target.setProperty(responseKey, value);
+    else
+      mergeInto(target.getProperty(responseKey), value);
+  }
+
+  private static void mergeInto(final Object existing, final Object value) {
+    if (existing instanceof ResultInternal existingObject && value instanceof ResultInternal valueObject) {
+      for (final String key : valueObject.getPropertyNames())
+        setMerged(existingObject, key, valueObject.getProperty(key));
+    } else if (existing instanceof List<?> existingList && value instanceof List<?> valueList
+        && existingList.size() == valueList.size()) {
+      for (int i = 0; i < existingList.size(); i++)
+        mergeInto(existingList.get(i), valueList.get(i));
+    }
+    // ANY OTHER PAIR (A LEAF, A null, AN OBJECT AGAINST A LEAF, OR TWO LISTS OF DIFFERENT SIZES, WHICH TWO BUILDS OF THE SAME
+    // FIELD IN ONE EXECUTION CANNOT PRODUCE) KEEPS THE FIRST VALUE WRITTEN
+  }
+
   private static String mapDatabaseTypeToGraphQL(final Type type) {
     if (type == null)
       return "String";
@@ -800,18 +883,26 @@ public class GraphQLSchema {
       case FLOAT -> "Float";
       case DOUBLE -> "Float";
       case BOOLEAN -> "Boolean";
+      // A JSON object whose keys the schema does not declare (#8756)
+      case MAP, EMBEDDED -> "JSON";
+      // The resolver returns the RID, serialized as "#bucket:position", not the linked record (#8756)
+      case LINK -> "ID";
+      // A JSON number carrying every digit of the value (#8756)
+      case DECIMAL -> "BigDecimal";
+      // Temporal values are serialized as formatted text
       default -> "String";
     };
   }
 
   /**
-   * The GraphQL element scalar of an ARRAY_OF_* property, or {@code null} when the type is not a primitive array.
+   * The GraphQL element scalar of an ARRAY_OF_* or BINARY property, or {@code null} when the type is not a primitive
+   * array. A BINARY is serialized as a JSON array of its byte values (#8756).
    */
   private static String mapDatabaseArrayElementToGraphQL(final Type type) {
     if (type == null)
       return null;
     return switch (type) {
-      case ARRAY_OF_SHORTS, ARRAY_OF_INTEGERS -> "Int";
+      case BINARY, ARRAY_OF_SHORTS, ARRAY_OF_INTEGERS -> "Int";
       case ARRAY_OF_LONGS -> "Long";
       case ARRAY_OF_FLOATS, ARRAY_OF_DOUBLES -> "Float";
       default -> null;

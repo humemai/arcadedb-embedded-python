@@ -18,12 +18,14 @@
  */
 package com.arcadedb.query.sql.executor;
 
+import com.arcadedb.database.Database;
 import com.arcadedb.database.DatabaseInternal;
 import com.arcadedb.database.DatabaseRID;
 import com.arcadedb.database.Document;
 import com.arcadedb.database.Identifiable;
 import com.arcadedb.database.RID;
 import com.arcadedb.database.Record;
+import com.arcadedb.engine.PageManager;
 import com.arcadedb.exception.RecordNotFoundException;
 import com.arcadedb.exception.TimeoutException;
 import com.arcadedb.log.LogManager;
@@ -32,8 +34,11 @@ import com.arcadedb.query.sql.parser.BetweenCondition;
 import com.arcadedb.query.sql.parser.BinaryCondition;
 import com.arcadedb.query.sql.parser.BooleanExpression;
 import com.arcadedb.query.sql.parser.WhereClause;
+import com.arcadedb.utility.RidHashSet;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Set;
@@ -83,12 +88,66 @@ public class GetValueFromIndexEntryStep extends AbstractExecutionStep implements
 
   enum Strategy {INDEX_ORDER, PHYSICAL_ORDER, PHYSICAL_ORDER_CHUNKED, SCAN}
 
+  // The key of a point lookup's streaming path before the first entry: no key, not even null
+  private static final Object NO_KEY              = new Object();
+  /**
+   * How many times the streaming path reads one key again for the entries commits took from it (#9902). Each read is one more
+   * pass over the key's entries, owed only to commits that deleted or moved records of THIS key while it was being read, so the
+   * bound only matters for a key rewritten faster than it can be read: past it, the entries lost last are not looked for again.
+   * A record that holds the key the whole time is never one of them: it is in the entries the lookup read, and passes its check.
+   */
+  private static final int    MAX_REREADS_PER_KEY = 8;
+  /**
+   * How many records the streaming path of a point lookup remembers it served of one key (#9902), about 6 MB at most: enough
+   * for any key a consumer pulls whole in practice, and a bound on what a statement holds for a key of millions of entries.
+   * What it served is what a read of the key again must not serve twice, so past the bound the key is not read again: entries
+   * a commit takes from it are counted as unsettled instead (PROFILE shows them, a WARNING says so once per execution). No record
+   * is served for a key it does not hold, and a record that holds the key the whole time is still served; the record that
+   * replaced a deleted one may be missed, and an {@code IN} that lists the key twice serves the records past the bound twice, as
+   * an {@code IN} with a repeated value did before #9902.
+   */
+  static final int            MAX_TRACKED_RIDS_PER_KEY = 1 << 18;
+  // The served set of the previous key is cleared for the next one up to this size, and replaced past it
+  private static final int    MAX_REUSED_SERVED_SET    = 64;
+
   private final List<Integer> filterBucketIds;
   private final ScanFallback  scanFallback;
 
   // runtime: plain fields, unlike the per-thread state of Cypher's NodeIndexRangeScan, because a cached SQL plan is
   // copied for every execution (ExecutionPlanCache.get()) while a cached Cypher operator is shared by all of them
   private ResultSet                   prevResult = null;
+  // The rows of a point lookup, loaded against one committed state (#9369), and the entries read past what that takes
+  private ArrayDeque<Result>          consistentRows;
+  private boolean                     consistentTried;
+  private final ArrayDeque<Result>    pendingEntries = new ArrayDeque<>();
+  private boolean                     prevExhausted;
+  // Rows a range scan recovered for an entry whose record could not be loaded (#9369), served before the next entry
+  private final ArrayDeque<Result>    recovered      = new ArrayDeque<>();
+  // The streaming path of a point lookup (#9902). Kept on the step, not on the page of rows syncPull() returns: a page ends
+  // where the consumer stops pulling, not where a key does, and what was served of a key must outlive it
+  private Object                      streamKey      = NO_KEY;
+  // The records served for the key: so a read of the key again serves only what was not served yet
+  private RidHashSet                  servedOfKey;
+  // Past MAX_TRACKED_RIDS_PER_KEY: servedOfKey no longer holds every record served of the key
+  private boolean                     servedOverflow;
+  // MAX_TRACKED_RIDS_PER_KEY, lowered by tests to reach the bound without a key of 256K entries
+  int                                 trackedRidsPerKey = MAX_TRACKED_RIDS_PER_KEY;
+  // Entries the key lost since it was last read again
+  private int                         pendingLosses;
+  // An entry of the key lost its record to a commit: the key is read again once its entries run out
+  private boolean                     keyLostEntries;
+  private int                         rereadsOfKey;
+  // The entries the key holds now that were not served yet, and the publication sequence they were read at
+  private ArrayDeque<RID>             rereadCandidates;
+  private long                        rereadSequence;
+  // What reconciling cost, for PROFILE and the tests
+  private long                        verifiedRows;
+  private long                        lostEntries;
+  private long                        keyRereads;
+  private long                        rereadEntries;
+  private long                        unsettledEntries;
+  // The buckets the records of a point lookup were read from, so a restart releases their pinned pages whatever the bucket filter
+  private final Set<Integer>          readBucketIds  = new HashSet<>();
   private Strategy                    strategy;
   private PhysicalOrderRidFetcher     fetcher;
   private FetchFromTypeWithFilterStep scanStep;
@@ -137,6 +196,31 @@ public class GetValueFromIndexEntryStep extends AbstractExecutionStep implements
    */
   Strategy getStrategy() {
     return strategy;
+  }
+
+  /** Rows of a point lookup checked against their key because a commit overlapped the lookup (#9902). Surfaced for tests. */
+  long getVerifiedRows() {
+    return verifiedRows;
+  }
+
+  /** Entries of a point lookup whose record was gone or no longer held the key. Surfaced for tests. */
+  long getLostEntries() {
+    return lostEntries;
+  }
+
+  /** How many times a key of a point lookup was read again for the entries it lost. Surfaced for tests. */
+  long getKeyRereads() {
+    return keyRereads;
+  }
+
+  /** Entries lost to a commit whose key was not read again for them, see {@link #startReread}. Surfaced for tests. */
+  long getUnsettledEntries() {
+    return unsettledEntries;
+  }
+
+  /** The index entries those reads returned. Surfaced for tests. */
+  long getRereadEntries() {
+    return rereadEntries;
   }
 
   @Override
@@ -271,6 +355,7 @@ public class GetValueFromIndexEntryStep extends AbstractExecutionStep implements
   }
 
   private ResultSet indexOrderResultSet(final CommandContext context, final ExecutionStepInternal prevStep, final int nRecords) {
+    final WorkGuard guard = WorkGuard.forCommandDeadline(context);
     return new ResultSet() {
 
       public boolean finished = false;
@@ -312,32 +397,78 @@ public class GetValueFromIndexEntryStep extends AbstractExecutionStep implements
         if (finished)
           return;
 
-        if (prevResult == null) {
-          prevResult = prevStep.syncPull(context, nRecords);
-          if (!prevResult.hasNext()) {
-            finished = true;
-            return;
-          }
+        if (!recovered.isEmpty()) {
+          nextItem = recovered.pollFirst();
+          return;
         }
-        while (!finished) {
-          while (!prevResult.hasNext()) {
-            prevResult = prevStep.syncPull(context, nRecords);
-            if (!prevResult.hasNext()) {
-              finished = true;
-              return;
-            }
-          }
-          final Result val = prevResult.next();
-          final long begin = context.isProfiling() ? System.nanoTime() : 0;
 
+        if (!consistentTried && prevStep instanceof FetchFromIndexStep indexStep && indexStep.isPointLookup()) {
+          consistentTried = true;
+          consistentRows = loadPointLookup(context, indexStep, nRecords, guard);
+        }
+        if (consistentRows != null) {
+          nextItem = consistentRows.pollFirst();
+          if (nextItem == null)
+            finished = true;
+          return;
+        }
+
+        while (!finished) {
+          // Every pass loads a record. The entries a chunk read ahead (pendingEntries) or a re-read found do not come through
+          // the index step's own check, so a terminated statement or one past its deadline is stopped here (#9893)
+          guard.check();
+          final long begin = context.isProfiling() ? System.nanoTime() : 0;
           try {
+            if (rereadCandidates != null) {
+              // The entries the key holds now, after its own ran out with some lost to a commit (#9902). Only a point lookup loses
+              // entries, so the previous step is a FetchFromIndexStep here and in the re-reads below
+              nextItem = nextRereadRow(context, (FetchFromIndexStep) prevStep, guard);
+              if (nextItem != null)
+                return;
+              rereadCandidates = null;
+              if (keyLostEntries)
+                // a commit took more entries while they were served: settle those too, from the key as it is now
+                startReread(context, (FetchFromIndexStep) prevStep, guard);
+              continue;
+            }
+
+            final Result val = nextEntry(context, prevStep, nRecords);
+            if (val == null) {
+              if (!keyLostEntries || !startReread(context, (FetchFromIndexStep) prevStep, guard))
+                finished = true;
+              continue;
+            }
+
             final Object finalVal = val.getProperty("rid");
             if (!passesBucketFilter(finalVal))
               continue;
 
-            nextItem = toResult(finalVal, context);
+            if (prevStep instanceof FetchFromIndexStep indexStep && finalVal instanceof RID rid) {
+              final Object key = val.getProperty("key");
+              if (indexStep.isPointLookup()) {
+                if (!FetchFromIndexStep.isEntryOf(key, streamKey)) {
+                  if (keyLostEntries) {
+                    // The entries of the key ran out with some lost to a commit: settle them before moving to the next key
+                    pendingEntries.addFirst(val);
+                    if (!startReread(context, indexStep, guard))
+                      startKey(indexStep.lookupKeyOf(key));
+                    continue;
+                  }
+                  startKey(indexStep.lookupKeyOf(key));
+                }
+                nextItem = pointLookupRow(context, indexStep, rid);
+              } else {
+                nextItem = toResult(finalVal, context);
+                if (nextItem == null) {
+                  // A range scan reads its entries as it goes, so only an entry whose record is gone is reconciled (#9369)
+                  recovered.addAll(reconcile(indexStep, val.getProperty("key"), rid, context, guard));
+                  nextItem = recovered.pollFirst();
+                }
+              }
+            } else
+              nextItem = toResult(finalVal, context);
             if (nextItem != null)
-              break;
+              return;
           } finally {
             if (context.isProfiling())
               cost += System.nanoTime() - begin;
@@ -345,6 +476,182 @@ public class GetValueFromIndexEntryStep extends AbstractExecutionStep implements
         }
       }
     };
+  }
+
+  /** The next index entry: one set aside first, then the previous step's, or null once both ran out. */
+  private Result nextEntry(final CommandContext context, final ExecutionStepInternal prevStep, final int nRecords) {
+    if (!pendingEntries.isEmpty())
+      return pendingEntries.pollFirst();
+    if (prevResult == null) {
+      prevResult = prevStep.syncPull(context, nRecords);
+      prevExhausted = !prevResult.hasNext();
+    }
+    // Only a page that comes back empty ends the entries: one that stops short of nRecords may not be the last
+    while (!prevResult.hasNext()) {
+      if (prevExhausted)
+        return null;
+      prevResult = prevStep.syncPull(context, nRecords);
+      prevExhausted = !prevResult.hasNext();
+    }
+    return prevResult.next();
+  }
+
+  /** Starts serving the entries of another key of a point lookup. */
+  private void startKey(final Object key) {
+    streamKey = key;
+    // A set grown for a large key is dropped rather than cleared: clearing costs its whole capacity, once per key
+    if (servedOfKey == null || servedOfKey.size() > MAX_REUSED_SERVED_SET)
+      servedOfKey = new RidHashSet(16);
+    else
+      servedOfKey.clear();
+    servedOverflow = false;
+    keyLostEntries = false;
+    pendingLosses = 0;
+    rereadsOfKey = 0;
+  }
+
+  /**
+   * The row of an entry of a point lookup that holds too many entries to be loaded against one committed state (#9369), or null
+   * when there is none to serve now (#9902). The row is served as loaded when no commit published since the lookup read its
+   * entries, which is the common case and costs one volatile read. When one did, the commit may have deleted the record, moved it
+   * to another key or given its slot to another record, and the row is served only if its record holds the key: a check of the
+   * record alone, whatever the commit touched elsewhere. An entry that fails it is set aside, and the key is read again once,
+   * when its entries run out, to serve what the key holds then and was not served yet: the record that replaced a deleted one,
+   * say. Nothing is materialised up front and no lock is taken, so the work follows the rows the consumer pulls, not the size of
+   * the key.
+   */
+  private Result pointLookupRow(final CommandContext context, final FetchFromIndexStep indexStep, final RID rid) {
+    // Several entries of a key can name one record only when a lookup repeats the key (an IN listing it twice)
+    if (servedOfKey.contains(rid))
+      return null;
+    final Result row = toResult(rid, context, false);
+    final DatabaseInternal database = (DatabaseInternal) context.getDatabase();
+    if (noCommitSince(database, indexStep.entriesSequence())) {
+      if (row != null)
+        return served(row, rid);
+      if (!isRepeatableRead(database)) {
+        // The entry and the records are one committed state: the index names a record that does not exist
+        LogManager.instance().log(this, Level.WARNING, "Record %s not found. Skip it from the result set", null, rid);
+        return null;
+      }
+      // Under REPEATABLE_READ the page the record was looked for in may be one this transaction pinned before the record existed
+    } else if (row != null && holdsKey(indexStep, row, streamKey))
+      return served(row, rid);
+    loseEntry(rid);
+    return null;
+  }
+
+  /**
+   * Notes a served record of the key, unique index or not: a lookup of a prefix of a composite unique key is one key with many
+   * entries, and a read of it again must not serve them twice.
+   */
+  private Result served(final Result row, final RID rid) {
+    if (!servedOverflow) {
+      if (servedOfKey.size() >= trackedRidsPerKey)
+        servedOverflow = true;
+      else
+        servedOfKey.add(rid);
+    }
+    return row;
+  }
+
+  private boolean holdsKey(final FetchFromIndexStep indexStep, final Result row, final Object key) {
+    ++verifiedRows;
+    return row.getElement().map(record -> indexStep.isKeyOf(record, key)).orElse(false);
+  }
+
+  private void loseEntry(final RID rid) {
+    keyLostEntries = true;
+    ++lostEntries;
+    ++pendingLosses;
+    // its bucket is released under REPEATABLE_READ before the key is read again
+    readBucketIds.add(rid.getBucketId());
+  }
+
+  /**
+   * Reads the key of the stream again, for the entries a commit took from it (#9902): the candidates are the entries the key holds
+   * now that were not served yet. Waits for a commit that is publishing to finish first, so the replacement of a record found
+   * deleted - published by the same commit, maybe on a page not put in the cache yet - is among them. Index entries only: the
+   * records are loaded one at a time as the consumer pulls them, see {@link #nextRereadRow}.
+   *
+   * @return false when the key is not read again: it was read again too many times already ({@link #MAX_REREADS_PER_KEY}), or
+   * served too many records to tell which ones a read again must skip ({@link #MAX_TRACKED_RIDS_PER_KEY}). The entries lost are
+   * then counted as unsettled
+   */
+  private boolean startReread(final CommandContext context, final FetchFromIndexStep indexStep, final WorkGuard guard) {
+    keyLostEntries = false;
+    if (rereadsOfKey >= MAX_REREADS_PER_KEY || servedOverflow) {
+      LogManager.instance().log(this, Level.FINE, "Key %s of index '%s' lost %d entries to commits while it was read and is not read "
+              + "again (read again %d times, %d records served): the records that replaced them are not looked for", null, streamKey,
+          indexStep.indexName, pendingLosses, rereadsOfKey, servedOfKey.size());
+      // unsettledEntries is still 0 only the first time: one WARNING per execution, however many keys give up
+      if (unsettledEntries == 0 && pendingLosses > 0)
+        LogManager.instance().log(this, Level.WARNING, "Point lookup on index '%s' lost entries of key %s to concurrent commits and "
+                + "did not look for the records that replaced them (key read again %d times, %d records served): the answer may "
+                + "miss records written during the query (logged once per execution, PROFILE counts every such entry)", null,
+            indexStep.indexName, streamKey, rereadsOfKey, servedOfKey.size());
+      unsettledEntries += pendingLosses;
+      pendingLosses = 0;
+      return false;
+    }
+    pendingLosses = 0;
+    ++rereadsOfKey;
+    ++keyRereads;
+
+    final DatabaseInternal database = (DatabaseInternal) context.getDatabase();
+    final PageManager pageManager = database.getPageManager();
+    guard.check();
+    if ((pageManager.getPublicationSequence() & 1) != 0)
+      // A commit is publishing: wait for it to let go of the lock, doing nothing under it. The wait cannot deadlock a reader that
+      // holds file locks in its transaction, for the reason given at loadPointLookup(): a committer takes this lock last and
+      // acquires nothing under it. It lasts one commit's publication, so the guard is checked before it and not during it
+      pageManager.executeInLock(() -> null);
+    unpinRepeatableReadPages(database, indexStep);
+    rereadSequence = pageManager.getPublicationSequence();
+
+    final List<RID> fresh = indexStep.lookupKeyAgain(streamKey, guard);
+    rereadCandidates = new ArrayDeque<>(fresh == null ? 0 : fresh.size());
+    if (fresh != null) {
+      rereadEntries += fresh.size();
+      for (final RID rid : fresh)
+        if (!servedOfKey.contains(rid) && passesBucketFilter(rid))
+          rereadCandidates.add(rid);
+    }
+    return true;
+  }
+
+  /**
+   * The next row of the entries a key was read again for, or null once they ran out. As for the entries of the lookup, a row is
+   * served as loaded when no commit published since the key was read again, and otherwise only if its record holds the key.
+   */
+  private Result nextRereadRow(final CommandContext context, final FetchFromIndexStep indexStep, final WorkGuard guard) {
+    final DatabaseInternal database = (DatabaseInternal) context.getDatabase();
+    RID rid;
+    while ((rid = rereadCandidates.pollFirst()) != null) {
+      // a record load each, I/O: checked on every one (#9893)
+      guard.check();
+      final Result row = toResult(rid, context, false);
+      if (noCommitSince(database, rereadSequence)) {
+        if (row != null)
+          return served(row, rid);
+        // the key and the record were read in one state: a dangling entry, not one a commit took
+        LogManager.instance().log(this, Level.WARNING, "Record %s not found. Skip it from the result set", null, rid);
+      } else if (row != null && holdsKey(indexStep, row, streamKey))
+        return served(row, rid);
+      else
+        loseEntry(rid);
+    }
+    return null;
+  }
+
+  /** True when no commit published since {@code sequence} was sampled, nor was publishing then. */
+  private static boolean noCommitSince(final DatabaseInternal database, final long sequence) {
+    return (sequence & 1) == 0 && database.getPageManager().getPublicationSequence() == sequence;
+  }
+
+  private static boolean isRepeatableRead(final DatabaseInternal database) {
+    return database.isTransactionActive()
+        && database.getTransactionIsolationLevel() == Database.TRANSACTION_ISOLATION_LEVEL.REPEATABLE_READ;
   }
 
   private ResultSet physicalOrderResultSet(final CommandContext context, final int nRecords) {
@@ -507,11 +814,180 @@ public class GetValueFromIndexEntryStep extends AbstractExecutionStep implements
     return false;
   }
 
+  private static final int MAX_RECONCILE_ATTEMPTS   = 8;
+  private static final int MAX_POINT_LOOKUP_ENTRIES = 256;
+
+  /**
+   * Loads the rows of a point lookup - an equality or an {@code IN} - against ONE committed state (#9369). A commit puts its
+   * pages in the read cache one at a time and gives a freed record slot to the next record it creates, so entries read
+   * before a commit and records loaded after it do not belong together: a row is lost when its record is gone, or served as
+   * another key's when the slot was reused, and a row found in a later state can then collide with one served earlier from
+   * an older one. The entries are read and every record loaded between two samples of the page manager's publication
+   * sequence that are equal and even, which no commit can have interleaved with; otherwise the lookup starts again, and
+   * after {@link #MAX_RECONCILE_ATTEMPTS} attempts runs under the publication lock, which keeps every commit out. Costs
+   * two volatile reads when no commit overlaps.
+   * <p>
+   * The rows are held until all are loaded, so a lookup of more than {@link #MAX_POINT_LOOKUP_ENTRIES} entries is not
+   * held: it returns null, leaving the entries read in {@link #pendingEntries} for the streaming path, which settles them
+   * one by one (#9902, see {@link #pointLookupRow}): an answer that large is not one state, but every row of it is a record
+   * that holds its key when it is loaded, none is served twice, and a record that holds its key the whole time is served.
+   * <p>
+   * The last-resort lock cannot deadlock: it is the page-manager lock, which is reentrant and which a committer takes last,
+   * inside the file locks, only to publish pages. It also holds for a reader inside a transaction that holds file locks
+   * (explicit {@code LOCK}, or writes): the committer that owns the page-manager lock took every file lock it needs before
+   * taking it and acquires none under it, so it never waits for the locks this reader holds; and nothing the reader runs under the
+   * lock waits on a committer.
+   */
+  @SuppressWarnings("unchecked")
+  private ArrayDeque<Result> loadPointLookup(final CommandContext context, final FetchFromIndexStep indexStep, final int nRecords,
+      final WorkGuard guard) {
+    final DatabaseInternal database = (DatabaseInternal) context.getDatabase();
+    final PageManager pageManager = database.getPageManager();
+    final long begin = context.isProfiling() ? System.nanoTime() : 0;
+    try {
+      for (int attempt = 0; attempt < MAX_RECONCILE_ATTEMPTS; attempt++) {
+        // a statement cancelled or past its deadline stops between attempts (#9893)
+        guard.check();
+        if ((pageManager.getPublicationSequence() & 1) != 0)
+          // a commit is publishing: wait for it to let go of the lock instead of spending an attempt inside its window
+          pageManager.executeInLock(() -> null);
+        final ArrayDeque<Result> rows = readAndLoad(context, indexStep, nRecords, guard);
+        if (rows == null)
+          return null;
+        final long baseline = indexStep.entriesSequence();
+        if ((baseline & 1) == 0 && pageManager.getPublicationSequence() == baseline)
+          return rows;
+        restartLookup(database, indexStep);
+      }
+      LogManager.instance().log(this, Level.FINE, "Point lookup on index '%s' overlapped a commit %d times, reading it under the publication lock",
+          null, indexStep.indexName, MAX_RECONCILE_ATTEMPTS);
+      // and not once the lock is held: every commit would wait for a statement that is going to fail anyway
+      guard.check();
+      final ArrayDeque<Result> rows = (ArrayDeque<Result>) pageManager.executeInLock(() -> {
+        restartLookup(database, indexStep);
+        return readAndLoad(context, indexStep, nRecords, guard);
+      });
+      return rows;
+    } finally {
+      if (context.isProfiling())
+        cost += System.nanoTime() - begin;
+    }
+  }
+
+  /** The rows of every entry the index step returns, or null once there are more entries than are held. */
+  private ArrayDeque<Result> readAndLoad(final CommandContext context, final FetchFromIndexStep indexStep, final int nRecords,
+      final WorkGuard guard) {
+    final List<Result> entries = new ArrayList<>();
+    prevResult = indexStep.syncPull(context, nRecords);
+    while (true) {
+      while (prevResult.hasNext()) {
+        entries.add(prevResult.next());
+        if (entries.size() > MAX_POINT_LOOKUP_ENTRIES) {
+          pendingEntries.addAll(entries);
+          return null;
+        }
+      }
+      prevResult = indexStep.syncPull(context, nRecords);
+      if (!prevResult.hasNext())
+        break;
+    }
+    final ArrayDeque<Result> rows = new ArrayDeque<>(entries.size());
+    for (final Result entry : entries) {
+      final Object value = entry.getProperty("rid");
+      if (!passesBucketFilter(value))
+        continue;
+      if (value instanceof RID rid)
+        readBucketIds.add(rid.getBucketId());
+      // a record load each, I/O: checked on every one, or a termination waits for the whole chunk (#9893)
+      guard.check();
+      final Result row = toResult(value, context);
+      if (row != null)
+        rows.add(row);
+    }
+    return rows;
+  }
+
+  /** Starts the lookup over after a commit overlapped it, releasing what REPEATABLE_READ pinned of the torn state. */
+  private void restartLookup(final DatabaseInternal database, final FetchFromIndexStep indexStep) {
+    indexStep.reset();
+    prevResult = null;
+    prevExhausted = false;
+    pendingEntries.clear();
+    unpinRepeatableReadPages(database, indexStep);
+  }
+
+  /**
+   * Under REPEATABLE_READ the pages this transaction pinned while a commit overlapped the lookup may be the very two states
+   * that disagree. Only called once an overlap was detected, so a lookup that no commit touched keeps its snapshot; the
+   * pinned pages of the files involved are read again from the committed state, which is the one the lookup is repeated on.
+   */
+  private void unpinRepeatableReadPages(final DatabaseInternal database, final FetchFromIndexStep indexStep) {
+    if (!database.isTransactionActive() || database.getTransactionIsolationLevel() != Database.TRANSACTION_ISOLATION_LEVEL.REPEATABLE_READ)
+      return;
+    final List<Integer> files = new ArrayList<>(indexStep.indexFileIds());
+    if (filterBucketIds != null)
+      files.addAll(filterBucketIds);
+    files.addAll(readBucketIds);
+    database.getTransaction().unpinFiles(files);
+  }
+
+  /**
+   * Looks an index key up again and loads its records against one committed state, for an entry of a range scan whose record
+   * could not be loaded (#9369): a range scan reads its entries as it goes, so only the entries whose record is gone are judged,
+   * see {@link #pointLookupRow} for a point lookup. A unique key holds one entry and is looked up again, which finds the record
+   * that replaced a deleted one; a non-unique key would have to be read whole, so only the entry itself is retried. The lookup
+   * and the load are repeated until no commit published in between, and as a last resort run under the publication lock, which
+   * keeps any commit out for the time of that one entry. Costs nothing unless an entry is dropped.
+   *
+   * @return the rows now found for the entry, empty when the key is gone or the entry was genuinely dangling
+   */
+  @SuppressWarnings("unchecked")
+  private List<Result> reconcile(final FetchFromIndexStep indexStep, final Object key, final RID missing, final CommandContext context,
+      final WorkGuard guard) {
+    final DatabaseInternal database = (DatabaseInternal) context.getDatabase();
+    final PageManager pageManager = database.getPageManager();
+    for (int attempt = 0; attempt < MAX_RECONCILE_ATTEMPTS; attempt++) {
+      guard.check();
+      final long before = pageManager.getPublicationSequence();
+      if ((before & 1) != 0) {
+        // a commit is publishing: wait for it to let go of the lock
+        pageManager.executeInLock(() -> null);
+        continue;
+      }
+      final List<Result> found = loadEntryAgain(database, indexStep, key, missing, context, guard);
+      if (pageManager.getPublicationSequence() == before)
+        return found;
+    }
+    guard.check();
+    return (List<Result>) pageManager.executeInLock(() -> loadEntryAgain(database, indexStep, key, missing, context, guard));
+  }
+
+  private List<Result> loadEntryAgain(final DatabaseInternal database, final FetchFromIndexStep indexStep, final Object key,
+      final RID missing, final CommandContext context, final WorkGuard guard) {
+    // The streaming path does not note the buckets it reads (a set insert per row): the entry that needs reconciling names one
+    readBucketIds.add(missing.getBucketId());
+    unpinRepeatableReadPages(database, indexStep);
+    final List<Result> found = new ArrayList<>(1);
+    final List<RID> fresh = indexStep.isIndexUnique() ? indexStep.lookupKeyAgain(key, guard) : null;
+    for (final RID rid : fresh != null ? fresh : List.of(missing)) {
+      if (!passesBucketFilter(rid))
+        continue;
+      final Result row = toResult(rid, context, false);
+      if (row != null)
+        found.add(row);
+    }
+    return found;
+  }
+
   /**
    * The row of an index entry, loaded through the context's database, or null when there is none. Static: the workers
    * of a parallel load call it too.
    */
   private static Result toResult(final Object value, final CommandContext context) {
+    return toResult(value, context, true);
+  }
+
+  private static Result toResult(final Object value, final CommandContext context, final boolean warnIfMissing) {
     if (value instanceof RID rid) {
       try {
         // A DatabaseRID carries its origin database, so asDocument() resolves directly. For bare RIDs, route through the query's command-context
@@ -520,8 +996,9 @@ public class GetValueFromIndexEntryStep extends AbstractExecutionStep implements
         return new ResultInternal(
             rid instanceof DatabaseRID ? rid.asDocument() : (Document) context.getDatabase().lookupByRID(rid, true));
       } catch (final RecordNotFoundException e) {
-        LogManager.instance()
-            .log(GetValueFromIndexEntryStep.class, Level.WARNING, "Record %s not found. Skip it from the result set", null, value);
+        if (warnIfMissing)
+          LogManager.instance()
+              .log(GetValueFromIndexEntryStep.class, Level.WARNING, "Record %s not found. Skip it from the result set", null, value);
         return null;
       }
     } else if (value instanceof Document document)
@@ -534,6 +1011,24 @@ public class GetValueFromIndexEntryStep extends AbstractExecutionStep implements
   @Override
   public void reset() {
     prevResult = null;
+    consistentRows = null;
+    consistentTried = false;
+    pendingEntries.clear();
+    prevExhausted = false;
+    recovered.clear();
+    streamKey = NO_KEY;
+    servedOfKey = null;
+    keyLostEntries = false;
+    rereadsOfKey = 0;
+    rereadCandidates = null;
+    verifiedRows = 0;
+    lostEntries = 0;
+    keyRereads = 0;
+    rereadEntries = 0;
+    unsettledEntries = 0;
+    servedOverflow = false;
+    pendingLosses = 0;
+    readBucketIds.clear();
     strategy = null;
     matchedEntries = 0;
     parallelDecided = false;
@@ -574,6 +1069,15 @@ public class GetValueFromIndexEntryStep extends AbstractExecutionStep implements
       result.append("\n").append(spaces).append("  filtering buckets [");
       result.append(filterBucketIds.stream().map(x -> "" + x).collect(Collectors.joining(",")));
       result.append("]");
+    }
+
+    if (context.isProfiling() && (verifiedRows > 0 || keyRereads > 0 || unsettledEntries > 0)) {
+      result.append("\n").append(spaces).append("  ").append(verifiedRows).append(" rows checked against their key after a commit, ")
+          .append(lostEntries).append(" entries lost");
+      if (keyRereads > 0)
+        result.append(", key read again ").append(keyRereads).append(" times (").append(rereadEntries).append(" entries)");
+      if (unsettledEntries > 0)
+        result.append(", ").append(unsettledEntries).append(" lost entries not looked for again");
     }
 
     if (scanFallback != null) {

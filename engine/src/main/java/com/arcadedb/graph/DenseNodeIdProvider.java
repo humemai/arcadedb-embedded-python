@@ -147,6 +147,12 @@ public class DenseNodeIdProvider implements GraphTraversalProvider {
   }
 
   @Override
+  public long countAllEdges(final String... edgeTypes) {
+    // A total does not depend on how the nodes are numbered
+    return delegate.countAllEdges(edgeTypes);
+  }
+
+  @Override
   public boolean hasPendingChanges() {
     // Renumbering the IDs says nothing about whether the delegate's own CSR arrays are the whole graph, and a
     // caller reaching for those arrays has to get the delegate's honest answer, not a reassuring one.
@@ -182,6 +188,17 @@ public class DenseNodeIdProvider implements GraphTraversalProvider {
   public RID getRID(final int nodeId) {
     final int id = delegateId(nodeId);
     return id < 0 ? null : delegate.getRID(id);
+  }
+
+  @Override
+  public int getBucketId(final int nodeId) {
+    final int id = delegateId(nodeId);
+    return id < 0 ? -1 : delegate.getBucketId(id);
+  }
+
+  @Override
+  public Object getNodeIdSpace() {
+    return delegate.getNodeIdSpace();
   }
 
   @Override

@@ -21,6 +21,8 @@ package com.arcadedb.query.opencypher.executor.steps;
 import com.arcadedb.database.Document;
 import com.arcadedb.exception.CommandExecutionException;
 import com.arcadedb.exception.TimeoutException;
+import com.arcadedb.graph.Edge;
+import com.arcadedb.graph.LightEdgeRID;
 import com.arcadedb.query.opencypher.ast.ClauseEntry;
 import com.arcadedb.query.opencypher.ast.CreateClause;
 import com.arcadedb.query.opencypher.ast.DeleteClause;
@@ -38,6 +40,7 @@ import com.arcadedb.query.sql.executor.IteratorResultSet;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultInternal;
 import com.arcadedb.query.sql.executor.ResultSet;
+import com.arcadedb.query.sql.executor.WorkGuard;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -53,6 +56,9 @@ import java.util.NoSuchElementException;
  */
 public class ForeachStep extends AbstractExecutionStep {
   private final ForeachClause foreachClause;
+  // WHAT THE DELETES OF EVERY ITERATION HAVE DELETED SO FAR: AN ELEMENT A LATER ITERATION BINDS AGAIN, OR A RELATIONSHIP
+  // AN EARLIER ONE'S DETACH TOOK AWAY, IS NOT DELETED AND COUNTED AGAIN (#10008)
+  private final DeleteStep.DeletedSoFar deletedSoFar = new DeleteStep.DeletedSoFar();
   private final ExpressionEvaluator evaluator;
   private final CypherFunctionFactory functionFactory;
 
@@ -259,6 +265,12 @@ public class ForeachStep extends AbstractExecutionStep {
 
     final String variable = foreachClause.getVariable();
 
+    // The lightweight edges of the list are numbered before an iteration deletes any of them: a delete renumbers the
+    // twins left in the list, and the dedup across iterations tells twins apart by their number (#10008)
+    for (final Object element : iterable)
+      if (element instanceof Edge edge && edge.getIdentity() instanceof LightEdgeRID light)
+        light.getOccurrence();
+
     // Per-iteration deferred-delete batching: see DeleteStep.DEFERRED_DELETE_BATCH_VAR.
     final Object previousBatch = context.getVariable(DeleteStep.DEFERRED_DELETE_BATCH_VAR);
     final boolean wasInTransaction = context.getDatabase().isTransactionActive();
@@ -266,7 +278,11 @@ public class ForeachStep extends AbstractExecutionStep {
       if (!wasInTransaction)
         context.getDatabase().begin();
 
+      // Every iteration runs the inner clauses on a plan of its own, so nothing that loops over the list checks the
+      // statement's deadline or termination: checked here, once per element (issue #9680)
+      final WorkGuard guard = WorkGuard.forCommandDeadline(context);
       for (final Object element : iterable) {
+        guard.check();
         final ResultInternal iterationRow = new ResultInternal();
         for (final String prop : inputRow.getPropertyNames())
           iterationRow.setProperty(prop, inputRow.getProperty(prop));
@@ -277,7 +293,7 @@ public class ForeachStep extends AbstractExecutionStep {
         try {
           executeInnerClauses(iterationRow, context);
 
-          DeleteStep.flushDeferredDeletes(context, deleteBatch);
+          DeleteStep.flushDeferredDeletes(context, deleteBatch, deletedSoFar);
         } finally {
           context.setVariable(DeleteStep.DEFERRED_DELETE_BATCH_VAR, previousBatch);
         }

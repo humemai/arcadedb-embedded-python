@@ -20,10 +20,13 @@ package com.arcadedb.query.opencypher.ast;
 
 import com.arcadedb.database.RID;
 import com.arcadedb.function.graph.IdFunction;
+import com.arcadedb.query.opencypher.InlineProperties;
 import com.arcadedb.query.opencypher.query.OpenCypherQueryEngine;
 import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.query.sql.executor.MultiValue;
 import com.arcadedb.query.sql.executor.Result;
+import com.arcadedb.schema.Property;
+import com.arcadedb.schema.Type;
 import com.arcadedb.utility.LongRangeList;
 
 import java.util.ArrayList;
@@ -118,16 +121,43 @@ public class InExpression implements BooleanExpression {
       // non-empty list makes this uncertain, an empty one leaves nothing to be uncertain about.
       return valuesToCheck.iterator().hasNext() ? null : Boolean.FALSE;
 
+    // A declaration defines the text form of its values ('1' for 1 in a STRING, 5 for '5' in an INTEGER), so membership
+    // compares the stored value with what each element would be stored as, like = does (issues #9695, #9794). The
+    // declaration is looked up once, and only for a text met by a non-text
+    Property declared = null;
+    boolean declaredResolved = false;
+
     if (valuesToCheck instanceof LongRangeList range) {
-      final Boolean found = rangeMembership(range, value);
+      Boolean found = rangeMembership(range, value);
+      // A range holds longs: a text declared STRING is also a member when it is the canonical spelling of one of them
+      if (!Boolean.TRUE.equals(found) && value instanceof String text) {
+        declared = declaredProperty(result, context);
+        declaredResolved = true;
+        if (declared != null && declared.getType() == Type.STRING) {
+          final Object number = canonicalLong(text);
+          if (number != value)
+            found = rangeMembership(range, number);
+        }
+      }
       if (found != null)
         return found;
     }
 
     // 3VL: null IN [1,2,3] -> null, 5 IN [1,null,3] -> null (if not found otherwise)
     boolean foundNull = false;
-    for (final Object checkValue : valuesToCheck) {
-      final Boolean cmp = valuesCompare(value, checkValue);
+    for (final Object element : valuesToCheck) {
+      Boolean cmp = valuesCompare(value, element);
+      if (!Boolean.TRUE.equals(cmp) && InlineProperties.isTextAgainstNonText(value, element)) {
+        if (!declaredResolved) {
+          declared = declaredProperty(result, context);
+          declaredResolved = true;
+        }
+        final Object stored = declared != null ?
+            InlineProperties.declaredValue(declared, context != null ? context.getDatabase() : null, element) :
+            null;
+        if (stored != null)
+          cmp = valuesCompare(value, stored);
+      }
       if (cmp == null)
         foundNull = true;
       else if (cmp)
@@ -138,6 +168,36 @@ public class InExpression implements BooleanExpression {
       return null;
 
     return Boolean.FALSE;
+  }
+
+  /**
+   * The declared property the left operand reads, when it reads a stored property of a record in any spelling
+   * ({@link PropertyReadExpression}, #9701) and the property is declared with a scalar type; otherwise null.
+   */
+  private Property declaredProperty(final Result result, final CommandContext context) {
+    final PropertyReadExpression.PropertyRead read = PropertyReadExpression.of(expression, result, context);
+    return read != null && read.record() != null ? InlineProperties.declaredProperty(read.record(), read.key()) : null;
+  }
+
+  /**
+   * The long a text is the canonical spelling of ({@code "12"}, not {@code "012"}, {@code "+12"} or {@code "-0"}), as the text an
+   * integer is stored as; or the text itself, which no long equals, when it is not one. The stored text of an integer is
+   * {@code Long.toString} because {@code Type.convert} to {@code String} is {@code toString()} for a number: this inverts it.
+   */
+  private static Object canonicalLong(final String text) {
+    // Only digits after an optional sign are parsed, so an ordinary text never costs a thrown exception
+    final int start = text.startsWith("-") ? 1 : 0;
+    if (start == text.length() || text.length() - start > 19)
+      return text;
+    for (int i = start; i < text.length(); i++)
+      if (text.charAt(i) < '0' || text.charAt(i) > '9')
+        return text;
+    try {
+      final long parsed = Long.parseLong(text);
+      return Long.toString(parsed).equals(text) ? parsed : text;
+    } catch (final NumberFormatException e) {
+      return text;
+    }
   }
 
   /**

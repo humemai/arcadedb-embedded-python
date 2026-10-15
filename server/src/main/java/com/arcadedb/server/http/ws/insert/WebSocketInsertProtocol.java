@@ -22,13 +22,19 @@ import com.arcadedb.ContextConfiguration;
 import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.exception.DuplicatedKeyException;
 import com.arcadedb.log.LogManager;
+import com.arcadedb.network.binary.ServerIsNotTheLeaderException;
 import com.arcadedb.serializer.json.JSONArray;
 import com.arcadedb.serializer.json.JSONException;
 import com.arcadedb.serializer.json.JSONObject;
+import com.arcadedb.server.ArcadeDBServer;
+import com.arcadedb.server.ErrorConcealment;
 import com.arcadedb.server.http.ws.WebSocketEventBus;
 import com.arcadedb.server.http.ws.WebSocketFrameSender;
+import com.arcadedb.server.security.ServerSecurityException;
 import com.arcadedb.server.security.ServerSecurityUser;
+import io.undertow.websockets.core.CloseMessage;
 import io.undertow.websockets.core.WebSocketChannel;
+import io.undertow.websockets.core.WebSockets;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
@@ -77,6 +83,10 @@ import java.util.logging.Level;
  * Server to client: {@code started}, {@code batchAck}, {@code committed}, and an {@code error} the server is free
  * to push unsolicited - which is what the idle sweep does when it rolls back a session the client walked away
  * from.
+ * <p>
+ * A write refused because this node is not the cluster leader names the leader in a {@code leaderAddress} field: on an
+ * {@code errors} entry of a {@code batchAck}, whose {@code code} is then {@code NOT_LEADER}, and on the {@code error}
+ * frame of a refused {@code commit}, whose {@code error} is then {@code "Not the leader"} (issue #9868).
  *
  * <h2>Ordering and threads</h2>
  * Undertow delivers the frames of one connection serially, on an I/O thread that must not be blocked with
@@ -111,11 +121,13 @@ public class WebSocketInsertProtocol {
 
   private final WebSocketInsertSessionManager sessionManager;
   private final ContextConfiguration          configuration;
+  private final WebSocketEventBus             eventBus;
 
   public WebSocketInsertProtocol(final WebSocketInsertSessionManager sessionManager,
-      final ContextConfiguration configuration) {
+      final ContextConfiguration configuration, final WebSocketEventBus eventBus) {
     this.sessionManager = sessionManager;
     this.configuration = configuration;
+    this.eventBus = eventBus;
     sessionManager.setExpiryListener((session, reason) -> {
       final WebSocketChannel channel = session.getChannel();
       if (channel != null && channel.isOpen())
@@ -136,7 +148,6 @@ public class WebSocketInsertProtocol {
    * and must stay free to read the next frame.
    */
   public void dispatch(final WebSocketChannel channel, final String action, final JSONObject message) {
-    final ServerSecurityUser user = (ServerSecurityUser) channel.getAttribute(WebSocketEventBus.USER);
     final UUID channelId = (UUID) channel.getAttribute(WebSocketEventBus.CHANNEL_ID);
 
     registerCloseHook(channel, channelId);
@@ -148,7 +159,7 @@ public class WebSocketInsertProtocol {
     if (start)
       pendingStarts(channel).incrementAndGet();
 
-    if (!frameQueue(channel).submit(() -> execute(channel, channelId, user, action, message))) {
+    if (!frameQueue(channel).submit(() -> execute(channel, channelId, action, message))) {
       // Refused for a full queue: the frame will never reach a worker, so its grant is released here instead.
       if (start)
         pendingStarts(channel).decrementAndGet();
@@ -209,8 +220,18 @@ public class WebSocketInsertProtocol {
     }
   }
 
-  private void execute(final WebSocketChannel channel, final UUID channelId, final ServerSecurityUser user,
-      final String action, final JSONObject message) {
+  private void execute(final WebSocketChannel channel, final UUID channelId, final String action,
+      final JSONObject message) {
+    // The principal is re-resolved for EVERY frame, never trusted from the handshake (issue #9311): a user dropped, given a
+    // new password or stripped of the database since then must not keep writing for the life of the connection.
+    final ServerSecurityUser user;
+    try {
+      user = eventBus.revalidatedUser(channel);
+    } catch (final ServerSecurityException e) {
+      revoke(channel, channelId, action, message, e);
+      return;
+    }
+
     try {
       switch (action) {
       case "start" -> {
@@ -243,6 +264,7 @@ public class WebSocketInsertProtocol {
       case "chunk" -> {
         final WebSocketInsertSession session = sessionManager.resolve(user, channelId,
             message.getString("sessionId", null));
+        requireDatabaseAccess(session, user);
         final JSONArray records = message.getJSONArray("records", null);
         if (records == null)
           throw new IllegalArgumentException("Property 'records' is required and must be an array");
@@ -265,11 +287,14 @@ public class WebSocketInsertProtocol {
                   + " allowed by '" + GlobalConfiguration.SERVER_WS_MAX_INSERT_CHUNK_ROWS.getKey()
                   + "'. Split it into smaller chunks");
 
-        send(channel, session.applyChunk(chunkSeq, records));
+        send(channel, sessionManager.applyChunk(session, chunkSeq, records));
       }
       case "commit", "rollback" -> {
         final WebSocketInsertSession session = sessionManager.resolve(user, channelId,
             message.getString("sessionId", null));
+        // A rollback is always allowed: it is how a client lets go of what it holds
+        if ("commit".equals(action))
+          requireDatabaseAccess(session, user);
         send(channel, sessionManager.finish(session, "commit".equals(action)));
       }
       // Unreachable through dispatch(), which only ever passes an action handles() claimed. It is here for the
@@ -279,17 +304,60 @@ public class WebSocketInsertProtocol {
       }
     } catch (final SecurityException e) {
       send(channel, error("Security error", e.getMessage(), message.getString("sessionId", null), e));
-    } catch (final JSONException | IllegalArgumentException | IllegalStateException | DuplicatedKeyException e) {
+    } catch (final DuplicatedKeyException e) {
+      // The per_stream commit refusing a key the client sent twice (issue #7404): the client's data, not the server's
+      // fault. Its message carries the key VALUES, stored data, so production mode conceals it (issue #8749)
+      send(channel, error("Insert session error",
+          ErrorConcealment.clientMessage(ArcadeDBServer.isProductionMode(configuration), this, "/ws insert", e.getMessage(), e),
+          message.getString("sessionId", null), e));
+    } catch (final JSONException | IllegalArgumentException | IllegalStateException e) {
       // JSONException joins them because a frame whose 'options' carries a value of the wrong JSON TYPE is the
       // same class of mistake as one carrying a value of the wrong content, and answering the first with
       // "Internal error" and the second with "Insert session error" told a client the server had broken when it
-      // had not. DuplicatedKeyException is the per_stream commit refusing a key the client sent twice (issue
-      // #7404): the client's data, not the server's fault.
+      // had not. Text this protocol wrote about the request, which the client needs to fix it: kept in every mode
       send(channel, error("Insert session error", e.getMessage(), message.getString("sessionId", null), e));
     } catch (final Exception e) {
       LogManager.instance().log(this, Level.FINE, "Error on /ws insert session action '%s'", e, action);
-      send(channel, error("Internal error", e.getMessage(), message.getString("sessionId", null), e));
+      // A per_stream commit refused because this node is not the leader is no server fault: the client is to send the
+      // load to the leader the refusal names, in 'leaderAddress' (issue #9868)
+      final boolean notTheLeader = ServerIsNotTheLeaderException.redirectIn(e) != null;
+      final JSONObject answer = error(notTheLeader ? "Not the leader" : "Internal error",
+          ErrorConcealment.clientMessage(ArcadeDBServer.isProductionMode(configuration), this, "/ws insert", e.getMessage(), e),
+          message.getString("sessionId", null), e);
+      WebSocketInsertSession.putLeaderAddress(answer, e);
+      send(channel, answer);
     }
+  }
+
+  /**
+   * The grant on the session's database is checked against the LIVE principal on every frame that writes or commits, not
+   * only at {@code start}. A revoked grant discards what the session holds, so nothing it applied can be committed later.
+   */
+  private void requireDatabaseAccess(final WebSocketInsertSession session, final ServerSecurityUser user) {
+    if (user.canAccessToDatabase(session.databaseName))
+      return;
+    try {
+      sessionManager.finish(session, false);
+    } catch (final RuntimeException e) {
+      LogManager.instance().log(this, Level.WARNING, "Cannot roll back /ws insert session %s after its grant was revoked", e,
+          session.id);
+    }
+    throw new SecurityException("User does not have access to database '" + session.databaseName + "'.");
+  }
+
+  /**
+   * The channel's principal is gone or its credentials changed: roll back what the connection holds, refuse every later
+   * {@code start}, say why and close the connection.
+   */
+  private void revoke(final WebSocketChannel channel, final UUID channelId, final String action, final JSONObject message,
+      final ServerSecurityException e) {
+    // The budget grant a start was given on the I/O thread is released even though the start is refused (issue #7909)
+    if ("start".equals(action))
+      pendingStarts(channel).decrementAndGet();
+
+    sessionManager.closeChannelSessions(channel, channelId);
+    send(channel, error("Security error", e.getMessage(), message.getString("sessionId", null), e));
+    WebSockets.sendClose(new CloseMessage(CloseMessage.MSG_VIOLATES_POLICY, "Principal is no longer valid"), channel, null);
   }
 
   private static JSONObject error(final String error, final String detail, final String sessionId, final Throwable e) {

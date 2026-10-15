@@ -76,7 +76,10 @@ import java.util.logging.Level;
  */
 public class LSMTreeIndex implements RangeIndex, IndexInternal {
   private static final IndexCursor                   EMPTY_CURSOR = new EmptyIndexCursor();
-  private final        String                        name;
+  // Not final for ONE writer only, restoreLogicalName(), which runs while a schema load builds this instance and before
+  // the load publishes it. The name is otherwise fixed for life: a compaction swaps the mutable FILE (and its name) in
+  // and out underneath it, which is why getMostRecentFileName() and getName() can differ (issue #9213).
+  private              String                        name;
   private final        RWLockContext                 lock         = new RWLockContext();
   protected final      AtomicReference<INDEX_STATUS> status       = new AtomicReference<>(INDEX_STATUS.AVAILABLE);
   /**
@@ -104,6 +107,32 @@ public class LSMTreeIndex implements RangeIndex, IndexInternal {
     }
   }
 
+  /**
+   * Loads the mutable component of an index from its file, or answers null - leaving the file out of the schema, untouched
+   * - when the file has no header to load (issue #10046). Such a file is a compaction's new mutable whose pages have not
+   * arrived: an HA follower holds one between the entry that creates a compaction's files and the entry that writes them,
+   * and keeps it when that sequence is cut short. Loaded anyway, it came back with no key types, and once bound to its
+   * index it failed every lookup and range scan with an {@code ArrayIndexOutOfBoundsException}. Left out, the index it
+   * would have stood for is reported missing by the schema, which keeps answering through a scan, and a
+   * {@code REBUILD INDEX} restores it. Never dropped from here: a load must not delete what it cannot read (#4743).
+   * <p>
+   * A compacted file needs no such guard: it never reads its own header - the mutable that points at it hands it its key
+   * types - and only a mutable whose header names it ever attaches it. A compacted file left behind by the same cut-short
+   * sequence is therefore claimed by no mutable, and the load's orphan sweep reclaims it.
+   */
+  private static PaginatedComponent loadMutable(final DatabaseInternal database, final String name, final boolean unique,
+      final String filePath, final int id, final ComponentFile.MODE mode, final int pageSize, final int version)
+      throws IOException {
+    try {
+      return new LSMTreeIndex(database, name, unique, filePath, id, mode, pageSize, version).mutable;
+    } catch (final LSMTreeIndexMutable.MissingHeaderException e) {
+      LogManager.instance().log(LSMTreeIndex.class, Level.SEVERE,
+          "Index file '%s' (fileId=%d) is not loaded: %s. It is the trace of an index compaction that did not complete; "
+              + "if an index needs it, run 'REBUILD INDEX' on that index", null, filePath, id, e.getMessage());
+      return null;
+    }
+  }
+
   public static class PaginatedComponentFactoryHandlerUnique implements ComponentFactory.PaginatedComponentFactoryHandler {
     @Override
     public PaginatedComponent createOnLoad(final DatabaseInternal database, final String name, final String filePath,
@@ -112,7 +141,7 @@ public class LSMTreeIndex implements RangeIndex, IndexInternal {
       if (filePath.endsWith(LSMTreeIndexCompacted.UNIQUE_INDEX_EXT))
         return new LSMTreeIndexCompacted(null, database, name, true, filePath, id, mode, pageSize, version);
 
-      return new LSMTreeIndex(database, name, true, filePath, id, mode, pageSize, version).mutable;
+      return loadMutable(database, name, true, filePath, id, mode, pageSize, version);
     }
   }
 
@@ -124,7 +153,7 @@ public class LSMTreeIndex implements RangeIndex, IndexInternal {
       if (filePath.endsWith(LSMTreeIndexCompacted.UNIQUE_INDEX_EXT))
         return new LSMTreeIndexCompacted(null, database, name, false, filePath, id, mode, pageSize, version);
 
-      return new LSMTreeIndex(database, name, false, filePath, id, mode, pageSize, version).mutable;
+      return loadMutable(database, name, false, filePath, id, mode, pageSize, version);
     }
   }
 
@@ -157,6 +186,26 @@ public class LSMTreeIndex implements RangeIndex, IndexInternal {
     this.name = name;
     this.metadata = new IndexMetadata(null, null, -1);
     this.mutable = new LSMTreeIndexMutable(this, database, name, unique, filePath, id, mode, pageSize, version);
+  }
+
+  /**
+   * Gives an instance a schema load has just built from its file back the logical name the index answered to when the
+   * schema was saved (issue #9213). The load path names an LSM index after the file it reads, and a compaction swaps a
+   * file named {@code <prefix>_<nanoTime>} in while the live index keeps its name, so after a restart - or on an HA
+   * follower, which re-reads the schema for a compaction entry - the same index used to come back under the new file
+   * name. {@code TypeIndex.equals} compares bucket indexes by name, so the leader's and a follower's copy of one type
+   * never matched again, and every lookup by the old name stopped resolving after a restart.
+   * <p>
+   * Only {@code LocalSchema} calls this, for an instance it has not published yet: no transaction can have queued
+   * entries under the old name, and nothing has hashed it, so the change of {@link #hashCode()} is unobservable.
+   */
+  public void restoreLogicalName(final String logicalName) {
+    // Only an instance still named after its file, i.e. one a load has just built: renaming a live index would hide the
+    // entries transactions queued under its current name (see LSMTreeIndexCursor, #8817).
+    if (!name.equals(mutable.getName()))
+      throw new IllegalStateException(
+          "Cannot restore the name '" + logicalName + "' on index '" + name + "': it no longer answers to its file name");
+    this.name = logicalName;
   }
 
   /**
@@ -847,13 +896,11 @@ public class LSMTreeIndex implements RangeIndex, IndexInternal {
       final LSMTreeIndexMutable result = lock.executeInWriteLock(() -> {
         final int pageSize = mutable.getPageSize();
 
-        final int last_ = mutable.getName().lastIndexOf('_');
-        final String newName = mutable.getName().substring(0, last_) + "_" + System.nanoTime();
+        final String newName = LSMTreeIndexAbstract.compactionBaseName(mutable.getName()) + "_" + System.nanoTime();
 
         final LSMTreeIndexMutable newMutableIndex = new LSMTreeIndexMutable(this, database, newName, mutable.isUnique(),
-            database.getDatabasePath() + File.separator + newName, mutable.getKeyTypes(), mutable.getStorageKeyTypes()
-            , pageSize,
-            LSMTreeIndexMutable.CURRENT_VERSION, compactedIndex);
+            database.getDatabasePath() + File.separator + newName, mutable.getKeyTypes(), mutable.getStorageKeyTypes(), pageSize,
+            LSMTreeIndexMutable.CURRENT_VERSION, compactedIndex, mutable.getNullStrategy());
         newMutableIndex.setStoreTermFrequency(mutable.isStoreTermFrequency());
         database.getSchema().getEmbedded().registerFile(newMutableIndex);
 
@@ -991,6 +1038,11 @@ public class LSMTreeIndex implements RangeIndex, IndexInternal {
   }
 
   Object[] normalizeKeysForBulkBuild(final Object[] keys) {
+    return convertKeys(keys);
+  }
+
+  @Override
+  public Object[] convertLookupKeys(final Object[] keys) {
     return convertKeys(keys);
   }
 

@@ -80,41 +80,15 @@ public class DepthFirstTraverseStep extends AbstractTraverseStep {
       if (item.isElement() && !traversed.contains(item.getElement().get().getIdentity())) {
         final RID rid = item.getElement().get().getIdentity();
         tryAddEntryPointAtTheEnd(item, context);
-        traversed.add(rid);
+        markTraversed(rid);
         bestDepthByRid.put(rid, 0);
       } else if (item.getProperty(RID_PROPERTY) instanceof Identifiable) {
         final RID rid = ((Identifiable) item.getProperty(RID_PROPERTY)).getIdentity();
         tryAddEntryPointAtTheEnd(item, context);
-        traversed.add(rid);
+        markTraversed(rid);
         bestDepthByRid.put(rid, 0);
       }
     }
-  }
-
-  private Result toTraverseResult(final Result item) {
-    TraverseResult res = null;
-    if (item instanceof TraverseResult result)
-      res = result;
-    else if (item.isElement() && item.getElement().get().getIdentity() != null) {
-      res = new TraverseResult(item.getElement().get());
-      res.depth = 0;
-    } else if (item.getPropertyNames().size() == 1) {
-      final Object val = item.getProperty(item.getPropertyNames().iterator().next());
-      if (val instanceof Identifiable identifiable) {
-        res = new TraverseResult((Document) identifiable.getRecord());
-        res.depth = 0;
-        res.setMetadata("$depth", 0);
-      }
-    } else {
-      res = new TraverseResult();
-      for (final String key : item.getPropertyNames())
-        res.setProperty(key, item.getProperty(key));
-
-      for (final String md : item.getMetadataKeys())
-        res.setMetadata(md, item.getMetadata(md));
-    }
-
-    return res;
   }
 
   @Override
@@ -243,9 +217,9 @@ public class DepthFirstTraverseStep extends AbstractTraverseStep {
     }
 
     if (res.isElement())
-      traversed.add(res.getElement().get().getIdentity());
+      markTraversed(res.getElement().get().getIdentity());
     else if (res.getProperty(RID_PROPERTY) instanceof Identifiable)
-      traversed.add(((Identifiable) res.getProperty(RID_PROPERTY)).getIdentity());
+      markTraversed(((Identifiable) res.getProperty(RID_PROPERTY)).getIdentity());
   }
 
   private void tryAddEntryPointAtTheEnd(final Result res, final CommandContext context) {
@@ -253,9 +227,15 @@ public class DepthFirstTraverseStep extends AbstractTraverseStep {
       this.entryPoints.add(res);
 
     if (res.isElement())
-      traversed.add(res.getElement().get().getIdentity());
+      markTraversed(res.getElement().get().getIdentity());
     else if (res.getProperty(RID_PROPERTY) instanceof Identifiable)
-      traversed.add(((Identifiable) res.getProperty(RID_PROPERTY)).getIdentity());
+      markTraversed(((Identifiable) res.getProperty(RID_PROPERTY)).getIdentity());
+  }
+
+  /** A record visited also takes an entry of {@link #bestDepthByRid} (a hash entry, its RID, its depth) and one of {@link #emitted}. */
+  @Override
+  protected int visitedEntryBytes() {
+    return 2 * VISITED_ENTRY_BYTES + HeapEstimator.HASH_ENTRY_BYTES + 3 * HeapEstimator.OBJECT_BYTES;
   }
 
   @Override

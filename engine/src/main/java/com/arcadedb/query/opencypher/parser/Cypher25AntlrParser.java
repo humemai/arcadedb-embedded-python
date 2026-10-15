@@ -31,8 +31,10 @@ import org.antlr.v4.runtime.CommonTokenStream;
 import org.antlr.v4.runtime.Token;
 import org.antlr.v4.runtime.tree.ParseTree;
 
+import java.util.ArrayDeque;
 import java.util.Collections;
 import java.util.LinkedHashSet;
+import java.util.Locale;
 import java.util.Set;
 import java.util.regex.Pattern;
 
@@ -96,6 +98,27 @@ public class Cypher25AntlrParser {
    * @throws CommandParsingException if query cannot be parsed
    */
   public ParsedQuery parseQuery(final String query) {
+    return parseQueryWithTree(query).parsed();
+  }
+
+  /**
+   * A parsed query together with the parse tree it was built from, for a caller that decides something on the tree itself
+   * (see {@link CypherLiteralParameterizer}).
+   *
+   * @param parsed the parsed query
+   * @param tree   the parse tree of the whole statement
+   */
+  public record ParsedTree(ParsedQuery parsed, Cypher25Parser.StatementContext tree) {
+  }
+
+  /**
+   * Parses a Cypher query string like {@link #parseQuery(String)}, also returning its parse tree.
+   *
+   * @param query the Cypher query string
+   * @return the parsed statement, its referenced parameter names and its parse tree
+   * @throws CommandParsingException if query cannot be parsed
+   */
+  public ParsedTree parseQueryWithTree(final String query) {
     if (query == null || query.trim().isEmpty())
       throw new CommandParsingException("Query cannot be empty");
 
@@ -156,7 +179,7 @@ public class Cypher25AntlrParser {
         final String errorLine = line > 0 && line <= lines.length ? lines[line - 1] : "";
 
         final StringBuilder errorMsg = new StringBuilder();
-        errorMsg.append(String.format("Unexpected input '%s' at line %d, column %d\n",
+        errorMsg.append(String.format(Locale.ROOT, "Unexpected input '%s' at line %d, column %d\n",
             nextToken.getText(), line, column));
 
         if (!errorLine.isEmpty()) {
@@ -167,13 +190,23 @@ public class Cypher25AntlrParser {
         throw new CommandParsingException(errorMsg.toString());
       }
 
+      // USE can only name the database this parser belongs to (issue #9940). Checked here, where the database is known, and
+      // on the tree, so a USE anywhere - a leading clause, before a braced query, inside a subquery - is reached. The walk
+      // runs only for a query holding the USE keyword at all.
+      // No database only on DoWhen's read-only probe (new Cypher25AntlrParser().parse(q).isReadOnly()), which never executes
+      // the statement: every query that runs is parsed by CypherStatementCache, with its database, and is checked here
+      if (database != null && containsToken(tokens, Cypher25Lexer.USE))
+        checkUseClauses(statementContext, database.getName());
+
       // Build AST using visitor
       final CypherASTBuilder astBuilder = new CypherASTBuilder();
       final CypherStatement statement = astBuilder.visitStatement(statementContext);
 
       CypherSemanticValidator.validate(statement);
 
-      return new ParsedQuery(statement, collectParameterNames(statementContext, query));
+      // After validation, so that an error names the query as written (issue #9598)
+      return new ParsedTree(new ParsedQuery(OptionalMatchAntiJoinRewriter.rewrite(statement), collectParameterNames(statementContext, query)),
+          statementContext);
 
     } catch (final CommandParsingException e) {
       // semantic-validation and explicit parse errors already carry a clear, actionable message
@@ -186,6 +219,31 @@ public class Cypher25AntlrParser {
       throw new CommandParsingException("Failed to parse Cypher query: " + query, e);
     } finally {
       ExpressionRewriter.restoreMaxExpressionDepth(previousMaxDepth);
+    }
+  }
+
+  private static boolean containsToken(final CommonTokenStream tokens, final int type) {
+    for (final Token token : tokens.getTokens())
+      if (token.getType() == type)
+        return true;
+    return false;
+  }
+
+  private static void checkUseClauses(final ParseTree root, final String databaseName) {
+    // Iterative, so a deeply nested query cannot overflow the stack here
+    final ArrayDeque<ParseTree> pending = new ArrayDeque<>();
+    pending.push(root);
+    while (!pending.isEmpty()) {
+      final ParseTree node = pending.pop();
+      if (node instanceof Cypher25Parser.UseClauseContext use) {
+        final String graph = CypherASTBuilder.useGraphName(use);
+        if (!graph.equals(databaseName))
+          throw new FeatureNotImplementedException("USE " + graph + " is not supported; a query can only USE "
+              + "the database it runs against ('" + databaseName + "')");
+        continue;
+      }
+      for (int i = 0; i < node.getChildCount(); i++)
+        pending.push(node.getChild(i));
     }
   }
 

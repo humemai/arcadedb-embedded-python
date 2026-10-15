@@ -45,7 +45,7 @@ class PluginApiSpecTest {
   }
 
   @Test
-  void allFifteenPluginOperationsAreDeclared() {
+  void allSixteenPluginOperationsAreDeclared() {
     assertThat(openAPI.getPaths().keySet()).containsExactlyInAnyOrder(
         "/prometheus",
         "/api/v1/cluster",
@@ -57,6 +57,8 @@ class PluginApiSpecTest {
         "/api/v1/cluster/verify/{database}",
         "/api/v1/cluster/resync/{database}",
         "/api/v1/cluster/accept-copy/{database}",
+        "/api/v1/cluster/accept-diverged/{database}",
+        "/api/v1/cluster/accept-stale-snapshot",
         "/api/v1/cluster/bootstrap-state",
         "/api/v1/cluster/capabilities",
         "/api/v1/cluster/security-seed",
@@ -65,7 +67,7 @@ class PluginApiSpecTest {
 
     final long operations = openAPI.getPaths().values().stream()
         .mapToLong(item -> item.readOperations().size()).sum();
-    assertThat(operations).isEqualTo(15);
+    assertThat(operations).isEqualTo(17);
   }
 
   @Test
@@ -131,11 +133,16 @@ class PluginApiSpecTest {
     // 'bootstrapInstalls' joined with issue #8044: the #7519 bootstrap install window pins '/api/v1/ready' at 503
     // and points the reader here, and nothing here reflected it. 'leaderContactElapsedMs' joined with issue #8900:
     // 'raftState' reads RUNNING while the leader's appends never reach this division, and only this figure shows it.
+    // 'localReplicationPathUnproven' and 'localLeaderUnreachableSinceRestart' joined with issues #9013 and #8953: the
+    // state of the replication path since an in-place restart, which that figure cannot show once a follower nobody
+    // reaches resets it on every rejected pre-vote. 'localInPlaceRestarts' joined with issue #9429: the restart counts
+    // that were reachable only through a log line.
     assertThat(schema.getProperties().keySet()).containsExactlyInAnyOrder(
         "implementation", "clusterName", "localPeerId", "capabilities", "raftState", "leaderContactElapsedMs",
         "isLeader", "leaderReady",
         "leaderId", "leaderHttpAddress", "electionCount", "lastElectionTime", "uptime",
         "localAppliedIndex", "localCommitIndex", "localReplicationLag", "localStuckAtStaleTerm",
+        "localReplicationPathUnproven", "localLeaderUnreachableSinceRestart", "localInPlaceRestarts",
         "leaderCommitIndex", "localStalledBehindLeader",
         "peers", "databases", "databasePresence", "alerts", "localResync",
         "criticalHalt", "raftLogFailure", "crashLoopEscalated", "bootstrapInstalls",
@@ -340,6 +347,27 @@ class PluginApiSpecTest {
     assertThat(post.getResponses().keySet()).containsExactlyInAnyOrder("200", "400", "401", "403", "404", "500");
     assertThat(openAPI.getComponents().getSchemas().get("ClusterActionResponse").getProperties().keySet())
         .contains("database", "localServer", "appliedIndex", "overriddenRefusal");
+  }
+
+  /** Issue #9449: root-only override on a sole voter; 404 when nothing stands, 409 on a node with peers. */
+  @Test
+  void acceptDivergedDeclaresWhatTheHandlerAnswers() {
+    final Operation post = openAPI.getPaths().get("/api/v1/cluster/accept-diverged/{database}").getPost();
+    assertThat(post.getOperationId()).isEqualTo("acceptClusterDivergedDatabase");
+    assertThat(post.getResponses().keySet()).containsExactlyInAnyOrder("200", "400", "401", "403", "404", "409", "500");
+    assertThat(openAPI.getComponents().getSchemas().get("ClusterActionResponse").getProperties().keySet())
+        .contains("database", "localServer", "appliedIndex", "divergenceCause", "readFloor");
+  }
+
+  /** Issue #9498: the node-wide floor's override; no database in the path, 404 when no floor stands, 409 with peers. */
+  @Test
+  void acceptStaleSnapshotDeclaresWhatTheHandlerAnswers() {
+    final Operation post = openAPI.getPaths().get("/api/v1/cluster/accept-stale-snapshot").getPost();
+    assertThat(post.getOperationId()).isEqualTo("acceptClusterStaleSnapshot");
+    assertThat(post.getParameters()).as("the floor is node-wide: the route names no database").isNullOrEmpty();
+    assertThat(post.getResponses().keySet()).containsExactlyInAnyOrder("200", "400", "401", "403", "404", "409", "500");
+    assertThat(openAPI.getComponents().getSchemas().get("ClusterActionResponse").getProperties().keySet())
+        .contains("localServer", "appliedIndex", "readFloor", "snapshotIndex");
   }
 
   /**

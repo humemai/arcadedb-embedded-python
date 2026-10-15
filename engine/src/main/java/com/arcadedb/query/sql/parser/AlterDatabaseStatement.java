@@ -22,15 +22,18 @@ package com.arcadedb.query.sql.parser;
 
 import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.database.DatabaseInternal;
+import com.arcadedb.database.DocumentValidator;
 import com.arcadedb.database.Identifiable;
+import com.arcadedb.database.LocalDatabase;
 import com.arcadedb.exception.CommandExecutionException;
 import com.arcadedb.exception.DatabaseOperationException;
+import com.arcadedb.exception.TransactionCommittedRemotelyException;
+import com.arcadedb.exception.TransactionOutcomeUnknownException;
 import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.query.sql.executor.InternalResultSet;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultInternal;
 import com.arcadedb.query.sql.executor.ResultSet;
-import com.arcadedb.schema.LocalSchema;
 import com.arcadedb.serializer.BinarySerializer;
 import com.arcadedb.security.SecurityDatabaseUser;
 import com.arcadedb.utility.FileUtils;
@@ -74,6 +77,13 @@ public class AlterDatabaseStatement extends DDLStatement {
           "Setting '" + settingNameAsString + "' has " + cfg.getScope() + " scope and cannot be set per database"
               + (cfg.getScope() == GlobalConfiguration.SCOPE.SERVER ? ": use SET SERVER SETTING instead" : ""));
 
+    // A database administrator holds updateDatabaseSettings for tuning. The settings that guard what a query may
+    // reach (LOAD CSV remote/file access and the SSRF block list) are security controls: clearing the block list
+    // turns the server into a proxy to its internal network, so they need the same privilege as the statements that
+    // fetch caller-supplied URLs or read local files (IMPORT DATABASE).
+    if (cfg.isSecuritySensitive())
+      db.checkPermissionsOnDatabase(SecurityDatabaseUser.DATABASE_ACCESS.UPDATE_SECURITY);
+
     // Externalized on the way into the result row for the same reason the new value is: for a Class-typed
     // setting the stored value may be the Class itself, and reporting it as "class java.time.LocalDate" would
     // make oldValue and newValue two different spellings of the same thing (issue #7163).
@@ -83,13 +93,13 @@ public class AlterDatabaseStatement extends DDLStatement {
     boolean saveInDatabaseConfiguration = false;
 
     switch (cfg) {
+    // The schema setters save schema.json themselves, inside a schema recording session that under HA also ships it to
+    // the followers. The bare save that used to follow here rewrote the leader's file only (issue #9747)
     case DATE_FORMAT:
       db.getSchema().setDateFormat(finalValue.toString());
-      ((LocalSchema) db.getSchema()).saveConfiguration();
       break;
     case DATE_TIME_FORMAT:
       db.getSchema().setDateTimeFormat(finalValue.toString());
-      ((LocalSchema) db.getSchema()).saveConfiguration();
       break;
     case DATE_IMPLEMENTATION, DATE_TIME_IMPLEMENTATION:
       // Issue #7163: the class-name -> Class conversion and its "not found" refusal used to live here, hand
@@ -121,18 +131,57 @@ public class AlterDatabaseStatement extends DDLStatement {
       final Class<?> resolvedClass = finalValue instanceof Class<?> clazz ? clazz : null;
       finalValue = GlobalConfiguration.externalizeValue(finalValue);
 
-      db.getConfiguration().setValue(cfg, finalValue);
+      // Kept to undo the change below when it cannot be saved (issue #9763). Under Raft HA the save is what replicates
+      // the configuration, and it can be refused - a peer that cannot decode the entry yet - or fail to commit: the
+      // setting must then not stay in force on this node alone, which is the divergence the replication exists to end.
+      // Only this setting is put back, so a change to another one that lands meanwhile is kept. The previous value is
+      // captured and the new one stored in one step for the apply of a replicated change, so a change to the same
+      // setting another node committed cannot land in between and be undone with a value it replaced (issue #9919).
+      final Object valueToStore = finalValue;
+      final Runnable store = () -> putInForce(db, cfg, valueToStore, resolvedClass);
+      final LocalDatabase.SettingChange change;
+      if (resolvedClass != null && (cfg == GlobalConfiguration.DATE_IMPLEMENTATION
+          || cfg == GlobalConfiguration.DATE_TIME_IMPLEMENTATION)) {
+        // A REGEXP on a DATE or DATETIME property is matched against the text of the class the value is held as, which this
+        // setting decides for the whole database: refused before anything changes when a pattern would match no value of
+        // the new class (issue #9976). Checked and put in force under the write lock, which ALTER PROPERTY takes too, so a
+        // pattern declared meanwhile is either checked here or checked against the new class. The database lock is taken
+        // before the apply lock changeSetting takes, never after: the apply of a replicated change holds no database lock
+        final String described = "'" + settingNameAsString + "' to '" + finalValue + "'";
+        change = db.executeInWriteLock(() -> {
+          DocumentValidator.requireDateImplementationChangeSatisfiable(db, cfg, resolvedClass, described);
+          return changeSetting(db, cfg.getKey(), store);
+        });
+      } else
+        change = changeSetting(db, cfg.getKey(), store);
 
       // The stored value is what the setting is now worth, which is not always what was asked for: a callback
       // reached through the overlay may normalise it (arcadedb.maxPageRAM clamps a page cache larger than 80%
-      // of the heap), and the result row has to report the value that took effect (issue #7163).
-      finalValue = GlobalConfiguration.externalizeValue(db.getConfiguration().getValue(cfg));
-
-      applyDatabaseSideEffect(db, cfg, resolvedClass);
+      // of the heap), and the result row has to report the value that took effect (issue #7163). valueSet() is the
+      // object db.getConfiguration().getValue(cfg) returns, read inside the change before an apply could replace it; when
+      // nothing is stored, that call falls back to the setting's own value, and so does this.
+      finalValue = GlobalConfiguration.externalizeValue(change.valueSet() != null ? change.valueSet() : cfg.getValue());
 
       try {
-        db.saveConfiguration();
+        // This setting only: under Raft HA the entry must not carry a change another statement on this node has put in
+        // force and not submitted yet, which would commit cluster-wide even if that statement's save is refused (issue #9959)
+        db.saveConfiguration(cfg.getKey());
+      } catch (final TransactionCommittedRemotelyException e) {
+        // Committed cluster-wide: every node, this one included, installs the change, so there is nothing to undo
+        throw e;
+      } catch (final TransactionOutcomeUnknownException e) {
+        // Handed to the replication, which may still commit it or never (issue #9904). Putting the previous value back
+        // blindly would race this node's own apply of the change: run after it, it leaves this node alone on the old
+        // value. The setting takes what this node's configuration.json holds instead, which is what was installed here
+        restoreSettingFromSavedConfiguration(db, cfg.getKey());
+        throw e;
+      } catch (final RuntimeException e) {
+        // A definite failure: refused or failed before it could commit, so the previous value is the right one, unless
+        // another writer changed the setting since (issue #9919)
+        undoSettingChange(db, change);
+        throw e;
       } catch (final IOException e) {
+        undoSettingChange(db, change);
         // Chain the cause and name what was being written: without them a read-only filesystem, a permission
         // problem and a full volume are indistinguishable to the caller (issue #7141).
         throw new CommandExecutionException(
@@ -150,6 +199,61 @@ public class AlterDatabaseStatement extends DDLStatement {
   }
 
   /**
+   * Stores the setting and applies its effect on this database. A side effect that fails puts the previous value back, so
+   * the configuration never names a setting this database is not running with. Runs inside
+   * {@link #changeSetting(DatabaseInternal, String, Runnable)}, under the lock the apply of a replicated change holds, so
+   * the value read back here is the one this change replaces (issue #9919).
+   */
+  private void putInForce(final DatabaseInternal db, final GlobalConfiguration cfg, final Object value,
+      final Class<?> resolvedClass) {
+    final Object previousValue = db.getConfiguration().hasValue(cfg.getKey()) ?
+        db.getConfiguration().getValue(cfg.getKey(), null) :
+        null;
+    db.getConfiguration().setValue(cfg, value);
+    try {
+      applyDatabaseSideEffect(db, cfg, resolvedClass);
+    } catch (final RuntimeException | Error e) {
+      if (db.getEmbedded() instanceof LocalDatabase local)
+        local.restoreSetting(cfg.getKey(), previousValue);
+      throw e;
+    }
+  }
+
+  /**
+   * Stores a setting through {@code change}, capturing the value it replaced in the same step for the apply of a
+   * replicated configuration change (issue #9919), see {@link LocalDatabase#changeSetting(String, Runnable)}. Every
+   * database a statement runs against is a {@link LocalDatabase} or wraps one, which
+   * {@link DatabaseInternal#getEmbedded()} returns; anything else has no apply to race with.
+   */
+  private static LocalDatabase.SettingChange changeSetting(final DatabaseInternal db, final String key, final Runnable change) {
+    if (db.getEmbedded() instanceof LocalDatabase local)
+      return local.changeSetting(key, change);
+    // No apply lock and no undo for anything else (undoSettingChange() is a no-op there), as before issue #9919
+    final Object previousValue = db.getConfiguration().hasValue(key) ? db.getConfiguration().getValue(key, null) : null;
+    change.run();
+    return new LocalDatabase.SettingChange(key, previousValue, db.getConfiguration().getValue(key, null));
+  }
+
+  /**
+   * Puts back the value this statement replaced, side effects included, after a save that did not happen (issue
+   * #9763), unless another writer changed the setting since (issue #9919). Only the embedded {@link LocalDatabase}
+   * re-derives the per-database effects.
+   */
+  private static void undoSettingChange(final DatabaseInternal db, final LocalDatabase.SettingChange change) {
+    if (db.getEmbedded() instanceof LocalDatabase local)
+      local.undoSettingChange(change);
+  }
+
+  /**
+   * Settles the setting on what {@code configuration.json} holds after a save whose outcome is unknown (issue #9904),
+   * see {@link LocalDatabase#restoreSettingFromSavedConfiguration(String)}.
+   */
+  private static void restoreSettingFromSavedConfiguration(final DatabaseInternal db, final String key) {
+    if (db.getEmbedded() instanceof LocalDatabase local)
+      local.restoreSettingFromSavedConfiguration(key);
+  }
+
+  /**
    * Applies the part of a setting's effect that belongs to THIS database rather than to the process: pointing
    * the database's own {@link BinarySerializer} at the date implementation just stored.
    * <p>
@@ -164,6 +268,19 @@ public class AlterDatabaseStatement extends DDLStatement {
    */
   private void applyDatabaseSideEffect(final DatabaseInternal db, final GlobalConfiguration cfg,
       final Class<?> resolvedClass) {
+    switch (cfg) {
+    case SQL_MAX_EXPRESSION_DEPTH, CYPHER_MAX_EXPRESSION_DEPTH, CYPHER_MAX_CLAUSES, QUERY_LITERAL_PARAMETERIZATION -> {
+      // The parse limits are checked when a text is parsed, and a cached statement is never parsed again: without this a
+      // lowered limit would not reach a statement parsed under the old one - nor any text of the same shape, which the
+      // statement caches serve from one parsed statement since issue #8307
+      db.getStatementCache().clear();
+      db.getCypherStatementCache().clear();
+    }
+    default -> {
+      // no cached statement depends on it
+    }
+    }
+
     if (resolvedClass == null)
       return;
 

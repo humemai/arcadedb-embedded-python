@@ -18,37 +18,30 @@
  */
 package com.arcadedb.query.opencypher.procedures.path;
 
-import com.arcadedb.database.RID;
-import com.arcadedb.exception.RecordNotFoundException;
-import com.arcadedb.graph.Edge;
-import com.arcadedb.graph.GhostEdgeReporter;
 import com.arcadedb.graph.Vertex;
 import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.query.sql.executor.Result;
-import com.arcadedb.query.sql.executor.ResultInternal;
 
-import com.arcadedb.utility.NumberUtils;
-import com.arcadedb.utility.RidHashSet;
-
-import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.stream.Stream;
 
 /**
  * Procedure: path.expandConfig(startNode, config)
  * <p>
  * Expands paths from a starting node using a configuration map.
- * Config options: relationshipFilter, labelFilter, minLevel, maxLevel, bfs, uniqueness, limit
+ * Config options: relationshipFilter, labelFilter, sequence, filterStartNode, beginSequenceAtStart, endNodes,
+ * terminatorNodes, allowlistNodes (whitelistNodes), denylistNodes (blacklistNodes), uniqueness, minLevel, maxLevel, bfs, limit,
+ * optional. The filters take APOC's syntax: see {@link RelationshipFilter}, {@link LabelFilter} and {@link NodeFilter}. The
+ * default {@code uniqueness} is APOC's, {@code RELATIONSHIP_PATH}: every trail, not every node, is a path. See
+ * {@link PathUniqueness} for the nine values, and {@link PathExpansion} for the walk.
  * </p>
  * <p>
  * Example Cypher usage:
  * <pre>
  * MATCH (a:Person {name: 'Alice'})
  * CALL path.expandConfig(a, {
- *   relationshipFilter: 'KNOWS|WORKS_WITH',
+ *   relationshipFilter: 'KNOWS>|&lt;WORKS_WITH',
  *   labelFilter: '+Person',
  *   minLevel: 1,
  *   maxLevel: 3,
@@ -93,168 +86,16 @@ public class PathExpandConfig extends AbstractPathProcedure {
     validateArgs(args);
 
     final Vertex startNode = extractVertex(args[0], "startNode");
-    final Map<String, Object> config = extractConfig(args[1]);
+    final Map<String, Object> config = optionalMapArg(args, 1, "config");
 
-    // Extract configuration options
-    final String[] relTypes = extractRelTypes(config.get("relationshipFilter"));
-    final String[] labelFilter = extractLabels(config.get("labelFilter"));
-    final int minLevel = config.containsKey("minLevel") ? NumberUtils.saturateToInt((Number) config.get("minLevel")) : 0;
-    final int maxLevel = config.containsKey("maxLevel") ? NumberUtils.saturateToInt((Number) config.get("maxLevel")) : Integer.MAX_VALUE;
-    final boolean bfs = config.containsKey("bfs") ? (Boolean) config.get("bfs") : true;
-    final int limit = config.containsKey("limit") ? NumberUtils.saturateToInt((Number) config.get("limit")) : Integer.MAX_VALUE;
+    final int minLevel = extractInt(config, "minLevel", 0);
+    final int maxLevel = extractMaxLevel(config);
+    final int limit = extractLimit(config);
+    final boolean bfs = extractBoolean(config, "bfs", true);
+    final boolean optional = extractBoolean(config, "optional", false);
+    final PathUniqueness uniqueness = extractUniqueness(config, PathUniqueness.RELATIONSHIP_PATH);
+    final Filters filters = extractFilters(config, startNode.getDatabase(), minLevel);
 
-    // Expand paths
-    final List<List<Object>> allPaths = new ArrayList<>();
-
-    if (bfs) {
-      expandBFS(startNode, relTypes, labelFilter, minLevel, maxLevel, limit, allPaths, context);
-    } else {
-      // Only the depth-first walk carries this state, and bfs defaults to true
-      final List<Object> currentPath = new ArrayList<>();
-      final Set<RID> visited = new HashSet<>();
-      final RidHashSet ghostNodes = new RidHashSet(16);
-
-      currentPath.add(startNode);
-      visited.add(startNode.getIdentity());
-
-      expandDFS(startNode, relTypes, labelFilter, 0, minLevel, maxLevel, currentPath, visited, ghostNodes, allPaths, context, limit);
-    }
-
-    // Convert paths to results (respect limit)
-    return allPaths.stream().limit(limit).map(pathElements -> {
-      final Map<String, Object> path = buildPath(pathElements);
-      final ResultInternal result = new ResultInternal();
-      result.setProperty("path", path);
-      return (Result) result;
-    });
-  }
-
-  private void expandBFS(final Vertex startNode, final String[] relTypes, final String[] labelFilter,
-      final int minLevel, final int maxLevel, final int limit,
-      final List<List<Object>> allPaths, final CommandContext context) {
-
-    final List<List<Object>> frontier = new ArrayList<>();
-    final RidHashSet visited = new RidHashSet();
-    final RidHashSet ghostNodes = new RidHashSet(16);
-
-    final List<Object> initialPath = new ArrayList<>();
-    initialPath.add(startNode);
-    frontier.add(initialPath);
-    visited.add(startNode.getIdentity());
-
-    int currentLevel = 0;
-
-    while (!frontier.isEmpty() && currentLevel <= maxLevel && allPaths.size() < limit) {
-      final List<List<Object>> nextFrontier = new ArrayList<>();
-
-      for (final List<Object> path : frontier) {
-        if (currentLevel >= minLevel && allPaths.size() < limit) {
-          allPaths.add(new ArrayList<>(path));
-        }
-
-        if (currentLevel < maxLevel) {
-          final Vertex lastNode = (Vertex) path.getLast();
-          expandFromNode(lastNode, relTypes, labelFilter, path, visited, ghostNodes, nextFrontier);
-        }
-      }
-
-      frontier.clear();
-      frontier.addAll(nextFrontier);
-      currentLevel++;
-    }
-  }
-
-  private void expandFromNode(final Vertex node, final String[] relTypes, final String[] labelFilter,
-      final List<Object> currentPath, final RidHashSet visited, final RidHashSet ghostNodes,
-      final List<List<Object>> nextFrontier) {
-
-    // Expand in both directions
-    for (final Vertex.DIRECTION direction : new Vertex.DIRECTION[] { Vertex.DIRECTION.OUT, Vertex.DIRECTION.IN }) {
-      final Iterable<Edge> edges = node.getEdges(direction, relTypes != null ? relTypes : NO_TYPES);
-
-      for (final Edge edge : edges) {
-        try {
-          // The neighbour is tested by its RID and loaded only once it is going into the path (issue #7976)
-          final RID neighborId = direction == Vertex.DIRECTION.OUT ? edge.getIn() : edge.getOut();
-
-          if (!visited.contains(neighborId) && matchesLabels(node.getDatabase(), neighborId, labelFilter)) {
-            // Resolved before the RID is marked visited: a RID marked visited by a load that then failed would make
-            // every later edge to the same ghost short-circuit, so only the first one would ever be reported
-            final Vertex neighbor = resolveNeighbor(neighborId, ghostNodes);
-            if (neighbor == null)
-              continue;
-
-            visited.add(neighborId);
-
-            final List<Object> newPath = new ArrayList<>(currentPath);
-            newPath.add(edge);
-            newPath.add(neighbor);
-            nextFrontier.add(newPath);
-          }
-        } catch (final RecordNotFoundException e) {
-          GhostEdgeReporter.reportSkipped(e);
-        }
-      }
-    }
-  }
-
-  // `visited` here is a boxing Set<RID> rather than the primitive RidHashSet the breadth-first walks use, and has to
-  // stay one: this is a depth-first path enumeration, so it UNMARKS a vertex on backtracking, and an open-addressed
-  // set with linear probing cannot remove an entry without tombstones - which RidHashSet deliberately does not carry
-  private void expandDFS(final Vertex current, final String[] relTypes, final String[] labelFilter,
-      final int currentDepth, final int minDepth, final int maxDepth,
-      final List<Object> currentPath, final Set<RID> visited, final RidHashSet ghostNodes,
-      final List<List<Object>> allPaths, final CommandContext context, final int limit) {
-
-    if (allPaths.size() >= limit) {
-      return;
-    }
-
-    if (currentDepth >= minDepth) {
-      allPaths.add(new ArrayList<>(currentPath));
-    }
-
-    if (currentDepth >= maxDepth) {
-      return;
-    }
-
-    for (final Vertex.DIRECTION direction : new Vertex.DIRECTION[] { Vertex.DIRECTION.OUT, Vertex.DIRECTION.IN }) {
-      final Iterable<Edge> edges = current.getEdges(direction, relTypes != null ? relTypes : NO_TYPES);
-
-      for (final Edge edge : edges) {
-        if (allPaths.size() >= limit) {
-          return;
-        }
-
-        try {
-          // The neighbour is tested by its RID and loaded only once it is going into the path (issue #7976)
-          final RID neighborId = direction == Vertex.DIRECTION.OUT ? edge.getIn() : edge.getOut();
-
-          if (!visited.contains(neighborId) && matchesLabels(current.getDatabase(), neighborId, labelFilter)) {
-            final Vertex neighbor = resolveNeighbor(neighborId, ghostNodes);
-            if (neighbor == null)
-              continue;
-
-            visited.add(neighborId);
-            currentPath.add(edge);
-            currentPath.add(neighbor);
-
-            // try-finally so the path/visited bookkeeping is unwound even if the recursion throws.
-            try {
-              expandDFS(neighbor, relTypes, labelFilter, currentDepth + 1, minDepth, maxDepth,
-                  currentPath, visited, ghostNodes, allPaths, context, limit);
-            } finally {
-              currentPath.removeLast();
-              currentPath.removeLast();
-              visited.remove(neighborId);
-            }
-          }
-        } catch (final RecordNotFoundException e) {
-          // Only edge.getIn()/getOut() (a ghost edge record, surfaced by its lazy load) can land here now; a ghost
-          // VERTEX is caught and remembered inside resolveNeighbor. The recursion has its own per-edge catches.
-          GhostEdgeReporter.reportSkipped(e);
-        }
-      }
-    }
+    return pathRows(new PathExpansion(startNode, filters, uniqueness, bfs, minLevel, maxLevel, limit, context), optional);
   }
 }

@@ -40,7 +40,7 @@ import com.arcadedb.security.SecurityDatabaseUser;
 import com.arcadedb.utility.FileUtils;
 
 import java.lang.reflect.InvocationTargetException;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.logging.Level;
@@ -49,13 +49,13 @@ public class BackupDatabaseStatement extends SimpleExecStatement {
   public          Url                         url;
   protected       Expression                  key;
   protected       Expression                  value;
-  public final    Map<Expression, Expression> settings = new HashMap<>();
+  public final    Map<Expression, Expression> settings = new LinkedHashMap<>();
 
   public BackupDatabaseStatement() {
   }
 
   @Override
-  public boolean isIdempotent() {
+  protected boolean isIdempotentItself() {
     return true;
   }
 
@@ -68,7 +68,7 @@ public class BackupDatabaseStatement extends SimpleExecStatement {
    * performs lets such a caller tell the two apart without special-casing this class by name.
    */
   @Override
-  public Set<OperationType> getOperationTypes() {
+  protected Set<OperationType> getOperationTypesItself() {
     return Set.of(OperationType.READ, OperationType.CREATE);
   }
 
@@ -168,6 +168,15 @@ public class BackupDatabaseStatement extends SimpleExecStatement {
 
         try {
           final String backupFile = (String) clazz.getMethod("backupDatabase").invoke(backup);
+
+          // PRUNE THE DIRECTORY JUST WRITTEN INTO (issue #9844). The statement is the other on-demand entry point next to the
+          // control plane's 'trigger backup', which prunes since #7472, and it wrote into the same directory without ever
+          // pruning it: a database absent from the auto-backup configuration grew its archive directory forever. Inside the
+          // BACKUP slot held above, so it is serialised against the scheduler's own prune exactly as 'trigger backup' is.
+          // After the archive exists, and retention always keeps the most recent one, so the backup just taken is never the
+          // one deleted. Never fails the statement: the archive is written. With no server bound this does nothing.
+          BackupDirectoryResolver.applyRetentionAfterBackup(context.getDatabase(), backupDirectory);
+
           result.setProperty("result", "OK");
           result.setProperty("backupFile", backupFile);
 

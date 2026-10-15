@@ -22,6 +22,7 @@ import com.arcadedb.ContextConfiguration;
 import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.server.ArcadeDBServer;
 import com.arcadedb.server.ServerException;
+import com.arcadedb.server.TestServerHelper;
 
 import org.apache.ratis.protocol.RaftPeerId;
 import org.junit.jupiter.api.AfterEach;
@@ -30,8 +31,6 @@ import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 /**
  * Which peer an operator's {@code shutdown <name>} names, and the one line a cluster gets when a peer-to-peer
@@ -52,7 +51,7 @@ class Issue7563ShutdownTargetAndFallbackNoticeTest {
   @BeforeEach
   @AfterEach
   void rearmTheNotice() {
-    PlainHttpFallbackNotice.rearmForTests();
+    PeerRequest.rearmForTests();
   }
 
   // ------------------------------------------------------------------ which peer the name selects
@@ -167,13 +166,13 @@ class Issue7563ShutdownTargetAndFallbackNoticeTest {
   /** One latch for every dial that can fall back, so the second one to notice does not repeat the first. */
   @Test
   void theFallbackNoticeIsSaidOnceForTheWholeFamilyOfDials() {
-    assertThat(PlainHttpFallbackNotice.sayOnce(BootstrapElection.class, "probing its bootstrap-state"))
+    assertThat(PeerRequest.sayOnce(BootstrapElection.class, "probing its bootstrap-state"))
         .as("the first dial to fall back says it")
         .isTrue();
-    assertThat(PlainHttpFallbackNotice.sayOnce(RaftHAPlugin.class, "sending it the shutdown command"))
+    assertThat(PeerRequest.sayOnce(RaftHAPlugin.class, "sending it the shutdown command"))
         .as("a different dial falling back the same way adds nothing an operator can act on")
         .isFalse();
-    assertThat(PlainHttpFallbackNotice.sayOnce(BootstrapElection.class, "probing its bootstrap-state"))
+    assertThat(PeerRequest.sayOnce(BootstrapElection.class, "probing its bootstrap-state"))
         .as("nor does the same one on its next round")
         .isFalse();
   }
@@ -187,9 +186,8 @@ class Issue7563ShutdownTargetAndFallbackNoticeTest {
     final ContextConfiguration config = new ContextConfiguration();
     config.setValue(GlobalConfiguration.HA_SERVER_LIST, serverList);
 
-    final ArcadeDBServer mockServer = mock(ArcadeDBServer.class);
-    when(mockServer.getServerName()).thenReturn("ArcadeDB_0");
+    final ArcadeDBServer arcadeServer = TestServerHelper.unstartedServer("ArcadeDB_0");
 
-    return new RaftHAServer(mockServer, config);
+    return new RaftHAServer(arcadeServer, config);
   }
 }
