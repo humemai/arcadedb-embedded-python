@@ -86,7 +86,7 @@ ls wheels/*/*.whl | wc -l                                           # 20
 for w in wheels/*/*.whl; do [ "$(stat -c%s "$w")" -lt 100000000 ] || echo "TOO BIG: $w"; done
 ```
 
-### 4. Tag, Check, and Release
+### 4. Tag and Check
 
 Tags are the source of truth. Pushing `X.Y.Z`, `X.Y.Z.devN`, or `X.Y.Z.postN` triggers
 PyPI + docs.
@@ -106,33 +106,12 @@ git push origin X.Y.Z
 
 # The remote tag must peel to the same commit
 git ls-remote origin 'refs/tags/X.Y.Z^{}'
-
-gh release create X.Y.Z -R humemai/arcadedb-embedded-python --verify-tag \
-  --title "X.Y.Z" \
-  --notes-file notes.md
 ```
 
 `--cleanup=verbatim` keeps the lines of the notes that start with `#`: `git tag -F` strips them
 by default, so the `##` headings of the release body would be missing from the tag message.
-`--verify-tag` stops `gh` from creating a tag of its own if the pushed one is missing.
-Always pass `-R humemai/arcadedb-embedded-python`: in a checkout of this fork, `gh`
-resolves its default repository to upstream, where a release would be a mistake. The
-release is created at <https://github.com/humemai/arcadedb-embedded-python/releases>;
-every release there is named by its tag (`26.9.1`, `26.5.1.post1`) and has no assets,
-because the wheels go to PyPI.
 
-#### What the release body contains
-
-Read the previous release at that page and keep its shape:
-
-- one line saying the wheel bundles the ArcadeDB engine of that version, synced to
-  upstream's release commit, with a link to the commit by its full SHA;
-- the `pip install` lines, including the optional extras;
-- "Read this before upgrading": behaviour changes a working program may depend on,
-  grouped under SQL, openCypher, and Through the bindings, each deliberate upstream and
-  linked to its issue;
-- a Security section for upstream advisories that matter to embedded use;
-- what the bindings added, and a pointer to [Known Engine Issues](../guide/known-issues.md).
+The tag push starts the release workflow, which builds and publishes the wheels. **Do not create the GitHub release yet**: it comes after step 5 has shown that every wheel is on PyPI (step 6).
 
 ### 5. Monitor GitHub Actions
 
@@ -168,7 +147,41 @@ Read the previous release at that page and keep its shape:
   deploys its docs as `latest`. If the release failed, move `latest` back (see
   [Rolling Back a Release](#rolling-back-a-release)).
 
-### 6. After the Release
+Only when this check passes (the publish job succeeded and PyPI shows all 20 files) go on to step 6. If it does not pass, fix that first: a GitHub release whose `pip install` line fails is worse than a late release.
+
+### 6. Create the GitHub Release, After PyPI Has Every Wheel
+
+Creating the release only after the wheels are on PyPI is the right order. The release page tells
+people to `pip install arcadedb-embedded==X.Y.Z`, so it is created only once that command works for
+every platform.
+
+```bash
+gh release create X.Y.Z -R humemai/arcadedb-embedded-python --verify-tag \
+  --title "X.Y.Z" \
+  --notes-file notes.md
+```
+
+`--verify-tag` stops `gh` from creating a tag of its own if the pushed one is missing.
+Always pass `-R humemai/arcadedb-embedded-python`: in a checkout of this fork, `gh`
+resolves its default repository to upstream, where a release would be a mistake. The
+release is created at <https://github.com/humemai/arcadedb-embedded-python/releases>;
+every release there is named by its tag (`26.9.1`, `26.5.1.post1`) and has no assets,
+because the wheels go to PyPI.
+
+#### What the release body contains
+
+Read the previous release at that page and keep its shape:
+
+- one line saying the wheel bundles the ArcadeDB engine of that version, synced to
+  upstream's release commit, with a link to the commit by its full SHA;
+- the `pip install` lines, including the optional extras;
+- "Read this before upgrading": behaviour changes a working program may depend on,
+  grouped under SQL, openCypher, and Through the bindings, each deliberate upstream and
+  linked to its issue;
+- a Security section for upstream advisories that matter to embedded use;
+- what the bindings added, and a pointer to [Known Engine Issues](../guide/known-issues.md).
+
+### 7. After the Release
 
 Return `main` to upstream's development line with a normal sync. It brings the next
 `-SNAPSHOT` version; there is no version bump to make here.
@@ -177,7 +190,7 @@ Return `main` to upstream's development line with a normal sync. It brings the n
 ./sync-upstream.sh
 ```
 
-### 7. Open the Upstream Pull Request, Last
+### 8. Open the Upstream Pull Request, Last
 
 Only now regenerate the `python-bindings` branch and open the pull request to
 ArcadeData/arcadedb: it is built on the `upstream-main` mirror that this sync just
@@ -304,7 +317,7 @@ git tag -a X.Y.Z.post1 -m "Python hotfix release X.Y.Z.post1"
 test "$(git rev-parse 'X.Y.Z.post1^{}')" = "$(git rev-parse HEAD)" && echo "tag OK"
 git push origin X.Y.Z.post1
 
-# 5. Create GitHub Release
+# 5. Create GitHub Release, only after PyPI shows every wheel (step 5 above)
 gh release create X.Y.Z.post1 -R humemai/arcadedb-embedded-python --verify-tag \
   --title "X.Y.Z.post1" \
   --notes "Hotfix for critical bug in X.Y.Z"
