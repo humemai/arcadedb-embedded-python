@@ -65,6 +65,9 @@ def main() -> int:
     ap.add_argument("--cap", type=float, default=None,
                     help="seconds; default reads runner.TIMEOUT_BY_SCALE[--tier]")
     ap.add_argument("--rows", nargs="*", default=None)
+    ap.add_argument("--backends", default=None,
+                    help="score only these engines (space or comma separated): the stage's own "
+                         "BACKENDS; default every engine the rows carry")
     a = ap.parse_args()
 
     cap = a.cap
@@ -81,6 +84,17 @@ def main() -> int:
     if not rows:
         print(f"no rows for {a.lane}/{src_tier} in {', '.join(os.path.basename(p) for p in paths)}")
         return 2
+    # ONLY THE ENGINES THE STAGE RUNS. Scoring the whole lane aborted qP22 on
+    # 2026-10-17: a one-engine ArcadeDB stage stopped because MongoDB and
+    # SurrealDB, which it does not run, projected over the cap at tpch10. A
+    # stage's verdict is about its own cells.
+    if a.backends:
+        keep = {b for b in a.backends.replace(",", " ").split() if b}
+        rows = [r for r in rows if str(r.get("backend")) in keep]
+        if not rows:
+            print(f"no rows for {a.lane}/{src_tier} for the stage's engines "
+                  f"({', '.join(sorted(keep))}): not scored")
+            return 2
 
     per = collections.defaultdict(dict)
     for r in rows:

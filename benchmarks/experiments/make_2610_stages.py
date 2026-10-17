@@ -692,7 +692,7 @@ RF="runs_page_${{PIN}}.jsonl"''')
   fi''',
              '''  elif [ $_cc -eq 2 ]; then
     if [ -f "results/$PRIOR_RF" ]; then
-      python3 cell_cost_check.py --lane {lane} --tier "$_tier" --rows "results/$PRIOR_RF" >> "$S" 2>&1
+      python3 cell_cost_check.py --lane {lane} --tier "$_tier" --backends "{backends}" --rows "results/$PRIOR_RF" >> "$S" 2>&1
       case $? in
         1) say "$ID WARNING: $_tier projected over the cap from October's rows ($PRIOR_RF); this pin has none yet, so it runs and its censored cells are what the projection said" ;;
         0) say "$ID: $_tier scored from October's rows ($PRIOR_RF): fits" ;;
