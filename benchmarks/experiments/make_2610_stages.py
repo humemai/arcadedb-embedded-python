@@ -53,6 +53,9 @@ Usage:
       python3 make_2610_stages.py --rep-from 4 --roster ROSTER.json --after <last pass-1 stage> --out DIR
   ARCADEDB_WHEEL=... ARCADEDB_SERVER_IMAGE=... ARCADEDB_ENGINE_COMMIT=<40 hex> \\
       python3 make_2610_stages.py --out DIR [--after qOA5 | --after none]
+  ARCADEDB_WHEEL=... ARCADEDB_SERVER_IMAGE=... ARCADEDB_ENGINE_COMMIT=<40 hex of the release> \\
+      python3 make_2610_stages.py --pass-tiers 1 --id-prefix qA --after <last stage before it> --out DIR
+                                                      # ArcadeDB alone on a new release, every declared rep (#183, #184)
 """
 from __future__ import annotations
 
@@ -226,26 +229,30 @@ def check_tiers():
     return problems
 
 
-def tiered_stages(stages=None, prefix="qT", rep_pass=None):
+def tiered_stages(stages=None, prefix="qT", rep_pass=None, tiers=None):
     """The stage list in tier order: tier 1's pieces in the paper's lane order (#133), then tier 2's, then
     tier 3's. A stage whose roster spans tiers is split into one stage per tier it touches (same lane,
     workloads, scales, guards and environment; only the roster differs), the host-side Python-cost stage
     is tier 1, and the ids are NEW (qT01, qT02, ...): a killed stage writes its ALL-DONE marker through the
     EXIT trap, and a chain that reused qRA..qRO would find the old chain's markers already in the
-    append-only STATUS.txt and start every stage at once."""
+    append-only STATUS.txt and start every stage at once.
+
+    `tiers` keeps only the pieces of those tiers (the Python-cost stage counts as tier 1): the ArcadeDB-only pass
+    on a new release is `tiers={1}` (DECISIONS #183, #184), every declared rep, a new pin and rows file."""
     stages = STAGES if stages is None else stages
     pieces = {k: [] for k in range(5)}
     for spec in stages:
         s = list(spec) + [None] * (10 - len(spec))
         if s[2] == "pycost":
-            pieces[phase_of(1, False)].append(s)
+            if tiers is None or 1 in tiers:
+                pieces[phase_of(1, False)].append(s)
             continue
         extra = is_extra(spec)
         by = collections.defaultdict(list)
         for be in stage_backends(spec):
             by[tier_of(be)].append(be)
         for t in (1, 2, 3):
-            if by[t]:
+            if by[t] and (tiers is None or t in tiers):
                 p = list(s)
                 p[1] = f"{s[1]} (tier {t}, {TIER_NAMES[t]})"
                 p[8] = by[t]
@@ -283,8 +290,11 @@ def stage_backends(spec):
     return list(only) if only else [b for b in runner.LANES[spec[2]][1] if b not in runner.restricted_arms(spec[2])]
 
 
-def check_coverage(stages=STAGES, plan=None):
+def check_coverage(stages=STAGES, plan=None, tiers=None):
     """Every registered arm of every page lane in exactly one stage per workload.
+
+    With `tiers`, the claim covers the arms of those tiers only (tier_of), and a stage that names an arm of another
+    tier is a problem: a pass that runs one tier must run all of it and nothing else.
 
     With a pass-2 `plan` (pass2_plan), the claim is the roster's instead: every arm cell the roster lists for the tiers
     the pass runs appears in exactly one stage, and a stage names no cell the roster does not.
@@ -304,6 +314,8 @@ def check_coverage(stages=STAGES, plan=None):
             stage_wls[lane].add(wl)
             for be in stage_backends(spec):
                 seen[(lane, wl, be)] += 1
+                if tiers is not None and tier_of(be) not in tiers:
+                    problems.append(f"{lane}/{wl}/{be}: staged, but it is a tier {tier_of(be)} arm and this pass runs tiers {sorted(tiers)}")
                 if not runner.arm_runs(lane, wl, be):
                     problems.append(f"{lane}/{wl}/{be}: staged, but runner.ARM_RUNS keeps it off this workload")
                 cfg = runner.ARM_RUNS.get(be, {}).get(lane)
@@ -321,6 +333,12 @@ def check_coverage(stages=STAGES, plan=None):
             excluded.append((lane, "feeds no page table (export_web._TABLE_LANE), so no stage runs it"))
             continue
         wls = page[lane] if page[lane] is not None else stage_wls.get(lane, set())
+        if tiers is not None:
+            # only the workloads an arm of these tiers runs: a lane whose arms are all in other tiers has nothing to stage
+            wls = {wl for wl in wls if any(tier_of(be) in tiers and runner.arm_runs(lane, wl, be) for be in backends)}
+            if not wls:
+                counts[lane] = 0
+                continue
         if not wls:
             problems.append(f"{lane}: a page lane with no stage")
         for wl in sorted(wls):
@@ -328,12 +346,12 @@ def check_coverage(stages=STAGES, plan=None):
                 problems.append(f"{lane}/{wl}: on the page, in no stage")
                 continue
             for be in backends:
-                if not runner.arm_runs(lane, wl, be):
+                if not runner.arm_runs(lane, wl, be) or (tiers is not None and tier_of(be) not in tiers):
                     continue
                 c = seen[(lane, wl, be)]
                 if c != 1:
                     problems.append(f"{lane}/{wl}/{be}: in {c} stages, expected exactly 1")
-        counts[lane] = len(backends)
+        counts[lane] = len(backends) if tiers is None else sum(tier_of(be) in tiers for be in backends)
     for (lane, wl, be), c in seen.items():
         if be not in runner.LANES.get(lane, ("", []))[1]:
             problems.append(f"{lane}/{wl}/{be}: staged but not registered in runner.LANES")
@@ -1011,6 +1029,10 @@ def main(argv=None) -> int:
                          "required with --rep-from, because a censored arm must not repeat at its cap")
     ap.add_argument("--tiers", default="1,2", metavar="LIST",
                     help="with --rep-from: the tiers this pass runs (default 1,2: tier 3 and ArcadeDB 26.11.1 come after)")
+    ap.add_argument("--pass-tiers", default=None, metavar="LIST",
+                    help="with --order tiers and without --rep-from: emit only these tiers, every declared rep (the "
+                         "ArcadeDB-only pass on a new release is `--pass-tiers 1 --id-prefix qA`, DECISIONS #183, #184); "
+                         "coverage then holds for the arms of these tiers only")
     ap.add_argument("--lane-order", choices=("closest", "paper"), default="closest",
                     help="with --rep-from: closest (default) puts the lanes whose ArcadeDB-versus-comparator ratios sit "
                          "nearest 1.3x first, the lifecycle, restart and sensitivity stages after the core lanes; "
@@ -1040,6 +1062,8 @@ def main(argv=None) -> int:
     if a.rep_from is not None:
         if a.rep_pass is not None:
             raise SystemExit("--rep-from and --rep-pass are two different passes: choose one")
+        if a.pass_tiers is not None:
+            raise SystemExit("--pass-tiers is the tiered mode's filter; the top-up pass takes --tiers")
         if not 2 <= a.rep_from <= 5:
             raise SystemExit("--rep-from must be 2 to 5 (reps below it ran in pass 1)")
         if not a.roster:
@@ -1060,10 +1084,14 @@ def main(argv=None) -> int:
         print("coverage: every roster cell of the tiers this pass runs in exactly one stage, none outside the roster")
     else:
         prefix = a.id_prefix or ("qP" if a.rep_pass else "qT")
-        stages = tiered_stages(prefix=prefix, rep_pass=a.rep_pass) if a.order == "tiers" else STAGES
-        problems, excluded, counts = check_coverage(stages)
-        print(f"order: {a.order}, {len(stages)} stages")
-        print("coverage: every registered arm of every page lane in exactly one stage per workload")
+        pass_tiers = parse_tiers(a.pass_tiers) if a.pass_tiers else None
+        if pass_tiers is not None and a.order != "tiers":
+            raise SystemExit("--pass-tiers needs --order tiers (the paper order does not split stages by tier)")
+        stages = tiered_stages(prefix=prefix, rep_pass=a.rep_pass, tiers=pass_tiers) if a.order == "tiers" else STAGES
+        problems, excluded, counts = check_coverage(stages, tiers=pass_tiers)
+        print(f"order: {a.order}, {len(stages)} stages" + (f", tiers {sorted(pass_tiers)} only" if pass_tiers else ""))
+        print("coverage: every registered arm of " + (f"tiers {sorted(pass_tiers)} of " if pass_tiers else "")
+              + "every page lane in exactly one stage per workload")
     problems += check_tiers()
     for lane, n in sorted(counts.items()):
         print(f"  {lane:10} {n:2} arms")
