@@ -426,7 +426,7 @@ PY
 # measured and must never block it -- that refusal exists because the tool
 # once scored 5 of 14 queries and reported ok.
 for _tier in {scale_list}; do
-  python3 cell_cost_check.py --lane {lane} --tier "$_tier" --rows "results/$RF" >> "$S" 2>&1
+  python3 cell_cost_check.py --lane {lane} --tier "$_tier" --backends "{backends}" --rows "results/$RF" >> "$S" 2>&1
   _cc=$?
   if [ $_cc -eq 1 ]; then
     say "$ID ABORT: projected cell cost exceeds the cap at $_tier (cell_cost_check)"
