@@ -18,14 +18,18 @@
  */
 package com.arcadedb.server.grpc;
 
+import com.arcadedb.exception.AlreadyExistsException;
+import com.arcadedb.exception.CauseChain;
 import com.arcadedb.exception.DatabaseOperationInProgressException;
 import com.arcadedb.exception.DuplicatedKeyException;
 import com.arcadedb.exception.ErrorCategory;
 import com.arcadedb.exception.NeedRetryException;
 import com.arcadedb.exception.QueryTerminatedException;
+import com.arcadedb.exception.SchemaException;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.network.binary.ServerIsNotTheLeaderException;
 import com.arcadedb.server.ArcadeDBServer;
+import com.arcadedb.server.ErrorConcealment;
 import com.arcadedb.server.HAServerPlugin;
 import io.grpc.Metadata;
 import io.grpc.Status;
@@ -66,6 +70,20 @@ public final class GrpcErrorMapper {
    */
   public static final Metadata.Key<String> DUP_KEYS_KEY         = Metadata.Key.of("arcadedb-dup-keys",
       Metadata.ASCII_STRING_MARSHALLER);
+  /**
+   * Trailer carrying the {@link AlreadyExistsException.Kind} of the schema object that holds a taken name (issue #10153), so the
+   * client rebuilds the exception with it. A {@link Enum#name()}, plain ASCII.
+   */
+  public static final Metadata.Key<String> ALREADY_EXISTS_KIND_KEY = Metadata.Key.of("arcadedb-already-exists-kind",
+      Metadata.ASCII_STRING_MARSHALLER);
+  /**
+   * Trailer the admin service names a taken user, API token or database name in, with the refusal's class name (issue
+   * #10143), so the client recognises one by what the server says rather than by the class-name trailer it leaves out. Not
+   * {@link #EXCEPTION_CLASS_KEY}: a client that predates this trailer reads only a trailer-less {@code ALREADY_EXISTS} as a
+   * taken name, and must keep doing so.
+   */
+  public static final Metadata.Key<String> NAME_TAKEN_KEY = Metadata.Key.of("arcadedb-name-taken",
+      Metadata.ASCII_STRING_MARSHALLER);
 
   /**
    * The description a CONCEALED failure carries in place of the exception's own message, when the server runs in
@@ -105,7 +123,8 @@ public final class GrpcErrorMapper {
    * An already-mapped gRPC status (e.g. the security status produced by {@code getDatabase}) is passed
    * through unchanged so it is never masked as {@code INTERNAL}.
    * <p>
-   * When the cause is a {@link ServerIsNotTheLeaderException} - whether raised by an explicit leadership check
+   * When the cause is a {@link ServerIsNotTheLeaderException}, or carries one anywhere along its cause chain (the
+   * engine wraps what it raises, issue #10089) - whether raised by an explicit leadership check
    * or by the replicated database refusing a schema change on a follower - the answer additionally names where
    * the caller should go, on the {@link LeaderRedirectProtocol} trailers (issue #6183), instead of only the one
    * RPC that happened to build the trailers by hand.
@@ -168,39 +187,66 @@ public final class GrpcErrorMapper {
       return new StatusRuntimeException(se.getStatus(), se.getTrailers());
 
     final Metadata trailers = new Metadata();
-    // A termination is named as one whatever wraps it, so the driver rebuilds the type that tells it not to retry (#9689)
-    trailers.put(EXCEPTION_CLASS_KEY, ErrorCategory.of(cause) == ErrorCategory.TERMINATED ?
+    // Found anywhere along the cause chain, because the engine wraps what it raises (a commit failure, a record-event listener,
+    // a trigger), like every other transport does (issue #10089). A test of the head alone answered ABORTED with no leader
+    // address for a refusal one frame down, and the driver retried the same follower until its retries ran out
+    final ServerIsNotTheLeaderException refusal = ServerIsNotTheLeaderException.refusalIn(cause);
+    final ErrorCategory category = ErrorCategory.of(cause);
+    // Every classified failure is looked for along the whole chain, never with an instanceof on its head: the engine wraps
+    // what it raises, and a wrapper must not change the answer (issue #10158). The maintenance-slot conflict is not an
+    // ErrorCategory of its own, so it is found here, below the two verdicts that outrank everything else; the duplicated
+    // key where ErrorCategory ranks it. Neither type takes a cause, so for one raised as itself this is the answer it
+    // always had
+    final DatabaseOperationInProgressException inProgress =
+        refusal == null && category != ErrorCategory.TERMINATED ? CauseChain.find(cause, DatabaseOperationInProgressException.class) : null;
+    final DuplicatedKeyException dup =
+        inProgress == null && category == ErrorCategory.DUPLICATED_KEY ? CauseChain.find(cause, DuplicatedKeyException.class) : null;
+    // The failure is named by the frame that classified it, whatever wraps it, so the driver rebuilds the type it must act
+    // on: the one that tells it not to retry (#9689), the one that tells it where to go (#10089), and every other typed
+    // failure (#10158) - a SchemaException named by its wrapper is rebuilt from NOT_FOUND alone, as a missing record
+    final Throwable classified = refusal != null ? refusal : inProgress != null ? inProgress : ErrorCategory.classifiedCause(cause);
+    // A taken schema object name (#10153) is answered ALREADY_EXISTS and named as a SchemaException, its supertype: a client
+    // that predates #10153 does not know AlreadyExistsException, and for a class it does not know it falls back to the status,
+    // which it reads as a duplicate key. As a SchemaException it rebuilds what the SchemaException-raising refusals came back as
+    // before, and a current client tells it apart by the ALREADY_EXISTS status and the kind trailer
+    final AlreadyExistsException taken = refusal == null && inProgress == null && category == ErrorCategory.ALREADY_EXISTS ?
+        CauseChain.find(cause, AlreadyExistsException.class) :
+        null;
+    trailers.put(EXCEPTION_CLASS_KEY, category == ErrorCategory.TERMINATED ?
         QueryTerminatedException.class.getName() :
-        cause.getClass().getName());
+        taken != null ? SchemaException.class.getName() : (classified != null ? classified : cause).getClass().getName());
+    if (taken != null && taken.getKind() != null)
+      trailers.put(ALREADY_EXISTS_KIND_KEY, taken.getKind().name());
 
     final Status.Code code;
     String redirect = null;
-    if (cause instanceof ServerIsNotTheLeaderException notTheLeader) {
+    if (refusal != null) {
       // FAILED_PRECONDITION, not the ABORTED its NeedRetryException ancestry would earn: retrying this call
       // as it stands means asking the same follower again. It is the leader-only work that is impossible
       // here, not a conflict that another attempt could win - the same reading the HTTP protocol takes when
       // it answers 400 rather than 503. What makes it actionable is the address, not a retry.
       code = Status.Code.FAILED_PRECONDITION;
-      redirect = attachLeaderRedirect(trailers, ha, notTheLeader);
-    } else if (cause instanceof DuplicatedKeyException dup) {
-      code = Status.Code.ALREADY_EXISTS;
-      addDuplicatedKeyTrailers(trailers, dup, conceal);
-    } else if (cause instanceof DatabaseOperationInProgressException) {
+      redirect = attachLeaderRedirect(trailers, ha, refusal);
+    } else if (inProgress != null) {
       // A backup, restore or import of the same database already holds the per-database maintenance slot, so a
       // SQL 'BACKUP DATABASE' or 'IMPORT DATABASE' sent through ExecuteCommand was refused. ABORTED is what the
       // admin service already answers for the server's own trigger/restore/import RPCs, and HTTP's 409: the
       // request is well formed and authorized, and retrying once the other operation finishes is the fix
       // (issue #7443). Without this arm it would read as INTERNAL - a server fault the caller cannot act on.
       code = Status.Code.ABORTED;
+    } else if (dup != null) {
+      code = Status.Code.ALREADY_EXISTS;
+      addDuplicatedKeyTrailers(trailers, dup, conceal);
     } else {
-      code = statusCodeFor(cause);
+      code = statusCodeFor(category);
     }
 
     if (conceal)
       logConcealed(GrpcErrorMapper.class, contextPrefix, cause);
 
+    // A taken name keeps its label when concealed, as the HTTP body's 'error' field does: it names the kind, never the content
     final String msg = conceal ?
-        CONCEALED_DESCRIPTION :
+        taken != null ? taken.getLabel() : CONCEALED_DESCRIPTION :
         cause.getMessage() != null ? cause.getMessage() : cause.toString();
     final String prefixed = contextPrefix != null && !contextPrefix.isBlank() ? contextPrefix + ": " + msg : msg;
     // THE LEADER-REDIRECT SENTENCE SURVIVES CONCEALMENT: IT IS AN ADDRESS THIS SERVER PUT THERE, NOT INTERNAL
@@ -218,20 +264,22 @@ public final class GrpcErrorMapper {
    * "server broke, safe to retry" to a driver's retry policy - when none of the four will ever succeed on retry,
    * and none but the first is actually the server's fault.
    * <p>
-   * Package-visible (not just used by {@link #toStatusRuntimeException}) for the handlers - {@code graphBatchLoad}
-   * is the current example - that must attach their own trailers (a partial-commit summary) alongside the
-   * classified code rather than the trailer set this class builds for {@code EXCEPTION_CLASS_KEY}/dup-key details;
-   * they reach it through {@link #toStatusException}.
+   * Private on purpose (issue #10090). It used to be package-visible for the handlers that must attach their own
+   * trailers (a partial-commit summary), but a handler that took the code from here alone lost everything else the
+   * mapper does around it - the {@code EXCEPTION_CLASS_KEY} trailer, the termination rewrite, the leader redirect - and
+   * {@code toSearchStatus} did exactly that for three RPCs. Those handlers reach the classification through
+   * {@link #toStatusException}, which layers their trailers onto the full answer.
    */
-  static Status.Code statusCodeFor(final Throwable cause) {
-    return switch (ErrorCategory.of(cause)) {
+  private static Status.Code statusCodeFor(final ErrorCategory category) {
+    return switch (category) {
       case RETRY -> Status.Code.ABORTED;
       case ARITHMETIC -> Status.Code.OUT_OF_RANGE;
-      // Unreachable from toStatusRuntimeException/classifyAndAddTrailers, which both special-case
-      // DuplicatedKeyException before reaching here - but ArcadeDbGrpcService.toSearchStatus calls this
-      // method directly with no such pre-check, so this arm exists for that caller (and any future one),
-      // not just to keep the switch exhaustive over ErrorCategory.
+      // Unreachable from toStatusRuntimeException, which special-cases the duplicated key (it has trailers of its own to
+      // add) before reaching here: the arm only keeps the switch exhaustive over ErrorCategory.
       case DUPLICATED_KEY -> Status.Code.ALREADY_EXISTS;
+      // A taken schema object name (issue #10153): gRPC's own word for it. It used to be NOT_FOUND - the opposite of what
+      // happened - for the SchemaException ones and INTERNAL for the CommandExecutionException ones
+      case ALREADY_EXISTS -> Status.Code.ALREADY_EXISTS;
       case NOT_FOUND, SCHEMA -> Status.Code.NOT_FOUND;
       case SECURITY -> Status.Code.PERMISSION_DENIED;
       case VALIDATION, PARSING -> Status.Code.INVALID_ARGUMENT;
@@ -286,8 +334,8 @@ public final class GrpcErrorMapper {
       final boolean conceal) {
     if (!conceal)
       // THE CLASS NAME WHEN THERE IS NO MESSAGE, LIKE insertErrorMessage AND Importer.describe: A LINK THAT READS
-      // "null" NAMES THE FAILURE LESS WELL THAN ITS TYPE DOES
-      return prefix + ": " + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName());
+      // "null" NAMES THE FAILURE LESS WELL THAN ITS TYPE DOES. THE RULE LIVES IN ErrorConcealment (issue #10092)
+      return prefix + ": " + ErrorConcealment.describe(e);
 
     logConcealed(requester, prefix, e);
     return prefix + ": " + CONCEALED_DESCRIPTION;

@@ -44,6 +44,7 @@ import com.arcadedb.engine.timeseries.TimeSeriesBucket;
 import com.arcadedb.engine.timeseries.TimeSeriesMaintenanceScheduler;
 import com.arcadedb.engine.timeseries.TimeSeriesTagDictionary;
 import com.arcadedb.event.*;
+import com.arcadedb.exception.AlreadyExistsException;
 import com.arcadedb.exception.ConfigurationException;
 import com.arcadedb.exception.DatabaseMetadataException;
 import com.arcadedb.exception.DatabaseOperationException;
@@ -89,6 +90,7 @@ import java.util.*;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
@@ -380,7 +382,10 @@ public class LocalSchema implements Schema {
   protected final     Map<String, MaterializedViewImpl>     materializedViews             = new LinkedHashMap<>();
   protected final     Map<String, ContinuousAggregateImpl> continuousAggregates          = new LinkedHashMap<>();
   protected final     Map<String, JSONObject>               extensions                    = new LinkedHashMap<>();
-  private final       Map<String, TriggerListenerAdapter> triggerAdapters = new HashMap<>();
+  // Concurrent: its emptiness is read on every record write, to skip the trigger walk on a database without triggers
+  private final       Map<String, TriggerListenerAdapter> triggerAdapters = new ConcurrentHashMap<>();
+  // INCREMENTAL MATERIALIZED VIEWS LISTENING ON THE POLYMORPHIC (TRIGGER) REGISTRIES OF THEIR SOURCE TYPES (issue #10205)
+  private final       AtomicInteger                       polymorphicViewListeners = new AtomicInteger();
   /**
    * The TimeSeries types whose engine waits for the WAL replay of the open in progress, {@code null} when engines are
    * built as their types are read. See {@link #openDeferredTimeSeriesEngines()}.
@@ -897,6 +902,7 @@ public class LocalSchema implements Schema {
 
         // ITS LISTENERS ARE NO LONGER REACHED BY ANY READ: THEY MUST NOT KEEP THE DATABASE ON THE DISPATCH PATH (#9997)
         type.events.detachFromDatabase();
+        type.triggerEvents.detachFromDatabase();
 
         if (type instanceof final LocalTimeSeriesType tsType) {
           // Retired, not closed (issue #9886): the replacement engine is built on the same registered files
@@ -1850,7 +1856,8 @@ public class LocalSchema implements Schema {
     checkValidBucketName(bucketName);
 
     if (lookupBucket(bucketName) != null)
-      throw new SchemaException("Cannot create bucket '" + bucketName + "' because already exists");
+      throw new AlreadyExistsException(AlreadyExistsException.Kind.BUCKET,
+          "Cannot create bucket '" + bucketName + "' because already exists");
 
     // Discoverability warning for the EXTERNAL property naming convention. The engine creates paired buckets
     // as '<primary>_ext' with file-format version EXTERNAL_BUCKET_VERSION, so version == CURRENT_VERSION (0)
@@ -2008,7 +2015,7 @@ public class LocalSchema implements Schema {
     database.checkPermissionsOnDatabase(SecurityDatabaseUser.DATABASE_ACCESS.UPDATE_SCHEMA);
 
     if (existsType(newTypeName))
-      throw new IllegalArgumentException("Type '" + newTypeName + "' already exists");
+      throw new AlreadyExistsException(AlreadyExistsException.Kind.TYPE, "Type '" + newTypeName + "' already exists");
 
     final DocumentType oldType = getType(typeName);
 
@@ -2320,7 +2327,7 @@ public class LocalSchema implements Schema {
     recordFileChanges(() -> {
       // Validate trigger does not already exist
       if (triggers.containsKey(trigger.getName())) {
-        throw new SchemaException("Trigger '" + trigger.getName() + "' already exists");
+        throw new AlreadyExistsException(AlreadyExistsException.Kind.TRIGGER, "Trigger '" + trigger.getName() + "' already exists");
       }
 
       // Validate type exists
@@ -2446,8 +2453,13 @@ public class LocalSchema implements Schema {
         oldView = materializedViews.get(viewName);
         if (oldView == null)
           throw new SchemaException("Materialized view '" + viewName + "' not found");
+        // A view whose query reads what no type's events report cannot become INCREMENTAL (issue #10205). Checked here, on
+        // the query of the view this ALTER replaces, before anything changes
+        if (newMode == MaterializedViewRefreshMode.INCREMENTAL)
+          MaterializedViewSources.of(database, oldView.getQuery()).checkIncremental(viewName);
         // Create new view instance with updated refresh mode
         newView = oldView.copyWithRefreshMode(newMode, newIntervalMs);
+        adoptEveryReadType(newView);
         materializedViews.put(viewName, newView);
         scheduler = materializedViewScheduler;
       }
@@ -2553,8 +2565,9 @@ public class LocalSchema implements Schema {
     final TriggerListenerAdapter adapter =
         new TriggerListenerAdapter(database, trigger, executor);
 
-    // Register listener based on timing and event
-    final RecordEventsRegistry events = (RecordEventsRegistry) type.getEvents();
+    // Register listener based on timing and event. On the type's TRIGGER registry, not on getEvents(): a trigger fires for
+    // the records of every subtype as well, which the type's lineage does at dispatch (issue #10207)
+    final RecordEventsRegistry events = type.getTriggerEvents();
     switch (trigger.getTiming()) {
       case BEFORE -> {
         switch (trigger.getEvent()) {
@@ -2590,7 +2603,7 @@ public class LocalSchema implements Schema {
     final Trigger trigger = adapter.getTrigger();
     final LocalDocumentType type = typeMap().get(trigger.getTypeName());
     if (type != null) {
-      final RecordEventsRegistry events = (RecordEventsRegistry) type.getEvents();
+      final RecordEventsRegistry events = type.getTriggerEvents();
 
       // Unregister listener based on timing and event
       switch (trigger.getTiming()) {
@@ -2726,8 +2739,20 @@ public class LocalSchema implements Schema {
         .withNullStrategy(nullStrategy).create();
   }
 
+  /**
+   * Stops the background warm-up of the indexes a schema reload re-created (issue #10021), dropping what is waiting and waiting,
+   * bounded, for a load in flight. The database close calls it where every index stops its background work, before the page
+   * flush and long before the files are closed or, on a drop, deleted (issue #10156): the warm-up reads index pages, and one read
+   * landing after the close purged this database's pages from the shared read cache would pin the closed instance there. Further
+   * warm-up requests are refused from then on; calling it again returns at once.
+   */
+  public void stopIndexWarmUp() {
+    indexWarmUp.close();
+  }
+
   public void close() {
-    // First, and waiting (bounded) for a load in flight: it reads the index files, which the database closes right after this
+    // The database close has stopped it already, before its flush (issue #10156). Kept, and free when it has, for a schema closed
+    // some other way, e.g. by an open that failed: a load in flight reads the index files, which are closed right after this
     indexWarmUp.close();
     // An open that failed before the replay finished leaves the engines it deferred behind
     timeSeriesEnginesAwaitingReplay = null;
@@ -3022,6 +3047,16 @@ public class LocalSchema implements Schema {
         //     left the instance in getTypes(), which is what CHECK DATABASE walks.
         // remove(key, value) rather than remove(key), for the same reason setAliases() unwinds with the two-argument
         // form: a name that has since been taken over by another type must not be taken away from it.
+        // THE TRIGGERS DECLARED ON THE TYPE GO WITH IT, AS ITS INDEXES DO: LEFT BEHIND, A TRIGGER STAYED IN THE SCHEMA NAMING A
+        // TYPE THAT NO LONGER EXISTS, AND BOUND ITSELF TO A TYPE CREATED LATER UNDER THE SAME NAME (issue #10207). As late as it
+        // can be, so a step above that fails leaves the type with its triggers: once every file is gone, and before the type
+        // leaves the type map, which is where the listener is unregistered from
+        for (final Trigger trigger : new ArrayList<>(triggers.values()))
+          if (canonicalTypeName.equals(trigger.getTypeName())) {
+            unregisterTriggerListener(trigger.getName());
+            triggers.remove(trigger.getName());
+          }
+
         for (final String alias : type.getAliases())
           typeMap().remove(alias, type);
 
@@ -3030,6 +3065,7 @@ public class LocalSchema implements Schema {
 
         // NO READ REACHES ITS LISTENERS ANY MORE: THEY MUST NOT KEEP THE DATABASE ON THE DISPATCH PATH (#9997)
         type.events.detachFromDatabase();
+        type.triggerEvents.detachFromDatabase();
 
         // #8187: A TYPE CREATED LATER UNDER THIS NAME IS A DIFFERENT TYPE AND IS REPORTED ON ITS OWN MERITS
         reportedUpgradeWarnings.remove(BUCKETLESS_TYPE_WARNING_PREFIX + type.getName());
@@ -3064,6 +3100,8 @@ public class LocalSchema implements Schema {
 
     synchronized (this) {
       for (final MaterializedViewImpl view : materializedViews.values()) {
+        checkDependantNamesResolve(typeName, "materialized view", view.getName(), "DROP MATERIALIZED VIEW " + view.getName(),
+            view.getBackingTypeName(), view.getSourceTypeNames());
         if (view.getBackingTypeName().equals(canonicalTypeName))
           throw new SchemaException(
               "Cannot drop type '" + typeName + "' because it is the backing type for materialized view '" + view.getName() + "'. " +
@@ -3074,11 +3112,13 @@ public class LocalSchema implements Schema {
                   "Drop the materialized view first with: DROP MATERIALIZED VIEW " + view.getName());
       }
       for (final ContinuousAggregateImpl ca : continuousAggregates.values()) {
+        checkDependantNamesResolve(typeName, "continuous aggregate", ca.getName(), "DROP CONTINUOUS AGGREGATE " + ca.getName(),
+            ca.getBackingTypeName(), ca.getSourceTypeName() != null ? List.of(ca.getSourceTypeName()) : List.of());
         if (ca.getBackingTypeName().equals(canonicalTypeName))
           throw new SchemaException(
               "Cannot drop type '" + typeName + "' because it is the backing type for continuous aggregate '" + ca.getName() + "'. " +
                   "Drop the continuous aggregate first with: DROP CONTINUOUS AGGREGATE " + ca.getName());
-        if (canonicalTypeName.equals(canonicalTypeNameOf(ca.getSourceTypeName())))
+        if (ca.getSourceTypeName() != null && canonicalTypeName.equals(canonicalTypeNameOf(ca.getSourceTypeName())))
           throw new SchemaException(
               "Cannot drop type '" + typeName + "' because it is the source type for continuous aggregate '" + ca.getName() + "'. " +
                   "Drop the continuous aggregate first with: DROP CONTINUOUS AGGREGATE " + ca.getName());
@@ -3102,6 +3142,128 @@ public class LocalSchema implements Schema {
   private String canonicalTypeNameOf(final String typeName) {
     final LocalDocumentType type = getTypeOrNull(typeName);
     return type != null ? type.getName() : typeName;
+  }
+
+  /**
+   * Fails safe on a dependant that names a type which does not exist (issue #10096). The guards of {@link #checkTypeHasNoDependants}
+   * compare the dropped type with what a view or an aggregate stores, and a stored name that resolves to no type matches nothing:
+   * that is what a type rename used to leave behind, and the drop was then let through by the guard whose whole purpose is to
+   * refuse it. Whether the dangling name is the OLD name of the type being dropped cannot be told - the type does not remember
+   * its names - so the drop is refused, saying which dependant is out of date and what to do about it. A dependant in that state
+   * cannot refresh anyway.
+   */
+  private void checkDependantNamesResolve(final String droppedTypeName, final String kind, final String dependantName,
+      final String dropStatement, final String backingTypeName, final Collection<String> sourceTypeNames) {
+    if (getTypeOrNull(backingTypeName) == null)
+      throw outOfDateDependant(droppedTypeName, kind, dependantName, dropStatement, backingTypeName);
+    for (final String sourceTypeName : sourceTypeNames)
+      if (getTypeOrNull(sourceTypeName) == null)
+        throw outOfDateDependant(droppedTypeName, kind, dependantName, dropStatement, sourceTypeName);
+  }
+
+  private static SchemaException outOfDateDependant(final String droppedTypeName, final String kind, final String dependantName,
+      final String dropStatement, final String missingTypeName) {
+    return new SchemaException("Cannot drop type '" + droppedTypeName + "' because the " + kind + " '" + dependantName
+        + "' names the type '" + missingTypeName + "', which does not exist (the type was probably renamed before a rename "
+        + "carried its views and aggregates), so it cannot be told whether this is a type the " + kind + " depends on. Drop the "
+        + kind + " first with: " + dropStatement + ", and create it again if it is still needed");
+  }
+
+  /**
+   * Decides, before a single file moves, whether the rename of {@code type} to {@code newName} can keep every materialized view
+   * and continuous aggregate that depends on it consistent (issue #10096).
+   * <ul>
+   *   <li>the BACKING type of a view or an aggregate is not renamed: a view is named after its backing type, which is the name
+   *   {@code SELECT FROM <view>} answers to and every record's {@code @type} reports, so a renamed backing type is a view that
+   *   no longer answers to its own name;</li>
+   *   <li>a SOURCE type is renamed, and its dependants follow ({@link #carryTypeRenameToDependants}), provided the defining query
+   *   can be re-pointed at the new name with certainty ({@link DependantQueryRetargeter}); otherwise the rename is refused rather
+   *   than leaving half of the dependants on a name that no longer resolves.</li>
+   * </ul>
+   * A dependant that stores the type by one of its ALIASES needs nothing: the alias stays in the type map across a rename, and the
+   * query that names it keeps resolving.
+   */
+  void checkTypeRenameKeepsDependants(final LocalDocumentType type, final String newName) {
+    // A NAME THAT IS TAKEN IS REFUSED BY THE RENAME ITSELF, WITH ITS OWN MESSAGE
+    if (existsType(newName))
+      return;
+
+    final String oldName = type.getName();
+    synchronized (this) {
+      for (final MaterializedViewImpl view : materializedViews.values()) {
+        if (view.getBackingTypeName().equals(oldName))
+          throw new SchemaException("Cannot rename type '" + oldName + "' because it is the backing type for materialized view '"
+              + view.getName() + "': a view is named after its backing type. Drop the materialized view first with: "
+              + "DROP MATERIALIZED VIEW " + view.getName());
+        if (view.getSourceTypeNames().contains(oldName)
+            && DependantQueryRetargeter.retarget(database, view.getQuery(), oldName, newName) == null)
+          throw cannotRepointQuery(oldName, newName, "materialized view", view.getName(),
+              "DROP MATERIALIZED VIEW " + view.getName());
+      }
+      for (final ContinuousAggregateImpl ca : continuousAggregates.values()) {
+        if (ca.getBackingTypeName().equals(oldName))
+          throw new SchemaException("Cannot rename type '" + oldName + "' because it is the backing type for continuous aggregate '"
+              + ca.getName() + "': an aggregate is named after its backing type. Drop the continuous aggregate first with: "
+              + "DROP CONTINUOUS AGGREGATE " + ca.getName());
+        if (oldName.equals(ca.getSourceTypeName())
+            && DependantQueryRetargeter.retarget(database, ca.getQuery(), oldName, newName) == null)
+          throw cannotRepointQuery(oldName, newName, "continuous aggregate", ca.getName(),
+              "DROP CONTINUOUS AGGREGATE " + ca.getName());
+      }
+    }
+  }
+
+  private static SchemaException cannotRepointQuery(final String oldName, final String newName, final String kind,
+      final String dependantName, final String dropStatement) {
+    return new SchemaException("Cannot rename type '" + oldName + "' to '" + newName + "' because it is a source type for the "
+        + kind + " '" + dependantName + "' and its query cannot be re-pointed at the new name with certainty (the name appears "
+        + "more than once in the query - a subquery, a join, but also a string literal or a comment that holds it - or in a form "
+        + "that is not rewritten). Drop the " + kind + " first with: " + dropStatement
+        + ", rename the type, and create the " + kind + " again");
+  }
+
+  /**
+   * The types a rename carries to its dependants (issue #10096): every materialized view and continuous aggregate that names the
+   * type {@code oldName} as a source has that name, and the defining query that spells it, rewritten to {@code newName}, in place,
+   * and so does every trigger bound to the type.
+   * Runs inside the schema recording session that publishes the rename, so under the database write lock that every view and
+   * aggregate registration takes too and before the session saves the schema: the names that reach {@code schema.json} are the
+   * new ones, and nothing can register a dependant between the carry and the save. {@link #checkTypeRenameKeepsDependants} already
+   * refused what cannot be carried, so this does not throw: the files have moved by now.
+   */
+  void carryTypeRenameToDependants(final String oldName, final String newName) {
+    synchronized (this) {
+      for (final MaterializedViewImpl view : materializedViews.values())
+        if (view.getSourceTypeNames().contains(oldName))
+          view.retargetSourceType(oldName, newName,
+              retargetedQuery("materialized view", view.getName(), view.getQuery(), oldName, newName));
+
+      for (final ContinuousAggregateImpl ca : continuousAggregates.values())
+        if (oldName.equals(ca.getSourceTypeName()))
+          ca.retargetSourceType(newName, retargetedQuery("continuous aggregate", ca.getName(), ca.getQuery(), oldName, newName));
+
+      // A TRIGGER IS BOUND TO ITS TYPE BY NAME TOO: PERSISTED, BOUND BY ON RELOAD, AND LOOKED UP BY WHEN IT IS DROPPED
+      for (final Trigger trigger : triggers.values())
+        if (trigger instanceof TriggerImpl impl && oldName.equals(impl.getTypeName()))
+          impl.retargetType(newName);
+    }
+  }
+
+  /**
+   * The query naming {@code newName}, or the query as it is when that cannot be done with certainty. Only a dependant registered
+   * AFTER the check of the rename can get here: its names follow all the same, so that the drop guard keeps protecting the type,
+   * and the refresh that fails on the old name says why.
+   */
+  private String retargetedQuery(final String kind, final String dependantName, final String query, final String oldName,
+      final String newName) {
+    final String retargeted = DependantQueryRetargeter.retarget(database, query, oldName, newName);
+    if (retargeted != null)
+      return retargeted;
+
+    LogManager.instance().log(this, Level.WARNING,
+        "The query of the %s '%s' still names the type '%s', renamed to '%s': it cannot be re-pointed with certainty, so its "
+            + "refresh will fail until the %s is dropped and created again", kind, dependantName, oldName, newName, kind);
+    return query;
   }
 
   @Override
@@ -3599,6 +3761,12 @@ public class LocalSchema implements Schema {
       // the genuine cases where the file is truly missing (issue #4063).
       final Map<String, List<String>> deferredMissingIndexWarnings = new LinkedHashMap<>();
       final Map<String, Map<String, JSONObject>> unavailableIndexes = new HashMap<>();
+      // The type that OWNS each bucket (issue #10093): an index is listed under the type that declares it, and its
+      // sub-indexes on the buckets of the types below it are bound to the type that owns the bucket, as they are when created
+      final Map<Integer, LocalDocumentType> ownerOfBucket = new HashMap<>();
+      for (final LocalDocumentType t : graph.values())
+        for (final Bucket b : t.getBuckets(false))
+          ownerOfBucket.put(b.getFileId(), t);
       // The BM25 corpus counters of a full-text index are TYPE-wide, so every bucket sub-index of one logical index has to
       // share ONE FullTextIndexMetadata, as the creation path does. Building one per bucket sub-index here made each copy
       // count only its own bucket's inserts, ran the once-per-session stale check (a full type scan) once per bucket, and
@@ -3706,7 +3874,7 @@ public class LocalSchema implements Schema {
                     .log(this, Level.WARNING, "Cannot find bucket '%s' defined in index '%s'. Ignoring it", null, bucketName,
                         index.getName());
               } else {
-                type.addIndexInternal(index, bucket.getFileId(), properties, null);
+                addLoadedIndex(type, ownerOfBucket, index, bucket.getFileId(), properties);
                 reportUpgradeWarning(index, typeName, properties);
               }
 
@@ -3792,7 +3960,7 @@ public class LocalSchema implements Schema {
                     // user-supplied name on the next reload.
                     if (entry.getValue().has("typeIndexName"))
                       index.getMetadata().typeIndexName = entry.getValue().getString("typeIndexName");
-                    type.addIndexInternal(index, bucket.getFileId(), properties, null);
+                    addLoadedIndex(type, ownerOfBucket, index, bucket.getFileId(), properties);
                     LogManager.instance()
                         .log(this, Level.FINE, "Relinked orphan index '%s' to type '%s'", null, indexName, type.getName());
                     relinkedOrphanNames.add(entry.getKey());
@@ -4153,6 +4321,7 @@ public class LocalSchema implements Schema {
         try {
           final JSONObject viewDef = mvJSON.getJSONObject(viewName);
           final MaterializedViewImpl view = MaterializedViewImpl.fromJSON(database, viewDef);
+          adoptEveryReadType(view);
 
           // Same replacement rule as the trigger above, and the same merge-path hole: a same-named view already
           // installed has its own listeners and schedule, and the put below is the only thing that used to happen
@@ -4724,7 +4893,8 @@ public class LocalSchema implements Schema {
     database.checkPermissionsOnDatabase(SecurityDatabaseUser.DATABASE_ACCESS.UPDATE_SCHEMA);
     if (library.getLanguage() == null) {
       if (functionLibraries.putIfAbsent(library.getName(), library) != null)
-        throw new IllegalArgumentException("Function library '" + library.getName() + "' already registered");
+        throw new AlreadyExistsException(AlreadyExistsException.Kind.FUNCTION_LIBRARY,
+            "Function library '" + library.getName() + "' already registered");
       return this;
     }
 
@@ -4733,7 +4903,8 @@ public class LocalSchema implements Schema {
 
     recordFileChanges(() -> {
       if (functionLibraries.putIfAbsent(library.getName(), library) != null)
-        throw new IllegalArgumentException("Function library '" + library.getName() + "' already registered");
+        throw new AlreadyExistsException(AlreadyExistsException.Kind.FUNCTION_LIBRARY,
+            "Function library '" + library.getName() + "' already registered");
       return null;
     });
     return this;
@@ -4795,7 +4966,8 @@ public class LocalSchema implements Schema {
       final FunctionLibraryDefinition existing = functionLibraries.get(libraryName);
       if (existing != null) {
         if (newLibrary != null)
-          throw new IllegalArgumentException("Function library '" + libraryName + "' already registered");
+          throw new AlreadyExistsException(AlreadyExistsException.Kind.FUNCTION_LIBRARY,
+              "Function library '" + libraryName + "' already registered");
         // A library holds functions of its own language only (issue #8423): checked here, under the schema's lock, so
         // a library dropped and recreated in another language since the caller looked is refused too
         final String functionLanguage = FunctionLibraryFactory.languageOf(function);
@@ -5400,6 +5572,29 @@ public class LocalSchema implements Schema {
     }
   }
 
+  /**
+   * Binds a bucket index read from the schema to its type (issue #10093). The schema lists an index under the type that DECLARES
+   * it, including its sub-indexes on the buckets of the types below it, and the type that declares it is not always the one that
+   * owns the bucket. Creating those sub-indexes binds each one to the type that owns the bucket, under the wrapper of the
+   * declaring type ({@code LocalDocumentType.createSubIndexesFor}); binding it to the declaring type here left the same database
+   * with a different layout after every load: the super type held the sub type's bucket indexes and the sub type none. Under
+   * Raft HA the leader keeps the layout it created and every follower the one it loads, which the comparison of the databases
+   * reported as a type configured differently.
+   */
+  private static void addLoadedIndex(final LocalDocumentType declaringType, final Map<Integer, LocalDocumentType> ownerOfBucket,
+      final IndexInternal index, final int bucketId, final String[] propertyNames) {
+    final LocalDocumentType owner = ownerOfBucket.get(bucketId);
+    if (owner == null || owner == declaringType || !owner.instanceOf(declaringType.getName()))
+      // The bucket is the declaring type's own, or belongs to a type that does not inherit from it: a schema written by hand
+      // keeps the binding it has always had
+      declaringType.addIndexInternal(index, bucketId, propertyNames, null);
+    else
+      // The declaring type's wrapper is minted here when this sub-index is the first of its index to be read (they are read in
+      // name order, so the sub type's can come before the declaring type's own). It is staged by publishIndexDuringLoad like
+      // any wrapper minted during a load, so a reader never sees it before the load publishes the schema
+      owner.addIndexInternal(index, bucketId, propertyNames, declaringType.typeIndexFor(index, propertyNames));
+  }
+
   protected boolean isSchemaLoaded() {
     return loadInRamCompleted;
   }
@@ -5492,6 +5687,48 @@ public class LocalSchema implements Schema {
   }
 
   private record UnidirectionalFlag(long serial, boolean value) {
+  }
+
+  /**
+   * Whether a trigger listens on any type of this schema: what lets a record write skip walking its type's lineage for the
+   * triggers of its super types (issue #10207).
+   */
+  public boolean hasTriggerListeners() {
+    return !triggerAdapters.isEmpty();
+  }
+
+  /**
+   * Whether an INCREMENTAL materialized view listens on the trigger registries of its source types (issue #10205): the records
+   * of their subtypes reach it through the same lineage walk the triggers use, for the AFTER write events only.
+   */
+  public boolean hasPolymorphicViewListeners() {
+    return polymorphicViewListeners.get() > 0;
+  }
+
+  void polymorphicListenerRegistered() {
+    polymorphicViewListeners.incrementAndGet();
+  }
+
+  void polymorphicListenerUnregistered() {
+    polymorphicViewListeners.decrementAndGet();
+  }
+
+  /**
+   * Adds to {@code view} the types its query reads that exist and it does not list yet (issue #10205): a view stored before
+   * every type of its query was tracked listed only the first FROM identifier. A query that no longer parses keeps its list.
+   */
+  private void adoptEveryReadType(final MaterializedViewImpl view) {
+    try {
+      final List<String> found = new ArrayList<>();
+      for (final String typeName : MaterializedViewSources.of(database, view.getQuery()).typeNames())
+        if (existsType(typeName))
+          found.add(getType(typeName).getName());
+      view.addSourceTypeNames(found);
+    } catch (final RuntimeException e) {
+      LogManager.instance().log(this, Level.WARNING,
+          "Cannot analyze the query of materialized view '%s', it is maintained by the source types it was stored with: %s", e,
+          view.getName(), e.getMessage());
+    }
   }
 
   /** A serial that moves whenever the types of this schema change: what a memo of a type-derived answer is keyed on. */

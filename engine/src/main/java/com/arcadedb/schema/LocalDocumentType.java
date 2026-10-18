@@ -23,6 +23,8 @@ import com.arcadedb.database.DatabaseInternal;
 import com.arcadedb.database.Document;
 import com.arcadedb.database.LocalDatabase;
 import com.arcadedb.database.MutableDocument;
+import com.arcadedb.database.RID;
+import com.arcadedb.database.Record;
 import com.arcadedb.database.RecordEvents;
 import com.arcadedb.database.RecordEventsRegistry;
 import com.arcadedb.database.TransactionContext;
@@ -35,6 +37,7 @@ import com.arcadedb.engine.Bucket;
 import com.arcadedb.engine.ComponentFile;
 import com.arcadedb.engine.FileManager;
 import com.arcadedb.engine.LocalBucket;
+import com.arcadedb.exception.AlreadyExistsException;
 import com.arcadedb.exception.SchemaException;
 import com.arcadedb.index.Index;
 import com.arcadedb.index.IndexException;
@@ -118,6 +121,12 @@ public class LocalDocumentType implements DocumentType {
   // Counted in the database's BEFORE READ listener total, so a read of a database nobody listens to skips finding the
   // registry of every record's type (issue #9997)
   protected final RecordEventsRegistry              events;
+  // The triggers declared ON this type (issue #10207). Kept apart from the exact-type registry above because a trigger is
+  // polymorphic and a Java type listener is not: a record fires the triggers of its own type and of every super type,
+  // through the lineage below. Counted in the same BEFORE READ total as the registry above
+  protected final RecordEventsRegistry              triggerEvents;
+  // The trigger registries a record of this type fires, stamped with the schema's types serial they were computed at
+  private volatile TriggerLineage                   triggerLineage;
   // changed by ALTER TYPE ... CUSTOM and read by toJSON() after the schema lock is released: copy-on-write, an unmodifiable
   // map replaced as a whole, so neither a reader nor a schema reload ever sees it half changed (#9989)
   protected volatile Map<String, Object>            custom                       = Collections.emptyMap();
@@ -190,6 +199,7 @@ public class LocalDocumentType implements DocumentType {
     this.name = name;
     // NO SCHEMA ONLY FOR A TYPE BUILT DETACHED FROM ANY DATABASE (A TEST FIXTURE): NO READ OF A DATABASE REACHES IT
     this.events = schema != null ? schema.newTypeEventsRegistry() : new RecordEventsRegistry();
+    this.triggerEvents = schema != null ? schema.newTypeEventsRegistry() : new RecordEventsRegistry();
   }
 
   @Override
@@ -238,6 +248,167 @@ public class LocalDocumentType implements DocumentType {
   }
 
   private record StoredStringConversions(long serial, boolean value) {
+  }
+
+  /**
+   * The registry the triggers declared on this type are registered on. Internal: {@link #getEvents()} is the one listeners
+   * registered from Java go to, and it keeps firing for records of this exact type only.
+   */
+  public RecordEventsRegistry getTriggerEvents() {
+    return triggerEvents;
+  }
+
+  /**
+   * Fires the BEFORE CREATE listeners of this type and the triggers a record of this type is subject to: see
+   * {@link #getTriggerLineage()}. False as soon as one vetoes the write.
+   */
+  public boolean fireBeforeCreate(final Record record) {
+    if (!events.onBeforeCreate(record))
+      return false;
+    if (hasTriggers())
+      for (final RecordEventsRegistry registry : getTriggerLineage())
+        if (!registry.onBeforeCreate(record))
+          return false;
+    return true;
+  }
+
+  public void fireAfterCreate(final Record record) {
+    events.onAfterCreate(record);
+    if (hasAfterWriteListenersInLineage())
+      for (final RecordEventsRegistry registry : getTriggerLineage())
+        registry.onAfterCreate(record);
+  }
+
+  public boolean fireBeforeUpdate(final Record record) {
+    if (!events.onBeforeUpdate(record))
+      return false;
+    if (hasTriggers())
+      for (final RecordEventsRegistry registry : getTriggerLineage())
+        if (!registry.onBeforeUpdate(record))
+          return false;
+    return true;
+  }
+
+  public void fireAfterUpdate(final Record record) {
+    events.onAfterUpdate(record);
+    if (hasAfterWriteListenersInLineage())
+      for (final RecordEventsRegistry registry : getTriggerLineage())
+        registry.onAfterUpdate(record);
+  }
+
+  public boolean fireBeforeDelete(final Record record) {
+    if (!events.onBeforeDelete(record))
+      return false;
+    if (hasTriggers())
+      for (final RecordEventsRegistry registry : getTriggerLineage())
+        if (!registry.onBeforeDelete(record))
+          return false;
+    return true;
+  }
+
+  public void fireAfterDelete(final Record record) {
+    events.onAfterDelete(record);
+    if (hasAfterWriteListenersInLineage())
+      for (final RecordEventsRegistry registry : getTriggerLineage())
+        registry.onAfterDelete(record);
+  }
+
+  public boolean hasBeforeReadListeners() {
+    if (events.hasBeforeReadListeners())
+      return true;
+    if (hasTriggers())
+      for (final RecordEventsRegistry registry : getTriggerLineage())
+        if (registry.hasBeforeReadListeners())
+          return true;
+    return false;
+  }
+
+  public boolean fireBeforeRead(final RID rid) {
+    if (!events.onBeforeRead(rid))
+      return false;
+    if (hasTriggers())
+      for (final RecordEventsRegistry registry : getTriggerLineage())
+        if (!registry.onBeforeRead(rid))
+          return false;
+    return true;
+  }
+
+  public boolean hasAfterReadListeners() {
+    if (events.hasAfterReadListeners())
+      return true;
+    if (hasTriggers())
+      for (final RecordEventsRegistry registry : getTriggerLineage())
+        if (registry.hasAfterReadListeners())
+          return true;
+    return false;
+  }
+
+  /** As the registry's own {@code onAfterRead}: null as soon as a listener filters the record out. */
+  public Record fireAfterRead(Record record) {
+    record = events.onAfterRead(record);
+    if (record != null && hasTriggers())
+      for (final RecordEventsRegistry registry : getTriggerLineage()) {
+        record = registry.onAfterRead(record);
+        if (record == null)
+          break;
+      }
+    return record;
+  }
+
+  /** One volatile read on a database without triggers, which is what keeps the walk below off every write path. */
+  private boolean hasTriggers() {
+    return schema != null && schema.hasTriggerListeners();
+  }
+
+  /**
+   * As {@link #hasTriggers()}, for the AFTER CREATE / UPDATE / DELETE events only, which an INCREMENTAL materialized view
+   * listens to on the same registries (issue #10205). Kept apart so that a view adds nothing to the read path. While any such
+   * view exists, an AFTER write on any type walks its lineage (an array cached per type graph, each registry a list that is
+   * empty unless something listens), not only a write on a source type of the view.
+   */
+  private boolean hasAfterWriteListenersInLineage() {
+    return schema != null && (schema.hasTriggerListeners() || schema.hasPolymorphicViewListeners());
+  }
+
+  /**
+   * The trigger registries a record of this type fires (issue #10207): its own type's first, then every super type's,
+   * nearest first, so {@code ON TYPE P} covers a record of {@code S EXTENDS P} the way {@code SELECT FROM P} returns it, and
+   * an openCypher node labelled {@code :P:X} (type {@code P~X}) fires the triggers of both labels. A type reached through two
+   * paths - the labels of a composite type sharing a parent - is listed once, so its triggers fire once.
+   * <p>
+   * Computed once per change of the type graph, not per record: served only under the schema's types serial it was computed
+   * at, which every super type link and unlink moves. Read before the walk, so an answer computed while a link is landing
+   * carries the serial the link then moves, and is never served again.
+   */
+  private RecordEventsRegistry[] getTriggerLineage() {
+    final long serial = schema.getTypesChangeSerial();
+    final TriggerLineage cached = triggerLineage;
+    if (cached != null && cached.serial() == serial)
+      return cached.registries();
+
+    final List<LocalDocumentType> lineage = new ArrayList<>();
+    lineage.add(this);
+    for (int i = 0; i < lineage.size(); i++)
+      for (final LocalDocumentType superType : lineage.get(i).superTypes)
+        if (!containsInstance(lineage, superType))
+          lineage.add(superType);
+
+    final RecordEventsRegistry[] registries = new RecordEventsRegistry[lineage.size()];
+    for (int i = 0; i < registries.length; i++)
+      registries[i] = lineage.get(i).triggerEvents;
+    triggerLineage = new TriggerLineage(serial, registries);
+    return registries;
+  }
+
+  // By identity: equals() compares two types' definitions, and two distinct types can be defined alike
+  private static boolean containsInstance(final List<LocalDocumentType> types, final LocalDocumentType type) {
+    for (final LocalDocumentType t : types)
+      if (t == type)
+        return true;
+    return false;
+  }
+
+  private record TriggerLineage(long serial, RecordEventsRegistry[] registries) {
   }
 
   @Override
@@ -452,6 +623,9 @@ public class LocalDocumentType implements DocumentType {
    */
   private void renameAndPublish(final String newName) {
     final String oldName = name;
+    // BEFORE ANYTHING MOVES: A VIEW OR AN AGGREGATE THAT THE RENAME WOULD LEAVE NAMING A TYPE THAT NO LONGER EXISTS REFUSES IT (#10096)
+    schema.checkTypeRenameKeepsDependants(this, newName);
+
     final DatabaseInternal database = ((DatabaseInternal) schema.getDatabase()).getWrappedDatabaseInstance();
     // Best effort: leadership or the peer set can still change before the session opens. A refusal from the session is
     // then met by the rollback below; this check only keeps the common refusal from moving any file at all.
@@ -465,6 +639,8 @@ public class LocalDocumentType implements DocumentType {
     try {
       schema.recordFileChanges(() -> {
         sessionStarted[0] = true;
+        // THE DEPENDANTS FOLLOW THE NEW NAME HERE, UNDER THE WRITE LOCK AND BEFORE THE SESSION SAVES THE SCHEMA (#10096)
+        schema.carryTypeRenameToDependants(oldName, newName);
         final FileManager fileManager = database.getFileManager();
         // The type's files as they are NOW, not only the ones listed before the move: a component attached to the type
         // in between (an index built concurrently) was moved with the others but has no "before" name. Recording a file
@@ -514,7 +690,7 @@ public class LocalDocumentType implements DocumentType {
 
   private void renameInternal(final String newName) {
     if (schema.existsType(newName))
-      throw new IllegalArgumentException("Type with name '" + newName + "' already exists");
+      throw new AlreadyExistsException(AlreadyExistsException.Kind.TYPE, "Type with name '" + newName + "' already exists");
 
     final String oldName = name;
 
@@ -546,7 +722,7 @@ public class LocalDocumentType implements DocumentType {
       // which puts the buckets renamed above back under their old names.
       ((DatabaseInternal) schema.getDatabase()).getWrappedDatabaseInstance().executeInWriteLock(() -> {
         if (schema.typeMap().putIfAbsent(newName, this) != null)
-          throw new SchemaException("Type with name '" + newName + "' already exists");
+          throw new AlreadyExistsException(AlreadyExistsException.Kind.TYPE, "Type with name '" + newName + "' already exists");
 
         name = newName;
         return null;
@@ -616,6 +792,10 @@ public class LocalDocumentType implements DocumentType {
         throw new SchemaException("Error on renaming type '" + oldName + "' in '" + newName
             + "'. The database schema is corrupted, check single file names for buckets " + removedBuckets, e);
 
+      // A late collision - another change took the name after the check at the top - is unwound cleanly, so it is reported as
+      // the conflict it is rather than as a generic schema failure, which no wire answers as one (issue #10153)
+      if (e instanceof AlreadyExistsException taken)
+        throw taken;
       throw new SchemaException("Error on renaming type '" + oldName + "' in '" + newName + "'", e);
     }
   }
@@ -1053,12 +1233,13 @@ public class LocalDocumentType implements DocumentType {
       checkTimeSeriesColumnDeclared(propertyName);
 
       if (properties.containsKey(propertyName))
-        throw new SchemaException(
+        throw new AlreadyExistsException(AlreadyExistsException.Kind.PROPERTY,
             "Cannot create the property '" + propertyName + "' in type '" + name + "' because it already exists");
 
+      // a name a super type holds is the same conflict as one this type holds (issue #10153)
       if (getPolymorphicPropertyNames().contains(propertyName))
-        throw new SchemaException("Cannot create the property '" + propertyName + "' in type '" + name
-            + "' because it was already defined in a super type");
+        throw new AlreadyExistsException(AlreadyExistsException.Kind.PROPERTY,
+            "Cannot create the property '" + propertyName + "' in type '" + name + "' because it was already defined in a super type");
 
       // The construction stays HERE, after the checks and inside the callback, although the constructor reaches
       // Dictionary.getIdByName(name, true) - which, for a name the dictionary has not seen, opens and commits a
@@ -1286,12 +1467,14 @@ public class LocalDocumentType implements DocumentType {
             + "declared name. Drop the whole type to change the column");
 
       if (properties.containsKey(newPropertyName))
-        throw new SchemaException("Cannot rename the property '" + propertyName + "' in type '" + name + "' to '"
-            + newPropertyName + "' because a property with that name already exists");
+        throw new AlreadyExistsException(AlreadyExistsException.Kind.PROPERTY,
+            "Cannot rename the property '" + propertyName + "' in type '" + name + "' to '" + newPropertyName
+                + "' because a property with that name already exists");
 
       if (getPolymorphicPropertyNames().contains(newPropertyName))
-        throw new SchemaException("Cannot rename the property '" + propertyName + "' in type '" + name + "' to '"
-            + newPropertyName + "' because it is already defined in a super type");
+        throw new AlreadyExistsException(AlreadyExistsException.Kind.PROPERTY,
+            "Cannot rename the property '" + propertyName + "' in type '" + name + "' to '" + newPropertyName
+                + "' because it is already defined in a super type");
 
       final TypeIndex indexOnProperty = findIndexOnProperty(propertyName);
       if (indexOnProperty != null)
@@ -2104,44 +2287,53 @@ public class LocalDocumentType implements DocumentType {
     final List<IndexInternal> list = bucketIndexesByBucket.computeIfAbsent(bucketId, k -> new CopyOnWriteArrayList<>());
     list.add(index);
 
-    if (propIndex == null) {
-      final List<String> propertyList = Arrays.asList(propertyNames);
-      propIndex = indexesByProperties.get(propertyList);
-      // A wrapper found here can be "invalidated" if a prior {@link TypeIndex#drop()} (e.g.
-      // existingTypeIndex.drop() in {@link TypeIndexBuilder#create()}) ran on it but the schema's
-      // own auto-removal hook (LocalSchema#dropIndex, #4179) failed to dislodge it - this is the
-      // observable symptom of the "is not valid" failures during REBUILD INDEX / index recreation.
-      // Treat a stale entry as if it weren't there: mint a fresh wrapper so the new bucket index
-      // can attach.
-      if (propIndex != null && !propIndex.isValid()) {
-        indexesByProperties.remove(propertyList);
-        schema.removeIndexDuringLoad(propIndex.getName());
-        propIndex = null;
-      }
-      if (propIndex == null) {
-        // CREATE THE TYPE-INDEX FOR THE 1ST TIME. Honour any user-supplied name carried on the
-        // bucket-level index metadata (issue #4139): {@code CREATE INDEX <manual_name> ON ...}
-        // sets metadata.typeIndexName via TypeIndexBuilder, the schema reload re-attaches it via
-        // LSMTreeIndex.setMetadata, and we use it here so the TypeIndex (and therefore the
-        // schema-level indexMap entry / Studio's "Indexes" view) is keyed by the manual name.
-        // Falling back to the auto-derived form keeps the public default name unchanged for all
-        // callers that did not supply a manual name.
-        final String customName = index.getMetadata().typeIndexName;
-        final String typeIndexName = customName != null && !customName.isEmpty() ?
-            customName :
-            name + Arrays.toString(propertyNames).replace(" ", "");
-        propIndex = new TypeIndex(typeIndexName, this);
-        // Staged while a schema load is in flight (issue #7213): this wrapper is the name a query resolves, and
-        // publishing it here would hand a reader a TypeIndex over a bucket-level index that has not run its
-        // onAfterSchemaLoad() yet - for a vector index, one with no vectors loaded.
-        schema.publishIndexDuringLoad(propIndex.getName(), propIndex);
-        indexesByProperties.put(propertyList, propIndex);
-      }
-    }
+    if (propIndex == null)
+      propIndex = typeIndexFor(index, propertyNames);
 
     // ADD AS SUB-INDEX
     propIndex.addIndexOnBucket(index);
     this.bucketSelectionStrategy.setType(this);
+  }
+
+  /**
+   * The wrapper of this type for the index on {@code propertyNames}, minted the first time (issue #10093 needs it from
+   * outside {@link #addIndexInternal}: the schema load binds a sub-index to the type that owns its bucket under the wrapper of
+   * the type that declares the index, which may not have minted it yet).
+   */
+  TypeIndex typeIndexFor(final IndexInternal index, final String[] propertyNames) {
+    final List<String> propertyList = Arrays.asList(propertyNames);
+    TypeIndex propIndex = indexesByProperties.get(propertyList);
+    // A wrapper found here can be "invalidated" if a prior {@link TypeIndex#drop()} (e.g.
+    // existingTypeIndex.drop() in {@link TypeIndexBuilder#create()}) ran on it but the schema's
+    // own auto-removal hook (LocalSchema#dropIndex, #4179) failed to dislodge it - this is the
+    // observable symptom of the "is not valid" failures during REBUILD INDEX / index recreation.
+    // Treat a stale entry as if it weren't there: mint a fresh wrapper so the new bucket index
+    // can attach.
+    if (propIndex != null && !propIndex.isValid()) {
+      indexesByProperties.remove(propertyList);
+      schema.removeIndexDuringLoad(propIndex.getName());
+      propIndex = null;
+    }
+    if (propIndex == null) {
+      // CREATE THE TYPE-INDEX FOR THE 1ST TIME. Honour any user-supplied name carried on the
+      // bucket-level index metadata (issue #4139): {@code CREATE INDEX <manual_name> ON ...}
+      // sets metadata.typeIndexName via TypeIndexBuilder, the schema reload re-attaches it via
+      // LSMTreeIndex.setMetadata, and we use it here so the TypeIndex (and therefore the
+      // schema-level indexMap entry / Studio's "Indexes" view) is keyed by the manual name.
+      // Falling back to the auto-derived form keeps the public default name unchanged for all
+      // callers that did not supply a manual name.
+      final String customName = index.getMetadata().typeIndexName;
+      final String typeIndexName = customName != null && !customName.isEmpty() ?
+          customName :
+          name + Arrays.toString(propertyNames).replace(" ", "");
+      propIndex = new TypeIndex(typeIndexName, this);
+      // Staged while a schema load is in flight (issue #7213): this wrapper is the name a query resolves, and
+      // publishing it here would hand a reader a TypeIndex over a bucket-level index that has not run its
+      // onAfterSchemaLoad() yet - for a vector index, one with no vectors loaded.
+      schema.publishIndexDuringLoad(propIndex.getName(), propIndex);
+      indexesByProperties.put(propertyList, propIndex);
+    }
+    return propIndex;
   }
 
   public void removeTypeIndexInternal(final TypeIndex index) {

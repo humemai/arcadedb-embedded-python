@@ -406,6 +406,19 @@ public class ResultInternal implements Result {
   }
 
   /**
+   * The value of the only property of a row that wraps no record (a sub-query row such as {@code SELECT k FROM U}), or
+   * {@code absent} when the row wraps a record or does not hold exactly one property. It answers what
+   * {@link #getPropertyNames()} followed by {@link #getProperty(String)} would, without building the name set: an
+   * {@code IN (SELECT ...)} reads it for every sub-query row of every outer row (#10186). Without a record the names are
+   * exactly the content keys, since {@link #removeProperty(String)} takes the key out of the content too.
+   */
+  public Object getSingleValue(final Object absent) {
+    if (element != null || content == null || content.size() != 1)
+      return absent;
+    return toPropertyValue(content.values().iterator().next());
+  }
+
+  /**
    * Deliberately the union of both stores, so it stays broader than {@link #getPropertyNames()}: for a
    * whole-entity projection this answers {@code true} for a name that is not listed as a column and that
    * {@link #getProperty(String)} resolves to {@code null}. FinalProjectionStep uses it to decide which
@@ -542,11 +555,12 @@ public class ResultInternal implements Result {
   public Map<String, Object> toPropertyMap(final boolean includeMetadata) {
     // getPropertyNames() and getProperty() inlined, with their precedence: once content is present the element is never
     // consulted. Walking the store directly spares the name set and the second lookup per name, on a path that runs once per
-    // row of an INSERT ... FROM SELECT
+    // row of an INSERT ... FROM SELECT. A record is read ONCE, whole: ImmutableDocument.get(name) walks the record header from
+    // its first byte until it meets the name, so reading it a property at a time cost N+1 passes (issue #10098)
     final boolean fromContent = content != null && !content.isEmpty();
-    final Set<String> elementNames = !fromContent && element != null ? element.getPropertyNames() : Collections.emptySet();
+    final Map<String, Object> stored = !fromContent && element != null ? element.toMap(false) : Collections.emptyMap();
     final Map<String, Object> map = new LinkedHashMap<>(
-        (fromContent ? content.size() : elementNames.size()) + (includeMetadata ? 5 : 0));
+        (fromContent ? content.size() : stored.size()) + (includeMetadata ? 5 : 0));
     if (includeMetadata && element != null)
       putStructuralAttributes(map::put);
 
@@ -556,9 +570,9 @@ public class ResultInternal implements Result {
         map.put(name, tombstones != null && tombstones.contains(name) ? null : toPropertyValue(entry.getValue()));
       }
     } else
-      for (final String name : elementNames)
-        if (tombstones == null || !tombstones.contains(name))
-          map.put(name, toPropertyValue(element.get(name)));
+      for (final Map.Entry<String, Object> entry : stored.entrySet())
+        if (tombstones == null || !tombstones.contains(entry.getKey()))
+          map.put(entry.getKey(), toPropertyValue(entry.getValue()));
     return map;
   }
 

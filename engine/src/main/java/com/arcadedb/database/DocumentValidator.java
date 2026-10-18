@@ -22,6 +22,7 @@ import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.exception.CommandExecutionException;
 import com.arcadedb.exception.ValidationException;
 import com.arcadedb.log.LogManager;
+import com.arcadedb.query.sql.parser.Identifier;
 import com.arcadedb.schema.DocumentType;
 import com.arcadedb.schema.Property;
 import com.arcadedb.schema.Schema;
@@ -187,7 +188,8 @@ public class DocumentValidator {
      */
     public boolean canBeViolatedOn(final Property p) {
       final Type type = p.getType();
-      return checkType && (isScalarType(type) || (type == Type.LIST || type == Type.MAP) && p.getOfType() != null) || min != null || max != null || regexp != null;
+      return checkType && (isScalarType(type) || type == Type.STRING || (type == Type.LIST || type == Type.MAP) && p.getOfType() != null)
+          || min != null || max != null || regexp != null;
     }
   }
 
@@ -207,6 +209,18 @@ public class DocumentValidator {
       return;
 
     final Type type = p.getType();
+    // Every value has a string form, so converting cannot be what accepts it: an index on the property compares its keys as
+    // text, while a scan compares the stored number, date or boolean natively, and the two disagree on ranges and order
+    // (issue #10204)
+    if (type == Type.STRING && constraints.checkType() && !(stored instanceof String)) {
+      final String text = String.valueOf(stored);
+      final String property = Identifier.quote(p.getName());
+      throwValidationException(document.getType(), p, "is declared as STRING but a stored value is a " + stored.getClass()
+          .getSimpleName() + ", not a string: " + (text.length() > 100 ? text.substring(0, 100) + "..." : text)
+          + " (convert the stored values first, e.g. with UPDATE " + Identifier.quote(document.getTypeName()) + " SET "
+          + property + " = " + property + ".asString())");
+    }
+
     Object value = stored;
     if (isScalarType(type)) {
       final Database database = document.getDatabase();
@@ -570,6 +584,57 @@ public class DocumentValidator {
       throw new CommandExecutionException("Cannot set " + setting + ": " + (broken.size() == 1 ? "a property" : broken.size()
           + " properties") + " would be left with a constraint no value can satisfy, and every write of it would fail. "
           + String.join("; ", broken) + ". Change or remove the constraint first (ALTER PROPERTY ... REGEXP null, MIN null, MAX null)");
+  }
+
+  /**
+   * The REGEXP of a DATE or DATETIME property that matches no text a value of the class the database holds it as NOW can be
+   * written as, so that every write of the property fails (issue #10104). The check {@link #requireDateConstraintsSatisfiableUnder}
+   * makes before a change, run after one instead: for the routes that put a class in force without a statement that can refuse
+   * - the context configuration an open reads, the public setters of the serializer, the apply of a replicated setting - and
+   * cannot be made to, since an open must not fail over a constraint. Only a pattern shown to match nothing is reported, not one
+   * the search could not settle, which {@link #requireDateConstraintsSatisfiableUnder} already warns about at the change.
+   * <p>
+   * The pattern was declared against some class, and the schema does not record which one, so every pattern is checked against
+   * the class in force. One search budget serves the whole walk, and a schema with no pattern on a date property - nearly all of
+   * them - costs a pass over its properties.
+   *
+   * @return one message per property, each naming it and the remedy, empty when every pattern can still match
+   */
+  public static List<String> findUnsatisfiableDateRegexps(final DatabaseInternal database) {
+    final BinarySerializer serializer = database.getSerializer();
+    List<String> found = null;
+    long deadline = 0L;
+    for (final DocumentType type : database.getSchema().getTypes())
+      for (final Property p : type.getProperties()) {
+        if (p.getRegexp() == null)
+          continue;
+        final Class<?> held = heldClassUnder(p.getType(), serializer.getDateImplementation(), serializer.getDateTimeImplementation());
+        if (held == null)
+          continue;
+
+        if (found == null) {
+          found = new ArrayList<>();
+          // one deadline for the whole walk, started when the first pattern is searched
+          deadline = TimeBoundRegex.newDeadline(REGEXP_SEARCH_TIMEOUT_MS);
+        }
+        final String refusal = regexpUsability(p.getType(), held, p.getRegexp(), true, deadline).refusal();
+        if (refusal != null)
+          found.add("the REGEXP '" + p.getRegexp() + "' of property '" + type.getName() + "." + p.getName() + "' " + refusal
+              + ": every write of the property fails. Remove it with ALTER PROPERTY `" + type.getName() + "`.`" + p.getName()
+              + "` REGEXP null, or hold the value as the class the pattern was written for (arcadedb.dateImplementation, "
+              + "arcadedb.dateTimeImplementation)");
+      }
+    return found == null ? List.of() : found;
+  }
+
+  /**
+   * Logs, one WARNING per property, what {@link #findUnsatisfiableDateRegexps} finds.
+   *
+   * @param cause what put the class in force, for the message
+   */
+  public static void warnAboutUnsatisfiableDateRegexps(final DatabaseInternal database, final String cause) {
+    for (final String finding : findUnsatisfiableDateRegexps(database))
+      LogManager.instance().log(DocumentValidator.class, Level.WARNING, "After %s, %s", cause, finding);
   }
 
   /**

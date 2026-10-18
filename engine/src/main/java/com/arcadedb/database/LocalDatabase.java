@@ -77,6 +77,7 @@ import com.arcadedb.index.Index;
 import com.arcadedb.index.IndexCursor;
 import com.arcadedb.index.IndexInternal;
 import com.arcadedb.index.TypeIndex;
+import com.arcadedb.index.fulltext.LSMTreeFullTextIndex;
 import com.arcadedb.index.hash.HashIndexBucket;
 import com.arcadedb.index.lsm.LSMTreeIndexBloomFilter;
 import com.arcadedb.index.lsm.LSMTreeIndexCompacted;
@@ -97,6 +98,7 @@ import com.arcadedb.query.sql.parser.ExecutionPlanCache;
 import com.arcadedb.query.sql.parser.StatementCache;
 import com.arcadedb.schema.DocumentType;
 import com.arcadedb.schema.EdgeType;
+import com.arcadedb.schema.FullTextIndexMetadata;
 import com.arcadedb.schema.LocalDocumentType;
 import com.arcadedb.schema.LocalSchema;
 import com.arcadedb.schema.LocalTimeSeriesType;
@@ -193,6 +195,9 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
   private static final AsyncQuiesce NO_ASYNC_TO_QUIESCE = () -> {
   };
 
+  /** The most lists whose census failure is reported at WARNING by one database; the counter is not bounded (#10100). */
+  private static final int MAX_REPORTED_CENSUS_FAILURES = 64;
+
   private static final Set<String> SUPPORTED_FILE_EXT = Set.of(
       Dictionary.DICT_EXT,
       LocalBucket.BUCKET_EXT,
@@ -229,6 +234,9 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
   public final       AtomicLong                                indexCompactions          = new AtomicLong();
   // #8649: count() recomputes not cached because a replicated apply wrote the bucket without its lock during the scan
   public final       AtomicLong                                recountPublishesRefused   = new AtomicLong();
+  // #10100: lightweight-edge census builds that failed, so that every edge of the list walks it alone
+  private final      AtomicLong                                lightEdgeCensusFallbacks  = new AtomicLong();
+  private final      Set<String>                               lightEdgeCensusReported   = ConcurrentHashMap.newKeySet();
   protected final    String                                    name;
   protected final    ComponentFile.MODE                        mode;
   protected final    ContextConfiguration                      configuration;
@@ -484,7 +492,13 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
       getTransaction().kill();
 
     // #5418: a real crash takes the index background threads down with the process, so the simulation must too -
-    // otherwise a vector index inactivity timer survives the "crash" and later fires against a dead database.
+    // otherwise a vector index inactivity timer survives the "crash" and later fires against a dead database. The schema's
+    // index warm-up thread is one of them (#10156).
+    try {
+      schema.stopIndexWarmUp();
+    } catch (final Exception e) {
+      // IGNORE IT: THIS IS A CRASH SIMULATION
+    }
     for (final Index idx : schema.getIndexes()) {
       try {
         ((IndexInternal) idx).releaseBackgroundResources();
@@ -665,7 +679,29 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
     final Map<String, Object> map = stats.toMap();
     map.put("indexCompactions", indexCompactions.get());
     map.put("recountPublishesRefused", recountPublishesRefused.get());
+    map.put("lightEdgeCensusFallbacks", lightEdgeCensusFallbacks.get());
     return map;
+  }
+
+  /**
+   * Counts a lightweight-edge census that could not count the edge list of {@code owner} in {@code direction}: from then
+   * on every lightweight edge of that list resolves its occurrence by walking the list itself, the per-vertex quadratic
+   * cost the census exists to remove (#10100). Every failure is counted ({@code lightEdgeCensusFallbacks} in
+   * {@link #getStats()}); what is bounded is how many are worth a WARNING.
+   *
+   * @return true when this is the first failure reported for this list and the database is still within its budget of
+   *         distinct lists, so the caller logs it at WARNING; false for a repeat or past the budget, which are not worth
+   *         a line each (a query meets the same list once per vertex) and are counted all the same
+   */
+  public boolean countLightEdgeCensusFallback(final RID owner, final Vertex.DIRECTION direction) {
+    lightEdgeCensusFallbacks.incrementAndGet();
+    // PAST THE BUDGET NOTHING IS BUILT: A DATABASE WHOSE LISTS KEEP FAILING PAYS A COUNTER INCREMENT AND A SIZE READ. UNDER IT
+    // THE CHECK AND THE ADD ARE ONE STEP, SO THE BUDGET IS EXACT UNDER CONCURRENCY; A FAILURE IS RARE, SO THE MONITOR IS NOT HOT
+    if (lightEdgeCensusReported.size() >= MAX_REPORTED_CENSUS_FAILURES)
+      return false;
+    synchronized (lightEdgeCensusReported) {
+      return lightEdgeCensusReported.size() < MAX_REPORTED_CENSUS_FAILURES && lightEdgeCensusReported.add(owner + "|" + direction);
+    }
   }
 
   @Override
@@ -1346,7 +1382,7 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
     if (!events.onBeforeCreate(record))
       return false;
     if (record instanceof Document doc)
-      if (!((RecordEventsRegistry) doc.getType().getEvents()).onBeforeCreate(record))
+      if (!((LocalDocumentType) doc.getType()).fireBeforeCreate(record))
         return false;
 
     boolean success = false;
@@ -1415,11 +1451,12 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
       ((RecordInternal) record).unsetDirty();
 
       success = true;
+      countCreatedRecord(record);
 
       // INVOKE EVENT CALLBACKS
       events.onAfterCreate(record);
       if (record instanceof Document doc)
-        ((RecordEventsRegistry) doc.getType().getEvents()).onAfterCreate(record);
+        ((LocalDocumentType) doc.getType()).fireAfterCreate(record);
 
     } finally {
       if (implicitTransaction) {
@@ -1430,6 +1467,20 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
       }
     }
     return true;
+  }
+
+  /**
+   * Counts a record the database has just created (issue #10095). The create-side twin of the {@code deleteRecord} counter in
+   * {@link #deleteRecordNoLock(Record)} and of the {@code updateRecord} counter in {@code applyUpdate}: incremented by the single owner of the
+   * operation, after the write happened, so a record that was instantiated and discarded, refused by validation or vetoed by a
+   * listener is not counted, and an edge is, whichever API made it. Only the records of the user are counted: the edge segments and
+   * stripe directories the graph engine allocates through the same method are storage of the engine, not records created. Counted
+   * when the write is made, not when the transaction commits, so a transaction rolled back later still counts its creates, as it does
+   * its updates and deletes.
+   */
+  private void countCreatedRecord(final Record record) {
+    if (record instanceof Document)
+      stats.createRecord.incrementAndGet();
   }
 
   /**
@@ -1553,18 +1604,19 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
               "Cannot restore record at position " + position + " in bucket '" + bucket.getName()
                   + "': a database-level beforeCreate listener vetoed it");
         if (record instanceof Document doc)
-          if (!((RecordEventsRegistry) doc.getType().getEvents()).onBeforeCreate(record))
+          if (!((LocalDocumentType) doc.getType()).fireBeforeCreate(record))
             throw new DatabaseOperationException(
                 "Cannot restore record at position " + position + " in bucket '" + bucket.getName()
                     + "': a beforeCreate listener on type '" + doc.getTypeName() + "' vetoed it");
 
         final RID restoredRid = restoreRecordInTransaction(record, bucket, position);
         success = true;
+        countCreatedRecord(record);
 
         // INVOKE EVENT CALLBACKS - before the implicit commit, exactly where createRecordNoLock fires them.
         events.onAfterCreate(record);
         if (record instanceof Document doc)
-          ((RecordEventsRegistry) doc.getType().getEvents()).onAfterCreate(record);
+          ((LocalDocumentType) doc.getType()).fireAfterCreate(record);
 
         return restoredRid;
       } finally {
@@ -1644,12 +1696,17 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
 
   @Override
   public boolean updateRecordReportingVeto(final Record record) {
-    return updateRecord(record, false, false);
+    return updateRecord(record, false, false, true);
+  }
+
+  @Override
+  public void updateRecordWithoutEvents(final Record record) {
+    updateRecord(record, false, false, false);
   }
 
   @Override
   public boolean updateRecordWithEventsNoLock(final Record record, final boolean discardRecordAfter) {
-    return updateRecord(record, true, discardRecordAfter);
+    return updateRecord(record, true, discardRecordAfter, true);
   }
 
   /**
@@ -1659,10 +1716,12 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
    * the events around the bare page write and miss the statistic, so the metrics endpoint undercounted every
    * asynchronous update (issue #9987).
    *
-   * @param writeNow true for the asynchronous worker: no database read lock, and the record is written to its page
-   *                 now, inside the caller's transaction, rather than queued for the commit
+   * @param writeNow   true for the asynchronous worker: no database read lock, and the record is written to its page
+   *                   now, inside the caller's transaction, rather than queued for the commit
+   * @param fireEvents false for the engine's own bookkeeping on a record, see {@link #updateRecordWithoutEvents(Record)}
    */
-  private boolean updateRecord(final Record record, final boolean writeNow, final boolean discardRecordAfter) {
+  private boolean updateRecord(final Record record, final boolean writeNow, final boolean discardRecordAfter,
+      final boolean fireEvents) {
     if (record.getIdentity() == null)
       throw new IllegalArgumentException("Cannot update the record because it is not persistent");
 
@@ -1673,21 +1732,24 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
       document.validate();
 
     // INVOKE EVENT CALLBACKS
-    if (!events.onBeforeUpdate(record))
-      return false;
-    if (record instanceof Document document)
-      if (!((RecordEventsRegistry) document.getType().getEvents()).onBeforeUpdate(record))
+    if (fireEvents) {
+      if (!events.onBeforeUpdate(record))
         return false;
+      if (record instanceof Document document)
+        if (!((LocalDocumentType) document.getType()).fireBeforeUpdate(record))
+          return false;
+    }
 
     if (writeNow)
-      return applyUpdate(record, true, discardRecordAfter);
-    return executeInReadLock(() -> applyUpdate(record, false, false));
+      return applyUpdate(record, true, discardRecordAfter, fireEvents);
+    return executeInReadLock(() -> applyUpdate(record, false, false, fireEvents));
   }
 
   /**
-   * The write half of {@link #updateRecord(Record, boolean, boolean)}, after the before-update listeners let it through.
+   * The write half of {@link #updateRecord(Record, boolean, boolean, boolean)}, after the before-update listeners let it through.
    */
-  private boolean applyUpdate(final Record record, final boolean writeNow, final boolean discardRecordAfter) {
+  private boolean applyUpdate(final Record record, final boolean writeNow, final boolean discardRecordAfter,
+      final boolean fireEvents) {
     if (!writeNow && isTransactionActive()) {
       // MARK THE RECORD FOR UPDATE IN TX AND DEFER THE SERIALIZATION AT COMMIT TIME. THIS SPEEDS UP CASES WHEN THE
       // SAME RECORDS ARE UPDATE MULTIPLE TIME INSIDE
@@ -1765,9 +1827,11 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
     markModified();
 
     // INVOKE EVENT CALLBACKS
-    events.onAfterUpdate(record);
-    if (record instanceof Document document)
-      ((RecordEventsRegistry) document.getType().getEvents()).onAfterUpdate(record);
+    if (fireEvents) {
+      events.onAfterUpdate(record);
+      if (record instanceof Document document)
+        ((LocalDocumentType) document.getType()).fireAfterUpdate(record);
+    }
 
     return true;
   }
@@ -1925,7 +1989,7 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
     if (!events.onBeforeDelete(record))
       return false;
     if (record instanceof Document document)
-      if (!((RecordEventsRegistry) document.getType().getEvents()).onBeforeDelete(record))
+      if (!((LocalDocumentType) document.getType()).fireBeforeDelete(record))
         return false;
 
     boolean success = false;
@@ -2036,7 +2100,7 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
       // INVOKE EVENT CALLBACKS
       events.onAfterDelete(record);
       if (record instanceof Document document)
-        ((RecordEventsRegistry) document.getType().getEvents()).onAfterDelete(record);
+        ((LocalDocumentType) document.getType()).fireAfterDelete(record);
 
       final TransactionContext transaction = getTransaction();
       if (record.getIdentity().getPosition() >= 0)
@@ -2188,6 +2252,10 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
 
     boolean duplicatedKeyRetried = false;
 
+    // #10135: how many transaction levels belong to the CALLER. On failure only the levels above it are rolled back.
+    // Sampled once: every failed attempt rolls back to exactly this depth, so it is the same before each attempt
+    final int callerLevels = activeTransactionLevels();
+
     for (int retry = 0; retry < attempts; ++retry) {
       boolean createdNewTx = true;
 
@@ -2200,7 +2268,7 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
       long commitCountAtStart = 0;
 
       try {
-        if (joinCurrentTx && wrappedDatabaseInstance.isTransactionActive())
+        if (joinCurrentTx && callerLevels > 0)
           createdNewTx = false;
         else
           wrappedDatabaseInstance.begin();
@@ -2226,13 +2294,17 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
         // "Target vertex is not persistent" when a stale, now-unsaved record reference is reused) - and
         // re-running the block against the same conflicted state cannot succeed anyway. Propagate the
         // exception so the real transaction owner retries the whole logical unit with fresh bindings.
-        if (!createdNewTx)
+        if (!createdNewTx) {
+          // A level the block opened itself and left open is not the caller's: take it back, keep the caller's (#10135)
+          rollbackLevelsAbove(callerLevels);
           throw e;
+        }
 
         // RETRY
         lastException = e;
-        if (wrappedDatabaseInstance.isTransactionActive())
-          wrappedDatabaseInstance.rollback();
+        // Back to the caller's depth, including a level the block began and left open, so the next attempt starts
+        // from the same state as this one (#10135)
+        rollbackLevelsAbove(callerLevels);
 
         if (error != null)
           error.call(e);
@@ -2276,8 +2348,12 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
           delayBetweenRetries(retry, retryDelayBase, retryDelay);
 
       } catch (final Throwable e) {
-        if (wrappedDatabaseInstance.isTransactionActive())
-          wrappedDatabaseInstance.rollback();
+        // #10135: the same ownership rule as the arm above. A call that JOINED the caller's transaction owns nothing,
+        // so whatever the block threw - not only a retryable exception - must leave the caller's transaction alive with
+        // its earlier work. Only the levels this call opened (its own transaction, or one the block began and left
+        // open) are rolled back: rolling back the caller's would discard work done before this call, and the caller
+        // would only find out at its next write ("Transaction not begun").
+        rollbackLevelsAbove(callerLevels);
 
         if (error != null)
           error.call(e);
@@ -2290,6 +2366,30 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
       error.call(lastException);
 
     throw lastException;
+  }
+
+  /**
+   * Number of active transaction levels on this thread: 0 without a transaction, otherwise the nesting depth.
+   */
+  private int activeTransactionLevels() {
+    return wrappedDatabaseInstance.isTransactionActive() ? wrappedDatabaseInstance.getNestedTransactions() : 0;
+  }
+
+  /**
+   * Rolls back the innermost transaction levels until only {@code levelsToKeep} remain active (issue #10135).
+   */
+  private void rollbackLevelsAbove(final int levelsToKeep) {
+    int levels;
+    while ((levels = activeTransactionLevels()) > levelsToKeep) {
+      wrappedDatabaseInstance.rollback();
+      if (activeTransactionLevels() >= levels) {
+        // NO PROGRESS: STOP INSTEAD OF SPINNING ON A TRANSACTION THAT CANNOT BE ROLLED BACK
+        LogManager.instance().log(this, Level.WARNING,
+            "Rollback of transaction level %d on database '%s' made no progress: leaving %d level(s) active, the caller "
+                + "owns %d", null, levels, name, levels, levelsToKeep);
+        break;
+      }
+    }
   }
 
   @Override
@@ -2336,8 +2436,6 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
       throw new IllegalArgumentException("Cannot create a document of type '" + typeName + "' because is not a " +
           "document type");
 
-    stats.createRecord.incrementAndGet();
-
     return new MutableDocument(wrappedDatabaseInstance, type, null);
   }
 
@@ -2364,8 +2462,6 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
     if (!type.getClass().equals(LocalVertexType.class))
       throw new IllegalArgumentException("Cannot create a vertex of type '" + typeName + "' because is not a vertex " +
           "type");
-
-    stats.createRecord.incrementAndGet();
 
     return new MutableVertex(wrappedDatabaseInstance, (VertexType) type, null);
   }
@@ -2420,8 +2516,6 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
     } else
       destinationVertex = v2Result.next().getIdentity().asVertex();
 
-    stats.createRecord.incrementAndGet();
-
     return sourceVertex.newEdge(edgeType, destinationVertex, properties);
   }
 
@@ -2467,8 +2561,6 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
                 destinationVertexKeyValues));
     } else
       destinationVertex = v2Result.next().getIdentity().asVertex();
-
-    stats.createRecord.incrementAndGet();
 
     return sourceVertex.newEdge(edgeType, destinationVertex, properties);
   }
@@ -3067,9 +3159,66 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
    * was then refused and the caller told nothing had changed.
    */
   public String pendingConfigurationChange(final String key) throws IOException {
+    return pendingConfigurationChanges(fileKeyOf(key));
+  }
+
+  /**
+   * The entry that replicates {@code change} (issue #10108): the one captured when the change stored its value, so it
+   * carries the value THIS change set and not whatever the in-memory configuration holds by the time the caller submits it,
+   * which another statement on the same setting may have replaced. {@code null} when {@code configuration.json} already
+   * holds what the change stored. A change made without {@link #changeSetting(String, Runnable)} captured nothing, and
+   * takes {@link #pendingConfigurationChange(String)}.
+   */
+  public String pendingConfigurationChange(final SettingChange change) throws IOException {
+    final String document = change.document();
+    if (document == null)
+      return pendingConfigurationChange(change.key());
+
+    final JSONObject captured = new JSONObject(document);
+    final JSONObject changed = captured.getJSONObject("configuration", new JSONObject());
+    final JSONArray removed = captured.getJSONArray("removed", new JSONArray());
+    final JSONObject saved = readSavedConfiguration().getJSONObject("configuration", new JSONObject());
+    for (final String key : changed.keySet())
+      if (!saved.has(key) || !String.valueOf(saved.get(key)).equals(String.valueOf(changed.get(key))))
+        return document;
+    for (int i = 0; i < removed.length(); i++)
+      if (saved.has(removed.getString(i)))
+        return document;
+    return null;
+  }
+
+  /**
+   * Saves the configuration after {@code change} stored its value (issue #10108). A database of its own writes the whole
+   * configuration to its file, as {@link #saveConfiguration()} does: there is nothing to replicate. The change matters to
+   * the Raft HA wrapper, which replicates the setting with the value that change set and nothing else.
+   */
+  @Override
+  public void saveConfiguration(final SettingChange change) throws IOException {
+    saveConfiguration();
+  }
+
+  /** The setting as {@code configuration.json} names it, however the caller spelled the key. */
+  private static String fileKeyOf(final String key) {
     // A declared setting under its declared key, the one the configuration stores it under, however the caller spelled it
     final GlobalConfiguration setting = GlobalConfiguration.findByKey(key);
-    return pendingConfigurationChanges(ContextConfiguration.jsonKey(setting != null ? setting.getKey() : key));
+    return ContextConfiguration.jsonKey(setting != null ? setting.getKey() : key);
+  }
+
+  /**
+   * The entry that replicates the setting {@code key} as it stands now, in the shape {@link #pendingConfigurationChanges()}
+   * produces: the setting with its value, or named as removed when the configuration no longer holds it. Read under
+   * {@link #configurationApplyLock}, right after the value was stored, so it cannot hold another statement's value.
+   */
+  private String settingChangeDocument(final String key) {
+    final String fileKey = fileKeyOf(key);
+    final JSONObject current = new JSONObject(configuration.toJSON()).getJSONObject("configuration", new JSONObject());
+    final JSONObject changed = new JSONObject();
+    final JSONArray removed = new JSONArray();
+    if (current.has(fileKey))
+      changed.put(fileKey, current.get(fileKey));
+    else
+      removed.put(fileKey);
+    return new JSONObject().put("configuration", changed).put("removed", removed).toString();
   }
 
   /** The difference between memory and {@code configuration.json}, restricted to {@code onlyFileKey} when not null. */
@@ -3124,6 +3273,30 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
     for (int i = 0; i < removed.length(); i++)
       settingTokens.remove(tokenKey(GlobalConfiguration.PREFIX + removed.getString(i)));
 
+    writeConfigurationFile(changed, removed);
+  }
+
+  /**
+   * Writes a document {@link #pendingConfigurationChanges()} produced to {@code configuration.json} alone, leaving the
+   * configuration in memory as it is (issue #10124): for a replicated change already in force here whose write failed, so
+   * the file catches up with it once the volume takes the write again. Every setting the document does not name keeps the
+   * value the file holds, exactly as in {@link #applyConfigurationChanges(String)}, and for the same reason: memory may
+   * hold a change made on this node that is still on its way through the replication, which must not reach the file ahead
+   * of its own entry.
+   * <p>
+   * For the Raft state machine's recovery of a replicated change only: memory and file are left disagreeing on purpose
+   * when the document holds a value memory does not. Any other caller wants {@link #saveConfiguration()} or
+   * {@link #applyConfigurationChanges(String)}.
+   */
+  public void writeConfigurationChanges(final String changesJson) throws IOException {
+    final JSONObject changes = new JSONObject(changesJson);
+    synchronized (configurationApplyLock) {
+      writeConfigurationFile(changes.getJSONObject("configuration", new JSONObject()),
+          changes.getJSONArray("removed", new JSONArray()));
+    }
+  }
+
+  private void writeConfigurationFile(final JSONObject changed, final JSONArray removed) throws IOException {
     // Read-modify-write, so under the lock every writer of the file takes
     synchronized (configurationFileLock) {
       final JSONObject saved = readSavedConfiguration();
@@ -3157,13 +3330,36 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
     }
   }
 
+  /**
+   * Warns, naming the property, about a REGEXP on a DATE or DATETIME property that the class in force holds no value of (issue
+   * #10104). Reached when the database opens and whenever the serializer's class changes, which is where a statement that can refuse
+   * is not the one changing it. Skipped while there is no loaded schema to walk.
+   * <p>
+   * Never throws: it is a diagnostic, run by an open that must not fail over a constraint and by a setter that has already changed
+   * the class, so a failure to check is reported and does not take either of them down.
+   */
+  private void warnAboutUnsatisfiableDateRegexps(final String cause) {
+    if (schema == null || !open)
+      return;
+    try {
+      DocumentValidator.warnAboutUnsatisfiableDateRegexps(this, cause);
+    } catch (final RuntimeException e) {
+      LogManager.instance().log(this, Level.WARNING, "Cannot check the REGEXP of the DATE and DATETIME properties of database '%s' after %s",
+          e, name, cause);
+    }
+  }
+
   /** Re-derives what {@link #open()} derives from the configuration, after it changed in memory (issue #9763). */
   private void configurationChanged() {
     serializer.setDateImplementation(configuration.getValue(GlobalConfiguration.DATE_IMPLEMENTATION));
     serializer.setDateTimeImplementation(configuration.getValue(GlobalConfiguration.DATE_TIME_IMPLEMENTATION));
 
-    statementCache.clear();
-    cypherStatementCache.clear();
+    // ALL FOUR QUERY CACHES, THE PLAN CACHES TOO: A SETTING READ AT PLANNING TIME IS BAKED INTO THE PLAN (issue #10155). ONE
+    // SETTING SIZES BOTH SQL CACHES, AS IN THE CONSTRUCTOR
+    statementCache.resize(configuration.getValueAsInteger(GlobalConfiguration.SQL_STATEMENT_CACHE));
+    executionPlanCache.resize(configuration.getValueAsInteger(GlobalConfiguration.SQL_STATEMENT_CACHE));
+    cypherStatementCache.resize(configuration.getValueAsInteger(GlobalConfiguration.OPENCYPHER_STATEMENT_CACHE));
+    cypherPlanCache.resize(configuration.getValueAsInteger(GlobalConfiguration.OPENCYPHER_PLAN_CACHE));
   }
 
   /**
@@ -3172,12 +3368,15 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
    * the previous value back only while nothing else changed the setting since (issue #9919). {@code token} identifies
    * this change, {@code previousToken} the change whose value it replaced ({@code null}: a value no change on this node
    * stored), so an undo can tell whether that value belongs to a change that was itself refused (issue #9951).
+   * {@code document} is the entry that replicates this change, captured when the value was stored (issue #10108): the
+   * setting named with the value this change set, whatever another statement stores before this one reaches its save.
+   * {@code null} for a change made without {@link #changeSetting(String, Runnable)}, which has no such moment.
    */
   public record SettingChange(String key, Object previousValue, Object valueSet, SettingToken previousToken,
-                              SettingToken token) {
+                              SettingToken token, String document) {
     /** A change made without {@link #changeSetting(String, Runnable)}: no token, so nothing to undo it against. */
     public SettingChange(final String key, final Object previousValue, final Object valueSet) {
-      this(key, previousValue, valueSet, null, null);
+      this(key, previousValue, valueSet, null, null, null);
     }
   }
 
@@ -3239,7 +3438,7 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
       }
       final SettingToken token = new SettingToken();
       settingTokens.put(tokenKey, token);
-      return new SettingChange(key, previousValue, settingValue(key), previousToken, token);
+      return new SettingChange(key, previousValue, settingValue(key), previousToken, token, settingChangeDocument(key));
     }
   }
 
@@ -3401,8 +3600,8 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
    */
   @Override
   public Record invokeAfterReadEvents(Record record) {
-    final DocumentType recordType = record instanceof Document document ? document.getType() : null;
-    final RecordEventsRegistry typeEvents = recordType != null ? (RecordEventsRegistry) recordType.getEvents() : null;
+    // The type's own listeners and the triggers of its lineage, a trigger on a super type included (issue #10207)
+    final LocalDocumentType typeEvents = record instanceof Document document ? (LocalDocumentType) document.getType() : null;
 
     if (!events.hasAfterReadListeners() && (typeEvents == null || !typeEvents.hasAfterReadListeners()))
       return record;
@@ -3422,12 +3621,12 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
     }
   }
 
-  private Record dispatchAfterRead(Record record, final RecordEventsRegistry typeEvents) {
+  private Record dispatchAfterRead(Record record, final LocalDocumentType typeEvents) {
     // INVOKE EVENT CALLBACKS
     record = events.onAfterRead(record);
     if (record == null)
       return null;
-    return typeEvents != null ? typeEvents.onAfterRead(record) : record;
+    return typeEvents != null ? typeEvents.fireAfterRead(record) : record;
   }
 
   private void lockDatabase() {
@@ -3589,6 +3788,17 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
       }
     }
 
+    // #10156: the warm-up of the indexes a schema reload re-created is index background work too, owned by the schema rather than
+    // by any one index, so the loop below cannot reach it. Stopped first, before the flush it would otherwise race, and before
+    // the write-locked teardown purges this database's pages from the shared read cache: a warm-up read landing after that purge
+    // put a page keyed by this closed instance back into the cache (the retention #6133 removed), and on a drop it read files
+    // about to be deleted (the page-parse errors #5418 names)
+    try {
+      schema.stopIndexWarmUp();
+    } catch (final Exception e) {
+      LogManager.instance().log(this, Level.WARNING, "Error on stopping the index warm-up of database '%s'", e, name);
+    }
+
     for (final Index idx : schema.getIndexes()) {
       final IndexInternal index = (IndexInternal) idx;
 
@@ -3696,6 +3906,8 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
         }
 
       open = false;
+      // the serializer must not keep a lambda that references this instance once it is closed (issue #10104)
+      serializer.setImplementationChangeListener(null);
 
       // From here on the instance reports itself closed, so every step below must run whatever the one before it did
       // (issue #8316): the files, the WAL and the lock file are released at the end, and a failure that skipped them
@@ -3897,6 +4109,22 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
     for (Bucket b : schema.getBuckets())
       ((LocalBucket) b).setCachedRecordCount(-1);
 
+    // THE SAME FOR THE BM25 CORPUS COUNTERS (ISSUE #10133): THE SCHEMA HOLDS THE PAIR OF ITS LAST SAVE, THE REPLAY RESTORES
+    // EVERYTHING COMMITTED AFTER IT. THE DRIFT CHECK ONLY COMPARES DOCUMENT COUNTS, SO A WORKLOAD THAT LEFT THE COUNT WHERE IT WAS
+    // (A DOCUMENT REPLACED BY A LONGER ONE) WOULD KEEP THE OLD LENGTH FOREVER: THE FIRST SEARCH RESCANS UNCONDITIONALLY INSTEAD
+    int bm25Indexes = 0;
+    for (final Index index : schema.getIndexes()) {
+      final FullTextIndexMetadata ftMetadata = LSMTreeFullTextIndex.metadataOf(index);
+      if (ftMetadata != null && ftMetadata.isBM25()) {
+        ftMetadata.requireRescan();
+        ++bm25Indexes;
+      }
+    }
+    if (bm25Indexes > 0)
+      LogManager.instance().log(this, Level.INFO,
+          "The BM25 corpus counters of %d full-text index(es) of database '%s' will be recomputed by a full scan at their first search",
+          null, bm25Indexes, name);
+
     executeCallbacks(CALLBACK_EVENT.DB_NOT_CLOSED);
 
     // #8626: A SYNC FORCES ONLY THE FILES WRITTEN SINCE THEIR LAST FSYNC, AND A CLEAN CLOSE IS WHAT LEAVES EVERY FILE
@@ -3997,6 +4225,16 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
 
         serializer.setDateImplementation(configuration.getValue(GlobalConfiguration.DATE_IMPLEMENTATION));
         serializer.setDateTimeImplementation(configuration.getValue(GlobalConfiguration.DATE_TIME_IMPLEMENTATION));
+
+        // The configuration this open read may hold dates as another class than the one a REGEXP was declared against, and the
+        // schema load does not search the text forms (that is paid at the declaration, not at every open). An open must not fail
+        // over a constraint, so it warns (issue #10104)
+        warnAboutUnsatisfiableDateRegexps("opening the database with dates held as " + serializer.getDateImplementation().getSimpleName()
+            + " and datetimes as " + serializer.getDateTimeImplementation().getSimpleName());
+
+        // From here on the class can change by routes that cannot refuse (a replicated setting, any other caller of the setter), and
+        // none of them is silent. Registered after the two assignments above, which are the open's own and were just reported
+        serializer.setImplementationChangeListener(() -> warnAboutUnsatisfiableDateRegexps("the class dates are held as changed"));
 
         if (recoveryPending) {
           try {

@@ -282,6 +282,16 @@ public interface DatabaseInternal extends Database {
   boolean updateRecordReportingVeto(Record record);
 
   /**
+   * Updates the record exactly as {@link #updateRecord(Record)} does - validation, indexes, the {@code updateRecord}
+   * statistic, the deferral to the commit - but without firing the before/after-update listeners, the database's or the
+   * type's. Reserved to the engine's own bookkeeping on a record whose properties it does not change: the edge list head
+   * pointers a vertex carries, rewritten when the vertex gets its first edge of a direction or a new head segment (issue
+   * #10207). Announced as an update, that write fired a vertex's UPDATE triggers on an edge creation now and then, and a
+   * BEFORE UPDATE veto on it dropped the pointer, leaving the new edge an orphan no traversal of the vertex reached.
+   */
+  void updateRecordWithoutEvents(Record record);
+
+  /**
    * Writes an updated record to its page now, and nothing else: no validation, no events, no statistics. The building
    * block the commit uses to flush the updates it deferred, which were validated, announced and counted when they were
    * made. To UPDATE a record, use {@link #updateRecordReportingVeto(Record)} or
@@ -439,6 +449,15 @@ public interface DatabaseInternal extends Database {
   default void saveConfiguration(final String key) throws IOException {
     saveConfiguration();
   }
+
+  /**
+   * Saves the configuration after {@code change} stored its value (issue #10108). Under Raft HA the entry replicated is the
+   * one captured when the change stored the value, so it names that setting with the value that change set, never a value
+   * another statement on the same setting stored meanwhile (issue #9959 settled the name, this settles the value). Elsewhere
+   * the same as {@link #saveConfiguration()}. Not defaulted: a database that wraps another has to forward it, and an
+   * inherited default would turn the save back into one that reads the value at submit time.
+   */
+  void saveConfiguration(LocalDatabase.SettingChange change) throws IOException;
 
   Map<String, Object> alignToReplicas();
 

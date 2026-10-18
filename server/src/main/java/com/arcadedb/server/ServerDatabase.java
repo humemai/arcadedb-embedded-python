@@ -468,6 +468,11 @@ public class ServerDatabase implements DatabaseInternal {
     return current().updateRecordReportingVeto(record);
   }
 
+  @Override
+  public void updateRecordWithoutEvents(final Record record) {
+    current().updateRecordWithoutEvents(record);
+  }
+
   public void updateRecordNoLock(final Record record, final boolean discardRecordAfter) {
     current().updateRecordNoLock(record, discardRecordAfter);
   }
@@ -802,6 +807,11 @@ public class ServerDatabase implements DatabaseInternal {
   @Override
   public void saveConfiguration(final String key) throws IOException {
     current().saveConfiguration(key);
+  }
+
+  @Override
+  public void saveConfiguration(final LocalDatabase.SettingChange change) throws IOException {
+    current().saveConfiguration(change);
   }
 
   public StatementCache getStatementCache() {

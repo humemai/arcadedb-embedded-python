@@ -50,10 +50,13 @@ import com.arcadedb.engine.timeseries.TimeSeriesEngine;
 import com.arcadedb.engine.timeseries.TimeSeriesGateway;
 import com.arcadedb.engine.timeseries.TimeSeriesGateway.TypeResolution;
 import com.arcadedb.engine.timeseries.TimeSeriesGateway.WriteReport;
+import com.arcadedb.exception.CauseChain;
 import com.arcadedb.exception.DatabaseOperationException;
 import com.arcadedb.exception.DuplicatedKeyException;
+import com.arcadedb.exception.ErrorCategory;
 import com.arcadedb.exception.QueryTerminatedException;
 import com.arcadedb.exception.RecordNotFoundException;
+import com.arcadedb.exception.RecordVetoedException;
 import com.arcadedb.exception.SchemaException;
 import com.arcadedb.graph.Edge;
 import com.arcadedb.graph.GraphBatch;
@@ -64,6 +67,7 @@ import com.arcadedb.log.LogManager;
 import com.arcadedb.network.binary.ServerIsNotTheLeaderException;
 import com.arcadedb.query.RunningQuery;
 import com.arcadedb.query.RunningQueryRegistry;
+import com.arcadedb.query.sql.executor.QueryAdmissionGate;
 import com.arcadedb.query.sql.executor.QueryStatistics;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultSet;
@@ -111,6 +115,7 @@ import java.time.Instant;
 import java.time.ZonedDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Date;
@@ -572,6 +577,10 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
     // The RPC's registry entry, published on the gRPC thread by GrpcAdmissionInterceptor: the statement runs on the
     // transaction's thread, so the entry goes with it there, where its checks and its commits read it (issue #9689)
     final RunningQuery runningQuery = RunningQuery.current();
+    // The RPC's admission slot, taken on the gRPC thread by GrpcAdmissionInterceptor: the statement runs on the
+    // transaction's thread, so the slot goes with it there, where a forward to the leader or a wait on an explicit lock
+    // gives it back (issue #10140). Left behind, those releases read an empty thread and hold the slot for the whole wait
+    final QueryAdmissionGate.Handoff admission = QueryAdmissionGate.getInstance().handOff();
     try {
       return txCtx.executor.submit(() -> {
         requireTransactionStillActive(txCtx);
@@ -582,9 +591,11 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         // engine by the tag when it refuses requests on a database being replaced from the leader's snapshot.
         ProtocolContext.set(GRPC_PROTOCOL);
         final RunningQuery.Binding binding = runningQuery != null ? runningQuery.bind() : null;
+        final QueryAdmissionGate.Adoption adoption = admission.adopt();
         try {
           return task.call();
         } finally {
+          adoption.close();
           if (binding != null)
             binding.close();
           if (runningQuery != null && runningQuery.isTerminated())
@@ -1162,7 +1173,9 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       if (dt instanceof VertexType) {
         final MutableVertex v = db.newVertex(cls);
         props.forEach((k, val) -> v.set(k, toJavaForProperty(db, v, dt, k, val)));
-        v.save();
+        // The reply names the record, so a create a listener vetoed is a refusal and not a RID that was never assigned (issue #10085)
+        if (!v.saveReportingVeto())
+          throw vetoed(cls);
 
         if (beganHere)
           db.commit();
@@ -1193,12 +1206,16 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         final var inEl = db.lookupByRID(new RID(inStr), false);
         final Vertex outV = outEl.asVertex(false);
 
-        final MutableEdge e = outV.newEdge(cls, inEl);
-        props.forEach((k, val) -> {
+        // The properties are set on the edge BEFORE it is saved, so they are part of the create: a listener's veto and a unique index
+        // that refuses one of them refuse the whole edge, and nothing is left wired in an externally managed transaction (issue #10085)
+        // (an embedded property is created on its owner, which is why the values cannot be converted before the edge exists)
+        final Consumer<MutableEdge> setProperties = edge -> props.forEach((k, val) -> {
           if (!"out".equals(k) && !"in".equals(k))
-            e.set(k, toJavaForProperty(db, e, dt, k, val));
+            edge.set(k, toJavaForProperty(db, edge, dt, k, val));
         });
-        e.save();
+        final MutableEdge e = ((DatabaseInternal) db).getGraphEngine().newEdgeInitializedReportingVeto(outV, cls, inEl, setProperties);
+        if (e == null)
+          throw vetoed(cls, outStr, inStr);
 
         if (beganHere)
           db.commit();
@@ -1209,7 +1226,8 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       // --- Document ---
       final MutableDocument d = db.newDocument(cls);
       props.forEach((k, val) -> d.set(k, toJavaForProperty(db, d, dt, k, val)));
-      d.save();
+      if (!d.saveReportingVeto())
+        throw vetoed(cls);
 
       if (beganHere)
         db.commit();
@@ -1221,6 +1239,16 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       }
       throw e;
     }
+  }
+
+  /** The refusal of a write that has to answer a record, which a listener's veto leaves without one (issue #10085). */
+  private static RecordVetoedException vetoed(final String typeName) {
+    return RecordVetoedException.ofCreate(typeName);
+  }
+
+  /** The same for an edge, which names the vertices it would have connected. */
+  private static RecordVetoedException vetoed(final String typeName, final String from, final String to) {
+    return new RecordVetoedException("Cannot create edge of type '" + typeName + "' from " + from + " to " + to + ": a listener vetoed it");
   }
 
   @Override
@@ -1367,6 +1395,8 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       var el = db.lookupByRID(new RID(ridStr), true);
 
       final var dbRef = db;
+      // What the engine answered to the save: false when a BeforeRecordUpdateListener vetoed it (issue #10084)
+      boolean applied = true;
 
       // THE RECORD BY ITS IDENTITY, NOT ITS CONTENT: SEE LOG_SHOW_VALUES (#9984)
       LogManager.instance().log(this, Level.FINE, "updateRecord(): el = %s; type = %s", summarizeJava(el), el.getRecordType());
@@ -1409,7 +1439,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
           mvertex.set(k, toJavaForProperty(dbRef, mvertex, dtype, k, v));
         });
 
-        mvertex.save();
+        applied = mvertex.saveReportingVeto();
       } else if (el instanceof Document elAsDocument) {
 
         LogManager.instance().log(this, Level.FINE, "updateRecord(): Processing Document ...");
@@ -1447,7 +1477,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
           mdoc.set(k, toJavaForProperty(dbRef, mdoc, dtype, k, v));
         });
 
-        mdoc.save();
+        applied = mdoc.saveReportingVeto();
       }
 
       // Commit/rollback with proper precedence (only for per-call transactions, not external)
@@ -1458,7 +1488,8 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
           db.commit();
       }
 
-      return UpdateRecordResponse.newBuilder().setUpdated(true).setSuccess(true).build();
+      // Both false for a vetoed update: the clients read success (RemoteGrpcDatabase.updateRecord() returns it) as "the record was updated"
+      return UpdateRecordResponse.newBuilder().setUpdated(applied).setSuccess(applied).build();
     } catch (RecordNotFoundException e) {
       if (beganHere) {
         try { db.rollback(); } catch (Exception ignore) { }
@@ -1548,8 +1579,11 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
 
     try {
       final var el = db.lookupByRID(new RID(ridStr), false);
-      el.delete();
+      // what the engine answered, which el.delete() throws away: a delete a before-delete listener vetoed was replied as
+      // deleted, so the client counted it and returned normally (issue #10230)
+      final boolean deleted = ((DatabaseInternal) db).deleteRecordReportingVeto(el);
 
+      // committed even after a veto: the vetoed delete left nothing in the transaction, so the commit writes nothing
       if (beganHere) {
         if (hasTx && req.getTransaction().getRollback())
           db.rollback();
@@ -1557,7 +1591,8 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
           db.commit();
       }
 
-      return DeleteRecordResponse.newBuilder().setSuccess(true).setDeleted(true).build();
+      // Both false for a vetoed delete, as for a vetoed update: the clients read either as "the record was deleted"
+      return DeleteRecordResponse.newBuilder().setSuccess(deleted).setDeleted(deleted).build();
     } catch (Exception e) {
       if (beganHere) {
         try { db.rollback(); } catch (Exception ignore) { }
@@ -2009,6 +2044,9 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
           commitTransaction(): committing txId=%s on db=%s (on dedicated \
           thread)""", txId, txCtx.db.getName());
 
+      // The commit is a gated RPC too: its slot goes with it to the transaction's thread (issue #10140), as in
+      // submitToActiveTransaction
+      final QueryAdmissionGate.Handoff admission = QueryAdmissionGate.getInstance().handOff();
       // Execute commit ON THE SAME THREAD that began the transaction
       Future<?> commitFuture = txCtx.executor.submit(() -> {
         // A statement of this transaction was terminated while this commit waited behind it: what it wrote was rolled
@@ -2018,7 +2056,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
               "Transaction " + txId + " was ended: a statement running in it was terminated, and everything it wrote rolled back");
         // A client request, on a thread no listener callback runs on (issue #8363): see submitToActiveTransaction.
         ProtocolContext.set(GRPC_PROTOCOL);
-        try {
+        try (final QueryAdmissionGate.Adoption ignored = admission.adopt()) {
           txCtx.db.commit();
         } finally {
           ProtocolContext.clear();
@@ -3249,9 +3287,14 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
    * {@link #insertError} puts the address beside it), and {@code COMMIT_FAILED} otherwise. Shared by the mid-stream onNext
    * failure path (Issue #4806) and the deferred whole-stream commit path (Issue #4198) so the two stay
    * in sync.
+   * <p>
+   * The duplicated key is found along the cause chain, like the leader refusal, because a commit failure reaches here
+   * as the engine wrapped it (issue #10158). The contract rejection is not: it is the stream's OWN refusal, raised as
+   * itself, and an {@link IllegalArgumentException} buried under a commit failure is that commit failing.
    */
-  private static String commitErrorCode(final Exception e) {
-    if (e instanceof DuplicatedKeyException)
+  // @VisibleForTesting
+  static String commitErrorCode(final Exception e) {
+    if (CauseChain.contains(e, DuplicatedKeyException.class))
       return "CONFLICT";
     if (ServerIsNotTheLeaderException.redirectIn(e) != null)
       return "NOT_LEADER";
@@ -5149,9 +5192,10 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
               final var outV = ctx.db.lookupByRID(new RID(outRid), false).asVertex(false);
 
               // Create edge from the OUT vertex. The `in` RID is stored in the edge record; use DatabaseRID so edge.getIn() resolves across threads.
-              final MutableEdge e = outV.newEdge(ctx.opts.getTargetClass(), ctx.db.newRID(inRid));
-              applyGrpcRecord(e, r); // sets edge properties
-              c.inserted(e.saveReportingVeto());
+              // The properties go INTO the creation, so one a unique index refuses refuses the create and a listener's veto is the answer
+              // to the whole edge: created and then updated, a refusal arrived at the update with the edge already wired (issue #10085)
+              c.inserted(((DatabaseInternal) ctx.db).getGraphEngine()
+                  .newEdgeReportingVeto(outV, ctx.opts.getTargetClass(), ctx.db.newRID(inRid), edgeProperties(r)) != null);
             }
           }
         } else {
@@ -5250,17 +5294,24 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
     });
   }
 
-  private void applyGrpcRecord(MutableEdge edge, GrpcRecord r) {
-    r.getPropertiesMap().forEach((k, grpcVal) -> {
+  /** The properties of an edge row, as the name/value pairs {@code newEdge()} takes, system fields left out. */
+  private Object[] edgeProperties(final GrpcRecord r) {
+    final Map<String, GrpcValue> properties = r.getPropertiesMap();
+    // Filled by index, once per edge row of a bulk insert: trimmed only when a system field was skipped
+    final Object[] pairs = new Object[properties.size() * 2];
+    int used = 0;
+    for (final Map.Entry<String, GrpcValue> entry : properties.entrySet()) {
       // Skip system fields
-      if (k.startsWith("@"))
-        return;
-      Object javaVal = fromGrpcValue(grpcVal);
+      if (entry.getKey().startsWith("@"))
+        continue;
+      final Object javaVal = fromGrpcValue(entry.getValue());
       if (LogManager.instance().isLoggable(this, Level.FINE))
-        LogManager.instance().log(this, Level.FINE, "APPLY-EDGE %s <= %s -> %s", k, summarizeGrpc(grpcVal),
+        LogManager.instance().log(this, Level.FINE, "APPLY-EDGE %s <= %s -> %s", entry.getKey(), summarizeGrpc(entry.getValue()),
             summarizeJava(javaVal));
-      edge.set(k, javaVal);
-    });
+      pairs[used++] = entry.getKey();
+      pairs[used++] = javaVal;
+    }
+    return used == pairs.length ? pairs : Arrays.copyOf(pairs, used);
   }
 
   private Object fromGrpcValue(GrpcValue v) {
@@ -6056,8 +6107,17 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
    * reported as an {@link IllegalArgumentException} naming the offending argument, so it must reach the client as
    * INVALID_ARGUMENT with that message intact - a caller that crossed a documented limit has to be able to tell
    * that from a server fault, exactly as the HTTP surface distinguishes 400 from 500.
+   * <p>
+   * Everything else goes through {@link GrpcErrorMapper#toStatusException}, the same entry point {@code mapError} and
+   * {@code graphBatchLoad} answer through (issue #10090). The classification alone is not the answer: the mapper also
+   * attaches the {@code arcadedb-exception-class} trailer the driver rebuilds the engine's own type from, names a
+   * termination as {@link QueryTerminatedException} whatever wraps it (so the driver does not retry a search somebody
+   * stopped), and carries a leader refusal's {@code FAILED_PRECONDITION} and address. {@code GrpcErrorMapper.statusCodeFor}
+   * is private for that reason: a handler that takes the code without the rest has nowhere to take it from.
+   * <p>
+   * Package-private only so the unit test can drive it without a running server.
    */
-  private StatusException toSearchStatus(final String operation, final Exception e) {
+  StatusException toSearchStatus(final String operation, final Exception e) {
     if (e instanceof final StatusException se)
       return se;
     if (e instanceof final StatusRuntimeException sre)
@@ -6065,13 +6125,18 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
     // ServerSecurityException does NOT extend java.lang.SecurityException (see GrpcErrorMapper), so it needs
     // its own arm here; everything else - including IllegalArgumentException, which ErrorCategory's
     // VALIDATION category already maps to INVALID_ARGUMENT - falls through to the same classification
-    // every other wire protocol uses (issue #7123) instead of collapsing to INTERNAL.
-    if (e instanceof ServerSecurityException)
-      return Status.PERMISSION_DENIED.withDescription(operation + ": " + e.getMessage()).asException();
-    // THE CATCH-ALL CARRIES ENGINE TEXT - A SCHEMA NAME, A FILE PATH, AN INDEX - AND IS CONCEALED IN PRODUCTION
-    // LIKE EVERY OTHER FREE-FORM DESCRIPTION. THE ARM ABOVE IS NOT: A SECURITY REFUSAL IS A SENTENCE THIS SERVER
-    // WROTE ABOUT THE REQUEST, WHICH IS WHAT MAKES IT ACTIONABLE (PR #7755 REVIEW)
-    return GrpcErrorMapper.statusCodeFor(e).toStatus().withDescription(concealable(operation, e)).asException();
+    // every other wire protocol uses (issue #7123) instead of collapsing to INTERNAL. Found along the cause chain:
+    // ErrorCategory reads a ServerSecurityException as a SERVER fault, so this arm is all that stands between a
+    // wrapped refusal and an INTERNAL that tells the client the server broke (issue #10158). Not for a search stopped on
+    // request, which the mapper answers CANCELLED whatever else its chain carries, as the admin service does (issue #9689)
+    final ServerSecurityException refusal =
+        ErrorCategory.of(e) != ErrorCategory.TERMINATED ? CauseChain.find(e, ServerSecurityException.class) : null;
+    if (refusal != null)
+      return Status.PERMISSION_DENIED.withDescription(operation + ": " + refusal.getMessage()).asException();
+    // THE MAPPER CONCEALS ENGINE TEXT - A SCHEMA NAME, A FILE PATH, AN INDEX - IN PRODUCTION LIKE EVERY OTHER FREE-FORM
+    // DESCRIPTION, AND LOGS IT. THE ARM ABOVE IS NOT CONCEALED: A SECURITY REFUSAL IS A SENTENCE THIS SERVER WROTE
+    // ABOUT THE REQUEST, WHICH IS WHAT MAKES IT ACTIONABLE (PR #7755 REVIEW)
+    return GrpcErrorMapper.toStatusException(e, operation, ha(), new Metadata(), concealErrors());
   }
 
   // Helper methods

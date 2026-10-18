@@ -30,6 +30,7 @@ import com.arcadedb.database.Document;
 import com.arcadedb.database.ProtocolContext;
 import com.arcadedb.database.QueryMetricsRecorder;
 import com.arcadedb.database.TransactionContext;
+import com.arcadedb.exception.AlreadyExistsException;
 import com.arcadedb.exception.ArithmeticErrorException;
 import com.arcadedb.exception.CauseChain;
 import com.arcadedb.exception.CommandExecutionException;
@@ -1585,14 +1586,15 @@ public class PostgresNetworkExecutor extends Thread {
    * @return the answer, or null when the query is not about the catalog at all and must be executed normally
    */
   private CatalogAnswer handleCatalogQuery(final String query, final Object... parameters) {
-    if (!PostgresCatalog.mightBeCatalogQuery(query))
+    if (!PostgresCatalog.mightBeAnswered(query))
       return null;
 
     if (DEBUG)
       LogManager.instance().log(this, Level.INFO, "PSQL: handling catalog query: %s (thread=%s)", query,
           Thread.currentThread().threadId());
 
-    final List<Result> types = toResults(PostgresTypeCatalog.resolve(query));
+    // A set operation naming no catalog relation (issue #10228) is never a pg_type lookup.
+    final List<Result> types = PostgresCatalog.mightBeCatalogQuery(query) ? toResults(PostgresTypeCatalog.resolve(query)) : null;
     if (types != null)
       return new CatalogAnswer(types, getColumns(types));
 
@@ -2658,7 +2660,8 @@ public class PostgresNetworkExecutor extends Thread {
 
     int colIndex = 0;
     for (final Map.Entry<String, PostgresType> col : columns.entrySet()) {
-      final String columnName = col.getKey();
+      // A catalog answer may name two columns alike, and carries the second under a key only it can produce.
+      final String columnName = PostgresCatalog.announcedName(col.getKey());
       final PostgresType columnType = col.getValue();
 
       bufferDescription.putByteArray(columnName.getBytes(DatabaseFactory.getDefaultCharset()));//The field name.
@@ -3005,7 +3008,7 @@ public class PostgresNetworkExecutor extends Thread {
       final Map<String, PostgresType> columns) {
     return new PostgresCopyStatement.CopyException(
         "a row of this COPY carries column \"" + name + "\", which is not among the columns the stream announced ("
-            + String.join(", ", columns.keySet())
+            + String.join(", ", columns.keySet().stream().map(PostgresCatalog::announcedName).toList())
             + "): this type stores rows of different shapes, and a COPY cannot add a column once its stream has "
             + "started. List the columns to export in the COPY itself - COPY <table> (" + name
             + ", ...) TO STDOUT, or COPY (SELECT " + name + ", ... FROM <table>) TO STDOUT - so its column set is "
@@ -4165,12 +4168,15 @@ public class PostgresNetworkExecutor extends Thread {
       return copy.sqlState;
     if (error instanceof PostgresSessionSettings.SettingException setting)
       return setting.sqlState;
+    if (error instanceof PostgresCatalog.WorkLimitExceeded)
+      return PostgresCatalog.WorkLimitExceeded.SQLSTATE; // program_limit_exceeded (issue #10228)
     return switch (ErrorCategory.of(error)) {
       // serialization_failure - the code drivers auto-retry on. Also a follower's refusal naming the leader (issue
       // #9845): the wire has no redirect code, so the leader is named in the message instead (see withLeaderRedirect)
       case RETRY -> "40001";
       case ARITHMETIC -> arithmeticSqlState(error);
       case DUPLICATED_KEY -> "23505"; // unique_violation
+      case ALREADY_EXISTS -> alreadyExistsSqlState(error);
       case NOT_FOUND -> "P0002";      // no_data_found - class 02 is a completion condition, not an error
       case SCHEMA -> "42P01";         // undefined_table - a type is this database's table
       case SECURITY -> "42501";       // insufficient_privilege
@@ -4179,6 +4185,25 @@ public class PostgresNetworkExecutor extends Thread {
       case TIMEOUT -> "57014";        // query_canceled
       case TERMINATED -> "57014";     // query_canceled - what a CancelRequest or pg_cancel_backend ends a statement with
       case SERVER -> "XX000";         // internal_error
+    };
+  }
+
+  /**
+   * The SQLSTATE Postgres answers the same taken name with (issue #10153): {@code 42P07} duplicate_table for what Postgres calls a
+   * relation - a type is this database's table, and an index or a view is a relation there too - {@code 42701} duplicate_column for
+   * a property, and {@code 42710} duplicate_object for everything else, a constraint, a trigger or a function among them. All three
+   * are class 42, so a client that only reads the class still sees its own mistake, not a server fault ({@code XX000}) nor a
+   * missing table ({@code 42P01}), which is what it was told before.
+   */
+  private static String alreadyExistsSqlState(final Throwable error) {
+    final AlreadyExistsException taken = CauseChain.find(error, AlreadyExistsException.class);
+    final AlreadyExistsException.Kind kind = taken != null ? taken.getKind() : null;
+    if (kind == null)
+      return "42710";
+    return switch (kind) {
+      case TYPE, INDEX, MATERIALIZED_VIEW, CONTINUOUS_AGGREGATE -> "42P07"; // duplicate_table
+      case PROPERTY -> "42701";                                             // duplicate_column
+      default -> "42710";                                                   // duplicate_object
     };
   }
 
