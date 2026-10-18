@@ -279,13 +279,13 @@ your own workload before you change a client for these numbers.
 driver spends about 5 microseconds of Python per record and fetches 1,000 records per
 round trip by default; upstream measured it 4x to 10x slower than HTTP on large results and
 advises raising `fetch_size` (for example `driver.session(fetch_size=-1)`). That advice
-was measured on ArcadeDB 26.11.1, which batches Bolt records. On the 26.10.1 server in
-this wheel a 10,000-row result did not get faster with it when we tried.
+was measured on an ArcadeDB 26.11.1-SNAPSHOT build, which batches Bolt records. On the 26.10.1
+server a 10,000-row result did not get faster with it when we tried.
 
 gRPC streaming with a batch size of 10,000 or more was the fastest route in upstream's
 measurement of results of hundreds of thousands of rows. At the default batch size it
-was slower than HTTP in ours (a 10,000-row Cypher read took about 3.3x as long, on a
-26.11.1 pre-release build), so set the batch size explicitly and measure. When your code
+was slower than HTTP in ours (a 10,000-row Cypher read took about 3.3x as long, on an
+ArcadeDB 26.11.1-SNAPSHOT build), so set the batch size explicitly and measure. When your code
 runs in the same process as the database (embedded mode), skip the socket and read a
 large result with [`to_arrow()`, `to_columns()`, or `to_list()`](../api/results.md).
 

@@ -57,7 +57,7 @@ What the script does beyond that:
   most recently as which version, then explain each file that crosses outside
   `bindings/python` and why, show the result of upstream's checks on the first push, and
   state the scope. In a release cycle the pull request comes last, after the release and
-  the sync that follows it ([Release Workflow](release.md#7-open-the-upstream-pull-request-last)).
+  the sync that follows it ([Release Workflow](release.md#8-open-the-upstream-pull-request-last)).
 
 ## What upstream expects
 

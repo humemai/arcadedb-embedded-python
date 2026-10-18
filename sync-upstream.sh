@@ -8,7 +8,7 @@
 # Everything else, including bindings/python/, is merged normally from
 # upstream-main into main.
 #
-# Usage: ./sync-upstream.sh [--help|--status|--dry-run]
+# Usage: ./sync-upstream.sh [--help|--status|--dry-run] [--until <commit>]
 
 set -e
 
@@ -204,6 +204,13 @@ restore_protected_paths() {
 }
 
 # Show help
+print_list() {
+    local item
+    for item in "$@"; do
+        echo "    • $item"
+    done
+}
+
 show_help() {
     cat << EOF
 ${BLUE}🔄 Upstream Sync Script${NC}
@@ -213,24 +220,22 @@ Syncs this fork with upstream ArcadeData/arcadedb while keeping:
     - main: fork changes merged with upstream-main
 
 ${YELLOW}Usage:${NC}
-  ./sync-upstream.sh            Sync with upstream (interactive)
-    ./sync-upstream.sh --until <commit>
-                                                                Sync only up to a specific upstream commit
-  ./sync-upstream.sh --dry-run  Show what would be synced (no changes)
-  ./sync-upstream.sh --status   Check sync status only
-  ./sync-upstream.sh --help     Show this help
+  ./sync-upstream.sh                   Sync with upstream (asks before merging; non-interactive: printf y | ./sync-upstream.sh)
+  ./sync-upstream.sh --until <commit>  Sync only up to a specific upstream commit
+  ./sync-upstream.sh --dry-run         Show what would be synced (no changes)
+  ./sync-upstream.sh --status          Check sync status only
+  ./sync-upstream.sh --help            Show this help
 
 ${YELLOW}Fork-Owned Files (restored after merge):${NC}
-    • README.md
-
-${YELLOW}Fork-Excluded Files (kept out of the fork):${NC}
-    • CLAUDE.md
-
-${YELLOW}.github/ (ALLOWLIST — every other TRACKED file is pruned after the merge):${NC}
-    • .github/workflows/deploy-python-docs.yml
-    • .github/workflows/release-python-packages.yml
-    • .github/workflows/test-python-bindings.yml
-    • .github/workflows/test-python-examples.yml
+EOF
+    print_list "${FORK_OWNED_PATHS[@]}"
+    echo ""
+    echo -e "${YELLOW}Fork-Excluded Files (kept out of the fork):${NC}"
+    print_list "${FORK_EXCLUDED_PATHS[@]}"
+    echo ""
+    echo -e "${YELLOW}.github/ (ALLOWLIST — every other TRACKED file is pruned after the merge):${NC}"
+    print_list "${FORK_GITHUB_ALLOWLIST[@]}"
+    cat << EOF
 
     Any other tracked file under .github/ is DELETED after each sync, and the
     prune names what it removed. This used to be a denylist of upstream
@@ -244,8 +249,13 @@ ${YELLOW}.github/ (ALLOWLIST — every other TRACKED file is pruned after the me
 ${YELLOW}Normal Merge Paths:${NC}
     • bindings/python/      - Merges normally from upstream-main into main
 
+${YELLOW}When the merge stops on conflicts:${NC}
+    Only the fork-owned and fork-excluded paths are resolved automatically; any
+    other conflict stops the script before the restore and the .github prune.
+    The steps are in bindings/python/docs/development/sync-upstream.md.
+
 ${YELLOW}After Sync:${NC}
-1. Test: cd bindings/python && ./scripts/build.sh linux/amd64 && pytest tests/
+1. Test: cd bindings/python && ./scripts/build.sh linux/amd64 && uv run pytest
     (or on Windows: ./scripts/build.sh windows/amd64; on macOS: ./scripts/build.sh darwin/arm64)
 2. Push: git push origin main
 

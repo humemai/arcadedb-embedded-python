@@ -70,13 +70,17 @@ db.close()
 
 MIDNIGHT_UTC_2024_01_02 = 1704153600000
 DAY_MS = 86_400_000
+EPOCH_DAY_2024_01_02 = MIDNIGHT_UTC_2024_01_02 // DAY_MS
 
 
 @pytest.mark.parametrize("zone", ["UTC", "Asia/Seoul", "America/Los_Angeles"])
 def test_to_json_list_writes_a_date_as_midnight_utc_in_any_jvm_zone(tmp_path, zone):
-    """to_json_list wrote a DATE as midnight in the JVM's zone, so it disagreed
-    with Result.to_json() and decoded to the previous day east of UTC (#116).
-    Each zone needs its own JVM, hence the child process."""
+    """to_json_list wrote a DATE as midnight in the JVM's zone, so it decoded to
+    the previous day east of UTC (#116). Each zone needs its own JVM, hence the
+    child process. Result.to_json() is the engine's own JSON and does not depend
+    on the zone either: it writes this undeclared LocalDate as midnight UTC
+    milliseconds up to 26.10.2 and, from ArcadeData/arcadedb#10253 (26.11.1),
+    as days since the epoch, as it writes a declared DATE in both."""
     proc = subprocess.run(  # nosec B603 - fixed argv, no shell, test-owned
         [sys.executable, "-c", _DATE_SCRIPT, str(tmp_path / "db"), zone],
         capture_output=True,
@@ -88,7 +92,7 @@ def test_to_json_list_writes_a_date_as_midnight_utc_in_any_jvm_zone(tmp_path, zo
     batch, single = out["batch"], out["single"]
 
     assert batch["day"] == MIDNIGHT_UTC_2024_01_02
-    assert batch["day"] == single["day"]
+    assert single["day"] in (MIDNIGHT_UTC_2024_01_02, EPOCH_DAY_2024_01_02)
     # a DATE inside a list or a map takes the same path
     assert batch["days"] == [MIDNIGHT_UTC_2024_01_02, MIDNIGHT_UTC_2024_01_02 + DAY_MS]
     assert batch["meta"] == {"on": MIDNIGHT_UTC_2024_01_02, "n": 1}

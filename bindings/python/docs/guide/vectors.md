@@ -139,9 +139,9 @@ rebuild can be deferred indefinitely, and every search then pays a growing scan
 of the vectors not yet in the graph (ArcadeDB
 [#7260](https://github.com/ArcadeData/arcadedb/issues/7260)). Upstream fixed it
 in [#9289](https://github.com/ArcadeData/arcadedb/pull/9289), merged on
-2026-10-06 for ArcadeDB 26.11.1, which is not released yet: the 26.10.1 wheel
-still has it. A heap of about twice the graph, a lower `mutations_before_rebuild`,
-or rebuilding in a quiet window avoids it. Read-mostly use, and loading first and
+2026-10-06 and released in ArcadeDB 26.10.2; the 26.10.1 wheel still has it. On 26.10.1, a
+heap of about twice the graph, a lower `mutations_before_rebuild`, or rebuilding in a quiet window
+avoids it. Read-mostly use, and loading first and
 serving after, never meet it.
 
 ### Build-time cache: use the default
