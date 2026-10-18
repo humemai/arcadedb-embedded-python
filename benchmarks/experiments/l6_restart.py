@@ -276,6 +276,12 @@ class Docs(Engine):
             a.cl, a.db, a.version = arango_common.connect(fresh=False)   # fresh=True drops the database
         else:
             a.connect()
+        if be == "postgres":
+            # COMMITTED WRITES NEED THE AUTOCOMMIT BUILD LEFT ON. PostgresTPC.connect() opens with autocommit off and
+            # only build() turns it on, after its final commit; a reattached adapter never runs build(), so without this
+            # every write of the batch sat in one open transaction the stop rolled back, and verify() reported the
+            # engine as losing committed writes (qP24, 2026-10-18: "cycle 0's 1000 committed writes were not back").
+            a.cx.autocommit = True
         if be == "mongodb":
             a._crud = a.db.get_collection("crud", write_concern=a._wc)
         self.adapter = a
