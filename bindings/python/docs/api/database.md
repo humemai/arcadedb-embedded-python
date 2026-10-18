@@ -855,7 +855,7 @@ load many vertices and edges efficiently.
 - `batch_size`: buffered edge batch size
 - `expected_edge_count`: tuning hint for large graph loads
 - `light_edges`: create property-less edges as light edges
-  Warning: from ArcadeDB 26.11.1, `light_edges=True` raises `ArcadeDBError` from `new_edge` for an edge type that is not declared `LIGHTWEIGHT`; declare it with `CREATE EDGE TYPE ... LIGHTWEIGHT` or leave the option out. On 26.10.1 and earlier the load succeeds but an openCypher one-hop `count(*)` over those edges answers 0, and a graph loaded that way stays wrong; see [Known Engine Issues](../guide/known-issues.md#an-opencypher-one-hop-count-answers-0-for-edges-loaded-with-light_edgestrue-into-a-type-that-is-not-lightweight) for the workaround.
+  Warning: from ArcadeDB 26.10.2, `light_edges=True` raises `ArcadeDBError` from `new_edge` for an edge type that is not declared `LIGHTWEIGHT`; declare it with `CREATE EDGE TYPE ... LIGHTWEIGHT` or leave the option out. On 26.10.1 and earlier the load succeeds but an openCypher one-hop `count(*)` over those edges answers 0, and a graph loaded that way stays wrong; see [Known Engine Issues](../guide/known-issues.md#fixed-in-26102).
 - `commit_every`: commit cadence during flush
 - `use_wal`: enable WAL for higher durability
 - `parallel_flush`: parallelize flush/close work
