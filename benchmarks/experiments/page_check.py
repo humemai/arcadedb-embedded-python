@@ -1408,12 +1408,14 @@ NOT_PRINTED = [
      "the restart lane's protocol (cycles, warm-up, the write batch, the poll "
      "interval, the stop grace) and its fixed read's key, stated on every row and "
      "described under the table, never a column"),
-    (r"^(restart_load_s|shutdown_after_load_s|write_batch_s|restart_read_recall_at_10)$",
+    (r"^(restart_load_s|shutdown_after_load_s|write_batch_s|restart_read_recall_at_10|"
+     r"restart_settle_reads|restart_settle_s)$",
      "the restart lane's parts that are not what it measures: the load (its own "
      "table's ingest column), the first stop (it flushes the whole load, a "
      "different question from a stop after a session), the write session that "
-     "gives the next stop something to flush, and the vector read's recall (the "
-     "read is held against the same engine's own answer before the stop)"),
+     "gives the next stop something to flush, the vector read's recall (the "
+     "read is held against the same engine's own answer before the stop), and "
+     "how many reads and seconds that answer took to settle"),
     (r"^(stop_killed_after_grace|stop_oom_killed|restart_writes_survived|restart_writes_visible_s)$",
      "the restart lane's checks on its own stops and restarts: whether Docker had "
      "to kill an engine that did not stop, an out-of-memory kill, and that every "
