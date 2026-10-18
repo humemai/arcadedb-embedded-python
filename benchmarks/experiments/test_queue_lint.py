@@ -60,8 +60,8 @@ def test_marker_wait():
     """The form October uses, including an id with a digit."""
     g = _graph({
         "qOA": HEAD,
-        "qOA2": HEAD + 'while ! grep -q "qOA ALL-DONE" "$S"; do sleep 300; done\n',
-        "qOB": HEAD + 'while ! grep -q "qOA2 ALL-DONE" "$S"; do sleep 300; done\n',
+        "qOA2": HEAD + 'while ! grep -qx "qOA ALL-DONE" "$S"; do sleep 300; done\n',
+        "qOB": HEAD + 'while ! grep -qx "qOA2 ALL-DONE" "$S"; do sleep 300; done\n',
     })
     _check("marker wait, plain id", g.get("qOA2"), {"qOA"})
     _check("marker wait, id with a digit", g.get("qOB"), {"qOA2"})
@@ -80,17 +80,27 @@ def test_pgrep_wait():
 def test_pgrep_wait_is_flagged():
     """...but refused as a wait: it holds only for one exact launch line (BUGS F59)."""
     old = HEAD + 'while pgrep -x -f "/bin/bash /home/tk/qEA.sh" > /dev/null; do sleep 300; done\n'
-    new = HEAD + 'while ! grep -q "qEA ALL-DONE" "$S"; do sleep 300; done\n'
+    new = HEAD + 'while ! grep -qx "qEA ALL-DONE" "$S"; do sleep 300; done\n'
     flag = lambda b: [p for p in queue_lint.check_paths_and_python("qEB", b) if "BUGS F59" in p[1]]
     _check("process-name wait is flagged", len(flag(old)), 1)
     _check("marker wait is not flagged", flag(new), [])
 
 
+def test_marker_wait_must_be_exact():
+    """`grep -q` finds the marker inside a prose note too; only the whole-line form waits (2026-10-18, qA00)."""
+    loose = HEAD + 'while ! grep -q "qEA ALL-DONE" "$S"; do sleep 300; done\n'
+    exact = HEAD + 'while ! grep -qx "qEA ALL-DONE" "$S"; do sleep 300; done\n'
+    flag = lambda b: [p for p in queue_lint.check_paths_and_python("qEB", b) if "without -x" in p[1]]
+    _check("substring marker wait is flagged", len(flag(loose)), 1)
+    _check("whole-line marker wait is not flagged", flag(exact), [])
+    _check("both forms are wait edges", (_graph({"qEB": loose}).get("qEB"), _graph({"qEB": exact}).get("qEB")), ({"qEA"}, {"qEA"}))
+
+
 def test_cycle_is_visible():
     """A cycle can only be found if both edges are seen."""
     g = _graph({
-        "qXA": HEAD + 'while ! grep -q "qXB ALL-DONE" "$S"; do sleep 300; done\n',
-        "qXB": HEAD + 'while ! grep -q "qXA ALL-DONE" "$S"; do sleep 300; done\n',
+        "qXA": HEAD + 'while ! grep -qx "qXB ALL-DONE" "$S"; do sleep 300; done\n',
+        "qXB": HEAD + 'while ! grep -qx "qXA ALL-DONE" "$S"; do sleep 300; done\n',
     })
     _check("cycle edge A->B", g.get("qXA"), {"qXB"})
     _check("cycle edge B->A", g.get("qXB"), {"qXA"})
@@ -152,7 +162,7 @@ def test_allow_dev_follows_the_baked_wheel():
 
 
 def main():
-    for t in (test_marker_wait, test_pgrep_wait, test_pgrep_wait_is_flagged, test_cycle_is_visible,
+    for t in (test_marker_wait, test_pgrep_wait, test_pgrep_wait_is_flagged, test_marker_wait_must_be_exact, test_cycle_is_visible,
               test_container_path_through_a_helper, test_allow_dev_follows_the_baked_wheel):
         print(f"\n== {t.__name__}")
         t()

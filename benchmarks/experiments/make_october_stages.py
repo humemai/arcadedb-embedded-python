@@ -661,7 +661,7 @@ def emit(idx: int, spec) -> str:
     backends = list(only) if only else list(runner.LANES[lane][1])
     caps = [(s, runner.TIMEOUT_BY_SCALE[s]) for s in scales]
     wait = ("" if after is None else
-            f'\nwhile ! grep -q "{after} ALL-DONE" "$S" 2>/dev/null; do sleep 300; done\n'
+            f'\nwhile ! grep -qx "{after} ALL-DONE" "$S" 2>/dev/null; do sleep 300; done\n'
             f'say "$ID: {after} finished, taking the machine"\n')
     body = HEAD.format(id=sid, n=idx + 1, total=len(STAGES), title=title, lane=lane,
                        nbe=len(backends), sha=SHA, wait=wait,
