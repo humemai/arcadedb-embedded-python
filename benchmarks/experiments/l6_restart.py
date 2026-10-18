@@ -66,6 +66,37 @@ POLL_S = float(os.environ.get("BENCH_RS_POLL_S", "0.05"))
 START_TIMEOUT_S = float(os.environ.get("BENCH_RS_START_TIMEOUT_S", "1800"))
 TRACE = os.environ.get("BENCH_RS_TRACE", "") == "1"
 VERIFY_S = float(os.environ.get("BENCH_RS_VERIFY_S", "300"))
+# The vector model's fixed read is taken as this engine's own answer once it
+# has settled: SETTLE_READS identical answers in a row, SETTLE_GAP_S apart,
+# within SETTLE_S. An approximate index can still change its top 10 after it
+# reports ready (mongot merges its Lucene segments in the background; the
+# small tier's MongoDB rep 1 of 2026-10-18 read two different answers one
+# moment apart and failed). Outside every timed section.
+SETTLE_READS = int(os.environ.get("BENCH_RS_SETTLE_READS", "3"))
+SETTLE_GAP_S = float(os.environ.get("BENCH_RS_SETTLE_GAP_S", "1"))
+SETTLE_S = float(os.environ.get("BENCH_RS_SETTLE_S", "600"))
+
+
+def settled_read(read, reads=SETTLE_READS, gap_s=SETTLE_GAP_S, within_s=SETTLE_S,
+                 clock=time.monotonic, sleep=time.sleep):
+    """(answer, reads taken, seconds) once `reads` calls in a row returned the
+    same answer; SystemExit if that does not happen within `within_s`."""
+    t0 = clock()
+    last, run, n, seen = None, 0, 0, []
+    while True:
+        got = read()
+        n += 1
+        run = run + 1 if n > 1 and got == last else 1
+        last = got
+        if got not in seen:
+            seen.append(got)
+        if run >= reads:
+            return got, n, clock() - t0
+        if clock() - t0 >= within_s:
+            raise SystemExit(f"l6_restart: the fixed read did not settle: {n} reads in "
+                             f"{clock() - t0:.0f} s gave {len(seen)} different answers, "
+                             f"the last {last!r}")
+        sleep(gap_s)
 
 # Which model each served arm runs, and through which lane's loader. One model
 # per engine (DECISIONS #139); a binary that several arms share is one row
@@ -448,9 +479,10 @@ class Dense(Engine):
         self.adapter, self.version = a, a.version
         self.durability = getattr(a, "durability", None) or D.DURABILITY.get(
             self.backend, DURABILITY_VECTOR_DEFAULT)
-        self.want = self.read()
+        self.want, n_reads, settle_s = settled_read(self.read)
         return {"n_docs": len(train), "restart_load_s": round(build_s, 2),
-                "restart_read_recall_at_10": len(set(self.want[0]["ids"]) & set(self.gt0)) / 10.0}
+                "restart_read_recall_at_10": len(set(self.want[0]["ids"]) & set(self.gt0)) / 10.0,
+                "restart_settle_reads": n_reads, "restart_settle_s": round(settle_s, 2)}
 
     def ping(self):
         be = self.backend
@@ -773,7 +805,8 @@ def main():
     first = eng.read()
     if first != want:
         raise SystemExit(f"l6_restart: before any stop the fixed read answered {first!r}, "
-                         f"want {want!r}; the load is wrong, not the restart")
+                         f"want {want!r}, this engine's own answer a moment earlier with no "
+                         f"write in between: the load or the engine is wrong, not the restart")
     if model == "dense":
         bench_common.record_result(out, "restart_knn",
                                    [{"rank": r, "id": i} for r, i in enumerate(want[0]["ids"])],
