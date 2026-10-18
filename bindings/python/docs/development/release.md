@@ -127,7 +127,7 @@ The tag push starts the release workflow, which builds and publishes the wheels.
     "import json,sys; fs=json.load(sys.stdin)['urls']; print(len(fs)); [print(f['filename'], f['size']) for f in sorted(fs, key=lambda f: f['filename'])]"
   ```
 
-  `scripts/after_tag_verify.sh <version> <previous-version> <release-run-id>` (optionally followed
+  `scripts/after_tag_verify.sh <version> <previous-version> [<release-run-id>]` (optionally followed
   by the engine jar's sha256 and build number) does the whole check in one command and prints
   PASS or FAIL for each step: the run and the publish job's own conclusion, the file set against
   the previous release, every file's sha256 against the run's artifact, `pip download` for the
@@ -317,7 +317,7 @@ git tag -a X.Y.Z.post1 -m "Python hotfix release X.Y.Z.post1"
 test "$(git rev-parse 'X.Y.Z.post1^{}')" = "$(git rev-parse HEAD)" && echo "tag OK"
 git push origin X.Y.Z.post1
 
-# 5. Create GitHub Release, only after PyPI shows every wheel (step 5 above)
+# 5. Create GitHub Release, only after PyPI shows every wheel (step 6 above)
 gh release create X.Y.Z.post1 -R humemai/arcadedb-embedded-python --verify-tag \
   --title "X.Y.Z.post1" \
   --notes "Hotfix for critical bug in X.Y.Z"

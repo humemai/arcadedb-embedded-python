@@ -255,7 +255,7 @@ Six maximum. A figure per table is a gallery, not an argument.
 | `f7_e2_hybrid` | published | cross-model transaction latency |
 | `f8_deployment` | published | embedded against server across result sizes; refuses to draw across two pins |
 | `f6_memory_ceiling` | generated (`results/generated/figures`), not on the page | peak anon at DEEP-10M, ArcadeDB bars at the 24g heap |
-| `f3_sparse_perquery` | not built (CAMPAIGN.md section 7, row 35) | per-query latency against summed posting length (Spearman 0.95 on the pre-pin rows) |
+| `f3_sparse_perquery` | not drawn: `make_paper_figures.py` has it and skips it until every `results/sparse_cliff.jsonl` row carries an engine version (CAMPAIGN.md section 7, row 35) | per-query latency against summed posting length (Spearman 0.95 on the pre-pin rows) |
 | `f9_build_cost` | not built (CAMPAIGN.md section 7, row 35) | build seconds per engine per lane, log scale. The largest ArcadeDB deficit on the page and currently only trailing columns. |
 | `f10_lifecycle` | candidate, not built (CAMPAIGN.md section 7, row 35) | close ms against rows, per situation, log-log |
 

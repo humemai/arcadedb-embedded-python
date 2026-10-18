@@ -19,7 +19,7 @@ pip install arcadedb-embedded
 ## What's Included
 
 The `arcadedb-embedded` package includes everything you need. The Linux x86_64 wheel of
-26.10.1 is 69.4 MiB to download and 96.9 MiB unpacked (measured on the file on PyPI);
+26.10.2 is 70.2 MiB to download and 97.8 MiB unpacked (measured on the file on PyPI);
 other platforms are in the same range:
 
 | Platform | Wheel tag (Python 3.12) | Download |
