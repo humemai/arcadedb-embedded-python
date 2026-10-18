@@ -169,6 +169,15 @@ NOT_COMPARABLE = {
     ("restart", "restart_knn"): "an approximate index's top 10; each engine's is held against its own answer "
                                 "before the stop, inside the lane",
 }
+# AN APPROXIMATE ANSWER FROM AN INDEX BUILT AGAIN FOR EVERY REPETITION. Each rep of the server-restart lane builds
+# its vector index from scratch, and an approximate index built twice need not return the same top 10: pass 1's
+# arcadedb_dense_server at deep10m answered rep 1 at recall 0.9 and reps 2 and 3 at 1.0 (2026-10-18), so rep 1 held
+# one true neighbour fewer and E2 failed the publish on it. Inside a rep the lane holds the answer after every restart
+# against the answer before the stop; across reps the check is the row's recall against exact ground truth, the field
+# named here. E2 lists these groups under E2b instead of failing them. NOT_COMPARABLE is the cross-engine half.
+REBUILT_PER_REP = {
+    ("restart", "restart_knn"): "restart_read_recall_at_10",
+}
 # (lane, backend) -> "embedded" or "served", filled by collect() for the lanes
 # above, so E3 does not count an embedded arm as silent on the served group.
 _DEPLOYMENT = {}
@@ -302,6 +311,7 @@ def report(groups, seen_backends, out=print, list_groups=False):
     failures = []          # (arcade_involved, key, lines)
     absences = []          # (key, backend, reason)
     unstable = []          # (key, backend, digests)
+    rebuilt = []           # (key, backend, digests, recall field): REBUILT_PER_REP, listed, not failed
     silent = []            # (key, backend) -- ran the cell, recorded no digest
     not_comparable = []    # (key, reason, backends) -- declared not like for like
     known_disagreements = []  # (key, backends, reasons) -- wrong, named, withheld
@@ -330,7 +340,11 @@ def report(groups, seen_backends, out=print, list_groups=False):
                 # engine disagrees with itself" into something actionable.
                 where = {d: sorted({f"{o[3]}/r{o[0]}" for o in occ})
                          for d, occ in expressed.items()}
-                unstable.append((key, be, where))
+                _field = REBUILT_PER_REP.get((lane, str(query).split("@", 1)[0]))
+                if _field:
+                    rebuilt.append((key, be, where, _field))
+                else:
+                    unstable.append((key, be, where))
             if expressed:
                 # The newest rep wins the display; the instability is reported
                 # separately above rather than hidden by this choice.
@@ -441,6 +455,13 @@ def report(groups, seen_backends, out=print, list_groups=False):
                 out(f"         {d}  {', '.join(tags)}")
             out("         A strict commit changes when a write is durable, not "
                 "what the answer is (DECISIONS #90).")
+
+    if rebuilt:
+        out("\n=== E2b: approximate top 10s from an index built again each repetition, not compared ===")
+        for key, be, where, field in rebuilt:
+            out(f"  {key[0]} {key[1]} {key[2]} :: {key[3]} -- {be}, {len(where)} answers: "
+                + "; ".join(f"{d} {', '.join(tags)}" for d, tags in sorted(where.items()))
+                + f" (checked by {field} on each row)")
 
     if silent:
         out("\n=== E3: a backend that recorded no digest for a query its neighbours answered ===")
