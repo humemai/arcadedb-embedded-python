@@ -57,6 +57,11 @@ ArcadeDB is pinned by **upstream commit SHA**, not by a release number. The buil
 - Embedded and server arms in one table are built from the SAME commit, paired, and run the same JVM (DECISIONS #54).
 - A campaign FREEZES one commit and holds it start to finish. Upstream landing a fix mid-run does not restart the campaign; it becomes a dated changelog entry and a candidate for the next re-pin.
 - Re-pinning is a deliberate, dated act recorded in the changelog with what moved. No table falls back to an older pin, anywhere (DECISIONS #62).
+- **One ArcadeDB version until the final DBBench release, then history (DECISIONS #189).** Until the final DBBench page and repo are released (after the late-November 2026 paper), a new ArcadeDB release's pass REPLACES the old one: after one scripted old-against-new comparison (a regression is filed before the next cut), the old version's ArcadeDB rows, page data, pin-specific code, pinned test fixtures and wording are removed. Comparator rows are kept across it and carry their own engine's version, never ArcadeDB's. From the final release on, a new engine version ADDS rows and the page keeps the history:
+  - every table and chart shows one row per engine, its newest version, labelled with the version and the date measured; two versions of one engine never share a table;
+  - a dated changelog (`/history`) has one entry per update with what moved, and links a frozen, static snapshot of the page as it stood before the update; the paper's state is the first snapshot and keeps a permanent URL;
+  - a per-cell version history (the value per version) is added once an engine has two versions measured;
+  - a history line connects only rows measured on the same host with the same instrument; a hardware or protocol change starts a new line, and the changelog says why.
 
 Comparators are pinned by image digest and carry a version name, recorded per row from the image they ran on. A comparator row with `version_name: null` is not publishable. Embedded comparators name the engine core, not the SDK (BUGS.md F39).
 
