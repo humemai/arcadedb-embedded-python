@@ -974,7 +974,7 @@ def _after_arg(text):
 
 def _wait(after):
     return ("" if after is None else
-            f'\nwhile ! grep -q "{after} ALL-DONE" "$S" 2>/dev/null; do sleep 300; done\n'
+            f'\nwhile ! grep -qx "{after} ALL-DONE" "$S" 2>/dev/null; do sleep 300; done\n'
             f'say "$ID: {after} finished, taking the machine"\n')
 
 

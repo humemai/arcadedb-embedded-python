@@ -202,6 +202,12 @@ def check_paths_and_python(name, body):
             problems.append((i, "process-name wait (pgrep -x -f) holds only if the predecessor was launched "
                                 "as exactly `/bin/bash /home/tk/qXX.sh`; wait on its ALL-DONE marker instead "
                                 "(BUGS F59)"))
+        # A MARKER wait without -x matches the phrase anywhere in STATUS.txt, prose included. qA00 waited on
+        # `grep -q "qP34 ALL-DONE"` and started three days early (2026-10-18) because the note that installed it
+        # said it would run "after qP34 ALL-DONE". The trap writes the marker as a whole line; match it as one.
+        if re.search(r"grep\s+-q\s+[\"']q[A-Z]+[0-9]*\s+ALL-DONE[\"']", line):
+            problems.append((i, "marker wait without -x: `grep -q \"qXX ALL-DONE\"` also matches the phrase inside "
+                                "any note in STATUS.txt and starts the stage early; use `grep -qx`"))
         if "build_images.sh" in line:
             msg = _allow_dev_problem(line, wheel_pre)
             if msg:
@@ -290,7 +296,7 @@ def check_cycles(scripts):
         # the ALL-DONE line is the artifact that actually says a stage
         # finished. The wait graph has to see both, or a marker-waiting stage
         # reads as waiting on nothing and no cycle or orphan can be detected.
-        for m in re.finditer(r"grep\s+-q\s+[\"'](q[A-Z]+[0-9]*) ALL-DONE[\"']", body):
+        for m in re.finditer(r"grep\s+-qx?\s+[\"'](q[A-Z]+[0-9]*) ALL-DONE[\"']", body):
             waits.add(m.group(1))
         for m in re.finditer(r"(?m)^\s*for q in ([^\n;]*?);\s*do", body):
             waits.update(q for q in m.group(1).split() if q.startswith("q") and q[1:2].isupper())
