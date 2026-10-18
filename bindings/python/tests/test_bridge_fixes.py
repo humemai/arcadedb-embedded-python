@@ -98,8 +98,12 @@ def test_to_json_list_writes_a_date_as_midnight_utc_in_any_jvm_zone(tmp_path, zo
     assert batch["day"] == MIDNIGHT_UTC_2024_01_02
     if out["local_date_type"] == "DATE":
         assert single["day"] == EPOCH_DAY_2024_01_02
-    else:
+    elif out["local_date_type"] == "None":
         assert single["day"] == MIDNIGHT_UTC_2024_01_02
+    else:
+        pytest.fail(
+            f"LocalDate maps to {out['local_date_type']}, neither DATE nor null"
+        )
     # a DATE inside a list or a map takes the same path
     assert batch["days"] == [MIDNIGHT_UTC_2024_01_02, MIDNIGHT_UTC_2024_01_02 + DAY_MS]
     assert batch["meta"] == {"on": MIDNIGHT_UTC_2024_01_02, "n": 1}
