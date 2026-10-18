@@ -6821,6 +6821,42 @@ def _run_log_rows():
         return [json.loads(l) for l in fh if l.strip()]
 
 
+# The rows the cap rule keeps off the tables. The runs happened, so the hosts and engine versions they record stay in the
+# payload's provenance; only their numbers go.
+_RULE_WITHHELD = []
+
+
+class RuleCensored(int):
+    """A cell the cap rule (DECISIONS #188, cap_rule.py) censors at report time: the value is the rule cap in seconds, so it
+    reads as a timeout everywhere an int does. `at` is None when the arm's own cell ran past the rule cap (its numbers are
+    withheld), and the smaller scale the arm was censored at when the cell is a larger scale of it that was not run."""
+    at = None
+
+
+def _rule_censored(taken, clean):
+    """The cap rule's cells, for a publish at the pin cap_rule_2610.json was computed for: an arm-cell whose pass-1 median is
+    over its rule cap, and every larger scale of an arm censored at a smaller one that has no row of its own."""
+    import cap_rule
+    data = cap_rule.load()
+    if not cap_rule.applies_to(data, os.environ.get("BENCH_ENGINE_COMMIT", "")):
+        return {}
+    out = {}
+    for (lane, scale, backend, wl), cap in sorted(cap_rule.over_rule_cells(data).items()):
+        out[(lane, scale, backend, wl)] = RuleCensored(cap)
+    for (lane, backend, wl, cls), scales in sorted(cap_rule.censored_scales(data).items()):
+        if cls:
+            continue
+        first = scales[0]
+        for s in cap_rule.larger_scales(lane, first):
+            key = (lane, s, backend, wl)
+            if key in taken or key in clean or key in out:
+                continue
+            v = RuleCensored(cap_rule.rule_cap(lane, s, wl, "", data) or cap_rule.rule_cap(lane, first, wl, "", data) or 0)
+            v.at = first
+            out[key] = v
+    return out
+
+
 def _censored_cells():
     """Cells at the pin whose every attempt ended in a timeout: (lane, scale,
     backend, workload) -> budget seconds. A timeout is a censored observation
@@ -6925,6 +6961,8 @@ def _censored_cells():
     declared = {("l1tpc", scale, backend, "olap") for backend, scale in _top_parts_refusals()}
     declared |= _ts_doc_oom_cells()
     _CENSORED_CACHE = {k: v for k, v in timeouts.items() if k not in clean and k not in declared}
+    # THE CAP RULE, AT REPORT TIME (DECISIONS #188): rows already measured meet the rule the unmeasured cells met when they ran.
+    _CENSORED_CACHE.update(_rule_censored(set(_CENSORED_CACHE) | declared, clean))
     return _CENSORED_CACHE
 
 
@@ -7561,13 +7599,25 @@ def _censored_notes(table_id):
             pins = [scale_label(lane, scale), _cap_txt,
                     _peak_txt.strip(" ()").replace("peak ", "") if _peak_txt else None]
         elif kind == "censored":
-            budget = f"{secs / 3600:g} hour" if secs else "its"
-            _phase = _CENSORED_PHASE.get((lane, str(scale), backend, w))
-            _in = f" It was still in {_phase} when the budget ran out." if _phase else ""
-            tail = (f" at {scale_label(lane, scale)}: {_cell} exceeded "
-                    f"its {budget} budget, the same budget every engine on this table had, on its first "
-                    f"attempt and was not retried; there is no row.{_in}")
-            pins = [scale_label(lane, scale), budget]
+            if isinstance(secs, RuleCensored) and secs.at is None:
+                # THE CAP RULE: the cell ran, and took longer than the rule allows (DECISIONS #188). Said as the censoring it is.
+                tail = (f" at {scale_label(lane, scale)}: {_cell} took longer than the cap rule's {secs:,} s for this cell, "
+                        f"the same rule for every engine on this table, so it is shown censored at that cap and its numbers "
+                        f"are not printed.")
+                pins = [scale_label(lane, scale), f"{secs:,}"]
+            elif isinstance(secs, RuleCensored):
+                tail = (f" at {scale_label(lane, scale)}: {_cell} was not run, because the engine was already censored at "
+                        f"{scale_label(lane, secs.at)} and the cap rule censors it at every larger size of this lane; "
+                        f"there is no row.")
+                pins = [scale_label(lane, scale), scale_label(lane, secs.at)]
+            else:
+                budget = f"{secs / 3600:g} hour" if secs else "its"
+                _phase = _CENSORED_PHASE.get((lane, str(scale), backend, w))
+                _in = f" It was still in {_phase} when the budget ran out." if _phase else ""
+                tail = (f" at {scale_label(lane, scale)}: {_cell} exceeded "
+                        f"its {budget} budget, the same budget every engine on this table had, on its first "
+                        f"attempt and was not retried; there is no row.{_in}")
+                pins = [scale_label(lane, scale), budget]
         else:
             tail = (f" at {scale_label(lane, scale)}: {_cell} failed "
                     f"inside its budget and was not retried, so there is no row. What it reported: "
@@ -8785,9 +8835,15 @@ def _finish_table(table: dict) -> dict:
     # (rehearsal of qOE's landing, 2026-09-26). A cell is censored only when
     # it has no clean row, so an entry sharing its engine and size was built
     # from failed rows alone; the censored row and its note stand for it.
-    _cens = {(str(m.get("backend_key")), str(m.get("scale"))) for m in _marked}
-    table["entries"] = [e for e in table["entries"]
-                        if e.get("outcome") or (str(e.get("backend_key")), str(e.get("scale"))) not in _cens]
+    # A censored cell takes its engine's measured entries at that scale off the table. The lifecycle table holds one entry per
+    # situation (the label says which), so there a censored situation takes off its own entry and not the engine's other
+    # situations at that scale, which ran and are not in question (the cap rule censors one situation at a time).
+    _per_situation = table.get("id") == "lifecycle"
+
+    def _cell_of(m):
+        return (str(m.get("backend_key")), str(m.get("scale")), str(m.get("backend")) if _per_situation else "")
+    _cens = {_cell_of(m) for m in _marked}
+    table["entries"] = [e for e in table["entries"] if e.get("outcome") or _cell_of(e) not in _cens]
     entries = table["entries"] + _marked
     seen = []
     for e in entries:
@@ -9143,6 +9199,20 @@ def main() -> int:
         return 2
 
     rows = list(csv.DictReader(FROZEN.open()))
+    # THE CAP RULE, AT REPORT TIME (DECISIONS #188): an arm-cell whose pass-1 median is over its rule cap is shown censored
+    # (_censored_cells) and its numbers are not shown, so its rows leave the tables here. Strict-class rows are the
+    # durability table's and stay.
+    import cap_rule
+    _rule = cap_rule.load()
+    if cap_rule.applies_to(_rule, os.environ.get("BENCH_ENGINE_COMMIT", "")):
+        _over = cap_rule.over_rule_cells(_rule)
+        _cut = [r for r in rows if (r.get("lane"), str(r.get("scale")), r.get("backend"), r.get("workload")) in _over
+                and str(r.get("durability_class")) != "strict"]
+        if _cut:
+            _RULE_WITHHELD[:] = _cut
+            print(f"  cap rule: {len(_cut)} rows of {len(_over)} over-the-cap arm-cells withheld, shown censored instead")
+            _gone = {id(r) for r in _cut}
+            rows = [r for r in rows if id(r) not in _gone]
     global _FROZEN_ROWS
     _FROZEN_ROWS = rows
     # F39: rows frozen before 2026-09-13 stamp the SurrealDB SDK version as the
@@ -9548,7 +9618,7 @@ def main() -> int:
     # published without them.
     tables = _restructure_tables(tables, rows)
 
-    hosts = sorted({r["host"] for r in rows if r.get("host")})
+    hosts = sorted({r["host"] for r in rows + _RULE_WITHHELD if r.get("host")})
     # ON-DISK SIZE, said once per table that prints it (PAGE-SPEC 4a). The
     # number is the engine's writable layer plus its volumes after the cell,
     # minus the same engine's empty footprint; a server reading is taken after
@@ -9730,9 +9800,9 @@ def main() -> int:
         # tables and read as though those engines could not run the workload,
         # which is the claim the tier guard exists to prevent us making.
         "comparator_versions": {
-            b: sorted(v) for b, v in sorted(_comparator_versions(rows).items())},
+            b: sorted(v) for b, v in sorted(_comparator_versions(rows + _RULE_WITHHELD).items())},
         "comparator_version_split": sorted(
-            b for b, v in _comparator_versions(rows).items() if len(v) > 1),
+            b for b, v in _comparator_versions(rows + _RULE_WITHHELD).items() if len(v) > 1),
         "arcadedb_engines": sorted({
             _engine_identity(_row_engine_string(r), r.get("engine_commit"))
             or str(_row_engine_string(r) or "").strip() or "(no engine recorded)"

@@ -74,6 +74,7 @@ import sys
 import make_october_stages as O
 import runner
 import bench_common
+import cap_rule
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -764,7 +765,76 @@ say "$ID: dbbench:arcadedb runs JPype $IJ, the pin"''')
         h = _sub(h, 'REPS=$REPS, pin $PIN', 'REPS=$REPS (reps run: 1 to $LAST_REP), pin $PIN')
     if rep_from:
         h = _top_up(h, rep_from)
+    return _cap_rule_head(h)
+
+
+# THE CAP RULE (DECISIONS #188, cap_rule.py). The bash is what was patched into the live pass-1 stages on 2026-10-18; the
+# generator emits the same text so later stages match them.
+CAP_RULE_HELPERS = """
+# THE CAP RULE (DECISIONS #188, 2026-10-18). Each run_cell cap above is min(the tier cap, max(1800 s, 10 x the slower of
+# ArcadeDB's and the median engine's pass-1 median for that cell)), so no ArcadeDB arm is ever censored by it. And an arm
+# censored at a smaller size is censored at every larger one of the same lane, workload and class: it is not run there,
+# and its overlay at a size where its lane cell was censored is not run either.
+declare -A CENSORED_AT
+cap_rule_skip() {  # <label> <key>: true (and says so) when the arm was already censored in this stage
+  local at=${CENSORED_AT[$2]:-}
+  [ -n "$at" ] || return 1
+  say "$ID: $1 not run: censored at $at, so censored here too (cap rule, DECISIONS #188)"
+  return 0
+}
+cap_rule_note() {  # <key> <scale>: after a failed rep 1, remember a TIMEOUT (not another failure) for the larger sizes
+  grep -E '^\\s+\\[[0-9]+/[0-9]+\\] ' "$S" | tail -1 | grep -q -- '-> timeout_after_' && CENSORED_AT[$1]=${CENSORED_AT[$1]:-$2}
+  return 0
+}
+"""
+
+
+def _cap_rule_head(h):
+    """The helpers once, before run_overlay, and the three calls in run_overlay and run_cell (the insertion points of the
+    2026-10-18 patch of the live stages). In the template every brace is doubled; emit() formats it."""
+    h = _sub(h, "run_overlay() {{  # <label>",
+             CAP_RULE_HELPERS.lstrip("\n").replace("{", "{{").replace("}", "}}") + "\nrun_overlay() {{  # <label>")
+    h = _sub(h, '  if [ "$oreps" -lt 2 ]; then\n',
+             '  cap_rule_skip "$label" "$be|$wl|" && return 0\n  if [ "$oreps" -lt 2 ]; then\n')
+    h = _sub(h, "  local dur=${{7:-}}\n", '  local dur=${{7:-}}\n  cap_rule_skip "$label" "$be|$wl|$dur" && return 0\n')
+    h = _sub(h, '    say "$ID: $label rep ', '    cap_rule_note "$be|$wl|$dur" "$scale"\n    say "$ID: $label rep ')
     return h
+
+
+_RUN_CELL_CAP = re.compile(r'run_cell "([a-z0-9]+)/([a-z0-9_]+)/\$BE/([a-z_0-9]+)( strict)?" ([a-z0-9_]+) (\d+)')
+
+
+def apply_cap_rule(body, lane, backends, workloads, data=None):
+    """The run-time half of the rule, on one emitted stage: each run_cell cap becomes min(its cap, the rule cap of its cell)
+    when cap_rule_2610.json has the cell, and before each scale's backend loop CENSORED_AT is seeded for the stage's arms that
+    pass 1 censored at a smaller scale of the lane (over the rule, or a TIMEOUT of rep 1), so a stage run later (the deferred
+    lifecycle stage, the top-up pass) does not run them again. Without the file the stage is unchanged."""
+    data = data if data is not None else cap_rule.load()
+    if not data:
+        return body
+
+    def sub_cap(m):
+        lane_, scale, wl, strict, _, cap = m.groups()
+        r = cap_rule.rule_cap(lane_, scale, wl, "strict" if strict else "", data)
+        if r is None or r >= int(cap):
+            return m.group(0)
+        return m.group(0)[: m.start(6) - m.start(0)] + str(r)
+    body = _RUN_CELL_CAP.sub(sub_cap, body)
+
+    def seed(m):
+        scale = re.search(r'run_cell "[a-z0-9]+/([a-z0-9_]+)/\$BE/', body[m.end():]).group(1)
+        lines = []
+        for (l, be, wl, cls), _ in sorted(cap_rule.censored_scales(data).items()):
+            if l != lane or be not in backends or wl not in workloads:
+                continue
+            at = cap_rule.censored_before(l, scale, be, wl, cls, data)
+            if at:
+                dur = "--durability strict" if cls == "strict" else ""
+                lines.append(f'CENSORED_AT["{be}|{wl}|{dur}"]="{at}"')
+        head = ("# CAP RULE, seeded from pass 1 (cap_rule_2610.json): arms already censored at a smaller scale of this lane\n"
+                + "\n".join(lines) + "\n") if lines else ""
+        return "\n" + head + m.group(0)[1:]
+    return re.sub(r"\nfor BE in \$BACKENDS; do\n", seed, body)
 
 
 def _top_up(h, rep_from):
@@ -943,7 +1013,7 @@ def emit_all(out, pins, first_after, allow_dev, stages=None, rep_pass=None, rep_
                     .replace("{roster_block}", rosters[spec[0]] if rep_from else "") \
                     .replace("{jpype_version}", bench_common.JPYPE_PIN) \
                     .replace("{instrument}", bench_common.INSTRUMENT)
-                body = O.emit(i, full)
+                body = apply_cap_rule(O.emit(i, full), spec[2], set(stage_backends(spec)), set(spec[3]))
             p = os.path.join(out, f"{spec[0]}.sh")
             with open(p, "w") as fh:
                 fh.write(body)
