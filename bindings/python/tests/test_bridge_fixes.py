@@ -64,7 +64,9 @@ with db.transaction():
     )
 batch = db.query("sql", "SELECT FROM Event").to_json_list()[0]
 single = json.loads(db.query("sql", "SELECT FROM Event").first().to_json())
-print(json.dumps({"batch": batch, "single": single}), flush=True)
+from jpype import JClass  # noqa: E402  (after start_jvm)
+mapped = JClass("com.arcadedb.schema.Type").getTypeByValue(JClass("java.time.LocalDate").of(2024, 1, 2))
+print(json.dumps({"batch": batch, "single": single, "local_date_type": str(mapped)}), flush=True)
 db.close()
 """
 
@@ -78,9 +80,11 @@ def test_to_json_list_writes_a_date_as_midnight_utc_in_any_jvm_zone(tmp_path, zo
     """to_json_list wrote a DATE as midnight in the JVM's zone, so it decoded to
     the previous day east of UTC (#116). Each zone needs its own JVM, hence the
     child process. Result.to_json() is the engine's own JSON and does not depend
-    on the zone either: it writes this undeclared LocalDate as midnight UTC
-    milliseconds up to 26.10.2 and, from ArcadeData/arcadedb#10253 (26.11.1),
-    as days since the epoch, as it writes a declared DATE in both."""
+    on the zone either: since ArcadeData/arcadedb#10253 maps LocalDate to DATE,
+    it writes this undeclared LocalDate as days since the epoch, as it writes a
+    declared DATE; before that it wrote midnight UTC milliseconds. The engine is
+    asked which of the two it does (a version number cannot tell: 26.11.1
+    snapshots from before #10253 exist), and the test holds it to that one."""
     proc = subprocess.run(  # nosec B603 - fixed argv, no shell, test-owned
         [sys.executable, "-c", _DATE_SCRIPT, str(tmp_path / "db"), zone],
         capture_output=True,
@@ -92,7 +96,10 @@ def test_to_json_list_writes_a_date_as_midnight_utc_in_any_jvm_zone(tmp_path, zo
     batch, single = out["batch"], out["single"]
 
     assert batch["day"] == MIDNIGHT_UTC_2024_01_02
-    assert single["day"] in (MIDNIGHT_UTC_2024_01_02, EPOCH_DAY_2024_01_02)
+    if out["local_date_type"] == "DATE":
+        assert single["day"] == EPOCH_DAY_2024_01_02
+    else:
+        assert single["day"] == MIDNIGHT_UTC_2024_01_02
     # a DATE inside a list or a map takes the same path
     assert batch["days"] == [MIDNIGHT_UTC_2024_01_02, MIDNIGHT_UTC_2024_01_02 + DAY_MS]
     assert batch["meta"] == {"on": MIDNIGHT_UTC_2024_01_02, "n": 1}
