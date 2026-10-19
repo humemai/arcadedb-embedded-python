@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Republish humem.ai/projects/arcadedb from the frozen results. One command.
+"""Republish humem.ai/research/arcadedb from the frozen results. One command.
 
     BENCH_ENGINE_COMMIT=<pin> python refresh_web_page.py   # tables and figures land in results/generated
 

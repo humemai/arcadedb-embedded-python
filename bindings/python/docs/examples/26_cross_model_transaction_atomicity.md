@@ -12,7 +12,7 @@ two ways:
 - **without one**: each write commits on its own, torn 20 of 20
 
 This is the small version of the project page's
-[cross-model table](https://humem.ai/projects/arcadedb#crossmodel), which applies
+[cross-model table](https://humem.ai/research/arcadedb#crossmodel), which applies
 the same interruption to every engine in that lane (see the
 [benchmark overview](../benchmarks/index.md)). The composed Qdrant plus Neo4j
 stack there is left torn every time, because no transaction spans its two engines.

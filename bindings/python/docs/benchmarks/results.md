@@ -199,6 +199,6 @@ Some specifics that matter if you ever compare the page against the data yoursel
 
 At each campaign freeze the frozen rows and the page payload are published as a release asset with their pins. That
 is the verification most readers want: you can recompute any table on the
-[project page](https://humem.ai/projects/arcadedb) from the rows behind it, check a cell
+[project page](https://humem.ai/research/arcadedb) from the rows behind it, check a cell
 against its own row, and see which cells were withheld and why, without a machine, a corpus,
 or a container.
