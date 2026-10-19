@@ -8,7 +8,7 @@ anything before you rely on them.
 
 !!! tip "The results live on the project page"
     Every table, every figure, and every measured number is published at
-    **[humem.ai/projects/arcadedb](https://humem.ai/projects/arcadedb)**.
+    **[humem.ai/research/arcadedb](https://humem.ai/research/arcadedb)**.
     These documentation pages carry the method only, and no results.
 
     There is one copy of the numbers on purpose. Each table is generated from one frozen
@@ -44,17 +44,17 @@ against the same corpus. Each lane feeds one or two tables on the project page.
 
 | Lane | Workload | Corpus | Table |
 |---|---|---|---|
-| Document OLTP | TPC-C new-order and payment, plus one record inserted, read by key, updated, and deleted | TPC-H at scale factors 1 and 10 | [Documents](https://humem.ai/projects/arcadedb#documents) |
-| Document OLAP | TPC-H Q1 and Q6, top parts by revenue, count by ship mode, and revenue by month | TPC-H at scale factors 1 and 10 | [Documents](https://humem.ai/projects/arcadedb#documents) |
-| Graph OLTP | Point lookup, one hop, two hops, three hops with a property filter, insert, update, and delete | LDBC-SNB persons and friendships at SF1 and SF10 | [Graph](https://humem.ai/projects/arcadedb#graph) |
-| Graph OLAP | Fourteen queries: average friend age, friendships within a city, most friends, degree distribution, and triangle count, plus LSQB's nine pattern-matching counts (below), with and without ArcadeDB's Graph Analytical View | LDBC-SNB, the full social network at SF1 | [Graph](https://humem.ai/projects/arcadedb#graph) |
-| Dense vectors | Nearest-neighbour search at k=10, plus an insert into a built index and a delete from one | SIFT1M and DEEP-10M | [Vectors](https://humem.ai/projects/arcadedb#vectors) |
-| Sparse vectors | Learned-sparse retrieval at k=10 | Big-ANN 2023 sparse track at three sizes | [Vectors](https://humem.ai/projects/arcadedb#vectors) |
-| Time series | Newest reading (asked unbounded, and again bounded to the past hour, which is kept on the row), a twelve-hour aggregate, a per-host hourly double group-by, a high-usage filter, and a group-by with ordering and a limit | TSBS cpu-only at 100 and 1,000 hosts | [Time series](https://humem.ai/projects/arcadedb#timeseries) |
-| Cross-model | One transaction that writes a document, a graph edge, and a vector together; the same transaction interrupted; a retrieval path; and a graph-filtered vector search | Generated product set, 50 thousand and 500 thousand products | [Cross-model](https://humem.ai/projects/arcadedb#crossmodel) |
-| Session lifecycle | Open, one query, one write, and close, across what a database contains | Each model at four sizes | [Python](https://humem.ai/projects/arcadedb#embedded) |
-| Deployment split | The same work in-process, over in-process HTTP, and against a separate container | Result sizes from one document to a hundred thousand | [Python](https://humem.ai/projects/arcadedb#embedded) |
-| Python materialization | The same result taken through each Python materialization API, against the Java baseline | One scan and one vector search | [Python](https://humem.ai/projects/arcadedb#embedded) |
+| Document OLTP | TPC-C new-order and payment, plus one record inserted, read by key, updated, and deleted | TPC-H at scale factors 1 and 10 | [Documents](https://humem.ai/research/arcadedb#documents) |
+| Document OLAP | TPC-H Q1 and Q6, top parts by revenue, count by ship mode, and revenue by month | TPC-H at scale factors 1 and 10 | [Documents](https://humem.ai/research/arcadedb#documents) |
+| Graph OLTP | Point lookup, one hop, two hops, three hops with a property filter, insert, update, and delete | LDBC-SNB persons and friendships at SF1 and SF10 | [Graph](https://humem.ai/research/arcadedb#graph) |
+| Graph OLAP | Fourteen queries: average friend age, friendships within a city, most friends, degree distribution, and triangle count, plus LSQB's nine pattern-matching counts (below), with and without ArcadeDB's Graph Analytical View | LDBC-SNB, the full social network at SF1 | [Graph](https://humem.ai/research/arcadedb#graph) |
+| Dense vectors | Nearest-neighbour search at k=10, plus an insert into a built index and a delete from one | SIFT1M and DEEP-10M | [Vectors](https://humem.ai/research/arcadedb#vectors) |
+| Sparse vectors | Learned-sparse retrieval at k=10 | Big-ANN 2023 sparse track at three sizes | [Vectors](https://humem.ai/research/arcadedb#vectors) |
+| Time series | Newest reading (asked unbounded, and again bounded to the past hour, which is kept on the row), a twelve-hour aggregate, a per-host hourly double group-by, a high-usage filter, and a group-by with ordering and a limit | TSBS cpu-only at 100 and 1,000 hosts | [Time series](https://humem.ai/research/arcadedb#timeseries) |
+| Cross-model | One transaction that writes a document, a graph edge, and a vector together; the same transaction interrupted; a retrieval path; and a graph-filtered vector search | Generated product set, 50 thousand and 500 thousand products | [Cross-model](https://humem.ai/research/arcadedb#crossmodel) |
+| Session lifecycle | Open, one query, one write, and close, across what a database contains | Each model at four sizes | [Python](https://humem.ai/research/arcadedb#embedded) |
+| Deployment split | The same work in-process, over in-process HTTP, and against a separate container | Result sizes from one document to a hundred thousand | [Python](https://humem.ai/research/arcadedb#embedded) |
+| Python materialization | The same result taken through each Python materialization API, against the Java baseline | One scan and one vector search | [Python](https://humem.ai/research/arcadedb#embedded) |
 
 The query set is fixed at forty-nine operations and closed to additions for the current
 campaign. Twenty-seven of the forty-nine come from a published benchmark rather than from
@@ -144,24 +144,24 @@ nothing else.
 
 A table is worth printing only if it answers a question a reader actually has.
 
-- **[Documents](https://humem.ai/projects/arcadedb#documents)**: whether an engine that
+- **[Documents](https://humem.ai/research/arcadedb#documents)**: whether an engine that
   stores documents can serve the transactional and analytical workloads people usually
   reach for a relational database to run. This is the workload ArcadeDB loses by the widest
   margin, and it is on the page for that reason.
-- **[Graph](https://humem.ai/projects/arcadedb#graph)**: whether traversals and graph
+- **[Graph](https://humem.ai/research/arcadedb#graph)**: whether traversals and graph
   analytics hold up against a dedicated graph database, and what ArcadeDB's Graph
   Analytical View buys, measured with the view both on and off so the accelerator is priced
   rather than assumed.
-- **[Vectors](https://humem.ai/projects/arcadedb#vectors)**: whether a multi-model engine
+- **[Vectors](https://humem.ai/research/arcadedb#vectors)**: whether a multi-model engine
   can search embeddings at a recall a specialist vector store would accept. Latency without
   recall is not a comparison, so both are always printed, at matched operating points.
-- **[Time series](https://humem.ai/projects/arcadedb#timeseries)**: whether the native
+- **[Time series](https://humem.ai/research/arcadedb#timeseries)**: whether the native
   time-series type is worth using against engines built for nothing else.
-- **[Cross-model](https://humem.ai/projects/arcadedb#crossmodel)**: the page's central
+- **[Cross-model](https://humem.ai/research/arcadedb#crossmodel)**: the page's central
   claim. One transaction writes a document, an edge, and a vector, and the same transaction
   is interrupted to see what survives. A composed stack of two specialist systems cannot
   offer that, and the table shows the difference as torn results rather than as an opinion.
-- **[Python](https://humem.ai/projects/arcadedb#embedded)**: what the embedded package
+- **[Python](https://humem.ai/research/arcadedb#embedded)**: what the embedded package
   costs. Session cost from open to close, what the client and server split costs, and what
   each Python materialization API costs against Java on the same JARs.
 

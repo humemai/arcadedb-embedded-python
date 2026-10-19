@@ -20,7 +20,7 @@ and smoke new adapters, and nothing they produce reaches the page.
 The bench host is a mobile-class Intel Core i9-12900HK with six performance cores and eight
 efficiency cores, 64 GiB of memory, an NVMe system disk, Ubuntu, and Docker. The full
 environment table is published in the
-[setup section](https://humem.ai/projects/arcadedb#setup) of the project page.
+[setup section](https://humem.ai/research/arcadedb#setup) of the project page.
 
 Four properties of that machine are load-bearing enough to state rather than record:
 
@@ -180,7 +180,7 @@ There is deliberately **no per-table aggregate**. An arithmetic mean across quer
 times span orders of magnitude is the slowest query in disguise, a median across them moves
 when a query is added, and the only defensible summary is one people would quote without
 its caveats. One column per query instead, with the cross-table ratio view left to the
-[summary figure](https://humem.ai/projects/arcadedb#summary).
+[summary figure](https://humem.ai/research/arcadedb#summary).
 
 ## Matched Operating Points
 

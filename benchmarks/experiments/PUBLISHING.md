@@ -1,6 +1,6 @@
 # Republishing the project page
 
-PROTOCOL.md says how a run is produced. FAIRNESS.md says what makes a comparison legitimate. READING-RESULTS.md says how to read what came out. This one says how the numbers get from the frozen rows onto humem.ai/projects/arcadedb without going wrong on the way.
+PROTOCOL.md says how a run is produced. FAIRNESS.md says what makes a comparison legitimate. READING-RESULTS.md says how to read what came out. This one says how the numbers get from the frozen rows onto humem.ai/research/arcadedb without going wrong on the way.
 
 ## Where this fits
 

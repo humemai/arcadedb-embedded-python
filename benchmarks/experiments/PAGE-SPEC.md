@@ -1,6 +1,6 @@
 # Project page spec: what the page contains and what each cell must satisfy
 
-The page at `humem.ai/projects/arcadedb` is the PRIMARY artifact. A paper, when there is one, is written from the same frozen rows at a stable release (DECISIONS #42); this file governs what the page shows. This file is the contract: what tables exist, what rows and columns they carry, which figures are published, and what a cell must satisfy to be printed.
+The page at `humem.ai/research/arcadedb` is the PRIMARY artifact. A paper, when there is one, is written from the same frozen rows at a stable release (DECISIONS #42); this file governs what the page shows. This file is the contract: what tables exist, what rows and columns they carry, which figures are published, and what a cell must satisfy to be printed.
 
 `PROTOCOL.md` says how a number is produced. `FAIRNESS.md` says when two numbers may be compared. This file says what gets shown. If they disagree, PROTOCOL wins on production and FAIRNESS wins on comparison; this file never licenses a cell those two would refuse.
 

@@ -157,7 +157,7 @@ ArcadeDB pages its vector index in from disk on demand, so the first time a set
 of query vectors runs it pays for the pages it touches and the second time it
 finds them resident. The example runs twenty fresh query vectors twice and
 prints the per-query time of each pass and how many top-5 answers are identical
-(all of them). The [project page](https://humem.ai/projects/arcadedb) measures the
+(all of them). The [project page](https://humem.ai/research/arcadedb) measures the
 same effect at ten million vectors; engines that keep the whole index in memory do
 not move between passes. When you benchmark, say which pass you timed.
 
