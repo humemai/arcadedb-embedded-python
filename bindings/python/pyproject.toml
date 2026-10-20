@@ -63,6 +63,11 @@ test = [
     # rather than an install command, so no amount of care at install time
     # would have caught it.
     "pandas>=2.2.0",
+    # Reference engines for tests/test_equivalence.py (#347): the same question asked of a second engine over the
+    # same data. All three have wheels for every CI platform, so the file never skips.
+    "duckdb>=1.4.2",
+    "ladybug>=0.21.2",
+    "networkx>=3.4",
 ]
 dev = [
     "black",
