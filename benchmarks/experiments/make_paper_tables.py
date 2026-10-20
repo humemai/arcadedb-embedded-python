@@ -831,14 +831,15 @@ def tabular_table(rows):
     l1 = [r for r in rows if r["lane"] == "l1"]
     tpc = [r for r in rows if r["lane"] == "l1tpc"]
     order = ["arcadedb_embedded", "arcadedb_server", "duckdb", "postgres"]
-    # Peak anon from the OLTP rows only. This lane runs OLTP and OLAP over one
-    # corpus, and memory is recorded for BOTH, so pooling them would report a
-    # median straddling two workloads: PostgreSQL reads 0.119 GiB on OLTP and
-    # 0.152 on OLAP, and their midpoint describes neither run. The latency
-    # columns are already per-workload by construction.
+    # Peak memory (owned: anonymous plus shared, issue #353) from the OLTP
+    # rows only. This lane runs OLTP and OLAP over one corpus, and memory is
+    # recorded for BOTH, so pooling them would report a median straddling two
+    # workloads (PostgreSQL's two readings differed, and their midpoint
+    # described neither run). The latency columns are already per-workload by
+    # construction.
     lines = [r"\begin{tabular}{lrrrrr}", r"\toprule",
              r"System & OLTP (ops/s) & Ins.\ p99 (ms) & "
-             r"Q1 (ms) & Q6 (ms) & Peak anon (GiB) \\", r"\midrule"]
+             r"Q1 (ms) & Q6 (ms) & Peak memory (GiB) \\", r"\midrule"]
     for be in order:
         oltp = [r for r in l1 if r["backend"] == be and r["workload"] == "oltp"]
         tq = [r for r in tpc if r["backend"] == be and r["workload"] == "olap"]
@@ -862,7 +863,7 @@ def tabular_table(rows):
             fmt(st.median([r["q6_ms"] for r in tq
                            if isinstance(r.get("q6_ms"), (int, float))]))
             if any(isinstance(r.get("q6_ms"), (int, float)) for r in tq) else "--",
-            mmm(oltp, "peak_anon_mib_sum", 1.0 / 1024),
+            mmm(oltp, "peak_owned_mib_sum", 1.0 / 1024),
         ]) + r" \\")
     lines += [r"\bottomrule", r"\end{tabular}"]
     write("t2_tabular.tex", "\n".join(lines) + "\n")
@@ -872,14 +873,14 @@ def graph_table(rows):
     l2 = [r for r in rows if r["lane"] == "l2"]
     order = ["arcadedb_graph_embedded", "arcadedb_graph_server",
              "neo4j_graph", "ladybug_graph"]
-    # Peak anon is the LAST column deliberately: it is a resource axis, not a
+    # Peak memory is the LAST column deliberately: it is a resource axis, not a
     # latency, and putting it beside the p99s invites reading it as one. The
-    # field is peak_anon_mib_sum, which for a served backend is server+client
+    # field is peak_owned_mib_sum (anonymous plus shared memory), which for a served backend is server+client
     # and for an embedded one is the single process, so both deployments
     # report the whole engine's footprint rather than half of it.
     lines = [r"\begin{tabular}{llrrrr}", r"\toprule",
              r"System & Scale & 1-hop p50 (ms) & 1-hop p99 (ms) & "
-             r"2-hop p99 (ms) & Peak anon (GiB) \\", r"\midrule"]
+             r"2-hop p99 (ms) & Peak memory (GiB) \\", r"\midrule"]
     for be in order:
         for sc in ("sf1", "sf10"):
             g = [r for r in l2 if r["backend"] == be and r["scale"] == sc
@@ -890,7 +891,7 @@ def graph_table(rows):
                 NAMES[be], sc.upper(),
                 mmm(g, "hop1_p50_ms"), mmm(g, "hop1_p99_ms"),
                 mmm(g, "hop2_p99_ms"),
-                mmm(g, "peak_anon_mib_sum", 1.0 / 1024)]) + r" \\")
+                mmm(g, "peak_owned_mib_sum", 1.0 / 1024)]) + r" \\")
     lines += [r"\bottomrule", r"\end{tabular}"]
     write("t3_graph.tex", "\n".join(lines) + "\n")
 

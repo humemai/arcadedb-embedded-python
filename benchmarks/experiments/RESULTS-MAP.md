@@ -87,7 +87,7 @@ The answer digest and its readable sample, the `durability` string, the thermal 
 
 `equivalence_check.py` reads the frozen set like the other gates and takes `--rows <file>` for a campaign file, a smoke file, or the skeleton freeze, reducing to the newest row per cell before it compares, so a re-run cell does not read as one backend giving two answers.
 
-`resource_check.py` reads the frozen set the same way and takes `--rows <file>` too. It checks the rows of the 2026-10 instrument only and prints how many rows it did not check and why.
+`resource_check.py` reads the frozen set the same way and takes `--rows <file>` too; its memory is the page's column, `peak_owned_mib_sum`. It checks the rows of the 2026-10 instrument only and prints how many rows it did not check and why.
 
 ## Overlays: directories a table reads directly
 

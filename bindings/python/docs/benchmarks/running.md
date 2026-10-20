@@ -132,8 +132,9 @@ rather than asserted by the launcher:
 - **Outcome**: `rc`, `oom_killed`, `n_rows`, the lane's latency and throughput fields at the
   median and the ninety-ninth percentile, `recall_at_10` where the index is approximate.
 - **Footprint**: peak anonymous, shared, and owned memory summed across every container in
-  the cell, plus disk for the writable layer and every declared volume, with a settle loop
-  and a flag saying whether it converged.
+  the cell (the published tables show the owned one, anonymous plus shared), plus disk for
+  the writable layer and every declared volume, with a settle loop and a flag saying whether
+  it converged.
 - **Phases**: `ingest_s`, `index_s` where the engine has that boundary, `build_s`, settle,
   query, and an accounted-phases total so unexplained time is visible rather than absorbed.
 - **Answers**: a canonical digest, a readable sample, and a row count per timed query.

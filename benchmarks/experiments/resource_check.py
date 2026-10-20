@@ -11,9 +11,10 @@ empty-start footprint holds preallocated files that later shrink, so its growth
 went negative. Every one of those was visible in the rows.
 
 What this flags, on the values the page shows (disk: the server container's
-growth for a served row, the data written for an embedded one; memory: the
-anonymous peak, `peak_anon_mib_sum`), per (lane, scale, workload, durability
-class):
+growth for a served row, the data written for an embedded one; memory: owned
+memory, `peak_owned_mib_sum`, the anonymous plus the shared-memory peak, which is
+the page's memory column since issue #353), per (lane, scale, workload,
+durability class):
 
   LOW       an engine whose median is under 1/20 of the median of the group's
             engines (groups of 3 or more engines with a value)
@@ -27,15 +28,6 @@ A flag on a disk value prints the row's `disk_note` when it has one.
 
 NOT FLAGGED, each for a reason the rows state:
 
-  * An engine whose rows hold more shared memory than anonymous memory
-    (`peak_shmem_mib_sum` above `peak_anon_mib_sum`: pgvector, PostgreSQL,
-    PostgreSQL + AGE, TimescaleDB) is not flagged LOW for memory. The page's
-    memory column counts anonymous memory by decision and says, under every
-    table such an engine is on, that its cell leaves out the shared memory
-    where it keeps its data (export_web._shared_memory_note). The excuse is
-    derived from the rows, never from a list of backend names, so an engine
-    that starts keeping its data in shared memory is excused and disclosed
-    together or neither.
   * Failed rows are skipped: the page prints the failure, not their numbers.
     A memory cap that was really hit is already a failed row (an OOM kill), so
     there is no separate cap rule; comparing the client's and the server's
@@ -75,10 +67,10 @@ LOW_RATIO = 20
 MIN_ENGINES = 3
 # (lane, backend, metric) -> why a flag is the right number
 BY_DESIGN = {
-    ("l3d", "sqlite_vec_dense", "memory"): "sqlite-vec reads its vector table through the page cache, which the "
-                                           "anonymous peak leaves out; its total peak is in the row",
-    ("l3d", "sqlite_vec_dense_int8", "memory"): "sqlite-vec reads its int8 table through the page cache, which the "
-                                                "anonymous peak leaves out; its total peak is in the row",
+    ("l3d", "sqlite_vec_dense", "memory"): "sqlite-vec reads its vector table through the page cache, which "
+                                           "owned memory leaves out for every engine; its total peak is in the row",
+    ("l3d", "sqlite_vec_dense_int8", "memory"): "sqlite-vec reads its int8 table through the page cache, which "
+                                                "owned memory leaves out for every engine; its total peak is in the row",
 }
 # lane -> {metric: why it is not checked}. A lane that skips both metrics is
 # not checked at all and its rows are counted as such.
@@ -110,22 +102,13 @@ def disk(r):
 
 
 def memory(r):
-    return _num(r.get("peak_anon_mib_sum"))
+    """The page's memory reading of a row: owned memory, or the anonymous peak for a row without it.
 
-
-def shared(r):
-    return _num(r.get("peak_shmem_mib_sum"))
-
-
-def holds_shared_memory(rows):
-    """True when the median shared peak of these rows is above their median anonymous peak.
-
-    The same definition export_web._shared_memory_rows uses to decide which entries
-    the page discloses, so the gate excuses exactly what the page explains.
+    The same rule as export_web._peak_mem. The rows this gate checks (the 2026-10 instrument) all
+    carry peak_owned_mib_sum; the fallback only keeps a row without it from reading as no value.
     """
-    anon = [v for v in (memory(r) for r in rows) if v is not None]
-    shm = [v for v in (shared(r) for r in rows) if v is not None]
-    return bool(anon and shm) and statistics.median(shm) > statistics.median(anon)
+    v = _num(r.get("peak_owned_mib_sum"))
+    return v if v is not None else _num(r.get("peak_anon_mib_sum"))
 
 
 Flag = collections.namedtuple("Flag", "kind key backend metric value ctx")
@@ -178,8 +161,6 @@ def check(rows):
             group = statistics.median(med.values())
             for be, v in med.items():
                 if not (group > 0 and v < group / LOW_RATIO):
-                    continue
-                if metric == "memory" and holds_shared_memory(bes[be]):
                     continue
                 ctx = f"group median {group:.1f}" + (f"; {notes[be]}" if notes[be] else "")
                 flags.append(Flag("LOW", key, be, metric, round(v, 1), ctx))

@@ -3,11 +3,12 @@
 Run with `python -m pytest test_resource_check.py -q` from this directory.
 
 Synthetic rows, one behaviour each, so that an edit which makes the gate pass while proving
-nothing fails here: a LOW disk, a LOW memory, the shared-memory excuse (and the case where it
-must not apply), a BY_DESIGN entry, a NEGATIVE disk, a PRE_DISK step that did not return 0,
-failed rows, rows that declare their situation unexpressible, the lanes whose page tables show no such column, and rows of another instrument.
-The second half holds export_web's shared-memory disclosure to the same definition the gate
-excuses, so the page explains exactly the entries the gate lets through.
+nothing fails here: a LOW disk, a LOW memory, memory read as owned memory (anonymous plus shared,
+the page's column since issue #353) with the anonymous peak only as a fallback, a BY_DESIGN entry,
+a NEGATIVE disk, a PRE_DISK step that did not return 0, failed rows, rows that declare their
+situation unexpressible, the lanes whose page tables show no such column, and rows of another
+instrument. The second half holds export_web's memory column and PostgreSQL split to the same
+definition: owned memory, with no shared-memory disclosure left to keep in step with the gate.
 """
 import os
 import sys
@@ -24,9 +25,10 @@ ENGINES = ("duckdb", "sqlite", "chroma", "lancedb")
 
 
 def row(backend, lane="l3d", scale="small", workload="search", disk=100.0, anon=1000.0, shm=0.0, **extra):
+    """A healthy row. peak_owned_mib_sum is anonymous plus shared, as the runner records it, unless `extra` sets it."""
     r = {"lane": lane, "scale": scale, "workload": workload, "durability_class": "relaxed", "backend": backend,
          "instrument": "2026-10", "rc": 0, "rep": 1, "disk_data_mb": disk, "peak_anon_mib_sum": anon,
-         "peak_shmem_mib_sum": shm}
+         "peak_shmem_mib_sum": shm, "peak_owned_mib_sum": anon + shm}
     r.update(extra)
     return r
 
@@ -54,7 +56,7 @@ def test_low_disk_is_flagged():
 
 
 def test_low_memory_is_flagged():
-    flags, _ = kinds(group(peak_anon_mib_sum=10.0))
+    flags, _ = kinds(group(peak_anon_mib_sum=10.0, peak_owned_mib_sum=10.0))
     assert flags == [("LOW", "duckdb", "memory")]
 
 
@@ -63,26 +65,31 @@ def test_a_group_of_two_has_nothing_to_compare_against():
     assert flags == []
 
 
-def test_an_engine_with_more_shared_than_anonymous_memory_is_not_flagged_low_for_memory():
-    flags, _ = kinds(group(peak_anon_mib_sum=10.0, peak_shmem_mib_sum=9000.0))
-    assert flags == []
+def test_memory_is_owned_memory_so_shared_memory_needs_no_excuse():
+    """An engine that keeps its data in shared memory has a high owned peak, so nothing is flagged and nothing is excused."""
+    odd = group(peak_anon_mib_sum=10.0, peak_shmem_mib_sum=9000.0, peak_owned_mib_sum=9010.0)
+    assert kinds(odd)[0] == []
+    assert not hasattr(RC, "holds_shared_memory")
 
 
-def test_the_excuse_is_the_rows_and_not_the_name():
-    """Little shared memory is not an excuse: the same low cell with less shared than anonymous memory is flagged."""
-    flags, _ = kinds(group(peak_anon_mib_sum=10.0, peak_shmem_mib_sum=5.0))
-    assert flags == [("LOW", "duckdb", "memory")]
-    flags, _ = kinds(group(peak_anon_mib_sum=10.0, peak_shmem_mib_sum=""))
-    assert flags == [("LOW", "duckdb", "memory")]
+def test_the_anonymous_peak_alone_does_not_decide():
+    """The same low anonymous peak is flagged only when owned memory is low too."""
+    assert RC.memory(row("a", peak_anon_mib_sum=10.0, peak_shmem_mib_sum=5.0, peak_owned_mib_sum=15.0)) == 15.0
+    assert kinds(group(peak_anon_mib_sum=10.0, peak_shmem_mib_sum=5.0, peak_owned_mib_sum=15.0))[0] == [("LOW", "duckdb", "memory")]
+    assert kinds(group(peak_anon_mib_sum=10.0, peak_owned_mib_sum=1000.0))[0] == []
 
 
-def test_the_shared_memory_excuse_does_not_cover_disk():
-    flags, _ = kinds(group(disk_data_mb=1.0, peak_anon_mib_sum=10.0, peak_shmem_mib_sum=9000.0))
-    assert flags == [("LOW", "duckdb", "disk")]
+def test_a_row_without_owned_memory_falls_back_to_the_anonymous_peak():
+    odd = dict(row("duckdb", peak_anon_mib_sum=10.0))
+    del odd["peak_owned_mib_sum"]
+    assert RC.memory(odd) == 10.0
+    assert RC.memory(dict(odd, peak_owned_mib_sum="")) == 10.0
+    assert kinds([odd] + [row(b) for b in ENGINES[1:]])[0] == [("LOW", "duckdb", "memory")]
+    assert RC.memory({"peak_anon_mib_sum": "", "peak_owned_mib_sum": ""}) is None
 
 
 def test_by_design_is_known_and_not_a_failure(monkeypatch, capsys):
-    rows = [row(b) for b in ("duckdb", "sqlite", "chroma")] + [row("sqlite_vec_dense", peak_anon_mib_sum=10.0)]
+    rows = [row(b) for b in ("duckdb", "sqlite", "chroma")] + [row("sqlite_vec_dense", peak_anon_mib_sum=10.0, peak_owned_mib_sum=10.0)]
     flags, _ = kinds(rows)
     assert flags == [("LOW", "sqlite_vec_dense", "memory")]
     assert ("l3d", "sqlite_vec_dense", "memory") in RC.BY_DESIGN
@@ -128,14 +135,14 @@ def test_pre_disk_step_that_returned_zero_or_is_absent_passes():
 
 @pytest.mark.parametrize("bad", [{"rc": 1}, {"error": "boom"}, {"oom_killed": True}, {"server_oom_killed": "True"}])
 def test_failed_rows_are_skipped_and_counted(bad):
-    flags, not_checked = kinds(group(disk_data_mb=-5.0, peak_anon_mib_sum=0.0, **bad))
+    flags, not_checked = kinds(group(disk_data_mb=-5.0, peak_owned_mib_sum=0.0, **bad))
     assert flags == []
     assert sum(n for why, n in not_checked.items() if "failed" in why) == 1
 
 
 def test_restart_is_not_checked():
     rows = [row(b, lane="restart") for b in ENGINES]
-    rows[0] = dict(rows[0], disk_data_mb=-5.0, peak_anon_mib_sum=1.0)
+    rows[0] = dict(rows[0], disk_data_mb=-5.0, peak_owned_mib_sum=1.0)
     flags, not_checked = kinds(rows)
     assert flags == []
     assert sum(not_checked.values()) == 4 and all(why.startswith("restart") for why in not_checked)
@@ -143,7 +150,7 @@ def test_restart_is_not_checked():
 
 def test_lifecycle_checks_memory_but_not_disk():
     rows = [row(b, lane="lifecycle") for b in ENGINES]
-    rows[0] = dict(rows[0], disk_data_mb=-5.0, peak_anon_mib_sum=1.0)
+    rows[0] = dict(rows[0], disk_data_mb=-5.0, peak_owned_mib_sum=1.0)
     flags, not_checked = kinds(rows)
     assert [(k, m) for k, _, m in flags] == [("LOW", "memory")]
     assert sum(not_checked.values()) == 0
@@ -151,7 +158,7 @@ def test_lifecycle_checks_memory_but_not_disk():
 
 def test_a_row_declaring_its_situation_unexpressible_is_not_checked():
     rows = [row(b, lane="lifecycle") for b in ENGINES]
-    rows[0] = dict(rows[0], peak_anon_mib_sum=1.0, lifecycle_situation_unexpressible="no analytical view")
+    rows[0] = dict(rows[0], peak_owned_mib_sum=1.0, lifecycle_situation_unexpressible="no analytical view")
     flags, not_checked = kinds(rows)
     assert flags == []
     assert sum(n for why, n in not_checked.items() if "unexpressible" in why) == 1
@@ -175,7 +182,7 @@ def test_no_row_is_both_checked_and_counted_as_unchecked():
     assert sum(not_checked.values()) == 8
 
 
-# ---- the page's disclosure follows the same definition as the gate's excuse
+# ---- the page's memory column is the gate's measure: owned memory
 
 @pytest.fixture(scope="module")
 def EW():
@@ -194,62 +201,44 @@ def EW():
     return export_web
 
 
-def test_gate_and_page_agree_on_which_rows_hold_shared_memory(EW):
-    cases = [([row("a", peak_anon_mib_sum=10.0, peak_shmem_mib_sum=9000.0)], True),
-             ([row("a", peak_anon_mib_sum=9000.0, peak_shmem_mib_sum=10.0)], False),
-             ([row("a", peak_anon_mib_sum=10.0, peak_shmem_mib_sum=10.0)], False),
-             ([row("a", peak_anon_mib_sum=10.0, peak_shmem_mib_sum="")], False),
-             ([row("a", peak_anon_mib_sum=10.0, peak_shmem_mib_sum=50.0), row("a", peak_anon_mib_sum=10.0, peak_shmem_mib_sum=50.0),
-               row("a", peak_anon_mib_sum=10.0, peak_shmem_mib_sum=1.0)], True),
-             ([], False)]
-    for rows, expected in cases:
-        assert RC.holds_shared_memory(rows) is expected is EW._holds_shared_memory(rows)
+def test_the_pages_memory_column_reads_owned_memory_with_the_anonymous_peak_as_fallback(EW):
+    assert EW.MEM_PEAK_FIELD == "peak_owned_mib_sum" and EW.MEM_PEAK_FALLBACK == "peak_anon_mib_sum"
+    pg = row("pgvector_dense", anon=91.0, shm=9737.0)
+    assert EW._peak_mem(pg) == 91.0 + 9737.0 == RC.memory(pg)
+    bare = {k: v for k, v in pg.items() if k != "peak_owned_mib_sum"}
+    assert EW._peak_mem(bare) == 91.0 == RC.memory(bare)
+    cell = EW._agg([pg, dict(pg), dict(pg)], EW.MEM_PEAK_FIELD)
+    assert cell["median"] == round((91.0 + 9737.0) / 1024, 4) and cell["n"] == 3
+    assert EW._UNIT_DIVISOR["peak_owned_mib_sum"] == 1024.0
 
 
-def _table(EW, tid, *entries):
-    return {"id": tid, "entries": [{"backend": EW.display_name(b), "scale": "small", "scale_label": "1M vectors",
-                                    "metrics": {"peak memory GiB": {"median": m}}} for b, m in entries]}
+def test_every_memory_column_of_the_page_is_owned_memory(EW):
+    """No table spec still names the anonymous peak under the "peak memory GiB" header."""
+    specs = [m for spec in list(EW.LANES.values()) + list(EW.OCT_METRICS.values())
+             for m in (spec.get("metrics", []) if isinstance(spec, dict) else spec)]
+    named = [f for f, label in specs if label == "peak memory GiB"]
+    assert named and set(named) == {EW.MEM_PEAK_FIELD}
 
 
-def test_page_discloses_every_entry_that_holds_more_shared_than_anonymous_memory(EW, monkeypatch):
-    rows = [row("pgvector_dense", peak_anon_mib_sum=91.0, peak_shmem_mib_sum=9737.0),
-            row("duckdb_dense", peak_anon_mib_sum=2000.0, peak_shmem_mib_sum=3.0),
-            row("timescaledb", lane="l4", scale="ts100", workload="ingest", peak_anon_mib_sum=50.0, peak_shmem_mib_sum=700.0)]
+def test_the_anonymous_peak_notes_are_gone(EW):
+    """Owned memory counts the shared memory, so the disclosure and its excuse no longer exist."""
+    assert not hasattr(EW, "_shared_memory_note") and not hasattr(EW, "_holds_shared_memory")
+
+
+def test_the_plain_postgresql_arm_splits_its_cell_into_client_and_database(EW, monkeypatch):
+    rows = [row("postgres", lane="l1tpc", scale="tpch1", workload="oltp", anon=120.0, shm=3000.0,
+                client_peak_anon_mib=110.0, client_peak_shmem_mib=2.0, server_peak_anon_mib=10.0, server_peak_shmem_mib=2998.0)]
     monkeypatch.setattr(EW, "_FROZEN_ROWS", rows)
-    note = EW._shared_memory_note(_table(EW, "l3d", ("pgvector_dense", 91.0 / 1024), ("duckdb_dense", 2000.0 / 1024)))
-    assert note.startswith("pgvector holds more memory as shared memory than in its own address space")
-    assert "duckdb" not in note.lower()                         # little shared memory: nothing to disclose
-    assert "pgvector at 1M vectors shows 0.09 GiB where its rows held 9.51 GiB of shared memory" in note
-    # every number the sentence carries is registered as generated
-    vals = {v for rec in EW._GENERATED if rec["text"] == note for v in rec["values"]}
-    assert {"0.09", "9.51", "1M vectors"} <= vals
-    # a table of engines that hold their memory themselves gets no sentence at all
-    assert EW._shared_memory_note(_table(EW, "l3d", ("duckdb_dense", 2.0))) is None
-
-
-def test_page_note_is_not_a_list_of_names(EW, monkeypatch):
-    """An engine nobody has heard of is disclosed the moment its rows hold more shared than anonymous memory."""
-    monkeypatch.setattr(EW, "_FROZEN_ROWS", [row("pgvector_dense", peak_anon_mib_sum=10.0, peak_shmem_mib_sum=20.0)])
-    assert EW._shared_memory_note(_table(EW, "l3d", ("pgvector_dense", 0.01))) is not None
-    monkeypatch.setattr(EW, "_FROZEN_ROWS", [row("pgvector_dense", peak_anon_mib_sum=20.0, peak_shmem_mib_sum=10.0)])
-    assert EW._shared_memory_note(_table(EW, "l3d", ("pgvector_dense", 0.02))) is None
-
-
-def test_two_engines_share_one_sentence_and_the_plural_agrees(EW, monkeypatch):
-    rows = [row("pgvector_dense", peak_anon_mib_sum=91.0, peak_shmem_mib_sum=9737.0),
-            row("milvus_dense", peak_anon_mib_sum=100.0, peak_shmem_mib_sum=4096.0)]
-    monkeypatch.setattr(EW, "_FROZEN_ROWS", rows)
-    note = EW._shared_memory_note(_table(EW, "l3d", ("pgvector_dense", 0.09), ("milvus_dense", 0.1)))
-    assert f"{EW.display_name('milvus_dense')} and pgvector hold more memory" in note
-    assert "their memory cells are not comparable" in note
-
-
-def test_the_plain_postgresql_arm_keeps_its_own_sentence(EW, monkeypatch):
-    rows = [row("postgres", lane="l1tpc", scale="tpch1", workload="oltp", peak_anon_mib_sum=120.0, peak_shmem_mib_sum=3000.0,
-                client_peak_anon_mib=110.0, server_peak_anon_mib=10.0)]
-    monkeypatch.setattr(EW, "_FROZEN_ROWS", rows)
+    cell = 3120.0 / 1024
     table = {"id": "docs_oltp", "entries": [{"backend": EW.display_name("postgres"), "scale": "tpch1", "scale_label": "TPC-H SF1",
-                                             "metrics": {"peak memory GiB": {"median": 120.0 / 1024}}}]}
+                                             "metrics": {"peak memory GiB": {"median": cell}}}]}
     pg = EW._pg_memory_note(table)
-    assert pg and "PostgreSQL's memory cell is not comparable to the others" in pg
-    assert EW._shared_memory_note(table) is None                # said once, by the sentence that also splits the cell
+    assert pg == (f"PostgreSQL's memory cell adds two containers. At TPC-H SF1, of the {cell:.2f} GiB shown, "
+                  f"{112.0 / 1024:.3f} GiB is our Python client and {3008.0 / 1024:.3f} GiB is the database.")
+    assert "not comparable" not in pg and "address space" not in pg
+    # every number the sentence carries is registered as generated
+    vals = {v for rec in EW._GENERATED if rec["text"] == pg for v in rec["values"]}
+    assert {f"{cell:.2f}", f"{112.0 / 1024:.3f}", f"{3008.0 / 1024:.3f}", "TPC-H SF1"} <= vals
+    # a row that lacks a per-container field gives no split rather than a wrong one
+    monkeypatch.setattr(EW, "_FROZEN_ROWS", [dict(rows[0], server_peak_shmem_mib="")])
+    assert EW._pg_memory_note(table) is None

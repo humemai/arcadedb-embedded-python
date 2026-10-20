@@ -158,7 +158,7 @@ Seven gates run, and they answer different questions. Six read the rows; `versio
 | Gate | Asks |
 |---|---|
 | `equivalence_check` | Did the engines of a table give the same answers? This is F11 of the [fairness invariants](protocol.md#the-fairness-invariants). |
-| `resource_check` | Is any disk or memory value one that cannot be right: far below the other engines in its group, a negative disk growth, or a disk reading taken after a failed pre-disk step? It checks the 2026-10 rows only and says how many it left out. |
+| `resource_check` | Is any disk or memory value one that cannot be right: far below the other engines in its group, a negative disk growth, or a disk reading taken after a failed pre-disk step? Memory here is the tables' column, owned memory (the anonymous peak plus the shared-memory peak). It checks the 2026-10 rows only and says how many it left out. |
 | `provenance_check` | Does every published cell trace back to a run, under conditions that were recorded rather than asserted? |
 | `fairness_check` | Were the rows in one table given the same thing? The [fairness invariants](protocol.md#the-fairness-invariants) that a row can show. |
 | `page_check` | Does every cell and every typed number on the page still agree with the generated tables? |

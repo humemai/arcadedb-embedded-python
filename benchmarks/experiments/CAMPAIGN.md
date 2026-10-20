@@ -72,7 +72,7 @@ A stage that produces rows no gate admits has failed even if every cell exited 0
 
 Beyond the lane's own metrics:
 
-- **Memory.** `peak_anon_mib_sum`, `peak_shmem_mib_sum`, `peak_owned_mib_sum` (anon + shmem), summed across every container in the cell. Anon alone misses a POSIX-shmem buffer pool entirely.
+- **Memory.** `peak_anon_mib_sum`, `peak_shmem_mib_sum`, `peak_owned_mib_sum` (anon + shmem), summed across every container in the cell. Anon alone misses a POSIX-shmem buffer pool entirely, which is why the page's memory column is `peak_owned_mib_sum` (issue #353).
 - **Disk.** `SizeRw` plus `du` over the daemon-reported volume mounts, with a settle loop requiring two readings within 1%. A volume in an image with no `du` is sized from a helper container (BUGS.md F38).
 - **IO.** Cumulative `rbytes`/`wbytes` from `io.stat`.
 - **Phases.** `build_s`, settle, query generation, ground-truth load, search wall, recall computation, and `phases_accounted_s` so unexplained time is visible rather than absorbed. The dense and sparse lanes also split `ingest_s` from `index_s` where the engine has the boundary. Every lane prints `PHASE` markers as it goes, so a cell killed by its timeout still says which phase it was in.
