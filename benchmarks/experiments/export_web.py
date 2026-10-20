@@ -1257,7 +1257,7 @@ def _dense_overlay_entries(scale="deep10m"):
             build.append({"build_s": passes[0].get("build_s"),
                           "ingest_s": passes[0].get("ingest_s"),
                           "index_s": passes[0].get("index_s")})
-            peak.append({"peak_anon_mib_sum": passes[0].get("peak_anon_mib_sum")})
+            peak.append({MEM_PEAK_FIELD: _peak_mem(passes[0])})
             cold.append({"p50": passes[0].get("p50"), "p99": passes[0].get("p99")})
             for p in passes[1:]:
                 warm.append({"p50": p.get("p50"), "p99": p.get("p99")})
@@ -1297,7 +1297,7 @@ def _dense_overlay_entries(scale="deep10m"):
         # served arm's multipass file sees only the client container (3.6 GiB
         # against the pair's 28), and no file carries disk. Same build, same
         # envelope; the overlay's own peak is the fallback.
-        _pk = _campaign_stat(_cb, scale, "peak_anon_mib_sum") or _agg(peak, "peak_anon_mib_sum")
+        _pk = _campaign_stat(_cb, scale, MEM_PEAK_FIELD) or _agg(peak, MEM_PEAK_FIELD)
         if _pk is not None:
             metrics["peak memory GiB"] = _pk
         _dk = _campaign_stat(_cb, scale, "disk_data_mb")
@@ -1342,9 +1342,32 @@ def _dense_overlay_entries(scale="deep10m"):
 # page both talk in GiB, and a column headed "GiB" printing 8256 would be a
 # defect the reader has to catch. Divide here, once, rather than in each table
 # spec where the next lane to add memory would forget it.
-_UNIT_DIVISOR = {"peak_anon_mib_sum": 1024.0, "end_anon_mib_sum": 1024.0, "disk_data_mb": 1024.0,
-                 "cpu_usec_sum": 1e6}
-DISK_NOTE = ("Disk is what the workload left on disk, in GiB: the engine's writable "
+_UNIT_DIVISOR = {"peak_owned_mib_sum": 1024.0, "peak_anon_mib_sum": 1024.0, "end_anon_mib_sum": 1024.0,
+                 "disk_data_mb": 1024.0, "cpu_usec_sum": 1e6}
+
+# THE PAGE'S MEMORY COLUMN IS OWNED MEMORY (issue #353): the anonymous peak plus the shared-memory
+# peak, summed over every container of the cell, which the runner records as peak_owned_mib_sum.
+# It replaced the anonymous peak (peak_anon_mib_sum) because anonymous memory alone leaves out the
+# buffer pool of every engine that keeps it in POSIX shared memory (PostgreSQL, pgvector, PG+AGE,
+# TimescaleDB), so their cells read about 1% of what they held. The file cache stays out for every
+# engine alike. Every row in the frozen CSVs (runs_paper.csv, runs_paper_oct.csv) carries the
+# field, and so does every row the 2026-10 page reads from runs.jsonl: the payload is
+# byte-identical with the fallback switched off. The fallback to peak_anon_mib_sum below is only
+# for a row that lacks it, and no row a current cell reads does. The rows that do lack it are the
+# July and August campaign rows in runs.jsonl and the multipass overlay files (the dense and
+# sparse overlays read them when the campaign has no row of the arm). end_anon_mib_sum is not the
+# page's memory column and stays anonymous.
+MEM_PEAK_FIELD = "peak_owned_mib_sum"
+MEM_PEAK_FALLBACK = "peak_anon_mib_sum"
+
+
+def _peak_mem(r):
+    """The page's memory reading of one row: owned memory, or the anonymous peak for a row without it."""
+    v = _num(r.get(MEM_PEAK_FIELD))
+    return v if v is not None else _num(r.get(MEM_PEAK_FALLBACK))
+
+
+DISK_NOTE =("Disk is what the workload left on disk, in GiB: the engine's writable "
              "layer plus its volumes after the cell, minus the same engine's empty "
              "footprint.")
 
@@ -1478,7 +1501,8 @@ def _agg(rows, field, across_scales=False):
             vals = [v / div for v in vals]
         return {"median": round(statistics.median(vals), 4), "min": round(min(vals), 4),
                 "max": round(max(vals), 4), "n": len(vals)}
-    vals = [v for v in (_num(r.get(field)) for r in rows) if v is not None]
+    vals = [v for v in ((_peak_mem(r) if field == MEM_PEAK_FIELD else _num(r.get(field))) for r in rows)
+            if v is not None]
     if field == "gav_build_s":
         # A row without the view records 0.0 for the view it did not build;
         # that is an absent cell, not a zero-second build.
@@ -1569,7 +1593,7 @@ OCT_TABLE_METRICS = {
         # exactly where it was measured.
         ("ingest_s", "ingest s"),
         ("index_s", "index s"),
-        ("peak_anon_mib_sum", "peak memory GiB"),
+        (MEM_PEAK_FIELD, "peak memory GiB"),
         (_disk_data, "disk GiB"),
     ],
     "l2": [
@@ -1582,7 +1606,7 @@ OCT_TABLE_METRICS = {
         ("delete_p50_ms", "delete p50 ms"),
         (_rate(("n_persons_ingested", "n_edges_ingested"), "build_s"), "ingest vertices+edges/s"),
         ("build_s", "ingest total s"),
-        ("peak_anon_mib_sum", "peak memory GiB"),
+        (MEM_PEAK_FIELD, "peak memory GiB"),
         (_disk_data, "disk GiB"),
     ],
     "l2olap": [
@@ -1609,7 +1633,7 @@ OCT_TABLE_METRICS = {
         (_rate(("n_persons_ingested", "n_edges_ingested"), "build_s"), "ingest vertices+edges/s"),
         ("build_s", "ingest total s"),
         ("gav_build_s", "view build s"),
-        ("peak_anon_mib_sum", "peak memory GiB"),
+        (MEM_PEAK_FIELD, "peak memory GiB"),
         (_disk_data, "disk GiB"),
     ],
     "e2": [
@@ -1632,7 +1656,7 @@ OCT_TABLE_METRICS = {
         # defined there.
         ("ingest_s", "ingest s"),
         ("index_s", "index s"),
-        ("peak_anon_mib_sum", "peak memory GiB"),
+        (MEM_PEAK_FIELD, "peak memory GiB"),
         (_disk_data, "disk GiB"),
     ],
     "l3d": [
@@ -1658,7 +1682,7 @@ OCT_TABLE_METRICS = {
         ("ingest_s", "ingest s"), ("index_s", "index s"),
         ("build_docs_per_s", "ingest+index vectors/s"),
         ("build_s", "ingest+index total s"),
-        ("peak_anon_mib_sum", "peak memory GiB"),
+        (MEM_PEAK_FIELD, "peak memory GiB"),
         (_disk_data, "disk GiB"),
     ],
     "l3s": [
@@ -1670,7 +1694,7 @@ OCT_TABLE_METRICS = {
         # conditions rather than left as a missing column.
         ("build_docs_per_s", "ingest+index vectors/s"),
         ("build_s", "ingest+index total s"),
-        ("peak_anon_mib_sum", "peak memory GiB"),
+        (MEM_PEAK_FIELD, "peak memory GiB"),
         (_disk_data, "disk GiB"),
     ],
     "l4": [
@@ -1688,7 +1712,7 @@ OCT_TABLE_METRICS = {
         # because `ingest_s` was published as the total first; see l4_tsbs.
         ("load_s", "ingest s"),
         ("index_s", "index s"),
-        ("peak_anon_mib_sum", "peak memory GiB"),
+        (MEM_PEAK_FIELD, "peak memory GiB"),
         ("disk_data_mb", "disk GiB"),
     ],
 }
@@ -2850,7 +2874,7 @@ LANES = {
                     ("recall_at_10", "recall@10"),
                     ("build_docs_per_s", "ingest+index vectors/s"),
                     ("build_s", "ingest+index total s"),
-                    ("peak_anon_mib_sum", "peak memory GiB"),
+                    (MEM_PEAK_FIELD, "peak memory GiB"),
                     (_disk_data, "disk GiB")],
         "conditions": [
             "Recall is reported beside every latency: ArcadeDB quantizes posting weights to int8 by default, so a latency number without its recall is not comparable.",
@@ -2878,7 +2902,7 @@ LANES = {
                     ("recall_at_10", "recall@10"),
                     ("build_docs_per_s", "ingest+index vectors/s"),
                     ("build_s", "ingest+index total s"),
-                    ("peak_anon_mib_sum", "peak memory GiB"),
+                    (MEM_PEAK_FIELD, "peak memory GiB"),
                     (_disk_data, "disk GiB")],
         "conditions": [
             "ingest+index total s is one timer around inserting the vectors and building the index; the two are not timed separately (Qdrant and Chroma build the index while ingesting, so the split is not defined there). ingest+index vectors/s divides the vector count by it.",
@@ -2908,7 +2932,7 @@ LANES = {
         # whole table vanished from the preview -- a silent loss, because a
         # table with no entries is simply not emitted.
         "only_scales": {"micro"} if SKELETON else {"sf1", "sf10"},
-        # Peak anon last, and present at all because the page had no memory
+        # Peak memory last, and present at all because the page had no memory
         # column anywhere while every lane has measured it since the #52 fix.
         # It is also the column that shows our largest loss on this lane:
         # LadybugDB runs the same SF10 workload in a twenty-second of the
@@ -2920,7 +2944,7 @@ LANES = {
                     ("write_p50_ms", "write p50 ms"), ("write_p99_ms", "write p99 ms"),
                     (_rate(("n_persons_ingested", "n_edges_ingested"), "build_s"), "ingest vertices+edges/s"),
                     ("build_s", "ingest total s"),
-                    ("peak_anon_mib_sum", "peak memory GiB"),
+                    (MEM_PEAK_FIELD, "peak memory GiB"),
                     (_disk_data, "disk GiB")],
         # OLTP only. The OLAP rows live in the l2olap table below, which is
         # also where the GAV ablation belongs: at SF10 the OLAP cell splits
@@ -3006,7 +3030,7 @@ LANES = {
                     ("lsqb_q8_p50_ms", "LSQB Q8 p50 ms"),
                     ("lsqb_q9_p50_ms", "LSQB Q9 p50 ms"),
                     ("gav_build_s", "view build s"),
-                    ("peak_anon_mib_sum", "peak memory GiB"),
+                    (MEM_PEAK_FIELD, "peak memory GiB"),
                     (_disk_data, "disk GiB")],
         "conditions": [
             "Three questions, each asked of the whole graph. Average friend age: for every city, the average age of the friends of the people who live there. Friends in same city: how many friendships connect two people in the same city. Most friends: which people have the highest number of friends. All three times are milliseconds.",
@@ -3062,15 +3086,14 @@ LANES = {
                     ("ingest_s", "ingest total s"),
                     ("olap_total_ms", "OLAP total ms"),
                     ("olap_total_p50_ms", "OLAP total p50 ms"),
-                    ("peak_anon_mib_sum", "peak memory GiB"),
+                    (MEM_PEAK_FIELD, "peak memory GiB"),
                     (_disk_data, "disk GiB")],
-        # The memory column is the one cell on this page a reader can most
-        # easily misread, because the gap looks like two orders of magnitude
-        # and is mostly an accounting boundary. Stated here rather than left
-        # for the reader to work out.
-        "conditions": [
-            "PostgreSQL's memory cell is not comparable to the other two. It keeps its data in shared memory and in the file cache the kernel holds for it, and this column counts neither, so it reads 0.12 GiB where the run's actual peak was 3.85. Most of even that 0.12 is our own benchmark client rather than the database: 0.105 of it. We checked that this is the measure and not the setting, by giving a PostgreSQL container a 2 GB buffer pool and watching this column stay at 5 MiB.",
-        ],
+        # No memory condition is typed here. This table once carried a sentence with
+        # PostgreSQL's cell and its client share as typed numbers, written for the anonymous
+        # peak that left PostgreSQL's shared memory out. The column is owned memory now (issue
+        # #353); the document tables print the client and database split of PostgreSQL's cell
+        # from the rows (_pg_memory_note).
+        "conditions": [],
     },
     "l1tpc": {
         "title": "Documents (TPC-H and TPC-C shapes)",
@@ -3091,7 +3114,7 @@ LANES = {
                     # exactly where it was measured.
                     ("ingest_s", "ingest s"),
                     ("index_s", "index s"),
-                    ("peak_anon_mib_sum", "peak memory GiB"),
+                    (MEM_PEAK_FIELD, "peak memory GiB"),
                     (_disk_data, "disk GiB")],
         "conditions": [
             "Q1 and Q6 are TPC-H's own query numbers. Q1 groups and aggregates the whole line-item table, so it measures a full scan; Q6 sums one column under a narrow filter, so it measures how well an engine skips what it does not need.",
@@ -3104,7 +3127,7 @@ LANES = {
         "metrics": [("hybrid_p50_ms", "p50 ms"), ("hybrid_p99_ms", "p99 ms"),
                     (_rate(("n_products", "n_edges"), "build_s"), "ingest+index vertices+edges/s"),
                     ("build_s", "ingest+index total s"),
-                    ("peak_anon_mib_sum", "peak memory GiB"),
+                    (MEM_PEAK_FIELD, "peak memory GiB"),
                     (_disk_data, "disk GiB")],
         # HYBRID ONLY. The atomicity workload has no latency to print, so
         # while every metric here was a latency its rows came out empty and
@@ -3157,7 +3180,7 @@ LANES = {
 
 GLOBAL_CONDITIONS = [
     "Every engine runs in Docker under an identical cpuset and memory cap, one job at a time, on the same host.",
-    "Peak memory is the largest amount an engine held in its own address space, added over every container a run used, and it leaves out the file cache the kernel keeps on the engine's behalf. That is the right number for engines that manage their own memory, and an undercount for engines that lean on the kernel instead, so compare it down one engine's rows rather than across engines that work differently.",
+    "Peak memory is the largest amount an engine held as its own, added over every container a run used: the memory it allocated plus the shared memory it holds, a buffer pool for example. It leaves out the file cache the kernel keeps on the engine's behalf, for every engine alike, so it reads low for an engine that leaves its data in that cache instead of holding it.",
     "Each printed cell is the median of 5 repetitions, with min and max carried alongside; nothing here is a single sample.",
     "Defaults first. Where a default would make the comparison meaningless, it is equalized and the override is disclosed rather than hidden.",
     "Comparators are pinned by sha256 image digest, not by a floating tag.",
@@ -3880,7 +3903,7 @@ L4_METRICS = [
     ("q_last_p99_ms", "newest reading p99 ms"),
     ("q_global_ms", "12h aggregate p50 ms"),
     ("q_global_p99_ms", "12h aggregate p99 ms"),
-    ("peak_anon_mib_sum", "peak memory GiB"),
+    (MEM_PEAK_FIELD, "peak memory GiB"),
     ("disk_data_mb", "disk GiB"),
 ]
 
@@ -4092,8 +4115,8 @@ def _sparse_multipass_table():
                     **({"ingest+index vectors/s": {"median": round(_nd / _bs, 1), "min": round(_nd / _bs, 1), "max": round(_nd / _bs, 1), "n": 1},
                         "ingest+index total s": {"median": round(_bs, 2), "min": round(_bs, 2), "max": round(_bs, 2), "n": 1}}
                        if (_bs and _nd) else {}),
-                    **({"peak memory GiB": _campaign_stat(backend, tier, "peak_anon_mib_sum") or _agg(cold, "peak_anon_mib_sum")}
-                       if (_campaign_stat(backend, tier, "peak_anon_mib_sum") or _agg(cold, "peak_anon_mib_sum")) else {}),
+                    **({"peak memory GiB": _campaign_stat(backend, tier, MEM_PEAK_FIELD) or _agg(cold, MEM_PEAK_FIELD)}
+                       if (_campaign_stat(backend, tier, MEM_PEAK_FIELD) or _agg(cold, MEM_PEAK_FIELD)) else {}),
                     **({"disk GiB": _campaign_stat(backend, tier, "disk_data_mb")}
                        if _campaign_stat(backend, tier, "disk_data_mb") else {}),
                 },
@@ -4355,7 +4378,7 @@ def _lifecycle_table(all_rows):
         # No disk column on this table (2026-09-13, user): a session-cost
         # table is not about footprint, and the embedded rows could not carry
         # it anyway (bind mount, see the comment above).
-        for field, label in (("peak_anon_mib_sum", "peak memory GiB"),):
+        for field, label in ((MEM_PEAK_FIELD, "peak memory GiB"),):
             got = _agg(rs, field)
             if got is not None:
                 entry["metrics"][label] = got
@@ -5747,7 +5770,7 @@ OCT_PROSE = {
                             "an editor, and the rest of a working machine kept running beside every "
                             "cell, so no cell had cores of its own and the times below are not "
                             "comparable between engines.", []),
-        "memory": ("Peak memory is the largest amount an engine held in its own address space, added over every container a run used, and it leaves out the file cache the kernel keeps on the engine's behalf. That is the right number for engines that manage their own memory, and an undercount for engines that lean on the kernel instead, so compare it down one engine's rows rather than across engines that work differently.", []),
+        "memory": ("Peak memory is the largest amount an engine held as its own, added over every container a run used: the memory it allocated plus the shared memory it holds, a buffer pool for example. It leaves out the file cache the kernel keeps on the engine's behalf, for every engine alike, so it reads low for an engine that leaves its data in that cache instead of holding it.", []),
         "defaults": ("Defaults first. Where a default would make the comparison meaningless, it is equalized and the override is disclosed rather than hidden.", []),
         "digest": ("Comparators are pinned by sha256 image digest, not by a floating tag.", []),
         # THE PIN FOLLOWS THE CLAUSE IT PINS. The settle tolerance moved out of
@@ -6231,11 +6254,11 @@ def _jvm_memory_note_fixed_heap(table):
     8g -> 6,604, 16g -> 17,312, 24g -> 29,103, a ratio of 0.68 to 1.19, and
     every other cap/heap pair on the page sits in the same band.
 
-    The page already makes this disclosure in the other direction for
-    PostgreSQL, whose cell reads artificially LOW because its data lives in
-    shared memory and the kernel's file cache. Saying it for the JVM arms and
-    not for PostgreSQL, or the reverse, is the asymmetry; saying both is the
-    page being even-handed about an accounting artifact whoever it favours.
+    The page used to make the disclosure in the other direction too, for
+    PostgreSQL, whose cell read artificially LOW while the column was the
+    anonymous peak and its data lived in shared memory. The column is owned
+    memory now (issue #353), which counts that shared memory, so only this
+    direction is left: a JVM's cell follows its heap.
 
     DERIVED, and every JVM arm on the table is named rather than ArcadeDB
     alone -- Neo4j records a heap too, and the composed stack's Neo4j half is
@@ -6317,10 +6340,19 @@ def _jvm_memory_note_fixed_heap(table):
         names, f"{gib:.2f}", pct, heap)
 
 
+def _owned_side(r, side):
+    """One container's owned memory (anonymous plus shared peak) from the row's own per-side fields."""
+    a, m = _num(r.get(f"{side}_peak_anon_mib")), _num(r.get(f"{side}_peak_shmem_mib"))
+    return None if a is None or m is None else a + m
+
+
 def _pg_memory_note(table):
-    """PostgreSQL's memory cell, split into client and server from the row's
-    own fields (client_peak_anon_mib, server_peak_anon_mib). The split was
-    typed until 2026-09-16 and had drifted from the cell it sat under."""
+    """How PostgreSQL's memory cell divides between our Python client and the database, from the
+    row's own per-container fields (client_peak_anon_mib + client_peak_shmem_mib, and the same for
+    the server). The cell is owned memory, which already includes the database's shared memory
+    (issue #353), so this is no longer a disclosure that the cell reads low; it says how much of
+    the cell is the database and how much is the client every served engine is measured through.
+    Until 2026-09-16 the split was typed; it is generated so it cannot drift from the cell."""
     lane_wl = _TABLE_LANE.get(table.get("id"))
     if not lane_wl:
         return None
@@ -6337,75 +6369,16 @@ def _pg_memory_note(table):
     e = max(pg, key=lambda x: SCALE_ORDER.index(x["scale"]) if x["scale"] in SCALE_ORDER else -1)
     rs = [r for r in _FROZEN_ROWS if r.get("lane") == lane and (not wl or r.get("workload") == wl)
           and str(r.get("backend")) == "postgres" and str(r.get("scale")) == str(e["scale"])]
-    client = [v for v in (_num(r.get("client_peak_anon_mib")) for r in rs) if v is not None]
-    server = [v for v in (_num(r.get("server_peak_anon_mib")) for r in rs) if v is not None]
-    head = ("PostgreSQL's memory cell is not comparable to the others: this column counts "
-            "memory an engine holds in its own address space, and PostgreSQL holds its data "
-            "in shared memory and the kernel's file cache instead")
+    client = [v for v in (_owned_side(r, "client") for r in rs) if v is not None]
+    server = [v for v in (_owned_side(r, "server") for r in rs) if v is not None]
     if not client or not server:
-        return _gen(head + ", so most of what its cell shows is our own Python client rather than the database.")
+        return None
     cell = f"{float(e['metrics']['peak memory GiB']['median']):.2f}"
     c, s = f"{statistics.median(client) / 1024:.3f}", f"{statistics.median(server) / 1024:.3f}"
     sl = e.get("scale_label") or scale_label(lane, e["scale"])
-    return _gen(head + f". At {sl}, of the {cell} GiB shown, {c} GiB is our Python client and {s} GiB is the database.",
+    return _gen(f"PostgreSQL's memory cell adds two containers. At {sl}, of the {cell} GiB shown, {c} GiB is "
+                f"our Python client and {s} GiB is the database.",
                 cell, c, s, sl)
-
-
-def _holds_shared_memory(rows):
-    """True when the median shared-memory peak of these rows is above their median anonymous peak.
-
-    The page's memory column is the anonymous peak by decision (DECISIONS #116 item 7), so an
-    engine whose rows hold more shared than anonymous memory shows a cell far below what it
-    used. resource_check.holds_shared_memory is the same test, so the gate excuses exactly
-    the entries this module discloses (test_resource_check.py holds the two together)."""
-    anon = [v for v in (_num(r.get("peak_anon_mib_sum")) for r in rows) if v is not None]
-    shm = [v for v in (_num(r.get("peak_shmem_mib_sum")) for r in rows) if v is not None]
-    return bool(anon and shm) and statistics.median(shm) > statistics.median(anon)
-
-
-def _shared_memory_note(table):
-    """Every engine on this table whose rows hold more shared than anonymous memory, and what its
-    memory cell leaves out (issue #349). DERIVED from the rows, never from a list of engines: the
-    note followed PostgreSQL alone until pgvector's dense cell read 91 MiB beside 9,737 MiB with
-    shared memory and the page said nothing. Like _jvm_memory_note it discloses and does not
-    change the column. The plain PostgreSQL arm keeps _pg_memory_note, which also splits its cell
-    into our client and the database, and is not repeated here."""
-    lane_wl = _TABLE_LANE.get(table.get("id"))
-    if not lane_wl:
-        return None
-    lane, wl = lane_wl
-    if lane == "l1tpc":
-        wl = "oltp"
-    covered = display_name("postgres") if table.get("id") in ("docs_oltp", "docs_olap") and _pg_memory_note(table) else None
-    found = {}     # backend -> (scale rank, scale label, cell GiB, shared GiB), at the backend's largest scale
-    for e in table.get("entries", []):
-        cell = (e.get("metrics") or {}).get("peak memory GiB")
-        if not cell or e.get("outcome") or cell.get("median") is None or e.get("backend") == covered:
-            continue
-        rs = _entry_rows(e, lane, wl, exact_only=True)
-        shm = [v for v in (_num(r.get("peak_shmem_mib_sum")) for r in rs) if v is not None]
-        if not rs or not shm or not _holds_shared_memory(rs):
-            continue
-        rank = SCALE_ORDER.index(e["scale"]) if e.get("scale") in SCALE_ORDER else -1
-        got = (rank, e.get("scale_label") or scale_label(lane, e["scale"]),
-               float(cell["median"]), statistics.median(shm) / 1024)
-        if e.get("backend") not in found or rank > found[e.get("backend")][0]:
-            found[e.get("backend")] = got
-    if not found:
-        return None
-    one = len(found) == 1
-    values, clauses = [], []
-    for be in sorted(found):
-        _, sl, c, s = found[be]
-        c, s = f"{c:.2f}", f"{s:.2f}"
-        clauses.append(f"{be} at {sl} shows {c} GiB where its rows held {s} GiB of shared memory")
-        values += [be, sl, c, s]
-    names = _join_and(sorted(found))
-    head = (f"{names} hold{'s' if one else ''} more memory as shared memory than in {'its' if one else 'their'} own "
-            f"address space, and this column counts only the second, so {'its' if one else 'their'} "
-            f"memory {'cell is' if one else 'cells are'} not comparable to the engines that keep their data in their own "
-            f"address space")
-    return _gen(f"{head}: {'; '.join(clauses)}.", names, *values)
 
 
 def _gav_pair_note(table):
@@ -6803,15 +6776,11 @@ def _oct_conditions(table):
         pg = _pg_memory_note(table)
         if pg:
             tail.append(pg)
-    shared = _shared_memory_note(table)
-    if shared:
-        tail.append(shared)
-    # THE JVM HALF OF THE SAME DISCLOSURE, which the October path never
-    # carried: October's tables said why PostgreSQL's memory cell reads low and
-    # not why a JVM engine's reads close to its heap, the one-sided case
-    # _jvm_memory_note's own docstring names as the asymmetry. September's
-    # tables have carried it since f5a6ccedcb (the user settled on 2026-09-22
-    # that the disclosure stays); this is the same generated sentence.
+    # THE JVM DISCLOSURE, which the October path never carried at first: a JVM
+    # engine's memory cell reads close to its heap, and owned memory does not
+    # change that. September's tables have carried it since f5a6ccedcb (the
+    # user settled on 2026-09-22 that the disclosure stays); this is the same
+    # generated sentence.
     jvm = _jvm_memory_note(table)
     if jvm:
         tail.append(jvm)
@@ -8790,7 +8759,6 @@ def _finish_table(table: dict) -> dict:
         for note in (_surreal_pair_note(table),
                      _jvm_memory_note(table),
                      _pg_memory_note(table) if table.get("id") in ("docs_oltp", "docs_olap") else None,
-                     _shared_memory_note(table),
                      _gav_build_note(table) if table.get("id") == "l2olap" else None,
                      _dense_cold_warm_note(table) if table.get("id") == "l3d" else None):
             if note:
@@ -9354,12 +9322,12 @@ def main() -> int:
     # ... with one exception, added when memory arrived. The merge is sound for
     # a metric that appears in only ONE workload's rows: aggregating over the
     # union puts each number in the cell it belongs to. Memory is not like
-    # that. peak_anon_mib_sum is recorded for every row of every workload, so
+    # that. The memory reading is recorded for every row of every workload, so
     # merging pools two different runs into one median: PostgreSQL's l1 cell
     # read 0.135 GiB, the midpoint of 0.119 (OLTP) and 0.152 (OLAP), a figure
     # describing neither. Keep only the transactional rows of a merged lane
     # when aggregating a metric that spans workloads.
-    MEM_FIELDS = {"peak_anon_mib_sum", "end_anon_mib_sum"}
+    MEM_FIELDS = {MEM_PEAK_FIELD, MEM_PEAK_FALLBACK, "end_anon_mib_sum"}
     grouped = defaultdict(list)
     for r in rows:
         wl = ("" if r["lane"] in MERGED_WORKLOAD_LANES

@@ -1223,11 +1223,12 @@ NOT_PRINTED = [
      "canonical values the answer holds and how many are 0 or null, read by degenerate_check.py "
      "to flag an agreed answer that cannot mean anything; a record of the answer, not a column"),
     (r"^(client|server)_(peak|end|io|disk|cpu)_\w+$|^server_(mem_cap_g|shm_size)$|"
-     r"^(peak_mib_sum|peak_owned_mib_sum|peak_shmem_mib_sum|end_anon_mib_sum|"
+     r"^(peak_mib_sum|peak_anon_mib_sum|peak_shmem_mib_sum|end_anon_mib_sum|"
      r"io_read_mib_sum|io_write_mib_sum|disk_mb_sum|cpu_usec_sum|client_mem_cap|"
      r"mem_cap|client_disk_mb|client_disk_baseline_mb)$",
-     "the page prints the summed peak memory and the workload's disk; these "
-     "are the per-side splits those two are computed from"),
+     "the page prints the summed owned memory (anonymous plus shared) and the workload's "
+     "disk; these are the per-side splits those two are computed from, and the anonymous "
+     "part of the memory sum"),
     (r"^(hnsw_M|m|k|ef_construction|ef_search|ivf_\w+|degree_param|"
      r"graph_build_cache_\w+|qps|neo4j_vector_search_expansion|ladybug_ml|ladybug_mu|"
      r"lance_nprobes|es_num_candidates|es_rescore_oversample)$",
@@ -1395,7 +1396,7 @@ NOT_PRINTED = [
      "PRAGMA threads=sched_getaffinity (FAIRNESS F6, audited in FAIRNESS.md "
      "rather than printed as a column)"),
     (r"^(torn_count|build_docs_per_s|ingest_pts_per_s|disk_data_mb|"
-     r"peak_anon_mib_sum|build_s|ingest_s|index_s|gav_build_s)$",
+     r"peak_owned_mib_sum|build_s|ingest_s|index_s|gav_build_s)$",
      "printed under a different label by the table that owns it; listed here "
      "so a table which stops printing one still has to say so"),
     # --- recovered from a SECOND module-level NOT_PRINTED the merge left in
