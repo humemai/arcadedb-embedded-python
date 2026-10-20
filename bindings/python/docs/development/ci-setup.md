@@ -23,7 +23,7 @@ The CI/CD workflows build and release across **4 platforms** for a total of **16
 
 ### Python 3.15 leg
 
-Python 3.15 runs as one extra, informational leg in the bindings and the examples matrices, on `linux/amd64` only. It is an `include` entry with `experimental: true`, and the `test` job sets `continue-on-error: ${{ matrix.experimental == true }}`, so a failure in that leg is shown on the run but does not fail the job, the summary job or the pull request. It uploads no wheel artifact, so the release workflow never collects or publishes a 3.15 wheel. The package does not claim 3.15 yet: there is no 3.15 classifier, and the dependency floors audit (which reads the classifiers) does not resolve it. When the leg has been green for a release cycle, add the classifier, move the entry into the required matrix and raise the wheel count in the release workflow, `after_tag_verify.sh` and these docs.
+Python 3.15 runs as one extra, informational leg in the bindings and the examples matrices, on `linux/amd64` only. It is an `include` entry with `experimental: true`, and the `test` job sets `continue-on-error: {% raw %}${{ matrix.experimental == true }}{% endraw %}`, so a failure in that leg is shown on the run but does not fail the job, the summary job or the pull request. It uploads no wheel artifact, so the release workflow never collects or publishes a 3.15 wheel. The package does not claim 3.15 yet: there is no 3.15 classifier, and the dependency floors audit (which reads the classifiers) does not resolve it. When the leg has been green for a release cycle, add the classifier, move the entry into the required matrix and raise the wheel count in the release workflow, `after_tag_verify.sh` and these docs.
 
 ## Workflows
 
