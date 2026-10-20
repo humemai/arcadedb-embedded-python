@@ -21,6 +21,10 @@ uv run pytest -m server -v
 uv run pytest -m "not server"
 ```
 
+## Equivalence checks
+
+`test_equivalence.py` compares ArcadeDB's answers with LadybugDB (Cypher), DuckDB (SQL), NetworkX (graph algorithms) and NumPy (vector recall) on small seeded data, and with ArcadeDB itself under indexes, a view and parameters. Its reference engines come with the `test` extra.
+
 ## No skips
 
 The server tests do not skip when the server stack is absent: the wheel always ships it, and a test that skips on a missing feature cannot notice the feature going missing (in 26.7.2 the server JARs were dropped from the wheel and the guarded tests skipped, so the suite stayed green while the feature was gone). `test_server_packaging.py` states the packaging requirement and fails without the JARs. CI also fails any skip that `scripts/check_test_skips.py` does not list, and that list is empty.

@@ -31,6 +31,9 @@ dependencies = [
     "redis>=5.0",
     "neo4j>=5.0",
     "pyarrow>=23.0.1",
+    "duckdb>=1.4.0",
+    "ladybug>=0.21.2",
+    "networkx>=3.4",
 ]
 
 [dependency-groups]
