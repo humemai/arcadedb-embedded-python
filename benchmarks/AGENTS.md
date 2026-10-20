@@ -9,7 +9,7 @@ Paths in this file are relative to the repository root (the directory that conta
 | You are | Read |
 |---|---|
 | running a lane | `bindings/python/docs/benchmarks/running.md` |
-| changing how a number is produced, adding an engine, or judging fairness, durability, pins or censored cells | `bindings/python/docs/benchmarks/protocol.md` |
+| changing how a number is produced, adding an engine, or judging fairness, durability, pins or censored cells | `benchmarks/experiments/PROTOCOL.md`, `benchmarks/experiments/FAIRNESS.md` (`bindings/python/docs/benchmarks/protocol.md` is the reader-facing summary) |
 | adding or changing a query, or checking that engines answered the same question | `bindings/python/docs/benchmarks/equivalence.md` |
 | reading or publishing results | `bindings/python/docs/benchmarks/results.md`, `bindings/python/docs/benchmarks/index.md` |
 | running or staging a campaign, or the re-pin checklist | `benchmarks/experiments/CAMPAIGN.md` (its first section is the whole routine; start at `benchmarks/README.md`) |

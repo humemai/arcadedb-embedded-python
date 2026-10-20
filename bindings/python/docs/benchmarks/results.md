@@ -63,85 +63,30 @@ re-measured cell supersedes the old one at merge.
 
 ## Fields That Trap People
 
-**A served row's disk is not the row's disk field.** The row keeps server plus client for
-the record; the page prints the server container's growth alone, because the client is only
-the driver. The row is in megabytes and the page is in gibibytes, so a value that looks a
-thousand times too large under a gibibyte header is a skipped division, not a real
-footprint. On-disk size is also a post-run reading taken after the queries, sampled until
-two readings agree, and a cell that never converged says so rather than printing a bare
-number.
+The fields that have actually misled people are listed, one by one, in
+[`READING-RESULTS.md`](https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/READING-RESULTS.md).
+The ones to know first:
 
-**A digest is of the canonical answer, not of the raw rows.** It is taken after the answer is
-put into canonical form: sorted unless the query defines an order, floats rounded, and
-driver-specific row wrappers and column ordering removed. Two engines whose digests match
-did not return identical result objects. Hashing what a driver handed back instead would
-disagree on every engine pair for reasons that are not about the answer. See
-[Answer Checking](equivalence.md).
+- **Units differ between a row and the page.** A row stores disk in megabytes and the page
+  prints gibibytes, and a served row's page value is the server container alone. A value a
+  thousand times too large is a skipped division, not a real footprint.
+- **A digest is of the canonical answer, not of the raw rows.** Matching digests do not
+  mean identical result objects. See [Answer Checking](equivalence.md).
+- **"Unexpressible" is a declaration, not a failure.** It is not a crashed cell, a timeout,
+  or evidence that the engine is slow.
+- **A censored cell, a cell killed at the memory cap, and a cell that failed inside its
+  budget are three different outcomes.** Only the first says anything about latency, and the
+  page names which one each cell was.
+- **`instrument`, `durability`, and the thermal fields are conditions.** Rows from two
+  instruments never share a table, and rows from different stages are compared with those
+  fields read, not assumed equal.
+- **Select an arm by flag, not by filename**, and read the whole record, not the fields you
+  expect.
 
-**"Unexpressible" is a declaration, not a failure.** An engine whose adapter declares an
-operation absent has said so deliberately, with its reason on the row. It is not a crashed
-cell, not a timeout, not a gap to be filled, and not evidence that the engine is slow. A
-silently missing answer is the failure, and telling the two apart is what the gate exists
-for.
-
-**The thermal fields are conditions, not diagnostics.** Every row records the package
-temperature and the kernel's throttle counters at the start and end of the cell. The bench
-host is a mobile-class part that bounces off its thermal ceiling under a long build, the
-power mode is left as the machine ships by decision, and rows from different stages are
-compared with those fields **read** rather than assumed equal. They are on the row so that a
-hot cell is a number instead of a suspicion.
-
-**`instrument` names the query set, the timers, and the durability rule the row ran under.**
-Rows from two instruments never share a table, and the freeze and the exporter both refuse
-one that does. The same column name can mean a different quantity under a different
-instrument, which is exactly why the field exists.
-
-**`durability` is what the engine ran at commit, read out of the engine** where it can be
-read. The engines that have no setting carry a string naming them as the exception, and an
-engine whose behaviour at commit could not be established says that instead of claiming a
-class.
-
-**A version field can be deliberately empty.** On one lane the ArcadeDB-stamped engine
-version is right for the ArcadeDB row and wrong for every comparator, so the lane asks each
-backend for its own version and leaves the shared field null. A wrong version that passes a
-provenance audit is worse than none.
-
-**An arm is selected by flag, not by filename.** Several files hold multiple arms of one
-experiment, distinguished by a boolean on the row. Assert the flags rather than globbing the
-directory.
-
-**A timed-out row records where it died.** The client disk and memory at the timeout are
-written on the timeout path, and the cell log carries the lane's phase markers. Read them
-before recording a did-not-finish.
-
-**A cell killed at the memory cap is not a timeout.** A cell the kernel killed because the
-engine outgrew the memory envelope every engine at that size was given ran out of room, not
-out of time. It says something about that engine's memory behaviour at that size and nothing
-at all about its latency, so it is worded differently from a censored cell and may not be
-read as one. A cell that exceeded its time cap, a cell that failed inside its budget for
-some other reason, and a cell killed at the envelope are three outcomes, and the page names
-which one each was.
-
-**A larger corpus size is a second row group, not a replacement.** A table that can show
-scaling carries two sizes, and the larger one is its own set of rows under the same Size
-column. An engine with no row at the larger size is a declared absence like any other:
-censored at the time cap, killed at the memory envelope, or failed inside its budget, and
-the table says which. The engines that did measure at that size publish, so one engine's
-absence does not hold back the others' rows.
-
-## Traps in the Other Direction
-
-**An absent row makes a claim.** If comparators appear at a size and we do not, a reader
-concludes we could not do that size. The exporter publishes only sizes where our engine also
-has a row, and prints what it withheld and why.
-
-**Real numbers can compose a false impression.** A table can be accurate in every cell and
-wrong as a whole. Ask what a reader concludes, not only whether each figure is right.
-
-**A negative number can be the finding.** One decomposition goes negative at the smallest
-sizes, which is the term sitting below the design's resolution, and that is the evidence for
-the claim it supports. It is published with the explanation rather than clamped to zero, and
-the count of negative sizes is pinned so it cannot be quietly tidied away.
+Reading the data the other way round has its own traps. An absent row makes a claim, so the
+exporter publishes only sizes where our engine also has a row and prints what it withheld.
+A table can be accurate in every cell and wrong as a whole. And a negative number can be the
+finding: it is published with its explanation, never clamped to zero.
 
 ## How the Page Is Generated and Gated
 
@@ -174,8 +119,7 @@ Some specifics that matter if you ever compare the page against the data yoursel
   wider window cannot pass a number the table no longer prints.
 - **Every typed number in the page's prose is pinned to a named table column**, including the
   numbers in captions. A reworded sentence fails the gate rather than passing silently,
-  which is deliberate: five caption ratios once stood stale on the live page after a re-pin
-  because nothing pinned them.
+  which is deliberate.
 - **A count is pinned alongside every zero.** "No torn results" is what a broken reader also
   produces, so the trial count is asserted beside it.
 - **The sentences under a table are page claims too.** Every number in one is either
@@ -184,8 +128,6 @@ Some specifics that matter if you ever compare the page against the data yoursel
   text: generated sentences, and prose that describes the instrument. Interpretation of
   the results, which engine moves between passes or what a ratio says, is written once at
   the freeze, each sentence pinned, and never carried from one campaign's page to the next.
-  This rule exists because seven typed numbers once stood false under the live tables for
-  weeks with no gate reading them.
 - **After the copy, the served file is verified byte-identical** to the one the gates read.
 
 !!! info "Where the rules live"
