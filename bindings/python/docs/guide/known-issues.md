@@ -25,10 +25,13 @@ the literal matches a list written there and misses the same list written with `
 Use openCypher's `=` (`MATCH (n:V) WHERE n.li = [1, 2]`), or bind the list as a named SQL
 parameter, `db.query("sql", "SELECT FROM V WHERE li = :p", {"p": [1, 2]})`: it crosses with
 `Long` elements, so it matches lists written with `Document.set`, `Vertex.set` and `GraphBatch`
-(and misses lists written with `insert_many`).
+(and misses lists written with `insert_many`). The parameter does not help when the list has a
+`BY ITEM` index: SQL `=` is then answered from the index and matches nothing, literal or
+parameter. openCypher's `=` matches with or without the index.
 
-Tests: `tests/test_collection_equality_known_issues.py` covers both workarounds, with a tripwire
-on the SQL literal that fails the suite once the fix reaches the wheel.
+Tests: `tests/test_collection_equality_known_issues.py` covers both workarounds, with tripwires
+on the SQL literals and on the parameter through a `BY ITEM` index that fail the suite once the
+fix reaches the wheel.
 
 ## Ctrl-C during an interruptible Java wait can raise `InterruptedException`, not `KeyboardInterrupt`
 
