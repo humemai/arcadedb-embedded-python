@@ -6419,9 +6419,12 @@ def _dense_cold_warm_note(table):
     ours, theirs = [], []
     for e in table.get("entries", []):
         m = e.get("metrics") or {}
-        if "cold p50 ms" not in m or "warm p50 ms" not in m:
+        cold, warm = m.get("cold p50 ms") or {}, m.get("warm p50 ms") or {}
+        # A MARK IS NOT A VALUE (DECISIONS #111, #117), as in _jvm_memory_note: a withdrawn or `re-run` row carries
+        # text where the median would be, and reading it stopped the September build (Neo4j fp32, issue #355).
+        if e.get("outcome") or cold.get("median") is None or warm.get("median") is None:
             continue
-        c, w = float(m["cold p50 ms"]["median"]), float(m["warm p50 ms"]["median"])
+        c, w = float(cold["median"]), float(warm["median"])
         if not w:
             continue
         (ours if e.get("is_arcadedb") else theirs).append((abs(c - w) / w, c / w, e))
