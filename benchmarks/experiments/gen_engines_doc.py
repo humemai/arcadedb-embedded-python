@@ -89,6 +89,7 @@ SETTING_FIELDS = (
     "heap", "server_heap", "server_pagecache", "cpuset", "server_cpuset",
     "server_jvm_gc", "server_jvm_flags", "quantization", "query_language", "store",
     "surreal_sync_mode", "memgraph_storage_mode", "memgraph_wal_enabled",
+    "memgraph_query_timeout_s", "memgraph_storage_access_timeout_s",
     "falkordb_appendonly", "falkordb_appendfsync", "falkordb_save",
 )
 
