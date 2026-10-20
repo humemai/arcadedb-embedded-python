@@ -118,7 +118,7 @@ jobs:
     strategy:
       matrix:
         platform: [linux/amd64, linux/arm64, darwin/arm64, windows/amd64]
-        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
+        python-version: ['3.11', '3.12', '3.13', '3.14']
     # Builds platform-specific wheel, runs tests
 ```
 
@@ -382,7 +382,7 @@ bindings/python/
     - Uploads artifact for native builds
 
 2. **test job matrix**
-    - Builds 4 platforms × 5 Python versions
+    - Builds 4 platforms × 4 Python versions
         - Platform-specific steps (native runners, artifact download, tests)
 
 3. **Test parsing**

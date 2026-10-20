@@ -222,7 +222,7 @@ import arcadedb_embedded as arcadedb
 
 ## Requirements
 
-- **Python**: 3.10 to 3.14 (CI runs all five on every supported platform)
+- **Python**: 3.11 to 3.14 (CI runs all four on every supported platform)
 - **OS**: Linux (x86_64, ARM64), macOS (Apple Silicon), or Windows (x86_64)
 
 ## Community & Support

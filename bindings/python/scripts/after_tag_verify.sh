@@ -5,7 +5,7 @@
 # example: after-tag-verify.sh 26.10.1 26.9.1 <run-id> e2e98691a6c399f439d52f441536abf551e76d6b809d2c835d5e60061a84dc2a d36b4ca3ae4c170abc73598e0dffa2bb58e06621
 #
 # Run it under bash (not zsh). Every step prints PASS or FAIL; the exit code is the number of FAILs.
-# Set PIN=4-5 to pin the smoke runs to those cores. It downloads about 3 GB (the 20 wheels of the run and four from PyPI): TMPDIR or WORK should point at a disk, not a tmpfs. Needs: gh, curl, python3, uv.
+# Set PIN=4-5 to pin the smoke runs to those cores. It downloads about 3 GB (the 16 wheels of the run and four from PyPI): TMPDIR or WORK should point at a disk, not a tmpfs. Needs: gh, curl, python3, uv.
 set -uo pipefail
 V="${1:?version}"
 PREV="${2:?previous version}"
@@ -38,13 +38,18 @@ EOF
     if awk -F'\t' '$2=="completed" && $3=="success" && $4=="success"{ok=1} END{exit ok?0:1}' "$W/publish-job.tsv"; then pass "publish job and its 'Publish to PyPI' step both succeeded"; else fail "publish job or its upload step did not succeed (a green run does not mean the upload worked)"; fi
 fi
 
-# (b) PyPI file set against the previous release: exactly the same 20 files with the new version, each under 100 MB (decimal)
+# (b) PyPI file set against the previous release: the same files as the previous release with the new version, minus wheels for Python versions the release dropped (16 files), each under 100 MB (decimal)
 curl -fsS "https://pypi.org/pypi/arcadedb-embedded/$V/json" -o "$W/pypi-new.json" || fail "PyPI has no $V yet"
 curl -fsS "https://pypi.org/pypi/arcadedb-embedded/$PREV/json" -o "$W/pypi-prev.json" || fail "cannot read PyPI $PREV"
-python3 - "$W/pypi-new.json" "$W/pypi-prev.json" "$V" "$PREV" << 'EOF' || FAILS=$((FAILS + 1))
-import json,sys
+python3 - "$W/pypi-new.json" "$W/pypi-prev.json" "$V" "$PREV" "$(dirname "$0")/../pyproject.toml" << 'EOF' || FAILS=$((FAILS + 1))
+import json,re,sys,tomllib
 new,prev,v,pv=json.load(open(sys.argv[1])),json.load(open(sys.argv[2])),sys.argv[3],sys.argv[4]
-want={u["filename"].replace(pv,v) for u in prev["urls"]}
+# A previous release may carry wheels for an interpreter this release dropped (3.10 in the release that raised requires-python to >=3.11): they are not expected again.
+floor=int(re.search(r">=\s*3\.(\d+)",tomllib.load(open(sys.argv[5],"rb"))["project"]["requires-python"]).group(1))
+def kept(f):
+    m=re.search(r"-cp3(\d+)-",f)
+    return m is None or int(m.group(1))>=floor
+want={u["filename"].replace(pv,v) for u in prev["urls"] if kept(u["filename"])}
 have={u["filename"]:u for u in new["urls"]}
 missing=sorted(want-set(have)); extra=sorted(set(have)-want)
 print("files on PyPI for %s: %d (previous release had %d)"%(v,len(have),len(prev["urls"])))

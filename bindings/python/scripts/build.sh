@@ -60,7 +60,7 @@ print_usage() {
     echo ""
     echo "PYTHON_VERSION:"
     echo "  Python version for wheel (default: 3.12); used by Linux (Docker) builds only"
-    echo "  Examples: 3.10, 3.11, 3.12, 3.13, 3.14"
+    echo "  Examples: 3.11, 3.12, 3.13, 3.14"
     echo ""
     echo "JAR_LIB_DIR (optional):"
     echo "  Directory containing ArcadeDB JARs to embed"

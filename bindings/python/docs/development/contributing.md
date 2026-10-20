@@ -22,7 +22,7 @@ uv run pytest
 
 **Required:**
 
-- Python: the package supports 3.10–3.14; the dev environment is 3.12 only
+- Python: the package supports 3.11–3.14; the dev environment is 3.12 only
 - [uv](https://docs.astral.sh/uv/) (runs the dev environment)
 - Docker (for building the Linux wheels)
 - Git

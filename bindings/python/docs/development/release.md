@@ -133,7 +133,7 @@ The tag push starts the release workflow, which builds and publishes the wheels.
   the previous release, every file's sha256 against the run's artifact, `pip download` for the
   four platforms, fresh installs on the oldest and newest Python, and the docs.
 
-  Expect 20 files: Python 3.10 to 3.14, each as `macosx_11_0_arm64`,
+  Expect 16 files: Python 3.11 to 3.14, each as `macosx_11_0_arm64`,
   `manylinux_2_34_aarch64`, `manylinux_2_34_x86_64`, and `win_amd64`, about 66 to 72 MB
   each (PyPI refuses a file over 100 MB). Compare each file's sha256 with the artifact
   the run built, and install the release from PyPI into a fresh environment and run a
@@ -147,7 +147,7 @@ The tag push starts the release workflow, which builds and publishes the wheels.
   deploys its docs as `latest`. If the release failed, move `latest` back (see
   [Rolling Back a Release](#rolling-back-a-release)).
 
-Only when this check passes (the publish job succeeded and PyPI shows all 20 files) go on to step 6. If it does not pass, fix that first: a GitHub release whose `pip install` line fails is worse than a late release.
+Only when this check passes (the publish job succeeded and PyPI shows all 16 files) go on to step 6. If it does not pass, fix that first: a GitHub release whose `pip install` line fails is worse than a late release.
 
 ### 6. Create the GitHub Release, After PyPI Has Every Wheel
 

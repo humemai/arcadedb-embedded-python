@@ -601,7 +601,7 @@ build-backend = "setuptools.build_meta"
 name = "arcadedb-embedded"
 # Placeholder: the build overwrites this from the parent pom.xml
 version = "0.0.0"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = ["jpype1>=1.5.0"]
 ```
 
