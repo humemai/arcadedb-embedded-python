@@ -542,7 +542,7 @@ def stamp_durability(out, engine_string, cls=None):
 
 
 # ---------------------------------------------------------------------------
-# OVERRIDE READ-BACKS (CAMPAIGN section 7 row 21, overrides.py).
+# OVERRIDE READ-BACKS (CAMPAIGN section 7 row 21, override_registry.py).
 #
 # PROTOCOL.md section 7 lists the settings this benchmark overrides, and until
 # row 21 the artifact recorded none of them for the engines below: the

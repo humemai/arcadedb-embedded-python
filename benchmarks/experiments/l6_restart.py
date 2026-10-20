@@ -783,11 +783,11 @@ def main():
     with _beat.phase("build", backend=args.backend, scale=args.scale):
         out.update(eng.build())
     # The override settings the model's adapter read back from its engine
-    # (overrides.py, CAMPAIGN section 7 row 21). The dense and graph models
+    # (override_registry.py, CAMPAIGN section 7 row 21). The dense and graph models
     # build through the same adapters as their tables, so they carry the same
     # stamps; only the registered fields are taken, because the adapters stamp
     # a good deal more that this lane has no table for.
-    import overrides as _ov
+    import override_registry as _ov
     _ad = getattr(eng, "adapter", None)
     _rx = dict(getattr(_ad, "row_extra", None) or {})
     if hasattr(_ad, "readbacks"):

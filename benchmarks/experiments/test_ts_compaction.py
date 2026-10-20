@@ -6,7 +6,7 @@ The decision was conditional on upstream confirming the declaration (ArcadeData/
 issue closed with PR #9246 (26.10.1). A type bulk-loaded once and then aggregated in hourly buckets declares the hourly
 bucket, so compaction cuts sealed blocks at its boundaries and the 12-hour hourly average answers from block statistics.
 Both native arms (embedded and served) run it; each row stamps `ts_compaction_interval_ms` as `schema:types` reports it
-(`compactionBucketIntervalMs`), never the string the lane sent; the page sentence and its gates live in overrides.py.
+(`compactionBucketIntervalMs`), never the string the lane sent; the page sentence and its gates live in override_registry.py.
 The arms run against stand-ins that record the statement they are given.
 """
 import sys
@@ -19,7 +19,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 import l4_tsbs as T  # noqa: E402
-import overrides as OV  # noqa: E402
+import override_registry as OV  # noqa: E402
 
 
 def test_the_declared_interval_is_the_hourly_buckets_and_matches_what_the_gate_expects():

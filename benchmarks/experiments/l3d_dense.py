@@ -443,7 +443,7 @@ class Base:
 
     def readbacks(self):
         """Settings this arm reads back from its engine for the row (CAMPAIGN
-        section 7 row 21, overrides.py), as {field: value}.
+        section 7 row 21, override_registry.py), as {field: value}.
 
         Called by main() and the multipass driver AFTER the build timer has
         stopped, never from build() or post_build(): build_s covers both, and a
@@ -663,7 +663,7 @@ class ArcadeEmbedded(Base):
     def readbacks(self):
         # The layered graph the CREATE INDEX statement asks for, as the engine
         # records it for the index it built (CAMPAIGN section 7 row 21,
-        # overrides.py). Read after the build timer, not inside build().
+        # override_registry.py). Read after the build timer, not inside build().
         return bench_common.arcadedb_hierarchy_readback(self.db, "Article[embedding]")
 
     def engine_stats(self):
@@ -763,7 +763,7 @@ class ArcadeServer(Base):
         # call would sit inside the timed ingest.
         if str(command)[:40].lstrip().upper().startswith("CREATE INDEX"):
             # The statement as sent, kept so the row can say what the index was
-            # asked for (the server returns no index metadata; overrides.py).
+            # asked for (the server returns no index metadata; override_registry.py).
             self._index_ddl = str(command)
         r = self.rq.post(f"{self.base}/command/bench", json=body, timeout=timeout)
         r.raise_for_status()
@@ -818,7 +818,7 @@ class ArcadeServer(Base):
     def readbacks(self):
         # What the CREATE INDEX statement asked for, recorded as a REQUEST
         # because the HTTP API returns no index metadata at this pin (CAMPAIGN
-        # section 7 row 21, overrides.py); the embedded arm reads it back from
+        # section 7 row 21, override_registry.py); the embedded arm reads it back from
         # the engine. Taken after the build timer, not inside build().
         return bench_common.arcadedb_hierarchy_requested(getattr(self, "_index_ddl", ""))
 
@@ -1152,7 +1152,7 @@ class DuckVSS(Base):
         self.cx.execute("INSTALL vss; LOAD vss;")
         self.cx.execute("SET hnsw_enable_experimental_persistence=true;")
         # Both settings as the engine reports them, on the row (CAMPAIGN
-        # section 7 row 21, overrides.py): the thread pool against the cell's
+        # section 7 row 21, override_registry.py): the thread pool against the cell's
         # cpuset, and the experimental persistence flag the HNSW index needs.
         self.row_extra = bench_common.duckdb_readback(self.cx, vss=True)
 
@@ -1392,7 +1392,7 @@ class Neo4jVector(Base):
         with self.drv.session() as s:
             v = s.run("CALL dbms.components() YIELD versions RETURN versions[0] AS v").single()["v"]
             # The page cache the runner fitted to the cell, as the engine reports
-            # it (CAMPAIGN section 7 row 21, overrides.py).
+            # it (CAMPAIGN section 7 row 21, override_registry.py).
             self._settings = bench_common.neo4j_readback(s)
         self.version = f"neo4j:{v}"
 
@@ -2293,7 +2293,7 @@ class ElasticDense(Base):
         # The two overrides a reader meets under this table (security off on
         # the server, no replica on the index), asked of the engine once the
         # index exists and the build timer has stopped (CAMPAIGN section 7
-        # row 21, overrides.py).
+        # row 21, override_registry.py).
         return bench_common.es_readback(self.es, self.IDX)
 
     def search(self, qvec, k):
@@ -2374,6 +2374,8 @@ class MemgraphDense(Base):
             "memgraph_storage_mode": cfg.get("storage_mode"),
             "memgraph_bolt_workers": cfg.get("bolt_num_workers"),
             "memgraph_memory_limit_mib": cfg.get("memory_limit"),
+            # the escape hatch of #344, as the engine reports it (the image default is 1 s)
+            "memgraph_storage_access_timeout_s": cfg.get("storage_access_timeout_sec"),
             "memgraph_vector_connectivity": MEMGRAPH_USEARCH_CONNECTIVITY,
             "memgraph_vector_expansion_add": MEMGRAPH_USEARCH_EXPANSION_ADD,
             "memgraph_vector_expansion_search": MEMGRAPH_USEARCH_EXPANSION_SEARCH,

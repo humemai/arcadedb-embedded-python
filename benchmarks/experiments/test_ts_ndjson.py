@@ -176,7 +176,7 @@ def test_set_sends_the_header_parses_the_rows_and_stamps(L, server, monkeypatch,
 
 
 def test_both_served_arms_are_override_carriers(L):
-    import overrides
+    import override_registry as overrides
     o = {x.key: x for x in overrides.OVERRIDES}["ts_ndjson"]
     assert {(c.lane, c.backend) for c in o.carriers} == {("l4", L.ArcadeTSServer.name), ("l4", L.ArcadeNativeTSServer.name)}
     assert all(c.field == L.TS_RESULT_FORMAT_FIELD for c in o.carriers)

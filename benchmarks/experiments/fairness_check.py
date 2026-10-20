@@ -276,7 +276,7 @@ def _served_envelopes():
         pass
     # server_query_max_heap_elements: the served ArcadeDB's query limit, which the runner
     # reads from the engine for the campaign cell and the multipass driver cannot
-    # (CAMPAIGN section 7 row 21, overrides.py).
+    # (CAMPAIGN section 7 row 21, override_registry.py).
     keys = ("server_mem_cap", "server_heap", "mem_split", "client_mem_cap", "server_mem_cap_g", "role",
             "server_query_max_heap_elements")
     _served_envelopes._cache = {be: {kk: r[kk] for kk in keys if r.get(kk) is not None} for be, r in newest.items()}
@@ -1511,7 +1511,7 @@ def check_overrides(rows):
 
     PROTOCOL.md section 7 lists the settings this benchmark overrides, and the
     rows its last column marked NOWHERE were recorded nowhere: not on a row, not
-    under a table (CAMPAIGN section 7 row 21). overrides.py registers each one
+    under a table (CAMPAIGN section 7 row 21). override_registry.py registers each one
     with the row field its adapter (or the runner, for the served ArcadeDB
     cap) reads back from the engine, and the value the page sentence claims.
     A 2026-10 row of such an arm without the field, or with another value, is
@@ -1520,7 +1520,7 @@ def check_overrides(rows):
     every arm on a table is re-run at the re-pin (version_consistency_check), so
     no frozen row survives it.
     """
-    import overrides as OV
+    import override_registry as OV
     print("=== F15: every disclosed override is stamped on the rows that ran it ===")
     bad_list, judged = OV.stamp_findings(rows)
     if not judged:
