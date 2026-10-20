@@ -115,7 +115,7 @@ def _rows(paths):
            and str(r.get("bench_host") or "mini") == "mini"]
     # The frozen CSV and the campaign file that fed it hold the same cells, so
     # reading both would let one cell vote twice. Reduce on the canonical
-    # store's key, newest `ts_utc` winning, as the freeze does (RESULTS-MAP).
+    # store's key, newest `ts_utc` winning, as the freeze does (PUBLISHING.md).
     keep = {}
     for r in out:
         key = tuple(str(r.get(k)) for k in

@@ -41,9 +41,8 @@ its detail. Read it first; the rest are the references it points to.
 | `COMPARATORS.md` | What every comparator is pinned to, and why it runs the way it does |
 | `QUANTIZATION.md` | What each dense and sparse engine ships, and which quantized arm the page runs |
 | `PAGE-SPEC.md` | What the page contains: tables, rows, columns, and what each cell must satisfy |
-| `PUBLISHING.md` | How the numbers get from the frozen rows onto the page, the preview route, and the results asset |
+| `PUBLISHING.md` | How the numbers get from the frozen rows onto the page, the preview route, and the results asset; what is in `results/` on the bench host and who reads it |
 | `READING-RESULTS.md` | How to read what came out without misreading it |
-| `RESULTS-MAP.md` | What is in `results/` on the bench host, and which script reads each file |
 
 If two of them disagree, PROTOCOL wins on how a number is produced, FAIRNESS
 wins on whether it may be compared, and PAGE-SPEC wins on what is shown.
@@ -58,5 +57,5 @@ Append logs and regenerable inputs (corpora, databases, per-run time series)
 are gitignored; the frozen rows the page is computed from and the generated
 tables are committed. The rules live in the repository-root `.gitignore` for
 both suites rather than in per-directory files, so one suite's `results/`
-convention cannot silently govern the other. `RESULTS-MAP.md` says which files
+convention cannot silently govern the other. `PUBLISHING.md` says which files
 exist only on the bench host.

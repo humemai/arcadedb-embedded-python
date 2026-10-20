@@ -133,7 +133,7 @@ Some specifics that matter if you ever compare the page against the data yoursel
 !!! info "Where the rules live"
     [`READING-RESULTS.md`](https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/READING-RESULTS.md)
     is the source for this page,
-    [`RESULTS-MAP.md`](https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/RESULTS-MAP.md)
+    [`PUBLISHING.md`](https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/PUBLISHING.md#what-is-in-results-and-who-reads-it)
     says what every file under `results/` is and who reads it, and
     [`PAGE-SPEC.md`](https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/PAGE-SPEC.md)
     is the contract for what the page contains and what a cell must satisfy to be printed.
