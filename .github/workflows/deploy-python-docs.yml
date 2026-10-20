@@ -28,7 +28,8 @@ concurrency:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     environment:
       name: github-pages
       url: https://docs.humem.ai/arcadedb/
@@ -39,7 +40,7 @@ jobs:
     steps:
       - name: Checkout repository
         if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0  # Full history for mike versioning
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -47,21 +48,28 @@ jobs:
 
       - name: Set up Python
         if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
 
       - name: Setup UV package manager
         if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
         run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
+          # Same pinned version and retry pattern as the test workflows: the script is downloaded first so a retried
+          # transfer is never piped half-written into sh.
+          installer="$(mktemp)"
+          curl -LsSf --retry 5 --retry-all-errors --retry-delay 5 -o "$installer" https://astral.sh/uv/0.12.0/install.sh
+          sh "$installer"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$PATH"
           uv --version
 
       - name: Install dependencies
         if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
         working-directory: bindings/python
         run: |
-          uv pip install --system mkdocs-material mkdocs-git-revision-date-localized-plugin mkdocs-macros-plugin mike
+          # Same versions as docs-build.yml, so the deployed site is built with what CI checked. Change both together.
+          uv pip install --system "mkdocs==1.6.1" "mkdocs-material==9.7.7" "mkdocs-git-revision-date-localized-plugin==1.6.0" "mkdocs-macros-plugin==1.5.0" "mike==2.2.0"
 
       - name: Validate docs token
         if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
@@ -89,7 +97,7 @@ jobs:
 
       - name: Checkout humemai-docs
         if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ env.DOCS_REPO }}
           ref: ${{ env.DOCS_BRANCH }}

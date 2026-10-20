@@ -1,0 +1,14 @@
+# Keeps the SHA-pinned actions in .github/workflows current. One grouped pull request a week, so a batch of action
+# releases is one review and one CI run. Python packages are not covered: they are pinned by hand (see ci-setup.md).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+    groups:
+      github-actions:
+        patterns:
+          - "*"
