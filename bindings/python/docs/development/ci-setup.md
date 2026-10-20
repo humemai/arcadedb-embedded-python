@@ -39,7 +39,8 @@ The CI/CD workflows build and release across **4 platforms** for a total of **20
     - `arcadedb-jars`, the unfiltered JAR set for the native builds, kept 1 day
     - The `test-results-*` upload names `pytest-output.txt` and `.coverage`, which the pytest
       step does not write, so it uploads nothing
-- **Triggers**: pushes to `main` and pull requests that touch `bindings/python/src/**`, `tests/**`, `examples/**`, `scripts/**`, `pyproject.toml`, `setup.py` or the workflow itself, manual dispatch, and `workflow_call` from the release workflow. A documentation-only change does not start the matrix (the `Docs Build` workflow covers it).
+- **Triggers**: pushes to `main` and pull requests that touch `bindings/python/src/**`, `tests/**`, `examples/**`, `scripts/**`, `pyproject.toml`, `setup.py` or the workflow itself, manual dispatch, and `workflow_call` from the release workflow. A documentation-only change does not start the matrix (the `Docs Build` workflow covers it). A draft pull request skips every job (`bandit`, `dependency-floors`, `download-jars`, `test` and `test-summary`; the summary shows as skipped, not failed), and marking the pull request ready for review starts the run (`ready_for_review` is in the trigger types). Pushes to `main`, manual dispatch and the release workflow's call always run.
+- **Timeouts**: job-level `timeout-minutes` (`bandit` and `dependency-floors` 15, `download-jars` 90 because the from-source engine build runs there, `test` 45, `test-summary` 5), so a job that never gets a runner or hangs does not hold the 360-minute default. Recent successful `test` jobs took 5 to 10 minutes.
 - **Engine from source**: a manual dispatch or a `workflow_call` with `engine-from-source: true` builds the engine jars from this commit's source in `download-jars` instead of copying them out of upstream's snapshot image. Push and pull request runs never take this path.
 
 ### `test-python-examples.yml`
@@ -47,7 +48,7 @@ The CI/CD workflows build and release across **4 platforms** for a total of **20
 Builds the wheel on the same 4 × 5 matrix and runs the example scripts
 (`0[1-9]_*.py 1[0-9]_*.py 2[0-9]_*.py` by default). Example 21 runs at reduced scale
 (`--base-cities 1200 ...`, 15-minute limit).
-Same path filter and triggers as the bindings workflow. A clean exit is not the whole
+Same path filter, triggers and draft rule as the bindings workflow (a draft pull request skips `download-jars`, `test-examples` and the summary). Job timeouts: `download-jars` 90, `test-examples` 120 (recent successful jobs took 29 to 38 minutes), summary 5. A clean exit is not the whole
 check for example 10: its queries are run a second time on the pure-Python reference
 backend (`--db python_memory`), and `examples/scripts/compare_query_hashes.py` fails the
 job unless every query's row count and result hash agree (#12).
@@ -77,9 +78,11 @@ Runs on every push to `main` and every pull request:
 - `pre-commit`: the repository's pre-commit hooks (black, isort with the black profile, and the rest) on the files under `bindings/python`
 - `ci-trigger-coverage` (`CI triggers cover every bindings/python entry`): every tracked entry directly under `bindings/python` must be in the trigger paths of both test workflows or listed there as needing no test run
 
+A newer push to a pull request cancels the older run of this workflow; runs on `main` are left to finish. Draft pull requests still run it, because it is cheap.
+
 ### `docs-build.yml`
 
-Named `Docs Build`. Runs `mkdocs build --strict` (Python 3.12, pinned `mkdocs`, `mkdocs-material` and plugin versions) on pull requests and pushes to `main` that change `bindings/python/docs/**`, `bindings/python/mkdocs.yml` or the workflow, and on manual dispatch. It does not run the code blocks in the pages. See [Documentation](documentation.md#build-documentation).
+Named `Docs Build`. Runs `mkdocs build --strict` (Python 3.12, pinned `mkdocs`, `mkdocs-material` and plugin versions; `deploy-python-docs.yml` installs the same versions) on pull requests and pushes to `main` that change `bindings/python/docs/**`, `bindings/python/mkdocs.yml` or the workflow, and on manual dispatch. It does not run the code blocks in the pages. See [Documentation](documentation.md#build-documentation).
 
 ### `build-engine-jars.yml`
 
@@ -92,6 +95,10 @@ Named `Build ArcadeDB engine jars`. A manual dispatch (inputs `repository`, defa
 - **test** and **test-examples**: call the two test workflows above with the tag version
 - **publish**: needs all three, collects all 20 wheels, checks the count and the versions, and publishes to `arcadedb-embedded` on PyPI through the `pypi` environment (trusted publishing)
 - The publish job has `continue-on-error: true`, so a failed upload or a failed check in it still leaves the run green. Check PyPI for every wheel the release built.
+
+### Maintenance
+
+Every `uses:` is pinned to a full commit SHA with a `# vX.Y.Z` comment (enforced by `lint-workflows.yml`), and every uv install is pinned to one version (`0.12.0`; raise it in all four places together). `.github/dependabot.yml` opens one grouped pull request a week for the `github-actions` ecosystem with the commit prefix `ci`. It does not cover pip: Python tool versions in the workflows and `.pre-commit-config.yaml` are bumped by hand. The release and docs-deploy workflows only run on a tag, so a bump to them is not exercised by the pull request; the SHAs they share with the test workflows are, and the others (`gh-action-pypi-publish`) get their first run at the next release.
 
 ### `deploy-python-docs.yml`
 

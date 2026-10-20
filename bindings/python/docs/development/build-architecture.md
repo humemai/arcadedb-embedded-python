@@ -110,7 +110,7 @@ See `bindings/python/setup.py` for the complete implementation.
 ```yaml
 jobs:
   download-jars:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Copies the ArcadeDB JARs out of the upstream image (or builds them from source when engine-from-source is set), uploads artifact
 
   test:
