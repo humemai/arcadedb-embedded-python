@@ -23,7 +23,7 @@ uv run pytest -m "not server"
 
 ## Equivalence checks
 
-`test_equivalence.py` compares ArcadeDB's answers with LadybugDB (Cypher), DuckDB (SQL), NetworkX (graph algorithms) and NumPy (vector recall) on small seeded data, and with ArcadeDB itself under indexes, a view and parameters. Its reference engines come with the `test` extra.
+`test_equivalence.py` compares ArcadeDB's answers with DuckDB (SQL), NetworkX (graph algorithms) and NumPy (vector recall) on small seeded data, and with ArcadeDB itself under indexes, a view and parameters; `test_equivalence_ladybug.py` compares its Cypher with LadybugDB's (Linux and macOS only). The reference engines come with the `test` extra.
 
 ## No skips
 

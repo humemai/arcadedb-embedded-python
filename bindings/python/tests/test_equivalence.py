@@ -1,6 +1,6 @@
 """Equivalence checks (#347): ArcadeDB answers like a reference engine over the same small seeded data.
 
-Cypher against LadybugDB, SQL against DuckDB, graph algorithms against NetworkX, and vector search against NumPy brute
+Cypher against LadybugDB (test_equivalence_ladybug.py, which shares this file's graph and queries), SQL against DuckDB, graph algorithms against NetworkX, and vector search against NumPy brute
 force. ArcadeDB is also checked against itself: an index, a Graph Analytical View, and parameters in place of literals
 must not change an answer. Answers are compared as multisets, or as sequences when the query orders, with every number
 compared as a float rounded to 9 significant digits.
@@ -11,7 +11,6 @@ import random
 
 import arcadedb_embedded as arcadedb
 import duckdb
-import ladybug
 import networkx as nx
 import numpy as np
 import pytest
@@ -128,41 +127,6 @@ def graph_db(tmp_path_factory):
             )
     yield db
     db.close()
-
-
-@pytest.fixture(scope="module")
-def ladybug_conn(tmp_path_factory):
-    conn = ladybug.Connection(
-        ladybug.Database(str(tmp_path_factory.mktemp("eq") / "ladybug"))
-    )
-    conn.execute(
-        "CREATE NODE TABLE Person(id INT64, age INT64, name STRING, PRIMARY KEY(id))"
-    )
-    conn.execute("CREATE REL TABLE KNOWS(FROM Person TO Person, w INT64)")
-    for p in PEOPLE:
-        conn.execute("CREATE (:Person {id: $id, age: $age, name: $name})", p)
-    for a, b, w in KNOWS:
-        conn.execute(
-            "MATCH (a:Person {id: $a}), (b:Person {id: $b}) CREATE (a)-[:KNOWS {w: $w}]->(b)",
-            {"a": a, "b": b, "w": w},
-        )
-    return conn
-
-
-def _ladybug(conn, query):
-    res = conn.execute(query)
-    cols, rows = res.get_column_names(), []
-    while res.has_next():
-        rows.append(dict(zip(cols, res.get_next())))
-    return rows
-
-
-@pytest.mark.parametrize("query", CYPHER)
-def test_cypher_matches_ladybug(graph_db, ladybug_conn, query):
-    ordered = "ORDER BY" in query
-    assert _canon(_arcade(graph_db, "opencypher", query), ordered) == _canon(
-        _ladybug(ladybug_conn, query), ordered
-    )
 
 
 def test_cypher_unchanged_by_parameters(graph_db):

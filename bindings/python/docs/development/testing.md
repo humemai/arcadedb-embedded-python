@@ -135,14 +135,15 @@ asserts, so the list below stops at the file.
 | File | What it checks |
 | --- | --- |
 | `test_docs_examples.py` | Python blocks from the documentation run as code; see [Documentation example tests](#documentation-example-tests) |
-| `test_equivalence.py` | ArcadeDB answers like LadybugDB (Cypher), DuckDB (SQL), NetworkX (graph algorithms) and NumPy (vector recall), and like itself with indexes, a view and parameters; see [Equivalence checks](#equivalence-checks) |
+| `test_equivalence.py` | ArcadeDB answers like DuckDB (SQL), NetworkX (graph algorithms) and NumPy (vector recall), and like itself with indexes, a view and parameters; see [Equivalence checks](#equivalence-checks) |
+| `test_equivalence_ladybug.py` | ArcadeDB's Cypher answers like LadybugDB's over the same graph and queries (not collected on Windows; see [Equivalence checks](#equivalence-checks)) |
 | `test_count_pushdown_known_issues.py` | Regression tests for the openCypher count push-down fixes and the `BYTE` aggregate fix that shipped in 26.10.2, with the workarounds that were documented for them (they fail on the 26.10.1 wheel) |
 | `test_light_edge_and_view_known_issues.py` | Regression tests for the two openCypher count fixes that shipped in 26.10.2 (a one-hop `count(*)` over `light_edges=True` edges in an edge type that is not `LIGHTWEIGHT`, and a pattern predicate over an edge type that a Graph Analytical View does not list): the refusal and the right counts, with the workarounds that were documented for them (they fail on the 26.10.1 wheel) |
 | `test_null_index_known_issues.py`, `test_declared_type_known_issues.py`, `test_dml_plan_cache_known_issues.py` | Plain regression tests for engine bugs that 26.10.1 fixed (null keys and index lookups, declared properties, positional parameters in a cached DML plan), with the workarounds that were documented for them |
 
 ## Equivalence checks
 
-`test_equivalence.py` (#347) asks a second engine the same question over the same seeded data, so a wrong answer that a hand-written expected value would share, or a value the Python conversion changes, fails:
+`test_equivalence.py` and `test_equivalence_ladybug.py` (#347) ask a second engine the same question over the same seeded data, so a wrong answer that a hand-written expected value would share, or a value the Python conversion changes, fails:
 
 | Compared | Against | What |
 | --- | --- | --- |
@@ -152,7 +153,7 @@ asserts, so the list below stops at the file.
 | Vector search | NumPy brute force | recall@10 of at least 0.9 on 1,000 vectors |
 | ArcadeDB | ArcadeDB | the Cypher queries give the same answers with indexes, with a Graph Analytical View, and with parameters in place of literals |
 
-Answers are compared as multisets, or as sequences when the query has `ORDER BY`, with numbers compared as floats rounded to 9 significant digits. The graph has no self-loops, no parallel edges and no dangling node, where engines legitimately differ. The three reference engines are in the `test` extra and in CI's install list, so the file never skips. Server engines stay in the benchmarks, whose `equivalence_check.py` compares every engine over each lane.
+Answers are compared as multisets, or as sequences when the query has `ORDER BY`, with numbers compared as floats rounded to 9 significant digits. The graph has no self-loops, no parallel edges and no dangling node, where engines legitimately differ. The three reference engines are in the `test` extra and in CI's install list, so nothing skips. The LadybugDB comparison is its own file, `test_equivalence_ladybug.py`, which `conftest.py` does not collect on Windows: LadybugDB's compiled module does not load in the Windows test process (it falls back to a C-API library its wheel does not ship, likely after a DLL the bundled JRE loaded first), so the Cypher comparison runs on Linux and macOS. Server engines stay in the benchmarks, whose `equivalence_check.py` compares every engine over each lane.
 
 ## Markers
 
