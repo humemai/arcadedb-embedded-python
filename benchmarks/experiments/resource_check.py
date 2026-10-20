@@ -40,17 +40,17 @@ NOT FLAGGED, each for a reason the rows state:
     A memory cap that was really hit is already a failed row (an OOM kill), so
     there is no separate cap rule; comparing the client's and the server's
     summed peak with one container's cap flagged every healthy served row.
-  * The restart and lifecycle lanes are skipped for both metrics. The restart
-    page table (export_web.LANES["restart"]) has timing columns only. The
-    lifecycle page table has no disk column (the lane removes each database
-    after measuring it, and the embedded database lives on a bind mount the
-    disk reading does not see; export_web's lifecycle builder says so). It
-    DOES print a peak memory column, so skipping it is a decision and not a
-    fact about the page: the embedded SurrealDB cells read far below every
-    other arm of their group, and nobody has yet shown whether that is the
-    measure or a defect. Until someone does, the gate neither flags them nor
-    excuses them in BY_DESIGN; remove "memory" from SKIP_LANES["lifecycle"]
-    to see them.
+  * The restart lane is skipped for both metrics: its page table
+    (export_web.LANES["restart"]) has timing columns only. The lifecycle lane
+    is skipped for disk only: its page table has no disk column (the lane
+    removes each database after measuring it, and the embedded database lives
+    on a bind mount the disk reading does not see; export_web's lifecycle
+    builder says so), but it prints a peak memory column, which is checked.
+  * A row that declares its situation or operation unexpressible (a field
+    ending in `_unexpressible`, e.g. SurrealDB's lifecycle `graph_gav` and
+    `sparse`: it has no analytical view and no sparse index) ran nothing, so
+    its numbers are not a measurement and it is not checked. Before this rule
+    those rows read about 33 MiB beside 1.3 to 11 GiB in their groups.
   * Rows of another instrument are not checked. Only the 2026-10 instrument
     carries the fields this gate reads (`instrument`, and the disk fields of
     #350), and the September rows the live page still serves are being
@@ -83,8 +83,7 @@ BY_DESIGN = {
 # lane -> {metric: why it is not checked}. A lane that skips both metrics is
 # not checked at all and its rows are counted as such.
 SKIP_LANES = {
-    "lifecycle": {"disk": "its page table has no disk column (the lane removes each database after measuring it)",
-                  "memory": "its memory column is not yet judged (see the docstring)"},
+    "lifecycle": {"disk": "its page table has no disk column (the lane removes each database after measuring it)"},
     "restart": {"disk": "its page table has timing columns only",
                 "memory": "its page table has timing columns only"},
 }
@@ -143,6 +142,9 @@ def check(rows):
             continue
         if failed(r):
             not_checked["the cell failed (its numbers are not printed)"] += 1
+            continue
+        if any(k.endswith("_unexpressible") and r.get(k) not in (None, "") for k in r):
+            not_checked["the row declares its situation unexpressible (it ran nothing)"] += 1
             continue
         lane = r.get("lane")
         if lane in SKIP_LANES and {"disk", "memory"} <= set(SKIP_LANES[lane]):

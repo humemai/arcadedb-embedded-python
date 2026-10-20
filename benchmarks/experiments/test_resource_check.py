@@ -5,7 +5,7 @@ Run with `python -m pytest test_resource_check.py -q` from this directory.
 Synthetic rows, one behaviour each, so that an edit which makes the gate pass while proving
 nothing fails here: a LOW disk, a LOW memory, the shared-memory excuse (and the case where it
 must not apply), a BY_DESIGN entry, a NEGATIVE disk, a PRE_DISK step that did not return 0,
-failed rows, the lanes whose page tables show no such column, and rows of another instrument.
+failed rows, rows that declare their situation unexpressible, the lanes whose page tables show no such column, and rows of another instrument.
 The second half holds export_web's shared-memory disclosure to the same definition the gate
 excuses, so the page explains exactly the entries the gate lets through.
 """
@@ -133,13 +133,28 @@ def test_failed_rows_are_skipped_and_counted(bad):
     assert sum(n for why, n in not_checked.items() if "failed" in why) == 1
 
 
-@pytest.mark.parametrize("lane", ["lifecycle", "restart"])
-def test_lifecycle_and_restart_are_not_checked(lane):
-    rows = [row(b, lane=lane) for b in ENGINES]
+def test_restart_is_not_checked():
+    rows = [row(b, lane="restart") for b in ENGINES]
     rows[0] = dict(rows[0], disk_data_mb=-5.0, peak_anon_mib_sum=1.0)
     flags, not_checked = kinds(rows)
     assert flags == []
-    assert sum(not_checked.values()) == 4 and all(why.startswith(lane) for why in not_checked)
+    assert sum(not_checked.values()) == 4 and all(why.startswith("restart") for why in not_checked)
+
+
+def test_lifecycle_checks_memory_but_not_disk():
+    rows = [row(b, lane="lifecycle") for b in ENGINES]
+    rows[0] = dict(rows[0], disk_data_mb=-5.0, peak_anon_mib_sum=1.0)
+    flags, not_checked = kinds(rows)
+    assert [(k, m) for k, _, m in flags] == [("LOW", "memory")]
+    assert sum(not_checked.values()) == 0
+
+
+def test_a_row_declaring_its_situation_unexpressible_is_not_checked():
+    rows = [row(b, lane="lifecycle") for b in ENGINES]
+    rows[0] = dict(rows[0], peak_anon_mib_sum=1.0, lifecycle_situation_unexpressible="no analytical view")
+    flags, not_checked = kinds(rows)
+    assert flags == []
+    assert sum(n for why, n in not_checked.items() if "unexpressible" in why) == 1
 
 
 def test_rows_of_another_instrument_are_not_checked_and_say_so(capsys, monkeypatch):
