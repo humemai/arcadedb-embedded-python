@@ -944,7 +944,7 @@ def main():
         # overlay, or an unaudited input" trains people to skip the warning.
         # On 2026-08-30 this printed 20 directories, of which 11 were live
         # inputs to published tables. Everything it still prints should be
-        # decided and recorded in RESULTS-MAP.md.
+        # decided and recorded in PUBLISHING.md.
         skip = {"archive", "manifests", "logs", "raw"}
         unmapped = sorted(d for d in present - mapped - skip
                           if not d.startswith("archive-"))
@@ -953,7 +953,7 @@ def main():
             for u in unmapped:
                 print(f"  {u}")
             print("  (dead overlay, or an unaudited input: decide which,")
-            print("   and record the decision in RESULTS-MAP.md)")
+            print("   and record the decision in PUBLISHING.md)")
             print()
 
         # The same question for top-level result FILES. Without this, the only
