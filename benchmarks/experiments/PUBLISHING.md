@@ -48,6 +48,7 @@ The gate scripts (`refresh_web_page.GATES`), then three structural checks. All o
 
 | Check | Asks |
 |---|---|
+| `resource_check` | is any disk or memory value one that cannot be right: far below the other engines of its group, a negative disk growth, or a disk reading taken after a failed pre-disk step (issue #349). Rows of the 2026-10 instrument only; the count of rows not checked is printed |
 | `provenance_check` | does every cell trace to a run |
 | `fairness_check` | F1 to F15 comparison invariants, durability class, instrument, and the stamps of the overrides a table discloses included |
 | `equivalence_check` | do the engines of a table agree on the answer, and is every operation an engine cannot express declared (DECISIONS #88) |

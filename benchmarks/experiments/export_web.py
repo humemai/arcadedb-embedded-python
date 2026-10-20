@@ -6121,10 +6121,10 @@ def _jvm_reported_heap(r):
     return f"{gib:.1f}".rstrip("0").rstrip(".") + "g"
 
 
-def _entry_heaps(e, lane, wl, exact_only=False):
-    """The JVM heaps the rows behind a table entry ran with ('4g', ...); empty
-    for an engine that records none. Shared by the memory note and the heap
-    column (DECISIONS #116 item 7), so the two cannot name different heaps."""
+def _entry_rows(e, lane, wl, exact_only=False):
+    """The frozen rows behind a table entry: its arm, at its own scale (or, when `exact_only` is
+    off and none match, at any scale of the lane). Shared by the heap column and the memory
+    notes, so they cannot read different rows."""
     # SCALE-EXACT FIRST, THEN THE LANE. The cell's own scale is the right
     # match and is what most tables need, but some take their memory figure
     # from an overlay rather than from the lane's rows (the dense table's
@@ -6156,6 +6156,14 @@ def _entry_heaps(e, lane, wl, exact_only=False):
     rs = [r for r in _FROZEN_ROWS if _match(r) and str(r.get("scale")) == str(e.get("scale"))]
     if not rs and not exact_only:
         rs = [r for r in _FROZEN_ROWS if _match(r)]
+    return rs
+
+
+def _entry_heaps(e, lane, wl, exact_only=False):
+    """The JVM heaps the rows behind a table entry ran with ('4g', ...); empty
+    for an engine that records none. Shared by the memory note and the heap
+    column (DECISIONS #116 item 7), so the two cannot name different heaps."""
+    rs = _entry_rows(e, lane, wl, exact_only)
     heaps = {str(r.get("heap") or r.get("server_heap") or _jvm_reported_heap(r) or "").strip() for r in rs}
     heaps = {h for h in heaps if h and h[-1].lower() == "g" and h[:-1].replace(".", "").isdigit()}
     return heaps
@@ -6341,6 +6349,63 @@ def _pg_memory_note(table):
     sl = e.get("scale_label") or scale_label(lane, e["scale"])
     return _gen(head + f". At {sl}, of the {cell} GiB shown, {c} GiB is our Python client and {s} GiB is the database.",
                 cell, c, s, sl)
+
+
+def _holds_shared_memory(rows):
+    """True when the median shared-memory peak of these rows is above their median anonymous peak.
+
+    The page's memory column is the anonymous peak by decision (DECISIONS #116 item 7), so an
+    engine whose rows hold more shared than anonymous memory shows a cell far below what it
+    used. resource_check.holds_shared_memory is the same test, so the gate excuses exactly
+    the entries this module discloses (test_resource_check.py holds the two together)."""
+    anon = [v for v in (_num(r.get("peak_anon_mib_sum")) for r in rows) if v is not None]
+    shm = [v for v in (_num(r.get("peak_shmem_mib_sum")) for r in rows) if v is not None]
+    return bool(anon and shm) and statistics.median(shm) > statistics.median(anon)
+
+
+def _shared_memory_note(table):
+    """Every engine on this table whose rows hold more shared than anonymous memory, and what its
+    memory cell leaves out (issue #349). DERIVED from the rows, never from a list of engines: the
+    note followed PostgreSQL alone until pgvector's dense cell read 91 MiB beside 9,737 MiB with
+    shared memory and the page said nothing. Like _jvm_memory_note it discloses and does not
+    change the column. The plain PostgreSQL arm keeps _pg_memory_note, which also splits its cell
+    into our client and the database, and is not repeated here."""
+    lane_wl = _TABLE_LANE.get(table.get("id"))
+    if not lane_wl:
+        return None
+    lane, wl = lane_wl
+    if lane == "l1tpc":
+        wl = "oltp"
+    covered = display_name("postgres") if table.get("id") in ("docs_oltp", "docs_olap") and _pg_memory_note(table) else None
+    found = {}     # backend -> (scale rank, scale label, cell GiB, shared GiB), at the backend's largest scale
+    for e in table.get("entries", []):
+        cell = (e.get("metrics") or {}).get("peak memory GiB")
+        if not cell or e.get("outcome") or cell.get("median") is None or e.get("backend") == covered:
+            continue
+        rs = _entry_rows(e, lane, wl, exact_only=True)
+        shm = [v for v in (_num(r.get("peak_shmem_mib_sum")) for r in rs) if v is not None]
+        if not rs or not shm or not _holds_shared_memory(rs):
+            continue
+        rank = SCALE_ORDER.index(e["scale"]) if e.get("scale") in SCALE_ORDER else -1
+        got = (rank, e.get("scale_label") or scale_label(lane, e["scale"]),
+               float(cell["median"]), statistics.median(shm) / 1024)
+        if e.get("backend") not in found or rank > found[e.get("backend")][0]:
+            found[e.get("backend")] = got
+    if not found:
+        return None
+    one = len(found) == 1
+    values, clauses = [], []
+    for be in sorted(found):
+        _, sl, c, s = found[be]
+        c, s = f"{c:.2f}", f"{s:.2f}"
+        clauses.append(f"{be} at {sl} shows {c} GiB where its rows held {s} GiB of shared memory")
+        values += [be, sl, c, s]
+    names = _join_and(sorted(found))
+    head = (f"{names} hold{'s' if one else ''} more memory as shared memory than in {'its' if one else 'their'} own "
+            f"address space, and this column counts only the second, so {'its' if one else 'their'} "
+            f"memory {'cell is' if one else 'cells are'} not comparable to the engines that keep their data in their own "
+            f"address space")
+    return _gen(f"{head}: {'; '.join(clauses)}.", names, *values)
 
 
 def _gav_pair_note(table):
@@ -6738,6 +6803,9 @@ def _oct_conditions(table):
         pg = _pg_memory_note(table)
         if pg:
             tail.append(pg)
+    shared = _shared_memory_note(table)
+    if shared:
+        tail.append(shared)
     # THE JVM HALF OF THE SAME DISCLOSURE, which the October path never
     # carried: October's tables said why PostgreSQL's memory cell reads low and
     # not why a JVM engine's reads close to its heap, the one-sided case
@@ -8722,6 +8790,7 @@ def _finish_table(table: dict) -> dict:
         for note in (_surreal_pair_note(table),
                      _jvm_memory_note(table),
                      _pg_memory_note(table) if table.get("id") in ("docs_oltp", "docs_olap") else None,
+                     _shared_memory_note(table),
                      _gav_build_note(table) if table.get("id") == "l2olap" else None,
                      _dense_cold_warm_note(table) if table.get("id") == "l3d" else None):
             if note:

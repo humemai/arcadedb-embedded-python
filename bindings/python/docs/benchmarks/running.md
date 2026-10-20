@@ -147,9 +147,10 @@ BENCH_ENGINE_COMMIT=<pin> python3 provenance_check.py    # does a cell trace to 
 BENCH_ENGINE_COMMIT=<pin> python3 fairness_check.py      # the fairness invariants a row can show
 BENCH_ENGINE_COMMIT=<pin> python3 page_check.py          # page cells against generated tables
 BENCH_ENGINE_COMMIT=<pin> python3 equivalence_check.py   # do the engines of a table agree
+BENCH_ENGINE_COMMIT=<pin> python3 resource_check.py      # can any disk or memory value be right
 ```
 
-`equivalence_check.py` takes `--rows <file>` so you can point it at a smoke file rather than
+`equivalence_check.py` and `resource_check.py` take `--rows <file>` so you can point them at a smoke file rather than
 the frozen set. It reduces to the newest row per cell before comparing, so a re-run does not
 read as one engine giving two answers.
 
