@@ -384,7 +384,7 @@ jobs:
           # to_dataframe() tests skipped themselves in this job while it
           # reported green. The guard step below now fails the build if any
           # test skips for a missing import, so the next drift is loud.
-          uv pip install --system test-install/*.whl pytest pytest-cov requests numpy "psycopg[binary]" redis neo4j pyarrow pandas "adbc-driver-postgresql>=1.12" "duckdb>=1.4.0" "ladybug>=0.21.2" "networkx>=3.4"
+          uv pip install --system test-install/*.whl pytest pytest-cov requests numpy "psycopg[binary]" redis neo4j pyarrow pandas "adbc-driver-postgresql>=1.12" "duckdb>=1.4.2" "ladybug>=0.21.2" "networkx>=3.4"
 
       - name: Run pytest on host
         id: pytest

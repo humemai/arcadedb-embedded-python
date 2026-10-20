@@ -124,7 +124,7 @@ examples = [
 requires-dist = [
     { name = "adbc-driver-postgresql", specifier = ">=1.12" },
     { name = "arcadedb-embedded", index = "file:///home/tk/repos/humemai/arcadedb-embedded-python/bindings/python/dist" },
-    { name = "duckdb", specifier = ">=1.4.0" },
+    { name = "duckdb", specifier = ">=1.4.2" },
     { name = "ladybug", specifier = ">=0.21.2" },
     { name = "neo4j", specifier = ">=5.0" },
     { name = "networkx", specifier = ">=3.4" },

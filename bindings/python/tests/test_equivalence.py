@@ -25,7 +25,7 @@ KNOWS = []
 
 
 def _seed_graph():
-    r = random.Random(7)
+    r = random.Random(7)  # nosec B311 - seeded test data, not a secret
     for i in range(2 * HALF):
         age = None if r.random() < 0.1 else r.randint(18, 70)
         PEOPLE.append(
@@ -213,6 +213,25 @@ def test_cypher_unchanged_by_index_and_view(graph_db):
         graph_db.command("sql", "DROP GRAPH ANALYTICAL VIEW eq")
 
 
+def _pagerank(g, damping):
+    """PageRank by power iteration in NumPy. nx.pagerank needs SciPy, which the test extra does not carry, and the graph
+    has no dangling node, so the textbook iteration is the whole algorithm."""
+    nodes = sorted(g)
+    pos = {n: i for i, n in enumerate(nodes)}
+    out_deg = np.array([g.out_degree(n) for n in nodes], dtype=float)
+    src = np.array([pos[a] for a, _ in g.edges()])
+    dst = np.array([pos[b] for _, b in g.edges()])
+    x = np.full(len(nodes), 1.0 / len(nodes))
+    for _ in range(1000):
+        nxt = np.full(len(nodes), (1 - damping) / len(nodes))
+        np.add.at(nxt, dst, damping * x[src] / out_deg[src])
+        if np.abs(nxt - x).sum() < 1e-15:
+            x = nxt
+            break
+        x = nxt
+    return {n: x[pos[n]] for n in nodes}
+
+
 def test_graph_algorithms_match_networkx(graph_db):
     g = nx.DiGraph()
     g.add_nodes_from(p["id"] for p in PEOPLE)
@@ -225,7 +244,7 @@ def test_graph_algorithms_match_networkx(graph_db):
         "YIELD node, score RETURN node.id AS id, score",
     )
     total = sum(r["score"] for r in rows)
-    expected = nx.pagerank(g, alpha=0.85, tol=1e-14, max_iter=1000)
+    expected = _pagerank(g, 0.85)
     for r in rows:
         assert r["score"] / total == pytest.approx(expected[r["id"]], rel=1e-6), r["id"]
 
@@ -250,7 +269,7 @@ def test_graph_algorithms_match_networkx(graph_db):
         n: (g.in_degree(n), g.out_degree(n)) for n in g
     }
 
-    r = random.Random(3)
+    r = random.Random(3)  # nosec B311 - seeded test data, not a secret
     for _ in range(10):
         base = r.choice((0, HALF))
         a, b = base + r.randrange(HALF), base + r.randrange(HALF)
@@ -269,7 +288,7 @@ ITEMS = []
 
 
 def _seed_items():
-    r = random.Random(11)
+    r = random.Random(11)  # nosec B311 - seeded test data, not a secret
     for i in range(300):
         ITEMS.append(
             {
