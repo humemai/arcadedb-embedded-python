@@ -1,4 +1,4 @@
-"""overrides.py and the three places it is held (CAMPAIGN section 7 row 21).
+"""override_registry.py and the three places it is held (CAMPAIGN section 7 row 21).
 
 Run with `python -m pytest test_overrides.py -q` from this directory.
 
@@ -16,7 +16,7 @@ import pytest
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-import overrides as OV  # noqa: E402
+import override_registry as OV  # noqa: E402
 
 PROTOCOL = HERE / "PROTOCOL.md"
 
@@ -94,7 +94,7 @@ def test_protocol_cites_every_key_once_and_none_of_those_rows_says_nowhere():
     for o in OV.OVERRIDES:
         assert len(cited.get(o.key, [])) == 1, f"PROTOCOL.md section 7 must cite `override: {o.key}` in exactly one row"
     for key in cited:
-        assert key in OV.BY_KEY, f"PROTOCOL.md cites `override: {key}`, which overrides.py does not register"
+        assert key in OV.BY_KEY, f"PROTOCOL.md cites `override: {key}`, which override_registry.py does not register"
     for key, hits in cited.items():
         for cells in hits:
             assert "NOWHERE" not in cells[-1], f"`override: {key}` is cited by a row that also says NOWHERE"

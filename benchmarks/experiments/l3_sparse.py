@@ -655,7 +655,7 @@ class Elastic(Base):
                                    "index_options": {"prune": self.prune}}}},
             settings={"number_of_shards": 1, "number_of_replicas": 0})
         # TWO MORE OVERRIDES, READ BACK FROM THE ENGINE (CAMPAIGN section 7
-        # row 21, overrides.py): `xpack.security.enabled=false` on the server
+        # row 21, override_registry.py): `xpack.security.enabled=false` on the server
         # (harness plumbing that also takes TLS and authentication out of every
         # latency measured here) and `number_of_replicas=0` on the index (a
         # single-node cluster has nowhere to place a replica and would sit

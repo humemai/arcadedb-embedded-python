@@ -20,7 +20,7 @@ Flags: `--site <path>` if humem.ai is not a sibling checkout; `--no-build` to sk
 
 ## The Engines documentation page
 
-The Engines page of the documentation site (humemai/dbbench, `docs/engines.md`) is generated, never edited: `uv run python benchmarks/experiments/gen_engines_doc.py <path to docs/engines.md>` from the repo root. It reads the October rows through `make_paper_tables.load_canonical`, the arm names from `export_web.py`, and the override sentences from `overrides.py`, so no number or setting on it is typed. Regenerate it at every landing and commit the result in humemai/dbbench; `--check <path>` exits 1 when the page there is out of date. Lanes and arms without rows yet are listed on the page's gap list, not hidden.
+The Engines page of the documentation site (humemai/dbbench, `docs/engines.md`) is generated, never edited: `uv run python benchmarks/experiments/gen_engines_doc.py <path to docs/engines.md>` from the repo root. It reads the October rows through `make_paper_tables.load_canonical`, the arm names from `export_web.py`, and the override sentences from `override_registry.py`, so no number or setting on it is typed. Regenerate it at every landing and commit the result in humemai/dbbench; `--check <path>` exits 1 when the page there is out of date. Lanes and arms without rows yet are listed on the page's gap list, not hidden.
 
 ## The preview target (DECISIONS #83)
 

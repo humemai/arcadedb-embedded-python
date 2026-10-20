@@ -9,7 +9,7 @@ classes, the tiers, the settings, and every override of an engine's default with
 its reason. A page like that typed by hand drifts from the rows the moment an
 engine is re-pinned, and a number copied by hand is a number nothing checks. So
 no number and no setting on the page is typed here. Every one is read from a
-result row, from the override registry (`overrides.py`), or from a constant the
+result row, from the override registry (`override_registry.py`), or from a constant the
 exporter already holds (`export_web.py`), and `test_gen_engines_doc.py` fails
 when a digit appears in the output that no row carries.
 
@@ -64,7 +64,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-import overrides as OV  # noqa: E402
+import override_registry as OV  # noqa: E402
 
 RUNS = HERE / "results" / "runs.jsonl"
 

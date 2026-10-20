@@ -64,7 +64,7 @@ def test_every_plain_property_engine_builds_an_index_and_the_rest_use_their_key(
 
 
 def test_every_dense_arm_is_an_override_carrier():
-    import overrides
+    import override_registry as overrides
     carriers = {be for _lane, be in overrides.DENSE_ID_INDEX_CARRIERS}
     pytest.importorskip("numpy")
     import l3d_dense

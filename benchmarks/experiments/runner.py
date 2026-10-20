@@ -396,7 +396,7 @@ _PCT_OPT = (" -Darcadedb.vectorIndex.graphBuildCacheMaxHeapPercent=" + DENSE_BUI
             if DENSE_BUILD_CACHE_PCT else "")
 
 # THE SERVED ARCADEDB'S LIMIT ON ONE HTTP REQUEST BODY, raised on the arms that bulk-load through POST /api/v1/batch (CAMPAIGN section 7
-# row 75, PROTOCOL.md section 7, overrides.py `arcadedb_http_body_limit`). 26.10.1 added `arcadedb.server.httpBodyContentMaxSize` (default
+# row 75, PROTOCOL.md section 7, override_registry.py `arcadedb_http_body_limit`). 26.10.1 added `arcadedb.server.httpBodyContentMaxSize` (default
 # 104,857,600 bytes = 100 MiB, measured on the wire; the October pin, a September commit, had no limit) and refuses a batch load whose
 # body passes it: "Batch load on database 'bench' was refused after 65645 vertices and 915591 edges because the request body exceeded ...
 # Raise that setting or split the payload". The graph lane loads ONE streamed request per load (l2_graph.ArcadeGraphServer._batch):
@@ -406,6 +406,8 @@ _PCT_OPT = (" -Darcadedb.vectorIndex.graphBuildCacheMaxHeapPercent=" + DENSE_BUI
 # ONE constant, applied by _with_http_body_limit below to exactly the arms that reach the batch endpoint (test_overrides.py holds that set).
 HTTP_BODY_MAX_PROPERTY = "arcadedb.server.httpBodyContentMaxSize"
 HTTP_BODY_MAX_BYTES = 64 << 30        # 68,719,476,736
+# Memgraph dense arms (#344): its storage access timeout, in seconds; longer than any cell cap (48 h for lc10m is the longest).
+MEMGRAPH_STORAGE_ACCESS_TIMEOUT_S = 172800
 HTTP_BODY_MAX_OPT = f"-D{HTTP_BODY_MAX_PROPERTY}={HTTP_BODY_MAX_BYTES}"
 
 # WHERE THE LIFECYCLE LANE PUTS ITS DATABASE, and why it is a host path.
@@ -1458,7 +1460,10 @@ BACKENDS = {
         "server_port": 9200,
         "ready_regex": r'"message":"started|current.health=\"GREEN\"',
     },
-    # Memgraph: the graph arm's image and every fitted flag (F6).
+    # Memgraph: the graph arm's image and every fitted flag (F6), plus one escape hatch of its own (#344): the
+    # storage access timeout defaults to 1 s, and the deep10m vector index build was refused with "Cannot get unique
+    # access ... storage access timeout" in both arms of the 26.10.1 pass. MEMGRAPH_STORAGE_ACCESS_TIMEOUT_S is longer
+    # than any cell cap, so the lane's own cap governs; read back from SHOW CONFIG onto the row.
     "memgraph_dense": {
         "topology": "client_server",
         "image": "dbbench:client",
@@ -1468,6 +1473,7 @@ BACKENDS = {
                        "--storage-snapshot-thread-count={ncpu}",
                        "--memory-limit={mem90_mib}",
                        "--query-execution-timeout-sec=0",
+                       f"--storage-access-timeout-sec={MEMGRAPH_STORAGE_ACCESS_TIMEOUT_S}",
                        "--telemetry-enabled=false"],
         "server_port": 7687,
         "ready_regex": r"Bolt server is fully armed and operational",
@@ -1482,6 +1488,7 @@ BACKENDS = {
                        "--storage-snapshot-thread-count={ncpu}",
                        "--memory-limit={mem90_mib}",
                        "--query-execution-timeout-sec=0",
+                       f"--storage-access-timeout-sec={MEMGRAPH_STORAGE_ACCESS_TIMEOUT_S}",
                        "--telemetry-enabled=false"],
         "server_port": 7687,
         "ready_regex": r"Bolt server is fully armed and operational",
@@ -2019,11 +2026,11 @@ def build_manifest(ts, args, workers, shards, jobs):
     batch, the launch configuration the runner passes (the server's env and
     command as templates, after the durability axis has patched them, with the
     scalars they are formatted from beside them) and the keys of the registered
-    overrides that apply to it (overrides.py). `runner_env` holds the
+    overrides that apply to it (override_registry.py). `runner_env` holds the
     campaign's own switches as set in the runner's environment. This is what
     was ASKED; what the engine answered is on each row (fairness_check F15).
     """
-    import overrides
+    import override_registry as overrides
     manifest = {"ts": ts, "tier": args.tier, "scale": args.scale, "cpuset": CPUSET,
                 "workers": workers, "shards": shards,
                 "reps": args.reps, "seed": args.seed,

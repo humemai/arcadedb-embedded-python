@@ -86,7 +86,7 @@ def main():
     WARM = 20
     timed_n = len(test) - WARM
     # The settings the adapter reads back from its engine (CAMPAIGN section 7
-    # row 21, overrides.py), read once here: after the build timer has stopped
+    # row 21, override_registry.py), read once here: after the build timer has stopped
     # and before the first query, so it sits in no timer and asks the engine
     # nothing about the data.
     _readbacks = b.readbacks()

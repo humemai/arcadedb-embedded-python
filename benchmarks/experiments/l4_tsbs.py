@@ -664,7 +664,7 @@ class ArcadeNativeTS(ArcadeTS):
         t0 = time.perf_counter()
         left = self.mutable_samples()
         # THE FIRST READ IS WHAT THE INGEST RATE LEFT OUTSTANDING (CAMPAIGN
-        # section 7 row 21, overrides.py). The ingest timer stopped when the
+        # section 7 row 21, override_registry.py). The ingest timer stopped when the
         # engine accepted the last point (`wait_completion()` here, the last
         # POST on the served arm); this is the engine's own count of the samples
         # it had not yet sealed, taken the moment the timer was off. It was read

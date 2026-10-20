@@ -426,7 +426,7 @@ class DuckTPC:
         # cpuset; only sched_getaffinity sees the cpuset. Same fix as l1_tabular.
         self.cx.execute(f"PRAGMA threads={len(os.sched_getaffinity(0))}")
         # ...and the engine's own answer, recorded on the row (CAMPAIGN section
-        # 7 row 21, overrides.py): fairness_check F15 holds it to the size of
+        # 7 row 21, override_registry.py): fairness_check F15 holds it to the size of
         # the cell's cpuset, so a PRAGMA that did not take cannot pass.
         self.row_extra = bench_common.duckdb_readback(self.cx)
         self.version = duckdb.__version__

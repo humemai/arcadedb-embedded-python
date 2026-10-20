@@ -21,7 +21,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 import gen_engines_doc as G  # noqa: E402
-import overrides as OV  # noqa: E402
+import override_registry as OV  # noqa: E402
 
 LANES_TS = Path.home() / "repos" / "humemai" / "humem.ai" / "src" / "lib" / "dbbench" / "lanes.ts"
 DATE = "2031-04-05"

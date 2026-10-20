@@ -1171,7 +1171,7 @@ class Neo4jE2:
         with self.drv.session() as s:
             v = s.run("CALL dbms.components() YIELD versions RETURN versions[0] AS v").single()["v"]
             # The page cache the runner fitted to the cell, as the engine reports
-            # it (CAMPAIGN section 7 row 21, overrides.py).
+            # it (CAMPAIGN section 7 row 21, override_registry.py).
             self._settings = bench_common.neo4j_readback(s)
         self.version = f"neo4j:{v}"
 
@@ -1746,7 +1746,7 @@ class ComposedE2:
             _nv = f"unknown ({e.__class__.__name__})"
         self.version = f"qdrant:{_qv}+neo4j:{_nv}"
         # Two settings the runner overrides on the Neo4j half, as the engine
-        # reports them (CAMPAIGN section 7 row 21, overrides.py): the page cache
+        # reports them (CAMPAIGN section 7 row 21, override_registry.py): the page cache
         # fitted to the cell, and the checkpoint interval set short.
         with self.neo.session() as _s:
             self.row_extra = bench_common.neo4j_readback(_s, checkpoint=True)

@@ -18,7 +18,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 import l3_sparse as S  # noqa: E402
-import overrides as OV  # noqa: E402
+import override_registry as OV  # noqa: E402
 import runner  # noqa: E402
 
 N_DOCS, N_QUERIES = 20, 40

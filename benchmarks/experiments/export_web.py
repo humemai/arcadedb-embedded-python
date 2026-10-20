@@ -9738,10 +9738,10 @@ def main() -> int:
     # section 7 lists every default this benchmark overrides, and the rows its
     # last column marked NOWHERE were named in no sentence under any table. One
     # sentence per override, under every October table that shows an arm that
-    # runs it, generated from the rows (overrides.py); page_check refuses a
+    # runs it, generated from the rows (override_registry.py); page_check refuses a
     # table that shows such an arm and prints no sentence saying so, and
     # fairness_check refuses a row that lacks the engine's own read-back.
-    import overrides as _OV
+    import override_registry as _OV
     for _t in tables:
         if _table_instrument(_t.get("id")) != "2026-10":
             continue

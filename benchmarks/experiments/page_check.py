@@ -1296,7 +1296,7 @@ NOT_PRINTED = [
      "the size of the cell's cpuset (FAIRNESS F6; fairness_check F15), stated "
      "under every table that shows DuckDB by a generated sentence rather than "
      "printed as a column"),
-    # THE OVERRIDES A TABLE DISCLOSES (overrides.py, CAMPAIGN section 7 row 21):
+    # THE OVERRIDES A TABLE DISCLOSES (override_registry.py, CAMPAIGN section 7 row 21):
     # each field below is a setting this benchmark overrides, read back from the
     # engine and named under every table that shows the arm by a generated
     # sentence. fairness_check F15 holds each row to the value the sentence
@@ -2080,7 +2080,7 @@ def _check_zero_age_disclosure(payload, rows):
 
 def _check_override_disclosures(payload, rows=None):
     """A table that shows an arm running a PROTOCOL section 7 override prints a
-    sentence that says so (overrides.py, CAMPAIGN section 7 row 21).
+    sentence that says so (override_registry.py, CAMPAIGN section 7 row 21).
 
     The exporter appends the sentence from the registry; this holds the payload
     to the registry's own `says` patterns, so a refactor that stops calling the
@@ -2089,7 +2089,7 @@ def _check_override_disclosures(payload, rows=None):
     with. The row-side half (the engine's own read-back on every row) is
     fairness_check F15. Returns bad count."""
     import export_web as EW
-    import overrides as OV
+    import override_registry as OV
     tables = [t for t in payload.get("tables", []) if t.get("instrument") == OV.INSTRUMENT]
     lane_of = lambda tid: (EW._TABLE_LANE.get(tid) or (None,))[0]   # noqa: E731
     found = OV.sentence_findings(tables, lane_of, rows)

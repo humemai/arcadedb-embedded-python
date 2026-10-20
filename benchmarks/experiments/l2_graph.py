@@ -593,7 +593,7 @@ class Neo4jGraph(Base):
             s.run("CREATE INDEX person_id IF NOT EXISTS "
                   "FOR (p:Person) ON (p.id)").consume()
         # Two settings the runner overrides on this server, as the engine
-        # reports them (CAMPAIGN section 7 row 21, overrides.py): the page
+        # reports them (CAMPAIGN section 7 row 21, override_registry.py): the page
         # cache fitted to the cell, and the checkpoint interval set short so the
         # disk reading finds the store on disk.
         with self.driver.session() as s:
