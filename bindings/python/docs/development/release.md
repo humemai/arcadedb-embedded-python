@@ -401,8 +401,8 @@ uv run --project .. --group docs mike alias --update-aliases \
 - Ensure `git config` is set in workflow
 - Check that the `HUMEMAI_DOCS_TOKEN` secret is set and can push to `humemai/humemai-docs`
 - Verify the `main` branch of `humemai/humemai-docs` exists (docs deploy there under `arcadedb/`)
-- The deploy installs the latest `mkdocs-material`, `mkdocs-git-revision-date-localized-plugin`,
-  `mkdocs-macros-plugin`, and `mike` with `uv pip install --system`, not the locked `docs`
+- The deploy runs `mike` with `uvx` at the versions pinned in `deploy-python-docs.yml` (the same
+  `mkdocs` toolchain pins as `docs-build.yml`), not the locked `docs`
   group of the repo-root project, so a page that builds locally can still differ in the
   deployed build
 

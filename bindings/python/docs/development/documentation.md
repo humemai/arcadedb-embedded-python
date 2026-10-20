@@ -290,10 +290,10 @@ change; it fails on warnings and on links to pages that do not exist (not on mis
 uv run mkdocs build --strict -f bindings/python/mkdocs.yml
 ```
 
-The deploy does not use the locked `docs` group of the repo-root project: it installs the
-latest `mkdocs-material`, `mkdocs-git-revision-date-localized-plugin`, `mkdocs-macros-plugin`,
-and `mike` with `uv pip install --system`. A page that builds locally can still differ in the
-deployed build.
+The deploy does not use the locked `docs` group of the repo-root project: it runs `mike`
+with `uvx` at the versions pinned in `deploy-python-docs.yml`, the same pins as `docs-build.yml` for
+`mkdocs`, `mkdocs-material`, `mkdocs-git-revision-date-localized-plugin` and `mkdocs-macros-plugin`.
+A page that builds locally can still differ in the deployed build.
 
 `tests/test_docs_examples.py`, part of the test suite, executes a selection of the
 Python snippets in these pages (see [Documentation Example Tests](testing.md#documentation-example-tests)).

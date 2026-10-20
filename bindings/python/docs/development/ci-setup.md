@@ -86,7 +86,7 @@ A newer push to a pull request cancels the older run of this workflow; runs on `
 
 ### `docs-build.yml`
 
-Named `Docs Build`. Runs `mkdocs build --strict` (Python 3.12, pinned `mkdocs`, `mkdocs-material` and plugin versions; `deploy-python-docs.yml` installs the same versions) on pull requests and pushes to `main` that change `bindings/python/docs/**`, `bindings/python/mkdocs.yml` or the workflow, and on manual dispatch. It does not run the code blocks in the pages. See [Documentation](documentation.md#build-documentation).
+Named `Docs Build`. Runs `mkdocs build --strict` (Python 3.12, pinned `mkdocs`, `mkdocs-material` and plugin versions, run with `uvx`; `deploy-python-docs.yml` runs `mike` with the same versions) on pull requests and pushes to `main` that change `bindings/python/docs/**`, `bindings/python/mkdocs.yml` or the workflow, and on manual dispatch. It does not run the code blocks in the pages. See [Documentation](documentation.md#build-documentation).
 
 ### `build-engine-jars.yml`
 
@@ -102,7 +102,11 @@ Named `Build ArcadeDB engine jars`. A manual dispatch (inputs `repository`, defa
 
 ### Maintenance
 
-Every `uses:` is pinned to a full commit SHA with a `# vX.Y.Z` comment (enforced by `lint-workflows.yml`), and every uv install is pinned to one version (`0.12.0`; raise it in all four places together). `.github/dependabot.yml` opens one grouped pull request a week for the `github-actions` ecosystem with the commit prefix `ci`. It does not cover pip: Python tool versions in the workflows and `.pre-commit-config.yaml` are bumped by hand. The release and docs-deploy workflows only run on a tag, so a bump to them is not exercised by the pull request; the SHAs they share with the test workflows are, and the others (`gh-action-pypi-publish`) get their first run at the next release.
+Every `uses:` is pinned to a full commit SHA with a `# vX.Y.Z` comment (enforced by `lint-workflows.yml`), and every uv install is pinned to one version (`0.12.0`; raise it in all seven places together: `grep -c astral.sh/uv/ .github/workflows/*.yml`). `.github/dependabot.yml` opens one grouped pull request a week for the `github-actions` ecosystem with the commit prefix `ci`. It does not cover Python packages: tool versions in the workflows and `.pre-commit-config.yaml` are bumped by hand. The release and docs-deploy workflows only run on a tag, so a bump to them is not exercised by the pull request; the SHAs they share with the test workflows are, and the others (`gh-action-pypi-publish`) get their first run at the next release.
+
+### Python tooling in the workflows
+
+The workflows follow the project rule for Python tooling: no `pip install` and no `uv pip` anywhere. One-off tools run with `uvx` at an exact version (`bandit`, `pip-audit`, `mkdocs` with its plugins, `mike`). The inline `pyyaml` check in `lint-workflows.yml` runs with `uv run --no-project --with pyyaml==...`. The test and example jobs run `uv run --no-project --python <matrix version> --with <built wheel> --with-requirements <file> ...`, so the wheel and its test or example packages live in a throwaway environment and nothing is installed into the runner's interpreter. The macOS and Windows wheel builds (`scripts/build-native.sh`) need a Python with the `build` module on `PATH`, so those steps run `bash ./scripts/build.sh` under `uv run --with build --with wheel --with setuptools`. The examples take `torch` from the PyTorch CPU index (`UV_INDEX`) with `UV_INDEX_STRATEGY=unsafe-best-match`, so torch gets its CPU build from there while every other package still takes the newest release on either index. The Docker build of the Linux wheels still installs its build tools inside the image (`scripts/Dockerfile.build`), which is outside the workflows.
 
 ### `deploy-python-docs.yml`
 
@@ -121,7 +125,7 @@ What must pass before a change is green, beyond the tests themselves:
 - **Dependency floors** (`dependency-floors` job): the dependencies declared in
   `bindings/python/pyproject.toml` (with the `test`, `vector`, `examples`, `arrow`,
   and `pandas` extras) are resolved to their lowest allowed versions for every
-  Python version in the classifiers, and `pip-audit` checks the result.
+  Python version in the classifiers (`uv lock --script` and `uv export --script` on a generated PEP 723 header, because `uv lock` refuses the `managed = false` project), and `uvx pip-audit` checks the result.
 - **No skips** (`test` job): a skipped test did not run, so the job fails on any skip in the
   JUnit XML (`scripts/check_test_skips.py`; its list of accepted skips is empty). A test file
   that cannot run on a platform is left out of collection in `tests/conftest.py`
@@ -130,7 +134,7 @@ What must pass before a change is green, beyond the tests themselves:
   missing package (`could not import`, which is what `pytest.importorskip` gives, so call it
   without its own `reason=`) or for a feature the wheel always ships is therefore a failure,
   and a skip that is truly unavoidable (a Windows limitation, a case that needs an engine fix that is still upstream) is added to the list with the platform, the reason, and the upstream issue (for an engine bug a strict `xfail` is better: it fails the suite once the fix arrives). A new test dependency must be added both
-  to the `test` extra in `bindings/python/pyproject.toml` and to the "Install wheel and
+  to the `test` extra in `bindings/python/pyproject.toml` and to the requirements list in the "Install wheel and
   test dependencies" step of `test-python-bindings.yml`. The repo-root `pyproject.toml`
   carries the same packages for local runs.
 - **Timeouts**: the pytest step has a 30-minute limit, and `faulthandler_timeout = 600`

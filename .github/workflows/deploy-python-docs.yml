@@ -64,13 +64,6 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH"
           uv --version
 
-      - name: Install dependencies
-        if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
-        working-directory: bindings/python
-        run: |
-          # Same versions as docs-build.yml, so the deployed site is built with what CI checked. Change both together.
-          uv pip install --system "mkdocs==1.6.1" "mkdocs-material==9.7.7" "mkdocs-git-revision-date-localized-plugin==1.6.0" "mkdocs-macros-plugin==1.5.0" "mike==2.2.0"
-
       - name: Validate docs token
         if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
         run: |
@@ -116,6 +109,11 @@ jobs:
         env:
           MIKE_VERSION: ${{ steps.version.outputs.version }}
         run: |
+          # Same versions as docs-build.yml, so the deployed site is built with what CI checked. Change both together.
+          # mike loads mkdocs.yml, so the theme and plugins share its environment.
+          mike() {
+            uvx --from "mike==2.2.0" --with "mkdocs==1.6.1" --with "mkdocs-material==9.7.7" --with "mkdocs-git-revision-date-localized-plugin==1.6.0" --with "mkdocs-macros-plugin==1.5.0" mike "$@"
+          }
           mike deploy --update-aliases \
             --deploy-prefix arcadedb \
             --branch ${{ env.DOCS_BRANCH }} \
@@ -136,6 +134,11 @@ jobs:
         env:
           MIKE_VERSION: ${{ steps.version.outputs.version }}
         run: |
+          # Same versions as docs-build.yml, so the deployed site is built with what CI checked. Change both together.
+          # mike loads mkdocs.yml, so the theme and plugins share its environment.
+          mike() {
+            uvx --from "mike==2.2.0" --with "mkdocs==1.6.1" --with "mkdocs-material==9.7.7" --with "mkdocs-git-revision-date-localized-plugin==1.6.0" --with "mkdocs-macros-plugin==1.5.0" mike "$@"
+          }
           mike deploy \
             --deploy-prefix arcadedb \
             --branch ${{ env.DOCS_BRANCH }} \
