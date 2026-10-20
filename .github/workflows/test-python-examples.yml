@@ -801,8 +801,8 @@ jobs:
             echo "All examples ran successfully across all enabled platforms." >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**Platforms tested**: linux/amd64, linux/arm64, darwin/arm64, windows/amd64" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "Python 3.15 runs as an informational linux/amd64 leg: its result is shown on the run but does not decide this summary." >> $GITHUB_STEP_SUMMARY
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "Python 3.15 runs as an informational linux/amd64 leg: its result is shown on the run but does not decide this summary." >> "$GITHUB_STEP_SUMMARY"
           else
             echo "❌ **Some platforms failed example testing**" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY

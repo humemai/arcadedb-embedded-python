@@ -668,7 +668,7 @@ jobs:
             echo "ℹ️ **Note**: Some platform/Python combinations are excluded from testing:" >> $GITHUB_STEP_SUMMARY
             echo "- Windows ARM64 (no GitHub-hosted runners available)" >> $GITHUB_STEP_SUMMARY
             echo "- macOS x86_64 (temporarily disabled)" >> $GITHUB_STEP_SUMMARY
-            echo "- Python 3.15 runs as an informational linux/amd64 leg: its result is shown on the run but does not decide this summary" >> $GITHUB_STEP_SUMMARY
+            echo "- Python 3.15 runs as an informational linux/amd64 leg: its result is shown on the run but does not decide this summary" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "❌ **Some platforms failed testing**" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
