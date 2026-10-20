@@ -73,25 +73,13 @@ A summed or averaged column is a **measure**, and it is declared as one in the q
 digest specification and compared as a number whatever type the driver hands back. A count
 or an identifier is not declared that way and is compared exactly.
 
-The distinction was forced by a real split. At the campaign's own document size, a pricing
-summary split seven engines against one, and the one returned a summed integer column as an
-integer where the SQL engines, MongoDB, and SurrealDB returned a double. The canonical form
-printed an integer exactly and a double to six significant digits, so one number became two
-strings. In the same row the count was an integer on both sides and identical, the average
-was bit-identical, and the average times the count is the sum. Nobody had computed anything
-wrong. The two spellings happen to coincide below a certain magnitude, which is why every
-earlier run had passed.
-
-It was fixed by declaring what each column **is**, rather than by loosening the comparison.
-Loosening it would have been the wrong fix: a count rounded to six significant digits would
-let two counts that differ by one agree, and a lost row is exactly what this gate exists to
-catch. The declaration is per query and never per engine, so it cannot be used to make one
-engine's answer match another's.
-
-The rounding itself was measured rather than assumed. Six significant digits leaves an
-enormous margin over the worst disagreement observed between engines on real floating-point
-cells, while tightening it further splits real data where two engines land one bit either
-side of the same value.
+The distinction was forced by a real split: a pricing summary split seven engines against
+one, because one returned a summed integer column as an integer where the others returned a
+double, and the canonical form printed the two spellings as different strings. Nobody had
+computed anything wrong. It was fixed by declaring what each column **is**, per query and
+never per engine, rather than by loosening the comparison: a count rounded to six
+significant digits would let two counts that differ by one agree, and a lost row is exactly
+what this gate exists to catch.
 
 !!! warning "Where rounding can hide a lost row, the query changed, not the rounding"
     Two analytical queries carried no count column, and at the campaign's largest size a
@@ -99,8 +87,10 @@ side of the same value.
     undetected much of the time. Both queries now count the rows they aggregate, and that
     count is compared exactly. It is part of the answer, not a page column. The reason it
     was worth a query change before a campaign, which is the only time such a change is
-    free, is the engine defect described below: an engine that silently loses one row to an
-    index bound is exactly what those two queries could not see.
+    free, is the engine defect behind
+    [ArcadeData/arcadedb#7611](https://github.com/ArcadeData/arcadedb/issues/7611): an
+    engine that silently loses one row to an index bound is exactly what those two queries
+    could not see.
 
 ## When an Engine Cannot Express a Query
 
@@ -120,13 +110,7 @@ is for.
 It is also a claim that has to be earned. An adapter may record a query as unexpressible
 only after the engine's own documentation has been read and the constructs that were tried
 are named, and the declaration carries that evidence rather than a one-line opinion. A first
-failure is evidence about our fluency, not about the engine. Two precedents settled that
-rule: one engine's degree distribution was impossible with a single grouping and correct as
-two subqueries, and another's vector index looked unusable until its parameters were read
-out of the documentation and calibrated. A third case was a triangle count declared
-impossible in an engine's own language that turned out simply to be untried; the rewrite is
-exact against an independent enumeration at several corpus sizes, and its digest matches the
-number five other engines already agreed on.
+failure is evidence about our fluency, not about the engine.
 
 A rewrite must compute the **same answer**, proven by the digest, never merely run faster.
 That is also what makes it defensible for one engine's two deployments to run different
@@ -175,60 +159,20 @@ says so.
 
 ## What It Found
 
-Answer checking found five defects in two days. Three were in the engine, filed upstream
-and fixed in 26.10.1; two were ours.
-
-### Three Engine Defects, Fixed in 26.10.1
-
-[**ArcadeData/arcadedb#7609**](https://github.com/ArcadeData/arcadedb/issues/7609): a
-comparison against a bare decimal literal lost the boundary value. Found because an
-analytical revenue query returned a different total from every comparator on the same data.
-Reproduced on a small fixture: an equality against the literal returned nothing, a
-greater-or-equal returned exactly what a strictly-greater returned, and a `BETWEEN` over the
-same bounds was correct. Root-caused in the engine to a suffix-less literal being parsed at
-single precision and widened back to double, which reproduced the error rather than undoing
-it. It was wider than the first example, since the direction depended on which literal was
-written, and sharper than it looked: the same rows behind an index answered every comparison
-correctly, because an index fetch takes a different path, so adding or dropping an index
-changed the answer. The harness rule that follows is that ArcadeDB SQL in this repository
-compares a numeric column through `BETWEEN` or a bound parameter and never against a bare
-decimal literal.
-
-[**ArcadeData/arcadedb#7610**](https://github.com/ArcadeData/arcadedb/issues/7610): the
-served engine serialised a time bucket as a date, so every bucket inside one calendar day
-collapsed to one value. The embedded engine on the same build returned the full grouping, and
-so did five comparators. Grouping, row counts, and aggregates were all correct; only the value
-on the wire was destroyed. With the fix the served cell publishes, and its answer matches its
-embedded twin's. The rule that follows is that a served query projecting a temporal value is
-checked against its embedded twin. See the
-[time series table](https://humem.ai/research/arcadedb#timeseries).
-
-[**ArcadeData/arcadedb#7611**](https://github.com/ArcadeData/arcadedb/issues/7611): an
-indexed lower bound lost part of a run of equal entries. An ascending range seek started
-wherever the binary search landed inside the run, and the entries before it were never
-produced, so a query over an indexed column could be short by rows that qualify. Found by
-running the document lane at the campaign's own scale factor rather than a small one, and
-root-caused with a repro against the engine API, including a candidate fix. It was not
-specific to one type, an unindexed scan over the same rows was correct, and rows written in
-one transaction merged into one entry and answered correctly, which is why bulk-loaded data
-hid it. This is the defect the two added row counts exist to catch.
-
-### Two of Our Own
-
-One of our analytical query texts computed four of the five aggregates every comparator
-computed, so the cell timed a smaller question than the row beside it, and it was faster for
-that reason. The other was the integer against double split described above, which was a
-defect in the digest specification rather than in any answer.
-
-Both of ours made ArcadeDB look better than the truth. That is the argument for this gate in
-one sentence: two wrong numbers, both in our favour, on a page that had already been
-reviewed three times.
-
-!!! info "Bugs are written down when they are found, not when they are fixed"
-    A finding gets a reproduction the day it is found, an upstream draft when it belongs to
-    the engine, and an entry in the issues trail whether or not it has been filed yet. What
-    each attempt teaches about a comparator's dialect is written down per engine, so the
-    next dialect problem starts from what is already known instead of from a shrug.
+Answer checking found five defects in two days. Three were in the engine, filed upstream and
+fixed in 26.10.1:
+[ArcadeData/arcadedb#7609](https://github.com/ArcadeData/arcadedb/issues/7609) (a comparison
+against a bare decimal literal lost the boundary value),
+[#7610](https://github.com/ArcadeData/arcadedb/issues/7610) (the served engine serialised a
+time bucket as a date), and
+[#7611](https://github.com/ArcadeData/arcadedb/issues/7611) (an indexed lower bound lost
+part of a run of equal entries). Two were ours: an analytical query text that computed four
+of the five aggregates every comparator computed, and the integer against double split
+described above. Both of ours made ArcadeDB look better than the truth, which is the
+argument for this gate in one sentence. The harness rule that follows from the first is that
+ArcadeDB SQL in this repository compares a numeric column through `BETWEEN` or a bound
+parameter and never against a bare decimal literal; the one that follows from the second is
+that a served query projecting a temporal value is checked against its embedded twin.
 
 ## What Answer Checking Cannot Prove
 
