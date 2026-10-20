@@ -10,7 +10,7 @@ pip install arcadedb-embedded
 
 **Requirements:**
 
-- **Python 3.10 to 3.14** (CI runs all five on every supported platform). No Java installation required!
+- **Python 3.11 to 3.14** (CI runs all four on every supported platform). No Java installation required!
 - **Supported Platforms**: Prebuilt wheels for **4 platforms**
     - Linux: x86_64, ARM64
     - macOS: Apple Silicon (ARM64)
@@ -56,7 +56,7 @@ Python process's, and it bundles the Postgres, Redis, and Bolt wire protocols (o
 
 ## Python Version
 
-- **Supported**: Python 3.10, 3.11, 3.12, 3.13, 3.14 (packaged classifiers)
+- **Supported**: Python 3.11, 3.12, 3.13, 3.14 (packaged classifiers)
 - **Recommended**: Python 3.12 or higher
 
 ## Dependencies

@@ -2,7 +2,7 @@
 
 The tests live in `bindings/python/tests` and run against the built wheel with its bundled JRE.
 One JVM serves a whole pytest session. CI runs the suite on Linux (x86_64 and ARM64), macOS
-(ARM64), and Windows (x86_64), on every Python from 3.10 to 3.14; see
+(ARM64), and Windows (x86_64), on every Python from 3.11 to 3.14; see
 [CI Gates](ci-setup.md#ci-gates).
 
 ## Running the tests

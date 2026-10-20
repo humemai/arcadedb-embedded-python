@@ -173,19 +173,20 @@ jobs:
     runs-on: ${{ matrix.runs-on }}
     timeout-minutes: 120
     needs: download-jars
+    # An experimental leg (Python 3.15) is reported but never fails the job, so Examples Test Summary stays green.
+    continue-on-error: ${{ matrix.experimental == true }}
     env:
       BUILD_VERSION: ${{ inputs.build-version }}
       # Pin the Hugging Face cache inside the workspace so it is cacheable with
       # one path on every platform (the default differs per OS). The examples
-      # embed with sentence-transformers, and this matrix is 20 jobs, so
-      # uncached that is 20 independent model downloads per release and 20
+      # embed with sentence-transformers, and this matrix is 17 jobs, so
+      # uncached that is 17 independent model downloads per release and 17
       # chances for a transient hub outage to fail a release. It has happened.
       HF_HOME: ${{ github.workspace }}/.hf-cache
     strategy:
       fail-fast: false
       matrix:
         python-version:
-          - '3.10'
           - '3.11'
           - '3.12'
           - '3.13'
@@ -207,6 +208,13 @@ jobs:
           # - platform: windows/arm64
           #   runs-on: windows-11-arm
           # macOS x86_64 and Windows ARM64 temporarily disabled
+          # Python 3.15 is informational: one linux/amd64 leg that may fail without failing the
+          # job or the summary (continue-on-error below). It uploads no wheel, so the release
+          # workflow never collects or publishes a 3.15 wheel. Drop `experimental` when 3.15 is supported.
+          - python-version: '3.15'
+            platform: linux/amd64
+            runs-on: ubuntu-24.04
+            experimental: true
 
     steps:
       - name: Checkout code
@@ -793,6 +801,8 @@ jobs:
             echo "All examples ran successfully across all enabled platforms." >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**Platforms tested**: linux/amd64, linux/arm64, darwin/arm64, windows/amd64" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Python 3.15 runs as an informational linux/amd64 leg: its result is shown on the run but does not decide this summary." >> $GITHUB_STEP_SUMMARY
           else
             echo "❌ **Some platforms failed example testing**" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY

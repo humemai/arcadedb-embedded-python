@@ -140,8 +140,8 @@ jobs:
       #
       # Every interpreter the package claims to support is resolved, because the
       # closure is interpreter-dependent even though the declared floors are not:
-      # 3.10 pulls exceptiongroup, tomli and typing-extensions that 3.12 does not,
-      # and 3.14 drops one more. --python-version selects the resolution target
+      # an older interpreter pulls backports (typing-extensions, for one) that a
+      # newer one does not, and 3.14 drops one more. --python-version selects the resolution target
       # without installing anything, so this stays one job rather than a matrix.
       # The list is read from the classifiers rather than repeated here, so adding
       # an interpreter to the package cannot leave it unaudited.
@@ -261,6 +261,8 @@ jobs:
     runs-on: ${{ matrix.runs-on }}
     timeout-minutes: 45
     needs: download-jars
+    # An experimental leg (Python 3.15) is reported but never fails the job, so Test Summary stays green.
+    continue-on-error: ${{ matrix.experimental == true }}
     env:
       BUILD_VERSION: ${{ inputs.build-version }}
     strategy:
@@ -268,7 +270,6 @@ jobs:
       fail-fast: false
       matrix:
         python-version:
-          - '3.10'
           - '3.11'
           - '3.12'
           - '3.13'
@@ -290,6 +291,13 @@ jobs:
           # - platform: windows/arm64
           #   runs-on: windows-11-arm
           # macOS x86_64 and Windows ARM64 temporarily disabled
+          # Python 3.15 is informational: one linux/amd64 leg that may fail without failing the
+          # job or the summary (continue-on-error below). It uploads no wheel, so the release
+          # workflow never collects or publishes a 3.15 wheel. Drop `experimental` when 3.15 is supported.
+          - python-version: '3.15'
+            platform: linux/amd64
+            runs-on: ubuntu-24.04
+            experimental: true
 
     steps:
       - name: Checkout code
@@ -619,7 +627,9 @@ jobs:
             bindings/python/.coverage
           retention-days: 7
 
+      # Not for an experimental leg: the release workflow collects wheel-*-py* and counts them.
       - name: Upload wheel artifact
+        if: matrix.experimental != true
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wheel-${{ matrix.platform == 'linux/amd64' && 'linux-amd64' || matrix.platform == 'linux/arm64' && 'linux-arm64' || matrix.platform == 'darwin/amd64' && 'darwin-amd64' || matrix.platform == 'darwin/arm64' && 'darwin-arm64' || matrix.platform == 'windows/amd64' && 'windows-amd64' || 'windows-arm64' }}-py${{ matrix.python-version }}
@@ -658,6 +668,7 @@ jobs:
             echo "ℹ️ **Note**: Some platform/Python combinations are excluded from testing:" >> $GITHUB_STEP_SUMMARY
             echo "- Windows ARM64 (no GitHub-hosted runners available)" >> $GITHUB_STEP_SUMMARY
             echo "- macOS x86_64 (temporarily disabled)" >> $GITHUB_STEP_SUMMARY
+            echo "- Python 3.15 runs as an informational linux/amd64 leg: its result is shown on the run but does not decide this summary" >> $GITHUB_STEP_SUMMARY
           else
             echo "❌ **Some platforms failed testing**" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY

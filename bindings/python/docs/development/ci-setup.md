@@ -2,7 +2,7 @@
 
 ## Overview
 
-The CI/CD workflows build and release across **4 platforms** for a total of **20 wheel packages** per release (4 platforms × 5 Python versions), all under the single `arcadedb-embedded` package.
+The CI/CD workflows build and release across **4 platforms** for a total of **16 wheel packages** per release (4 platforms × 4 Python versions), all under the single `arcadedb-embedded` package.
 
 ## Build Matrix
 
@@ -19,19 +19,23 @@ The CI/CD workflows build and release across **4 platforms** for a total of **20
 
 ### Total Artifacts
 
-**20 wheels per release**: 1 package × 4 platforms × 5 Python versions = 20 wheels
+**16 wheels per release**: 1 package × 4 platforms × 4 Python versions = 16 wheels
+
+### Python 3.15 leg
+
+Python 3.15 runs as one extra, informational leg in the bindings and the examples matrices, on `linux/amd64` only. It is an `include` entry with `experimental: true`, and the `test` job sets `continue-on-error: ${{ matrix.experimental == true }}`, so a failure in that leg is shown on the run but does not fail the job, the summary job or the pull request. It uploads no wheel artifact, so the release workflow never collects or publishes a 3.15 wheel. The package does not claim 3.15 yet: there is no 3.15 classifier, and the dependency floors audit (which reads the classifiers) does not resolve it. When the leg has been green for a release cycle, add the classifier, move the entry into the required matrix and raise the wheel count in the release workflow, `after_tag_verify.sh` and these docs.
 
 ## Workflows
 
 ### `test-python-bindings.yml`
 
-- **Matrix**: `platform: [linux/amd64, linux/arm64, darwin/arm64, windows/amd64]` and `python-version: [3.10, 3.11, 3.12, 3.13, 3.14]`
+- **Matrix**: `platform: [linux/amd64, linux/arm64, darwin/arm64, windows/amd64]` and `python-version: [3.11, 3.12, 3.13, 3.14]`, plus one informational Python 3.15 leg on `linux/amd64` (see [Python 3.15 leg](#python-315-leg))
 - **Runners**: All native (no QEMU emulation)
     - ubuntu-24.04 (Linux x64)
     - ubuntu-24.04-arm (Linux ARM64)
     - macos-15 (macOS Apple Silicon)
     - windows-2025 (Windows x86_64)
-- **Jobs**: `bandit`, `dependency-floors`, `download-jars`, `test` (20 matrix jobs: 4 platforms × 5 Python versions), and `test-summary`
+- **Jobs**: `bandit`, `dependency-floors`, `download-jars`, `test` (16 required matrix jobs: 4 platforms × 4 Python versions, plus the informational 3.15 leg), and `test-summary`
 - **Artifacts**:
     - `wheel-<os>-<arch>-py<version>` (for example `wheel-linux-amd64-py3.12`), kept 7 days; the
       release workflow collects these with the pattern `wheel-*-py*`
@@ -45,7 +49,7 @@ The CI/CD workflows build and release across **4 platforms** for a total of **20
 
 ### `test-python-examples.yml`
 
-Builds the wheel on the same 4 × 5 matrix and runs the example scripts
+Builds the wheel on the same 4 × 4 matrix (and the same informational 3.15 leg) and runs the example scripts
 (`0[1-9]_*.py 1[0-9]_*.py 2[0-9]_*.py` by default). Example 21 runs at reduced scale
 (`--base-cities 1200 ...`, 15-minute limit).
 Same path filter, triggers and draft rule as the bindings workflow (a draft pull request skips `download-jars`, `test-examples` and the summary). Job timeouts: `download-jars` 90, `test-examples` 120 (recent successful jobs took 29 to 38 minutes), summary 5. A clean exit is not the whole
@@ -93,7 +97,7 @@ Named `Build ArcadeDB engine jars`. A manual dispatch (inputs `repository`, defa
 - **Trigger**: a pushed tag matching `[0-9]+.[0-9]+.[0-9]+*` (`X.Y.Z`, `X.Y.Z.devN`, `X.Y.Z.postN`)
 - **validate-version**: the tag's base version must equal the `pom.xml` base version, or the release stops
 - **test** and **test-examples**: call the two test workflows above with the tag version
-- **publish**: needs all three, collects all 20 wheels, checks the count and the versions, and publishes to `arcadedb-embedded` on PyPI through the `pypi` environment (trusted publishing)
+- **publish**: needs all three, collects all 16 wheels, checks the count and the versions, and publishes to `arcadedb-embedded` on PyPI through the `pypi` environment (trusted publishing)
 - The publish job has `continue-on-error: true`, so a failed upload or a failed check in it still leaves the run green. Check PyPI for every wheel the release built.
 
 ### Maintenance
@@ -181,7 +185,7 @@ repository; this is how they are configured if they ever need to be recreated.
 
 After a successful release, you should see:
 
-- **20 wheel files** on PyPI for `arcadedb-embedded` (4 platforms × 5 Python versions)
+- **16 wheel files** on PyPI for `arcadedb-embedded` (4 platforms × 4 Python versions)
 
 ### Package Contents
 
@@ -268,7 +272,7 @@ The bindings load the bundled JRE's JVM library from a platform-specific path:
 
 ### Wheel count mismatch
 
-- The publish job validates that exactly 20 wheels exist
+- The publish job validates that exactly 16 wheels exist
 - If validation fails, check the build matrix jobs for failures
 - Ensure all 4 platform builds succeeded
 
