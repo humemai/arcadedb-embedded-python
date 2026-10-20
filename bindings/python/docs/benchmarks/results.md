@@ -153,11 +153,12 @@ The invariant it enforces: **every page table and figure is generated from froze
 listed in the page manifest, pinned by a gate, and carries a source link to a tracked
 artifact.**
 
-Six gates run, and they answer different questions. Five read the rows; `version_pin_check`, the newest, reads none, asking instead whether the files that state a version pin still agree with each other. `equivalence_check` runs first: it arrived with the 2026-10 instrument, which is also the instrument whose lanes stamp the answer digests it compares. **Rows from before the 2026-10 instrument carry no digest field**, so wherever the page still prints them the gate has nothing to compare, and the answers behind those cells were never compared across engines. That is worth knowing when you read one of those latencies: with no answer check behind a number, a fast number and a wrong answer look alike. It is the 2026-10 rows that this gate holds to each other.
+Seven gates run, and they answer different questions. Six read the rows; `version_pin_check`, the newest, reads none, asking instead whether the files that state a version pin still agree with each other. `equivalence_check` runs first: it arrived with the 2026-10 instrument, which is also the instrument whose lanes stamp the answer digests it compares. **Rows from before the 2026-10 instrument carry no digest field**, so wherever the page still prints them the gate has nothing to compare, and the answers behind those cells were never compared across engines. That is worth knowing when you read one of those latencies: with no answer check behind a number, a fast number and a wrong answer look alike. It is the 2026-10 rows that this gate holds to each other.
 
 | Gate | Asks |
 |---|---|
 | `equivalence_check` | Did the engines of a table give the same answers? This is F11 of the [fairness invariants](protocol.md#the-fairness-invariants). |
+| `resource_check` | Is any disk or memory value one that cannot be right: far below the other engines in its group, a negative disk growth, or a disk reading taken after a failed pre-disk step? It checks the 2026-10 rows only and says how many it left out. |
 | `provenance_check` | Does every published cell trace back to a run, under conditions that were recorded rather than asserted? |
 | `fairness_check` | Were the rows in one table given the same thing? The [fairness invariants](protocol.md#the-fairness-invariants) that a row can show. |
 | `page_check` | Does every cell and every typed number on the page still agree with the generated tables? |

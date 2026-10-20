@@ -2,7 +2,7 @@
 
 How this benchmark harness must be operated. Every rule carries a tag saying what enforces it:
 
-- **GATE** `<name>`: something refuses. Either one of the gate scripts `refresh_web_page.py` runs (`equivalence_check` from the 2026-10 instrument, `provenance_check`, `fairness_check`, `page_check`, `version_consistency_check`, and `version_pin_check`, in `refresh_web_page.GATES`) or a refusal in the runner or a lane at production time.
+- **GATE** `<name>`: something refuses. Either one of the gate scripts `refresh_web_page.py` runs (`equivalence_check` and `resource_check`, both from the 2026-10 instrument, `provenance_check`, `fairness_check`, `page_check`, `version_consistency_check`, and `version_pin_check`, in `refresh_web_page.GATES`) or a refusal in the runner or a lane at production time.
 - **HAND-RUN** `claims_check`: checked only when someone runs `claims_check.py`. It is a helper library that `page_check` imports, not a gate.
 - **REMEMBERED**: nothing will catch the next violation.
 
@@ -120,6 +120,8 @@ The admission filter is `make_paper_tables.load_canonical()`. Every test below r
 - Leave an unsourced prose number pinned and FAILING rather than deleting the claim or nudging the number. **REMEMBERED**
 - Pin a known confound as a checkable quantity instead of publishing the ratio it corrupts. Never publish a cross-engine memory ratio computed from anonymous memory: anon is 26% of PostgreSQL's peak and 97.5% of ArcadeDB's. **HAND-RUN** `anon_share`, `anon_client_share`
 - Split a served cell's memory into client and server before comparing with an embedded engine. **HAND-RUN** `mem.postgres.client_share`
+- A disk or memory value far below the other engines of its lane, scale, workload and durability class (`resource_check.LOW_RATIO`), a negative disk growth, and a disk reading taken after a pre-disk step that did not return `rc=0` do not publish; a flag that has been understood goes in `resource_check.BY_DESIGN` with its reason. Rows of the 2026-10 instrument only, failed rows are skipped, and the lifecycle and restart lanes are not checked (`resource_check.SKIP_LANES` says why). **GATE** `resource_check`
+- An engine whose rows hold more shared than anonymous memory is named under its table, with its cell beside the shared memory its rows held, because the memory column counts the anonymous peak only. The same row test excuses it from `resource_check`'s memory rule. **GATE** `export_web._shared_memory_note` (the plain PostgreSQL arm keeps `_pg_memory_note`, which also splits its cell into our client and the database), `test_resource_check.py`
 - Reject a throughput from a run that wrote the wrong number of rows. **HAND-RUN** `ingest_ab` honors `count_ok`
 - Aggregate a decomposition over all matched released runs, and pin the fact that a term sits below resolution rather than quoting one tidy run. **HAND-RUN** `_e4_decomp`
 - Pin a binding-overhead ratio by the exact pair of arms it compares. **HAND-RUN** `pyb_ratio`
