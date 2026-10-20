@@ -858,6 +858,8 @@ BACKENDS = {
                        "-e", "FALKORDB_ARGS=THREAD_COUNT {ncpu} RESULTSET_SIZE -1"],
         "server_port": 6379,
         "ready_regex": r"Ready to accept connections",
+        # Run in the server before its final disk reading, relaxed class only (#349): see the reading below.
+        "pre_disk_cmd": ["redis-cli", "SAVE"],
     },
     # DUCKPGQ on DuckDB 1.5.4 (2026-09-17, DECISIONS #103d/#103e), embedded in
     # the DuckDB image (which carries pyarrow for the bulk load). SQL/PGQ over
@@ -1504,6 +1506,8 @@ BACKENDS = {
                        "-e", "FALKORDB_ARGS=THREAD_COUNT {ncpu} RESULTSET_SIZE -1"],
         "server_port": 6379,
         "ready_regex": r"Ready to accept connections",
+        # Run in the server before its final disk reading, relaxed class only (#349): see the reading below.
+        "pre_disk_cmd": ["redis-cli", "SAVE"],
     },
     # LadybugDB: embedded in the client image, as the graph arm is; the
     # adapter fits its threads and buffer pool to the cell (F160).
@@ -3505,6 +3509,20 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                     row["server_oom_killed"] = _si.stdout.strip() == "true"
             except Exception as _e:                       # noqa: BLE001
                 row["server_oom_error"] = f"{type(_e).__name__}: {_e}"
+            # A PERSISTED FOOTPRINT, NOT A SNAPSHOT TIMER (#349). FalkorDB's relaxed class is the image default,
+            # RDB snapshots on Redis's save rules only, so a cell that ended before a rule fired had written
+            # nothing and read 0.0 MB beside its neighbours' gigabytes (l3d small and l2 sf1, pass 1 of
+            # 26.10.1). What a relaxed FalkorDB keeps on disk is its snapshot, so the snapshot is taken first.
+            # Not in the strict class: its append-only file already holds every write, and a snapshot beside it
+            # would count the data twice.
+            if be.get("pre_disk_cmd") and _dcls == "relaxed":
+                try:
+                    _pd = subprocess.run(["docker", "exec", server_cid] + be["pre_disk_cmd"],
+                                         capture_output=True, text=True, timeout=1800)
+                    row["server_pre_disk"] = (f"{' '.join(be['pre_disk_cmd'])}: rc={_pd.returncode} "
+                                              f"{(_pd.stdout or _pd.stderr).strip()[:80]}")
+                except Exception as _e:                       # noqa: BLE001
+                    row["server_pre_disk"] = f"{' '.join(be['pre_disk_cmd'])}: {type(_e).__name__}: {_e}"
             d = container_disk(server_cid)
             row["server_disk_mb"] = d["disk_mb"]
             row["server_disk_rw_mb"] = d["disk_rw_mb"]
@@ -3568,6 +3586,17 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             # storage comparison wants; the raw ones stay beside it so the
             # subtraction is visible rather than baked in.
             row["disk_data_mb"] = round(sum(_d) - sum(_b), 1) if _b else None
+            # NOT EVERY READING IS A FOOTPRINT (#349). The lifecycle lane removes each database after measuring
+            # it, so its end-of-cell reading is the empty container whatever the size (0.0 MB at ten million
+            # records): disk is not one of its measures. And a growth below zero is not a size: QuestDB's
+            # empty-start footprint holds preallocated files that shrink later (restart ts100 read -95.9 MB).
+            # Both raw readings stay on the row either way.
+            if job["lane"] == "lifecycle":
+                row["disk_data_mb"] = None
+            elif row["disk_data_mb"] is not None and row["disk_data_mb"] < 0:
+                row["disk_note"] = (f"growth {row['disk_data_mb']} MB is below zero: the empty-start reading "
+                                    f"was larger than the final one, so no growth is recorded")
+                row["disk_data_mb"] = None
 
         for name, s in samplers:
             s.finish()
