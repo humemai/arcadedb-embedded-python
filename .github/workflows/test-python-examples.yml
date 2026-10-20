@@ -183,6 +183,16 @@ jobs:
       # uncached that is 17 independent model downloads per release and 17
       # chances for a transient hub outage to fail a release. It has happened.
       HF_HOME: ${{ github.workspace }}/.hf-cache
+      # The examples run in a throwaway `uv run` environment holding the wheel and the packages in
+      # EXAMPLE_REQUIREMENTS (set by "Install ArcadeDB Python bindings", written by "Install example dependencies"). Torch comes from the PyTorch
+      # CPU index, which avoids the CUDA build on Linux and Windows. That index also carries copies of
+      # numpy, requests and others, and the default first-index strategy would take those over PyPI's.
+      # unsafe-best-match looks at every index and takes the best version of each package; a tie, as
+      # for torch on macOS, goes to the first index. It is safe here because the extra index is
+      # PyTorch's own. UV_PYTHON_DOWNLOADS=never keeps uv on the interpreter setup-python installed.
+      UV_INDEX: https://download.pytorch.org/whl/cpu
+      UV_INDEX_STRATEGY: unsafe-best-match
+      UV_PYTHON_DOWNLOADS: never
     strategy:
       fail-fast: false
       matrix:
@@ -254,11 +264,6 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH"
           uv --version
 
-      - name: Install Python build dependencies
-        shell: bash
-        run: |
-          uv pip install --system build wheel setuptools
-
       # Windows currently enabled, no symlink needed
       # - name: Create python3 symlink (Windows only)
       #   if: matrix.platform == 'windows/amd64' || matrix.platform == 'windows/arm64'
@@ -275,14 +280,18 @@ jobs:
         run: |
           cd bindings/python
           echo "🔨 Building arcadedb-embedded for ${{ matrix.platform }} with Python ${{ matrix.python-version }}..."
+          # scripts/build-native.sh (macOS and Windows) runs `python -m build` with the first python on PATH that
+          # has the build module. `uv run --with` puts a throwaway environment holding the build tools first on
+          # PATH for this one command, so nothing is installed into the runner's interpreter. Linux builds in Docker.
+          BUILD_RUN=(uv run --no-project --python "${{ matrix.python-version }}" --with build --with wheel --with setuptools bash)
           # ENGINE FROM SOURCE: hand the jars built from this commit to build.sh on
           # every platform. Without JAR_LIB_DIR the Linux (Docker) build pulls the
           # snapshot image's jars itself, so the option silently did nothing there
           # while the native builds used the artifact (2026-10-04, run 37193748490).
           if [ "${ENGINE_FROM_SOURCE}" = "true" ]; then
-            ./scripts/build.sh ${{ matrix.platform }} ${{ matrix.python-version }} src/arcadedb_embedded/jars
+            "${BUILD_RUN[@]}" ./scripts/build.sh ${{ matrix.platform }} ${{ matrix.python-version }} src/arcadedb_embedded/jars
           else
-            ./scripts/build.sh ${{ matrix.platform }} ${{ matrix.python-version }}
+            "${BUILD_RUN[@]}" ./scripts/build.sh ${{ matrix.platform }} ${{ matrix.python-version }}
           fi
 
       # Note: Java is NOT required - arcadedb-embedded has bundled JRE!
@@ -290,24 +299,32 @@ jobs:
       - name: Install ArcadeDB Python bindings
         shell: bash
         run: |
-          cd bindings/python
-          uv pip install --system dist/*embed*.whl
+          # Not installed into the runner's interpreter: the later steps pass this wheel to `uv run --with`.
+          wheels=("$GITHUB_WORKSPACE"/bindings/python/dist/*embed*.whl)
+          if [ "${#wheels[@]}" -ne 1 ] || [ ! -f "${wheels[0]}" ]; then
+            echo "expected exactly one wheel in bindings/python/dist, found: ${wheels[*]}"
+            exit 1
+          fi
+          {
+            echo "ARCADEDB_WHEEL=${wheels[0]}"
+            echo "EXAMPLE_REQUIREMENTS=$RUNNER_TEMP/example-requirements.txt"
+          } >> "$GITHUB_ENV"
 
       - name: Install example dependencies
         shell: bash
         run: |
-          # Install dependencies needed by examples
-          # PyTorch is required by sentence-transformers, even on macOS
-          # For Python 3.13+, wheels might only be on PyTorch official index
+          # Packages needed by the examples, listed once here for every later step.
+          # PyTorch is required by sentence-transformers, even on macOS (its CPU build supports MPS acceleration).
+          # tqdm, py7zr and lxml are for the dataset downloads.
           if [[ "$OSTYPE" == "darwin"* ]]; then
-            # macOS: Install CPU-only PyTorch (supports MPS acceleration)
-            uv pip install --system torch --index-url https://download.pytorch.org/whl/cpu
-            uv pip install --system "numpy<2.0" requests sentence-transformers
+            numpy_spec="numpy<2.0"
           else
-            # Linux & Windows: Install CPU-only PyTorch to save space (avoid CUDA)
-            uv pip install --system torch --index-url https://download.pytorch.org/whl/cpu
-            uv pip install --system numpy requests sentence-transformers
+            numpy_spec="numpy"
           fi
+          printf '%s\n' torch "$numpy_spec" requests sentence-transformers tqdm py7zr lxml > "$EXAMPLE_REQUIREMENTS"
+          # Build the environment now, so a dependency that cannot be resolved or installed fails here.
+          EXAMPLES_PYTHON=(uv run --no-project --python "${{ matrix.python-version }}" --with "$ARCADEDB_WHEEL" --with-requirements "$EXAMPLE_REQUIREMENTS" python)
+          "${EXAMPLES_PYTHON[@]}" -c "import sys; print(sys.version)"
 
       # Restored before the dataset step, which is what triggers the model
       # download. Keyed on the model name so bumping the model invalidates it.
@@ -330,9 +347,9 @@ jobs:
         shell: bash
         continue-on-error: true
         run: |
-          uv pip install --system sentence-transformers >/dev/null 2>&1 || true
+          EXAMPLES_PYTHON=(uv run --no-project --python "${{ matrix.python-version }}" --with "$ARCADEDB_WHEEL" --with-requirements "$EXAMPLE_REQUIREMENTS" python)
           for attempt in 1 2 3; do
-            if python3 -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2'); print('model ready')"; then
+            if "${EXAMPLES_PYTHON[@]}" -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2'); print('model ready')"; then
               echo "✅ model cached on attempt $attempt"
               exit 0
             fi
@@ -344,7 +361,7 @@ jobs:
       - name: Download datasets
         shell: bash
         run: |
-          uv pip install --system tqdm py7zr lxml
+          EXAMPLES_PYTHON=(uv run --no-project --python "${{ matrix.python-version }}" --with "$ARCADEDB_WHEEL" --with-requirements "$EXAMPLE_REQUIREMENTS" python)
           cd bindings/python/examples
 
           # Determine which examples are selected
@@ -374,7 +391,7 @@ jobs:
             # every failure into "exited 0" and would have made this skip
             # everything, including real ones.
             local rc=0
-            if python3 download_data.py "$@"; then
+            if "${EXAMPLES_PYTHON[@]}" download_data.py "$@"; then
               return 0
             else
               rc=$?
@@ -434,6 +451,9 @@ jobs:
         shell: bash
         run: |
           cd bindings/python/examples
+
+          # Same environment as the steps above; uv builds it once and reuses it for every example.
+          EXAMPLES_PYTHON=(uv run --no-project --python "${{ matrix.python-version }}" --with "$ARCADEDB_WHEEL" --with-requirements "$EXAMPLE_REQUIREMENTS" python)
 
           echo "🚀 Running Python Examples..."
           echo ""
@@ -629,13 +649,13 @@ jobs:
 
             # Run the example with appropriate parameters
             if [ -n "$example_jvm_args" ]; then
-              if ARCADEDB_JVM_ARGS="$example_jvm_args" JAVA_TOOL_OPTIONS="" _JAVA_OPTIONS="" $TIMEOUT_CMD $timeout_duration python "$example" $example_args > "$log_file" 2>&1; then
+              if ARCADEDB_JVM_ARGS="$example_jvm_args" JAVA_TOOL_OPTIONS="" _JAVA_OPTIONS="" $TIMEOUT_CMD $timeout_duration "${EXAMPLES_PYTHON[@]}" "$example" $example_args > "$log_file" 2>&1; then
                 exit_code=0
               else
                 exit_code=$?
               fi
             else
-              if ARCADEDB_JVM_ARGS="" JAVA_TOOL_OPTIONS="" _JAVA_OPTIONS="" $TIMEOUT_CMD $timeout_duration python "$example" $example_args > "$log_file" 2>&1; then
+              if ARCADEDB_JVM_ARGS="" JAVA_TOOL_OPTIONS="" _JAVA_OPTIONS="" $TIMEOUT_CMD $timeout_duration "${EXAMPLES_PYTHON[@]}" "$example" $example_args > "$log_file" 2>&1; then
                 exit_code=0
               else
                 exit_code=$?
@@ -649,11 +669,11 @@ jobs:
               ref_args="${example_args/--db arcadedb_cypher/--db python_memory}"
               ref_args="${ref_args/--run-label ci10/--run-label ci10ref}"
               ref_log="${example%.py}-reference.log"
-              if ! $TIMEOUT_CMD $timeout_duration python "$example" $ref_args > "$ref_log" 2>&1; then
+              if ! $TIMEOUT_CMD $timeout_duration "${EXAMPLES_PYTHON[@]}" "$example" $ref_args > "$ref_log" 2>&1; then
                 echo "❌ reference run (python_memory) of $example failed; last 20 lines:"
                 tail -n 20 "$ref_log"
                 exit_code=1
-              elif ! python scripts/compare_query_hashes.py "$log_file" "$ref_log"; then
+              elif ! "${EXAMPLES_PYTHON[@]}" scripts/compare_query_hashes.py "$log_file" "$ref_log"; then
                 echo "❌ $example: answers differ from the python_memory reference (above)"
                 exit_code=1
               fi
