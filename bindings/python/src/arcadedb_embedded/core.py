@@ -2080,6 +2080,16 @@ class Database:
 class DatabaseFactory:
     """Factory for creating/opening ArcadeDB databases."""
 
+    def __new__(cls, path: str, jvm_kwargs: Optional[dict] = None):
+        # ARCADEDB_BACKEND=native (experimental, native-spike branch): the factory over libarcadedb
+        from . import _native
+
+        if _native.enabled():
+            from ._native.database import NativeDatabaseFactory
+
+            return NativeDatabaseFactory(path, jvm_kwargs)
+        return super().__new__(cls)
+
     def __init__(
         self,
         path: str,

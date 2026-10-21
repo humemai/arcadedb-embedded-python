@@ -50,6 +50,22 @@ def _all_interfaces_host_settings():
 class ArcadeDBServer:
     """ArcadeDB Server wrapper for enabling HTTP API and Studio access."""
 
+    def __new__(
+        cls,
+        root_path: str = "./databases",
+        root_password: Optional[str] = None,
+        config: Optional[Dict[str, Any]] = None,
+        jvm_kwargs: Optional[dict] = None,
+    ):
+        # ARCADEDB_BACKEND=native (experimental, native-spike branch): the in-process server over libarcadedb
+        from . import _native
+
+        if _native.enabled():
+            from ._native.server import NativeServer
+
+            return NativeServer(root_path, root_password, config)
+        return super().__new__(cls)
+
     def __init__(
         self,
         root_path: str = "./databases",

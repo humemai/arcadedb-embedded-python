@@ -126,6 +126,14 @@ class ArcadeDBError(Exception):
 
     def __str__(self):
         text = super().__str__()
+        chain = getattr(self, "java_chain", None)
+        if chain and len(chain) > 1:
+            # native backend: the cause chain came over as text, innermost last
+            name, message = chain[-1]
+            if not message or message not in text:
+                detail = f"{name}: {message}" if message and message != "None" else name
+                text = f"{text} (caused by {detail})"
+            return text
         try:
             root = _java_root_cause(self.__cause__)
             if root is not None:

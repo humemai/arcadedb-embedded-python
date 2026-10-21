@@ -24,6 +24,49 @@ if not os.path.isdir(os.path.join(os.path.dirname(os.path.dirname(__file__)), "d
     collect_ignore.append("test_docs_examples.py")
 
 
+# ARCADEDB_BACKEND=native (experimental, branch native-spike only): the same suite runs against libarcadedb. A test
+# that needs a Java object API raises NotOnNativeYet and is reported as a skip whose reason starts with "NOTYET";
+# a file about the JVM or the JPype wheel is not collected and listed in NATIVE_NOT_APPLICABLE.
+NATIVE_NOT_APPLICABLE = {
+    "test_jvm.py": "JVM start-up and settings",
+    "test_jvm_args.py": "JVM arguments",
+    "test_jvm_payload.py": "JVM bridge payload",
+    "test_jar_provenance.py": "jar fingerprint of the JPype wheel",
+    "test_java_package_shadowing.py": "JPype package import hooks",
+    "test_wheel_platform_tag.py": "JPype wheel tag",
+    "test_wheel_size.py": "JPype wheel size",
+    "test_server_packaging.py": "JPype wheel contents",
+    "test_runtime_cache.py": "JRE runtime cache of the JPype wheel",
+}
+if os.environ.get(
+    "ARCADEDB_BACKEND", "jpype"
+).lower() == "native" and not os.environ.get("NATIVE_PARITY_ALL"):
+    collect_ignore.extend(NATIVE_NOT_APPLICABLE)
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    if os.environ.get("ARCADEDB_BACKEND", "jpype").lower() != "native":
+        return
+    report = outcome.get_result()
+    if call.excinfo is None or report.passed:
+        return
+    from arcadedb_embedded._native import NotOnNativeYet
+
+    exc, seen = call.excinfo.value, 0
+    while exc is not None and seen < 8:
+        if isinstance(exc, NotOnNativeYet):
+            report.outcome = "skipped"
+            report.longrepr = (
+                str(item.fspath),
+                item.location[1] or 0,
+                f"NOTYET: {exc}",
+            )
+            return
+        exc, seen = exc.__cause__ or exc.__context__, seen + 1
+
+
 @pytest.hookimpl(trylast=True)
 def pytest_configure(config):
     # HotSpot routinely raises access violations it handles itself
