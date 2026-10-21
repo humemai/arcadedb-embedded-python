@@ -204,7 +204,7 @@ def degree_stamp(backend):
     # arm and lancedb_dense_fp32 its unquantized one (2026-10-02), both HNSW at
     # COMPARATOR_M in the same IVF partitions.
     base = str(backend)
-    for _suffix in ("_int8", "_fp32"):
+    for _suffix in ("_int8", "_fp32", "_pq"):
         if base.endswith(_suffix):
             base = base[:-len(_suffix)]
     if base.startswith("arcadedb"):
@@ -256,6 +256,8 @@ def effective_build_cache(configured, quant):
     """
     if configured > 0:
         return configured, "explicit bound from BENCH_DENSE_BUILD_CACHE"
+    if canonical_quant_label(quant) == "PRODUCT":
+        return 0, "engine auto; not read back for a PRODUCT index (the INT8 and BINARY default does not apply)"
     if canonical_quant_label(quant) != "fp32":
         return ENGINE_DEFAULT_CACHE_SIZE, "engine default for an inline-quantized index"
     return 0, "engine auto: whole corpus when it fits graphBuildCacheMaxHeapPercent (default 25) of AVAILABLE heap"
@@ -560,6 +562,8 @@ class Base:
 
 class ArcadeEmbedded(Base):
     name = "arcadedb_dense_embedded"
+    # Extra METADATA entries that follow the quantization key (the PQ arm's subspaces and clusters)
+    _quant_extra = ""
     ID_INDEX_DDL = "CREATE INDEX ON Article (vid) UNIQUE_HASH"
 
     @property
@@ -673,7 +677,7 @@ class ArcadeEmbedded(Base):
                     for j in range(min(BATCH, len(vecs) - s0))])
         self.ingest_s = round(time.perf_counter() - _t0, 2)
         quant = resolve_quant(os.environ.get("BENCH_DENSE_QUANT", ""))
-        qline = f'"quantization": "{quant}", ' if quant else ""
+        qline = f'"quantization": "{quant}", {self._quant_extra}' if quant else ""
         _t1 = time.perf_counter()
         db.command("sql", f'''CREATE INDEX ON Article (embedding) LSM_VECTOR
                    METADATA {{ "dimensions": {DIM}, "similarity": "EUCLIDEAN",
@@ -2697,6 +2701,278 @@ class LadybugDense(Base):
         self.db.close()
 
 
+# ---------------------------------------------------------------- PQ arms
+#
+# PRODUCT QUANTIZATION (QUANTIZATION.md, the PQ column). Registered only under
+# instrument 2026-11 AND BENCH_DENSE_PQ=1 (bench_common.dense_pq_enabled), and
+# every row says "PRODUCT" in `quantization` and "pq" on the page.
+#
+# ONE PQ SETTING FOR THE FAMILY, matched as closely as each engine allows:
+# PQ_SUBSPACES subspaces (M) of DIM / M dimensions each, PQ_CLUSTERS (256, 8 bits)
+# centroids per subspace, so a 128-d SIFT vector is 32 bytes of codes. ArcadeDB
+# takes M and K as they are (`pqSubspaces`, `pqClusters`); Qdrant takes a
+# compression ratio and fixes 256 centroids per chunk, so x16 (512 bytes to 32)
+# is M = 32; Milvus HNSW_PQ takes `m` and `nbits` (8); ArangoDB takes the FAISS
+# factory string `PQ<M>x8`. LanceDB is not an arm: its HNSW variant
+# (`IVF_HNSW_PQ`) exists, but its PQ is trained per IVF partition, not over the
+# corpus, so it would not be the same PQ setting; the fp32 and int8 arms stay
+# its comparison (QUANTIZATION.md).
+#
+# RE-RANK, where the engine has it: the PQ codes pick PQ_OVERSAMPLE candidates
+# per requested neighbour and the stored float vectors order them. Qdrant
+# (`oversampling` with `rescore`) and Milvus (`refine` FP32, `refine_k`) are
+# given PQ_OVERSAMPLE; ArcadeDB's SQL re-ranks at the engine's own default
+# (LSMVectorIndex.DEFAULT_APPROXIMATE_RERANK_OVERSAMPLE, 10, the value this
+# constant has), passed by neither side; ArangoDB's factory string has no
+# re-rank, as its int8 arm has none, and the row says so (`pq_rerank`).
+PQ_SUBSPACES = int(os.environ.get("BENCH_DENSE_PQ_SUBSPACES", "32"))
+PQ_CLUSTERS = 256
+PQ_OVERSAMPLE = 10
+# Qdrant's compression ratios for ProductQuantization (qdrant docs: x4 to x64), by bytes saved
+_QDRANT_PQ_RATIOS = (4, 8, 16, 32, 64)
+
+
+def pq_check(dim=None, subspaces=None):
+    """PQ_SUBSPACES must divide the dimension, or the engine splits the vector unevenly (or refuses late)."""
+    dim = DIM if dim is None else dim
+    m = PQ_SUBSPACES if subspaces is None else subspaces
+    if m < 1 or dim % m:
+        raise SystemExit(f"PQ: {m} subspaces do not divide {dim} dimensions "
+                         f"(BENCH_DENSE_PQ_SUBSPACES); every engine would split the vector differently")
+    return m
+
+
+# The probe that tells an engine whose SQL knows the `rerank` option from one that does not. The option is parsed
+# before the index is looked up, so on a build that has it the probe fails with some other error (no such index),
+# and on one that does not it fails with the option error.
+PQ_RERANK_PROBE_SQL = ("SELECT expand(vectorNeighbors('Article[embedding]', [0.0], 1, "
+                       "{efSearch: 1, rerank: 1}))")
+PQ_RERANK_REFUSAL = (
+    "REFUSING the ArcadeDB PQ arm: this engine build's SQL rejects the `rerank` option of "
+    "vectorNeighbors, so it does not walk a PRODUCT index on its PQ codes and a PQ-labelled row "
+    "would measure exact search. Run it on a build that carries the PRODUCT search (ArcadeData/arcadedb "
+    "#10518) and leave BENCH_DENSE_PQ unset until the measured release has it.")
+
+
+def pq_rerank_rejected(error_text):
+    """True when an engine's error text says the vectorNeighbors `rerank` option is unknown."""
+    t = str(error_text).lower()
+    return "unknown option" in t and "rerank" in t
+
+
+def require_rerank_option(run_probe):
+    """Refuse (SystemExit with PQ_RERANK_REFUSAL) when run_probe(sql) fails because `rerank` is unknown.
+
+    run_probe executes the statement and raises (or returns the engine's error text as a string, for a client that
+    does not raise). Any other outcome, an answer or another error, means the option parsed."""
+    try:
+        out = run_probe(PQ_RERANK_PROBE_SQL)
+    except Exception as e:                              # noqa: BLE001
+        out = str(e)
+    if isinstance(out, str) and pq_rerank_rejected(out):
+        raise SystemExit(PQ_RERANK_REFUSAL)
+
+
+def _pq_ddl_entries():
+    return f'"pqSubspaces": {pq_check()}, "pqClusters": {PQ_CLUSTERS}, '
+
+
+class ArcadeEmbeddedPQ(ArcadeEmbedded):
+    """ArcadeDB LSM_VECTOR `quantization: PRODUCT`, embedded: M = PQ_SUBSPACES, K = PQ_CLUSTERS, set explicitly.
+
+    Searched with the same vectorNeighbors statement as every ArcadeDB arm, so the engine's default re-rank
+    applies; connect() refuses a build whose SQL does not know the option (PQ_RERANK_REFUSAL)."""
+    name = "arcadedb_dense_embedded_pq"
+    quantization = "PRODUCT"
+
+    @property
+    def _quant_extra(self):
+        return _pq_ddl_entries()
+
+    def connect(self):
+        super().connect()
+        require_rerank_option(lambda sql: self.db.query("sql", sql).to_list())
+        self.row_extra = {**(getattr(self, "row_extra", None) or {}),
+                          "pq_subspaces": PQ_SUBSPACES, "pq_clusters": PQ_CLUSTERS,
+                          "pq_rerank": "engine default", "pq_rerank_option_accepted": True}
+
+    def build(self, vecs):
+        prev = os.environ.get("BENCH_DENSE_QUANT")
+        os.environ["BENCH_DENSE_QUANT"] = "PRODUCT"
+        try:
+            super().build(vecs)
+        finally:
+            if prev is None:
+                os.environ.pop("BENCH_DENSE_QUANT", None)
+            else:
+                os.environ["BENCH_DENSE_QUANT"] = prev
+
+    def readbacks(self):
+        out = dict(super().readbacks())
+        # The index files the engine wrote (graph, vectors, PQ codebook), in bytes: what the PQ index costs on disk
+        # beside the cell's disk_data_mb. A miss is a reason on the row, never a blank.
+        try:
+            root = "/tmp/l3d_arcade"
+            out["pq_index_bytes"] = sum(
+                os.path.getsize(os.path.join(d, f)) for d, _, fs in os.walk(root) for f in fs
+                if any(t in f for t in ("lsmvecidx", "vecgraph", "vecpq")))
+        except OSError as e:
+            out["pq_index_bytes_error"] = f"{type(e).__name__}: {e}"
+        return out
+
+
+class ArcadeServerPQ(ArcadeServer):
+    """ArcadeDB over HTTP with `quantization: PRODUCT`, the served twin of the embedded PQ arm.
+
+    Declared in the POSTed METADATA, like the INT8 arm: BENCH_DENSE_QUANT cannot reach the container."""
+    name = "arcadedb_dense_server_pq"
+    quantization = "PRODUCT"
+
+    @property
+    def _quant_ddl(self):
+        return f'"quantization": "PRODUCT", {_pq_ddl_entries()}'
+
+    def connect(self):
+        super().connect()
+
+        def probe(sql):
+            r = self.rq.post(f"{self.base}/query/bench", json={"language": "sql", "command": sql}, timeout=60)
+            return "" if r.status_code == 200 else r.text
+        require_rerank_option(probe)
+        self.row_extra = {**(getattr(self, "row_extra", None) or {}),
+                          "pq_subspaces": PQ_SUBSPACES, "pq_clusters": PQ_CLUSTERS,
+                          "pq_rerank": "engine default", "pq_rerank_option_accepted": True}
+
+
+class QdrantPQ(Qdrant):
+    """Qdrant product quantization (PQ_SUBSPACES bytes per vector: x16 on 128-d), rescored at search.
+
+    Rescoring is asked for at search time and oversampling is PQ_OVERSAMPLE, as Qdrant's quantization docs advise
+    for PQ (its codes alone are coarse), the same reason the int8 arm asks for `rescore`. Held in RAM
+    (`always_ram`), as the int8 arm. The collection's quantization config is read back and a mismatch refuses
+    the cell (BUGS F164)."""
+    quantization = "PRODUCT"
+    name = "qdrant_dense_pq"
+
+    def _compression(self):
+        pq_check()
+        ratio = DIM * 4 // PQ_SUBSPACES
+        if ratio not in _QDRANT_PQ_RATIOS or DIM * 4 % PQ_SUBSPACES:
+            raise SystemExit(f"Qdrant PQ takes a compression ratio of {_QDRANT_PQ_RATIOS}; {PQ_SUBSPACES} subspaces "
+                             f"of {DIM} float32 dimensions is x{DIM * 4 / PQ_SUBSPACES:g}")
+        return ratio
+
+    def connect(self):
+        super().connect()
+        self.row_extra = {**(getattr(self, "row_extra", None) or {}),
+                          "pq_subspaces": PQ_SUBSPACES, "pq_clusters": PQ_CLUSTERS,
+                          "pq_rerank": f"rescore, oversampling {PQ_OVERSAMPLE}"}
+
+    def build(self, vecs):
+        from qdrant_client import models as qm
+        ratio = self._compression()
+        self.cl.create_collection(
+            "articles",
+            vectors_config=qm.VectorParams(
+                size=DIM, distance=qm.Distance.EUCLID,
+                hnsw_config=qm.HnswConfigDiff(m=COMPARATOR_M, ef_construct=EF_CONSTRUCTION)),
+            quantization_config=qm.ProductQuantization(
+                product=qm.ProductQuantizationConfig(
+                    compression=getattr(qm.CompressionRatio, f"X{ratio}"), always_ram=True)))
+        for i in range(0, len(vecs), BATCH):
+            self.cl.upsert("articles", points=qm.Batch(
+                ids=list(range(i, i + len(vecs[i:i + BATCH]))),
+                vectors=vecs[i:i + BATCH].tolist()))
+
+    def readbacks(self):
+        q = self.cl.get_collection("articles").config.quantization_config
+        prod = getattr(q, "product", None)
+        got = str(getattr(getattr(prod, "compression", None), "value", getattr(prod, "compression", None)))
+        want = f"x{self._compression()}"
+        if got != want:
+            raise RuntimeError(f"qdrant quantization read back {got!r}, not product {want!r}: the row would "
+                               f"record PRODUCT for a different index (BUGS F164)")
+        return {"qdrant_quantization": f"product {got}"}
+
+    def search(self, qvec, k):
+        from qdrant_client import models as qm
+        res = self.cl.query_points(
+            "articles", query=qvec.tolist(), limit=k,
+            search_params=qm.SearchParams(
+                hnsw_ef=EF_SEARCH,
+                quantization=qm.QuantizationSearchParams(rescore=True, oversampling=float(PQ_OVERSAMPLE))))
+        return [int(p.id) for p in res.points]
+
+
+class MilvusPQ(Milvus):
+    """Milvus HNSW_PQ: `m` = PQ_SUBSPACES, `nbits` 8 (256 centroids), refined with the FP32 vectors at search.
+
+    HNSW_PQ takes two different `m`: `M` is the graph degree (COMPARATOR_M) and `m` the PQ subquantizer count.
+    `refine` with `refine_type` FP32 keeps the floats for the re-rank and `refine_k` (PQ_OVERSAMPLE) is the
+    candidate multiple. The index type is read back from the server."""
+    quantization = "PRODUCT"
+    name = "milvus_dense_pq"
+    INDEX_TYPE = "HNSW_PQ"
+
+    def connect(self):
+        super().connect()
+        self.row_extra = {**(getattr(self, "row_extra", None) or {}),
+                          "pq_subspaces": PQ_SUBSPACES, "pq_clusters": PQ_CLUSTERS,
+                          "pq_rerank": f"refine FP32, refine_k {PQ_OVERSAMPLE}"}
+
+    def build(self, vecs):
+        from pymilvus import DataType
+        pq_check()
+        sch = self.cl.create_schema()
+        sch.add_field("id", DataType.INT64, is_primary=True)
+        sch.add_field("vec", DataType.FLOAT_VECTOR, dim=DIM)
+        idx = self.cl.prepare_index_params()
+        idx.add_index("vec", index_type=self.INDEX_TYPE, metric_type="L2",
+                      params={"M": COMPARATOR_M, "efConstruction": EF_CONSTRUCTION,
+                              "m": PQ_SUBSPACES, "nbits": 8,
+                              "refine": True, "refine_type": "FP32"})
+        self.cl.create_collection("articles", schema=sch, index_params=idx)
+        _t0 = time.perf_counter()
+        for i in range(0, len(vecs), BATCH):
+            self.cl.insert("articles", [
+                {"id": i + j, "vec": vecs[i + j].tolist()}
+                for j in range(min(BATCH, len(vecs) - i))])
+        self.ingest_s = round(time.perf_counter() - _t0, 2)
+
+    def readbacks(self):
+        d = self.cl.describe_index("articles", "vec")
+        got = d.get("index_type")
+        if got != self.INDEX_TYPE:
+            raise RuntimeError(f"milvus index type read back {got!r}, not {self.INDEX_TYPE!r}: the row would "
+                               f"record PRODUCT for a different index (BUGS F164)")
+        return {"milvus_index_type": got, "milvus_index_params": json.dumps(
+            {k: d.get(k) for k in ("m", "nbits", "M", "efConstruction", "refine", "refine_type")}, sort_keys=True)}
+
+    def search(self, qvec, k):
+        res = self.cl.search("articles", data=[qvec.tolist()], limit=k,
+                             search_params={"params": {"ef": EF_SEARCH, "refine_k": PQ_OVERSAMPLE}})
+        return [int(h["id"]) for h in res[0]]
+
+
+class ArangoDensePQ(ArangoDense):
+    """ArangoDB's IVF with product-quantized lists: the FAISS factory string "IVF<nLists>,PQ<M>x8".
+
+    The fp32 arm's nLists, trained the same way, nProbe calibrated to the same recall target on the same
+    held-out slice (the int8 arm's procedure). The factory has no re-rank stage, so the arm answers from the
+    codes alone and says so on the row; the training state and the read-back factory string are the evidence
+    that the server built what the row says (BUGS F164)."""
+    quantization = "PRODUCT"
+    name = "arangodb_dense_pq"
+    FACTORY = "IVF{nlists},PQ" + str(PQ_SUBSPACES) + "x8"
+
+    def connect(self):
+        super().connect()
+        pq_check()
+        self.row_extra = {**(getattr(self, "row_extra", None) or {}),
+                          "pq_subspaces": PQ_SUBSPACES, "pq_clusters": PQ_CLUSTERS,
+                          "pq_rerank": "none (the factory string has no re-rank stage)"}
+
+
 BACKENDS = {b.name: b for b in
             (ArcadeEmbedded, ArcadeServer, Chroma, LanceDB, SqliteVec, DuckVSS, Qdrant, Milvus,
              PgVector, Neo4jVector, Neo4jVectorInt8, SurrealDense, SurrealDenseServer, ArangoDense,
@@ -2707,6 +2983,9 @@ BACKENDS = {b.name: b for b in
              ElasticDense, ElasticDenseInt8, MemgraphDense, FalkorDense, LadybugDense,
              # the quantization survey's int8 counterparts (DECISIONS #135, 2026-10-02)
              MongoDenseInt8, MemgraphDenseInt8, LanceDBFlat, ArangoDenseInt8)}
+# The PQ arms: only under instrument 2026-11 AND BENCH_DENSE_PQ=1 (bench_common.dense_pq_enabled)
+if bench_common.dense_pq_enabled():
+    BACKENDS.update({c.name: c for c in (ArcadeEmbeddedPQ, ArcadeServerPQ, QdrantPQ, MilvusPQ, ArangoDensePQ)})
 
 # EVERY adapter that names itself must be registered here. This tuple is
 # explicit, and --backend takes `choices=list(BACKENDS)`, so a class that exists,
@@ -2720,7 +2999,9 @@ BACKENDS = {b.name: b for b in
 _unregistered = sorted(
     c.name for c in Base.__subclasses__() + [s for b in Base.__subclasses__()
                                              for s in b.__subclasses__()]
-    if getattr(c, "name", None) and c.name not in BACKENDS)
+    # The PQ arms are defined always and registered only under both gates (bench_common.dense_pq_enabled)
+    if getattr(c, "name", None) and c.name not in BACKENDS
+    and c.name not in bench_common.DENSE_PQ_ARMS)
 if _unregistered:
     raise SystemExit(
         "l3d_dense.py: adapter(s) define a name but are absent from BACKENDS, so "

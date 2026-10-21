@@ -91,6 +91,42 @@ def embedded_jvm_args(heap, *more):
     """`-Xms` (when pinned) followed by the other arguments, space-joined, empty pieces dropped."""
     return " ".join(p for p in (embedded_xms(heap), *more) if p)
 
+
+# PRODUCT QUANTIZATION ARMS OF THE DENSE LANE (QUANTIZATION.md, the PQ column).
+# Each arm clones the runner entry of the sibling named here. They exist only
+# when BOTH gates are open: the next instrument (BENCH_INSTRUMENT=2026-11) and an
+# explicit BENCH_DENSE_PQ=1, so a stage that selects the next instrument does not
+# start a PQ cell by accident, and a stage that sets only BENCH_DENSE_PQ=1 on the
+# current instrument starts none either.
+DENSE_PQ_ENV = "BENCH_DENSE_PQ"
+DENSE_PQ_ARMS = {
+    "arcadedb_dense_embedded_pq": "arcadedb_dense_embedded",
+    "arcadedb_dense_server_pq": "arcadedb_dense_server",
+    "qdrant_dense_pq": "qdrant_dense",
+    "milvus_dense_pq": "milvus_dense",
+    "arangodb_dense_pq": "arangodb_dense",
+}
+
+
+def dense_pq_enabled():
+    """True when the PQ arms may be registered: instrument 2026-11 or later AND BENCH_DENSE_PQ=1."""
+    return instrument_at_least("2026-11") and os.environ.get(DENSE_PQ_ENV, "").strip() == "1"
+
+
+def row_family(backend):
+    """The page's precision family of a dense arm: "pq" for a PQ arm, else None (the table's own map answers)."""
+    return "pq" if backend in DENSE_PQ_ARMS else None
+
+
+def drop_unstamped_pq_rows(rows):
+    """The rows the page may print: a PQ arm's row only when it carries instrument 2026-11.
+
+    PQ is a next-instrument row family. A PQ row without that stamp (a smoke, a
+    hand-run cell) must not reach a page whose other rows are the current
+    instrument, and the other rows pass untouched."""
+    return [r for r in rows
+            if r.get("backend") not in DENSE_PQ_ARMS or str(r.get("instrument") or "") == "2026-11"]
+
 # THE JPYPE VERSION THE CAMPAIGN MEASURES (CAMPAIGN 7 row 73). The embedded
 # ArcadeDB arms cross from Python into the JVM through JPype, so its per-call
 # cost is part of every embedded number: a laptop A/B of JPype 1.7.1 against its
