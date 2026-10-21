@@ -1,0 +1,125 @@
+name: Native spike (shared library)
+
+# Feasibility spike, branch native-spike only. Not a product, never merged.
+# Builds ArcadeDB (the wheel's module set) as a GraalVM native-image shared library
+# and smoke-tests it through ctypes. Timings come from a shared runner: not for claims.
+on:
+  push:
+    branches:
+      - native-spike
+
+concurrency:
+  group: native-spike
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: libarcadedb.so (linux x86_64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Same builder as ArcadeData/arcadedb native/pom.xml (native.graalvm.version).
+      - name: Set up GraalVM (Community 25.0.2)
+        uses: graalvm/setup-graalvm@27b360dbb857524eaf0b4c4cef364d38e5b4f173 # v1.6.1
+        with:
+          java-version: "25.0.2"
+          distribution: "graalvm-community"
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          native-image-job-reports: "true"
+
+      - name: Add swap
+        run: |
+          set -euo pipefail
+          sudo fallocate -l 8G /swapfile.native
+          sudo chmod 600 /swapfile.native
+          sudo mkswap /swapfile.native
+          sudo swapon /swapfile.native
+          free -m
+
+      - name: Check the jar set against bindings/python/scripts/jar_exclusions.txt
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          mvn -B -q --no-transfer-progress -f native-spike/pom.xml dependency:list \
+            -DincludeScope=runtime -DoutputFile="$PWD/out/jars.txt"
+          sed 's/^ *//' out/jars.txt | awk -F: 'NF>=5{print $2"-"$(NF-1)".jar"}' | sort > out/jar-names.txt
+          bad=0
+          while IFS= read -r pattern; do
+            pattern="${pattern%$'\r'}"
+            [[ -z "$pattern" || "${pattern#\#}" != "$pattern" ]] && continue
+            while IFS= read -r name; do
+              # shellcheck disable=SC2053
+              if [[ "$name" == $pattern ]]; then echo "EXCLUDED JAR PRESENT: $name (pattern $pattern)"; bad=1; fi
+            done < out/jar-names.txt
+          done < bindings/python/scripts/jar_exclusions.txt
+          wc -l out/jar-names.txt
+          exit $bad
+
+      - name: Is --emit build-report available?
+        id: report
+        shell: bash
+        run: |
+          set -euo pipefail
+          if native-image --help-extra 2>&1 | grep -q 'build-report'; then
+            echo "profile=-Preport" >> "$GITHUB_OUTPUT"; echo "build-report: available"
+          else
+            echo "profile=" >> "$GITHUB_OUTPUT"; echo "build-report: not available"
+          fi
+
+      - name: Build libarcadedb.so
+        shell: bash
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          mvn -B --no-transfer-progress -f native-spike/pom.xml ${{ steps.report.outputs.profile }} -DskipTests package 2>&1 | tee out/build.log
+          echo "BUILD_SECONDS=$(( $(date +%s) - start ))" | tee -a out/sizes.txt
+
+      - name: Sizes
+        if: always()
+        shell: bash
+        run: |
+          set -uo pipefail
+          so=native-spike/target/libarcadedb.so
+          ls -l native-spike/target | tee -a out/sizes.txt
+          if [[ -f "$so" ]]; then
+            echo "so_bytes=$(stat -c %s "$so")" | tee -a out/sizes.txt
+            gzip -9 -k -c "$so" > out/libarcadedb.so.gz
+            echo "so_gzip9_bytes=$(stat -c %s out/libarcadedb.so.gz)" | tee -a out/sizes.txt
+            (cd native-spike/target && zip -9 -q ../../out/libarcadedb.zip libarcadedb.so)
+            echo "so_zip9_bytes=$(stat -c %s out/libarcadedb.zip)" | tee -a out/sizes.txt
+            ldd "$so" | tee out/ldd.txt
+            cp native-spike/target/graal_isolate.h native-spike/target/libarcadedb.h out/ 2>/dev/null || true
+          fi
+          grep -n -E -A30 'Produced artifacts|Image details|object bytes' out/build.log > out/image-breakdown.txt || true
+          cat out/image-breakdown.txt || true
+          grep -n -i -E 'warning.*(reflection|resource|metadata)|Could not resolve|not found' out/build.log | head -60 > out/metadata-warnings.txt || true
+          cp -r native-spike/target/reports out/reports 2>/dev/null || true
+          find native-spike/target -name '*build-report*' -o -name '*.html' | head
+
+      - name: Smoke test through ctypes
+        shell: bash
+        run: |
+          set -uo pipefail
+          python3 -I native-spike/smoke.py native-spike/target/libarcadedb.so 2>&1 | tee out/smoke.out
+          rc=${PIPESTATUS[0]}
+          echo "smoke_rc=$rc" | tee -a out/sizes.txt
+          exit $rc
+
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-spike-linux-x86_64
+          path: |
+            out/
+            native-spike/target/libarcadedb.so
+          if-no-files-found: warn
+          retention-days: 14
