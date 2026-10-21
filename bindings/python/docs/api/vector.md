@@ -251,6 +251,12 @@ db.command(
 SQL builds the vector graph immediately by default. Add `"buildGraphNow": false` only
 if you intentionally want lazy preparation.
 
+The metadata also takes the graph build settings `maxConnections`, `beamWidth`,
+`neighborOverflowFactor`, `alphaDiversityRelaxation` and `addHierarchy`. A SQL index without
+`"addHierarchy"` has a flat graph (the engine default), while `Database.create_vector_index()`
+defaults to `add_hierarchy=True`. See
+[Graph build settings in SQL](../guide/vectors.md#graph-build-settings-in-sql).
+
 ### Creation via Database
 
 `Database.create_vector_index()` still exists, but it should be treated as a secondary,
@@ -297,7 +303,9 @@ Find k-nearest neighbors to the query vector.
 
 Treat this as a helper/manual API. For normal application queries, prefer SQL
 `vectorNeighbors` so search composes naturally with filtering, projection, and record
-exclusion.
+exclusion. This method takes `ef_search` and `allowed_rids` only. The other options of the
+SQL function (`where`, `groupBy`, `groupSize`, `maxDistance`) are SQL-only; see
+[Search Options in SQL](../guide/vectors.md#search-options-in-sql).
 
 **Note:** With default settings (`build_graph_now=True` in `create_vector_index`), graph
 preparation runs during index creation. In the preferred SQL path, this eager behavior is

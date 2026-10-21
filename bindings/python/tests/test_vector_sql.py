@@ -1108,3 +1108,227 @@ class TestConversionFastPaths:
         ids1 = [rec.get("id") for rec, _ in r1]
         ids2 = [rec.get("id") for rec, _ in r2]
         assert ids1 == ids2 and len(ids1) == 3
+
+
+def _engine_version():
+    import jpype
+
+    raw = str(jpype.JClass("com.arcadedb.Constants").getRawVersion())
+    parts = [int(p) if p.isdigit() else 0 for p in raw.split("-")[0].split(".")[:3]]
+    return tuple(parts + [0] * (3 - len(parts)))
+
+
+# `where` in the vector.neighbors options is new in ArcadeDB 26.11.1. The JVM only runs
+# once a database fixture has started it, so the version is read inside each test, and
+# both engines are asserted on (the repository accepts no skips, scripts/check_test_skips.py).
+WHERE_SINCE = (26, 11, 1)
+
+
+class TestVectorSearchOptionsSql:
+    """The vector.neighbors option map and index metadata the vector guide documents.
+
+    The guide's "Search Options in SQL" and "Graph build settings in SQL"
+    sections show these exact forms, so each test runs one of them and checks
+    the answer.
+    """
+
+    @staticmethod
+    def _make_docs(db, metadata=""):
+        db.command("sql", "CREATE DOCUMENT TYPE OptDoc")
+        db.command("sql", "CREATE PROPERTY OptDoc.id INTEGER")
+        db.command("sql", "CREATE PROPERTY OptDoc.lang STRING")
+        db.command("sql", "CREATE PROPERTY OptDoc.year INTEGER")
+        db.command("sql", "CREATE PROPERTY OptDoc.embedding ARRAY_OF_FLOATS")
+        db.command(
+            "sql",
+            "CREATE INDEX ON OptDoc (embedding) LSM_VECTOR METADATA "
+            f'{{"dimensions": 2, "similarity": "EUCLIDEAN"{metadata}}}',
+        )
+        # Squared euclidean distance to the origin is id * id.
+        with db.transaction():
+            for i in range(10):
+                db.command(
+                    "sql",
+                    "INSERT INTO OptDoc SET id = ?, lang = ?, year = ?, embedding = ?",
+                    i,
+                    "en" if i % 2 == 0 else "fr",
+                    2015 + i,
+                    arcadedb.to_java_float_array([float(i), 0.0]),
+                )
+
+    @staticmethod
+    def _rids(db):
+        rows = db.query("sql", "SELECT @rid AS rid, id FROM OptDoc").to_list()
+        return {r["id"]: str(r["rid"]) for r in rows}
+
+    @staticmethod
+    def _search(db, options, k=4):
+        return db.query(
+            "sql",
+            "SELECT id, distance FROM "  # nosec B608 - test-owned option literals
+            f"(SELECT expand(vectorNeighbors('OptDoc[embedding]', ?, {k}, {options})))",  # nosec B608
+            arcadedb.to_java_float_array([0.0, 0.0]),
+        ).to_list()
+
+    def test_max_distance_drops_far_hits(self, test_db):
+        self._make_docs(test_db)
+
+        rows = self._search(test_db, "{ maxDistance: 4.5 }")
+
+        assert [r["id"] for r in rows] == [0, 1, 2]
+        assert [r["distance"] for r in rows] == [0.0, 1.0, 4.0]
+
+    def test_filter_and_ef_search_options(self, test_db):
+        self._make_docs(test_db)
+        rids = self._rids(test_db)
+        allowed = f"['{rids[3]}', '{rids[5]}', '{rids[8]}']"
+
+        rows = self._search(test_db, f"{{ efSearch: 50, filter: {allowed} }}")
+
+        assert [r["id"] for r in rows] == [3, 5, 8]
+
+    def test_group_by_with_group_size_two(self, test_db):
+        self._make_docs(test_db)
+
+        rows = self._search(test_db, "{ groupBy: 'lang', groupSize: 2 }")
+
+        assert [r["id"] for r in rows] == [0, 1, 2, 3]
+
+    def test_where_map_and_condition(self, test_db):
+        self._make_docs(test_db)
+
+        if _engine_version() < WHERE_SINCE:
+            with pytest.raises(Exception, match="Unknown option 'where'"):
+                self._search(test_db, "{ where: { lang: 'fr' } }")
+            return
+
+        by_map = self._search(test_db, "{ where: { lang: 'fr' } }")
+        by_condition = self._search(
+            test_db, "{ where: \"lang = 'fr' AND year > 2018\" }"
+        )
+
+        assert [r["id"] for r in by_map] == [1, 3, 5, 7]
+        assert [r["id"] for r in by_condition] == [5, 7, 9]
+
+    def test_where_combines_with_filter(self, test_db):
+        self._make_docs(test_db)
+        rids = self._rids(test_db)
+        allowed = f"['{rids[2]}', '{rids[3]}', '{rids[5]}']"
+        options = f"{{ filter: {allowed}, where: {{ lang: 'fr' }} }}"
+
+        if _engine_version() < WHERE_SINCE:
+            with pytest.raises(Exception, match="Unknown option 'where'"):
+                self._search(test_db, options)
+            return
+
+        rows = self._search(test_db, options)
+
+        assert [r["id"] for r in rows] == [3, 5]
+
+    def test_unknown_option_lists_the_allowed_ones(self, test_db):
+        self._make_docs(test_db)
+
+        with pytest.raises(Exception, match="Unknown option 'maxDist'"):
+            self._search(test_db, "{ maxDist: 1.0 }")
+
+    @staticmethod
+    def _metadata(db, index_name):
+        index = db.schema.get_index_by_name(index_name)
+        if "TypeIndex" in index.getClass().getName():
+            index = index.getSubIndexes().get(0)
+        return index.getMetadata()
+
+    def test_graph_build_settings_reach_the_index(self, test_db):
+        self._make_docs(
+            test_db,
+            ', "neighborOverflowFactor": 1.5, "alphaDiversityRelaxation": 1.4, '
+            '"addHierarchy": true',
+        )
+
+        meta = self._metadata(test_db, "OptDoc[embedding]")
+
+        assert float(meta.neighborOverflowFactor) == pytest.approx(1.5)
+        assert float(meta.alphaDiversityRelaxation) == pytest.approx(1.4)
+        assert bool(meta.addHierarchy) is True
+
+    def test_add_hierarchy_defaults_differ_between_sql_and_python(self, test_db):
+        """SQL follows the engine (flat graph); create_vector_index() builds a hierarchy."""
+        self._make_docs(test_db)
+        meta = self._metadata(test_db, "OptDoc[embedding]")
+        assert bool(meta.addHierarchy) is False
+        assert float(meta.neighborOverflowFactor) == pytest.approx(1.2)
+        assert float(meta.alphaDiversityRelaxation) == pytest.approx(1.2)
+
+        test_db.command("sql", "CREATE VERTEX TYPE PyHier")
+        test_db.command("sql", "CREATE PROPERTY PyHier.embedding ARRAY_OF_FLOATS")
+        python_index = test_db.create_vector_index("PyHier", "embedding", dimensions=2)
+        assert python_index.get_metadata()["add_hierarchy"] is True
+
+        test_db.command("sql", "CREATE VERTEX TYPE PyEngineDefault")
+        test_db.command(
+            "sql", "CREATE PROPERTY PyEngineDefault.embedding ARRAY_OF_FLOATS"
+        )
+        engine_default_index = test_db.create_vector_index(
+            "PyEngineDefault", "embedding", dimensions=2, add_hierarchy=None
+        )
+        assert engine_default_index.get_metadata()["add_hierarchy"] is False
+
+
+class TestSparseSearchOptionsSql:
+    """The sparse index forms the vector guide documents."""
+
+    @staticmethod
+    def _make_sparse(db):
+        db.command("sql", "CREATE DOCUMENT TYPE SparseOpt")
+        db.command("sql", "CREATE PROPERTY SparseOpt.id STRING")
+        db.command("sql", "CREATE PROPERTY SparseOpt.tokens ARRAY_OF_INTEGERS")
+        db.command("sql", "CREATE PROPERTY SparseOpt.weights ARRAY_OF_FLOATS")
+
+    @staticmethod
+    def _insert(db):
+        with db.transaction():
+            for doc_id, weight in (("a", 1.0), ("b", 0.5), ("c", 0.1)):
+                db.command(
+                    "sql",
+                    "INSERT INTO SparseOpt SET id = ?, tokens = [5], weights = [?]",
+                    doc_id,
+                    weight,
+                )
+
+    @staticmethod
+    def _search(db, options):
+        return db.query(
+            "sql",
+            "SELECT id, score FROM "  # nosec B608 - test-owned option literals
+            "(SELECT expand(`vector.sparseNeighbors`('SparseOpt[tokens,weights]', "  # nosec B608
+            f"?, ?, 5, {options}))) ORDER BY score DESC",  # nosec B608
+            jtypes.JArray(jtypes.JInt)([5]),
+            arcadedb.to_java_float_array([1.0]),
+        ).to_list()
+
+    def test_min_score_drops_low_scores(self, test_db):
+        self._make_sparse(test_db)
+        test_db.command(
+            "sql",
+            "CREATE INDEX ON SparseOpt (tokens, weights) LSM_SPARSE_VECTOR "
+            'METADATA {"dimensions": 128, "weightQuantization": "FP32"}',
+        )
+        self._insert(test_db)
+
+        rows = self._search(test_db, "{ minScore: 0.4 }")
+
+        assert [r["id"] for r in rows] == ["a", "b"]
+        assert rows[0]["score"] > rows[1]["score"] >= 0.4
+
+    def test_index_type_enum_creates_a_sparse_index(self, test_db):
+        self._make_sparse(test_db)
+        test_db.schema.create_index(
+            "SparseOpt",
+            ["tokens", "weights"],
+            index_type=arcadedb.IndexType.LSM_SPARSE_VECTOR,
+        )
+        self._insert(test_db)
+
+        rows = self._search(test_db, "{ minScore: 0.4 }")
+
+        assert [r["id"] for r in rows] == ["a", "b"]
