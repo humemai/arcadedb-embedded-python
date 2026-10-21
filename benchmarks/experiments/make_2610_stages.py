@@ -988,7 +988,9 @@ def emit_all(out, pins, first_after, allow_dev, stages=None, rep_pass=None, rep_
     head = _head(rep_pass, rep_from)
     sha, wheel, server = pins["ARCADEDB_ENGINE_COMMIT"], pins["ARCADEDB_WHEEL"], pins["ARCADEDB_SERVER_IMAGE"]
     wheel_name = os.path.basename(wheel)
-    wheel_sha = hashlib.sha256(open(wheel, "rb").read()).hexdigest()
+    # a caller that names the wheel by an explicit sha256 (a release that is not on disk at generation, make_2611_stages
+    # --arcadedb-release) passes it; otherwise the file's own sha256 is what the stages demand
+    wheel_sha = pins.get("ARCADEDB_WHEEL_SHA256") or hashlib.sha256(open(wheel, "rb").read()).hexdigest()
     saved = (O.HEAD, O.SHA, O.STAGES)
     try:
         O.SHA = sha
