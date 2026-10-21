@@ -69,6 +69,13 @@ NATIVE_NOTYET_MARKERS = (
 )
 
 
+# Tests that count the JPype parameter conversions (an internal of the JPype path).
+NATIVE_NA_TESTS = {
+    "test_non_scalars_keep_the_general_path",
+    "test_a_subclass_of_a_scalar_is_not_assumed_to_be_one",
+}
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
     outcome = yield
@@ -79,6 +86,14 @@ def pytest_runtest_makereport(item, call):
         return
     from arcadedb_embedded._native import NotOnNativeYet
 
+    if item.name in NATIVE_NA_TESTS:
+        report.outcome = "skipped"
+        report.longrepr = (
+            str(item.fspath),
+            item.location[1] or 0,
+            "NA-JVM: counts JPype conversions",
+        )
+        return
     exc, seen = call.excinfo.value, 0
     while exc is not None and seen < 8:
         if isinstance(exc, NotOnNativeYet):
