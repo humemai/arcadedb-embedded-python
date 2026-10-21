@@ -1341,8 +1341,10 @@ specifically need that surface.
   `beamWidth` in HNSW (JVector).
 - `quantization` (str | None): `"INT8"` (recommended), `"BINARY"`, `"PRODUCT"` for PQ,
   or `None` for full precision (default: `"INT8"`). Prefer `"INT8"` for current
-  production usage in these bindings; `"PRODUCT"`/PQ is currently not recommended for
-  production workloads. In current ArcadeDB engine builds, `"PRODUCT"` also requires
+  production usage in these bindings; `"PRODUCT"`/PQ is not recommended: in current engine builds the SQL search
+  (`vectorNeighbors`) scores candidates with the full-precision vectors, so PQ gives no
+  search speedup, and the index files are larger than with `None` because the engine writes
+  PQ codes that it does not read ([ArcadeDB #10514](https://github.com/ArcadeData/arcadedb/issues/10514)). In current ArcadeDB engine builds, `"PRODUCT"` also requires
   enough indexed vectors per bucket for PQ training. For tiny corpora, set `pq_clusters`
   explicitly to a small value or prefer another quantization mode.
 - `encoding` (str | None): Optional storage encoding for the document property.
@@ -1366,6 +1368,7 @@ specifically need that surface.
   the number of indexed vectors available for PQ training in a bucket.
 - `pq_center_globally` (bool | None): PQ global centering flag. Requires `quantization="PRODUCT"`.
 - `pq_training_limit` (int | None): PQ training sample cap. Requires `quantization="PRODUCT"`.
+  Current engine builds ignore it ([ArcadeDB #10514](https://github.com/ArcadeData/arcadedb/issues/10514)).
 - `build_graph_now` (bool): If `True` (default), eagerly builds/loads the vector graph immediately after index creation. Set to `False` to defer graph preparation to first query.
 
 **Returns:**

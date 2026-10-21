@@ -331,7 +331,10 @@ rows = db.query(
 - In current ArcadeDB engine builds, PRODUCT/PQ also needs enough indexed vectors per
   bucket for training. For very small corpora, set `pq_clusters` to a value no larger
   than the number of indexed vectors in that bucket, or use `INT8`, `BINARY`, or `None`.
-- `"PRODUCT"`/PQ is currently not recommended for production workloads in these bindings.
+- `"PRODUCT"`/PQ is not recommended in these bindings: current engine builds score SQL search
+  (`vectorNeighbors`) candidates with the full-precision vectors, so PQ gives no search speedup,
+  and the index files are larger than with `None` because PQ codes are written that nothing reads
+  ([ArcadeDB #10514](https://github.com/ArcadeData/arcadedb/issues/10514)).
 - SQL quantization helpers: `vector.quantizeInt8` / `vector.dequantizeInt8` and
   `vector.quantizeBinary` / `vector.dequantizeBinary(v[, low, high])`. Binary
   quantization keeps only the sign of each element; dequantize reconstructs it as

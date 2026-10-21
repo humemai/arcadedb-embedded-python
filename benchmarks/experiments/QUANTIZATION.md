@@ -10,7 +10,7 @@ The quantization survey of DECISIONS #131 item 8 (CAMPAIGN.md section 7 row 42),
 
 | engine (pin) | ships | our arm today | int8 arm | source |
 |---|---|---|---|---|
-| ArcadeDB (26.10.1 at the re-pin) | `LSM_VECTOR` quantization `NONE`, `INT8`, `BINARY`, `PRODUCT` | fp32 and INT8, embedded and served | exists | adapter (`l3d_dense._QUANT_DDL`, the engine's own error text for anything else) |
+| ArcadeDB (26.10.1 at the re-pin) | `LSM_VECTOR` quantization `NONE`, `INT8`, `BINARY`, `PRODUCT` | fp32 and INT8, embedded and served (no `PRODUCT` arm: the SQL search scores candidates with the full-precision vectors, so PQ saves no memory there, [ArcadeData/arcadedb#10514](https://github.com/ArcadeData/arcadedb/issues/10514)) | exists | adapter (`l3d_dense._QUANT_DDL`, the engine's own error text for anything else) |
 | Qdrant v1.19.1 | scalar (int8), product, binary, turbo | fp32 and scalar int8 (quantile 0.99, always_ram, rescore at search) | exists | image: `qdrant_client.models` in `dbbench:client` lists `ScalarQuantization` (`int8`), `ProductQuantization`, `BinaryQuantization`, `TurboQuantization` |
 | Milvus v3.0.1 | HNSW (fp32), `HNSW_SQ` (`sq_type` SQ8 and others), `HNSW_PQ`, `HNSW_PRQ`, IVF variants | HNSW fp32 and `HNSW_SQ` SQ8 | exists | adapter (both arms build on the image); docs for the rest |
 | sqlite-vec 0.1.9 | `float32`, `int8`, `bit` column types, `vec_quantize_int8()` | fp32 and int8 | exists | image: `dbbench:dense` |
