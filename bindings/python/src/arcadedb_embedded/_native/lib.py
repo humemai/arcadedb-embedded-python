@@ -15,6 +15,9 @@ _LIB_NAMES = {
     "win32": "arcadedb.dll",
 }
 
+# ARCADEDB_NATIVE_BINARY=0 turns off the float32 side buffer for numpy float parameters (phase 6: on by default when the library has it)
+BINARY_PARAMS = os.environ.get("ARCADEDB_NATIVE_BINARY", "1") != "0"
+
 _lock = threading.Lock()
 _lib = None
 _isolate = None
@@ -113,12 +116,14 @@ def _load():
             "arcadedb_n_info": [P, L],
             "arcadedb_n_tx": [P, L, I],
             "arcadedb_n_exec": [P, L, I, S, S, S, I],
+            "arcadedb_n_exec_bin": [P, L, I, S, S, S, I, S, L],
             "arcadedb_n_next": [P, L, I],
             "arcadedb_n_rs_close": [P, L],
             "arcadedb_n_server_start": [P, S],
             "arcadedb_n_server_stop": [P, L],
             "arcadedb_n_server_db": [P, L, S, I],
             "arcadedb_n_diag": [P],
+            "arcadedb_n_sample_dump": [P],
             "arcadedb_free": [P, P],
         }
         for name, argtypes in sigs.items():
@@ -127,6 +132,11 @@ def _load():
                 continue
             fn.argtypes = argtypes
             fn.restype = None if name == "arcadedb_free" else ctypes.c_void_p
+        global BINARY_PARAMS
+        if not hasattr(
+            lib, "arcadedb_n_exec_bin"
+        ):  # a library built before the binary path
+            BINARY_PARAMS = False
         _isolate = isolate
         _creator = threading.get_ident()
         _local.thread = _Thread(thread, owned=False)

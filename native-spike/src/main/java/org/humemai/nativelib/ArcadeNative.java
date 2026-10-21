@@ -25,6 +25,8 @@ import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.UnmanagedMemory;
 import org.graalvm.nativeimage.c.function.CEntryPoint;
 import org.graalvm.nativeimage.c.type.CCharPointer;
+import org.graalvm.nativeimage.c.type.CFloatPointer;
+import org.graalvm.word.WordFactory;
 import org.graalvm.nativeimage.c.type.CTypeConversion;
 
 import java.nio.charset.StandardCharsets;
@@ -48,6 +50,61 @@ public final class ArcadeNative {
   }
 
   private ArcadeNative() {
+  }
+
+  // ---- phase 6: stack-sampling profiler (ARCADEDB_NATIVE_SAMPLE=<ms>, a CPU profile of the image without perf/JFR). A daemon thread
+  // takes Thread.getAllStackTraces every <ms>, counts the top frame per runnable thread ("self") and every distinct frame in the top
+  // 40 ("incl"); arcadedb_n_sample_dump returns the counts as JSON. Safepoint-biased, like any Java sampler: a direction, not a measurement.
+  private static final Map<String, long[]> SELF = new ConcurrentHashMap<>(), INCL = new ConcurrentHashMap<>();
+  private static volatile long samples;
+
+  static {
+    final String ms = System.getenv("ARCADEDB_NATIVE_SAMPLE");
+    if (ms != null && !ms.isEmpty()) {
+      final long every = Long.parseLong(ms);
+      final Thread t = new Thread(() -> {
+        final Thread me = Thread.currentThread();
+        while (true) {
+          try {
+            Thread.sleep(every);
+            for (final Map.Entry<Thread, StackTraceElement[]> e : Thread.getAllStackTraces().entrySet()) {
+              final StackTraceElement[] st = e.getValue();
+              if (e.getKey() == me || st.length == 0 || e.getKey().getState() != Thread.State.RUNNABLE)
+                continue;
+              SELF.computeIfAbsent(st[0].getClassName() + "." + st[0].getMethodName(), k -> new long[1])[0]++;
+              final java.util.HashSet<String> seen = new java.util.HashSet<>();
+              for (int i = 0; i < st.length && i < 40; i++)
+                if (seen.add(st[i].getClassName() + "." + st[i].getMethodName()))
+                  INCL.computeIfAbsent(st[i].getClassName() + "." + st[i].getMethodName(), k -> new long[1])[0]++;
+              samples++;
+            }
+          } catch (final Throwable ignored) {
+            // keep sampling
+          }
+        }
+      }, "native-sampler");
+      t.setDaemon(true);
+      t.start();
+    }
+  }
+
+  @CEntryPoint(name = "arcadedb_n_sample_dump")
+  public static CCharPointer sampleDump(final IsolateThread thread) {
+    final StringBuilder sb = new StringBuilder("{\"ok\":true,\"samples\":").append(samples);
+    for (final String which : new String[] { "self", "incl" }) {
+      sb.append(",\"").append(which).append("\":[");
+      final java.util.List<Map.Entry<String, long[]>> l = new java.util.ArrayList<>((which.equals("self") ? SELF : INCL).entrySet());
+      l.sort((a, b) -> Long.compare(b.getValue()[0], a.getValue()[0]));
+      for (int i = 0; i < l.size() && i < 70; i++) {
+        if (i > 0)
+          sb.append(',');
+        sb.append('[');
+        NativeCodec.quote(sb, l.get(i).getKey());
+        sb.append(',').append(l.get(i).getValue()[0]).append(']');
+      }
+      sb.append(']');
+    }
+    return out(sb.append('}').toString());
   }
 
   // ---- databases
@@ -149,33 +206,60 @@ public final class ArcadeNative {
    * statement and returns its first batch of up to max rows; {"rs":id} is the open cursor (0 once drained and closed).
    */
   @CEntryPoint(name = "arcadedb_n_exec")
-  @SuppressWarnings("unchecked")
   public static CCharPointer exec(final IsolateThread thread, final long h, final int flags, final CCharPointer language,
       final CCharPointer text, final CCharPointer params, final int max) {
+    return execImpl(h, flags, language, text, params, max, WordFactory.nullPointer(), 0);
+  }
+
+  /** Same as arcadedb_n_exec plus a float32 side buffer (pointer + count of floats) that params values {"\u0001":["B",offset,count]} read from. */
+  @CEntryPoint(name = "arcadedb_n_exec_bin")
+  public static CCharPointer execBin(final IsolateThread thread, final long h, final int flags, final CCharPointer language,
+      final CCharPointer text, final CCharPointer params, final int max, final CFloatPointer buf, final long bufFloats) {
+    return execImpl(h, flags, language, text, params, max, buf, bufFloats);
+  }
+
+  /** Timers (ns) of the exec path, read through arcadedb_n_diag: decode of the text arguments, JSON parse, engine call, reply encoding. */
+  static final long[] T = new long[5];
+
+  @SuppressWarnings("unchecked")
+  private static CCharPointer execImpl(final long h, final int flags, final CCharPointer language, final CCharPointer text,
+      final CCharPointer params, final int max, final CFloatPointer buf, final long bufFloats) {
     ResultSet rs = null;
     try {
+      final long t0 = System.nanoTime();
       final Database db = db(h);
       final String lang = str(language);
       final String sql = str(text);
       final String p = str(params);
       final boolean command = (flags & 1) != 0;
+      final long t1 = System.nanoTime();
       Map<String, Object> named = null;
       Object[] pos = null;
       if (p != null && !p.isEmpty()) {
-        final Map<String, Object> env = (Map<String, Object>) Json.parse(p);
+        final Map<String, Object> env = (Map<String, Object>) Json.parse(p, buf, bufFloats);
         final Object n = env.get("named");
         if (n instanceof Map<?, ?> m)
           named = (Map<String, Object>) m;
         else
           pos = ((List<Object>) env.get("pos")).toArray();
       }
+      final long t2 = System.nanoTime();
       if (named != null)
         rs = command ? db.command(lang, sql, named) : db.query(lang, sql, named);
       else if (pos != null)
         rs = command ? db.command(lang, sql, pos) : db.query(lang, sql, pos);
       else
         rs = command ? db.command(lang, sql) : db.query(lang, sql);
-      return out(batch(rs, max));
+      final long t3 = System.nanoTime();
+      final String reply = batch(rs, max);
+      final CCharPointer o = out(reply);
+      final long t4 = System.nanoTime();
+      T[0]++;
+      T[1] += t1 - t0;
+      T[2] += t2 - t1;
+      T[3] += t3 - t2;
+      T[4] += t4 - t3;
+      return o;
     } catch (final Throwable t) {
       closeQuietly(rs);
       return err(t);
@@ -308,6 +392,8 @@ public final class ArcadeNative {
       sb.append(",\"vector_module\":").append(ModuleLayer.boot().findModule("jdk.incubator.vector").isPresent());
       sb.append(",\"cpus\":").append(Runtime.getRuntime().availableProcessors());
       sb.append(",\"max_heap\":").append(Runtime.getRuntime().maxMemory());
+      sb.append(",\"exec_timers_ns\":{\"calls\":").append(T[0]).append(",\"args\":").append(T[1]).append(",\"json\":").append(T[2])
+          .append(",\"engine\":").append(T[3]).append(",\"reply\":").append(T[4]).append('}');
       final io.github.jbellis.jvector.vector.VectorizationProvider vp = io.github.jbellis.jvector.vector.VectorizationProvider.getInstance();
       sb.append(",\"provider\":");
       NativeCodec.quote(sb, vp.getClass().getName());

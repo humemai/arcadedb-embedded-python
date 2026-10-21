@@ -7,6 +7,9 @@
  */
 package org.humemai.nativelib;
 
+import org.graalvm.nativeimage.c.type.CFloatPointer;
+import org.graalvm.word.WordFactory;
+
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.time.LocalDate;
@@ -22,14 +25,23 @@ final class Json {
   static final String TAG = "\u0001";
 
   private final String s;
+  private final CFloatPointer buf;
+  private final long bufFloats;
   private int i;
 
-  private Json(final String s) {
+  private Json(final String s, final CFloatPointer buf, final long bufFloats) {
     this.s = s;
+    this.buf = buf;
+    this.bufFloats = bufFloats;
   }
 
   static Object parse(final String text) {
-    final Json j = new Json(text);
+    return parse(text, WordFactory.nullPointer(), 0);
+  }
+
+  /** buf: the float32 side buffer that {"\u0001":["B",offset,count]} values point into (offset and count in floats); may be null. */
+  static Object parse(final String text, final CFloatPointer buf, final long bufFloats) {
+    final Json j = new Json(text, buf, bufFloats);
     final Object v = j.value();
     j.ws();
     if (j.i != j.s.length())
@@ -195,15 +207,27 @@ final class Json {
       if (c != ',')
         throw new IllegalArgumentException("bad JSON object at " + (i - 1));
     }
-    if (out.size() == 1 && out.get(TAG) instanceof List<?> tag && tag.size() == 2 && tag.get(0) instanceof String kind)
-      return decodeTag(kind, tag.get(1));
+    if (out.size() == 1 && out.get(TAG) instanceof List<?> tag && tag.size() >= 2 && tag.get(0) instanceof String kind)
+      return decodeTag(kind, tag);
     return out;
   }
 
-  /** Python -> Java tagged values: n Decimal, i big int, m map with non-str keys, D date, T datetime (UTC wall clock), s set, b bytes (base64), F float[], R RID. */
+  /** Python -> Java tagged values: n Decimal, i big int, m map with non-str keys, D date, T datetime (UTC wall clock), s set, b bytes (base64), F float[] (as a list), B float[] (from the side buffer), R RID. */
   @SuppressWarnings("unchecked")
-  private static Object decodeTag(final String kind, final Object payload) {
+  private Object decodeTag(final String kind, final List<?> tag) {
+    final Object payload = tag.get(1);
     switch (kind) {
+    case "B": {
+      // binary side buffer: float32 values [offset, offset + count) of the buffer passed beside the JSON, no text round trip
+      final long off = ((Number) payload).longValue();
+      final int count = ((Number) tag.get(2)).intValue();
+      if (buf.isNull() || off < 0 || count < 0 || off + count > bufFloats)
+        throw new IllegalArgumentException("binary parameter outside the side buffer");
+      final float[] f = new float[count];
+      for (int k = 0; k < count; k++)
+        f[k] = buf.read((int) off + k);
+      return f;
+    }
     case "n":
       return new BigDecimal((String) payload);
     case "i":

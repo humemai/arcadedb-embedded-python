@@ -14,8 +14,12 @@ TAG = "\u0001"
 _EPOCH_NAIVE = datetime(1970, 1, 1)
 
 
-def _default(value):
-    """json.dumps hook: the values JSON cannot carry, as tagged objects (see Json.java)."""
+def _default(value, _bin=None):
+    """json.dumps hook: the values JSON cannot carry, as tagged objects (see Json.java).
+
+    ``_bin`` (binary mode): ``[arrays, floats_so_far]``; a float ndarray then goes to the side buffer as float32 and the JSON carries
+    ``["B", offset, count]`` instead of the number list (no float formatting in Python, no text parsing in Java).
+    """
     if isinstance(value, RID):
         return {TAG: ["R", value.text]}
     if isinstance(value, Decimal):
@@ -38,6 +42,12 @@ def _default(value):
     if _np is not None:
         if isinstance(value, _np.ndarray):
             if value.dtype.kind == "f":
+                if _bin is not None:
+                    arr = _np.ascontiguousarray(value.ravel(), dtype=_np.float32)
+                    off = _bin[1]
+                    _bin[0].append(arr)
+                    _bin[1] = off + arr.size
+                    return {TAG: ["B", off, arr.size]}
                 return {TAG: ["F", value.tolist()]}
             return value.tolist()
         if isinstance(value, _np.bool_):
@@ -72,24 +82,37 @@ def _prep(value):
     return value
 
 
-def encode_params(args) -> str:
+def encode_params(args, binary=False):
     """The ``params`` text for ``arcadedb_n_exec``: '' for none, else ``{"named":{..}}`` or ``{"pos":[..]}``.
 
     Same selection as the JPype path: a lone list/tuple is the positional list itself, a lone mapping (also alone in
     a list) is the named map, anything else is positional.
     """
     if not args:
-        return ""
+        return ("", None, 0) if binary else ""
     values = args[0] if len(args) == 1 and isinstance(args[0], (list, tuple)) else args
     plain = _PLAIN
     if len(values) == 1 and isinstance(values[0], Mapping):
         named = values[0]
         if not all(type(v) in plain for v in named.values()):
             named = {k: _prep(v) for k, v in named.items()}
-        return json.dumps({"named": dict(named)}, default=_default)
+        return _dump({"named": dict(named)}, binary)
     if not all(type(v) in plain for v in values):
         values = [_prep(v) for v in values]
-    return json.dumps({"pos": list(values)}, default=_default)
+    return _dump({"pos": list(values)}, binary)
+
+
+def _dump(obj, binary):
+    """JSON text; binary mode returns ``(text, float32 side buffer bytes or None, float count)``."""
+    if not binary:
+        return json.dumps(obj, default=_default)
+    state = [[], 0]
+    text = json.dumps(obj, default=lambda v: _default(v, state))
+    arrays = state[0]
+    if not arrays:
+        return text, None, 0
+    buf = arrays[0].tobytes() if len(arrays) == 1 else _np.concatenate(arrays).tobytes()
+    return text, buf, state[1]
 
 
 class RID:

@@ -410,8 +410,32 @@ class NativeDatabase:
         self, flags: int, prefix: str, language: str, command: str, args
     ) -> NativeResultSet:
         self._check_not_closed()
-        reply = loads(
-            lib.call(
+        if lib.BINARY_PARAMS:
+            text, buf, count = encode_params(args, binary=True)
+            if buf is not None:
+                raw = lib.call(
+                    "arcadedb_n_exec_bin",
+                    self._h,
+                    flags,
+                    lib.b(language),
+                    lib.b(command),
+                    lib.b(text),
+                    _FIRST_BATCH,
+                    buf,
+                    count,
+                )
+            else:
+                raw = lib.call(
+                    "arcadedb_n_exec",
+                    self._h,
+                    flags,
+                    lib.b(language),
+                    lib.b(command),
+                    lib.b(text),
+                    _FIRST_BATCH,
+                )
+        else:
+            raw = lib.call(
                 "arcadedb_n_exec",
                 self._h,
                 flags,
@@ -420,7 +444,7 @@ class NativeDatabase:
                 lib.b(encode_params(args)),
                 _FIRST_BATCH,
             )
-        )
+        reply = loads(raw)
         if not reply.get("ok"):
             raise _error(prefix, reply)
         return NativeResultSet(self, reply)
