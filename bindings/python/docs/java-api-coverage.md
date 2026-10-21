@@ -8,8 +8,27 @@ Python bindings surface in this repository. It reflects the current code in
 
 The Python bindings expose the **core database, schema, graph, vector, async,
 import/export, and server workflows** needed for typical application usage. Most
-omissions are **low-level JVM internals** (WAL details, bucket scanning, binary
+omissions are **low-level JVM internals** (WAL details, binary
 protocol, clustering) that are not typically used from Python.
+
+**The recommended path is the query languages.** Where the engine offers a SQL statement
+for a feature, the bindings document the statement and wrap nothing: property
+constraints, type scans, the transaction isolation level and the admin operations are
+all `db.command(...)` / `db.query(...)` calls (table below). Python API exists for what a
+query cannot express, such as opening a database read-only.
+
+#### Java features reached through SQL
+
+| Java API | SQL statement | Notes |
+| --- | --- | --- |
+| `Property.setMandatory/setReadonly/setNotNull/setMin/setMax/setRegexp/setDefaultValue` | `CREATE PROPERTY T.p TYPE (mandatory true, readonly true, notnull true, min 0, max 9, regexp '...', default x)`; `ALTER PROPERTY T.p MAX 5` | [Schema](api/schema.md#5-set-property-constraints) |
+| `Database.scanType(type, polymorphic, callback)` | `SELECT FROM T` (subtypes included) | `AsyncExecutor.scan_type()` wraps the callback form |
+| `Database.begin(TRANSACTION_ISOLATION_LEVEL)`, `setTransactionIsolationLevel` | `BEGIN ISOLATION READ_COMMITTED` or `REPEATABLE_READ` | [Transactions](api/transactions.md#isolation-level) |
+| `Backup` | `BACKUP DATABASE 'name.zip'` | directory set by `arcadedb.server.backupDirectory` |
+| `DatabaseChecker` | `CHECK DATABASE [FIX]` | |
+| `Index` rebuild, compaction | `REBUILD INDEX name\|*`, `COMPACT INDEX name\|*` | |
+
+These statements are covered in [SQL for Constraints, Scans, and Maintenance](api/database.md#sql-for-constraints-scans-and-maintenance).
 The package bundles the optional in-process server (HTTP API + Studio); see
 [Server Mode](guide/server.md). For a server whose lifetime is independent of
 your Python process, or for HA/TLS, use the official ArcadeDB distribution.
@@ -25,7 +44,7 @@ your Python process, or for HA/TLS, use the official ArcadeDB distribution.
 | Vector Search | ✅ Supported | JVector indexes + NumPy conversion helpers |
 | Sparse Vectors | ✅ Supported | `LSM_SPARSE_VECTOR` indexes and `vector.sparseNeighbors(...)` through SQL |
 | Time Series | ✅ Supported | `TIMESERIES` types through SQL, `async_executor().append_samples(...)` for bulk writes, and the server's `/api/v1/ts/{db}/write` endpoint |
-| Async Execution | ✅ Supported | `AsyncExecutor` plus record-level and SQL/Cypher async flows |
+| Async Execution | ✅ Supported | `AsyncExecutor` plus record-level and SQL/Cypher async flows, `scan_type()` |
 | Data Import | ✅ Supported | SQL import workflows plus a narrow `db.import_documents(...)` wrapper for document files |
 | Data Export | ✅ Supported | JSONL + CSV for query results |
 | Server Mode | ✅ Supported | Embedded server lifecycle + Studio access |
@@ -37,7 +56,9 @@ your Python process, or for HA/TLS, use the official ArcadeDB distribution.
 
 **DatabaseFactory:**
 
-- ✅ `create()`, `open()`, `exists()`
+- ✅ `create()`, `open(read_only=False)`, `exists()`
+- ✅ Read-only mode: `open_database(path, read_only=True)` and `open(read_only=True)`
+  (`ComponentFile.MODE.READ_ONLY`)
 
 **Database:**
 
@@ -49,13 +70,18 @@ your Python process, or for HA/TLS, use the official ArcadeDB distribution.
 - ✅ Bulk ingest: `insert_many()` (documents from rows), `insert_columns()` (documents from columns), `graph_batch()` (vertices and edges)
 - ✅ Import: `import_documents()` for document-shaped files
 - ✅ Vector indexes: `create_vector_index()`
-- ✅ Utilities: `count_type()`, `drop()`, `get_name()`, `get_database_path()`, `is_open()`, `close()`
+- ✅ Utilities: `count_type()`, `drop()`, `get_name()`, `get_database_path()`, `is_open()`,
+  `is_read_only()`, `close()`
+- ✅ `sqlscript`: `db.command("sqlscript", script)` and `db.query("sqlscript", script)` run several
+  SQL statements as one script (see [Queries](guide/core/queries.md))
 - ✅ Configuration: `set_auto_transaction()`, `set_read_your_writes()`,
   `is_read_your_writes()`, `set_wal_flush()`
 - ✅ Async execution: `async_executor()`
 - ✅ Export helpers: `export_database()` and `export_to_csv()`
 
-**Not directly exposed:** bucket scans, WAL internals, low-level binary protocol
+**Not directly exposed:** WAL internals, low-level binary protocol. Type scans are
+`SELECT FROM <type>`; `AsyncExecutor.scan_type()` is the callback form, and bucket scans
+(`scanBucket`) are not wrapped.
 
 #### 2. Query Execution
 
@@ -132,11 +158,13 @@ Full Pythonic Schema API available via `db.schema`:
 
 - ✅ `create_document_type()`, `create_vertex_type()`, `create_edge_type()`
 - ✅ `get_or_create_*()` helpers
-- ✅ `create_property()`, `drop_property()`
+- ✅ `create_property()`, `get_or_create_property()`, `drop_property()` (constraints through
+  SQL, see above)
 - ✅ `drop_type()`, `exists_type()`, `get_type()`, `get_types()`
-- ✅ Indexes: `create_index()`, `drop_index()`, `get_indexes()`, `exists_index()`
+- ✅ Indexes: `create_index()`, `get_or_create_index()`, `drop_index()`, `get_indexes()`,
+  `exists_index()`, `get_index_by_name()`
 - ✅ Vector indexes: SQL `CREATE INDEX ... LSM_VECTOR`, secondary/manual helper coverage,
-  `list_vector_indexes()`
+  `get_vector_index()`, `list_vector_indexes()`
 
 #### 5. Server Mode
 
@@ -209,7 +237,8 @@ The Python bindings follow a **"query-first, API-second"** philosophy, which is 
 for Python developers. Instead of exposing every Java object, operations are enabled
 through:
 
-- **SQL DDL** for schema management
+- **SQL DDL** for schema management, including property constraints
+- **SQL statements** for scans, the isolation level, backup, integrity check and index maintenance
 - **SQL/OpenCypher** for graph and document operations
 - **Thin helper APIs** for transactions, vector search, and targeted record access
 

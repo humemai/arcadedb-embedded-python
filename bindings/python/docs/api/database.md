@@ -53,7 +53,7 @@ with arcadedb.create_database("./mydb") as db:
 ### open_database
 
 ```python
-arcadedb.open_database(path: str, jvm_kwargs: Optional[dict] = None) -> Database
+arcadedb.open_database(path: str, jvm_kwargs: Optional[dict] = None, read_only: bool = False) -> Database
 ```
 
 Open an existing database.
@@ -62,6 +62,7 @@ Open an existing database.
 
 - `path` (str): Path to the existing database
 - `jvm_kwargs` (Optional[dict]): Optional JVM args passed to `start_jvm()` (e.g. `{"heap_size": "8g"}`)
+- `read_only` (bool): Open in `ComponentFile.MODE.READ_ONLY`. Reads, queries and scans work; every write, schema change and transaction begin raises `ArcadeDBError` ("read only database"). Default `False`
 
 **Returns:**
 
@@ -77,6 +78,11 @@ Open an existing database.
 with arcadedb.open_database("./mydb") as db:
     result = db.query("sql", "SELECT FROM Person")
     print(f"Found {len(list(result))} records")
+
+# Inspect a database that must not change
+with arcadedb.open_database("./mydb", read_only=True) as db:
+    assert db.is_read_only()
+    db.query("sql", "SELECT count(*) AS n FROM Person").first().get("n")
 ```
 
 ---
@@ -309,7 +315,7 @@ except Exception as e:
 db.begin()
 ```
 
-Begin a new transaction. Prefer using `transaction()` context manager.
+Begin a new transaction. Prefer using `transaction()` context manager. The transaction runs at `READ_COMMITTED`; to choose `REPEATABLE_READ`, see [Isolation level](transactions.md#isolation-level).
 
 **Raises:**
 
@@ -1131,6 +1137,16 @@ Get the database name.
 
 ---
 
+### is_read_only
+
+```python
+db.is_read_only() -> bool
+```
+
+Return `True` if the database was opened with `read_only=True`.
+
+---
+
 ### get_database_path
 
 ```python
@@ -1219,10 +1235,10 @@ Create a new database.
 ### open
 
 ```python
-factory.open() -> Database
+factory.open(read_only: bool = False) -> Database
 ```
 
-Open an existing database.
+Open an existing database. With `read_only=True` the files open in `ComponentFile.MODE.READ_ONLY`, as for [`open_database`](#open_database).
 
 ---
 
@@ -1284,6 +1300,55 @@ db.query("opencypher", """
 ```
 
 ---
+
+## SQL for Constraints, Scans, and Maintenance
+
+The bindings are query-first: what a SQL statement does, `db.command()` and `db.query()` run. Every statement below has a test in `tests/test_sql_constraints_and_maintenance.py` (`COMPACT INDEX` in `tests/test_sparse_quantization_compact.py`).
+
+| Task | Statement |
+| --- | --- |
+| Property constraints | `CREATE PROPERTY T.p INTEGER (mandatory true, notnull true, readonly true, min 0, max 100, regexp '[A-Z]+', default 5)` |
+| Change a constraint | `ALTER PROPERTY T.p MAX 200` (refused while a stored record violates it) |
+| Scan a type with its subtypes | `SELECT FROM T` |
+| Isolation level | `BEGIN ISOLATION REPEATABLE_READ`, see [Transactions](transactions.md#isolation-level) |
+| Backup | `BACKUP DATABASE 'name.zip'` |
+| Integrity check | `CHECK DATABASE` (`CHECK DATABASE FIX` repairs) |
+| Rebuild an index | `REBUILD INDEX \`Type[prop]\`` or `REBUILD INDEX *` |
+| Compact an index | `COMPACT INDEX \`Type[prop]\`` or `COMPACT INDEX *` |
+
+```python
+db.command("sql", "CREATE DOCUMENT TYPE Item")
+db.command("sql", "CREATE PROPERTY Item.qty INTEGER (mandatory true, notnull true, min 0, max 100)")
+db.command("sql", "CREATE PROPERTY Item.code STRING (regexp '[A-Z]+', default 'AB')")
+
+with db.transaction():
+    db.command("sql", "INSERT INTO Item SET qty = 500")  # ArcadeDBError: ValidationException
+```
+
+A constraint refuses the write with an `ArcadeDBError` whose message names the `ValidationException`. Schema statements apply at once, not in the transaction.
+
+`SELECT FROM Animal` returns the records of `Animal` and of every type that extends it, one row at a time through the `ResultSet`. `AsyncExecutor.scan_type(type_name, callback, polymorphic=True)` is the callback form, with `polymorphic=False` for one type only.
+
+Each admin statement returns one row that `first().to_dict()` turns into a dict:
+
+```python
+report = db.command("sql", "CHECK DATABASE").first().to_dict()
+assert report.get("totalErrors", 0) == 0  # the key is absent when there is no error
+
+db.command("sql", "REBUILD INDEX *").first().to_dict()   # {'operation': 'rebuild index', 'indexes': [...], 'totalIndexed': 20, ...}
+db.command("sql", "COMPACT INDEX *").first().to_dict()   # {'operation': 'compact index', 'indexes': [...], 'compacted': True}
+```
+
+`REBUILD INDEX` replaces the index files, so the file-level names in `indexes` change; address one index by its schema name, `` `Type[prop]` ``.
+
+`BACKUP DATABASE 'name.zip'` takes a file name, not a path. The archive goes to `<arcadedb.server.backupDirectory>/<database name>/name.zip`, so set the directory when the JVM starts, and unzip the archive into an empty directory to open it:
+
+```python
+db = arcadedb.open_database(path, jvm_kwargs={"jvm_args": "-Darcadedb.server.backupDirectory=/data/backups"})
+db.command("sql", "BACKUP DATABASE 'nightly.zip'")  # /data/backups/<database name>/nightly.zip
+```
+
+`CHECK DATABASE` rolls back an open transaction first, so run it outside one. A read-only database refuses `db.command()` for `CREATE ...` and for `CHECK DATABASE` with an `ArcadeDBError`; read it with `db.query()`.
 
 ## Best Practices
 
