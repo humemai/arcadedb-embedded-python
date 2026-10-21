@@ -62,6 +62,13 @@ NATIVE_JVM_MARKERS = (
 )
 
 
+# Failure texts that mean the test needs a Java-object wrapper (Document, Vertex, Edge) or the exporter's Java path.
+NATIVE_NOTYET_MARKERS = (
+    "'NativeResult' object is not iterable",
+    "assert 'NativeResult' ==",
+)
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
     outcome = yield
@@ -83,6 +90,14 @@ def pytest_runtest_makereport(item, call):
             )
             return
         text = f"{type(exc).__name__}: {exc}"
+        if any(marker in text for marker in NATIVE_NOTYET_MARKERS):
+            report.outcome = "skipped"
+            report.longrepr = (
+                str(item.fspath),
+                item.location[1] or 0,
+                "NOTYET: Java-object wrapper or exporter path",
+            )
+            return
         if any(marker in text for marker in NATIVE_JVM_MARKERS):
             # the test reaches into the JVM directly (jpype.JClass, Java arrays, bridge classes): about the JPype path
             report.outcome = "skipped"

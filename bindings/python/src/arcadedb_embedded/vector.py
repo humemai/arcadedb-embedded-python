@@ -49,7 +49,9 @@ def to_java_float_array(vector):
         Java float array compatible with ArcadeDB vector indexes
     """
     if _native_enabled():
-        return _np.asarray(vector, dtype=_np.float32)
+        return _np.asarray(
+            vector if hasattr(vector, "__array__") else list(vector), dtype=_np.float32
+        )
     global _FLOAT_ARRAY
     float_array = _FLOAT_ARRAY
     if float_array is None:

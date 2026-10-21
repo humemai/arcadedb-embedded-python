@@ -232,9 +232,13 @@ class NativeResultSet:
             yield row.to_dict()
 
     def to_json_list(self, batch_size: int = 10_000) -> List[Dict[str, Any]]:
+        if int(batch_size) < 1:
+            raise ValueError("batch_size must be at least 1")
         return [json_native(row) for row in self._drain_dicts()]
 
     def iter_json_batches(self, batch_size: int = 10_000, **kwargs):
+        if int(batch_size) < 1:
+            raise ValueError("batch_size must be at least 1")
         rows = self.to_json_list()
         for i in range(0, len(rows), batch_size):
             yield rows[i : i + batch_size]
@@ -513,6 +517,8 @@ class NativeDatabase:
         otherwise every ``commit_every`` rows are one transaction (0: all rows in one).
         """
         self._check_not_closed()
+        if parallel:
+            not_yet("insert_many(parallel=True) (the async executor)")
         sql = f"INSERT INTO `{type_name}` CONTENT :row"
         total = 0
         if self.is_transaction_active():
@@ -662,6 +668,7 @@ class NativeSchema:
         self._run(
             f"CREATE PROPERTY `{type_name}`.`{property_name}` IF NOT EXISTS {t}{o}"
         )
+        return _JavaObject()
 
     def drop_property(self, type_name, property_name):
         self._run(f"DROP PROPERTY `{type_name}`.`{property_name}`")
@@ -703,7 +710,12 @@ class NativeDatabaseFactory:
 
     def __init__(self, path: str, jvm_kwargs: Optional[dict] = None):
         if jvm_kwargs:
-            not_yet("jvm_kwargs (there is no JVM)")
+            import logging
+
+            logging.getLogger("arcadedb_embedded").warning(
+                "jvm_kwargs %s ignored: the native backend has no JVM",
+                sorted(jvm_kwargs),
+            )
         self._path = os.fspath(path)
 
     def create(self) -> NativeDatabase:

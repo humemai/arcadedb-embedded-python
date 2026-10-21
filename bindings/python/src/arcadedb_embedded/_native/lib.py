@@ -93,7 +93,9 @@ def _load():
             "arcadedb_free": [P, P],
         }
         for name, argtypes in sigs.items():
-            fn = getattr(lib, name)
+            fn = getattr(lib, name, None)
+            if fn is None:  # a library built before this entry point existed
+                continue
             fn.argtypes = argtypes
             fn.restype = None if name == "arcadedb_free" else ctypes.c_void_p
         _isolate = isolate
