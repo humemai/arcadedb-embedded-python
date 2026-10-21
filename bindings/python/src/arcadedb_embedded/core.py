@@ -2002,6 +2002,7 @@ class Database:
         trim_text: Optional[bool] = None,
         on_row_error: Optional[str] = None,
         extra_settings: Optional[Mapping[str, Any]] = None,
+        disable_xml_limits: bool = False,
     ) -> ImportResult:
         """
         Import document-shaped data through ArcadeDB's Java importer framework.
@@ -2033,6 +2034,10 @@ class Database:
                 value raises `ValueError`, because the engine treats everything
                 that is not `"skip"` as `"abort"`.
             extra_settings: Additional raw importer settings.
+            disable_xml_limits: Lift the JDK's XML entity limits for this call only, for an
+                XML file with a very large text node or many entity references. Default
+                False. The limits are restored when the call ends. An import that hits one
+                raises ``ArcadeDBError`` whose message names this option.
 
         Returns:
             ImportResult with normalized metadata and importer statistics.
@@ -2056,6 +2061,7 @@ class Database:
             trim_text=trim_text,
             on_row_error=on_row_error,
             extra_settings=extra_settings,
+            disable_xml_limits=disable_xml_limits,
         )
 
     @property

@@ -159,8 +159,8 @@ JVM arguments use two flag types:
 | Flag | Purpose |
 |------|---------|
 | `-Xmx4g` | Default heap ceiling (`heap_size="4g"`); an `-Xmx` in `jvm_args` or `ARCADEDB_JVM_ARGS` wins unless you pass a different `heap_size` |
-| `-XX:ErrorFile=./log/hs_err_pid%p.log` | JVM crash log location (`ARCADEDB_JVM_ERROR_FILE` overrides it) |
-| `-Djdk.xml.maxGeneralEntitySizeLimit=0`, `-Djdk.xml.entityExpansionLimit=0`, `-Djdk.xml.totalEntitySizeLimit=0` | Lift the JDK's XML entity limits for large XML imports; this applies to the whole process. Pass `start_jvm(disable_xml_limits=False)` to keep the JDK limits |
+| `-Darcadedb.server.logsDirectory=<log dir>` and `-Djava.util.logging.config.file=<log dir>/logging.properties` | Put the engine log (`arcadedb.log.*`) in the per-user log directory instead of `./log` in the working directory; see [Where the logs go](#where-the-logs-go). A value of either flag in `jvm_args` or `ARCADEDB_JVM_ARGS` wins |
+| `-XX:ErrorFile=<log dir>/hs_err_pid%p.log` | JVM crash log location (`ARCADEDB_JVM_ERROR_FILE` or an `-XX:ErrorFile=` in `jvm_args` overrides it) |
 | `--add-modules=jdk.incubator.vector` | Enable JVector SIMD acceleration |
 | `--enable-native-access=ALL-UNNAMED` | Required for off-heap / Panama access |
 | `-Dfile.encoding=UTF8` | Force UTF-8 regardless of OS locale |
@@ -170,6 +170,24 @@ JVM arguments use two flag types:
 | `-Darcadedb.polyglotEngineEnabled=false` | Keep the GraalVM polyglot scripting engine off. The wheel ships no GraalVM language (GraalJS is excluded), so an enabled engine would only log "no languages found" at the first SQL command. Pass `-Darcadedb.polyglotEngineEnabled=true` to turn it back on |
 | `-XX:+UseCompactObjectHeaders` | Reduce per-object header overhead to lower heap usage |
 | `-Djava.awt.headless=true` | Suppress AWT/display initialisation |
+
+**Only on request** (not set unless you ask):
+
+| Flag | Purpose |
+|------|---------|
+| `-Djdk.xml.maxGeneralEntitySizeLimit=0`, `-Djdk.xml.entityExpansionLimit=0`, `-Djdk.xml.totalEntitySizeLimit=0` | Lift the JDK's XML entity limits for the whole process. Pass `start_jvm(disable_xml_limits=True)`; SQL `IMPORT DATABASE` of a large XML file needs it. `Database.import_documents(..., disable_xml_limits=True)` lifts them for that one call instead, with no restart. Before this release `start_jvm` lifted them by default |
+
+#### Where the logs go
+
+The engine log, the JVM crash log and a generated `logging.properties` go to one per-user directory, never the working directory, so a process started from a read-only directory or a container image works and leaves no `./log` behind:
+
+| Platform | Default log directory |
+|----------|-----------------------|
+| Linux | `$XDG_STATE_HOME/arcadedb-embedded/log`, or `~/.local/state/arcadedb-embedded/log` |
+| macOS | `~/Library/Logs/arcadedb-embedded/log` |
+| Windows | `%LOCALAPPDATA%\arcadedb-embedded\log` |
+
+Set `ARCADEDB_LOG_DIR` to use another directory. The directory is created when the JVM starts; if it cannot be created or written, a directory under the system temp directory is used and a warning names it. This is a change: earlier releases wrote `./log` in the working directory. Server event logs are separate and stay under `<root_path>/log`.
 
 !!! warning "One JVM configuration per process"
     JVM options are locked after the JVM starts. Set `start_jvm(...)` or pass `jvm_kwargs` **before** the first database is created. To change JVM settings, start a new Python process.

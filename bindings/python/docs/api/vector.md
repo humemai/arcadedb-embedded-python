@@ -254,7 +254,9 @@ if you intentionally want lazy preparation.
 The metadata also takes the graph build settings `maxConnections`, `beamWidth`,
 `neighborOverflowFactor`, `alphaDiversityRelaxation` and `addHierarchy`. A SQL index without
 `"addHierarchy"` has a flat graph (the engine default), while `Database.create_vector_index()`
-defaults to `add_hierarchy=True`. See
+defaults to `add_hierarchy=True`. In the same way a SQL index without `"quantization"` is
+full precision (`NONE`), while the helper defaults to `"INT8"`; put `"quantization": "INT8"` in
+the `METADATA` for the helper's index. See
 [Graph build settings in SQL](../guide/vectors.md#graph-build-settings-in-sql).
 
 ### Creation via Database

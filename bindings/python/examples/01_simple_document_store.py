@@ -61,10 +61,6 @@ db_path = os.path.join(db_dir, "task_db")
 if os.path.exists(db_path):
     shutil.rmtree(db_path)
 
-# Clean up log directory from previous runs
-if os.path.exists("./log"):
-    shutil.rmtree("./log")
-
 with arcadedb.create_database(db_path) as db:
 
     print(f"   ✅ Database created at: {db_path}")
@@ -508,7 +504,7 @@ print("     - schema.json - Schema definition (types & properties)")
 print("     - Task_0.1.65536.v0.bucket - Data bucket with Task documents")
 print("     - dictionary.0.327680.v0.dict - String compression dictionary")
 print("     - statistics.json - Database statistics")
-print("   • ./log/ - ArcadeDB and JVM log files")
+print("   • The ArcadeDB and JVM log files are in the per-user log directory, not here")
 print()
 print("💡 Next steps:")
 print("   • See docs/examples/ for detailed explanations")

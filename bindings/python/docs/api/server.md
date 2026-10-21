@@ -364,11 +364,15 @@ ArcadeDB writes logs to multiple locations:
 
 ### 1. Application Logs
 
-**Location:** `./log/arcadedb.log.*` (relative to working directory)
+**Location:** `arcadedb.log.*` in the per-user log directory (Linux
+`~/.local/state/arcadedb-embedded/log`; the other platforms are in
+[Where the logs go](../getting-started/installation.md#where-the-logs-go)). It is not the
+working directory.
 
 **Content:** Server startup, database operations, errors
 
-**Cannot be changed** (hardcoded in Java)
+**Customize BEFORE the JVM starts:** set `ARCADEDB_LOG_DIR`, or pass
+`-Darcadedb.server.logsDirectory=<dir>` in `jvm_args`.
 
 ### 2. Server Event Logs
 
@@ -381,7 +385,7 @@ ArcadeDB writes logs to multiple locations:
 
 ### 3. JVM Crash Logs
 
-**Location:** `./log/hs_err_pid*.log` (default)
+**Location:** `hs_err_pid*.log` in the same log directory (default)
 
 **Customize BEFORE the JVM starts:**
 

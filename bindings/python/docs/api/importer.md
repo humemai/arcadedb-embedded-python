@@ -106,6 +106,12 @@ one sets is in parentheses.
 - `on_row_error`: `"abort"` (the default) or `"skip"`; see [`on_row_error`](#on_row_error).
 - `extra_settings`: any other importer setting by its engine name; each value is passed
   as a string, and `None` values are dropped.
+- `disable_xml_limits`: lift the JDK's XML entity limits for this call only (default
+  `False`), for an XML file with a very large text node or many entity references. The
+  previous values are restored when the call ends. Without it, an import that hits a limit
+  raises `ArcadeDBError` whose message names this option. SQL `IMPORT DATABASE` has no such
+  option; start the JVM with `start_jvm(disable_xml_limits=True)` for it. Earlier releases
+  lifted the limits for the whole process by default.
 
 **While it runs**, the call turns read-your-writes off on the database and applies any
 `parallel`, `commit_every`, and `wal` you pass to the database's async executor. When

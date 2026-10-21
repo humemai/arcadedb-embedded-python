@@ -127,6 +127,8 @@ asserts, so the list below stops at the file.
 | --- | --- |
 | `test_jvm.py` | `start_jvm()` re-entry, close and reopen in one process, and exit with an unclosed database |
 | `test_jvm_args.py` | JVM argument handling and the `conftest.py` hooks |
+| `test_log_dir.py` | The engine log, the crash log and `logging.properties` go to a per-user directory and never the working directory (a child JVM started from an empty read-only directory), `ARCADEDB_LOG_DIR` and `jvm_args` overrides, the temp-directory fallback, and the directory per platform |
+| `test_xml_limits.py` | `disable_xml_limits` defaults to false, an import that hits a JDK entity limit names the option, and `import_documents(disable_xml_limits=True)` lifts the limits for that call only and restores them |
 | `test_jvm_payload.py` | A static check that no Python list crosses into the JVM |
 | `test_sigint.py` | Ctrl-C raises `KeyboardInterrupt` and runs cleanup once the JVM is started; `interrupt=True` keeps JPype's default (not collected on Windows) |
 | `test_bridge_fixes.py` | Two fixes in the Java bridge: nested values read back as Python in the same transaction, and a date written as midnight UTC in any JVM time zone |

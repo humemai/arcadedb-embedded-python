@@ -73,9 +73,6 @@ db_path = os.path.join(db_dir, "vector_search_db")
 if os.path.exists(db_path):
     shutil.rmtree(db_path)
 
-if os.path.exists("./log"):
-    shutil.rmtree("./log")
-
 with arcadedb.create_database(db_path) as db:
 
     print(f"   ✅ Database created at: {db_path}")
