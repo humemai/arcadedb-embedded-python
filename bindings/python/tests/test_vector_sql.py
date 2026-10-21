@@ -1118,11 +1118,10 @@ def _engine_version():
     return tuple(parts + [0] * (3 - len(parts)))
 
 
-def _skip_unless_engine_at_least(minimum, what):
-    # The JVM only runs once a database fixture has started it, so this cannot be
-    # a collection-time skipif.
-    if _engine_version() < minimum:
-        pytest.skip(f"{what} needs ArcadeDB {'.'.join(map(str, minimum))}")
+# `where` in the vector.neighbors options is new in ArcadeDB 26.11.1. The JVM only runs
+# once a database fixture has started it, so the version is read inside each test, and
+# both engines are asserted on (the repository accepts no skips, scripts/check_test_skips.py).
+WHERE_SINCE = (26, 11, 1)
 
 
 class TestVectorSearchOptionsSql:
@@ -1166,8 +1165,8 @@ class TestVectorSearchOptionsSql:
     def _search(db, options, k=4):
         return db.query(
             "sql",
-            "SELECT id, distance FROM "
-            f"(SELECT expand(vectorNeighbors('OptDoc[embedding]', ?, {k}, {options})))",
+            "SELECT id, distance FROM "  # nosec B608 - test-owned option literals
+            f"(SELECT expand(vectorNeighbors('OptDoc[embedding]', ?, {k}, {options})))",  # nosec B608
             arcadedb.to_java_float_array([0.0, 0.0]),
         ).to_list()
 
@@ -1196,8 +1195,12 @@ class TestVectorSearchOptionsSql:
         assert [r["id"] for r in rows] == [0, 1, 2, 3]
 
     def test_where_map_and_condition(self, test_db):
-        _skip_unless_engine_at_least((26, 11, 1), "the where option")
         self._make_docs(test_db)
+
+        if _engine_version() < WHERE_SINCE:
+            with pytest.raises(Exception, match="Unknown option 'where'"):
+                self._search(test_db, "{ where: { lang: 'fr' } }")
+            return
 
         by_map = self._search(test_db, "{ where: { lang: 'fr' } }")
         by_condition = self._search(
@@ -1208,24 +1211,19 @@ class TestVectorSearchOptionsSql:
         assert [r["id"] for r in by_condition] == [5, 7, 9]
 
     def test_where_combines_with_filter(self, test_db):
-        _skip_unless_engine_at_least((26, 11, 1), "the where option")
         self._make_docs(test_db)
         rids = self._rids(test_db)
         allowed = f"['{rids[2]}', '{rids[3]}', '{rids[5]}']"
+        options = f"{{ filter: {allowed}, where: {{ lang: 'fr' }} }}"
 
-        rows = self._search(
-            test_db, f"{{ filter: {allowed}, where: {{ lang: 'fr' }} }}"
-        )
+        if _engine_version() < WHERE_SINCE:
+            with pytest.raises(Exception, match="Unknown option 'where'"):
+                self._search(test_db, options)
+            return
+
+        rows = self._search(test_db, options)
 
         assert [r["id"] for r in rows] == [3, 5]
-
-    def test_where_is_rejected_before_26_11_1(self, test_db):
-        if _engine_version() >= (26, 11, 1):
-            pytest.skip("only an engine older than 26.11.1 rejects where")
-        self._make_docs(test_db)
-
-        with pytest.raises(Exception, match="Unknown option 'where'"):
-            self._search(test_db, "{ where: { lang: 'fr' } }")
 
     def test_unknown_option_lists_the_allowed_ones(self, test_db):
         self._make_docs(test_db)
@@ -1301,9 +1299,9 @@ class TestSparseSearchOptionsSql:
     def _search(db, options):
         return db.query(
             "sql",
-            "SELECT id, score FROM "
-            "(SELECT expand(`vector.sparseNeighbors`('SparseOpt[tokens,weights]', "
-            f"?, ?, 5, {options}))) ORDER BY score DESC",
+            "SELECT id, score FROM "  # nosec B608 - test-owned option literals
+            "(SELECT expand(`vector.sparseNeighbors`('SparseOpt[tokens,weights]', "  # nosec B608
+            f"?, ?, 5, {options}))) ORDER BY score DESC",  # nosec B608
             jtypes.JArray(jtypes.JInt)([5]),
             arcadedb.to_java_float_array([1.0]),
         ).to_list()
