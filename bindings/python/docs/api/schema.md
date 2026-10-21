@@ -355,9 +355,10 @@ schema.drop_property("User", "old_field")
 ```
 
 !!! note "Property constraints"
-    Constraints such as mandatory, not-null, default, and min/max are configured on the
-    returned Java `Property` object (for example `prop.setMandatory(True)`) or via SQL
-    DDL. The Python `Schema` wrapper itself only exposes property creation/removal.
+    Constraints (mandatory, readonly, not-null, min, max, regexp, default) are SQL DDL:
+    `CREATE PROPERTY` with an attribute list, `ALTER PROPERTY` on an existing property. See
+    [Set Property Constraints](#5-set-property-constraints). The Python `Schema` wrapper
+    itself only exposes property creation/removal.
 
 ## Index Creation
 
@@ -859,16 +860,30 @@ schema.create_document_type("Event", buckets=buckets)
 
 ### 5. Set Property Constraints
 
-Property constraints are not exposed by the Python `Schema` wrapper. Apply them via SQL
-DDL, or on the Java `Property` object returned by `create_property` (camelCase methods):
+Property constraints are not arguments of `create_property`. Declare them with SQL DDL,
+the recommended path, and change them with `ALTER PROPERTY`:
 
 ```python
 # ✅ Recommended: SQL DDL for constraints (schema statements apply immediately)
 db.schema.create_vertex_type("User")
 db.command("sql", "CREATE PROPERTY User.username STRING (mandatory true, notnull true)")
 db.command("sql", "CREATE PROPERTY User.age INTEGER (min 0, max 150)")
+db.command("sql", "CREATE PROPERTY User.code STRING (regexp '[A-Z]+', default 'AB')")
+db.command("sql", "CREATE PROPERTY User.tag STRING (readonly true)")
 
-# Or configure the returned Java Property object directly
+# Change one on an existing property
+db.command("sql", "ALTER PROPERTY User.age MAX 120")
+```
+
+A write that breaks a constraint raises `ArcadeDBError` (the message names the
+`ValidationException`). `ALTER PROPERTY ... MAX` or `MIN` is refused while a stored record
+already breaks the new bound. `tests/test_sql_constraints_and_maintenance.py` runs each
+attribute.
+
+The Java `Property` object returned by `create_property` takes the same settings through
+its camelCase setters, when you hold the object already:
+
+```python
 username = db.schema.create_property("User", "nickname", "STRING")
 username.setMandatory(True)
 username.setNotNull(True)

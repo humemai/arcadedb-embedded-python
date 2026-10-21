@@ -1034,6 +1034,20 @@ class Database:
         except Exception as e:
             raise ArcadeDBError(f"Failed to get database name: {e}") from e
 
+    def is_read_only(self) -> bool:
+        """Return True if the database was opened read-only.
+
+        Example:
+            >>> db = arcadedb.open_database("./mydb", read_only=True)
+            >>> db.is_read_only()
+            True
+        """
+        self._check_not_closed()
+        try:
+            return str(self._java_db.getMode()) == "READ_ONLY"
+        except Exception as e:
+            raise ArcadeDBError(f"Failed to read the database mode: {e}") from e
+
     def get_database_path(self) -> str:
         """Get the database path."""
         self._check_not_closed()
@@ -1921,10 +1935,21 @@ class DatabaseFactory:
         except Exception as e:
             raise ArcadeDBError(f"Failed to create database: {e}") from e
 
-    def open(self) -> Database:
-        """Open an existing database."""
+    def open(self, read_only: bool = False) -> Database:
+        """Open an existing database.
+
+        Args:
+            read_only: Open in ``ComponentFile.MODE.READ_ONLY``. Reads, queries
+                and scans work; every write, schema change and transaction
+                begin raises ``ArcadeDBError``. Use it to inspect a database
+                that must not change, such as a backup restored for audit.
+        """
         try:
-            java_db = self._java_factory.open()
+            if read_only:
+                mode = _java_class("com.arcadedb.engine.ComponentFile$MODE").READ_ONLY
+                java_db = self._java_factory.open(mode)
+            else:
+                java_db = self._java_factory.open()
             return Database(java_db)
         except Exception as e:
             raise ArcadeDBError(f"Failed to open database: {e}") from e
@@ -1959,6 +1984,7 @@ def create_database(
 def open_database(
     path: str,
     jvm_kwargs: Optional[dict] = None,
+    read_only: bool = False,
 ) -> Database:
     """Open an existing database at the given path.
 
@@ -1966,12 +1992,19 @@ def open_database(
         path: Database path
         jvm_kwargs: Optional JVM args passed to start_jvm()
             Example: {"heap_size": "8g"}
+        read_only: Open the database read-only. Writes, schema changes and
+            transactions raise ``ArcadeDBError``.
+
+    Example:
+        >>> db = arcadedb.open_database("./mydb", read_only=True)
+        >>> db.is_read_only()
+        True
     """
     factory = DatabaseFactory(
         path,
         jvm_kwargs=jvm_kwargs,
     )
-    return factory.open()
+    return factory.open(read_only=read_only)
 
 
 def database_exists(path: str) -> bool:

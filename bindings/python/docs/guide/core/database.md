@@ -40,6 +40,15 @@ with arcadedb.open_database("./mydb") as db:
         print(user.get("name"))
 ```
 
+### Open Read-Only
+
+```python
+# Reads and queries work; writes, schema changes and transactions raise ArcadeDBError
+with arcadedb.open_database("./mydb", read_only=True) as db:
+    print(db.is_read_only())  # True
+    print(db.query("sql", "SELECT count(*) AS n FROM User").first().get("n"))
+```
+
 ### Check if Database Exists
 
 ```python
@@ -330,6 +339,13 @@ with reset_database("./mydb") as db:
 ```
 
 ### Database Backup Pattern
+
+The engine writes a consistent archive for you: `db.command("sql", "BACKUP DATABASE 'nightly.zip'")`
+puts it in `<arcadedb.server.backupDirectory>/<database name>/`, and `CHECK DATABASE` verifies a
+database. Set the directory when the JVM starts, with
+`jvm_kwargs={"jvm_args": "-Darcadedb.server.backupDirectory=/data/backups"}` (see
+[Database](../../api/database.md#sql-for-constraints-scans-and-maintenance)). The file copy
+below works for a database no process has open.
 
 ```python
 import shutil

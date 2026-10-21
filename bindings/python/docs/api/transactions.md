@@ -8,7 +8,7 @@ ArcadeDB transactions provide:
 
 - **Atomicity**: All changes commit together or none commit
 - **Consistency**: Schema validation and constraint enforcement
-- **Isolation**: Read committed isolation level
+- **Isolation**: `READ_COMMITTED` by default; `REPEATABLE_READ` per transaction (see [Isolation level](#isolation-level))
 - **Durability**: A committed transaction survives a process crash. With the default
   WAL flush mode (`'no'`) it does not survive a power cut; call
   `db.set_wal_flush('yes_nometadata')` (or `'yes_full'`) for that (see
@@ -20,6 +20,29 @@ ArcadeDB transactions provide:
 - **Explicit transactions** required for write operations
 - **Context managers** automatically handle commit/rollback
 - **Rollback on exception** ensures data integrity
+
+## Isolation level
+
+The engine has two levels, and the bindings choose one through SQL (there is no Python argument for it):
+
+| Level | A read sees |
+| :--- | :--- |
+| `READ_COMMITTED` (default) | the latest committed version of each page, including commits made after this transaction began |
+| `REPEATABLE_READ` | the pages as this transaction first read them: they are cached until commit or rollback |
+
+`BEGIN ISOLATION <level>` begins a transaction on the calling thread at that level. End it with `db.commit()` or `db.rollback()`. Do not wrap it in `with db.transaction():`, which begins its own, at the default level:
+
+```python
+db.command("sql", "BEGIN ISOLATION REPEATABLE_READ")
+try:
+    first = db.query("sql", "SELECT v FROM Counter").first().get("v")
+    # ... another thread commits an UPDATE of Counter here ...
+    again = db.query("sql", "SELECT v FROM Counter").first().get("v")  # == first
+finally:
+    db.commit()
+```
+
+Both levels detect only write-write conflicts on the same page, at commit (a retryable `ConcurrentModificationException`, see `run_in_transaction()`). Neither validates what a transaction read, so write skew and phantom reads are possible under both. `REPEATABLE_READ` keeps every page it visits in memory until the end, so a long scan inside one costs RAM. `tests/test_sql_constraints_and_maintenance.py` runs the two levels against a commit from a second thread.
 
 ## Transaction Scope
 

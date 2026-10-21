@@ -55,6 +55,8 @@ asserts, so the list below stops at the file.
 | `test_parameter_binding.py` | Positional and named parameters reach the statement on every entry point, including a lone `None` and the async executor, and scalars skip the conversion walk |
 | `test_percall_calls.py` | The per-call paths of `query`, `command`, `first`, and `get` give the same bound values, overload choice, errors, and result-set state as the plain path (#280) |
 | `test_typed_rows.py` | `to_list()` and `iter_dicts()` read rows through the typed-row transport and return the same Python type and value for every property type as the row-by-row path (#285) |
+| `test_open_read_only.py` | `open_database(read_only=True)` and `DatabaseFactory.open(read_only=True)` read and refuse writes and schema changes; the default stays writable (#383) |
+| `test_sql_constraints_and_maintenance.py` | The SQL the docs give instead of wrappers (#383): property constraints and `ALTER PROPERTY`, `SELECT FROM` over subtypes, `BEGIN ISOLATION` `READ_COMMITTED` against `REPEATABLE_READ`, `CHECK DATABASE`, `REBUILD INDEX`, and `BACKUP DATABASE` to an archive that opens |
 | `test_database_utils.py` | `count_type`, `is_transaction_active`, `drop`, and the errors on a closed database |
 | `test_transaction_config.py` | WAL flush, read-your-writes, and auto-transaction settings |
 | `test_results_after_close.py` | What a result or record does after its `Database` is closed or dropped |
