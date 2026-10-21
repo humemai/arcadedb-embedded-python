@@ -2,9 +2,9 @@
 
 Run with `python -m pytest test_idle_and_warmup.py -q` from this directory.
 
-Both switches are OFF unless the launching environment sets them, and the 26.10.1 chain pulls main at every stage start, so the first group
-of tests holds that with both unset the sparse lane makes exactly the calls it made and its row has exactly the fields it had, and the runner
-neither opens the device nor adds a field. No engine runs: the lane is driven against a stand-in backend that records its calls.
+Both are part of the instrument: the sparse lane warms up every engine on queries apart from the timed set before its timed pass, and the
+runner holds the idle-state target for each timed cell. Both take a numeric override from the launching environment (PROTOCOL.md section 7);
+neither can be turned off. No engine runs: the lane is driven against a stand-in backend that records its calls.
 """
 import json
 import os
@@ -67,17 +67,20 @@ def _run_lane(monkeypatch, tmp_path):
 TIMED = [("search", tuple(q[0])) for q in QUERIES]
 
 
-def test_with_the_switch_unset_the_lane_makes_exactly_its_old_calls_and_adds_no_field(monkeypatch, tmp_path):
+def test_with_the_count_unset_the_lane_warms_up_with_the_default_count_before_the_timed_pass(monkeypatch, tmp_path):
     monkeypatch.delenv(S.WARMUP_ENV, raising=False)
+    monkeypatch.setattr(S, "disjoint_warmup_queries", lambda n, nt, nd: ([([900 + i], [1.0]) for i in range(3)], "extra_queries"))
     row, calls = _run_lane(monkeypatch, tmp_path)
-    assert calls == [("connect",), ("build", N_DOCS), ("post_build",)] + TIMED + [("close",)]
-    assert "sparse_warmup_queries" not in row
-    assert row["n_queries"] == N_QUERIES
-    assert S.sparse_warmup_n() == 0
+    assert S.sparse_warmup_n() == 1000
+    searches = [c for c in calls if c[0] == "search"]
+    assert searches[3:] == TIMED and len(searches) == 3 + N_QUERIES
+    assert row["sparse_warmup_queries"] == 3 and row["n_queries"] == N_QUERIES
 
 
 def test_the_warmup_runs_n_untimed_searches_before_the_timed_pass_and_stamps_n(monkeypatch, tmp_path):
     monkeypatch.setenv(S.WARMUP_ENV, "7")
+    warm_q = [([900 + i], [1.0]) for i in range(7)]
+    monkeypatch.setattr(S, "disjoint_warmup_queries", lambda n, nt, nd: (warm_q[:n], "extra_queries"))
     row, calls = _run_lane(monkeypatch, tmp_path)
     searches = [c for c in calls if c[0] == "search"]
     assert len(searches) == 7 + N_QUERIES
@@ -86,12 +89,6 @@ def test_the_warmup_runs_n_untimed_searches_before_the_timed_pass_and_stamps_n(m
     assert calls.index(("post_build",)) < calls.index(warm[0]) and calls.index(timed[0]) > calls.index(warm[-1])
     assert row["sparse_warmup_queries"] == 7
     assert row["n_queries"] == N_QUERIES and row["query_n"] == N_QUERIES - S.WARMUP      # the percentiles still cover the same queries
-
-
-def test_the_warmup_draw_is_the_same_for_every_engine_and_is_not_the_first_n():
-    a, b = S.warmup_indices(7, N_QUERIES), S.warmup_indices(7, N_QUERIES)
-    assert a == b and len(set(a)) == 7 and a != list(range(7))
-    assert S.warmup_indices(100, 5) == [0, 1, 2, 3, 4]       # never more than the set holds
 
 
 @pytest.mark.parametrize("bad", ["0", "-3", "many", "1.5"])
@@ -104,16 +101,17 @@ def test_a_warmup_that_is_not_a_positive_integer_ends_the_run(monkeypatch, bad):
 # ---------------------------------------------------------------------------
 # the idle-state hold
 
-def test_with_the_switch_unset_the_runner_opens_nothing_and_stamps_nothing(monkeypatch):
+def test_with_the_target_unset_the_runner_holds_the_default_target_and_stamps_it(monkeypatch, tmp_path):
+    dev = tmp_path / "cpu_dma_latency"
+    dev.write_bytes(b"")
+    monkeypatch.setattr(runner, "CPU_DMA_LATENCY_DEV", str(dev))
     monkeypatch.delenv(runner.CPU_DMA_LATENCY_ENV, raising=False)
-    opened = []
-    monkeypatch.setattr(runner.os, "open", lambda *a, **k: opened.append(a) or 99)
-    assert runner.cpu_dma_latency_target() is None
+    assert runner.cpu_dma_latency_target() == 0
     row = {"run_id": "x", "rc": 0}
     with runner.CpuDmaLatencyHold(runner.cpu_dma_latency_target()) as hold:
-        assert hold.fd is None
-        assert hold.stamp(row) is row
-    assert row == {"run_id": "x", "rc": 0} and opened == []
+        assert hold.fd is not None
+        hold.stamp(row)
+    assert row == {"run_id": "x", "rc": 0, "cpu_dma_latency_us": 0, "cpu_dma_latency_held": True}
 
 
 def test_the_hold_writes_the_32_bit_target_keeps_the_descriptor_open_for_the_cell_and_closes_it_after(monkeypatch, tmp_path):

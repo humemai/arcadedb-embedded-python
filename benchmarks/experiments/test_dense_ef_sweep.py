@@ -1,10 +1,9 @@
-"""The dense lane's search-beam sweep and matched-recall headline (instrument 2026-11 only).
+"""The dense lane's search-beam sweep and matched-recall headline.
 
 Run with `python -m pytest test_dense_ef_sweep.py -q` from this directory. Needs numpy (the lane and export_web import it).
 
-Under 2026-11 the lane builds once, runs the cold pass it has always run, then one timed pass per beam value, and the
-headline is the lowest p50 among the passes whose recall@10 reaches a fixed target (dense_beam.py). Under 2026-10 nothing
-changes.
+The lane builds once, runs the cold pass it has always run, then one timed pass per beam value, and the
+headline is the lowest p50 among the passes whose recall@10 reaches a fixed target (dense_beam.py).
 """
 import os
 import subprocess
@@ -36,12 +35,8 @@ def _enabled(instrument):
     return r.stdout.strip()
 
 
-def test_the_sweep_is_off_by_default_and_under_2026_10():
-    assert _enabled(None) == "False"
-    assert _enabled("2026-10") == "False"
-
-
-def test_the_sweep_is_on_under_2026_11():
+def test_the_sweep_is_on_by_default():
+    assert _enabled(None) == "True"
     assert _enabled("2026-11") == "True"
 
 

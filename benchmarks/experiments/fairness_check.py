@@ -1097,11 +1097,10 @@ ARCADEDB_HASH_ID_INDEXES = (
                          ("Country", "City", "Forum", "Post", "Comment", "Tag", "TagClass"))),
 )
 
-# NOT HERE: the dense lane's `Article(vid)` UNIQUE_HASH index. It is built only
-# under BENCH_DENSE_ID_INDEX=1 (#291, CAMPAIGN section 7 row 84), together with
-# an id index on every comparator that lacks one, and each row stamps
-# `dense_id_index`; this registry feeds a sentence about every row, so a
-# switch-dependent index would make it claim an index the unstamped rows lack.
+# NOT HERE: the dense lane's `Article(vid)` UNIQUE_HASH index (#291, CAMPAIGN
+# section 7 row 84). It is built together with an id index on every comparator
+# that lacks one, and each row stamps `dense_id_index`; the stamp, not this
+# registry, says which index the delete ran through.
 
 # WHAT STAYS SORTED, and why, so the next reader does not "finish" the change.
 # `Person(id)` on the graph lane: the untimed `person_scan` ranges over it

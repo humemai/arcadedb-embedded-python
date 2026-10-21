@@ -42,12 +42,34 @@ worker at the publishing tier. A cell measured two-at-once is exploration foreve
   budget on top.
 - **One JVM heap per tier, identical for every JVM engine.** The heap a row records is the
   heap the engine **ran**, read back out of the container, not the heap the cell asked for.
+  The cap on the heap (`-Xmx`) is the same for every JVM engine; the initial heap follows each
+  engine's own documentation. Embedded ArcadeDB leaves `-Xms` unset, as the Python bindings
+  document, and the server engines keep the initial heap their vendors recommend.
 - **Raising a resource for one engine obliges a re-measure of every engine at that tier.**
 
 !!! note "The memory contract cuts against ArcadeDB, and is kept anyway"
     The JVM heap lives inside the container cap, so ArcadeDB's heap leaves the rest of the
     cap for JVM overhead and page cache while a non-JVM comparator has the whole cap for
     its own use. Equal caps are what can be enforced, so equal caps are what is enforced.
+
+## What the Instrument Does
+
+The harness measures one instrument, `2026-11`, and every row is stamped with it. These
+choices are part of it, the same for every cell:
+
+- **A warm-up before the sparse search.** Every sparse engine runs 1,000 untimed searches on
+  queries that are not in the timed set, so a query or result cache cannot flatter an engine.
+- **The CPU idle state is held for each timed cell**, at the lowest latency target, so a
+  single-client time under a millisecond does not include a core waking up. A cell that
+  cannot take the hold still runs, and the row says so.
+- **The dense lane indexes the vector id** on every engine that would otherwise scan for the
+  record it deletes, so the delete column compares indexed lookups.
+- **The served ArcadeDB arms use the vendor's official Python driver as the headline**, and
+  the same cell runs again on the lean HTTP client of this harness as a labelled sensitivity
+  row. Bulk loads and transactions stay on the lean client.
+- **Large results are read on each engine's documented bulk path** (Arrow for ArcadeDB
+  embedded and DuckDB), with the plain-Python read timed beside it. Small results do not
+  move.
 
 ## Repetitions, and What a Cell Prints
 

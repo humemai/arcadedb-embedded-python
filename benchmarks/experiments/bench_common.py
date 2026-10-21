@@ -19,18 +19,19 @@ import time
 # THE INSTRUMENT VERSION. Rows measured under different query sets, timers, or
 # durability settings cannot share a table, so every row names the instrument
 # it was measured with and make_paper_tables refuses to mix them within a
-# table (DECISIONS #84). "2026-09" is the September campaign (rows without the
-# field); "2026-10" carries the #82 query set, the #81 durability rule, the
-# ingest/index timer split, and bench_host.
-# The next instrument is developed on main behind BENCH_INSTRUMENT, because the
-# queue host pulls main at every stage start (CAMPAIGN "ONE LINE OF DEVELOPMENT"):
-# unset, every stage keeps measuring "2026-10"; a stage that exports
-# BENCH_INSTRUMENT=2026-11 measures the next one. Code that changes behaviour for
-# the next instrument asks `instrument_at_least("2026-11")`, never the env.
-INSTRUMENTS = ("2026-10", "2026-11")
-INSTRUMENT = os.environ.get("BENCH_INSTRUMENT", "2026-10")
+# table (DECISIONS #84). The harness measures one instrument, "2026-11"; rows
+# stamped "2026-10" (and the September rows without the field) belong to the
+# retired instruments and are never produced again (DECISIONS #196). The stamp and
+# the selector stay, so a later instrument is added to INSTRUMENTS and gated with
+# `instrument_at_least`, never with the env. A BENCH_INSTRUMENT other than a member
+# of INSTRUMENTS is refused, so a launcher that still exports an old value fails
+# at import instead of measuring something else under the new stamp.
+INSTRUMENTS = ("2026-11",)
+INSTRUMENT = os.environ.get("BENCH_INSTRUMENT", "2026-11")
 if INSTRUMENT not in INSTRUMENTS:
-    raise SystemExit(f"BENCH_INSTRUMENT={INSTRUMENT!r} is not one of {INSTRUMENTS}")
+    raise SystemExit(
+        f"BENCH_INSTRUMENT={INSTRUMENT!r}: this harness measures only {', '.join(INSTRUMENTS)} "
+        "(the 2026-10 and September instruments are retired, DECISIONS #196). Unset it, or set it to the instrument above.")
 
 
 def instrument_at_least(version):
@@ -40,64 +41,19 @@ def instrument_at_least(version):
     return INSTRUMENT >= version
 
 
-# WHAT THE NEXT INSTRUMENT TURNS ON (CAMPAIGN section 7 rows 81, 82, 84, and the note under that table). Each switch below is
-# OFF when BENCH_INSTRUMENT is unset (or "2026-10") and ON by default under BENCH_INSTRUMENT=2026-11. The explicit environment
-# variable of each switch keeps working as an override in both instruments: a value set by the launcher always wins over the
-# instrument's default, and rows stamp what was used, as before. One place holds the defaults so a test can read them.
-NEXT_INSTRUMENT = "2026-11"
+# WHAT THE INSTRUMENT MEASURES (CAMPAIGN section 7 rows 72, 81, 82, 84 and the note under that table). These are the method,
+# not switches: an untimed sparse warm-up on queries disjoint from the timed set, the CPU idle-state hold at the lowest latency
+# target, an index on the dense lane's vector id, the embedded ArcadeDB JVM's initial heap left unset, large l4 results read on
+# each engine's documented bulk path, and the official ArcadeDB driver as the served headline with the lean client as the labelled
+# sensitivity twin. One place holds the numeric defaults so a test can read them.
 SPARSE_WARMUP_DEFAULT = 1000       # untimed searches per engine: one full round, as the study that motivated the warm-up used
 CPU_DMA_LATENCY_DEFAULT_US = 0     # idle-exit latency target held for each timed cell: no sleep state deeper than polling
-LARGE_RESULT_PATH_ENV = "BENCH_LARGE_RESULT_PATH"   # "arrow" or "rows": how a large result (l4 q_high, q_groupby) is read
-
-
-def next_instrument_default():
-    """True when this process measures the next instrument, so its default-off switches default to on."""
-    return instrument_at_least(NEXT_INSTRUMENT)
-
-
-def large_result_path():
-    """How the l4 queries with large answers (`q_high`, `q_groupby`) are read: "arrow" (each engine's documented bulk path:
-    ArcadeDB `to_arrow()`, DuckDB `to_arrow_table()`; SQLite has none and stays on `fetchall()`) under the next instrument,
-    "rows" (`to_list()` / `fetchall()`) under 2026-10. `BENCH_LARGE_RESULT_PATH=rows|arrow` overrides it in both instruments."""
-    v = (os.environ.get(LARGE_RESULT_PATH_ENV) or "").strip().lower()
-    if not v:
-        return "arrow" if next_instrument_default() else "rows"
-    if v not in ("arrow", "rows"):
-        raise SystemExit(f"{LARGE_RESULT_PATH_ENV}={v!r}: must be 'arrow' or 'rows' (unset it for the instrument's default)")
-    return v
-
-
-# THE EMBEDDED ARCADEDB JVM'S INITIAL HEAP. Through 2026-10 every embedded arm passed `-Xms{heap}` beside `heap_size` (-Xmx), so
-# the heap was committed up front like the served arms'. The bindings' documented practice is to leave -Xms unset and cap -Xmx
-# from the cell's memory budget; 2026-11 does that. `BENCH_ARCADEDB_EMBEDDED_XMS=pin|unset` overrides it in both instruments.
-EMBEDDED_XMS_ENV = "BENCH_ARCADEDB_EMBEDDED_XMS"
-
-
-def embedded_pins_xms():
-    v = (os.environ.get(EMBEDDED_XMS_ENV) or "").strip().lower()
-    if not v:
-        return not next_instrument_default()
-    if v not in ("pin", "unset"):
-        raise SystemExit(f"{EMBEDDED_XMS_ENV}={v!r}: must be 'pin' or 'unset' (unset it for the instrument's default)")
-    return v == "pin"
-
-
-def embedded_xms(heap):
-    """The `-Xms` argument for an embedded ArcadeDB JVM, or "" when this instrument leaves -Xms unset."""
-    return f"-Xms{heap}" if embedded_pins_xms() else ""
-
-
-def embedded_jvm_args(heap, *more):
-    """`-Xms` (when pinned) followed by the other arguments, space-joined, empty pieces dropped."""
-    return " ".join(p for p in (embedded_xms(heap), *more) if p)
 
 
 # PRODUCT QUANTIZATION ARMS OF THE DENSE LANE (QUANTIZATION.md, the PQ column).
 # Each arm clones the runner entry of the sibling named here. They exist only
-# when BOTH gates are open: the next instrument (BENCH_INSTRUMENT=2026-11) and an
-# explicit BENCH_DENSE_PQ=1, so a stage that selects the next instrument does not
-# start a PQ cell by accident, and a stage that sets only BENCH_DENSE_PQ=1 on the
-# current instrument starts none either.
+# under an explicit BENCH_DENSE_PQ=1, so a stage does not start a PQ cell by
+# accident before the measured ArcadeDB release carries the upstream PQ fixes.
 DENSE_PQ_ENV = "BENCH_DENSE_PQ"
 DENSE_PQ_ARMS = {
     "arcadedb_dense_embedded_pq": "arcadedb_dense_embedded",
@@ -109,8 +65,8 @@ DENSE_PQ_ARMS = {
 
 
 def dense_pq_enabled():
-    """True when the PQ arms may be registered: instrument 2026-11 or later AND BENCH_DENSE_PQ=1."""
-    return instrument_at_least("2026-11") and os.environ.get(DENSE_PQ_ENV, "").strip() == "1"
+    """True when the PQ arms may be registered: BENCH_DENSE_PQ=1."""
+    return os.environ.get(DENSE_PQ_ENV, "").strip() == "1"
 
 
 def row_family(backend):

@@ -121,9 +121,8 @@ def test_records_parse_and_the_count_is_checked():
         LH.ndjson_records(_ndjson(ROWS[:1]) + b'{"record": {"a": 1}}\n')
 
 
-@pytest.mark.parametrize("client", ["lean", "lean2"])
-def test_post_ndjson_sends_the_header_and_reads_the_chunked_body(server, monkeypatch, client):
-    monkeypatch.setenv(LH.CLIENT_ENV, client)
+def test_post_ndjson_sends_the_header_and_reads_the_chunked_body(server, monkeypatch):
+    monkeypatch.setenv(LH.CLIENT_ENV, "lean")
     s = LH.Session()
     s.auth = ("root", "x")
     url = f"http://127.0.0.1:{server.server_address[1]}/api/v1/query/bench"
@@ -149,7 +148,7 @@ def test_switch_is_off_unless_set_to_1(L, monkeypatch):
 @pytest.mark.parametrize("arm", ["ArcadeTSServer", "ArcadeNativeTSServer"])
 def test_unset_is_the_buffered_call_and_no_row_field(L, server, monkeypatch, arm):
     monkeypatch.delenv(L.TS_NDJSON_ENV, raising=False)
-    monkeypatch.delenv(LH.CLIENT_ENV, raising=False)
+    monkeypatch.setenv(LH.CLIENT_ENV, "lean")
     b = getattr(L, arm)()
     b.connect()
     assert b.q_high() == ROWS
@@ -162,7 +161,7 @@ def test_unset_is_the_buffered_call_and_no_row_field(L, server, monkeypatch, arm
 @pytest.mark.parametrize("arm", ["ArcadeTSServer", "ArcadeNativeTSServer"])
 def test_set_sends_the_header_parses_the_rows_and_stamps(L, server, monkeypatch, arm):
     monkeypatch.setenv(L.TS_NDJSON_ENV, "1")
-    monkeypatch.delenv(LH.CLIENT_ENV, raising=False)
+    monkeypatch.setenv(LH.CLIENT_ENV, "lean")
     b = getattr(L, arm)()
     b.connect()
     assert b.q_high() == ROWS

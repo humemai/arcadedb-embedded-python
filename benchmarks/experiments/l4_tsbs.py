@@ -222,7 +222,7 @@ def parse_lp(path):
 
 
 class ArrowResult:
-    """A large answer read as the engine's typed Arrow table (BENCH_INSTRUMENT=2026-11, or BENCH_LARGE_RESULT_PATH=arrow). The timed
+    """A large answer read as the engine's typed Arrow table (DECISIONS #170 amendment). The timed
     call returns the table; the row count is `num_rows`, and the digest iterates it as dict rows AFTER the timer stops."""
 
     def __init__(self, table, positional=False):
@@ -247,22 +247,18 @@ class BulkRead:
     for a result that size (DECISIONS #170 amendment, CAMPAIGN section 7): ArcadeDB `ResultSet.to_arrow()`, DuckDB
     `to_arrow_table()`; SQLite has no columnar path and stays on `fetchall()`. `<query>_plain()` is the plain-Python-objects read
     (`to_list()`, DuckDB `fetchall()`) that the lane times beside it as the labelled sensitivity row. Small results never move.
-    Under 2026-10, and with BENCH_LARGE_RESULT_PATH=rows, the headline stays `to_list()` / `fetchall()` and nothing is added."""
+    A missing pyarrow or bridge jar falls back to `to_list()` and the row says `read_path_arrow_missing`."""
 
     bulk_read = True
     LARGE = ("q_groupby", "q_high")
 
-    def _path(self):
-        return bench_common.large_result_path()
-
     def _large(self, rs):
-        if self._path() == "arrow":
-            table = rs.to_arrow()
-            if table is not None:
-                self._used = "arrow"
-                return ArrowResult(table)
-            self._used = "rows"          # pyarrow or the bridge jar is missing: the row says what ran
-            self._arrow_missing = True
+        table = rs.to_arrow()
+        if table is not None:
+            self._used = "arrow"
+            return ArrowResult(table)
+        self._used = "rows"          # pyarrow or the bridge jar is missing: the row says what ran
+        self._arrow_missing = True
         return rs.to_list()
 
     def read_path_fields(self):
@@ -281,14 +277,9 @@ class ArcadeTS(BulkRead):
         self._arcadedb = arcadedb
         heap = os.environ.get("ARCADEDB_HEAP", "6g")
         self.db = arcadedb.create_database("/tmp/l4_arcade",
-                                           # -Xms pinned to -Xmx through 2026-10 (left unset under 2026-11, bench_common.embedded_xms), matching every server arm and the other lanes.
-                                           # heap_size sets -Xmx ONLY (bindings jvm.py), so without this the JVM
-                                           # starts at its default initial heap, 1/64 of the cgroup, and grows
-                                           # under load. The paper states -Xms=-Xmx as a protocol invariant for
-                                           # everyone. It was true of l1, l2, l3s, l3d and every server arm, and
-                                           # false here.
+                                           # -Xms is left unset; heap_size sets -Xmx from the cell's memory budget (the bindings' documented practice, PROTOCOL section 7).
                                            jvm_kwargs={"heap_size": heap,
-                                                       "jvm_args": bench_common.embedded_xms(heap) or None})
+                                                       "jvm_args": None})
 
     def version(self):
         return f"arcadedb {self._arcadedb.__version__}"
@@ -905,10 +896,8 @@ class DuckTS(BulkRead):
         self.row_extra = bench_common.duckdb_readback(self.cx)
 
     def _large_duck(self, rel):
-        if self._path() == "arrow":
-            self._used = "arrow"
-            return ArrowResult(rel.to_arrow_table() if hasattr(rel, "to_arrow_table") else rel.fetch_arrow_table(), positional=True)
-        return rel.fetchall()
+        self._used = "arrow"
+        return ArrowResult(rel.to_arrow_table() if hasattr(rel, "to_arrow_table") else rel.fetch_arrow_table(), positional=True)
 
     def version(self):
         return f"duckdb {self._duckdb.__version__}"
@@ -1917,8 +1906,8 @@ def main():
 
     # THE LARGE-RESULT READ PATH (DECISIONS #170 amendment, CAMPAIGN section 7): an arm with a bulk path stamps which one carried
     # q_groupby and q_high, and, when that was the typed Arrow read, times the plain-Python-objects read (`to_list()`, `fetchall()`)
-    # beside it as the labelled sensitivity row `<query>_plain_*`. Nothing here runs under 2026-10 or BENCH_LARGE_RESULT_PATH=rows.
-    if getattr(b, "bulk_read", False) and bench_common.large_result_path() == "arrow":
+    # beside it as the labelled sensitivity row `<query>_plain_*`.
+    if getattr(b, "bulk_read", False):
         out.update(b.read_path_fields())
     if out.get("read_path") == "arrow":
         for qn in BulkRead.LARGE:

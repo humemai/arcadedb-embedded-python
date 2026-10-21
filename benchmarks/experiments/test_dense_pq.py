@@ -1,4 +1,4 @@
-"""The dense lane's PQ arms (QUANTIZATION.md): registered only under both gates, refused on an engine whose SQL
+"""The dense lane's PQ arms (QUANTIZATION.md): registered only under BENCH_DENSE_PQ=1, refused on an engine whose SQL
 does not know `rerank`, and kept as their own row family on the page.
 
 Run with `python -m pytest test_dense_pq.py -q` from this directory (needs numpy: the lane imports it).
@@ -39,15 +39,15 @@ def _registered(instrument, pq):
     return json.loads(r.stdout.strip().splitlines()[-1])
 
 
-@pytest.mark.parametrize("instrument,pq", [(None, None), (None, "1"), ("2026-10", "1"),
-                                           ("2026-11", None), ("2026-11", "0"), ("2026-11", "yes")])
-def test_no_pq_arm_unless_both_gates_are_open(instrument, pq):
+@pytest.mark.parametrize("instrument,pq", [(None, None), (None, "0"), (None, "yes"), ("2026-11", None)])
+def test_no_pq_arm_unless_the_switch_is_set(instrument, pq):
     got = _registered(instrument, pq)
     assert got == {"lane": [], "runner": [], "roster": []}
 
 
-def test_every_pq_arm_is_registered_when_both_gates_are_open():
-    got = _registered("2026-11", "1")
+@pytest.mark.parametrize("instrument", [None, "2026-11"])
+def test_every_pq_arm_is_registered_when_the_switch_is_set(instrument):
+    got = _registered(instrument, "1")
     assert got["lane"] == sorted(PQ_ARMS)
     assert got["runner"] == sorted(PQ_ARMS)
     assert got["roster"] == sorted(PQ_ARMS)

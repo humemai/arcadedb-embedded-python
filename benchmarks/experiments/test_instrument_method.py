@@ -1,5 +1,6 @@
-"""What BENCH_INSTRUMENT=2026-11 turns on (CAMPAIGN section 7 rows 72, 81, 82, 84 and the note under that table), and that unset keeps
-2026-10 exactly: for each switch, one test under 2026-10 and one under 2026-11. An explicit variable overrides the default in both."""
+"""What the 2026-11 instrument measures (CAMPAIGN section 7 rows 72, 81, 82, 84 and the note under that table): each method choice is the
+default, with nothing to switch on. Only the two numeric overrides PROTOCOL.md section 7 documents (the warm-up count, the idle-hold target)
+and the runner's own client selector for the sensitivity twin remain as variables."""
 import os
 import subprocess
 import sys
@@ -8,9 +9,8 @@ import types
 import pytest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SWITCH_VARS = ("BENCH_INSTRUMENT", "BENCH_SPARSE_WARMUP", "BENCH_CPU_DMA_LATENCY_US", "BENCH_DENSE_ID_INDEX",
-               "BENCH_ARCADEDB_HTTP_CLIENT", "BENCH_LARGE_RESULT_PATH", "BENCH_ARCADEDB_EMBEDDED_XMS",
-               "BENCH_ARCADEDB_CLIENT_SENSITIVITY", "BENCH_ARCADEDB_CLIENT_ROLE")
+SWITCH_VARS = ("BENCH_INSTRUMENT", "BENCH_SPARSE_WARMUP", "BENCH_CPU_DMA_LATENCY_US",
+               "BENCH_ARCADEDB_HTTP_CLIENT", "BENCH_ARCADEDB_CLIENT_ROLE")
 
 
 def run(code, instrument=None, **env_vars):
@@ -27,29 +27,21 @@ def run(code, instrument=None, **env_vars):
 WARM = "import l3_sparse as m; print(m.sparse_warmup_n())"
 
 
-def test_sparse_warmup_stays_off_under_2026_10():
-    assert run(WARM)[1] == "0"
-    assert run(WARM, "2026-10")[1] == "0"
-
-
-def test_sparse_warmup_defaults_on_under_2026_11():
+def test_sparse_warmup_defaults_to_one_full_round():
     import bench_common
-    assert run(WARM, "2026-11")[1] == str(bench_common.SPARSE_WARMUP_DEFAULT) == "1000"
+    assert run(WARM)[1] == str(bench_common.SPARSE_WARMUP_DEFAULT) == "1000"
+    assert run(WARM, "2026-11")[1] == "1000"
 
 
-def test_sparse_warmup_explicit_value_wins_in_both_instruments():
-    assert run(WARM, "2026-10", BENCH_SPARSE_WARMUP="7")[1] == "7"
-    assert run(WARM, "2026-11", BENCH_SPARSE_WARMUP="7")[1] == "7"
-    assert run(WARM, "2026-11", BENCH_SPARSE_WARMUP="off")[1] == "0"
-    assert run(WARM, "2026-11", BENCH_SPARSE_WARMUP="0")[1] == "0"
-    assert run(WARM, "2026-10", BENCH_SPARSE_WARMUP="0")[0] != 0      # 2026-10 still refuses a non-positive count
+def test_sparse_warmup_explicit_count_wins_and_it_cannot_be_turned_off():
+    assert run(WARM, BENCH_SPARSE_WARMUP="7")[1] == "7"
+    for bad in ("off", "0", "-3", "many"):
+        assert run(WARM, BENCH_SPARSE_WARMUP=bad)[0] != 0
 
 
 def _warm_module(monkeypatch):
     sys.path.insert(0, HERE)
-    import bench_common
     import l3_sparse
-    monkeypatch.setattr(bench_common, "INSTRUMENT", "2026-11")
     return l3_sparse
 
 
@@ -72,7 +64,7 @@ def test_warmup_falls_back_to_a_fixed_sample_of_documents_when_the_dataset_has_n
     assert src == "document_sample" and a == b and len(a) == 10 and all(q[0][0] >= 1000 for q in a)
 
 
-def test_the_lane_warms_up_on_disjoint_queries_under_2026_11_and_stamps_count_and_source(monkeypatch, tmp_path):
+def test_the_lane_warms_up_on_disjoint_queries_and_stamps_count_and_source(monkeypatch, tmp_path):
     S = _warm_module(monkeypatch)
     import test_idle_and_warmup as T
     warm = [([900 + i], [1.0]) for i in range(7)]
@@ -88,59 +80,36 @@ def test_the_lane_warms_up_on_disjoint_queries_under_2026_11_and_stamps_count_an
 DMA = "import runner as m; print(m.cpu_dma_latency_target())"
 
 
-def test_cpu_dma_hold_stays_off_under_2026_10():
-    assert run(DMA)[1] == "None"
-    assert run(DMA, "2026-10")[1] == "None"
-
-
-def test_cpu_dma_hold_defaults_to_the_target_under_2026_11():
+def test_cpu_dma_hold_defaults_to_the_target():
+    assert run(DMA)[1] == "0"
     assert run(DMA, "2026-11")[1] == "0"
 
 
-def test_cpu_dma_explicit_target_wins_in_both_instruments():
-    assert run(DMA, "2026-10", BENCH_CPU_DMA_LATENCY_US="10")[1] == "10"
-    assert run(DMA, "2026-11", BENCH_CPU_DMA_LATENCY_US="10")[1] == "10"
-    assert run(DMA, "2026-11", BENCH_CPU_DMA_LATENCY_US="off")[1] == "None"
-    assert run(DMA, "2026-10", BENCH_CPU_DMA_LATENCY_US="off")[0] != 0
+def test_cpu_dma_explicit_target_wins_and_the_hold_cannot_be_turned_off():
+    assert run(DMA, BENCH_CPU_DMA_LATENCY_US="10")[1] == "10"
+    assert run(DMA, BENCH_CPU_DMA_LATENCY_US="off")[0] != 0
 
 
 # ------------------------------------------------------------------------------------------------------ the dense id index (row 84)
-IDX = "import l3d_dense as m; print(m.id_index_enabled())"
-
-
-def test_dense_id_index_stays_off_under_2026_10():
-    assert run(IDX)[1] == "False"
-    assert run(IDX, "2026-10")[1] == "False"
-
-
-def test_dense_id_index_defaults_on_under_2026_11():
-    assert run(IDX, "2026-11")[1] == "True"
-
-
-def test_dense_id_index_explicit_value_wins_in_both_instruments():
-    assert run(IDX, "2026-10", BENCH_DENSE_ID_INDEX="1")[1] == "True"
-    assert run(IDX, "2026-11", BENCH_DENSE_ID_INDEX="1")[1] == "True"
-    assert run(IDX, "2026-11", BENCH_DENSE_ID_INDEX="0")[1] == "False"
-    assert run(IDX, "2026-10", BENCH_DENSE_ID_INDEX="0")[0] != 0
+def test_every_dense_adapter_builds_the_id_index_unconditionally():
+    src = open(os.path.join(HERE, "l3d_dense.py")).read()
+    assert "id_index_enabled" not in src and "BENCH_DENSE_ID_INDEX" not in src
+    assert src.count("self.id_index = self.ID_INDEX_DDL") >= 7       # the seven engines that lacked a key
 
 
 # ------------------------------------------------------------------------------------------ the served client and its twins (rows 72, 82)
 CLIENT = "import lean_http as m; print(m.client_choice())"
 
 
-def test_served_client_stays_lean_under_2026_10():
-    assert run(CLIENT)[1] == "lean"
-    assert run(CLIENT, "2026-10")[1] == "lean"
+def test_served_client_is_the_official_driver_by_default():
+    assert run(CLIENT)[1] == "official"
 
 
-def test_served_client_is_the_official_driver_under_2026_11():
-    assert run(CLIENT, "2026-11")[1] == "official"
-
-
-def test_served_client_explicit_value_wins_in_both_instruments():
-    for inst in ("2026-10", "2026-11"):
-        for v in ("lean", "lean2", "requests", "official"):
-            assert run(CLIENT, inst, BENCH_ARCADEDB_HTTP_CLIENT=v)[1] == v
+def test_served_client_selector_takes_official_or_lean_only():
+    for v in ("lean", "official"):
+        assert run(CLIENT, BENCH_ARCADEDB_HTTP_CLIENT=v)[1] == v
+    for v in ("lean2", "requests"):
+        assert run(CLIENT, BENCH_ARCADEDB_HTTP_CLIENT=v)[0] != 0
 
 
 JOBS = ("import runner as m\n"
@@ -150,25 +119,16 @@ JOBS = ("import runner as m\n"
         "      all(x['run_id'].endswith('_clientlean') for x in tw), len({x['run_id'] for x in j}) == len(j))")
 
 
-def test_no_sensitivity_twin_cells_under_2026_10():
-    out = run(JOBS, "2026-10")[1].split()
-    assert out[0] == "0" and out[3] == "True"
-
-
-def test_every_served_arcadedb_arm_has_a_lean_twin_under_2026_11():
-    out = run(JOBS, "2026-11")[1].split()
+def test_every_served_arcadedb_arm_has_a_lean_twin():
+    out = run(JOBS)[1].split()
     assert int(out[0]) > 0 and out[1:] == ["True", "True", "True"]
 
 
-def test_twin_cells_follow_the_explicit_switch_in_both_instruments():
-    assert run(JOBS, "2026-11", BENCH_ARCADEDB_CLIENT_SENSITIVITY="0")[1].split()[0] == "0"
-    assert int(run(JOBS, "2026-10", BENCH_ARCADEDB_CLIENT_SENSITIVITY="1")[1].split()[0]) > 0
-
-
-def test_runner_forwards_the_instrument_and_the_new_switches_to_the_cell():
+def test_runner_always_forwards_the_instrument_and_the_twin_selects_the_lean_client():
     src = open(os.path.join(HERE, "runner.py")).read()
-    for v in ("BENCH_INSTRUMENT", "BENCH_LARGE_RESULT_PATH", "BENCH_ARCADEDB_EMBEDDED_XMS"):
-        assert f'"{v}"' in src
+    assert 'f"BENCH_INSTRUMENT={bench_common.INSTRUMENT}"' in src          # from the host's own value, never left to the container's default
+    assert "BENCH_ARCADEDB_CLIENT_SENSITIVITY" not in src
+    assert 'f"BENCH_ARCADEDB_HTTP_CLIENT={job[\'http_client\']}"' in src
 
 
 def _fake_driver(monkeypatch, calls):
@@ -252,24 +212,6 @@ def test_a_lean_row_carries_no_role_unless_the_runner_made_it_a_twin(monkeypatch
 
 
 # ----------------------------------------------------------------------------------------------- the large-result read path (DECISIONS)
-PATH = "import bench_common as m; print(m.large_result_path())"
-
-
-def test_large_results_stay_on_rows_under_2026_10():
-    assert run(PATH)[1] == "rows"
-    assert run(PATH, "2026-10")[1] == "rows"
-
-
-def test_large_results_use_the_documented_bulk_path_under_2026_11():
-    assert run(PATH, "2026-11")[1] == "arrow"
-
-
-def test_large_result_path_explicit_value_wins_in_both_instruments():
-    assert run(PATH, "2026-10", BENCH_LARGE_RESULT_PATH="arrow")[1] == "arrow"
-    assert run(PATH, "2026-11", BENCH_LARGE_RESULT_PATH="rows")[1] == "rows"
-    assert run(PATH, "2026-11", BENCH_LARGE_RESULT_PATH="x")[0] != 0
-
-
 BULK = """
 import l4_tsbs as m
 class Table:
@@ -289,15 +231,8 @@ print(m.ArcadeTSServer.bulk_read, m.ArcadeNativeTSServer.bulk_read, m.ArcadeNati
 """
 
 
-def test_l4_reads_large_results_as_rows_under_2026_10():
-    code, out, err = run(BULK, "2026-10")
-    assert code == 0, err
-    lines = out.splitlines()
-    assert lines[0] == "list 2 - rows"
-
-
-def test_l4_reads_large_results_as_arrow_under_2026_11_and_says_when_it_could_not():
-    code, out, err = run(BULK, "2026-11")
+def test_l4_reads_large_results_as_arrow_and_says_when_it_could_not():
+    code, out, err = run(BULK)
     assert code == 0, err
     lines = out.splitlines()
     assert lines[0] == "ArrowResult 2 h arrow"
@@ -306,28 +241,10 @@ def test_l4_reads_large_results_as_arrow_under_2026_11_and_says_when_it_could_no
 
 
 # -------------------------------------------------------------------------------------------- the embedded JVM's -Xms (DECISIONS, bindings)
-XMS = "import bench_common as m; print(repr(m.embedded_xms('4g')), repr(m.embedded_jvm_args('4g', '-Dx=1', '')))"
-
-
-def test_embedded_arms_pin_xms_under_2026_10():
-    assert run(XMS)[1] == "'-Xms4g' '-Xms4g -Dx=1'"
-    assert run(XMS, "2026-10")[1] == "'-Xms4g' '-Xms4g -Dx=1'"
-
-
-def test_embedded_arms_leave_xms_unset_under_2026_11():
-    assert run(XMS, "2026-11")[1] == "'' '-Dx=1'"
-
-
-def test_embedded_xms_explicit_value_wins_in_both_instruments():
-    assert run(XMS, "2026-11", BENCH_ARCADEDB_EMBEDDED_XMS="pin")[1] == "'-Xms4g' '-Xms4g -Dx=1'"
-    assert run(XMS, "2026-10", BENCH_ARCADEDB_EMBEDDED_XMS="unset")[1] == "'' '-Dx=1'"
-    assert run(XMS, "2026-10", BENCH_ARCADEDB_EMBEDDED_XMS="x")[0] != 0
-
-
-def test_no_embedded_arm_hardcodes_xms_and_the_servers_keep_theirs():
+def test_no_embedded_arm_pins_xms_and_the_servers_keep_theirs():
     for f in ("l1_tabular.py", "l2_graph.py", "l3_sparse.py", "l3d_dense.py", "l4_tsbs.py", "l1_tpc.py", "e2_hybrid.py", "l5_lifecycle.py"):
         src = open(os.path.join(HERE, f)).read()
-        assert 'f"-Xms{heap}' not in src, f
+        assert "-Xms{" not in src, f
     runner = open(os.path.join(HERE, "runner.py")).read()
     assert runner.count("ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap}") >= 5      # served ArcadeDB keeps its pin
     assert runner.count("ES_JAVA_OPTS=-Xms{heap} -Xmx{heap}") >= 2               # Elasticsearch keeps its own

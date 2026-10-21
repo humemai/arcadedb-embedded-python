@@ -1,4 +1,4 @@
-"""Memory per phase (instrument 2026-11, #352): parsers on synthetic input, the lane and host handshake, and that a 2026-10 row has nothing new."""
+"""Memory per phase (instrument 2026-11, #352): parsers on synthetic input, the lane and host handshake, and that a row from before 2026-11 has nothing new."""
 import io
 import json
 import os
@@ -204,7 +204,7 @@ def test_lane_gives_up_when_nobody_answers(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# a 2026-10 row has nothing new
+# the probe is part of the instrument
 
 def _py(code, **env):
     e = {k: v for k, v in os.environ.items() if k not in ("BENCH_INSTRUMENT", "BENCH_MEMPROBE_DIR")}
@@ -212,15 +212,7 @@ def _py(code, **env):
     return subprocess.run([sys.executable, "-c", code], cwd=HERE, env=e, capture_output=True, text=True)
 
 
-def test_2610_has_no_probe():
-    r = _py("import memory_probe as m, bench_common as b, sys, io\n"
-            "print(m.enabled(), m.HostProbe.maybe('x', '/nonexistent') is None)\n"
-            "b.PhaseLog.__init__ if hasattr(b, 'PhaseLog') else None\n")
-    assert r.returncode == 0, r.stderr
-    assert r.stdout.split() == ["False", "True"]
-
-
-def test_2610_phase_marks_import_nothing():
+def test_phase_marks_import_nothing_without_a_probe_dir():
     code = ("import sys, io, bench_common as b\n"
             "cls = getattr(b, 'PhaseBeat')\n"
             "p = cls(out=io.StringIO()); p.mark('build-done'); p.mark('close-start')\n"
