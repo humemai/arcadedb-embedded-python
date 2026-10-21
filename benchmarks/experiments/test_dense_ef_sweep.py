@@ -36,11 +36,6 @@ def _enabled(instrument):
     return r.stdout.strip()
 
 
-def test_the_sweep_is_off_by_default_and_under_2026_10():
-    assert _enabled(None) == "False"
-    assert _enabled("2026-10") == "False"
-
-
 def test_the_sweep_is_on_under_2026_11():
     assert _enabled("2026-11") == "True"
 

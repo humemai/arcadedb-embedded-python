@@ -209,7 +209,7 @@ def test_the_pages_memory_column_reads_owned_memory_with_the_anonymous_peak_as_f
 
 def test_every_memory_column_of_the_page_is_owned_memory(EW):
     """No table spec still names the anonymous peak under the "peak memory GiB" header."""
-    specs = [m for spec in list(EW.LANES.values()) + list(EW.OCT_METRICS.values())
+    specs = [m for spec in list(EW.LANES.values()) + list(EW.OCT_TABLE_METRICS.values())
              for m in (spec.get("metrics", []) if isinstance(spec, dict) else spec)]
     named = [f for f, label in specs if label == "peak memory GiB"]
     assert named and set(named) == {EW.MEM_PEAK_FIELD}

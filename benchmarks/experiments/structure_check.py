@@ -125,21 +125,8 @@ def check_citations():
 def check_ingest_sentences():
     """A fact written twice must not lose an engine on one of the copies.
 
-    The ingest path of each arm is stated in TWO places: `INGEST_NOTES` for
-    the September page and `OCT_PROSE[...]["ingest"]` for the October one.
-    Two copies of one fact drift, and on 2026-09-22 they had: DuckPGQ joined
-    the graph lane in September's extension, September's sentence was updated
-    and October's was not, so the October graph table named ten of its eleven
-    arms -- and October's is the one that page renders.
-
-    The rule is not "the two must match". October legitimately names engines
-    September never had, because October's tables have more arms. What must
-    not happen is an engine that is ON the October table, named in the
-    September sentence, and missing from the October one: that is a copy which
-    was updated once and not twice.
-
-    Checked against `runner.LANES` rather than against the other sentence, so
-    an engine genuinely dropped in October does not read as drift.
+    The ingest path of each arm is stated in `OCT_PROSE[...]["ingest"]`. A table's sentence must name every engine its lane runs,
+    checked against `runner.LANES` (what the runner actually executes) rather than against a second copy.
     """
     import export_web as E
     import runner as R
@@ -154,7 +141,7 @@ def check_ingest_sentences():
         return {e for e in ENGINES if re.search(rf"\b{e}\b", text)}
 
     bad = []
-    for tid in sorted(set(E.INGEST_NOTES) | set(E.OCT_PROSE)):
+    for tid in sorted(E.OCT_PROSE):
         oct_ = (E.OCT_PROSE.get(tid) or {}).get("ingest")
         oct_ = oct_[0] if isinstance(oct_, tuple) else oct_
         lane = (E._TABLE_LANE.get(tid) or (None,))[0]
@@ -171,17 +158,9 @@ def check_ingest_sentences():
             arms |= named(E.display_name(be) if be in E.DISPLAY_NAMES else be)
         missing = sorted(arms - named(oct_))
         if missing:
-            bad.append(f"{tid}: the October ingest sentence does not name {missing}, "
+            bad.append(f"{tid}: the ingest sentence does not name {missing}, "
                        f"which lane {lane} runs -- a reader is told how every other "
                        f"arm on that table was loaded and not that one")
-        # And the older copy must not be the only one that knows an arm: that
-        # is the DuckPGQ case, one copy updated and the other not.
-        sep = E.INGEST_NOTES.get(tid)
-        if sep:
-            lost = sorted((named(sep) - named(oct_)) & arms)
-            if lost and lost != missing:
-                bad.append(f"{tid}: {lost} named in the September ingest sentence "
-                           f"and missing from the October one")
     return bad
 
 

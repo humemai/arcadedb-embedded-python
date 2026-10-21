@@ -191,7 +191,7 @@ def test_both_switches_are_registered_judged_only_where_stamped_and_absent_from_
 
 
 def test_the_stamped_rows_are_checked_and_the_sentences_name_the_values_the_rows_carry():
-    base = {"instrument": "2026-10", "lane": "l3s", "backend": "qdrant_sparse", "scale": "micro", "workload": "search"}
+    base = {"instrument": "2026-11", "lane": "l3s", "backend": "qdrant_sparse", "scale": "micro", "workload": "search"}
     ok = dict(base, sparse_warmup_queries=100, cpu_dma_latency_us=10, cpu_dma_latency_held=True)
     assert [f for f in OV.stamp_findings([ok])[0]] == []
     bad = dict(base, cpu_dma_latency_us=10, cpu_dma_latency_held=False)

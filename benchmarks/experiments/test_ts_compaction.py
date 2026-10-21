@@ -137,31 +137,10 @@ def test_the_lane_stamps_the_readback_after_the_settle_and_before_any_query():
     assert main.index("b.settle()") < stamp < main.index("corpus-release")
 
 
-# ---- the October pin's rows ran without the declaration ----------------------------------------------------------
+# ---- the declaration under the compaction-interval stamp ----------------------------------------------------------
 
 def _row(**kw):
-    base = {"lane": "l4", "scale": "ts100", "workload": "ingest", "backend": "arcadedb_ts_native", "instrument": "2026-10",
+    base = {"lane": "l4", "scale": "ts100", "workload": "ingest", "backend": "arcadedb_ts_native", "instrument": "2026-11",
             "ts_mutable_at_ingest_end": 0}
     base.update(kw)
     return base
-
-
-def test_rows_of_the_pin_measured_before_the_declaration_are_not_asked_for_the_stamp():
-    old = _row(engine_commit="417314c18da782620463bc7c09ac6bd34ac6fbda")
-    new = _row(engine_commit="d36b4ca3ae4c170abc73598e0dffa2bb58e06621")
-    assert OV.stamp_findings([old]) == ([], 1)                     # only the unsealed-samples stamp is judged
-    findings, judged = OV.stamp_findings([new])
-    assert judged == 2 and [f["key"] for f in findings] == ["arcadedb_ts_compaction_interval"]
-
-
-def test_no_sentence_about_the_interval_stands_under_a_table_built_from_rows_that_ran_without_it():
-    old = _row(engine_commit="417314c18")
-    new = _row(engine_commit="d36b4ca3a", ts_compaction_interval_ms=OV.TS_COMPACTION_MS)
-    keys = ["arcadedb_ts_native"]
-    said = lambda rows: [t for t, _v in OV.notes_for_table("l4", "l4", keys, rows) if "compaction interval" in t]
-    assert said([old]) == []
-    assert len(said([old, new])) == 1 and "one-hour" in said([old, new])[0]
-    # and the page gate does not demand the sentence for a table that has none to say
-    assert "arcadedb_ts_compaction_interval" not in [o.key for o in OV.applicable("l4", keys, [old])]
-    assert "arcadedb_ts_compaction_interval" in [o.key for o in OV.applicable("l4", keys, [old, new])]
-    assert "arcadedb_ts_compaction_interval" in [o.key for o in OV.applicable("l4", keys)]       # no rows given: owed

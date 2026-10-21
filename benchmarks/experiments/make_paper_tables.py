@@ -257,7 +257,7 @@ def _assert_lanes_registered():
             f"export_web.SCALE_LABELS, then fairness_check.LANE_SCRIPT.")
 
 
-def load_canonical(apply_corpus=True):
+def load_canonical(apply_corpus=True, include_twins=False):
     _assert_lanes_registered()
     del WITHHELD_RECALL[:]   # per call, or the sidecar counts every earlier call's rows again
     del UNSETTLED_DISK[:]
@@ -534,16 +534,21 @@ def load_canonical(apply_corpus=True):
         # sweep row and a GAV-ablation row could once have shadowed a published
         # cell. Rows before #90 carry no class and default to relaxed, which is
         # what they were.
+        # THE CLIENT ROLE IS PART OF THE KEY. A served ArcadeDB cell runs twice: on the headline client and, as a twin job, on
+        # the lean HTTP client (`arcadedb_http_client_role` = sensitivity). Same lane, scale, workload, backend and rep, so
+        # without the role the later of the two would replace the other on ts_utc.
         k = (r["lane"], r["scale"], r.get("n_docs"), r.get("workload"),
              r["backend"], r.get("gav") is not False, r["rep"],
-             r.get("durability_class") or "relaxed")
+             r.get("durability_class") or "relaxed", r.get("arcadedb_http_client_role") == "sensitivity")
         if k not in best or r["ts_utc"] > best[k]["ts_utc"]:
             best[k] = r
     _write_withheld_recall()
     if UNSETTLED_DISK:
         print(f"  blanked the disk reading of {len(UNSETTLED_DISK)} row(s): it had not settled; "
               f"their other measurements stand")
-    out = list(best.values())
+    # The paper tables, the gates and the claims read the headline rows. The twin rows go to the freeze (include_twins) so
+    # the exporter can show them beside the headline, labelled, and are never pooled into a headline median.
+    out = [r for r in best.values() if include_twins or r.get("arcadedb_http_client_role") != "sensitivity"]
     return out
 
 
@@ -1358,7 +1363,7 @@ def main(freeze=True):
     rows = load_canonical()
     print(f"{len(rows)} canonical rows")
     if freeze:
-        freeze_paper_rows(rows)
+        freeze_paper_rows(load_canonical(include_twins=True))
     tabular_table(rows)
     graph_table(rows)
     sparse_table(rows)

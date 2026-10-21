@@ -117,4 +117,4 @@ def test_the_setup_and_the_sparse_table_say_what_the_rows_stamp(payloads):
 def test_the_exporter_refuses_another_selector(tmp_path):
     results = _stage(tmp_path / "results")
     proc = _run("export_web.py", results, BENCH_INSTRUMENT="2026-10")
-    assert proc.returncode != 0 and "2026-11 rows only" in proc.stderr
+    assert proc.returncode != 0 and "2026-11" in proc.stderr

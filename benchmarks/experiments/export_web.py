@@ -7015,6 +7015,9 @@ def main() -> int:
     if _dropped:
         print(f"  one setting per table: {len(_dropped)} strict rows set aside for the durability table only")
         rows = [r for r in rows if r not in _dropped]
+    # The twin rows get the same one-setting rule: a strict row is the durability table's, never a twin cell's.
+    _twin_rows = [r for r in _twin_rows if not (str(r.get("durability_class")) == "strict" and (
+        r.get("lane"), r.get("workload"), r.get("backend"), str(r.get("scale"))) in _has_relaxed)]
     names = _image_version_names()
 
     # The tabular lanes run OLTP and OLAP as separate workloads over ONE corpus

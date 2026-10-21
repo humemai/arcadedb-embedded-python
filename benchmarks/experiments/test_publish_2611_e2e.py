@@ -135,6 +135,13 @@ def test_the_served_arcadedb_twin_row_is_not_in_the_headline(published):
     got = [m["median"] for m in entry["metrics"].values() if isinstance(m, dict) and "median" in m]
     want = statistics.median(r[key] for r in head if r.get("scale") == entry["scale"])
     assert any(g == pytest.approx(want, rel=1e-3) for g in got), (key, want, got[:8])
+    # the freeze keeps the twin rows and the exporter attaches them, labelled, to the headline entry
+    frozen = list(csv.DictReader((published["results"] / "runs_paper.csv").open()))
+    assert any(r.get("arcadedb_http_client_role") == "sensitivity" for r in frozen)
+    twin = entry["client_twin"]
+    assert "lean" in twin["client"] and twin["metrics"]
+    label = next(k for k, m in entry["metrics"].items() if isinstance(m, dict) and m.get("median") == pytest.approx(want, rel=1e-3))
+    assert twin["metrics"][label]["median"] == pytest.approx(want * 0.7, rel=1e-2)
 
 
 def test_the_paper_tables_are_written_beside_the_freeze(published):
