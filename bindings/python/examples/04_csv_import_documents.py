@@ -1072,10 +1072,6 @@ db_path = os.path.join(db_dir, db_name)
 if os.path.exists(db_path):
     shutil.rmtree(db_path)
 
-# Clean up log directory from previous runs
-if os.path.exists("./log"):
-    shutil.rmtree("./log")
-
 db = arcadedb.create_database(
     db_path,
     jvm_kwargs={"heap_size": args.heap_size} if args.heap_size else None,

@@ -267,7 +267,8 @@ start_jvm(heap_size="8g", jvm_args="-Xms8g -XX:MaxDirectMemorySize=8g")
     start a new Python process.
 
 !!! tip "Alternative: ARCADEDB_JVM_ERROR_FILE"
-    Set crash log location:
+    The crash log goes to `hs_err_pid%p.log` in the log directory by default (see
+    [Where the logs go](../getting-started/installation.md#where-the-logs-go)). Set another location:
 
     ```bash
     export ARCADEDB_JVM_ERROR_FILE="/var/log/arcade/errors.log"
@@ -633,9 +634,10 @@ chmod -R 755 ./databases
 ```
 
 3. **Check logs:** the engine does not log through Python's `logging`. It writes
-   `./log/arcadedb.log.*` relative to the working directory, server events go to
+   `arcadedb.log.*` in the per-user log directory (`ARCADEDB_LOG_DIR` to change it; see
+   [Where the logs go](../getting-started/installation.md#where-the-logs-go)), server events go to
    `<root_path>/log/server-event-log-*.jsonl`, and a JVM crash leaves
-   `./log/hs_err_pid*.log` (or the path in `ARCADEDB_JVM_ERROR_FILE`).
+   `hs_err_pid*.log` in the log directory (or at the path in `ARCADEDB_JVM_ERROR_FILE`).
 
 ---
 
@@ -818,10 +820,11 @@ import arcadedb_embedded as arcadedb
 # exceptions swallowed during cleanup, and a WARNING when a bridge class is missing
 ```
 
-**Engine and server logs:** the engine writes `./log/arcadedb.log.*` relative to the
-working directory, server events go to `<root_path>/log/server-event-log-*.jsonl`,
-and a JVM crash leaves `./log/hs_err_pid*.log` (or the path in
-`ARCADEDB_JVM_ERROR_FILE`).
+**Engine and server logs:** the engine writes `arcadedb.log.*` in the per-user log
+directory (`ARCADEDB_LOG_DIR` to change it; see
+[Where the logs go](../getting-started/installation.md#where-the-logs-go)), server events go
+to `<root_path>/log/server-event-log-*.jsonl`, and a JVM crash leaves `hs_err_pid*.log` in
+the log directory (or at the path in `ARCADEDB_JVM_ERROR_FILE`).
 
 **Java logging:**
 

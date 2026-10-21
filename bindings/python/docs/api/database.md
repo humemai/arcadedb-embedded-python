@@ -1340,7 +1340,9 @@ specifically need that surface.
 - `beam_width` (int): Beam width for search/construction (default: 100). Maps to
   `beamWidth` in HNSW (JVector).
 - `quantization` (str | None): `"INT8"` (recommended), `"BINARY"`, `"PRODUCT"` for PQ,
-  or `None` for full precision (default: `"INT8"`). Prefer `"INT8"` for current
+  or `None` for full precision (default: `"INT8"`, a choice of this helper; a SQL
+  `CREATE INDEX` without `"quantization"` in its `METADATA` builds a full-precision index,
+  the engine's `NONE`). Prefer `"INT8"` for current
   production usage in these bindings; `"PRODUCT"`/PQ is not recommended: in current engine builds the SQL search
   (`vectorNeighbors`) scores candidates with the full-precision vectors, so PQ gives no
   search speedup, and the index files are larger than with `None` because the engine writes

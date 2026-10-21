@@ -7,9 +7,11 @@ Handles JVM initialization and JAR file management.
 import glob
 import os
 import platform
+import re
 import shlex
 import shutil
 import sys
+import tempfile
 import zipfile
 from pathlib import Path
 from typing import Iterable, Optional, Union
@@ -17,10 +19,18 @@ from typing import Iterable, Optional, Union
 import jpype
 import jpype.imports
 
+from ._logging import get_logger
 from .exceptions import ArcadeDBError
+
+_LOGGER = get_logger(__name__)
 
 _JVM_CONFIG = None
 _JVM_INTERRUPT = None  # the `interrupt` the running JVM was started with
+_LOG_DIR_USED = None  # the log directory the running JVM was started with
+
+_LOG_DIR_ENV = "ARCADEDB_LOG_DIR"
+_LOGGING_CONFIG_NAME = "logging.properties"
+_ENGINE_LOG_RESOURCE = "arcadedb-log.properties"
 
 
 def _project_dir() -> Path:
@@ -266,7 +276,7 @@ def get_bundled_jre_lib_path() -> str:
 
 def start_jvm(
     heap_size: Optional[str] = "4g",
-    disable_xml_limits: bool = True,
+    disable_xml_limits: bool = False,
     jvm_args: Optional[Union[Iterable[str], str]] = None,
     common_pool_parallelism: Optional[int] = None,
     interrupt: Optional[bool] = None,
@@ -284,8 +294,12 @@ def start_jvm(
         none is given.
 
     disable_xml_limits (optional)
-        If True, relaxes JDK XML entity limits to support large XML
-        dumps (adds jdk.xml.* limits).
+        Default False: the JDK's XML entity limits stay on, which is the safe
+        setting for XML you did not write. If True, lifts them for the whole
+        process (adds the jdk.xml.* flags) so SQL ``IMPORT DATABASE`` of a
+        large XML file works. For ``Database.import_documents`` prefer its own
+        ``disable_xml_limits=True``, which lifts them for that one call only.
+        Earlier releases defaulted to True.
 
     jvm_args (optional)
         Additional JVM flags to pass through (e.g. "-XX:MaxDirectMemorySize=8g",
@@ -330,8 +344,11 @@ def start_jvm(
             -Djava.util.concurrent.ForkJoinPool.common.parallelism=<count>   Limit
                 common pool threads if you want fewer threads for graph builds
 
-        XML import may exceed default JDK entity limits.
-        Configure these BEFORE import to avoid JAXP limit errors:
+        A large XML import may exceed the default JDK entity limits (a JAXP
+        limit error). Prefer ``disable_xml_limits=True`` on
+        ``Database.import_documents`` (one call) or on ``start_jvm`` (whole
+        process); these flags do the same by hand and must be set BEFORE the
+        JVM starts:
             -Djdk.xml.maxGeneralEntitySizeLimit=0
             -Djdk.xml.entityExpansionLimit=0
             -Djdk.xml.totalEntitySizeLimit=0
@@ -346,13 +363,22 @@ def start_jvm(
             # Explicit thread cap for reproducible benchmarks
             start_jvm(heap_size="8g", common_pool_parallelism=8)
 
+    ARCADEDB_LOG_DIR (optional)
+        Directory for the engine log (arcadedb.log.*), the JVM crash log and the
+        generated logging.properties. Default: a per-user state directory,
+        never the working directory (Linux ``$XDG_STATE_HOME`` or
+        ``~/.local/state``, macOS ``~/Library/Logs``, Windows ``%LOCALAPPDATA%``,
+        then ``arcadedb-embedded/log``). A ``-Darcadedb.server.logsDirectory=`` or
+        ``-Djava.util.logging.config.file=`` in ``jvm_args`` wins over it.
+
     ARCADEDB_JVM_ERROR_FILE (optional)
-        Path for JVM crash logs (default: ./log/hs_err_pid%p.log)
+        Path for JVM crash logs (default: ``hs_err_pid%p.log`` in the log
+        directory above). ``-XX:ErrorFile=`` in ``jvm_args`` wins over it.
 
     Note: JVM options must be set BEFORE the first JVM start, as the JVM
           can only be configured once per Python process.
     """
-    global _JVM_CONFIG, _JVM_INTERRUPT
+    global _JVM_CONFIG, _JVM_INTERRUPT, _LOG_DIR_USED
     if jpype.isJVMStarted():
         candidate_args = tuple(
             _build_jvm_args(
@@ -360,12 +386,13 @@ def start_jvm(
                 disable_xml_limits=disable_xml_limits,
                 jvm_args=jvm_args,
                 common_pool_parallelism=common_pool_parallelism,
+                log_dir=_LOG_DIR_USED,
             )
         )
         has_overrides = (
             jvm_args is not None
             or (heap_size not in (None, "4g"))
-            or (disable_xml_limits is not True)
+            or (disable_xml_limits is not False)
             or (common_pool_parallelism is not None)
         )
         if (
@@ -405,11 +432,14 @@ def start_jvm(
     # Get bundled JRE's JVM library path
     jvm_path = get_bundled_jre_lib_path()
 
+    log_dir = _prepare_log_dir(_default_log_dir(), jar_files)
+
     jvm_args = _build_jvm_args(
         heap_size=heap_size,
         disable_xml_limits=disable_xml_limits,
         jvm_args=jvm_args,
         common_pool_parallelism=common_pool_parallelism,
+        log_dir=log_dir,
     )
 
     try:
@@ -422,6 +452,7 @@ def start_jvm(
             jvm_path, *jvm_args, classpath=classpath, interrupt=_JVM_INTERRUPT
         )
         _JVM_CONFIG = tuple(jvm_args)
+        _LOG_DIR_USED = log_dir
     except Exception as e:
         raise ArcadeDBError(f"Failed to start JVM: {e}") from e
 
@@ -514,11 +545,119 @@ def _dedupe_max_heap(args: list[str]) -> list[str]:
     return filtered
 
 
+def _state_base_dir() -> Path:
+    """Per-user base directory for state and logs, by platform (stdlib only).
+
+    The home directory is read only where the platform needs it, and when it
+    cannot be determined (no HOME or USERPROFILE, as in a stripped-down service
+    environment) the system temp directory is used, so this never raises.
+    """
+    if sys.platform == "win32":
+        local = os.environ.get("LOCALAPPDATA")
+        if local:
+            return Path(local)
+    elif sys.platform != "darwin":
+        xdg = os.environ.get("XDG_STATE_HOME")
+        # The XDG spec ignores a relative value.
+        if xdg and os.path.isabs(xdg):
+            return Path(xdg)
+    try:
+        home = Path.home()
+    except (RuntimeError, KeyError, OSError):
+        return Path(tempfile.gettempdir())
+    if sys.platform == "win32":
+        return home / "AppData" / "Local"
+    if sys.platform == "darwin":
+        return home / "Library" / "Logs"
+    return home / ".local" / "state"
+
+
+def _default_log_dir() -> Path:
+    """Where the engine log, the crash log and logging.properties go.
+
+    ``ARCADEDB_LOG_DIR`` if set, else ``arcadedb-embedded/log`` under the
+    per-user state directory. Never the working directory.
+    """
+    override = os.environ.get(_LOG_DIR_ENV)
+    if override:
+        return Path(os.path.abspath(os.path.expanduser(override)))
+    return _state_base_dir() / "arcadedb-embedded" / "log"
+
+
+def _read_engine_log_properties(jar_files: Iterable[str]) -> Optional[str]:
+    """Read the engine's bundled ``arcadedb-log.properties`` from its jar."""
+    for jar in sorted(jar_files, key=lambda j: "engine" not in os.path.basename(j)):
+        try:
+            with zipfile.ZipFile(jar) as zf:
+                return zf.read(_ENGINE_LOG_RESOURCE).decode("iso-8859-1")
+        except (KeyError, OSError, zipfile.BadZipFile):
+            continue
+    return None
+
+
+def _render_logging_config(engine_text: str) -> str:
+    """The engine's logging config with the file log in ``logsDirectory``.
+
+    The jar's own file hard-codes ``./log/arcadedb.log``, which lands in the
+    working directory. The engine resolves ``${arcadedb.server.logsDirectory}``
+    in the pattern, and the JVM argument that sets it is added in
+    ``_build_jvm_args``.
+    """
+    lines = [
+        line
+        for line in engine_text.splitlines()
+        if not re.match(r"\s*java\.util\.logging\.FileHandler\.pattern\s*[=:]", line)
+    ]
+    lines.append(
+        "java.util.logging.FileHandler.pattern="
+        "${arcadedb.server.logsDirectory}/arcadedb.log"
+    )
+    return "\n".join(lines) + "\n"
+
+
+def _prepare_log_dir(log_dir: Path, jar_files: Iterable[str]) -> Path:
+    """Create the log directory and write its logging.properties.
+
+    Returns the directory to use: ``log_dir``, or a fresh directory under the
+    system temp directory when ``log_dir`` cannot be created or written (a
+    read-only home, for example), so that nothing is ever written to the
+    working directory.
+    """
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        if not os.access(log_dir, os.W_OK | os.X_OK):
+            raise OSError(f"{log_dir} is not writable")
+    except OSError as exc:
+        fallback = Path(tempfile.mkdtemp(prefix="arcadedb-embedded-log-"))
+        _LOGGER.warning(
+            "Cannot use %s for ArcadeDB logs (%s); using %s. Set %s to choose one.",
+            log_dir,
+            exc,
+            fallback,
+            _LOG_DIR_ENV,
+        )
+        log_dir = fallback
+
+    engine_text = _read_engine_log_properties(jar_files)
+    if engine_text is not None:
+        config = log_dir / _LOGGING_CONFIG_NAME
+        rendered = _render_logging_config(engine_text)
+        try:
+            if not config.exists() or config.read_text("iso-8859-1") != rendered:
+                tmp = log_dir / f"{_LOGGING_CONFIG_NAME}.{os.getpid()}.tmp"
+                tmp.write_text(rendered, encoding="iso-8859-1", newline="\n")
+                os.replace(tmp, config)
+        except OSError as exc:
+            _LOGGER.warning("Cannot write %s: %s", config, exc)
+    return log_dir
+
+
 def _build_jvm_args(
     heap_size: Optional[str],
     disable_xml_limits: bool,
     jvm_args: Optional[Union[Iterable[str], str]],
     common_pool_parallelism: Optional[int] = None,
+    log_dir: Optional[Path] = None,
 ) -> list[str]:
     """Helper to construct JVM arguments from params, env vars, and defaults."""
     if common_pool_parallelism is not None and common_pool_parallelism < 1:
@@ -612,12 +751,29 @@ def _build_jvm_args(
             merged_args.append("-Xmx4g")
         merged_args = _dedupe_max_heap(merged_args)
 
+    # Logs and the crash log go to a per-user directory, never the working
+    # directory. An argument the caller gave wins over each default.
+    if log_dir is None:
+        log_dir = _default_log_dir()
+    log_dir_posix = log_dir.as_posix()
+    if not any(
+        arg.startswith("-Darcadedb.server.logsDirectory=") for arg in merged_args
+    ):
+        merged_args.append(f"-Darcadedb.server.logsDirectory={log_dir_posix}")
+    if not any(
+        arg.startswith("-Djava.util.logging.config.file=") for arg in merged_args
+    ):
+        merged_args.append(
+            f"-Djava.util.logging.config.file={log_dir_posix}/{_LOGGING_CONFIG_NAME}"
+        )
+
     # Configure JVM crash log location (hs_err_pid*.log files)
-    error_file = os.environ.get("ARCADEDB_JVM_ERROR_FILE")
-    if error_file:
-        merged_args.append(f"-XX:ErrorFile={error_file}")
-    else:
-        merged_args.append("-XX:ErrorFile=./log/hs_err_pid%p.log")
+    if not any(arg.startswith("-XX:ErrorFile=") for arg in merged_args):
+        error_file = os.environ.get("ARCADEDB_JVM_ERROR_FILE")
+        if error_file:
+            merged_args.append(f"-XX:ErrorFile={error_file}")
+        else:
+            merged_args.append(f"-XX:ErrorFile={log_dir_posix}/hs_err_pid%p.log")
 
     return merged_args
 

@@ -27,7 +27,9 @@ with arcadedb.create_database("./vector_demo") as db:
         LSM_VECTOR
         METADATA {
         "dimensions": 3,
-        "similarity": "COSINE"
+        "similarity": "COSINE",
+        "quantization": "INT8",
+        "addHierarchy": true
         }
         """,
     )
@@ -326,7 +328,14 @@ rows = db.query(
 ## Quantization
 
 - `quantization` accepts `"INT8"`, `"BINARY"`, `"PRODUCT"` (PQ), or `None` (full precision).
-- Default and recommended setting is `"INT8"`.
+- The default depends on the path that creates the index:
+    - `Database.create_vector_index()` passes `quantization="INT8"` and `add_hierarchy=True`
+      unless you say otherwise. This is a deliberate choice of these bindings.
+    - SQL `CREATE INDEX ... LSM_VECTOR` follows the engine: no quantization (`NONE`, full
+      precision) and no hierarchy (`addHierarchy` false) unless the `METADATA` sets them.
+      The quick start above sets both, so it builds the same index as the helper.
+- INT8 is the recommended setting. To get it from SQL, put `"quantization": "INT8"` in the
+  `METADATA`.
 - Use `quantization=None` only when you explicitly need full-precision vectors and can
   accept higher memory usage.
 - PQ tunables (require `quantization="PRODUCT"`): `pq_subspaces` (M), `pq_clusters` (K),

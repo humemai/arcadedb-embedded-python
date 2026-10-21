@@ -30,6 +30,11 @@ classifiers = [
 ]
 
 dependencies = [
+    # Floor 1.5.0: the oldest JPype with cp311 and cp312 wheels. A subset of the
+    # suite that uses JPype on every call (JVM start, type conversion, queries,
+    # transactions, async executor) gives the same results at 1.5.0 as at 1.7.1
+    # on Python 3.12. Python 3.13 needs 1.5.1 or newer and 3.14 needs 1.7.0 or newer
+    # for a wheel, so pip picks a newer JPype there on its own.
     "jpype1>=1.5.0",
 ]
 

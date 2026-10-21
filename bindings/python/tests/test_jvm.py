@@ -29,9 +29,10 @@ def test_identical_config_is_idempotent(monkeypatch):
     args = tuple(
         jvm._build_jvm_args(
             heap_size="6g",
-            disable_xml_limits=True,
+            disable_xml_limits=False,
             jvm_args="-Xms6g",
             common_pool_parallelism=None,
+            log_dir=jvm._LOG_DIR_USED,
         )
     )
     monkeypatch.setattr(jvm, "_JVM_CONFIG", args)

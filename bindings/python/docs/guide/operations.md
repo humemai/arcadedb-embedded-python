@@ -55,7 +55,7 @@ ArcadeDB has **three distinct types of logs** stored in **two different location
 
 ### 1. JVM and ArcadeDB Application Logs
 
-**Location**: `./log/` (relative to your Python script)
+**Location**: the per-user log directory, not the working directory (Linux `~/.local/state/arcadedb-embedded/log`; other platforms and `ARCADEDB_LOG_DIR` in [Where the logs go](../getting-started/installation.md#where-the-logs-go))
 
 **Files**:
 
@@ -73,7 +73,7 @@ ArcadeDB has **three distinct types of logs** stored in **two different location
 
 ### 2. JVM Crash Dumps
 
-**Location**: `./log/` (same directory as application logs)
+**Location**: the same log directory as the application logs
 
 **Files**: `hs_err_pid<process_id>.log`
 

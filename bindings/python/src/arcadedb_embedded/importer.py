@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import re
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from os import PathLike, fspath
 from pathlib import Path
@@ -13,6 +16,52 @@ from .exceptions import ArcadeDBError
 # ImporterSettings.isSkipOnRowError() tests only for "skip", so anything else
 # means "abort". Keep this list in step with that method, not with the docs.
 _VALID_ON_ROW_ERROR = frozenset({"abort", "skip"})
+
+# The JDK's XML entity limits, as system properties. The parser factory reads
+# them when it is created, which the XML importer does once per import, so
+# setting them around one import relaxes the limits for that import only.
+_XML_LIMIT_PROPERTIES = (
+    "jdk.xml.maxGeneralEntitySizeLimit",
+    "jdk.xml.entityExpansionLimit",
+    "jdk.xml.totalEntitySizeLimit",
+)
+_xml_limits_lock = threading.Lock()
+
+# JAXP00010001 entity expansion, JAXP00010003 general entity size, JAXP00010004
+# total entity size: the three limits the properties above lift.
+_XML_LIMIT_ERROR = re.compile(r"JAXP0001000[134]")
+_XML_LIMIT_HINT = (
+    " The JDK's XML entity limits stopped this import. Pass"
+    " disable_xml_limits=True to import_documents to lift them for this call"
+    " only, or to start_jvm to lift them for the whole process (needed for SQL"
+    " IMPORT DATABASE of XML)."
+)
+
+
+@contextmanager
+def _xml_limits_lifted(enabled: bool):
+    """Lift the JDK XML entity limits for the duration of the block.
+
+    The previous values are restored afterwards. The lock serializes lifted
+    imports with each other; an XML parse started by another thread inside the
+    block sees the lifted limits too, because JDK system properties are global.
+    """
+    if not enabled:
+        yield
+        return
+    System = jpype.JClass("java.lang.System")
+    with _xml_limits_lock:
+        saved = {name: System.getProperty(name) for name in _XML_LIMIT_PROPERTIES}
+        for name in _XML_LIMIT_PROPERTIES:
+            System.setProperty(name, "0")
+        try:
+            yield
+        finally:
+            for name, value in saved.items():
+                if value is None:
+                    System.clearProperty(name)
+                else:
+                    System.setProperty(name, str(value))
 
 
 @dataclass(slots=True)
@@ -188,6 +237,7 @@ def import_documents(
     trim_text: bool | None = None,
     on_row_error: str | None = None,
     extra_settings: Mapping[str, Any] | None = None,
+    disable_xml_limits: bool = False,
 ) -> ImportResult:
     source_url = normalize_import_source(source)
     settings = _build_import_settings(
@@ -214,13 +264,14 @@ def import_documents(
 
         importer = Importer(java_database, None)
         importer.setSettings(_to_java_settings_map(settings))
-        java_stats = _run_import_with_runtime_settings(
-            java_database,
-            importer,
-            parallel=parallel,
-            commit_every=commit_every,
-            wal=wal,
-        )
+        with _xml_limits_lifted(disable_xml_limits):
+            java_stats = _run_import_with_runtime_settings(
+                java_database,
+                importer,
+                parallel=parallel,
+                commit_every=commit_every,
+                wal=wal,
+            )
         statistics = _java_value_to_python(java_stats) if java_stats is not None else {}
 
         return ImportResult(
@@ -230,7 +281,10 @@ def import_documents(
             statistics=statistics,
         )
     except Exception as e:
-        raise ArcadeDBError(f"Document import failed: {e}") from e
+        message = f"Document import failed: {e}"
+        if not disable_xml_limits and _XML_LIMIT_ERROR.search(str(e)):
+            message += _XML_LIMIT_HINT
+        raise ArcadeDBError(message) from e
 
 
 def _run_import_with_runtime_settings(

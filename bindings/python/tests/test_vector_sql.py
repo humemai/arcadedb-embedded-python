@@ -1256,6 +1256,8 @@ class TestVectorSearchOptionsSql:
         self._make_docs(test_db)
         meta = self._metadata(test_db, "OptDoc[embedding]")
         assert bool(meta.addHierarchy) is False
+        # The vector guide says the same of quantization: SQL is the engine's NONE.
+        assert str(meta.quantizationType) == "NONE"
         assert float(meta.neighborOverflowFactor) == pytest.approx(1.2)
         assert float(meta.alphaDiversityRelaxation) == pytest.approx(1.2)
 
@@ -1263,6 +1265,7 @@ class TestVectorSearchOptionsSql:
         test_db.command("sql", "CREATE PROPERTY PyHier.embedding ARRAY_OF_FLOATS")
         python_index = test_db.create_vector_index("PyHier", "embedding", dimensions=2)
         assert python_index.get_metadata()["add_hierarchy"] is True
+        assert python_index.get_metadata()["quantization"] == "INT8"
 
         test_db.command("sql", "CREATE VERTEX TYPE PyEngineDefault")
         test_db.command(
@@ -1272,6 +1275,27 @@ class TestVectorSearchOptionsSql:
             "PyEngineDefault", "embedding", dimensions=2, add_hierarchy=None
         )
         assert engine_default_index.get_metadata()["add_hierarchy"] is False
+
+    def test_sql_metadata_gives_the_helper_defaults(self, test_db):
+        """The vector guide's quick start sets quantization and addHierarchy in METADATA."""
+        test_db.command("sql", "CREATE VERTEX TYPE QuickDoc")
+        test_db.command("sql", "CREATE PROPERTY QuickDoc.embedding ARRAY_OF_FLOATS")
+        test_db.command(
+            "sql",
+            """
+            CREATE INDEX ON QuickDoc (embedding)
+            LSM_VECTOR
+            METADATA {
+            "dimensions": 3,
+            "similarity": "COSINE",
+            "quantization": "INT8",
+            "addHierarchy": true
+            }
+            """,
+        )
+        meta = self._metadata(test_db, "QuickDoc[embedding]")
+        assert str(meta.quantizationType) == "INT8"
+        assert bool(meta.addHierarchy) is True
 
 
 class TestSparseSearchOptionsSql:

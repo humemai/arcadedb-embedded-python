@@ -50,8 +50,8 @@ arcadedb_embedded/
 - Starts JVM using bundled JRE and packaged JARs
 - Prefers programmatic configuration (`start_jvm(...)`, `jvm_kwargs`)
 - Supports explicit heap and common-pool thread limits via `heap_size` and `common_pool_parallelism`
-- Always reads `ARCADEDB_JVM_ARGS` and puts its flags before `jvm_args`; `ARCADEDB_JVM_ERROR_FILE` sets the crash-log path
-- Adds default flags unless the merged arguments already set them: `--add-modules=jdk.incubator.vector`, `-Djava.awt.headless=true`, `--enable-native-access=ALL-UNNAMED`, `-Dfile.encoding=UTF8`, `--add-opens` flags (for `java.util.concurrent.atomic`, `java.nio.channels.spi`, and `java.lang`), `-Darcadedb.polyglotEngineEnabled=false`, `-XX:+UseCompactObjectHeaders`, and `-Xmx4g` when no heap is given; the `jdk.xml` entity limits are lifted while `disable_xml_limits` is true, and `-XX:ErrorFile` defaults to `./log/hs_err_pid%p.log`
+- Always reads `ARCADEDB_JVM_ARGS` and puts its flags before `jvm_args`; `ARCADEDB_JVM_ERROR_FILE` sets the crash-log path and `ARCADEDB_LOG_DIR` the log directory
+- Adds default flags unless the merged arguments already set them: `--add-modules=jdk.incubator.vector`, `-Djava.awt.headless=true`, `--enable-native-access=ALL-UNNAMED`, `-Dfile.encoding=UTF8`, `--add-opens` flags (for `java.util.concurrent.atomic`, `java.nio.channels.spi`, and `java.lang`), `-Darcadedb.polyglotEngineEnabled=false`, `-XX:+UseCompactObjectHeaders`, and `-Xmx4g` when no heap is given; the `jdk.xml` entity limits are lifted only while `disable_xml_limits` is true (default false), and `-XX:ErrorFile`, `-Darcadedb.server.logsDirectory` and `-Djava.util.logging.config.file` default into a per-user log directory (never the working directory), where `start_jvm` also writes a `logging.properties` rendered from the engine jar's `arcadedb-log.properties` with the file log pointed at that directory
 - Starts once per process: a later `start_jvm()` with no settings, or the same ones, joins the running JVM; different settings raise `ArcadeDBError`
 - `interrupt` chooses what Ctrl-C does: by default (`False`) Python gets it and raises `KeyboardInterrupt`; `True` leaves it to JPype's handler, which ends the process with status 130 and runs no Python cleanup (see [JVM API](../api/jvm.md))
 - From a source checkout (no `jars/` or `jre/` next to the package), extracts them from the newest wheel in `dist/` into `bindings/python/.runtime-cache/`, stamped with that wheel and re-extracted when the wheel changes
@@ -150,7 +150,7 @@ pure-JPype fallback.
 ```python
 def start_jvm(
     heap_size="4g",
-    disable_xml_limits=True,
+    disable_xml_limits=False,
     jvm_args=None,
     common_pool_parallelism=None,
     interrupt=None,
@@ -166,12 +166,16 @@ def start_jvm(
     jvm_path = get_bundled_jre_lib_path()
     jar_files = glob.glob(os.path.join(get_jar_path(), "*.jar"))
 
+    # Create the per-user log directory and write its logging.properties
+    log_dir = _prepare_log_dir(_default_log_dir(), jar_files)
+
     # ARCADEDB_JVM_ARGS first, then jvm_args, then any missing default flags
     args = _build_jvm_args(
         heap_size=heap_size,
         disable_xml_limits=disable_xml_limits,
         jvm_args=jvm_args,
         common_pool_parallelism=common_pool_parallelism,
+        log_dir=log_dir,
     )
 
     # Single-shot startup per process
@@ -615,7 +619,7 @@ requires-python = ">=3.11"
 dependencies = ["jpype1>=1.5.0"]
 ```
 
-`jpype1` is the only runtime dependency. `numpy` is an optional extra
+`jpype1` is the only runtime dependency. The 1.5.0 floor was run through a subset of the suite that uses JPype on every call (JVM start, type conversion, queries, transactions, async executor) and matched 1.7.1 on Python 3.12; the CI floor job only audits the floors for advisories, it does not run tests. `numpy` is an optional extra
 (`arcadedb-embedded[vector]`) rather than a hard requirement, so a plain install
 stays minimal. The extras' floors are audited in CI, so treat
 `bindings/python/pyproject.toml` as authoritative rather than this excerpt.

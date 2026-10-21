@@ -282,9 +282,6 @@ def main() -> int:
     if db_dir:
         os.makedirs(db_dir, exist_ok=True)
 
-    if os.path.exists("./log"):
-        shutil.rmtree("./log")
-
     with arcadedb.create_database(db_path) as db:
         print(f"Database created at: {db_path}")
         print("Approach: SQL-first time-series access from Python bindings")
