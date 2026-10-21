@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import jpype
 
+from .callbacks import raise_pending_interrupt
 from .exceptions import ArcadeDBError
 from .type_conversion import convert_java_to_python, convert_python_to_java
 
@@ -123,8 +124,19 @@ class Document:
         return self
 
     def save(self) -> "Document":
-        """Save the document."""
-        self._java_document.save()
+        """Save the document.
+
+        Raises:
+            ArcadeDBError: If the engine refuses the write (no transaction, a duplicate key,
+                a read-only database, a ``before_*`` callback that raised).
+        """
+        try:
+            self._java_document.save()
+        except jpype.JException as e:
+            error = ArcadeDBError(f"Failed to save record: {e}")
+            error.__cause__ = e
+            raise_pending_interrupt(error, e)
+            raise error from e
         return self
 
     def delete(self):
@@ -132,8 +144,18 @@ class Document:
 
         A query row is a ``Result``, not a record: reach the record with
         ``result.get_element()`` (or ``db.lookup_by_rid()``) and delete that.
+
+        Raises:
+            ArcadeDBError: If the engine refuses the delete (no transaction, a read-only
+                database, a ``before_delete`` callback that raised).
         """
-        self._java_document.delete()
+        try:
+            self._java_document.delete()
+        except jpype.JException as e:
+            error = ArcadeDBError(f"Failed to delete record: {e}")
+            error.__cause__ = e
+            raise_pending_interrupt(error, e)
+            raise error from e
 
     def modify(self) -> "Document":
         """Get mutable version for updates."""

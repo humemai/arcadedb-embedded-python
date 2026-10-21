@@ -18,6 +18,7 @@ arcadedb_embedded/
 ├── __init__.py          # Package exports and version
 ├── _logging.py          # Internal logging helpers
 ├── async_executor.py    # Async command/query + record wrapper
+├── callbacks.py         # Python functions in SQL/openCypher, record event callbacks
 ├── core.py              # Database, DatabaseFactory, convenience helpers
 ├── exceptions.py        # ArcadeDBError (unified exceptions)
 ├── exporter.py          # Export (JSONL + CSV helper)
@@ -95,6 +96,12 @@ arcadedb_embedded/
 **`async_executor.py`**
 
 - `AsyncExecutor`: async SQL/OpenCypher command/query flows plus parallel record helpers, commitEvery, WAL tuning
+
+**`callbacks.py`**
+
+- `Database.register_function()` / `unregister_function()`: a Python callable becomes an engine `SQLFunction` (bridge class `PythonFunctions`), visible to SQL and, with a namespaced name, openCypher
+- `Database.on()` and `EventHandle`: Python callbacks on before/after create, update, delete (bridge class `PythonRecordEvents`); database-wide or per type
+- Python exceptions are turned into one Java `RuntimeException` so the engine reports a query error and the JVM never sees a Python exception
 
 **`exporter.py`**
 

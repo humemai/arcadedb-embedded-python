@@ -677,6 +677,54 @@ for doc in db.query("sql", "SELECT FROM Person"):
         process(doc.get("name"), doc.get("city"))
 ```
 
+## Python Functions in SQL and openCypher
+
+`db.register_function()` makes a Python function callable from a statement. It is for logic
+that SQL cannot express, such as a text normalizer or a call into a Python library. Where a
+SQL expression does the job, use the expression: it stays inside the engine.
+
+```python
+import re
+
+def slugify(text):
+    # SQL NULL arrives as None, and None comes back as NULL
+    return None if text is None else re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+
+db.register_function("slugify", slugify)
+
+db.query("sql", "SELECT slugify(name) AS slug FROM Person")
+db.query("sql", "SELECT FROM Person WHERE slugify(name) = 'ann-lee'")
+
+# openCypher only accepts a function name it does not know when it has a namespace
+db.register_function("py.slugify", slugify)
+db.query("opencypher", "MATCH (p:Person) RETURN py.slugify(p.name) AS slug")
+```
+
+- **Errors.** An exception in the function fails the statement with an `ArcadeDBError` that
+  names the function and the Python exception. A wrong number of arguments fails the same
+  way. The database stays usable. Ctrl-C is the one exception: the statement is aborted and
+  you get a `KeyboardInterrupt` (chained from the `ArcadeDBError`), wherever the signal landed.
+  A return value the bridge cannot convert (a numpy array, an integer past 2\*\*63) is a
+  `TypeError` or `OverflowError` in the error text.
+- **Memory.** On JPype 1.7.1 each call that has a numeric argument keeps about 30 bytes of
+  Python memory that is not given back (measured with `tracemalloc` over 1,000,000 calls of a
+  one-argument function; a call without arguments does not grow). It is the same
+  JPype behaviour as `Result.get()` above, and it adds up only for billions of calls: recycle
+  a process that makes that many.
+- **Aggregates.** Only per-row functions: no `GROUP BY` aggregate can be written in Python.
+- **Threads.** The engine can call the function from its own threads (for example an async
+  executor's writers). The GIL serializes the calls.
+- **Scope.** The engine's function table is process-wide: every database in the process sees
+  the function until `db.unregister_function(name)` or until the `Database` that registered
+  it is closed. Register before concurrent statements run.
+- **Cost.** One call crosses between the engine and Python once per row, so a function
+  applied to every row of a large result pays that crossing on every row; compute in SQL
+  where a SQL expression can do the work.
+  [Example 28](../../examples/28_python_functions_and_record_events.md) prints the extra cost
+  per row on your machine, against the same statement written as a SQL expression.
+
+See [`register_function`](../../api/database.md#register_function) for every argument.
+
 ## OpenCypher
 
 OpenCypher provides expressive graph pattern matching.

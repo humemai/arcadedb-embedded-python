@@ -2,7 +2,6 @@
 
 The bindings ship a small Java helper jar alongside the engine JARs. Its
 sources live in `bindings/python/src/java/com/arcadedb/python/`:
-
 | Class | Purpose |
 |---|---|
 | `RowBatcher` | Serializes up to N result rows into one JSON-array string per call (batched row transport) |
@@ -15,6 +14,8 @@ sources live in `bindings/python/src/java/com/arcadedb/python/`:
 | `TypedRows` | Up to N rows per call as one JSON string, type-faithful (`nextRows`, which also reports whether the result set is drained): DECIMAL, BigInteger, DATE, DATETIME, Instant and zoned values, and sets are tagged and restored exactly by Python, and every other value (RIDs, embedded documents, `float[]` and `double[]`, non-finite floats, maps with non-String keys, years Python cannot hold) is returned in a side array as the engine's own object and converted by Python as before. Behind `ResultSet.to_list()` (up to 1,000 rows or 4 MiB of JSON per call, whichever comes first) and `ResultSet.iter_dicts()` (one row per call, so a lazy caller reads rows when it asks) |
 | `GraphCalls` | Every edge of `Vertex.getEdges(direction, labels)` in one call (`outEdges`, `inEdges`, `bothEdges`, behind `Vertex.get_out_edges()` and its siblings), and the record and score of every vector search hit in one call (`hits`, behind `LSMVectorIndex` search results) |
 | `DbCalls` | One-row statements and lookups in one call: `commandNamed`, `queryNamed`, `commandPositional`, and `queryPositional` take the parameters as the varargs of a single non-overloaded method and build the map Java-side (behind `Database.command()` and `Database.query()`), and `lookupFirst` is the whole of `Database.lookup_by_key()` |
+| `PythonFunctions` | Registers a Python callable as an engine `SQLFunction` in the process-wide function factory (so SQL and openCypher resolve it): the arity check, one `CommandExecutionException` naming the function for any failure of the callable, and a revoked flag so an unregistered function fails clearly. Behind `Database.register_function()` and `unregister_function()`. Each call is one JNI round trip |
+| `PythonRecordEvents` | One listener class for the six write events (before and after create, update, delete) that forwards each to a Python callback; a `false` from a before event is the veto, and a failure is wrapped in a `DatabaseOperationException` naming the event. Behind `Database.on()` |
 
 `RowBatcher.nextJsonBatch` and `RowAccess.nextRows` return fewer rows than asked for only when the result set is drained, and they close it before returning. `TypedRows.nextRows` also ends a batch early, once its JSON text reaches 4 MiB of characters (`MAX_BATCH_CHARS`), so rows of any width cross in bounded pieces; it therefore returns a third element, `drained`, and closes the result set only when that is true. Python stops after a drained batch (a short one, for `nextJsonBatch` and `RowAccess.nextRows`) and makes no further call into the bridge, not even `close()`: a one-row `to_list()` or `to_json_list()` costs one call into the bridge.
 
@@ -51,6 +52,8 @@ crossing per batch**, receiving a bulk payload it can decode at C speed: the
 | `GraphBatch.new_edges()` (with and without properties) | `EdgeBatcher` |
 | `GraphBatch.create_vertices()` bulk path | `VertexBatcher` |
 | `Database.export_to_csv()` (streams JSON batches) | `RowBatcher` |
+| `Database.register_function()` | `PythonFunctions` |
+| `Database.on()` | `PythonRecordEvents` |
 
 ## How it builds and ships
 
@@ -70,7 +73,9 @@ source on every wheel build.
 - **No engine code is modified.** The bridge is bindings-scoped glue over
   `Database`, `MutableDocument`, `ResultSet`, `Result`, `GraphBatch`, `RID`,
   the async `ErrorCallback`, and the engine's JSON serializer, so upstream
-  syncs never conflict with it. `TimeSeriesBatcher` also depends on internal
+  syncs never conflict with it. `PythonFunctions` also depends on the engine's function registries
+  (`DefaultSQLFunctionFactory`, `FunctionRegistry`, `CypherFunctionRegistry`, `CypherBuiltinFunctions`),
+  so an upstream refactor of those can break it. `TimeSeriesBatcher` also depends on internal
   time-series classes (`TimeSeriesBatch`, `ColumnDefinition`, and
   `LocalTimeSeriesType`), so an upstream refactor of those can break it.
 - **Most callers have a fallback.** Most Python APIs that ride the bridge
@@ -82,7 +87,8 @@ source on every wheel build.
   `DocumentBatcher` for any JSON-serializable rows and raises `ArcadeDBError` if it
   is missing (its per-row path runs only for rows `json.dumps` rejects), and
   `Database.insert_columns()`, which always loads `DocumentBatcher` and raises the same
-  error.
+  error. `Database.register_function()` and `Database.on()` also need the jar (`PythonFunctions`,
+  `PythonRecordEvents`) and raise `ArcadeDBError` without it.
 - **A missing jar is logged.** When a bridge class cannot be loaded, the
   `arcadedb_embedded.results` logger warns `bridge class <name> unavailable;
   falling back to the slow per-row path`. To see whether the jar is in an

@@ -51,6 +51,8 @@ asserts, so the list below stops at the file.
 | File | What it checks |
 | --- | --- |
 | `test_core.py` | Create, read, update, and delete, transactions and `run_in_transaction()`, SQL statements, full-text search, graph basics through SQL, `lookup_by_rid()`, result materialization |
+| `test_python_callbacks.py` | `register_function()` (SELECT and WHERE, NULL, result types, arity, errors surfacing as `ArcadeDBError`, replace, unregister, openCypher through a namespaced name, engine and Python threads) and `on()` (each event once per change with the record, type filter, veto of create, update, and delete, `remove()`, exceptions failing the operation) |
+| `test_python_function_interrupt.py` | A real SIGINT during a statement that calls a Python function always arrives as `KeyboardInterrupt` and leaves the database usable (not collected on Windows) |
 | `test_cypher.py` | OpenCypher queries, path modes, and planner regressions |
 | `test_parameter_binding.py` | Positional and named parameters reach the statement on every entry point, including a lone `None` and the async executor, and scalars skip the conversion walk |
 | `test_percall_calls.py` | The per-call paths of `query`, `command`, `first`, and `get` give the same bound values, overload choice, errors, and result-set state as the plain path (#280) |
@@ -196,7 +198,7 @@ the gate). A skip is a test that should have run and did not, so the suite does 
 anything it can state otherwise:
 
 - **A test file that cannot run on a platform is left out of collection**, not skipped:
-  `tests/conftest.py` sets `collect_ignore` for `test_sigint.py` on Windows (it sends SIGINT to a
+  `tests/conftest.py` sets `collect_ignore` for `test_sigint.py` and `test_python_function_interrupt.py` on Windows (they send SIGINT; the first to a
   child process) and for `test_docs_examples.py` on the upstream pull request branch, which has
   no `docs/`. A parametrized case Windows cannot create (a directory name with a question mark
   in `test_importer_api.py`) is not generated there.

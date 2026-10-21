@@ -13,6 +13,7 @@ import jpype as _jpype
 from jpype import JException
 
 from ._logging import get_logger
+from .callbacks import raise_pending_interrupt
 from .exceptions import ArcadeDBError
 from .graph import Document, Edge, Vertex
 from .type_conversion import convert_java_to_python
@@ -91,7 +92,12 @@ def _read_error(exc: BaseException) -> ArcadeDBError:
     or any later row, after ``query()`` or ``command()`` returned (#173). Raise
     it ``from`` the Java exception, which ``str()`` then names as the cause.
     """
-    return ArcadeDBError(f"Reading the result set failed: {exc}")
+    error = ArcadeDBError(f"Reading the result set failed: {exc}")
+    error.__cause__ = exc
+    raise_pending_interrupt(
+        error, exc
+    )  # raises KeyboardInterrupt when a Python function left one
+    return error
 
 
 def _java_class_name(value: Any) -> str:

@@ -9,11 +9,18 @@ from collections.abc import Mapping
 from datetime import date
 from decimal import Decimal
 from os import PathLike
-from typing import Any, List, Optional
+from typing import Any, Callable, List, Optional
 
 import jpype
 
 from ._logging import get_logger
+from .callbacks import (
+    EventHandle,
+    FunctionRegistration,
+    clear_pending_interrupt,
+    raise_pending_interrupt,
+    register_event,
+)
 from .exceptions import ArcadeDBError, _retry_verdict
 from .graph import Document, Edge, Vertex
 from .graph_batch import GraphBatch
@@ -264,6 +271,7 @@ class Database:
         self._java_db = java_database
         self._closed = False
         self._async_executors = []
+        self._functions = FunctionRegistration(self)
 
     def __enter__(self):
         return self
@@ -371,6 +379,7 @@ class Database:
         is the positional list itself; ``None`` binds as null.
         """
         self._check_not_closed()
+        clear_pending_interrupt()
         try:
             if args:
                 java_result = _through_bridge(
@@ -384,7 +393,10 @@ class Database:
                 java_result = self._java_db.query(language, command)
             return ResultSet(java_result, self)
         except Exception as e:
-            raise ArcadeDBError(f"Query failed: {e}") from e
+            error = ArcadeDBError(f"Query failed: {e}")
+            error.__cause__ = e
+            raise_pending_interrupt(error, e)
+            raise error from e
 
     def command(self, language: str, command: str, *args) -> Optional[ResultSet]:
         """Execute a command (non-idempotent operation).
@@ -392,6 +404,7 @@ class Database:
         Parameters bind as in :meth:`query`.
         """
         self._check_not_closed()
+        clear_pending_interrupt()
         try:
             if args:
                 java_result = _through_bridge(
@@ -408,7 +421,10 @@ class Database:
                 return ResultSet(java_result, self)
             return None
         except Exception as e:
-            raise ArcadeDBError(f"Command failed: {e}") from e
+            error = ArcadeDBError(f"Command failed: {e}")
+            error.__cause__ = e
+            raise_pending_interrupt(error, e)
+            raise error from e
 
     def run_in_transaction(self, fn, retries: int = 12, backoff_s: float = 0.005):
         """
@@ -1168,6 +1184,7 @@ class Database:
         """Close the database."""
         if not self._closed and self._java_db is not None:
             async_close_error = None
+            self._functions.clear()
             try:
                 async_close_error = self._close_async_executors()
                 self._java_db.close()
@@ -1692,6 +1709,130 @@ class Database:
         except Exception as e:
             raise ArcadeDBError(f"Failed to set auto-transaction: {e}") from e
 
+    def register_function(
+        self,
+        name: str,
+        fn: Callable,
+        *,
+        min_args: Optional[int] = None,
+        max_args: Optional[int] = None,
+        deterministic: bool = False,
+        replace: bool = False,
+    ) -> None:
+        """
+        Register a Python function that SQL and openCypher statements can call.
+
+        After ``db.register_function("slugify", fn)``, ``SELECT slugify(name) FROM Person``
+        and ``MATCH (p:Person) RETURN slugify(p.name)`` call ``fn`` once per row.
+        Arguments reach ``fn`` as Python values (SQL ``NULL`` is ``None``) and the return
+        value is converted back with the bindings' type conversion, so ``fn`` may return
+        ``None``, a number, a string, a bool, a ``Decimal``, a ``datetime``, a list, or a
+        dict. An exception raised in ``fn`` fails the statement with an ``ArcadeDBError``
+        that names the function and the Python exception. A ``KeyboardInterrupt`` (Ctrl-C)
+        is the one exception to that: the statement is aborted and the caller gets a
+        ``KeyboardInterrupt``, chained from the ``ArcadeDBError``, wherever the signal
+        landed. A numeric argument costs about 30 bytes of Python memory per call that
+        JPype 1.7.1 does not give back (see the Python functions guide).
+
+        The engine registers functions for the whole process, not for one database: every
+        database in this process sees the function, and a function stays registered until
+        :meth:`unregister_function` or until this ``Database`` is closed. Register before
+        running concurrent statements: the engine's function table is not safe to change
+        while another thread resolves a name. The engine may call ``fn`` on its own
+        threads; the GIL serializes the calls, so ``fn`` does not run in parallel. An
+        aggregate (one result per group) cannot be written this way.
+
+        Args:
+            name: Function name; letters, digits and underscores, starting with a letter
+                or underscore. SQL function names are case-insensitive. A name that is
+                already an engine function (``abs``, ``count``, ``toUpper``, ...) is
+                refused.
+            fn: The callable. It takes positional arguments only.
+            min_args: Fewest arguments a call may pass. Default: the parameters of ``fn``
+                without a default.
+            max_args: Most arguments a call may pass. Default: all positional parameters
+                of ``fn`` (unlimited with ``*args``).
+            deterministic: True only if ``fn`` returns the same result for the same
+                arguments and reads nothing else. The planner may then fold a call over
+                constants at plan time and cache plans that contain it.
+            replace: Replace a Python function already registered under this name.
+
+        Raises:
+            ValueError: If the name or an argument count is invalid
+            ArcadeDBError: If the name is an engine function, or a Python function with
+                this name exists and ``replace`` is false
+
+        Example:
+            >>> db.register_function("slugify", lambda s: s.lower().replace(" ", "-"))
+            >>> db.query("sql", "SELECT slugify('Hello World') AS s").first().get("s")
+            'hello-world'
+        """
+        self._check_not_closed()
+        self._functions.register(name, fn, min_args, max_args, deterministic, replace)
+
+    def unregister_function(self, name: str) -> None:
+        """
+        Remove a Python function registered through this database.
+
+        A statement that calls it afterwards fails with an unknown-function error.
+
+        Args:
+            name: The name given to :meth:`register_function`
+
+        Raises:
+            ArcadeDBError: If this database did not register a function with this name
+        """
+        self._check_not_closed()
+        self._functions.unregister(name)
+
+    def on(
+        self,
+        event: str,
+        fn: Callable,
+        type_name: Optional[str] = None,
+    ) -> EventHandle:
+        """
+        Call a Python function when a record is created, updated, or deleted.
+
+        ``fn(record)`` receives the record as a :class:`Vertex`, :class:`Edge`, or
+        :class:`Document`. It runs inside the operation that fired the event, on the
+        thread that runs it (the engine may use its own threads, for example for async
+        writes; the GIL serializes the calls). A callback should be quick and should not
+        start work that waits on another thread's transaction.
+
+        Events: ``before_create``, ``after_create``, ``before_update``, ``after_update``,
+        ``before_delete``, ``after_delete``. A ``before_*`` callback that returns
+        ``False`` vetoes the change: the record is not written (a ``save()`` or a
+        statement skips it silently, as for the engine's own listeners). Any other return
+        value allows it, and the return value of an ``after_*`` callback is ignored.
+
+        An exception raised in a callback is not swallowed: it fails the operation that
+        fired the event with an ``ArcadeDBError`` that names the event and the Python
+        exception, and the surrounding transaction does not commit. A ``before_*`` event
+        fires before the record is written, an ``after_*`` event right after the write
+        and before the commit, so a rolled-back transaction has already fired its
+        ``after_*`` callbacks.
+
+        Args:
+            event: One of the event names above
+            fn: The callback, called with one argument: the record
+            type_name: Only records of exactly this type (not its subtypes). Default: every
+                record of the database.
+
+        Returns:
+            An :class:`EventHandle`; ``handle.remove()`` stops the callback
+
+        Raises:
+            ValueError: If ``event`` is not valid
+            ArcadeDBError: If ``type_name`` does not exist
+
+        Example:
+            >>> handle = db.on("after_create", lambda rec: print(rec.get_rid()), "Person")
+            >>> handle.remove()
+        """
+        self._check_not_closed()
+        return register_event(self, event, fn, type_name)
+
     def async_executor(self):
         """
         Get async executor for parallel operations.
@@ -2111,9 +2252,10 @@ class DatabaseFactory:
 
         Args:
             read_only: Open in ``ComponentFile.MODE.READ_ONLY``. Reads, queries
-                and scans work; every write, schema change and transaction
-                begin raises ``ArcadeDBError``. Use it to inspect a database
-                that must not change, such as a backup restored for audit.
+                and scans work; every write and schema change raises
+                ``ArcadeDBError``. ``begin()`` does not raise: the first write
+                does, and so does the commit. Use it to inspect a database that
+                must not change, such as a backup restored for audit.
         """
         try:
             if read_only:

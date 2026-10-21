@@ -45,6 +45,7 @@ your Python process, or for HA/TLS, use the official ArcadeDB distribution.
 | Sparse Vectors | ✅ Supported | `LSM_SPARSE_VECTOR` indexes and `vector.sparseNeighbors(...)` through SQL |
 | Graph Analytics | ✅ Supported | Graph Analytical Views (`CREATE`/`ALTER`/`REBUILD`/`DROP GRAPH ANALYTICAL VIEW`) and the `algo.*` procedures, through SQL and openCypher only; see the [Graph Analytics guide](guide/graph-analytics.md) |
 | Time Series | ✅ Supported | `TIMESERIES` types through SQL, `async_executor().append_samples(...)` for bulk writes, and the server's `/api/v1/ts/{db}/write` endpoint; see the [Time Series guide](guide/timeseries.md) |
+| Functions and Events | ✅ Supported | Python functions callable from SQL and OpenCypher (`register_function()`), Python callbacks on record create/update/delete (`on()`) |
 | Async Execution | ✅ Supported | `AsyncExecutor` plus record-level and SQL/Cypher async flows, `scan_type()` |
 | Data Import | ✅ Supported | SQL import workflows plus a narrow `db.import_documents(...)` wrapper for document files |
 | Data Export | ✅ Supported | JSONL + CSV for query results |
@@ -78,6 +79,8 @@ your Python process, or for HA/TLS, use the official ArcadeDB distribution.
 - ✅ Configuration: `set_auto_transaction()`, `set_read_your_writes()`,
   `is_read_your_writes()`, `set_wal_flush()`
 - ✅ Async execution: `async_executor()`
+- ✅ SQL and openCypher functions written in Python: `register_function()`, `unregister_function()` (engine `SQLFunction` through the bridge class `PythonFunctions`)
+- ✅ Record events: `on()` and `EventHandle.remove()` for before/after create, update, and delete (engine `RecordEvents`, database-wide or per type, through the bridge class `PythonRecordEvents`). Read events (`BeforeRecordReadListener`, `AfterRecordReadListener`) are not exposed
 - ✅ Export helpers: `export_database()` and `export_to_csv()`
 
 **Not directly exposed:** WAL internals, low-level binary protocol. Type scans are
@@ -243,6 +246,7 @@ through:
 - **SQL statements** for scans, the isolation level, backup, integrity check and index maintenance
 - **SQL/OpenCypher** for graph and document operations
 - **Thin helper APIs** for transactions, vector search, and targeted record access
+- **Python hooks** where no statement can do the job: `register_function()` (a Python function called from SQL and openCypher) and `on()` (a Python callback on record create, update, or delete)
 
 For example, an index is one SQL statement and a graph query is one OpenCypher statement:
 

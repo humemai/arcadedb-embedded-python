@@ -408,6 +408,22 @@ Arrow type is stored as
 
 ---
 
+### 🧩 [28_python_functions_and_record_events.py](./28_python_functions_and_record_events.py)
+**Python Functions | Record Events | SQL + openCypher**
+
+Two things no query language can express:
+- `db.register_function()` makes a Python `slugify` callable from SQL (SELECT and WHERE) and,
+  as `py.slugify`, from openCypher; an exception in the function is a query error
+- measures the cost of one call on your machine against the same SQL expression
+- `db.on()` keeps an audit trail with `after_create` / `after_update` / `after_delete`
+  callbacks and vetoes a write with a `before_create` callback that returns `False`
+- no data download; flags: `--rows` (default 20,000) and `--db-path`
+
+**Learn:** When a Python function or callback is the right tool, what it costs, and how
+errors, threads, and unregistering behave
+
+---
+
 ## 💡 Tips
 
 - **Run from examples/ directory** - Always execute examples from `bindings/python/examples/` for correct file paths

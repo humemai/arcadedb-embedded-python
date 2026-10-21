@@ -98,6 +98,7 @@ arcadedb-embedded-python/bindings/python/
 │   │   ├── __init__.py            # Package initialization
 │   │   ├── _logging.py            # Internal logging helpers
 │   │   ├── async_executor.py      # Async command/query execution
+│   │   ├── callbacks.py           # Python functions in SQL, record event callbacks
 │   │   ├── core.py                # Database, DatabaseFactory
 │   │   ├── exceptions.py          # Exception classes
 │   │   ├── exporter.py            # JSONL database export, CSV result export

@@ -175,6 +175,7 @@ nav:
   - 25 - Sparse Vectors, Weight Precision, And Compaction: examples/25_sparse_quantization_and_compact.md
   - 26 - Cross-Model Transaction Atomicity: examples/26_cross_model_transaction_atomicity.md
   - 27 - DataFrame And Arrow Ingest: examples/27_dataframe_arrow_ingest.md
+  - 28 - Python Functions And Record Events: examples/28_python_functions_and_record_events.md
 - Benchmarks:
   - Overview: benchmarks/index.md
   - Protocol: benchmarks/protocol.md

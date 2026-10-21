@@ -24,6 +24,9 @@ except Exception:  # not installed: fall back to the build-time file
 # Import async execution
 from .async_executor import AsyncExecutor
 
+# Import record event handle
+from .callbacks import EventHandle
+
 # Import core database classes
 from .core import (
     Database,
@@ -83,6 +86,7 @@ __all__ = [
     # Core classes
     "Database",
     "DatabaseFactory",
+    "EventHandle",
     # Record wrappers
     "Document",
     "Vertex",
