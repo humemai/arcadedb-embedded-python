@@ -100,8 +100,14 @@ cmd(h, "sql", "CREATE INDEX ON Doc (id) UNIQUE")
 N, DIM = 10_000, 8
 
 
+import random
+
+_rng = random.Random(42)
+VECS = [[round(_rng.random(), 4) for _ in range(DIM)] for _ in range(N)]
+
+
 def vec(i):
-    return [round(((i * (j + 7)) % 97) / 97.0, 4) for j in range(DIM)]
+    return VECS[i]
 
 
 t0 = T()
@@ -152,6 +158,30 @@ results["reopen_and_count_ms"] = round((T() - t0) * 1e3, 1)
 assert lib.arcadedb_close(thread, h2) == 0
 print("reopen ok", flush=True)
 
+# Extra probes: each reports ok/error; none fails the smoke. They exercise reflection/resource paths.
+extras = {}
+
+
+def probe(name, fn):
+    try:
+        extras[name] = {"ok": True, "detail": str(fn())[:120]}
+    except Exception as e:  # noqa: BLE001
+        extras[name] = {"ok": False, "detail": repr(e)[:300]}
+
+
+h3 = lib.arcadedb_open(thread, dbpath.encode())
+probe("update", lambda: cmd(h3, "sql", "UPDATE Doc SET name = 'renamed' WHERE id = 1"))
+probe("delete", lambda: cmd(h3, "sql", "DELETE FROM Doc WHERE id = 2"))
+probe("math_abs", lambda: cmd(h3, "sql", "SELECT math_abs(-3) AS v"))
+probe("sql_functions", lambda: cmd(h3, "sql", "SELECT sum(id) AS s, avg(id) AS a, max(name) AS m FROM Doc"))
+probe("fulltext_create", lambda: cmd(h3, "sql", "CREATE INDEX ON Doc (name) FULL_TEXT"))
+probe("fulltext_search", lambda: cmd(h3, "sql", "SELECT FROM Doc WHERE SEARCH_INDEX('Doc[name]', 'renamed') LIMIT 3"))
+probe("graph_sql_match", lambda: cmd(h3, "sql", "MATCH {type: Person, as: a}-KNOWS->{as: b} RETURN a.name, b.name"))
+probe("schema_indexes", lambda: len(cmd(h3, "sql", "SELECT FROM schema:indexes")))
+probe("json_params", lambda: cmd(h3, "sql", "SELECT FROM Doc WHERE id = :id", {"id": 7})[0]["name"])
+lib.arcadedb_close(thread, h3)
+results["extras"] = extras
+
 # Optional: in-process HTTP server. Reported separately; does not fail the embedded smoke.
 server_ok = False
 try:
@@ -169,6 +199,18 @@ try:
             results["studio_root_head"] = body[:80]
     except Exception as e:  # noqa: BLE001
         results["studio_root_error"] = repr(e)[:200]
+    import base64
+
+    req = urllib.request.Request(
+        "http://127.0.0.1:2480/api/v1/query/smoke",
+        data=json.dumps({"language": "sql", "command": "select count(*) as c from Doc"}).encode(),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": "Basic " + base64.b64encode(b"root:PlayWithData123!").decode(),
+        },
+    )
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        results["http_query_count"] = json.loads(resp.read())["result"]
     lib.arcadedb_server_stop(thread)
     server_ok = True
 except Exception as e:  # noqa: BLE001
@@ -178,6 +220,6 @@ results["server_ok"] = server_ok
 results["rss_end_kb"] = vmrss_kb()
 results["peak_rss_kb"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
 results["lib_size_bytes"] = os.path.getsize(lib_path)
-print(json.dumps(results, indent=2))
-print("SMOKE PASSED (embedded)")
+print("RESULTS " + json.dumps(results), flush=True)
+print("SMOKE PASSED (embedded)", flush=True)
 os._exit(0)

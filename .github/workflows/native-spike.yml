@@ -74,44 +74,74 @@ jobs:
             echo "profile=" >> "$GITHUB_OUTPUT"; echo "build-report: not available"
           fi
 
-      - name: Build libarcadedb.so
+      - name: Build libarcadedb.so (default CPU target)
         shell: bash
         run: |
           set -euo pipefail
           start=$(date +%s)
           mvn -B --no-transfer-progress -f native-spike/pom.xml ${{ steps.report.outputs.profile }} -DskipTests package 2>&1 | tee out/build.log
-          echo "BUILD_SECONDS=$(( $(date +%s) - start ))" | tee -a out/sizes.txt
+          echo "BUILD_SECONDS_default=$(( $(date +%s) - start ))" | tee -a out/sizes.txt
+          mkdir -p out/default
+          cp native-spike/target/libarcadedb.so native-spike/target/lib*_dynamic.h native-spike/target/libarcadedb.h native-spike/target/graal_isolate.h out/default/
+          cp native-spike/target/libjsvml.so native-spike/target/libmanagement_ext.so out/default/ 2>/dev/null || true
+          cp /tmp/native-image-build-output.json out/default/build-output.json 2>/dev/null || true
+
+      - name: Build libarcadedb.so (-march=compatibility)
+        shell: bash
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          rm -f native-spike/target/libarcadedb.* native-spike/target/lib*_dynamic.h
+          export NATIVE_IMAGE_OPTIONS="${NATIVE_IMAGE_OPTIONS:-} -march=compatibility"
+          mvn -B --no-transfer-progress -f native-spike/pom.xml -DskipTests package 2>&1 | tee out/build-compat.log
+          echo "BUILD_SECONDS_compat=$(( $(date +%s) - start ))" | tee -a out/sizes.txt
+          mkdir -p out/compat
+          cp native-spike/target/libarcadedb.so out/compat/
+          cp /tmp/native-image-build-output.json out/compat/build-output.json 2>/dev/null || true
 
       - name: Sizes
         if: always()
         shell: bash
         run: |
           set -uo pipefail
-          so=native-spike/target/libarcadedb.so
-          ls -l native-spike/target | tee -a out/sizes.txt
-          if [[ -f "$so" ]]; then
-            echo "so_bytes=$(stat -c %s "$so")" | tee -a out/sizes.txt
-            gzip -9 -k -c "$so" > out/libarcadedb.so.gz
-            echo "so_gzip9_bytes=$(stat -c %s out/libarcadedb.so.gz)" | tee -a out/sizes.txt
-            (cd native-spike/target && zip -9 -q ../../out/libarcadedb.zip libarcadedb.so)
-            echo "so_zip9_bytes=$(stat -c %s out/libarcadedb.zip)" | tee -a out/sizes.txt
-            ldd "$so" | tee out/ldd.txt
-            cp native-spike/target/graal_isolate.h native-spike/target/libarcadedb.h out/ 2>/dev/null || true
-          fi
-          grep -n -E -A30 'Produced artifacts|Image details|object bytes' out/build.log > out/image-breakdown.txt || true
-          cat out/image-breakdown.txt || true
-          grep -n -i -E 'warning.*(reflection|resource|metadata)|Could not resolve|not found' out/build.log | head -60 > out/metadata-warnings.txt || true
-          cp -r native-spike/target/reports out/reports 2>/dev/null || true
-          find native-spike/target -name '*build-report*' -o -name '*.html' | head
+          for v in default compat; do
+            so=out/$v/libarcadedb.so
+            [[ -f "$so" ]] || continue
+            echo "[$v] so_bytes=$(stat -c %s "$so")" | tee -a out/sizes.txt
+            gzip -9 -c "$so" > out/$v/libarcadedb.so.gz
+            echo "[$v] so_gzip9_bytes=$(stat -c %s out/$v/libarcadedb.so.gz)" | tee -a out/sizes.txt
+            (cd out/$v && zip -9 -q libarcadedb.zip libarcadedb.so)
+            echo "[$v] so_zip9_bytes=$(stat -c %s out/$v/libarcadedb.zip)" | tee -a out/sizes.txt
+            rm -f out/$v/libarcadedb.so.gz out/$v/libarcadedb.zip.tmp
+            ldd "$so" | tee out/$v/ldd.txt
+          done
+          ls -l out/default | tee -a out/sizes.txt
+          for f in build.log build-compat.log; do
+            sed -n '/GraalVM Native Image: Generating/,/Finished generating/p' out/$f > out/image-breakdown-$f.txt || true
+          done
+          cat out/image-breakdown-build.log.txt || true
+          grep -n -i -E 'warning.*(reflection|resource|metadata)|Could not resolve|not found|unresolved' out/build.log | grep -v 'Configuration directory not found' | head -60 > out/metadata-warnings.txt || true
+          find native-spike/target -name '*build-report*' | head
 
       - name: Smoke test through ctypes
         shell: bash
         run: |
           set -uo pipefail
-          python3 -I native-spike/smoke.py native-spike/target/libarcadedb.so 2>&1 | tee out/smoke.out
-          rc=${PIPESTATUS[0]}
-          echo "smoke_rc=$rc" | tee -a out/sizes.txt
-          exit $rc
+          fail=0
+          # The .so alone in an empty directory: no companion libraries next to it.
+          for v in default compat; do
+            d=$(mktemp -d); cp out/$v/libarcadedb.so "$d/"
+            for run in 1 2 3; do
+              python3 -I native-spike/smoke.py "$d/libarcadedb.so" > out/smoke-$v-$run.out 2>&1
+              rc=$?; echo "smoke_rc[$v,$run]=$rc" | tee -a out/sizes.txt
+              grep -E '^RESULTS|SMOKE PASSED' out/smoke-$v-$run.out | cut -c1-1500
+              [[ $rc -eq 0 ]] || fail=1
+            done
+          done
+          # With the companion libraries (libjsvml.so, libmanagement_ext.so) next to it.
+          python3 -I native-spike/smoke.py out/default/libarcadedb.so > out/smoke-default-with-companions.out 2>&1
+          echo "smoke_rc[default,companions]=$?" | tee -a out/sizes.txt
+          exit $fail
 
       - name: Upload artifact
         if: always()
@@ -120,6 +150,5 @@ jobs:
           name: native-spike-linux-x86_64
           path: |
             out/
-            native-spike/target/libarcadedb.so
           if-no-files-found: warn
           retention-days: 14
