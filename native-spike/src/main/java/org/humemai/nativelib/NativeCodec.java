@@ -54,22 +54,40 @@ final class NativeCodec {
     sb.append("\"rows\":[");
     int n = 0;
     boolean drained = false;
-    while (n < max) {
-      if (!rs.hasNext()) {
-        drained = true;
-        break;
+    String readError = null;
+    try {
+      while (n < max) {
+        if (!rs.hasNext()) {
+          drained = true;
+          break;
+        }
+        final Result row = rs.next();
+        final int rowStart = sb.length();
+        final int metaStart = meta.length();
+        try {
+          if (n > 0) {
+            sb.append(',');
+            meta.append(',');
+          }
+          appendRow(sb, meta, row);
+        } catch (final Throwable t) {
+          sb.setLength(rowStart);
+          meta.setLength(metaStart);
+          throw t;
+        }
+        n++;
+        if (sb.length() >= MAX_BATCH_CHARS)
+          break;
       }
-      final Result row = rs.next();
-      if (n > 0) {
-        sb.append(',');
-        meta.append(',');
-      }
-      appendRow(sb, meta, row);
-      n++;
-      if (sb.length() >= MAX_BATCH_CHARS)
-        break;
+    } catch (final Throwable t) {
+      // The engine plans and computes lazily: a statement's error can surface while its rows are read. The rows read
+      // before it still go to the caller; the error is raised when they have been consumed. The cursor is finished.
+      readError = ArcadeNative.errorJson(t);
+      drained = true;
     }
     sb.append("],\"meta\":").append(meta).append("],\"drained\":").append(drained);
+    if (readError != null)
+      sb.append(",\"rerr\":").append(readError);
     return drained;
   }
 

@@ -309,6 +309,10 @@ public final class ArcadeNative {
   }
 
   private static CCharPointer err(final Throwable t) {
+    return out(errorJson(t));
+  }
+
+  static String errorJson(final Throwable t) {
     final StringBuilder sb = new StringBuilder("{\"ok\":false,\"error\":");
     NativeCodec.quote(sb, String.valueOf(t.getMessage()));
     sb.append(",\"cls\":");
@@ -332,7 +336,7 @@ public final class ArcadeNative {
         retry = "duplicated_key";
     }
     sb.append("],\"retry\":").append(retry == null ? "null" : "\"" + retry + "\"").append(",\"retry_ms\":").append(retryMs).append('}');
-    return out(sb.toString());
+    return sb.toString();
   }
 
   private static CCharPointer out(final String s) {

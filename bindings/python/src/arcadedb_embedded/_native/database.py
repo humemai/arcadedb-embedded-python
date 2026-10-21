@@ -27,6 +27,15 @@ def _error(prefix: str, reply: dict) -> ArcadeDBError:
     return exc
 
 
+def _read_error(reply: dict) -> ArcadeDBError:
+    exc = ArcadeDBError(
+        f"Reading the result set failed: {reply.get('cls')}: {reply.get('error')}"
+    )
+    exc.native = reply
+    exc.java_chain = reply.get("chain") or []
+    return exc
+
+
 def _call(prefix: str, name: str, *args) -> dict:
     reply = json.loads(lib.call(name, *args))
     if not reply.get("ok"):
@@ -121,6 +130,9 @@ class NativeResultSet:
         self._more = not reply["drained"]
         self._closed = False
         self._exhausted = False
+        # the engine computes lazily: an error met while the first rows were read is raised when the rows before it
+        # have been consumed, as it is on the JPype path (the cursor is already finished on the Java side)
+        self._pending_error = reply.get("rerr")
 
     # -- state
 
@@ -142,6 +154,12 @@ class NativeResultSet:
 
     def _fill(self) -> bool:
         """Fetch the next batch into the buffer; False once the cursor is drained."""
+        if self._pending_error is not None:
+            err, self._pending_error = self._pending_error, None
+            self._more = False
+            self._closed = True
+            self._exhausted = True
+            raise _read_error(err)
         if not self._more:
             return False
         try:
@@ -158,7 +176,8 @@ class NativeResultSet:
             )
         self._buf.extend(zip(reply["rows"], reply["meta"]))
         self._more = not reply["drained"]
-        return bool(self._buf)
+        self._pending_error = reply.get("rerr")
+        return bool(self._buf) or self._pending_error is not None
 
     def _finish(self) -> None:
         self._exhausted = True
@@ -226,23 +245,13 @@ class NativeResultSet:
         return pd.DataFrame(self._drain_dicts())
 
     def to_polars(self, *args, **kwargs):
-        import polars as pl
-
-        return pl.DataFrame(self._drain_dicts())
+        not_yet("ResultSet.to_polars")
 
     def to_arrow(self, *args, **kwargs):
-        import pyarrow as pa
-
-        return pa.Table.from_pylist(self._drain_dicts())
+        not_yet("ResultSet.to_arrow (the Arrow path is a later step)")
 
     def to_columns(self, *args, **kwargs):
-        rows = self._drain_dicts()
-        names: List[str] = []
-        for r in rows:
-            for k in r:
-                if k not in names:
-                    names.append(k)
-        return {n: [r.get(n) for r in rows] for n in names}
+        not_yet("ResultSet.to_columns (the binary column path is a later step)")
 
     def iter_chunks(self, *args, **kwargs):
         not_yet("ResultSet.iter_chunks")
@@ -538,10 +547,11 @@ class NativeDatabase:
     def async_executor(self, *args, **kwargs):
         not_yet("AsyncExecutor")
 
+    @property
     def schema(self):
-        not_yet(
-            "Database.schema (use CREATE TYPE / CREATE PROPERTY / CREATE INDEX statements)"
-        )
+        """DDL helpers over SQL statements (the DSL-first subset); everything else is not on native yet."""
+        self._check_not_closed()
+        return NativeSchema(self)
 
     def create_vector_index(self, *args, **kwargs):
         not_yet("Database.create_vector_index (use CREATE INDEX ... LSM_VECTOR)")
@@ -575,6 +585,87 @@ class NativeDatabase:
 
     def set_auto_transaction(self, *args, **kwargs):
         not_yet("Database.set_auto_transaction")
+
+
+class NativeSchema:
+    """Type, property and index creation as SQL statements. Returns None where the JPype Schema returns a Java object."""
+
+    def __init__(self, db):
+        self._db = db
+
+    def _run(self, sql):
+        self._db.command("sql", sql).close()
+
+    def _type(self, kind, name, buckets, if_not_exists=False):
+        ine = " IF NOT EXISTS" if if_not_exists else ""
+        suffix = f" BUCKETS {int(buckets)}" if buckets else ""
+        self._run(f"CREATE {kind} TYPE `{name}`{ine}{suffix}")
+
+    def create_document_type(self, name, buckets=None):
+        self._type("DOCUMENT", name, buckets)
+
+    def create_vertex_type(self, name, buckets=None):
+        self._type("VERTEX", name, buckets)
+
+    def create_edge_type(self, name, buckets=None):
+        self._type("EDGE", name, buckets)
+
+    def get_or_create_document_type(self, name, buckets=None):
+        self._type("DOCUMENT", name, buckets, True)
+
+    def get_or_create_vertex_type(self, name, buckets=None):
+        self._type("VERTEX", name, buckets, True)
+
+    def get_or_create_edge_type(self, name, buckets=None):
+        self._type("EDGE", name, buckets, True)
+
+    def exists_type(self, name):
+        rows = self._db.query(
+            "sql", "SELECT FROM schema:types WHERE name = ?", name
+        ).to_list()
+        return bool(rows)
+
+    def drop_type(self, name):
+        self._run(f"DROP TYPE `{name}`")
+
+    def create_property(self, type_name, property_name, property_type, of_type=None):
+        t = getattr(property_type, "value", property_type)
+        o = f" OF {getattr(of_type, 'value', of_type)}" if of_type else ""
+        self._run(f"CREATE PROPERTY `{type_name}`.`{property_name}` {t}{o}")
+
+    def get_or_create_property(
+        self, type_name, property_name, property_type, of_type=None
+    ):
+        t = getattr(property_type, "value", property_type)
+        o = f" OF {getattr(of_type, 'value', of_type)}" if of_type else ""
+        self._run(
+            f"CREATE PROPERTY `{type_name}`.`{property_name}` IF NOT EXISTS {t}{o}"
+        )
+
+    def drop_property(self, type_name, property_name):
+        self._run(f"DROP PROPERTY `{type_name}`.`{property_name}`")
+
+    def create_index(
+        self, type_name, property_names, unique=False, index_type="LSM_TREE"
+    ):
+        kind = "UNIQUE" if unique else getattr(index_type, "value", index_type)
+        cols = ", ".join(f"`{p}`" for p in property_names)
+        self._run(f"CREATE INDEX ON `{type_name}` ({cols}) {kind}")
+
+    def exists_index(self, index_name):
+        return bool(
+            self._db.query(
+                "sql", "SELECT FROM schema:indexes WHERE name = ?", index_name
+            ).to_list()
+        )
+
+    def drop_index(self, index_name, force=False):
+        self._run(f"DROP INDEX `{index_name}`")
+
+    def __getattr__(self, name):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        not_yet(f"Schema.{name} (returns Java objects)")
 
 
 class NativeDatabaseFactory:

@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Minimal strict JSON reader for the native entry points. Integers without a fraction or exponent come back as Long
- * (BigInteger past 64 bits), other numbers as Double, objects as LinkedHashMap. NaN/Infinity/-Infinity are accepted
+ * (BigInteger past 64 bits), other numbers as Double, objects as HashMap (the iteration order of the JPype path's java.util.HashMap). NaN/Infinity/-Infinity are accepted
  * because Python's json module writes them. An object {"\u0001": [kind, payload]} is a tagged value (see decodeTag).
  */
 package org.humemai.nativelib;
@@ -14,7 +14,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashSet;
-import java.util.LinkedHashMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -172,7 +172,7 @@ final class Json {
 
   private Object object() {
     i++;
-    final Map<String, Object> out = new LinkedHashMap<>();
+    final Map<String, Object> out = new HashMap<>();
     ws();
     if (s.charAt(i) == '}') {
       i++;

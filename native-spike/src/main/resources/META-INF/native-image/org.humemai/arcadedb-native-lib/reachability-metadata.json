@@ -4703,6 +4703,188 @@
      "sun.nio.ch.Interruptible"
     ]
    }
+  },
+  {
+   "type": "org.locationtech.spatial4j.context.SpatialContext",
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true
+  },
+  {
+   "type": "org.locationtech.spatial4j.context.SpatialContextFactory",
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true
+  },
+  {
+   "type": "org.locationtech.spatial4j.context.jts.JtsSpatialContext",
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true
+  },
+  {
+   "type": "org.locationtech.spatial4j.context.jts.JtsSpatialContextFactory",
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true
+  },
+  {
+   "type": "org.locationtech.spatial4j.shape.impl.ShapeFactoryImpl",
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true
+  },
+  {
+   "type": "org.locationtech.spatial4j.shape.jts.JtsShapeFactory",
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true
+  },
+  {
+   "type": "org.locationtech.spatial4j.io.BinaryCodec",
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true
+  },
+  {
+   "type": "org.locationtech.spatial4j.io.jts.JtsBinaryCodec",
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true
+  },
+  {
+   "type": "org.locationtech.spatial4j.io.WKTReader",
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true
+  },
+  {
+   "type": "org.locationtech.spatial4j.io.WKTWriter",
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true
+  },
+  {
+   "type": "org.locationtech.spatial4j.io.WktShapeParser",
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true
+  },
+  {
+   "type": "org.locationtech.spatial4j.io.jts.JtsWKTReaderShapeParser",
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true
+  },
+  {
+   "type": "org.locationtech.spatial4j.io.jts.JtsWKTWriter",
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true
+  },
+  {
+   "type": "org.locationtech.spatial4j.io.GeoJSONReader",
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true
+  },
+  {
+   "type": "org.locationtech.spatial4j.io.GeoJSONWriter",
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true
+  },
+  {
+   "type": "org.locationtech.spatial4j.io.jts.JtsGeoJSONWriter",
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true
+  },
+  {
+   "type": "org.locationtech.spatial4j.io.PolyshapeReader",
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true
+  },
+  {
+   "type": "org.locationtech.spatial4j.io.PolyshapeWriter",
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true
+  },
+  {
+   "type": "org.locationtech.spatial4j.io.jts.JtsPolyshapeWriter",
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true
+  },
+  {
+   "type": "org.locationtech.spatial4j.io.LegacyShapeReader",
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true
+  },
+  {
+   "type": "org.locationtech.spatial4j.io.LegacyShapeWriter",
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true
+  },
+  {
+   "type": "org.locationtech.spatial4j.distance.CartesianDistCalc",
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true
+  },
+  {
+   "type": "org.locationtech.spatial4j.distance.GeodesicSphereDistCalc",
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true
+  },
+  {
+   "type": "org.locationtech.spatial4j.distance.GeodesicSphereDistCalc$Haversine",
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true
+  },
+  {
+   "type": "org.locationtech.spatial4j.distance.GeodesicSphereDistCalc$LawOfCosines",
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true
+  },
+  {
+   "type": "org.locationtech.spatial4j.distance.GeodesicSphereDistCalc$Vincenty",
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true
   }
  ],
  "resources": [

@@ -64,6 +64,20 @@ def pytest_runtest_makereport(item, call):
                 f"NOTYET: {exc}",
             )
             return
+        text = f"{type(exc).__name__}: {exc}"
+        if (
+            "JVMNotRunning" in text
+            or "without JVM" in text
+            or "Java Virtual Machine is not running" in text
+        ):
+            # the test reaches into the JVM directly (jpype.JClass, Java arrays, bridge classes): about the JPype path
+            report.outcome = "skipped"
+            report.longrepr = (
+                str(item.fspath),
+                item.location[1] or 0,
+                "NA-JVM: the test uses the JVM directly",
+            )
+            return
         exc, seen = exc.__cause__ or exc.__context__, seen + 1
 
 
