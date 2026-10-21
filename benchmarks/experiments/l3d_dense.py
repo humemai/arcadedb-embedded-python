@@ -204,7 +204,7 @@ def degree_stamp(backend):
     # arm and lancedb_dense_fp32 its unquantized one (2026-10-02), both HNSW at
     # COMPARATOR_M in the same IVF partitions.
     base = str(backend)
-    for _suffix in ("_int8", "_fp32"):
+    for _suffix in ("_int8", "_fp32", "_pq"):
         if base.endswith(_suffix):
             base = base[:-len(_suffix)]
     if base.startswith("arcadedb"):
