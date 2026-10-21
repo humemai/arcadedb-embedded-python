@@ -20,7 +20,8 @@ def test_defaults_no_env_vars():
         assert any("java.base/java.util.concurrent.atomic" in a for a in args)
         assert any("java.base/java.nio.channels.spi" in a for a in args)
         assert any("java.base/java.lang=" in a for a in args)
-        assert "-Dpolyglot.engine.WarnInterpreterOnly=false" in args
+        assert "-Darcadedb.polyglotEngineEnabled=false" in args
+        assert not any("WarnInterpreterOnly" in a for a in args)
         assert "-XX:+UseCompactObjectHeaders" in args
         # Should have default error log
         assert any("hs_err_pid" in arg for arg in args)
@@ -47,8 +48,29 @@ def test_custom_jvm_args_merging():
         assert any("java.base/java.util.concurrent.atomic" in a for a in args)
         assert any("java.base/java.nio.channels.spi" in a for a in args)
         assert any("java.base/java.lang=" in a for a in args)
-        assert "-Dpolyglot.engine.WarnInterpreterOnly=false" in args
+        assert "-Darcadedb.polyglotEngineEnabled=false" in args
+        assert not any("WarnInterpreterOnly" in a for a in args)
         assert "-XX:+UseCompactObjectHeaders" in args
+
+
+def test_polyglot_engine_default_can_be_overridden():
+    """The polyglot engine is off by default and ``jvm_args`` or the env var turn it on.
+
+    The wheel ships no GraalVM language, so an enabled engine only logs
+    "no languages found" at the first SQL command. The flag follows the other
+    defaults: whoever sets it themselves wins, and only one copy is passed.
+    """
+    flag = "-Darcadedb.polyglotEngineEnabled=true"
+    with patch.dict(os.environ, {}, clear=True):
+        from_jvm_args = _build_jvm_args(
+            heap_size="4g", disable_xml_limits=True, jvm_args=[flag]
+        )
+    with patch.dict(os.environ, {"ARCADEDB_JVM_ARGS": flag}, clear=True):
+        from_env = _build_jvm_args(
+            heap_size="4g", disable_xml_limits=True, jvm_args=None
+        )
+    for args in (from_jvm_args, from_env):
+        assert [a for a in args if "polyglotEngineEnabled" in a] == [flag]
 
 
 def test_dedupe_heap_keeps_max():

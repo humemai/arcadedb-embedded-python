@@ -123,3 +123,102 @@ def test_server_starts_and_serves_http(temp_server_root):
         )
         assert r.status_code == 200, f"server returned {r.status_code}"
         assert "version" in r.json()
+
+
+def _varint(n):
+    out = bytearray()
+    while True:
+        low = n & 0x7F
+        n >>= 7
+        if n:
+            out.append(low | 0x80)
+        else:
+            out.append(low)
+            return bytes(out)
+
+
+def _field(number, payload):
+    return _varint(number << 3 | 2) + _varint(len(payload)) + payload
+
+
+def _snappy_prometheus_write():
+    """A Prometheus remote-write body: one sample, protobuf, snappy literal block."""
+    import struct
+
+    label = _field(1, _field(1, b"__name__") + _field(2, b"cpu"))
+    sample = _field(2, b"\x09" + struct.pack("<d", 1.5) + b"\x10" + _varint(1))
+    raw = _field(1, label + sample)
+    return _varint(len(raw)) + bytes([61 << 2]) + struct.pack("<H", len(raw) - 1) + raw
+
+
+@pytest.fixture
+def served(temp_server_root):
+    """A started server, a database named ``packaging``, and an authenticated session."""
+    import requests
+    from arcadedb_embedded import create_server
+    from tests.conftest import TEST_PASSWORD
+
+    with create_server(
+        root_path=temp_server_root, root_password=TEST_PASSWORD
+    ) as server:
+        server.create_database("packaging").close()
+        session = requests.Session()
+        session.auth = ("root", TEST_PASSWORD)
+        try:
+            yield session, f"http://localhost:{server.get_http_port()}/api/v1"
+        finally:
+            session.close()
+
+
+@pytest.mark.server
+def test_openapi_json_is_served(served):
+    """``GET /api/v1/openapi.json`` answers 200 with the spec.
+
+    swagger-core builds it with Jackson. While jackson-*.jar was excluded from the
+    wheel (2026-07-05 to 2026-10) this was a 500 ``NoClassDefFoundError`` that no
+    test noticed, because no test asked.
+    """
+    session, base = served
+    response = session.get(f"{base}/openapi.json", timeout=30)
+    assert response.status_code == 200, response.text
+    spec = response.json()
+    assert spec["openapi"].startswith("3.")
+    assert spec["paths"], "the spec lists no endpoints"
+
+
+@pytest.mark.server
+def test_snappy_compressed_bodies_are_decoded(served):
+    """A snappy-compressed Prometheus remote write is accepted, a corrupt one is a 400.
+
+    The server decodes both with snappy-java. While the jar was excluded the same
+    requests were a 500 ``NoClassDefFoundError``; a 400 here means the class
+    loaded and the decoder judged the bytes.
+    """
+    session, base = served
+    session.post(
+        f"{base}/command/packaging",
+        json={
+            "language": "sql",
+            "command": "CREATE TIMESERIES TYPE cpu TIMESTAMP ts "
+            "TAGS (host STRING) FIELDS (value DOUBLE)",
+        },
+        timeout=30,
+    ).raise_for_status()
+    headers = {"Content-Encoding": "snappy"}
+
+    good = session.post(
+        f"{base}/ts/packaging/prom/write",
+        data=_snappy_prometheus_write(),
+        headers=headers,
+        timeout=30,
+    )
+    assert good.status_code == 204, good.text
+
+    bad = session.post(
+        f"{base}/ts/packaging/prom/write",
+        data=b"\x05garbage",
+        headers=headers,
+        timeout=30,
+    )
+    assert bad.status_code == 400, bad.text
+    assert "Snappy" in bad.text

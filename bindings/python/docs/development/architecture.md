@@ -51,7 +51,7 @@ arcadedb_embedded/
 - Prefers programmatic configuration (`start_jvm(...)`, `jvm_kwargs`)
 - Supports explicit heap and common-pool thread limits via `heap_size` and `common_pool_parallelism`
 - Always reads `ARCADEDB_JVM_ARGS` and puts its flags before `jvm_args`; `ARCADEDB_JVM_ERROR_FILE` sets the crash-log path
-- Adds default flags unless the merged arguments already set them: `--add-modules=jdk.incubator.vector`, `-Djava.awt.headless=true`, `--enable-native-access=ALL-UNNAMED`, `-Dfile.encoding=UTF8`, `--add-opens` flags (for `java.util.concurrent.atomic`, `java.nio.channels.spi`, and `java.lang`), `-Dpolyglot.engine.WarnInterpreterOnly=false`, `-XX:+UseCompactObjectHeaders`, and `-Xmx4g` when no heap is given; the `jdk.xml` entity limits are lifted while `disable_xml_limits` is true, and `-XX:ErrorFile` defaults to `./log/hs_err_pid%p.log`
+- Adds default flags unless the merged arguments already set them: `--add-modules=jdk.incubator.vector`, `-Djava.awt.headless=true`, `--enable-native-access=ALL-UNNAMED`, `-Dfile.encoding=UTF8`, `--add-opens` flags (for `java.util.concurrent.atomic`, `java.nio.channels.spi`, and `java.lang`), `-Darcadedb.polyglotEngineEnabled=false`, `-XX:+UseCompactObjectHeaders`, and `-Xmx4g` when no heap is given; the `jdk.xml` entity limits are lifted while `disable_xml_limits` is true, and `-XX:ErrorFile` defaults to `./log/hs_err_pid%p.log`
 - Starts once per process: a later `start_jvm()` with no settings, or the same ones, joins the running JVM; different settings raise `ArcadeDBError`
 - `interrupt` chooses what Ctrl-C does: by default (`False`) Python gets it and raises `KeyboardInterrupt`; `True` leaves it to JPype's handler, which ends the process with status 130 and runs no Python cleanup (see [JVM API](../api/jvm.md))
 - From a source checkout (no `jars/` or `jre/` next to the package), extracts them from the newest wheel in `dist/` into `bindings/python/.runtime-cache/`, stamped with that wheel and re-extracted when the wheel changes
@@ -529,7 +529,9 @@ The Python binding is distributed as a **single, self-contained package** (`arca
 - **Query engines**: SQL, OpenCypher, and GraphQL ship in the wheel.
   `scripts/jar_exclusions.txt` drops the Gremlin, MongoDB, and gRPC modules, Raft HA
   (so the server is single-node), metrics and tracing, the JavaScript stack (js,
-  truffle, icu4j, and regex), commons-math3, Jackson, snappy-java, and jline.
+  truffle, icu4j, and regex), and jline. Jackson, snappy-java, and commons-math3 ship: the
+  server's OpenAPI route, its snappy-compressed request bodies, and jvector refer to them, and
+  `tests/test_jar_closure.py` fails when a shipped class refers to a package no shipped jar has.
 - **Wire protocols**: the Postgres, Redis, and Bolt plugins ship, and the server starts
   each one only when its plugin is configured (see `create_server()`).
 - **Zero Configuration**: No external Java installation required.
