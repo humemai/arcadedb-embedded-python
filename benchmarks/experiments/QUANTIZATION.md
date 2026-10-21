@@ -40,3 +40,7 @@ The quantization survey of DECISIONS #131 item 8 (CAMPAIGN.md section 7 row 42),
 ## What follows
 
 Built 2026-10-02 and smoked on the laptop: Neo4j `SCALAR` (with its fp32 arms corrected to `NONE`, on the dense and cross-model lanes), MongoDB `scalar`, Elasticsearch `int8_hnsw`, Memgraph `i8`, LanceDB's fp32 `IVF_HNSW_FLAT` beside its SQ arm, ArangoDB's `IVF<nLists>,SQ8`, and Qdrant sparse `uint8`. Each is registered on its lane in the runner, in export_web's precision and display maps, in the dense overlay or sparse multipass arm lists, and in the re-pin smoke (`oct_repin_smoke.sh`). None has a bench-host row yet: their first measured rows come from the 26.10.1 measurement.
+
+## The beam sweep and the precision arms
+
+Under the 2026-11 instrument the dense lane sweeps the search beam on the built index and headlines latency at matched recall (PROTOCOL.md section 2). Precision arms change nothing in that rule: each int8 and PQ arm is swept over the same `ef` list as its fp32 sibling (ArangoDB's over `nProbe` around its calibrated value), and the re-rank settings stay as the arm set them (Qdrant `oversampling`, Milvus `refine_k`, ArcadeDB's engine default, none for ArangoDB's factory string), so a quantized arm's curve is the beam sweep at its own fixed re-rank. A quantized arm that does not reach the target at the top of the list is marked `not reached`, which is how a coarse code shows up in the headline.
