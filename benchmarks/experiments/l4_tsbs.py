@@ -225,13 +225,20 @@ class ArrowResult:
     """A large answer read as the engine's typed Arrow table (BENCH_INSTRUMENT=2026-11, or BENCH_LARGE_RESULT_PATH=arrow). The timed
     call returns the table; the row count is `num_rows`, and the digest iterates it as dict rows AFTER the timer stops."""
 
-    def __init__(self, table):
+    def __init__(self, table, positional=False):
         self.table = table
+        self.positional = positional
 
     def __len__(self):
         return self.table.num_rows
 
     def __iter__(self):
+        if self.positional:
+            # TUPLES BY POSITION, as the engine's own fetchall() returns them. DuckDB names an unaliased aggregate `avg(uu)`, and
+            # the declared digest column is `v`: as dict rows the value was looked up under a name the table does not have and the
+            # digest read <missing> where the plain read had the number (gate run 2026-10-21, q_groupby 7ab90d6f43a25460 against
+            # 18c9985de67433e6). The 2026-10 query text stays as it was, so the fix lives in the reader, not in an `AS v`.
+            return zip(*(c.to_pylist() for c in self.table.columns))
         return iter(self.table.to_pylist())
 
 
@@ -900,7 +907,7 @@ class DuckTS(BulkRead):
     def _large_duck(self, rel):
         if self._path() == "arrow":
             self._used = "arrow"
-            return ArrowResult(rel.to_arrow_table() if hasattr(rel, "to_arrow_table") else rel.fetch_arrow_table())
+            return ArrowResult(rel.to_arrow_table() if hasattr(rel, "to_arrow_table") else rel.fetch_arrow_table(), positional=True)
         return rel.fetchall()
 
     def version(self):
@@ -1925,7 +1932,20 @@ def main():
             out[f"{qn}_plain_ms"] = round(statistics.median(_pt), 4)
             out[f"{qn}_plain_iters"] = len(_pt)
             out[f"{qn}_plain_rows"] = len(_pref)
+            # THE GATE, ON THE ROW (2026-10-21): the plain read must give the same ANSWER as the typed read it sits beside, and
+            # "same" is the lane's own digest, not a row count. Stamped under a name the cross-engine check does not read as a query
+            # (it matches res_*_digest), and a mismatch ends the cell: a typed read that changes the answer is not a faster read.
+            _pd = bench_common.result_digest(_pref, **Q_DIGEST[qn])
+            out[f"{qn}_plain_digest"] = _pd["digest"]
+            out[f"{qn}_plain_sample"] = _pd["sample"]
+            out[f"{qn}_plain_digest_match"] = _pd["digest"] == out[f"res_{qn}_digest"]
         out["read_path_sensitivity"] = b.PLAIN_NAME
+        _split = {qn: (out[f"res_{qn}_digest"], out[f"{qn}_plain_digest"], out[f"res_{qn}_sample"], out[f"{qn}_plain_sample"])
+                  for qn in BulkRead.LARGE if not out[f"{qn}_plain_digest_match"]}
+        if _split:
+            raise SystemExit(
+                f"{args.backend}: the typed Arrow read and the plain read answer differently (typed digest, plain digest, typed sample, plain sample): {_split}. "
+                f"The headline is withheld until the conversion or the digest normalisation is fixed.")
 
     # ASSERT THE SHAPES, do not merely record them. The lane already knew the
     # right answers -- 60 minute buckets over an hour, 12 two-hour buckets over a
