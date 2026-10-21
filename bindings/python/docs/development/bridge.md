@@ -44,6 +44,8 @@ crossing per batch**, receiving a bulk payload it can decode at C speed: the
 | `ResultSet.to_columns()` / fast `to_dataframe()` / `to_arrow()` | `ColumnBatcher` |
 | `Database.insert_many()` | `DocumentBatcher` |
 | `Database.insert_columns()` | `DocumentBatcher` |
+| `Database.insert_dataframe()` / `insert_arrow()` | `DocumentBatcher` (document types, through `insert_columns()`), `VertexBatcher` (vertex types, through `GraphBatch.create_vertices()`); the Arrow-to-column conversion is Python (`dataframe.py`) |
+| `ResultSet.to_polars()` | `ColumnBatcher` (through `to_arrow()`) |
 | `AsyncExecutor.append_samples()` (numpy numeric-column boxing) | `DocumentBatcher` |
 | `AsyncExecutor.append_samples(..., primitive=True)` | `TimeSeriesBatcher` |
 | `GraphBatch.new_edges()` (with and without properties) | `EdgeBatcher` |

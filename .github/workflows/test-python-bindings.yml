@@ -444,6 +444,7 @@ jobs:
           neo4j
           pyarrow
           pandas
+          polars
           adbc-driver-postgresql>=1.12
           duckdb>=1.4.2
           ladybug>=0.21.2

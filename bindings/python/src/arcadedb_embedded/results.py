@@ -633,6 +633,48 @@ class ResultSet:
 
         return pd.DataFrame(self.to_list(convert_types=convert_types))
 
+    def to_polars(
+        self, batch_size: int = 25_000, columns: Optional[Sequence[str]] = None
+    ):
+        """
+        Bulk-materialize all rows as a ``polars.DataFrame``, through Arrow.
+
+        Reads :meth:`to_arrow` and hands the table to Polars, so nulls keep
+        their type (a nullable integer stays an integer column) and a DECIMAL
+        column is a Polars ``Decimal``. Requires polars and pyarrow
+        (``pip install 'arcadedb-embedded[polars]'``).
+
+        Args:
+            batch_size: Rows per bridge crossing, as in :meth:`to_arrow`.
+            columns: Optional column names to pin, as in :meth:`to_columns`.
+
+        Returns:
+            polars DataFrame
+
+        Raises:
+            ImportError: If polars or pyarrow is not installed, or the bundled
+                bridge jar is missing (the cases in which :meth:`to_arrow`
+                returns None).
+
+        Example:
+            >>> df = db.query("sql", "SELECT FROM User").to_polars()
+        """
+        try:
+            import polars as pl
+        except ImportError as exc:
+            raise ImportError(
+                "polars is required for to_polars(). "
+                "Install with: pip install 'arcadedb-embedded[polars]'"
+            ) from exc
+        table = self.to_arrow(batch_size=batch_size, columns=columns)
+        if table is None:
+            raise ImportError(
+                "to_polars() reads through Arrow, which needs pyarrow and numpy "
+                "and the bundled bridge jar. "
+                "Install with: pip install 'arcadedb-embedded[polars]'"
+            )
+        return pl.from_arrow(table)
+
     def to_columns(
         self, batch_size: int = 25_000, columns: Optional[Sequence[str]] = None
     ):

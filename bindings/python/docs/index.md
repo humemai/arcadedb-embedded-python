@@ -105,7 +105,8 @@ are doing.
     `db.import_documents(...)` wrapper when you specifically need document-file import.
 - For bulk document ingest from Python, prefer `db.insert_many(...)` for rows and
     `db.insert_columns(...)` for data that already lives in columns. They cross the FFI
-    boundary once per batch and once per column.
+    boundary once per batch and once per column. A pandas or Polars DataFrame or an Arrow
+    table loads with `db.insert_dataframe(...)` or `db.insert_arrow(...)`.
 - For bulk graph ingest from Python, prefer `GraphBatch`.
 - Do not use the async executor's SQL command path (`async_executor().command(...)`) for
     bulk writes.

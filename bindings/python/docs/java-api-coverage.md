@@ -68,7 +68,7 @@ your Python process, or for HA/TLS, use the official ArcadeDB distribution.
 - ✅ Transaction helpers: `run_in_transaction()` (retries on concurrent-modification
   conflicts), `is_transaction_active()`
 - ✅ Records: `new_document()`, `new_vertex()`, `lookup_by_rid()`, `lookup_by_key()`
-- ✅ Bulk ingest: `insert_many()` (documents from rows), `insert_columns()` (documents from columns), `graph_batch()` (vertices and edges)
+- ✅ Bulk ingest: `insert_many()` (documents from rows), `insert_columns()` (documents from columns), `insert_dataframe()` and `insert_arrow()` (pandas or Polars DataFrames and Arrow tables into a document or vertex type, through `DocumentBatcher` and `GraphBatch`; no new Java), `graph_batch()` (vertices and edges)
 - ✅ Import: `import_documents()` for document-shaped files
 - ✅ Vector indexes: `create_vector_index()`
 - ✅ Utilities: `count_type()`, `drop()`, `get_name()`, `get_database_path()`, `is_open()`,

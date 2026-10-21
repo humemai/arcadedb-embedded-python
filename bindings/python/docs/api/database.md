@@ -605,8 +605,9 @@ rolled back on any failure, a transaction the caller opened is left to the calle
   A float `NaN` in a numpy float column is stored as NaN, not as null: use a
   sequence with `None` for nulls. A pandas nullable column (`Int64`, `string`)
   converts with its `<NA>` as null. `datetime64`, `timedelta64`, and complex
-  columns do not cross natively (`TypeError`): convert them to Python values or
-  use `insert_many`.
+  columns do not cross natively (`TypeError`): convert them to Python values, use
+  `insert_many`, or load the frame with [`insert_dataframe`](#insert_dataframe), which
+  maps timestamps.
 - `commit_every` (int): Transaction batch size in synchronous mode, any int as
   for `insert_many` (0 = single transaction; ignored when a transaction is already
   open)
@@ -642,6 +643,169 @@ n = db.insert_columns("Reading", {
     "value": np.random.random(1_000_000),
     "label": ["a", "b"] * 500_000,
 })
+```
+
+---
+
+### insert_dataframe
+
+```python
+db.insert_dataframe(type_name: str, df, *, batch_size: int = 10_000,
+                    parallel: bool = False) -> int
+```
+
+Load a **pandas or Polars `DataFrame`** into a type, in batches. The frame is read as an
+Arrow table, so [`insert_arrow`](#insert_arrow) has the type mapping and the rules for
+declared properties. What the two libraries do differently:
+
+- A pandas `NaN` in a float column is pandas' missing value, so it loads as a null. A
+  Polars `NaN` stays a `NaN`, because Polars keeps null and NaN apart.
+- The pandas index is not loaded: `df.reset_index()` makes it a column. Pandas column
+  names must be strings.
+- A Polars `LazyFrame` is refused (`TypeError`): call `.collect()` first.
+- Any other object that speaks the Arrow PyCapsule interface (`__arrow_c_stream__`)
+  also loads.
+
+A **document type** gets documents, through the same typed-array path as
+[`insert_columns`](#insert_columns) (integers, floats, and booleans without nulls cross as
+one buffer copy; timestamps, dates, decimals, lists, and strings convert per element). A
+**vertex type** gets vertices, through `GraphBatch.create_vertices()`. An **edge type** is
+refused (`ArcadeDBError`): load the vertices, then buffer the edges with
+[`graph_batch().new_edges()`](graph_batch.md), because an edge needs the RIDs of its two
+vertices and no column convention for them is fixed here.
+
+**Parameters:**
+
+- `type_name` (str): Target type (must exist, with or without declared properties)
+- `df`: A pandas or Polars `DataFrame`
+- `batch_size` (int): Rows per batch (default `10_000`). A batch is converted, written,
+  and committed on its own, so memory stays bounded for a large frame
+- `parallel` (bool): Documents only: hand each batch to the async executor's parallel
+  bucket writers, as `insert_columns(parallel=True)` does. A vertex type raises
+  `ValueError`
+
+**Returns:**
+
+- `int`: Number of records written
+
+**Raises:**
+
+- `ImportError`: pyarrow is not installed (`pip install 'arcadedb-embedded[arrow]'`)
+- `ValueError`: no columns, duplicate or non-string column names, a `batch_size` that is
+  not a positive integer, or `parallel` with a vertex type
+- `TypeError`: a column type with no mapping (time of day, duration, map), a type that
+  does not load into the property the type declares for it, a `LazyFrame`, or an object
+  that is not a frame or an Arrow table. Raised before anything is written
+- `ArcadeDBError`: the type does not exist or is an edge type, or the load fails (a
+  duplicate key, a value past a declared property's range). The batch in flight is rolled
+  back, the batches before it stay committed, and the message says how many rows that is.
+  A transaction the caller opened is left to the caller (a vertex load refuses to run
+  inside one, as `GraphBatch` does): the batches join it, the message then says the rows
+  were written in your transaction, not committed, and a rollback removes them
+
+**Example:**
+
+```python
+import pandas as pd
+
+db.command("sql", "CREATE DOCUMENT TYPE Trip")
+df = pd.DataFrame({
+    "id": [1, 2, 3],
+    "fare": [12.5, None, 7.25],
+    "picked_up": pd.to_datetime(["2026-01-01 08:00", "2026-01-01 09:30", None]),
+})
+db.insert_dataframe("Trip", df)  # 3
+```
+
+---
+
+### insert_arrow
+
+```python
+db.insert_arrow(type_name: str, table, *, batch_size: int = 10_000,
+                parallel: bool = False) -> int
+```
+
+Load an **Arrow table** (`pyarrow.Table`, `RecordBatch`, `RecordBatchReader`, or any object
+with `__arrow_c_stream__`) into a type, in batches. A reader is read whole before the
+load starts. The parameters, return value, and exceptions are those of
+[`insert_dataframe`](#insert_dataframe).
+
+It is one function per source kind rather than one function that takes everything,
+because the two sources differ in a way the caller should see in the name: a DataFrame has
+library-specific missing-value rules (pandas `NaN` versus Polars `NaN`), an Arrow table
+has none. `insert_dataframe` converts to Arrow and calls the same code.
+
+**Arrow type to stored type.** A property the type does not declare takes the stored type
+below; a declared property converts to its declared type (next table).
+
+| Arrow type | Stored as |
+|---|---|
+| `int8`, `int16`, `int32`, `int64`, `uint8`, `uint16`, `uint32` | `LONG` |
+| `uint64` | `LONG`, up to 2\*\*63 - 1 (a larger value raises `ValueError` before anything is written) |
+| `float16`, `float32`, `float64` | `DOUBLE` (`float32` widens exactly) |
+| `bool` | `BOOLEAN` |
+| `string`, `large_string`, `string_view` | `STRING` |
+| `dictionary` (a pandas categorical, a Polars `Categorical`) | its value type |
+| `binary`, `large_binary` | `byte[]`, read back as a list of signed ints |
+| `timestamp`, no time zone, unit `s`, `ms`, `us`, or `ns` | a UTC date-time: the wall clock as it shows, with the input's precision (see below) |
+| `timestamp` with a time zone, any unit | a UTC date-time: converted to UTC |
+| `date32`, `date64` | `DATE` |
+| `decimal128`, `decimal256` | `DECIMAL`, every digit kept |
+| `list`, `large_list`, `fixed_size_list` | `LIST` (an `ARRAY_OF_*` when declared so) |
+| `struct` | `MAP` |
+| `null` (a column of only nulls) | no value |
+| `time32`, `time64`, `duration`, `map`, `interval`, `union`, `extension` | no mapping: `TypeError` |
+
+A null is stored as a missing property.
+
+**DATETIME precisions.** A `DATETIME` is a UTC wall clock, whatever the host's time zone. A
+timestamp with a zone is converted to UTC; one without is taken as the wall clock it
+shows (the rule `Document.set()` applies to a `datetime`). The value is read from the
+integer epoch count, so a `ns` column is not cut to microseconds on the way in. For a
+declared property what is kept is what the property's type keeps: `DATETIME`
+milliseconds, `DATETIME_MICROS` microseconds, `DATETIME_NANOS` nanoseconds,
+`DATETIME_SECOND` seconds. A column the type does not declare keeps the input's own
+precision (a `ns` column is stored with its nanoseconds).
+
+**Reading timestamps back is coarser than storing them.** `Result.get()` returns a Python
+`datetime`, which holds microseconds at most. `to_arrow()`, `to_polars()`, `to_dataframe()`
+and `to_columns()` return milliseconds (`timestamp[ms]`, `datetime64[ms]`), also for
+`DATETIME_MICROS` and `DATETIME_NANOS` properties and for `DATE`. Nanoseconds do not
+come back through the bindings: keep an integer epoch-nanosecond column if you need them.
+
+**Declared properties.** A property the type declares converts, but only along the pairs
+below, checked before a row is written. Anything else raises `TypeError` that names the
+column, the Arrow type, and the declared type, because the engine would otherwise
+truncate or guess (a float into an `INTEGER` property keeps the integer part; a string
+into a `LONG` property is parsed).
+
+| Arrow kind | Loads into a declared |
+|---|---|
+| integer | `BYTE`, `SHORT`, `INTEGER`, `LONG`, `FLOAT`, `DOUBLE`, `DECIMAL`, `STRING` |
+| floating | `FLOAT`, `DOUBLE`, `DECIMAL`, `STRING` |
+| bool | `BOOLEAN`, `STRING` |
+| string | `STRING`, `LINK` (RID text) |
+| binary | `BINARY` |
+| timestamp | `DATETIME`, `DATETIME_SECOND`, `DATETIME_MICROS`, `DATETIME_NANOS`, `STRING` |
+| date | `DATE`, any `DATETIME*`, `STRING` |
+| decimal | `DECIMAL`, `DOUBLE`, `FLOAT`, `STRING` |
+| list | `LIST`, `ARRAY_OF_SHORTS`, `ARRAY_OF_INTEGERS`, `ARRAY_OF_LONGS`, `ARRAY_OF_FLOATS`, `ARRAY_OF_DOUBLES` |
+| struct | `MAP`, `EMBEDDED` |
+
+The engine still refuses a value past the declared type's range (an integer of 2\*\*40 into
+an `INTEGER` property): the load fails with `ArcadeDBError` and the batch is rolled back.
+A property on a parent type counts as declared.
+
+**Example:**
+
+```python
+import pyarrow as pa
+
+db.command("sql", "CREATE VERTEX TYPE Station")
+db.command("sql", "CREATE PROPERTY Station.id INTEGER")
+table = pa.table({"id": [1, 2], "name": ["Central", "North"]})
+db.insert_arrow("Station", table)  # 2 vertices; the int64 column converts to INTEGER
 ```
 
 ---
