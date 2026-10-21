@@ -33,7 +33,8 @@ INGEST_BATCH = 500
 
 # THE UNTIMED WARM-UP (CAMPAIGN section 7 row 81, DECISIONS #177), default OFF. Unset: no warm-up and no row field, so
 # a row is what it was. `BENCH_SPARSE_WARMUP=N` (a positive integer) runs N untimed searches on every backend after the
-# build and before the timed pass, and the row records `sparse_warmup_queries`. The N queries are drawn from the query
+# build and before the timed pass, and the row records `sparse_warmup_queries`. Under BENCH_INSTRUMENT=2026-11 an unset variable means
+# bench_common.SPARSE_WARMUP_DEFAULT (and "0" or "off" turns it off); under 2026-10 unset still means none. The N queries are drawn from the query
 # set by a seeded sample, so every engine gets the same ones, and they are spread over the set instead of being the
 # timed pass's first N (those are the ones the timed pass would otherwise replay from a warm cache). Same count and
 # same rule for every engine, as the documents lane's warm-up uses keys apart from the timed ones.
@@ -46,7 +47,10 @@ def sparse_warmup_n():
     a launcher that asked for a warm-up and silently got none would stamp nothing and believe otherwise."""
     raw = (os.environ.get(WARMUP_ENV) or "").strip()
     if not raw:
-        return 0
+        # Unset: none through 2026-10; BENCH_INSTRUMENT=2026-11 warms every engine (CAMPAIGN section 7 row 81)
+        return bench_common.SPARSE_WARMUP_DEFAULT if bench_common.next_instrument_default() else 0
+    if bench_common.next_instrument_default() and raw.lower() in ("0", "off"):
+        return 0       # an explicit "no warm-up" under the instrument that defaults to one
     try:
         n = int(raw)
     except ValueError:
@@ -166,20 +170,19 @@ class ArcadeEmbedded(Base):
     def connect(self):
         import arcadedb_embedded as arcadedb
         heap = os.environ.get("ARCADEDB_HEAP", "4g")
-        # -Xms pinned to -Xmx for parity with the server deployment
-        # (ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap} in runner.py)
-        jvm_args = f"-Xms{heap}"
+        # -Xms pinned to -Xmx through 2026-10; left unset under 2026-11 (bench_common.embedded_xms)
+        jvm_args = bench_common.embedded_xms(heap)
         # Engine knobs for an ablation arm, e.g.
         #   ARCADEDB_JVM_EXTRA=-Darcadedb.sparseVectorScoringMaxPartitions=8
         # Echoed rather than applied silently: an unread override would make an
         # ablation measure the default and look like a null result.
         extra = os.environ.get("ARCADEDB_JVM_EXTRA", "").strip()
         if extra:
-            jvm_args = f"{jvm_args} {extra}"
+            jvm_args = f"{jvm_args} {extra}".strip()
             print(f"JVM-EXTRA {extra}", flush=True)
         self.db = arcadedb.create_database(
             "/tmp/l3_arcade",
-            jvm_kwargs={"heap_size": heap, "jvm_args": jvm_args})
+            jvm_kwargs={"heap_size": heap, "jvm_args": jvm_args or None})
         from importlib.metadata import version as _pv
         self.version = _pv("arcadedb-embedded")
         self.db.command("sql", "CREATE DOCUMENT TYPE Doc")
@@ -206,7 +209,7 @@ class ArcadeEmbedded(Base):
         heap = os.environ.get("ARCADEDB_HEAP", "4g")
         self.db = arcadedb.open_database(
             "/tmp/l3_arcade",
-            jvm_kwargs={"heap_size": heap, "jvm_args": f"-Xms{heap}"})
+            jvm_kwargs={"heap_size": heap, "jvm_args": bench_common.embedded_xms(heap) or None})
         self.idx_name = "Doc[tokens,weights]"
 
     def build(self, n_docs):

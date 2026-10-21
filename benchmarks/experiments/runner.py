@@ -2844,7 +2844,10 @@ def cpu_dma_latency_target():
     microseconds ends the run, because stamping a request that was never made would be a false row."""
     raw = (os.environ.get(CPU_DMA_LATENCY_ENV) or "").strip()
     if not raw:
-        return None
+        # Unset: no hold through 2026-10; BENCH_INSTRUMENT=2026-11 holds the default target (CAMPAIGN section 7 row 81)
+        return bench_common.CPU_DMA_LATENCY_DEFAULT_US if bench_common.next_instrument_default() else None
+    if bench_common.next_instrument_default() and raw.lower() == "off":
+        return None    # an explicit "no hold" under the instrument that defaults to one
     try:
         n = int(raw)
     except ValueError:
@@ -2932,6 +2935,7 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
            # cell ran under; make_paper_tables refuses to mix two in a table.
            "bench_host": os.environ.get("BENCH_HOST"),
            "instrument": bench_common.INSTRUMENT,
+           **({"arcadedb_http_client_role": "sensitivity"} if job.get("http_client") else {}),
            # The class the cell ASKED for. The lane also stamps it, from the
            # same variable, beside the string the engine itself reports; both
            # are here so a row missing the lane's stamp (an old artifact, a
@@ -3243,6 +3247,10 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                    # "requests" restores the October client. CLOSED tuple: a campaign that set it
                    # without this line would have run the default while believing otherwise.
                    "BENCH_ARCADEDB_HTTP_CLIENT",
+                   # which instrument the cell measures: the container's own bench_common reads it, and every
+                   # next-instrument default in the lanes (warm-up, id index, read path, -Xms) follows from it. Unset is
+                   # not forwarded, so a container of the running instrument sees exactly what it saw before.
+                   "BENCH_INSTRUMENT", "BENCH_LARGE_RESULT_PATH", "BENCH_ARCADEDB_EMBEDDED_XMS",
                    # the sparse lane's untimed warm-up, OFF unless set (row 81, DECISIONS #177); the lane reads it in the container
                    "BENCH_SPARSE_WARMUP",
                    # the dense lane's id index for the delete, OFF unless set (row 84, #291, DECISIONS #178)
@@ -3251,6 +3259,12 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                    "BENCH_ARCADEDB_TS_NDJSON"):
             if os.environ.get(_k):
                 bench_env += ["-e", f"{_k}={os.environ[_k]}"]
+
+        # THE LABELLED SENSITIVITY TWIN of a served ArcadeDB arm (CAMPAIGN section 7 row 72): the same cell on the lean HTTP client,
+        # after the env forwarding above so it wins over an inherited BENCH_ARCADEDB_HTTP_CLIENT.
+        if job.get("http_client"):
+            bench_env += ["-e", f"BENCH_ARCADEDB_HTTP_CLIENT={job['http_client']}",
+                          "-e", "BENCH_ARCADEDB_CLIENT_ROLE=sensitivity"]
 
         # TELL THE CONTAINER WHAT IT IS RUNNING. Only this process knows the
         # backend's image and pinned server digest; inside the container that
@@ -3804,6 +3818,26 @@ def restricted_arms(lane):
     return {be: ARM_RUNS[be][lane] for be in LANES[lane][1] if lane in ARM_RUNS.get(be, {})}
 
 
+# THE SERVED ARCADEDB ARMS' CLIENT SENSITIVITY (CAMPAIGN section 7 row 72, the next instrument). The headline client of a served
+# ArcadeDB arm is the vendor's `arcadedb-driver` (lean_http.OfficialSession). Under BENCH_INSTRUMENT=2026-11 every such arm also runs
+# the same cell on the lean HTTP client, as a twin job whose rows carry `arcadedb_http_client_role` = "sensitivity" and whose run_id ends
+# in `_clientlean`. `BENCH_ARCADEDB_CLIENT_SENSITIVITY=0|1` overrides the instrument's default in both instruments. The PostgreSQL wire
+# has no adapter in this harness, so it is not among the twins.
+ARCADEDB_HTTP_ARMS = ("arcadedb_server", "arcadedb_graph_server", "arcadedb_e2_server", "arcadedb_sparse_server",
+                      "arcadedb_sparse_server_fp32", "arcadedb_dense_server", "arcadedb_dense_server_int8",
+                      "arcadedb_ts_doc_server", "arcadedb_ts_native_server")
+SENSITIVITY_CLIENT = "lean"
+
+
+def client_sensitivity_enabled():
+    raw = (os.environ.get("BENCH_ARCADEDB_CLIENT_SENSITIVITY") or "").strip()
+    if not raw:
+        return bench_common.next_instrument_default()
+    if raw not in ("0", "1"):
+        raise SystemExit(f"BENCH_ARCADEDB_CLIENT_SENSITIVITY={raw!r}: set it to 0 or 1, or unset it")
+    return raw == "1"
+
+
 def build_jobs(lanes, workloads_arg):
     """Jobs for these lanes, optionally narrowed to some workloads.
 
@@ -3834,6 +3868,9 @@ def build_jobs(lanes, workloads_arg):
                 jobs.append({"lane": lane, "backend": be, "workload": wl,
                              "script": script,
                              "run_id": f"{lane}_{be}_{wl}"})
+                if client_sensitivity_enabled() and be in ARCADEDB_HTTP_ARMS:
+                    jobs.append({**jobs[-1], "http_client": SENSITIVITY_CLIENT,
+                                 "run_id": f"{lane}_{be}_{wl}_client{SENSITIVITY_CLIENT}"})
     if want:
         missing = want - {j["workload"] for j in jobs}
         if missing:

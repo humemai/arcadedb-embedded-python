@@ -65,6 +65,7 @@ Pins follow DECISIONS #87 (the latest self-hosted stable release at campaign tim
 | Neo4j driver (Neo4j AND Memgraph arms) | `neo4j==6.3.1` | client package |
 | Neo4j driver Rust extension (the vendor's documented accelerator, DECISIONS #173) | `neo4j-rust-ext==6.3.1.0` | client package |
 | pgvector Python adapter (binary COPY, DECISIONS #174) | `pgvector==0.5.0` | client package |
+| ArcadeDB official Python driver (sync, httpx; the served ArcadeDB arms' headline client under BENCH_INSTRUMENT=2026-11, CAMPAIGN section 7 row 72) | `arcadedb-driver==0.2.0` | client package |
 
 **Held below the newest, and why.**
 

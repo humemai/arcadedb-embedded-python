@@ -119,7 +119,7 @@ def build(situation, n, heap):
     import arcadedb_embedded as arcadedb
     _rm(DB)
     db = arcadedb.create_database(
-        DB, jvm_kwargs={"heap_size": heap, "jvm_args": f"-Xms{heap}"})
+        DB, jvm_kwargs={"heap_size": heap, "jvm_args": bench_common.embedded_xms(heap) or None})
     c = db.command
     # ONE scratch type in every situation, holding no rows, so the write mode
     # is the SAME operation everywhere: insert one document, commit, close.

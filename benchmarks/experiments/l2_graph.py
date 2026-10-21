@@ -200,12 +200,12 @@ class ArcadeGraphEmbedded(Base):
     def connect(self):
         import arcadedb_embedded as arcadedb
         heap = os.environ.get("ARCADEDB_HEAP", "4g")
-        # -Xms pinned to -Xmx for parity with the server deployment
+        # -Xms pinned to -Xmx through 2026-10; left unset under 2026-11 (bench_common.embedded_xms)
         self.db = arcadedb.create_database(
             "/tmp/l2_arcade",
             # txWalFlush passed explicitly at both classes (DECISIONS #90).
             jvm_kwargs={"heap_size": heap,
-                        "jvm_args": bench_common.arcade_jvm_args(f"-Xms{heap}")})
+                        "jvm_args": bench_common.arcade_jvm_args(bench_common.embedded_xms(heap))})
         self.version = arcadedb.__version__
         self.durability = bench_common.arcade_durability_readback()
         for ddl in ["CREATE VERTEX TYPE Person",
@@ -232,7 +232,7 @@ class ArcadeGraphEmbedded(Base):
         heap = os.environ.get("ARCADEDB_HEAP", "4g")
         self.db = arcadedb.open_database(
             "/tmp/l2_arcade",
-            jvm_kwargs={"heap_size": heap, "jvm_args": f"-Xms{heap}"})
+            jvm_kwargs={"heap_size": heap, "jvm_args": bench_common.embedded_xms(heap) or None})
 
     def build(self, n_persons):
         # ArcadeDB's bulk graph path at the maintainers' recommended crash-safe
