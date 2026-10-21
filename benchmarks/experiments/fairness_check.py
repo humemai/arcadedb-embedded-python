@@ -1318,6 +1318,7 @@ PHASE_SPLIT_DECLARED = {
     ("l3d", "chroma_dense"): "builds its HNSW index during the load (`add`)",
     ("l3d", "qdrant_dense"): "builds its HNSW index in the background as points arrive, and the wait for it is inside the build timer",
     ("l3d", "qdrant_dense_int8"): "builds its HNSW index in the background as points arrive, and the wait for it is inside the build timer",
+    ("l3d", "qdrant_dense_pq"): "builds its HNSW index in the background as points arrive, and the wait for it is inside the build timer",
     ("l3d", "sqlite_vec_dense"): "has no separate index: `vec0` is a brute-force table",
     ("l3d", "sqlite_vec_dense_int8"): "has no separate index: `vec0` is a brute-force table",
     ("l3d", "surrealdb_dense"): "defines its index before the load, which builds it as rows arrive",

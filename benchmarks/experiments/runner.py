@@ -1563,6 +1563,12 @@ BACKENDS = {
 # The fp32 ablation on the served deployment shares the served arm's
 # topology, images, heap and GC settings to the byte; only the adapter's DDL
 # differs (l3_sparse.ArcadeServerFP32, 2026-09-07).
+# The dense lane's PQ arms (QUANTIZATION.md): each clones its sibling's entry, and they exist only under both gates
+# (instrument 2026-11 and BENCH_DENSE_PQ=1; bench_common.dense_pq_enabled).
+if bench_common.dense_pq_enabled():
+    for _pq_arm, _pq_sibling in bench_common.DENSE_PQ_ARMS.items():
+        BACKENDS[_pq_arm] = dict(BACKENDS[_pq_sibling])
+
 BACKENDS["arcadedb_sparse_server_fp32"] = dict(BACKENDS["arcadedb_sparse_server"])
 # Served arms for the lanes that had none (user, 2026-09-07: both deployments
 # for every ArcadeDB row). Same container shape as arcadedb_server: client
@@ -1940,6 +1946,10 @@ LANES = {
             "postgres_ts"],
            ["ingest"]),
 }
+
+# The PQ arms join the dense lane's roster under both gates only.
+if bench_common.dense_pq_enabled():
+    LANES["l3d"] = (LANES["l3d"][0], LANES["l3d"][1] + list(bench_common.DENSE_PQ_ARMS), LANES["l3d"][2])
 
 
 def _cpuset_size(cpuset):
@@ -2801,6 +2811,9 @@ MP_LABELS = {
     "mongodb_dense_int8": "mongo_int8", "memgraph_dense_int8": "memgraph_int8",
     "lancedb_dense_fp32": "lancedb_fp32", "arangodb_dense_int8": "arango_int8",
 }
+if bench_common.dense_pq_enabled():
+    MP_LABELS.update({"arcadedb_dense_embedded_pq": "pq", "arcadedb_dense_server_pq": "arcsrv_pq",
+                      "qdrant_dense_pq": "qdrant_pq", "milvus_dense_pq": "milvus_pq", "arangodb_dense_pq": "arango_pq"})
 
 
 # The sparse multipass overlay names its files sp_<arm>_<tier>.json, one per

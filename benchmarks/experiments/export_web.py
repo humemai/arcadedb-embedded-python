@@ -42,6 +42,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
+import bench_common  # noqa: E402
 from runner import BACKENDS, MEM_BY_SCALE, HEAP_BY_SCALE, arm_runs  # noqa: E402  (path set above)
 
 
@@ -643,6 +644,9 @@ DISPLAY_NAMES = {
     "neo4j_e2": "Neo4j (vector index)",
     "memgraph_e2": "Memgraph (vector index)", "ladybug_e2": "LadybugDB (vector extension)",
     "duckdb_e2": "DuckDB (vss + DuckPGQ)",
+    # The PQ row family (instrument 2026-11, BENCH_DENSE_PQ=1): the precision column says "pq"
+    "arcadedb_dense_embedded_pq": "ArcadeDB (embedded)", "arcadedb_dense_server_pq": "ArcadeDB (server)",
+    "qdrant_dense_pq": "Qdrant", "milvus_dense_pq": "Milvus", "arangodb_dense_pq": "ArangoDB",
     "qdrant_sparse": "Qdrant", "qdrant_dense": "Qdrant", "qdrant_dense_int8": "Qdrant",
     "qdrant_sparse_uint8": "Qdrant",
     "milvus_sparse": "Milvus", "milvus_dense": "Milvus", "milvus_dense_int8": "Milvus",
@@ -904,6 +908,14 @@ DENSE_PRECISION = {
     "arangodb_dense_int8": "int8",
     "falkordb_dense": "fp32",
     "ladybug_dense": "fp32",
+    # The PQ row family, a separate family beside fp32 and int8 (QUANTIZATION.md). Rows exist only from the
+    # 2026-11 instrument with BENCH_DENSE_PQ=1; main() drops any PQ row that does not carry that instrument.
+    #   arcadedb_dense_{embedded,server}_pq  LSM_VECTOR quantization PRODUCT, pqSubspaces 32, pqClusters 256
+    #   qdrant_dense_pq                      ProductQuantization x16, rescore with oversampling
+    #   milvus_dense_pq                      HNSW_PQ m 32, nbits 8, refine FP32 (milvus_index_type)
+    #   arangodb_dense_pq                    FAISS factory IVF<nLists>,PQ32x8 (ivf_factory)
+    "arcadedb_dense_embedded_pq": "pq", "arcadedb_dense_server_pq": "pq",
+    "qdrant_dense_pq": "pq", "milvus_dense_pq": "pq", "arangodb_dense_pq": "pq",
 }
 
 
@@ -2809,7 +2821,9 @@ def _cold_note(table_id, rows, columns=()):
 
 def _instrument_of(lane):
     """'2026-10', '2026-09', or a refusal when the lane's rows mix the two."""
-    seen = {str(r.get("instrument") or "2026-09") for r in _FROZEN_ROWS if r.get("lane") == lane}
+    # The PQ arms are their own row family on the next instrument: they do not make a lane "mixed"
+    seen = {str(r.get("instrument") or "2026-09") for r in _FROZEN_ROWS
+            if r.get("lane") == lane and r.get("backend") not in bench_common.DENSE_PQ_ARMS}
     if len(seen) > 1:
         raise SystemExit(f"REFUSING: lane {lane} carries rows from two instruments {sorted(seen)}; "
                          "a table cannot mix them (DECISIONS #84). Re-freeze from one campaign.")
@@ -9375,6 +9389,8 @@ def main() -> int:
         return 2
 
     rows = list(csv.DictReader(FROZEN.open()))
+    # The PQ row family is the next instrument's: a PQ row without instrument 2026-11 is not printed
+    rows = bench_common.drop_unstamped_pq_rows(rows)
     # THE CAP RULE, AT REPORT TIME (DECISIONS #188): an arm-cell whose pass-1 median is over its rule cap is shown censored
     # (_censored_cells) and its numbers are not shown, so its rows leave the tables here. Strict-class rows are the
     # durability table's and stay.
