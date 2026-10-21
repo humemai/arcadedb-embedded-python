@@ -18,10 +18,15 @@ regex-*.jar
 arcadedb-ha-raft-*.jar
 arcadedb-metrics-*.jar
 arcadedb-mongodbw-*.jar
-# Embedded-unused (verified 2026-07-05 by quarantine + full suite/examples gate;
-# micrometer must STAY - server startup requires it):
-commons-math3-*.jar
-jackson-*.jar
-snappy-java-*.jar
+# Verified 2026-07-05 by quarantine + full suite/examples gate; micrometer must STAY
+# (server startup requires it):
 arcadedb-tracing-*.jar
 jline-*.jar
+#
+# NOT excluded, on purpose: that gate ran the embedded suite only, and these are
+# reached in server mode (tests/test_jar_closure.py finds this class of mistake):
+#   jackson-*.jar         swagger-core builds GET /api/v1/openapi.json with core,
+#                         annotations, databind, dataformat-yaml and datatype-jsr310
+#   snappy-java-*.jar     CompressedBodyDecoder and the Prometheus remote read and
+#                         write routes
+#   commons-math3-*.jar   jvector's ScoreTracker$TwoPhaseTracker

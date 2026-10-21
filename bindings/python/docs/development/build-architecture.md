@@ -182,8 +182,16 @@ The JARs are filtered later, by the build that packages them (see
 
 **Format:** One glob pattern per line; `#` starts a comment. The file is the list: it drops
 the engine's Gremlin, gRPC, MongoDB, Raft HA, metrics, and tracing modules, the GraalVM
-JavaScript jars, and a few third-party libraries the embedded engine does not use. Read the
-file for the current patterns.
+JavaScript jars, and a few third-party libraries nothing in the wheel refers to. Read the file
+for the current patterns.
+
+**Check before you add a pattern.** A jar that the embedded test suite never loads can still be
+needed by server mode or by another jar: Jackson, snappy-java, and commons-math3 were excluded
+as "embedded-unused" and broke `GET /api/v1/openapi.json`, snappy-compressed request bodies, and
+a jvector code path. `tests/test_jar_closure.py` reads the class files of the jars that ship and
+fails on a reference into a package no shipped jar provides, so it names the jar to put back.
+The few references left (optional integrations of Micrometer and JBoss Logging, OSGi activators,
+the console's jline) are listed in that test, each with a reason.
 
 **Used by:**
 

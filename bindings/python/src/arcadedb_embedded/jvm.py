@@ -586,11 +586,15 @@ def _build_jvm_args(
     if not any("java.base/java.lang=" in arg for arg in merged_args):
         merged_args.append("--add-opens=java.base/java.lang=ALL-UNNAMED")
 
-    # Silence Truffle/GraalVM interpreter warning on standard HotSpot JDKs
+    # The wheel does not ship GraalJS (js-language, truffle, icu4j and regex are in
+    # scripts/jar_exclusions.txt), so the polyglot engine would start with no
+    # language to register and log "GraalPolyglotEngine: no languages found" at the
+    # first SQL command. Off by default; pass -Darcadedb.polyglotEngineEnabled=true
+    # in jvm_args or ARCADEDB_JVM_ARGS to turn it back on.
     if not any(
-        arg.startswith("-Dpolyglot.engine.WarnInterpreterOnly=") for arg in merged_args
+        arg.startswith("-Darcadedb.polyglotEngineEnabled=") for arg in merged_args
     ):
-        merged_args.append("-Dpolyglot.engine.WarnInterpreterOnly=false")
+        merged_args.append("-Darcadedb.polyglotEngineEnabled=false")
 
     # Enable compact object headers (JDK 25+) to reduce heap footprint
     if not any("UseCompactObjectHeaders" in arg for arg in merged_args):

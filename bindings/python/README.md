@@ -77,7 +77,7 @@ The `arcadedb-embedded` package is platform-specific and self-contained:
 **Package Contents (the 26.10.1 Linux x86_64 wheel; varies by platform and version):**
 
 - **Wheel size (compressed)**: ~69 MiB
-- **ArcadeDB JARs (uncompressed)**: ~34 MiB across 64 JARs
+- **ArcadeDB JARs (uncompressed)**: ~41 MiB across 71 JARs
 - **Bundled JRE (uncompressed)**: ~63 MiB (platform-specific Java 25 runtime via jlink)
 - **Installed package size**: ~97 MiB
 

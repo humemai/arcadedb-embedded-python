@@ -33,14 +33,17 @@ Every wheel is platform-specific, built on a native runner of its platform, and 
 JRE for that platform, so pip needs no hint to pick the right one. Unpacked, the Linux
 x86_64 wheel holds:
 
-- **ArcadeDB JARs**: ~34 MiB across 64 JARs, including the optional server and Studio stack
+- **ArcadeDB JARs**: ~41 MiB across 71 JARs, including the optional server and Studio stack
   ([Server Mode](../guide/server.md#what-it-costs-you) lists it; `arcadedb.jar_fingerprint()`
   counts and hashes the installed JARs)
 - **Bundled JRE**: ~63 MiB (Java 25 runtime trimmed with jlink to 20 modules)
 
 Engine modules the bindings do not use are left out to keep the wheel small: the gRPC and
 MongoDB wire protocols, Raft HA, and Gremlin among them (`scripts/jar_exclusions.txt` in the
-repository has the full list). The optional server is in-process, so its lifetime is your
+repository has the full list). **JavaScript is not available**: the GraalJS jars are left out, so
+`DEFINE FUNCTION ... LANGUAGE js` fails and the polyglot scripting engine is switched off by
+default (see below); define functions in SQL or openCypher, or register a Python function with
+`register_function()`. The optional server is in-process, so its lifetime is your
 Python process's, and it bundles the Postgres, Redis, and Bolt wire protocols (opt-in); see
 [Access Methods](../api-access-methods.md).
 
@@ -164,7 +167,7 @@ JVM arguments use two flag types:
 | `--add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED` | Reflection into atomic internals used by the engine |
 | `--add-opens=java.base/java.nio.channels.spi=ALL-UNNAMED` | Reflection into NIO channel SPI for memory-mapped I/O |
 | `--add-opens=java.base/java.lang=ALL-UNNAMED` | Reflection into core `java.lang` for engine bootstrap |
-| `-Dpolyglot.engine.WarnInterpreterOnly=false` | Silence Truffle/GraalVM warning on standard HotSpot JDKs |
+| `-Darcadedb.polyglotEngineEnabled=false` | Keep the GraalVM polyglot scripting engine off. The wheel ships no GraalVM language (GraalJS is excluded), so an enabled engine would only log "no languages found" at the first SQL command. Pass `-Darcadedb.polyglotEngineEnabled=true` to turn it back on |
 | `-XX:+UseCompactObjectHeaders` | Reduce per-object header overhead to lower heap usage |
 | `-Djava.awt.headless=true` | Suppress AWT/display initialisation |
 

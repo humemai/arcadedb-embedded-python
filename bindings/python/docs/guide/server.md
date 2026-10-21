@@ -15,6 +15,8 @@ the package sizes are in
 | `arcadedb-studio` | 2.88 | web UI assets, **no** `.class` files |
 | `undertow-core` | 2.33 | HTTP server, 1,510 classes |
 | `arcadedb-server` | 1.09 | the server itself, 373 classes |
+| `jackson-*` (5 JARs) | 2.59 | the OpenAPI spec at `/api/v1/openapi.json` |
+| `snappy-java` | 2.45 | snappy-compressed request bodies, Prometheus remote read and write |
 | `micrometer-core` | 0.92 | metrics, required at server startup |
 | `xnio-api` | 0.59 | undertow's IO layer |
 | `wildfly-common` | 0.28 | |
@@ -24,7 +26,7 @@ the package sizes are in
 | `jboss-logging` | 0.06 | |
 | `micrometer-commons` | 0.05 | |
 | `wildfly-client-config` | 0.05 | |
-| **total** | **8.58** | |
+| **total** | **13.62** | |
 
 **Memory and CPU, if you never call `create_server()`.** The JARs sit on the
 classpath and the JVM loads classes lazily, so nothing is initialised, no

@@ -95,7 +95,8 @@ SQL and OpenCypher run through `db.query()` and `db.command()`:
 - ✅ OpenCypher
 
 The GraphQL module ships in the wheel, but no test exercises it from Python. Gremlin and
-the MongoDB query language are not bundled (`scripts/jar_exclusions.txt`).
+the MongoDB query language are not bundled (`scripts/jar_exclusions.txt`), and neither is
+JavaScript: GraalJS is left out, so `DEFINE FUNCTION ... LANGUAGE js` is not available.
 
 **ResultSet & Results:**
 
