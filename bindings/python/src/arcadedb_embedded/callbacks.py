@@ -9,6 +9,7 @@ implements the engine's interfaces and forwards each call to a JPype proxy defin
 
 import inspect
 import re
+import threading
 import traceback
 import weakref
 from typing import Callable, Optional, Tuple
@@ -45,6 +46,14 @@ def _bridge_class(name: str):
         ) from e
 
 
+# A KeyboardInterrupt raised inside a Python function or callback cannot cross the engine as it
+# is: it ends the statement as a Java exception. It is remembered per thread, and the place that
+# turns the statement's Java exception into an ArcadeDBError raises the KeyboardInterrupt instead
+# (chained from that ArcadeDBError), so Ctrl-C reaches the caller as KeyboardInterrupt whether the
+# signal landed in the function, in the engine, or between the two.
+_PENDING = threading.local()
+
+
 def _raise_to_java(error: BaseException):
     """Hand a Python exception to the engine as a Java RuntimeException.
 
@@ -55,7 +64,51 @@ def _raise_to_java(error: BaseException):
         "Python callback raised:\n%s",
         "".join(traceback.format_exception(type(error), error, error.__traceback__)),
     )
+    if isinstance(error, KeyboardInterrupt):
+        _PENDING.interrupt = error
+    elif isinstance(error, RuntimeError) and "Fatal error occurred" in str(error):
+        # JPype's own race with Ctrl-C (test_sigint.py, #179): its SIGINT handler interrupts the
+        # Java thread first, and a Java sleep or wait in the engine then fails inside JPype with
+        # this RuntimeError before Python's handler runs. It means Ctrl-C.
+        _PENDING.interrupt = KeyboardInterrupt(
+            "interrupted while a Python function was called"
+        )
+        _PENDING.interrupt.__cause__ = error
     raise jpype.JClass("java.lang.RuntimeException")(f"{type(error).__name__}: {error}")
+
+
+def clear_pending_interrupt() -> None:
+    """Forget a KeyboardInterrupt left by an earlier statement (called when a statement starts)."""
+    _PENDING.interrupt = None
+
+
+def _escaped_python_exception(exc: BaseException) -> bool:
+    """True when a Java exception chain holds JPype's proxy for a Python exception that left a callback.
+
+    Only an exception that arrives outside the callback's own ``try`` can do that, and that is
+    in practice a KeyboardInterrupt raised by the signal handler on entering the callback.
+    """
+    try:
+        cause = exc
+        for _ in range(16):
+            if cause is None:
+                return False
+            if "PyExceptionProxy" in str(cause.getClass().getName()):
+                return True
+            cause = cause.getCause()
+    except Exception:  # nosec B110 - not a Java exception: nothing escaped
+        pass
+    return False
+
+
+def raise_pending_interrupt(error: BaseException, java_exc: BaseException) -> None:
+    """Raise the KeyboardInterrupt a Python callback left, chained from ``error``, if there is one."""
+    interrupt = getattr(_PENDING, "interrupt", None)
+    _PENDING.interrupt = None
+    if interrupt is None and _escaped_python_exception(java_exc):
+        interrupt = KeyboardInterrupt("interrupted while a Python function was called")
+    if interrupt is not None:
+        raise interrupt from error
 
 
 def _arity(fn: Callable) -> Tuple[int, int]:
@@ -86,48 +139,84 @@ def _arity(fn: Callable) -> Tuple[int, int]:
     return minimum, maximum
 
 
+# The proxy classes are defined once, on first use (the JVM must be running, so not at import):
+# a @JImplements class defined on every registration leaked about 6 KB of Python heap per
+# registration, which neither the engine's unregister nor gc gave back. State is per instance.
+_PROXY_CLASSES = {}
+
+
+def _function_proxy_class():
+    cls = _PROXY_CLASSES.get("function")
+    if cls is None:
+
+        @jpype.JImplements(
+            _bridge_class("com.arcadedb.python.PythonFunctions$Callback")
+        )
+        class _PythonFunction:
+            def __init__(self, fn, database_ref):
+                self._fn = fn
+                self._database_ref = database_ref
+
+            @jpype.JOverride
+            def call(self, args):
+                from .core import _wrap_java_record
+
+                try:
+                    values = []
+                    for arg in args:
+                        value = convert_java_to_python(arg)
+                        values.append(_wrap_java_record(value, self._database_ref()))
+                    result = convert_python_to_java(self._fn(*values))
+                    if result is not None:
+                        # Convert to a Java Object here, inside the try: left to JPype's return
+                        # conversion an unconvertible value (a numpy array, an int past 2**63)
+                        # reaches the engine as an opaque org.jpype.PyExceptionProxy.
+                        result = jpype.JObject(result, jpype.JObject)
+                    return result
+                except BaseException as e:  # pylint: disable=broad-except
+                    _raise_to_java(e)
+
+        cls = _PROXY_CLASSES["function"] = _PythonFunction
+    return cls
+
+
+def _event_proxy_class():
+    cls = _PROXY_CLASSES.get("event")
+    if cls is None:
+
+        @jpype.JImplements(
+            _bridge_class("com.arcadedb.python.PythonRecordEvents$Callback")
+        )
+        class _PythonListener:
+            def __init__(self, fn, is_before, database_ref):
+                self._fn = fn
+                self._is_before = is_before
+                self._database_ref = database_ref
+
+            @jpype.JOverride
+            def call(self, record):
+                from .core import _wrap_java_record
+
+                try:
+                    result = self._fn(_wrap_java_record(record, self._database_ref()))
+                except BaseException as e:  # pylint: disable=broad-except
+                    _raise_to_java(e)
+                return not (self._is_before and result is False)
+
+        cls = _PROXY_CLASSES["event"] = _PythonListener
+    return cls
+
+
 def _function_callback(fn: Callable, database):
     """A PythonFunctions.Callback proxy: Java arguments in, converted result out."""
-    from .core import _wrap_java_record
-
     # weak: the engine holds this proxy, so a strong Database here would never be released
-    database_ref = weakref.ref(database)
-
-    @jpype.JImplements(_bridge_class("com.arcadedb.python.PythonFunctions$Callback"))
-    class _PythonFunction:
-        @jpype.JOverride
-        def call(self, args):
-            try:
-                values = []
-                for arg in args:
-                    value = convert_java_to_python(arg)
-                    values.append(_wrap_java_record(value, database_ref()))
-                return convert_python_to_java(fn(*values))
-            except BaseException as e:  # pylint: disable=broad-except
-                _raise_to_java(e)
-
-    return _PythonFunction()
+    return _function_proxy_class()(fn, weakref.ref(database))
 
 
 def _event_callback(event: str, fn: Callable, database):
     """A PythonRecordEvents.Callback proxy: the record wrapped, a before event may veto."""
-    from .core import _wrap_java_record
-
-    is_before = event.startswith("before_")
     # weak: the engine holds this proxy, so a strong Database here would never be released
-    database_ref = weakref.ref(database)
-
-    @jpype.JImplements(_bridge_class("com.arcadedb.python.PythonRecordEvents$Callback"))
-    class _PythonListener:
-        @jpype.JOverride
-        def call(self, record):
-            try:
-                result = fn(_wrap_java_record(record, database_ref()))
-            except BaseException as e:  # pylint: disable=broad-except
-                _raise_to_java(e)
-            return not (is_before and result is False)
-
-    return _PythonListener()
+    return _event_proxy_class()(fn, event.startswith("before_"), weakref.ref(database))
 
 
 class FunctionRegistration:

@@ -129,7 +129,7 @@ What must pass before a change is green, beyond the tests themselves:
 - **No skips** (`test` job): a skipped test did not run, so the job fails on any skip in the
   JUnit XML (`scripts/check_test_skips.py`; its list of accepted skips is empty). A test file
   that cannot run on a platform is left out of collection in `tests/conftest.py`
-  (`collect_ignore`: `test_sigint.py` on Windows, `test_docs_examples.py` on the upstream pull
+  (`collect_ignore`: `test_sigint.py` and `test_python_function_interrupt.py` on Windows, `test_docs_examples.py` on the upstream pull
   request branch, which has no `docs/`), so it is not reported as skipped. A skip for a
   missing package (`could not import`, which is what `pytest.importorskip` gives, so call it
   without its own `reason=`) or for a feature the wheel always ships is therefore a failure,

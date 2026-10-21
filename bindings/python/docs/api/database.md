@@ -62,7 +62,7 @@ Open an existing database.
 
 - `path` (str): Path to the existing database
 - `jvm_kwargs` (Optional[dict]): Optional JVM args passed to `start_jvm()` (e.g. `{"heap_size": "8g"}`)
-- `read_only` (bool): Open in `ComponentFile.MODE.READ_ONLY`. Reads, queries and scans work; every write, schema change and transaction begin raises `ArcadeDBError` ("read only database"). Default `False`
+- `read_only` (bool): Open in `ComponentFile.MODE.READ_ONLY`. Reads, queries and scans work; every write and schema change raises `ArcadeDBError` ("read only database"). `begin()` and `with db.transaction():` do not raise on entry: the first write does, and so does the commit; reads and queries need no transaction. Default `False`
 
 **Returns:**
 
@@ -1049,6 +1049,12 @@ arrives as a `Document`, `Vertex` or `Edge`) and the return value goes back thro
 `Python function 'explode' failed: ValueError: bad input`. The JVM never sees a Python
 exception. The traceback goes to the `arcadedb_embedded.callbacks` debug log. As for any
 query, an error raised while the rows are produced surfaces when you read the result set.
+A `KeyboardInterrupt` (Ctrl-C) in `fn`, or a signal that lands while the statement runs, is
+the one exception: the statement is aborted and the caller gets a `KeyboardInterrupt`,
+chained from the `ArcadeDBError`, whether the signal landed in `fn`, in the engine, or
+between the two. The database works as before. A return value that cannot be converted
+(a numpy array, an integer past 2\*\*63) fails the statement with a `TypeError` or
+`OverflowError` in the `ArcadeDBError` text.
 
 **Threading:** the engine may call `fn` on its own threads (an async executor's writers, a
 parallel scan). JPype attaches each such thread, and the GIL serializes the calls, so `fn`

@@ -16,6 +16,8 @@ collect_ignore = []
 if sys.platform == "win32":
     # test_sigint.py sends SIGINT to a child process, which Windows cannot deliver
     collect_ignore.append("test_sigint.py")
+    # test_python_function_interrupt.py sends SIGINT to its own process, which Windows cannot do either
+    collect_ignore.append("test_python_function_interrupt.py")
     # LadybugDB's compiled module does not load in this process on Windows (it falls back to a C-API library its
     # wheel does not ship), so the Cypher half of the equivalence checks runs on Linux and macOS (#347)
     collect_ignore.append("test_equivalence_ladybug.py")

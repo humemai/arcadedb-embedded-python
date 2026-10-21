@@ -14,7 +14,13 @@ from typing import Any, Callable, List, Optional
 import jpype
 
 from ._logging import get_logger
-from .callbacks import EventHandle, FunctionRegistration, register_event
+from .callbacks import (
+    EventHandle,
+    FunctionRegistration,
+    clear_pending_interrupt,
+    raise_pending_interrupt,
+    register_event,
+)
 from .exceptions import ArcadeDBError, _retry_verdict
 from .graph import Document, Edge, Vertex
 from .graph_batch import GraphBatch
@@ -373,6 +379,7 @@ class Database:
         is the positional list itself; ``None`` binds as null.
         """
         self._check_not_closed()
+        clear_pending_interrupt()
         try:
             if args:
                 java_result = _through_bridge(
@@ -386,7 +393,10 @@ class Database:
                 java_result = self._java_db.query(language, command)
             return ResultSet(java_result, self)
         except Exception as e:
-            raise ArcadeDBError(f"Query failed: {e}") from e
+            error = ArcadeDBError(f"Query failed: {e}")
+            error.__cause__ = e
+            raise_pending_interrupt(error, e)
+            raise error from e
 
     def command(self, language: str, command: str, *args) -> Optional[ResultSet]:
         """Execute a command (non-idempotent operation).
@@ -394,6 +404,7 @@ class Database:
         Parameters bind as in :meth:`query`.
         """
         self._check_not_closed()
+        clear_pending_interrupt()
         try:
             if args:
                 java_result = _through_bridge(
@@ -410,7 +421,10 @@ class Database:
                 return ResultSet(java_result, self)
             return None
         except Exception as e:
-            raise ArcadeDBError(f"Command failed: {e}") from e
+            error = ArcadeDBError(f"Command failed: {e}")
+            error.__cause__ = e
+            raise_pending_interrupt(error, e)
+            raise error from e
 
     def run_in_transaction(self, fn, retries: int = 12, backoff_s: float = 0.005):
         """
@@ -1714,7 +1728,11 @@ class Database:
         value is converted back with the bindings' type conversion, so ``fn`` may return
         ``None``, a number, a string, a bool, a ``Decimal``, a ``datetime``, a list, or a
         dict. An exception raised in ``fn`` fails the statement with an ``ArcadeDBError``
-        that names the function and the Python exception.
+        that names the function and the Python exception. A ``KeyboardInterrupt`` (Ctrl-C)
+        is the one exception to that: the statement is aborted and the caller gets a
+        ``KeyboardInterrupt``, chained from the ``ArcadeDBError``, wherever the signal
+        landed. A numeric argument costs about 30 bytes of Python memory per call that
+        JPype 1.7.1 does not give back (see the Python functions guide).
 
         The engine registers functions for the whole process, not for one database: every
         database in this process sees the function, and a function stays registered until
@@ -2234,9 +2252,10 @@ class DatabaseFactory:
 
         Args:
             read_only: Open in ``ComponentFile.MODE.READ_ONLY``. Reads, queries
-                and scans work; every write, schema change and transaction
-                begin raises ``ArcadeDBError``. Use it to inspect a database
-                that must not change, such as a backup restored for audit.
+                and scans work; every write and schema change raises
+                ``ArcadeDBError``. ``begin()`` does not raise: the first write
+                does, and so does the commit. Use it to inspect a database that
+                must not change, such as a backup restored for audit.
         """
         try:
             if read_only:

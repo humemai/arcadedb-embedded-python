@@ -139,12 +139,99 @@ def test_function_exception_becomes_query_error(db):
 
 
 def test_function_base_exception_does_not_reach_the_jvm(db):
-    def interrupt():
+    def leave():
+        raise SystemExit(3)
+
+    db.register_function("leave", leave)
+    with pytest.raises(arcadedb.ArcadeDBError, match="SystemExit"):
+        db.query("sql", "SELECT leave() AS x").to_list()
+    assert db.query("sql", "SELECT 1 + 1 AS two").first().get("two") == 2
+
+
+def test_keyboard_interrupt_in_a_function_reaches_the_caller_as_one(db):
+    """Ctrl-C always arrives as KeyboardInterrupt, chained from the ArcadeDBError that names the
+    function; the statement is aborted and the database works as before."""
+    _insert_people(db, ["Ann", "Bob"])
+
+    def interrupt(value):
         raise KeyboardInterrupt("stop")
 
     db.register_function("interrupt", interrupt)
-    with pytest.raises(arcadedb.ArcadeDBError, match="KeyboardInterrupt"):
-        db.query("sql", "SELECT interrupt() AS x").to_list()
+    for read in (
+        lambda: db.query("sql", "SELECT interrupt(name) AS x FROM Person").to_list(),
+        lambda: list(db.query("sql", "SELECT interrupt(name) AS x FROM Person")),
+        lambda: db.command("sql", "SELECT interrupt(name) AS x FROM Person").to_list(),
+    ):
+        with pytest.raises(KeyboardInterrupt) as error:
+            read()
+        assert isinstance(error.value.__cause__, arcadedb.ArcadeDBError)
+        assert "interrupt" in str(error.value.__cause__)
+    assert _names(db) == ["Ann", "Bob"]
+
+
+def test_a_stale_interrupt_does_not_turn_a_later_error_into_one(db):
+    def interrupt(value):
+        raise KeyboardInterrupt("stop")
+
+    db.register_function("interrupt", interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        db.query("sql", "SELECT interrupt(1) AS x").to_list()
+    with pytest.raises(arcadedb.ArcadeDBError):
+        db.query("sql", "SELEC nonsense")
+
+
+def test_unconvertible_return_values_are_readable_errors(db):
+    import numpy as np
+
+    for label, value in (
+        ("TypeError", np.array([1, 2])),
+        ("OverflowError", 2**63),
+        ("TypeError", object()),
+    ):
+        db.register_function("bad", lambda x, value=value: value, replace=True)
+        with pytest.raises(arcadedb.ArcadeDBError) as error:
+            db.query("sql", "SELECT bad(1) AS x").to_list()
+        assert "bad" in str(error.value)
+        assert label in str(error.value)
+        assert "PyExceptionProxy" not in str(error.value)
+    db.register_function("bad", lambda x: 2**62, replace=True)
+    assert db.query("sql", "SELECT bad(1) AS x").first().get("x") == 2**62
+
+
+def test_registering_again_and_again_does_not_grow_the_python_heap(db):
+    """The JPype proxy class is defined once, not per registration (it leaked about 6 KB each)."""
+    import gc
+    import time
+    import tracemalloc
+
+    import jpype
+
+    def settle():
+        # JPype frees a proxy's Python object once the JVM has collected the Java side
+        jpype.JClass("java.lang.System").gc()
+        time.sleep(0.3)
+        gc.collect()
+
+    def cycle(n):
+        for _ in range(n):
+            db.register_function("churn", lambda x: x, replace=True)
+            handle = db.on("after_create", lambda record: None, "Person")
+            handle.remove()
+        db.unregister_function("churn")
+
+    cycle(300)  # warm-up: caches, the first proxy classes
+    settle()
+    tracemalloc.start()
+    try:
+        before, _ = tracemalloc.get_traced_memory()
+        cycle(2000)
+        settle()
+        after, _ = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert (
+        after - before < 1_000_000
+    )  # it was about 24,000,000 when each call defined a class
 
 
 def test_function_argument_count_is_inferred(db):
@@ -487,6 +574,40 @@ def test_after_callback_exception_rolls_the_transaction_back(db):
     handle.remove()
     _insert_people(db, ["z"])
     assert _names(db) == ["z"]
+
+
+def test_save_and_delete_raise_arcadedb_error_when_a_callback_fails(db):
+    """Document.save() and delete() wrap the engine's Java exceptions like the rest of the API."""
+
+    def explode(record):
+        raise RuntimeError("no today")
+
+    handle = db.on("before_create", explode, "Person")
+    with pytest.raises(arcadedb.ArcadeDBError, match="before_create.*no today"):
+        with db.transaction():
+            db.new_document("Person").set("name", "x").save()
+    handle.remove()
+    assert _names(db) == []
+
+    with db.transaction():
+        db.new_document("Person").set("name", "y").save()
+    handle = db.on("before_delete", explode, "Person")
+    with pytest.raises(arcadedb.ArcadeDBError, match="before_delete.*no today"):
+        with db.transaction():
+            db.query("sql", "SELECT FROM Person").first().get_element().delete()
+    handle.remove()
+    assert _names(db) == ["y"]
+
+    # a veto (False) is not an error: the record is just not written
+    veto = db.on("before_create", lambda record: False, "Person")
+    with db.transaction():
+        db.new_document("Person").set("name", "z").save()
+    veto.remove()
+    assert _names(db) == ["y"]
+
+    # without a transaction the engine refuses, as an ArcadeDBError
+    with pytest.raises(arcadedb.ArcadeDBError):
+        db.new_document("Person").set("name", "w").save()
 
 
 def test_event_registration_errors(db):

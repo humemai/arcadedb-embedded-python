@@ -42,6 +42,21 @@ def test_read_only_open_reads_and_refuses_writes(populated_path):
         assert not db.schema.exists_type("Other")
 
 
+def test_read_only_begin_is_not_refused_the_write_and_the_commit_are(populated_path):
+    """begin() returns on a read-only database; the first write raises, and so does the commit
+    (the engine starts the transaction then). A write through Document.save() is an
+    ArcadeDBError like the rest of the API. Reads need no transaction."""
+    with arcadedb.open_database(populated_path, read_only=True) as db:
+        db.begin()  # not refused
+        assert db.count_type("Note") == 2
+        with pytest.raises(ArcadeDBError, match="(?i)read.?only"):
+            db.new_document("Note").set("n", 3).save()
+        with pytest.raises(ArcadeDBError, match="(?i)read.?only"):
+            db.commit()
+        assert db.count_type("Note") == 2
+        assert db.query("sql", "SELECT n FROM Note").to_list()
+
+
 def test_factory_open_read_only_and_default_is_writable(populated_path):
     factory = arcadedb.DatabaseFactory(populated_path)
 
