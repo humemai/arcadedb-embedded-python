@@ -33,6 +33,8 @@ final class FastOps {
 
   static float call(final int which, final MemorySegment symbol, final MemorySegment a, final long aoffset,
       final MemorySegment b, final long boffset, final long length) {
+    if (FastMode.MODE != 0)
+      return FfmKernels.call(which, symbol, a, aoffset, b, boffset, length);
     long fn = ADDRESS[which];
     if (fn == 0)
       ADDRESS[which] = fn = symbol.address();

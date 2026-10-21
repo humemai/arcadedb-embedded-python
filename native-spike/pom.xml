@@ -14,6 +14,8 @@
     <arcadedb.version>26.10.2</arcadedb.version>
     <!-- Same as native/pom.xml native.graalvm.version: the builder (GraalVM CE 25.0.2) must match. -->
     <graalvm.version>25.0.2</graalvm.version>
+    <!-- phase 5: -Dnative.opt=-O2 (CE: -O2 and -O3 are the same) and -Dgraalvm.version=25.4.4.1.1 for the newest CE; -Os stays the default for the old numbers -->
+    <native.opt>-Os</native.opt>
     <native-maven-plugin.version>1.1.14</native-maven-plugin.version>
     <maven.compiler.release>25</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -329,13 +331,14 @@
           <sharedLibrary>true</sharedLibrary>
           <metadataRepository><enabled>true</enabled></metadataRepository>
           <buildArgs>
-            <buildArg>-Os</buildArg>
+            <buildArg>${native.opt}</buildArg>
             <buildArg>--no-fallback</buildArg>
             <buildArg>-H:+ReportExceptionStackTraces</buildArg>
             <buildArg>--enable-url-protocols=http,https</buildArg>
             <buildArg>--add-modules=jdk.incubator.vector</buildArg>
             <buildArg>--enable-native-access=ALL-UNNAMED</buildArg>
             <buildArg>--initialize-at-run-time=org.wildfly.common.net.HostName</buildArg>
+            <buildArg>--initialize-at-build-time=io.github.jbellis.jvector.vector.cnative.FastMode,io.github.jbellis.jvector.vector.cnative.FfmKernels</buildArg>
             <buildArg>--initialize-at-build-time=org.slf4j,org.slf4j.helpers,org.slf4j.spi,org.slf4j.event,org.slf4j.jul</buildArg>
             <!-- NO -H:IncludeResources=.* : resources are listed in META-INF/native-image/.../reachability-metadata.json -->
           </buildArgs>
