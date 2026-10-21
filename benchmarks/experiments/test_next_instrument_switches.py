@@ -34,7 +34,7 @@ def test_sparse_warmup_stays_off_under_2026_10():
 
 def test_sparse_warmup_defaults_on_under_2026_11():
     import bench_common
-    assert run(WARM, "2026-11")[1] == str(bench_common.SPARSE_WARMUP_DEFAULT) == "100"
+    assert run(WARM, "2026-11")[1] == str(bench_common.SPARSE_WARMUP_DEFAULT) == "1000"
 
 
 def test_sparse_warmup_explicit_value_wins_in_both_instruments():
@@ -43,6 +43,45 @@ def test_sparse_warmup_explicit_value_wins_in_both_instruments():
     assert run(WARM, "2026-11", BENCH_SPARSE_WARMUP="off")[1] == "0"
     assert run(WARM, "2026-11", BENCH_SPARSE_WARMUP="0")[1] == "0"
     assert run(WARM, "2026-10", BENCH_SPARSE_WARMUP="0")[0] != 0      # 2026-10 still refuses a non-positive count
+
+
+def _warm_module(monkeypatch):
+    sys.path.insert(0, HERE)
+    import bench_common
+    import l3_sparse
+    monkeypatch.setattr(bench_common, "INSTRUMENT", "2026-11")
+    return l3_sparse
+
+
+def test_warmup_queries_are_the_datasets_extra_queries_and_never_the_timed_ones(monkeypatch):
+    S = _warm_module(monkeypatch)
+    allq = [([i], [1.0]) for i in range(30)]
+    monkeypatch.setattr(S, "gen_queries", lambda n: allq[:n])
+    got, src = S.disjoint_warmup_queries(10, 12, 1000)
+    assert src == "extra_queries" and got == allq[12:22]
+    assert not set(map(str, got)) & set(map(str, allq[:12]))
+
+
+def test_warmup_falls_back_to_a_fixed_sample_of_documents_when_the_dataset_has_no_extra_queries(monkeypatch):
+    S = _warm_module(monkeypatch)
+    timed = [([i], [1.0]) for i in range(12)]
+    monkeypatch.setattr(S, "gen_queries", lambda n: timed[:n])
+    monkeypatch.setattr(S, "gen_docs", lambda n, *a, **k: iter([(i, [1000 + i], [0.5]) for i in range(n)]))
+    a, src = S.disjoint_warmup_queries(10, 12, 500)
+    b, _ = S.disjoint_warmup_queries(10, 12, 500)
+    assert src == "document_sample" and a == b and len(a) == 10 and all(q[0][0] >= 1000 for q in a)
+
+
+def test_the_lane_warms_up_on_disjoint_queries_under_2026_11_and_stamps_count_and_source(monkeypatch, tmp_path):
+    S = _warm_module(monkeypatch)
+    import test_idle_and_warmup as T
+    warm = [([900 + i], [1.0]) for i in range(7)]
+    monkeypatch.setattr(S, "disjoint_warmup_queries", lambda n, nt, nd: (warm[:n], "extra_queries"))
+    monkeypatch.setenv(S.WARMUP_ENV, "7")
+    row, calls = T._run_lane(monkeypatch, tmp_path)
+    searches = [c for c in calls if c[0] == "search"]
+    assert searches[:7] == [("search", tuple(q[0])) for q in warm] and searches[7:] == T.TIMED
+    assert row["sparse_warmup_queries"] == 7 and row["sparse_warmup_source"] == "extra_queries"
 
 
 # ------------------------------------------------------------------------------------------------ the idle-state hold (row 81)

@@ -45,7 +45,7 @@ def instrument_at_least(version):
 # variable of each switch keeps working as an override in both instruments: a value set by the launcher always wins over the
 # instrument's default, and rows stamp what was used, as before. One place holds the defaults so a test can read them.
 NEXT_INSTRUMENT = "2026-11"
-SPARSE_WARMUP_DEFAULT = 100        # untimed searches per engine; a query set smaller than this is warmed in full
+SPARSE_WARMUP_DEFAULT = 1000       # untimed searches per engine: one full round, as the study that motivated the warm-up used
 CPU_DMA_LATENCY_DEFAULT_US = 0     # idle-exit latency target held for each timed cell: no sleep state deeper than polling
 LARGE_RESULT_PATH_ENV = "BENCH_LARGE_RESULT_PATH"   # "arrow" or "rows": how a large result (l4 q_high, q_groupby) is read
 
