@@ -1062,10 +1062,9 @@ when it is closed. Register before concurrent statements start: the engine's fun
 is not safe to change while another thread resolves a name. An aggregate (one result per
 group) cannot be written this way.
 
-**Cost:** each call is one round trip between the engine and Python, about 5 to 10
-microseconds on a laptop core (see [Python functions](../guide/core/queries.md#python-functions-in-sql-and-opencypher)
-for how it was measured). A statement that calls `fn` on a million rows spends several
-seconds in the call; compute in SQL where a SQL expression can do the work.
+**Cost:** each call is one round trip between the engine and Python, paid once per row a
+statement calls `fn` on (see [Python functions](../guide/core/queries.md#python-functions-in-sql-and-opencypher));
+compute in SQL where a SQL expression can do the work.
 
 **Raises:**
 

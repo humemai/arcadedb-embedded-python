@@ -27,8 +27,8 @@ The database is created under `./my_test_databases/python_functions_events` (`--
 ## Notes
 
 - Synthetic data, no download; a few seconds end to end.
-- The per-call cost is one round trip between the engine and Python, about 5 to 10
-  microseconds on a laptop core. It is why a SQL expression is better where one can do the
-  work.
+- Each call is one round trip between the engine and Python, and the example prints what
+  that costs per row on your machine. It is why a SQL expression is better where one can do
+  the work.
 - See [`register_function`](../api/database.md#register_function) and
   [`on`](../api/database.md#on) for threading, scope, and error rules.

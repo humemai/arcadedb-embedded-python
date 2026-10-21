@@ -709,12 +709,11 @@ db.query("opencypher", "MATCH (p:Person) RETURN py.slugify(p.name) AS slug")
 - **Scope.** The engine's function table is process-wide: every database in the process sees
   the function until `db.unregister_function(name)` or until the `Database` that registered
   it is closed. Register before concurrent statements run.
-- **Cost.** One call crosses between the engine and Python once per row. Measured with
-  [Example 27](../../examples/28_python_functions_and_record_events.md) on a 20,000-row type
-  (best of 5 runs of `SELECT plus_one(n) FROM Number` against `SELECT n + 1 FROM Number`,
-  JVM warm, a laptop core with the JVM heap at 1 GB), the Python function cost about 5 to
-  10 microseconds more per row than the SQL expression. A statement that calls it on a
-  million rows spends several seconds there.
+- **Cost.** One call crosses between the engine and Python once per row, so a function
+  applied to every row of a large result pays that crossing on every row; compute in SQL
+  where a SQL expression can do the work.
+  [Example 28](../../examples/28_python_functions_and_record_events.md) prints the extra cost
+  per row on your machine, against the same statement written as a SQL expression.
 
 See [`register_function`](../../api/database.md#register_function) for every argument.
 
