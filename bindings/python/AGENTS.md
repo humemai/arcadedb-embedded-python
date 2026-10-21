@@ -46,4 +46,5 @@ A change to behaviour updates every place that describes it. Grep these for the 
 - Issue, PR and comment bodies: one paragraph is one line (no hard wraps), no em dashes; tables and code fences keep their own lines.
 - A security vulnerability is never reported in a public issue or PR; follow `SECURITY.md`.
 - When you add, rename or remove a doc, update its row in this file in the same PR.
+- A number from an A/B measurement is never typed into a doc: it comes from a result file in `bindings/python/docs/benchmarks/ab-results/` through `bindings/python/scripts/render_ab_tables.py --write` (the `<!-- ab-table: ID -->` blocks; format in `bindings/python/docs/development/documentation.md`, "A/B Result Tables").
 - This repository is public. Never write secrets, token locations or private notes into a file, a commit message, an issue or a comment.

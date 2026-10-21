@@ -677,6 +677,9 @@ for doc in db.query("sql", "SELECT FROM Person"):
         process(doc.get("name"), doc.get("city"))
 ```
 
+<!-- ab-table: materialization -->
+<!-- /ab-table -->
+
 ## Python Functions in SQL and openCypher
 
 `db.register_function()` makes a Python function callable from a statement. It is for logic

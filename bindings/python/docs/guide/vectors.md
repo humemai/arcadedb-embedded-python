@@ -144,6 +144,9 @@ heap of about twice the graph, a lower `mutations_before_rebuild`, or rebuilding
 avoids it. Read-mostly use, and loading first and
 serving after, never meet it.
 
+<!-- ab-table: rebuild-threshold -->
+<!-- /ab-table -->
+
 ### Build-time cache: use the default
 
 Building the graph for millions of vectors is dominated by reading the vectors

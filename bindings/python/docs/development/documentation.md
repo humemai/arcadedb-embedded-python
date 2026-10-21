@@ -166,6 +166,48 @@ Documentation versions **match PyPI package versions**:
 
 This ensures users always see documentation matching their installed package version.
 
+## A/B Result Tables
+
+A number from an A/B measurement is never typed into a page. The pages hold a marked block, the numbers live in a result file under `docs/benchmarks/ab-results/`, and `scripts/render_ab_tables.py` is the only thing that writes between the markers:
+
+```text
+<!-- ab-table: parallel-buckets -->
+...generated...
+<!-- /ab-table -->
+```
+
+Until a figure has a result file, nothing is rendered between its markers, so the two comments stay and the page reads as it did without them. The figure ids are the `FIGURES` table in the script: `ingest-path`, `parallel-buckets`, `async-sql-path`, `commit-size`, `index-before-after`, `rebuild-threshold`, `materialization`, `udf-cost`, `callback-cost` and `heap-pinned`. A marker that names an id outside `FIGURES` (a typo) fails the check. A block may appear on more than one page. Markers inside a fenced code block, like the one above, are examples and are ignored.
+
+To publish a figure: put `<figure-id>.json` in `docs/benchmarks/ab-results/`, run `uv run python bindings/python/scripts/render_ab_tables.py --write` from the repository root, and write the recommendation text that the table supports in the same change. The `render-ab-tables` pre-commit hook and `tests/test_render_ab_tables.py` run `--check`, which fails when a block differs from what its result file renders, when a result file is invalid or unused, or when a marker is unclosed or names an unknown figure.
+
+A result file is the output of `tools/ab.py` (interleaved arms on the same cores, a noise gate, round 0 dropped, at least 7 clean pairs for a verdict) in this format, one file per figure:
+
+```json
+{
+  "format": 1,
+  "figure": "parallel-buckets",
+  "environment": {
+    "engine_version": "26.10.2",
+    "wheel_version": "26.10.2",
+    "cores": "2 (pinned)",
+    "machine": "x86-64 laptop, 16 cores"
+  },
+  "comparisons": [
+    {
+      "case": "1,000,000 rows, 4 buckets",
+      "metric": "throughput", "unit": "rows/s", "better": "higher",
+      "a": "sync", "b": "parallel",
+      "a_median": 100000.0, "b_median": 112000.0,
+      "ratio": 0.893, "ci_low": 0.85, "ci_high": 0.93,
+      "clean_pairs": 12, "dropped_pairs": 1,
+      "sign_b_better": 11, "sign_b_worse": 1, "sign_p": 0.00635
+    }
+  ]
+}
+```
+
+The values above only show the shape of the file; they are not a measurement. `ratio` is the median of the per-round ratios in `ab.py`'s convention (above 1 means B is worse), `ci_low` and `ci_high` its bootstrap 95% interval (all three `null` with fewer than 7 clean pairs), and a row may carry its own `environment` object that overrides single keys of the file's (for example `engine_version` when one figure was run on two engines). The verdict is never stored: the script derives it from the interval, so a file cannot contradict itself. The `machine` value is a public label, not a host name.
+
 ## Writing Documentation
 
 ### Style Guide

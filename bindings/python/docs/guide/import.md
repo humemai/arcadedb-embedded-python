@@ -89,6 +89,15 @@ not something we currently encourage as the default Python import story.
     `new_edges()` methods run at or near Java speed; see Example 16 and the graph
     examples.
 
+<!-- ab-table: ingest-path -->
+<!-- /ab-table -->
+
+<!-- ab-table: parallel-buckets -->
+<!-- /ab-table -->
+
+<!-- ab-table: async-sql-path -->
+<!-- /ab-table -->
+
 ## Example 15 and 16 Benchmark Structure
 
 Example 15 and 16 are the repository's focused ingest comparison harnesses.
@@ -305,6 +314,9 @@ you do choose the SQL import path.
 | 100K to 1M rows | 10,000 to 50,000 |
 | > 1M rows | 50,000 to 100,000 |
 
+<!-- ab-table: commit-size -->
+<!-- /ab-table -->
+
 ### Drop Heavy Indexes Before Bulk Loads
 
 For large one-shot imports, remove expensive indexes first and recreate them afterward.
@@ -321,6 +333,9 @@ db.command(
 
 db.command("sql", "CREATE INDEX ON User (email) UNIQUE_HASH")
 ```
+
+<!-- ab-table: index-before-after -->
+<!-- /ab-table -->
 
 ### Validate the Input Up Front
 

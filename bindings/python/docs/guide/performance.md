@@ -116,6 +116,9 @@ fine. The speedup is not Arrow being faster in general, it is the string
 decode and the null promotion not happening. Pick it for what your columns
 are, not by default.
 
+<!-- ab-table: materialization -->
+<!-- /ab-table -->
+
 ## Known limits
 
 Measured limits that remain by design, and the recommended pattern for each:
@@ -130,6 +133,12 @@ Measured limits that remain by design, and the recommended pattern for each:
 | Record mutation (`modify().set().save()`) | 16.5µs vs 3.4µs per record | Absolute cost is small; use SQL `UPDATE` or bulk ingest paths for volume |
 | List-typed columns convert per element via `.get()` | 14.6ms for a 10k-element LIST via `.get()` | Read the row with `to_list()`, or prefer typed array properties (e.g. `ARRAY_OF_FLOATS`) |
 
+<!-- ab-table: udf-cost -->
+<!-- /ab-table -->
+
+<!-- ab-table: callback-cost -->
+<!-- /ab-table -->
+
 ## Memory
 
 | Question | Answer |
@@ -138,6 +147,9 @@ Measured limits that remain by design, and the recommended pattern for each:
 | Baseline footprint | ~121MB RSS after JVM start |
 | "`-Xmx4g` means it uses 4GB"? | No: `-Xmx` is a ceiling, not a reservation; the heap grows only as needed |
 | Bulk APIs (`to_json_list`, `to_columns`) | Transient peak scales with `batch_size` (rows, not bytes: rows of a megabyte or more need a small `batch_size`) and is fully reclaimed; under a small heap, with rows of ordinary size, they degrade gracefully (slower, no OOM). `to_list()` ends each batch at a few megabytes of JSON, whatever the row width |
+
+<!-- ab-table: heap-pinned -->
+<!-- /ab-table -->
 
 ## Full report
 
