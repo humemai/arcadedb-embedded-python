@@ -164,7 +164,8 @@ def test_stage_problems_catch_an_arm_outside_the_subset():
 
 
 def test_lint_catches_an_unset_instrument_a_shared_rows_file_and_a_foreign_arm():
-    good = ('export BENCH_INSTRUMENT=2026-11\nRF="runs_page_${PIN}_2611.jsonl"\nBACKENDS="sqlite duckdb"\n')
+    good = ('export BENCH_INSTRUMENT=2026-11\nRF="runs_page_${PIN}_2611.jsonl"\nBACKENDS="sqlite duckdb"\n'
+            'is not the wheel this chain was generated for\n')
     assert G.lint_draft(good, "s.sh") == []
     assert G.lint_draft(good.replace("export BENCH_INSTRUMENT=2026-11\n", ""), "s.sh")
     assert G.lint_draft(good.replace("_2611", ""), "s.sh")
@@ -221,23 +222,25 @@ def test_projection_prices_the_lane_cells_of_each_stage(tmp_path):
 
 
 # ------------------------------------------------------------------------------------ the ArcadeDB pair's guards
-PAIR_GUARDS = ("is not in dist/", "wheels in dist/", "is not the wheel this chain was generated for", "no server image",
-               "ABORT: dbbench:arcadedb carries wheel", "ABORT: dbbench:arcadedb runs JPype", "ABORT: pair unverified at the pin")
+PAIR_GUARDS = ("wheels in dist/", "no server image", "ABORT: dbbench:arcadedb carries wheel",
+               "ABORT: dbbench:arcadedb runs JPype", "ABORT: pair unverified at the pin")
+WHEEL_GUARDS = ("is not in dist/", "is not the wheel this chain was generated for")
 
 
-def test_a_comparator_only_stage_has_no_arcadedb_wheel_or_image_guard(drafts):
+def test_a_comparator_only_stage_guards_the_wheel_it_bakes_and_nothing_of_the_arcadedb_arms(drafts):
     for f in sorted(drafts.glob("*.sh")):
         t = f.read_text()
+        # what the image build needs: the pinned wheel at its path with its sha256, exported BEFORE build_images.sh
+        for g in WHEEL_GUARDS:
+            assert g in t, (f.name, g)
+        assert t.index("is not the wheel this chain was generated for") < t.index("export ARCADEDB_WHEEL=") < t.index("./build_images.sh")
+        assert re.search(r'^export ARCADEDB_WHEEL="\$W" ARCADEDB_SERVER_IMAGE="arcadedb-c25:e85469273"$', t, re.M), f.name
+        # what concerns the ArcadeDB arms themselves
         for g in PAIR_GUARDS:
             assert g not in t, (f.name, g)
-        assert "dbbench:arcadedb" not in t.replace("no dbbench:arcadedb needed", "")
-        assert "dist/*.whl" not in t and "verify_pair_c25.sh" not in t
-        # the rows still carry the pin, and the runner's together-or-not-at-all rule still holds
+        assert "--entrypoint python3 dbbench:arcadedb" not in t
+        assert "./verify_pair_c25.sh" not in t and "docker image inspect \"$ARCADEDB_SERVER_IMAGE\"" not in t
         assert "export ARCADEDB_ENGINE_COMMIT=$PIN" in t
-        assert re.search(r'^export ARCADEDB_WHEEL=".*/dist/' + re.escape(WHEEL) + r'" ARCADEDB_SERVER_IMAGE="arcadedb-c25:e85469273"$',
-                         t, re.M), f.name
-        # ... and is exported only after the image build, which bakes ARCADEDB_WHEEL into every generic image it builds
-        assert t.index("./build_images.sh") < t.index("export ARCADEDB_WHEEL=")
         assert "arcadedb" not in re.findall(r"^BENCH_ALLOW_DEV=0 \./build_images\.sh (.*?) >>", t, re.M)[0].split()
 
 
@@ -249,7 +252,7 @@ def test_an_arcadedb_release_stage_keeps_every_guard_of_the_pair(tmp_path):
     assert stages
     for f in stages:
         t = f.read_text()
-        for g in PAIR_GUARDS:
+        for g in PAIR_GUARDS + WHEEL_GUARDS:
             assert g in t, (f.name, g)
         assert re.findall(r"^BENCH_ALLOW_DEV=0 \./build_images\.sh (.*?) >>", t, re.M)[0].split()[0] == "arcadedb"
         assert t.index("is not the wheel this chain was generated for") < t.index("./build_images.sh") < t.index("pair unverified")
@@ -257,11 +260,14 @@ def test_an_arcadedb_release_stage_keeps_every_guard_of_the_pair(tmp_path):
 
 def test_the_lint_demands_the_pair_guards_exactly_where_an_arcadedb_arm_runs(tmp_path):
     base = ('export BENCH_INSTRUMENT=2026-11\nRF="runs_page_${PIN}_2611.jsonl"\n')
-    guards = "is not the wheel this chain was generated for\nABORT: dbbench:arcadedb carries wheel\n"
+    wheel = "is not the wheel this chain was generated for\n"
+    guards = wheel + "wheels in dist/\nABORT: no server image\nABORT: dbbench:arcadedb carries wheel\nABORT: pair unverified at the pin\n"
     assert G.lint_draft(base + 'BACKENDS="arcadedb_graph_embedded"\n' + guards, "s.sh") == []
-    assert G.lint_draft(base + 'BACKENDS="arcadedb_graph_embedded"\n', "s.sh")
+    assert G.lint_draft(base + 'BACKENDS="arcadedb_graph_embedded"\n' + wheel, "s.sh")
+    assert G.lint_draft(base + 'BACKENDS="duckpgq_graph"\n' + wheel, "s.sh") == []
+    assert G.lint_draft(base + 'BACKENDS="duckpgq_graph"\n', "s.sh")
     comp = G.lint_draft(base + 'BACKENDS="duckpgq_graph"\n' + guards, "s.sh")
-    assert any("guards the pinned wheel" in p for p in comp)
+    assert any("guards one wheel in dist/" in p for p in comp)
 
 
 # ------------------------------------------------------------------------------- an ABORT hands on (CAMPAIGN rule)

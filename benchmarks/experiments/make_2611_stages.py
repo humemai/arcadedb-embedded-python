@@ -566,8 +566,12 @@ def lint_draft(text, name, engines=None):
         out.append(f"{name}: no BACKENDS line")
     else:
         arcade = has_arcadedb_arm(m.group(1).split())
-        for needle, what in (("is not the wheel this chain was generated for", "the pinned wheel in dist/"),
-                             ("ABORT: dbbench:arcadedb carries wheel", "the dbbench:arcadedb wheel check")):
+        # every stage builds images with the pinned wheel baked in, so every stage guards the wheel's sha256
+        if "is not the wheel this chain was generated for" not in text:
+            out.append(f"{name}: no guard for the pinned wheel's sha256, which the image build bakes into every image")
+        for needle, what in (("wheels in dist/", "one wheel in dist/"), ("ABORT: no server image", "the server image"),
+                             ("ABORT: dbbench:arcadedb carries wheel", "the dbbench:arcadedb wheel check"),
+                             ("ABORT: pair unverified at the pin", "verify_pair_c25.sh")):
             if arcade and needle not in text:
                 out.append(f"{name}: runs an ArcadeDB arm but has no guard for {what}")
             if not arcade and needle in text:
@@ -747,16 +751,20 @@ def apply_cap_rule(body, lane, backends, workloads, data=None):
     return re.sub(r"\nfor BE in \$BACKENDS; do\n", seed, body)
 
 
-# THE ARCADEDB PAIR'S GUARDS, in the stages that contain an ArcadeDB arm (and only those). A stage whose roster is comparators
-# needs neither the pinned wheel in dist/ nor dbbench:arcadedb: its arms run in the digest-pinned images and dbbench:duckdb,
-# client, dense, pg-age, mongo-search and composed, none of which import arcadedb_embedded. Guarding them anyway aborted a
-# healthy comparator stage on a host whose dist/ and dbbench:arcadedb were still the previous release's.
-ARCADE_PRE_BUILD = '''# THE WHEEL IS BAKED AT IMAGE BUILD TIME, so it has to be exported BEFORE
+# THE ARCADEDB PAIR'S GUARDS. A stage that runs an ArcadeDB arm (the --arcadedb-release pass) gets all of them. A comparator-only
+# stage gets the ones its IMAGE BUILD needs and no others: the build bakes ARCADEDB_WHEEL into every generic image (client,
+# duckdb, dense; Dockerfile.bench installs every wheel in docker-wheels/), so the wheel is exported before build_images.sh,
+# exactly as in the ArcadeDB stages, and must exist at the pinned path with the pinned sha256 (build_images.sh copies it from
+# there; nothing in it or in the Dockerfiles reads dist/ itself). What it does not need, because none of its arms is ArcadeDB:
+# the "one wheel in dist/" rule (it protects verify_pair_c25.sh, which takes the newest wheel there), the server image, the wheel
+# and JPype read back out of dbbench:arcadedb, and verify_pair_c25.sh. Guarding those anyway aborted a healthy comparator stage
+# on a host whose dist/ and dbbench:arcadedb were still the previous release's.
+ARCADE_WHEEL_HEAD = '''# THE WHEEL IS BAKED AT IMAGE BUILD TIME, so it has to be exported BEFORE
 # build_images.sh, and the arcadedb image has to be rebuilt. Without both,
-# build_images.sh falls back to `arcadedb-embedded==26.8.1` from PyPI and
-# every EMBEDDED arm runs that while every SERVED arm runs the pinned image:
-# two ArcadeDB versions on one table. That is exactly what last night's
-# calibration did -- its embedded arms ran 26.8.1 against served
+# the embedded arms would run another wheel than the served ones run
+# (build_images.sh used to fall back to `arcadedb-embedded==26.8.1` from PyPI;
+# it now refuses without ARCADEDB_WHEEL): two ArcadeDB versions on one table.
+# That is exactly what last night's calibration did -- its embedded arms ran 26.8.1 against served
 # 26.9.1-SNAPSHOT -- and verify_pair_c25.sh does not catch it, because it
 # compares the newest wheel FILE in dist/ against the server image and never
 # looks inside dbbench:arcadedb.
@@ -764,7 +772,9 @@ ARCADE_PRE_BUILD = '''# THE WHEEL IS BAKED AT IMAGE BUILD TIME, so it has to be 
 # (DECISIONS #42). A different file in dist/ is a different engine under test.
 W="$REPO/bindings/python/dist/{wheel_name}"
 [ -f "$W" ] || {{ say "$ID ABORT: the pinned wheel {wheel_name} is not in dist/"; exit 1; }}
-# ONE WHEEL, OR SAY WHICH. `ls -t | head -1` takes the newest by mtime and
+'''
+
+ARCADE_WHEEL_COUNT = '''# ONE WHEEL, OR SAY WHICH. `ls -t | head -1` takes the newest by mtime and
 # says nothing about the ones it passed over, so a second wheel in dist/ --
 # a rebuild at a different pin, a copy kept "just in case" -- silently
 # decides what every cell of this stage measures. dist/ holds exactly one
@@ -773,11 +783,18 @@ W="$REPO/bindings/python/dist/{wheel_name}"
 _NW=$(ls "$REPO"/bindings/python/dist/*.whl 2>/dev/null | wc -l)
 [ "$_NW" -eq 1 ] || {{ say "$ID ABORT: $_NW wheels in dist/, and ls -t would pick one by date: $(ls "$REPO"/bindings/python/dist/*.whl | tr '
 ' ' ')"; exit 1; }}
-[ "$(sha256sum "$W" | cut -d' ' -f1)" = "{wheel_sha256}" ] || {{ say "$ID ABORT: dist/{wheel_name} is not the wheel this chain was generated for (sha256)"; exit 1; }}
+'''
+
+ARCADE_WHEEL_SHA_EXPORT = '''[ "$(sha256sum "$W" | cut -d' ' -f1)" = "{wheel_sha256}" ] || {{ say "$ID ABORT: dist/{wheel_name} is not the wheel this chain was generated for (sha256)"; exit 1; }}
 export ARCADEDB_WHEEL="$W" ARCADEDB_SERVER_IMAGE="{server_image}"
-docker image inspect "$ARCADEDB_SERVER_IMAGE" >/dev/null 2>&1 || {{ say "$ID ABORT: no server image $ARCADEDB_SERVER_IMAGE"; exit 1; }}
+'''
+
+ARCADE_PRE_TAIL = '''docker image inspect "$ARCADEDB_SERVER_IMAGE" >/dev/null 2>&1 || {{ say "$ID ABORT: no server image $ARCADEDB_SERVER_IMAGE"; exit 1; }}
 WV=$(basename "$W" | cut -d- -f2)
 '''
+
+ARCADE_PRE_BUILD = ARCADE_WHEEL_HEAD + ARCADE_WHEEL_COUNT + ARCADE_WHEEL_SHA_EXPORT + ARCADE_PRE_TAIL
+COMPARATOR_PRE_BUILD = ARCADE_WHEEL_HEAD + ARCADE_WHEEL_SHA_EXPORT.rstrip("\n")
 
 ARCADE_POST_CHECKS = '''# VERIFY THE ARM, NOT THE FILE: read the version out of the built image.
 # The pair check below is the REPO copy, not ~/verify_pair_c25.sh: that
@@ -792,14 +809,7 @@ say "$ID: dbbench:arcadedb runs JPype $IJ, the pin"
 PAIR_IMAGE="$ARCADEDB_SERVER_IMAGE" ./verify_pair_c25.sh "$SHA" >> "$S" 2>&1 || {{ say "$ID ABORT: pair unverified at the pin"; exit 1; }}
 '''
 
-# What a comparator-only stage does in their place. runner.py takes ARCADEDB_WHEEL and ARCADEDB_SERVER_IMAGE together or not
-# at all, and refuses ARCADEDB_ENGINE_COMMIT without them, while land_stage.py keeps only the rows whose engine_commit starts
-# with the chain's pin: so the three are still exported, as the label the rows carry. They are exported AFTER the image build,
-# because build_images.sh bakes ARCADEDB_WHEEL into every generic image it builds (client, duckdb, dense), and a comparator
-# image has no use for the engine under test. Nothing here reads dist/ or dbbench:arcadedb.
-COMPARATOR_PRE_BUILD = "# (no ArcadeDB arm in this stage: no wheel in dist/ and no dbbench:arcadedb needed, see make_2611_stages.ARCADE_PRE_BUILD)"
-COMPARATOR_STAMP_EXPORTS = '''# ROW LABEL ONLY, nothing is read from these: see make_2611_stages.COMPARATOR_STAMP_EXPORTS.
-export ARCADEDB_WHEEL="$REPO/bindings/python/dist/{wheel_name}" ARCADEDB_SERVER_IMAGE="{server_image}"'''
+COMPARATOR_POST_CHECKS = "# (no ArcadeDB arm in this stage: dbbench:arcadedb and the pair are not checked, see ARCADE_PRE_BUILD)"
 
 
 def has_arcadedb_arm(backends):
@@ -1097,7 +1107,7 @@ def stage_script(idx, total, spec, after, pins, params):
         pulled=(" ".join(f'"{i}"' for i in _pulled_images_for(backends)) or '""'),
         wheel_name=pins["wheel_name"], wheel_sha256=pins["wheel_sha256"], server_image=pins["ARCADEDB_SERVER_IMAGE"],
         pre_build=_pair_part(ARCADE_PRE_BUILD if arcade else COMPARATOR_PRE_BUILD, pins, params),
-        post_checks=_pair_part(ARCADE_POST_CHECKS if arcade else COMPARATOR_STAMP_EXPORTS, pins, params),
+        post_checks=_pair_part(ARCADE_POST_CHECKS if arcade else COMPARATOR_POST_CHECKS, pins, params),
         **params)
     for scale, cap in caps:
         senv = " ".join(SCALE_ENV.get((lane, scale), []))
