@@ -3,7 +3,7 @@
 
 `prose_check.py` closes the same loop for result NUMBERS: a figure in the page
 or the paper must trace to a pinned claim. Nothing closed it for the STRUCTURAL
-lists -- which gates run, which stages run and in what order -- and those drift
+lists -- which gates run, and once which stages ran and in what order -- and those drift
 the same way and are read the same way, as fact.
 
 The week of 2026-09-21 produced six instances of one shape, something written
@@ -20,8 +20,8 @@ once beside the thing it describes and never revisited when the thing changed:
        order, putting `qOI` -- the only producer of the e4 table, and therefore
        the first landing's only blocker -- four stages later than it runs
 
-F92 is the one this file would have caught, and it is worth being concrete
-about the cost: nobody would have published a wrong number, they would have
+F92 is the one the stage-chain check caught (it went with the 2026-10 stage
+generators it read); the cost is worth being concrete about: nobody would have published a wrong number, they would have
 waited hours for a stage that was already next. A document that is wrong about
 the schedule is wrong about the plan.
 
@@ -63,50 +63,6 @@ def check_gates():
     if stated != actual:
         return [f"PAGE-SPEC.md names gates {stated}; refresh_web_page.GATES runs {actual}"]
     return []
-
-
-def check_stage_chain():
-    """CAMPAIGN.md draws the chain; make_october_stages.STAGES holds it.
-
-    The doc legitimately names stages the generator does not -- `qOAR` was made
-    by hand -- so the test is not equality. Every generated stage must appear,
-    and the generated stages must appear in the generator's relative order. That
-    tolerates a hand-made stage anywhere and still catches F92 exactly: `qOI`
-    out of place, and `qOA4` missing altogether.
-    """
-    import make_october_stages
-
-    doc = _read("CAMPAIGN.md")
-    # ANCHOR ON THE OCTOBER HEADING. The first version searched the whole file
-    # and matched SEPTEMBER's chain, which is drawn identically earlier in the
-    # document, then reported all fifteen October stages missing. A checker that
-    # reads the wrong list is worse than one that reads none: it is confidently
-    # wrong about the thing it exists to be right about.
-    anchor = doc.find("**The October chain on mini")
-    if anchor < 0:
-        return ["CAMPAIGN.md no longer has a section headed \"The October chain on "
-                "mini\"; either it moved or this check has gone blind"]
-    m = re.search(r"((?:`q[A-Z0-9]+` -> )+`q[A-Z0-9]+`\.)", doc[anchor:])
-    if not m:
-        return ["CAMPAIGN.md's October section no longer draws a `qX` -> `qY` chain; "
-                "either it moved or this check has gone blind"]
-    drawn = re.findall(r"`(q[A-Z0-9]+)`", m.group(1))
-    generated = [s[0] for s in make_october_stages.STAGES]
-
-    bad = []
-    missing = [s for s in generated if s not in drawn]
-    if missing:
-        bad.append(f"CAMPAIGN.md's chain omits {missing}, which make_october_stages "
-                   f"generates and mini therefore runs")
-    # relative order of the stages the doc and the generator share
-    shared = [s for s in drawn if s in generated]
-    expected = [s for s in generated if s in shared]
-    if shared != expected:
-        first = next((a for a, b in zip(shared, expected) if a != b), None)
-        bad.append(f"CAMPAIGN.md's chain orders the generated stages {shared}; "
-                   f"make_october_stages.STAGES orders them {expected}"
-                   + (f" -- they first differ at {first}" if first else ""))
-    return bad
 
 
 def check_citations():
@@ -229,7 +185,7 @@ def check_ingest_sentences():
     return bad
 
 
-CHECKS = (("gates", check_gates), ("stage chain", check_stage_chain),
+CHECKS = (("gates", check_gates),
           ("ingest prose", check_ingest_sentences),
           ("citations", check_citations))
 

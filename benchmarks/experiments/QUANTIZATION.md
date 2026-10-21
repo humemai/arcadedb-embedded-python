@@ -39,7 +39,7 @@ The quantization survey of DECISIONS #131 item 8 (CAMPAIGN.md section 7 row 42),
 
 ## What follows
 
-Built 2026-10-02 and smoked on the laptop: Neo4j `SCALAR` (with its fp32 arms corrected to `NONE`, on the dense and cross-model lanes), MongoDB `scalar`, Elasticsearch `int8_hnsw`, Memgraph `i8`, LanceDB's fp32 `IVF_HNSW_FLAT` beside its SQ arm, ArangoDB's `IVF<nLists>,SQ8`, and Qdrant sparse `uint8`. Each is registered on its lane in the runner, in export_web's precision and display maps, in the dense overlay or sparse multipass arm lists, and in the re-pin smoke (`oct_repin_smoke.sh`). None has a bench-host row yet: their first measured rows come from the 26.10.1 measurement.
+Built 2026-10-02 and smoked on the laptop: Neo4j `SCALAR` (with its fp32 arms corrected to `NONE`, on the dense and cross-model lanes), MongoDB `scalar`, Elasticsearch `int8_hnsw`, Memgraph `i8`, LanceDB's fp32 `IVF_HNSW_FLAT` beside its SQ arm, ArangoDB's `IVF<nLists>,SQ8`, and Qdrant sparse `uint8`. Each is registered on its lane in the runner, in export_web's precision and display maps, in the dense overlay or sparse multipass arm lists. None has a bench-host row yet: their first measured rows come from the 26.10.1 measurement.
 
 ## The beam sweep and the precision arms
 

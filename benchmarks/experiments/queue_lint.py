@@ -123,7 +123,7 @@ def wheel_is_prerelease(body):
 
     The same token test build_images.sh applies to the wheel's basename (its
     version field), so the lint and the guard cannot disagree. A stage generated
-    for a stable release (make_2610_stages, a stable wheel) sets
+    for a stable release (make_2611_stages, a stable wheel) sets
     BENCH_ALLOW_DEV=0 on purpose; the lint used to demand 1 on every
     build_images.sh line and rejected all fourteen stages of the 26.10.1 chain
     the first time they were linted against the official wheel.

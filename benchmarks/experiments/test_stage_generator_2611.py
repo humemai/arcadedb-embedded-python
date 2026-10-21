@@ -6,6 +6,8 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -204,7 +206,7 @@ def test_projection_prices_the_lane_cells_of_each_stage(tmp_path):
     stages = G.number(G.subset_specs(engines, lanes, "paper"), "x")
     tsv = tmp_path / "h.tsv"
     rows = ["lane\tworkload\tscale\tbackend\tclass\th3\th5\tkind"]
-    cells = [c for st in stages for c in G.M.stage_cells(st) if c.kind == "lane" and not c.arm]
+    cells = [c for st in stages for c in G.stage_cells(st) if c.kind == "lane" and not c.arm]
     for c in cells[1:]:   # the first cell has no row
         rows.append(f"{c.lane}\t{c.workload}\t{c.scale}\t{c.backend}\t{c.cls}\t1.0\t2.0\tclean reps")
     tsv.write_text("\n".join(rows) + "\n")
@@ -214,3 +216,41 @@ def test_projection_prices_the_lane_cells_of_each_stage(tmp_path):
         assert sum(m for _s, _h, _n, m in priced) == 1
     with pytest.raises(SystemExit):
         G.load_hours(str(tsv), 4)
+
+
+# ------------------------------------------------------------------------------------ the drafts, byte for byte
+SHA_LIST = HERE / "stage_drafts_2611.sha256"
+GENERATIONS = {
+    # case: (arguments, whether the comparator pair comes from the environment)
+    "comparators": (["--second-list", "--after", "qR20"], True),
+    "comparators-paper-5reps": (["--second-list", "--order", "paper", "--reps", "5", "--after", "qR20", "--id-prefix", "qU"], True),
+    "arcadedb-release": (None, False),
+}
+
+
+def drafts_sha256(tmp_path):
+    """sha256 of every script three generations write: the comparators (default order, and paper order at 5 reps) and ArcadeDB
+    alone on a release, all lanes and the second list. One line per script, `<sha256>  <case>/<name>`, sorted."""
+    lines = []
+    for case, (args, from_env) in GENERATIONS.items():
+        out = tmp_path / case
+        if args is None:
+            args = _release_args() + ["--second-list", "--after", "none", "--id-prefix", "qV"]
+        r = run(args + ["--out", str(out)], tmp_path if from_env else None)
+        assert r.returncode == 0, case + r.stdout[-600:] + r.stderr[-600:]
+        lines += [f"{sha256(f.read_bytes()).hexdigest()}  {case}/{f.name}" for f in sorted(out.glob("*.sh"))]
+    return sorted(lines, key=lambda x: x.split("  ", 1)[1])
+
+
+def test_the_drafts_are_the_ones_on_file(tmp_path):
+    """A change to the template, the stage table, a pin the stages bake in or the cap rule moves a draft. That is allowed, but
+    never silently: review the diff of the drafts, then `python3 test_stage_generator_2611.py --rewrite` and commit the list."""
+    assert SHA_LIST.read_text().splitlines() == drafts_sha256(tmp_path)
+
+
+if __name__ == "__main__":
+    if sys.argv[1:] != ["--rewrite"]:
+        raise SystemExit("usage: python3 test_stage_generator_2611.py --rewrite   (regenerates stage_drafts_2611.sha256)")
+    with tempfile.TemporaryDirectory() as d:
+        SHA_LIST.write_text("\n".join(drafts_sha256(Path(d))) + "\n")
+    print(f"wrote {SHA_LIST.name}")

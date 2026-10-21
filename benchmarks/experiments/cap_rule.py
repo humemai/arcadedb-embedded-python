@@ -10,7 +10,7 @@ scale of the same lane, workload and class (SCALE_CHAINS says which scales are s
 lane cell was censored. At report time the same rule applies to rows already measured (`over_rule`).
 
 This file computes the rule from the bench host's log (the cell lines `  [i/n] <cell> <secs>s (<cpuset>) -> <status>`) and
-writes cap_rule_2610.json, which make_2610_stages.py (run-time caps and seeding) and export_web.py (report-time censoring)
+writes cap_rule_2610.json, which make_2611_stages.py (run-time caps and seeding) and export_web.py (report-time censoring)
 read. Run:  python3 cap_rule.py --status STATUS.txt --from-line 45558 --out cap_rule_2610.json
 """
 import argparse
@@ -59,10 +59,8 @@ def smaller_scales(lane, scale):
 
 
 def known_backends():
-    import make_2610_stages as G   # the registry of every arm any stage runs
-    out = set()
-    for spec in G.STAGES:
-        out |= set(G.stage_backends(spec))
+    import runner   # the registry of every arm any lane runs
+    out = {b for spec in runner.LANES.values() for b in spec[1]}
     return sorted(out | {"surrealdb_lifecycle"}, key=len, reverse=True)
 
 

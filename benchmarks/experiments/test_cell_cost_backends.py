@@ -50,11 +50,12 @@ def test_an_engine_with_no_rows_is_not_scored(tmp_path):
 def test_every_generated_stage_passes_its_own_backends(tmp_path):
     wheel = tmp_path / "arcadedb_embedded-26.10.1-cp312-cp312-manylinux_2_34_x86_64.whl"
     wheel.write_bytes(b"not a real wheel, only its name and sha256 are read")
-    env = dict(os.environ, ARCADEDB_WHEEL=str(wheel), ARCADEDB_SERVER_IMAGE="arcadedb-c25:26.10.1",
+    env = {k: v for k, v in os.environ.items() if k != "BENCH_INSTRUMENT"}
+    env.update(ARCADEDB_WHEEL=str(wheel), ARCADEDB_SERVER_IMAGE="arcadedb-c25:26.10.1",
                ARCADEDB_ENGINE_COMMIT="d36b4ca3ae4c170abc73598e0dffa2bb58e06621")
     out = tmp_path / "stages"
-    r = subprocess.run([sys.executable, str(HERE / "make_2610_stages.py"), "--out", str(out)], cwd=HERE, env=env,
-                       capture_output=True, text=True)
+    r = subprocess.run([sys.executable, str(HERE / "make_2611_stages.py"), "--second-list", "--after", "none", "--out", str(out)],
+                       cwd=HERE, env=env, capture_output=True, text=True)
     assert r.returncode == 0, r.stdout[-400:] + r.stderr[-400:]
     scripts = sorted(out.glob("*.sh"))
     checked = 0
