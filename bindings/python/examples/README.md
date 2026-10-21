@@ -405,13 +405,16 @@ DataFrames and Arrow tables loaded straight into a type, and a result back out a
 
 **Learn:** How a DataFrame becomes documents or vertices without a row loop, and what each
 Arrow type is stored as
+
+---
+
 ### 🧩 [28_python_functions_and_record_events.py](./28_python_functions_and_record_events.py)
 **Python Functions | Record Events | SQL + openCypher**
 
 Two things no query language can express:
 - `db.register_function()` makes a Python `slugify` callable from SQL (SELECT and WHERE) and,
   as `py.slugify`, from openCypher; an exception in the function is a query error
-- measures the cost of one call (about 5 to 10 microseconds) against the same SQL expression
+- measures the cost of one call on your machine against the same SQL expression
 - `db.on()` keeps an audit trail with `after_create` / `after_update` / `after_delete`
   callbacks and vetoes a write with a `before_create` callback that returns `False`
 - no data download; flags: `--rows` (default 20,000) and `--db-path`
