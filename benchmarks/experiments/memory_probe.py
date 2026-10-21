@@ -45,6 +45,18 @@ def enabled():
     return bench_common.instrument_at_least("2026-11")
 
 
+# WHERE A FULL GC MAY RUN. Never right before a timed phase: a collection at the end of a warm-up would hand a JVM engine a freshly
+# collected heap for the timed queries that a native engine does not get, and would move the queries' own GC timing. The lane
+# cannot see the next phase from a marker, so the rule is by phase: a GC is forced only at the end of the last timed phase
+# (`queries`, taken when the lane closes) and in `idle`. `load`, `index_build` and `warmup` are never followed by a forced GC,
+# because timed work can follow each of them; they record the heap as it stands, with no GC, under names that say so.
+FORCED_GC_PHASES = ("queries", "idle")
+
+
+def forces_gc(phase):
+    return phase in FORCED_GC_PHASES
+
+
 def phases_for_mark(name):
     """The standard phases a lane PHASE marker closes, in order. Empty for every other marker.
 
@@ -171,9 +183,9 @@ class LaneProbe:
         self.dead = False
         self.idle_s = IDLE_S
 
-    def _jvm(self):
-        """In-process JVM, when the engine is embedded and a JVM was started: full GC, then used/committed heap and the
-        direct buffer pool. {} when there is no JVM."""
+    def _jvm(self, force):
+        """In-process JVM, when the engine is embedded and a JVM was started: a full GC if `force`, then used/committed heap
+        and the direct buffer pool. Without `force` nothing is collected and `used` includes garbage. {} when there is no JVM."""
         try:
             import jpype
         except ImportError:
@@ -184,10 +196,12 @@ class LaneProbe:
             t0 = time.perf_counter()
             system = jpype.JClass("java.lang.System")
             rt = jpype.JClass("java.lang.Runtime").getRuntime()
-            system.gc()
+            if force:
+                system.gc()
             total, free = int(rt.totalMemory()), int(rt.freeMemory())
-            out = {"used": total - free, "committed": total,
-                   "gc_ms": round((time.perf_counter() - t0) * 1000, 1), "source": "jpype"}
+            out = {"used": total - free, "committed": total, "forced": bool(force), "source": "jpype"}
+            if force:
+                out["gc_ms"] = round((time.perf_counter() - t0) * 1000, 1)
             try:
                 mx = jpype.JClass("java.lang.management.ManagementFactory")
                 pools = mx.getPlatformMXBeans(jpype.JClass("java.lang.management.BufferPoolMXBean"))
@@ -209,7 +223,8 @@ class LaneProbe:
 
     def _request(self, phase):
         self.seq += 1
-        body = {"seq": self.seq, "phase": phase, "t": time.time(), "jvm": self._jvm(), "proc": self._proc()}
+        body = {"seq": self.seq, "phase": phase, "t": time.time(), "force_gc": forces_gc(phase),
+                "jvm": self._jvm(forces_gc(phase)), "proc": self._proc()}
         tmp = os.path.join(self.dir, f".req.{self.seq:03d}.tmp")
         with open(tmp, "w") as fh:
             json.dump(body, fh)
@@ -363,8 +378,8 @@ class HostProbe:
         parts = out.split()
         return (parts[0], parts[1]) if rc == 0 and len(parts) == 2 else False
 
-    def _server_jvm(self, cid):
-        """Force a full GC in the server container's JVM and read the heap after it. {} when the engine is not a JVM."""
+    def _server_jvm(self, cid, force):
+        """Read the server container's JVM heap, after a forced full GC when `force`. {} when the engine is not a JVM."""
         if self.jvm is None:
             self.jvm = self._find_jvm(cid)
         if not self.jvm:
@@ -372,15 +387,19 @@ class HostProbe:
         pid, home = self.jvm
         jcmd = f"{home}/jcmd"
         t0 = time.perf_counter()
-        rc, out = self.exec(cid, [jcmd, pid, "GC.run"])
-        if rc != 0:
-            return {"error": f"jcmd GC.run rc={rc}: {out.strip()[:120]}"}
-        gc_ms = round((time.perf_counter() - t0) * 1000, 1)
+        gc_ms = None
+        if force:
+            rc, out = self.exec(cid, [jcmd, pid, "GC.run"])
+            if rc != 0:
+                return {"error": f"jcmd GC.run rc={rc}: {out.strip()[:120]}"}
+            gc_ms = round((time.perf_counter() - t0) * 1000, 1)
         rc, out = self.exec(cid, [jcmd, pid, "GC.heap_info"])
         h = parse_heap_info(out) if rc == 0 else {}
         if not h:
             return {"error": f"jcmd GC.heap_info rc={rc}: {out.strip()[:120]}"}
-        res = {"used": h["used"], "committed": h["committed"], "gc_ms": gc_ms, "source": "jcmd"}
+        res = {"used": h["used"], "committed": h["committed"], "forced": bool(force), "source": "jcmd"}
+        if gc_ms is not None:
+            res["gc_ms"] = gc_ms
         rc, out = self.exec(cid, [jcmd, pid, "VM.native_memory", "summary"])
         d = parse_nmt_other(out) if rc == 0 else None
         if d is not None:
@@ -444,7 +463,7 @@ class HostProbe:
         jvm = dict(req.get("jvm") or {})
         server = next(((n, s) for n, s in self.pairs if n == "server"), None)
         if server is not None:
-            jvm = self._server_jvm(server[1].cid)       # the engine is the server; the lane's JVM (none) is not it
+            jvm = self._server_jvm(server[1].cid, bool(req.get("force_gc")))       # the engine is the server; the lane's JVM (none) is not it
         if jvm.get("error"):
             self.errors.append(jvm["error"])
         # 3. what each cgroup holds now, then 4. restart its peak
@@ -559,7 +578,8 @@ def fields_from(records, errors, spent_s, peak_reset, row=None, engine_side="cli
             out[f"io_{ph}_write_mib"] = _mib(sum(v["wbytes"] for v in io.values()))
         j = r.get("jvm") or {}
         if j.get("used") is not None:
-            out[f"jvm_{ph}_used_after_gc_mib"] = _mib(j["used"])
+            # named for what it is: a heap read after a forced GC is the working set; one read without is garbage included
+            out[f"jvm_{ph}_used_after_gc_mib" if j.get("forced") else f"jvm_{ph}_used_mib"] = _mib(j["used"])
             out[f"jvm_{ph}_committed_mib"] = _mib(j["committed"])
         if j.get("direct") is not None:
             out[f"jvm_{ph}_direct_mib"] = _mib(j["direct"])
@@ -572,6 +592,9 @@ def fields_from(records, errors, spent_s, peak_reset, row=None, engine_side="cli
         kinds = {r.get("peak_kind") for r in records.values() if r.get("peak_kind")}
         out["mem_probe_peak_kind"] = "kernel-reset" if kinds == {"kernel-reset"} else "sampled-0.25s"
         out["mem_probe_gc_s"] = round(sum((r.get("gc_ms") or 0.0) for r in records.values()) / 1000, 3)
+        forced = [p for p in PHASES if (records.get(p, {}).get("jvm") or {}).get("forced")]
+        if any((r.get("jvm") or {}).get("used") is not None for r in records.values()):
+            out["jvm_forced_gc_phases"] = ",".join(forced)
         srcs = {(r.get("jvm") or {}).get("source") for r in records.values()} - {None}
         if srcs:
             out["jvm_probe_source"] = ",".join(sorted(srcs))

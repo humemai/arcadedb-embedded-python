@@ -145,7 +145,10 @@ def test_served_jvm_cell(tmp_path):
     assert row["disk_close_mib"] == 100.0 and row["disk_close_data_mib"] == 70.0
     assert row["mem_load_owned_mib"] == 3.5               # (1 + 0.5) client + 2 server
     assert row["mem_load_server_owned_mib"] == 2.0 and row["mem_load_client_owned_mib"] == 1.5
-    assert row["jvm_load_used_after_gc_mib"] == 12.1
+    assert row["jvm_load_used_mib"] == 12.1 and "jvm_load_used_after_gc_mib" not in row      # load: no GC was forced
+    assert row["jvm_queries_used_after_gc_mib"] == 12.1 and row["jvm_idle_used_after_gc_mib"] == 12.1
+    assert row["jvm_forced_gc_phases"] == "queries,idle"
+    assert sum(1 for a in calls if a[-1] == "GC.run") == 2
     assert row["jvm_load_committed_mib"] == 256.0
     assert "jvm_load_direct_mib" not in row               # native memory tracking off
     assert row["jvm_probe_source"] == "jcmd"
@@ -262,3 +265,44 @@ def test_export_web_column_only_for_2611(monkeypatch):
     cols = ew._metrics_for("l1tpc", spec)
     assert cols[-1] == ew.MEM_PHASE_COLUMN and cols[:-1] == ew._metrics_for_instrument("l1tpc", spec)
     assert ew._UNIT_DIVISOR[ew.MEM_PHASE_COLUMN[0]] == 1024.0
+
+
+# ---------------------------------------------------------------------------
+# no forced GC right before a timed phase
+
+LANE_MARKS = {   # the PHASE markers of lane shapes, in order; "-start" markers of timed work are listed in TIMED
+    "docs": ["connect-start", "connect-done", "build-start", "build-done", "oltp-warmup-start", "oltp-warmup-done",
+             "new-order-start", "new-order-done", "close-start", "close-done"],
+    "dense": ["build-start", "build-done", "post-build-start", "post-build-done", "warmup-start", "warmup-done",
+              "queries-start", "queries-done", "close-start", "close-done"],
+    "dense_no_warmup": ["build-start", "build-done", "post-build-start", "post-build-done", "queries-start",
+                        "queries-done", "close-start", "close-done"],
+    "sparse": ["build-start", "build-done", "post-build-start", "post-build-done", "search-warmup-start",
+               "search-warmup-done", "search-start", "search-done", "close-start", "close-done"],
+}
+TIMED = {"new-order-start", "queries-start", "search-start", "payment-start", "query-q1-start"}
+
+
+@pytest.mark.parametrize("lane", sorted(LANE_MARKS))
+def test_no_forced_gc_right_before_a_timed_phase(lane):
+    marks = LANE_MARKS[lane]
+    for i, m in enumerate(marks):
+        for ph in mp.phases_for_mark(m):
+            if not mp.forces_gc(ph):
+                continue
+            later = marks[i + 1:]
+            # a forced GC is allowed only once no timed phase is left to run (idle follows queries at the same marker)
+            assert not any(x in TIMED for x in later), f"{lane}: GC forced at {ph} ({m}) before {later}"
+    # and the phases that precede a timed phase in these lanes are exactly the ones never forced
+    for ph in ("load", "index_build", "warmup"):
+        assert not mp.forces_gc(ph)
+    assert mp.FORCED_GC_PHASES == ("queries", "idle")
+
+
+def test_lane_without_a_jvm_records_no_gc_phases(tmp_path):
+    cg = _cgroup(tmp_path, "cli")
+    host = mp.HostProbe("r6", str(tmp_path / "raw"))
+    host.docker_args()
+    host.start([("client", FakeSampler("c"))], lambda cid: cg)
+    row = _drive(host, ["build-done", "close-start"])
+    assert "jvm_forced_gc_phases" not in row
