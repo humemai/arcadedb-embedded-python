@@ -222,7 +222,7 @@ class ArcadeE2:
             # heap and ArcadeDB got one that grows.
             # txWalFlush explicit at both classes (DECISIONS #90).
             jvm_kwargs={"heap_size": heap,
-                        "jvm_args": bench_common.arcade_jvm_args(f"-Xms{heap}")})
+                        "jvm_args": bench_common.arcade_jvm_args(bench_common.embedded_xms(heap))})
         # THE WHEEL'S version, not its name (#156). A row stamped
         # "arcadedb-embedded" cannot be re-measured by anyone including us.
         from importlib.metadata import version as _v

@@ -391,6 +391,8 @@ ID_INDEX_ENV = "BENCH_DENSE_ID_INDEX"
 def id_index_enabled():
     raw = (os.environ.get(ID_INDEX_ENV) or "").strip()
     if not raw:
+        return bench_common.next_instrument_default()      # on under BENCH_INSTRUMENT=2026-11 (CAMPAIGN section 7 row 84)
+    if raw == "0" and bench_common.next_instrument_default():
         return False
     if raw != "1":
         raise SystemExit(f"{ID_INDEX_ENV}={raw!r}: set it to 1 or unset it")
@@ -624,7 +626,7 @@ class ArcadeEmbedded(Base):
         self.db = arcadedb.create_database(
             "/tmp/l3d_arcade",
             jvm_kwargs={"heap_size": heap,
-                        "jvm_args": f"-Xms{heap} {extra}".strip()})
+                        "jvm_args": bench_common.embedded_jvm_args(heap, extra.strip()) or None})
         from importlib.metadata import version as _pv
         self.version = _pv("arcadedb-embedded")
 

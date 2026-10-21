@@ -39,6 +39,58 @@ def instrument_at_least(version):
         raise ValueError(f"unknown instrument {version!r}")
     return INSTRUMENT >= version
 
+
+# WHAT THE NEXT INSTRUMENT TURNS ON (CAMPAIGN section 7 rows 81, 82, 84, and the note under that table). Each switch below is
+# OFF when BENCH_INSTRUMENT is unset (or "2026-10") and ON by default under BENCH_INSTRUMENT=2026-11. The explicit environment
+# variable of each switch keeps working as an override in both instruments: a value set by the launcher always wins over the
+# instrument's default, and rows stamp what was used, as before. One place holds the defaults so a test can read them.
+NEXT_INSTRUMENT = "2026-11"
+SPARSE_WARMUP_DEFAULT = 1000       # untimed searches per engine: one full round, as the study that motivated the warm-up used
+CPU_DMA_LATENCY_DEFAULT_US = 0     # idle-exit latency target held for each timed cell: no sleep state deeper than polling
+LARGE_RESULT_PATH_ENV = "BENCH_LARGE_RESULT_PATH"   # "arrow" or "rows": how a large result (l4 q_high, q_groupby) is read
+
+
+def next_instrument_default():
+    """True when this process measures the next instrument, so its default-off switches default to on."""
+    return instrument_at_least(NEXT_INSTRUMENT)
+
+
+def large_result_path():
+    """How the l4 queries with large answers (`q_high`, `q_groupby`) are read: "arrow" (each engine's documented bulk path:
+    ArcadeDB `to_arrow()`, DuckDB `to_arrow_table()`; SQLite has none and stays on `fetchall()`) under the next instrument,
+    "rows" (`to_list()` / `fetchall()`) under 2026-10. `BENCH_LARGE_RESULT_PATH=rows|arrow` overrides it in both instruments."""
+    v = (os.environ.get(LARGE_RESULT_PATH_ENV) or "").strip().lower()
+    if not v:
+        return "arrow" if next_instrument_default() else "rows"
+    if v not in ("arrow", "rows"):
+        raise SystemExit(f"{LARGE_RESULT_PATH_ENV}={v!r}: must be 'arrow' or 'rows' (unset it for the instrument's default)")
+    return v
+
+
+# THE EMBEDDED ARCADEDB JVM'S INITIAL HEAP. Through 2026-10 every embedded arm passed `-Xms{heap}` beside `heap_size` (-Xmx), so
+# the heap was committed up front like the served arms'. The bindings' documented practice is to leave -Xms unset and cap -Xmx
+# from the cell's memory budget; 2026-11 does that. `BENCH_ARCADEDB_EMBEDDED_XMS=pin|unset` overrides it in both instruments.
+EMBEDDED_XMS_ENV = "BENCH_ARCADEDB_EMBEDDED_XMS"
+
+
+def embedded_pins_xms():
+    v = (os.environ.get(EMBEDDED_XMS_ENV) or "").strip().lower()
+    if not v:
+        return not next_instrument_default()
+    if v not in ("pin", "unset"):
+        raise SystemExit(f"{EMBEDDED_XMS_ENV}={v!r}: must be 'pin' or 'unset' (unset it for the instrument's default)")
+    return v == "pin"
+
+
+def embedded_xms(heap):
+    """The `-Xms` argument for an embedded ArcadeDB JVM, or "" when this instrument leaves -Xms unset."""
+    return f"-Xms{heap}" if embedded_pins_xms() else ""
+
+
+def embedded_jvm_args(heap, *more):
+    """`-Xms` (when pinned) followed by the other arguments, space-joined, empty pieces dropped."""
+    return " ".join(p for p in (embedded_xms(heap), *more) if p)
+
 # THE JPYPE VERSION THE CAMPAIGN MEASURES (CAMPAIGN 7 row 73). The embedded
 # ArcadeDB arms cross from Python into the JVM through JPype, so its per-call
 # cost is part of every embedded number: a laptop A/B of JPype 1.7.1 against its

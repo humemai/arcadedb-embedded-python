@@ -1051,7 +1051,7 @@ class ArcadeTPC:
         self._a = arcadedb
         heap = os.environ.get("ARCADEDB_HEAP", "4g")
         self.db = arcadedb.create_database("/tmp/tpc_arcade",
-                                           # -Xms pinned to -Xmx, matching every server arm and the other lanes.
+                                           # -Xms pinned to -Xmx through 2026-10 (left unset under 2026-11, bench_common.embedded_xms), matching every server arm and the other lanes.
                                            # heap_size sets -Xmx ONLY (bindings jvm.py), so without this the JVM
                                            # starts at its default initial heap, 1/64 of the cgroup, and grows
                                            # under load. The paper states -Xms=-Xmx as a protocol invariant for
@@ -1062,7 +1062,7 @@ class ArcadeTPC:
                                            # row's claim is a flag this process set rather
                                            # than a default someone remembered.
                                            jvm_kwargs={"heap_size": heap,
-                                                       "jvm_args": bench_common.arcade_jvm_args(f"-Xms{heap}")})
+                                                       "jvm_args": bench_common.arcade_jvm_args(bench_common.embedded_xms(heap))})
         from importlib.metadata import version as _pv
         self.version = _pv("arcadedb-embedded")
         # ASKED, not asserted (#81's standard, doubled by #90's second class).

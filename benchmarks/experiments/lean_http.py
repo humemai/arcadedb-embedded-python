@@ -34,6 +34,11 @@ says why (ArcadeDB 26.10.1's 100 MiB request-body limit looked like `[Errno 32] 
 A session is for one thread. `BENCH_ARCADEDB_HTTP_CLIENT=requests` restores the October client (`Session()` then returns a `requests.Session`), so
 the October behaviour stays reproducible; the default is `lean`. `BENCH_ARCADEDB_HTTP_CLIENT=lean2` selects `LeanSession2`, the same client over a bare socket (see its docstring), OFF
 unless asked for. `row_fields(session)` is what a row records.
+
+THE NEXT INSTRUMENT (BENCH_INSTRUMENT=2026-11, CAMPAIGN section 7 rows 72 and 82): unset, the client is `official`, the vendor's own
+`arcadedb-driver` (sync, httpx) for every `/query` and `/command` call, and `lean` and the PG wire are the labelled sensitivity rows (the
+runner schedules them as twin cells). `BENCH_ARCADEDB_HTTP_CLIENT=lean|lean2|requests|official` overrides the default in both
+instruments. Under 2026-10 unset is still `lean`.
 """
 import base64
 import gzip
@@ -41,6 +46,7 @@ import http.client
 import io
 import json as _json
 import os
+import re
 import select
 import socket
 import ssl
@@ -51,20 +57,28 @@ CLIENT_ENV = "BENCH_ARCADEDB_HTTP_CLIENT"
 LEAN = "lean"
 LEAN2 = "lean2"
 REQUESTS = "requests"
+OFFICIAL = "official"
+OFFICIAL_PIN = "0.2.0"       # the arcadedb-driver release the 2026-11 headline measures; recorded per row from the installed package
 LEAN_NAME = "lean_http (http.client, keep-alive)"
 LEAN2_NAME = "lean_http2 (socket, keep-alive)"
 
 
 def client_choice():
-    """'lean' (the default), 'lean2', or 'requests', from BENCH_ARCADEDB_HTTP_CLIENT; anything else is refused rather than guessed."""
+    """'lean' (the default through 2026-10), 'official' (the default under 2026-11), 'lean2', or 'requests', from
+    BENCH_ARCADEDB_HTTP_CLIENT; anything else is refused rather than guessed."""
     v = (os.environ.get(CLIENT_ENV) or "").strip().lower()
-    if v in ("", LEAN):
+    if v == "":
+        import bench_common
+        return OFFICIAL if bench_common.next_instrument_default() else LEAN
+    if v == LEAN:
         return LEAN
     if v == REQUESTS:
         return REQUESTS
     if v == LEAN2:
         return LEAN2
-    raise ValueError(f"{CLIENT_ENV} must be 'lean', 'lean2', or 'requests', got {v!r}")
+    if v == OFFICIAL:
+        return OFFICIAL
+    raise ValueError(f"{CLIENT_ENV} must be 'lean', 'lean2', 'requests', or 'official', got {v!r}")
 
 
 # ------------------------------------------------------------------------------------------------------ exceptions
@@ -694,10 +708,120 @@ class LeanSession2(LeanSession):
                              _charset_of(ctype.decode("latin-1")) if ctype is not None else "utf-8")
 
 
+# ----------------------------------------------------------------------------------------------- the official driver
+_DATA_URL = re.compile(r"^(?P<root>https?://[^/]+)/api/v1/(?P<kind>query|command)/(?P<db>[^/?#]+)$")
+
+
+class _OfficialResponse:
+    """What an official-driver call returns, in the part of requests' Response the lanes read: the answer is the envelope the driver
+    already parsed, so `.json()` hands it back as it is and nothing is serialised inside the timed call. `.content` and `.text` encode it
+    on demand (a lane that reads them pays for them, as it would on any client)."""
+
+    def __init__(self, status_code, obj, url, reason=""):
+        self.status_code, self._obj, self.url, self.reason, self.headers = status_code, obj, url, reason, {}
+
+    ok = property(lambda self: self.status_code < 400)
+
+    def json(self):
+        return self._obj
+
+    @property
+    def content(self):
+        return _json.dumps(self._obj, default=str).encode("utf-8")
+
+    @property
+    def text(self):
+        return self.content.decode("utf-8")
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise HTTPError(f"{self.status_code} Server Error: {self.reason} for url: {self.url}", response=self)
+
+
+class OfficialSession:
+    """The official `arcadedb-driver` (sync, httpx) behind the part of `requests.Session` the lanes use, so a lane changes by no line.
+
+    Every `POST /api/v1/query/<db>` and `/command/<db>` whose body is `{language, command, params?, limit?}` goes through
+    `ArcadeDBServer(...).db(<db>).query(...)` or `.command(...)`, which is what the vendor documents for a Python client. Everything
+    else goes through a `LeanSession`: the `GET /server` probe, the bulk `/batch` load, transactions (`begin`/`commit`/`rollback` and any
+    call carrying a session id), NDJSON streams, raw text bodies, and a body with a field the driver has no argument for. Bulk loads stay
+    on HTTP `batch` and `command` as the protocol-audit decision says; the driver's `batch_load` is a different request shape and is not
+    used. `official_calls` and `fallback_calls` count the two (a test reads them).
+    """
+
+    client_name = None   # set per instance from the installed package
+
+    def __init__(self):
+        import arcadedb_driver
+        from arcadedb_driver.auth import basic_auth
+        self._driver, self._basic_auth = arcadedb_driver, basic_auth
+        self.version = getattr(arcadedb_driver, "__version__", None) or _driver_version()
+        self.client_name = f"arcadedb-driver {self.version} (sync, httpx)"
+        self.auth = None
+        self._servers = {}
+        self._fallback = LeanSession()
+        self.official_calls = 0
+        self.fallback_calls = 0
+
+    def _server(self, root, auth):
+        key = (root, auth)
+        srv = self._servers.get(key)
+        if srv is None:
+            user, password = auth
+            srv = self._driver.ArcadeDBServer(base_url=root, auth=self._basic_auth(user, password))
+            self._servers[key] = srv
+        return srv
+
+    def get(self, url, **kw):
+        kw.setdefault("auth", self.auth)
+        self.fallback_calls += 1
+        return self._fallback.get(url, **kw)
+
+    def post(self, url, json=None, data=None, auth=None, headers=None, timeout=None, **kw):
+        auth = auth or self.auth
+        m = _DATA_URL.match(url)
+        if (m and auth and isinstance(json, dict) and data is None and not headers and not kw
+                and set(json) <= {"language", "command", "params", "limit"}
+                and "language" in json and "command" in json
+                and not (m["kind"] == "command" and "limit" in json)):
+            srv = self._server(m["root"], tuple(auth))
+            db = srv.db(m["db"])
+            self.official_calls += 1
+            try:
+                if m["kind"] == "query":
+                    env = db.query(language=json["language"], command=json["command"], params=json.get("params"), limit=json.get("limit"))
+                else:
+                    env = db.command(language=json["language"], command=json["command"], params=json.get("params"))
+            except self._driver.ArcadeDBError as e:
+                return _OfficialResponse(e.status, {"error": e.error, "detail": e.detail, "exception": e.exception}, url, e.error or "")
+            return _OfficialResponse(200, {"result": env.result, "limit": env.limit, "returned": env.returned, "truncated": env.truncated}, url, "OK")
+        self.fallback_calls += 1
+        return self._fallback.post(url, json=json, data=data, auth=auth or self.auth, headers=headers, timeout=timeout, **kw)
+
+    def close(self):
+        for srv in self._servers.values():
+            try:
+                srv.close()
+            except Exception:  # noqa: BLE001 - closing must not fail a cell
+                pass
+        self._servers.clear()
+        self._fallback.close()
+
+
+def _driver_version():
+    try:
+        from importlib.metadata import version
+        return version("arcadedb-driver")
+    except Exception:  # noqa: BLE001
+        return "unknown"
+
+
 # ------------------------------------------------------------------------------------------------------ the factory
 def Session():  # noqa: N802 - requests' own spelling, so a lane changes by one import
     """The ArcadeDB served arms' session: lean by default, LeanSession2 when BENCH_ARCADEDB_HTTP_CLIENT=lean2, `requests.Session` when it is `requests`."""
     choice = client_choice()
+    if choice == OFFICIAL:
+        return OfficialSession()
     if choice == LEAN2:
         return LeanSession2()
     if choice == REQUESTS:
@@ -710,7 +834,12 @@ def Session():  # noqa: N802 - requests' own spelling, so a lane changes by one 
 
 def row_fields(session):
     """What a served ArcadeDB row records about its client, read from the session it ran with (not from the environment)."""
-    return {"arcadedb_http_client": getattr(session, "client_name", None) or type(session).__module__ + "." + type(session).__name__}
+    out = {"arcadedb_http_client": getattr(session, "client_name", None) or type(session).__module__ + "." + type(session).__name__}
+    if isinstance(session, OfficialSession):
+        out["arcadedb_http_client_role"] = "headline"
+    elif os.environ.get("BENCH_ARCADEDB_CLIENT_ROLE"):
+        out["arcadedb_http_client_role"] = os.environ["BENCH_ARCADEDB_CLIENT_ROLE"]
+    return out
 
 
 # --------------------------------------------------------------------------------------------- streamed (NDJSON) results

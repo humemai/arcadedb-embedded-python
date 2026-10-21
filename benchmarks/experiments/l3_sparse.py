@@ -33,8 +33,10 @@ INGEST_BATCH = 500
 
 # THE UNTIMED WARM-UP (CAMPAIGN section 7 row 81, DECISIONS #177), default OFF. Unset: no warm-up and no row field, so
 # a row is what it was. `BENCH_SPARSE_WARMUP=N` (a positive integer) runs N untimed searches on every backend after the
-# build and before the timed pass, and the row records `sparse_warmup_queries`. The N queries are drawn from the query
-# set by a seeded sample, so every engine gets the same ones, and they are spread over the set instead of being the
+# build and before the timed pass, and the row records `sparse_warmup_queries`. Under BENCH_INSTRUMENT=2026-11 an unset variable means
+# bench_common.SPARSE_WARMUP_DEFAULT (1,000; "0" or "off" turns it off) and the warm-up queries are DISJOINT from the timed set
+# (disjoint_warmup_queries; the row stamps `sparse_warmup_source`); under 2026-10 unset still means none, and an explicit N draws its
+# N queries from the query set by a seeded sample, so every engine gets the same ones, and they are spread over the set instead of being the
 # timed pass's first N (those are the ones the timed pass would otherwise replay from a warm cache). Same count and
 # same rule for every engine, as the documents lane's warm-up uses keys apart from the timed ones.
 WARMUP_ENV = "BENCH_SPARSE_WARMUP"
@@ -46,7 +48,10 @@ def sparse_warmup_n():
     a launcher that asked for a warm-up and silently got none would stamp nothing and believe otherwise."""
     raw = (os.environ.get(WARMUP_ENV) or "").strip()
     if not raw:
-        return 0
+        # Unset: none through 2026-10; BENCH_INSTRUMENT=2026-11 warms every engine (CAMPAIGN section 7 row 81)
+        return bench_common.SPARSE_WARMUP_DEFAULT if bench_common.next_instrument_default() else 0
+    if bench_common.next_instrument_default() and raw.lower() in ("0", "off"):
+        return 0       # an explicit "no warm-up" under the instrument that defaults to one
     try:
         n = int(raw)
     except ValueError:
@@ -61,6 +66,24 @@ def warmup_indices(n, n_queries):
     import random
     n = min(n, n_queries)
     return sorted(random.Random(WARMUP_SEED).sample(range(n_queries), n))
+
+
+def disjoint_warmup_queries(n, n_timed, n_docs):
+    """The warm-up queries of the next instrument: `n` queries that are NOT in the timed set, so an engine with a query or result cache
+    cannot look faster for having seen them. Returns (queries, source). The source is the dataset's EXTRA queries, the ones after
+    the `n_timed` the timed pass uses ("extra_queries": the rest of the Big-ANN dev file, or the next draws of the synthetic generator,
+    whose first `n_timed` draws are the timed set); when the dataset holds fewer than `n_timed + n`, a fixed-seed sample of `n`
+    documents used as queries ("document_sample", from the first 100,000 documents). The same ones for every engine."""
+    try:
+        extra = gen_queries(n_timed + n)[n_timed:]
+    except Exception:  # noqa: BLE001 - a file shorter than asked for is the fallback's case, not an error
+        extra = []
+    if len(extra) >= n:
+        return extra[:n], "extra_queries"
+    import random
+    pool = min(n_docs, 100_000)
+    picks = set(random.Random(WARMUP_SEED).sample(range(pool), min(n, pool)))
+    return [(idx, vals) for i, idx, vals in gen_docs(pool) if i in picks], "document_sample"
 
 
 def pct(vals):
@@ -166,20 +189,19 @@ class ArcadeEmbedded(Base):
     def connect(self):
         import arcadedb_embedded as arcadedb
         heap = os.environ.get("ARCADEDB_HEAP", "4g")
-        # -Xms pinned to -Xmx for parity with the server deployment
-        # (ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap} in runner.py)
-        jvm_args = f"-Xms{heap}"
+        # -Xms pinned to -Xmx through 2026-10; left unset under 2026-11 (bench_common.embedded_xms)
+        jvm_args = bench_common.embedded_xms(heap)
         # Engine knobs for an ablation arm, e.g.
         #   ARCADEDB_JVM_EXTRA=-Darcadedb.sparseVectorScoringMaxPartitions=8
         # Echoed rather than applied silently: an unread override would make an
         # ablation measure the default and look like a null result.
         extra = os.environ.get("ARCADEDB_JVM_EXTRA", "").strip()
         if extra:
-            jvm_args = f"{jvm_args} {extra}"
+            jvm_args = f"{jvm_args} {extra}".strip()
             print(f"JVM-EXTRA {extra}", flush=True)
         self.db = arcadedb.create_database(
             "/tmp/l3_arcade",
-            jvm_kwargs={"heap_size": heap, "jvm_args": jvm_args})
+            jvm_kwargs={"heap_size": heap, "jvm_args": jvm_args or None})
         from importlib.metadata import version as _pv
         self.version = _pv("arcadedb-embedded")
         self.db.command("sql", "CREATE DOCUMENT TYPE Doc")
@@ -206,7 +228,7 @@ class ArcadeEmbedded(Base):
         heap = os.environ.get("ARCADEDB_HEAP", "4g")
         self.db = arcadedb.open_database(
             "/tmp/l3_arcade",
-            jvm_kwargs={"heap_size": heap, "jvm_args": f"-Xms{heap}"})
+            jvm_kwargs={"heap_size": heap, "jvm_args": bench_common.embedded_xms(heap) or None})
         self.idx_name = "Doc[tokens,weights]"
 
     def build(self, n_docs):
@@ -831,9 +853,16 @@ def main():
     if _warm_n:
         _w0 = time.perf_counter()
         _beat.mark("search-warmup-start", n=_warm_n)
-        for _qi in warmup_indices(_warm_n, len(queries)):
-            b.search(queries[_qi][0], queries[_qi][1], K)
-        out["sparse_warmup_queries"] = min(_warm_n, len(queries))
+        if bench_common.next_instrument_default():
+            # 2026-11: queries disjoint from the timed set (see disjoint_warmup_queries); the row names the source
+            _wq, out["sparse_warmup_source"] = disjoint_warmup_queries(_warm_n, len(queries), n_docs)
+            for _idx, _vals in _wq:
+                b.search(_idx, _vals, K)
+            out["sparse_warmup_queries"] = len(_wq)
+        else:
+            for _qi in warmup_indices(_warm_n, len(queries)):
+                b.search(queries[_qi][0], queries[_qi][1], K)
+            out["sparse_warmup_queries"] = min(_warm_n, len(queries))
         _beat.mark("search-warmup-done", t=f"{round(time.perf_counter() - _w0, 2)}s")
 
     # timed warm search

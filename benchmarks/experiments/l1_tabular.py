@@ -505,8 +505,9 @@ class ArcadeEmbedded(Base):
 
     def connect(self):
         import arcadedb_embedded as arcadedb
+        import bench_common      # this retired lane imports nothing else from it
         heap = os.environ.get("ARCADEDB_HEAP", "4g")
-        # -Xms pinned to -Xmx for parity with the server deployment
+        # -Xms pinned to -Xmx through 2026-10; left unset under 2026-11 (bench_common.embedded_xms)
         # queryMaxHeapElementsAllowedPerOp: raised from the 500k default so a
         # high-cardinality top-N-by-aggregate (top_customers, >1.24M groups at
         # medium) completes instead of aborting. Documented fairness override
@@ -516,8 +517,8 @@ class ArcadeEmbedded(Base):
         self.db = arcadedb.create_database(
             "/tmp/l1_arcade",
             jvm_kwargs={"heap_size": heap,
-                        "jvm_args": f"-Xms{heap} "
-                                    "-Darcadedb.queryMaxHeapElementsAllowedPerOp=5000000"})
+                        "jvm_args": bench_common.embedded_jvm_args(
+                            heap, "-Darcadedb.queryMaxHeapElementsAllowedPerOp=5000000")})
         self.version = arcadedb.__version__
         self._tx = False
 
@@ -539,12 +540,13 @@ class ArcadeEmbedded(Base):
         the same label.
         """
         import arcadedb_embedded as arcadedb
+        import bench_common      # this retired lane imports nothing else from it
         heap = os.environ.get("ARCADEDB_HEAP", "4g")
         self.db = arcadedb.open_database(
             "/tmp/l1_arcade",
             jvm_kwargs={"heap_size": heap,
-                        "jvm_args": f"-Xms{heap} "
-                                    "-Darcadedb.queryMaxHeapElementsAllowedPerOp=5000000"})
+                        "jvm_args": bench_common.embedded_jvm_args(
+                            heap, "-Darcadedb.queryMaxHeapElementsAllowedPerOp=5000000")})
         self._tx = False
 
     def schema(self):

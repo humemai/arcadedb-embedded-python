@@ -221,7 +221,59 @@ def parse_lp(path):
     return pts
 
 
-class ArcadeTS:
+class ArrowResult:
+    """A large answer read as the engine's typed Arrow table (BENCH_INSTRUMENT=2026-11, or BENCH_LARGE_RESULT_PATH=arrow). The timed
+    call returns the table; the row count is `num_rows`, and the digest iterates it as dict rows AFTER the timer stops."""
+
+    def __init__(self, table, positional=False):
+        self.table = table
+        self.positional = positional
+
+    def __len__(self):
+        return self.table.num_rows
+
+    def __iter__(self):
+        if self.positional:
+            # TUPLES BY POSITION, as the engine's own fetchall() returns them. DuckDB names an unaliased aggregate `avg(uu)`, and
+            # the declared digest column is `v`: as dict rows the value was looked up under a name the table does not have and the
+            # digest read <missing> where the plain read had the number (gate run 2026-10-21, q_groupby 7ab90d6f43a25460 against
+            # 18c9985de67433e6). The 2026-10 query text stays as it was, so the fix lives in the reader, not in an `AS v`.
+            return zip(*(c.to_pylist() for c in self.table.columns))
+        return iter(self.table.to_pylist())
+
+
+class BulkRead:
+    """The l4 queries with large answers (`q_high`, about 33,000 rows at ts100; `q_groupby`) on each engine's documented best path
+    for a result that size (DECISIONS #170 amendment, CAMPAIGN section 7): ArcadeDB `ResultSet.to_arrow()`, DuckDB
+    `to_arrow_table()`; SQLite has no columnar path and stays on `fetchall()`. `<query>_plain()` is the plain-Python-objects read
+    (`to_list()`, DuckDB `fetchall()`) that the lane times beside it as the labelled sensitivity row. Small results never move.
+    Under 2026-10, and with BENCH_LARGE_RESULT_PATH=rows, the headline stays `to_list()` / `fetchall()` and nothing is added."""
+
+    bulk_read = True
+    LARGE = ("q_groupby", "q_high")
+
+    def _path(self):
+        return bench_common.large_result_path()
+
+    def _large(self, rs):
+        if self._path() == "arrow":
+            table = rs.to_arrow()
+            if table is not None:
+                self._used = "arrow"
+                return ArrowResult(table)
+            self._used = "rows"          # pyarrow or the bridge jar is missing: the row says what ran
+            self._arrow_missing = True
+        return rs.to_list()
+
+    def read_path_fields(self):
+        """What the row records, from what ran: the path each large query took, and the plain read's name for the sensitivity row."""
+        used = getattr(self, "_used", "rows")
+        return {"read_path": used, "read_path_queries": list(self.LARGE),
+                "read_path_plain": self.PLAIN_NAME, **({"read_path_arrow_missing": True} if getattr(self, "_arrow_missing", False) else {})}
+
+
+class ArcadeTS(BulkRead):
+    PLAIN_NAME = "to_list"
     name = "arcadedb_ts_doc"
 
     def connect(self):
@@ -229,14 +281,14 @@ class ArcadeTS:
         self._arcadedb = arcadedb
         heap = os.environ.get("ARCADEDB_HEAP", "6g")
         self.db = arcadedb.create_database("/tmp/l4_arcade",
-                                           # -Xms pinned to -Xmx, matching every server arm and the other lanes.
+                                           # -Xms pinned to -Xmx through 2026-10 (left unset under 2026-11, bench_common.embedded_xms), matching every server arm and the other lanes.
                                            # heap_size sets -Xmx ONLY (bindings jvm.py), so without this the JVM
                                            # starts at its default initial heap, 1/64 of the cgroup, and grows
                                            # under load. The paper states -Xms=-Xmx as a protocol invariant for
                                            # everyone. It was true of l1, l2, l3s, l3d and every server arm, and
                                            # false here.
                                            jvm_kwargs={"heap_size": heap,
-                                                       "jvm_args": f"-Xms{heap}"})
+                                                       "jvm_args": bench_common.embedded_xms(heap) or None})
 
     def version(self):
         return f"arcadedb {self._arcadedb.__version__}"
@@ -287,14 +339,26 @@ class ArcadeTS:
             f"SELECT (ts - ts % 3600) AS h, avg(uu) AS v FROM Point "
             f"WHERE ts >= {T0} AND ts < {T0+43200} GROUP BY h ORDER BY h").to_list()
 
-    def q_groupby(self):
+    def _q_groupby_rs(self):
         return self.db.query("sql",
             f"SELECT host, (ts - ts % 3600) AS h, avg(uu) AS v FROM Point "
-            f"WHERE ts >= {T0} AND ts < {T0+43200} GROUP BY host, h ORDER BY host, h").to_list()
+            f"WHERE ts >= {T0} AND ts < {T0+43200} GROUP BY host, h ORDER BY host, h")
+
+    def q_groupby(self):
+        return self._large(self._q_groupby_rs())
+
+    def q_groupby_plain(self):
+        return self._q_groupby_rs().to_list()
+
+    def _q_high_rs(self):
+        return self.db.query("sql",
+            f"SELECT host, ts, uu FROM Point WHERE ts >= {T0} AND ts < {T0+43200} AND uu > {HIGH}")
 
     def q_high(self):
-        return self.db.query("sql",
-            f"SELECT host, ts, uu FROM Point WHERE ts >= {T0} AND ts < {T0+43200} AND uu > {HIGH}").to_list()
+        return self._large(self._q_high_rs())
+
+    def q_high_plain(self):
+        return self._q_high_rs().to_list()
 
     def q_orderlimit(self):
         return self.db.query("sql",
@@ -306,6 +370,7 @@ class ArcadeTS:
 
 
 class ArcadeTSServer(ArcadeTS):
+    bulk_read = False      # the served arms read over HTTP; the bulk path is an embedded API
     """The document path against the ArcadeDB SERVER over HTTP (2026-09-07).
     Same schema and the same three queries; the ingest goes as SQLSCRIPT
     batches of 5,000 INSERTs, so the ingest column measures the HTTP path a
@@ -622,16 +687,28 @@ class ArcadeNativeTS(ArcadeTS):
             f"WHERE ts >= {a} AND ts < {b} "
             f"GROUP BY h ORDER BY h").to_list()
 
-    def q_groupby(self):
+    def _q_groupby_rs(self):
         a, b = T0 * 1000, (T0 + 43200) * 1000
         return self.db.query("sql",
             f"SELECT host, ts.timeBucket('1h', ts) AS h, avg(uu) AS v FROM Point "
-            f"WHERE ts >= {a} AND ts < {b} GROUP BY host, h ORDER BY host, h").to_list()
+            f"WHERE ts >= {a} AND ts < {b} GROUP BY host, h ORDER BY host, h")
 
-    def q_high(self):
+    def q_groupby(self):
+        return self._large(self._q_groupby_rs())
+
+    def q_groupby_plain(self):
+        return self._q_groupby_rs().to_list()
+
+    def _q_high_rs(self):
         a, b = T0 * 1000, (T0 + 43200) * 1000
         return self.db.query("sql",
-            f"SELECT host, ts, uu FROM Point WHERE ts >= {a} AND ts < {b} AND uu > {HIGH}").to_list()
+            f"SELECT host, ts, uu FROM Point WHERE ts >= {a} AND ts < {b} AND uu > {HIGH}")
+
+    def q_high(self):
+        return self._large(self._q_high_rs())
+
+    def q_high_plain(self):
+        return self._q_high_rs().to_list()
 
     def q_orderlimit(self):
         a, b = T0 * 1000, (T0 + 43200) * 1000
@@ -688,6 +765,7 @@ class ArcadeNativeTS(ArcadeTS):
 
 
 class ArcadeNativeTSServer(ArcadeNativeTS):
+    bulk_read = False
     """The native TIMESERIES type on the SERVER (2026-09-07). Ingest goes through
     the server's own time-series endpoint, POST /api/v1/ts/{db}/write with
     InfluxDB line protocol, in chunks; the three queries are the same SQL the
@@ -812,8 +890,9 @@ class ArcadeNativeTSServer(ArcadeNativeTS):
         self.rq.close()
 
 
-class DuckTS:
+class DuckTS(BulkRead):
     name = "duckdb"
+    PLAIN_NAME = "fetchall"
 
     def connect(self):
         import duckdb
@@ -824,6 +903,12 @@ class DuckTS:
         self.cx.execute(f"PRAGMA threads={len(os.sched_getaffinity(0))}")
         # The engine's own answer, on the row (CAMPAIGN section 7 row 21).
         self.row_extra = bench_common.duckdb_readback(self.cx)
+
+    def _large_duck(self, rel):
+        if self._path() == "arrow":
+            self._used = "arrow"
+            return ArrowResult(rel.to_arrow_table() if hasattr(rel, "to_arrow_table") else rel.fetch_arrow_table(), positional=True)
+        return rel.fetchall()
 
     def version(self):
         return f"duckdb {self._duckdb.__version__}"
@@ -883,14 +968,26 @@ class DuckTS:
             f"SELECT (ts - ts % 3600) AS h, avg(uu) FROM p WHERE ts >= {T0} "
             f"AND ts < {T0+43200} GROUP BY h ORDER BY h").fetchall()
 
-    def q_groupby(self):
+    def _q_groupby_rel(self):
         return self.cx.execute(
             f"SELECT host, (ts - ts % 3600) AS h, avg(uu) FROM p WHERE ts >= {T0} "
-            f"AND ts < {T0+43200} GROUP BY host, h ORDER BY host, h").fetchall()
+            f"AND ts < {T0+43200} GROUP BY host, h ORDER BY host, h")
+
+    def q_groupby(self):
+        return self._large_duck(self._q_groupby_rel())
+
+    def q_groupby_plain(self):
+        return self._q_groupby_rel().fetchall()
+
+    def _q_high_rel(self):
+        return self.cx.execute(
+            f"SELECT host, ts, uu FROM p WHERE ts >= {T0} AND ts < {T0+43200} AND uu > {HIGH}")
 
     def q_high(self):
-        return self.cx.execute(
-            f"SELECT host, ts, uu FROM p WHERE ts >= {T0} AND ts < {T0+43200} AND uu > {HIGH}").fetchall()
+        return self._large_duck(self._q_high_rel())
+
+    def q_high_plain(self):
+        return self._q_high_rel().fetchall()
 
     def q_orderlimit(self):
         return self.cx.execute(
@@ -1814,9 +1911,41 @@ def main():
         bench_common.record_first_query(out, qn, times[0])
         # THE ANSWER (DECISIONS #88), from the object the last timed call
         # returned, outside the timed loop.
-        bench_common.record_result(out, qn, ref, **Q_DIGEST[qn])
+        bench_common.record_result(out, qn, list(ref) if isinstance(ref, ArrowResult) else ref, **Q_DIGEST[qn])
         _beat.mark(f"query-{qn}-done", p50=out[f"{qn}_ms"], rows=out[f"{qn}_rows"],
                    digest=out[f"res_{qn}_digest"])
+
+    # THE LARGE-RESULT READ PATH (DECISIONS #170 amendment, CAMPAIGN section 7): an arm with a bulk path stamps which one carried
+    # q_groupby and q_high, and, when that was the typed Arrow read, times the plain-Python-objects read (`to_list()`, `fetchall()`)
+    # beside it as the labelled sensitivity row `<query>_plain_*`. Nothing here runs under 2026-10 or BENCH_LARGE_RESULT_PATH=rows.
+    if getattr(b, "bulk_read", False) and bench_common.large_result_path() == "arrow":
+        out.update(b.read_path_fields())
+    if out.get("read_path") == "arrow":
+        for qn in BulkRead.LARGE:
+            _pt, _p0 = [], time.perf_counter()
+            for _ in range(QITER):
+                if _pt and time.perf_counter() - _p0 > out[f"{qn}_budget_s"]:
+                    break
+                _s = time.perf_counter()
+                _pref = getattr(b, f"{qn}_plain")()
+                _pt.append((time.perf_counter() - _s) * 1000)
+            out[f"{qn}_plain_ms"] = round(statistics.median(_pt), 4)
+            out[f"{qn}_plain_iters"] = len(_pt)
+            out[f"{qn}_plain_rows"] = len(_pref)
+            # THE GATE, ON THE ROW (2026-10-21): the plain read must give the same ANSWER as the typed read it sits beside, and
+            # "same" is the lane's own digest, not a row count. Stamped under a name the cross-engine check does not read as a query
+            # (it matches res_*_digest), and a mismatch ends the cell: a typed read that changes the answer is not a faster read.
+            _pd = bench_common.result_digest(_pref, **Q_DIGEST[qn])
+            out[f"{qn}_plain_digest"] = _pd["digest"]
+            out[f"{qn}_plain_sample"] = _pd["sample"]
+            out[f"{qn}_plain_digest_match"] = _pd["digest"] == out[f"res_{qn}_digest"]
+        out["read_path_sensitivity"] = b.PLAIN_NAME
+        _split = {qn: (out[f"res_{qn}_digest"], out[f"{qn}_plain_digest"], out[f"res_{qn}_sample"], out[f"{qn}_plain_sample"])
+                  for qn in BulkRead.LARGE if not out[f"{qn}_plain_digest_match"]}
+        if _split:
+            raise SystemExit(
+                f"{args.backend}: the typed Arrow read and the plain read answer differently (typed digest, plain digest, typed sample, plain sample): {_split}. "
+                f"The headline is withheld until the conversion or the digest normalisation is fixed.")
 
     # ASSERT THE SHAPES, do not merely record them. The lane already knew the
     # right answers -- 60 minute buckets over an hour, 12 two-hour buckets over a
