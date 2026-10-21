@@ -193,8 +193,8 @@ COPY bindings/python/README.md ./
 # Also copy repository pom.xml so scripts/extract_version.py can read it
 COPY pom.xml /arcadedb/pom.xml
 
-# Install Python build dependencies
-RUN uv pip install --system build wheel setuptools jpype1
+# No separate install of build tools: `uv build` creates an isolated environment with the
+# `[build-system] requires` from pyproject.toml (build, setuptools, wheel, jpype1) for each build.
 
 # Re-declare build args for this stage (required after FROM)
 ARG PACKAGE_NAME
@@ -247,12 +247,12 @@ RUN if [ -n "${BUILD_VERSION}" ]; then \
         fi; \
         if [ -n "${WHEEL_PLAT}" ]; then \
             echo "🏷️  Building wheel with platform tag: ${WHEEL_PLAT}"; \
-            python3 -m build --wheel --config-setting=--build-option=--plat-name=${WHEEL_PLAT}; \
+            uv build --wheel --config-setting=--build-option=--plat-name=${WHEEL_PLAT}; \
         else \
-            python3 -m build --wheel; \
+            uv build --wheel; \
         fi; \
     else \
-        python3 -m build --wheel; \
+        uv build --wheel; \
     fi && \
     if echo "${TARGET_PLATFORM}" | grep -q '^linux-'; then \
         if [ -n "${WHEEL_PLAT}" ] && ! ls /build/dist/*${WHEEL_PLAT}*.whl 1> /dev/null 2>&1; then \
@@ -292,8 +292,8 @@ WORKDIR /test
 # Copy the wheel from builder
 COPY --from=python-builder /build/dist/*.whl /tmp/
 
-# Install the wheel and test dependencies
-RUN uv pip install --system /tmp/*.whl pytest pytest-cov
+# The wheel and the test dependencies run in a throwaway `uv run` environment instead of being
+# installed into the image's interpreter. The RUN below builds it once and the image caches it.
 
 # Copy tests
 COPY --from=python-builder /build/tests ./tests/
@@ -331,6 +331,6 @@ finally:\n\
 ' > /test/test_install.py && chmod +x /test/test_install.py
 
 # Run the installation test
-RUN python3 /test/test_install.py
+RUN uv run --no-project --with /tmp/*.whl --with pytest --with pytest-cov python3 /test/test_install.py
 
-CMD ["python3", "/test/test_install.py"]
+CMD ["sh", "-c", "uv run --no-project --offline --with /tmp/*.whl --with pytest --with pytest-cov python3 /test/test_install.py"]

@@ -82,7 +82,7 @@ sys.exit(1 if bad else 0)
 EOF
 fi
 
-# (d) every platform resolves, and a fresh venv installs and works (3.12 and 3.14)
+# (d) every platform resolves, and a fresh environment installs and works (3.12 and 3.14)
 for plat in manylinux_2_34_x86_64 manylinux_2_34_aarch64 macosx_11_0_arm64 win_amd64; do
     if uvx pip download --no-deps --only-binary=:all: --platform "$plat" --python-version 3.12 "arcadedb-embedded==$V" -d "$W/dl-$plat" > "$W/dl-$plat.log" 2>&1; then pass "pip download $plat (cp312)"; else fail "pip download $plat: $(tail -1 "$W/dl-$plat.log")"; fi
 done
@@ -91,15 +91,14 @@ for py in 3.12 3.14; do
         printf "SKIP  smoke on Python %s (SKIP_SMOKE set)\n" "$py"
         continue
     }
-    uv venv --python "$py" "$W/venv-$py" > /dev/null 2>&1 || {
-        fail "uv venv $py"
+    # A throwaway `uv run` environment with the PyPI release; the fresh cache directory makes the
+    # install download from PyPI (what `--no-cache` did), and the smoke run below reuses it.
+    UVRUN=(uv run --no-project --cache-dir "$W/uv-cache-$py" --python "$py" --with "arcadedb-embedded==$V")
+    "${UVRUN[@]}" python -c "import arcadedb_embedded" > "$W/install-$py.log" 2>&1 || {
+        fail "uv run --with arcadedb-embedded==$V on $py: $(tail -1 "$W/install-$py.log")"
         continue
     }
-    uv pip install --no-cache --python "$W/venv-$py/bin/python" "arcadedb-embedded==$V" > "$W/install-$py.log" 2>&1 || {
-        fail "uv pip install $V on $py: $(tail -1 "$W/install-$py.log")"
-        continue
-    }
-    ENG_SHA="$ENG_SHA" ENG_BUILD="$ENG_BUILD" V="$V" ${PIN:+taskset -c "$PIN"} "$W/venv-$py/bin/python" - << 'EOF' > "$W/smoke-$py.log" 2>&1
+    ENG_SHA="$ENG_SHA" ENG_BUILD="$ENG_BUILD" V="$V" ${PIN:+taskset -c "$PIN"} "${UVRUN[@]}" python - << 'EOF' > "$W/smoke-$py.log" 2>&1
 import hashlib, os, pathlib, tempfile, zipfile
 import arcadedb_embedded as adb
 assert adb.__version__ == os.environ["V"], adb.__version__
@@ -122,7 +121,7 @@ with tempfile.TemporaryDirectory() as d:
 print("SMOKE OK", adb.__version__)
 EOF
     if [ $? -eq 0 ] && grep -q 'SMOKE OK' "$W/smoke-$py.log"; then
-        pass "fresh venv Python $py: install, import, SQL, openCypher, official engine jar"
+        pass "fresh environment Python $py: install, import, SQL, openCypher, official engine jar"
         grep 'engine jar' "$W/smoke-$py.log"
     else
         fail "smoke on Python $py (see $W/smoke-$py.log)"

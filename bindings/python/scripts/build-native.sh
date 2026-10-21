@@ -156,13 +156,8 @@ done
 
 if [[ -z "$PYTHON_WITH_BUILD" ]]; then
     echo -e "${RED}❌ build module not found or broken in any Python installation${NC}"
-    echo -e "${YELLOW}💡 Please ensure build module is properly installed:${NC}"
-    echo -e "${YELLOW}   1. If you have a venv, activate it and run: uv pip install build${NC}"
-    echo -e "${YELLOW}   2. Otherwise, create a venv:${NC}"
-    echo -e "${YELLOW}      python3 -m venv .build-env${NC}"
-    echo -e "${YELLOW}      source .build-env/bin/activate${NC}"
-    echo -e "${YELLOW}      uv pip install build${NC}"
-    echo -e "${YELLOW}      ./scripts/build.sh${NC}"
+    echo -e "${YELLOW}💡 Run this script with the build tools on PATH, without installing them:${NC}"
+    echo -e "${YELLOW}      uv run --no-project --with build --with wheel --with setuptools bash ./scripts/build.sh <platform>${NC}"
     exit 1
 fi
 
