@@ -52,10 +52,8 @@ CPU_DMA_LATENCY_DEFAULT_US = 0     # idle-exit latency target held for each time
 
 # PRODUCT QUANTIZATION ARMS OF THE DENSE LANE (QUANTIZATION.md, the PQ column).
 # Each arm clones the runner entry of the sibling named here. They exist only
-# when BOTH gates are open: the next instrument (BENCH_INSTRUMENT=2026-11) and an
-# explicit BENCH_DENSE_PQ=1, so a stage that selects the next instrument does not
-# start a PQ cell by accident, and a stage that sets only BENCH_DENSE_PQ=1 on the
-# current instrument starts none either.
+# under an explicit BENCH_DENSE_PQ=1, so a stage does not start a PQ cell by
+# accident before the measured ArcadeDB release carries the upstream PQ fixes.
 DENSE_PQ_ENV = "BENCH_DENSE_PQ"
 DENSE_PQ_ARMS = {
     "arcadedb_dense_embedded_pq": "arcadedb_dense_embedded",
@@ -67,8 +65,8 @@ DENSE_PQ_ARMS = {
 
 
 def dense_pq_enabled():
-    """True when the PQ arms may be registered: instrument 2026-11 or later AND BENCH_DENSE_PQ=1."""
-    return instrument_at_least("2026-11") and os.environ.get(DENSE_PQ_ENV, "").strip() == "1"
+    """True when the PQ arms may be registered: BENCH_DENSE_PQ=1."""
+    return os.environ.get(DENSE_PQ_ENV, "").strip() == "1"
 
 
 def row_family(backend):

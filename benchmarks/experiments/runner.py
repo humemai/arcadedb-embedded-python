@@ -1563,7 +1563,7 @@ BACKENDS = {
 # The fp32 ablation on the served deployment shares the served arm's
 # topology, images, heap and GC settings to the byte; only the adapter's DDL
 # differs (l3_sparse.ArcadeServerFP32, 2026-09-07).
-# The dense lane's PQ arms (QUANTIZATION.md): each clones its sibling's entry, and they exist only under both gates
+# The dense lane's PQ arms (QUANTIZATION.md): each clones its sibling's entry, and they exist only under BENCH_DENSE_PQ=1
 # (instrument 2026-11 and BENCH_DENSE_PQ=1; bench_common.dense_pq_enabled).
 if bench_common.dense_pq_enabled():
     for _pq_arm, _pq_sibling in bench_common.DENSE_PQ_ARMS.items():
@@ -1947,7 +1947,7 @@ LANES = {
            ["ingest"]),
 }
 
-# The PQ arms join the dense lane's roster under both gates only.
+# The PQ arms join the dense lane's roster under BENCH_DENSE_PQ=1 only.
 if bench_common.dense_pq_enabled():
     LANES["l3d"] = (LANES["l3d"][0], LANES["l3d"][1] + list(bench_common.DENSE_PQ_ARMS), LANES["l3d"][2])
 

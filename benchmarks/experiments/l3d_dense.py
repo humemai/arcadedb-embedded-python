@@ -2976,7 +2976,7 @@ if bench_common.dense_pq_enabled():
 _unregistered = sorted(
     c.name for c in Base.__subclasses__() + [s for b in Base.__subclasses__()
                                              for s in b.__subclasses__()]
-    # The PQ arms are defined always and registered only under both gates (bench_common.dense_pq_enabled)
+    # The PQ arms are defined always and registered only under BENCH_DENSE_PQ=1 (bench_common.dense_pq_enabled)
     if getattr(c, "name", None) and c.name not in BACKENDS
     and c.name not in bench_common.DENSE_PQ_ARMS)
 if _unregistered:
