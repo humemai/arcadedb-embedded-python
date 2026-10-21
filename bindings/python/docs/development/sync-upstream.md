@@ -25,7 +25,7 @@ In order:
 4. Resets `upstream-main` to the sync target (`upstream/main`, or the `--until` commit).
 5. Merges `upstream-main` into `main`.
 6. Keeps this fork's own copies of the paths listed in `FORK_OWNED_PATHS` in the script (the root `README.md`, `pyproject.toml`, `uv.lock`, and a few others), and keeps the paths in `FORK_EXCLUDED_PATHS` (such as `CLAUDE.md`) out of the fork.
-7. Treats `.github/` as an **allowlist**: after the merge it deletes every tracked file under `.github/` that is not named in `FORK_GITHUB_ALLOWLIST`, so no upstream workflow arrives. A list of files to delete could only name the ones that existed when it was written; the allowlist also stops the ones upstream adds later. Adding a workflow of our own therefore means adding it to that list in the same commit, or the next sync deletes it.
+7. Treats `.github/` as an **allowlist**: after the merge it deletes every tracked file under `.github/` that is not named in `FORK_GITHUB_ALLOWLIST`, so no upstream workflow arrives. A list of files to delete could only name the ones that existed when it was written; the allowlist also stops the ones upstream adds later. Adding a workflow of our own therefore means adding it to that list in the same commit, or the next sync deletes it. A file that upstream also has at the same path and that we replace with our own (`.github/dependabot.yml`: ours updates the pinned GitHub Actions, upstream's is a Maven config) goes in both `FORK_GITHUB_ALLOWLIST` and `FORK_OWNED_PATHS`, so the prune keeps it and the sync never merges upstream's version into it.
 
 The lists live in `sync-upstream.sh` and nowhere else on purpose.
 
