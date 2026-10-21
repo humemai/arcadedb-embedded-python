@@ -170,8 +170,10 @@ def probe(name, fn):
 
 
 h3 = lib.arcadedb_open(thread, dbpath.encode())
-probe("update", lambda: cmd(h3, "sql", "UPDATE Doc SET name = 'renamed' WHERE id = 1"))
-probe("delete", lambda: cmd(h3, "sql", "DELETE FROM Doc WHERE id = 2"))
+probe("update", lambda: cmd(h3, "sqlscript", "BEGIN;\nUPDATE Doc SET name = 'renamed' WHERE id = 1;\nCOMMIT;"))
+probe("delete", lambda: cmd(h3, "sqlscript", "BEGIN;\nDELETE FROM Doc WHERE id = 2;\nCOMMIT;"))
+probe("update_check", lambda: cmd(h3, "sql", "SELECT name FROM Doc WHERE id = 1")[0]["name"])
+probe("delete_check", lambda: cmd(h3, "sql", "SELECT count(*) AS c FROM Doc")[0]["c"])
 probe("math_abs", lambda: cmd(h3, "sql", "SELECT math_abs(-3) AS v"))
 probe("sql_functions", lambda: cmd(h3, "sql", "SELECT sum(id) AS s, avg(id) AS a, max(name) AS m FROM Doc"))
 probe("fulltext_create", lambda: cmd(h3, "sql", "CREATE INDEX ON Doc (name) FULL_TEXT"))
@@ -220,6 +222,6 @@ results["server_ok"] = server_ok
 results["rss_end_kb"] = vmrss_kb()
 results["peak_rss_kb"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
 results["lib_size_bytes"] = os.path.getsize(lib_path)
-print("RESULTS " + json.dumps(results), flush=True)
+print("\nRESULTS " + json.dumps(results), flush=True)
 print("SMOKE PASSED (embedded)", flush=True)
 os._exit(0)
