@@ -220,6 +220,81 @@ def test_projection_prices_the_lane_cells_of_each_stage(tmp_path):
         G.load_hours(str(tsv), 4)
 
 
+# ------------------------------------------------------------------------------------ the ArcadeDB pair's guards
+PAIR_GUARDS = ("is not in dist/", "wheels in dist/", "is not the wheel this chain was generated for", "no server image",
+               "ABORT: dbbench:arcadedb carries wheel", "ABORT: dbbench:arcadedb runs JPype", "ABORT: pair unverified at the pin")
+
+
+def test_a_comparator_only_stage_has_no_arcadedb_wheel_or_image_guard(drafts):
+    for f in sorted(drafts.glob("*.sh")):
+        t = f.read_text()
+        for g in PAIR_GUARDS:
+            assert g not in t, (f.name, g)
+        assert "dbbench:arcadedb" not in t.replace("no dbbench:arcadedb needed", "")
+        assert "dist/*.whl" not in t and "verify_pair_c25.sh" not in t
+        # the rows still carry the pin, and the runner's together-or-not-at-all rule still holds
+        assert "export ARCADEDB_ENGINE_COMMIT=$PIN" in t
+        assert re.search(r'^export ARCADEDB_WHEEL=".*/dist/' + re.escape(WHEEL) + r'" ARCADEDB_SERVER_IMAGE="arcadedb-c25:e85469273"$',
+                         t, re.M), f.name
+        # ... and is exported only after the image build, which bakes ARCADEDB_WHEEL into every generic image it builds
+        assert t.index("./build_images.sh") < t.index("export ARCADEDB_WHEEL=")
+        assert "arcadedb" not in re.findall(r"^BENCH_ALLOW_DEV=0 \./build_images\.sh (.*?) >>", t, re.M)[0].split()
+
+
+def test_an_arcadedb_release_stage_keeps_every_guard_of_the_pair(tmp_path):
+    out = tmp_path / "rel"
+    r = run(_release_args() + ["--after", "none", "--id-prefix", "qT", "--lanes", "graph", "--out", str(out)])
+    assert r.returncode == 0, r.stdout[-500:] + r.stderr[-500:]
+    stages = sorted(out.glob("qT0[1-9].sh"))
+    assert stages
+    for f in stages:
+        t = f.read_text()
+        for g in PAIR_GUARDS:
+            assert g in t, (f.name, g)
+        assert re.findall(r"^BENCH_ALLOW_DEV=0 \./build_images\.sh (.*?) >>", t, re.M)[0].split()[0] == "arcadedb"
+        assert t.index("is not the wheel this chain was generated for") < t.index("./build_images.sh") < t.index("pair unverified")
+
+
+def test_the_lint_demands_the_pair_guards_exactly_where_an_arcadedb_arm_runs(tmp_path):
+    base = ('export BENCH_INSTRUMENT=2026-11\nRF="runs_page_${PIN}_2611.jsonl"\n')
+    guards = "is not the wheel this chain was generated for\nABORT: dbbench:arcadedb carries wheel\n"
+    assert G.lint_draft(base + 'BACKENDS="arcadedb_graph_embedded"\n' + guards, "s.sh") == []
+    assert G.lint_draft(base + 'BACKENDS="arcadedb_graph_embedded"\n', "s.sh")
+    comp = G.lint_draft(base + 'BACKENDS="duckpgq_graph"\n' + guards, "s.sh")
+    assert any("guards the pinned wheel" in p for p in comp)
+
+
+# ------------------------------------------------------------------------------- an ABORT hands on (CAMPAIGN rule)
+def _abort_trap(text):
+    return re.search(r"""^trap 'echo "\$ID ALL-DONE" >> "\$S"' EXIT$""", text, re.M)
+
+
+def test_the_all_done_trap_is_set_before_the_first_guard_that_can_abort(drafts, tmp_path):
+    rel = tmp_path / "rel"
+    r = run(_release_args() + ["--after", "none", "--id-prefix", "qT", "--out", str(rel)])
+    assert r.returncode == 0, r.stdout[-500:] + r.stderr[-500:]
+    for f in sorted(drafts.glob("*.sh")) + sorted(rel.glob("*.sh")):
+        t = f.read_text()
+        m = _abort_trap(t)
+        assert m, f.name
+        assert m.start() < t.index("$ID ABORT"), f.name
+        assert t.index('ALL-DONE" "$S"') < m.start() if 'while ! grep -qx' in t else True   # set after the wait, never inside it
+
+
+def test_a_pre_start_abort_writes_the_marker_so_the_chain_goes_on(tmp_path):
+    out = tmp_path / "o"
+    r = run(["--after", "none", "--lanes", "graph", "--out", str(out)], tmp_path)
+    assert r.returncode == 0, r.stdout[-400:] + r.stderr[-400:]
+    home = tmp_path / "home"
+    home.mkdir()                       # no repo here: the first guard (git pull) fails, long before the START line
+    p = subprocess.run(["bash", str(out / "qS01.sh")], env={"HOME": str(home), "PATH": os.environ["PATH"]},
+                       capture_output=True, text=True, timeout=60)
+    assert p.returncode == 1
+    lines = (home / "STATUS.txt").read_text().splitlines()
+    assert "qS01 ABORT: pull" in lines[0] and "START" not in "".join(lines)
+    assert lines[-1] == "qS01 ALL-DONE"
+
+
 # ------------------------------------------------------------------------------------ the drafts, byte for byte
 SHA_LIST = HERE / "stage_drafts_2611.sha256"
 GENERATIONS = {

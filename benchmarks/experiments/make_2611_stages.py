@@ -558,10 +558,20 @@ def lint_draft(text, name, engines=None):
         out.append(f"{name}: does not export BENCH_INSTRUMENT={INSTRUMENT}")
     if re.search(r"runs_page_\$\{PIN\}\.jsonl", text) or f"runs_page_${{PIN}}{ROWS_SUFFIX}.jsonl" not in text:
         out.append(f"{name}: writes a rows file that is not runs_page_<pin>{ROWS_SUFFIX}.jsonl")
+    first_abort = text.find('$ID ABORT')
+    if first_abort >= 0 and not 0 <= text.find("ALL-DONE\" >> \"$S\"' EXIT") < first_abort:
+        out.append(f"{name}: a guard can ABORT before the ALL-DONE trap is set, which strands every stage waiting on this one")
     m = _BACKENDS.search(text)
     if not m:
         out.append(f"{name}: no BACKENDS line")
     else:
+        arcade = has_arcadedb_arm(m.group(1).split())
+        for needle, what in (("is not the wheel this chain was generated for", "the pinned wheel in dist/"),
+                             ("ABORT: dbbench:arcadedb carries wheel", "the dbbench:arcadedb wheel check")):
+            if arcade and needle not in text:
+                out.append(f"{name}: runs an ArcadeDB arm but has no guard for {what}")
+            if not arcade and needle in text:
+                out.append(f"{name}: runs no ArcadeDB arm but guards {what}, so a host still on the previous release aborts it")
         for b in m.group(1).split():
             eng = engine_of(b)
             if eng is None:
@@ -737,6 +747,66 @@ def apply_cap_rule(body, lane, backends, workloads, data=None):
     return re.sub(r"\nfor BE in \$BACKENDS; do\n", seed, body)
 
 
+# THE ARCADEDB PAIR'S GUARDS, in the stages that contain an ArcadeDB arm (and only those). A stage whose roster is comparators
+# needs neither the pinned wheel in dist/ nor dbbench:arcadedb: its arms run in the digest-pinned images and dbbench:duckdb,
+# client, dense, pg-age, mongo-search and composed, none of which import arcadedb_embedded. Guarding them anyway aborted a
+# healthy comparator stage on a host whose dist/ and dbbench:arcadedb were still the previous release's.
+ARCADE_PRE_BUILD = '''# THE WHEEL IS BAKED AT IMAGE BUILD TIME, so it has to be exported BEFORE
+# build_images.sh, and the arcadedb image has to be rebuilt. Without both,
+# build_images.sh falls back to `arcadedb-embedded==26.8.1` from PyPI and
+# every EMBEDDED arm runs that while every SERVED arm runs the pinned image:
+# two ArcadeDB versions on one table. That is exactly what last night's
+# calibration did -- its embedded arms ran 26.8.1 against served
+# 26.9.1-SNAPSHOT -- and verify_pair_c25.sh does not catch it, because it
+# compares the newest wheel FILE in dist/ against the server image and never
+# looks inside dbbench:arcadedb.
+# THE RELEASE PAIR THIS CHAIN WAS GENERATED FOR, named rather than found
+# (DECISIONS #42). A different file in dist/ is a different engine under test.
+W="$REPO/bindings/python/dist/{wheel_name}"
+[ -f "$W" ] || {{ say "$ID ABORT: the pinned wheel {wheel_name} is not in dist/"; exit 1; }}
+# ONE WHEEL, OR SAY WHICH. `ls -t | head -1` takes the newest by mtime and
+# says nothing about the ones it passed over, so a second wheel in dist/ --
+# a rebuild at a different pin, a copy kept "just in case" -- silently
+# decides what every cell of this stage measures. dist/ holds exactly one
+# today; the guard is here because the day it holds two is the day nobody
+# notices. Refusing rather than warning: this picks the ENGINE UNDER TEST.
+_NW=$(ls "$REPO"/bindings/python/dist/*.whl 2>/dev/null | wc -l)
+[ "$_NW" -eq 1 ] || {{ say "$ID ABORT: $_NW wheels in dist/, and ls -t would pick one by date: $(ls "$REPO"/bindings/python/dist/*.whl | tr '
+' ' ')"; exit 1; }}
+[ "$(sha256sum "$W" | cut -d' ' -f1)" = "{wheel_sha256}" ] || {{ say "$ID ABORT: dist/{wheel_name} is not the wheel this chain was generated for (sha256)"; exit 1; }}
+export ARCADEDB_WHEEL="$W" ARCADEDB_SERVER_IMAGE="{server_image}"
+docker image inspect "$ARCADEDB_SERVER_IMAGE" >/dev/null 2>&1 || {{ say "$ID ABORT: no server image $ARCADEDB_SERVER_IMAGE"; exit 1; }}
+WV=$(basename "$W" | cut -d- -f2)
+'''
+
+ARCADE_POST_CHECKS = '''# VERIFY THE ARM, NOT THE FILE: read the version out of the built image.
+# The pair check below is the REPO copy, not ~/verify_pair_c25.sh: that
+# one is a stale copy from 2026-08-30 and would miss its own fourth
+# check. A script pulled with the tree cannot drift from it.
+IV=$(docker run --rm --entrypoint python3 dbbench:arcadedb -c      'import importlib.metadata as m; print(m.version("arcadedb-embedded"))' 2>/dev/null | tr -dc "0-9a-zA-Z.-")
+[ "$IV" = "$WV" ] || {{ say "$ID ABORT: dbbench:arcadedb carries wheel $IV, dist has $WV"; exit 1; }}
+say "$ID: dbbench:arcadedb carries wheel $IV, matching dist"
+IJ=$(docker run --rm --entrypoint python3 dbbench:arcadedb -c 'import jpype; print(jpype.__version__)' 2>/dev/null | tr -dc "0-9a-zA-Z.-")
+[ "$IJ" = "{jpype_version}" ] || {{ say "$ID ABORT: dbbench:arcadedb runs JPype '$IJ', the pin is {jpype_version} (Dockerfile.bench, ARG JPYPE_VERSION); rebuild dbbench:arcadedb, which installs the pin"; exit 1; }}
+say "$ID: dbbench:arcadedb runs JPype $IJ, the pin"
+PAIR_IMAGE="$ARCADEDB_SERVER_IMAGE" ./verify_pair_c25.sh "$SHA" >> "$S" 2>&1 || {{ say "$ID ABORT: pair unverified at the pin"; exit 1; }}
+'''
+
+# What a comparator-only stage does in their place. runner.py takes ARCADEDB_WHEEL and ARCADEDB_SERVER_IMAGE together or not
+# at all, and refuses ARCADEDB_ENGINE_COMMIT without them, while land_stage.py keeps only the rows whose engine_commit starts
+# with the chain's pin: so the three are still exported, as the label the rows carry. They are exported AFTER the image build,
+# because build_images.sh bakes ARCADEDB_WHEEL into every generic image it builds (client, duckdb, dense), and a comparator
+# image has no use for the engine under test. Nothing here reads dist/ or dbbench:arcadedb.
+COMPARATOR_PRE_BUILD = "# (no ArcadeDB arm in this stage: no wheel in dist/ and no dbbench:arcadedb needed, see make_2611_stages.ARCADE_PRE_BUILD)"
+COMPARATOR_STAMP_EXPORTS = '''# ROW LABEL ONLY, nothing is read from these: see make_2611_stages.COMPARATOR_STAMP_EXPORTS.
+export ARCADEDB_WHEEL="$REPO/bindings/python/dist/{wheel_name}" ARCADEDB_SERVER_IMAGE="{server_image}"'''
+
+
+def has_arcadedb_arm(backends):
+    """True when the stage runs an ArcadeDB arm (embedded or served), which is when the pair's guards apply."""
+    return any(engine_of(b) == "arcadedb" for b in backends)
+
+
 # The stage script. Braces are doubled where bash needs one. The parameters that change with the instrument are the instrument
 # itself ({instrument}), the repetitions ({reps}), the rows file suffix ({rows_suffix}) and the banner ({banner}); the rest is
 # per stage (stage_script) or per release pair.
@@ -765,6 +835,13 @@ RF="runs_page_${{PIN}}{rows_suffix}.jsonl"   # land_stage.py pulls this exact na
 REPS={reps}   # fixed at generation (make_2611_stages --reps)
 say() {{ echo "[$(date -Is)] $*" >> "$S"; }}
 {wait}
+# AN ABORT MUST NOT STRAND THE CHAIN. Every ABORT hands on (the convention of the qMA stages: "an EXIT trap set after the wait
+# writes its own marker, so ABORT/SKIP still hand on"). This trap used to be set after the guards, so a guard that failed
+# before the START line exited without a marker and the stages waiting on this one waited forever -- which is what happened
+# on 2026-09-20 when a guard of mine aborted a healthy stage and left the host idle. Set from here on, the marker is written
+# whatever happens: the ABORT is already in STATUS.txt and loud (mini_watch.sh greps it), and the rest of the campaign is worth
+# more than making a human notice sooner. It is set after the wait, so a waiter that is killed does not hand on.
+trap 'echo "$ID ALL-DONE" >> "$S"' EXIT
 cd "$REPO" && git pull -q --ff-only || {{ say "$ID ABORT: pull"; exit 1; }}
 cd "$R" || exit 1
 export PATH=$HOME/.local/bin:$PATH
@@ -901,32 +978,7 @@ for _tier in {scale_list}; do
 done
 {guards}
 # --- images and the pinned pair -------------------------------------------
-# THE WHEEL IS BAKED AT IMAGE BUILD TIME, so it has to be exported BEFORE
-# build_images.sh, and the arcadedb image has to be rebuilt. Without both,
-# build_images.sh falls back to `arcadedb-embedded==26.8.1` from PyPI and
-# every EMBEDDED arm runs that while every SERVED arm runs the pinned image:
-# two ArcadeDB versions on one table. That is exactly what last night's
-# calibration did -- its embedded arms ran 26.8.1 against served
-# 26.9.1-SNAPSHOT -- and verify_pair_c25.sh does not catch it, because it
-# compares the newest wheel FILE in dist/ against the server image and never
-# looks inside dbbench:arcadedb.
-# THE RELEASE PAIR THIS CHAIN WAS GENERATED FOR, named rather than found
-# (DECISIONS #42). A different file in dist/ is a different engine under test.
-W="$REPO/bindings/python/dist/{wheel_name}"
-[ -f "$W" ] || {{ say "$ID ABORT: the pinned wheel {wheel_name} is not in dist/"; exit 1; }}
-# ONE WHEEL, OR SAY WHICH. `ls -t | head -1` takes the newest by mtime and
-# says nothing about the ones it passed over, so a second wheel in dist/ --
-# a rebuild at a different pin, a copy kept "just in case" -- silently
-# decides what every cell of this stage measures. dist/ holds exactly one
-# today; the guard is here because the day it holds two is the day nobody
-# notices. Refusing rather than warning: this picks the ENGINE UNDER TEST.
-_NW=$(ls "$REPO"/bindings/python/dist/*.whl 2>/dev/null | wc -l)
-[ "$_NW" -eq 1 ] || {{ say "$ID ABORT: $_NW wheels in dist/, and ls -t would pick one by date: $(ls "$REPO"/bindings/python/dist/*.whl | tr '
-' ' ')"; exit 1; }}
-[ "$(sha256sum "$W" | cut -d' ' -f1)" = "{wheel_sha256}" ] || {{ say "$ID ABORT: dist/{wheel_name} is not the wheel this chain was generated for (sha256)"; exit 1; }}
-export ARCADEDB_WHEEL="$W" ARCADEDB_SERVER_IMAGE="{server_image}"
-docker image inspect "$ARCADEDB_SERVER_IMAGE" >/dev/null 2>&1 || {{ say "$ID ABORT: no server image $ARCADEDB_SERVER_IMAGE"; exit 1; }}
-WV=$(basename "$W" | cut -d- -f2)
+{pre_build}
 BENCH_ALLOW_DEV=0 ./build_images.sh {images} >> "$S" 2>&1 || {{ say "$ID ABORT: image build"; exit 1; }}
 # ARTIFACT EXISTS IS NOT ARTIFACT BUILT: a target that silently did
 # nothing leaves no image, and the first cell to want it reports
@@ -960,29 +1012,12 @@ done
 # reading each image's versions back out of the image before any cell runs.
 python3 version_pin_check.py --runtime >> "$S" 2>&1 || {{ say "$ID ABORT: an image does not carry the version it is pinned to"; exit 1; }}
 say "$ID: images carry their pins"
-# VERIFY THE ARM, NOT THE FILE: read the version out of the built image.
-# The pair check below is the REPO copy, not ~/verify_pair_c25.sh: that
-# one is a stale copy from 2026-08-30 and would miss its own fourth
-# check. A script pulled with the tree cannot drift from it.
-IV=$(docker run --rm --entrypoint python3 dbbench:arcadedb -c      'import importlib.metadata as m; print(m.version("arcadedb-embedded"))' 2>/dev/null | tr -dc "0-9a-zA-Z.-")
-[ "$IV" = "$WV" ] || {{ say "$ID ABORT: dbbench:arcadedb carries wheel $IV, dist has $WV"; exit 1; }}
-say "$ID: dbbench:arcadedb carries wheel $IV, matching dist"
-IJ=$(docker run --rm --entrypoint python3 dbbench:arcadedb -c 'import jpype; print(jpype.__version__)' 2>/dev/null | tr -dc "0-9a-zA-Z.-")
-[ "$IJ" = "{jpype_version}" ] || {{ say "$ID ABORT: dbbench:arcadedb runs JPype '$IJ', the pin is {jpype_version} (Dockerfile.bench, ARG JPYPE_VERSION); rebuild dbbench:arcadedb, which installs the pin"; exit 1; }}
-say "$ID: dbbench:arcadedb runs JPype $IJ, the pin"
-PAIR_IMAGE="$ARCADEDB_SERVER_IMAGE" ./verify_pair_c25.sh "$SHA" >> "$S" 2>&1 || {{ say "$ID ABORT: pair unverified at the pin"; exit 1; }}
+{post_checks}
 export ARCADEDB_ENGINE_COMMIT=$PIN BENCH_DATA=$HOME/bench-data BENCH_HOST=mini
 export BENCH_CPUSET=0-11 BENCH_GRAPH_SOURCE=ldbc
 {stage_env}
 
 BACKENDS="{backends}"
-# AN ABORT MUST NOT STRAND THE CHAIN. Every guard above exits 1 without a
-# marker, so the stages waiting on this one wait forever -- which is what
-# happened on 2026-09-20 when a guard of mine aborted a healthy stage and left
-# the host idle. From the START line on, the marker is written by a trap
-# whatever happens: the ABORT is already in STATUS.txt and loud, and the rest
-# of the campaign is worth more than making a human notice sooner.
-trap 'echo "$ID ALL-DONE" >> "$S"' EXIT
 say "$ID START: {title}, {nbe} engines, REPS=$REPS, pin $PIN, instrument {instrument}"
 
 {cap_rule_helpers}
@@ -1037,6 +1072,11 @@ def stage_params(reps):
             "jpype_version": bench_common.JPYPE_PIN, "cap_rule_helpers": CAP_RULE_HELPERS.lstrip("\n")}
 
 
+def _pair_part(text, pins, params):
+    return text.format(wheel_name=pins["wheel_name"], wheel_sha256=pins["wheel_sha256"],
+                       server_image=pins["ARCADEDB_SERVER_IMAGE"], jpype_version=params["jpype_version"])
+
+
 def stage_script(idx, total, spec, after, pins, params):
     """One stage's script. THE ROSTER IS stage_backends(spec), never the lane's whole arm list: that would put an arm that
     runs only part of its lane into the lane's main stage as well."""
@@ -1045,6 +1085,7 @@ def stage_script(idx, total, spec, after, pins, params):
     dur_mode = spec[9] if len(spec) > 9 else None
     backends = stage_backends(spec)
     guards = list(guards) + _pin_guard(backends)
+    arcade = has_arcadedb_arm(backends)
     caps = [(s, runner.TIMEOUT_BY_SCALE[s]) for s in scales]
     body = HEAD.format(
         id=sid, n=idx + 1, total=total, title=title, lane=lane, nbe=len(backends), sha=pins["ARCADEDB_ENGINE_COMMIT"],
@@ -1055,6 +1096,8 @@ def stage_script(idx, total, spec, after, pins, params):
         # ONE SHAPE FOR BOTH CASES: an empty string is a valid word the loop skips, a comment is a bash syntax error
         pulled=(" ".join(f'"{i}"' for i in _pulled_images_for(backends)) or '""'),
         wheel_name=pins["wheel_name"], wheel_sha256=pins["wheel_sha256"], server_image=pins["ARCADEDB_SERVER_IMAGE"],
+        pre_build=_pair_part(ARCADE_PRE_BUILD if arcade else COMPARATOR_PRE_BUILD, pins, params),
+        post_checks=_pair_part(ARCADE_POST_CHECKS if arcade else COMPARATOR_STAMP_EXPORTS, pins, params),
         **params)
     for scale, cap in caps:
         senv = " ".join(SCALE_ENV.get((lane, scale), []))
