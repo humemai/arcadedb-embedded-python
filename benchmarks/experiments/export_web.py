@@ -1343,6 +1343,7 @@ def _dense_overlay_entries(scale="deep10m"):
 # defect the reader has to catch. Divide here, once, rather than in each table
 # spec where the next lane to add memory would forget it.
 _UNIT_DIVISOR = {"peak_owned_mib_sum": 1024.0, "peak_anon_mib_sum": 1024.0, "end_anon_mib_sum": 1024.0,
+                 "mem_queries_owned_mib": 1024.0,
                  "disk_data_mb": 1024.0, "cpu_usec_sum": 1e6}
 
 # THE PAGE'S MEMORY COLUMN IS OWNED MEMORY (issue #353): the anonymous peak plus the shared-memory
@@ -2815,7 +2816,21 @@ def _instrument_of(lane):
     return next(iter(seen), "2026-09")
 
 
+# THE 2026-11 MEMORY COLUMN (issue #352, PROTOCOL "Memory per phase"): owned memory (anonymous plus shared) of every
+# container of the cell at the end of the timed queries. Every engine has it, and it is the only memory column added;
+# the other phases, the peaks and the per-runtime JVM and process readings stay on the rows. Only a lane whose rows
+# all carry instrument 2026-11 gets it, so a 2026-10 payload is unchanged.
+MEM_PHASE_COLUMN = ("mem_queries_owned_mib", "owned memory after queries GiB")
+
+
 def _metrics_for(table_id, spec, src_lane=None):
+    cols = _metrics_for_instrument(table_id, spec, src_lane)
+    if _instrument_of(src_lane or table_id) == "2026-11":
+        cols = cols + [MEM_PHASE_COLUMN]
+    return cols
+
+
+def _metrics_for_instrument(table_id, spec, src_lane=None):
     """The columns this TABLE prints, under the instrument its ROWS were run on.
 
     Two identifiers, deliberately: l2olap is a second view of the graph lane's
@@ -2825,7 +2840,7 @@ def _metrics_for(table_id, spec, src_lane=None):
     transactional table's October columns.
     """
     src_lane = src_lane or table_id
-    oct_ = _instrument_of(src_lane) == "2026-10"
+    oct_ = _instrument_of(src_lane) in ("2026-10", "2026-11")
     if oct_ and table_id in OCT_TABLE_METRICS:
         cols = list(OCT_TABLE_METRICS[table_id])
         # THE GRAPH TABLE'S COLD COLUMN, once its reads are timed after an untimed warm-up (CAMPAIGN
@@ -9394,7 +9409,7 @@ def main() -> int:
     # read 0.135 GiB, the midpoint of 0.119 (OLTP) and 0.152 (OLAP), a figure
     # describing neither. Keep only the transactional rows of a merged lane
     # when aggregating a metric that spans workloads.
-    MEM_FIELDS = {MEM_PEAK_FIELD, MEM_PEAK_FALLBACK, "end_anon_mib_sum"}
+    MEM_FIELDS = {MEM_PEAK_FIELD, MEM_PEAK_FALLBACK, "end_anon_mib_sum", MEM_PHASE_COLUMN[0]}
     grouped = defaultdict(list)
     for r in rows:
         wl = ("" if r["lane"] in MERGED_WORKLOAD_LANES

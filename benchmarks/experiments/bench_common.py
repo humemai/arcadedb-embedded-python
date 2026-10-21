@@ -1016,6 +1016,9 @@ class PhaseBeat:
     def mark(self, name, **fields):
         kv = "".join(f" {k}={v}" for k, v in fields.items())
         print(f"PHASE {name}{kv}{self._extra()}", file=self.out, flush=True)
+        if os.environ.get("BENCH_MEMPROBE_DIR"):   # set by the runner only under instrument 2026-11
+            import memory_probe
+            memory_probe.lane_on_mark(name)
 
     @contextlib.contextmanager
     def phase(self, name, **fields):
