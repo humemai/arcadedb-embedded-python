@@ -86,6 +86,23 @@ jobs:
           cp native-spike/target/libarcadedb.so native-spike/target/libarcadedb.h out/compat/
           cp native-spike/target/libjsvml.so native-spike/target/libmanagement_ext.so out/compat/ 2>/dev/null || true
           cp /tmp/native-image-build-output.json out/compat/build-output.json 2>/dev/null || true
+          # jvector's Highway library, shipped next to the engine library (phase 3)
+          unzip -p ~/.m2/repository/io/github/jbellis/jvector/4.0.2/jvector-4.0.2.jar META-INF/versions/22/libjvector-x86_64.so > out/compat/libjvector-x86_64.so
+          ls -l out/compat/libjvector-x86_64.so
+
+      # Variant: AVX2 baseline + the Vector API support flag. The phase-2 test of the flag ran at -march=compatibility, where the
+      # Vector API sees a 64-bit preferred species, so it never had a chance. Not part of the smoke gate.
+      - name: Build libarcadedb.so (-march=x86-64-v3 -H:+VectorAPISupport, variant)
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          export NATIVE_IMAGE_OPTIONS="-march=x86-64-v3 -H:+VectorAPISupport"
+          mvn -B --no-transfer-progress -f native-spike/pom.xml -DskipTests package 2>&1 | tail -n 400 > out/build-v3.log
+          mkdir -p out/v3
+          cp native-spike/target/libarcadedb.so out/v3/
+          cp out/compat/libjvector-x86_64.so out/v3/
+          ls -l out/v3
 
       - name: Sizes
         if: always()

@@ -58,6 +58,8 @@ def _load():
                 f"Native library not found at {path}. Build it from the native-spike workflow or set "
                 "ARCADEDB_NATIVE_LIB."
             )
+        # jvector's Highway library (libjvector-<arch>.so) is looked for next to the engine library
+        os.environ.setdefault("ARCADEDB_NATIVE_LIBDIR", str(path.resolve().parent))
         lib = ctypes.CDLL(str(path))
         isolate = ctypes.c_void_p()
         thread = ctypes.c_void_p()

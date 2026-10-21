@@ -136,7 +136,14 @@ _SIMPLE = {
 
 def _hook(obj):
     tagged = obj.get(TAG)
-    if tagged is None:
+    # a column may be called like the tag: only a lone [kind, payload] pair of a known kind is a tagged value
+    if (
+        tagged is None
+        or len(obj) != 1
+        or type(tagged) is not list
+        or len(tagged) != 2
+        or tagged[0] not in _SIMPLE
+    ):
         return obj
     kind, payload = tagged
     return _SIMPLE[kind](payload)

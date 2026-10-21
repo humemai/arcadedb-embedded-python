@@ -75,14 +75,22 @@ class NativeResult:
     def get_rid(self) -> Optional[str]:
         return self._meta[0] if self._meta else None
 
+    def _record(self, kinds):
+        from .records import _wrap
+
+        self._check_open()
+        if not self._meta or self._meta[2] not in kinds:
+            return None
+        return _wrap(self._database, self)
+
     def get_vertex(self):
-        not_yet("Result.get_vertex")
+        return self._record("v")
 
     def get_edge(self):
-        not_yet("Result.get_edge")
+        return self._record("e")
 
     def get_element(self):
-        not_yet("Result.get_element")
+        return self._record("vde")
 
     def get_property_names(self) -> List[str]:
         self._check_open()
@@ -248,17 +256,50 @@ class NativeResultSet:
 
         return pd.DataFrame(self._drain_dicts())
 
-    def to_polars(self, *args, **kwargs):
-        not_yet("ResultSet.to_polars")
+    def to_columns(self, batch_size: int = 25_000, columns=None):
+        """Columns as the JPype path returns them (numpy int64/float64/bool/datetime64[ms] arrays, lists for text and
+        JSON-typed values, an object array of Decimal), built in Python from the rows: a columnar JSON path, no
+        binary buffer. None when numpy is missing."""
+        try:
+            import numpy  # noqa: F401
+        except ImportError:
+            return None
+        from .columns import to_columns
 
-    def to_arrow(self, *args, **kwargs):
-        not_yet("ResultSet.to_arrow (the Arrow path is a later step)")
+        return to_columns(self._drain_dicts(), columns)
 
-    def to_columns(self, *args, **kwargs):
-        not_yet("ResultSet.to_columns (the binary column path is a later step)")
+    def to_arrow(self, batch_size: int = 25_000, columns=None):
+        """A ``pyarrow.Table`` with the types of :meth:`to_columns` but nulls kept (None when pyarrow is missing)."""
+        try:
+            import numpy  # noqa: F401
+            import pyarrow  # noqa: F401
+        except ImportError:
+            return None
+        from .columns import to_arrow
 
-    def iter_chunks(self, *args, **kwargs):
-        not_yet("ResultSet.iter_chunks")
+        return to_arrow(self._drain_dicts(), columns)
+
+    def to_polars(self, batch_size: int = 25_000, columns=None):
+        try:
+            import polars as pl
+        except ImportError as exc:
+            raise ImportError(
+                "polars is required for to_polars(); install it with 'pip install polars pyarrow'"
+            ) from exc
+        table = self.to_arrow(batch_size, columns)
+        if table is None:
+            raise ImportError("pyarrow is required for to_polars()")
+        return pl.from_arrow(table)
+
+    def iter_chunks(self, size: int = 1000, convert_types: bool = True):
+        chunk = []
+        for row in self.iter_dicts(convert_types=convert_types):
+            chunk.append(row)
+            if len(chunk) >= size:
+                yield chunk
+                chunk = []
+        if chunk:
+            yield chunk
 
     def count(self) -> int:
         n = 0
@@ -493,20 +534,21 @@ class NativeDatabase:
         return int(row.get("c")) if row is not None else 0
 
     def lookup_by_rid(self, rid: str):
-        """The record row at ``rid`` (a Result, not a Document wrapper on native)."""
+        """The record at ``rid`` as a Document, Vertex or Edge wrapper."""
         self._check_not_closed()
         row = self.query("sql", f"SELECT FROM {rid}").first()
         if row is None:
             raise ArcadeDBError(f"Failed to lookup RID '{rid}': record not found")
-        return row
+        return row.get_element()
 
     def lookup_by_key(self, type_name: str, keys: List[str], values: List[Any]):
         self._check_not_closed()
         where = " AND ".join(f"`{k}` = ?" for k in keys)
         try:
-            return self.query(
+            row = self.query(
                 "sql", f"SELECT FROM `{type_name}` WHERE {where} LIMIT 1", list(values)
             ).first()
+            return row.get_element() if row is not None else None
         except ArcadeDBError as e:
             raise ArcadeDBError(f"Failed to lookup by key in '{type_name}': {e}") from e
 
@@ -551,10 +593,18 @@ class NativeDatabase:
         not_yet("get_java_database")
 
     def new_vertex(self, type_name: str):
-        not_yet("Database.new_vertex")
+        """A vertex that is created by ``save()`` (``CREATE VERTEX .. CONTENT``)."""
+        from .records import NativeVertex
+
+        self._check_not_closed()
+        return NativeVertex(self, type_name)
 
     def new_document(self, type_name: str):
-        not_yet("Database.new_document")
+        """A document that is created by ``save()`` (``INSERT INTO .. CONTENT``)."""
+        from .records import NativeDocument
+
+        self._check_not_closed()
+        return NativeDocument(self, type_name)
 
     def graph_batch(self, *args, **kwargs):
         not_yet("GraphBatch")
@@ -580,14 +630,39 @@ class NativeDatabase:
     def export_to_csv(self, *args, **kwargs):
         not_yet("Database.export_to_csv")
 
-    def insert_columns(self, *args, **kwargs):
-        not_yet("Database.insert_columns")
+    def insert_columns(
+        self, type_name, columns, commit_every: int = 10_000, parallel: bool = False
+    ) -> int:
+        """Bulk insert from whole columns (dict of name -> numpy array or list), as rows through :meth:`insert_many`."""
+        names = list(columns)
+        if not names:
+            raise ValueError("insert_columns needs at least one column")
+        if not all(isinstance(n, str) for n in names):
+            raise ValueError("insert_columns: column names must be strings")
+        data = [
+            c.tolist() if hasattr(c, "tolist") else list(c) for c in columns.values()
+        ]
+        lengths = {len(c) for c in data}
+        if len(lengths) > 1:
+            raise ValueError(
+                f"insert_columns: columns differ in length: {sorted(lengths)}"
+            )
+        rows = (dict(zip(names, vals)) for vals in zip(*data))
+        return self.insert_many(type_name, rows, commit_every, parallel)
 
-    def insert_dataframe(self, *args, **kwargs):
-        not_yet("Database.insert_dataframe")
+    def insert_dataframe(
+        self, type_name, df, *, batch_size: int = 10_000, parallel: bool = False
+    ) -> int:
+        """A pandas or Polars DataFrame as rows (NaN and NaT are nulls) through :meth:`insert_many`."""
+        records = df.to_dicts() if hasattr(df, "to_dicts") else df.to_dict("records")
+        rows = ({k: (None if v != v else v) for k, v in r.items()} for r in records)
+        return self.insert_many(type_name, rows, batch_size, parallel)
 
-    def insert_arrow(self, *args, **kwargs):
-        not_yet("Database.insert_arrow")
+    def insert_arrow(
+        self, type_name, table, *, batch_size: int = 10_000, parallel: bool = False
+    ) -> int:
+        """An Arrow table as rows through :meth:`insert_many`."""
+        return self.insert_many(type_name, table.to_pylist(), batch_size, parallel)
 
     def set_wal_flush(self, *args, **kwargs):
         not_yet("Database.set_wal_flush")

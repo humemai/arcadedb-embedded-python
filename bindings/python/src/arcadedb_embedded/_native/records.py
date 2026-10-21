@@ -1,0 +1,185 @@
+"""Record wrappers for the native backend: ``Document``, ``Vertex`` and ``Edge`` as Python objects over SQL statements.
+
+The JPype wrappers hold a Java record; here a record is its type, its RID (``None`` until saved) and its properties as a
+dict, and every write is one DSL statement (``CREATE VERTEX .. CONTENT``, ``INSERT .. CONTENT``, ``UPDATE .. MERGE``,
+``DELETE``, ``CREATE EDGE``). They subclass the JPype wrapper classes so ``isinstance`` checks keep their meaning.
+"""
+
+from typing import Any, Dict, List, Optional
+
+from ..exceptions import ArcadeDBError
+from ..graph import Document, Edge, Vertex
+from . import not_yet
+from .codec import RID
+
+_UNSAVED = "#-1:-1"
+
+
+def _q(name: str) -> str:
+    return "`" + name.replace("`", "``") + "`"
+
+
+class _Mixin:
+    """What the three native wrappers share (state in ``_db``, ``_type``, ``_rid``, ``_props``, ``_mutable``)."""
+
+    _CREATE = "INSERT INTO {t} CONTENT :row"
+    _DELETE = "DELETE FROM {rid}"
+
+    def __init__(self, database, type_name, rid=None, props=None, mutable=False):
+        self._java_document = None
+        self._database = database
+        self._db = database
+        self._type = type_name
+        self._rid = rid or None
+        self._props: Dict[str, Any] = dict(props or {})
+        self._mutable = mutable or not rid
+        self._property_names_cache = None
+
+    # -- reading
+
+    def _check_open(self) -> None:
+        database = self._database
+        if database is not None and database._closed and self._rid:
+            raise ArcadeDBError(
+                "Database is closed: a record cannot be read after its database was closed. "
+                "Read what you need before closing it."
+            )
+
+    def get(self, name: str, convert_types: bool = True) -> Any:
+        self._check_open()
+        return self._props.get(name)
+
+    def get_raw(self, name: str) -> Any:
+        return self.get(name)
+
+    def has_property(self, name: str) -> bool:
+        self._check_open()
+        return name in self._props
+
+    def get_property_names(self) -> List[str]:
+        self._check_open()
+        return list(self._props)
+
+    def to_dict(self, convert_types: bool = True) -> Dict[str, Any]:
+        self._check_open()
+        return dict(self._props)
+
+    def get_rid(self) -> str:
+        return self._rid or _UNSAVED
+
+    def get_identity(self):
+        return RID(self.get_rid())
+
+    def get_type_name(self) -> str:
+        self._check_open()
+        return self._type
+
+    def get_java_document(self):
+        not_yet("get_java_document")
+
+    # -- writing
+
+    def set(self, name: str, value: Any):
+        if not self._mutable:
+            raise AttributeError(
+                f"{type(self).__name__} is immutable. Call .modify() first to get a mutable version."
+            )
+        self._props[name] = value
+        return self
+
+    def save(self):
+        db = self._db
+        if self._rid is None:
+            row = db.command(
+                "sql", self._CREATE.format(t=_q(self._type)), {"row": self._props}
+            ).first()
+            self._adopt(row)
+        else:
+            db.command(
+                "sql", f"UPDATE {self._rid} MERGE :row", {"row": self._props}
+            ).close()
+        return self
+
+    def _adopt(self, row) -> None:
+        if row is None or not row.get_rid():
+            raise ArcadeDBError(
+                f"Failed to save a {self._type} record: the statement returned no record"
+            )
+        self._rid = row.get_rid()
+        self._props = row.to_dict()
+
+    def delete(self):
+        if self._rid is None:
+            raise ArcadeDBError("Cannot delete a record that was never saved")
+        self._db.command("sql", self._DELETE.format(rid=self._rid)).close()
+
+    def modify(self):
+        self._check_open()
+        return type(self)(self._db, self._type, self._rid, self._props, mutable=True)
+
+    def __repr__(self) -> str:
+        return f"<{type(self).__name__} rid={self.get_rid()} type={self._type}>"
+
+
+class NativeDocument(_Mixin, Document):
+    pass
+
+
+class NativeVertex(_Mixin, Vertex):
+    _CREATE = "CREATE VERTEX {t} CONTENT :row"
+    _DELETE = "DELETE FROM {rid}"
+
+    def new_edge(self, label: str, target: "Vertex", **kwargs) -> "Edge":
+        self._check_open()
+        if self._rid is None or getattr(target, "_rid", None) is None:
+            raise ArcadeDBError(
+                "Both vertices of an edge must be saved before new_edge()"
+            )
+        sql = f"CREATE EDGE {_q(label)} FROM {self._rid} TO {target._rid}"
+        if kwargs:
+            sql += " CONTENT :row"
+        row = self._db.command(
+            "sql", sql, *(({"row": kwargs},) if kwargs else ())
+        ).first()
+        edge = NativeEdge(self._db, label, mutable=False)
+        edge._adopt(row)
+        return edge
+
+    def _edges(self, fn: str, labels) -> List["Edge"]:
+        self._check_open()
+        args = ", ".join("'" + label.replace("'", "\\'") + "'" for label in labels)
+        rows = self._db.query("sql", f"SELECT expand({fn}({args})) FROM {self._rid}")
+        return [_wrap(self._db, row) for row in rows]
+
+    def get_out_edges(self, *labels: str) -> List["Edge"]:
+        return self._edges("outE", labels)
+
+    def get_in_edges(self, *labels: str) -> List["Edge"]:
+        return self._edges("inE", labels)
+
+    def get_both_edges(self, *labels: str) -> List["Edge"]:
+        return self._edges("bothE", labels)
+
+
+class NativeEdge(_Mixin, Edge):
+
+    def _end(self, fn: str) -> "Vertex":
+        self._check_open()
+        row = self._db.query("sql", f"SELECT expand({fn}()) FROM {self._rid}").first()
+        return _wrap(self._db, row)
+
+    def get_in(self) -> Vertex:
+        return self._end("inV")
+
+    def get_out(self) -> Vertex:
+        return self._end("outV")
+
+
+def _wrap(database, row):
+    """The wrapper for a result row that is a record (vertex, edge or document); None for a projection."""
+    meta = row._meta
+    if not meta:
+        return None
+    rid, type_name, kind = meta
+    cls = {"v": NativeVertex, "e": NativeEdge}.get(kind, NativeDocument)
+    return cls(database, type_name, rid, row._props)

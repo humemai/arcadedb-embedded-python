@@ -6002,10 +6002,10 @@
    "glob": "org/jboss/**/*.properties"
   },
   {
-   "glob": "libjvector-x86_64.so"
+   "glob": "META-INF/versions/22/libjvector-x86_64.so"
   },
   {
-   "glob": "libjvector-aarch64.so"
+   "glob": "META-INF/versions/22/libjvector-aarch64.so"
   }
  ],
  "foreign": {
