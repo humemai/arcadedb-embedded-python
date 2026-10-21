@@ -317,12 +317,10 @@ jobs:
           # PyTorch is required by sentence-transformers, even on macOS (its CPU build supports MPS acceleration).
           # tqdm, py7zr and lxml are for the dataset downloads; pandas, polars and pyarrow for
           # 27_dataframe_arrow_ingest.py.
-          if [[ "$OSTYPE" == "darwin"* ]]; then
-            numpy_spec="numpy<2.0"
-          else
-            numpy_spec="numpy"
-          fi
-          printf '%s\n' torch "$numpy_spec" requests sentence-transformers tqdm py7zr lxml pandas polars pyarrow > "$EXAMPLE_REQUIREMENTS"
+          # numpy is not capped: the old macOS `numpy<2.0` was for Intel Macs, where PyTorch stops at 2.2
+          # (built against NumPy 1.x). That leg (darwin/amd64) is disabled; re-enabling it needs the cap
+          # back for that platform only. On Apple Silicon a cap breaks pyarrow (it needs NumPy 2 on 3.14).
+          printf '%s\n' torch numpy requests sentence-transformers tqdm py7zr lxml pandas polars pyarrow > "$EXAMPLE_REQUIREMENTS"
           # Build the environment now, so a dependency that cannot be resolved or installed fails here.
           EXAMPLES_PYTHON=(uv run --no-project --python "${{ matrix.python-version }}" --with "$ARCADEDB_WHEEL" --with-requirements "$EXAMPLE_REQUIREMENTS" python)
           "${EXAMPLES_PYTHON[@]}" -c "import sys; print(sys.version)"
