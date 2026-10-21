@@ -157,10 +157,11 @@ Configure JVM memory in Python **before the first database or server is created*
 import arcadedb_embedded as arcadedb
 from arcadedb_embedded.jvm import start_jvm
 
-# Default: 4GB heap (no changes needed)
+# Default: heap is 50% of the RAM the JVM sees (container limit in a container), no changes needed;
+# ArcadeDB's page cache is a quarter of that heap
 
-# Production: 8GB heap with matching initial size
-start_jvm(heap_size="8g", jvm_args="-Xms8g")
+# Production: 8GB heap (leave -Xms unset, see Memory below)
+start_jvm(heap_size="8g")
 ```
 
 **Common JVM Options:**
@@ -168,7 +169,7 @@ start_jvm(heap_size="8g", jvm_args="-Xms8g")
 | Option | Description | Example |
 |--------|-------------|----------|
 | `-Xmx<size>` | Maximum heap memory | `-Xmx8g` (8 gigabytes) |
-| `-Xms<size>` | Initial heap size (recommended: same as `-Xmx`) | `-Xms8g` |
+| `-Xms<size>` | Initial heap size. Leave it unset in a Python process (see [Memory](../api/jvm.md#memory)); never set it equal to `-Xmx` there | |
 | `-XX:MaxDirectMemorySize=<size>` | Limit off-heap direct buffers | `-XX:MaxDirectMemorySize=8g` |
 | `-Darcadedb.vectorIndex.graphBuildCacheSize=<count>` | Override for the vectors cached during the graph build (default `0`, automatic; leave it) | `-Darcadedb.vectorIndex.graphBuildCacheSize=2000000` (only to bound a build on a small heap) |
 | `-Darcadedb.vectorIndex.mutationsBeforeRebuild=<count>` | FLOOR for the rebuild threshold (default: 100). The effective threshold is `max(floor, min(graphSize x rebuildGraphRatio, maxPendingMutations))`, so on a 1M-vector index at the defaults it is **50,000**, not 100, so raising this alone changes nothing above ~500 vectors. Separately, `arcadedb.vectorIndex.maxDeltaScanRatio` (default 1.0) triggers a rebuild sooner when a query's scan of the pending vectors costs more than that multiple of its graph walk; the floor still applies | `-Darcadedb.vectorIndex.mutationsBeforeRebuild=200` |
@@ -186,7 +187,6 @@ from arcadedb_embedded.jvm import start_jvm
 start_jvm(
     heap_size="8g",
     jvm_args=(
-        "-Xms8g "
         "-Darcadedb.vectorIndex.graphBuildCacheMaxHeapPercent=20 "
         "-Darcadedb.vectorIndex.searchCacheMaxHeapPercent=20"
     ),
@@ -230,24 +230,24 @@ Rule of thumb: Plan for 1.5-2× your heap size in actual RAM
 # Small datasets (<1M records, <100K vectors)
 from arcadedb_embedded.jvm import start_jvm
 
-start_jvm(heap_size="2g", jvm_args="-Xms2g")
+start_jvm(heap_size="2g")
 
 # Medium datasets (1M-10M records, 100K-1M vectors)
-start_jvm(heap_size="8g", jvm_args="-Xms8g -XX:MaxDirectMemorySize=8g")
+start_jvm(heap_size="8g", jvm_args="-XX:MaxDirectMemorySize=8g")
 
 # Large datasets (10M+ records, 1M+ vectors)
-start_jvm(heap_size="16g", jvm_args="-Xms16g -XX:MaxDirectMemorySize=16g")
+start_jvm(heap_size="16g", jvm_args="-XX:MaxDirectMemorySize=16g")
 
 # High-dimensional vectors (e.g., 1536-dim embeddings): each cached vector
 # costs about dimensions x 4 + 64 bytes, so give the heap room for the corpus
-start_jvm(heap_size="8g", jvm_args="-Xms8g -XX:MaxDirectMemorySize=8g")
+start_jvm(heap_size="8g", jvm_args="-XX:MaxDirectMemorySize=8g")
 ```
 
 !!! tip "Page cache share (ArcadeDB 26.10.1 and later)"
     `arcadedb.maxPageRAM`, the page cache, defaults to a quarter of the heap, which is a
     safe baseline. For a dedicated process whose database is larger than the cache, the
     maintainers recommend 40-50% of the heap (a value above 80% is reduced to half of the
-    heap), for example `start_jvm(heap_size="16g", jvm_args="-Xms16g -Darcadedb.maxPageRAM=7000")`
+    heap), for example `start_jvm(heap_size="16g", jvm_args="-Darcadedb.maxPageRAM=7000")`
     (megabytes, here about 45%). Leave it alone when the database fits in the default share
     (ArcadeData/arcadedb#9168).
 
@@ -284,7 +284,7 @@ start_jvm(heap_size="8g", jvm_args="-Xms8g -XX:MaxDirectMemorySize=8g")
     ```python
     from arcadedb_embedded.jvm import start_jvm
 
-    start_jvm(heap_size="8g", jvm_args="-Xms8g")
+    start_jvm(heap_size="8g")
     ```
 
 2. **Lower the caches' heap share** (for vector workloads). The build and
@@ -295,7 +295,6 @@ start_jvm(heap_size="8g", jvm_args="-Xms8g -XX:MaxDirectMemorySize=8g")
     start_jvm(
         heap_size="8g",
         jvm_args=(
-            "-Xms8g "
             "-Darcadedb.vectorIndex.graphBuildCacheMaxHeapPercent=10 "
             "-Darcadedb.vectorIndex.searchCacheMaxHeapPercent=10"
         ),

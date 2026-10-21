@@ -348,5 +348,5 @@ class TestVectorParams:
         print(f"Total Memory: {total_memory / (1024**2):.2f} MB")
         print(f"Free Memory:  {free_memory / (1024**2):.2f} MB")
 
-        # Verify it's a reasonable size (at least 1GB, reflecting -Xmx4g default)
+        # Verify it's a reasonable size (at least 1GB; the default heap is a share of RAM)
         assert max_memory > 1 * 1024 * 1024 * 1024

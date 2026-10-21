@@ -25,6 +25,18 @@ from .exceptions import ArcadeDBError
 _LOGGER = get_logger(__name__)
 
 _JVM_CONFIG = None
+# Default heap when neither heap_size nor a user flag sets one: this share of the
+# RAM the JVM sees (the container limit inside a container, the machine's RAM
+# otherwise). Chosen from memory probes, see the "Memory" note in the JVM guide.
+_DEFAULT_MAX_RAM_PERCENTAGE = 50
+# Flags that already fix the maximum heap; the default is added only without them.
+_MAX_HEAP_FLAG_PREFIXES = (
+    "-Xmx",
+    "-XX:MaxRAMPercentage=",
+    "-XX:MaxRAMFraction=",
+    "-XX:MaxRAM=",
+    "-XX:MaxHeapSize=",
+)
 _JVM_INTERRUPT = None  # the `interrupt` the running JVM was started with
 _LOG_DIR_USED = None  # the log directory the running JVM was started with
 
@@ -275,7 +287,7 @@ def get_bundled_jre_lib_path() -> str:
 
 
 def start_jvm(
-    heap_size: Optional[str] = "4g",
+    heap_size: Optional[str] = None,
     disable_xml_limits: bool = False,
     jvm_args: Optional[Union[Iterable[str], str]] = None,
     common_pool_parallelism: Optional[int] = None,
@@ -287,11 +299,27 @@ def start_jvm(
     JVM Configuration (programmatic preferred):
     -------------------------------------------
     heap_size (optional)
-        Max heap size (e.g. "8g", "4096m"). Defaults to "4g".
-        A value other than "4g" replaces every -Xmx from jvm_args or the
-        environment. With "4g" or None, an -Xmx given there is kept (the
-        largest wins if there are several), and -Xmx4g is added only when
-        none is given.
+        Max heap size (e.g. "8g", "4096m"). Defaults to None: the heap is then
+        a share of the RAM the JVM sees (50 percent: -XX:MaxRAMPercentage=50),
+        which is the container limit inside a container, so no sizing is
+        needed. A value given here always wins: it replaces every -Xmx from
+        jvm_args or the environment. With None, an -Xmx or other max-heap flag
+        (-XX:MaxRAMPercentage=, -XX:MaxRAM=) given there is kept (the largest
+        -Xmx wins if there are several), and the percentage is added only when
+        none is given. ArcadeDB's page cache (arcadedb.maxPageRAM) is a quarter
+        of the resolved heap unless you set it.
+
+        Initial heap (-Xms): leave it unset in a Python process. The JVM then
+        starts small (1/64 of RAM) and grows as needed; pinning -Xms equal to
+        -Xmx commits the whole cap at start, with the Python side still to fit
+        beside it. No -Xms and no -XX:InitialRAMPercentage is added here.
+        Pinning is the usual practice for a dedicated ArcadeDB server outside
+        Python. In containers, size with percentages and leave headroom for
+        direct memory, metaspace and thread stacks. An -Xms larger than an
+        explicit heap_size (or -Xmx) raises ValueError before the JVM starts,
+        naming both values, because the JVM would otherwise end the process.
+        With only a percentage as the maximum the check is skipped: the JVM
+        raises the maximum to the -Xms value.
 
     disable_xml_limits (optional)
         Default False: the JDK's XML entity limits stay on, which is the safe
@@ -360,6 +388,9 @@ def start_jvm(
             # Development/testing (smaller memory)
             start_jvm(heap_size="2g")
 
+            # Another share of RAM instead of a fixed size
+            start_jvm(jvm_args="-XX:MaxRAMPercentage=70")
+
             # Explicit thread cap for reproducible benchmarks
             start_jvm(heap_size="8g", common_pool_parallelism=8)
 
@@ -391,7 +422,7 @@ def start_jvm(
         )
         has_overrides = (
             jvm_args is not None
-            or (heap_size not in (None, "4g"))
+            or (heap_size is not None)
             or (disable_xml_limits is not False)
             or (common_pool_parallelism is not None)
         )
@@ -441,6 +472,7 @@ def start_jvm(
         common_pool_parallelism=common_pool_parallelism,
         log_dir=log_dir,
     )
+    _check_initial_heap(jvm_args)
 
     try:
         # Always use bundled JRE
@@ -502,23 +534,44 @@ def _normalize_jvm_args(jvm_args: Optional[Union[Iterable[str], str]]) -> list[s
 
 
 def _parse_memory_size(value: str) -> Optional[int]:
-    """Parse JVM memory size to bytes. Supports k, m, g (case-insensitive)."""
+    """Parse a JVM memory size to bytes: k, m, g, t (case-insensitive), or bytes."""
     if not value:
         return None
+    units = {"k": 1024, "m": 1024**2, "g": 1024**3, "t": 1024**4}
     try:
         unit = value[-1].lower()
-        number = value[:-1]
-        if unit in {"k", "m", "g"}:
-            base = float(number)
-            if unit == "k":
-                return int(base * 1024)
-            if unit == "m":
-                return int(base * 1024 * 1024)
-            if unit == "g":
-                return int(base * 1024 * 1024 * 1024)
+        if unit in units:
+            return int(float(value[:-1]) * units[unit])
         return int(value)
-    except Exception:
+    except ValueError:
         return None
+
+
+def _check_initial_heap(args: list[str]) -> None:
+    """Refuse an -Xms larger than the maximum heap before the JVM starts.
+
+    The JVM prints an error and ends the whole process for that mix, which a
+    Python caller cannot catch. The maximum is known only when -Xmx (or
+    -XX:MaxHeapSize=) is in the arguments. With only a percentage
+    (-XX:MaxRAMPercentage=) the check is skipped: the JVM then raises the
+    maximum to the -Xms value instead of aborting (measured), so nothing
+    needs preventing.
+    """
+    initial = [a[4:] for a in args if a.startswith("-Xms")]
+    maxima = [a[4:] for a in args if a.startswith("-Xmx")] or [
+        a[len("-XX:MaxHeapSize=") :] for a in args if a.startswith("-XX:MaxHeapSize=")
+    ]
+    if not initial or not maxima:
+        return
+    xms_text, xmx_text = initial[-1], maxima[-1]
+    xms, xmx = _parse_memory_size(xms_text), _parse_memory_size(xmx_text)
+    if xms is not None and xmx is not None and xms > xmx:
+        raise ValueError(
+            f"-Xms{xms_text} is larger than the maximum heap ({xmx_text}); the "
+            "JVM would refuse to start and end the process. Leave -Xms unset "
+            "(the heap then grows as needed), or make it no larger than "
+            "heap_size / -Xmx."
+        )
 
 
 def _dedupe_max_heap(args: list[str]) -> list[str]:
@@ -740,15 +793,15 @@ def _build_jvm_args(
         merged_args.append("-XX:+UseCompactObjectHeaders")
 
     # Heap handling (single place):
-    # - If heap_size is explicitly set to non-default, override.
-    # - If heap_size is default or None, keep env/user -Xmx and dedupe (or add default).
-    has_xmx = any(arg.startswith("-Xmx") for arg in merged_args)
-    if heap_size is not None and heap_size != "4g":
+    # - An explicit heap_size wins over every -Xmx from the environment or jvm_args.
+    # - With heap_size None, a user's -Xmx (deduped to the largest) or other
+    #   max-heap flag is kept, and a share of RAM is added only when there is none.
+    if heap_size is not None:
         merged_args = [arg for arg in merged_args if not arg.startswith("-Xmx")]
         merged_args.append(f"-Xmx{heap_size}")
+    elif not any(arg.startswith(_MAX_HEAP_FLAG_PREFIXES) for arg in merged_args):
+        merged_args.append(f"-XX:MaxRAMPercentage={_DEFAULT_MAX_RAM_PERCENTAGE}")
     else:
-        if not has_xmx:
-            merged_args.append("-Xmx4g")
         merged_args = _dedupe_max_heap(merged_args)
 
     # Logs and the crash log go to a per-user directory, never the working

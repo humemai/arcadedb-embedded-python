@@ -147,7 +147,7 @@ JVM arguments use two flag types:
 
 - **`-X` flags**: JVM runtime options (heap, GC, etc.)
     - `-Xmx<size>`: Maximum heap memory (e.g., `-Xmx8g` for 8GB)
-    - `-Xms<size>`: Initial heap size (recommended: same as `-Xmx`)
+    - `-Xms<size>`: Initial heap size. Leave it unset in a Python process; see [Memory](../api/jvm.md#memory)
     - `-XX:MaxDirectMemorySize=<size>`: Limit off-heap buffers
 
 - **`-D` flags**: System properties for ArcadeDB configuration
@@ -158,7 +158,7 @@ JVM arguments use two flag types:
 
 | Flag | Purpose |
 |------|---------|
-| `-Xmx4g` | Default heap ceiling (`heap_size="4g"`); an `-Xmx` in `jvm_args` or `ARCADEDB_JVM_ARGS` wins unless you pass a different `heap_size` |
+| `-XX:MaxRAMPercentage=50` | Default heap ceiling: half of the RAM the JVM sees (the container limit inside a container). Added only when you give no `heap_size`, no `-Xmx` and no other max-heap flag in `jvm_args` or `ARCADEDB_JVM_ARGS`; a `heap_size` you pass always wins |
 | `-Darcadedb.server.logsDirectory=<log dir>` and `-Djava.util.logging.config.file=<log dir>/logging.properties` | Put the engine log (`arcadedb.log.*`) in the per-user log directory instead of `./log` in the working directory; see [Where the logs go](#where-the-logs-go). A value of either flag in `jvm_args` or `ARCADEDB_JVM_ARGS` wins |
 | `-XX:ErrorFile=<log dir>/hs_err_pid%p.log` | JVM crash log location (`ARCADEDB_JVM_ERROR_FILE` or an `-XX:ErrorFile=` in `jvm_args` overrides it) |
 | `--add-modules=jdk.incubator.vector` | Enable JVector SIMD acceleration |

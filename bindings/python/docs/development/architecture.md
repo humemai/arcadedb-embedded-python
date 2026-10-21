@@ -51,7 +51,7 @@ arcadedb_embedded/
 - Prefers programmatic configuration (`start_jvm(...)`, `jvm_kwargs`)
 - Supports explicit heap and common-pool thread limits via `heap_size` and `common_pool_parallelism`
 - Always reads `ARCADEDB_JVM_ARGS` and puts its flags before `jvm_args`; `ARCADEDB_JVM_ERROR_FILE` sets the crash-log path and `ARCADEDB_LOG_DIR` the log directory
-- Adds default flags unless the merged arguments already set them: `--add-modules=jdk.incubator.vector`, `-Djava.awt.headless=true`, `--enable-native-access=ALL-UNNAMED`, `-Dfile.encoding=UTF8`, `--add-opens` flags (for `java.util.concurrent.atomic`, `java.nio.channels.spi`, and `java.lang`), `-Darcadedb.polyglotEngineEnabled=false`, `-XX:+UseCompactObjectHeaders`, and `-Xmx4g` when no heap is given; the `jdk.xml` entity limits are lifted only while `disable_xml_limits` is true (default false), and `-XX:ErrorFile`, `-Darcadedb.server.logsDirectory` and `-Djava.util.logging.config.file` default into a per-user log directory (never the working directory), where `start_jvm` also writes a `logging.properties` rendered from the engine jar's `arcadedb-log.properties` with the file log pointed at that directory
+- Adds default flags unless the merged arguments already set them: `--add-modules=jdk.incubator.vector`, `-Djava.awt.headless=true`, `--enable-native-access=ALL-UNNAMED`, `-Dfile.encoding=UTF8`, `--add-opens` flags (for `java.util.concurrent.atomic`, `java.nio.channels.spi`, and `java.lang`), `-Darcadedb.polyglotEngineEnabled=false`, `-XX:+UseCompactObjectHeaders`, and `-XX:MaxRAMPercentage=50` when no heap is given (no `heap_size`, no `-Xmx` or other max-heap flag); the `jdk.xml` entity limits are lifted only while `disable_xml_limits` is true (default false), and `-XX:ErrorFile`, `-Darcadedb.server.logsDirectory` and `-Djava.util.logging.config.file` default into a per-user log directory (never the working directory), where `start_jvm` also writes a `logging.properties` rendered from the engine jar's `arcadedb-log.properties` with the file log pointed at that directory
 - Starts once per process: a later `start_jvm()` with no settings, or the same ones, joins the running JVM; different settings raise `ArcadeDBError`
 - `interrupt` chooses what Ctrl-C does: by default (`False`) Python gets it and raises `KeyboardInterrupt`; `True` leaves it to JPype's handler, which ends the process with status 130 and runs no Python cleanup (see [JVM API](../api/jvm.md))
 - From a source checkout (no `jars/` or `jre/` next to the package), extracts them from the newest wheel in `dist/` into `bindings/python/.runtime-cache/`, stamped with that wheel and re-extracted when the wheel changes
@@ -149,7 +149,7 @@ pure-JPype fallback.
 
 ```python
 def start_jvm(
-    heap_size="4g",
+    heap_size=None,
     disable_xml_limits=False,
     jvm_args=None,
     common_pool_parallelism=None,
