@@ -470,3 +470,104 @@ def test_async_executor_wait_completion_positive_timeout_still_times_out(temp_db
         assert async_exec.wait_completion(30000) is None
     finally:
         async_exec.close()
+
+
+# What each async signal means (docs/api/async_executor.md, "When is async work
+# stored?"): a per-record callback runs when the record is applied to the writer's
+# current batch, on_ok runs after a batch commits, and wait_completion() returns
+# when everything queued is committed. A crash test (kill -9) showed what that
+# means for durability; these tests pin the ordering without killing anything.
+
+
+def test_per_record_callback_runs_before_the_batch_commits_and_on_ok_after(temp_db):
+    db = temp_db
+    db.command("sql", "CREATE DOCUMENT TYPE Signal")
+
+    ok_visible_counts = []
+    applied = threading.Event()
+    release = threading.Event()
+
+    def on_ok():
+        # on_ok runs on the writer thread after the commit: the rows are visible
+        ok_visible_counts.append(db.count_type("Signal"))
+
+    # one worker, a batch far larger than the load: nothing commits until the
+    # queue drains, so the first record sits in an uncommitted batch
+    ex = db.async_executor().set_parallel_level(1).set_commit_every(1000)
+    ex.on_ok(on_ok)
+
+    def on_applied(_record):
+        applied.set()
+        release.wait(30)
+
+    doc = db.new_document("Signal")
+    doc.set("n", 0)
+    ex.create_record(doc, callback=on_applied)
+    assert applied.wait(30), "the per-record callback never ran"
+
+    try:
+        # the callback has fired, so the record is applied; it is not committed
+        assert ex.is_processing() or ex.is_pending()
+        assert ok_visible_counts == [], "on_ok fired before the batch committed"
+        assert db.count_type("Signal") == 0, "an applied record was already visible"
+    finally:
+        release.set()
+        ex.wait_completion()
+        ex.close()
+
+    assert db.count_type("Signal") == 1
+    assert ok_visible_counts, "on_ok never fired after the commit"
+    assert ok_visible_counts[-1] == 1, "on_ok ran before the commit was visible"
+
+
+def test_wait_completion_commits_everything_queued_including_the_tail(temp_db):
+    db = temp_db
+    db.command("sql", "CREATE DOCUMENT TYPE Tail")
+
+    errors = []
+    callbacks = []
+    # 250 records at a commit every 100: two full batches and a tail of 50 that only
+    # the end of the queue commits
+    ex = db.async_executor().set_parallel_level(1).set_commit_every(100)
+    ex.on_error(errors.append)
+    for i in range(250):
+        doc = db.new_document("Tail")
+        doc.set("n", i)
+        ex.create_record(doc, callback=callbacks.append)
+
+    ex.wait_completion()
+
+    assert not ex.is_pending()
+    assert not ex.is_processing()
+    assert errors == []
+    # nothing left to apply and nothing left uncommitted
+    assert len(callbacks) == 250
+    assert db.count_type("Tail") == 250
+    ex.close()
+
+
+@pytest.mark.parametrize("use_wal", [True, False])
+def test_wait_completion_then_reopen_has_every_record(temp_db_path, use_wal):
+    # After wait_completion() the load is stored, with the WAL on or off. The WAL
+    # setting only matters for a crash (docs/api/async_executor.md).
+    db = arcadedb.create_database(temp_db_path)
+    try:
+        db.command("sql", "CREATE DOCUMENT TYPE Stored")
+        ex = db.async_executor().set_parallel_level(1).set_commit_every(100)
+        ex.set_transaction_use_wal(use_wal)
+        assert ex.is_transaction_use_wal() is use_wal
+        for i in range(250):
+            doc = db.new_document("Stored")
+            doc.set("n", i)
+            ex.create_record(doc)
+        ex.wait_completion()
+        ex.close()
+    finally:
+        db.close()
+
+    db = arcadedb.open_database(temp_db_path)
+    try:
+        assert db.count_type("Stored") == 250
+        assert db.query("sql", "SELECT max(n) AS m FROM Stored").first().get("m") == 249
+    finally:
+        db.close()

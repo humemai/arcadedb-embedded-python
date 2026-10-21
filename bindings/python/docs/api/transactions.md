@@ -8,7 +8,7 @@ ArcadeDB transactions provide:
 
 - **Atomicity**: All changes commit together or none commit
 - **Consistency**: Schema validation and constraint enforcement
-- **Isolation**: `READ_COMMITTED` by default; `REPEATABLE_READ` per transaction (see [Isolation level](#isolation-level))
+- **Isolation**: `READ_COMMITTED` by default; `REPEATABLE_READ` per transaction, which repeats page reads and is not a snapshot of the database (see [Isolation level](#isolation-level))
 - **Durability**: A committed transaction survives a process crash. With the default
   WAL flush mode (`'no'`) it does not survive a power cut; call
   `db.set_wal_flush('yes_nometadata')` (or `'yes_full'`) for that (see
@@ -23,12 +23,12 @@ ArcadeDB transactions provide:
 
 ## Isolation level
 
-The engine has two levels, and the bindings choose one through SQL (there is no Python argument for it):
+The engine has two levels, both built on page-level MVCC (optimistic locking on the page version), and the bindings choose one through SQL (there is no Python argument for it). The engine's own description is the javadoc of `TRANSACTION_ISOLATION_LEVEL` in [`Database.java`](https://github.com/ArcadeData/arcadedb/blob/main/engine/src/main/java/com/arcadedb/database/Database.java#L45-L56):
 
 | Level | A read sees |
 | :--- | :--- |
 | `READ_COMMITTED` (default) | the latest committed version of each page, including commits made after this transaction began |
-| `REPEATABLE_READ` | the pages as this transaction first read them: they are cached until commit or rollback |
+| `REPEATABLE_READ` | the pages as this transaction first read them: they are cached until commit or rollback, so a page read repeats. It is page-level, not a snapshot of the whole database |
 
 `BEGIN ISOLATION <level>` begins a transaction on the calling thread at that level. End it with `db.commit()` or `db.rollback()`. Do not wrap it in `with db.transaction():`, which begins its own, at the default level:
 
@@ -41,6 +41,8 @@ try:
 finally:
     db.commit()
 ```
+
+**Do not expect snapshot-style repeatable results from `REPEATABLE_READ`.** What repeats is a page that the transaction has already read. In our test on 26.10.2 a scan, an index lookup and a point read gave the same answer again after another thread committed, but `SELECT count(*)` and `count_type()` did not: they follow the committed bucket counters, not the cached pages, and returned a larger number the second time. If a count has to repeat, count a property or add a `WHERE` (`SELECT count(id) FROM T`), which reads pages, instead of `count(*)`.
 
 Both levels detect only write-write conflicts on the same page, at commit (a retryable `ConcurrentModificationException`, see `run_in_transaction()`). Neither validates what a transaction read, so write skew and phantom reads are possible under both. `REPEATABLE_READ` keeps every page it visits in memory until the end, so a long scan inside one costs RAM. `tests/test_sql_constraints_and_maintenance.py` runs the two levels against a commit from a second thread.
 

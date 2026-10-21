@@ -65,6 +65,20 @@ async_exec.close()
 db.close()
 ```
 
+## When is async work stored?
+
+Three signals tell you something about async writes, and they do not mean the same thing:
+
+| Signal | What it means | Do | Avoid |
+| :--- | :--- | :--- | :--- |
+| A per-record or per-statement `callback` (`create_record`, `command`, `new_edge`) | The writer applied the record to its **current batch**. The batch is not committed yet, so it is not durable, and a commit that is then rejected has been through the callback too | Use it to collect a result or to count progress | Treating it as "stored": do not call `Document.save()` or report success to a caller from inside it |
+| [`on_ok`](#on_ok) | A batch **committed** | Use it as the "this batch is stored" signal when you cannot wait for the end | Counting calls as batches or records (a reconfigured executor can fire it for an empty commit); compare against your own submitted count |
+| [`wait_completion()`](#wait_completion) | Everything queued before the call has been **processed**: committed, or reported to an error callback | Call it before you tell anyone the writes are stored, before `close()` and before the process exits | Exiting between the last queued write and `wait_completion()`: the queued tail is dropped without an error |
+
+Our test of this killed the process with `kill -9` (one worker, a commit every 100 records, 1,000 records into a document type) and reopened the database afterwards. After `wait_completion()` returned, every record was there, with the WAL on or off. Killed inside the callback of the 150th record, the database held 100 of the 150 records the callbacks had reported, always whole batches. No record that `on_ok` had reported was missing when the WAL was on. This matches what the maintainers say in ArcadeData/arcadedb#6470 (a callback runs when the record is applied, not when it is durable; `onOk` is the commit signal) and what ArcadeData/arcadedb-docs#499 asks the engine docs to say.
+
+**Disabling the WAL gives up durability of acknowledged work.** With `set_transaction_use_wal(False)` a batch can be acknowledged by `on_ok` and still be gone after a crash, because there is no log to replay: in our test one of 50 WAL-off runs reopened without a batch whose `on_ok` had fired. Keep the WAL on when `on_ok` has to mean stored, and turn it off only for a load you would re-run from the start after a crash. A power cut is a separate matter, set by [`set_transaction_sync`](#set_transaction_sync); `kill -9` does not test it.
+
 ## Configuration Methods
 
 All configuration methods return `self` for method chaining.
@@ -157,12 +171,15 @@ Enable or disable Write-Ahead Log for transactions.
 
 - `AsyncExecutor`: Self for chaining
 
-**Note:** Disabling WAL increases speed but reduces durability.
+**Note:** With the WAL off, a batch that [`on_ok`](#on_ok) reported can still be lost in a
+crash, so the executor's signals no longer mean "stored" (see
+[When is async work stored?](#when-is-async-work-stored)). Turn it off only for a load you
+would re-run from the start after a crash.
 
 **Example:**
 
 ```python
-# Disable WAL for maximum speed (less durable)
+# WAL off: only for a load you can re-run from the start after a crash
 async_exec = db.async_executor().set_transaction_use_wal(False)
 ```
 
@@ -305,7 +322,9 @@ Execute an async command (INSERT/UPDATE/DELETE/DDL). The callback is optional.
 
 - `language` (str): Command language (`"sql"`, `"opencypher"`, etc.)
 - `command_text` (str): Command string
-- `callback` (Optional[Callable]): Optional callback invoked with each result row
+- `callback` (Optional[Callable]): Optional callback invoked with each result row. It runs
+  when the writer has applied the statement to its current batch, before that batch commits:
+  it does not mean the row is stored (see [When is async work stored?](#when-is-async-work-stored))
 - `args` (Optional[Sequence]): Positional parameters (use `?` placeholders)
 - `error_callback` (Optional[Callable]): Optional per-operation error callback. A
   statement's own failure goes only here: it never reaches the executor-wide
@@ -456,7 +475,7 @@ ex.create_record(document, callback=None, error_callback=None)
 
 Queue a document (built with `db.new_document`, not yet saved) for
 asynchronous creation by the engine's parallel bucket writers. Call
-`wait_completion()` before relying on visibility. For many uniform rows
+`wait_completion()` before relying on visibility or durability. For many uniform rows
 prefer `db.insert_many(..., parallel=True)`, which crosses the FFI boundary
 once per batch instead of per document.
 
@@ -465,7 +484,8 @@ once per batch instead of per document.
 - `document` (Document): Unsaved document from `db.new_document`
 - `callback` (callable, optional): Invoked with the record once the writer has created
   it in its transaction, before that batch commits, so a record the commit then rejects
-  has been through `callback` too; only `error_callback` tells the two apart
+  has been through `callback` too, and a crash can still lose it; only `error_callback` tells
+  a rejected record apart, and only `on_ok` or `wait_completion()` says a batch is committed
 - `error_callback` (callable, optional): Invoked with the exception when the writers
   reject this record (a duplicate key under a UNIQUE index, or its batch abandoned at a
   failed commit)
@@ -603,16 +623,16 @@ Asynchronously scan all records of a type, invoking `callback` per record. Retur
 async_exec.on_ok(callback: Callable[[], None]) -> AsyncExecutor
 ```
 
-Set a global success callback for all operations.
+Set a global callback that runs after a batch **commits**. It is the signal that the
+records applied so far are stored; the per-record `callback` of a `command()` or
+`create_record()` call is not, because it runs before the batch commits (see
+[When is async work stored?](#when-is-async-work-stored)). In our `kill -9` test no record
+that `on_ok` had reported was lost with the WAL on. With the WAL off
+([`set_transaction_use_wal(False)`](#set_transaction_use_wal)) that guarantee is gone.
 
-**Note:** Global callbacks have JPype proxy compatibility issues. Prefer per-operation
-callbacks on async SQL/Cypher commands:
-
-```python
-async_exec.command(
-    "sql", "INSERT INTO Log SET id = :id", callback=on_success, id=1
-)
-```
+The callback takes no arguments and does not say how many records the batch held, and it
+can fire for an empty commit. Count what you submitted, and use `wait_completion()` to know
+that all of it is done.
 
 **Parameters:**
 
@@ -654,6 +674,18 @@ the statement's `error_callback`, and is not raised anywhere when there is none.
 async_exec.on_error(lambda e: print(f"Error: {e}"))
 ```
 
+`on_ok` and `on_error` together:
+
+```python
+committed_batches = []
+async_exec = (
+    db.async_executor()
+    .on_ok(lambda: committed_batches.append(1))   # a batch committed: stored
+    .on_error(lambda e: print(f"Async error: {e}"))
+)
+# a per-record callback would only say "applied to the current batch"
+```
+
 ## Status Methods
 
 ### wait_completion
@@ -662,7 +694,11 @@ async_exec.on_error(lambda e: print(f"Error: {e}"))
 async_exec.wait_completion(timeout_ms: Optional[int] = None)
 ```
 
-Wait for all pending operations to complete.
+Wait until every operation queued before the call has been processed: its batch is committed,
+or the failure went to an error callback. This is the point at which async writes are stored
+(with the WAL on); a per-record callback and a returning `command()` or `create_record()` call
+are not. A process that exits or is killed before it, with writes still queued, loses the
+unprocessed tail without an error.
 
 **Parameters:**
 
@@ -673,7 +709,9 @@ Wait for all pending operations to complete.
 - `TimeoutError`: If the timeout elapses before completion, or at once for `0` while work is pending
 - `ValueError`: If `timeout_ms` is negative
 
-**Note:** Always call before closing executor or database.
+**Note:** Always call before closing the executor or database, and before you report async
+writes as stored. It does not raise for a record the writers rejected; pass an
+`error_callback` or register `on_error` to hear about those.
 
 **Example:**
 
@@ -884,7 +922,25 @@ async_exec.close()
 async_exec.close()  # Operations may be lost!
 ```
 
-### 3. Load Bulk Data Outside the Executor
+### 3. Treat `on_ok` and `wait_completion()` as "stored", not the per-record callback
+
+```python
+# ✅ Good: stored means the batch committed (on_ok) or everything is processed (wait_completion)
+async_exec.on_error(lambda e: print(f"Async error: {e}"))
+for doc in docs:
+    async_exec.create_record(doc)
+async_exec.wait_completion()
+print("stored")
+
+# ❌ Bad: the callback runs before the batch commits, so this can print for records a crash then loses
+for doc in docs:
+    async_exec.create_record(doc, callback=lambda rec: print("stored", rec.get_identity()))
+```
+
+Keep the WAL on when `on_ok` has to mean stored. See
+[When is async work stored?](#when-is-async-work-stored).
+
+### 4. Load Bulk Data Outside the Executor
 
 ```python
 # ✅ Good: documents
@@ -917,7 +973,8 @@ async_exec.set_parallel_level(1)  # Fewer workers
 # Increase batch size
 async_exec.set_commit_every(20000)
 
-# Consider disabling WAL (less durable!)
+# Disabling the WAL is faster but gives up durability of acknowledged work: a batch
+# that on_ok reported can be lost in a crash. Only for a load you can re-run from the start.
 async_exec.set_transaction_use_wal(False)
 ```
 
