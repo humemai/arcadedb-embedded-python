@@ -39,6 +39,14 @@ public final class ArcadeNative {
   private static final Map<Long, ArcadeDBServer> SERVERS = new ConcurrentHashMap<>();
   private static final AtomicLong IDS = new AtomicLong(1);
 
+  static {
+    // ARCADEDB_VECTOR_PROVIDER = native | panama | default (jvector's VectorizationProvider, forced); unset: jvector chooses
+    // (Highway through the FFM downcalls when the bundled libjvector loads, else the Vector API classes).
+    final String forced = System.getenv("ARCADEDB_VECTOR_PROVIDER");
+    if (forced != null && !forced.isEmpty() && System.getProperty("jvector.vectorization_provider") == null)
+      System.setProperty("jvector.vectorization_provider", forced);
+  }
+
   private ArcadeNative() {
   }
 
@@ -305,6 +313,15 @@ public final class ArcadeNative {
       NativeCodec.quote(sb, vp.getClass().getName());
       sb.append(",\"util_support\":");
       NativeCodec.quote(sb, vp.getVectorUtilSupport().getClass().getName());
+      sb.append(",\"isa\":");
+      String isa = null;
+      try {
+        final Object support = vp.getVectorUtilSupport();
+        isa = (String) support.getClass().getMethod("getActiveIsa").invoke(support);
+      } catch (final ReflectiveOperationException | RuntimeException e) {
+        // the Panama and default providers have no ISA tier
+      }
+      NativeCodec.quote(sb, String.valueOf(isa));
       return out(sb.append('}').toString());
     } catch (final Throwable t) {
       return err(t);

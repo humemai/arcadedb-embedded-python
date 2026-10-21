@@ -53,6 +53,25 @@ def _default(value):
     )
 
 
+_PLAIN = frozenset((str, int, float, bool, type(None)))
+
+
+def _prep(value):
+    """A value ready for json.dumps: a dict with a key that is not a str becomes a tagged ``[[k, v], ..]`` map (JSON would turn
+    the key into text; the JPype path keeps it), and containers are walked for such dicts. Plain scalars pass untouched.
+    """
+    t = type(value)
+    if t in _PLAIN:
+        return value
+    if isinstance(value, Mapping):
+        if all(type(k) is str for k in value):
+            return {k: _prep(v) for k, v in value.items()}
+        return {TAG: ["m", [[_prep(k), _prep(v)] for k, v in value.items()]]}
+    if t is list or t is tuple:
+        return [_prep(v) for v in value]
+    return value
+
+
 def encode_params(args) -> str:
     """The ``params`` text for ``arcadedb_n_exec``: '' for none, else ``{"named":{..}}`` or ``{"pos":[..]}``.
 
@@ -62,8 +81,14 @@ def encode_params(args) -> str:
     if not args:
         return ""
     values = args[0] if len(args) == 1 and isinstance(args[0], (list, tuple)) else args
+    plain = _PLAIN
     if len(values) == 1 and isinstance(values[0], Mapping):
-        return json.dumps({"named": dict(values[0])}, default=_default)
+        named = values[0]
+        if not all(type(v) in plain for v in named.values()):
+            named = {k: _prep(v) for k, v in named.items()}
+        return json.dumps({"named": dict(named)}, default=_default)
+    if not all(type(v) in plain for v in values):
+        values = [_prep(v) for v in values]
     return json.dumps({"pos": list(values)}, default=_default)
 
 

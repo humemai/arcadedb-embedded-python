@@ -110,7 +110,10 @@ final class Json {
     try {
       return Long.parseLong(t);
     } catch (final NumberFormatException e) {
-      return new BigInteger(t);
+      // the JPype path raises OverflowError for a Python int beyond 64 bits (query parameters and the bulk paths alike):
+      // refuse it here instead of letting the engine wrap or widen it
+      new BigInteger(t);
+      throw new IllegalArgumentException("integer out of range for a 64-bit parameter: " + t);
     }
   }
 
@@ -197,7 +200,7 @@ final class Json {
     return out;
   }
 
-  /** Python -> Java tagged values: n Decimal, i big int, D date, T datetime (UTC wall clock), s set, b bytes (base64), F float[], R RID. */
+  /** Python -> Java tagged values: n Decimal, i big int, m map with non-str keys, D date, T datetime (UTC wall clock), s set, b bytes (base64), F float[], R RID. */
   @SuppressWarnings("unchecked")
   private static Object decodeTag(final String kind, final Object payload) {
     switch (kind) {
@@ -205,6 +208,15 @@ final class Json {
       return new BigDecimal((String) payload);
     case "i":
       return new BigInteger((String) payload);
+    case "m": {
+      // a Python dict with a non-str key: [[k, v], ..] (the plain JSON object form can only carry str keys)
+      final Map<Object, Object> m = new HashMap<>();
+      for (final Object pair : (List<Object>) payload) {
+        final List<Object> kv = (List<Object>) pair;
+        m.put(kv.get(0), kv.get(1));
+      }
+      return m;
+    }
     case "D":
       return LocalDate.parse((String) payload);
     case "T":

@@ -21,6 +21,8 @@
 
   <dependencyManagement>
     <dependencies>
+      <!-- phase 3: jvector 4.0.2 carries the Highway (FFM) provider and libjvector-*.so; the engine pins 4.0.1 -->
+      <dependency><groupId>io.github.jbellis</groupId><artifactId>jvector</artifactId><version>4.0.2</version></dependency>
       <!-- the versions the wheel ships (the Docker image lib/), not what the parent pom resolves -->
       <dependency><groupId>org.jboss.threads</groupId><artifactId>jboss-threads</artifactId><version>3.10.1</version></dependency>
       <dependency><groupId>io.smallrye.common</groupId><artifactId>smallrye-common-annotation</artifactId><version>2.20.0</version></dependency>
@@ -332,6 +334,7 @@
             <buildArg>-H:+ReportExceptionStackTraces</buildArg>
             <buildArg>--enable-url-protocols=http,https</buildArg>
             <buildArg>--add-modules=jdk.incubator.vector</buildArg>
+            <buildArg>--enable-native-access=ALL-UNNAMED</buildArg>
             <buildArg>--initialize-at-run-time=org.wildfly.common.net.HostName</buildArg>
             <buildArg>--initialize-at-build-time=org.slf4j,org.slf4j.helpers,org.slf4j.spi,org.slf4j.event,org.slf4j.jul</buildArg>
             <!-- NO -H:IncludeResources=.* : resources are listed in META-INF/native-image/.../reachability-metadata.json -->
