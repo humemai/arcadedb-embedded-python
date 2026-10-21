@@ -74,29 +74,17 @@ jobs:
             echo "profile=" >> "$GITHUB_OUTPUT"; echo "build-report: not available"
           fi
 
-      - name: Build libarcadedb.so (default CPU target)
-        shell: bash
-        run: |
-          set -euo pipefail
-          start=$(date +%s)
-          mvn -B --no-transfer-progress -f native-spike/pom.xml ${{ steps.report.outputs.profile }} -DskipTests package 2>&1 | tee out/build.log
-          echo "BUILD_SECONDS_default=$(( $(date +%s) - start ))" | tee -a out/sizes.txt
-          mkdir -p out/default
-          cp native-spike/target/libarcadedb.so native-spike/target/lib*_dynamic.h native-spike/target/libarcadedb.h native-spike/target/graal_isolate.h out/default/
-          cp native-spike/target/libjsvml.so native-spike/target/libmanagement_ext.so out/default/ 2>/dev/null || true
-          cp /tmp/native-image-build-output.json out/default/build-output.json 2>/dev/null || true
-
       - name: Build libarcadedb.so (-march=compatibility)
         shell: bash
         run: |
           set -euo pipefail
           start=$(date +%s)
-          rm -f native-spike/target/libarcadedb.* native-spike/target/lib*_dynamic.h
           export NATIVE_IMAGE_OPTIONS="${NATIVE_IMAGE_OPTIONS:-} -march=compatibility"
           mvn -B --no-transfer-progress -f native-spike/pom.xml -DskipTests package 2>&1 | tee out/build-compat.log
           echo "BUILD_SECONDS_compat=$(( $(date +%s) - start ))" | tee -a out/sizes.txt
           mkdir -p out/compat
-          cp native-spike/target/libarcadedb.so out/compat/
+          cp native-spike/target/libarcadedb.so native-spike/target/libarcadedb.h out/compat/
+          cp native-spike/target/libjsvml.so native-spike/target/libmanagement_ext.so out/compat/ 2>/dev/null || true
           cp /tmp/native-image-build-output.json out/compat/build-output.json 2>/dev/null || true
 
       - name: Sizes
@@ -104,7 +92,7 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
-          for v in default compat; do
+          for v in compat; do
             so=out/$v/libarcadedb.so
             [[ -f "$so" ]] || continue
             echo "[$v] so_bytes=$(stat -c %s "$so")" | tee -a out/sizes.txt
@@ -115,12 +103,12 @@ jobs:
             rm -f out/$v/libarcadedb.so.gz out/$v/libarcadedb.zip.tmp
             ldd "$so" | tee out/$v/ldd.txt
           done
-          ls -l out/default | tee -a out/sizes.txt
-          for f in build.log build-compat.log; do
+          ls -l out/compat | tee -a out/sizes.txt
+          for f in build-compat.log; do
             sed -n '/GraalVM Native Image: Generating/,/Finished generating/p' out/$f > out/image-breakdown-$f.txt || true
           done
-          cat out/image-breakdown-build.log.txt || true
-          grep -n -i -E 'warning.*(reflection|resource|metadata)|Could not resolve|not found|unresolved' out/build.log | grep -v 'Configuration directory not found' | head -60 > out/metadata-warnings.txt || true
+          cat out/image-breakdown-build-compat.log.txt || true
+          grep -n -i -E 'warning.*(reflection|resource|metadata)|Could not resolve|not found|unresolved' out/build-compat.log | grep -v 'Configuration directory not found' | head -60 > out/metadata-warnings.txt || true
           find native-spike/target -name '*build-report*' | head
 
       - name: Smoke test through ctypes
@@ -129,7 +117,7 @@ jobs:
           set -uo pipefail
           fail=0
           # The .so alone in an empty directory: no companion libraries next to it.
-          for v in default compat; do
+          for v in compat; do
             d=$(mktemp -d); cp out/$v/libarcadedb.so "$d/"
             for run in 1 2 3; do
               python3 -I native-spike/smoke.py "$d/libarcadedb.so" > out/smoke-$v-$run.out 2>&1
@@ -138,9 +126,6 @@ jobs:
               [[ $rc -eq 0 ]] || fail=1
             done
           done
-          # With the companion libraries (libjsvml.so, libmanagement_ext.so) next to it.
-          python3 -I native-spike/smoke.py out/default/libarcadedb.so > out/smoke-default-with-companions.out 2>&1
-          echo "smoke_rc[default,companions]=$?" | tee -a out/sizes.txt
           exit $fail
 
       - name: Upload artifact
