@@ -2368,6 +2368,63 @@ def _gav_scope_note(table_id, rows):
         "keeps the rows without the view beside it."))
 
 
+# THE VIEW MUST NOT LIST THE `Message` SUPERTYPE ON 26.10.x AND MUST LIST IT FROM
+# 26.11.1. l2_graph.py `_gav_types()` lists the concrete message types (Post,
+# Comment) and leaves their abstract supertype out, because listing it returns a
+# wrong count for one LSQB query on 26.10.x; upstream PR #9320 (26.11.1) makes
+# the listing correct, and the 26.11.1 measurement needs the supertype in the
+# list. A row records the types the ENGINE says the view covers (`gav_types`,
+# "vertex: Person, ...; edge: KNOWS, ..."), so this reads the rows twice: a
+# 26.10.x row that covers Post or Comment without Message gets the declaration
+# below, and a 26.11.1-or-later row that does so is refused, so that the
+# measurement cannot be published with the stale list. A tier with no message
+# half covers Person and KNOWS only and is not concerned.
+# REMOVE WHEN: the 26.11.1 pass has landed with `Message` in `gav_types` (the
+# declaration then has no 26.10.x row left to describe, and l2_graph.py's
+# `_gav_types()` has been changed in its own harness PR).
+_GAV_SUPERTYPE = "Message"
+_GAV_SUPERTYPE_LISTED_FROM = (26, 11, 1)
+
+
+def _gav_message_rows(rows):
+    """[(release tuple or None, row)] for the October ArcadeDB with-view graph analytics rows whose
+    `gav_types` cover a message type (Post or Comment) but not the Message supertype."""
+    out = []
+    for r in rows:
+        if not (r.get("lane") == "l2" and r.get("workload") == "olap"
+                and str(r.get("instrument") or "") == "2026-10"
+                and str(r.get("backend") or "").startswith("arcadedb")
+                and str(r.get("gav")) != "False"):
+            continue
+        types = set(re.findall(r"\w+", str(r.get(_GAV_TYPES_FIELD) or "")))
+        if not ({"Post", "Comment"} & types) or _GAV_SUPERTYPE in types:
+            continue
+        m = re.search(r"(\d+)\.(\d+)\.(\d+)", str(r.get("engine_version") or ""))
+        out.append((tuple(int(x) for x in m.groups()) if m else None, r))
+    return out
+
+
+def _gav_supertype_note(table_id, rows):
+    """The declaration for the graph analytics table while its ArcadeDB view lacks the Message supertype
+    on a release before 26.11.1; SystemExit when a 26.11.1-or-later row lacks it (see the comment above)."""
+    if table_id != "l2olap" or not _OCTOBER_ENV:
+        return None
+    hits = _gav_message_rows(rows)
+    stale = [r for v, r in hits if v is not None and v >= _GAV_SUPERTYPE_LISTED_FROM]
+    if stale:
+        raise SystemExit(
+            f"{len(stale)} ArcadeDB graph analytics row(s) from release "
+            f"{'.'.join(map(str, _GAV_SUPERTYPE_LISTED_FROM))} or later built the view without the "
+            f"{_GAV_SUPERTYPE} supertype; l2_graph.py _gav_types() must list it from that release")
+    if not any(v is None or v < _GAV_SUPERTYPE_LISTED_FROM for v, _r in hits):
+        return None
+    fixed = ".".join(map(str, _GAV_SUPERTYPE_LISTED_FROM))
+    return _gen(
+        f"ArcadeDB's Graph Analytical View covers the message types Post and Comment but not their "
+        f"{_GAV_SUPERTYPE} supertype, because listing the supertype makes this release return a wrong count for one "
+        f"of the graph queries; the measurement on release {fixed} builds the view with it listed.", fixed)
+
+
 # ARCADEDB'S SPARSE SEARCH RETURNS WHOLE RECORDS (DECISIONS #153 item 1). The
 # timed ArcadeDB search, embedded and served, is `SELECT expand(
 # vector.sparseNeighbors(...))`, which returns each hit's whole record (and
@@ -3299,14 +3356,17 @@ _PAPER_RELEASE = "26.11.1"
 # THE FIRST PACKAGE VERSION BUILT WITH THE FASTER PYTHON BINDINGS (humemai/
 # arcadedb-embedded-python#283). The 26.10.1 rows ran on the bindings as they
 # were at the re-pin; since then the per-call glue, the Java-array parameter
-# path, and the result readers got faster, and they reach the page only through
-# the wheel the paper's release is measured with, built from main after those
-# changes. The embedded rows record that wheel's package version as their
-# engine_version, so a row below this version predates the change. Bump the
-# constant (and keep it equal to the version of the next wheel to be measured)
-# when a later bindings change should also be announced; the line goes by
-# itself once the rows come from a wheel at or above it.
-_BINDINGS_FASTER_FROM = "26.11.1"
+# path, and the result readers got faster (#277, #281, #286, #295, #320), and
+# they reach the page only through a wheel built after those changes. The
+# first such wheel is 26.10.2: all five PRs are ancestors of the 26.10.2 tag,
+# the release run for that tag built the PyPI wheel, and the wheel's Python
+# sources are byte-identical to the tag's. The embedded rows record the
+# wheel's package version as their engine_version, so a row below this version
+# predates the change and a 26.10.2 row does not. Bump the constant (and keep
+# it equal to the version of the first wheel that carries the change) when a
+# later bindings change should also be announced; the line goes by itself once
+# the rows come from a wheel at or above it.
+_BINDINGS_FASTER_FROM = "26.10.2"
 
 
 # WHAT THE NEXT MEASUREMENT CHANGES, ONE LINE PER CHANGE, on the page itself
@@ -3516,7 +3576,8 @@ def _global_conditions(tables, october):
         out = [_R("GLOBAL", "docker_skeleton" if SKELETON else "docker"), _R("GLOBAL", "memory")]
         if reps:
             out.append(reps)
-        out += [_R("GLOBAL", "defaults"), _R("GLOBAL", "digest")]
+        out += [_R("GLOBAL", "defaults"), _R("GLOBAL", "digest"),
+                _R("GLOBAL", "index_order"), _R("GLOBAL", "jvm_heap")]
         # The next measurement's list goes last, and is appended in main()
         # once _finish_table has run: it reads the finished tables' sentences.
         return out
@@ -5773,6 +5834,15 @@ OCT_PROSE = {
         "memory": ("Peak memory is the largest amount an engine held as its own, added over every container a run used: the memory it allocated plus the shared memory it holds, a buffer pool for example. It leaves out the file cache the kernel keeps on the engine's behalf, for every engine alike, so it reads low for an engine that leaves its data in that cache instead of holding it.", []),
         "defaults": ("Defaults first. Where a default would make the comparison meaningless, it is equalized and the override is disclosed rather than hidden.", []),
         "digest": ("Comparators are pinned by sha256 image digest, not by a floating tag.", []),
+        # TWO DECLARATIONS WHERE THE MEASUREMENT DEPARTS FROM ARCADEDB'S OWN ADVICE (no number in either).
+        # REMOVE WHEN: the instrument that follows this campaign changes the index order (index_order) or
+        # stops pinning the initial heap while memory is measured (jvm_heap).
+        "index_order": ("ArcadeDB's maintainers advise creating indexes after a bulk load, and the ArcadeDB rows create most of "
+                        "theirs before it (the id, key and time-series key indexes and the sparse vector index) and build only the "
+                        "shipping-date index on documents and the dense vector indexes after it; no measurement here shows whether "
+                        "that order changes ArcadeDB's totals.", []),
+        "jvm_heap": ("Every JVM-based engine runs with the initial heap pinned to the maximum heap, the image-defaults ArcadeDB row excepted, "
+                     "although ArcadeDB's guidance is not to pin them when measuring memory.", []),
         # THE PIN FOLLOWS THE CLAUSE IT PINS. The settle tolerance moved out of
         # the per-table disk note with the sentence that states it.
         "disk_detail": (OCT_DISK_DETAIL, [(r"agree within (\d+)%", lambda P, rows: _const("runner", "DISK_SETTLE_TOL") * 100, "const")]),
@@ -7292,6 +7362,60 @@ def _phase_split_notes(table):
     return out
 
 
+# AN INDEX DEFINED BEFORE THE FIRST ROW TIMES AS NEARLY NOTHING, and reads as a
+# free index beside the engines that build theirs after the load. The adapters
+# record the case as `index_before_load` through bench_common.index_split, but
+# only SurrealDB's set it, and until now nothing on the page read the flag. An
+# arm is "before the load" here when its rows carry the flag, or when it is
+# listed below: the arms whose index DDL is the only index work they time and
+# runs on an empty type, collection or table, found by reading the adapters
+# (l4_tsbs.py ArcadeTS/ArcadeTSServer/ArangoTS.ingest, e2_hybrid.py
+# SurrealE2.build). The same rule holds for every engine. Arms that define one
+# index early and build a larger one after the load (ArcadeDB's cross-model arm:
+# `Product(pid)` first, the vector index after) print a real `index s` and are
+# not listed. This is the report-time half; the rows themselves are not edited.
+# REMOVE WHEN: the adapters above set `index_before_load` and the rows that
+# carry the flag are the only rows on the page.
+_INDEX_BEFORE_LOAD_REPORTED = {
+    ("l4", "arcadedb_ts_doc"), ("l4", "arcadedb_ts_doc_server"),
+    ("l4", "arangodb_ts"),
+    ("e2", "surrealdb_e2"),
+}
+
+
+def _index_before_load_backends(lane):
+    """The backends of `lane` whose index is defined before the load: the rows'
+    own `index_before_load` flag, plus _INDEX_BEFORE_LOAD_REPORTED."""
+    flagged = {str(r.get("backend")) for r in _FROZEN_ROWS
+               if r.get("lane") == lane
+               and str(r.get("index_before_load")).strip().lower() in ("true", "1")}
+    return flagged | {be for (ln, be) in _INDEX_BEFORE_LOAD_REPORTED if ln == lane}
+
+
+def _index_before_load_notes(table):
+    """One sentence naming the arms on this table that define their index
+    before the load, so their small `index s` is not read as a free index."""
+    lane_wl = _TABLE_LANE.get(table.get("id"))
+    if not lane_wl or "index s" not in set(table.get("columns") or []):
+        return []
+    early = _index_before_load_backends(lane_wl[0])
+    names = []
+    for e in table.get("entries") or []:
+        if (e.get("outcome") or str(e.get("backend_key")) not in early
+                or not isinstance((e.get("metrics") or {}).get("index s"), dict)):
+            continue
+        name = str(e.get("backend"))
+        if name not in names:
+            names.append(name)
+    if not names:
+        return []
+    one = len(names) == 1
+    return [_gen(
+        f"{_join_and(names)} define{'s' if one else ''} {'its' if one else 'their'} index before "
+        f"the first row is loaded, so the index s printed for {'it' if one else 'them'} times only "
+        f"the definition and the work of building the index is inside ingest s.", *names)]
+
+
 def _split_note(table):
     """The two phases are INSIDE the total, and do not always fill it.
 
@@ -8596,7 +8720,7 @@ def _top_parts_refusal_note(table_id):
 # KEYED ON THE ROWS, like _top_parts_refusals: the l4 ingest rows at ts1000 of
 # `arcadedb_ts_doc` at this publish's pin, every one OOM-killed (`oom_killed`),
 # and each recording an embedded bindings version below _BINDINGS_FASTER_FROM
-# (the first wheel built with the fix, equal to the next wheel measured). A row
+# (the first wheel built with the fix, 26.10.2). A row
 # that completes stands and the cell prints its number; a failure from a wheel
 # at or above the cut, or one that cannot be placed on a wheel, keeps the
 # generic failed-cell sentence. So the sentence goes by itself once a row from
@@ -8774,6 +8898,7 @@ def _finish_table(table: dict) -> dict:
                            + _jvm_defaults_notes(table)
                            + _split_note(table)
                            + _phase_split_notes(table)
+                           + _index_before_load_notes(table)
                            + _delete_settle_notes(table)
                            + _censored_notes(table.get("id"))
                            + _query_budget_notes(table.get("id"))
@@ -9705,6 +9830,7 @@ def main() -> int:
         # has no cold column and carries it here.
         for _note in (_lsqb_id_form_note(_t.get("id"), rows),
                       _gav_scope_note(_t.get("id"), rows),
+                      _gav_supertype_note(_t.get("id"), rows),
                       _sparse_whole_record_note(_t.get("id"), rows),
                       _dense_id_index_note(_t.get("id"), rows),
                       _docs_warmup_note(_t.get("id"), rows) if _t.get("id") == "durability" else None):
