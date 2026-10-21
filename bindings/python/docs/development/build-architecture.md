@@ -147,9 +147,9 @@ The JARs are filtered later, by the build that packages them (see
 2. Build platform-specific wheel:
     - `jre-builder`: Filters the JARs, compiles `arcadedb-python-bridge.jar`, and creates the
       platform-specific JRE via `jdeps` and `jlink`
-    - `python-builder`: Builds wheel with bundled JRE
-    - `tester`: Installs the wheel in a clean image and runs a create, insert, and query
-      smoke script (not pytest)
+    - `python-builder`: Builds wheel with bundled JRE (`uv build --wheel`)
+    - `tester`: Runs the wheel in a throwaway `uv run --no-project --with` environment in a clean
+      image and runs a create, insert, and query smoke script (not pytest)
 3. Skip artifact download (Docker gets JARs directly)
 4. `build.sh` runs the `tester` smoke stage; the full suite then runs on the runner host
    against the built wheel
@@ -161,7 +161,7 @@ The JARs are filtered later, by the build that packages them (see
     - Removes the JARs listed in `jar_exclusions.txt`
     - Uses the Corretto 25 JDK that the workflow installs with `actions/setup-java`
     - Runs `jlink` natively → platform-specific JRE
-    - Builds wheel with `python -m build`
+    - Builds wheel with `python -m build`, run under `uv run --no-project --with build --with wheel --with setuptools` (CI does this; by hand, run `build.sh` the same way)
 3. Run tests on native platform
 
 #### Windows Platform (Native)
@@ -171,7 +171,7 @@ The JARs are filtered later, by the build that packages them (see
     - Removes the JARs listed in `jar_exclusions.txt`
     - Uses the Corretto 25 JDK that the workflow installs with `actions/setup-java`
     - Runs `jlink` natively → platform-specific JRE
-    - Builds wheel with `python -m build`
+    - Builds wheel with `python -m build`, run under `uv run --no-project --with build --with wheel --with setuptools` (CI does this; by hand, run `build.sh` the same way)
 3. Run tests on native platform
 
 ## JAR Exclusion System
@@ -251,12 +251,12 @@ COPY bindings/python/local-jars/lib/ /build/local-jars/
 FROM python:${PYTHON_VERSION}-slim AS python-builder
 COPY --from=jre-builder /build/jars /build/jars/
 COPY --from=jre-builder /build/jre /build/jre/
-# Builds wheel with bundled JRE; on Linux, checks the manylinux tag against the JRE
+# Builds wheel with bundled JRE (uv build --wheel); on Linux, checks the manylinux tag against the JRE
 
 # Stage 4: export (build.sh copies the wheel out of this stage)
 FROM python-builder AS export
 
-# Stage 5: tester (installs the wheel in a clean image, runs a smoke script)
+# Stage 5: tester (runs the wheel in a uv run environment in a clean image, runs a smoke script)
 FROM python:${PYTHON_VERSION}-slim AS tester
 ```
 
