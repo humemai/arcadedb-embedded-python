@@ -32,7 +32,7 @@ start_jvm(
 
 **Parameters:**
 
-- `heap_size` (`Optional[str]`, default `"4g"`): Maximum JVM heap, for example `"8g"` or `"4096m"`
+- `heap_size` (`Optional[str]`, default `None`): Maximum JVM heap, for example `"8g"` or `"4096m"`. `None` sizes the heap as a share of the RAM the JVM sees (`-XX:MaxRAMPercentage=50`); see [Memory](#memory)
 - `disable_xml_limits` (`bool`, default `True`): Relaxes the JDK XML entity limits
   (`-Djdk.xml.maxGeneralEntitySizeLimit=0`, `-Djdk.xml.entityExpansionLimit=0`, and
   `-Djdk.xml.totalEntitySizeLimit=0`) for the whole process, for large XML imports.
@@ -44,14 +44,38 @@ start_jvm(
 **Raises:**
 
 - `ArcadeDBError`: If the JVM is already started with a different configuration, the bundled runtime is missing, or JPype cannot start the JVM
+- `ValueError`: If an `-Xms` is larger than the maximum heap (`heap_size` or `-Xmx`); raised before the JVM starts, so the Python process survives
 
 **Notes:**
 
 - The bundled JRE is always used; no external Java installation is required
 - The module injects required defaults such as `jdk.incubator.vector`, UTF-8 file encoding, and required `--add-opens` flags if they are not already provided
 - `ARCADEDB_JVM_ARGS` is always read: its flags come first and `jvm_args` are appended after them. In-code configuration is preferred
-- Heap: a `heap_size` other than `"4g"` replaces every `-Xmx` from `jvm_args` or the environment. With the default `"4g"` (or `None`), an `-Xmx` given there is kept (the largest wins if there are several), and `-Xmx4g` is added only when none is given
+- Heap: a `heap_size` you pass always wins and replaces every `-Xmx` from `jvm_args` or the environment (this includes `"4g"`, which used to be the default and meant "not given"). With `heap_size=None`, an `-Xmx`, `-XX:MaxRAMPercentage=`, `-XX:MaxRAM=` or `-XX:MaxHeapSize=` given in `jvm_args` or the environment is kept (the largest `-Xmx` wins if there are several), and `-XX:MaxRAMPercentage=50` is added only when none is given
 - JVM crash logs go to `./log/hs_err_pid%p.log` unless `ARCADEDB_JVM_ERROR_FILE` names another path
+
+### Memory
+
+By default the JVM heap is 50 percent of the RAM the JVM sees: the machine's RAM, or the memory limit of the container (cgroup) it runs in. You do not have to size it, and it follows the container limit. The other half is left for what is not heap: the Python process and its objects, thread stacks, metaspace and the JVM's GC structures, and direct (off-heap) buffers, whose cap (`-XX:MaxDirectMemorySize`) defaults to the maximum heap.
+
+ArcadeDB's page cache follows the heap with no setting of its own: when `arcadedb.maxPageRAM` is not set, it is a quarter of the maximum heap. A value you set above 80 percent of the heap is reduced to half of it.
+
+Override the default when you know better:
+
+| You want | Pass |
+|---|---|
+| A fixed heap | `start_jvm(heap_size="8g")` (an explicit value always wins) |
+| A different share of RAM | `start_jvm(jvm_args="-XX:MaxRAMPercentage=70")` or the same in `ARCADEDB_JVM_ARGS` |
+| A bigger or smaller page cache | `-Darcadedb.maxPageRAM=<MB>` in `jvm_args` |
+
+**`-Xms` (initial heap).**
+
+- In a Python process, leave `-Xms` unset. The JVM then starts small (1/64 of RAM by default) and grows as needed. Never pin `-Xms` equal to `-Xmx` there: it commits the whole cap at start, and the Python side has to fit beside it. The bindings add no `-Xms` and no `-XX:InitialRAMPercentage`.
+- A dedicated ArcadeDB server outside Python (`server.sh`, the Docker image): pinning `-Xms` to `-Xmx` is the usual server practice.
+- In containers, size with percentages (`-XX:MaxRAMPercentage`) and leave headroom for direct memory, metaspace and thread stacks.
+- If you pass a `heap_size` (or `-Xmx`) and an `-Xms` larger than it, `start_jvm` raises `ValueError` naming both values before the JVM starts, because the JVM would otherwise end the whole Python process ("Initial heap size set to a larger value than the maximum heap size"). `-Xms` alone, without `heap_size` or another max-heap flag, is not an error: the JVM raises the maximum heap to the initial size when that is above the default share (measured: `-Xms17g` on a 31 GB machine gave a 17 GB maximum, above the 50 percent default).
+
+Raise the share when the Python side is small (a script that only runs queries); lower it when Python holds large results (a big `to_list()`, NumPy arrays) in the same process. Read the resolved values with `java.lang.Runtime.getRuntime().maxMemory()` and `GlobalConfiguration.MAX_PAGE_RAM.getValueAsLong()`.
 
 ## shutdown_jvm
 
