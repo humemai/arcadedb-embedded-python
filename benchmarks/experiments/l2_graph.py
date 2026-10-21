@@ -3522,12 +3522,10 @@ def main():
     # published.
     out["query_language"] = getattr(ad, "QUERY_LANGUAGE", "not declared")
     out["instrument"] = bench_common.INSTRUMENT
-    # EVERY QUESTION IS ASKED UNDIRECTED (CAMPAIGN section 7 row 56, BUGS F169): the page's
-    # one-way disclosure (export_web._knows_one_way_note) retires per row from this field, so
-    # it is written on every graph row, both workloads, before the first query runs.
+    # EVERY QUESTION IS ASKED UNDIRECTED (CAMPAIGN section 7 row 56, BUGS F169): the
+    # direction is written on every graph row, both workloads, before the first query runs.
     out[graph_common.KNOWS_DIRECTION_FIELD] = graph_common.KNOWS_DIRECTION
-    # LSQB'S OWN TEXT on every graph analytics row (row 60, BUGS F174): the page's id-form sentence
-    # (export_web._lsqb_id_form_note) retires per row from this field.
+    # LSQB'S OWN TEXT on every graph analytics row (row 60, BUGS F174).
     if args.workload == "olap":
         out[graph_common.LSQB_TEXT_FIELD] = graph_common.LSQB_TEXT
 
@@ -4000,8 +3998,7 @@ def main():
     _gav = getattr(ad, "gav_build_s", None)
     if _gav is not None:
         out["gav_build_s"] = _gav
-    # THE TYPES THE VIEW COVERS, as the engine reports them (row 61): the page's narrow-view sentence
-    # (export_web._gav_scope_note) retires per row from this field; the no-view arm has none.
+    # THE TYPES THE VIEW COVERS, as the engine reports them (row 61): the no-view arm has none.
     if getattr(ad, "gav_types", None):
         out["gav_types"] = ad.gav_types
 

@@ -9,7 +9,7 @@ pull. One script, one order, refuses by default.
         --message "Neo4j vector index joins the dense table (qDK)" [--apply]
 
 Steps, in order:
-  1. pull results/runs_page_<pin>.jsonl from the bench host (and, with
+  1. pull results/runs_page_<pin>_2611.jsonl from the bench host (and, with
      --overlay ARM, the dense multipass files mp_<ARM>_b*.json at both sizes);
   2. drop rows of the backends still running (--exclude-backends), so a
      stage in progress never reaches the freeze; also any row newer than
@@ -39,7 +39,13 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 SITE = REPO.parent / "humem.ai"
 sys.path.insert(0, str(HERE))
+from make_2611_stages import ROWS_SUFFIX  # noqa: E402  (the stage generator names what a stage writes; one place)
 from publish_instrument import PUBLISH_INSTRUMENT  # noqa: E402
+
+
+def host_name(stem, pin, ext=""):
+    """The name a stage writes on the bench host: `<stem>_<pin><suffix><ext>`. Locally the overlays keep `<stem>_<pin>`."""
+    return f"{stem}_{pin}{ROWS_SUFFIX}{ext}"
 
 # The checkout's own tracked results tree: a landing merges into it and commits from it, so it never runs under
 # BENCH_RESULTS_DIR (which exists for tests).
@@ -339,7 +345,7 @@ def main():
                          "publish, not the merge.")
     args = ap.parse_args()
 
-    # Step 1 pulls `runs_page_<pin>.jsonl` by exact name, so a landing with no pin would fetch nothing, and a
+    # Step 1 pulls `runs_page_<pin>_2611.jsonl` by exact name, so a landing with no pin would fetch nothing, and a
     # guessed one would fetch another build's rows. Refuse instead of guessing.
     if not args.pin:
         sys.exit("REFUSING: no --pin, no BENCH_ENGINE_COMMIT, and the current payload does not name exactly one "
@@ -385,13 +391,14 @@ def main():
                   f"{','.join(sorted(_already - _lanes))} already on the page")
         _lanes |= _already
         env["BENCH_ONLY_LANES"] = ",".join(sorted(_lanes))
-    step(1, f"pull runs_page_{args.pin}.jsonl from {HOST}")
+    step(1, f"pull {host_name('runs_page', args.pin, '.jsonl')} from {HOST}")
     pulled = SCRATCH / "runs_page_host.jsonl"
-    sh(["scp", "-q", f"{HOST}:{REMOTE}/runs_page_{args.pin}.jsonl", str(pulled)])
+    sh(["scp", "-q", f"{HOST}:{REMOTE}/{host_name('runs_page', args.pin, '.jsonl')}", str(pulled)])
     for arm in args.overlay:
         for d in (f"dense_mp5_{args.pin}", f"dense_mp5_small_{args.pin}"):
             (RESULTS / d).mkdir(exist_ok=True)
-            sh(["scp", "-q", f"{HOST}:{REMOTE}/{d}/mp_{arm}_b*.json", str(RESULTS / d)], check=False)
+            sh(["scp", "-q", f"{HOST}:{REMOTE}/{host_name(d.rsplit('_', 1)[0], args.pin)}/mp_{arm}_b*.json", str(RESULTS / d)],
+               check=False)
             have = sorted((RESULTS / d).glob(f"mp_{arm}_b*.json"))
             print(f"  {d}: {len(have)} files for {arm}")
 
@@ -411,7 +418,7 @@ def main():
     if not _lanes or "l3s" in _lanes:
         _sp = RESULTS / f"sparse_mp_{args.pin}"
         _sp.mkdir(exist_ok=True)
-        sh(["scp", "-q", f"{HOST}:{REMOTE}/sparse_mp_{args.pin}/sp_*.json", str(_sp)],
+        sh(["scp", "-q", f"{HOST}:{REMOTE}/{host_name('sparse_mp', args.pin)}/sp_*.json", str(_sp)],
            check=False)
         _files = sorted(_sp.glob("sp_*.json"))
         if _files:

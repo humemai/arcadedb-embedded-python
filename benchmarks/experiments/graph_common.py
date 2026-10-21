@@ -153,10 +153,9 @@ HOP3F_MIN_AGE = 41
 # walked back along itself), counted per walk, where a friendship counts once
 # whichever way it is stored; a question that counts friendships or triangles counts
 # each one once (friends in same city with `a.id < b.id`, a triangle with
-# `a.id < b.id < c.id`). The row records `knows_direction` so the page's one-way
-# disclosure (export_web._knows_one_way_note) retires from the rows.
+# `a.id < b.id < c.id`). The row records `knows_direction`.
 KNOWS_DIRECTION = "undirected"
-KNOWS_DIRECTION_FIELD = "knows_direction"   # the row field; export_web._KNOWS_DIRECTION_FIELD reads it
+KNOWS_DIRECTION_FIELD = "knows_direction"   # the row field
 
 OLTP_READS = {
     # ALIASED RETURN COLUMNS (2026-10). `RETURN p.name, p.age` gives the column
@@ -379,7 +378,7 @@ LSQB_QUERIES = {
 # (DECISIONS #104). The harness iterates OLAP_QUERIES, so the nine join it here.
 OLAP_QUERIES.update(LSQB_QUERIES)
 
-# The row field the page's id-form sentence reads (export_web._LSQB_TEXT_FIELD) and its value: LSQB's own text, every
+# The row field that says which query text ran, and its value: LSQB's own text, every
 # engine, in the dialect LSQB publishes for it (a dialect with no LSQB text is checked against it, row 60).
 LSQB_TEXT_FIELD = "lsqb_text"
 LSQB_TEXT = "lsqb"

@@ -61,3 +61,18 @@ def test_there_is_no_preview_flag(monkeypatch, tmp_path):
     with pytest.raises(SystemExit) as exc:
         L.main()
     assert exc.value.code == 2
+
+
+def test_land_stage_pulls_the_names_a_generated_stage_writes(tmp_path):
+    """The rows file and the overlay directories land_stage scp's are the ones a make_2611_stages script writes."""
+    import test_stage_generator_2611 as G
+
+    out = tmp_path / "stages"
+    r = G.run(["--second-list", "--after", "qR20", "--out", str(out)], tmp_path)
+    assert r.returncode == 0, r.stdout[-400:] + r.stderr[-400:]
+    text = "".join(f.read_text() for f in sorted(out.glob("*.sh")))
+    pin = "${PIN}"
+    assert L.host_name("runs_page", pin, ".jsonl") in text
+    for stem in ("dense_mp5", "dense_mp5_small", "sparse_mp"):
+        assert L.host_name(stem, pin) in text, stem
+    assert L.host_name("runs_page", "abc123def", ".jsonl") == "runs_page_abc123def_2611.jsonl"

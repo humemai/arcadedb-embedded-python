@@ -119,7 +119,7 @@ BATCH = 10_000
 # sum_charge, avg_qty, avg_price, avg_disc, n); every documents analytics row records `tpch_q1` = full. The answer is
 # checked against DuckDB's bundled official SF1 answer (tpch_answers()) on the laptop (test_tpch_q1_full.py's
 # reference, and the smoke in REPIN-REHEARSAL).
-TPCH_Q1_FIELD = "tpch_q1"      # the row field export_web._partial_q1 reads
+TPCH_Q1_FIELD = "tpch_q1"      # the row field that says which Q1 ran
 TPCH_Q1 = "full"               # all ten of TPC-H Q1's output columns
 Q1_DUCK = """
 SELECT l_returnflag, l_linestatus, sum(l_quantity) AS sum_qty,

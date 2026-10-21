@@ -810,8 +810,7 @@ def main():
     bench_common.stamp_durability(out, getattr(b, "durability", None)
                                   or DURABILITY.get(args.backend, DURABILITY_INGEST_ONLY))
     out["instrument"] = bench_common.INSTRUMENT
-    # WHAT THE SEARCH RETURNS, on every ArcadeDB row (row 62); the page's whole-record sentence
-    # (export_web._sparse_whole_record_note) retires per row from this field.
+    # WHAT THE SEARCH RETURNS, on every ArcadeDB row (row 62).
     if getattr(b, "SPARSE_RESULT", None):
         out["sparse_result"] = b.SPARSE_RESULT
     # DECISIONS #89: where the split does not apply, the reason, not a blank.
