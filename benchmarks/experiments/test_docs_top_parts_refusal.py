@@ -99,7 +99,7 @@ def test_the_refusal_is_declared_with_one_plain_sentence(EW, page):
     assert text.endswith(".") and text.count(". ") == 0        # one sentence
     for fact in ("ArcadeDB 26.10.1", "heap budget that shrinks as cores are added", "12 cores", "2,000,000-group",
                  "default settings", "ArcadeDB 26.11.1 fixes it (ArcadeData/arcadedb#9402, fixed by #9415)",
-                 "the next measurement re-measures it", "ArcadeDB (embedded) and ArcadeDB (server)"):
+                 "the 26.11.1 measurement re-measures it", "ArcadeDB (embedded) and ArcadeDB (server)"):
         assert fact in text, fact
     assert not re.search(r"\b(lane|cell|row|arm|harness)s?\b", text)     # PAGE-SPEC: the reader's language
     assert ".notes" not in text

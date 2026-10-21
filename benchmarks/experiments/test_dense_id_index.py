@@ -5,7 +5,7 @@ Run with `python -m pytest test_dense_id_index.py -q -rs` from this directory. N
 Index parity: when `BENCH_DENSE_ID_INDEX=1`, ArcadeDB and every comparator that stores the id as a plain property (pgvector, Neo4j,
 Memgraph, FalkorDB, DuckDB, LanceDB) build an index on it, inside the load timer; the engines whose own key is the id stamp "key".
 Unset, nothing is built and no row field appears. The /next page says ArcadeDB's delete ran without the index while the rows lack the
-stamp, and the next-measurement list says those engines are measured again.
+stamp, and the list of coming measurements says those engines are measured again.
 """
 import inspect
 import os
@@ -137,6 +137,7 @@ def test_page_sentence_while_an_arcadedb_delete_ran_without_the_index(EW, monkey
     monkeypatch.setattr(EW, "_NEXT_ITEM_SENTENCES", {})
     s = EW._dense_id_index_note("l3d", [_row()])
     assert s and "no index" in s and "measures all of them again" in s
+    assert "A measurement after the paper indexes the id" in s and "next measurement" not in s
     assert s in EW._NEXT_ITEM_SENTENCES["dense_id_index"]
     assert EW._dense_id_index_note("l3d", [_row(dense_id_index="CREATE INDEX ON Article (vid) UNIQUE_HASH")]) is None
     assert EW._dense_id_index_note("l3d", [_row(backend="pgvector_dense")]) is None
@@ -152,5 +153,5 @@ def test_next_measurement_line_names_the_re_measured_engines(EW, monkeypatch):
     s = EW._dense_id_index_note("l3d", [_row()])
     out = EW._next_measurement_note([{"id": "l3d", "title": "Dense vectors", "conditions": [s]}])
     assert any("carry over unless a line below says they are measured again" in x for x in out)
-    [line] = [x for x in out if "index on its id" in x]
+    [line] = [x for x in out if "index on the vector id" in x]
     assert "Dense vectors" in line and "measured again" in line

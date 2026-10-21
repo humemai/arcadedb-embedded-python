@@ -2,7 +2,7 @@
 
 Run with `python -m pytest test_next_remeasure_line.py -q -rs` from this directory.
 
-The list of what the next measurement changes used to show only while the ArcadeDB rows were a development build, so it vanished
+The list of what the coming measurements change used to show only while the ArcadeDB rows were a development build, so it vanished
 when the 26.10.1 release rows landed and a reader would take those numbers as final. It now carries one line while the rows are a
 release other than the paper's (26.11.1): ArcadeDB is measured again on 26.11.1 and the comparators' numbers carry over. Keyed on
 the rows' engine_version; 26.11.1 rows take the line off the page. The defects 26.11.1 fixes in 26.10.1 other than the top parts
@@ -54,10 +54,10 @@ def _release_rows(v):
 
 def test_release_rows_show_the_line(EW, note):
     out = note(_release_rows("26.10.1"))
-    [line] = [x for x in out if "26.11.1" in x]
-    assert line == ("ArcadeDB's numbers here are from release 26.10.1. The next measurement runs ArcadeDB again on release 26.11.1, "
-                    "the one the paper reports, and every other engine's numbers carry over.")
-    assert out[0].startswith("The next measurement runs after this one is complete")
+    [line] = [x for x in out if "numbers here are from release" in x]
+    assert line == ("ArcadeDB's numbers here are from release 26.10.1. The 26.11.1 measurement runs ArcadeDB again on release 26.11.1, "
+                    "the one the paper reports, with the method used here, and every other engine's numbers carry over.")
+    assert out[0].startswith("More measurements come after this one")
     assert not re.search(r"\b(lane|cell|row|arm|harness)s?\b", line)      # PAGE-SPEC: the reader's language
     assert ".notes" not in line
     pinned = [g for g in EW._GENERATED if g["text"] == line][0]["values"]
@@ -75,24 +75,24 @@ def test_a_mix_with_one_other_release_keeps_the_line(EW, note):
 
 
 def test_a_development_build_keeps_its_own_list(EW, note):
-    filed = {"knows": {"Every graph question is asked in both directions of a friendship."}}
-    tables = [{"id": "l2", "title": "Graph", "conditions": ["Every graph question is asked in both directions of a friendship."]}]
+    filed = {"dense_id_index": {"A dense sentence."}}
+    tables = [{"id": "l3d", "title": "Dense vectors", "conditions": ["A dense sentence."]}]
     out = note([("arcadedb_embedded", DEV)], tables, filed)
     assert any("development build" in x and "every other engine to its latest stable release" in x for x in out)
     assert not any("carry over" in x for x in out)
 
 
 def test_release_rows_keep_the_table_lines_too(EW, note):
-    s = "Every graph question is asked in both directions of a friendship."
-    out = note(_release_rows("26.10.1"), [{"id": "l2", "title": "Graph", "conditions": [s]}], {"knows": {s}})
-    assert any("both directions of a friendship" in x for x in out) and any("carry over" in x for x in out)
+    s = "A dense sentence."
+    out = note(_release_rows("26.10.1"), [{"id": "l3d", "title": "Dense vectors", "conditions": [s]}], {"dense_id_index": {s}})
+    assert any("measurement after the paper" in x for x in out) and any("carry over" in x for x in out)
 
 
 def test_the_refusal_sentence_uses_the_same_constant(EW):
     assert EW._REFUSAL_FIXED_IN == EW._PAPER_RELEASE == "26.11.1"
 
 
-BINDINGS = ("newer Python bindings, which are faster at reading results and binding parameters, so ArcadeDB's embedded numbers "
+BINDINGS = ("run ArcadeDB on newer Python bindings, which are faster at reading results and binding parameters, so ArcadeDB's embedded numbers "
             "are expected to move for that reason as well as for the engine release.")
 
 
@@ -100,7 +100,7 @@ def test_bindings_line_shows_on_26_10_1_rows(EW, note):
     for rows in (_release_rows("26.10.1"), [("arcadedb_embedded", "26.10.1.dev0"), ("arcadedb_server", SERVED.format(v="26.10.1"))]):
         out = note(rows)
         [line] = [x for x in out if "Python bindings" in x]
-        assert line.startswith("The next measurement also runs ArcadeDB on ") and BINDINGS in line
+        assert line.startswith("The 26.10.2 and 26.11.1 measurements ") and BINDINGS in line
         assert not re.search(r"\b(lane|cell|row|arm|harness|wheel)s?\b|#\d", line)      # PAGE-SPEC: the reader's language
         assert ".notes" not in line
 

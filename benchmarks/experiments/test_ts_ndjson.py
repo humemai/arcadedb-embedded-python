@@ -5,8 +5,7 @@ Run with `python -m pytest test_ts_ndjson.py -q -rs` from this directory. The la
 With `BENCH_ARCADEDB_TS_NDJSON=1` both served ArcadeDB arms of the time-series lane ask the query endpoint for
 `Accept: application/x-ndjson` and read the `{"record": ...}` lines and the last `{"stats": {"returned": N}}` line, checking the
 count; their rows stamp `arcadedb_ts_result_format`. Unset, the request, the answer path, and the row fields are what they were. The
-/next page says the served ArcadeDB arms read a buffered answer while the rows lack the stamp, and the next-measurement list says the
-next measurement reads them as a stream.
+page says nothing about a stream, because the switch stays off in the 26.11.1 measurement (CAMPAIGN section 7 row 85).
 """
 import json
 import os

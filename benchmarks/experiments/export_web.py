@@ -1783,8 +1783,8 @@ def _partial_q1_words(rows):
     words = (f"TPC-H Q1, the pricing summary, {cols}. It groups and aggregates nearly every "
              f"line item, so it measures a full scan. It leaves out the average price, the average "
              f"discount, and the total charge with tax, which needs the tax column this "
-             f"measurement did not load. The next measurement runs the full Q1")
-    return _next_item("q1", words), ([ran, spec] if ran else [])
+             f"measurement did not load")
+    return words, ([ran, spec] if ran else [])
 
 
 # WHAT THE ANSWER CHECK COULD NOT COMPARE, ON THE TABLE IT APPLIES TO
@@ -1866,12 +1866,12 @@ _BEFORE_F132 = lambda r: str(r.get("filtered_access") or "") != "record ids"    
 # index configuration back as `neo4j_vector_quantization`, so a row without that field is a row from before the fix.
 _F164_DENSE = ("Neo4j's row is marked `re-run`: its vector index ran at Neo4j's default quantization, binary with a "
                "three-fold search expansion, which our index definition did not override, while the row recorded it as "
-               "unquantized. The next measurement sets the quantization explicitly, unquantized here and as a "
+               "unquantized. It is being re-measured with the quantization set explicitly, unquantized here and as a "
                "separate scalar-quantized row.")
 _F164_E2 = ("Neo4j's row is marked `re-run`: its vector index ran at Neo4j's default quantization, binary with a "
             "three-fold search expansion, which our index definition did not override, so its vector search was not "
-            "the unquantized search the other engines ran. The next measurement sets the quantization "
-            "explicitly. Its all-or-nothing result on the atomicity table does not depend on the index.")
+            "the unquantized search the other engines ran. It is being re-measured with the quantization "
+            "set explicitly. Its all-or-nothing result on the atomicity table does not depend on the index.")
 _BEFORE_F164 = lambda r: not r.get("neo4j_vector_quantization")                # noqa: E731
 
 # SurrealDB served ran at its default, a sync to disk at every commit, in BOTH durability classes (BUGS F165).
@@ -1886,12 +1886,12 @@ _BEFORE_F164 = lambda r: not r.get("neo4j_vector_quantization")                #
 # _durability_stale exempts these entries while withholding every other write withheld on its own table.
 _F165_WRITES = ("SurrealDB (server)'s write cells are marked `re-run`: the server ran at its default, a sync to disk "
                 "at every commit, although it has a setting that does not wait, and every other engine on this table "
-                "that has such a setting ran at it. Our harness missed that setting, and the next measurement runs "
-                "its writes at it. Its read cells commit nothing and stay.")
+                "that has such a setting ran at it. Our harness missed that setting. It is being re-measured with its writes "
+                "at that setting. Its read cells commit nothing and stay.")
 _F165_E2 = ("SurrealDB (server)'s transaction cells are marked `re-run`: the server ran at its default, a sync to "
             "disk at every commit, although it has a setting that does not wait, and every other engine on this "
-            "table that has such a setting ran at it. Our harness missed that setting, and the next measurement "
-            "runs the transaction at it.")
+            "table that has such a setting ran at it. Our harness missed that setting. It is being re-measured with the "
+            "transaction at that setting.")
 _SURREAL_SERVED_SYNCED = lambda r: (str(r.get("backend") or "").startswith("surrealdb_")      # noqa: E731
                                     and str(r.get("backend") or "").endswith("_server")
                                     and not r.get("surreal_sync_mode"))
@@ -2206,12 +2206,10 @@ def _ldbc_age_note(table_id, rows):
         return _gen("In this measurement every person's age loaded as zero, through a date-parsing "
                     f"error in our data loader, so the 3-hop filtered read (age above "
                     f"{_ZERO_AGE_HOP3F_MIN_AGE}) matched no one on any engine: its times are three "
-                    "hops plus a check on every end node. The next measurement parses the ages "
-                    "correctly.", _ZERO_AGE_HOP3F_MIN_AGE)
+                    "hops plus a check on every end node.", _ZERO_AGE_HOP3F_MIN_AGE)
     return _gen("In this measurement every person's age loaded as zero, through a date-parsing "
                 "error in our data loader, so average friend age is zero for every city; its "
-                "times still read every friend's age. The next measurement parses the ages "
-                "correctly.")
+                "times still read every friend's age.")
 
 
 # THE FRIENDSHIPS ARE STORED ONE WAY (BUGS F169, DECISIONS #151 items 1 and 2).
@@ -2257,16 +2255,14 @@ def _knows_one_way_note(table_id, rows):
         text = (f"{lead} The engines can follow an edge from either end, but the 1-hop, 2-hop, "
                 "and 3-hop reads follow it only the way it points, so 1-hop counts only the "
                 "friends with a larger id than the start person, and 2-hop and 3-hop reach only "
-                "people along a chain of rising ids. The next measurement asks the same "
-                "questions in both directions of a friendship.")
+                "people along a chain of rising ids.")
     else:
         text = (f"{lead} The triangle count follows edges only the way they point, so it looks "
                 "for three people whose ids rise all the way round a cycle, which cannot "
                 "happen: it finds no triangle on any engine, by construction. For the same "
                 "reason, most friends and degree distribution count only the friends with a "
-                "larger id. The next measurement asks these questions in both directions of a "
-                "friendship.")
-    return _next_item("knows", _gen(text))
+                "larger id.")
+    return _gen(text)
 
 
 # LSQB'S NODE INEQUALITY RAN ON THE ID PROPERTY (BUGS F174, DECISIONS #154
@@ -2328,9 +2324,8 @@ def _lsqb_id_form_note(table_id, rows):
     text = (f"In {_join_and(names)}, the check that two matched nodes are different compared "
             f"their id properties, where LSQB's own text compares the nodes themselves. The "
             f"answers are the same either way, but on the build measured here the id form "
-            f"keeps ArcadeDB on a slower plan than LSQB's own text gets. The next measurement "
-            f"runs LSQB's own text.")
-    return _next_item("lsqb_text", _gen(text, *names))
+            f"keeps ArcadeDB on a slower plan than LSQB's own text gets.")
+    return _gen(text, *names)
 
 
 # ARCADEDB'S GRAPH ANALYTICAL VIEW COVERS PERSON AND KNOWS ONLY (DECISIONS
@@ -2361,11 +2356,10 @@ def _gav_scope_note(table_id, rows):
     every ArcadeDB with-view row behind it recorded the types its view covers."""
     if table_id != "l2olap" or not _OCTOBER_ENV or not _gav_narrow_rows(rows):
         return None
-    return _next_item("gav_types", _gen(
+    return _gen(
         "In this measurement ArcadeDB's Graph Analytical View covers only the persons and their "
         "friendships. Every LSQB query reads kinds of node the view leaves out, so none of them "
-        "can use it. The next measurement builds the view over every type in the graph and "
-        "keeps the rows without the view beside it."))
+        "can use it.")
 
 
 # THE VIEW MUST NOT LIST THE `Message` SUPERTYPE ON 26.10.x AND MUST LIST IT FROM
@@ -2488,8 +2482,8 @@ def _dense_id_index_note(table_id, rows):
     return _next_item("dense_id_index", _gen(
         "On this table ArcadeDB's delete finds each vector by an id that has no index, so every "
         "delete batch reads the whole collection, while most of the other engines find it "
-        "through a key they always index. The next measurement indexes the id on ArcadeDB and on "
-        "every other engine that stores it the same way (pgvector, Neo4j, Memgraph, FalkorDB, "
+        "through a key they always index. A measurement after the paper indexes the id on ArcadeDB "
+        "and on every other engine that stores it the same way (pgvector, Neo4j, Memgraph, FalkorDB, "
         "DuckDB, and LanceDB), counts the index in the load time, and measures all of them again."))
 
 
@@ -2498,10 +2492,9 @@ def _sparse_whole_record_note(table_id, rows):
     ArcadeDB sparse row behind it returned ids."""
     if table_id != "l3s" or not _OCTOBER_ENV or not _sparse_whole_record_rows(rows):
         return None
-    return _next_item("sparse_ids", _gen(
+    return _gen(
         "On this table each ArcadeDB search returns every hit's whole record, while every other "
-        "engine returns the ids of its hits, not the records. The next measurement has ArcadeDB "
-        "return ids as well."))
+        "engine returns the ids of its hits, not the records.")
 
 
 # ARCADEDB EMBEDDED'S DOCUMENTS LOAD GOES ROW BY ROW (DECISIONS #153 item 2,
@@ -2679,7 +2672,7 @@ def _graph_first_pass_note(rows):
     second pass over the same ids, and the sentence holds either way.
 
     KEYED ON THE ROWS: a row without `read_warmup` was measured without the
-    untimed warm-up on other start persons that the next measurement's lane
+    untimed warm-up on other start persons that the lane now
     records, and the sentence stays until no such row is behind the table. The
     JVM engines are named from the rows, by the heap they recorded, the same
     test _jvm_memory_note uses.
@@ -2700,10 +2693,7 @@ def _graph_first_pass_note(rows):
         _one = len(jvm) == 1
         parts.append(f"On {_join_and(jvm)}, which {'runs' if _one else 'run'} on a JVM, that "
                      f"warm-up includes the JVM compiling the query path.")
-    parts.append("The next measurement gives every engine an untimed warm-up on other start "
-                 "persons first, prints the warm median, and adds the first query of a session "
-                 "as the cold column.")
-    return _next_item("warmup", _gen(" ".join(parts), *jvm))
+    return _gen(" ".join(parts), *jvm)
 
 
 # THE DOCUMENT OPERATIONS ARE TIMED FROM THE FIRST ONE AFTER THE LOAD
@@ -2762,14 +2752,7 @@ def _docs_warmup_note(table_id, rows):
         _one = len(jvm) == 1
         parts.append(f"On {_join_and(jvm)}, which {'runs' if _one else 'run'} on a JVM, that "
                      f"warm-up includes the JVM compiling the statement path.")
-    if table_id == "docs_oltp":
-        parts.append("The next measurement gives every engine an untimed warm-up on separate "
-                     "keys first, prints the warm median, and adds the first operation as the "
-                     "cold column.")
-    else:
-        parts.append("The next measurement gives every engine an untimed warm-up on separate "
-                     "keys first, and this table prints their warm median.")
-    return _next_item("docs_warmup", _gen(" ".join(parts), *jvm))
+    return _gen(" ".join(parts), *jvm)
 
 
 def _cold_note(table_id, rows, columns=()):
@@ -3331,7 +3314,7 @@ _DEV_BUILD = re.compile(r"(dev\d*|SNAPSHOT)\b", re.I)
 
 # THE RELEASE THE PAPER PINS (DECISIONS #176): ArcadeDB 26.11.1. The 26.10.1
 # rows are a measurement on the way there, so while the ArcadeDB rows' release
-# is another one the next-measurement list says ArcadeDB's numbers are
+# is another one the list of coming measurements says ArcadeDB's numbers are
 # re-measured on it and the comparators' carry over (_next_measurement_note).
 # The same release is the one that fixes the 26.10.1 defects the page declares
 # (_REFUSAL_FIXED_IN). When the rows are this release, the line goes by itself.
@@ -3369,14 +3352,32 @@ _PAPER_RELEASE = "26.11.1"
 _BINDINGS_FASTER_FROM = "26.10.2"
 
 
-# WHAT THE NEXT MEASUREMENT CHANGES, ONE LINE PER CHANGE, on the page itself
+# THE MEASUREMENTS AFTER THIS ONE, AND WHAT EACH CHANGES, on the page itself
 # (the user, 2026-10-04: "let's write what'll change in the October page").
+# The plan (CAMPAIGN section 7, "Switches and the 26.11.1 re-measure"): the
+# paper's rows are the 26.10.1 measurement's instrument. ArcadeDB is measured
+# again on 26.10.2 and on 26.11.1 with that same instrument, so only an engine
+# or bindings release can move its rows. A default-off switch or a method change
+# goes on only in a measurement after the paper, where every engine it touches is
+# measured again. So a line is one of three kinds, and says which by name:
+#  * "the 26.11.1 measurement" (or the 26.10.2 one): a newer release only;
+#  * "a measurement after the paper": a switch or a method change;
+#  * nothing about a later measurement: the change is already in the rows the
+#    page will carry, so its table sentence says only what the old rows did.
+# test_next_measurement_wording.py holds this: no string in this file promises
+# one single coming measurement, because there is none.
 # Each line stands for a sentence under a table, and is printed only while that
 # sentence is on the page: the helper that writes the table sentence (keyed on
 # the rows) files it here under the line's key, and _next_measurement_note
 # looks for it in the tables' conditions. So a line leaves the page on the same
 # rows, and in the same publish, as the table sentence it summarises.
 _NEXT_ITEM_SENTENCES = {}
+
+# What a table sentence says for a switch-gated change (CAMPAIGN section 7).
+_AFTER_PAPER = "a measurement after the paper"
+# The words that mark a table sentence as describing a later measurement.
+_LATER_MARKERS = (f"the {_PAPER_RELEASE} measurement", f"{_BINDINGS_FASTER_FROM} and {_PAPER_RELEASE} measurements",
+                  _AFTER_PAPER)
 
 
 def _next_item(key, text):
@@ -3425,13 +3426,16 @@ def _bindings_behind(engine_versions):
 
 
 def _next_measurement_note(tables):
-    """WHEN "the next measurement" is and WHAT it changes, said for the page:
-    a list of sentences, the first saying when and one per change after it.
+    """WHAT THE MEASUREMENTS AFTER THIS ONE CHANGE, said for the page: a list of
+    sentences, the first saying that more come and one per change after it.
 
-    When: after this campaign (CAMPAIGN section 7, row 9). No date, because
-    none is fixed. What: the release move, then one line per change a table
-    sentence describes (_NEXT_ITEM_SENTENCES), then the `re-run` cells, then,
-    when a table describes a change no line covers, a pointer to the notes.
+    There is no single coming measurement (CAMPAIGN section 7, "Switches and the
+    26.11.1 re-measure"). The lines name the measurement they belong to: the
+    26.10.2 and 26.11.1 measurements run ArcadeDB again on newer releases with
+    this page's method, and a measurement after the paper is where a switch or
+    a method change goes on and every engine it touches is measured again. No
+    date, because none is fixed. A change already in the rows the page will
+    carry has no line.
 
     KEYED ON THE ROWS: the whole list is shown while the ArcadeDB rows behind
     the page are a development build, which is what this campaign measured,
@@ -3439,11 +3443,8 @@ def _next_measurement_note(tables):
     the paper's (_PAPER_RELEASE) show it with the line that ArcadeDB is
     measured again on that release and the comparators' numbers carry over;
     rows from the paper's release take it off the page, and so does a page
-    with nothing left to re-measure. Each line
-    after the first is keyed on what its table sentence is keyed on. The one
-    change no table sentence describes, ArcadeDB embedded's documents load
-    (the tables' ingest-path sentence already says what ran), is keyed on its
-    rows directly (_docs_row_load_tables).
+    with nothing left to re-measure. Each line after the first is keyed on what
+    its table sentence is keyed on.
     """
     if not _OCTOBER_ENV or SKELETON:
         return []
@@ -3466,107 +3467,52 @@ def _next_measurement_note(tables):
     rerun = any((cell or {}).get("text") == "re-run"
                 for t in tables for e in t.get("entries") or []
                 for cell in (e.get("metrics") or {}).values() if isinstance(cell, dict))
-    other = any("the next measurement" in c.lower() and not any(s in c for s in filed)
+    other = any(any(m in c.lower() for m in _LATER_MARKERS) and not any(s in c for s in filed)
                 for _t, c in conds)
     items = []
-    warm = carried_by("warmup")
-    if warm:
-        items.append(_gen(f"The {_join_and(warm)} reads get an untimed warm-up on other start "
-                          f"persons, the table prints their warm median, and a cold column is "
-                          f"added.", *warm))
-    docs_warm = carried_by("docs_warmup")
-    if docs_warm:
-        # The cold column is the documents OLTP table's; the durability table
-        # prints warm medians only. Its title is a phrase ("What waiting for
-        # the disk costs"), so the line names it as the table on that phrase.
-        titles = {t.get("id"): str(t.get("title") or t.get("id")) for t in tables}
-        oltp = titles.get("docs_oltp") if titles.get("docs_oltp") in docs_warm else None
-        dur = titles.get("durability") if titles.get("durability") in docs_warm else None
-        dur_words = f"the table on {dur[:1].lower()}{dur[1:]}" if dur else None
-        if oltp:
-            text = (f"The {oltp} operations get an untimed warm-up on separate keys, the table "
-                    f"prints their warm median and adds the first operation as a cold column"
-                    + (f", and {dur_words} prints warm medians too" if dur else "") + ".")
-        else:
-            text = (f"The document operations on {dur_words} get an untimed warm-up on separate "
-                    f"keys, and the table prints their warm median.")
-        items.append(_gen(text, *docs_warm))
-    if carried_by("full_sync"):
-        nxt = str(_ARCADEDB_STRICT_NEXT)
-        items.append(_gen(f"ArcadeDB's runs that wait for the disk use a data-only sync "
-                          f"(`txWalFlush={nxt}`) instead of a full sync.", nxt))
-    if carried_by("knows"):
-        items.append(_gen("Every graph question is asked in both directions of a friendship."))
-    lsqb = carried_by("lsqb_text")
-    names = _lsqb_id_form_queries(_FROZEN_ROWS) if lsqb else []
-    if lsqb and names:
-        items.append(_gen(f"On the {_join_and(lsqb)} table, {_join_and(names)} "
-                          f"{'runs' if len(names) == 1 else 'run'} LSQB's own text, which "
-                          f"compares the matched nodes themselves rather than their ids.",
-                          *lsqb, *names))
-    gav = carried_by("gav_types")
-    if gav:
-        items.append(_gen(f"On the {_join_and(gav)} table, ArcadeDB's Graph Analytical View "
-                          f"covers every type in the graph, not only the persons and their "
-                          f"friendships, and the rows without the view stay.", *gav))
-    q1 = carried_by("q1")
-    if q1:
-        items.append(_gen(f"The {_join_and(q1)} table runs the full TPC-H Q1.", *q1))
-    docs = _docs_row_load_tables(tables, _FROZEN_ROWS)
-    if docs:
-        items.append(_gen(f"On the {_join_and(docs)} {'table' if len(docs) == 1 else 'tables'}, "
-                          f"ArcadeDB (embedded) loads its data through the Python package's "
-                          f"columnar insert, which takes whole columns at a time, as DuckDB "
-                          f"takes whole frames.", *docs))
-    dense_idx = carried_by("dense_id_index")
-    if dense_idx:
-        items.append(_gen(f"On the {_join_and(dense_idx)} table, the delete finds each vector through "
-                          f"an index on its id in every engine, so ArcadeDB and the six engines that "
-                          f"had no such index are measured again there.", *dense_idx))
     ts_oom = carried_by("ts_doc_oom")
     if ts_oom:
-        items.append(_gen(f"On the {_join_and(ts_oom)} table, ArcadeDB's embedded time-series document "
-                          f"load at {_TS_OOM_HOSTS:,} hosts is measured again on Python bindings that "
-                          f"read the load a chunk at a time.", *ts_oom, f"{_TS_OOM_HOSTS:,}"))
-    sparse = carried_by("sparse_ids")
-    if sparse:
-        items.append(_gen(f"On the {_join_and(sparse)} table, ArcadeDB returns the ids of its "
-                          f"hits, not the records, as every other engine does.", *sparse))
+        items.append(_gen(f"On the {_join_and(ts_oom)} table, the {_BINDINGS_FASTER_FROM} and {_PAPER_RELEASE} "
+                          f"measurements run ArcadeDB's embedded time-series document load at "
+                          f"{_TS_OOM_HOSTS:,} hosts again, on Python bindings that read the load a "
+                          f"chunk at a time.", *ts_oom, f"{_TS_OOM_HOSTS:,}", _BINDINGS_FASTER_FROM, _PAPER_RELEASE))
+    dense_idx = carried_by("dense_id_index")
+    if dense_idx:
+        items.append(_gen(f"On the {_join_and(dense_idx)} table, {_AFTER_PAPER} gives every engine an "
+                          f"index on the vector id for the delete, so ArcadeDB and the six engines that "
+                          f"had no such index are measured again there.", *dense_idx))
     if rerun:
         items.append(_gen("The cells marked `re-run` are measured again."))
     if bindings:
-        items.append(_gen("The next measurement also runs ArcadeDB on newer Python bindings, which "
-                          "are faster at reading results and binding parameters, so ArcadeDB's "
-                          "embedded numbers are expected to move for that reason as well as for "
-                          "the engine release."))
+        items.append(_gen(f"The {_BINDINGS_FASTER_FROM} and {_PAPER_RELEASE} measurements run ArcadeDB on newer "
+                          f"Python bindings, which are faster at reading results and binding parameters, so "
+                          f"ArcadeDB's embedded numbers are expected to move for that reason as well as for "
+                          f"the engine release.", _BINDINGS_FASTER_FROM, _PAPER_RELEASE))
     if behind:
         # Release rows (DECISIONS #176): the move to the paper's release is the
-        # release line, and the comparators are already at their latest stable
-        # release, so their numbers carry over rather than move again.
-        out = [_gen("The next measurement runs after this one is complete, and it makes the "
-                    "changes listed below."),
-               _gen(f"ArcadeDB's numbers here are from release {_join_and(behind)}. The next "
+        # release line, made with this page's method; the comparators are already
+        # at their latest stable release, so their numbers carry over rather
+        # than move again.
+        out = [_gen("More measurements come after this one, and the lines below say what they change."),
+               _gen(f"ArcadeDB's numbers here are from release {_join_and(behind)}. The {_PAPER_RELEASE} "
                     f"measurement runs ArcadeDB again on release {_PAPER_RELEASE}, the one the "
-                    f"paper reports, and every other engine's numbers carry over"
+                    f"paper reports, with the method used here, and every other engine's numbers carry over"
                     + (" unless a line below says they are measured again" if dense_idx else "") + ".",
                     *behind, _PAPER_RELEASE)]
         out += items
         if other:
-            out.append(_gen("The notes under the tables describe the next measurement's other "
-                            "changes."))
+            out.append(_gen("The notes under the tables describe other changes to come."))
         return out
     if not (items or other):
         return []
     date = _arcadedb_dev_build_date(_FROZEN_ROWS)
     build = f"the development build of {date}" if date else "the development build measured here"
-    out = [_gen("The next measurement runs after this one is complete, and it makes the "
-                "changes listed below."),
+    out = [_gen("More measurements come after this one, and the lines below say what they change."),
            _gen(f"ArcadeDB moves from {build} to its next release, and every other engine "
                 f"to its latest stable release.", *([date] if date else []))]
     out += items
     if other:
-        out.append(_gen("The notes under the tables describe the next measurement's other "
-                        "changes."))
+        out.append(_gen("The notes under the tables describe other changes to come."))
     return out
 
 
@@ -3578,7 +3524,7 @@ def _global_conditions(tables, october):
             out.append(reps)
         out += [_R("GLOBAL", "defaults"), _R("GLOBAL", "digest"),
                 _R("GLOBAL", "index_order"), _R("GLOBAL", "jvm_heap")]
-        # The next measurement's list goes last, and is appended in main()
+        # The list of coming measurements goes last, and is appended in main()
         # once _finish_table has run: it reads the finished tables' sentences.
         return out
     out = []
@@ -3638,7 +3584,7 @@ def _loaded_wal_off(r):
     return ts < fix
 
 
-# ARCADEDB'S STRICT CLASS IS AN FSYNC, AND THE NEXT MEASUREMENT'S IS AN
+# ARCADEDB'S STRICT CLASS WAS AN FSYNC, AND THE 26.10.1 MEASUREMENT'S IS AN
 # FDATASYNC. `txWalFlush=2` is FileChannel.force(true) (WALFile.YES_FULL): the
 # log's data and metadata at every commit. SQLite's FULL in WAL mode is one
 # fdatasync per commit, which is `txWalFlush=1` (force(false)), and upstream's
@@ -3669,10 +3615,10 @@ def _arcadedb_full_sync_note(rows):
     # every arm's row records either way.
     text = (f"In the runs that wait for the disk, ArcadeDB was set to sync its write-ahead "
             f"log's data and metadata at every commit (`txWalFlush={measured}`, an fsync). "
-            f"The next measurement uses `txWalFlush={nxt}` instead, a data-only sync "
-            f"(fdatasync) like SQLite's FULL setting, which ArcadeDB's documentation "
-            f"recommends for production and says recovers everything the full sync does.")
-    return _next_item("full_sync", text), [measured, nxt]
+            f"SQLite's FULL setting syncs only the data (fdatasync), which is "
+            f"`txWalFlush={nxt}`; ArcadeDB's documentation recommends it for production "
+            f"and says it recovers everything the full sync does.")
+    return text, [measured, nxt]
 
 
 def _durability_note(entries, rows, table_lane=None):
@@ -3753,15 +3699,14 @@ def _durability_note(entries, rows, table_lane=None):
         parts.append(f"{names}'s rows record that no setting was found, and its server log shows "
                      f"what it ran: its default in both runs, a sync to disk at every commit (the log "
                      f"reads \"Sync mode: every transaction commit\" in every run), although it has a "
-                     f"setting that does not wait; the next measurement runs both.")
+                     f"setting that does not wait.")
     if wal_off:
         names = sorted(wal_off)
         _one = len(names) == 1
         parts.append(f"{_join_and(names)} loaded {'its' if _one else 'their'} catalog with the write-ahead "
                      f"log off, which the bulk-load helper {'it' if _one else 'they'} used does by default, "
                      f"so {'its' if _one else 'their'} ingest figures had less durability than the relaxed "
-                     f"setting; {'its' if _one else 'their'} timed operations ran with the log on. The next "
-                     f"measurement loads with the log on.")
+                     f"setting; {'its' if _one else 'their'} timed operations ran with the log on.")
     # Today no table reaches this with an ArcadeDB strict row: main() sets a
     # strict row aside wherever its cell has a relaxed one, and the durability
     # table, which shows them, says it in its own conditions. Here for a table
@@ -4294,8 +4239,8 @@ def _lc_short_reason(text):
 # all) but the same edit changed its SCOPE from 100 seeds to an unbounded
 # whole-graph 2-hop, so its numbers describe the query written rather than the
 # view. Withheld rather than published with a caveat nobody reads.
-# The bounded seed set returns with the next measurement (CAMPAIGN section 7 row 34), not in this campaign.
-LIFECYCLE_WITHHELD = {"graph_gav": "its query grew from a bounded set of seeds to an unbounded 2-hop, so it stays off this table until the next measurement bounds the query again."}   # PAGE-SPEC rule 7
+# The bounded seed set returns in a measurement after the paper (CAMPAIGN section 7 row 34), not in this campaign.
+LIFECYCLE_WITHHELD = {"graph_gav": "its query grew from a bounded set of seeds to an unbounded 2-hop, so it stays off this table until a measurement after the paper bounds the query again."}   # PAGE-SPEC rule 7
 
 # SURREALDB'S OCTOBER LIFECYCLE ROWS CARRY OUR INPUT LIST (BUGS F161, DECISIONS #134). Its build fed the
 # engine from one in-memory Python list while the ArcadeDB arm streamed, fixed in the lane on 2026-09-30.
@@ -4310,8 +4255,8 @@ LIFECYCLE_WITHHELD = {"graph_gav": "its query grew from a bounded set of seeds t
 _SURREAL_LIST = ("SurrealDB's peak memory on this table is withheld, and its 10M dense-vector cell is not shown: "
                  "our build fed SurrealDB from one in-memory Python list while the ArcadeDB arm streamed, so its "
                  "memory reading was partly ours, and the 10M vector build was killed for our allocation, not "
-                 "SurrealDB's. Its session timings ran after the build and stand. Both are re-measured in the "
-                 "next measurement, with the input streamed.")
+                 "SurrealDB's. Its session timings ran after the build and stand. Both are re-measured "
+                 "with the input streamed.")
 _SURREAL_LIST_ROW = lambda r: str(r.get("engine_commit") or "").startswith("417314c18")   # noqa: E731
 LIFECYCLE_STALE = {
     ("surrealdb_lifecycle", None, None, "peak memory GiB"): (_SURREAL_LIST, _SURREAL_LIST_ROW),
@@ -4974,8 +4919,7 @@ def _durability_table(all_rows):
     _two_txn_note = (_gen(f"{_join_and(_two_txn)} {'send' if len(_two_txn) > 1 else 'sends'} the graph insert's person and its edge as two "
                           f"statements with no transaction around them, so each commits on its own: "
                           f"the run that waits for the disk waits twice for each insert, and the cost "
-                          f"of waiting on that row counts both. The next measurement wraps the two in "
-                          f"one transaction.", *_two_txn)
+                          f"of waiting on that row counts both.", *_two_txn)
                      if _two_txn else None)
 
     def _verb(names):
@@ -5026,7 +4970,7 @@ def _durability_table(all_rows):
                     f"reads \"Sync mode: every transaction commit\", and a trace counts one sync per "
                     f"commit. So the one number printed is in the waiting column. "
                     f"{'They have' if len(_synced_default) > 1 else 'It has'} a setting that does not "
-                    f"wait, which our harness missed, and the next measurement runs both.",
+                    f"wait, which our harness missed.",
                     *_synced_default)] if _synced_default else []),
             *([_gen(_full_sync[0], *_full_sync[1])] if _full_sync else []),
             *_engine_defect_notes("durability", _shown),
@@ -7157,8 +7101,8 @@ _MARK_MEANINGS = {
     "err": "the cell failed inside its budget; the note says what it reported",
     # DECISIONS #117. Not a dash: on this page a dash means an operation the
     # engine cannot express, and these ran; they measured our mistake.
-    # Not "is being measured again": some marked cells are re-measured in this campaign and some only in the
-    # next measurement, and each note says which.
+    # Not "is being measured again": the cell stays off the table until the measurement with the fix, and
+    # the note says what was wrong.
     "re-run": "the cell was measured before a fix to our harness and stays off the table until it is measured again; the note says what was wrong",
     # Not `re-run`: nothing was wrong with our harness, and the cell is not
     # measured again at this release. Not `err`: the cell finished. A defect in
@@ -7357,7 +7301,6 @@ def _phase_split_notes(table):
                    "index after the load and time it inside the total, so "
                    f"{'their' if len(dis) > 1 else 'its'} total includes the index build "
                    "and the table has no separate index figure for "
-                   f"{'them' if len(dis) > 1 else 'it'}; the next measurement splits "
                    f"{'them' if len(dis) > 1 else 'it'}.")
     return out
 
@@ -8503,13 +8446,8 @@ def _one_list_note(backend, scale, items):
     text = (f"{label} at {size} is not comparable. On the release measured here, "
             f"{_join_and(releases)}, an IVF index with {floor} or more lists answers every "
             f"query from one fixed list. {has}, so the search returned {found} of the true "
-            f"neighbours, and the cell is not a measurement of {label}'s search. The next "
-            f"measurement runs {label} at its latest stable release.")
-    # Filed under the release move, which the page's list of changes already
-    # states for every engine other than ArcadeDB, so this sentence adds no
-    # line of its own and is not counted as a change no line covers.
-    return _next_item("release", _gen(text, label, size, *releases, floor,
-                                      *(f"{n:,}" for n in lists[:1] if len(lists) == 1)))
+            f"neighbours, and the cell is not a measurement of {label}'s search.")
+    return _gen(text, label, size, *releases, floor, *(f"{n:,}" for n in lists[:1] if len(lists) == 1))
 
 
 def _dense_row_label(backend):
@@ -8702,7 +8640,7 @@ def _top_parts_refusal_note(table_id):
             f"ArcadeDB {_join_and(releases)} gives each query a heap budget that shrinks as cores are "
             f"added, and {host} it refuses this {groups}-group aggregate, while ArcadeDB "
             f"{_REFUSAL_FIXED_IN} fixes it ({_REFUSAL_ISSUES[0]}, fixed by {_REFUSAL_ISSUES[1]}) and the "
-            f"next measurement re-measures it.")
+            f"{_REFUSAL_FIXED_IN} measurement re-measures it.")
     return _next_item("release", _gen(text, who, size, *releases, groups, _REFUSAL_FIXED_IN,
                                       *_REFUSAL_ISSUES, *([str(core_n)] if core_n else [])))
 
@@ -8713,8 +8651,8 @@ def _top_parts_refusal_note(table_id):
 # at ts1000 was OOM-killed at the tier's memory cap: `Database.insert_many`
 # held the whole input three times at once (the Python list, one JSON text, one
 # parsed array on the Java heap). The defect is in our bindings and not in the
-# engine; the fix reads 10,000 rows at a time, and the next measurement runs
-# with it. The cell has no row to print, so it is a declared outcome of its own
+# engine; the fix reads 10,000 rows at a time, and the 26.10.2 and 26.11.1
+# measurements run with it. The cell has no row to print, so it is a declared outcome of its own
 # (an `envelope` absence with one plain sentence), not an unexplained failure.
 #
 # KEYED ON THE ROWS, like _top_parts_refusals: the l4 ingest rows at ts1000 of
@@ -8777,8 +8715,9 @@ def _ts_doc_oom_note(table_id):
     hosts = f"{_TS_OOM_HOSTS:,}"
     return _next_item("ts_doc_oom", _gen(
         f"ArcadeDB's embedded time-series document load at {hosts} hosts ran out of memory because the "
-        f"Python bindings held the whole load in memory at once; the bindings are fixed and the next "
-        f"measurement runs it again.", hosts))
+        f"Python bindings held the whole load in memory at once; the bindings are fixed and the "
+        f"{_BINDINGS_FASTER_FROM} and {_PAPER_RELEASE} measurements run it again.",
+        hosts, _BINDINGS_FASTER_FROM, _PAPER_RELEASE))
 
 
 def _refusal_entries(table):
@@ -9823,7 +9762,7 @@ def main() -> int:
             _t.setdefault("conditions", [])
             if _one_way not in _t["conditions"]:
                 _t["conditions"].append(_one_way)
-        # The rest of what the next measurement changes about a table, each
+        # The rest of what later measurements change about a table, each
         # keyed on a field its rows will record (BUGS F174, DECISIONS #153,
         # #154, #157). The documents OLTP table carries its warm-up sentence
         # in place of the cold-column one (_cold_note); the durability table
@@ -10022,7 +9961,7 @@ def main() -> int:
                 "page will compare on each workload, not anything measured yet."))
         tables.append(_mm)
         payload["tables"].append(_mm)
-    # WHAT THE NEXT MEASUREMENT CHANGES, last among the page's conditions and
+    # WHAT THE COMING MEASUREMENTS CHANGE, last among the page's conditions and
     # read off the FINISHED tables: _finish_table adds the query words and the
     # repetition sentences, so the list cannot be built with the global
     # conditions above, which are computed before it runs.

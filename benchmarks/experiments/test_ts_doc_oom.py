@@ -59,7 +59,7 @@ def page(EW, monkeypatch):
 def test_the_oom_is_declared_with_one_plain_sentence(EW, page):
     notes, censored = page([_row("killed")])
     want = ("ArcadeDB's embedded time-series document load at 1,000 hosts ran out of memory because the Python bindings held the "
-            "whole load in memory at once; the bindings are fixed and the next measurement runs it again.")
+            "whole load in memory at once; the bindings are fixed and the 26.10.2 and 26.11.1 measurements run it again.")
     assert notes == [want] == [EW._ts_doc_oom_note("l4")]
     assert censored == {}                                   # out of the unexplained-failure set
     [a] = EW._DECLARED_ABSENCES["l4"]
