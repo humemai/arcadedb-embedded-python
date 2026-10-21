@@ -15,7 +15,7 @@
     <!-- Same as native/pom.xml native.graalvm.version: the builder (GraalVM CE 25.0.2) must match. -->
     <graalvm.version>25.0.2</graalvm.version>
     <native-maven-plugin.version>1.1.14</native-maven-plugin.version>
-    <maven.compiler.release>21</maven.compiler.release>
+    <maven.compiler.release>25</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
   </properties>
 
