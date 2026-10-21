@@ -10,6 +10,7 @@ implements the engine's interfaces and forwards each call to a JPype proxy defin
 import inspect
 import re
 import traceback
+import weakref
 from typing import Callable, Optional, Tuple
 
 import jpype
@@ -89,6 +90,9 @@ def _function_callback(fn: Callable, database):
     """A PythonFunctions.Callback proxy: Java arguments in, converted result out."""
     from .core import _wrap_java_record
 
+    # weak: the engine holds this proxy, so a strong Database here would never be released
+    database_ref = weakref.ref(database)
+
     @jpype.JImplements(_bridge_class("com.arcadedb.python.PythonFunctions$Callback"))
     class _PythonFunction:
         @jpype.JOverride
@@ -97,7 +101,7 @@ def _function_callback(fn: Callable, database):
                 values = []
                 for arg in args:
                     value = convert_java_to_python(arg)
-                    values.append(_wrap_java_record(value, database))
+                    values.append(_wrap_java_record(value, database_ref()))
                 return convert_python_to_java(fn(*values))
             except BaseException as e:  # pylint: disable=broad-except
                 _raise_to_java(e)
@@ -110,13 +114,15 @@ def _event_callback(event: str, fn: Callable, database):
     from .core import _wrap_java_record
 
     is_before = event.startswith("before_")
+    # weak: the engine holds this proxy, so a strong Database here would never be released
+    database_ref = weakref.ref(database)
 
     @jpype.JImplements(_bridge_class("com.arcadedb.python.PythonRecordEvents$Callback"))
     class _PythonListener:
         @jpype.JOverride
         def call(self, record):
             try:
-                result = fn(_wrap_java_record(record, database))
+                result = fn(_wrap_java_record(record, database_ref()))
             except BaseException as e:  # pylint: disable=broad-except
                 _raise_to_java(e)
             return not (is_before and result is False)
@@ -132,8 +138,15 @@ class FunctionRegistration:
     """
 
     def __init__(self, database):
-        self._database = database
+        # Weak: the Database holds this registry, and a strong reference back would make a
+        # cycle that keeps the Database (and its engine instance) alive until a gc pass
+        # instead of releasing it with its last result (tests/test_results_after_close.py).
+        self._database_ref = weakref.ref(database)
         self._handles = {}
+
+    @property
+    def _database(self):
+        return self._database_ref()
 
     def register(
         self,
