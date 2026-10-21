@@ -25,7 +25,8 @@ Create a configured batch helper tied to the current database.
 **Common options:**
 
 - `batch_size`: buffered edge batch size before flush; usually leave it unset and
-  give `expected_edge_count` instead
+  give `expected_edge_count` instead. Do not lower it to save memory (see
+  [Memory](#memory))
 - `expected_edge_count`: the number of edges you are about to load; with no
   `batch_size`, the batch size is tuned to it (clamped to 100,000-5,000,000), and
   a single flush is the optimal shape
@@ -74,6 +75,16 @@ with db.graph_batch(use_wal=True, expected_edge_count=50000) as batch:
     bob = batch.create_vertex("Person", name="Bob")
     batch.new_edge(alice, "Knows", bob, since=2024)
 ```
+
+## Memory
+
+**Size the heap, and the container, by the number of distinct vertices the load touches.** Peak
+memory of a `GraphBatch` load grew with the number of vertices (created, and connected by edges), not with `batch_size`. Lowering `batch_size` barely reduces the peak.
+
+Our test: a fresh process per point, `use_wal=False`, 300,000 random edges between the vertices, JVM heap capped at 3 GB. The same edges between 16 times more distinct vertices raised peak RSS by well over half, and creating the vertices alone was a large part of that. Cutting `batch_size` 30-fold at a fixed number of vertices saved a much smaller share. The sizes were small (hundreds of thousands of vertices) and the shape was one random graph, so take the direction as the guidance and measure your own graph for a number.
+
+- Do: plan the JVM heap (see [JVM](jvm.md)) and the container limit from the vertex count.
+- Avoid: lowering `batch_size` as the fix for an `OutOfMemoryError`; give the JVM more heap.
 
 ## Transactions
 

@@ -424,6 +424,10 @@ def run_async_sql_load(
     async_exec = db.async_executor()
     async_exec.set_parallel_level(1)
     async_exec.set_commit_every(batch_size)
+    # WAL off: this benchmark rebuilds its database from the source data after a crash. With the
+    # WAL off an acknowledged batch (on_ok) can still be lost in a crash, and the per-statement
+    # callbacks only mean "applied to the current batch". The load counts as stored once
+    # wait_completion() returns, not before.
     async_exec.set_transaction_use_wal(False)
 
     errors: List[Exception] = []
@@ -570,6 +574,10 @@ def run_import_database_load(
     async_exec = db.async_executor()
     async_exec.set_parallel_level(max(1, parallel))
     async_exec.set_commit_every(batch_size)
+    # WAL off: this benchmark rebuilds its database from the source data after a crash. With the
+    # WAL off an acknowledged batch (on_ok) can still be lost in a crash, and the per-statement
+    # callbacks only mean "applied to the current batch". The load counts as stored once
+    # wait_completion() returns, not before.
     async_exec.set_transaction_use_wal(False)
 
     start = time.perf_counter()

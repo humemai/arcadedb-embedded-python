@@ -63,7 +63,7 @@ asserts, so the list below stops at the file.
 | `test_transaction_config.py` | WAL flush, read-your-writes, and auto-transaction settings |
 | `test_results_after_close.py` | What a result or record does after its `Database` is closed or dropped |
 | `test_concurrency.py` | The file lock, thread safety, sequential reopen, a second process refused, and a mixed multi-thread workload |
-| `test_async_executor.py` | Async commands, queries, callbacks, state flags, and `wait_completion` timeouts, with exact command-path counts at parallel levels 1 and 4 |
+| `test_async_executor.py` | Async commands, queries, callbacks, state flags, and `wait_completion` timeouts, with exact command-path counts at parallel levels 1 and 4, and the order of the signals: a per-record callback before the commit, `on_ok` after it, `wait_completion` commits the tail |
 | `test_schema.py` | Types, properties, and indexes: create, discover, and drop |
 | `test_schema_batching.py` | Schema statements apply at once, a rollback does not undo them, and many batch in one transaction |
 | `test_type_conversion.py` | Python and Java type conversion in both directions |

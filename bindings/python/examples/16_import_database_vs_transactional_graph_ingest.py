@@ -60,6 +60,8 @@ explicitly configure async/import settings on the DB handle before import:
 - async_executor().set_parallel_level(parallel)
 - async_executor().set_commit_every(batch_size)
 - async_executor().set_transaction_use_wal(False)
+  (durability trade-off: a crash can lose acknowledged batches; the load is stored once
+  wait_completion() returns. See docs/api/async_executor.md)
 
 Without this, import may not use the intended runtime settings in this code path, which
 can produce misleading performance and/or parity behavior.
@@ -544,6 +546,10 @@ def run_async_sql_graph_load(
     async_exec = db.async_executor()
     async_exec.set_parallel_level(1)
     async_exec.set_commit_every(batch_size)
+    # WAL off: this benchmark rebuilds its database from the source data after a crash. With the
+    # WAL off an acknowledged batch (on_ok) can still be lost in a crash, and the per-statement
+    # callbacks only mean "applied to the current batch". The load counts as stored once
+    # wait_completion() returns, not before.
     async_exec.set_transaction_use_wal(False)
 
     errors: List[Exception] = []
@@ -809,6 +815,10 @@ def run_import_database_graph_load(
     async_exec = db.async_executor()
     async_exec.set_parallel_level(parallel)
     async_exec.set_commit_every(batch_size)
+    # WAL off: this benchmark rebuilds its database from the source data after a crash. With the
+    # WAL off an acknowledged batch (on_ok) can still be lost in a crash, and the per-statement
+    # callbacks only mean "applied to the current batch". The load counts as stored once
+    # wait_completion() returns, not before.
     async_exec.set_transaction_use_wal(False)
 
     start = time.perf_counter()

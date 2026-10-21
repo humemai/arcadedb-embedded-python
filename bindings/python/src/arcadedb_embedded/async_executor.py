@@ -187,7 +187,8 @@ class AsyncExecutor:
         Enable/disable Write-Ahead Log for async operations.
 
         Disabling WAL is faster but less durable (data loss on crash).
-        Only disable for bulk imports where data can be re-imported.
+        Only disable for bulk imports where data can be re-imported: with the
+        WAL off a batch that ``on_ok`` reported can still be lost in a crash.
 
         Args:
             use_wal: True to use WAL (default), False to disable
@@ -806,8 +807,10 @@ class AsyncExecutor:
         """
         Wait for all async operations to complete.
 
-        Blocks until all pending operations finish. If timeout is reached,
-        raises TimeoutError.
+        Blocks until every operation queued before the call is processed: its
+        batch is committed, or the failure went to an error callback. This is
+        the point at which async writes are stored (with the WAL on); a
+        per-record callback is not. If timeout is reached, raises TimeoutError.
 
         Args:
             timeout_ms: Optional timeout in milliseconds.
@@ -897,14 +900,16 @@ class AsyncExecutor:
 
     def on_ok(self, callback: Callable[[], None]) -> "AsyncExecutor":
         """
-        Set global success callback for all operations.
+        Set a global callback that runs after a batch commits.
 
-        **Note:** Global callbacks have JPype proxy compatibility issues.
-        Prefer per-operation callbacks on async SQL/Cypher commands:
-
-            async_exec.command(
-                "sql", "INSERT INTO Log SET id = :id", callback=on_success, id=1
-            )
+        This is the signal that the records applied so far are stored. The
+        per-record ``callback`` of ``command()`` or ``create_record()`` is not:
+        it runs when the record is applied to the current batch, before the
+        commit. With the WAL off (``set_transaction_use_wal(False)``) a batch
+        that ``on_ok`` reported can still be lost in a crash. The callback takes
+        no arguments, does not say how many records the batch held and can fire
+        for an empty commit: count what you submitted, and use
+        ``wait_completion()`` to know that all of it is done.
 
         Args:
             callback: Success callback, no args

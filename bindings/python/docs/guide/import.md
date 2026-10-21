@@ -71,6 +71,16 @@ not something we currently encourage as the default Python import story.
     periodic commit is now retried and otherwise reported through the error callback).
     `create_record`, `append_samples`, `db.insert_many(...)`, and `db.graph_batch(...)`
     never had that problem.
++ Async writes are stored when their batch commits, not when a per-record callback runs.
+    A per-record or per-statement `callback` fires once the writer has applied the record to
+    its current batch, before the commit; the executor's `on_ok` fires after a batch commits;
+    `wait_completion()` returns when everything queued is processed. Do wait for
+    `wait_completion()` before you treat async writes as stored, and avoid exiting before it
+    or reading a callback as proof of storage. Avoid `set_transaction_use_wal(False)` when an
+    acknowledged batch has to survive a crash: with no WAL there is nothing to replay, and a
+    reported batch can be missing after `kill -9`. `insert_many(..., parallel=True)` waits for
+    the writers itself. Details and the test behind this:
+    [When is async work stored?](../api/async_executor.md#when-is-async-work-stored).
 + `db.import_documents(...)` exists for document-shaped file import convenience; like
     `IMPORT DATABASE`, it is not the recommended default for bulk loads from Python.
 + Reserve `IMPORT DATABASE` for supported import formats, restore flows, and cases where
