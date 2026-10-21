@@ -1013,6 +1013,10 @@ specifically need that surface.
 - `mutations_before_rebuild` (int | None): Override rebuild threshold (default: `None`, uses engine default).
 - `store_vectors_in_graph` (bool): Persist vectors inline in graph file (faster reopen/search, larger graph).
 - `add_hierarchy` (bool | None): Force enabling/disabling HNSW hierarchy (default: `True`).
+  The default is a deliberate choice of these bindings. The engine itself defaults to
+  `false`, so a SQL `CREATE INDEX` without `"addHierarchy"` builds a flat graph. Pass `None` to
+  take the engine default. See
+  [Graph build settings in SQL](../guide/vectors.md#graph-build-settings-in-sql).
 - `pq_subspaces` (int | None): PQ subspaces (M). Requires `quantization="PRODUCT"`.
 - `pq_clusters` (int | None): PQ clusters per subspace (K). Requires
   `quantization="PRODUCT"`. In current ArcadeDB engine builds, this should not exceed

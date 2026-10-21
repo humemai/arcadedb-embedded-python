@@ -157,6 +157,42 @@ examples sets it. See the
 [Memory & Heap](#memory-heap-requirements-1024-dim-vectors) section for the
 heap side.
 
+### Graph build settings in SQL
+
+The index metadata takes the graph build settings that the tuning list above names, and two
+more that the Python helper does not expose: `neighborOverflowFactor` and
+`alphaDiversityRelaxation`. Both are at least 1.0 and default to 1.2 in the engine. They
+set how many extra candidate neighbours the build considers (`neighborOverflowFactor`) and
+how far the build trades distance accuracy for diversity (`alphaDiversityRelaxation`). The
+engine documents 1.0 to 1.5 as the typical range. A higher value costs build time. Leave them
+at their defaults unless you measure a recall gain.
+
+```python
+db.command(
+    "sql",
+    """
+    CREATE INDEX ON Doc (embedding) LSM_VECTOR
+    METADATA {
+        "dimensions": 384,
+        "similarity": "COSINE",
+        "maxConnections": 32,
+        "beamWidth": 100,
+        "neighborOverflowFactor": 1.2,
+        "alphaDiversityRelaxation": 1.2,
+        "addHierarchy": false
+    }
+    """,
+)
+```
+
+`addHierarchy` has two defaults, on purpose. A SQL `CREATE INDEX` without the key follows the
+engine, which builds a flat graph (`false`). `Database.create_vector_index()` passes
+`add_hierarchy=True` unless you say otherwise, so an index made from Python has the HNSW
+hierarchy layers. The two paths therefore build different graphs from the same
+settings. State the value in both when you compare results, or when you need the same
+index from either path. `VectorIndex.get_metadata()["add_hierarchy"]` shows what an index
+has.
+
 ## Memory & Heap Requirements (1024-dim vectors)
 
 Vector index build is the most memory-hungry step. For 1024-dimensional vectors:
@@ -436,6 +472,30 @@ Leave the scorer's own settings at their defaults (posting block size 128,
 `arcadedb.sparseVectorScoringMaxPartitions=0`); upstream has no other setting to
 recommend (`ArcadeData/arcadedb#8553`).
 
+### Sparse search options
+
+`vector.sparseNeighbors(index, indices, values, k[, options])` takes the query as two
+arrays of the same length, token ids and weights. Its options map has `filter`, `where`,
+`groupBy` and `groupSize`, which work as in [Search Options in SQL](#search-options-in-sql)
+(`where` needs 26.11.1 or later), and `minScore`, which drops hits scoring below it. A sparse
+score is a similarity, so higher is better. Unlike the dense function, the row exposes
+`score`, not `distance`.
+
+```python
+rows = db.query(
+    "sql",
+    "SELECT id, score FROM "
+    "(SELECT expand(`vector.sparseNeighbors`('SparseDoc[tokens,weights]', ?, ?, 5, "
+    "{ minScore: 0.5 })))",
+    jtypes.JArray(jtypes.JInt)([5]),
+    arcadedb.to_java_float_array([1.0]),
+).to_list()
+```
+
+From Python, `db.schema.create_index("SparseDoc", ["tokens", "weights"],
+index_type=IndexType.LSM_SPARSE_VECTOR)` creates the index with the engine defaults. Use
+the SQL form above when you need `dimensions`, `weightQuantization` or `rescoreOversample`.
+
 ### The settle step: compact before you time queries
 
 An LSM sparse index answers from every segment it has written until those
@@ -473,6 +533,70 @@ rows = db.query(
     3,
 ).to_list()
 ```
+
+## Search Options in SQL
+
+The fourth argument of `vectorNeighbors(index, vector, k, options)` (the dotted name
+`vector.neighbors` is the same function) is either the search beam as a number or a map of
+options. All keys are optional:
+
+| Key | Meaning |
+| --- | --- |
+| `efSearch` | Search beam width, as in [The search beam in SQL](#the-search-beam-in-sql) |
+| `filter` | List of RIDs to restrict the search to |
+| `where` | Predicate on the candidate records: a map of property to value, or a SQL condition string. Needs ArcadeDB 26.11.1 or later |
+| `groupBy` | Property to group the hits by; `k` then counts groups |
+| `groupSize` | Hits kept per group (default 1) |
+| `maxDistance` | Drop hits farther than this distance |
+
+An unknown key raises an error that lists the allowed ones. `where` raises that error on an
+engine older than 26.11.1, and the 26.10.x wheels carry one.
+
+### Filter by RID and by predicate
+
+`filter` takes a list of RIDs you computed before the search. `where` tests a condition on
+each candidate as the search reaches it, so you do not list every RID in scope first. Give a
+map (every property must be equal) or a SQL condition string. A condition cannot use
+positional `?` parameters, so bind values by name or put them in a map.
+
+```python
+# Needs ArcadeDB 26.11.1 or later
+rows = db.query(
+    "sql",
+    "SELECT title, distance FROM "
+    "(SELECT expand(vectorNeighbors('Doc[embedding]', ?, 5, "
+    "{ where: \"lang = 'en' AND year > 2020\" })))",
+    to_java_float_array(query_vec),
+).to_list()
+
+rows = db.query(
+    "sql",
+    "SELECT title, distance FROM "
+    "(SELECT expand(vectorNeighbors('Doc[embedding]', ?, 5, { where: { lang: 'en' } })))",
+    to_java_float_array(query_vec),
+).to_list()
+```
+
+`where` and `filter` combine: a hit has to pass both. On an older engine, build the RID
+list with a query and pass it as `filter`.
+
+### Distance cut-off
+
+`maxDistance` drops hits whose distance is above the value. It is applied to the `k`
+neighbours the index found, so a tight cut-off returns fewer than `k` rows and does not
+search further to fill them. Set `k` to the most rows you want.
+
+```python
+rows = db.query(
+    "sql",
+    "SELECT title, distance FROM "
+    "(SELECT expand(vectorNeighbors('Doc[embedding]', ?, 50, { maxDistance: 0.25 })))",
+    to_java_float_array(query_vec),
+).to_list()
+```
+
+Options combine, for example `{ efSearch: 100, filter: [...], maxDistance: 0.25 }`.
+[Grouped Search](#grouped-search) shows `groupBy` and `groupSize`.
 
 ## Examples & References
 

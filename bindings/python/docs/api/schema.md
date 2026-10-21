@@ -380,7 +380,10 @@ Create an index on a type.
 - `property_names` (List[str]): List of property names to index
 - `unique` (bool): Whether the index should enforce uniqueness (default: `False`)
 - `index_type` (str or IndexType): Type of index (`"LSM_TREE"`, `"HASH"`, `"FULL_TEXT"`,
-  `"LSM_VECTOR"`, `"GEOSPATIAL"`); default: `IndexType.LSM_TREE`
+  `"LSM_VECTOR"`, `"LSM_SPARSE_VECTOR"`, `"GEOSPATIAL"`); default: `IndexType.LSM_TREE`.
+  `LSM_SPARSE_VECTOR` takes the token and weight properties, in that order, and the engine
+  defaults; for `dimensions` or `weightQuantization` use SQL (see the
+  [vector guide](../guide/vectors.md#sparse-vectors)).
 
 **Returns:**
 
@@ -424,7 +427,7 @@ schema.create_index("Article", ["content"], index_type="FULL_TEXT")
   [#9228](https://github.com/ArcadeData/arcadedb/issues/9228), fixed in 26.10.2 by
   [#9538](https://github.com/ArcadeData/arcadedb/pull/9538); an existing index needs `REBUILD INDEX`
   for the fix).
-- Use `FULL_TEXT`, `LSM_VECTOR`, and `GEOSPATIAL` only for their specialized query
+- Use `FULL_TEXT`, `LSM_VECTOR`, `LSM_SPARSE_VECTOR`, and `GEOSPATIAL` only for their specialized query
   types.
 - `HASH` can be unique or non-unique. The index structure and uniqueness constraint are
   separate choices.
@@ -437,6 +440,7 @@ schema.create_index("Article", ["content"], index_type="FULL_TEXT")
 - `CREATE INDEX ON Order (customerId) NOTUNIQUE_HASH` -> non-unique `HASH`
 - `CREATE INDEX ON Article (content) FULL_TEXT` -> `FULL_TEXT`
 - `CREATE INDEX ON Doc (embedding) LSM_VECTOR ...` -> `LSM_VECTOR`
+- `CREATE INDEX ON Doc (tokens, weights) LSM_SPARSE_VECTOR ...` -> `LSM_SPARSE_VECTOR`
 - `CREATE INDEX ON Place (location) GEOSPATIAL` -> `GEOSPATIAL`
 
 **Vector (JVector) Parameters:**

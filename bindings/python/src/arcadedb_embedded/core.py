@@ -1226,7 +1226,10 @@ class Database:
                 lookups.
             add_hierarchy: Whether to build hierarchical layers in the HNSW graph
                 (Default is True). If None, uses the engine default. Set explicitly to
-                True/False to force the behavior.
+                True/False to force the behavior. The default of True is a deliberate
+                choice of these bindings: the engine itself defaults to False, so a
+                SQL ``CREATE INDEX ... LSM_VECTOR`` without ``"addHierarchy"`` builds a
+                flat graph. Record the value you use when you compare results.
 
         Returns:
             VectorIndex object

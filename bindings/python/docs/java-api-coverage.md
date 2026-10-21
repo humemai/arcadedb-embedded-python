@@ -20,7 +20,7 @@ your Python process, or for HA/TLS, use the official ArcadeDB distribution.
 | --- | --- | --- |
 | Core Database | ✅ Supported | `DatabaseFactory`, `Database`, transactions, lookups, async helpers |
 | Query Execution | ✅ Supported | SQL and OpenCypher |
-| Schema & Indexes | ✅ Supported | Types, properties, LSM_TREE/HASH/FULL_TEXT/LSM_VECTOR/GEOSPATIAL indexes |
+| Schema & Indexes | ✅ Supported | Types, properties, LSM_TREE/HASH/FULL_TEXT/LSM_VECTOR/LSM_SPARSE_VECTOR/GEOSPATIAL indexes |
 | Graph API | ✅ Supported | SQL/OpenCypher graph workflows plus `Document`/`Vertex`/`Edge` wrapper compatibility |
 | Vector Search | ✅ Supported | JVector indexes + NumPy conversion helpers |
 | Sparse Vectors | ✅ Supported | `LSM_SPARSE_VECTOR` indexes and `vector.sparseNeighbors(...)` through SQL |
@@ -189,9 +189,10 @@ Support exists, but the current repository guidance is:
 
 - ✅ Vector index creation - SQL `CREATE INDEX ... LSM_VECTOR`
 - ✅ NumPy array support - `to_java_float_array()`, `to_java_int_array()`, `to_java_byte_array()`, `to_python_array()`
-- ✅ Similarity search - SQL `vectorNeighbors`
+- ✅ Similarity search - SQL `vectorNeighbors`, with the `efSearch`, `filter`, `where` (26.11.1 and later), `groupBy`, `groupSize` and `maxDistance` options
 - ✅ Distance functions - cosine, euclidean, dot_product
-- ✅ Index tuning parameters (connections, beam width, quantization)
+- ✅ Index tuning parameters (connections, beam width, quantization), and in SQL `neighborOverflowFactor` and `alphaDiversityRelaxation`
+- ✅ Sparse vectors - SQL `CREATE INDEX ... LSM_SPARSE_VECTOR` and `vector.sparseNeighbors`
 - ✅ Automatic indexing of existing records
 - ✅ List vector indexes - `schema.list_vector_indexes()`
 

@@ -28,6 +28,7 @@ class IndexType(Enum):
     LSM_TREE = "LSM_TREE"
     FULL_TEXT = "FULL_TEXT"
     LSM_VECTOR = "LSM_VECTOR"
+    LSM_SPARSE_VECTOR = "LSM_SPARSE_VECTOR"
     GEOSPATIAL = "GEOSPATIAL"
     HASH = "HASH"
 
@@ -461,7 +462,8 @@ class Schema:
             type_name: Name of the type
             property_names: List of property names to index
             unique: Whether the index should enforce uniqueness
-            index_type: Type of index (LSM_TREE, FULL_TEXT, LSM_VECTOR, GEOSPATIAL, HASH)
+            index_type: Type of index (LSM_TREE, FULL_TEXT, LSM_VECTOR,
+                LSM_SPARSE_VECTOR, GEOSPATIAL, HASH)
 
         Returns:
             Java Index object
@@ -536,7 +538,8 @@ class Schema:
             type_name: Name of the type
             property_names: List of property names to index
             unique: Whether the index should enforce uniqueness
-            index_type: Type of index (LSM_TREE, FULL_TEXT, LSM_VECTOR, GEOSPATIAL, HASH)
+            index_type: Type of index (LSM_TREE, FULL_TEXT, LSM_VECTOR,
+                LSM_SPARSE_VECTOR, GEOSPATIAL, HASH)
 
         Returns:
             Java Index object
