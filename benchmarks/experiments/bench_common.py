@@ -22,7 +22,22 @@ import time
 # table (DECISIONS #84). "2026-09" is the September campaign (rows without the
 # field); "2026-10" carries the #82 query set, the #81 durability rule, the
 # ingest/index timer split, and bench_host.
-INSTRUMENT = "2026-10"
+# The next instrument is developed on main behind BENCH_INSTRUMENT, because the
+# queue host pulls main at every stage start (CAMPAIGN "ONE LINE OF DEVELOPMENT"):
+# unset, every stage keeps measuring "2026-10"; a stage that exports
+# BENCH_INSTRUMENT=2026-11 measures the next one. Code that changes behaviour for
+# the next instrument asks `instrument_at_least("2026-11")`, never the env.
+INSTRUMENTS = ("2026-10", "2026-11")
+INSTRUMENT = os.environ.get("BENCH_INSTRUMENT", "2026-10")
+if INSTRUMENT not in INSTRUMENTS:
+    raise SystemExit(f"BENCH_INSTRUMENT={INSTRUMENT!r} is not one of {INSTRUMENTS}")
+
+
+def instrument_at_least(version):
+    """True when the instrument being measured is `version` or later (the ids sort as text)."""
+    if version not in INSTRUMENTS:
+        raise ValueError(f"unknown instrument {version!r}")
+    return INSTRUMENT >= version
 
 # THE JPYPE VERSION THE CAMPAIGN MEASURES (CAMPAIGN 7 row 73). The embedded
 # ArcadeDB arms cross from Python into the JVM through JPype, so its per-call
