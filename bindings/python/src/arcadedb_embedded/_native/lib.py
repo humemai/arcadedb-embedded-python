@@ -89,6 +89,7 @@ def _load():
             "arcadedb_n_server_start": [P, S],
             "arcadedb_n_server_stop": [P, L],
             "arcadedb_n_server_db": [P, L, S, I],
+            "arcadedb_n_diag": [P],
             "arcadedb_free": [P, P],
         }
         for name, argtypes in sigs.items():
@@ -131,3 +132,8 @@ def call(name: str, *args) -> dict:
 
 def b(value) -> bytes:
     return value.encode("utf-8") if isinstance(value, str) else value
+
+
+def diag() -> dict:
+    """Runtime facts of the image: Java version, jdk.incubator.vector present, CPUs, max heap, jvector provider classes."""
+    return json.loads(call("arcadedb_n_diag"))

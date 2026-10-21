@@ -291,6 +291,26 @@ public final class ArcadeNative {
     }
   }
 
+  /** Which vector math the image runs: jvector's VectorizationProvider and VectorUtilSupport classes (no logging needed). */
+  @CEntryPoint(name = "arcadedb_n_diag")
+  public static CCharPointer diag(final IsolateThread thread) {
+    try {
+      final StringBuilder sb = new StringBuilder("{\"ok\":true,\"java\":");
+      NativeCodec.quote(sb, Runtime.version().toString());
+      sb.append(",\"vector_module\":").append(ModuleLayer.boot().findModule("jdk.incubator.vector").isPresent());
+      sb.append(",\"cpus\":").append(Runtime.getRuntime().availableProcessors());
+      sb.append(",\"max_heap\":").append(Runtime.getRuntime().maxMemory());
+      final io.github.jbellis.jvector.vector.VectorizationProvider vp = io.github.jbellis.jvector.vector.VectorizationProvider.getInstance();
+      sb.append(",\"provider\":");
+      NativeCodec.quote(sb, vp.getClass().getName());
+      sb.append(",\"util_support\":");
+      NativeCodec.quote(sb, vp.getVectorUtilSupport().getClass().getName());
+      return out(sb.append('}').toString());
+    } catch (final Throwable t) {
+      return err(t);
+    }
+  }
+
   // ---- plumbing
 
   private static Database db(final long h) {
