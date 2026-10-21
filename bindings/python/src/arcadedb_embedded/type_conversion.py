@@ -55,8 +55,6 @@ class _PythonToJavaTypes(NamedTuple):
     local_date: Any
 
 
-_UNSET = object()
-
 # Element types convert_python_to_java hands to the JVM as one Object[].
 _BULK_SCALAR_TYPES = frozenset((int, float, str, bool, type(None)))
 

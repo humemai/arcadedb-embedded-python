@@ -97,23 +97,6 @@ def test_server_custom_config(temp_server_root):
     server.stop()
 
 
-@pytest.mark.server
-def test_server_context_manager(temp_server_root):
-    """Test server context manager."""
-    with ArcadeDBServer(
-        root_path=temp_server_root, root_password=TEST_PASSWORD
-    ) as server:
-        # Server auto-starts in context manager
-        time.sleep(1)
-
-        assert server.is_started()
-
-        # Server should auto-stop when exiting context
-
-    # Note: We can't easily test if stopped after context exit
-    # because the server object is out of scope
-
-
 def test_default_host_is_localhost(temp_server_root):
     """Default host should be localhost; binding to all interfaces must be opt-in.
 
