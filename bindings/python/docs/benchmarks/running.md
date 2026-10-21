@@ -71,7 +71,8 @@ The graph lane at SF1 is the cheapest published tier, so it is the one to try fi
 cd benchmarks/experiments
 
 # Phase A: build the per-backend images. Parallel, nothing is measured here.
-bash build_images.sh
+# The arcadedb image takes the wheel under test from ARCADEDB_WHEEL (there is no PyPI fallback).
+ARCADEDB_WHEEL=/path/to/arcadedb_embedded-<version>-<tags>.whl bash build_images.sh
 
 # The dataset switches, from the repository rather than from someone's shell history.
 source campaign_env.sh

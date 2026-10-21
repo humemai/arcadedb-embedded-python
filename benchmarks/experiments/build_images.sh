@@ -17,12 +17,24 @@ cd "$(dirname "$0")"
 # result set, so they are part of the instrument. Pinned at what the October
 # images on mini and the laptop resolved (2026-09-19); move them deliberately.
 HARNESS_PKGS="numpy==2.5.3 pandas==3.0.6 pyarrow==25.0.1"
-ARCADE_PKGS="arcadedb-embedded==26.8.1 $HARNESS_PKGS"
+# NO SILENT PYPI FALLBACK (2026-10-22). The engine under test is always a named wheel: the `arcadedb` image takes it from
+# ARCADEDB_WHEEL and nothing else, because the old default here (`arcadedb-embedded==26.8.1` from PyPI) was a stale pin that
+# a build with the variable forgotten would have baked in without a word, two ArcadeDB versions on one table (F5). The
+# generic images (client, duckdb, dense) take no ArcadeDB package of their own: with the variable set they carry the wheel
+# (Dockerfile.bench installs every wheel in docker-wheels/), and without it they carry none, so building only those needs no wheel.
+ARCADE_PKGS="$HARNESS_PKGS"
 mkdir -p docker-wheels && rm -f docker-wheels/*.whl
 if [ -n "${ARCADEDB_WHEEL:-}" ]; then
+  [ -f "$ARCADEDB_WHEEL" ] || { echo "REFUSING: ARCADEDB_WHEEL=$ARCADEDB_WHEEL is not a file" >&2; exit 1; }
   cp "$ARCADEDB_WHEEL" docker-wheels/
-  ARCADE_PKGS="$HARNESS_PKGS"
   echo "using local wheel: $(basename "$ARCADEDB_WHEEL")"
+fi
+_want_arcadedb=1
+if [ $# -gt 0 ]; then _want_arcadedb=0; for _t in "$@"; do [ "$_t" = "arcadedb" ] && _want_arcadedb=1; done; fi
+if [ "$_want_arcadedb" = 1 ] && [ -z "${ARCADEDB_WHEEL:-}" ]; then
+  echo "REFUSING: the arcadedb image needs ARCADEDB_WHEEL=<path to the pinned arcadedb_embedded wheel>; there is no PyPI fallback." >&2
+  echo "          Name the targets (e.g. './build_images.sh duckdb client dense') to build the images that take no wheel." >&2
+  exit 1
 fi
 
 declare -A PKGS=(
@@ -68,8 +80,6 @@ _pin=""
 if [ -n "${ARCADEDB_WHEEL:-}" ]; then
   # arcadedb_embedded-26.8.1.dev20-py3-none-linux_x86_64.whl -> 26.8.1.dev20
   _pin=$(basename "$ARCADEDB_WHEEL" | cut -d- -f2)
-else
-  _pin=${ARCADE_PKGS#*arcadedb-embedded==}; _pin=${_pin%% *}
 fi
 case "$_pin" in
   *dev*|*rc[0-9]*|*a[0-9]*|*b[0-9]*|*SNAPSHOT*)

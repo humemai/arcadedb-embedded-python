@@ -57,7 +57,7 @@ def _build(tmp_path, *, wheel, pip_packages, installed, arg=PIN):
     if wheel:
         (wheels / "arcadedb_embedded-26.10.1-cp312-cp312-manylinux_2_34_x86_64.whl").write_bytes(b"x")
     bindir = tmp_path / "bin"
-    bindir.mkdir()
+    bindir.mkdir(parents=True)
     log = tmp_path / "pip.log"
     (bindir / "pip").write_text(f'#!/bin/sh\necho "$@" >> {log}\n')
     # -S: no site-packages, so a JPype installed in the interpreter running this test is never seen
@@ -112,6 +112,47 @@ def test_build_images_reads_the_default_from_the_dockerfile_and_passes_it_down()
                        capture_output=True, text=True)
     assert r.stdout.strip() == PIN
     assert subprocess.run(["bash", "-n", str(HERE / "build_images.sh")]).returncode == 0
+
+
+def _run_build_images(tmp_path, args, wheel=None):
+    """build_images.sh copied into a scratch folder, with a `docker` that only records its argv."""
+    import shutil
+    work = tmp_path / "w"
+    work.mkdir(parents=True)
+    for n in ("build_images.sh", "Dockerfile.bench"):
+        shutil.copy(HERE / n, work / n)
+    bindir = tmp_path / "bin"
+    bindir.mkdir(parents=True)
+    (bindir / "docker").write_text('#!/bin/sh\necho "$@" >> "' + str(tmp_path / "docker.log") + '"\n')
+    (bindir / "docker").chmod(0o755)
+    env = {"PATH": f"{bindir}:{os.environ['PATH']}", "HOME": str(tmp_path)}
+    if wheel is not None:
+        env["ARCADEDB_WHEEL"] = str(wheel)
+    r = subprocess.run(["bash", str(work / "build_images.sh")] + args, cwd=work, env=env, capture_output=True, text=True)
+    return r, work
+
+
+def test_build_images_has_no_pypi_fallback_for_the_arcadedb_image(tmp_path):
+    for args in (["arcadedb"], ["duckdb", "arcadedb"], []):          # [] is every target, arcadedb included
+        r, _ = _run_build_images(tmp_path / ("-".join(args) or "all"), args)
+        assert r.returncode == 1 and "REFUSING: the arcadedb image needs ARCADEDB_WHEEL" in r.stderr, args
+        assert "26.8.1" not in r.stdout + r.stderr
+
+
+def test_build_images_refuses_a_wheel_that_is_not_a_file(tmp_path):
+    r, _ = _run_build_images(tmp_path, ["duckdb"], wheel=tmp_path / "nope.whl")
+    assert r.returncode == 1 and "is not a file" in r.stderr
+
+
+def test_the_images_that_take_no_wheel_build_without_one_and_carry_none(tmp_path):
+    r, work = _run_build_images(tmp_path, ["duckdb", "client"])
+    assert r.returncode == 0, r.stderr
+    assert not list((work / "docker-wheels").glob("*.whl"))
+    wheel = tmp_path / "arcadedb_embedded-26.10.2-cp312-cp312-manylinux_2_34_x86_64.whl"
+    wheel.write_bytes(b"x")
+    r, work = _run_build_images(tmp_path / "with", ["arcadedb", "duckdb"], wheel=wheel)
+    assert r.returncode == 0, r.stderr
+    assert [w.name for w in (work / "docker-wheels").glob("*.whl")] == [wheel.name]
 
 
 def test_the_pair_check_reads_the_pin_from_the_dockerfile_and_checks_the_embedded_image():
@@ -171,16 +212,20 @@ def test_check_refuses_a_pin_that_is_a_range_and_a_dockerfile_with_two_defaults(
 # --------------------------------------------------------------------------- the stages
 @pytest.fixture(scope="module")
 def stages(tmp_path_factory):
+    """The ArcadeDB release pass's stages: the only ones that run an ArcadeDB arm, so the only ones that read JPype out of
+    dbbench:arcadedb (a comparator stage has no use for that image, make_2611_stages.has_arcadedb_arm)."""
     tmp = tmp_path_factory.mktemp("jpype-stages")
-    wheel = tmp / "arcadedb_embedded-26.10.1-cp312-cp312-manylinux_2_34_x86_64.whl"
-    wheel.write_bytes(b"not a real wheel, only its name and sha256 are read")
-    env = dict(os.environ, ARCADEDB_WHEEL=str(wheel), ARCADEDB_SERVER_IMAGE="arcadedb-c25:26.10.1",
-               ARCADEDB_ENGINE_COMMIT="d36b4ca3ae4c170abc73598e0dffa2bb58e06621")
+    wheel_name = "arcadedb_embedded-26.11.1-cp312-cp312-manylinux_2_34_x86_64.whl"
     out = tmp / "stages"
-    env.pop("BENCH_INSTRUMENT", None)
-    r = subprocess.run([sys.executable, str(HERE / "make_2611_stages.py"), "--second-list", "--out", str(out), "--after", "none"],
+    env = {k: v for k, v in os.environ.items() if k != "BENCH_INSTRUMENT"}
+    r = subprocess.run([sys.executable, str(HERE / "make_2611_stages.py"), "--arcadedb-release", "26.11.1",
+                        "--engine-commit", "1" * 40, "--image-digest", "sha256:" + "ab" * 32, "--wheel-name", wheel_name,
+                        "--wheel-sha256", "cd" * 32, "--wheel-url", "https://files.pythonhosted.org/packages/x/" + wheel_name,
+                        "--second-list", "--out", str(out), "--after", "none", "--id-prefix", "qT"],
                        cwd=HERE, env=env, capture_output=True, text=True)
     assert r.returncode == 0, r.stdout[-400:] + r.stderr[-400:]
+    for pair in out.glob("qT00.sh"):
+        pair.unlink()     # the pair install is not a runner stage
     return out
 
 
@@ -190,14 +235,26 @@ def _stage_ids(stages):
     return ids
 
 
-def test_every_runner_stage_reads_jpype_out_of_the_image_after_the_build(stages):
+def test_every_arcadedb_stage_reads_jpype_out_of_the_image_after_the_build(stages):
     for sid in _stage_ids(stages):
         text = (stages / f"{sid}.sh").read_text()
         assert text.count("import jpype; print(jpype.__version__)") == 1, sid
         assert f'[ "$IJ" = "{PIN}" ]' in text, sid
         # after the image build and the wheel check, before the pair check and the first cell
         assert text.index("./build_images.sh") < text.index('IJ=$(docker run') < text.index("./verify_pair_c25.sh"), sid
-        assert text.index('IJ=$(docker run') < text.index('trap \'echo "$ID ALL-DONE"'), sid
+        # the ALL-DONE trap is set before it, so a failed read hands on (CAMPAIGN: every ABORT hands on)
+        assert text.index('trap \'echo "$ID ALL-DONE"') < text.index('IJ=$(docker run'), sid
+
+
+def test_a_comparator_stage_does_not_read_jpype_out_of_dbbench_arcadedb(tmp_path):
+    wheel = tmp_path / "arcadedb_embedded-26.10.2-cp312-cp312-manylinux_2_34_x86_64.whl"
+    wheel.write_bytes(b"x")
+    out = tmp_path / "comparators"
+    out.mkdir()
+    pins = {"ARCADEDB_ENGINE_COMMIT": "d" * 40, "ARCADEDB_WHEEL": str(wheel), "ARCADEDB_SERVER_IMAGE": "arcadedb-c25:26.10.2"}
+    G.emit_all(str(out), G.number(G.subset_specs(["duckdb"], ["l2"], "paper"), "qS"), pins, None, 3)
+    text = (out / "qS01.sh").read_text()
+    assert "IJ=$(docker run" not in text and "--entrypoint python3 dbbench:arcadedb" not in text
 
 
 def _snippet(text, first, last):
@@ -240,7 +297,7 @@ def test_the_stages_carry_the_pin_the_generator_holds_not_a_literal_of_their_own
     out.mkdir()
     pins = {"ARCADEDB_ENGINE_COMMIT": "d36b4ca3ae4c170abc73598e0dffa2bb58e06621",
             "ARCADEDB_WHEEL": str(wheel), "ARCADEDB_SERVER_IMAGE": "arcadedb-c25:26.10.1"}
-    G.emit_all(str(out), G.number(G.subset_specs(["duckdb"], ["l2"], "paper"), "qS"), pins, None, 3)
+    G.emit_all(str(out), G.number(G.subset_specs(["arcadedb"], ["l2"], "paper"), "qS"), pins, None, 3)
     text = (out / "qS01.sh").read_text()
     assert '[ "$IJ" = "1.7.2" ]' in text
     assert PIN not in "".join(re.findall(r'\[ "\$IJ" = "[^"]+" \]', text))
