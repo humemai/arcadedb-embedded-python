@@ -31,7 +31,7 @@ def test_custom_jvm_args_merging():
     """Test merging critical flags when user provides custom JVM args."""
     with patch.dict(os.environ, {"ARCADEDB_JVM_ARGS": "-Xmx8g -Dfoo=bar"}, clear=True):
         args = _build_jvm_args(
-            heap_size="4g",
+            heap_size=None,  # the default: an -Xmx from the environment is kept (an explicit heap_size wins, see test_jvm.py)
             disable_xml_limits=True,
             jvm_args=None,
         )
@@ -79,7 +79,7 @@ def test_dedupe_heap_keeps_max():
         os.environ, {"ARCADEDB_JVM_ARGS": "-Xmx2g -Xmx4096m -Xmx1g"}, clear=True
     ):
         args = _build_jvm_args(
-            heap_size="4g",
+            heap_size=None,  # the default: an -Xmx from the environment is kept (an explicit heap_size wins, see test_jvm.py)
             disable_xml_limits=True,
             jvm_args=None,
         )
