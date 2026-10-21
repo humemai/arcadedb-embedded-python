@@ -25,8 +25,10 @@ PIN_OLD, PIN_NEW = "417314c18", "261100fix"
 KEEP = {"e2": {"e2"}, "e4": {"e2"}, "l1tpc": {"tpch1"}, "l2": {"sf1"}, "l3d": {"small"}, "l3s": {"tiny", "small", "medium"},
         "lifecycle": {"lc10k"}, "l4": {"ts100"}}
 MAX_REP = 3
+PQ_ARMS = {"arcadedb_dense_embedded": "arcadedb_dense_embedded_pq", "arcadedb_dense_server": "arcadedb_dense_server_pq",
+           "qdrant_dense": "qdrant_dense_pq", "milvus_dense": "milvus_dense_pq", "arangodb_dense": "arangodb_dense_pq"}
 FULL_REP_LANES = {"l3s"}   # the sparse freeze takes a pinned tier only at five repetitions, at every tier
-WITH_PQ = False            # the product-quantization arms need #419; set True once it is in
+WITH_PQ = True
 OUT = HERE / "results"
 
 
@@ -103,13 +105,23 @@ def _add_2611_fields(rows):
                 if k.endswith("_ms") and isinstance(v, (int, float)) and not isinstance(v, bool):
                     t[k] = round(v * 0.7, 4)
             twins.append(t)
-    # one product-quantization arm beside the fp32 arm it is derived from (dense lane, embedded ArcadeDB)
+    # the product-quantization arms (#419) beside the fp32 arm each is derived from: synthetic, there are no real PQ rows. The
+    # stamps are the ones l3d_dense writes (quantization PRODUCT for ArcadeDB, pq_subspaces, pq_clusters, pq_rerank, the
+    # read-back fields); the numbers are the fp32 arm's, slower queries and a lower recall, as PQ trades them.
     pq = []
     for r in out if WITH_PQ else ():
-        if r["lane"] == "l3d" and r["backend"] == "arcadedb_dense_embedded":
+        arm = PQ_ARMS.get(r["backend"]) if r["lane"] == "l3d" else None
+        if arm:
             p = dict(r)
-            p["backend"] = "arcadedb_dense_embedded_pq"
-            p["quantization"] = "pq"
+            p["backend"] = arm
+            p["quantization"] = "PRODUCT" if arm.startswith("arcadedb") else "fp32"
+            p.update(pq_subspaces=32, pq_clusters=256, pq_rerank="engine default" if arm.startswith("arcadedb") else "refine FP32",
+                     pq_rerank_option_accepted=True)
+            if arm.startswith("arcadedb"):
+                p["pq_index_bytes"] = 123456789
+            for k in ("recall_at_10", "matched_r095_recall_at_10"):
+                if isinstance(p.get(k), (int, float)):
+                    p[k] = round(p[k] - 0.02, 4)
             pq.append(p)
     return out + twins + pq
 

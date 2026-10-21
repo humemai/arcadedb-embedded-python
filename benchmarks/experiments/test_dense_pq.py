@@ -216,13 +216,15 @@ def test_pq_arms_are_a_separate_precision_family_with_a_name(export_web):
     assert export_web.DENSE_PRECISION["qdrant_dense"] == "fp32"
 
 
-def test_pq_rows_do_not_make_the_dense_lane_a_mixed_instrument(export_web):
-    saved = export_web._FROZEN_ROWS
-    try:
-        export_web._FROZEN_ROWS = [_row("qdrant_dense", "2026-10"), _row("qdrant_dense_pq", "2026-11")]
-        assert export_web._instrument_of("l3d") == "2026-10"
-        export_web._FROZEN_ROWS = [_row("qdrant_dense", "2026-10"), _row("qdrant_dense_int8", "2026-11")]
+def test_a_pq_row_without_the_2026_11_stamp_is_refused_by_the_publish_rule():
+    import publish_instrument
+
+    publish_instrument.refuse_other_instruments([_row("qdrant_dense_pq", "2026-11")], "x")
+    for stamp in ("2026-10", "", None):
         with pytest.raises(SystemExit):
-            export_web._instrument_of("l3d")
-    finally:
-        export_web._FROZEN_ROWS = saved
+            publish_instrument.refuse_other_instruments([_row("qdrant_dense_pq", stamp)], "x")
+
+
+def test_the_exporter_reads_the_deployment_of_a_pq_arm_without_BENCH_DENSE_PQ(export_web):
+    for arm, sibling in bench_common.DENSE_PQ_ARMS.items():
+        assert export_web.BACKENDS[arm] == export_web.BACKENDS[sibling]

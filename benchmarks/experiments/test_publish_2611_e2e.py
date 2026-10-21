@@ -122,6 +122,19 @@ def test_the_dense_table_headlines_latency_at_matched_recall(published):
     assert entry["beam_curve"]["kind"] == "ef" and len(entry["beam_curve"]["points"]) == 4
 
 
+def test_the_pq_arms_are_their_own_precision_row_beside_fp32(published):
+    t = _table(published["payload"], "l3d")
+    pq = [e for e in t["entries"] if e["backend_key"].endswith("_pq")]
+    assert {e["backend_key"] for e in pq} == {"arcadedb_dense_embedded_pq", "arcadedb_dense_server_pq", "qdrant_dense_pq",
+                                              "milvus_dense_pq", "arangodb_dense_pq"}
+    assert {e["precision"] for e in pq} == {"pq"}
+    # the PQ row is its own cell: its recall is the stamped PQ recall, not the fp32 arm's
+    fp32 = next(e for e in t["entries"] if e["backend_key"] == "arcadedb_dense_embedded")
+    emb = next(e for e in pq if e["backend_key"] == "arcadedb_dense_embedded_pq")
+    assert emb["metrics"]["recall@10"]["median"] < fp32["metrics"]["recall@10"]["median"]
+    assert emb["backend"] == fp32["backend"] == "ArcadeDB (embedded)" or emb["backend"].startswith("ArcadeDB (embedded")
+
+
 def test_the_served_arcadedb_twin_row_is_not_in_the_headline(published):
     # every served ArcadeDB cell has a lean twin (role "sensitivity", 30 percent faster); the headline cell is the median of
     # the official-client rows alone

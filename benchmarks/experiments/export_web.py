@@ -45,6 +45,13 @@ import publish_instrument as _PI  # noqa: E402
 RESULTS = _PI.results_dir()
 
 from runner import BACKENDS, MEM_BY_SCALE, HEAP_BY_SCALE  # noqa: E402  (path set above)
+import bench_common  # noqa: E402
+
+# THE PQ ARMS CAN HAVE ROWS EVEN WHEN THEY ARE NOT MEASURING. runner registers them only under BENCH_DENSE_PQ=1 (a stage
+# must not start a PQ cell by accident), but a freeze that holds their rows is read here without that variable, and their
+# deployment is their sibling's: look it up, never guess it from the name.
+for _pq_arm, _pq_sibling in bench_common.DENSE_PQ_ARMS.items():
+    BACKENDS.setdefault(_pq_arm, dict(BACKENDS[_pq_sibling]))
 
 
 # SIZE LABELS FROM THE LANES' OWN CONSTANTS, not typed. The time-series label
@@ -845,7 +852,7 @@ DENSE_PRECISION = {
     "falkordb_dense": "fp32",
     "ladybug_dense": "fp32",
     # The PQ row family, a separate family beside fp32 and int8 (QUANTIZATION.md). Rows exist only from the
-    # 2026-11 instrument with BENCH_DENSE_PQ=1; main() drops any PQ row that does not carry that instrument.
+    # 2026-11 instrument with BENCH_DENSE_PQ=1; the freeze refuses any row, a PQ row included, that does not carry that instrument.
     #   arcadedb_dense_{embedded,server}_pq  LSM_VECTOR quantization PRODUCT, pqSubspaces 32, pqClusters 256
     #   qdrant_dense_pq                      ProductQuantization x16, rescore with oversampling
     #   milvus_dense_pq                      HNSW_PQ m 32, nbits 8, refine FP32 (milvus_index_type)
@@ -7258,11 +7265,13 @@ def main() -> int:
             # single-pass rows stay in the CSV for l3d_params and the ablation;
             # they are never this table. "Never both" still holds: it is all
             # overlay or, with no overlay on disk, all CSV.
+            # The PQ arms (#419) have no multipass overlay: they are single-pass campaign rows with the beam sweep, a
+            # precision family of their own, so they stay beside the overlay's arms.
             _mp = _dense_overlay_entries("deep10m")
             if _mp:
                 _campaign_deep = {e["backend_key"]: e for e in entries if e["scale"] == "deep10m"}
                 _carry_beam(_mp, _campaign_deep)
-                entries = [e for e in entries if e["scale"] != "deep10m"]
+                entries = [e for e in entries if e["scale"] != "deep10m" or e["backend_key"] in bench_common.DENSE_PQ_ARMS]
                 entries.extend(_mp)
             # The 1M size reads its own multipass overlay the same way, so the
             # warm column exists at both sizes and both read one protocol.
@@ -7291,7 +7300,7 @@ def main() -> int:
                         if _col in _src and _col not in _e["metrics"]:
                             _e["metrics"][_col] = _src[_col]
                 _carry_beam(_mps, _campaign_small)
-                entries = [e for e in entries if e["scale"] != "small"]
+                entries = [e for e in entries if e["scale"] != "small" or e["backend_key"] in bench_common.DENSE_PQ_ARMS]
                 entries.extend(_mps)
         if entries:
             # A scale where the comparators have rows and ArcadeDB does not
