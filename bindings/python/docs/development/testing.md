@@ -93,6 +93,8 @@ asserts, so the list below stops at the file.
 | `test_graph_api.py` | Vertex, edge, and document wrappers and traversal helpers |
 | `test_graph_algorithms_sql.py` | `shortestPath`, `dijkstra`, and `astar` |
 | `test_geo_predicate_sql.py` | `geo.within` and `geo.intersects` (a boundary point returns a boolean; which one is not asserted) |
+| `test_guide_graph_analytics.py` | Every example in the Graph Analytics guide: Graph Analytical View create, state, update modes, rebuild and drop, and the `algo.*` calls, each statement checked to appear in the page |
+| `test_guide_timeseries.py` | Every example in the Time Series guide: type declaration, insert forms, `append_samples`, `ts.*` functions, buckets, continuous aggregates, each statement checked to appear in the page |
 | `test_timeseries_sql.py` | `CREATE TIMESERIES TYPE`, range queries, bucketing, tag filters, and `COMPACT` |
 | `test_materialized_view_sql.py` | Materialized view create, refresh, alter, and drop |
 | `test_restore_sql.py` | `RESTORE DOCUMENT` and `RESTORE VERTEX`: the record count agrees with a full scan, and the record comes back intact |

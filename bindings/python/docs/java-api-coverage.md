@@ -43,7 +43,8 @@ your Python process, or for HA/TLS, use the official ArcadeDB distribution.
 | Graph API | ✅ Supported | SQL/OpenCypher graph workflows plus `Document`/`Vertex`/`Edge` wrapper compatibility |
 | Vector Search | ✅ Supported | JVector indexes + NumPy conversion helpers |
 | Sparse Vectors | ✅ Supported | `LSM_SPARSE_VECTOR` indexes and `vector.sparseNeighbors(...)` through SQL |
-| Time Series | ✅ Supported | `TIMESERIES` types through SQL, `async_executor().append_samples(...)` for bulk writes, and the server's `/api/v1/ts/{db}/write` endpoint |
+| Graph Analytics | ✅ Supported | Graph Analytical Views (`CREATE`/`ALTER`/`REBUILD`/`DROP GRAPH ANALYTICAL VIEW`) and the `algo.*` procedures, through SQL and openCypher only; see the [Graph Analytics guide](guide/graph-analytics.md) |
+| Time Series | ✅ Supported | `TIMESERIES` types through SQL, `async_executor().append_samples(...)` for bulk writes, and the server's `/api/v1/ts/{db}/write` endpoint; see the [Time Series guide](guide/timeseries.md) |
 | Async Execution | ✅ Supported | `AsyncExecutor` plus record-level and SQL/Cypher async flows, `scan_type()` |
 | Data Import | ✅ Supported | SQL import workflows plus a narrow `db.import_documents(...)` wrapper for document files |
 | Data Export | ✅ Supported | JSONL + CSV for query results |
