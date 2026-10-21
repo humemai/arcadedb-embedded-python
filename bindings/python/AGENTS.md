@@ -29,6 +29,8 @@ A change to behaviour updates every place that describes it. Grep these for the 
 | API (database, schema, transactions, queries, results, records, async, exceptions, type conversion, JVM) | `bindings/python/src/arcadedb_embedded/`, `bindings/python/tests/` | `bindings/python/docs/api/`, `bindings/python/docs/guide/core/database.md`, `bindings/python/docs/guide/core/queries.md`, `bindings/python/docs/guide/core/transactions.md` |
 | Vectors | same | `bindings/python/docs/guide/vectors.md`, `bindings/python/docs/api/vector.md` |
 | Graphs and bulk loading | same | `bindings/python/docs/guide/graphs.md`, `bindings/python/docs/api/graph_batch.md` |
+| Graph analytics (Graph Analytical Views, `algo.*`) | `bindings/python/tests/test_guide_graph_analytics.py` | `bindings/python/docs/guide/graph-analytics.md` |
+| Time series (`TIMESERIES` types, `ts.*`, `append_samples`) | `bindings/python/tests/test_guide_timeseries.py`, `bindings/python/tests/test_timeseries_sql.py` | `bindings/python/docs/guide/timeseries.md` |
 | Import and export | same | `bindings/python/docs/guide/import.md`, `bindings/python/docs/api/importer.md`, `bindings/python/docs/api/exporter.md` |
 | Server mode, operations | same | `bindings/python/docs/guide/server.md`, `bindings/python/docs/api/server.md`, `bindings/python/docs/guide/operations.md` |
 | Which Java API is wrapped | same | `bindings/python/docs/java-api-coverage.md`, `bindings/python/docs/api-access-methods.md` |

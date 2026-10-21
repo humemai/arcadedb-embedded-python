@@ -52,6 +52,9 @@ vertex only:
 If a type is often queried from its target, declare it two-way (the default): a pattern
 from the target of a one-way type pays a scan of the whole edge type.
 
+For whole-graph questions (PageRank, components, shortest paths) and the Graph
+Analytical View that speeds them up, see the [Graph Analytics guide](graph-analytics.md).
+
 ## Overview
 
 ArcadeDB's graph model consists of:

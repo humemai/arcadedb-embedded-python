@@ -190,6 +190,8 @@ nav:
   - Vector Search: guide/vectors.md
   - Data Import: guide/import.md
   - Graph Operations: guide/graphs.md
+  - Graph Analytics: guide/graph-analytics.md
+  - Time Series: guide/timeseries.md
   - Server Mode: guide/server.md
   - Performance: guide/performance.md
   - Known Engine Issues: guide/known-issues.md
