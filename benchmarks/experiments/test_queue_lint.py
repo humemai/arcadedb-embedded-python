@@ -5,7 +5,7 @@ RUN BY THE GATE, not by hand: queue_lint.py calls main() before it lints a
 single script, on the same reasoning as test_result_digest.py -- a test that
 only runs when someone remembers is a comment.
 
-Why this file exists. Twice on 2026-09-19 the lint reported a queue it could
+Why this file exists. Twice the lint reported a queue it could
 not actually see:
 
   * a stage waiting on the previous stage's ALL-DONE MARKER read as waiting on
@@ -57,7 +57,7 @@ HEAD = "#!/bin/bash\nset -u\nS=$HOME/STATUS.txt\n"
 
 
 def test_marker_wait():
-    """The form October uses, including an id with a digit."""
+    """The current form, including an id with a digit."""
     g = _graph({
         "qOA": HEAD,
         "qOA2": HEAD + 'while ! grep -qx "qOA ALL-DONE" "$S"; do sleep 300; done\n',
@@ -69,7 +69,7 @@ def test_marker_wait():
 
 
 def test_pgrep_wait():
-    """The September form: still a wait EDGE (so a cycle through it is seen)."""
+    """The older form: still a wait EDGE (so a cycle through it is seen)."""
     g = _graph({
         "qEA": HEAD,
         "qEB": HEAD + 'while pgrep -x -f "/bin/bash /home/tk/qEA.sh" > /dev/null; do sleep 300; done\n',
@@ -87,7 +87,7 @@ def test_pgrep_wait_is_flagged():
 
 
 def test_marker_wait_must_be_exact():
-    """`grep -q` finds the marker inside a prose note too; only the whole-line form waits (2026-10-18, qA00)."""
+    """`grep -q` finds the marker inside a prose note too; only the whole-line form waits (qA00)."""
     loose = HEAD + 'while ! grep -q "qEA ALL-DONE" "$S"; do sleep 300; done\n'
     exact = HEAD + 'while ! grep -qx "qEA ALL-DONE" "$S"; do sleep 300; done\n'
     flag = lambda b: [p for p in queue_lint.check_paths_and_python("qEB", b) if "without -x" in p[1]]

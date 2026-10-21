@@ -4,7 +4,7 @@
 RUN BY THE GATE, not by hand. equivalence_check.py calls main() before it
 compares a single row, because a digest function nobody tests is a checksum of
 whatever it happened to do that day, and because the last test file in this
-directory (test_adapters.py) was deleted on 2026-09-14 having never once been
+directory (test_adapters.py) was deleted having never once been
 run (DECISIONS #85a). A test that only runs when someone remembers is a
 comment.
 
@@ -88,7 +88,7 @@ def test_value_rules():
     # company: ArangoDB's AQL SUM over an integer column returns an INTEGER
     # where every SQL engine, MongoDB's $sum and SurrealQL's math::sum return a
     # double, and at TPC-H SF1 that split the pricing summary seven engines to
-    # one on an answer nobody got wrong (2026-09-14, sum_qty 37,734,107).
+    # one on an answer nobody got wrong (sum_qty 37,734,107).
     print("values: above a million the int and float spellings DIVERGE")
     ne("37734107 != 37734107.0 undeclared",
        d([(37734107,)], columns=("sum_qty",)), d([(37734107.0,)], columns=("sum_qty",)))
@@ -154,7 +154,7 @@ def test_float_tolerance():
     check("the two sums really do differ in the raw bits", a != b, f"{a!r} {b!r}")
     eq("6 significant digits reconciles them",
        d([(a,)], columns=("rev",)), d([(b,)], columns=("rev",)))
-    # A SIX-DIGIT TIE MUST NOT SPLIT ON ITS LAST BIT (2026-09-28). 41.15625 is
+    # A SIX-DIGIT TIE MUST NOT SPLIT ON ITS LAST BIT. 41.15625 is
     # an exact double (a mean of 32 ages) with a 5 in the seventh digit; one
     # engine sums and divides and lands on it, another keeps a running mean and
     # lands an ulp away, and "%.6g" then rounds the two to 41.1562 and 41.1563.

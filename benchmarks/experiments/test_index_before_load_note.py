@@ -85,4 +85,5 @@ def test_a_withdrawn_or_blank_cell_and_a_table_without_the_column_say_nothing(EW
 def test_the_two_global_declarations_are_on_the_page(EW):
     text = " ".join(EW._R("GLOBAL", k) for k in ("index_order", "jvm_heap"))
     assert "advise creating indexes after a bulk load" in text and "initial heap pinned to the maximum heap" in text
-    assert not any(ch.isdigit() for ch in text) and "—" not in text
+    assert "ArcadeDB embedded sets only the maximum heap" in text
+    assert not any(ch.isdigit() for ch in text.replace("Neo4j", "")) and "—" not in text

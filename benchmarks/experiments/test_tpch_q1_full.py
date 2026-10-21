@@ -65,8 +65,6 @@ def test_the_lane_stamps_the_q1_it_ran_on_every_analytics_row():
     main = src[src.index("def main():"):]
     assert main.index('if args.workload == "olap":') < main.index("out[TPCH_Q1_FIELD] = TPCH_Q1") < main.index("b.olap(which)")
     assert T.TPCH_Q1_FIELD == "tpch_q1" and T.TPCH_Q1 == "full"
-    ew = (HERE / "export_web.py").read_text()
-    assert re.search(r'^_TPCH_Q1_FIELD = "tpch_q1"$', ew, re.M)
 
 
 # ---- the answer, through the real adapters ---------------------------------------------------------------------

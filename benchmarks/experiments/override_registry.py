@@ -13,11 +13,11 @@ by editing one of them:
   * the ADAPTER (or the runner, for the served ArcadeDB cap) stamps a row
     field, read back from the engine where the engine can be asked, so the
     artifact records what the engine ran with and not the string we passed;
-  * `export_web` appends the generated sentence to every October table that
+  * `export_web` appends the generated sentence to every table that
     shows one of the override's backends, derived from the rows behind the
     table (`notes_for_table`);
   * `page_check` fails a table that shows such a backend and prints no sentence
-    saying it (`sentence_findings`), and `fairness_check` fails a 2026-10 row of
+    saying it (`sentence_findings`), and `fairness_check` fails a published row of
     such a backend that lacks the stamp or carries another value
     (`stamp_findings`).
 
@@ -37,9 +37,11 @@ from __future__ import annotations
 import re
 from typing import Callable, NamedTuple, Optional
 
-# The rows of an October campaign carry this instrument stamp; a September row
-# predates every field below and is not judged.
-INSTRUMENT = "2026-10"
+from publish_instrument import PUBLISH_INSTRUMENT
+
+# The rows judged here are the ones the publish side renders; a row of any other
+# instrument predates the fields below and is not judged.
+INSTRUMENT = PUBLISH_INSTRUMENT
 
 
 class Carrier(NamedTuple):
@@ -207,16 +209,6 @@ def _body_limit_is_the_runner_limit(row, v):
     return None if src else "no `server_http_body_max_source`, so a reader cannot tell a read-back from a request"
 
 
-# The pins measured BEFORE the limit existed (CAMPAIGN section 7 row 75): the October pin is a September commit, and a server built from it
-# has no `arcadedb.server.httpBodyContentMaxSize`, so the override is not in force for its rows and no sentence about it may stand under
-# a table built from them.
-PRE_BODY_LIMIT_PINS = ("417314c18",)
-
-
-def _body_limit_in_force(row):
-    return not str(row.get("engine_commit") or "").startswith(PRE_BODY_LIMIT_PINS)
-
-
 def _hierarchy_is_on(row, v):
     bad = _is_true(row, v)
     if bad:
@@ -233,16 +225,6 @@ def _count_at_ingest_end(row, v):
 # The compaction interval l4_tsbs declares on ArcadeDB's native time-series type (`COMPACTION_INTERVAL 1 HOURS`,
 # CAMPAIGN section 7 row 54), in the milliseconds the engine reports back (`compactionBucketIntervalMs`).
 TS_COMPACTION_MS = 3_600_000
-
-
-# The pins measured BEFORE the compaction interval was declared (CAMPAIGN section 7 row 54): their l4 rows ran
-# without it and carry no stamp, so the override is not in force for them, no sentence about it may stand under a
-# table built from them, and the fairness gate does not ask them for the read-back.
-PRE_COMPACTION_PINS = ("417314c18",)
-
-
-def _compaction_in_force(row):
-    return not str(row.get("engine_commit") or "").startswith(PRE_COMPACTION_PINS)
 
 
 def _compaction_is_one_hour(row, v):
@@ -663,8 +645,7 @@ OVERRIDES = (
         carriers=tuple(Carrier(lane, be, "server_http_body_max_bytes") for lane, be in BODY_LIMIT_CARRIERS),
         check=_body_limit_is_the_runner_limit, sentence=_arcadedb_body_limit,
         says=(r"ArcadeDB server", r"request body", r"embedded"),
-        companions=("server_http_body_max_source", "server_http_body_max_default"),
-        applies=_body_limit_in_force),
+        companions=("server_http_body_max_source", "server_http_body_max_default")),
     Override(
         key="arcadedb_query_ram",
         setting=f"-D{QUERY_RAM_PROPERTY}",
@@ -716,8 +697,7 @@ OVERRIDES = (
                   Carrier("l4", "arcadedb_ts_native_server", "ts_compaction_interval_ms")),
         check=_compaction_is_one_hour, sentence=_arcadedb_ts_compaction,
         says=(r"ArcadeDB", r"time-series", r"compaction", r"hour"),
-        companions=("ts_compaction_interval", "ts_compaction_interval_readback_error"),
-        applies=_compaction_in_force),
+        companions=("ts_compaction_interval", "ts_compaction_interval_readback_error")),
 )
 
 BY_KEY = {o.key: o for o in OVERRIDES}
@@ -804,7 +784,7 @@ def sentence_findings(tables, lane_of, rows):
 # consumer 3: fairness_check
 
 def stamp_findings(rows):
-    """Findings for 2026-10 rows: a row of a carrier arm that lacks the field
+    """Findings for published rows: a row of a carrier arm that lacks the field
     its override stamps, or carries a value the sentence does not claim.
     Returns (findings, how many rows were judged); a finding is a dict with
     `kind` (NOT STAMPED or WRONG), `key`, `field`, `where`, and `text`."""

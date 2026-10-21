@@ -16,7 +16,7 @@ read those two files, not this page.
 
 Every published number is measured on one host, a mobile-class Intel Core i9-12900HK with
 64 GiB of memory and an NVMe disk. The full environment table is in the
-[setup section](https://humem.ai/research/arcadedb#setup) of the project page. Development
+[setup section](https://humem.ai/research/dbbench) of the DBBench page. Development
 machines compile, run probes, and smoke new adapters, and nothing they produce reaches the
 page.
 

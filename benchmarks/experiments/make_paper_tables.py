@@ -5,7 +5,7 @@ results/l4_tsbs.jsonl.
 Canonical-row rule (see .notes/bench/DECISIONS.md #44): latest row per
 (lane, scale, workload, backend, rep), rc==0, paper scales only.
 Cells are median [min-max] over N=5 reps. Raw rows are never edited;
-rerun this script after the October freeze re-measure.
+rerun this script after a re-measure.
 
 Outputs: ../latex/tables/t{2,3,4,5}_*.tex.
 """
@@ -87,10 +87,8 @@ def _commit_matches(row_commit):
     return rc[:9] == _PINNED_COMMIT[:9]
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-RESULTS = os.path.join(HERE, "results")
-# _PAPER_DIR, GENERATED and OUT are resolved further down, under FROZEN_NAME:
-# which directory this run writes into depends on BENCH_SKELETON and
-# BENCH_INSTRUMENT, and both are read below. See GENERATED_NAME.
+import publish_instrument as _PI
+RESULTS = str(_PI.results_dir())
 
 # Every published cell is N=5. A row outside 1..5 is a probe, not a repetition;
 # see the rep filter in load_canonical for the 34 rows that made this explicit.
@@ -110,144 +108,37 @@ MAX_REP = 5
 # Adding a lane here is therefore step 1 of 3. Step 2 is export_web.SCALE_LABELS,
 # which SystemExits on a missing tier by design. Step 3 is fairness_check
 # .LANE_SCRIPT, so F6b can tell a lane script from a bespoke driver.
-# e4 REGISTERED 2026-09-22, the third lane to be caught by the paragraph
-# above. qOI ran it to completion at the October pin, the rows were
-# stamped correctly, and all five were discarded here: the E4 TABLE is
-# built from the artifacts in results/e4decomp_<pin>/, so nothing
-# downstream complained, and the first landing that carried only this
-# lane froze zero rows and failed. The table still reads the artifacts;
-# registering the lane is what lets a GATE see the rows.
-PAPER_SCALES = {"l1": ["medium"], "l1tpc": ["tpch1"], "l2": ["sf1", "sf10"], "e4": ["e2"],
+# e4 is registered for the same reason: the E4 TABLE is built from the artifacts
+# in results/e4decomp_<pin>/, so nothing downstream complains when its rows are
+# discarded here. The table still reads the artifacts; registering the lane is
+# what lets a GATE see the rows.
+PAPER_SCALES = {"l1": ["medium"], "l1tpc": ["tpch1", "tpch10"], "l2": ["sf1", "sf10", "sf1full"], "e4": ["e2"],
                 "l3s": ["tiny", "small", "medium"], "l3d": ["small", "deep10m"],
-                "e2": ["e2"],
-                "l4": ["ts100"],
+                "e2": ["e2", "e2_500k"],
+                "l4": ["ts100", "ts1000"],
                 "lifecycle": ["lc10k", "lc100k", "lc1m", "lc10m"],
+                # The big sizes (tpch10, sf1full, e2_500k, ts1000) are row groups beside the
+                # base tier, not replacements (DECISIONS #108).
                 # The server restart (DECISIONS #139 item 2): each model at its
                 # own lane's tiers, the scale naming the model (l6_restart.py).
                 "restart": ["tpch1", "tpch10", "sf1", "sf10", "small", "deep10m", "ts100", "ts1000"]}
-# OCTOBER'S LARGE SIZES, WHICH #108 MAKES ROW GROUPS RATHER THAN REPLACEMENTS.
-# Dense and sparse always carried two (l3d small+deep10m, l3s three), so the
-# multi-size rendering has worked all along; these four lanes were simply
-# never added, because the list below them still implemented #103b's rule
-# that a raise REPLACES a tier when every engine has landed. #108 retired
-# that rule on 2026-09-19 and nothing here followed.
-#
-# The cost of the gap is measured, not hypothetical: on 2026-09-21 the
-# October campaign had 78 rows that reached no table, no figure and no gate
-# -- l4/ts1000 (56, already paid for by qOC), e2/e2_500k (21 and climbing
-# while qOD spends about 16 h on it), l2/sf1full -- with l1tpc/tpch10 due to
-# join them when qOE runs. That is the same silent discard the comment above
-# describes for LANES, happening to SIZES.
-#
-# SEPTEMBER MUST NOT GAIN THEM. Its store holds tpch10 and sf1full rows from
-# the qEA/qEB extension, measured at September's pin under #103b's rule that
-# they replace a tier only on a full switch that never happened. Adding them
-# unconditionally would change the live page without a decision, which is
-# exactly the trap F72 documented.
-OCTOBER_LARGE_SCALES = {"l1tpc": "tpch10", "l2": "sf1full",
-                        "e2": "e2_500k", "l4": "ts1000"}
-# THE SEPTEMBER EXTENSION'S RAISED SIZES (DECISIONS #103b) ARE NOT LISTED YET,
-# ON PURPOSE. A raised size REPLACES a tier: documents analytics moves to
-# tpch10, time series to ts1000, cross-model to e2_500k, graph analytics to
-# sf1full (the interactive graph table keeps sf1 and sf10). None of the page
-# tables after l2olap filters on scale, so listing a new tier here while its
-# old one stays would print two corpora on one table the moment the first
-# row landed. The switch is one edit per table, made when every engine on
-# that table has its rows at the new size: replace the old tier with the new
-# one here (for l2, ADD sf1full and move export_web's l2olap only_scales to
-# {"sf1full"}; sf1 and sf10 stay for the interactive table), then freeze.
-# The dropped rows stay in the campaign file and the release asset.
-
-# THE SKELETON'S TIERS (DECISIONS #86). BENCH_SKELETON=1 swaps the campaign's
-# published tiers for the laptop's micro ones, so the October page's SHAPE can
-# be published weeks before mini measures anything. Nothing else about the
-# selection changes: the serial-cpuset rule, the release rule, the rep range,
-# the corpus fingerprint, and the canonical dedupe all still apply. A skeleton
-# freeze is written to the same runs_paper.csv and must never be committed;
-# every cell it produces is stamped skeleton by the exporter and refused by a
-# live publish.
-# l2 carries sf1 as well: the graph analytics skeleton is the capped LDBC SF1
-# slice the LSQB smoke ran on the laptop (DECISIONS #104a); the interactive
-# skeleton stays the micro generator.
-SKELETON_SCALES = {"l1tpc": ["micro"], "l2": ["micro", "sf1"], "l3s": ["micro"],
-                   "l3d": ["micro"], "e2": ["e2"], "l4": ["ts100"],
-                   "lifecycle": ["lc10k"], "restart": ["micro", "ts100"]}
-SKELETON = os.environ.get("BENCH_SKELETON") == "1"
 # Set by land_stage --only-lanes; empty means every lane this freeze knows.
 _ONLY_LANES = {l.strip() for l in os.environ.get("BENCH_ONLY_LANES", "").split(",") if l.strip()}
-if SKELETON:
-    PAPER_SCALES = dict(SKELETON_SCALES)
 
-# ONE CAMPAIGN PER FREEZE (DECISIONS #84). BENCH_INSTRUMENT=2026-10 freezes
-# October's rows to October's own file; unset freezes everything that is NOT
-# October -- rows before 2026-10 carry no instrument field and are September's
-# -- and keeps writing runs_paper.csv.
-#
-# BOTH DIRECTIONS MATTER, and the default one is the surprising half. The
-# refusal at the end of load_canonical fires when two instruments share a
-# (lane, scale), and October's first stage is l2 at sf1 and sf10, two tiers
-# September already publishes. Without the default filter, September's publish
-# starts refusing the moment the first October row is merged into runs.jsonl,
-# which is before anyone has asked October to publish anything. Selecting the
-# campaign here lets one append log feed two freezes, each complete and
-# neither able to see the other's rows.
-#
-# Same shape as the skeleton switch above, for the same reason: the freeze
-# names the file it wrote, so a payload can be traced back to the rows it came
-# from, and October's freeze can never be committed as September's.
-INSTRUMENT = os.environ.get("BENCH_INSTRUMENT") or ""
-if INSTRUMENT and INSTRUMENT != "2026-10":
-    raise SystemExit(f"BENCH_INSTRUMENT={INSTRUMENT!r} is not a campaign this "
-                     "freeze knows. Set it to 2026-10, or leave it unset for "
-                     "September.")
-OCTOBER = INSTRUMENT == "2026-10"
-# Applied here and not at the literal above, because OCTOBER is not known
-# until the instrument is read. A skeleton keeps its own tiers either way.
-if OCTOBER and not SKELETON:
-    for _lane, _scale in OCTOBER_LARGE_SCALES.items():
-        if _scale not in PAPER_SCALES.get(_lane, []):
-            PAPER_SCALES.setdefault(_lane, []).append(_scale)
-# A SKELETON KEEPS ITS OWN NAMES (DECISIONS #86) whatever else is exported: it
-# is a laptop placeholder run, not a campaign, so it is tested first.
-FROZEN_NAME = ("runs_skeleton_laptop.csv" if SKELETON
-               else "runs_paper_oct.csv" if OCTOBER
-               else "runs_paper.csv")
-
-# THE GENERATED ARTIFACTS ARE SEPARATED THE SAME WAY, and for the same reason
-# the freeze and the payload are. Until 2026-09-19 they were not: FROZEN_NAME
-# above picked October's CSV while the .tex tables, GATE_STATUS.txt and
-# withheld_recall.json were written unconditionally into results/generated,
-# which is SEPTEMBER'S PUBLISHED SET and what page_check pins the live page
-# against. An October freeze over a log holding October rows rewrote
-# GATE_STATUS.txt, t2_tabular.tex, t3_graph.tex and withheld_recall.json in
-# place; the gate that would have noticed reads the same four files, so it
-# would have been comparing October's tables against October's tables and
-# passing. BENCH_SKELETON=1 had the same hole, narrower only because a
-# skeleton returns before the .tex tables are rendered: it still overwrote
-# GATE_STATUS.txt and withheld_recall.json.
-#
-# A campaign's artifacts are not re-derivable once overwritten -- the rows
-# they came from keep moving -- so the directory is selected here, once, and
-# every consumer resolves the same three names: claims_check (which is what
-# page_check reads cells through), export_web's withheld-cell notes,
-# make_paper_figures, provenance_check, refresh_web_page and land_stage's
-# commit list. Skeleton is tested first, as everywhere else: it is a laptop
-# placeholder and keeps its own names whatever campaign is selected.
-#
-# Only results/generated is tracked. generated_oct is allowlisted in
-# .gitignore (an unnamed path under results/ is ignored, and `git add` on it
-# commits nothing silently); generated_skeleton is deliberately NOT, because
-# a laptop placeholder run has nothing to put under version control.
-GENERATED_NAME = ("generated_skeleton" if SKELETON
-                  else "generated_oct" if OCTOBER
-                  else "generated")
-GENERATED = os.path.join(RESULTS, GENERATED_NAME)
+# ONE INSTRUMENT PER FREEZE (DECISIONS #196). The freeze publishes rows stamped
+# publish_instrument.PUBLISH_INSTRUMENT. BENCH_INSTRUMENT is no longer a selector:
+# unset and 2026-11 both mean 2026-11, anything else is refused.
+if (os.environ.get("BENCH_INSTRUMENT") or _PI.PUBLISH_INSTRUMENT) != _PI.PUBLISH_INSTRUMENT:
+    raise SystemExit(f"REFUSING: BENCH_INSTRUMENT={os.environ['BENCH_INSTRUMENT']!r}. This tooling publishes "
+                     f"{_PI.PUBLISH_INSTRUMENT} rows only; unset it or set it to {_PI.PUBLISH_INSTRUMENT}.")
+FROZEN_NAME = "runs_paper.csv"
+# The generated tables, GATE_STATUS.txt and withheld_recall.json: tracked, and what
+# claims_check, export_web, make_paper_figures, provenance_check and land_stage read.
+GENERATED = os.path.join(RESULTS, "generated")
 # The paper source is deliberately not in this repository. Point
 # BENCH_PAPER_DIR at the directory holding paper.tex and its generated
 # tables/ and figures/ subdirectories.
-# 2026-09-11: the paper directory is gone (the ICDE draft was dropped; the
-# order is project page, then preprint, then a conference paper). The
-# generated tables live in the repo under results/generated, which is what
+# The generated tables live in the repo under results/generated, which is what
 # page_check pins against. BENCH_PAPER_DIR still overrides for a future paper.
 _PAPER_DIR = os.environ.get("BENCH_PAPER_DIR", GENERATED)
 os.makedirs(_PAPER_DIR, exist_ok=True)
@@ -276,8 +167,8 @@ NAMES = {
     # DENSE ROWS STATE WHAT THEY STORE, all of them. T5 labelled only our two
     # arms "(emb, fp32)" and "(emb, int8)", so quantization read as an ArcadeDB
     # peculiarity and every unlabelled row read as full precision. LanceDB is
-    # not: lancedb_dense builds IVF_HNSW_SQ, int8 scalar-quantized (and since
-    # 2026-10-02 lancedb_dense_fp32 builds its unquantized IVF_HNSW_FLAT).
+    # not: lancedb_dense builds IVF_HNSW_SQ, int8 scalar-quantized (and
+    # lancedb_dense_fp32 builds its unquantized IVF_HNSW_FLAT).
     # That makes its 0.932 recall the same kind of number as our int8 arm's
     # 0.943, where Chroma's 0.934 at fp32 is a different kind. Read from the
     # adapters in l3d_dense.py, never from the rows' `quantization` field, which
@@ -291,7 +182,7 @@ NAMES = {
     "qdrant_dense_int8": "Qdrant (int8)", "milvus_dense_int8": "Milvus (int8)",
     "arcadedb_dense_server_int8": "ArcadeDB (srv, int8)", "sqlite_vec_dense_int8": "sqlite-vec (int8)",
     "chroma_dense": "Chroma (fp32)", "lancedb_dense": "LanceDB (int8)",
-    # DECISIONS #135 (2026-10-02): LanceDB's fp32 arm (IVF_HNSW_FLAT) and three
+    # DECISIONS #135: LanceDB's fp32 arm (IVF_HNSW_FLAT) and three
     # more int8 counterparts
     "lancedb_dense_fp32": "LanceDB (fp32)", "mongodb_dense_int8": "MongoDB (int8)",
     "memgraph_dense_int8": "Memgraph (int8)", "arangodb_dense_int8": "ArangoDB (int8)",
@@ -313,11 +204,9 @@ NAMES = {
 
 RECALL_FLOOR = 0.5   # below this an ANN row is a broken index, not a slow one
 WITHHELD_RECALL = []
-# Rows dropped for an unsettled disk reading (October), and the September rows
-# that would have been dropped had the rule been enforced when they published.
+# Rows dropped for an unsettled disk reading.
 UNSETTLED_DISK = []
-SEPT_UNSETTLED = []
-_SEPT_UNSETTLED_SAID = []   # load_canonical runs several times per invocation
+_OTHERS_SAID = []
 
 
 def _write_withheld_recall():
@@ -325,8 +214,8 @@ def _write_withheld_recall():
 
     GENERATED, not _PAPER_DIR: this file is read by export_web out of the
     repository, so BENCH_PAPER_DIR pointing at a paper source must not move
-    it. It IS per-campaign, because the cells it declares withheld are the
-    ones this freeze selected (see GENERATED_NAME).
+    it. It is written beside the freeze, because the cells it declares withheld
+    are the ones this freeze selected.
     """
     out = os.path.join(GENERATED, "withheld_recall.json")
     os.makedirs(os.path.dirname(out), exist_ok=True)
@@ -347,24 +236,13 @@ def _assert_lanes_registered():
     and `l4` were registered in runner.LANES, run to completion, stamped
     correctly, and every row discarded here before a table, figure or gate saw
     them -- 117 lifecycle rows worth about 18 h of bench time. `e4` made it
-    three on 2026-09-22, and its omission was hiding a second defect: with the
-    rows dropped upstream, F10 never saw that the lane records no durability
-    at all. A comment cannot stop this happening a fourth time; a check can.
+    three, and its omission was hiding a second defect: with the rows dropped
+    upstream, F10 never saw that the lane records no durability at all. A comment cannot stop this happening a fourth time; a check can.
 
     Refusing here rather than warning, because the failure mode is silence:
     an unregistered lane produces an empty freeze and a table built from
-    nothing, which is exactly what the first October landing did.
+    nothing.
     """
-    # THE SKELETON COVERS FEWER LANES ON PURPOSE, so this check does not apply
-    # to it. SKELETON_SCALES replaces PAPER_SCALES wholesale, and the lanes it
-    # leaves out are ones the LAPTOP cannot produce: `e4` is assembled from a
-    # bench-host overlay and `l1` is retired (#67, #72). The skeleton already
-    # declares what it is missing, by table, in `skeleton_absent_tables`, and
-    # that declaration is what the preview route reads -- so a second, cruder
-    # refusal here bought nothing and cost the whole preview publish. Found by
-    # this check blocking the first `--preview --skeleton` run after it landed.
-    if SKELETON:
-        return
     try:
         import runner
     except Exception:  # noqa: BLE001 - the freeze must still run without it
@@ -379,31 +257,38 @@ def _assert_lanes_registered():
             f"export_web.SCALE_LABELS, then fairness_check.LANE_SCRIPT.")
 
 
-def load_canonical(apply_corpus=True):
+def load_canonical(apply_corpus=True, include_twins=False):
     _assert_lanes_registered()
     del WITHHELD_RECALL[:]   # per call, or the sidecar counts every earlier call's rows again
     del UNSETTLED_DISK[:]
-    del SEPT_UNSETTLED[:]
     CORPUS_EXCLUDED.clear()
     # Dedupe on PAYLOAD fields, never run_id: pre-2026-07-21 run_ids were not
     # scale-qualified, so different scales collided under one id (the 100k
     # sparse tier was invisible under run_id-keyed dedupe).
-    # WHICH LOG. runs.jsonl is the campaign's append log and the default. A
-    # skeleton freeze (DECISIONS #86) reads its own file instead, so the
-    # campaign's rows and the laptop's placeholders can never be pooled by a
-    # freeze that happened to run in the wrong directory.
+    # WHICH LOG. runs.jsonl is the append log and the default.
     rows = [json.loads(l) for l in open(os.path.join(
                 RESULTS, os.environ.get("BENCH_RUNS_JSONL", "runs.jsonl")))
             if l.strip()]
+    # The append log may hold older rows for a while; they are not frozen. A row of
+    # another instrument at a (lane, scale) this freeze would publish is not left
+    # out silently, it is refused: the freeze would otherwise publish a cell that
+    # lacks the rows the page is supposed to be made of.
+    others = [r for r in rows if _PI.instrument_of(r) != _PI.PUBLISH_INSTRUMENT]
+    if others:
+        _PI.refuse_other_instruments(
+            [r for r in others if r.get("rc") == 0 and r.get("scale") in PAPER_SCALES.get(r.get("lane"), [])
+             and (not _ONLY_LANES or r.get("lane") in _ONLY_LANES)],
+            "runs.jsonl at the lanes and scales this freeze publishes")
+        if not _OTHERS_SAID:   # load_canonical runs several times per invocation
+            _OTHERS_SAID.append(1)
+            print(f"  {len(others)} rows of other instruments left out of the freeze")
     best = {}
     for r in rows:
-        # THE ROW'S CAMPAIGN, FIRST, BEFORE ANY OTHER TEST. See INSTRUMENT
-        # above. A row from the other campaign is not a worse row to be
-        # excluded and counted; it belongs to a freeze that is not this one, so
-        # it must not reach the corpus counters, the withheld-recall sidecar,
-        # or the dedupe, where a later October row would otherwise outrank a
-        # September one on ts_utc and shadow a published cell.
-        if (str(r.get("instrument") or "") == "2026-10") != OCTOBER:
+        # THE ROW'S INSTRUMENT, FIRST, BEFORE ANY OTHER TEST. A row of another
+        # instrument (counted above) is not a worse row to be excluded; it must
+        # not reach the corpus counters, the withheld-recall sidecar, or the
+        # dedupe, where a later row would otherwise outrank a 2026-11 one on ts_utc.
+        if _PI.instrument_of(r) != _PI.PUBLISH_INSTRUMENT:
             continue
         if r.get("rc") != 0:
             continue
@@ -415,7 +300,7 @@ def load_canonical(apply_corpus=True):
         # gated on e4's rows, which sit in the store from an earlier landing
         # that failed, carry no durability stamp, and cannot publish until qOK
         # re-runs them at the end of the chain. Five rows of a lane nobody was
-        # landing blocked every October publish for a week.
+        # landing blocked every publish for a week.
         #
         # Scoping the freeze instead of deleting those rows: they are a record
         # of what ran, qOK will supersede them on ts_utc, and the rule this file
@@ -485,7 +370,7 @@ def load_canonical(apply_corpus=True):
         if r["lane"] == "l3s" and r.get("recall_at_10") is None:
             continue
         # A SEARCH THAT RETURNS ALMOST NOTHING RIGHT IS NOT A MEASUREMENT OF
-        # SEARCH. 2026-09-17: ArangoDB's IVF at 9.99M vectors answered with
+        # SEARCH. ArangoDB's IVF at 9.99M vectors answered with
         # recall@10 of 0.0000-0.0001 on every repetition, with every one of
         # its 12,643 lists probed (BUGS F55). Publishing its latency beside
         # engines answering at 0.95 would compare a working index against a
@@ -514,25 +399,13 @@ def load_canonical(apply_corpus=True):
         # "settled=False blocks publication"). `container_disk()` samples until
         # two readings agree within a tolerance and returns settled=False with
         # both readings rather than a bare number, precisely so this can be
-        # refused -- and until 2026-09-19 NOTHING read the field. It is written
-        # by runner.py and appears in no gate, no exporter and no table builder,
-        # so three Milvus sparse rows at the 1M tier published disk numbers
-        # taken while the store was still compacting, and the median the page
-        # prints (4.6157 GiB) is itself one of them (BUGS.md F72).
-        #
-        # OCTOBER ONLY, deliberately. Dropping these from September's freeze
-        # SEPTEMBER NOW DROPS THEM TOO (user decision, 2026-09-21). The rule
-        # was October-only because applying it would change a published page
-        # without a decision; the decision has been given. No cell is lost by
-        # it: the three affected cells keep 20, 12 and 33 settled rows, so the
-        # disk medians move slightly and nothing goes blank. SEPT_UNSETTLED
-        # still records which rows went, so the change is auditable.
+        # refused. The field is written by runner.py; three Milvus sparse rows
+        # once published disk numbers taken while the store was still
+        # compacting (BUGS.md F72), so the freeze enforces the rule.
         if str(r.get("server_disk_settled")) == "False":
             UNSETTLED_DISK.append({"lane": r["lane"], "backend": r["backend"],
                                    "scale": r["scale"], "rep": r.get("rep"),
                                    "disk_data_mb": r.get("disk_data_mb")})
-            if not OCTOBER:
-                SEPT_UNSETTLED.append(f'{r["lane"]}/{r["scale"]}/{r["backend"]} rep {r.get("rep")}')
             # BLANK THE DISK READING, KEEP THE ROW. PAGE-SPEC 4a rule 3 sits
             # in a paragraph entirely about `disk GiB`: what failed to
             # converge is the disk sampling, so the disk number is not
@@ -631,7 +504,7 @@ def load_canonical(apply_corpus=True):
             # backend_version (l4: the lane stamps engine_version from the
             # wheel import, which the client image does not have) or
             # lib_version (the dense driver). Any of them naming a version is
-            # the witness; 2026-09-08 the L4 document-server rows were dropped
+            # the witness; the L4 document-server rows were once dropped
             # here with "unknown (PackageNotFoundError)" in engine_version and
             # "server:26.9.1-SNAPSHOT (build 8d6af9475...)" in backend_version.
             # A local pinned image (arcadedb-c25:<commit>) with engine_commit
@@ -661,43 +534,21 @@ def load_canonical(apply_corpus=True):
         # sweep row and a GAV-ablation row could once have shadowed a published
         # cell. Rows before #90 carry no class and default to relaxed, which is
         # what they were.
+        # THE CLIENT ROLE IS PART OF THE KEY. A served ArcadeDB cell runs twice: on the headline client and, as a twin job, on
+        # the lean HTTP client (`arcadedb_http_client_role` = sensitivity). Same lane, scale, workload, backend and rep, so
+        # without the role the later of the two would replace the other on ts_utc.
         k = (r["lane"], r["scale"], r.get("n_docs"), r.get("workload"),
              r["backend"], r.get("gav") is not False, r["rep"],
-             r.get("durability_class") or "relaxed")
+             r.get("durability_class") or "relaxed", r.get("arcadedb_http_client_role") == "sensitivity")
         if k not in best or r["ts_utc"] > best[k]["ts_utc"]:
             best[k] = r
     _write_withheld_recall()
-    if SEPT_UNSETTLED and not _SEPT_UNSETTLED_SAID:
-        _SEPT_UNSETTLED_SAID.append(1)
-        print(f"  NOTE: {len(set(SEPT_UNSETTLED))} September cell(s) carry an unsettled "
-              f"disk reading and are published anyway (PAGE-SPEC 4a rule 3 was "
-              f"unenforced until 2026-09-19; BUGS F72): "
-              + ", ".join(sorted(set(SEPT_UNSETTLED))))
     if UNSETTLED_DISK:
         print(f"  blanked the disk reading of {len(UNSETTLED_DISK)} row(s): it had not settled; "
               f"their other measurements stand")
-    out = list(best.values())
-    # ONE INSTRUMENT PER TABLE (DECISIONS #84). A row names the instrument it
-    # was measured under (bench_common.INSTRUMENT; rows before 2026-10 carry
-    # none and are the September instrument). Two instruments in one
-    # (lane, scale) would seat a five-query OLAP row beside a two-query one,
-    # or a relaxed-durability write beside an fsync one, under one header.
-    # Refused here, at the freeze, rather than left for a reader to notice.
-    #
-    # KEPT AS AN ASSERTION, not as the selector it used to be. The campaign
-    # filter at the top of the loop admits one instrument by construction, so
-    # this can no longer fire on a mixed log -- which is the whole point of the
-    # filter. What it still catches is a row stamped with the wrong instrument:
-    # a queue script that ran an October lane against a September wheel, or a
-    # value neither branch of the filter expected. That is worth a refusal.
-    mixed = {}
-    for r in out:
-        mixed.setdefault((r["lane"], r["scale"]), set()).add(str(r.get("instrument") or "2026-09"))
-    bad = {k: sorted(v) for k, v in mixed.items() if len(v) > 1}
-    if bad:
-        raise SystemExit("REFUSING: rows from two instruments share a table: "
-                         + "; ".join(f"{k[0]}/{k[1]} {v}" for k, v in sorted(bad.items()))
-                         + ". Freeze from one campaign, or exclude the other instrument's rows.")
+    # The paper tables, the gates and the claims read the headline rows. The twin rows go to the freeze (include_twins) so
+    # the exporter can show them beside the headline, labelled, and are never pooled into a headline median.
+    out = [r for r in best.values() if include_twins or r.get("arcadedb_http_client_role") != "sensitivity"]
     return out
 
 
@@ -916,8 +767,7 @@ def _pinned_sparse_rows(arm="arcadedb_sparse_embedded"):
     already drops everything else) at BENCH_ENGINE_COMMIT, all three tiers at
     five reps and one engine_version, else None. Same all-or-nothing rule as
     dense_mp_dir(): a partial re-run must not supersede a complete overlay
-    tier by tier. Until qCI (2026-09-06) every sparse row at a pin had been on
-    the synthetic corpus (BUGS F6), which is why T4 still read sparse_2681.
+    tier by tier.
     """
     pin = os.environ.get("BENCH_ENGINE_COMMIT", "").strip().lower()
     if not pin:
@@ -935,9 +785,9 @@ def _pinned_sparse_rows(arm="arcadedb_sparse_embedded"):
     # case this function exists for: a partial re-run must not supersede a
     # complete set tier by tier. ABSENT (no row at any tier) is the sparse
     # arm not having run at this pin yet, which is the normal state for most
-    # of a campaign -- l3s is stage 8 of 10, and October lands table by table
-    # from stage 1. Refusing both alike blocked every October landing until
-    # the sparse stage finished. Empty dict means absent; None still means
+    # of a campaign -- l3s is stage 8 of 10, and the page lands table by table
+    # from stage 1. Refusing both alike blocked every landing until the sparse
+    # stage finished. Empty dict means absent; None still means
     # partial or mixed, and still refuses.
     if not out:
         return {}
@@ -953,53 +803,12 @@ def _pinned_sparse_rows(arm="arcadedb_sparse_embedded"):
 
 
 def _sparse_2681_rows(arm="arcadedb_sparse_embedded"):
-    """The pinned sparse rows, or refuse. The name is historical (T4 read the
-    sparse_2681 overlay until 2026-08); since 2026-09-08 there is no overlay
-    fallback: incomplete or mixed pinned rows stop the generation."""
+    """The pinned sparse rows, or refuse. There is no overlay fallback:
+    incomplete or mixed pinned rows stop the generation."""
     pinned = _pinned_sparse_rows(arm)
     if pinned is None:
         raise SystemExit(f"pinned sparse rows for {arm} incomplete or mixed (see stderr); no fallback")
     return pinned   # {} when the arm has not run at this pin (absent, not partial)
-
-
-def _sparse_2681_rows_overlay(arm="arcadedb_sparse_embedded"):
-    """T4's ArcadeDB rows, from ONE released engine.
-
-    Replaces a six-deep cascade of dev overlays (verify5411=dev0, sparse_full=
-    dev20, dev21_sparse, dev21_sparse_full, dev22_sparse, t4dev23) whose whole
-    purpose was to prefer the newest dev line per tier and "fall back rather
-    than mix". Every tier is now measured on the release at N=5, so there is
-    nothing to prefer and nothing to fall back to. The cascade was also the
-    mechanism by which T4 kept quoting dev-era numbers after the release was
-    re-measured, which is the same defect the dense block had.
-
-    Refuses to return anything unless all three tiers are complete and on one
-    version, because a partial return here would silently reinstate exactly
-    the mixed-version row this replaced.
-    """
-    import glob
-    out = {}
-    for fp in glob.glob(os.path.join(RESULTS, "sparse_2681", "*.json")):
-        try:
-            r = json.load(open(fp))
-        except Exception:
-            continue
-        if r.get("backend") != arm:
-            continue
-        out.setdefault(r["scale"], []).append(r)
-    tiers = ("tiny", "small", "medium")
-    missing = [t for t in tiers if len(out.get(t, [])) < 5]
-    if missing:
-        raise SystemExit(
-            "REFUSING to write t4: sparse_2681 has fewer than 5 reps at %s. "
-            "The dev-overlay cascade this replaced is gone on purpose; "
-            "falling back to it would reinstate mixed-version rows."
-            % ", ".join(missing))
-    versions = {str(r.get("engine_version")) for t in tiers for r in out[t]}
-    if versions != {"26.8.1"}:
-        raise SystemExit("REFUSING to write t4: sparse_2681 is not one "
-                         "released version: %s" % sorted(versions))
-    return out
 
 
 def sparse_table(rows):
@@ -1061,27 +870,24 @@ MP_ARMS = ("fp32", "int8", "arcsrv", "arcsrv_int8", "milvus", "milvus_int8",
            "qdrant", "qdrant_int8", "chroma", "duckvss", "lancedb",
            "sqlitevec", "sqlitevec_int8")
 MP_BUILDS = 5
-# The 1M twin (qDB, 2026-09-10): the same protocol without the int8 comparator
+# The 1M twin: the same protocol without the int8 comparator
 # arms, which exist only at 10M.
 MP_ARMS_SMALL = ("fp32", "int8", "arcsrv", "arcsrv_int8", "milvus",
                  "qdrant", "chroma", "duckvss", "lancedb", "sqlitevec")
-# Arms that JOIN as their overlay files land (2026-09-12): the September
-# comparators. An optional arm with all MP_BUILDS files is published; with
-# none it is absent; with some it REFUSES, so a publish mid-run cannot show
-# an arm built from one rep. The required lists above are the August set.
-# MongoDB joined the dense lane in October (MongoDB Search, dbbench:mongo-search);
-# the runner writes mp_mongo_b*.json and export_web has its row, but without it
-# here the arm was filtered out of the table silently (docs audit, 2026-09-26).
+# Arms that JOIN as their overlay files land. An optional arm with all MP_BUILDS
+# files is published; with none it is absent; with some it REFUSES, so a publish
+# mid-run cannot show an arm built from one rep. The required lists above are
+# the arms every run has. MongoDB (MongoDB Search, dbbench:mongo-search) is
+# optional: the runner writes mp_mongo_b*.json and export_web has its row, but
+# without it here the arm was filtered out of the table silently.
 MP_ARMS_OPTIONAL = ("neo4jvec", "pgvector", "surreal", "surrealsrv", "arango", "mongo")
-# THE INT8 COMPARATORS AT 1M (2026-10-06). MP_ARMS_SMALL above says they "exist
-# only at 10M", which was true of September's re-run and stopped being true in
-# October: the dense stage runs every registered arm at both sizes, so the
-# overlay at 1M holds their files and the campaign holds their 1M rows. The
+# THE INT8 COMPARATORS AT 1M. MP_ARMS_SMALL above leaves them out, but the
+# dense stage runs every registered arm at both sizes, so the overlay at 1M
+# holds their files and the campaign holds their 1M rows. The
 # exporter only reads the arms this module names, so the 1M table dropped all
 # three, and the maintenance columns (which exist only at 1M) read as blank
 # for them in page_check's A1. Optional rather than required, like the other
-# arms that joined later: September's 1M overlay has none of them, and a
-# required arm would make that directory refuse. A separate tuple, not an
+# arms that joined later: an overlay without them must not refuse. A separate tuple, not an
 # addition to MP_ARMS_OPTIONAL, because make_paper_figures reads that one for
 # the figure's arm list and the figures were not asked to change.
 MP_ARMS_SMALL_OPTIONAL = ("milvus_int8", "qdrant_int8", "sqlitevec_int8")
@@ -1116,22 +922,21 @@ def mp_arms_present(small=False):
 
 
 def dense_mp_dir():
-    """results/dense_mp5_<pin>: complete, or absent, or refuse. PINNED ONLY since
-    2026-09-08: the fallback to dense_mp5_2681 was a way to publish an older
-    engine's overlay quietly when the pinned one was incomplete (it did, on
-    2026-09-06, until page_check caught the 8.87 vs 8.75 disagreement). One
+    """results/dense_mp5_<pin>: complete, or absent, or refuse. PINNED ONLY: a
+    fallback to an older overlay would publish an older engine's numbers
+    quietly when the pinned one was incomplete. One
     resolver for the table, the figures, the exporter and the checks."""
     pin = os.environ.get("BENCH_ENGINE_COMMIT", "").strip()
     if not pin:
         raise SystemExit("BENCH_ENGINE_COMMIT is unset: the dense overlay is pinned only")
     cand = os.path.join(RESULTS, f"dense_mp5_{pin}")
     # ABSENT IS NOT PARTIAL, and conflating them blocked the campaign's own
-    # publish plan. A PARTIAL directory is the 2026-09-06 defect this function
+    # publish plan. A PARTIAL directory is the defect this function
     # exists to stop: an incomplete overlay quietly superseding a complete one.
     # An ABSENT directory is the dense arm not having run yet, which at a
     # pin's first stages is the normal state -- l3d is stage 9 of 10, and
-    # October lands table by table from stage 1. Refusing both alike meant no
-    # October table could land until the LAST stage finished.
+    # the page lands table by table from stage 1. Refusing both alike meant no
+    # table could land until the LAST stage finished.
     #
     # This restores a behaviour the file already assumed: _arms_for_scale
     # guards `if not os.path.isdir(cand): return base` on the value this
@@ -1325,14 +1130,10 @@ def dense_ts_table(rows):
         lines.append(" & ".join([
             label, fmt(build, "build"), fmt(cold50, "cold"), fmt(warm, "warm"),
             fmt(cold99, "cold99"), fmt(recall, "recall", digits=3)]) + r" \\")
-    # CANONICAL ROWS AT THE PIN (2026-09-08). This read results/l4_tsbs.jsonl,
-    # the 2026-08-08 file at 26.8.1 with legacy backend names, and the native
-    # row from results/ts_2681 (below), so T5's time-series block stayed on the
-    # old engine while the page moved; provenance flagged T5 as mixing three
-    # versions. The l4 lane now carries all ArcadeDB arms at the pin
+    # CANONICAL ROWS AT THE PIN. The l4 lane carries all ArcadeDB arms at the pin
     # (arcadedb_ts_doc, arcadedb_ts_native, and their served twins) beside the
     # comparators, so the block reads the same rows the page does.
-    # ONE TIER, AND THE CAPTION SAYS WHICH. October runs l4 at ts100 and
+    # ONE TIER, AND THE CAPTION SAYS WHICH. l4 runs at ts100 and
     # ts1000, and this block filtered on backend alone, so every figure in it
     # was a median across both corpora under a caption naming only the
     # smaller: ArcadeDB's last point printed 2.39 [2.1--4.1], where the ts100
@@ -1410,7 +1211,7 @@ def dense_ts_table(rows):
             # file (a rehearsal's, time series only) stayed on disk as if it
             # were this landing's table. page_check then compared the page's
             # DEEP-10M cells against it and failed 24 of them as ABSENT: the
-            # dense stage's first October landing (2026-10-06). The mirror
+            # dense stage's first landing. The mirror
             # image of the omission above, which keeps the time-series half
             # when the dense arm has not run.
             if dense:
@@ -1418,22 +1219,11 @@ def dense_ts_table(rows):
                 lines += [r"\bottomrule", r"\end{tabular}"]
                 write("t5_dense_ts.tex", "\n".join(lines) + "\n")
             return
-        raise SystemExit("no arcadedb_ts_native rows at the pin; no fallback (ts_2681 retired 2026-09-08)")
+        raise SystemExit("no arcadedb_ts_native rows at the pin; no fallback")
     # The lane's native arm records the unbounded last-point under q_last_ms
     # (its q_last() is the unbounded form since 2026-08-27); the 26.8.1 probe
     # used q_last_unbounded_ms. Take whichever the rows carry.
     last_key = "q_last_unbounded_ms" if any(r.get("q_last_unbounded_ms") is not None for r in native) else "q_last_ms"
-    # ts_2681 REPLACED ts59, which was the last published cell measured on a
-    # pre-release wheel (26.8.1.dev23). A version sweep found it; this row is
-    # the re-measure. It also records cpuset/heap/mem_cap/producer/role/host,
-    # which ts59 did not, so the cell is now traceable as well as correctly
-    # versioned.
-    #
-    # The engine barely moved across that gap, which is the useful part: ingest
-    # 1.92M -> 1.86M pts/s, last point 0.690 -> 0.72 ms, 1h bucket 4.31 -> 4.41,
-    # and the 12h aggregation IMPROVED 29.86 -> 24.98 ms. Nothing here changes
-    # a conclusion, so the re-measure buys provenance rather than a new result,
-    # which is exactly what a version freeze is supposed to buy.
     _v = {str(r.get("engine_version") or "?") for r in native}
     _dev = sorted(v for v in _v if ".dev" in v)
     if _dev:
@@ -1538,45 +1328,7 @@ def freeze_paper_rows(rows):
         for k in r:
             if k not in cols:
                 cols.append(k)
-    # A SKELETON FREEZE HAS ITS OWN FILE (DECISIONS #86). runs_paper.csv is
-    # the campaign's tracked freeze and the live page publishes from it; a
-    # laptop placeholder run must not be able to overwrite it, not even for
-    # the minutes a publish takes.
-    #
-    # AND THE SAME PROTECTION IN THE OTHER DIRECTION (BUGS F93). Having its
-    # own file did not stop a skeleton freeze being FILLED with campaign
-    # rows: `refresh_web_page --skeleton` validates its input and then step 1
-    # re-freezes from whatever canonical rows the laptop holds, which are now
-    # October's. It wrote 198 paper-tier rows with no bench host over 164
-    # sweep-tier laptop rows, twice on 2026-09-21, and the failure is silent
-    # on the run that causes it: the NEXT run fails the input guard and reads
-    # as "the skeleton was never valid" rather than "the last run ate it".
-    # A skeleton freeze holds skeleton rows or it is not written.
     path = os.path.join(RESULTS, FROZEN_NAME)
-    if SKELETON:
-        # A SKELETON FREEZE IS AN INPUT, NOT A DERIVATION (BUGS F93). The
-        # earlier guard here refused to OVERWRITE it with campaign rows, which
-        # stopped the damage and left `--skeleton` unable to publish at all --
-        # a wall, not a fix. The reason it cannot be re-derived is simply that
-        # its rows are not on this host to derive from: the freeze holds 164
-        # laptop sweep rows and the laptop's runs.jsonl holds none of them
-        # (its only sweep rows are 166 undated ones from before bench_host
-        # existed; runs_oct_smoke_laptop.jsonl has 88 of the 164). The
-        # placeholder sweep wrote its rows, they were frozen, the freeze was
-        # committed, and THAT tracked file is the artifact the preview
-        # publishes from -- which is exactly how _assert_skeleton_rows in
-        # refresh_web_page already treats it, by validating it as input.
-        #
-        # So this step reads it and leaves it alone. Re-deriving it is not a
-        # thing that can succeed here, and a step that cannot succeed should
-        # not run: every attempt so far has either destroyed the file or been
-        # refused. To REPLACE the skeleton, run the laptop sweep again and
-        # freeze that, which writes this file deliberately rather than as the
-        # side effect of a publish.
-        print(f"skeleton: {FROZEN_NAME} is the placeholder run's own artifact and is "
-              f"read, not rewritten (BUGS F93); {len(rows)} canonical rows on this host "
-              f"are not its source")
-        return
     with open(path, "w", newline="") as f:
         w = _csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
         w.writeheader()
@@ -1594,8 +1346,8 @@ def main(freeze=True):
     diffs; never writes the real tables") and it redirects OUT to a temp dir
     to keep that promise -- but freeze_paper_rows writes to RESULTS, which is
     not redirected, so running the read-only gate overwrote runs_paper.csv:
-    the only committed record of the PREVIOUS campaign's canonical selection,
-    381 rows replaced by 405. That file cannot be regenerated back, because
+    the only committed record of the PREVIOUS canonical selection, 381 rows
+    replaced by 405. That file cannot be regenerated back, because
     load_canonical() always dedupes to the latest ts_utc.
 
     Worse than the loss: after such a run the repo holds a CSV frozen from one
@@ -1611,18 +1363,7 @@ def main(freeze=True):
     rows = load_canonical()
     print(f"{len(rows)} canonical rows")
     if freeze:
-        freeze_paper_rows(rows)
-    # THE .tex TABLES ARE THE CAMPAIGN'S, NOT THE SKELETON'S (DECISIONS #86).
-    # T4 and T5 read pinned bench-host artifacts and refuse rather than fall
-    # back, correctly; T2 and T3 read lanes and tiers a laptop skeleton does
-    # not run, so they would render rows with N=0 and every caption's N would
-    # be wrong. The skeleton page reads the frozen CSV directly and none of
-    # these files, so the freeze above is the whole job here.
-    if SKELETON:
-        print("skeleton: the paper tables read campaign tiers and pinned "
-              "artifacts; not generated. The frozen rows above are the "
-              "skeleton page's only input.")
-        return 0
+        freeze_paper_rows(load_canonical(include_twins=True))
     tabular_table(rows)
     graph_table(rows)
     sparse_table(rows)

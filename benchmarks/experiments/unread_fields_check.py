@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Which recorded fields does nothing read?
 
-The harness records far more than anything reads, and twice on 2026-09-19 that
+The harness records far more than anything reads, and twice that
 gap was a rule the page depends on:
 
   * BUGS F71 -- `host_throttled_ms` and the temperature counters are written
@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import csv
 import os
+import sys
 
 # Everything that turns a row into a published number, a gate verdict, or a
 # figure. A field read by none of these is read by nothing that ships.
@@ -48,8 +49,10 @@ TELEMETRY_PREFIXES = ("client_", "server_peak", "server_end", "server_io",
 
 def main() -> int:
     here = os.path.dirname(os.path.abspath(__file__))
+    sys.path.insert(0, here)
+    import publish_instrument
     ap = argparse.ArgumentParser()
-    ap.add_argument("--rows", default=os.path.join(here, "results", "runs_paper.csv"))
+    ap.add_argument("--rows", default=os.path.join(publish_instrument.results_dir(), "runs_paper.csv"))
     ap.add_argument("--all", action="store_true",
                     help="include the telemetry families, which are unread on purpose")
     a = ap.parse_args()

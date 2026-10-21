@@ -202,7 +202,7 @@ GOOD = {
 
 def _row(lane="l1tpc", backend="arcadedb_embedded", workload="oltp", stamp="@good", **kw):
     r = {"lane": lane, "backend": backend, "workload": workload, "scale": "micro", "rep": 1,
-         "instrument": "2026-10", "index_kinds": GOOD[lane] if stamp == "@good" else stamp}
+         "instrument": FC.publish_instrument.PUBLISH_INSTRUMENT, "index_kinds": GOOD[lane] if stamp == "@good" else stamp}
     r.update(kw)
     return r
 
@@ -257,8 +257,7 @@ def test_an_unstamped_row_fails_only_once_the_gate_is_flipped(row, what, strict,
 
 @pytest.mark.parametrize("row,what", UNSTAMPED_ROWS)
 def test_an_unstamped_row_only_warns_in_report_only_mode(row, what, capsys, monkeypatch):
-    """REPORT-ONLY MODE (the default until the re-pin commit flipped it). October's rows predate the stamp
-    and must not block landing an October stage: an unstamped row is printed as a warning and the return
+    """REPORT-ONLY MODE (the switch is off): an unstamped row must not block a landing. It is printed as a warning and the return
     value (which main() adds to the exit status) is 0."""
     monkeypatch.setattr(FC, "INDEX_KINDS_GATE_FAILS", False)
     assert FC.check_index_kinds([row]) == 0
@@ -267,7 +266,7 @@ def test_an_unstamped_row_only_warns_in_report_only_mode(row, what, capsys, monk
 
 
 def test_in_report_only_mode_only_the_wrong_stamped_row_counts(capsys, monkeypatch):
-    """October-shaped rows (no stamp) beside one wrong stamped row: in report-only mode the unstamped ones
+    """Unstamped rows beside one wrong stamped row: in report-only mode the unstamped ones
     warn and the wrong one fails."""
     monkeypatch.setattr(FC, "INDEX_KINDS_GATE_FAILS", False)
     rows = [_row(stamp=None), _row(backend="arcadedb_server", stamp=None), WRONG_ROWS[0][0]]
@@ -286,7 +285,7 @@ def test_the_gate_has_exactly_one_switch():
 
 def test_the_flip_changes_the_exit_status_of_the_whole_gate(monkeypatch):
     """main() adds check_index_kinds' return value to its failure count, so the constant is what moves
-    the exit status for the UNSTAMPED case: an October-shaped set of rows (no stamp anywhere) passes in the
+    the exit status for the UNSTAMPED case: a set of rows with no stamp anywhere passes in the
     default mode and fails after the flip. (A wrong stamped kind never waited for the flip.)"""
     october = [_row(stamp=None), _row(backend="arcadedb_server", stamp=None)]
     assert "bad += check_index_kinds(rows)" in (HERE / "fairness_check.py").read_text()
@@ -303,10 +302,10 @@ def test_gate_does_not_owe_the_message_half_to_a_cell_that_never_loaded_it(stric
 
 def test_gate_leaves_other_engines_other_lanes_errors_and_other_instruments_alone(strict):
     assert FC.check_index_kinds([_row(backend="sqlite", stamp=None)]) == 0
-    other_lane = {"lane": "l3d", "backend": "arcadedb_dense_embedded", "instrument": "2026-10", "workload": "search"}
+    other_lane = {"lane": "l3d", "backend": "arcadedb_dense_embedded", "instrument": FC.publish_instrument.PUBLISH_INSTRUMENT, "workload": "search"}
     assert FC.check_index_kinds([other_lane]) == 0
     assert FC.check_index_kinds([dict(_row(stamp=None), error="boom")]) == 0
-    assert FC.check_index_kinds([dict(_row(stamp=None), instrument="2026-09")]) == 0
+    assert FC.check_index_kinds([dict(_row(stamp=None), instrument="legacy")]) == 0
 
 
 # --------------------------------------------------------------------------

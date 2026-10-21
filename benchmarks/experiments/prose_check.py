@@ -32,7 +32,7 @@ recomputing: the check must not be able to invent an answer.
 
     python3 page_prose_check.py                 # check, exit 1 on an unpinned result
     python3 page_prose_check.py --list          # every number found, with its status
-    BENCH_PAGE_PROSE=/path/to/arcadedb.ts python3 page_prose_check.py
+    BENCH_PAGE_PROSE=/path/to/lanes.ts python3 page_prose_check.py
 """
 import argparse
 import os
@@ -54,7 +54,7 @@ import sys
 # facts, and only one of them is good news.
 TARGETS = [
     {"name": "page",  "env": "BENCH_PAGE_PROSE", "kind": "ts",  "gates": True,
-     "default": "~/repos/humemai/humem.ai/src/lib/projects/items/arcadedb.ts"},
+     "default": "~/repos/humemai/humem.ai/src/lib/dbbench/lanes.ts"},
     {"name": "arxiv", "env": "BENCH_ARXIV_TEX",  "kind": "tex", "gates": False,
      "default": "~/repos/humemai/arcadedb-paper/paper.tex"},
 ]
@@ -182,10 +182,10 @@ def near_duplicate_conditions(payload_path, ratio=0.80):
     name. Merging them would destroy information. So this prints the pairs and
     a person reads them.
 
-    It earns its place twice over. The user objected on 2026-09-21 to
+    It earns its place twice over. The user objected to
     loop-shaped prose, forty-seven sentences under one table differing in two
     tokens each, which is exactly what a similarity pass finds. And run once
-    by hand on 2026-09-22 it surfaced something worse than duplication: the
+    by hand it surfaced something worse than duplication: the
     FalkorDB and SurrealDB zero-disk sentences came back at 0.96, and reading
     the pair side by side showed FalkorDB's explained its own disk cell with
     SURREALDB's write-ahead log -- a false claim that had been live for a day

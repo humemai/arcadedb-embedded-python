@@ -18,7 +18,7 @@ import fairness_check as F  # noqa: E402
 
 def _row(backend, klass, scale="tpch10"):
     d = bench_common.DURABILITY_ARCADEDB if klass == "relaxed" else bench_common.DURABILITY_ARCADEDB_STRICT
-    return {"instrument": "2026-10", "lane": "l1tpc", "scale": scale, "workload": "oltp", "backend": backend,
+    return {"instrument": "2026-11", "lane": "l1tpc", "scale": scale, "workload": "oltp", "backend": backend,
             "durability": d, "durability_class": klass}
 
 

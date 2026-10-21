@@ -8,12 +8,13 @@ pins, and the gate status at publish time, and attaches it to a GitHub release
 so a table can be checked against its own data without a machine, a corpus, or
 a container.
 
-    python publish_results_asset.py --tag bench-2026-09-15 [--publish]
+    python publish_results_asset.py --tag bench-2026-11-15 [--publish]
 
 Without --publish it writes the bundle and prints what it would upload, which
 is the same dry-run-then-apply shape land_stage.py uses.
 """
 import argparse
+import csv
 import hashlib
 import json
 import os
@@ -23,18 +24,16 @@ import tarfile
 import time
 from pathlib import Path
 
+from publish_instrument import PUBLISH_INSTRUMENT, refuse_other_instruments, results_dir
+
 HERE = Path(__file__).resolve().parent
-RESULTS = HERE / "results"
+RESULTS = results_dir()
 REPO = HERE.parents[1]
 
-# SEPTEMBER ONLY, and deliberately so: this bundles what the LIVE page serves,
-# so it names runs_paper.csv, web_benchmarks.json and results/generated
-# literally and reads no BENCH_INSTRUMENT. It is the one place under results/
-# that is not campaign-switched (make_paper_tables.GENERATED_NAME), because a
-# release asset for a campaign that has not been promoted would describe a
-# page nobody can open. Its own two outputs under generated/ -- the manifest
-# and the tarball -- are gitignored. When October is promoted, the live names
-# become October's and this script follows them there, not before.
+# This bundles the one set the lane pages are built from: results/runs_paper.csv,
+# results/web_benchmarks.json and the gate status beside the generated tables.
+# Its own two outputs under generated/ -- the manifest and the tarball -- are
+# gitignored.
 
 
 def _sha256(p: Path) -> str:
@@ -61,6 +60,13 @@ def main() -> int:
             return 2
 
     doc = json.loads(payload.read_text())
+    if doc.get("instrument") != PUBLISH_INSTRUMENT or doc.get("skeleton"):
+        print(f"REFUSING: {payload} is stamped instrument {doc.get('instrument')!r}, "
+              f"skeleton={doc.get('skeleton')!r}; a release asset bundles {PUBLISH_INSTRUMENT} "
+              f"measured rows only.", file=sys.stderr)
+        return 1
+    with open(frozen, newline="", encoding="utf-8") as fh:
+        refuse_other_instruments(list(csv.DictReader(fh)), str(frozen))
     manifest = {
         "generated_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "engine": doc.get("arcadedb_engines"),
@@ -73,7 +79,7 @@ def main() -> int:
         "gates": (RESULTS / "generated" / "tables" / "GATE_STATUS.txt").read_text().strip()
                  if (RESULTS / "generated" / "tables" / "GATE_STATUS.txt").exists() else None,
         "how_to_check": (
-            "Every table on https://humem.ai/research/arcadedb is generated from "
+            "Every table on the DBBench pages at https://humem.ai/research/dbbench is generated from "
             "web_benchmarks.json, which is aggregated from runs_paper.csv, one row per "
             "cell per repetition. A published cell is the median across repetitions of "
             "the rows sharing its lane, scale, backend, and workload."),
@@ -97,7 +103,7 @@ def main() -> int:
     if not have:
         subprocess.run(["gh", "release", "create", args.tag, "--repo", "humemai/arcadedb-embedded-python",
                         "--title", f"Benchmark results {args.tag}", "--notes",
-                        "The rows and the payload behind the tables at https://humem.ai/research/arcadedb, "
+                        "The rows and the payload behind the tables at https://humem.ai/research/dbbench, "
                         "with the pins and the gate status they were published under."],
                        check=True)
     subprocess.run(["gh", "release", "upload", args.tag, str(bundle), "--clobber",

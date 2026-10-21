@@ -20,22 +20,15 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 
+import publish_instrument as _PI
+
 HERE = os.path.dirname(os.path.abspath(__file__))
-RESULTS = os.path.join(HERE, "results")
+RESULTS = str(_PI.results_dir())
 # The paper source is deliberately not in this repository. Point
 # BENCH_PAPER_DIR at the directory holding paper.tex and its generated
-# tables/ and figures/ subdirectories.
-# make_paper_tables.GENERATED_NAME, which is the definition and carries the
-# reasoning. A figure is drawn from the freeze this run selected, so October's
-# figures go beside October's tables; refresh_web_page copies the preview
-# route's images out of this directory, and writing them over September's
-# would leave the live page's PDFs describing rows they were not drawn from.
-# A skeleton draws no figure at all (see main), so its entry is the directory
-# it would have used and nothing is written there.
-_GENERATED_NAME = ("generated_skeleton" if os.environ.get("BENCH_SKELETON") == "1"
-                   else "generated_oct" if os.environ.get("BENCH_INSTRUMENT") == "2026-10"
-                   else "generated")
-_PAPER_DIR = os.environ.get("BENCH_PAPER_DIR", os.path.join(HERE, "results", _GENERATED_NAME))   # see make_paper_tables
+# tables/ and figures/ subdirectories. Unset, the figures go beside the tables
+# (make_paper_tables.GENERATED), drawn from the same freeze.
+_PAPER_DIR = os.environ.get("BENCH_PAPER_DIR", os.path.join(RESULTS, "generated"))
 os.makedirs(_PAPER_DIR, exist_ok=True)
 FIGS = os.path.join(_PAPER_DIR, "figures")
 
@@ -135,7 +128,7 @@ def _check_no_orphan_figures():
     """
     used = set()
     if not any(n.endswith(".tex") for n in os.listdir(_PAPER_DIR)):
-        # No paper source here (2026-09-11): every figure is web-only and the
+        # No paper source here: every figure is web-only and the
         # page's own build is the check that it is used.
         return
     for name in sorted(os.listdir(_PAPER_DIR)):
@@ -180,7 +173,7 @@ def _scoped_out(*lanes):
     figure for any other lane runs over an EMPTY list and dies inside
     statistics.median rather than saying which lane it wanted.
 
-    That is not hypothetical: rehearsing the l2 landing on 2026-09-22 killed
+    That is not hypothetical: rehearsing the l2 landing killed
     the whole refresh at `f7_e2` with "no median for empty data", which would
     have blocked the landing at the moment the data arrived. `f4_one_vs_n`
     already carried this guard written out by hand; the other four did not,
@@ -806,7 +799,7 @@ def _dense_best_comparator(warm, scale):
         raise SystemExit(f"f4: no recall for our dense arm at {scale}")
     elig = []
     import make_paper_tables as _MPT
-    # The August comparators plus every optional September arm whose overlay
+    # The required comparators plus every optional arm whose overlay
     # files are complete (neo4jvec, pgvector, surreal, surrealsrv), so a
     # landed comparator competes for the bar without an edit here.
     optional = [a for a in _MPT.mp_arms_present(small=(scale != "deep10m")) if a in _MPT.MP_ARMS_OPTIONAL]
@@ -851,8 +844,8 @@ def f4_one_vs_n(rows):
     def recall(lane, scale, wl, be):
         return med(lane, scale, wl, be, "recall_at_10")
 
-    # ONE TIER, THE ONE THE TABLE THIS FIGURE SUMMARISES PRINTS. October runs
-    # l4 at ts100 and ts1000; unfiltered, every ratio here was a median across
+    # ONE TIER, THE ONE THE TABLE THIS FIGURE SUMMARISES PRINTS. l4 runs
+    # at ts100 and ts1000; unfiltered, every ratio here was a median across
     # both corpora, and the figure's own cross-check against t5 caught it --
     # "TS 12h agg p50: figure=6.214 table=3.4" -- once the table was fixed to
     # read one tier (BUGS F110). A summary figure must be built from the same
@@ -871,11 +864,11 @@ def f4_one_vs_n(rows):
         # omission in f7 killed an l2 rehearsal.
         if _scoped_out("l4"):
             return
-        raise SystemExit("no arcadedb_ts_native rows at the pin (ts_2681 fallback retired 2026-09-08)")
+        raise SystemExit("no arcadedb_ts_native rows at the pin (no fallback)")
 
     def tsmed(be, f):
         # A latency of exactly zero is below the lane's two-decimal resolution
-        # (SQLite's newest reading, about 4 us, 2026-09-12); it is not a value
+        # (SQLite's newest reading, about 4 us); it is not a value
         # to divide by. The lane records four decimals from qDR on.
         v = [r[f] for r in ts if r["backend"] == be and isinstance(r.get(f), (int, float)) and r[f] > 0]
         return st.median(v) if v else None
@@ -912,7 +905,7 @@ def f4_one_vs_n(rows):
             # THE WHOLE ROW'S LANE HAS NOT RUN AT THIS PIN. Neither our arm
             # nor any comparator left a value, which is not the failure the
             # refusal below describes -- that one is "we measured, and no
-            # comparator qualifies", a real problem. October lands table by
+            # comparator qualifies", a real problem. The page lands table by
             # table from stage 1, so a figure row whose lane is still queued
             # is the normal state for most of the campaign. Loud on purpose:
             # a row that quietly stops being drawn is its own defect.
@@ -979,8 +972,7 @@ def f4_one_vs_n(rows):
     entries = [
         # Rows follow the PAGE: section order (documents, graph, vectors, time
         # series, cross-model), each table in the order the page shows them,
-        # and within a table its column order (2026-09-12). Ingest rows joined
-        # the same day; every table's ingest pair is a page column and the
+        # and within a table its column order. Every table's ingest pair is a page column and the
         # figure had carried only the time-series one.
         # documents: OLTP table (new-order, ingest), then OLAP table (Q1, Q6)
         row("TPC-C new-order p50", False,
@@ -1116,10 +1108,10 @@ def f4_one_vs_n(rows):
                   "unitless ratio of the row's metric; >1 = better",
                   fontsize=6.5)
     # Explicit margins: tight_layout did not reserve room for the row labels
-    # beside two shared-y panels and the left column clipped (2026-09-11).
+    # beside two shared-y panels and the left column clipped.
     # THE BOTTOM MARGIN IS ABSOLUTE, NOT FRACTIONAL. The figure's height is
     # 0.21*n + 0.9 inches, so a fixed FRACTION reserves less and less real
-    # space as rows drop out -- and rows do drop out, because October lands
+    # space as rows drop out -- and rows do drop out, because the page lands
     # table by table and a lane still queued draws nothing. At the full row
     # count 0.13 was about 0.72 in and fine; with a third of the rows it
     # became 0.28 in and the two-line supxlabel printed straight through the
@@ -1212,19 +1204,6 @@ def main():
             f"BENCH_PAPER_DIR unset or wrong: {os.path.normpath(_PAPER_DIR)} "
             "does not exist.\nSet it to the directory holding paper.tex.")
     os.makedirs(FIGS, exist_ok=True)
-    # THE FIGURES ARE THE CAMPAIGN'S, NOT THE SKELETON'S (DECISIONS #86), the
-    # same ruling make_paper_tables applies to the .tex tables one file over.
-    # Every figure here is a ratio against the best comparator, or a per-query
-    # panel, or a deployment overlay: at one repetition on micro corpora those
-    # are noise drawn to look like results, and f3 and f8 read pinned
-    # bench-host artifacts a laptop skeleton does not have at all. The skeleton
-    # page references no figure, names the summary figure as absent in its
-    # banner, and would publish nothing written here; generating them anyway
-    # would leave stale PDFs for the campaign's own run to trip over.
-    if os.environ.get("BENCH_SKELETON") == "1":
-        print("skeleton: figures are ratios over campaign rows and pinned "
-              "bench-host artifacts; not generated (DECISIONS #86).")
-        return
     rows = canonical()
     f3_sparse_perquery()
     f4_one_vs_n(rows)

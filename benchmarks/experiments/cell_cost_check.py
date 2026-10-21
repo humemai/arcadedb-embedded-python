@@ -77,7 +77,7 @@ def main() -> int:
 
     src_tier = a.from_tier or a.tier
     paths = a.rows or [os.path.join(HERE, "results", f)
-                       for f in ("runs_paper.csv", "runs_skeleton_laptop.csv",
+                       for f in ("runs_paper.csv",
                                  "runs.jsonl")]
     rows = [r for r in _rows(paths)
             if r.get("lane") == a.lane and str(r.get("scale")) == src_tier]

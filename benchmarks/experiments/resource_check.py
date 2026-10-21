@@ -43,17 +43,16 @@ NOT FLAGGED, each for a reason the rows state:
     `sparse`: it has no analytical view and no sparse index) ran nothing, so
     its numbers are not a measurement and it is not checked. Before this rule
     those rows read about 33 MiB beside 1.3 to 11 GiB in their groups.
-  * Rows of another instrument are not checked. Only the 2026-10 instrument
-    carries the fields this gate reads (`instrument`, and the disk fields of
-    #350), and the September rows the live page still serves are being
-    replaced at the October switch. The count of rows not checked, and why, is
+  * Every row is a 2026-11 row: a row of another instrument is refused, since
+    only that instrument carries the fields this gate reads (`instrument`, and
+    the disk fields of #350). The count of rows not checked, and why, is
     printed, so a gate that checked nothing says so.
 
 A flag that has been understood and is right goes in BY_DESIGN with the
 reason, so every flag is either a defect or a sentence someone wrote down.
 
     python3 resource_check.py                     # the canonical frozen set
-    python3 resource_check.py --rows results/runs_page_e85469273.jsonl
+    python3 resource_check.py --rows results/runs_paper.csv
 """
 import argparse
 import collections
@@ -61,8 +60,8 @@ import statistics
 import sys
 
 from equivalence_check import load_rows
+from publish_instrument import refuse_other_instruments
 
-REQUIRED_INSTRUMENT = "2026-10"
 LOW_RATIO = 20
 MIN_ENGINES = 3
 # (lane, backend, metric) -> why a flag is the right number
@@ -104,7 +103,7 @@ def disk(r):
 def memory(r):
     """The page's memory reading of a row: owned memory, or the anonymous peak for a row without it.
 
-    The same rule as export_web._peak_mem. The rows this gate checks (the 2026-10 instrument) all
+    The same rule as export_web._peak_mem. The rows this gate checks (the 2026-11 instrument) all
     carry peak_owned_mib_sum; the fallback only keeps a row without it from reading as no value.
     """
     v = _num(r.get("peak_owned_mib_sum"))
@@ -116,13 +115,10 @@ Flag = collections.namedtuple("Flag", "kind key backend metric value ctx")
 
 def check(rows):
     """(flags, not_checked) where not_checked is a Counter of reason -> rows."""
+    refuse_other_instruments(rows, "the rows to check")
     flags, not_checked = [], collections.Counter()
     groups = collections.defaultdict(lambda: collections.defaultdict(list))
     for r in rows:
-        inst = str(r.get("instrument") or "")
-        if inst != REQUIRED_INSTRUMENT:
-            not_checked[f"instrument {inst or '(none)'}, not {REQUIRED_INSTRUMENT}"] += 1
-            continue
         if failed(r):
             not_checked["the cell failed (its numbers are not printed)"] += 1
             continue

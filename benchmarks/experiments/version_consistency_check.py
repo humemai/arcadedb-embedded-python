@@ -20,10 +20,11 @@ Exit 0 when every family wears one version, 1 otherwise.
 from __future__ import annotations
 
 import json
-import os
 import re
 import sys
 from collections import defaultdict
+
+from publish_instrument import results_dir
 
 # Families whose arms appear under several backend labels and must agree. A
 # family is a substring matched case-insensitively inside the version string.
@@ -40,18 +41,6 @@ FAMILIES = ("arcadedb", "duckdb", "postgres", "neo4j", "mongo", "surrealdb",
 # entry is a DECISION, not a way to quiet the gate, and it must name two
 # genuinely different artifacts rather than two measurements of one.
 ALLOWED_SPLITS: dict[str, str] = {
-    "postgres":
-        "two upstream images, each pinned at the latest of its own line "
-        "(DECISIONS #87), not one engine measured twice: the document arms "
-        "run the official `postgres` image (17.10) and every arm built on "
-        "`pgvector/pgvector` runs the PostgreSQL that image vendors (17.11) "
-        "-- pgvector_dense, pgvector_sparse, and the PostgreSQL+pgvector+AGE "
-        "cross-model stack. The split is a patch level and was INVISIBLE "
-        "until 2026-09-21, because the composed rows named pgvector and AGE "
-        "and not the PostgreSQL underneath them (BUGS F77); the page now "
-        "prints both versions, so a reader can see it rather than be told. "
-        "October removes it: the re-pin moves every PostgreSQL arm to 18.6 "
-        "together, at which point this entry should go rather than be renewed",
     "surrealdb":
         "embedded and served SurrealDB are two artifacts with independent "
         "version lines, not one engine measured twice: the embedded arm runs "
@@ -66,8 +55,8 @@ ALLOWED_SPLITS: dict[str, str] = {
         "image the vector tables run; two artifacts with their own version "
         "lines. It is also an unsanctioned fairness gap -- that half still "
         "opens location=':memory:' while ArcadeDB runs on disk -- disclosed "
-        "on the table in PROTOCOL section 7 and retired in October, at which "
-        "point this entry should go rather than be renewed",
+        "on the table in PROTOCOL section 7; once that half runs on disk this "
+        "entry should go rather than be renewed",
 }
 
 _VER = r"[ :=v]*([0-9]+(?:\.[0-9]+)+)"
@@ -76,11 +65,10 @@ _VER = r"[ :=v]*([0-9]+(?:\.[0-9]+)+)"
 # seventeen families it never was. The scan below wants the version to follow
 # the family token immediately, so "mongo" never matched `mongodb 8.2.12`,
 # "postgres" never matched `postgresql 18.6`, and "duckdb" never matched
-# `duckdb vss 1.5.5`. 23 of the 191 rows on the live September payload carried
-# a version string this gate could not read, and an unreadable string was
-# silently dropped rather than flagged -- so the gate passed by seeing almost
-# nothing. That is how a cross-model arm ran PostgreSQL 17.11 + age 1.7.0
-# under an October instrument declaring 18.6 + 1.8.0 with every gate green.
+# `duckdb vss 1.5.5`. Rows carrying a version string this gate could not read
+# were silently dropped rather than flagged -- so the gate passed by seeing
+# almost nothing. That is how a cross-model arm ran PostgreSQL 17.11 + age 1.7.0
+# under an instrument declaring 18.6 + 1.8.0 with every gate green.
 #
 # The qualifiers here are part of a product's NAME (DuckDB VSS, sqlite-vec),
 # never a second component with its own version line. Nothing skips a space
@@ -160,13 +148,6 @@ def _versionless_measurements(node, table=None):
 
 def check(path: str) -> list[str]:
     payload = json.load(open(path))
-    # A SKELETON is declared placeholder data: laptop timings, one repetition,
-    # the smallest corpus, and an `arcadedb_version` of null precisely because
-    # it cannot name one. Arms re-measured on the new build sit beside arms
-    # that have not been, and that is the point of the route rather than a
-    # defect. Comparators are still held: a skeleton may be rough, not wrong
-    # about whose engine it ran.
-    skeleton = bool(payload.get("skeleton"))
     seen: dict[str, dict[str, set]] = defaultdict(lambda: defaultdict(set))
     unparsed: list[tuple] = []
     for table, backend, version in _rows(payload):
@@ -268,11 +249,6 @@ def check(path: str) -> list[str]:
     for family, versions in sorted(seen.items()):
         if len(versions) < 2:
             continue
-        if family == "arcadedb" and skeleton:
-            print(f"  ALLOWED arcadedb: {', '.join(sorted(versions))} -- a "
-                  f"skeleton payload, which declares arcadedb_version null and "
-                  f"mixes re-measured arms with placeholders by design")
-            continue
         if family in ALLOWED_SPLITS:
             print(f"  ALLOWED {family}: {', '.join(sorted(versions))}"
                   f" -- {ALLOWED_SPLITS[family]}")
@@ -285,34 +261,20 @@ def check(path: str) -> list[str]:
     return failures
 
 
-# Where the payloads live, so the gate can run with no arguments the way
+# The payload the publish is about, so the gate runs with no arguments the way
 # refresh_web_page.py invokes every other gate.
-_HERE = os.path.dirname(os.path.abspath(__file__))
-LIVE = os.path.join(_HERE, "results", "web_benchmarks.json")
-# TWO PAYLOADS REACH THE PREVIEW ROUTE, and they are not the same file. A
-# skeleton publish (DECISIONS #86) exports web_benchmarks_skeleton.json; the
-# October campaign (DECISIONS #84, BENCH_INSTRUMENT=2026-10) exports
-# web_benchmarks_next.json. Both land on /projects/arcadedb/next, so
-# --preview alone does not say which, and the env switch does. Naming only the
-# skeleton here would have this gate report "no payload at
-# .../web_benchmarks_skeleton.json; nothing to check" and RETURN 0 on every
-# October publish: a gate that passes by not running is worse than one that
-# fails, because the publish reads it as agreement.
-PREVIEW = os.path.join(_HERE, "results", "web_benchmarks_skeleton.json")
-PREVIEW_OCT = os.path.join(_HERE, "results", "web_benchmarks_next.json")
+PAYLOAD = results_dir() / "web_benchmarks.json"
 
 
 def main(argv: list[str]) -> int:
-    args = [a for a in argv[1:] if a != "--preview"]
+    args = argv[1:]
     if not args:
-        # Default to the payload this publish is about, like page_check.
-        preview = (PREVIEW_OCT if os.environ.get("BENCH_INSTRUMENT") == "2026-10"
-                   and os.environ.get("BENCH_SKELETON") != "1" else PREVIEW)
-        want = preview if "--preview" in argv[1:] else LIVE
-        if not os.path.exists(want):
-            print(f"  no payload at {want}; nothing to check")
-            return 0
-        args = [want]
+        # A gate that passes by not running is worse than one that fails: the
+        # publish reads it as agreement.
+        if not PAYLOAD.exists():
+            print(f"  no payload at {PAYLOAD}; run export_web.py first")
+            return 1
+        args = [str(PAYLOAD)]
     bad = 0
     for path in args:
         print(f"== {path}")

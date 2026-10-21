@@ -191,7 +191,7 @@ def test_both_switches_are_registered_judged_only_where_stamped_and_absent_from_
 
 
 def test_the_stamped_rows_are_checked_and_the_sentences_name_the_values_the_rows_carry():
-    base = {"instrument": "2026-10", "lane": "l3s", "backend": "qdrant_sparse", "scale": "micro", "workload": "search"}
+    base = {"instrument": "2026-11", "lane": "l3s", "backend": "qdrant_sparse", "scale": "micro", "workload": "search"}
     ok = dict(base, sparse_warmup_queries=100, cpu_dma_latency_us=10, cpu_dma_latency_held=True)
     assert [f for f in OV.stamp_findings([ok])[0]] == []
     bad = dict(base, cpu_dma_latency_us=10, cpu_dma_latency_held=False)
@@ -206,14 +206,13 @@ def test_the_stamped_rows_are_checked_and_the_sentences_name_the_values_the_rows
     assert "—" not in joined and "--" not in joined
 
 
-def test_the_idle_state_disclosure_is_always_on_the_page_setup_block():
+def test_the_idle_state_sentence_is_generated_from_what_the_rows_stamp():
     pytest.importorskip("numpy")
-    mp = pytest.MonkeyPatch()
-    if not os.environ.get("BENCH_ENGINE_COMMIT"):
-        mp.setenv("BENCH_ENGINE_COMMIT", "417314c18")
-    try:
-        import export_web
-    finally:
-        mp.undo()
-    assert "not controlled" in export_web.CPU_IDLE_NOTE and "C10" in export_web.CPU_IDLE_NOTE and "wake up" in export_web.CPU_IDLE_NOTE
-    assert "setup.cpu_idle_note" in (HERE / "PAGE-SPEC.md").read_text()
+    import export_web
+    held = {"cpu_dma_latency_us": "0", "cpu_dma_latency_held": "True"}
+    note = export_web._cpu_idle_note([held, held])
+    assert "held out of their deep idle states" in note and "at 0 microseconds" in note and "wake up" in note
+    assert "could not take the hold" not in note
+    mixed = export_web._cpu_idle_note([held, {"cpu_dma_latency_us": "0", "cpu_dma_latency_held": "False"}])
+    assert "1 of 2 rows could not take the hold" in mixed
+    assert "are not held" in export_web._cpu_idle_note([{}])                  # rows that stamp nothing claim no hold

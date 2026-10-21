@@ -145,28 +145,9 @@ def EW():
     return export_web
 
 
-def _row(**kw):
-    base = {"lane": "l1tpc", "workload": "oltp", "backend": "arcadedb_embedded", "instrument": "2026-10"}
-    base.update(kw)
-    return base
-
-
-def test_the_sentence_says_insert_many_while_any_row_behind_the_table_loaded_that_way(EW, monkeypatch):
-    table = {"id": "docs_oltp"}
-    old, new = EW.OCT_PROSE["docs_oltp"]["ingest_insert_many"][0], EW.OCT_PROSE["docs_oltp"]["ingest"][0]
-    assert "insert_many in 10,000-row batches" in old and "insert_columns" in new and "insert_many in 10,000" not in new
-    monkeypatch.setattr(EW, "_FROZEN_ROWS", [_row()])                                         # an October row
-    assert EW._docs_ingest_note(table, new) == old
-    monkeypatch.setattr(EW, "_FROZEN_ROWS", [_row(columnar_insert="insert_columns")])        # a re-pin row
-    assert EW._docs_ingest_note(table, new) == new
-    monkeypatch.setattr(EW, "_FROZEN_ROWS", [_row(columnar_insert="insert_columns"), _row()])  # mixed: the old one stands
-    assert EW._docs_ingest_note(table, new) == old
-    assert EW._docs_ingest_note({"id": "l2"}, "x") == "x"                                      # no other table changes
-
-
-def test_both_sentences_are_allowed_entries_of_the_documents_tables_and_the_new_one_names_the_whole_frame_engines(EW):
+def test_the_ingest_sentence_is_an_allowed_entry_of_the_documents_tables_and_names_the_whole_frame_engines(EW):
     for t in ("docs_oltp", "docs_olap"):
         entries = EW._oct_entries(t)
-        assert EW.OCT_PROSE[t]["ingest"][0] in entries and EW.OCT_PROSE[t]["ingest_insert_many"][0] in entries
+        assert EW.OCT_PROSE[t]["ingest"][0] in entries
     new = EW.OCT_PROSE["docs_oltp"]["ingest"][0]
     assert "DuckDB and ArcadeDB embedded load whole frames" in new and "are fed row by row" in new

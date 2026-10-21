@@ -15,13 +15,13 @@ when a digit appears in the output that no row carries.
 
 WHERE EACH PART COMES FROM
 
-  * WHICH ROWS. `make_paper_tables.load_canonical` under `BENCH_INSTRUMENT=2026-10`
-    is the selection the published tables are frozen from (the October campaign,
-    rc == 0, the serial 0-11 cpuset, reps 1..N, no pre-release engine, the newest
-    row per cell). It is run here, not re-implemented, in a private copy of the
+  * WHICH ROWS. `make_paper_tables.load_canonical` is the selection the
+    published tables are frozen from (the 2026-11 instrument only, rc == 0, the
+    serial 0-11 cpuset, reps 1..N, no pre-release engine, the newest row per
+    cell). It is run here, not re-implemented, in a private copy of the
     module so that its import-time switches cannot leak into another importer.
   * FAILURES. `load_canonical` drops every row with rc != 0, and a failure is a
-    result (methodology rule 7). The same campaign's failed attempts are read
+    result (methodology rule 7). The same instrument's failed attempts are read
     from the same log under the same cpuset, tier, and rep filters, and a cell is
     listed when its newest attempt is a failure newer than any clean row of that
     cell.
@@ -65,8 +65,9 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 import override_registry as OV  # noqa: E402
+import publish_instrument  # noqa: E402
 
-RUNS = HERE / "results" / "runs.jsonl"
+RUNS = publish_instrument.results_dir() / "runs.jsonl"
 
 # The lane order and table ids of humem.ai/src/lib/dbbench/lanes.ts (slug, title,
 # the tableId of each of its tables, in order). The first table a lane lists is
@@ -184,13 +185,13 @@ def _env(**kw):
                 os.environ[k] = v
 
 
-def _october_paper_tables():
-    """A private copy of make_paper_tables in its October mode. It reads its mode
-    from the environment when it is imported, and tests elsewhere import the real
-    module in September mode, so this copy is not registered in sys.modules."""
+def _paper_tables():
+    """A private copy of make_paper_tables. It reads BENCH_ONLY_LANES from the
+    environment when it is imported, so this copy is imported with that switch
+    cleared and is not registered in sys.modules."""
     spec = importlib.util.spec_from_file_location("_gen_engines_mpt", HERE / "make_paper_tables.py")
     mod = importlib.util.module_from_spec(spec)
-    with _env(BENCH_INSTRUMENT=OV.INSTRUMENT, BENCH_SKELETON=None, BENCH_ONLY_LANES=None):
+    with _env(BENCH_ONLY_LANES=None):
         spec.loader.exec_module(mod)
     return mod
 
@@ -205,16 +206,16 @@ def _cell(r):
 
 
 def select_rows(runs_path):
-    """(clean rows, failed cells, raw October rows) from the canonical log.
+    """(clean rows, failed cells, raw rows of the instrument) from the canonical log.
 
-    Clean rows are exactly `make_paper_tables.load_canonical()` under the October
+    Clean rows are exactly `make_paper_tables.load_canonical()` under the published
     instrument. A failed cell is the newest failed attempt of a cell whose clean
     rows (if any) are all older than it, among the attempts the freeze would have
     considered but for rc: this campaign, the serial cpuset, a published tier, a
     rep inside 1..N.
     """
     runs_path = Path(runs_path).resolve()
-    M = _october_paper_tables()
+    M = _paper_tables()
     with _env(BENCH_RUNS_JSONL=str(runs_path)):
         saved, M._write_withheld_recall = M._write_withheld_recall, (lambda: None)
         try:
@@ -228,13 +229,13 @@ def select_rows(runs_path):
             line = line.strip()
             if line:
                 raw.append(json.loads(line))
-    october = [r for r in raw if str(r.get("instrument") or "") == OV.INSTRUMENT]
+    published = [r for r in raw if str(r.get("instrument") or "") == OV.INSTRUMENT]
     newest_clean = {}
     for r in clean:
         c = _cell(r)
         newest_clean[c] = max(newest_clean.get(c, ""), str(r.get("ts_utc")))
     newest_fail = {}
-    for r in october:
+    for r in published:
         if not _is_failure(r):
             continue
         if str(r.get("cpuset")) not in ("0-11", "None"):
@@ -247,7 +248,7 @@ def select_rows(runs_path):
         if c not in newest_fail or str(r.get("ts_utc")) > str(newest_fail[c].get("ts_utc")):
             newest_fail[c] = r
     failed = [r for c, r in newest_fail.items() if str(r.get("ts_utc")) > newest_clean.get(c, "")]
-    return clean, failed, october
+    return clean, failed, published
 
 
 def row_id(r):
@@ -583,7 +584,7 @@ def registered_arms():
 
 
 def build(runs_path, date):
-    clean, failed, _october = select_rows(runs_path)
+    clean, failed, _published = select_rows(runs_path)
     return render(clean, failed, registered_arms(), date)
 
 

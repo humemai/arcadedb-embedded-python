@@ -34,7 +34,9 @@ import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-RESULTS = os.path.join(HERE, "results")
+sys.path.insert(0, HERE)
+import publish_instrument  # noqa: E402
+RESULTS = str(publish_instrument.results_dir())
 FULL_CPUSET = "0-11"
 # Fallback only. Every served row records its own mem_split; this is for the
 # handful written before that field existed. Must match runner.py's
@@ -161,27 +163,17 @@ def check_jvm_defaults_arms(rows=None):
     return bad
 
 
-# DECISIONS #86. Declared here because _dense_rows() below reads it: a laptop
-# skeleton has no bench-host overlay to open.
-SKELETON = os.environ.get("BENCH_SKELETON") == "1"
-
-# DECISIONS #84: this gate opens no payload and no freeze, so the campaign
-# switch reaches it in one place and one place only -- _canonical() below,
-# which is load_canonical() and therefore filtered on BENCH_INSTRUMENT
-# already. Nothing here needed a branch.
+# This gate opens no payload and no freeze: the instrument rule reaches it in
+# one place, _canonical() below, which is load_canonical() and therefore
+# publishes 2026-11 rows only.
 #
-# ONE KNOWN CROSS-CAMPAIGN HAZARD IS LEFT STANDING, deliberately, because
-# closing it would fail October's first publish rather than protect it.
-# _served_envelopes() below reads runs.jsonl directly and takes the NEWEST
-# l3d deep10m row per backend, with no instrument term. Filtering it to the
-# selected campaign was tried and reverted: the dense lane's envelopes come
-# from a PIN-keyed overlay directory (dense_mp5_<pin>), not from an
-# instrument-stamped row, so under BENCH_INSTRUMENT=2026-10 the map came back
-# EMPTY and F3 failed every dense backend at deep10m -- on a stage (l2 sf1,
-# sf10) that has nothing to do with the dense lane. The dense overlay has no
-# campaign concept yet; giving it one is its own decision, not a side effect
-# of the freeze switch. Until then October reads September's envelopes here,
-# which is wrong only once October re-runs l3d deep10m.
+# ONE HAZARD IS LEFT STANDING, deliberately. _served_envelopes() below reads
+# runs.jsonl directly and takes the NEWEST l3d deep10m row per backend, with no
+# instrument term, because the dense lane's envelopes come from a PIN-keyed
+# overlay directory (dense_mp5_<pin>), not from an instrument-stamped row;
+# filtering it by instrument made the map come back EMPTY and F3 failed every
+# dense backend at deep10m. Giving the dense overlay an instrument is its own
+# decision.
 
 
 def _canonical():
@@ -198,11 +190,6 @@ def _dense_rows():
     build are one cell's worth of envelope, not five.
     """
     out = []
-    # A SKELETON HAS NO OVERLAY. The multipass artifacts are the bench host's
-    # (DECISIONS #86); a laptop skeleton measures the dense lane once and its
-    # own rows are what the checks below read.
-    if SKELETON:
-        return out
     # dense_mp5_2681: five INDEPENDENT builds per arm, so pass 0 of each file
     # is one cell's conditions and there are five cells per arm, not one. The
     # old directory held a single build per arm and needed a "_build" filter to
@@ -238,7 +225,7 @@ def _dense_rows():
         # runner stamps server_mem_cap / server_heap / mem_split / client_mem_cap
         # on the campaign row of the same cell AFTER the cell, from its own
         # docker knowledge, and the driver ran inside that same envelope
-        # (runner --driver). Until 2026-09-07 this patched three fp32 backends BY
+        # (runner --driver). This once patched three fp32 backends BY
         # NAME with mem_split=0.75, so the served fp32 arm reduced to 32g, the
         # served int8 arms to 8g, and F3 failed the tier on the pinned overlay
         # (BUGS-20260830 F13). Now: any file whose backend has a campaign row
@@ -259,7 +246,7 @@ def _served_envelopes():
         return _served_envelopes._cache
     newest = {}
     try:
-        with open(os.path.join(HERE, "results", "runs.jsonl")) as fh:
+        with open(os.path.join(publish_instrument.results_dir(), "runs.jsonl")) as fh:
             for line in fh:
                 try:
                     r = json.loads(line)
@@ -558,11 +545,11 @@ def _base_degree(r):
 def check_degree(rows):
     """F7: same effective base-layer degree across dense backends per scale.
 
-    Added 2026-08-01 after finding that l3d_dense.py handed ONE constant to
+    Added after finding that l3d_dense.py handed ONE constant to
     both unit systems. It was harmless while the default was 16 (every
     published comparator row records m=16, and the T5 dense block as printed
     IS matched), but the default became 32 to fix ArcadeDB and nothing had
-    re-run since. The October freeze re-measures this lane, and would have
+    re-run since. A freeze that re-measures this lane would have
     built five comparators at twice their intended degree with ArcadeDB
     correct -- a fourth "all three favoured us" entry for the list above, found
     before it produced a number rather than after.
@@ -597,7 +584,7 @@ def check_degree(rows):
             # EFFECT instead: nProbe calibrated in the cell to the frozen recall
             # of ArcadeDB's fp32 arm at the same scale (arango_common). A row
             # that carries no target, or missed it by more than 0.01, is not a
-            # matched row (2026-09-13).
+            # matched row.
             try:
                 _t, _c = float(r.get("ivf_recall_target")), float(r.get("ivf_calibration_recall"))
             except (TypeError, ValueError):
@@ -705,46 +692,12 @@ def check_protocol_overlays():
 
 # Regressions the gate has already caught, filed, and seen fixed upstream: the
 # gate keeps printing them, as KNOWN rather than BAD, on the pin they were
-# measured on. Disclosed on the page's lifecycle table by export_web. Remove
-# the entry at the re-pin that carries the fix, so the gate is armed again.
-KNOWN_REGRESSIONS = {
-    # A LIST PER SITUATION: one situation can carry a known regression on more
-    # than one pin (the September one below, and the October one after it).
-    "vector": [{
-        "commit": "8d6af9475",
-        # THE RELEASES THE REGRESSION IS IN, for rows that carry no commit.
-        # engine_commit is stamped by a campaign that built a matched pair;
-        # the laptop skeleton (DECISIONS #86) runs the published wheel and the
-        # published image and stamps none, so a commit-only match turned a
-        # documented, filed, upstream-fixed cost into a gate failure on the one
-        # publish that can do nothing about it. engine_version is what the
-        # running engine reported, which is evidence rather than a claim, so an
-        # unstamped row is matched on the releases the regression was measured
-        # in. #7191 ships in 26.10.1; a row from that release matches neither
-        # key and the gate is armed again, which is the point of the entry
-        # naming its releases instead of "not 26.10.1".
-        "versions": ("26.8", "26.9"),
-        "why": "the first search after a write started a full async rebuild and close() waited on it; "
-               "filed as #7183, fixed in #7191 for 26.10.1",
-    }, {
-        # THE OCTOBER PIN (417314c18, 2026-09-17), BUGS F159. Only the EMBEDDED
-        # arm's clean close grows with what is stored (5.4, 12.5, 88, and 1,400
-        # ms at 10k, 100k, 1M, and 10M vectors; the server arm's stays at about
-        # 5 ms at every size): the lane reads LSMVectorIndex.getStats() before
-        # close, outside the timers, and at this pin a clean close then fsyncs
-        # the data files it holds, which #8626 found and #8630 (7bb0c116f9,
-        # 2026-09-29, after this pin) fixed for 26.10.1. The page's lifecycle
-        # table already says the dense-vector row's clean figure is an upper
-        # bound for that reason; the re-pin moves the stats read out of the
-        # session (CAMPAIGN section 7 row 22) and runs on an engine with #8630,
-        # so this entry comes out then.
-        "commit": "417314c18",
-        "versions": (),
-        "why": "the embedded arm reads the index statistics before close (BUGS F159) and at this pin a clean "
-               "close then fsyncs every data file it holds (#8626, fixed by #8630 for 26.10.1); disclosed on the "
-               "page as an upper bound",
-    }],
-}
+# measured on, and the page's lifecycle table discloses them (export_web). Empty
+# while the pin carries every fix; an entry is a list per situation, each
+# `{"commit": <short sha>, "versions": (<release prefixes for rows with no
+# commit>), "why": <sentence>}`, removed at the re-pin that carries the fix so
+# the gate is armed again.
+KNOWN_REGRESSIONS = {}
 
 
 def _known_applies(entries, rows):
@@ -802,7 +755,7 @@ def check_close_cost(rows):
     # cost the other way and made a session slower overall. What a caller pays is
     # open plus close, so that is what gets budgeted.
     # OUR ENGINE'S INVARIANT (DECISIONS #50), checked on our rows. The lane
-    # carries a SurrealDB embedded arm since 2026-09-16 (DECISIONS #95a), and a
+    # carries a SurrealDB embedded arm (DECISIONS #95a), and a
     # cell keyed on (situation, size) alone would take one median over two
     # engines and judge ArcadeDB's budget against a comparator's numbers. The
     # comparator's rows are reported beside ours, per situation, and judged
@@ -834,7 +787,7 @@ def check_close_cost(rows):
         # lifecycle row for weeks and this gate reported success on the
         # emptiness that caused it. That catch has to survive. But a campaign
         # that lands table by table reaches this gate before its lifecycle
-        # stage has run at all -- qOG is stage 8 of the October chain -- and
+        # stage has run at all -- it is a late stage of the chain -- and
         # failing then blocks a landing for work that is merely still queued.
         #
         # The distinguishing evidence is the MAP, not the rows: if `lifecycle`
@@ -879,9 +832,8 @@ def check_close_cost(rows):
         by_sit[sit][scale] = med
         if med > 100.0:
             # The absolute budget gets the same known-regression exception as
-            # the shape test below: at the pinned build the vector close is
-            # O(stored) by #7183 (1.4 s at 10M, 2026-09-08), and printing BAD
-            # for a documented, fixed-upstream cost trains the reader to skip
+            # the shape test below: on a build with a documented, fixed-upstream
+            # O(stored) close, printing BAD for that cost trains the reader to skip
             # the line. KNOWN is printed, disclosed on the page, not counted.
             # Scoped to THIS cell's rows, not to every lifecycle row in the
             # set: one arm carrying the regressed build was licensing the
@@ -925,12 +877,12 @@ def check_close_cost(rows):
 # ---------------------------------------------------------------------------
 # F10: one durability class per table, and one instrument (DECISIONS #81, #84).
 #
-# Every row measured under the 2026-10 instrument records `durability`, the
+# Every row measured under the 2026-11 instrument records `durability`, the
 # setting its engine ran at commit, and `instrument`. The matched class is
 # "relaxed" (a commit returns without waiting for the disk); an engine that
 # cannot be relaxed says so with a string starting "fsync at commit" and is
 # the named exception on its tables (Neo4j, DuckDB, LadybugDB). Anything
-# else on a 2026-10 row is a FAIL (FAIRNESS.md F10): a row with no durability,
+# else on a 2026-11 row is a FAIL (FAIRNESS.md F10): a row with no durability,
 # a row whose engine reports a class other than the one its cell asked for in
 # `durability_class` (DECISIONS #90), or a PostgreSQL row whose server did not
 # answer its class's synchronous_commit (off relaxed, on strict).
@@ -949,7 +901,7 @@ RELAXED_ONLY_ALLOWED = {"lancedb_lifecycle"}
 # THE THIRD CLASS, and the backends allowed to be in it: none since BUGS F165.
 # The five SurrealDB served arms were, on the claim that 3.2.4 had no sync
 # setting; it has one on its storage path, and its default syncs at every
-# commit, which the October rows ran under a "not verified" label in both
+# commit, which was once run under a "not verified" label in both
 # classes. Any backend that says "not verified" is an engine whose default
 # nobody checked, which is exactly what #81 forbids.
 UNVERIFIED_ALLOWED = set()
@@ -976,16 +928,15 @@ WRITE_CELLS = {("l1tpc", "oltp"), ("l2", "oltp"), ("e2", "hybrid")}
 # by degree or calibrated by effect. Adding a lane here without a selective
 # filter would collect declarations nobody can falsify.
 #
-# THE GRAPH LANE'S HALF OF THAT WAS CHECKED, NOT ASSUMED (2026-09-22), because
+# THE GRAPH LANE'S HALF OF THAT WAS CHECKED, NOT ASSUMED, because
 # the e2 paragraph below is what a scoping judgement is worth unverified. Read
 # query by query: all five analytics queries are whole-graph aggregates with no
 # constant predicate (`top_degree` and `degree_dist` scan person, the two city
 # queries scan knows, and `same_city_edges`'s only WHERE compares an edge's two
 # endpoints to each other rather than to a value); LSQB's nine are pure
 # structural counts over labels with no property predicate at all; and `hop3f`'s
-# `age > HOP3F_MIN_AGE` (graph_common; 41 from the re-pin, keeping about half;
-# 30 through October, when every loaded age was 0 and it kept no one, BUGS
-# F146) filters a vertex set the traversal has already reached, which no index
+# `age > HOP3F_MIN_AGE` (graph_common; 41, keeping about half; an
+# older 30 kept no one while every loaded age was 0, BUGS F146) filters a vertex set the traversal has already reached, which no index
 # can narrow. So there is no selective filter on this lane to get wrong.
 #
 # The lane DOES build indexes, and they are matched by effect rather than by
@@ -1011,13 +962,13 @@ INDEX_DECISIONS = {
         "arcadedb_embedded":    "l_shipdate: 870.7 -> 141.7 ms, 6.1x",
         "arcadedb_server":      "l_shipdate: the embedded arm's measurement, same engine and schema",
         "arcadedb_imgdefaults_server": "l_shipdate: the main served arm's measurement, same adapter and schema",
-        "postgres":             "l_shipdate: 726 -> 290 ms, 2.5x (added 2026-09-22)",
+        "postgres":             "l_shipdate: 726 -> 290 ms, 2.5x",
         "postgres_tuned":       "l_shipdate: inherits PostgresTPC",
         "surrealdb_tpc":        "l_shipdate before the load: 4016 -> 1062 ms, 3.8x",
         "surrealdb_tpc_server": "l_shipdate: inherits SurrealTPC",
         "mongodb":              "l_shipdate: 280.3 -> 178.1 ms, 1.6x",
-        "sqlite":               "NONE: the index costs it, 53.4 -> 63.3 ms (removed 2026-09-22)",
-        "arangodb_tpc":         "NONE: the index costs it, 684 -> 881 ms (removed 2026-09-22)",
+        "sqlite":               "NONE: the index costs it, 53.4 -> 63.3 ms",
+        "arangodb_tpc":         "NONE: the index costs it, 684 -> 881 ms",
         "duckdb":               "NONE: no effect, 6.0 -> 6.2 ms; columnar with zone maps",
     },
     # e2 WAS LEFT OUT OF THIS MAP AND SHOULD NOT HAVE BEEN. The scoping note
@@ -1043,7 +994,7 @@ INDEX_DECISIONS = {
         # (BUGS F132: 3,638 -> 15.7 ms on the laptop at 50k).
         "surrealdb_e2":           "record id carries pid (every read addresses it; F132)",
         "surrealdb_e2_server":    "record id carries pid (every read addresses it; F132)",
-        "arangodb_e2":            "persistent(pid): 22.52 -> 3.21 ms, 7.0x (added 2026-09-22)",
+        "arangodb_e2":            "persistent(pid): 22.52 -> 3.21 ms, 7.0x",
         # The Qdrant half is the server since DECISIONS #117 (BUGS F133); the
         # candidate filter reads a payload index on pid: 24.4 -> 3.15 ms, 7.7x
         # (laptop, 50k), and in local mode no index of any kind existed.
@@ -1055,9 +1006,9 @@ INDEX_DECISIONS = {
         "arcadedb_ts_native":         "native TIMESERIES type, time-ordered by construction",
         "arcadedb_ts_native_server":  "native TIMESERIES type, time-ordered by construction",
         "sqlite":                     "(host, ts): 35.36 -> 0.01 ms last-point",
-        "duckdb":                     "(host, ts): 7.06 -> 6.20 ms last-point (added 2026-09-22)",
+        "duckdb":                     "(host, ts): 7.06 -> 6.20 ms last-point",
         "timescaledb":                "(host, ts DESC)",
-        # Plain PostgreSQL (DECISIONS #131 item 6), measured 2026-10-02 on ts100
+        # Plain PostgreSQL (DECISIONS #131 item 6), measured on ts100
         # (repros/pg-ts-index/index_probe.py): the host-filtered queries need it,
         # and the scan-wide 12 h aggregate pays for it (the planner reads through
         # the index), stated rather than tuned away: the same index as TimescaleDB.
@@ -1120,18 +1071,15 @@ ARCADEDB_SORTED_ID_INDEXES = (("l2", "Person", "id"),)
 # cell that loaded it, which the row says with `msg_vertices`.
 ARCADEDB_HASH_ID_REQUIRES = {("l2", "olap"): "msg_vertices"}
 
-# THE UNSTAMPED ROW IS REPORT-ONLY UNTIL THE RE-PIN CAMPAIGN STARTS, THEN A FAILURE. October's own
-# rows predate the stamp, so a gate that failed an UNSTAMPED row would block landing an October stage
-# (or the freeze's consistency pass) whenever this branch's gates are run over October's rows. While
-# this is False, a row with no `index_kinds` is printed as a WARNING and the exit status is left alone.
-# The commit that starts the re-pin campaign sets it to True (CAMPAIGN section 7, row 68), and from
-# then on an unstamped row fails too. This is the ONLY switch, and it does not touch the other case: a
-# STAMPED row whose kind disagrees with the registry is a failure from the first day (see below).
+# THE UNSTAMPED ROW FAILS (CAMPAIGN section 7, row 68). While this is False, a row with no
+# `index_kinds` is printed as a WARNING and the exit status is left alone. This is the ONLY switch, and
+# it does not touch the other case: a STAMPED row whose kind disagrees with the registry is always a
+# failure (see below).
 INDEX_KINDS_GATE_FAILS = True
 
 
 def check_index_kinds(rows):
-    """F14d: every 2026-10 row of an ArcadeDB arm on a lane that has a changed index records
+    """F14d: every 2026-11 row of an ArcadeDB arm on a lane that has a changed index records
     the kinds the engine built, and they are the kinds the registry says (a setting written is
     not a setting in force). Returns the failure count.
 
@@ -1150,7 +1098,7 @@ def check_index_kinds(rows):
     for r in rows:
         be, lane = str(r.get("backend")), str(r.get("lane"))
         if (not be.startswith("arcadedb") or lane not in lanes or r.get("error")
-                or str(r.get("instrument") or "") != "2026-10"):
+                or str(r.get("instrument") or "") != publish_instrument.PUBLISH_INSTRUMENT):
             continue
         wl = str(r.get("workload"))
         judged += 1
@@ -1192,7 +1140,7 @@ def check_index_kinds(rows):
 # NONE for l_shipdate can still time a key index its transactional workload needs.
 # DuckDB builds o_okey on the EMPTY orders_new table: 0.008-0.012 s, where the
 # l_shipdate index it declares away costs 3.4-3.6 s at SF1 (laptop, DuckDB 1.5.4,
-# 2026-09-23, three reps each). The bound sits 10x above the first and 34x below
+# three reps each). The bound sits 10x above the first and 34x below
 # the second at SF1, further below at SF10, so the check still catches the removed
 # index coming back. Without this entry the gate refused qOE's first DuckDB rows
 # (index_s=0.01) as "an index that was removed has come back", found by the
@@ -1216,7 +1164,7 @@ def _check_index_rows(rows):
     (the pull, budget_lookup, equivalence_check, budgets.py); only qOJ checks
     that the specific fix it exists to measure is present, because that guard
     was written by hand when the stage was generated. qOD3 and qOE carry the
-    2026-09-22 index fixes -- PostgreSQL's l_shipdate, ArangoDB's persistent
+    index fixes -- PostgreSQL's l_shipdate, ArangoDB's persistent
     pid, the two removals -- and verify none of them. A waiting queue script
     cannot be edited (bash reads it by byte offset), so the check goes where
     the pull already reaches: here, against the rows the stage produces.
@@ -1305,14 +1253,10 @@ def check_index_decisions(rows=None):
     return bad
 
 
-# DECISIONS #132. F14c's dense lane, read per adapter rather than per row: the
-# rows were measured before the split reached every arm, and a mid-campaign
-# change would split the lane's rows, so the October answer is a declaration
-# for the arms whose index work genuinely has no separate phase, and a
-# disclosure for the two that do have one and time it inside one timer. Both
-# maps are read by export_web as well, so the page and this gate state the
-# same thing. The disclosed arms gain the split at the re-pin (CAMPAIGN
-# section 7), after which their entries here go.
+# DECISIONS #132. F14c's dense lane, read per adapter rather than per row: a
+# declaration for the arms whose index work genuinely has no separate phase, and
+# a disclosure for an arm that has one and times it inside one timer. Both maps
+# are read by export_web as well, so the page and this gate state the same thing.
 PHASE_SPLIT_DECLARED = {
     ("l3d", "chroma_dense"): "builds its HNSW index during the load (`add`)",
     ("l3d", "qdrant_dense"): "builds its HNSW index in the background as points arrive, and the wait for it is inside the build timer",
@@ -1321,12 +1265,12 @@ PHASE_SPLIT_DECLARED = {
     ("l3d", "sqlite_vec_dense"): "has no separate index: `vec0` is a brute-force table",
     ("l3d", "sqlite_vec_dense_int8"): "has no separate index: `vec0` is a brute-force table",
     ("l3d", "surrealdb_dense"): "defines its index before the load, which builds it as rows arrive",
-    # #131 item 3 (2026-10-02). Lucene builds a graph per segment while
+    # #131 item 3. Lucene builds a graph per segment while
     # documents are indexed and the force-merge rebuilds it into one.
     ("l3d", "elasticsearch_dense"): "builds its HNSW per segment as documents are indexed, and the refresh and the force-merge into one segment, which rebuilds the graph, are inside the build timer",
     ("l3d", "elasticsearch_dense_int8"): "builds its HNSW per segment as documents are indexed, and the refresh and the force-merge into one segment, which rebuilds the graph, are inside the build timer",
 }
-# EMPTY SINCE 2026-10-02 (CAMPAIGN section 7 row 44): DuckDB VSS and ArangoDB
+# EMPTY (CAMPAIGN section 7 row 44): DuckDB VSS and ArangoDB
 # now time their load and their index as two timers, as the split arms do,
 # so neither needs a disclosure. An arm added here again is one whose index
 # phase exists and is timed inside one timer.
@@ -1362,7 +1306,7 @@ def check_phase_split(rows):
     lanes = collections.defaultdict(lambda: collections.defaultdict(lambda: [0, 0, 0]))
     for r in rows:
         lane = r.get("lane")
-        if not lane or str(r.get("instrument") or "") != "2026-10":
+        if not lane or str(r.get("instrument") or "") != publish_instrument.PUBLISH_INSTRUMENT:
             continue
         st = lanes[lane][r.get("backend")]
         st[0] += 1
@@ -1409,15 +1353,15 @@ def _durability_classes_required(lane, backend):
 def check_durability(rows):
     import bench_common
     print("=== F10: durability class and instrument per table ===")
-    oct_rows = [r for r in rows if str(r.get("instrument") or "") == "2026-10"]
-    if not oct_rows:
-        print("  no 2026-10 rows in the canonical set; nothing to check yet")
+    inst_rows = [r for r in rows if str(r.get("instrument") or "") == publish_instrument.PUBLISH_INSTRUMENT]
+    if not inst_rows:
+        print("  no 2026-11 rows in the canonical set; nothing to check yet")
         return 0
     bad = 0
     unverified = set()
     no_setting = set()
     seen_classes = collections.defaultdict(set)   # (lane, scale, workload, backend) -> classes
-    for r in oct_rows:
+    for r in inst_rows:
         d = str(r.get("durability") or "")
         # THE TWO THINGS A ROW NOW SAYS (DECISIONS #90): the class the CELL
         # asked for, and the class the ENGINE reported. A cell that asked for
@@ -1434,7 +1378,7 @@ def check_durability(rows):
         else:
             seen_classes[key].add(asked)
         if got is None:
-            print(f"  FAIL {where}: 2026-10 row records no durability"); bad += 1
+            print(f"  FAIL {where}: 2026-11 row records no durability"); bad += 1
             continue
         if r.get("durability_no_setting"):
             # An engine with no knob reports the same string in both classes,
@@ -1476,13 +1420,13 @@ def check_durability(rows):
     # The two data-dependent time-series shapes must agree across engines
     # (l4_tsbs records the counts; a query that returned a different number
     # of rows measured a different question).
-    # ...and the document analytics shapes, per scale (the three 2026-10
+    # ...and the document analytics shapes, per scale (the three
     # queries return a fixed count only if every engine grouped the same way).
     for lane, fields in (("l4", ("q_groupby_rows", "q_high_rows")),
                          ("l1tpc", ("top_parts_rows", "ship_mode_rows", "by_month_rows"))):
         for qn in fields:
             got = {}
-            for r in oct_rows:
+            for r in inst_rows:
                 if r.get("lane") == lane and r.get(qn) not in (None, ""):
                     got.setdefault((r.get("scale"), str(r.get(qn))), set()).add(r.get("backend"))
             per_scale = {}
@@ -1500,7 +1444,7 @@ def check_durability(rows):
               f"(each straced rather than assumed); they run once and the page "
               f"prints that one number in both columns (DECISIONS #90)")
     if not bad:
-        print(f"  ok: {len(oct_rows)} 2026-10 rows, every durability recorded, "
+        print(f"  ok: {len(inst_rows)} 2026-11 rows, every durability recorded, "
               f"in the class the cell asked for, and both classes present on "
               f"every write cell")
     return bad
@@ -1514,17 +1458,15 @@ def check_overrides(rows):
     under a table (CAMPAIGN section 7 row 21). override_registry.py registers each one
     with the row field its adapter (or the runner, for the served ArcadeDB
     cap) reads back from the engine, and the value the page sentence claims.
-    A 2026-10 row of such an arm without the field, or with another value, is
+    A 2026-11 row of such an arm without the field, or with another value, is
     the page saying something its artifact does not show. page_check holds the
-    sentence half. Rows measured before the stamps existed fail here by design:
-    every arm on a table is re-run at the re-pin (version_consistency_check), so
-    no frozen row survives it.
+    sentence half.
     """
     import override_registry as OV
     print("=== F15: every disclosed override is stamped on the rows that ran it ===")
     bad_list, judged = OV.stamp_findings(rows)
     if not judged:
-        print("  no 2026-10 row of an arm that runs a registered override; nothing to check yet")
+        print("  no 2026-11 row of an arm that runs a registered override; nothing to check yet")
         return 0
     groups = {}
     for f in bad_list:
@@ -1539,30 +1481,13 @@ def check_overrides(rows):
     return len(bad_list)
 
 
-# (moved above _dense_rows: it is read there too)
-# DECISIONS #86: the laptop skeleton waives the two invariants that are about
-# the BENCH HOST and nothing else -- F1's cpuset pinning and F3's per-size
-# memory envelope -- because a laptop has neither. Every other invariant,
-# including the degree match, the close cost, the durability class, and the
-# instrument, runs exactly as it will in October. The waiver is printed here
-# and published in the payload (export_web.SKELETON_WAIVERS); it is never
-# silent, and BENCH_SKELETON is set by the skeleton publish alone.
-
-
 def main():
     try:
         rows = _canonical()
     except Exception as e:
         print(f"cannot load canonical rows: {e}")
         return 2
-    if SKELETON:
-        print("=== SKELETON publish (DECISIONS #86): F1 (cpuset) and F3 "
-              "(memory envelope) are WAIVED ===")
-        print("  Both describe the bench host, which for a skeleton is the "
-              "laptop. Every other invariant below runs unchanged.")
-        bad = 0
-    else:
-        bad = check_cpuset(rows) + check_envelope(rows)
+    bad = check_cpuset(rows) + check_envelope(rows)
     bad += check_jvm_defaults_arms(rows)
     bad += check_heap_witnesses(rows)
     bad += check_index_kinds(rows)
@@ -1639,7 +1564,7 @@ def check_producers(rows):
 def report_producers(rows):
     """F6b: did published rows come from the lane script or a bespoke driver?
 
-    Was dead code until 2026-08-01. check_producers() and LANE_SCRIPT sat
+    Was once dead code. check_producers() and LANE_SCRIPT sat
     BELOW `if __name__ == "__main__": sys.exit(main())`, so running the file
     as a script exited at that line and never reached their definitions, let
     alone called them. FAIRNESS.md calls this rule the structural cause of
