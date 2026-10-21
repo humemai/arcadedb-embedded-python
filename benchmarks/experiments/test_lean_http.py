@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The ArcadeDB served arms' HTTP client: lean_http.Session against requests.Session (CAMPAIGN section 7 row 72).
+"""The lean HTTP client (the labelled sensitivity twin of the served ArcadeDB arms, CAMPAIGN section 7 row 72) against requests.Session, the reference it mimics.
 
 Run with `python -m pytest test_lean_http.py -q -rs` from this directory (the parity tests need `requests`; they skip without it).
 
@@ -9,7 +9,7 @@ replaces requests must give every caller the same answers, so these tests run th
 read: status, reason, headers, bytes, text, json(), the text of raise_for_status(), and the request each one SENDS (headers and body bytes, the
 chunked stream of an iterator body included). They also pin what keep-alive adds: one connection for many calls, a connection the server
 closed is replaced, a read that dies on a reused connection is retried once and a write never is, a timeout raises an OSError that is a
-TimeoutError, and the choice of client is switchable, read from the session, forwarded to the lane container, and recorded on the manifest.
+TimeoutError, and the choice of client (official driver or lean) is read from the session and recorded on the manifest.
 """
 import gzip
 import json
@@ -490,24 +490,25 @@ def test_a_connection_that_dies_while_sending_with_no_answer_keeps_the_plain_mes
 
 # ------------------------------------------------------------------------------------------- the switch and the record
 def test_the_factory_follows_BENCH_ARCADEDB_HTTP_CLIENT(monkeypatch):
+    """The official driver is the default; `lean` is the runner's twin selector; nothing else is a client."""
     monkeypatch.delenv(LH.CLIENT_ENV, raising=False)
+    monkeypatch.setattr(LH, "OfficialSession", lambda: "an official session")      # the driver package is not installed in every venv
+    assert LH.client_choice() == LH.OFFICIAL and LH.Session() == "an official session"
+    monkeypatch.setenv(LH.CLIENT_ENV, "official")
+    assert LH.client_choice() == LH.OFFICIAL
+    monkeypatch.setenv(LH.CLIENT_ENV, "lean")
     s = LH.Session()
     assert isinstance(s, LH.LeanSession) and s.client_name == LH.LEAN_NAME
-    monkeypatch.setenv(LH.CLIENT_ENV, "lean")
-    assert isinstance(LH.Session(), LH.LeanSession)
-    monkeypatch.setenv(LH.CLIENT_ENV, "requests")
-    r = LH.Session()
-    assert isinstance(r, requests.Session) and r.client_name == f"requests {requests.__version__}"
-    monkeypatch.setenv(LH.CLIENT_ENV, "urllib")
-    with pytest.raises(ValueError):
-        LH.Session()
+    for retired in ("requests", "lean2", "urllib"):
+        monkeypatch.setenv(LH.CLIENT_ENV, retired)
+        with pytest.raises(ValueError):
+            LH.Session()
 
 
 def test_the_row_records_the_client_the_session_ran_with(monkeypatch):
-    monkeypatch.delenv(LH.CLIENT_ENV, raising=False)
+    monkeypatch.setenv(LH.CLIENT_ENV, "lean")
+    monkeypatch.delenv("BENCH_ARCADEDB_CLIENT_ROLE", raising=False)
     assert LH.row_fields(LH.Session()) == {"arcadedb_http_client": LH.LEAN_NAME}
-    monkeypatch.setenv(LH.CLIENT_ENV, "requests")
-    assert LH.row_fields(LH.Session()) == {"arcadedb_http_client": f"requests {requests.__version__}"}
 
 
 def test_the_manifest_records_the_client(monkeypatch):
@@ -515,16 +516,17 @@ def test_the_manifest_records_the_client(monkeypatch):
     import runner
     args = types.SimpleNamespace(tier="smoke", scale="micro", reps=1, seed=0)
     monkeypatch.delenv(LH.CLIENT_ENV, raising=False)
-    assert runner.build_manifest("t", args, 1, 1, [])["arcadedb_http_client"] == "lean"
-    monkeypatch.setenv(LH.CLIENT_ENV, "requests")
+    assert runner.build_manifest("t", args, 1, 1, [])["arcadedb_http_client"] == "official"
+    monkeypatch.setenv(LH.CLIENT_ENV, "lean")
     m = runner.build_manifest("t", args, 1, 1, [])
-    assert m["arcadedb_http_client"] == "requests" and m["runner_env"][LH.CLIENT_ENV] == "requests"
+    assert m["arcadedb_http_client"] == "lean" and m["runner_env"][LH.CLIENT_ENV] == "lean"
 
 
-def test_the_lane_container_receives_the_switch():
+def test_the_twin_cell_selects_the_lean_client_and_the_launcher_cannot_inherit_one():
     src = (HERE / "runner.py").read_text()
     block = src[src.index("for _k in (\"ARCADEDB_ENGINE_COMMIT\""):src.index("if os.environ.get(_k):", src.index("for _k in (\"ARCADEDB_ENGINE_COMMIT\""))]
-    assert '"BENCH_ARCADEDB_HTTP_CLIENT"' in block
+    assert '"BENCH_ARCADEDB_HTTP_CLIENT"' not in block
+    assert "BENCH_ARCADEDB_HTTP_CLIENT={job['http_client']}" in src
 
 
 def test_the_page_gate_declares_the_new_row_field():
@@ -564,21 +566,17 @@ def _stub_server_answering_everything():
 @pytest.mark.parametrize("module, cls", [("l2_graph", "ArcadeGraphServer"), ("l3_sparse", "ArcadeServer"), ("l3d_dense", "ArcadeServer"),
                                          ("l4_tsbs", "ArcadeTSServer"), ("l4_tsbs", "ArcadeNativeTSServer"), ("l1_tabular", "ArcadeServer"),
                                          ("l1_tpc", "ArcadeServerTPC")])
-@pytest.mark.parametrize("choice, want", [("", LH.LEAN_NAME), ("requests", f"requests {requests.__version__}")])
-def test_every_served_adapter_records_the_client_it_ran_with(monkeypatch, module, cls, choice, want):
+def test_every_served_adapter_records_the_client_it_ran_with(monkeypatch, module, cls):
     srv = _stub_server_answering_everything()
     try:
-        if choice:
-            monkeypatch.setenv(LH.CLIENT_ENV, choice)
-        else:
-            monkeypatch.delenv(LH.CLIENT_ENV, raising=False)
+        monkeypatch.setenv(LH.CLIENT_ENV, "lean")
         monkeypatch.setenv("BENCH_SERVER_HOST", "127.0.0.1")
         monkeypatch.setenv("BENCH_SERVER_PORT", str(srv.server_address[1]))
         mod = __import__(module)
         ad = getattr(mod, cls)()
         ad.connect()
-        assert ad.row_extra["arcadedb_http_client"] == want
-        assert (type(ad.rq).__name__ == "LeanSession") == (not choice)
+        assert ad.row_extra["arcadedb_http_client"] == LH.LEAN_NAME
+        assert type(ad.rq).__name__ == "LeanSession"
     finally:
         srv.shutdown()
         srv.server_close()
@@ -587,7 +585,7 @@ def test_every_served_adapter_records_the_client_it_ran_with(monkeypatch, module
 def test_the_e2_served_adapter_records_the_client_it_ran_with(monkeypatch):
     srv = _stub_server_answering_everything()
     try:
-        monkeypatch.delenv(LH.CLIENT_ENV, raising=False)
+        monkeypatch.setenv(LH.CLIENT_ENV, "lean")
         monkeypatch.setenv("BENCH_SERVER_HOST", "127.0.0.1")
         monkeypatch.setenv("BENCH_SERVER_PORT", str(srv.server_address[1]))
         import e2_hybrid

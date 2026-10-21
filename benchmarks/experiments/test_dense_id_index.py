@@ -1,11 +1,10 @@
-"""The dense lane's id index for the delete, default OFF (humemai/arcadedb-embedded-python#291, CAMPAIGN section 7 row 84, DECISIONS #178).
+"""The dense lane's id index for the delete (humemai/arcadedb-embedded-python#291, CAMPAIGN section 7 row 84, DECISIONS #178).
 
 Run with `python -m pytest test_dense_id_index.py -q -rs` from this directory. Needs numpy (the lane and export_web import it).
 
-Index parity: when `BENCH_DENSE_ID_INDEX=1`, ArcadeDB and every comparator that stores the id as a plain property (pgvector, Neo4j,
-Memgraph, FalkorDB, DuckDB, LanceDB) build an index on it, inside the load timer; the engines whose own key is the id stamp "key".
-Unset, nothing is built and no row field appears. The /next page says ArcadeDB's delete ran without the index while the rows lack the
-stamp, and the list of coming measurements says those engines are measured again.
+Index parity: ArcadeDB and every comparator that stores the id as a plain property (pgvector, Neo4j, Memgraph, FalkorDB, DuckDB, LanceDB)
+build an index on it, inside the load timer; the engines whose own key is the id stamp "key". The page says ArcadeDB's delete ran without
+the index while rows lack the stamp, and the list of coming measurements says those engines are measured again.
 """
 import inspect
 import os
@@ -41,14 +40,8 @@ def EW():
     return export_web
 
 
-def test_switch_is_off_unless_set_to_1(L, monkeypatch):
-    monkeypatch.delenv("BENCH_DENSE_ID_INDEX", raising=False)
-    assert L.id_index_enabled() is False
-    monkeypatch.setenv("BENCH_DENSE_ID_INDEX", "1")
-    assert L.id_index_enabled() is True
-    monkeypatch.setenv("BENCH_DENSE_ID_INDEX", "yes")       # a typo must not run unindexed while the launcher believes otherwise
-    with pytest.raises(SystemExit):
-        L.id_index_enabled()
+def test_there_is_no_switch(L):
+    assert not hasattr(L, "id_index_enabled") and not hasattr(L, "ID_INDEX_ENV")
 
 
 def test_every_plain_property_engine_builds_an_index_and_the_rest_use_their_key(L):
@@ -57,8 +50,8 @@ def test_every_plain_property_engine_builds_an_index_and_the_rest_use_their_key(
         if base:
             assert cls.ID_INDEX_DDL != "key", name
             src = inspect.getsource(cls.build)
-            # the build asks the switch, or wraps a parent build that does (the int8 arms set the quantization and call super)
-            assert "id_index_enabled()" in src or "super().build(" in src, name
+            # the build sets the index it made, or wraps a parent build that does (the int8 arms set the quantization and call super)
+            assert "self.id_index = self.ID_INDEX_DDL" in src or "super().build(" in src, name
         else:
             assert cls.ID_INDEX_DDL == "key", f"{name}: deletes by its own key, so it builds nothing"
 
@@ -69,10 +62,6 @@ def test_every_dense_arm_is_an_override_carrier():
     pytest.importorskip("numpy")
     import l3d_dense
     assert set(l3d_dense.BACKENDS) == carriers
-
-
-def test_runner_forwards_the_switch_into_the_container():
-    assert '"BENCH_DENSE_ID_INDEX"' in (HERE / "runner.py").read_text()
 
 
 class _FakeBatch:
@@ -107,23 +96,15 @@ class _FakeA:
         return v
 
 
-@pytest.mark.parametrize("on", [False, True])
-def test_arcadedb_embedded_builds_the_index_before_the_load_only_when_on(L, monkeypatch, on):
+def test_arcadedb_embedded_builds_the_index_before_the_load(L, monkeypatch):
     import numpy as np
-    if on:
-        monkeypatch.setenv("BENCH_DENSE_ID_INDEX", "1")
-    else:
-        monkeypatch.delenv("BENCH_DENSE_ID_INDEX", raising=False)
     monkeypatch.delenv("BENCH_DENSE_QUANT", raising=False)
     a = object.__new__(L.ArcadeEmbedded)
     a.db, a._a = _FakeDb(), _FakeA()
     a.build(np.zeros((3, L.DIM), dtype="float32"))
     ddl = "CREATE INDEX ON Article (vid) UNIQUE_HASH"
-    if on:
-        assert a.db.log.index(ddl) < a.db.log.index("graph_batch")
-        assert a.id_index == ddl
-    else:
-        assert ddl not in a.db.log and a.id_index is None
+    assert a.db.log.index(ddl) < a.db.log.index("graph_batch")
+    assert a.id_index == ddl
 
 
 def _row(**kw):

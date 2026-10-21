@@ -2845,29 +2845,26 @@ def _client_tail(job, be, scale, run_id):
             "--scale", scale, "--out", f"/work/results/raw/{run_id}.json"]
 
 
-# THE IDLE-STATE HOLD (CAMPAIGN section 7 row 81, DECISIONS #177), default OFF. With `BENCH_CPU_DMA_LATENCY_US` unset nothing in
-# this block runs and no row field is added. Set (0, 10, ...), the runner opens /dev/cpu_dma_latency, writes the target as a
-# 32-bit integer, and keeps the descriptor open for the length of the timed cell: the kernel honours the target only while the
+# THE IDLE-STATE HOLD (CAMPAIGN section 7 row 81, DECISIONS #177). The runner opens /dev/cpu_dma_latency, writes the target
+# (`bench_common.CPU_DMA_LATENCY_DEFAULT_US`, 0, or the whole number of microseconds in `BENCH_CPU_DMA_LATENCY_US`) as a 32-bit
+# integer, and keeps the descriptor open for the length of the timed cell: the kernel honours the target only while the
 # descriptor is open, and it caps how deep a core may sleep. The hold is on the host, so it reaches the container's cores.
 CPU_DMA_LATENCY_ENV = "BENCH_CPU_DMA_LATENCY_US"
 CPU_DMA_LATENCY_DEV = "/dev/cpu_dma_latency"
 
 
 def cpu_dma_latency_target():
-    """The requested target in microseconds, or None when the switch is unset. A value that is not a whole number of
-    microseconds ends the run, because stamping a request that was never made would be a false row."""
+    """The target in microseconds: `bench_common.CPU_DMA_LATENCY_DEFAULT_US`, or the value of `BENCH_CPU_DMA_LATENCY_US`. A value
+    that is not a whole number of microseconds ends the run, because stamping a request that was never made would be a false row."""
     raw = (os.environ.get(CPU_DMA_LATENCY_ENV) or "").strip()
     if not raw:
-        # Unset: no hold through 2026-10; BENCH_INSTRUMENT=2026-11 holds the default target (CAMPAIGN section 7 row 81)
-        return bench_common.CPU_DMA_LATENCY_DEFAULT_US if bench_common.next_instrument_default() else None
-    if bench_common.next_instrument_default() and raw.lower() == "off":
-        return None    # an explicit "no hold" under the instrument that defaults to one
+        return bench_common.CPU_DMA_LATENCY_DEFAULT_US
     try:
         n = int(raw)
     except ValueError:
         n = -1
     if n < 0 or n > 0x7FFFFFFF:
-        raise SystemExit(f"{CPU_DMA_LATENCY_ENV}={raw!r}: must be a whole number of microseconds, 0 or more (unset it for no hold)")
+        raise SystemExit(f"{CPU_DMA_LATENCY_ENV}={raw!r}: must be a whole number of microseconds, 0 or more (unset it for {bench_common.CPU_DMA_LATENCY_DEFAULT_US})")
     return n
 
 
@@ -2881,8 +2878,6 @@ class CpuDmaLatencyHold:
         self.error = None
 
     def __enter__(self):
-        if self.target is None:
-            return self
         try:
             fd = os.open(CPU_DMA_LATENCY_DEV, os.O_WRONLY)
         except OSError as e:
@@ -2907,8 +2902,6 @@ class CpuDmaLatencyHold:
         return False
 
     def stamp(self, row):
-        if self.target is None:
-            return row
         row["cpu_dma_latency_us"] = self.target
         row["cpu_dma_latency_held"] = self.error is None and self.fd is not None
         if self.error:
@@ -3257,26 +3250,18 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                    "BENCH_RS_ITERS", "BENCH_RS_WARMUP", "BENCH_RS_WRITE_N",
                    "BENCH_RS_GRACE_S", "BENCH_RS_POLL_S", "BENCH_RS_START_TIMEOUT_S",
                    "BENCH_RS_TRACE", "BENCH_RS_VERIFY_S",
-                   # The HTTP client every ArcadeDB served arm uses (lean_http.py, CAMPAIGN 7
-                   # row 72): unset or "lean" is the persistent http.client connection,
-                   # "requests" restores the October client. CLOSED tuple: a campaign that set it
-                   # without this line would have run the default while believing otherwise.
-                   "BENCH_ARCADEDB_HTTP_CLIENT",
-                   # which instrument the cell measures: the container's own bench_common reads it, and every
-                   # next-instrument default in the lanes (warm-up, id index, read path, -Xms) follows from it. Unset is
-                   # not forwarded, so a container of the running instrument sees exactly what it saw before.
-                   "BENCH_INSTRUMENT", "BENCH_LARGE_RESULT_PATH", "BENCH_ARCADEDB_EMBEDDED_XMS",
-                   # the sparse lane's untimed warm-up, OFF unless set (row 81, DECISIONS #177); the lane reads it in the container
+                   # the sparse lane's warm-up count (row 81, DECISIONS #177); the lane reads it in the container
                    "BENCH_SPARSE_WARMUP",
-                   # the dense lane's id index for the delete, OFF unless set (row 84, #291, DECISIONS #178)
-                   "BENCH_DENSE_ID_INDEX",
                    # the served ArcadeDB time-series arms read query answers as NDJSON, OFF unless set (row 85)
                    "BENCH_ARCADEDB_TS_NDJSON"):
             if os.environ.get(_k):
                 bench_env += ["-e", f"{_k}={os.environ[_k]}"]
 
-        # THE LABELLED SENSITIVITY TWIN of a served ArcadeDB arm (CAMPAIGN section 7 row 72): the same cell on the lean HTTP client,
-        # after the env forwarding above so it wins over an inherited BENCH_ARCADEDB_HTTP_CLIENT.
+        # WHICH INSTRUMENT THE CELL MEASURES, always forwarded from this process's own `bench_common.INSTRUMENT`, so the container
+        # stamps and follows the instrument the launcher selected and the two cannot disagree (the image's bench_common may be older).
+        bench_env += ["-e", f"BENCH_INSTRUMENT={bench_common.INSTRUMENT}"]
+
+        # THE LABELLED SENSITIVITY TWIN of a served ArcadeDB arm (CAMPAIGN section 7 row 72): the same cell on the lean HTTP client.
         if job.get("http_client"):
             bench_env += ["-e", f"BENCH_ARCADEDB_HTTP_CLIENT={job['http_client']}",
                           "-e", "BENCH_ARCADEDB_CLIENT_ROLE=sensitivity"]
@@ -3839,24 +3824,14 @@ def restricted_arms(lane):
     return {be: ARM_RUNS[be][lane] for be in LANES[lane][1] if lane in ARM_RUNS.get(be, {})}
 
 
-# THE SERVED ARCADEDB ARMS' CLIENT SENSITIVITY (CAMPAIGN section 7 row 72, the next instrument). The headline client of a served
-# ArcadeDB arm is the vendor's `arcadedb-driver` (lean_http.OfficialSession). Under BENCH_INSTRUMENT=2026-11 every such arm also runs
+# THE SERVED ARCADEDB ARMS' CLIENT SENSITIVITY (CAMPAIGN section 7 row 72). The headline client of a served
+# ArcadeDB arm is the vendor's `arcadedb-driver` (lean_http.OfficialSession). Every such arm also runs
 # the same cell on the lean HTTP client, as a twin job whose rows carry `arcadedb_http_client_role` = "sensitivity" and whose run_id ends
-# in `_clientlean`. `BENCH_ARCADEDB_CLIENT_SENSITIVITY=0|1` overrides the instrument's default in both instruments. The PostgreSQL wire
-# has no adapter in this harness, so it is not among the twins.
+# in `_clientlean`. The PostgreSQL wire has no adapter in this harness, so it is not among the twins.
 ARCADEDB_HTTP_ARMS = ("arcadedb_server", "arcadedb_graph_server", "arcadedb_e2_server", "arcadedb_sparse_server",
                       "arcadedb_sparse_server_fp32", "arcadedb_dense_server", "arcadedb_dense_server_int8",
                       "arcadedb_ts_doc_server", "arcadedb_ts_native_server")
 SENSITIVITY_CLIENT = "lean"
-
-
-def client_sensitivity_enabled():
-    raw = (os.environ.get("BENCH_ARCADEDB_CLIENT_SENSITIVITY") or "").strip()
-    if not raw:
-        return bench_common.next_instrument_default()
-    if raw not in ("0", "1"):
-        raise SystemExit(f"BENCH_ARCADEDB_CLIENT_SENSITIVITY={raw!r}: set it to 0 or 1, or unset it")
-    return raw == "1"
 
 
 def build_jobs(lanes, workloads_arg):
@@ -3889,7 +3864,7 @@ def build_jobs(lanes, workloads_arg):
                 jobs.append({"lane": lane, "backend": be, "workload": wl,
                              "script": script,
                              "run_id": f"{lane}_{be}_{wl}"})
-                if client_sensitivity_enabled() and be in ARCADEDB_HTTP_ARMS:
+                if be in ARCADEDB_HTTP_ARMS:
                     jobs.append({**jobs[-1], "http_client": SENSITIVITY_CLIENT,
                                  "run_id": f"{lane}_{be}_{wl}_client{SENSITIVITY_CLIENT}"})
     if want:
@@ -4159,7 +4134,7 @@ def main():
             # truncated batch as success. Now the cell is counted as raised,
             # the traceback printed, the batch goes on, and the exit is 1.
             try:
-                # the idle-state hold wraps the timed cell (row 81); with the switch unset the hold is a no-op
+                # the idle-state hold wraps the timed cell (row 81)
                 with CpuDmaLatencyHold(cpu_dma_latency_target()) as _hold:
                     row = run_cell(job, rep, args.scale, shard, args.tier, net_name)
                     _hold.stamp(row)

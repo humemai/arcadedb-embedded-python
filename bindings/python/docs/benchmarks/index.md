@@ -25,7 +25,7 @@ Two benchmark suites live in the repository, and they answer different questions
 | [`benchmarks/experiments/`](https://github.com/humemai/arcadedb-embedded-python/tree/main/benchmarks/experiments) | Engine against engine. How does ArcadeDB compare with specialist and embedded databases on the same corpus, the same machine, and the same operation? | These pages |
 | [`benchmarks/python-bindings/`](https://github.com/humemai/arcadedb-embedded-python/tree/main/benchmarks/python-bindings) | Binding against binding. What does reaching the same engine through Python cost against calling it from Java? | [Performance: Python Bindings vs Java](../guide/performance.md) |
 
-These pages describe the instrument the current campaign runs, settled before its first
+These pages describe the 2026-11 instrument, settled before its first
 cell so that nothing changes under the rows (a mid-campaign change splits them). The
 published page can lag the instrument, so where a corpus size or an engine list here is
 ahead of what the page prints, that is the gap between an instrument and the rows it has

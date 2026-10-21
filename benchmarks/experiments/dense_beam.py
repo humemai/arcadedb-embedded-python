@@ -1,8 +1,8 @@
-"""The dense lane's search-beam sweep and its matched-recall headline (instrument 2026-11 only).
+"""The dense lane's search-beam sweep and its matched-recall headline.
 
 One latency at one search beam says little: an engine that is fast at ef 100 may be fast
 because it is answering worse. ANN-benchmarks practice is to compare engines at the SAME
-recall, so under BENCH_INSTRUMENT=2026-11 the dense lane builds the index once and, after the
+recall, so the dense lane builds the index once and, after the
 cold timed pass it has always run, runs one more timed pass per beam value on the same built
 index. The headline cell is the lowest p50 among the beam values whose recall@10 reaches a
 fixed target (0.95; 0.90 and 0.99 are secondary), with the beam that achieved it beside it.
@@ -40,7 +40,7 @@ NPROBE_MULTIPLES = (0.5, 1, 2, 4)
 
 
 def enabled():
-    """True when the sweep may run: instrument 2026-11 or later. Under 2026-10 nothing changes."""
+    """True when the sweep may run: instrument 2026-11 or later (every instrument this harness measures)."""
     return bench_common.instrument_at_least("2026-11")
 
 

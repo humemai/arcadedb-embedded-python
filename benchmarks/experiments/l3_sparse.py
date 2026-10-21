@@ -31,45 +31,33 @@ gen_docs, gen_queries = _src.gen_docs, _src.gen_queries
 WARMUP = 5
 INGEST_BATCH = 500
 
-# THE UNTIMED WARM-UP (CAMPAIGN section 7 row 81, DECISIONS #177), default OFF. Unset: no warm-up and no row field, so
-# a row is what it was. `BENCH_SPARSE_WARMUP=N` (a positive integer) runs N untimed searches on every backend after the
-# build and before the timed pass, and the row records `sparse_warmup_queries`. Under BENCH_INSTRUMENT=2026-11 an unset variable means
-# bench_common.SPARSE_WARMUP_DEFAULT (1,000; "0" or "off" turns it off) and the warm-up queries are DISJOINT from the timed set
-# (disjoint_warmup_queries; the row stamps `sparse_warmup_source`); under 2026-10 unset still means none, and an explicit N draws its
-# N queries from the query set by a seeded sample, so every engine gets the same ones, and they are spread over the set instead of being the
-# timed pass's first N (those are the ones the timed pass would otherwise replay from a warm cache). Same count and
-# same rule for every engine, as the documents lane's warm-up uses keys apart from the timed ones.
+# THE UNTIMED WARM-UP (CAMPAIGN section 7 row 81, DECISIONS #177). After the build and before the timed pass every backend runs
+# `bench_common.SPARSE_WARMUP_DEFAULT` untimed searches (1,000, one full round), drawn from queries DISJOINT from the timed set
+# (disjoint_warmup_queries) so a query or result cache cannot flatter an engine, and the row records `sparse_warmup_queries` and
+# `sparse_warmup_source`. Same count and same rule for every engine, as the documents lane's warm-up uses keys apart from the timed
+# ones. `BENCH_SPARSE_WARMUP=N` (a positive integer) sets the count (PROTOCOL.md section 7); the warm-up itself cannot be turned off.
 WARMUP_ENV = "BENCH_SPARSE_WARMUP"
 WARMUP_SEED = 177
 
 
 def sparse_warmup_n():
-    """The requested warm-up count, or 0 when the switch is unset. A value that is not a positive integer ends the run:
-    a launcher that asked for a warm-up and silently got none would stamp nothing and believe otherwise."""
+    """The warm-up count: `bench_common.SPARSE_WARMUP_DEFAULT`, or the positive integer in `BENCH_SPARSE_WARMUP`. A value that is
+    not a positive integer ends the run: a launcher that asked for a count and silently got another would stamp one and believe
+    the other."""
     raw = (os.environ.get(WARMUP_ENV) or "").strip()
     if not raw:
-        # Unset: none through 2026-10; BENCH_INSTRUMENT=2026-11 warms every engine (CAMPAIGN section 7 row 81)
-        return bench_common.SPARSE_WARMUP_DEFAULT if bench_common.next_instrument_default() else 0
-    if bench_common.next_instrument_default() and raw.lower() in ("0", "off"):
-        return 0       # an explicit "no warm-up" under the instrument that defaults to one
+        return bench_common.SPARSE_WARMUP_DEFAULT
     try:
         n = int(raw)
     except ValueError:
         n = 0
     if n <= 0:
-        raise SystemExit(f"{WARMUP_ENV}={raw!r}: must be a positive integer (unset it for no warm-up)")
+        raise SystemExit(f"{WARMUP_ENV}={raw!r}: must be a positive integer (unset it for {bench_common.SPARSE_WARMUP_DEFAULT})")
     return n
 
 
-def warmup_indices(n, n_queries):
-    """Which queries of the set the warm-up runs: the same for every engine."""
-    import random
-    n = min(n, n_queries)
-    return sorted(random.Random(WARMUP_SEED).sample(range(n_queries), n))
-
-
 def disjoint_warmup_queries(n, n_timed, n_docs):
-    """The warm-up queries of the next instrument: `n` queries that are NOT in the timed set, so an engine with a query or result cache
+    """The warm-up queries: `n` queries that are NOT in the timed set, so an engine with a query or result cache
     cannot look faster for having seen them. Returns (queries, source). The source is the dataset's EXTRA queries, the ones after
     the `n_timed` the timed pass uses ("extra_queries": the rest of the Big-ANN dev file, or the next draws of the synthetic generator,
     whose first `n_timed` draws are the timed set); when the dataset holds fewer than `n_timed + n`, a fixed-seed sample of `n`
@@ -189,8 +177,8 @@ class ArcadeEmbedded(Base):
     def connect(self):
         import arcadedb_embedded as arcadedb
         heap = os.environ.get("ARCADEDB_HEAP", "4g")
-        # -Xms pinned to -Xmx through 2026-10; left unset under 2026-11 (bench_common.embedded_xms)
-        jvm_args = bench_common.embedded_xms(heap)
+        # -Xms is left unset; heap_size sets -Xmx from the cell's memory budget (the bindings' documented practice, PROTOCOL section 7).
+        jvm_args = ""
         # Engine knobs for an ablation arm, e.g.
         #   ARCADEDB_JVM_EXTRA=-Darcadedb.sparseVectorScoringMaxPartitions=8
         # Echoed rather than applied silently: an unread override would make an
@@ -228,7 +216,7 @@ class ArcadeEmbedded(Base):
         heap = os.environ.get("ARCADEDB_HEAP", "4g")
         self.db = arcadedb.open_database(
             "/tmp/l3_arcade",
-            jvm_kwargs={"heap_size": heap, "jvm_args": bench_common.embedded_xms(heap) or None})
+            jvm_kwargs={"heap_size": heap, "jvm_args": None})
         self.idx_name = "Doc[tokens,weights]"
 
     def build(self, n_docs):
@@ -848,22 +836,15 @@ def main():
     out.update(getattr(b, "row_extra", None) or {})
     out.update(bench_common.client_path_fields())
 
-    # THE UNTIMED WARM-UP, only when asked for (row 81); nothing below changes when it is not.
+    # THE UNTIMED WARM-UP (row 81): queries disjoint from the timed set; the row names the source
     _warm_n = sparse_warmup_n()
-    if _warm_n:
-        _w0 = time.perf_counter()
-        _beat.mark("search-warmup-start", n=_warm_n)
-        if bench_common.next_instrument_default():
-            # 2026-11: queries disjoint from the timed set (see disjoint_warmup_queries); the row names the source
-            _wq, out["sparse_warmup_source"] = disjoint_warmup_queries(_warm_n, len(queries), n_docs)
-            for _idx, _vals in _wq:
-                b.search(_idx, _vals, K)
-            out["sparse_warmup_queries"] = len(_wq)
-        else:
-            for _qi in warmup_indices(_warm_n, len(queries)):
-                b.search(queries[_qi][0], queries[_qi][1], K)
-            out["sparse_warmup_queries"] = min(_warm_n, len(queries))
-        _beat.mark("search-warmup-done", t=f"{round(time.perf_counter() - _w0, 2)}s")
+    _w0 = time.perf_counter()
+    _beat.mark("search-warmup-start", n=_warm_n)
+    _wq, out["sparse_warmup_source"] = disjoint_warmup_queries(_warm_n, len(queries), n_docs)
+    for _idx, _vals in _wq:
+        b.search(_idx, _vals, K)
+    out["sparse_warmup_queries"] = len(_wq)
+    _beat.mark("search-warmup-done", t=f"{round(time.perf_counter() - _w0, 2)}s")
 
     # timed warm search
     _search_t0 = time.perf_counter()

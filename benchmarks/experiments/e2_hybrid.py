@@ -215,14 +215,10 @@ class ArcadeE2:
         heap = os.environ.get("ARCADEDB_HEAP", "4g")
         self.db = arcadedb.create_database(
             "/tmp/e2_arcade",
-            # In THIS lane the asymmetry had a direct comparator: the
-            # composed arm's Neo4j gets NEO4J_server_memory_heap_initial
-            # __size pinned, so under a protocol the paper says applies to
-            # everyone, the comparator got the committed, latency-stable
-            # heap and ArcadeDB got one that grows.
+            # -Xms is left unset; heap_size sets -Xmx from the cell's memory budget (the bindings' documented practice, PROTOCOL section 7).
             # txWalFlush explicit at both classes (DECISIONS #90).
             jvm_kwargs={"heap_size": heap,
-                        "jvm_args": bench_common.arcade_jvm_args(bench_common.embedded_xms(heap))})
+                        "jvm_args": bench_common.arcade_jvm_args()})
         # THE WHEEL'S version, not its name (#156). A row stamped
         # "arcadedb-embedded" cannot be re-measured by anyone including us.
         from importlib.metadata import version as _v

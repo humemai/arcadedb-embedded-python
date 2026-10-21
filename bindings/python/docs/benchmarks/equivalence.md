@@ -19,9 +19,7 @@ This page is the reason the suite is not a stopwatch.
 The digest is computed **outside the timed section**, from the object the timed call
 returned, so checking the answer costs the measurement nothing. The gate is
 `equivalence_check.py`, and it runs on every publish beside the provenance, fairness, and
-page checks. It holds the rows of the 2026-10 instrument, the first whose lanes record
-digests. Rows from earlier campaigns carry none, so the gate reports them as skipped, by
-count, rather than comparing them.
+page checks. It holds the rows of the instrument, every lane of which records digests.
 
 ## The Canonical Form
 
@@ -188,9 +186,8 @@ probably yield findings too.
 
 ## What It Means for a Reader
 
-- From the 2026-10 instrument on, a published latency is a latency for **the answer the other
-  engines gave**. If the engines of a table disagreed at any size, the table did not publish.
-  Rows from earlier campaigns carry no digest, so their answers were never compared; see
+- A published latency is a latency for **the answer the other engines gave**. If the engines
+  of a table disagreed at any size, the table did not publish; see
   [Reading the Output](results.md#how-the-page-is-generated-and-gated).
 - A dash on the page is either a declared unexpressible operation, with its reason in the
   table's condition, or a censored cell with its budget stated. Neither is a gap nobody
