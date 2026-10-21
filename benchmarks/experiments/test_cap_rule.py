@@ -1,4 +1,4 @@
-"""The cap rule (DECISIONS #188): cap_rule.py computes it, make_2610_stages.py applies it at run time, export_web.py at report time.
+"""The cap rule (DECISIONS #188): cap_rule.py computes it, make_2611_stages.py applies it at run time, export_web.py at report time.
 
 Run with `python -m pytest test_cap_rule.py -q` from this directory. What is held fixed: the numbers the rule gives for the
 cells the live stages were patched with; the stage text every generator mode emits (helpers, the three call sites, a lowered
@@ -18,7 +18,7 @@ sys.path.insert(0, str(HERE))
 os.environ.setdefault("BENCH_ENGINE_COMMIT", "d36b4ca3a")
 
 import cap_rule as C  # noqa: E402
-import make_2610_stages as G  # noqa: E402
+import make_2611_stages as G  # noqa: E402
 
 
 def line(cell, secs, status="ok"):
@@ -118,40 +118,32 @@ def test_without_the_data_a_stage_is_unchanged(monkeypatch):
 def _env(tmp_path):
     wheel = tmp_path / "arcadedb_embedded-26.10.1-cp312-cp312-manylinux_2_34_x86_64.whl"
     wheel.write_bytes(b"not a real wheel, only its name and sha256 are read")
-    return dict(os.environ, ARCADEDB_WHEEL=str(wheel), ARCADEDB_SERVER_IMAGE="arcadedb-c25:26.10.1",
-                ARCADEDB_ENGINE_COMMIT="d36b4ca3ae4c170abc73598e0dffa2bb58e06621")
+    env = {k: v for k, v in os.environ.items() if k != "BENCH_INSTRUMENT"}
+    env.update(ARCADEDB_WHEEL=str(wheel), ARCADEDB_SERVER_IMAGE="arcadedb-c25:26.10.1",
+               ARCADEDB_ENGINE_COMMIT="d36b4ca3ae4c170abc73598e0dffa2bb58e06621")
+    return env
 
 
 def _gen(tmp_path, name, *extra):
     out = tmp_path / name
-    r = subprocess.run([sys.executable, str(HERE / "make_2610_stages.py"), "--out", str(out), "--after", "none", *extra],
-                       cwd=HERE, env=_env(tmp_path), capture_output=True, text=True)
+    r = subprocess.run([sys.executable, str(HERE / "make_2611_stages.py"), "--second-list", "--out", str(out),
+                        "--after", "none", *extra], cwd=HERE, env=_env(tmp_path), capture_output=True, text=True)
     assert r.returncode == 0, r.stdout[-400:] + r.stderr[-400:]
-    return out
-
-
-def _top_up(tmp_path):
-    import test_stage_top_up as T
-    out, r = T._generate(tmp_path, T.R.build_roster(T.synthetic_rows(), source="synthetic.jsonl"), "--after", "qP34", name="topup")
     return out
 
 
 @pytest.fixture(scope="module")
 def modes(tmp_path_factory):
     t = tmp_path_factory.mktemp("caprule")
-    return {"tiered": _gen(t, "tiered"), "rep-pass": _gen(t, "reppass", "--rep-pass", "3"),
-            "pass-tiers": _gen(t, "passtiers", "--rep-pass", "3", "--pass-tiers", "1,2"),
-            "top-up": _top_up(t)}
+    return {"biggest-last": _gen(t, "biglast"), "paper": _gen(t, "paper", "--order", "paper", "--reps", "5")}
 
 
-@pytest.mark.parametrize("mode", ["tiered", "rep-pass", "pass-tiers", "top-up"])
+@pytest.mark.parametrize("mode", ["biggest-last", "paper"])
 def test_every_mode_emits_the_helpers_at_the_patched_insertion_points_and_still_parses(modes, mode):
     stages = sorted(modes[mode].glob("*.sh"))
     assert stages
     for f in stages:
         text = f.read_text()
-        if "run_cell()" not in text:
-            continue      # the Python-cost host stage has no cells
         assert text.count("declare -A CENSORED_AT") == 1, f.name
         assert text.index("declare -A CENSORED_AT") < text.index("run_overlay() {"), f.name
         assert 'cap_rule_skip "$label" "$be|$wl|" && return 0' in text, f.name
@@ -161,27 +153,27 @@ def test_every_mode_emits_the_helpers_at_the_patched_insertion_points_and_still_
 
 
 def test_the_emitted_helpers_are_the_ones_patched_into_the_live_stages(modes):
-    text = (modes["rep-pass"] / "qP34.sh").read_text()
+    text = sorted(modes["paper"].glob("*.sh"))[0].read_text()
     assert G.CAP_RULE_HELPERS.strip("\n") in text
     assert "grep -E '^\\s+\\[[0-9]+/[0-9]+\\] ' \"$S\" | tail -1 | grep -q -- '-> timeout_after_'" in text
 
 
 def test_a_cap_is_lowered_to_the_rule_and_the_seeding_reaches_a_later_stage(modes):
-    text = "\n".join(f.read_text() for f in sorted(modes["rep-pass"].glob("*.sh")))
+    text = "\n".join(f.read_text() for f in sorted(modes["paper"].glob("*.sh")))
     assert re.search(r'run_cell "l2/sf10/\$BE/oltp" sf10 8685 ', text)
     assert re.search(r'run_cell "l2/sf10/\$BE/oltp strict" sf10 9031 ', text)
     assert 'CENSORED_AT["surrealdb_lifecycle|graph|"]="lc1m"' in text
     assert 'CENSORED_AT["surrealdb_lifecycle|vector|"]="lc100k"' in text
     assert 'CENSORED_AT["surrealdb_tpc|olap|"]="tpch1"' in text
     # the arm is seeded above the scale it was censored at and not at it
-    stage = next(f.read_text() for f in sorted(modes["rep-pass"].glob("*.sh"))
+    stage = next(f.read_text() for f in sorted(modes["paper"].glob("*.sh"))
                  if 'CENSORED_AT["surrealdb_tpc|olap|"]="tpch1"' in f.read_text())
     assert stage.index('CENSORED_AT["surrealdb_tpc|olap|"]') > stage.index('run_cell "l1tpc/tpch1/$BE/olap"')
 
 
 def test_a_cap_the_tier_has_lower_than_the_rule_is_not_raised(modes):
     d = C.load()
-    for f in modes["rep-pass"].glob("*.sh"):
+    for f in modes["paper"].glob("*.sh"):
         for lane, scale, wl, strict, cap in re.findall(r'run_cell "([a-z0-9]+)/([a-z0-9_]+)/\$BE/([a-z_0-9]+)( strict)?" \S+ (\d+)',
                                                       f.read_text()):
             r = C.rule_cap(lane, scale, wl, "strict" if strict else "", d)

@@ -169,7 +169,7 @@ Every other directory under `results/` is evidence, quarantine, or output; nothi
 
 **`evidence/`** holds tracked copies of what an upstream report cites: `results/` is untracked by design, but an upstream issue needs a stable URL. Copy, never move; `results/` stays the working store.
 
-**Queue scripts.** The live chain and where finished scripts go: CAMPAIGN.md section 6; what each stage runs: `make_october_stages.STAGES` for the October chain and `make_2610_stages.py` for the 26.10.1 measurement. Every script gates on `verify_pair_c25.sh`, which sits here beside `build_matched_pair.sh` and `build_c25_wheel.sh`, the pair recipe.
+**Queue scripts.** The live chain and where finished scripts go: CAMPAIGN.md section 6; what each stage runs: `make_2611_stages.STAGES`. Every script gates on `verify_pair_c25.sh`, which sits here beside `build_matched_pair.sh` and `build_c25_wheel.sh`, the pair recipe.
 
 ## Landing a finished queue stage
 

@@ -24,7 +24,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 import bench_common  # noqa: E402
-import make_2610_stages as G  # noqa: E402
+import make_2611_stages as G  # noqa: E402
 
 PIN = "1.7.1"
 DOCKERFILE = (HERE / "Dockerfile.bench").read_text()
@@ -123,23 +123,30 @@ def test_the_pair_check_reads_the_pin_from_the_dockerfile_and_checks_the_embedde
 
 
 # --------------------------------------------------------------------------- the generator
-def test_the_check_passes_on_this_tree():
+@pytest.fixture()
+def as_2611(monkeypatch):
+    """main() refuses a tree that does not select its instrument; the entry point sets it, a direct call selects it here."""
+    monkeypatch.delenv("BENCH_INSTRUMENT", raising=False)
+    monkeypatch.setattr(bench_common, "INSTRUMENT", G.INSTRUMENT)
+
+
+def test_the_check_passes_on_this_tree(as_2611):
     assert G.check_jpype_pin() == []
     assert G.main(["--check"]) == 0
 
 
-def test_check_refuses_a_dockerfile_default_that_is_not_the_pin(tmp_path, capsys, monkeypatch):
+def test_check_refuses_a_dockerfile_default_that_is_not_the_pin(as_2611, tmp_path, capsys, monkeypatch):
     other = tmp_path / "Dockerfile.bench"
     other.write_text(DOCKERFILE.replace(f"ARG JPYPE_VERSION={PIN}", "ARG JPYPE_VERSION=1.7.2"))
     monkeypatch.setattr(G, "JPYPE_DOCKERFILE", str(other))
     assert G.main(["--check"]) == 1
     out = capsys.readouterr().out
     assert "PROBLEM jpype pin" in out and "1.7.2" in out and PIN in out
-    # and nothing else ran: no coverage line after a refused pin
-    assert "coverage:" not in out
+    # and nothing else ran: no selection line after a refused pin
+    assert "engines:" not in out
 
 
-def test_check_refuses_a_constant_that_moved_without_the_dockerfile(capsys, monkeypatch):
+def test_check_refuses_a_constant_that_moved_without_the_dockerfile(as_2611, capsys, monkeypatch):
     monkeypatch.setattr(bench_common, "JPYPE_PIN", "1.7.2")
     assert G.main(["--check"]) == 1
     out = capsys.readouterr().out
@@ -170,39 +177,27 @@ def stages(tmp_path_factory):
     env = dict(os.environ, ARCADEDB_WHEEL=str(wheel), ARCADEDB_SERVER_IMAGE="arcadedb-c25:26.10.1",
                ARCADEDB_ENGINE_COMMIT="d36b4ca3ae4c170abc73598e0dffa2bb58e06621")
     out = tmp / "stages"
-    r = subprocess.run([sys.executable, str(HERE / "make_2610_stages.py"), "--out", str(out), "--after", "none"],
+    env.pop("BENCH_INSTRUMENT", None)
+    r = subprocess.run([sys.executable, str(HERE / "make_2611_stages.py"), "--second-list", "--out", str(out), "--after", "none"],
                        cwd=HERE, env=env, capture_output=True, text=True)
     assert r.returncode == 0, r.stdout[-400:] + r.stderr[-400:]
     return out
 
 
-def _stage_ids():
-    # the ids of the order the fixture generates (the generator's default, DECISIONS #163: qT01..), not the paper order's qRA..
-    stages = G.tiered_stages()
-    host = [s[0] for s in stages if s[2] == "pycost"]
-    runner_stages = [s[0] for s in stages if s[2] != "pycost"]
-    assert len(host) == 1 and runner_stages
-    return host[0], runner_stages
+def _stage_ids(stages):
+    ids = sorted(p.stem for p in stages.glob("*.sh"))
+    assert ids
+    return ids
 
 
 def test_every_runner_stage_reads_jpype_out_of_the_image_after_the_build(stages):
-    host, runner_stages = _stage_ids()
-    for sid in runner_stages:
+    for sid in _stage_ids(stages):
         text = (stages / f"{sid}.sh").read_text()
         assert text.count("import jpype; print(jpype.__version__)") == 1, sid
         assert f'[ "$IJ" = "{PIN}" ]' in text, sid
         # after the image build and the wheel check, before the pair check and the first cell
         assert text.index("./build_images.sh") < text.index('IJ=$(docker run') < text.index("./verify_pair_c25.sh"), sid
         assert text.index('IJ=$(docker run') < text.index('trap \'echo "$ID ALL-DONE"'), sid
-
-
-def test_the_host_stage_checks_the_repo_venv_and_names_the_pinned_install(stages):
-    host, _ = _stage_ids()
-    text = (stages / f"{host}.sh").read_text()
-    assert f'[ "$HAVE_J" = "{PIN}" ]' in text
-    assert f"uv pip install --python $REPO/.venv jpype1=={PIN}" in text
-    assert f"whl jpype1=={PIN}" in text            # the wheel's own install hint carries the pin too
-    assert text.index("HAVE_J=") < text.index("mkdir -p")
 
 
 def _snippet(text, first, last):
@@ -221,8 +216,7 @@ def _run_snippet(tmp_path, preamble, snippet):
 
 @pytest.mark.parametrize("image_says,aborts", [(PIN, False), ("1.7.2", True), ("1.8.0.dev0", True), ("", True)])
 def test_a_runner_stage_aborts_when_the_image_runs_another_jpype(stages, tmp_path, image_says, aborts):
-    _, runner_stages = _stage_ids()
-    text = (stages / f"{runner_stages[0]}.sh").read_text()
+    text = (stages / f"{_stage_ids(stages)[0]}.sh").read_text()
     snippet = _snippet(text, "IJ=$(docker run", "ABORT: dbbench:arcadedb runs JPype")
     r, status = _run_snippet(tmp_path, f"docker() {{ printf '%s\\n' '{image_says}'; }}", snippet)
     if not aborts:
@@ -232,24 +226,6 @@ def test_a_runner_stage_aborts_when_the_image_runs_another_jpype(stages, tmp_pat
     # the message names the stage, the image, the version found, the pin, and what to do
     assert f"qRX ABORT: dbbench:arcadedb runs JPype '{image_says}', the pin is {PIN} " in status
     assert "Dockerfile.bench" in status and "rebuild dbbench:arcadedb" in status
-
-
-@pytest.mark.parametrize("venv_says,aborts", [(PIN, False), ("1.7.2", True), ("", True)])
-def test_the_host_stage_aborts_when_the_repo_venv_runs_another_jpype(stages, tmp_path, venv_says, aborts):
-    host, _ = _stage_ids()
-    text = (stages / f"{host}.sh").read_text()
-    snippet = _snippet(text, "HAVE_J=", "ABORT: the repo venv runs JPype")
-    py = tmp_path / "repo" / ".venv" / "bin" / "python"
-    py.parent.mkdir(parents=True)
-    py.write_text(f"#!/bin/sh\n[ -n '{venv_says}' ] && echo '{venv_says}'\nexit 0\n")
-    py.chmod(0o755)
-    r, status = _run_snippet(tmp_path, f"REPO={tmp_path / 'repo'}", snippet)
-    if not aborts:
-        assert r.returncode == 0 and "PASSED" in r.stdout and status == ""
-        return
-    assert r.returncode == 1 and "PASSED" not in r.stdout
-    assert f"qRX ABORT: the repo venv runs JPype '{venv_says}', the pin is {PIN}; install it first: " in status
-    assert f"uv pip install --python {tmp_path / 'repo'}/.venv jpype1=={PIN}" in status
 
 
 def test_the_stages_carry_the_pin_the_generator_holds_not_a_literal_of_their_own(stages, monkeypatch, tmp_path):
@@ -262,13 +238,12 @@ def test_the_stages_carry_the_pin_the_generator_holds_not_a_literal_of_their_own
     wheel.write_bytes(b"x")
     out = tmp_path / "moved"
     out.mkdir()
-    G.emit_all(str(out), {"ARCADEDB_ENGINE_COMMIT": "d36b4ca3ae4c170abc73598e0dffa2bb58e06621",
-                          "ARCADEDB_WHEEL": str(wheel), "ARCADEDB_SERVER_IMAGE": "arcadedb-c25:26.10.1"},
-               None, allow_dev=False, stages=G.tiered_stages())
-    host, runner_stages = _stage_ids()
-    assert '[ "$IJ" = "1.7.2" ]' in (out / f"{runner_stages[0]}.sh").read_text()
-    assert '[ "$HAVE_J" = "1.7.2" ]' in (out / f"{host}.sh").read_text()
-    assert PIN not in "".join(re.findall(r'\[ "\$(?:IJ|HAVE_J)" = "[^"]+" \]', (out / f"{host}.sh").read_text()))
+    pins = {"ARCADEDB_ENGINE_COMMIT": "d36b4ca3ae4c170abc73598e0dffa2bb58e06621",
+            "ARCADEDB_WHEEL": str(wheel), "ARCADEDB_SERVER_IMAGE": "arcadedb-c25:26.10.1"}
+    G.emit_all(str(out), G.number(G.subset_specs(["duckdb"], ["l2"], "paper"), "qS"), pins, None, 3)
+    text = (out / "qS01.sh").read_text()
+    assert '[ "$IJ" = "1.7.2" ]' in text
+    assert PIN not in "".join(re.findall(r'\[ "\$IJ" = "[^"]+" \]', text))
 
 
 # --------------------------------------------------------------------------- the rows

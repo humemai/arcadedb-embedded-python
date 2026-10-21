@@ -102,7 +102,7 @@ echo "arcadedb pin: $_pin"
 # of a new JPype release would resolve the new one and change every embedded
 # ArcadeDB call's cost in the middle of a run. The version is read from
 # Dockerfile.bench's ARG default (bench_common.JPYPE_PIN is checked against it by
-# make_2610_stages.py --check) and passed down explicitly, so a JPYPE_VERSION left
+# make_2611_stages.py --check) and passed down explicitly, so a JPYPE_VERSION left
 # in the caller's environment cannot move it.
 JPYPE_VERSION=$(sed -n 's/^ARG JPYPE_VERSION=//p' Dockerfile.bench)
 case "$JPYPE_VERSION" in

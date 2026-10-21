@@ -99,7 +99,7 @@ def embedded_jvm_args(heap, *more):
 # from Java. The wheel declares `jpype1>=1.5.0` with no upper bound, so an image
 # built on the day of the next release would have changed the instrument in the
 # middle of a run and split its rows. Dockerfile.bench installs
-# `jpype1==${JPYPE_VERSION}` with this default; make_2610_stages.py --check
+# `jpype1==${JPYPE_VERSION}` with this default; make_2611_stages.py --check
 # refuses a Dockerfile whose default is not this constant, and every stage
 # refuses an image or a repo venv that runs another one.
 JPYPE_PIN = "1.7.1"

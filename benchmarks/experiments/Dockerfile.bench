@@ -9,7 +9,7 @@ ARG PIP_PACKAGES=""
 # JPype release would have resolved the new one and changed what every embedded
 # ArcadeDB call costs in the middle of a run. A hard `==`, installed in the same
 # pip command as the wheel, so the resolver has no room to pick another. The
-# default is bench_common.JPYPE_PIN; `make_2610_stages.py --check` refuses a
+# default is bench_common.JPYPE_PIN; `make_2611_stages.py --check` refuses a
 # default that differs, and every stage reads the version back out of the image.
 ARG JPYPE_VERSION=1.7.1
 # Local wheels (e.g. a not-yet-released arcadedb-embedded) placed in
