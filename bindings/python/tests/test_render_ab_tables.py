@@ -85,13 +85,19 @@ def test_every_figure_has_a_block_in_the_docs():
         assert f"<!-- ab-table: {figure} -->" in text, figure
 
 
-def test_a_figure_without_a_result_file_renders_the_pending_line(tmp_path, capsys):
+def test_a_figure_without_a_result_file_renders_nothing(tmp_path):
     docs, results = _tree(tmp_path, None, EMPTY_BLOCK)
-    assert _run(docs, results) == 1  # the empty block is not the rendered one yet
-    assert _run(docs, results, "--write") == 0
-    text = (docs / "page.md").read_text(encoding="utf-8")
-    assert "Measurement pending" in text and "`commit-size`" in text
     assert _run(docs, results) == 0
+    assert _run(docs, results, "--write") == 0
+    assert (docs / "page.md").read_text(encoding="utf-8") == EMPTY_BLOCK
+
+
+def test_text_between_markers_without_a_result_file_fails_the_check(tmp_path):
+    doc = "<!-- ab-table: commit-size -->\ntyped by hand\n<!-- /ab-table -->\n"
+    docs, results = _tree(tmp_path, None, doc)
+    assert _run(docs, results) == 1
+    assert _run(docs, results, "--write") == 0
+    assert "typed by hand" not in (docs / "page.md").read_text(encoding="utf-8")
 
 
 def test_write_renders_the_table_and_check_passes(tmp_path):

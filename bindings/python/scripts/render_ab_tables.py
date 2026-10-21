@@ -6,7 +6,7 @@ said 372.9). Every A/B figure in the docs is therefore generated: the docs hold 
 live in a result file, and this script is the only thing that writes between the markers.
 
     <!-- ab-table: parallel-buckets -->
-    ...rendered table, or the "measurement pending" line when there is no result file yet...
+    ...rendered table, or nothing at all while there is no result file yet...
     <!-- /ab-table -->
 
 Result files: bindings/python/docs/benchmarks/ab-results/<figure-id>.json, one file per figure, written from
@@ -201,14 +201,10 @@ def effective_env(data: dict, row: dict) -> dict:
     return {**data["environment"], **row.get("environment", {})}
 
 
-def pending(figure: str) -> str:
-    return f"*Measurement pending: figure `{figure}` ({FIGURES[figure]}). No recommendation on this page changes until the A/B result for it is published.*\n"
-
-
 def render(figure: str, data: dict | None) -> str:
-    """The text between the markers for one figure (ends with a newline)."""
+    """The text between the markers for one figure: empty without a result file (the page reads as before), else ends with a newline."""
     if data is None:
-        return pending(figure)
+        return ""
     rows = data["comparisons"]
     envs = [effective_env(data, r) for r in rows]
     distinct = []

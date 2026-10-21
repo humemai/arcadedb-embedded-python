@@ -117,7 +117,6 @@ decode and the null promotion not happening. Pick it for what your columns
 are, not by default.
 
 <!-- ab-table: materialization -->
-*Measurement pending: figure `materialization` (Result materialization: to_list, to_columns, to_dataframe, to_arrow, to_polars). No recommendation on this page changes until the A/B result for it is published.*
 <!-- /ab-table -->
 
 ## Known limits
@@ -133,16 +132,10 @@ Measured limits that remain by design, and the recommended pattern for each:
 | Record mutation (`modify().set().save()`) | 16.5µs vs 3.4µs per record | Absolute cost is small; use SQL `UPDATE` or bulk ingest paths for volume |
 | List-typed columns convert per element via `.get()` | 14.6ms for a 10k-element LIST via `.get()` | Read the row with `to_list()`, or prefer typed array properties (e.g. `ARRAY_OF_FLOATS`) |
 
-### Python function and callback cost
-
-Measured cost of a Python function called from SQL and of a per-record callback, from the bindings A/B study.
-
 <!-- ab-table: udf-cost -->
-*Measurement pending: figure `udf-cost` (Python function in SQL against the equivalent SQL expression). No recommendation on this page changes until the A/B result for it is published.*
 <!-- /ab-table -->
 
 <!-- ab-table: callback-cost -->
-*Measurement pending: figure `callback-cost` (Per-record callback cost of Database.on(...)). No recommendation on this page changes until the A/B result for it is published.*
 <!-- /ab-table -->
 
 ## Memory
@@ -154,12 +147,7 @@ Measured cost of a Python function called from SQL and of a per-record callback,
 | "`-Xmx4g` means it uses 4GB"? | No: `-Xmx` is a ceiling, not a reservation; the heap grows only as needed |
 | Bulk APIs (`to_json_list`, `to_columns`) | Transient peak scales with `batch_size` (rows, not bytes: rows of a megabyte or more need a small `batch_size`) and is fully reclaimed; under a small heap, with rows of ordinary size, they degrade gracefully (slower, no OOM). `to_list()` ends each batch at a few megabytes of JSON, whatever the row width |
 
-### Pinned and unpinned heap
-
-Measured effect of pinning the JVM heap (`-Xms` equal to `-Xmx`) on speed and peak memory.
-
 <!-- ab-table: heap-pinned -->
-*Measurement pending: figure `heap-pinned` (JVM heap pinned (-Xms equal to -Xmx) against unpinned). No recommendation on this page changes until the A/B result for it is published.*
 <!-- /ab-table -->
 
 ## Full report

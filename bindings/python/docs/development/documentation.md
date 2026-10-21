@@ -176,7 +176,7 @@ A number from an A/B measurement is never typed into a page. The pages hold a ma
 <!-- /ab-table -->
 ```
 
-Until a figure has a result file, its block holds a "Measurement pending" line that names the figure. The figure ids are the `FIGURES` table in the script: `ingest-path`, `parallel-buckets`, `async-sql-path`, `commit-size`, `index-before-after`, `rebuild-threshold`, `materialization`, `udf-cost`, `callback-cost` and `heap-pinned`. A block may appear on more than one page. Markers inside a fenced code block, like the one above, are examples and are ignored.
+Until a figure has a result file, nothing is rendered between its markers, so the two comments stay and the page reads as it did without them. The figure ids are the `FIGURES` table in the script: `ingest-path`, `parallel-buckets`, `async-sql-path`, `commit-size`, `index-before-after`, `rebuild-threshold`, `materialization`, `udf-cost`, `callback-cost` and `heap-pinned`. A marker that names an id outside `FIGURES` (a typo) fails the check. A block may appear on more than one page. Markers inside a fenced code block, like the one above, are examples and are ignored.
 
 To publish a figure: put `<figure-id>.json` in `docs/benchmarks/ab-results/`, run `uv run python bindings/python/scripts/render_ab_tables.py --write` from the repository root, and write the recommendation text that the table supports in the same change. The `render-ab-tables` pre-commit hook and `tests/test_render_ab_tables.py` run `--check`, which fails when a block differs from what its result file renders, when a result file is invalid or unused, or when a marker is unclosed or names an unknown figure.
 

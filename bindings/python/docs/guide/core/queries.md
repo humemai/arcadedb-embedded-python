@@ -678,7 +678,6 @@ for doc in db.query("sql", "SELECT FROM Person"):
 ```
 
 <!-- ab-table: materialization -->
-*Measurement pending: figure `materialization` (Result materialization: to_list, to_columns, to_dataframe, to_arrow, to_polars). No recommendation on this page changes until the A/B result for it is published.*
 <!-- /ab-table -->
 
 ## Python Functions in SQL and openCypher
