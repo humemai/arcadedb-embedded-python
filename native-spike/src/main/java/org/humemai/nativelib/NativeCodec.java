@@ -119,6 +119,23 @@ final class NativeCodec {
     meta.append('0');
   }
 
+  /** phase 7: the float32 tail of a reply while a binary-reply batch is being encoded (see ArcadeNative.replyOf) */
+  static final ThreadLocal<FloatSink> SINK = new ThreadLocal<>();
+
+  static final class FloatSink {
+    float[] a = new float[1024];
+    int n;
+
+    int add(final float[] v) {
+      if (n + v.length > a.length)
+        a = java.util.Arrays.copyOf(a, Math.max(a.length * 2, n + v.length));
+      System.arraycopy(v, 0, a, n, v.length);
+      final int off = n;
+      n += v.length;
+      return off;
+    }
+  }
+
   static void append(final StringBuilder sb, final Object value) {
     if (value == null) {
       sb.append("null");
@@ -210,6 +227,9 @@ final class NativeCodec {
       sb.append('[');
       appendElements(sb, collection);
       sb.append(']');
+    } else if (value instanceof float[] a && a.length >= 8 && SINK.get() != null) {
+      final FloatSink sink = SINK.get();
+      tagged(sb, "B").append(sink.add(a)).append(',').append(a.length).append("]}");
     } else if (value instanceof float[] a) {
       sb.append('[');
       for (int i = 0; i < a.length; i++) {

@@ -12,6 +12,8 @@ from ..transactions import TransactionContext
 from . import lib, not_yet
 from .codec import encode_params, json_native, loads
 
+_LAZY_COMMAND_ROWS = os.environ.get("ARCADEDB_NATIVE_LAZY_CMD", "1") != "0"
+_BINARY_REPLY = os.environ.get("ARCADEDB_NATIVE_BIN_REPLY", "1") != "0"
 _FIRST_BATCH = 256
 _NEXT_BATCH = 2048
 _KIND = {"v": "v", "e": "e", "d": "d"}
@@ -410,10 +412,15 @@ class NativeDatabase:
         self, flags: int, prefix: str, language: str, command: str, args
     ) -> NativeResultSet:
         self._check_not_closed()
+        # phase 7 (arcadedb_n_exec flags): 2 = a command's rows are pulled but encoded only when read, 4 = float arrays come back as a float32 tail
+        if flags & 1 and _LAZY_COMMAND_ROWS:
+            flags |= 2
+        if _BINARY_REPLY:
+            flags |= 4
         if lib.BINARY_PARAMS:
             text, buf, count = encode_params(args, binary=True)
             if buf is not None:
-                raw = lib.call(
+                raw, floats = lib.call_bin(
                     "arcadedb_n_exec_bin",
                     self._h,
                     flags,
@@ -425,7 +432,7 @@ class NativeDatabase:
                     count,
                 )
             else:
-                raw = lib.call(
+                raw, floats = lib.call_bin(
                     "arcadedb_n_exec",
                     self._h,
                     flags,
@@ -435,7 +442,7 @@ class NativeDatabase:
                     _FIRST_BATCH,
                 )
         else:
-            raw = lib.call(
+            raw, floats = lib.call_bin(
                 "arcadedb_n_exec",
                 self._h,
                 flags,
@@ -444,7 +451,7 @@ class NativeDatabase:
                 lib.b(encode_params(args)),
                 _FIRST_BATCH,
             )
-        reply = loads(raw)
+        reply = loads(raw, floats)
         if not reply.get("ok"):
             raise _error(prefix, reply)
         return NativeResultSet(self, reply)
@@ -663,6 +670,12 @@ class NativeDatabase:
             raise ValueError("insert_columns needs at least one column")
         if not all(isinstance(n, str) for n in names):
             raise ValueError("insert_columns: column names must be strings")
+        if not parallel:
+            from .bulk import insert_columns_fast
+
+            done = insert_columns_fast(self, type_name, columns, commit_every)
+            if done is not None:
+                return done
         data = [
             c.tolist() if hasattr(c, "tolist") else list(c) for c in columns.values()
         ]

@@ -117,6 +117,7 @@ def _load():
             "arcadedb_n_tx": [P, L, I],
             "arcadedb_n_exec": [P, L, I, S, S, S, I],
             "arcadedb_n_exec_bin": [P, L, I, S, S, S, I, S, L],
+            "arcadedb_n_insert_cols": [P, L, S, S, S, L],
             "arcadedb_n_next": [P, L, I],
             "arcadedb_n_rs_close": [P, L],
             "arcadedb_n_server_start": [P, S],
@@ -169,6 +170,32 @@ def call(name: str, *args) -> dict:
     finally:
         lib.arcadedb_free(th, ptr)
     return text
+
+
+def call_bin(name: str, *args):
+    """Like :func:`call` for a reply that may carry a float32 tail (``arcadedb_n_exec*`` with flag 4): returns ``(text, floats)``,
+    floats a float32 numpy array or None. The JSON ends with ``,"bin":N}`` and the N floats follow its NUL, 4-byte aligned.
+    """
+    lib = _lib or _load()
+    th = _thread_handle()
+    ptr = getattr(lib, name)(th, *args)
+    try:
+        raw = ctypes.string_at(ptr)
+        floats = None
+        if raw.endswith(b"}"):
+            i = raw.rfind(b',"bin":', max(0, len(raw) - 40))
+            if i >= 0:
+                n = int(raw[i + 7 : -1])
+                import numpy as np
+
+                off = (len(raw) + 1 + 3) & ~3
+                floats = np.frombuffer(
+                    ctypes.string_at(ptr + off, 4 * n), dtype=np.float32
+                )
+                raw = raw[:i] + b"}"
+    finally:
+        lib.arcadedb_free(th, ptr)
+    return raw.decode("utf-8"), floats
 
 
 def b(value) -> bytes:

@@ -172,9 +172,26 @@ def _hook(obj):
     return _SIMPLE[kind](payload)
 
 
-def loads(text: str):
-    """Decode a reply, restoring tagged values."""
-    return json.loads(text, object_hook=_hook)
+def loads(text: str, floats=None):
+    """Decode a reply, restoring tagged values. ``floats``: the float32 tail of a binary reply (``["B", offset, count]`` values)."""
+    if floats is None:
+        return json.loads(text, object_hook=_hook)
+
+    def hook(obj):
+        tagged = obj.get(TAG)
+        if (
+            tagged is not None
+            and len(obj) == 1
+            and type(tagged) is list
+            and len(tagged) == 3
+            and tagged[0] == "B"
+        ):
+            return floats[
+                tagged[1] : tagged[1] + tagged[2]
+            ].tolist()  # float32 widens to the same double as the JPype path
+        return _hook(obj)
+
+    return json.loads(text, object_hook=hook)
 
 
 # --- JSON-native form of a row (ResultSet.to_json_list): DATE/DATETIME as epoch millis, DECIMAL as float.

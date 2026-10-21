@@ -251,8 +251,7 @@ public final class ArcadeNative {
       else
         rs = command ? db.command(lang, sql) : db.query(lang, sql);
       final long t3 = System.nanoTime();
-      final String reply = batch(rs, max);
-      final CCharPointer o = out(reply);
+      final CCharPointer o = replyOf(rs, max, flags);
       final long t4 = System.nanoTime();
       T[0]++;
       T[1] += t1 - t0;
@@ -460,6 +459,57 @@ public final class ArcadeNative {
     }
     sb.append("],\"retry\":").append(retry == null ? "null" : "\"" + retry + "\"").append(",\"retry_ms\":").append(retryMs).append('}');
     return sb.toString();
+  }
+
+  // ---- phase 7: lazy command rows, binary float reply, columnar insert (small and separate: BulkOps, Prefetched, NativeCodec.SINK)
+
+  /**
+   * flags bit 1 (2): the statement has run and its first rows are pulled, but not encoded; arcadedb_n_next encodes them when
+   * read. Bit 2 (4): float[] values of 8 or more elements in the reply go to a float32 tail of the reply ({"\u0001":["B",off,n]},
+   * the JSON ends with ,"bin":total and the floats follow the NUL, 4-byte aligned) instead of number text.
+   */
+  private static CCharPointer replyOf(final ResultSet rs, final int max, final int flags) {
+    if ((flags & 2) != 0 && rs != null) {
+      final ResultSet lazy = new Prefetched(rs, max);
+      final long id = IDS.getAndIncrement();
+      RESULT_SETS.put(id, lazy);
+      return out("{\"ok\":true,\"rs\":" + id + ",\"rows\":[],\"meta\":[],\"drained\":false}");
+    }
+    if ((flags & 4) == 0)
+      return out(batch(rs, max));
+    final NativeCodec.FloatSink sink = new NativeCodec.FloatSink();
+    NativeCodec.SINK.set(sink);
+    final String reply;
+    try {
+      reply = batch(rs, max);
+    } finally {
+      NativeCodec.SINK.remove();
+    }
+    if (sink.n == 0)
+      return out(reply);
+    final byte[] b = (reply.substring(0, reply.length() - 1) + ",\"bin\":" + sink.n + "}").getBytes(StandardCharsets.UTF_8);
+    final int off = (b.length + 1 + 3) & ~3;
+    final CCharPointer p = UnmanagedMemory.malloc(off + 4 * sink.n);
+    for (int i = 0; i < b.length; i++)
+      p.write(i, b[i]);
+    for (int i = b.length; i < off; i++)
+      p.write(i, (byte) 0);
+    final CFloatPointer fp = (CFloatPointer) ((org.graalvm.word.Pointer) p).add(off);
+    for (int i = 0; i < sink.n; i++)
+      fp.write(i, sink.a[i]);
+    return p;
+  }
+
+  /** Columnar insert (see BulkOps): header JSON, one buffer holding the columns. Returns {"ok":true,"n":rows}. */
+  @CEntryPoint(name = "arcadedb_n_insert_cols")
+  public static CCharPointer insertCols(final IsolateThread thread, final long h, final CCharPointer type, final CCharPointer header,
+      final CCharPointer buf, final long bufBytes) {
+    try {
+      final java.nio.ByteBuffer bb = CTypeConversion.asByteBuffer(buf, (int) bufBytes);
+      return out("{\"ok\":true,\"n\":" + BulkOps.insertColumns(db(h), str(type), str(header), bb) + "}");
+    } catch (final Throwable t) {
+      return err(t);
+    }
   }
 
   private static CCharPointer out(final String s) {
