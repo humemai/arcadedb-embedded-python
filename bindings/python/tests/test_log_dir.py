@@ -3,6 +3,7 @@
 import os
 import subprocess  # nosec B404 - test-controlled child process
 import sys
+import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -177,3 +178,30 @@ def test_the_engine_jar_carries_the_log_config_the_render_starts_from():
     text = jvm._read_engine_log_properties(jars)
     assert text is not None
     assert "java.util.logging.FileHandler.pattern" in text
+
+
+def test_windows_branch_needs_no_home_directory(tmp_path):
+    # The Windows runner clears the environment in the unit tests above; the base
+    # directory must come from LOCALAPPDATA, or the temp dir, without a home directory.
+    with patch.object(jvm.sys, "platform", "win32"):
+        with patch.dict(os.environ, {"LOCALAPPDATA": str(tmp_path)}, clear=True):
+            with patch.object(Path, "home", side_effect=RuntimeError("no home")):
+                assert _default_log_dir() == tmp_path / "arcadedb-embedded" / "log"
+        with patch.dict(os.environ, {}, clear=True):
+            with patch.object(Path, "home", side_effect=RuntimeError("no home")):
+                expected = Path(tempfile.gettempdir()) / "arcadedb-embedded" / "log"
+                assert _default_log_dir() == expected
+        with patch.dict(os.environ, {}, clear=True):
+            with patch.object(Path, "home", return_value=tmp_path):
+                expected = tmp_path / "AppData" / "Local" / "arcadedb-embedded" / "log"
+                assert _default_log_dir() == expected
+
+
+def test_arg_values_use_forward_slashes_on_every_platform(tmp_path):
+    # as_posix() keeps a Windows drive path usable in -D and -XX values.
+    with patch.dict(os.environ, {}, clear=True):
+        args = _build_jvm_args(
+            heap_size="4g", disable_xml_limits=False, jvm_args=None, log_dir=tmp_path
+        )
+    assert f"-Darcadedb.server.logsDirectory={tmp_path.as_posix()}" in args
+    assert f"-XX:ErrorFile={tmp_path.as_posix()}/hs_err_pid%p.log" in args

@@ -546,16 +546,29 @@ def _dedupe_max_heap(args: list[str]) -> list[str]:
 
 
 def _state_base_dir() -> Path:
-    """Per-user base directory for state and logs, by platform (stdlib only)."""
-    home = Path.home()
+    """Per-user base directory for state and logs, by platform (stdlib only).
+
+    The home directory is read only where the platform needs it, and when it
+    cannot be determined (no HOME or USERPROFILE, as in a stripped-down service
+    environment) the system temp directory is used, so this never raises.
+    """
     if sys.platform == "win32":
-        return Path(os.environ.get("LOCALAPPDATA") or home / "AppData" / "Local")
+        local = os.environ.get("LOCALAPPDATA")
+        if local:
+            return Path(local)
+    elif sys.platform != "darwin":
+        xdg = os.environ.get("XDG_STATE_HOME")
+        # The XDG spec ignores a relative value.
+        if xdg and os.path.isabs(xdg):
+            return Path(xdg)
+    try:
+        home = Path.home()
+    except (RuntimeError, KeyError, OSError):
+        return Path(tempfile.gettempdir())
+    if sys.platform == "win32":
+        return home / "AppData" / "Local"
     if sys.platform == "darwin":
         return home / "Library" / "Logs"
-    xdg = os.environ.get("XDG_STATE_HOME")
-    # The XDG spec ignores a relative value.
-    if xdg and os.path.isabs(xdg):
-        return Path(xdg)
     return home / ".local" / "state"
 
 
