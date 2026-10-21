@@ -150,7 +150,7 @@ def test_the_paper_tables_are_written_beside_the_freeze(published):
     assert "ArcadeDB" in (tables / "t3_graph.tex").read_text()
 
 
-@pytest.mark.parametrize("stamp", ["2026-10", "2026-09", ""])
+@pytest.mark.parametrize("stamp", ["2026-10", "2026-08", ""])
 def test_a_row_of_another_instrument_is_refused_with_a_clear_message(tmp_path, stamp):
     results = _stage(tmp_path / "results")
     rows = _fixture_rows()
