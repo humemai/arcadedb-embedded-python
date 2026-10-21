@@ -994,6 +994,174 @@ starts with it off. Prefer `with db.transaction():` for writes.
 
 ---
 
+### register_function
+
+```python
+db.register_function(
+    name: str,
+    fn: Callable,
+    *,
+    min_args: int | None = None,
+    max_args: int | None = None,
+    deterministic: bool = False,
+    replace: bool = False,
+) -> None
+```
+
+Register a Python function that SQL and openCypher statements can call. Python is the
+only way to do this: no statement can define a function whose body is Python.
+
+```python
+db.register_function("slugify", lambda s: None if s is None else s.lower().replace(" ", "-"))
+db.query("sql", "SELECT slugify(name) AS slug FROM Person WHERE slugify(name) = 'ann-lee'")
+
+# openCypher accepts a function name it does not know only when it has a namespace
+db.register_function("py.slugify", lambda s: s.lower().replace(" ", "-"))
+db.query("opencypher", "MATCH (p:Person) RETURN py.slugify(p.name) AS slug")
+```
+
+**Parameters:**
+
+- `name` (str): letters, digits and underscores, optionally joined by dots (`py.slugify`).
+  SQL names are case-insensitive. A name the engine already has (`abs`, `count`, `toUpper`,
+  `id`, ...) raises `ArcadeDBError`. Use a dotted name to call the function from openCypher:
+  its validator rejects a bare name it does not know.
+- `fn` (callable): called with positional arguments only
+- `min_args`, `max_args` (int, optional): the argument counts a call may pass. They default
+  to what the signature of `fn` allows (parameters without a default, all positional
+  parameters, unlimited with `*args`). A call with another count fails with an error that
+  names the function.
+- `deterministic` (bool): `True` only when `fn` returns the same result for the same
+  arguments and reads nothing else. The planner may then fold a call over constants at plan
+  time and cache plans that contain it. Leave it `False` for anything that reads the clock, a
+  random source, a counter, or the database.
+- `replace` (bool): replace a Python function already registered under this name
+  (otherwise `ArcadeDBError`)
+
+**Conversion:** arguments reach `fn` through
+[`convert_java_to_python`](type_conversion.md) (SQL `NULL` is `None`; a record argument
+arrives as a `Document`, `Vertex` or `Edge`) and the return value goes back through
+[`convert_python_to_java`](type_conversion.md), so `None`, numbers, strings, bools,
+`Decimal`, `datetime`, lists and dicts work.
+
+**Errors:** an exception raised in `fn` (any `BaseException`) fails the statement with an
+`ArcadeDBError` whose text names the function and the Python exception, for example
+`Python function 'explode' failed: ValueError: bad input`. The JVM never sees a Python
+exception. The traceback goes to the `arcadedb_embedded.callbacks` debug log. As for any
+query, an error raised while the rows are produced surfaces when you read the result set.
+
+**Threading:** the engine may call `fn` on its own threads (an async executor's writers, a
+parallel scan). JPype attaches each such thread, and the GIL serializes the calls, so `fn`
+never runs in parallel with other Python code and does not need to be thread-safe against
+itself. A function that blocks on another thread's database work can deadlock the statement
+that called it.
+
+**Scope:** the engine registers functions for the whole process, not for one database: every
+database in this process sees the function. A `Database` removes the functions it registered
+when it is closed. Register before concurrent statements start: the engine's function table
+is not safe to change while another thread resolves a name. An aggregate (one result per
+group) cannot be written this way.
+
+**Cost:** each call is one round trip between the engine and Python, about 5 to 10
+microseconds on a laptop core (see [Python functions](../guide/core/queries.md#python-functions-in-sql-and-opencypher)
+for how it was measured). A statement that calls `fn` on a million rows spends several
+seconds in the call; compute in SQL where a SQL expression can do the work.
+
+**Raises:**
+
+- `ValueError`: invalid name or argument counts
+- `TypeError`: `fn` is not callable
+- `ArcadeDBError`: the name is an engine function, a Python function with this name exists and
+  `replace` is false, or `fn` has a keyword-only parameter without a default
+
+---
+
+### unregister_function
+
+```python
+db.unregister_function(name: str) -> None
+```
+
+Remove a function registered through this database. A statement that calls it afterwards
+fails with an unknown-function error, including one whose text ran before.
+
+**Raises:**
+
+- `ArcadeDBError`: this database did not register a function with this name
+
+---
+
+### on
+
+```python
+db.on(
+    event: str,
+    fn: Callable,
+    type_name: str | None = None,
+) -> EventHandle
+```
+
+Call `fn(record)` when a record is created, updated, or deleted. The record is a
+`Document`, `Vertex` or `Edge`. Python is the only way to do this: no statement can run
+Python on a change.
+
+```python
+audit = []
+handle = db.on("after_create", lambda rec: audit.append(rec.get_rid()), type_name="Person")
+
+# a before_* callback that returns False vetoes the change
+db.on("before_delete", lambda rec: rec.get("name") != "root", type_name="Person")
+
+handle.remove()
+```
+
+**Events:** `before_create`, `after_create`, `before_update`, `after_update`,
+`before_delete`, `after_delete`. Each fires once per record changed, whether the change came
+from SQL, openCypher, or a record's `save()` and `delete()`.
+
+**Veto:** a `before_*` callback that returns `False` stops the change: the record is not
+written, and the statement or `save()` goes on without it, as with the engine's own
+listeners. Any other return value (including `None`) allows it. The return value of an
+`after_*` callback is ignored.
+
+**Timing:** a `before_*` event fires before the record is written. An `after_*` event
+fires right after the write and before the commit, so a transaction that later rolls back
+has already fired its `after_*` callbacks; do not use them for side effects outside the
+database unless you commit first.
+
+**Errors:** an exception raised in a callback is not swallowed. It fails the operation that
+fired the event with an `ArcadeDBError` that names the event and the Python exception, and
+the surrounding transaction does not commit.
+
+**Type filter:** with `type_name`, the callback fires only for records of exactly that type
+(not its subtypes) and keeps firing after schema changes. Without it, the callback fires for
+every record of the database.
+
+**Threading:** a callback runs inside the operation that fired the event, on the thread
+that runs it. That is the engine's thread for an async write; the GIL serializes the calls.
+Keep it quick: it adds to every change of that type.
+
+**Raises:**
+
+- `ValueError`: `event` is not one of the six
+- `TypeError`: `fn` is not callable
+- `ArcadeDBError`: `type_name` does not exist
+
+#### EventHandle
+
+Returned by `db.on()`.
+
+| Member | Meaning |
+|---|---|
+| `remove()` | Unregister the callback. Calling it again does nothing |
+| `active` | `True` until `remove()` |
+| `event`, `type_name` | What it was registered for |
+
+An `EventHandle` is also a context manager: `with db.on("after_create", fn): ...` removes the
+callback on exit. Closing the database drops its callbacks.
+
+---
+
 ### async_executor
 
 ```python

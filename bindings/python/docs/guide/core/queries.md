@@ -677,6 +677,47 @@ for doc in db.query("sql", "SELECT FROM Person"):
         process(doc.get("name"), doc.get("city"))
 ```
 
+## Python Functions in SQL and openCypher
+
+`db.register_function()` makes a Python function callable from a statement. It is for logic
+that SQL cannot express, such as a text normalizer or a call into a Python library. Where a
+SQL expression does the job, use the expression: it stays inside the engine.
+
+```python
+import re
+
+def slugify(text):
+    # SQL NULL arrives as None, and None comes back as NULL
+    return None if text is None else re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+
+db.register_function("slugify", slugify)
+
+db.query("sql", "SELECT slugify(name) AS slug FROM Person")
+db.query("sql", "SELECT FROM Person WHERE slugify(name) = 'ann-lee'")
+
+# openCypher only accepts a function name it does not know when it has a namespace
+db.register_function("py.slugify", slugify)
+db.query("opencypher", "MATCH (p:Person) RETURN py.slugify(p.name) AS slug")
+```
+
+- **Errors.** An exception in the function fails the statement with an `ArcadeDBError` that
+  names the function and the Python exception. A wrong number of arguments fails the same
+  way. The database stays usable.
+- **Aggregates.** Only per-row functions: no `GROUP BY` aggregate can be written in Python.
+- **Threads.** The engine can call the function from its own threads (for example an async
+  executor's writers). The GIL serializes the calls.
+- **Scope.** The engine's function table is process-wide: every database in the process sees
+  the function until `db.unregister_function(name)` or until the `Database` that registered
+  it is closed. Register before concurrent statements run.
+- **Cost.** One call crosses between the engine and Python once per row. Measured with
+  [Example 27](../../examples/27_python_functions_and_record_events.md) on a 20,000-row type
+  (best of 5 runs of `SELECT plus_one(n) FROM Number` against `SELECT n + 1 FROM Number`,
+  JVM warm, a laptop core with the JVM heap at 1 GB), the Python function cost about 5 to
+  10 microseconds more per row than the SQL expression. A statement that calls it on a
+  million rows spends several seconds there.
+
+See [`register_function`](../../api/database.md#register_function) for every argument.
+
 ## OpenCypher
 
 OpenCypher provides expressive graph pattern matching.

@@ -93,6 +93,8 @@ Vector search, graph hop, and document update in one transaction, interrupted be
 
 **[27 - DataFrame And Arrow Ingest](27_dataframe_arrow_ingest.md)**
 A pandas DataFrame into documents, a Polars DataFrame into vertices, an Arrow table into declared properties (and a lossy column refused), and the result back out with `to_polars()`.
+**[27 - Python Functions And Record Events](27_python_functions_and_record_events.md)**
+A Python `slugify` called from SQL and openCypher, its cost per call measured, and an audit trail and a write veto built from `db.on()` callbacks.
 
 ## Quick Start
 
@@ -126,6 +128,7 @@ python 01_simple_document_store.py
 19. **Server HTTP Transactions And Time Series** (24) - Multi-request transactions, server database commands, and line-protocol writes over HTTP
 20. **Sparse Vectors And Compaction** (25) - Sparse index weight precision and the `COMPACT INDEX` settle step
 21. **Cross-Model Atomicity** (26) - Search, hop, and update in one transaction that survives an interruption with nothing torn
+22. **Python Functions And Record Events** (27) - `register_function()` for SQL and openCypher, `on()` callbacks for audit and veto
 
 ---
 

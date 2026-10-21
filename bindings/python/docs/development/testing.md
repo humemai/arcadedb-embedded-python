@@ -51,6 +51,7 @@ asserts, so the list below stops at the file.
 | File | What it checks |
 | --- | --- |
 | `test_core.py` | Create, read, update, and delete, transactions and `run_in_transaction()`, SQL statements, full-text search, graph basics through SQL, `lookup_by_rid()`, result materialization |
+| `test_python_callbacks.py` | `register_function()` (SELECT and WHERE, NULL, result types, arity, errors surfacing as `ArcadeDBError`, replace, unregister, openCypher through a namespaced name, engine and Python threads) and `on()` (each event once per change with the record, type filter, veto of create, update, and delete, `remove()`, exceptions failing the operation) |
 | `test_cypher.py` | OpenCypher queries, path modes, and planner regressions |
 | `test_parameter_binding.py` | Positional and named parameters reach the statement on every entry point, including a lone `None` and the async executor, and scalars skip the conversion walk |
 | `test_percall_calls.py` | The per-call paths of `query`, `command`, `first`, and `get` give the same bound values, overload choice, errors, and result-set state as the plain path (#280) |

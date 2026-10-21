@@ -480,6 +480,41 @@ with arcadedb.open_database("./database1") as db1, \
     pass
 ```
 
+## Record Event Callbacks
+
+`db.on()` runs a Python function when a record is created, updated, or deleted, whether the
+change came from SQL, openCypher, or a record's `save()` and `delete()`. Typical uses are an
+audit trail, a derived value kept up to date, and a rule that refuses some writes.
+
+```python
+audit = []
+db.on("after_create", lambda rec: audit.append(("created", rec.get_rid())), "Person")
+db.on("after_delete", lambda rec: audit.append(("deleted", rec.get_rid())), "Person")
+
+# a before_* callback that returns False refuses the change; the write is skipped
+refuse_blank = db.on("before_create", lambda rec: bool(rec.get("name")), "Person")
+
+with db.transaction():
+    db.command("sql", "INSERT INTO Person SET name = 'Ann'")   # fires after_create
+    db.command("sql", "INSERT INTO Person SET name = ''")      # vetoed: no record
+
+refuse_blank.remove()   # stops this callback only
+```
+
+- **Events:** `before_create`, `after_create`, `before_update`, `after_update`,
+  `before_delete`, `after_delete`. Each fires once per record.
+- **Type filter:** `type_name="Person"` limits a callback to records of exactly that type.
+  Leave it out for every record of the database.
+- **Timing:** `before_*` fires before the write, `after_*` right after it and before the
+  commit, so a rolled-back transaction has already fired its `after_*` callbacks.
+- **Errors:** an exception in a callback fails the operation that fired it with an
+  `ArcadeDBError` and the transaction does not commit. Nothing is swallowed.
+- **Threads:** the callback runs on the thread that makes the change, which is an engine
+  thread for async writes; the GIL serializes the calls. Keep callbacks quick.
+
+See [`on`](../../api/database.md#on) for the full contract and
+[Example 27](../../examples/27_python_functions_and_record_events.md).
+
 ## See Also
 
 - [Database API Reference](../../api/database.md) - Complete API documentation
