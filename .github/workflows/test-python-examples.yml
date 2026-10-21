@@ -183,15 +183,16 @@ jobs:
       # uncached that is 17 independent model downloads per release and 17
       # chances for a transient hub outage to fail a release. It has happened.
       HF_HOME: ${{ github.workspace }}/.hf-cache
-      # The examples run in a throwaway `uv run` environment holding the wheel and the packages in
-      # EXAMPLE_REQUIREMENTS (set by "Install ArcadeDB Python bindings", written by "Install example dependencies"). Torch comes from the PyTorch
-      # CPU index, which avoids the CUDA build on Linux and Windows. That index also carries copies of
-      # numpy, requests and others, and the default first-index strategy would take those over PyPI's.
-      # unsafe-best-match looks at every index and takes the best version of each package; a tie, as
-      # for torch on macOS, goes to the first index. It is safe here because the extra index is
-      # PyTorch's own. UV_PYTHON_DOWNLOADS=never keeps uv on the interpreter setup-python installed.
-      UV_INDEX: https://download.pytorch.org/whl/cpu
-      UV_INDEX_STRATEGY: unsafe-best-match
+      # The examples run in a throwaway uv project (EXAMPLE_PROJECT, written by "Install example
+      # dependencies") that lists the example packages, plus the built wheel passed with `--with`.
+      # Torch comes from the PyTorch CPU index, which avoids the CUDA build on Linux and Windows.
+      # That index is declared `explicit = true` and only torch is pinned to it, so uv asks it
+      # about torch alone and every other package comes from PyPI. Do not set UV_INDEX here: with
+      # a global extra index uv needs `unsafe-best-match` and asks PyTorch about every package, so a
+      # PyTorch outage (503 on /whl/cpu/rich/) fails jobs that do not need torch.
+      # UV_PYTHON_DOWNLOADS=never keeps uv on the interpreter setup-python installed.
+      # UV_HTTP_RETRIES is raised from its default of 3 to ride out a brief index or CDN outage.
+      UV_HTTP_RETRIES: 6
       UV_PYTHON_DOWNLOADS: never
     strategy:
       fail-fast: false
@@ -307,7 +308,7 @@ jobs:
           fi
           {
             echo "ARCADEDB_WHEEL=${wheels[0]}"
-            echo "EXAMPLE_REQUIREMENTS=$RUNNER_TEMP/example-requirements.txt"
+            echo "EXAMPLE_PROJECT=$RUNNER_TEMP/example-project"
           } >> "$GITHUB_ENV"
 
       - name: Install example dependencies
@@ -320,9 +321,31 @@ jobs:
           # numpy is not capped: the old macOS `numpy<2.0` was for Intel Macs, where PyTorch stops at 2.2
           # (built against NumPy 1.x). That leg (darwin/amd64) is disabled; re-enabling it needs the cap
           # back for that platform only. On Apple Silicon a cap breaks pyarrow (it needs NumPy 2 on 3.14).
-          printf '%s\n' torch numpy requests sentence-transformers tqdm py7zr lxml pandas polars pyarrow > "$EXAMPLE_REQUIREMENTS"
+          # They go into a minimal uv project so that `[tool.uv.sources]` can pin torch alone to the
+          # PyTorch CPU index (`explicit = true`); `uv run --no-project` reads no sources, and a
+          # requirements file cannot mark an index explicit. The project has no build system, so
+          # nothing of it is installed except its dependencies.
+          mkdir -p "$EXAMPLE_PROJECT"
+          cat > "$EXAMPLE_PROJECT/pyproject.toml" <<'TOML'
+          [project]
+          name = "arcadedb-examples-env"
+          version = "0"
+          requires-python = ">=3.11"
+          dependencies = [
+            "torch", "numpy", "requests", "sentence-transformers", "tqdm", "py7zr", "lxml",
+            "pandas", "polars", "pyarrow",
+          ]
+
+          [tool.uv.sources]
+          torch = { index = "pytorch-cpu" }
+
+          [[tool.uv.index]]
+          name = "pytorch-cpu"
+          url = "https://download.pytorch.org/whl/cpu"
+          explicit = true
+          TOML
           # Build the environment now, so a dependency that cannot be resolved or installed fails here.
-          EXAMPLES_PYTHON=(uv run --no-project --python "${{ matrix.python-version }}" --with "$ARCADEDB_WHEEL" --with-requirements "$EXAMPLE_REQUIREMENTS" python)
+          EXAMPLES_PYTHON=(uv run --project "$EXAMPLE_PROJECT" --python "${{ matrix.python-version }}" --with "$ARCADEDB_WHEEL" python)
           "${EXAMPLES_PYTHON[@]}" -c "import sys; print(sys.version)"
 
       # Restored before the dataset step, which is what triggers the model
@@ -346,7 +369,7 @@ jobs:
         shell: bash
         continue-on-error: true
         run: |
-          EXAMPLES_PYTHON=(uv run --no-project --python "${{ matrix.python-version }}" --with "$ARCADEDB_WHEEL" --with-requirements "$EXAMPLE_REQUIREMENTS" python)
+          EXAMPLES_PYTHON=(uv run --project "$EXAMPLE_PROJECT" --python "${{ matrix.python-version }}" --with "$ARCADEDB_WHEEL" python)
           for attempt in 1 2 3; do
             if "${EXAMPLES_PYTHON[@]}" -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2'); print('model ready')"; then
               echo "✅ model cached on attempt $attempt"
@@ -360,7 +383,7 @@ jobs:
       - name: Download datasets
         shell: bash
         run: |
-          EXAMPLES_PYTHON=(uv run --no-project --python "${{ matrix.python-version }}" --with "$ARCADEDB_WHEEL" --with-requirements "$EXAMPLE_REQUIREMENTS" python)
+          EXAMPLES_PYTHON=(uv run --project "$EXAMPLE_PROJECT" --python "${{ matrix.python-version }}" --with "$ARCADEDB_WHEEL" python)
           cd bindings/python/examples
 
           # Determine which examples are selected
@@ -452,7 +475,7 @@ jobs:
           cd bindings/python/examples
 
           # Same environment as the steps above; uv builds it once and reuses it for every example.
-          EXAMPLES_PYTHON=(uv run --no-project --python "${{ matrix.python-version }}" --with "$ARCADEDB_WHEEL" --with-requirements "$EXAMPLE_REQUIREMENTS" python)
+          EXAMPLES_PYTHON=(uv run --project "$EXAMPLE_PROJECT" --python "${{ matrix.python-version }}" --with "$ARCADEDB_WHEEL" python)
 
           echo "🚀 Running Python Examples..."
           echo ""
