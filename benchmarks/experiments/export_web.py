@@ -2879,12 +2879,8 @@ def _beam_extras(entry, rs):
     best = max((float(r.get("beam_max_recall_at_10") or 0.0) for r in sweep), default=0.0)
     for t, k in BEAM_TARGETS:
         label = _beam_label("p50", t)
-        if label in entry["metrics"]:
-            continue
-        if all(r.get(f"matched_{k}_status") == "not reached" for r in sweep):
+        if label not in entry["metrics"] and all(r.get(f"matched_{k}_status") == "not reached" for r in sweep):
             entry["metrics"][label] = {"text": f"not reached (best recall {best:.3f})"}
-        elif all(r.get(f"matched_{k}_status") == "not swept" for r in sweep):
-            entry["metrics"][label] = {"text": f"not swept (cell too slow; cold-pass recall {best:.3f})"}
     kind = sweep[0].get("beam_kind")
     if kind == "none":
         entry["beam_curve"] = {"kind": "none", "na": sweep[0].get("beam_na")}

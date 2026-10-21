@@ -2978,11 +2978,11 @@ def main():
     # own held-out warm-up and timed pass. The headline is the latency at matched recall.
     if dense_beam.enabled():
         with _beat.phase("beam-sweep", kind=str(b.beam_kind)):
-            _kind, _pts, _na, _skip = dense_beam.run_sweep(
+            _kind, _pts, _na = dense_beam.run_sweep(
                 b, test, gt, timed_n, K, WARM, surreal_common.keep, pct, statistics.mean,
                 {"recall": out["recall_at_10"], "p50": out["query_p50_ms"], "p99": out["query_p99_ms"]},
-                span, beat=_beat)
-        out.update(dense_beam.row_fields(_kind, _pts, _na, _skip))
+                beat=_beat)
+        out.update(dense_beam.row_fields(_kind, _pts, _na))
 
     # ----------------------------------------------------------------------
     # THE TWO MUTATION OPERATIONS (DECISIONS #82d), in the order DELETE then

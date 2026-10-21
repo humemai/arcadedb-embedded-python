@@ -55,11 +55,11 @@ def test_the_lane_runs_the_sweep_only_behind_the_gate():
 # ------------------------------------------------------------------ selection
 
 def test_target_reached_at_ef_200_is_the_headline():
-    pts = [pt(50, 0.80, 0.3), pt(100, 0.91, 0.5), pt(200, 0.96, 0.9), pt(400, 0.985, 1.7), pt(800, 0.995, 3.2)]
+    pts = [pt(50, 0.80, 0.3), pt(100, 0.91, 0.5), pt(200, 0.96, 0.9), pt(400, 0.992, 1.7)]
     w = DB.select_matched(pts, 0.95)
     assert w["beam"] == 200 and w["p50"] == 0.9
     assert DB.select_matched(pts, 0.90)["beam"] == 100
-    assert DB.select_matched(pts, 0.99)["beam"] == 800
+    assert DB.select_matched(pts, 0.99)["beam"] == 400
 
 
 def test_never_reached_has_no_headline():
@@ -123,8 +123,8 @@ def test_ef_list_contains_the_lane_default():
 
 def test_nprobe_list_is_clipped_sorted_and_holds_the_calibrated_value():
     v = DB.nprobe_values(100, 1000)
-    assert v == [25, 50, 100, 200, 400]
-    assert DB.nprobe_values(3, 1000) == [1, 2, 3, 6, 12]
+    assert v == [50, 100, 200, 400]
+    assert DB.nprobe_values(3, 1000) == [2, 3, 6, 12]
     assert DB.nprobe_values(400, 500)[-1] == 500 and 400 in DB.nprobe_values(400, 500)
 
 
@@ -161,25 +161,25 @@ class NoKnobBackend(FakeBackend):
 COLD = {"recall": 0.9, "p50": 5.0, "p99": 20.0}
 
 
-def _run(backend, span=1.0):
+def _run(backend):
     import numpy as np
     test = np.zeros((25, 2), dtype="float32")
     gt = np.tile(np.arange(10), (25, 1))
     return DB.run_sweep(backend, test, gt, 5, 10, 20, lambda b, lats, ms: lats.append(ms),
                         lambda v: {"p50": sorted(v)[len(v) // 2], "p99": max(v)},
-                        lambda v: sum(v) / len(v), COLD, span)
+                        lambda v: sum(v) / len(v), COLD)
 
 
 def test_run_sweep_takes_every_beam_warms_each_pass_and_restores_the_default():
     b = FakeBackend()
-    kind, points, na, skipped = _run(b)
-    assert kind == "ef" and na is None and skipped is None
+    kind, points, na = _run(b)
+    assert kind == "ef" and na is None
     assert [p["beam"] for p in points] == list(DB.EF_LIST)
-    assert [round(p["recall"], 1) for p in points] == [0.7, 0.7, 1.0, 1.0, 1.0]
+    assert [round(p["recall"], 1) for p in points] == [0.7, 0.7, 1.0, 1.0]
     for v in DB.EF_LIST:
         assert b.seen.count(v) == 5 + 20           # 5 timed queries and 20 held-out warm-ups at each beam
     assert b.beam == 100                            # the default is back for the mutation phases
-    assert DB.select_matched(points, 0.95)["beam"] in (200, 400, 800)     # real (tiny) timings: only the recall gate is fixed
+    assert DB.select_matched(points, 0.95)["beam"] in (200, 400)     # real (tiny) timings: only the recall gate is fixed
 
 
 def test_run_sweep_restores_the_default_when_a_pass_fails():
@@ -196,29 +196,16 @@ def test_run_sweep_restores_the_default_when_a_pass_fails():
 
 def test_an_engine_without_a_knob_runs_no_extra_pass_and_uses_the_cold_pass():
     b = NoKnobBackend()
-    kind, points, na, skipped = _run(b)
-    assert kind == "none" and na == "fixed" and skipped is None
+    kind, points, na = _run(b)
+    assert kind == "none" and na == "fixed"
     assert points == [{**COLD, "beam": None}] and b.seen == []
 
 
-def test_a_cell_too_slow_for_the_sweep_keeps_its_cold_pass_and_says_why():
+def test_no_cell_is_skipped():
     b = FakeBackend()
-    kind, points, na, skipped = _run(b, span=500.0)      # 500 s x 15.5 = 7750 s, over the 1800 s budget
-    assert kind == "ef" and na is None and b.seen == []
-    assert points == [{**COLD, "beam": 100}]
-    assert "sweep skipped" in skipped and "1800" in skipped
-    f = DB.row_fields(kind, points, na, skipped)
-    assert f["beam_skipped"] == skipped and f["ef100_query_p99_ms"] == 20.0 and f["matched_r095_status"] == "not swept"
-
-
-def test_the_bound_is_the_sum_of_the_beams_over_the_default():
-    assert DB.sweep_bound_s(DB.EF_LIST, 100, 10.0) == pytest.approx(155.0)
-
-
-def test_the_budget_is_overridable_by_the_environment(monkeypatch):
-    monkeypatch.setenv("BENCH_DENSE_BEAM_BUDGET_S", "5")
-    kind, points, na, skipped = _run(FakeBackend(), span=1.0)       # 15.5 s over a 5 s budget
-    assert skipped and len(points) == 1
+    kind, points, na = _run(b)
+    assert kind == "ef" and [p["beam"] for p in points] == list(DB.EF_LIST)
+    assert not hasattr(DB, "budget_s") and not hasattr(DB, "BUDGET_S")
 
 
 # ------------------------------------------------------------------ the adapters
@@ -254,7 +241,7 @@ def test_the_default_set_beam_moves_the_one_global_the_searches_read(L):
 def test_arangodb_turns_nprobe_around_the_calibrated_value(L):
     a = L.ArangoDense.__new__(L.ArangoDense)
     a.ivf_nprobe, a.ivf_nlists = 40, 1000
-    assert a.beam_default() == 40 and a.beam_values() == [10, 20, 40, 80, 160]
+    assert a.beam_default() == 40 and a.beam_values() == [20, 40, 80, 160]
     a.set_beam(80)
     assert a.ivf_nprobe == 80
 
@@ -336,12 +323,3 @@ def test_export_says_why_an_engine_without_a_beam_ran_once(EW):
     entry = {"metrics": {}}
     EW._beam_extras(entry, [row])
     assert entry["beam_curve"] == {"kind": "none", "na": "exact scan"}
-
-
-def test_export_says_a_slow_cell_was_not_swept_instead_of_not_reached(EW):
-    row = dense_row("2026-11", [pt(100, 0.80, 5.0)], backend="lancedb_dense")
-    row.update(DB.row_fields("ef", [pt(100, 0.80, 5.0)], None, "sweep skipped: too slow"))
-    row = {k: str(v) for k, v in row.items()}
-    entry = {"metrics": {}}
-    EW._beam_extras(entry, [row])
-    assert entry["metrics"]["p50 ms at recall 0.95"]["text"].startswith("not swept")
