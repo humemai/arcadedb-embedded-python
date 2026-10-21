@@ -28,6 +28,7 @@ FORK_OWNED_PATHS=(
     ".python-version"
     # Fork tooling for the periodic upstream bindings PR
     "make-upstream-pr-branch.sh"
+    ".github/dependabot.yml"   # ours since #378 (github-actions only); upstream has a maven one at the same path: never merge theirs
 )
 
 FORK_EXCLUDED_PATHS=(
@@ -51,6 +52,8 @@ FORK_EXCLUDED_PATHS=(
 #                                       button on OUR repo soliciting for them
 #   dependabot.yml                      maven ecosystem, 20 PRs/week, against
 #                                       the Java tree we do not maintain
+#                                       (since #378 the path holds OUR github-actions
+#                                       config: owned and allowlisted below)
 #   ISSUE_TEMPLATE.md,                  ArcadeDB's templates shown to people
 #   pull_request_template.md            opening issues and PRs on this fork
 #   dependency-review-config.yml,       config and helpers for the upstream
@@ -72,6 +75,7 @@ FORK_GITHUB_ALLOWLIST=(
     # is deliberately NOT in make-upstream-pr-branch.sh's INCLUDE_PATHS.
     ".github/workflows/lint-workflows.yml"
     ".github/workflows/docs-build.yml"               # ours; not upstream (strict docs build for documentation-only changes)
+    ".github/dependabot.yml"                         # ours since #378 (upstream has its own; we keep our copy)
 )
 
 PROTECTED_SOURCE_REV=""
