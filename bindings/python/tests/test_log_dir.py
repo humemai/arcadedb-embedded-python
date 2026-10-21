@@ -107,8 +107,10 @@ def test_unusable_log_dir_falls_back_to_a_temp_dir(tmp_path):
 def test_args_never_name_the_working_directory():
     with patch.dict(os.environ, {}, clear=True):
         args = _build_jvm_args(heap_size="4g", disable_xml_limits=False, jvm_args=None)
+        # the expected directory comes from the same (cleared) environment the args were built in: on Windows the real
+        # environment has LOCALAPPDATA and the cleared one falls back, so computing it outside the block would differ
+        log_dir = _default_log_dir().as_posix()
     assert not any("./log" in a for a in args)
-    log_dir = _default_log_dir().as_posix()
     assert f"-Darcadedb.server.logsDirectory={log_dir}" in args
     assert f"-Djava.util.logging.config.file={log_dir}/logging.properties" in args
     assert f"-XX:ErrorFile={log_dir}/hs_err_pid%p.log" in args
