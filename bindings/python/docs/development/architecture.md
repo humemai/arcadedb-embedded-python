@@ -64,6 +64,7 @@ arcadedb_embedded/
 - `DatabaseFactory`: create/open databases
 - `Database`: queries/commands, transactions, lookups, vector index builder
 - `insert_many()` and `insert_columns()`: bulk document ingest via the bridge's `DocumentBatcher`, from a list of dicts and from whole columns
+- `insert_dataframe()` and `insert_arrow()`: pandas, Polars, and Arrow data in batches, as `insert_columns()` for a document type and `GraphBatch.create_vertices()` for a vertex type; the Arrow type mapping and the declared-property check live in `dataframe.py`
 - Convenience: `async_executor()`, `schema`, export helpers
 
 **`graph.py`**

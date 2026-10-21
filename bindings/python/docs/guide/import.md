@@ -63,6 +63,8 @@ not something we currently encourage as the default Python import story.
         an insert's unique check and a keyed lookup touch one sub-index instead of every
         bucket's (the same laptop, 400,000 rows, 4 buckets, 6 runs per arm: the parallel
         load 3.15 s against 2.53 s partitioned, and a keyed lookup 16.2 against 14.6 us).
++ For a pandas or Polars DataFrame or an Arrow table, use `db.insert_dataframe(...)` or
+    `db.insert_arrow(...)`: see [DataFrames and Arrow Tables](#dataframes-and-arrow-tables).
 + The async executor's SQL command path (`db.async_executor().command(...)`) is not a
     bulk-write path at any parallel level. Above parallel level 1 it silently discarded
     records before 26.10.1 (`ArcadeData/arcadedb#7615`, fixed in #7625: a failed
@@ -177,6 +179,45 @@ its restore returned all 2,769 records of edge-case values unchanged in the chec
 that issue, and copying the closed database directory
 ([Database Backup Pattern](core/database.md#database-backup-pattern)) copies the files
 themselves.
+
+### DataFrames and Arrow Tables
+
+A pandas or Polars DataFrame, or an Arrow table, loads straight into a type, the way DuckDB
+scans a DataFrame in place. No row loop, no CSV in between:
+
+```python
+import pandas as pd
+import polars as pl
+
+db.command("sql", "CREATE DOCUMENT TYPE Trip")
+db.insert_dataframe("Trip", pd.DataFrame({"id": [1, 2], "fare": [12.5, None]}))  # 2
+
+db.command("sql", "CREATE VERTEX TYPE Station")
+db.insert_dataframe("Station", pl.DataFrame({"name": ["Central", "North"]}))  # 2
+
+back = db.query("sql", "SELECT FROM Trip").to_polars()  # and out again
+```
+
+- `insert_dataframe(type_name, df)` takes pandas or Polars; `insert_arrow(type_name, table)`
+  takes a `pyarrow.Table`, `RecordBatch`, or `RecordBatchReader`. Both return the number of
+  records written and load in batches of `batch_size` rows (default 10,000), each batch
+  committed on its own.
+- A **document type** gets documents (through the typed-array path of `insert_columns()`),
+  a **vertex type** gets vertices (through `GraphBatch`). An **edge type** is refused: an
+  edge needs the RIDs of its two vertices, so load the vertices and then buffer the edges
+  with `graph_batch().new_edges()`.
+- Types are mapped by Arrow type: integers to `LONG`, floats to `DOUBLE`, `bool`, strings,
+  timestamps to `DATETIME` (a UTC wall clock; a zone is converted to UTC), dates to `DATE`,
+  decimals to `DECIMAL`, lists to `LIST`, structs to `MAP`, nulls to missing properties. A
+  property the type declares converts to its declared type, and a column that would lose
+  data there (a float into `INTEGER`, a string into `LONG`) is refused with `TypeError`
+  before a row is written. The full tables are on
+  [`insert_arrow`](../api/database.md#insert_arrow).
+- pandas `NaN` is a null; Polars `NaN` stays `NaN`. The pandas index is not loaded.
+- Declare the schema first when types matter: an undeclared integer column is stored as
+  `LONG`, an undeclared timestamp as the engine's millisecond `DATETIME`.
+- Needs pyarrow (`pip install 'arcadedb-embedded[arrow]'`), plus pandas or
+  `pip install 'arcadedb-embedded[polars]'`. See Example 27.
 
 ## Choosing the Right Import Mode
 

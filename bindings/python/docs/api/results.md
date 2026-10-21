@@ -255,6 +255,31 @@ sims = emb @ query_vector      # immediately usable
 
 ---
 
+### `to_polars(batch_size: int = 25_000, columns: Optional[Sequence[str]] = None)`
+
+Bulk-materialize all rows as a `polars.DataFrame`, through `to_arrow()`. Requires polars
+and pyarrow (`pip install 'arcadedb-embedded[polars]'`). Everything said for `to_arrow()`
+holds: nulls keep their column type, a `DECIMAL` column is a Polars `Decimal`, and a
+`DATE` or `DATETIME` column is `Datetime("ms")`, the precision the columnar bridge
+carries.
+
+**Returns:**
+
+- `polars.DataFrame`
+
+**Raises:**
+
+- `ImportError`: polars or pyarrow is not installed, or the bridge jar is missing (the
+  cases in which `to_arrow()` returns `None`); the message names the extra to install
+
+**Example:**
+
+```python
+frame = db.query("sql", "SELECT id, name, score FROM Doc").to_polars()
+```
+
+---
+
 ### `to_arrow(batch_size: int = 25_000, columns: Optional[Sequence[str]] = None)`
 
 Bulk-materialize all rows as a `pyarrow.Table`. Requires numpy and pyarrow.

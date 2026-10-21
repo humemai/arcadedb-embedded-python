@@ -391,6 +391,23 @@ half-applied after an interruption
 
 ---
 
+### 🐼 [27_dataframe_arrow_ingest.py](./27_dataframe_arrow_ingest.py)
+**DataFrame And Arrow Ingest | pandas | Polars | Arrow | Declared Types**
+
+DataFrames and Arrow tables loaded straight into a type, and a result back out as Polars:
+- a pandas DataFrame into a document type (timestamps, nulls, a list column), in batches
+- a Polars DataFrame into a vertex type, then edges through `graph_batch().new_edges()`
+- an Arrow table into declared `INTEGER` and `DATETIME_MICROS` properties, and a float
+  column refused before a row is written
+- `to_polars()` on the result
+- synthetic data; flags: `--rows` (default 100,000) and `--db-path`
+- requires `pip install 'arcadedb-embedded[pandas,polars]'`
+
+**Learn:** How a DataFrame becomes documents or vertices without a row loop, and what each
+Arrow type is stored as
+
+---
+
 ## 💡 Tips
 
 - **Run from examples/ directory** - Always execute examples from `bindings/python/examples/` for correct file paths

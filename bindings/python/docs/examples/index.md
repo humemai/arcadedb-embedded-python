@@ -91,6 +91,9 @@ Sparse retrieval on a synthetic SPLADE-style corpus built once per weight settin
 **[26 - Cross-Model Transaction Atomicity](26_cross_model_transaction_atomicity.md)**
 Vector search, graph hop, and document update in one transaction, interrupted between the writes: rolled back cleanly inside a transaction, torn every time without one.
 
+**[27 - DataFrame And Arrow Ingest](27_dataframe_arrow_ingest.md)**
+A pandas DataFrame into documents, a Polars DataFrame into vertices, an Arrow table into declared properties (and a lossy column refused), and the result back out with `to_polars()`.
+
 ## Quick Start
 
 **⚠️ Important: Always run examples from the `examples/` directory.**
