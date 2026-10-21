@@ -42,6 +42,9 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
+import publish_instrument as _PI  # noqa: E402
+RESULTS = _PI.results_dir()
+
 import bench_common  # noqa: E402
 from runner import BACKENDS, MEM_BY_SCALE, HEAP_BY_SCALE, arm_runs  # noqa: E402  (path set above)
 
@@ -109,7 +112,7 @@ _OCTOBER_ENV = os.environ.get("BENCH_INSTRUMENT") == "2026-10"
 FROZEN_NAME = ("runs_skeleton_laptop.csv" if _SKELETON_ENV
                else "runs_paper_oct.csv" if _OCTOBER_ENV
                else "runs_paper.csv")
-FROZEN = HERE / "results" / FROZEN_NAME
+FROZEN = RESULTS / FROZEN_NAME
 # A SKELETON WRITES ITS OWN PAYLOAD, for the same reason it writes its own
 # freeze. web_benchmarks.json is the tracked record of what the LIVE page
 # serves, and a skeleton export overwrote it: the repository then held a
@@ -126,7 +129,7 @@ FROZEN = HERE / "results" / FROZEN_NAME
 OUT_NAME = ("web_benchmarks_skeleton.json" if _SKELETON_ENV
             else "web_benchmarks_next.json" if _OCTOBER_ENV
             else "web_benchmarks.json")
-OUT = HERE / "results" / OUT_NAME
+OUT = RESULTS / OUT_NAME
 # AND THE GENERATED ARTIFACTS, for the fourth time for the same reason
 # (make_paper_tables.GENERATED_NAME, which is the definition; this is the
 # third name that has to move with the other two). The only one this module
@@ -137,7 +140,7 @@ OUT = HERE / "results" / OUT_NAME
 GENERATED_NAME = ("generated_skeleton" if _SKELETON_ENV
                   else "generated_oct" if _OCTOBER_ENV
                   else "generated")
-GENERATED = HERE / "results" / GENERATED_NAME
+GENERATED = RESULTS / GENERATED_NAME
 
 # Version names live as trailing comments beside each pin in runner.py; the
 # digest is authoritative and the name is a convenience, so a missing name is
@@ -213,7 +216,7 @@ def _pinned_dir(name, expected=None):
     pin = os.environ.get("BENCH_ENGINE_COMMIT", "").strip()
     if not pin:
         raise SystemExit(f"BENCH_ENGINE_COMMIT is unset: {name} is pinned only")
-    cand = HERE / "results" / f"{name}_{pin}"
+    cand = RESULTS / f"{name}_{pin}"
     # ABSENT IS NOT PARTIAL. A PARTIAL directory is what this refusal is for:
     # an incomplete overlay standing in for a complete one is a wrong number,
     # not a safety net. An ABSENT one is a lane that has not run at this pin,
@@ -423,7 +426,7 @@ def _campaign_engine_string(backend) -> str | None:
     multipass files). The overlay ran inside the same campaign envelope."""
     best = None
     try:
-        with open(HERE / "results" / "runs.jsonl") as fh:
+        with open(RESULTS / "runs.jsonl") as fh:
             for line in fh:
                 try:
                     r = json.loads(line)
@@ -1407,7 +1410,7 @@ def _campaign_stat(backend, scale, field, lanes=("l3d", "l3s")):
     size is a property of the build, not of which pass was timed."""
     newest = {}
     try:
-        with open(HERE / "results" / "runs.jsonl") as fh:
+        with open(RESULTS / "runs.jsonl") as fh:
             for line in fh:
                 try:
                     r = json.loads(line)
@@ -3809,7 +3812,7 @@ def _durability_note(entries, rows, table_lane=None):
 # Resolved the same way, and for the same reason -- e4decomp_2681 is a 2026-08-07
 # artifact on 26.8.1, so a pinned re-run must be able to supersede it without an
 # edit here. The "_2681" name is kept as the fallback because that is what exists.
-E4_DIR = HERE / "results" / f"e4decomp_{os.environ.get('BENCH_ENGINE_COMMIT', '').strip() or 'UNPINNED'}"
+E4_DIR = RESULTS / f"e4decomp_{os.environ.get('BENCH_ENGINE_COMMIT', '').strip() or 'UNPINNED'}"
 if not E4_DIR.is_dir() and not SKELETON:
     raise SystemExit(f"{E4_DIR.name} missing; E4 is pinned only since 2026-09-08 (e4decomp_2681 retired), run the e4 lane")
 
@@ -3964,8 +3967,8 @@ def _e4_table():
     }
 
 
-L4_FILE = HERE / "results" / "l4_tsbs.jsonl"
-L4_NATIVE = HERE / "results" / "ts_2681"
+L4_FILE = RESULTS / "l4_tsbs.jsonl"
+L4_NATIVE = RESULTS / "ts_2681"
 
 # One configuration, so these are constants of the experiment.
 # The workload name only. "scale" lived here too and was a typed "2.59M
@@ -6954,7 +6957,7 @@ def _run_log_rows():
     from: the skeleton's own frozen file, else the campaign's run log."""
     if _SKELETON_ENV:
         return list(csv.DictReader(FROZEN.open())) if FROZEN.exists() else []
-    path = HERE / "results" / os.environ.get("BENCH_RUNS_JSONL", "runs.jsonl")
+    path = RESULTS / os.environ.get("BENCH_RUNS_JSONL", "runs.jsonl")
     if not path.exists():
         return []
     with open(path) as fh:
@@ -8180,7 +8183,7 @@ def _unexpressible_cells():
         return _UNEXPRESSIBLE_CACHE
     import bench_common
     out = collections.defaultdict(dict)
-    path = HERE / "results" / os.environ.get("BENCH_RUNS_JSONL", "runs.jsonl")
+    path = RESULTS / os.environ.get("BENCH_RUNS_JSONL", "runs.jsonl")
     if path.exists():
         with open(path) as fh:
             for line in fh:

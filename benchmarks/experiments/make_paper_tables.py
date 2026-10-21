@@ -87,7 +87,8 @@ def _commit_matches(row_commit):
     return rc[:9] == _PINNED_COMMIT[:9]
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-RESULTS = os.path.join(HERE, "results")
+import publish_instrument as _PI
+RESULTS = str(_PI.results_dir())
 # _PAPER_DIR, GENERATED and OUT are resolved further down, under FROZEN_NAME:
 # which directory this run writes into depends on BENCH_SKELETON and
 # BENCH_INSTRUMENT, and both are read below. See GENERATED_NAME.
