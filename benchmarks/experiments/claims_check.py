@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""HELPER LIBRARY since 2026-09-11: the paper is gone, so nothing runs this as a gate; page_check and make_paper_figures import its row-selection, torn-count, and arm helpers. The docstring below is the original.
+"""HELPER LIBRARY: nothing runs this as a gate; page_check and make_paper_figures import its row-selection, torn-count, and arm helpers. The docstring below is the original.
 
 Check every numeric claim in the paper's prose against the data behind it.
 
@@ -19,7 +19,7 @@ what the tables actually print.
 
 Each CLAIM below pins one prose number to the selector that produces it. That
 mapping is the part a machine cannot infer, so it is written down once here and
-re-checked forever after. At the October freeze, running this says exactly
+re-checked forever after. After a freeze, running this says exactly
 which prose numbers moved and which did not.
 
     python3 claims_check.py           # check all
@@ -86,16 +86,9 @@ def min_of(rows, field, **kw):
 # tables/ and figures/ subdirectories. Resolved at import but never opened
 # here, so make_paper_figures can import this module for its result-loading
 # helpers without the paper being present.
-_HERE = os.path.dirname(os.path.abspath(__file__))
-# make_paper_tables.GENERATED_NAME, which is the definition and carries the
-# reasoning. This module is how page_check reads a generated cell, so if these
-# three names disagree with the generator's the gate pins the page against the
-# OTHER campaign's tables and passes. page_check overrides TABLES at call time
-# for its --preview and --skeleton flags, which arrive after this import.
-_GENERATED_NAME = ("generated_skeleton" if os.environ.get("BENCH_SKELETON") == "1"
-                   else "generated_oct" if os.environ.get("BENCH_INSTRUMENT") == "2026-10"
-                   else "generated")
-_PAPER_DIR = os.environ.get("BENCH_PAPER_DIR", os.path.join(_HERE, "results", _GENERATED_NAME))   # see make_paper_tables
+# make_paper_tables.GENERATED is the one generated set; page_check reads every
+# generated cell through this module.
+_PAPER_DIR = os.environ.get("BENCH_PAPER_DIR", M.GENERATED)
 TABLES = os.path.join(_PAPER_DIR, "tables")
 PAPER = os.path.join(_PAPER_DIR, "paper.tex")
 
@@ -116,7 +109,7 @@ def cell(table, row_label, col):
     """
     path = os.path.join(TABLES, table)
     # A TABLE THAT WAS NOT GENERATED CANNOT BE CHECKED, and that is a skip
-    # rather than a crash. October lands table by table from stage 1, so a
+    # rather than a crash. A staged landing lands table by table, so a
     # table whose lane is still queued has no .tex file yet; a claim pinned to
     # it is unverifiable now and gets verified the moment its stage lands.
     # None is what this function already returns when a column is absent, so
@@ -152,7 +145,7 @@ def cell_text(table, row_label, col):
     decimals the table prints and compare at that precision."""
     path = os.path.join(TABLES, table)
     # A TABLE THAT WAS NOT GENERATED CANNOT BE CHECKED, and that is a skip
-    # rather than a crash. October lands table by table from stage 1, so a
+    # rather than a crash. A staged landing lands table by table, so a
     # table whose lane is still queued has no .tex file yet; a claim pinned to
     # it is unverifiable now and gets verified the moment its stage lands.
     # None is what this function already returns when a column is absent, so
@@ -512,12 +505,12 @@ def _comparator_engines():
                "elasticsearch_sparse": "elasticsearch",
                "elasticsearch_dense": "elasticsearch", "elasticsearch_dense_int8": "elasticsearch",
                "memgraph_dense": "memgraph", "falkordb_dense": "falkordb", "ladybug_dense": "ladybug",
-               # a precision arm is its engine (DECISIONS #135, 2026-10-02); the two
+               # a precision arm is its engine (DECISIONS #135); the two
                # whose fp32 sibling has no alias count as that sibling does
                "memgraph_dense_int8": "memgraph", "lancedb_dense_fp32": "lancedb",
                "qdrant_sparse_uint8": "qdrant", "mongodb_dense_int8": "mongodb_dense",
                "arangodb_dense_int8": "arangodb_dense", "neo4j_dense_int8": "neo4j_dense",
-               # one engine, one name, whichever table it ran on (2026-10-02)
+               # one engine, one name, whichever table it ran on
                "memgraph_graph": "memgraph", "falkordb_graph": "falkordb",
                "neo4j_graph": "neo4j", "ladybug_graph": "ladybug",
                "surrealdb_e2": "surrealdb",

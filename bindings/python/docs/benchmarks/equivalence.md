@@ -19,7 +19,8 @@ This page is the reason the suite is not a stopwatch.
 The digest is computed **outside the timed section**, from the object the timed call
 returned, so checking the answer costs the measurement nothing. The gate is
 `equivalence_check.py`, and it runs on every publish beside the provenance, fairness, and
-page checks. It holds the rows of the instrument, every lane of which records digests.
+page checks. It holds the rows of the 2026-11 instrument, whose lanes all record
+digests; rows of any other instrument are refused before any gate runs.
 
 ## The Canonical Form
 
@@ -142,14 +143,14 @@ keep **recall against ground truth**, which is the stronger check: the corpora s
 top-k ground truth, so an approximate index is measured against the right answer rather than
 against another approximate index. Latency is never printed without the recall it was
 achieved at, and the operating points are matched so that the recalls are comparable in the
-first place. See the [vectors table](https://humem.ai/research/arcadedb#vectors).
+first place. See the [vectors lane](https://humem.ai/research/dbbench/vectors).
 
 The cross-model lane keeps its **torn-state comparison**: after an interrupted transaction,
 what does each engine leave behind. Its two read paths carry recall against a brute-force
 answer over the same filtered candidate set, with the graph and document halves digest
 compared exactly, because an engine that filters after the search shows it in the recall and
 not in the latency. See the
-[cross-model table](https://humem.ai/research/arcadedb#crossmodel). A zero torn count
+[cross-model lane](https://humem.ai/research/dbbench/cross-model). A zero torn count
 proves only what the engine's transaction can enclose, so each arm records which of its
 three stages may run inside one: MongoDB's vector stage cannot, so its zero demonstrates
 document atomicity rather than the three-model kind the table exists to test, and the row

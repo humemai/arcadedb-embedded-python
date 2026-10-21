@@ -30,10 +30,8 @@ CYPHER_QUESTIONS = {
 }
 
 
-def test_the_row_says_undirected_and_the_page_reads_the_same_field():
-    assert G.KNOWS_DIRECTION == "undirected"
-    ew = (HERE / "export_web.py").read_text()
-    assert re.search(r'^_KNOWS_DIRECTION_FIELD = "%s"$' % re.escape(G.KNOWS_DIRECTION_FIELD), ew, re.M)
+def test_the_row_says_undirected():
+    assert G.KNOWS_DIRECTION == "undirected" and G.KNOWS_DIRECTION_FIELD == "knows_direction"
 
 
 def test_the_lane_stamps_the_direction_before_any_query_runs():

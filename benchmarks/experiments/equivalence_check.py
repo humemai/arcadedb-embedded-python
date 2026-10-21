@@ -5,11 +5,10 @@ fairness_check asks whether the row next to this one was given the same
 resources and the same treatment. This asks the question underneath it: was it
 given the same QUESTION, and did it come back with the same ANSWER?
 
-Nothing asked that until 2026-09-14. The harness checked recall against ground
-truth on the vector lanes and torn state in the cross-model trial; every other
-lane recorded latency, throughput, and for a few queries a row count. An
-adapter that dropped a filter, a group, or a join condition would have printed
-a lead, not a bug, and the September rows are built on those adapters.
+The harness checks recall against ground truth on the vector lanes and torn
+state in the cross-model trial; every other lane records latency, throughput,
+and for a few queries a row count. An adapter that dropped a filter, a group,
+or a join condition would print a lead, not a bug.
 
 So every timed query whose answer is deterministic now records a canonical
 digest (bench_common.result_digest) computed OUTSIDE its timed section from the
@@ -18,8 +17,7 @@ those digests by lane, scale, workload and query, compares them across
 backends, and refuses the publish when two engines disagree.
 
     python3 equivalence_check.py                       # the canonical frozen set
-    python3 equivalence_check.py --rows results/runs_smoke_oct.jsonl
-    python3 equivalence_check.py --rows results/runs_skeleton_laptop.csv
+    python3 equivalence_check.py --rows results/runs_paper.csv
 
 Three rules this file exists to keep, each of which is a way to pass while
 proving nothing:
@@ -27,7 +25,7 @@ proving nothing:
   * A GROUP WITH ONE ENGINE IS UNCHECKED, NOT PASSED. One digest agrees with
     itself. Those groups are counted and listed under their own heading, never
     folded into the ok count.
-  * SILENCE IS NOT AGREEMENT. Under the 2026-10 instrument, a backend that
+  * SILENCE IS NOT AGREEMENT. Under the 2026-11 instrument, a backend that
     records no digest for a query its neighbours do record fails: either it
     answered and did not say what it answered, or it never ran the query.
     An engine that CANNOT ask the question records
@@ -53,24 +51,23 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-RESULTS = os.path.join(HERE, "results")
 
 import bench_common  # noqa: E402
+import publish_instrument  # noqa: E402
 import test_result_digest  # noqa: E402
 
 DIGEST_RE = re.compile(r"^res_(.+)_digest$")
-# The instrument that is required to carry digests. Rows from the September
-# campaign predate #88 and are reported as skipped, by count, rather than
-# failed: the decision is that October does not start without them, not that
-# history is retroactively broken.
-REQUIRED_INSTRUMENT = "2026-10"
+# The instrument that is required to carry digests. A row of any other
+# instrument in a --rows file is reported as skipped, by count, rather than
+# failed.
+REQUIRED_INSTRUMENT = publish_instrument.PUBLISH_INSTRUMENT
 ARCADE = "arcadedb"
 
 # WHICH LANES ARE CHECKED BY SOMETHING ELSE, and why, so that "this lane
 # records no digest" is a declared fact rather than an omission nobody
 # noticed. DECISIONS #88: "The vector lanes keep recall against ground truth,
 # which is the stronger check for an approximate index; the cross-model lane
-# keeps its torn-state comparison." Any lane NOT named here whose 2026-10 rows
+# keeps its torn-state comparison." Any lane NOT named here whose 2026-11 rows
 # carry no digest at all fails E6 -- which is the case a per-query comparison
 # cannot catch, because with nothing recorded there is nothing to compare.
 LANES_CHECKED_OTHERWISE = {
@@ -101,22 +98,7 @@ LANES_CHECKED_OTHERWISE = {
 # Each entry names the engine, what it returns instead, and what is being done
 # about it. Remove the entry when the engine is re-pinned with the fix, which
 # re-arms the gate for that query.
-# EMPTY SINCE 2026-09-18. It held ("l4", "q_groupby") for
-# arcadedb_ts_native_server from 2026-09-08: the served SQL path returned a
-# CONSTANT bucket for the function-derived grouping key when a second grouping
-# key was present, 100 hosts x 1 bucket where the embedded arm on the same
-# build, and DuckDB, SQLite, MongoDB, QuestDB and TimescaleDB, all returned
-# 100 x 12. The single-key form (q_global) agreed on both arms throughout, so
-# the two-key group-by was wrong and not the bucket function.
-#
-# Upstream #7610, the served time-bucket serializer, is in the October pin
-# 417314c18d, and the re-run on that pin closes it: the served arm's digest
-# moves from cf8b95166d59727f (100 x 1 = 100 pairs) to 18c9985de67433e6
-# (100 x 12 = 1200 pairs), which is what every other engine has always
-# returned. Removed together with the export_web.WITHHELD_CELLS entry that
-# kept the cell off the page while this stood; neither is any use alone.
-#
-# PostgreSQL + AGE's two CRUD read-backs (2026-10-02, apache/age#2587). The
+# PostgreSQL + AGE's two CRUD read-backs (apache/age#2587). The
 # read-back is `MATCH (q:Person) WHERE q.id >= $f`, $f the first id the write
 # phase created, and a btree index scan on agtype that starts at a `>=` bound
 # skips the keys equal to it, on every AGE release tried (1.6.0 on PG16 to
@@ -139,14 +121,13 @@ KNOWN_DISAGREEMENTS = {
     ("l2", "graph_insert_edges"): {"pgage_graph": _AGE_2587_EDGES},
 }
 
-# NOT ONE GROUP, TWO (2026-10-02). The lifecycle read was declared NOT_COMPARABLE
+# NOT ONE GROUP, TWO. The lifecycle read was declared NOT_COMPARABLE
 # here because the embedded and served arms run different mode sets, so their
 # post-state record counts differ by construction. That was true of the served
 # arm and nothing else, and once six embedded engines joined the table the
 # declaration exempted all of them: a group holding ArcadeDB embedded and
 # DuckDB answering differently would have been skipped as "not comparable"
-# exactly as ArcadeDB server's different count is. Found rehearsing the
-# 26.10.1 publish. The group is split by deployment instead: embedded arms are
+# exactly as ArcadeDB server's different count is. The group is split by deployment instead: embedded arms are
 # compared with each other, served arms with each other, and never across.
 SPLIT_BY_DEPLOYMENT = {
     "lifecycle": "the embedded and served lifecycle arms run different mode sets, so "
@@ -154,9 +135,9 @@ SPLIT_BY_DEPLOYMENT = {
 }
 
 # THE SAME SPLIT BY A FIELD THE ROW CARRIES. The server-restart lane runs each
-# engine on ONE model's data, and its campaign tiers already keep the models
-# apart (the scale names the model), but its laptop skeleton runs every model
-# at one tier: a document read and a graph read must not be one group there.
+# engine on ONE model's data, and its tiers already keep the models apart (the
+# scale names the model); this split keeps a document read and a graph read
+# apart should a run put every model at one tier.
 SPLIT_BY_FIELD = {
     "restart": "restart_model",
 }
@@ -171,7 +152,7 @@ NOT_COMPARABLE = {
 }
 # AN APPROXIMATE ANSWER FROM AN INDEX BUILT AGAIN FOR EVERY REPETITION. Each rep of the server-restart lane builds
 # its vector index from scratch, and an approximate index built twice need not return the same top 10: pass 1's
-# arcadedb_dense_server at deep10m answered rep 1 at recall 0.9 and reps 2 and 3 at 1.0 (2026-10-18), so rep 1 held
+# arcadedb_dense_server at deep10m answered rep 1 at recall 0.9 and reps 2 and 3 at 1.0, so rep 1 held
 # one true neighbour fewer and E2 failed the publish on it. Inside a rep the lane holds the answer after every restart
 # against the answer before the stop; across reps the check is the row's recall against exact ground truth, the field
 # named here. E2 lists these groups under E2b instead of failing them. NOT_COMPARABLE is the cross-engine half.
@@ -294,7 +275,7 @@ def report_silent_lanes(silent_lanes, out=print):
         out(f"  FAIL {k[0]} {k[1]}: {len(bes)} backend(s) recorded no result digest "
             f"on any query: {', '.join(sorted(str(b) for b in bes))}")
     if not missing and not declared:
-        out("  ok: every 2026-10 row carries at least one digest")
+        out("  ok: every 2026-11 row carries at least one digest")
     elif not missing:
         out("  ok: every other lane carries digests")
     return bad
@@ -561,7 +542,7 @@ def main():
             print(f"  skipped: {n} row(s), {reason}")
     if not groups and not silent_lanes:
         print("\n=== E1: equivalent queries, equivalent answers (DECISIONS #88) ===")
-        print("  no 2026-10 rows at all; nothing to check yet")
+        print("  no 2026-11 rows at all; nothing to check yet")
         return 0
 
     bad, agreed, _dis, unchecked = report(groups, seen, list_groups=args.list_groups)

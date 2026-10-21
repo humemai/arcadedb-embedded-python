@@ -28,9 +28,9 @@ DATE = "2031-04-05"
 
 
 def row(**kw):
-    """A clean October row of the graph lane, with the fields the page reads."""
+    """A clean 2026-11 row of the graph lane, with the fields the page reads."""
     r = {
-        "run_id": "l2_x_r1", "ts_utc": "2026-10-01T00:00:00+00:00", "instrument": "2026-10",
+        "run_id": "l2_x_r1", "ts_utc": "2026-11-01T00:00:00+00:00", "instrument": "2026-11",
         "lane": "l2", "scale": "sf1", "workload": "oltp", "backend": "falkordb_graph", "rep": 1,
         "rc": 0, "cpuset": "0-11", "error": None, "topology": "client_server",
         "engine_version": "falkordb:4.20.6 (redis 8.6.3)", "durability_class": "relaxed",
@@ -57,7 +57,7 @@ def neo4j_rows():
 def fixture():
     clean = neo4j_rows() + [row(run_id="f1"), row(run_id="f2", scale="sf10", mem_cap="24g")]
     failed = [row(run_id="a1", backend="arangodb_graph", scale="sf10", rc=-1, error="timeout_after_7200s",
-                  ts_utc="2026-10-02T00:00:00+00:00")]
+                  ts_utc="2026-11-02T00:00:00+00:00")]
     registered = {"l2": ("neo4j_graph", "falkordb_graph", "arangodb_graph", "ghost_graph")}
     return clean, failed, registered
 
@@ -151,14 +151,13 @@ def test_an_override_the_registry_cannot_render_is_a_gap(monkeypatch):
 
 
 def test_an_override_not_in_force_for_any_row_prints_no_sentence():
-    """PRE_COMPACTION-style rule: `applies` is False for every row, so a sentence would be false."""
-    clean = [row(lane="l4", scale="ts100", workload="ingest", backend="arcadedb_ts_native",
-                 engine_version="26.9.1", engine_commit="417314c18", ts_compaction_interval_ms=None,
-                 ts_mutable_at_ingest_end=5)]
-    text = G.render(clean, [], {}, DATE)
-    block = text.split("#### ArcadeDB: `arcadedb_ts_native`", 1)[1].split("#### ", 1)[0]
-    assert "Override `arcadedb_ts_compaction_interval`" not in block
-    assert "Override `arcadedb_ts_acceptance`" in block
+    """`applies` is False for every row (no query-heap stamp), so a sentence about it would be false."""
+    clean = [row(lane="l1tpc", scale="tpch1", workload="oltp", backend="arcadedb_embedded", engine_version="26.11.1")]
+    block = G.render(clean, [], {}, DATE).split("#### ArcadeDB (embedded): `arcadedb_embedded`", 1)[1].split("#### ", 1)[0]
+    assert "Override `arcadedb_query_ram`" not in block
+    stamped = [dict(clean[0], arcadedb_query_max_heap_ram_mb=4096, arcadedb_query_max_heap_ram_source="requested")]
+    block = G.render(stamped, [], {}, DATE).split("#### ArcadeDB (embedded): `arcadedb_embedded`", 1)[1].split("#### ", 1)[0]
+    assert "Override `arcadedb_query_ram`" in block
 
 
 def test_mixed_versions_inside_one_tier_are_a_gap():
@@ -226,28 +225,32 @@ def test_every_number_on_the_page_is_in_a_row_or_the_generated_line():
 
 def test_selection_is_load_canonical_plus_failed_cells(tmp_path):
     rows = [
-        row(run_id="old", ts_utc="2026-10-01T00:00:00+00:00", engine_version="falkordb:4.20.6"),
-        row(run_id="new", ts_utc="2026-10-03T00:00:00+00:00", engine_version="falkordb:6.0.1"),         # supersedes `old`
-        row(run_id="sept", instrument=None, backend="neo4j_graph"),                                      # the other campaign
+        row(run_id="old", ts_utc="2026-11-01T00:00:00+00:00", engine_version="falkordb:4.20.6"),
+        row(run_id="new", ts_utc="2026-11-03T00:00:00+00:00", engine_version="falkordb:6.0.1"),         # supersedes `old`
         row(run_id="sweep", cpuset="0-5", backend="neo4j_graph"),                                        # a sharded sweep row
         row(run_id="rep9", rep=9, backend="neo4j_graph"),                                                # out of range
         row(run_id="bad-old", rc=1, error="boom", backend="neo4j_graph", scale="sf10",
-            ts_utc="2026-10-01T00:00:00+00:00"),
-        row(run_id="good", backend="neo4j_graph", scale="sf10", ts_utc="2026-10-02T00:00:00+00:00"),     # after the failure: not listed
+            ts_utc="2026-11-01T00:00:00+00:00"),
+        row(run_id="good", backend="neo4j_graph", scale="sf10", ts_utc="2026-11-02T00:00:00+00:00"),     # after the failure: not listed
         row(run_id="bad-new", rc=1, error="Trace\nValueError: nope", backend="duckpgq_graph",
-            ts_utc="2026-10-04T00:00:00+00:00"),                                                         # a failed cell
+            ts_utc="2026-11-04T00:00:00+00:00"),                                                         # a failed cell
         row(run_id="bad-scale", rc=1, error="x", backend="duckpgq_graph", scale="tiny"),                 # not a published tier
     ]
     p = tmp_path / "runs.jsonl"
     p.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
-    clean, failed, october = G.select_rows(p)
+    clean, failed, published = G.select_rows(p)
     assert sorted(r["run_id"] for r in clean) == ["good", "new"]
     assert [r["run_id"] for r in failed] == ["bad-new"]
     assert G.error_summary(failed[0]["error"]) == "ValueError: nope"
-    assert all(r.get("instrument") == "2026-10" for r in october)
-    # and the real module in this process is untouched by the private October copy
-    import make_paper_tables as M
-    assert M.OCTOBER is False or M.INSTRUMENT == "2026-10"
+    assert all(r.get("instrument") == "2026-11" for r in published)
+
+
+@pytest.mark.parametrize("stamp", ["legacy", None])
+def test_a_row_of_another_instrument_at_a_published_tier_is_refused(tmp_path, stamp):
+    p = tmp_path / "runs.jsonl"
+    p.write_text(json.dumps(row(run_id="x", instrument=stamp)) + "\n")
+    with pytest.raises(SystemExit, match="REFUSING"):
+        G.select_rows(p)
 
 
 # ---------------------------------------------------------------------------

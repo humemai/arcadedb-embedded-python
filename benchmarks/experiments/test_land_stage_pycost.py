@@ -1,10 +1,10 @@
-"""land_stage pulls the Python-cost file of the pin and commits it (the 26.10.1 chain's qRJ, CAMPAIGN section 7 row 29).
+"""land_stage pulls the Python-cost file of the pin and commits it (CAMPAIGN section 7 row 29).
 
 Run with `python -m pytest test_land_stage_pycost.py -q -rs` from this directory.
 
-qRJ is a host-side stage: it writes $HOME/pycost/mini_results_<pin>.csv outside the tree, and the landing is what puts it where
+The pycost stage is host-side: it writes $HOME/pycost/mini_results_<pin>.csv outside the tree, and the landing is what puts it where
 export_web reads it (`jpype_overhead/results/mini_results_<pin>.csv`, preferred over the tracked file) and commits it. Without the step
-a qRJ landing published the table from the September file with every gate green.
+a landing published the table from a stale file with every gate green.
 """
 import sys
 from pathlib import Path

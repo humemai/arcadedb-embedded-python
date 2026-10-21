@@ -214,6 +214,7 @@ def E(monkeypatch):
                           dict(lane="l1tpc", scale="tpch1", backend="surrealdb_tpc", workload="oltp", cls="strict", median_s=9999.0, cap_s=7326)],
             "timeouts": [dict(lane="l3d", scale="small", backend="surrealdb_dense", workload="search", cls="", cap_s=7200)]}
     monkeypatch.setitem(C._CACHE, C.RULE_JSON, data)
+    monkeypatch.setenv("BENCH_ENGINE_COMMIT", "d36b4ca3a")          # the rule is read for its own pin only
     return export_web
 
 

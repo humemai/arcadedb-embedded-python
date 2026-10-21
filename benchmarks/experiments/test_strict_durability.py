@@ -1,4 +1,4 @@
-"""ArcadeDB's strict durability class is txWalFlush=1 (CAMPAIGN section 7 row 5, the user's decision of 2026-10-04).
+"""ArcadeDB's strict durability class is txWalFlush=1 (CAMPAIGN section 7 row 5, the user's decision).
 
 Run with `python -m pytest test_strict_durability.py -q -rs` from this directory.
 
@@ -40,22 +40,13 @@ def test_the_served_container_gets_the_same_flag():
     assert relaxed["server_env"] == ["JAVA_OPTS=-Xmx2g"]
 
 
-def test_the_strings_classify_and_the_october_one_is_still_strict():
+def test_the_strings_classify_and_the_full_sync_one_is_still_strict():
     assert B.durability_class(B.DURABILITY_ARCADEDB_STRICT) == "strict"
-    assert B.durability_class(B.DURABILITY_ARCADEDB_STRICT_FULL_SYNC) == "strict"      # the October rows
+    assert B.durability_class(B.DURABILITY_ARCADEDB_STRICT_FULL_SYNC) == "strict"      # the full-sync rows
     assert B.durability_class(B.DURABILITY_ARCADEDB) == "relaxed"
     assert B.DURABILITY_ARCADEDB_STRICT.startswith("txWalFlush=1:")
     assert B.DURABILITY_ARCADEDB_STRICT_FULL_SYNC == "txWalFlush=2: the WAL is flushed and synced at every commit"
     assert B.at_class(B.DURABILITY_ARCADEDB, "strict") == B.DURABILITY_ARCADEDB_STRICT
-
-
-def test_the_page_sentence_about_the_change_is_keyed_on_the_october_text_not_the_new_one():
-    """It must stand for as long as a row measured at 2 stands behind a table, and go when the last one does."""
-    import re
-    ew = (HERE / "export_web.py").read_text()
-    assert re.search(r'^_ARCADEDB_FULL_SYNC = "%s"$' % re.escape(B.DURABILITY_ARCADEDB_STRICT_FULL_SYNC), ew, re.M)
-    assert not B.DURABILITY_ARCADEDB_STRICT.startswith(B.DURABILITY_ARCADEDB_STRICT_FULL_SYNC)
-    assert re.search(r"^_ARCADEDB_STRICT_NEXT = %d\b" % B.ARCADE_STRICT_TX_WAL_FLUSH, ew, re.M)
 
 
 class _GC:

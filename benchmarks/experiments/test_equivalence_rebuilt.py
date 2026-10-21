@@ -1,5 +1,5 @@
 """The server-restart lane's vector read is an approximate top 10 from an index built again every repetition, so two
-reps may differ while each is right (pass 1, 2026-10-18: arcadedb_dense_server at deep10m, recall 0.9 in rep 1 and 1.0
+reps may differ while each is right (arcadedb_dense_server at deep10m, recall 0.9 in rep 1 and 1.0
 in reps 2 and 3). E2 must list that, not fail it, and must still fail an exact read that changes between reps."""
 import equivalence_check as E
 

@@ -21,7 +21,7 @@ The single rule everything else follows from:
 | Merge | `results/runs.jsonl` | The merged canonical store, append-only. Merging appends and never replaces, and refuses if it would shrink the canonical cell count. |
 | Freeze | `results/runs_paper.csv` | The frozen rows every table is generated from. Regenerated from the store, never hand-edited. |
 | Export | `results/web_benchmarks.json` | The page payload: every table, row, column, and condition the site renders. |
-| Publish | The project page | Copied to the site, gated, and verified byte-identical to the file the gates read. |
+| Publish | The DBBench page | Copied to the site's DBBench data file, gated, and verified byte-identical to the file the gates read. |
 
 Order matters, and it is not optional: a campaign file archived before it is merged is a
 deleted campaign. A few tables also read **overlay directories** of per-cell files directly
@@ -98,16 +98,16 @@ The invariant it enforces: **every page table and figure is generated from froze
 listed in the page manifest, pinned by a gate, and carries a source link to a tracked
 artifact.**
 
-Seven gates run, and they answer different questions. Six read the rows; `version_pin_check`, the newest, reads none, asking instead whether the files that state a version pin still agree with each other. `equivalence_check` runs first: it arrived with the 2026-10 instrument, which is also the instrument whose lanes stamp the answer digests it compares. **Rows from before the 2026-10 instrument carry no digest field**, so wherever the page still prints them the gate has nothing to compare, and the answers behind those cells were never compared across engines. That is worth knowing when you read one of those latencies: with no answer check behind a number, a fast number and a wrong answer look alike. It is the 2026-10 rows that this gate holds to each other.
+Seven gates run, and they answer different questions. Six read the rows; `version_pin_check`, the newest, reads none, asking instead whether the files that state a version pin still agree with each other. `equivalence_check` runs first: every lane of the 2026-11 instrument stamps the answer digests it compares, so no latency is published for an answer the other engines of its table did not give. Rows of any other instrument are refused before any gate runs: the tooling publishes 2026-11 rows only.
 
 | Gate | Asks |
 |---|---|
 | `equivalence_check` | Did the engines of a table give the same answers? This is F11 of the [fairness invariants](protocol.md#the-fairness-invariants). |
-| `resource_check` | Is any disk or memory value one that cannot be right: far below the other engines in its group, a negative disk growth, or a disk reading taken after a failed pre-disk step? Memory here is the tables' column, owned memory (the anonymous peak plus the shared-memory peak). It checks the 2026-10 rows only and says how many it left out. |
+| `resource_check` | Is any disk or memory value one that cannot be right: far below the other engines in its group, a negative disk growth, or a disk reading taken after a failed pre-disk step? Memory here is the tables' column, owned memory (the anonymous peak plus the shared-memory peak). |
 | `provenance_check` | Does every published cell trace back to a run, under conditions that were recorded rather than asserted? |
 | `fairness_check` | Were the rows in one table given the same thing? The [fairness invariants](protocol.md#the-fairness-invariants) that a row can show. |
 | `page_check` | Does every cell and every typed number on the page still agree with the generated tables? |
-| `version_consistency_check` | Does each engine wear ONE version across the page? It also refuses an ArcadeDB release number on a comparator's row, which the dense table published for months. |
+| `version_consistency_check` | Does each engine wear ONE version across the page? It also refuses an ArcadeDB release number on a comparator's row. |
 | `version_pin_check` | Does every file that states a version pin (the runner's backend table, the image build script, the Dockerfiles, and `COMPARATORS.md`) name the same artifact? |
 
 Some specifics that matter if you ever compare the page against the data yourself:
@@ -142,6 +142,6 @@ Some specifics that matter if you ever compare the page against the data yoursel
 
 At each campaign freeze the frozen rows and the page payload are published as a release asset with their pins. That
 is the verification most readers want: you can recompute any table on the
-[project page](https://humem.ai/research/arcadedb) from the rows behind it, check a cell
+[DBBench page](https://humem.ai/research/dbbench) from the rows behind it, check a cell
 against its own row, and see which cells were withheld and why, without a machine, a corpus,
 or a container.

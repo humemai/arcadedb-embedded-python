@@ -79,10 +79,8 @@ def test_the_dialects_with_no_lsqb_text_compare_node_identity_never_a_property_t
     assert "'$ne'" in mongo
 
 
-def test_the_field_and_value_the_page_reads():
-    ew = (HERE / "export_web.py").read_text()
-    assert re.search(r'^_LSQB_TEXT_FIELD = "%s"$' % re.escape(G.LSQB_TEXT_FIELD), ew, re.M)
-    assert G.LSQB_TEXT == "lsqb"
+def test_the_field_and_value_the_rows_carry():
+    assert G.LSQB_TEXT_FIELD == "lsqb_text" and G.LSQB_TEXT == "lsqb"
 
 
 # ---- the lane stamps it -------------------------------------------------------------------------------------------

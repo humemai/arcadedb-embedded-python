@@ -237,25 +237,11 @@ def test_runner_hooks_are_gated():
     assert src.index("    _mp = None") < src.index("memory_probe.HostProbe.maybe(")
 
 
-def test_export_web_column_only_for_2611(monkeypatch):
+def test_export_web_prints_the_per_phase_memory_column():
     pytest.importorskip("numpy")
-    mpatch = pytest.MonkeyPatch()
-    if not os.environ.get("BENCH_ENGINE_COMMIT"):
-        mpatch.setenv("BENCH_ENGINE_COMMIT", "417314c18")
-    try:
-        import export_web as ew
-    except SystemExit as e:      # export_web refuses to import without the campaign's untracked results
-        pytest.skip(f"export_web needs the campaign results: {e}")
-    finally:
-        mpatch.undo()
-    spec = {"metrics": [("x_ms", "x ms")]}
-    base = ew._metrics_for_instrument("l1tpc", spec)
-    monkeypatch.setattr(ew, "_FROZEN_ROWS", [{"lane": "l1tpc", "instrument": "2026-10"}])
-    assert ew._metrics_for("l1tpc", spec) == ew._metrics_for_instrument("l1tpc", spec)
-    assert ew.MEM_PHASE_COLUMN not in ew._metrics_for("l1tpc", spec)
-    monkeypatch.setattr(ew, "_FROZEN_ROWS", [{"lane": "l1tpc", "instrument": "2026-11"}])
-    cols = ew._metrics_for("l1tpc", spec)
-    assert cols[-1] == ew.MEM_PHASE_COLUMN and cols[:-1] == ew._metrics_for_instrument("l1tpc", spec)
+    import export_web as ew
+    cols = ew._metrics_for("l1tpc", {"metrics": [("x_ms", "x ms")]})
+    assert cols[-1] == ew.MEM_PHASE_COLUMN
     assert ew._UNIT_DIVISOR[ew.MEM_PHASE_COLUMN[0]] == 1024.0
 
 

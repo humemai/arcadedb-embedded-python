@@ -1,9 +1,10 @@
-"""The dense lane's search-beam sweep and matched-recall headline.
+"""The dense lane's search-beam sweep and matched-recall headline (instrument 2026-11).
 
 Run with `python -m pytest test_dense_ef_sweep.py -q` from this directory. Needs numpy (the lane and export_web import it).
 
-The lane builds once, runs the cold pass it has always run, then one timed pass per beam value, and the
-headline is the lowest p50 among the passes whose recall@10 reaches a fixed target (dense_beam.py).
+Under 2026-11 the lane builds once, runs the cold pass it has always run, then one timed pass per beam value, and the
+headline is the lowest p50 among the passes whose recall@10 reaches a fixed target (dense_beam.py). Under 2026-10 nothing
+changes.
 """
 import os
 import subprocess
@@ -35,8 +36,12 @@ def _enabled(instrument):
     return r.stdout.strip()
 
 
-def test_the_sweep_is_on_by_default():
-    assert _enabled(None) == "True"
+def test_the_sweep_is_off_by_default_and_under_2026_10():
+    assert _enabled(None) == "False"
+    assert _enabled("2026-10") == "False"
+
+
+def test_the_sweep_is_on_under_2026_11():
     assert _enabled("2026-11") == "True"
 
 
@@ -251,16 +256,7 @@ def test_the_engines_that_bake_the_beam_into_the_connection_override_set_beam(L)
 @pytest.fixture(scope="module")
 def EW():
     pytest.importorskip("numpy")
-    mp = pytest.MonkeyPatch()
-    if not os.environ.get("BENCH_ENGINE_COMMIT"):
-        mp.setenv("BENCH_ENGINE_COMMIT", "417314c18")
-    try:
-        try:
-            import export_web
-        except SystemExit as e:                      # the e4 artifacts are not in this checkout
-            pytest.skip(f"export_web does not import here: {e}")
-    finally:
-        mp.undo()
+    import export_web
     return export_web
 
 
@@ -275,22 +271,18 @@ def dense_row(instrument, pts, backend="qdrant_dense", kind="ef", **extra):
 SPEC = {"metrics": [("query_p50_ms", "cold p50 ms")]}
 
 
-def test_export_adds_the_matched_columns_only_for_2026_11(EW, monkeypatch):
+def test_export_adds_the_matched_columns_when_the_rows_carry_the_sweep(EW, monkeypatch):
     pts = [pt(100, 0.91, 0.5), pt(200, 0.96, 0.9)]
     monkeypatch.setattr(EW, "_FROZEN_ROWS", [dense_row("2026-11", pts)])
     labels = [lab for _f, lab in EW._metrics_for("l3d", SPEC, "l3d")]
     assert labels[0] == "cold p50 ms"
     assert "p50 ms at recall 0.95" in labels and "p99 ms at recall 0.95" in labels
     assert "ef or nProbe at recall 0.95" in labels and "p50 ms at recall 0.99" in labels
-    # a 2026-10 table is the table it was
-    monkeypatch.setattr(EW, "_FROZEN_ROWS", [dense_row("2026-10", pts)])
-    assert [f for f, _l in EW._metrics_for("l3d", SPEC, "l3d")][:1] == ["query_p50_ms"]
-    assert not any(l.startswith("p50 ms at recall") for _f, l in EW._metrics_for("l3d", SPEC, "l3d"))
-    # and a 2026-11 table whose rows carry no sweep grows nothing
+    # a table whose rows carry no sweep grows nothing
     plain = dense_row("2026-11", pts)
     plain.pop("beam_kind")
     monkeypatch.setattr(EW, "_FROZEN_ROWS", [plain])
-    assert [f for f, _l in EW._metrics_for("l3d", SPEC, "l3d")] == ["query_p50_ms"]
+    assert not any(l.startswith("p50 ms at recall") for _f, l in EW._metrics_for("l3d", SPEC, "l3d"))
 
 
 def test_export_marks_a_target_no_run_reached_and_carries_the_curve(EW):
@@ -308,7 +300,7 @@ def test_export_marks_a_target_no_run_reached_and_carries_the_curve(EW):
 
 def test_export_leaves_a_row_without_the_sweep_alone(EW):
     entry = {"metrics": {"cold p50 ms": {"median": 1.0}}}
-    EW._beam_extras(entry, [{"lane": "l3d", "backend": "qdrant_dense", "instrument": "2026-10"}])
+    EW._beam_extras(entry, [{"lane": "l3d", "backend": "qdrant_dense", "instrument": "2026-11"}])
     assert entry == {"metrics": {"cold p50 ms": {"median": 1.0}}}
 
 

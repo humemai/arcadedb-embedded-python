@@ -27,7 +27,7 @@ ENGINES = ("duckdb", "sqlite", "chroma", "lancedb")
 def row(backend, lane="l3d", scale="small", workload="search", disk=100.0, anon=1000.0, shm=0.0, **extra):
     """A healthy row. peak_owned_mib_sum is anonymous plus shared, as the runner records it, unless `extra` sets it."""
     r = {"lane": lane, "scale": scale, "workload": workload, "durability_class": "relaxed", "backend": backend,
-         "instrument": "2026-10", "rc": 0, "rep": 1, "disk_data_mb": disk, "peak_anon_mib_sum": anon,
+         "instrument": "2026-11", "rc": 0, "rep": 1, "disk_data_mb": disk, "peak_anon_mib_sum": anon,
          "peak_shmem_mib_sum": shm, "peak_owned_mib_sum": anon + shm}
     r.update(extra)
     return r
@@ -164,22 +164,17 @@ def test_a_row_declaring_its_situation_unexpressible_is_not_checked():
     assert sum(n for why, n in not_checked.items() if "unexpressible" in why) == 1
 
 
-def test_rows_of_another_instrument_are_not_checked_and_say_so(capsys, monkeypatch):
-    rows = [dict(r, instrument="") for r in group(disk_data_mb=-5.0)] + [dict(r, instrument="2026-09") for r in group()]
-    flags, not_checked = kinds(rows)
-    assert flags == []
-    assert sum(not_checked.values()) == 8 and len(not_checked) == 2
-    monkeypatch.setattr(RC, "load_rows", lambda path=None: (rows, "synthetic"))
-    monkeypatch.setattr(sys, "argv", ["resource_check.py"])
-    assert RC.main() == 0
-    out = capsys.readouterr().out
-    assert "checked 0" in out and "not checked: 4 rows, instrument (none)" in out and "instrument 2026-09" in out
+@pytest.mark.parametrize("stamp", ["", "legacy"])
+def test_rows_of_another_instrument_are_refused(stamp):
+    rows = group() + [dict(r, instrument=stamp) for r in group()]
+    with pytest.raises(SystemExit, match="REFUSING"):
+        RC.check(rows)
 
 
 def test_no_row_is_both_checked_and_counted_as_unchecked():
-    rows = group() + [dict(r, instrument="2026-09") for r in group()] + [dict(r, lane="restart") for r in group()]
+    rows = group() + [dict(r, lane="restart") for r in group()]
     _, not_checked = kinds(rows)
-    assert sum(not_checked.values()) == 8
+    assert sum(not_checked.values()) == 4
 
 
 # ---- the page's memory column is the gate's measure: owned memory
@@ -190,7 +185,7 @@ def EW():
     pytest.importorskip("numpy")
     mp = pytest.MonkeyPatch()
     if not os.environ.get("BENCH_ENGINE_COMMIT"):
-        mp.setenv("BENCH_ENGINE_COMMIT", "417314c18")
+        mp.setenv("BENCH_ENGINE_COMMIT", "261100fix")
     try:
         try:
             import export_web

@@ -197,14 +197,8 @@ def _row(**kw):
     return r
 
 
-def test_the_page_promises_no_stream(EW, monkeypatch):
+def test_the_page_promises_no_stream(EW):
     """The switch measured mixed at ts100 (documents 0.853 [0.713, 0.928], native 1.087 [1.083, 1.088] with the merged
-    whole-body reader), so it stays off at 26.11.1 and the page says nothing about it: no table sentence, no
-    next-measurement line (CAMPAIGN section 7 row 85)."""
+    whole-body reader), so it stays off at 26.11.1 and the page says nothing about it: no table sentence (CAMPAIGN
+    section 7 row 85)."""
     assert not hasattr(EW, "_ts_ndjson_note")
-    monkeypatch.setattr(EW, "_OCTOBER_ENV", True)
-    monkeypatch.setattr(EW, "SKELETON", False)
-    monkeypatch.setattr(EW, "_FROZEN_ROWS", [{"backend": "arcadedb_embedded", "engine_version": "26.10.1"}])
-    monkeypatch.setattr(EW, "_NEXT_ITEM_SENTENCES", {})
-    out = EW._next_measurement_note([{"id": "l4", "title": "Time series", "conditions": []}])
-    assert not [x for x in out if "stream" in x]

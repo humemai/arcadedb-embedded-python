@@ -6,9 +6,9 @@ TimescaleDB for time series, and the other multi-model engines that claim the sa
 This section documents how those numbers are produced, so you can decide whether they mean
 anything before you rely on them.
 
-!!! tip "The results live on the project page"
+!!! tip "The results live on the DBBench page"
     Every table, every figure, and every measured number is published at
-    **[humem.ai/research/arcadedb](https://humem.ai/research/arcadedb)**.
+    **[humem.ai/research/dbbench](https://humem.ai/research/dbbench)**.
     These documentation pages carry the method only, and no results.
 
     There is one copy of the numbers on purpose. Each table is generated from one frozen
@@ -25,11 +25,11 @@ Two benchmark suites live in the repository, and they answer different questions
 | [`benchmarks/experiments/`](https://github.com/humemai/arcadedb-embedded-python/tree/main/benchmarks/experiments) | Engine against engine. How does ArcadeDB compare with specialist and embedded databases on the same corpus, the same machine, and the same operation? | These pages |
 | [`benchmarks/python-bindings/`](https://github.com/humemai/arcadedb-embedded-python/tree/main/benchmarks/python-bindings) | Binding against binding. What does reaching the same engine through Python cost against calling it from Java? | [Performance: Python Bindings vs Java](../guide/performance.md) |
 
-These pages describe the 2026-11 instrument, settled before its first
-cell so that nothing changes under the rows (a mid-campaign change splits them). The
-published page can lag the instrument, so where a corpus size or an engine list here is
-ahead of what the page prints, that is the gap between an instrument and the rows it has
-produced so far, and the page's own notes say which sizes it carries.
+These pages describe the 2026-11 instrument, settled before its first cell so that nothing
+changes under the rows (a mid-campaign change splits them). The page publishes 2026-11 rows
+only, and a table appears on it when its rows are frozen, so where a corpus size or an engine
+list here is ahead of what the page prints, that is the gap between the instrument and the
+rows it has produced so far, and the page's own notes say which sizes it carries.
 
 The rest of this section is about the first suite. It runs every engine in Docker, one
 cell at a time, with pinned image digests, an identical CPU set and memory envelope per
@@ -40,7 +40,7 @@ published, which is the part that separates it from a stopwatch.
 ## The Lanes, Corpora, and Engines
 
 A **lane** is one workload script that puts every engine through the same operations
-against the same corpus, and each lane feeds one or two tables on the project page. No
+against the same corpus, and each lane feeds one or two tables on the DBBench page. No
 lane that reaches a table runs on a generated corpus where a published one exists, and a
 lane that cannot find its corpus is refused rather than allowed to fall back to a
 synthetic generator.
@@ -81,24 +81,24 @@ error show the query cannot be expressed.
 
 A table is worth printing only if it answers a question a reader actually has.
 
-- **[Documents](https://humem.ai/research/arcadedb#documents)**: whether an engine that
+- **[Documents](https://humem.ai/research/dbbench/tables)**: whether an engine that
   stores documents can serve the transactional and analytical workloads people usually
   reach for a relational database to run. This is the workload ArcadeDB loses by the widest
   margin, and it is on the page for that reason.
-- **[Graph](https://humem.ai/research/arcadedb#graph)**: whether traversals and graph
+- **[Graph](https://humem.ai/research/dbbench/graphs)**: whether traversals and graph
   analytics hold up against a dedicated graph database, and what ArcadeDB's Graph
   Analytical View buys, measured with the view both on and off so the accelerator is priced
   rather than assumed.
-- **[Vectors](https://humem.ai/research/arcadedb#vectors)**: whether a multi-model engine
+- **[Vectors](https://humem.ai/research/dbbench/vectors)**: whether a multi-model engine
   can search embeddings at a recall a specialist vector store would accept. Latency without
   recall is not a comparison, so both are always printed, at matched operating points.
-- **[Time series](https://humem.ai/research/arcadedb#timeseries)**: whether the native
+- **[Time series](https://humem.ai/research/dbbench/time-series)**: whether the native
   time-series type is worth using against engines built for nothing else.
-- **[Cross-model](https://humem.ai/research/arcadedb#crossmodel)**: the page's central
+- **[Cross-model](https://humem.ai/research/dbbench/cross-model)**: the page's central
   claim. One transaction writes a document, an edge, and a vector, and the same transaction
   is interrupted to see what survives. A composed stack of two specialist systems cannot
   offer that, and the table shows the difference as torn results rather than as an opinion.
-- **[Python](https://humem.ai/research/arcadedb#embedded)**: what the embedded package
+- **[Python](https://humem.ai/research/dbbench/lifecycle)**: what the embedded package
   costs. Session cost from open to close, what the client and server split costs, and what
   each Python materialization API costs against Java on the same JARs.
 
@@ -136,7 +136,7 @@ Stated here because an absent number is a claim too.
 
 -   :material-table-search:{ .lg .middle } [**Reading the Output**](results.md)
 
-    The frozen file, the fields that trap people, and how the project page is generated
+    The frozen file, the fields that trap people, and how the DBBench page is generated
     and gated
 
 </div>

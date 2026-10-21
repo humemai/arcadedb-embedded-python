@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Land a finished queue stage on the page: pull, filter, merge, gate, publish.
 
-The procedure this replaces was typed by hand for every stage of the
-September 2026 chain and went wrong twice (a partial in-progress lane merged
-into the freeze; a raw directory committed and every queued script aborted at
-its pull). One script, one order, refuses by default.
+Landing by hand goes wrong in two ways: a partial in-progress lane merged into
+the freeze, and a raw directory committed so every queued script aborts at its
+pull. One script, one order, refuses by default.
 
     python land_stage.py --exclude-backends surrealdb_tpc,surrealdb_graph \\
         --message "Neo4j vector index joins the dense table (qDK)" [--apply]
@@ -27,7 +26,7 @@ Steps, in order:
 Without --apply the script stops after step 5 and reverts the site payload,
 so the merge and the diff can be read first. Raw directories (results/runs.jsonl,
 dense_mp5_*, sparse_mp_*) are never added to git: they are the bench host's
-own output and a tracked copy breaks its pull (HANDOFF 2026-09-12).
+own output and a tracked copy breaks its pull.
 """
 import argparse
 import json
@@ -39,19 +38,18 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 SITE = REPO.parent / "humem.ai"
+sys.path.insert(0, str(HERE))
+from publish_instrument import PUBLISH_INSTRUMENT  # noqa: E402
+
+# The checkout's own tracked results tree: a landing merges into it and commits from it, so it never runs under
+# BENCH_RESULTS_DIR (which exists for tests).
 RESULTS = HERE / "results"
 PAYLOAD = RESULTS / "web_benchmarks.json"
-SITE_PAYLOAD = SITE / "src" / "data" / "arcadedb-benchmarks.json"
-# --preview (DECISIONS #83): land on /projects/arcadedb/next instead; only the
-# preview's payload, images, and prose are committed on the site, and the
-# bindings commit carries results/generated/preview-tables.md instead of PAGE-SPEC.
-PREVIEW_PAYLOAD = SITE / "src" / "data" / "arcadedb-benchmarks-next.json"
-SITE_FILES = {
-    "live": ["src/data/arcadedb-benchmarks.json", "public/images/projects/arcadedb",
-             "src/lib/projects/items/arcadedb.ts"],
-    "preview": ["src/data/arcadedb-benchmarks-next.json", "public/images/projects/arcadedb-next",
-                "src/lib/projects/items/arcadedb-next.ts"],
-}
+# The site's copy of the payload, and the lane page source that names the tables. The landing commits both on the
+# site; only the payload is a generated file (a dry run restores it, never the hand-written page source).
+SITE_PAYLOAD = SITE / "src" / "data" / "dbbench-benchmarks.json"
+SITE_PAGE_SOURCE = "src/lib/dbbench/lanes.ts"
+SITE_FILES = ["src/data/dbbench-benchmarks.json", SITE_PAGE_SOURCE]
 HOST = os.environ.get("BENCH_LAND_HOST", "mini")
 REMOTE = os.environ.get("BENCH_LAND_REMOTE",
                         "~/repos/humemai/arcadedb-embedded-python/benchmarks/experiments/results")
@@ -74,11 +72,11 @@ def sh(cmd, cwd=None, check=True, capture=False, env=None, quiet=False):
                           capture_output=capture or quiet, env=env)
 
 
-# THE PYTHON-COST TABLE'S FILE (the 26.10.1 chain's qRJ, CAMPAIGN section 7 row 29). The stage is host-side, not runner
+# THE PYTHON-COST TABLE'S FILE (CAMPAIGN section 7 row 29). The stage is host-side, not runner
 # cells: it writes $HOME/pycost/mini_results_<pin>.csv OUTSIDE the tree (a file the laptop later commits must not sit
 # untracked on the bench host, BUGS F19), and the landing is what puts it where export_web reads it, named by the pin
 # (`mini_results_<pin>.csv` beside the tracked file, which wins when it exists) and committed with the rest. Without this
-# step a qRJ landing published the table from the September file, with every gate green.
+# step a landing published the table from a stale file, with every gate green.
 PYCOST_DIR = REPO / "benchmarks" / "python-bindings" / "jpype_overhead" / "results"
 PYCOST_REMOTE = "~/pycost"
 
@@ -105,7 +103,7 @@ def pull_pycost(pin, lanes, host=None, run=None):
 def _warn_rows_predate_lane_changes(lanes, pin):
     """Say when a lane's rows were measured before its own script changed.
 
-    THE GATES CANNOT SEE THIS. On 2026-09-22 an l4 landing passed all six with
+    THE GATES CANNOT SEE THIS. An l4 landing passed all six with
     DuckDB rows measured three days before the commit that gave DuckDB the
     `(host, ts)` index every other arm on that lane has (BUGS F98). The rows
     and their index declaration agreed with each other; what changed
@@ -139,7 +137,7 @@ def _warn_rows_predate_lane_changes(lanes, pin):
                 r = json.loads(line)
             except ValueError:
                 continue
-            if str(r.get("instrument") or "") != "2026-10":
+            if str(r.get("instrument") or "") != PUBLISH_INSTRUMENT:
                 continue
             if pin and not str(r.get("engine_commit") or "").startswith(pin):
                 continue
@@ -198,8 +196,7 @@ def _published_lanes(payload_path, pin=None):
         # published, and was refused two steps later for tables that "would
         # disappear" -- after merging, and with the cause (here: export_web
         # imports numpy, and the interpreter had none) nowhere in the output.
-        # Rehearsing qOE's landing on 2026-09-25 with the system python3 did
-        # exactly that. There is no safe way to land without this answer.
+        # There is no safe way to land without this answer.
         raise SystemExit(
             f"REFUSING: cannot read which lanes {payload_path} already carries: "
             f"export_web did not import ({type(exc).__name__}: {exc}). Run land_stage.py "
@@ -220,18 +217,16 @@ def _restore_this_runs_writes(dirty_before, site_files):
 
     The bindings side is exact: only results paths that became dirty during
     this run (`dirty_before` is the set taken before the merge). The site side
-    is the generated files the publish writes -- payload and images, never the
-    hand-written prose under `/items/` -- restricted to tracked paths, because
+    is the generated files the publish writes -- payload, never the
+    hand-written page source -- restricted to tracked paths, because
     `git checkout` fails the whole command on an untracked one. Shared by the
-    dry run, a refused gate, and the step-5 refusal: until 2026-09-25 only the
-    dry run restored the site, and a step-5 refusal restored nothing, leaving
-    six regenerated artifacts and the refused preview payload in the trees.
+    dry run, a refused gate, and the step-5 refusal.
     """
     ours = sorted(_dirty_results() - dirty_before)
     if ours:
         sh(["git", "checkout", "--"] + ours, cwd=REPO)
         print(f"  restored {len(ours)} regenerated artifact(s) this run rewrote")
-    written = [f for f in site_files if "/items/" not in f]
+    written = [f for f in site_files if f != SITE_PAGE_SOURCE]
     tracked = [f for f in written
                if sh(["git", "ls-files", "--error-unmatch", f], cwd=SITE,
                      check=False, quiet=True).returncode == 0]
@@ -271,9 +266,20 @@ def step(n, title):
     print(f"\n[{n}] {title}", flush=True)
 
 
-# September's campaign pin: the right default for a LIVE landing, refused for a
-# preview one (see main()).
-PIN_DEFAULT = "8d6af9475"
+
+def current_pin(payload_path=None):
+    """The one engine commit the current payload was built from, or None.
+
+    `--pin` defaults to it, so a stage landed on top of a published payload names the same
+    build without being told. None when there is no payload yet or it carries several
+    commits: a first landing, or a mixed freeze, has no pin to guess."""
+    try:
+        payload = json.loads(Path(payload_path or PAYLOAD).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    pins = payload.get("arcadedb_commits") or []
+    return str(pins[0]) if len(pins) == 1 else None
+
 
 def parse_drop_unless(spec):
     """BACKEND:LANE:WORKLOAD:FIELD=VALUE -> (backend, lane, workload, field, value). A malformed spec ends the run:
@@ -300,12 +306,14 @@ def main():
     # Every step this script shells out to already uses PY; the one piece that
     # runs in-process, _published_lanes' import of export_web, needs that
     # environment's packages too (numpy, through e2_hybrid). Started with the
-    # system python3 it silently lost the published lanes (2026-09-25).
+    # system python3 it silently lost the published lanes.
     if Path(PY).exists() and Path(sys.prefix).resolve() != (REPO / ".venv").resolve():
         print(f"(re-running under {PY})", flush=True)
         os.execv(PY, [PY, str(Path(__file__).resolve())] + sys.argv[1:])
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--pin", default=os.environ.get("BENCH_ENGINE_COMMIT", PIN_DEFAULT))
+    ap.add_argument("--pin", default=os.environ.get("BENCH_ENGINE_COMMIT") or current_pin(),
+                    help="engine commit whose rows are pulled (default: BENCH_ENGINE_COMMIT, else the one commit "
+                         "the current payload was built from)")
     ap.add_argument("--only-lanes", default="",
                     help="comma list of lanes to land (e.g. l4,e4); rows of every other lane "
                          "are left on the host for a later landing. A STAGED LANDING NEEDS "
@@ -329,35 +337,25 @@ def main():
                     help="pull and filter, then STOP before the merge. Without this, "
                          "a run with no --apply still merges: --apply governs the "
                          "publish, not the merge.")
-    ap.add_argument("--preview", action="store_true",
-                    help="land on the preview page (/projects/arcadedb/next); the live page is not touched")
     args = ap.parse_args()
 
-    # --pin DEFAULTS TO SEPTEMBER'S COMMIT, which is right for a live landing
-    # and wrong for every preview one. Step 1 pulls `runs_page_<pin>.jsonl` by
-    # exact name, so a preview landing that took the default would fetch
-    # SEPTEMBER's rows, merge them, and then fail somewhere downstream when
-    # October's freeze filtered them all out -- an obscure failure a long way
-    # from its cause. Refuse instead of guessing an October pin: the campaign
-    # names its own, and a wrong one here is a wrong page.
-    if args.preview and args.pin == PIN_DEFAULT and not os.environ.get("BENCH_ENGINE_COMMIT"):
-        sys.exit("REFUSING: --preview lands an OCTOBER stage, and --pin is still "
-                 f"the September default ({PIN_DEFAULT}). Pass --pin <october commit> "
-                 "or set BENCH_ENGINE_COMMIT.")
-
-    global SITE_PAYLOAD
-    if args.preview:
-        SITE_PAYLOAD = PREVIEW_PAYLOAD
-    site_files = SITE_FILES["preview" if args.preview else "live"]
-    refresh_flags = ["--no-build"] + (["--preview"] if args.preview else [])
+    # Step 1 pulls `runs_page_<pin>.jsonl` by exact name, so a landing with no pin would fetch nothing, and a
+    # guessed one would fetch another build's rows. Refuse instead of guessing.
+    if not args.pin:
+        sys.exit("REFUSING: no --pin, no BENCH_ENGINE_COMMIT, and the current payload does not name exactly one "
+                 "engine commit. Pass --pin <commit> or set BENCH_ENGINE_COMMIT.")
+    if os.environ.get("BENCH_INSTRUMENT", PUBLISH_INSTRUMENT) != PUBLISH_INSTRUMENT:
+        sys.exit(f"REFUSING: BENCH_INSTRUMENT={os.environ['BENCH_INSTRUMENT']!r}; this tooling lands "
+                 f"{PUBLISH_INSTRUMENT} rows only (DECISIONS #196).")
+    site_files = SITE_FILES
 
     SCRATCH.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, BENCH_ENGINE_COMMIT=args.pin)
     env.pop("BENCH_PAPER_DIR", None)
-    # AND THE FREEZE HEARS ABOUT --only-lanes TOO. It filtered the PULL alone
-    # until 2026-09-22, so a landing scoped to one lane still froze and gated
-    # the whole store: five undurable e4 rows blocked an e2 landing that had
-    # nothing to do with them. It must go in THIS dict, not os.environ -- step
+    # AND THE FREEZE HEARS ABOUT --only-lanes TOO. If it filtered the PULL
+    # alone, a landing scoped to one lane would still freeze and gate the whole
+    # store: undurable e4 rows would block an e2 landing that had nothing to do
+    # with them. It must go in THIS dict, not os.environ -- step
     # 4 hands the subprocess `env=env` explicitly, so a variable set on our own
     # environment never reaches the gates, which is how the first attempt at
     # this fix passed every local test and still failed the real landing.
@@ -381,22 +379,12 @@ def main():
     # published row therefore passes every gate on every landing, which is the
     # property that makes republishing safe at all.
     if _lanes:
-        _already = _published_lanes(PREVIEW_PAYLOAD if args.preview else SITE_PAYLOAD,
-                                    pin=args.pin)
+        _already = _published_lanes(SITE_PAYLOAD, pin=args.pin)
         if _already - _lanes:
             print(f"  cumulative: landing {','.join(sorted(_lanes))} and keeping "
                   f"{','.join(sorted(_already - _lanes))} already on the page")
         _lanes |= _already
         env["BENCH_ONLY_LANES"] = ",".join(sorted(_lanes))
-    if args.preview:
-        # THE SWITCH TRAVELS WITH THE PUBLISH (DECISIONS #84). `env` is what
-        # step 4 hands refresh_web_page.py, and that script sets the same
-        # variable for itself from --preview -- but this is the only dict a
-        # step added here would inherit, and a second landing step that shells
-        # out without it would silently regenerate from September's freeze.
-        # Stated where the environment is built, not left to one callee.
-        env["BENCH_INSTRUMENT"] = "2026-10"
-
     step(1, f"pull runs_page_{args.pin}.jsonl from {HOST}")
     pulled = SCRATCH / "runs_page_host.jsonl"
     sh(["scp", "-q", f"{HOST}:{REMOTE}/runs_page_{args.pin}.jsonl", str(pulled)])
@@ -411,12 +399,11 @@ def main():
     # nothing pulled it. `export_web` aborts outright when
     # results/e4decomp_<pin>/ is not there, so a landing would have died at
     # the export step with "e4decomp_417314c18 missing" -- after pulling,
-    # filtering and merging. September's directory is on this laptop because
-    # somebody scp'd it by hand once and it is untracked, which is exactly
-    # the kind of step that works until the person who knew about it is not
-    # the one doing the landing.
+    # filtering and merging. A directory somebody scp'd by hand once and left
+    # untracked is exactly the kind of step that works until the person who knew
+    # about it is not the one doing the landing.
     # THE SPARSE SECOND-PASS TABLE IS A DIRECTORY OF ARTIFACTS TOO, and this
-    # step did not pull it either (found rehearsing qOF's landing, 2026-09-28).
+    # step must pull it too.
     # export_web reads results/sparse_mp_<pin>/sp_<arm>_<tier>.json and treats
     # an ABSENT directory as a lane not yet run, so a sparse landing without it
     # would have published the sparse table and silently left its second-pass
@@ -485,10 +472,9 @@ def main():
     if args.dry_run:
         # STOP BEFORE ANYTHING WRITES. Without --apply this script still runs
         # steps 2 and 3, and step 3 MERGES: "dry run" in the docstring above
-        # describes the PUBLISH, not the merge, and on 2026-09-19 I read it as
-        # covering both and came within a closed pipe of merging an
-        # in-progress stage's rows into the canonical log while testing an
-        # unrelated guard. A pipeline that writes needs a mode that does not.
+        # describes the PUBLISH, not the merge, and reading it as covering both
+        # risks merging an in-progress stage's rows into the canonical log. A
+        # pipeline that writes needs a mode that does not.
         n = sum(1 for _ in open(filtered)) if filtered.exists() else 0
         print(f"\n  DRY RUN: {n} row(s) would be merged into results/runs.jsonl,"
               f"\n           then the gates would run and the diff would print."
@@ -500,12 +486,9 @@ def main():
     # WHAT WAS ALREADY DIRTY IN THE RESULTS TREE, so a rehearsal can put back
     # what IT wrote without touching what someone else was mid-way through.
     # Same rule as the site restore below and the same reason: this run
-    # regenerates the payload, the October freeze and the .tex tables, and on
-    # a dry run or a failed gate it leaves them behind. On 2026-09-22 an l2
-    # rehearsal that FAILED its gates left `web_benchmarks_next.json` holding
-    # the l2 payload while the published page carried the e2 one, so the file
-    # a reader opens to ask "what is on the page?" answered with a payload
-    # that was refused.
+    # regenerates the payload, the freeze and the .tex tables, and on a dry run
+    # or a failed gate it leaves them behind: the file a reader opens to ask
+    # "what is on the page?" would answer with a payload that was refused.
     _dirty_before = _dirty_results()
     # AN EMPTY FILTERED FILE IS NOT A BROKEN PULL WHEN WE DID THE EMPTYING.
     #
@@ -516,8 +499,8 @@ def main():
     # measured yet -- and that is the normal state when rehearsing a landing
     # BEFORE its data arrives, which is the whole point of rehearsing.
     #
-    # Rehearsing l3s and l3d on 2026-09-22 died here with a traceback out of
-    # subprocess, which reads like a broken tool rather than "that lane has no
+    # Rehearsing a landing before its data arrives died here with a traceback
+    # out of subprocess, which reads like a broken tool rather than "that lane has no
     # rows yet". Since "every incoming row was already present" is not an
     # error one line down, "there were no incoming rows for this lane" should
     # not be either. The pull itself is still checked, above.
@@ -533,7 +516,7 @@ def main():
     step(4, "publish through the gates (page-only, no site build)")
     log = SCRATCH / "refresh.log"
     with open(log, "w") as fh:
-        rc = subprocess.run([PY, str(HERE / "refresh_web_page.py")] + refresh_flags,
+        rc = subprocess.run([PY, str(HERE / "refresh_web_page.py"), "--no-build"],
                             cwd=REPO, env=env, stdout=fh, stderr=subprocess.STDOUT).returncode
     text = log.read_text()
     for line in text.splitlines():
@@ -577,9 +560,9 @@ def main():
         added = sorted(rows_new - rows_old)
         if n_new != n_old or added or _differs(t, old.get(tid)):
             changed += 1
-            # SAY WHAT CHANGED. This printed "cells changed" for any difference
-            # in the table's JSON, so a landing that only rewrote the notes
-            # under two tables (2026-10-04) read as if their numbers had moved.
+            # SAY WHAT CHANGED. "cells changed" for any difference in the
+            # table's JSON would make a landing that only rewrote the notes
+            # under a table read as if its numbers had moved.
             o = old.get(tid) or {}
             what = sorted(k for k in set(t) | set(o) if _differs(t.get(k), o.get(k)))
             if added:
@@ -621,30 +604,13 @@ def main():
         # Put the site's payload back so the working tree is what the last
         # publish left; the merge into runs.jsonl stands (it is idempotent).
         #
-        # RESTORE WHAT THIS RUN TOUCHED, not a fixed slice. Two bugs lived in
-        # the old two lines. `before` is read from SITE_PAYLOAD, which is the
-        # LIVE payload, so a --preview dry run wrote the live file and left the
-        # preview one to a positional `site_files[:2]` that happened to include
-        # it. And that slice named `public/images/projects/arcadedb-next`,
-        # a directory holding no tracked files, so git answered "pathspec did
-        # not match" and returned non-zero for the whole command -- a restore
-        # that announces "site payload restored" while reporting an error is
-        # the shape where one day it restores nothing and still says that.
-        #
-        # git checkout only restores TRACKED paths, so ask git which of them
-        # are tracked and pass exactly those. An untracked or empty directory
-        # is then not an error, because nothing in it could have been changed.
-        # RESTORE ONLY WHAT THIS RUN WROTE. `site_files` is the COMMIT list --
-        # payload, images, and the hand-written prose -- and a dry run writes
-        # only the first two. Reverting the third threw away uncommitted prose
-        # edits twice in one session, silently, while printing "site payload
-        # restored"; the second time it discarded the rewrite that stopped the
-        # page claiming its numbers came from a development laptop.
-        #
-        # A dry run must leave the tree as it found it, and that cuts both
-        # ways: it may not keep what it wrote, and it may not drop what it did
-        # not write. The prose file is never written here, so it is never
-        # restored here.
+        # RESTORE ONLY WHAT THIS RUN WROTE, and only TRACKED paths: git checkout
+        # fails the whole command on an untracked one. `site_files` is the
+        # COMMIT list -- payload and the hand-written page source -- and a dry
+        # run writes only the payload; reverting the page source would throw
+        # away uncommitted edits while printing "site payload restored". A dry
+        # run must leave the tree as it found it, which cuts both ways: it may
+        # not keep what it wrote, and it may not drop what it did not write.
         _restore_this_runs_writes(_dirty_before, site_files)
         print("\nDRY RUN: stopping before build and commit; site payload restored. Re-run with --apply to publish.")
         return 0
@@ -654,42 +620,19 @@ def main():
     # so it never replaces what a running dev server in the checkout serves from.
     sh(["npm", "run", "build"], cwd=SITE, env=dict(os.environ, NEXT_DIST_DIR=".next-gate"))
     sh(["git", "add"] + site_files, cwd=SITE)
-    sh(["git", "commit", "-q", "-m", f"arcadedb{' preview' if args.preview else ''}: {args.message}{TRAILER}"], cwd=SITE, check=False)
+    sh(["git", "commit", "-q", "-m", f"dbbench: {args.message}{TRAILER}"], cwd=SITE, check=False)
     sh(["git", "push", "-q", "origin", "main"], cwd=SITE)
-    # COMMIT THE ARTIFACTS THIS PUBLISH WROTE, not September's. A preview
-    # landing regenerates runs_paper_oct.csv and web_benchmarks_next.json and
-    # leaves the live pair exactly as it found them (DECISIONS #84), so
-    # committing the live pair here would add nothing and the October freeze
-    # would stay untracked -- the page serving numbers whose frozen rows are
-    # in no commit.
-    #
-    # THE GENERATED DIRECTORY IS THE THIRD ARTIFACT, and it was the one still
-    # pointing at September. It used to stage results/generated whichever
-    # route this landing was for, which did two wrong things at once on a
-    # preview landing: October's tables (results/generated_oct, since
-    # make_paper_tables.GENERATED_NAME) went into no commit, and anything that
-    # had touched September's published set got committed as part of an
-    # October landing without being read. Staging only what this publish wrote
-    # means a September artifact showing up dirty during an October landing
-    # stays dirty and visible, instead of being swept into the commit.
-    #
-    # results/generated_oct is allowlisted in .gitignore. It has to be: under
-    # the allowlist an unnamed path is ignored and `git add` on it commits
-    # NOTHING, silently, which is exactly where a landing would stop -- the
-    # site pushed, the tables in no commit.
-    _frozen, _payload, _generated = (
-        ("runs_paper_oct.csv", "web_benchmarks_next.json", "generated_oct") if args.preview
-        else ("runs_paper.csv", "web_benchmarks.json", "generated"))
+    # COMMIT THE ARTIFACTS THIS PUBLISH WROTE: the freeze, the payload and the
+    # generated tables, so the page never serves numbers whose frozen rows are in
+    # no commit. results/generated is allowlisted in .gitignore; under the
+    # allowlist an unnamed path is ignored and `git add` on it commits NOTHING,
+    # silently.
     tracked = ([str(_pycost.relative_to(REPO))] if _pycost else []) + [
-               f"benchmarks/experiments/results/{_frozen}",
-               f"benchmarks/experiments/results/{_payload}",
-               f"benchmarks/experiments/results/{_generated}",
-               # the preview route's inventory, which stays under
-               # results/generated beside PAGE-SPEC's own (refresh_web_page
-               # .PREVIEW_INVENTORY says why)
-               "benchmarks/experiments/results/generated/preview-tables.md" if args.preview
-               else "benchmarks/experiments/PAGE-SPEC.md"]
-    # THE COMMIT MUST BE VERIFIED, NOT ASSUMED. 2026-09-18 (BUGS F56): the
+               "benchmarks/experiments/results/runs_paper.csv",
+               "benchmarks/experiments/results/web_benchmarks.json",
+               "benchmarks/experiments/results/generated",
+               "benchmarks/experiments/PAGE-SPEC.md"]
+    # THE COMMIT MUST BE VERIFIED, NOT ASSUMED (BUGS F56): the
     # pre-commit hook rewrote a staged JSON file, git aborted the commit, this
     # script printed LANDED and pushed nothing, and the frozen rows sat staged
     # and uncommitted while the site had already moved. A hook that rewrites a

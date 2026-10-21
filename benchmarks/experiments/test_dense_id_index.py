@@ -108,31 +108,17 @@ def test_arcadedb_embedded_builds_the_index_before_the_load(L, monkeypatch):
 
 
 def _row(**kw):
-    r = {"lane": "l3d", "instrument": "2026-10", "backend": "arcadedb_dense_embedded", "mutate_delete_per_op_ms": 1.5}
+    r = {"lane": "l3d", "instrument": "2026-11", "backend": "arcadedb_dense_embedded", "mutate_delete_per_op_ms": 1.5,
+         "dense_id_index": "CREATE INDEX ON Article (vid) UNIQUE_HASH"}
     r.update(kw)
     return r
 
 
-def test_page_sentence_while_an_arcadedb_delete_ran_without_the_index(EW, monkeypatch):
-    monkeypatch.setattr(EW, "_OCTOBER_ENV", True)
-    monkeypatch.setattr(EW, "_NEXT_ITEM_SENTENCES", {})
-    s = EW._dense_id_index_note("l3d", [_row()])
-    assert s and "no index" in s and "measures all of them again" in s
-    assert "A measurement after the paper indexes the id" in s and "next measurement" not in s
-    assert s in EW._NEXT_ITEM_SENTENCES["dense_id_index"]
-    assert EW._dense_id_index_note("l3d", [_row(dense_id_index="CREATE INDEX ON Article (vid) UNIQUE_HASH")]) is None
-    assert EW._dense_id_index_note("l3d", [_row(backend="pgvector_dense")]) is None
-    assert EW._dense_id_index_note("l3d", [_row(mutate_delete_per_op_ms=None)]) is None   # no delete measured, nothing to say
+def test_page_sentence_names_the_engines_whose_rows_stamp_the_index(EW):
+    s = EW._dense_id_index_note("l3d", [_row(), _row(backend="pgvector_dense", dense_id_index="key")])
+    assert s and "ArcadeDB" in s and "pgvector" in s and "index on the vector id" in s and "ingest time" in s
+    assert s in [g["text"] for g in EW._GENERATED]                       # registered as a generated sentence
+    only = EW._dense_id_index_note("l3d", [_row(), _row(backend="pgvector_dense", dense_id_index="")])
+    assert "ArcadeDB" in only and "pgvector" not in only                 # an unstamped engine is not named
+    assert EW._dense_id_index_note("l3d", [_row(dense_id_index="")]) is None
     assert EW._dense_id_index_note("l3s", [_row()]) is None
-
-
-def test_next_measurement_line_names_the_re_measured_engines(EW, monkeypatch):
-    monkeypatch.setattr(EW, "_OCTOBER_ENV", True)
-    monkeypatch.setattr(EW, "SKELETON", False)
-    monkeypatch.setattr(EW, "_FROZEN_ROWS", [{"backend": "arcadedb_embedded", "engine_version": "26.10.1"}])
-    monkeypatch.setattr(EW, "_NEXT_ITEM_SENTENCES", {})
-    s = EW._dense_id_index_note("l3d", [_row()])
-    out = EW._next_measurement_note([{"id": "l3d", "title": "Dense vectors", "conditions": [s]}])
-    assert any("carry over unless a line below says they are measured again" in x for x in out)
-    [line] = [x for x in out if "index on the vector id" in x]
-    assert "Dense vectors" in line and "measured again" in line

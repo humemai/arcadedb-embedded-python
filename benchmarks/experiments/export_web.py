@@ -32,7 +32,6 @@ import collections
 import ast as _ast
 import json
 import os
-import subprocess
 import re
 import statistics
 import sys
@@ -45,8 +44,7 @@ sys.path.insert(0, str(HERE))
 import publish_instrument as _PI  # noqa: E402
 RESULTS = _PI.results_dir()
 
-import bench_common  # noqa: E402
-from runner import BACKENDS, MEM_BY_SCALE, HEAP_BY_SCALE, arm_runs  # noqa: E402  (path set above)
+from runner import BACKENDS, MEM_BY_SCALE, HEAP_BY_SCALE  # noqa: E402  (path set above)
 
 
 # SIZE LABELS FROM THE LANES' OWN CONSTANTS, not typed. The time-series label
@@ -97,49 +95,13 @@ def _l2_full_network(scale: str) -> str:
     return f"{v / 1e6:.1f}M vertices, {e / 1e6:.1f}M edges"
 
 
-# The frozen selection this payload is built from. A skeleton publish reads
-# its own freeze (DECISIONS #86), so the campaign's tracked runs_paper.csv is
-# never touched and the page's source link names the file it really used.
-#
-# The October campaign reads its own freeze for the same reason (DECISIONS
-# #84): make_paper_tables writes runs_paper_oct.csv under BENCH_INSTRUMENT
-# =2026-10, and these two names must move together or the exporter reads one
-# campaign's rows while the freeze step wrote the other's. Skeleton is tested
-# first: it is a laptop placeholder run and keeps its own names whatever
-# campaign is selected.
-_SKELETON_ENV = os.environ.get("BENCH_SKELETON") == "1"
-_OCTOBER_ENV = os.environ.get("BENCH_INSTRUMENT") == "2026-10"
-FROZEN_NAME = ("runs_skeleton_laptop.csv" if _SKELETON_ENV
-               else "runs_paper_oct.csv" if _OCTOBER_ENV
-               else "runs_paper.csv")
+# The frozen selection this payload is built from, the one payload it writes, and the generated set whose
+# withheld-recall sidecar it reads. One set of names: the publish renders 2026-11 rows only (publish_instrument).
+FROZEN_NAME = "runs_paper.csv"
 FROZEN = RESULTS / FROZEN_NAME
-# A SKELETON WRITES ITS OWN PAYLOAD, for the same reason it writes its own
-# freeze. web_benchmarks.json is the tracked record of what the LIVE page
-# serves, and a skeleton export overwrote it: the repository then held a
-# laptop placeholder payload as the published one, with the live page still
-# serving the campaign's. Same name, two meanings, and nothing to tell them
-# apart after the fact.
-#
-# THE OCTOBER CAMPAIGN WRITES ITS OWN PAYLOAD, for the third time for the same
-# reason. web_benchmarks.json is what the LIVE page serves and stays
-# September's until the preview route is promoted; October fills
-# web_benchmarks_next.json, which is what /projects/arcadedb/next is served
-# from (DECISIONS #83). One name per published thing, so a stale copy is
-# always identifiable as one.
-OUT_NAME = ("web_benchmarks_skeleton.json" if _SKELETON_ENV
-            else "web_benchmarks_next.json" if _OCTOBER_ENV
-            else "web_benchmarks.json")
+OUT_NAME = "web_benchmarks.json"
 OUT = RESULTS / OUT_NAME
-# AND THE GENERATED ARTIFACTS, for the fourth time for the same reason
-# (make_paper_tables.GENERATED_NAME, which is the definition; this is the
-# third name that has to move with the other two). The only one this module
-# reads is the withheld-recall sidecar, and reading September's while
-# exporting October's payload would declare September's withheld cells under
-# October's tables -- a sentence under a table, sourced from a campaign the
-# table has no rows from.
-GENERATED_NAME = ("generated_skeleton" if _SKELETON_ENV
-                  else "generated_oct" if _OCTOBER_ENV
-                  else "generated")
+GENERATED_NAME = "generated"
 GENERATED = RESULTS / GENERATED_NAME
 
 # Version names live as trailing comments beside each pin in runner.py; the
@@ -193,26 +155,9 @@ _UNUSABLE_VERSION = re.compile(
     re.I)
 
 
-# DECISIONS #86, declared here because the module-level artifact readers below
-# depend on it: BENCH_SKELETON=1 says the frozen rows are the laptop's
-# micro-scale placeholder run. A skeleton reads NO bench-host overlay, so the
-# readers that refuse a missing pinned directory must not fire for it.
-SKELETON = os.environ.get("BENCH_SKELETON") == "1"
-
-
-def _dense_overlay_is_pinned():
-    """Always, since 2026-09-08: dense_mp_dir() refuses instead of falling back."""
-    if SKELETON:
-        return False
-    import make_paper_tables as _MPT
-    _MPT.dense_mp_dir()
-    return True
-
-
 def _pinned_dir(name, expected=None):
-    """results/<name>_<pin>, complete, or refuse. PINNED ONLY since 2026-09-08
-    (the fallback to results/<name> published a 26.8.1 overlay when the pinned
-    one was incomplete; that is a wrong number, not a safety net)."""
+    """results/<name>_<pin>, complete, or refuse. Pinned only: a fallback to results/<name> would publish
+    an older overlay when the pinned one is incomplete, which is a wrong number, not a safety net."""
     pin = os.environ.get("BENCH_ENGINE_COMMIT", "").strip()
     if not pin:
         raise SystemExit(f"BENCH_ENGINE_COMMIT is unset: {name} is pinned only")
@@ -221,8 +166,8 @@ def _pinned_dir(name, expected=None):
     # an incomplete overlay standing in for a complete one is a wrong number,
     # not a safety net. An ABSENT one is a lane that has not run at this pin,
     # which for most of a campaign is the normal state -- sparse_mp comes from
-    # stage 8 of 10 and the dense overlays from stage 9, while October lands
-    # table by table from stage 1. Callers already expect this: the sparse
+    # stage 8 of 10 and the dense overlays from stage 9, while the other tables land
+    # from stage 1. Callers already expect this: the sparse
     # multipass builder immediately below does `if not root.is_dir(): return
     # None`, which the raise made unreachable, and the table is simply not
     # drawn. Returning the path lets that guard do its job.
@@ -259,8 +204,7 @@ def _dominant_cpuset(rows):
     `Counter(...).most_common(1)[0][0]` raises IndexError on an empty counter,
     which is what a payload with no rows produces -- and "IndexError: list
     index out of range" from inside a dict literal says nothing about the
-    cause. Rehearsing the l3s landing before that lane has any October rows
-    hit exactly this.
+    cause. A landing before that lane has any rows hit exactly this.
 
     A payload with no rows is not publishable anyway: page_check requires the
     page's hardware paragraph to name this cpuset, so an empty one would take
@@ -389,9 +333,8 @@ def _engine_identity(raw: str | None, commit: str | None) -> str | None:
     # cannot see that those name the same engine, which is the whole job of the
     # identifier (#49).
     #
-    # Nine, because that is the width already published across September's
-    # page, and because a render-time normalisation must not change what a
-    # settled page says. Truncating here rather than at the stamp fixes the
+    # Nine, because that is the width already published, and because a
+    # render-time normalisation must not change what a settled page says. Truncating here rather than at the stamp fixes the
     # rows ALREADY frozen as well as future ones; per this function's contract
     # callers have compared the raw strings long before reaching it.
     if sha and re.fullmatch(r"[0-9a-f]{9,40}", sha):
@@ -405,9 +348,6 @@ def _row_engine_string(r) -> str | None:
     """engine_version unless it is the driver's "unknown (...)" placeholder, in
     which case lib_version (the served arm's banner, learned on connect())."""
     ev = str(r.get("engine_version") or "")
-    if ev.startswith("surrealdb-embedded:"):
-        import surreal_common
-        ev = surreal_common.legacy_stamp_fixup(ev)   # F39: SDK version was stamped as the engine
     if ev and not ev.startswith("unknown"):
         return ev
     # The served banner lands in backend_version on the L4 lane (its
@@ -445,7 +385,9 @@ def _overlay_commit() -> str | None:
     """The commit an overlay row belongs to: the files carry engine_commit=None
     (the driver never stamped it) but the directory is named by the pin, so a
     pinned overlay's rows are that commit's rows by construction."""
-    return os.environ.get("BENCH_ENGINE_COMMIT", "").strip() or None if _dense_overlay_is_pinned() else None
+    import make_paper_tables as _MPT
+    _MPT.dense_mp_dir()      # refuses a missing or incomplete pinned overlay
+    return os.environ.get("BENCH_ENGINE_COMMIT", "").strip() or None
 
 
 # Canonical spelling per engine, so an image repo name and a row label cannot
@@ -504,7 +446,7 @@ def _engine_version(label: str, raw: str | None,
     # served rows carry engine_version "server:26.9.1-SNAPSHOT (build <sha>)"
     # and engine_commit; the image in runner.py is the DEFAULT the campaign
     # overrides with ARCADEDB_SERVER_IMAGE, and its tag said 26.8.1 while the
-    # container was built from 8d6af9475. 2026-09-07: every served ArcadeDB
+    # container was built from 8d6af9475.: every served ArcadeDB
     # entry on the page read "arcadedb 26.8.1" beside embedded rows at
     # "arcadedb 26.9.1", two identities for one pinned pair (PAGE-SPEC rule 1).
     if str(label or "").lower().startswith("arcadedb"):
@@ -530,7 +472,7 @@ def _engine_version(label: str, raw: str | None,
     # A MEMBER MAY SPELL ITSELF WITH A SPACE, and the colon-only pair regex
     # this replaces dropped every one that did. The cross-model arm's row
     # reads "PostgreSQL 17.11 + pgvector:0.8.6 + age:1.7.0" -- PostgreSQL, the
-    # arm's PRIMARY engine, separated by a space -- so the live September page
+    # arm's PRIMARY engine, separated by a space -- so the page
     # published that stack as "pgvector 0.8.6 + age 1.7.0" under a label
     # reading "PostgreSQL + pgvector + AGE": the one engine the row is named
     # for was the one engine the version line did not name. Splitting on "+"
@@ -581,15 +523,6 @@ def _engine_version(label: str, raw: str | None,
     return f"{engine} {ver}"
 
 
-def _dense_rows_for_note():
-    """Frozen l3d rows, for notes that apply only when an engine is present."""
-    try:
-        with open(FROZEN, newline="") as fh:
-            return [r for r in csv.DictReader(fh) if r.get("lane") == "l3d"]
-    except OSError:
-        return []
-
-
 def _image_version_names() -> dict[str, str]:
     src = (HERE / "runner.py").read_text(encoding="utf-8")
     out = {}
@@ -621,7 +554,7 @@ DISPLAY_NAMES = {
     "arcadedb_dense_embedded": "ArcadeDB (embedded)",
     "arcadedb_dense_server": "ArcadeDB (server)",
     # The int8 arms fell through to the bare "ArcadeDB" default and the dense
-    # table showed two rows both labelled "ArcadeDB (int8)" at 1M (2026-09-09).
+    # table showed two rows both labelled "ArcadeDB (int8)" at 1M.
     "arcadedb_dense_embedded_int8": "ArcadeDB (embedded)",
     "arcadedb_dense_server_int8": "ArcadeDB (server)",
     # Name the quantization on BOTH sparse rows. Left as a bare
@@ -657,7 +590,7 @@ DISPLAY_NAMES = {
     "elasticsearch_sparse": "Elasticsearch",
     "chroma_dense": "Chroma", "lancedb_dense": "LanceDB", "lancedb_dense_fp32": "LanceDB",
     "sqlite_vec_dense": "sqlite-vec", "duckdb_vss_dense": "DuckDB VSS",
-    # #131 item 3 (2026-10-02)
+    # #131 item 3
     "elasticsearch_dense": "Elasticsearch", "elasticsearch_dense_int8": "Elasticsearch",
     "memgraph_dense": "Memgraph", "falkordb_dense": "FalkorDB", "ladybug_dense": "LadybugDB",
     "memgraph_dense_int8": "Memgraph",
@@ -698,11 +631,11 @@ OFF_PAGE_ARMS = {
     "postgres_tuned": "an ablation of one engine's image defaults, not a second "
                       "engine; it answered its question (2.33 vs 2.39 ms new-order) "
                       "and stays in the rows, off the document and durability "
-                      "tables (user, 2026-09-13, DECISIONS #76)",
+                      "tables (user, DECISIONS #76)",
     "arcadedb_sparse_embedded_nocompact": "the settle-step ablation; it sat among "
                       "engine rows while being an ablation no comparator has run, "
                       "so it stays in the harness and off the page until a "
-                      "comparator has the matching arm (2026-09-10)",
+                      "comparator has the matching arm",
 }
 
 
@@ -750,7 +683,7 @@ OFF_PAGE_ARMS = {
 # Read from each vendor's docs AND source at the version we run, never inferred
 # from the recall we measured:
 #
-#   Qdrant v1.19.1   fp32. RE-VERIFIED AT THE NEW PIN 2026-09-19, and one
+#   Qdrant v1.19.1   fp32. RE-VERIFIED AT THE NEW PIN, and one
 #                    clause of the old citation was wrong. `datatype` is
 #                    NOT documented with a default: the schema text for
 #                    SparseIndexParams.datatype is byte-identical at v1.18.2
@@ -781,7 +714,7 @@ OFF_PAGE_ARMS = {
 #                    (pinned/cached/cold, default pinned). It still works, and
 #                    is the next thing here that will need rewording.
 #   Milvus v3.0.1    fp32 -- BUT CONDITIONAL, AND THE OLD CITATION IS DEAD.
-#                    Re-derived at the new pin 2026-09-19 (was v2.6.13).
+#                    Re-derived at the current pin (was v2.6.13).
 #                    FIRST, DROP THE DOC SENTENCE ENTIRELY. "the value part
 #                    can be a non-negative 32-bit floating-point number" is
 #                    NOT on the v3.0.x pages either: grepping milvus-docs at
@@ -835,7 +768,7 @@ OFF_PAGE_ARMS = {
 # really about dense vectors is the likeliest way to put a wrong label on a
 # competitor's row. Both were confirmed against version-pinned source.
 #
-# AND THE TRAP THE 2026-09-19 RE-PIN ADDED: a precision label sourced at one
+# AND THE TRAP A RE-PIN ADDS: a precision label sourced at one
 # version is not evidence about another. All three entries here were pinned to
 # versions we no longer run, one of them cited a page that never said what it
 # was quoted for, and Milvus's answer now depends on a config key rather than
@@ -847,7 +780,7 @@ SPARSE_PRECISION = {
     "arcadedb_sparse_server_fp32": "fp32",
     "qdrant_sparse": "fp32",
     # SparseIndexParams.datatype uint8, read back from the collection as
-    # qdrant_sparse_datatype (DECISIONS #135, 2026-10-02); the fp32 arm now sets
+    # qdrant_sparse_datatype (DECISIONS #135); the fp32 arm now sets
     # float32 and reads it back the same way.
     "qdrant_sparse_uint8": "uint8",
     "milvus_sparse": "fp32",
@@ -890,7 +823,7 @@ DENSE_PRECISION = {
     #   sqlite_vec_dense_int8       vec0(embedding int8[DIM]) + vec_quantize_int8(v,'unit')
     "arcadedb_dense_server_int8": "int8",
     "sqlite_vec_dense_int8": "int8",
-    # #131 item 3 (2026-10-02), checked against the DDL each issues (#53):
+    # #131 item 3, checked against the DDL each issues (#53):
     #   elasticsearch_dense       dense_vector, index_options.type hnsw (float)
     #   elasticsearch_dense_int8  index_options.type int8_hnsw, top k rescored with the floats
     #   memgraph_dense            CREATE VECTOR INDEX ... "scalar_kind": "f32"
@@ -899,7 +832,7 @@ DENSE_PRECISION = {
     "elasticsearch_dense": "fp32",
     "elasticsearch_dense_int8": "int8",
     "memgraph_dense": "fp32",
-    # The quantization survey's counterparts (DECISIONS #135, 2026-10-02),
+    # The quantization survey's counterparts (DECISIONS #135),
     # checked against the DDL each issues and the value each reads back:
     #   mongodb_dense_int8   vectorSearch field "quantization": "scalar" (mongot_vector_quantization)
     #   memgraph_dense_int8  CREATE VECTOR INDEX ... "scalar_kind": "i8" (memgraph_vector_scalar_kind)
@@ -947,15 +880,11 @@ SCALE_LABELS = {
     ("e4", "e2"): "50k products",
     ("l2", "sf1"): "SF1 (11k people)",
     ("l2", "sf10"): "SF10 (73k people)",
-    # THE SEPTEMBER EXTENSION'S RAISED SIZES (DECISIONS #103b). Each is a
-    # tier of its own so its rows never share a canonical key with the rows
-    # they replace; the page table switches tiers when every engine on it has
-    # landed at the new size, never before, so a table is never two corpora.
     # sf1full: the full SF1 social network, persons+KNOWS plus the message
     # half, for the analytics table only (the interactive table keeps the
-    # projection at SF1 and SF10).
+    # projection at SF1 and SF10). Each raised size is a tier of its own, so
+    # its rows never share a canonical key with another corpus's.
     ("l2", "sf1full"): f"SF1, full network ({_l2_full_network('sf1full')})",
-    ("l1", "medium"): "20M orders (synthetic)",
     ("l1tpc", "tpch1"): "TPC-H SF1 (6.0M line items)",
     # 59,986,052 line items in the DuckDB 1.5.4 dbgen output (the corpus
     # README's parquet metadata; the lane records the file's own count as
@@ -984,34 +913,6 @@ SCALE_LABELS = {
     ("restart", "deep10m"): "dense vectors, 9.99M (Deep)",
     ("restart", "ts100"): f"time series, {_l4_points('ts100')} points",
     ("restart", "ts1000"): f"time series, {_l4_points('ts1000')} points (1,000 hosts)",
-}
-
-# THE SKELETON'S OWN LABELS (DECISIONS #86). The placeholder run uses the
-# laptop's micro corpora, and the campaign labels above would print "2.59M
-# points" over 12 hours of TSBS or "TPC-H SF1" over SF0.01. A banner saying
-# the numbers are placeholders does not excuse a size column that names a
-# corpus the cell never read, so the sizes here are the ones actually
-# measured, each marked so it cannot be mistaken for a campaign tier.
-SKELETON_SCALE_LABELS = {
-    ("l1tpc", "micro"): "TPC-H SF0.01 (60k line items, skeleton)",
-    # NAMED AS SYNTHETIC. These two lanes read a real corpus in the campaign,
-    # LDBC-SNB and the Big-ANN sparse track, and neither is staged on a laptop,
-    # so the skeleton runs the lane's own generator. A size column that said
-    # only "2k people" under prose about LDBC would be naming a corpus the cell
-    # never read, which is the whole reason this table exists.
-    ("l2", "micro"): "2k people (synthetic, skeleton)",
-    ("l3d", "micro"): "5k vectors (skeleton)",
-    ("l3s", "micro"): "5k vectors (synthetic, skeleton)",
-    # THE SKELETON READS THE SAME CORPUS AS THE CAMPAIGN, so the count comes
-    # from the lane's constant, not from a typed guess: the first version of
-    # this line said "432k points, 12 h" over rows carrying 2,592,000.
-    ("l4", "ts100"): f"{_l4_points('ts100')} points (skeleton)",
-    ("e2", "e2"): "50k products (skeleton)",
-    ("lifecycle", "lc10k"): "10k (skeleton)",
-    # One micro tier for three models on the laptop: the skeleton shows the
-    # table's shape, and the campaign's tiers (above) name each model apart.
-    ("restart", "micro"): "each engine's own micro corpus (skeleton)",
-    ("restart", "ts100"): f"time series, {_l4_points('ts100')} points (skeleton)",
 }
 
 
@@ -1053,19 +954,8 @@ def scale_label(lane: str, scale: str) -> str:
     if lane == "l2":
         size = _l2_size(scale)
         if size:
-            if SKELETON:
-                # The skeleton's analytics rows read a capped slice of the
-                # real LDBC SF1 network (DECISIONS #104a); its interactive
-                # rows read the micro generator. The rows say which.
-                src = next((str(r.get("graph_source") or "") for r in _FROZEN_ROWS
-                            if r.get("lane") == "l2" and str(r.get("scale")) == str(scale)), "")
-                if src.startswith("ldbc"):
-                    return f"{size} (LDBC SF1 slice, skeleton)"
-                return f"{size} (synthetic, skeleton)"
             return f"{str(scale).upper()} ({size})"
     try:
-        if SKELETON:
-            return SKELETON_SCALE_LABELS[(lane, scale)]
         return SCALE_LABELS[(lane, scale)]
     except KeyError:
         raise SystemExit(
@@ -1117,9 +1007,8 @@ SOURCES = {
     # Two tiers, two artifacts: small comes from the campaign's frozen rows,
     # DEEP-10M from the matched multipass overlay. Both are published.
     "l3d": [f"benchmarks/experiments/results/{FROZEN_NAME}",
-            "benchmarks/experiments/results/dense_mp5_<pin or 2681>"],   # resolved in _dense_overlay_entries
+            "benchmarks/experiments/results/dense_mp5_<pin>"],   # resolved in _dense_overlay_entries
     "l2": f"benchmarks/experiments/results/{FROZEN_NAME}",
-    "l1": f"benchmarks/experiments/results/{FROZEN_NAME}",
     "l1tpc": f"benchmarks/experiments/results/{FROZEN_NAME}",
     "e2": f"benchmarks/experiments/results/{FROZEN_NAME}",
     "l4": f"benchmarks/experiments/results/{FROZEN_NAME}",
@@ -1166,8 +1055,7 @@ DENSE_10M_ARMS = [
     ("qdrant_int8", "qdrant_dense_int8", "Qdrant (int8)", False),
     ("sqlitevec_int8", "sqlite_vec_dense_int8", "sqlite-vec (int8)", False),
     ("sqlitevec", "sqlite_vec_dense", "sqlite-vec (fp32)", False),
-    # 2026-09-11 additions; their overlay files appear when qDK lands and the
-    # rows are skipped until then.
+    # Their overlay files appear when the arm lands and the rows are skipped until then.
     ("pgvector", "pgvector_dense", "pgvector (fp32)", False),
     ("neo4jvec", "neo4j_dense", "Neo4j (fp32)", False),
     ("neo4jvec_int8", "neo4j_dense_int8", "Neo4j (int8)", False),
@@ -1175,11 +1063,11 @@ DENSE_10M_ARMS = [
     ("surrealsrv", "surrealdb_dense_server", "SurrealDB (server, fp32)", False),
     ("arango", "arangodb_dense", "ArangoDB (fp32)", False),
     ("mongo", "mongodb_dense", "MongoDB (fp32)", False),
-    # #131 item 3 (2026-10-02); skipped until their overlay files exist.
+    # #131 item 3; skipped until their overlay files exist.
     ("elastic", "elasticsearch_dense", "Elasticsearch (fp32)", False),
     ("elastic_int8", "elasticsearch_dense_int8", "Elasticsearch (int8)", False),
     ("memgraph", "memgraph_dense", "Memgraph (fp32)", False),
-    # DECISIONS #135 (2026-10-02); skipped until their overlay files exist.
+    # DECISIONS #135; skipped until their overlay files exist.
     ("mongo_int8", "mongodb_dense_int8", "MongoDB (int8)", False),
     ("memgraph_int8", "memgraph_dense_int8", "Memgraph (int8)", False),
     ("lancedb_fp32", "lancedb_dense_fp32", "LanceDB (fp32)", False),
@@ -1190,11 +1078,6 @@ DENSE_10M_ARMS = [
 
 
 def _dense_overlay_entries(scale="deep10m"):
-    # See _extras in main(): a skeleton draws only what it measured, so the
-    # multipass overlay (a bench-host artifact) is not read and the dense
-    # table comes from the skeleton's own single-pass rows, cold only.
-    if SKELETON:
-        return []
     """The DEEP-10M tier, every engine, both passes.
 
     THIS TIER WAS WITHHELD AND SHOULD NOT HAVE BEEN. The withheld note said
@@ -1216,10 +1099,10 @@ def _dense_overlay_entries(scale="deep10m"):
     together because separating them is the point: only ArcadeDB moves.
     """
     import make_paper_tables as _MPT
-    # One protocol at both sizes since 2026-09-10 (BUGS F26): deep10m reads
+    # One protocol at both sizes (BUGS F26): deep10m reads
     # dense_mp5_<pin>, small reads dense_mp5_small_<pin>, both pinned-only.
     # Arms come from the overlay's own contents (required set plus every
-    # optional September arm whose files are complete; a partial arm
+    # optional arm whose files are complete; a partial arm
     # refuses), so a landed comparator appears without an edit here.
     if scale == "deep10m":
         root, n_docs = Path(_MPT.dense_mp_dir()), "9,990,000"
@@ -1246,15 +1129,10 @@ def _dense_overlay_entries(scale="deep10m"):
             # ("neo4j:2026.07.1"), and our served arm's is lib_version too
             # ("server:26.9.1...").
             #
-            # That is what the comment said before 2026-09-19 and NOT what the
-            # code did: it substituted lib_version only when engine_version
-            # began "unknown", on the assumption that the client image always
-            # fails to resolve the wheel. It does not always fail. Where the
+            # A client image does not always fail to resolve the wheel. Where the
             # wheel IS importable the overlay stamps its version on every row,
-            # comparators included, so the dense table published
-            # "surrealdb 26.9.1" -- an ArcadeDB release number worn by
-            # SurrealDB, formed by _engine_version taking the NAME from the row
-            # label and the NUMBER from this field (BUGS F63a).
+            # comparators included, so a comparator would publish an ArcadeDB
+            # release number (BUGS F63a).
             #
             # For a comparator, lib_version wins whenever it exists. Only our
             # own arms may take engine_version, and theirs is the same wheel.
@@ -1267,8 +1145,8 @@ def _dense_overlay_entries(scale="deep10m"):
             # build_s, and the two timers beside it where the engine has the
             # boundary (DECISIONS #74 item 2). The overlay is what the dense
             # table prints, so the split has to be read HERE as well as from
-            # the campaign rows: a September file carries neither and _agg
-            # returns None, which drops the column rather than printing blanks.
+            # the campaign rows: a file that carries neither makes _agg
+            # return None, which drops the column rather than printing blanks.
             build.append({"build_s": passes[0].get("build_s"),
                           "ingest_s": passes[0].get("ingest_s"),
                           "index_s": passes[0].get("index_s")})
@@ -1324,7 +1202,7 @@ def _dense_overlay_entries(scale="deep10m"):
         v = next((x for x in ver if x and not str(x).startswith("unknown")), None)
         # The comparator files stamp nothing usable, but the same arm ran in
         # the campaign lane at this size with its version recorded; the page
-        # showed nine unversioned rows at 10M for that (2026-09-10).
+        # showed nine unversioned rows at 10M for that.
         if v is None and not ours:
             v = _campaign_engine_string(_cb)
         out.append({
@@ -1366,11 +1244,9 @@ _UNIT_DIVISOR = {"peak_owned_mib_sum": 1024.0, "peak_anon_mib_sum": 1024.0, "end
 # It replaced the anonymous peak (peak_anon_mib_sum) because anonymous memory alone leaves out the
 # buffer pool of every engine that keeps it in POSIX shared memory (PostgreSQL, pgvector, PG+AGE,
 # TimescaleDB), so their cells read about 1% of what they held. The file cache stays out for every
-# engine alike. Every row in the frozen CSVs (runs_paper.csv, runs_paper_oct.csv) carries the
-# field, and so does every row the 2026-10 page reads from runs.jsonl: the payload is
-# byte-identical with the fallback switched off. The fallback to peak_anon_mib_sum below is only
-# for a row that lacks it, and no row a current cell reads does. The rows that do lack it are the
-# July and August campaign rows in runs.jsonl and the multipass overlay files (the dense and
+# engine alike. Every row in the frozen CSV carries the field, so the payload is byte-identical with the
+# fallback switched off. The fallback to peak_anon_mib_sum below is only for a row that lacks it, and no
+# row a current cell reads does: the rows that do lack it are the multipass overlay files (the dense and
 # sparse overlays read them when the campaign has no row of the arm). end_anon_mib_sum is not the
 # page's memory column and stays anonymous.
 MEM_PEAK_FIELD = "peak_owned_mib_sum"
@@ -1381,26 +1257,6 @@ def _peak_mem(r):
     """The page's memory reading of one row: owned memory, or the anonymous peak for a row without it."""
     v = _num(r.get(MEM_PEAK_FIELD))
     return v if v is not None else _num(r.get(MEM_PEAK_FALLBACK))
-
-
-DISK_NOTE =("Disk is what the workload left on disk, in GiB: the engine's writable "
-             "layer plus its volumes after the cell, minus the same engine's empty "
-             "footprint.")
-
-# HOW DISK IS READ, SAID ONCE FOR THE PAGE. It used to be said in full on
-# every table that prints the column -- eight of them, five clauses each,
-# verbatim -- which is the same repetition the censored notes had, one level
-# up. Peak memory was already a page-level sentence and disk was the outlier.
-# Each table keeps the one line above so it still reads standalone; the rest
-# lives beside the other conditions that hold everywhere.
-DISK_DETAIL = ("A disk reading is taken after the queries, so it includes anything "
-               "querying wrote; for a served row it is the server container alone, the "
-               "client being only the driver. A server reading is taken once two samples "
-               "agree within 1%, an embedded reading once on the stopped container. A "
-               "blank disk cell is a row measured before the disk reading existed "
-               "(2026-08-14). Neo4j's value includes the transaction-log files it "
-               "preallocates in 256 MiB steps, which is how Neo4j uses disk; turning "
-               "that off would have slowed its writes, so it stays on.")
 
 
 def _campaign_stat(backend, scale, field, lanes=("l3d", "l3s")):
@@ -1437,17 +1293,16 @@ def _campaign_stat(backend, scale, field, lanes=("l3d", "l3s")):
     return _agg(list(newest.values()), field)
 
 
-
 def _disk_data(r):
     """disk_data_mb, unless this is a served row whose server reading is
     missing: then the field is the client's scratch alone (1.1 MB for a
-    SurrealDB server holding 6.0M line items, 2026-09-13) and says nothing."""
+    SurrealDB server holding 6.0M line items) and says nothing."""
     if r.get("server_image"):
         # A served row: the engine's bytes are the server container's growth
         # over its empty footprint. The client container is only the driver
         # (its growth is at most 1.1 MB across every served row frozen by
-        # 2026-09-14), and adding it made the column mean two different things
-        # in the two modes (user, 2026-09-14: "do you combine server and
+        #), and adding it made the column mean two different things
+        # in the two modes (user,: "do you combine server and
         # client"). disk_data_mb on the row keeps the sum for the record.
         try:
             sv, sb = float(r.get("server_disk_mb") or ""), float(r.get("server_disk_baseline_mb") or 0.0)
@@ -1508,7 +1363,7 @@ def _agg(rows, field, across_scales=False):
         if not vals:
             return None
         # A callable stands in for a row field; it says which one through
-        # unit_field so the divisor still applies. 2026-09-13: _disk_data
+        # unit_field so the divisor still applies.: _disk_data
         # replaced "disk_data_mb" on seven tables and, without this, the page
         # printed megabytes under a "disk GiB" header for a day (gates green:
         # no pin covered a disk cell; page_check now bounds every disk column).
@@ -1536,47 +1391,17 @@ def _agg(rows, field, across_scales=False):
     }
 
 
-# THE 2026-10 COLUMNS (DECISIONS #82, #74), keyed on the ROWS, not on a flag:
-# a lane whose frozen rows all carry instrument "2026-10" gets these beside
-# its September columns; a lane whose rows carry none is printed as before;
-# a lane with both refuses, because a table cannot mix two instruments
-# (make_paper_tables refuses the same mix at freeze). Rows without the field
-# are the September instrument.
-OCT_METRICS = {
-    "l1tpc": [("payment_p50_ms", "payment p50 ms"), ("payment_p99_ms", "payment p99 ms"),
-              ("top_parts_ms", "top parts p50 ms"), ("top_parts_p99_ms", "top parts p99 ms"),
-              ("ship_mode_ms", "ship mode p50 ms"), ("ship_mode_p99_ms", "ship mode p99 ms"),
-              ("by_month_ms", "by month p50 ms"), ("by_month_p99_ms", "by month p99 ms")],
-    "l2": [("hop3f_p50_ms", "3-hop filtered p50 ms"), ("hop3f_p99_ms", "3-hop filtered p99 ms"),
-           ("delete_p50_ms", "delete p50 ms"), ("delete_p99_ms", "delete p99 ms")],
-    "l3d": [("ingest_s", "ingest s"), ("index_s", "index s")],
-    "l4": [("q_groupby_ms", "per-host hourly p50 ms"), ("q_groupby_p99_ms", "per-host hourly p99 ms"),
-           ("q_high_ms", "high-usage p50 ms"), ("q_high_p99_ms", "high-usage p99 ms")],
-}
-OCT_DOCS_OLTP = {"payment p50 ms", "payment p99 ms"}
-OCT_DOCS_OLAP = {"top parts p50 ms", "top parts p99 ms", "ship mode p50 ms", "ship mode p99 ms",
-                 "by month p50 ms", "by month p99 ms"}
 _FROZEN_ROWS = []   # set by main() once the CSV is read; the switch reads it
 
 
-# THE OCTOBER COLUMN SET, PER TABLE (DECISIONS #89 as amended). The dict above
-# ADDS to the September columns, which is how the new queries first reached the
-# page; applied to the whole October set that arithmetic gives twenty-one
-# columns on the widest table, which is what #89 was written to stop. So a lane
-# named here REPLACES its September list: one warm median per query, a
-# ninety-ninth percentile for that table's headline query only, one cold column
-# for the first query after the database opens (where the lane has one --
-# a transactional cell declares in `cold_warm_na` that it does not), throughput
-# where the operation has a rate, recall where the index is approximate, peak
-# memory, on-disk size, and for the vector tables ingest and index build as
-# separate timers.
+# THE COLUMNS EACH TABLE PRINTS (DECISIONS #89), one list per table: one warm median per query, a
+# ninety-ninth percentile for that table's headline query only, one cold column for the first query after the
+# database opens (where the lane has one -- a transactional cell declares in `cold_warm_na` that it does not),
+# throughput where the operation has a rate, recall where the index is approximate, peak memory, on-disk size,
+# and for the vector tables ingest and index build as separate timers.
 #
-# The headline query is the FIRST one in each list, so the p99 belongs to the
-# query the section leads with rather than to whichever one happened to have
-# the column already.
-#
-# A September payload is untouched: _metrics_for reaches this only for a lane
-# whose rows all carry instrument 2026-10.
+# The headline query is the FIRST one in each list, so the p99 belongs to the query the section leads with.
+_FROZEN_ROWS = []   # set by main() once the CSV is read; the column switches read it
 OCT_TABLE_METRICS = {
     # Both document tables come from this one lane spec and are split by
     # _restructure_tables; the union of their columns lives here.
@@ -1600,13 +1425,11 @@ OCT_TABLE_METRICS = {
         (_rate(("n_lineitem", "n_part"), "build_s"), "ingest documents/s"),
         ("build_s", "ingest total s"),
         # THE SPLIT, beside the total rather than replacing it (FAIRNESS F14).
-        # `ingest total s` keeps meaning what it has always meant, the whole of
-        # build(), so September's rows and October's say the same thing by that
-        # name. The two below say how that total divides, under the names the
-        # dense table has used since it was written. A row with no index_s --
-        # every September row, and any arm that builds no index -- does not fill
-        # them, and a column no row fills is dropped, so the split shows up
-        # exactly where it was measured.
+        # `ingest total s` is the whole of build(); the two below say how that
+        # total divides, under the names the dense table uses. A row with no
+        # index_s -- any arm that builds no index -- does not fill them, and a
+        # column no row fills is dropped, so the split shows up exactly where
+        # it was measured.
         ("ingest_s", "ingest s"),
         ("index_s", "index s"),
         (MEM_PEAK_FIELD, "peak memory GiB"),
@@ -1718,7 +1541,12 @@ OCT_TABLE_METRICS = {
         ("q_last_p99_ms", "newest reading p99 ms"),
         ("q_global_ms", "12h aggregate p50 ms"),
         ("q_groupby_ms", "per-host hourly p50 ms"),
+        # THE PLAIN READ BESIDE THE BULK ONE: the two queries that return thousands of rows are read the engine's
+        # documented bulk way for the headline (`read_path`), and `<query>_plain_ms` times to_list() / fetchall() on
+        # the same query, labelled as such. A row without the field fills no column, and the column is dropped.
+        ("q_groupby_plain_ms", "per-host hourly plain-read p50 ms"),
         ("q_high_ms", "high-usage p50 ms"),
+        ("q_high_plain_ms", "high-usage plain-read p50 ms"),
         ("q_orderlimit_ms", "grouped, ordered, limited p50 ms"),
         ("cold_first_query_ms", "cold first query ms"),
         ("ingest_pts_per_s", "ingest points/s"),
@@ -1733,7 +1561,7 @@ OCT_TABLE_METRICS = {
     ],
 }
 
-# Which rows carry each October table's cold column, so a table can say what
+# Which rows carry each table's cold column, so a table can say what
 # its cold number is -- or, where the lane declares there is no cold and warm
 # split, say that instead of leaving a reader to wonder why the column is
 # missing (DECISIONS #89: "Where a measurement genuinely does not apply, the
@@ -1748,59 +1576,6 @@ COLD_QUERY_NAMES = {
     "q1": "TPC-H Q1", "top_degree": "most friends", "q_last": "the newest reading",
     "point": "the point lookup", "new_order": "new-order", "retrieval": "the retrieval path",
 }
-
-
-# THE LANE'S Q1 IS PART OF TPC-H Q1 (BUGS F170, DECISIONS #151 item 3). TPC-H
-# Q1, the pricing summary report, returns the ten columns below. The October
-# lane's Q1, on every engine, returns seven of them: it never loads `l_tax`, so
-# it cannot compute sum_charge, and it leaves out avg_price and avg_disc too.
-# The page called it "TPC-H's own Q1". Until the documents analytics rows are
-# the full query, the Q1 words and the cold-column sentence say what ran. The
-# re-pin loads `l_tax`, runs the full Q1 on every engine, and writes `tpch_q1`
-# into every documents analytics row (CAMPAIGN section 7 row 57); a row without
-# it ran the partial Q1. The count of columns that ran is read from the rows'
-# own answer sample, not typed.
-_TPCH_Q1_COLUMNS = ("l_returnflag", "l_linestatus", "sum_qty", "sum_base_price",
-                    "sum_disc_price", "sum_charge", "avg_qty", "avg_price", "avg_disc",
-                    "count_order")
-_TPCH_Q1_FIELD = "tpch_q1"
-
-
-def _partial_q1(rows):
-    """(columns the rows' Q1 returned, TPC-H Q1's column count), as words,
-    while any October documents analytics row ran the partial Q1; else None.
-    The first count is None when the rows' answer samples disagree on it."""
-    rs = [r for r in rows
-          if r.get("lane") == "l1tpc" and r.get("workload") == "olap"
-          and str(r.get("instrument") or "") == "2026-10"
-          and not str(r.get(_TPCH_Q1_FIELD) or "").strip()]
-    if not rs:
-        return None
-    widths = set()
-    for r in rs:
-        m = re.match(r"\(([^)]*)\)", str(r.get("res_q1_sample") or ""))
-        if m:
-            widths.add(len(m.group(1).split(",")))
-    ran = None
-    if len(widths) == 1 and next(iter(widths)) in _WORDS:
-        ran = _WORDS[next(iter(widths))].lower()
-    return ran, _WORDS[len(_TPCH_Q1_COLUMNS)].lower()
-
-
-def _partial_q1_words(rows):
-    """What the documents analytics table's Q1 is, while it is the partial Q1:
-    (words, the values inserted), or None."""
-    part = _partial_q1(rows)
-    if not part:
-        return None
-    ran, spec = part
-    cols = (f"with {ran} of its {spec} output columns" if ran
-            else "with some of its output columns")
-    words = (f"TPC-H Q1, the pricing summary, {cols}. It groups and aggregates nearly every "
-             f"line item, so it measures a full scan. It leaves out the average price, the average "
-             f"discount, and the total charge with tax, which needs the tax column this "
-             f"measurement did not load")
-    return words, ([ran, spec] if ran else [])
 
 
 # WHAT THE ANSWER CHECK COULD NOT COMPARE, ON THE TABLE IT APPLIES TO
@@ -1832,149 +1607,10 @@ EQUIVALENCE_TABLE_OF = {
 #
 # Keyed (table id, backend label, column) -> the sentence the table prints.
 #
-# EMPTY SINCE 2026-09-18, and the entry it held is why the withholding is a
-# table and not a hard-coded column. The l4 per-host hourly cell for ArcadeDB's
-# served native arm was withheld from 2026-09-08: the server's SQL path
-# returned a CONSTANT bucket for the function-derived key when a second
-# grouping key was present, 100 hosts x 1 bucket where every other engine
-# returned 100 x 12. Upstream #7610 (the served time-bucket serializer) is in
-# the October pin, and the re-run on that pin answers it:
-#
-#   arcadedb_ts_native_server, l4/ts100          digest    hosts x buckets = pairs
-#     26.8.1        (2026-09-08, withheld)   cf8b95166d59727f   100 x  1 =  100
-#     417314c18d    (2026-09-18, published)  18c9985de67433e6   100 x 12 = 1200
-#   every other engine, both dates             18c9985de67433e6   100 x 12 = 1200
-#
-# So the cell publishes: 921.5705 ms p50, beside its embedded twin's 915.4556.
-# Removed here AND from equivalence_check.KNOWN_DISAGREEMENTS, which is the
-# pair that has to move together -- the gate declaration without the
-# withholding would print a latency for a wrong answer, and the withholding
-# without the declaration would fail the gate.
+# No cell is withheld for a wrong answer today. An entry here goes together with the same cell in
+# equivalence_check.KNOWN_DISAGREEMENTS: the gate declaration without the withholding would print a
+# latency for a wrong answer, and the withholding without the declaration would fail the gate.
 WITHHELD_CELLS = {}
-
-# HARNESS DEFECTS THAT TIMED THE WRONG THING (DECISIONS #117). Not a wrong
-# answer -- the answers agree -- but a latency that measured our query shape,
-# an unsettled index, or a stand-in engine rather than the engine named, fixed
-# in the lanes and re-run in qOM.
-#
-# KEYED ON THE ROWS, NOT ON A DATE. Each entry says how to recognise a row
-# measured BEFORE its fix, and the cell (or, with column None, the whole row)
-# comes down only while the rows behind it are such rows. The re-run's rows
-# supersede them under the canonical-row rule and are not recognised, so the
-# numbers return at the landing that carries them with nothing to remember
-# and no list to edit. (table id, backend key, column or None) -> (why, stale).
-_F132 = ("SurrealDB's graph-filtered search is marked `re-run`: our query scanned every product instead of "
-         "reading the candidates by record id, the access path every other engine on this table was "
-         "given. It is being re-measured with the fix.")
-_F134 = ("SurrealDB (server) retrieval at the 500k tier is marked `re-run`: the server was still building "
-         "its vector index in the background when these queries ran. It is being re-measured with the "
-         "build waiting for the index to catch up.")
-_F133 = ("Qdrant + Neo4j's row is marked `re-run`. Its vector half ran in the "
-         "Qdrant client's in-memory local mode, a pure-Python reimplementation rather than the Qdrant "
-         "server, so every time, recall, and disk value it produced described that reimplementation. "
-         "It is being re-run against the Qdrant server the vector table uses. Its all-or-nothing result "
-         "on the atomicity table below does not depend on this.")
-_BEFORE_F132 = lambda r: str(r.get("filtered_access") or "") != "record ids"      # noqa: E731
-# Neo4j's vector index ran BINARY-quantized (BUGS F164, DECISIONS #135): Neo4j 2026.08.1 builds a vector index with
-# `vector.quantization.type: "BINARY"` and a search expansion factor of 3 when the definition names no quantization,
-# and neither arm's definition did, while their rows recorded `quantization: "fp32"`. Every cell resting on the index
-# comes down; the cross-model atomicity row does not rest on it and stays. The re-measured rows read the applied
-# index configuration back as `neo4j_vector_quantization`, so a row without that field is a row from before the fix.
-_F164_DENSE = ("Neo4j's row is marked `re-run`: its vector index ran at Neo4j's default quantization, binary with a "
-               "three-fold search expansion, which our index definition did not override, while the row recorded it as "
-               "unquantized. It is being re-measured with the quantization set explicitly, unquantized here and as a "
-               "separate scalar-quantized row.")
-_F164_E2 = ("Neo4j's row is marked `re-run`: its vector index ran at Neo4j's default quantization, binary with a "
-            "three-fold search expansion, which our index definition did not override, so its vector search was not "
-            "the unquantized search the other engines ran. It is being re-measured with the quantization "
-            "set explicitly. Its all-or-nothing result on the atomicity table does not depend on the index.")
-_BEFORE_F164 = lambda r: not r.get("neo4j_vector_quantization")                # noqa: E731
-
-# SurrealDB served ran at its default, a sync to disk at every commit, in BOTH durability classes (BUGS F165).
-# Its rows said "behaviour at commit is not verified": the harness held that 3.2.4 had no sync setting, having
-# searched only its SURREAL_* variable names, while the setting is a parameter on the storage path
-# (`rocksdb:/path?sync=never`) and the server printed "Sync mode: every transaction commit" at INFO in every
-# serverlog the October campaign kept (107 of 107). So its single-record writes and its cross-model transaction,
-# where one sync is most of the cost, sat beside every other engine's no-wait cells; they come down until the
-# re-measurement, whose rows carry the mode read back from the server (`surreal_sync_mode`). Its reads, analytics,
-# and ingest stay: ingest commits once per 5,000- or 10,000-record batch. The durability table keeps its writes in
-# the waiting column (DECISIONS #136 item 1): a sync at every commit is what that column measures, so
-# _durability_stale exempts these entries while withholding every other write withheld on its own table.
-_F165_WRITES = ("SurrealDB (server)'s write cells are marked `re-run`: the server ran at its default, a sync to disk "
-                "at every commit, although it has a setting that does not wait, and every other engine on this table "
-                "that has such a setting ran at it. Our harness missed that setting. It is being re-measured with its writes "
-                "at that setting. Its read cells commit nothing and stay.")
-_F165_E2 = ("SurrealDB (server)'s transaction cells are marked `re-run`: the server ran at its default, a sync to "
-            "disk at every commit, although it has a setting that does not wait, and every other engine on this "
-            "table that has such a setting ran at it. Our harness missed that setting. It is being re-measured with the "
-            "transaction at that setting.")
-_SURREAL_SERVED_SYNCED = lambda r: (str(r.get("backend") or "").startswith("surrealdb_")      # noqa: E731
-                                    and str(r.get("backend") or "").endswith("_server")
-                                    and not r.get("surreal_sync_mode"))
-_BEFORE_F134 = lambda r: not str(r.get("settle_s") or "").strip()                  # noqa: E731
-_BEFORE_F133 = lambda r: "qdrant-local" in str(r.get("engine_version") or "")     # noqa: E731
-# ArangoDB's relaxed cross-model rows predate its `persistent(pid)` index (BUGS F168). The index landed in
-# 299e454a8a (2026-09-21) and the stage said to carry it re-ran only the strict class, so the 20 relaxed
-# `arangodb_e2` rows on the page scanned every product for each read (2.6x to 25x slower than its own strict
-# rows, which have the index). Every row built with the index records `index_s`; a row without it was measured
-# before the index existed, and the whole row comes down until a relaxed cell is measured with it.
-_F168_E2 = ("ArangoDB's row is marked `re-run`: its rows on this table were measured before the index on the "
-            "product id that the protocol builds for it existed, so its reads scanned every product. They are "
-            "withheld until it is measured with the index.")
-_BEFORE_ARANGO_PID_INDEX = lambda r: str(r.get("index_s") or "").strip() in ("", "None")   # noqa: E731
-# LadybugDB's graph arm ran with threads and buffer pool sized from the whole host while its peers were fitted
-# to the cell (BUGS F160, DECISIONS #125). Stage qOA5 re-runs its four interactive cells at both durability
-# classes in this campaign; the fitted rows record `ladybug_threads` (read back from the engine) and
-# `ladybug_buffer_pool_mib` (l2_graph.py, LadybugGraph), so a row without them is an unfitted row and the
-# re-run's rows return by themselves.
-_F160_L2 = ("LadybugDB's row is marked `re-run`: it sized its thread count and buffer pool from the whole "
-            "machine rather than from the cores and memory its cell was given, while every other engine here "
-            "that sizes itself from the machine was fitted to its cell. It is being re-measured with both fitted.")
-_BEFORE_F160 = lambda r: not str(r.get("ladybug_threads") or "").strip()            # noqa: E731
-STALE_UNTIL_RERUN = {
-    ("e2", "arangodb_e2", None, None): (_F168_E2, _BEFORE_ARANGO_PID_INDEX),
-    ("l2", "ladybug_graph", None, None): (_F160_L2, _BEFORE_F160),
-    ("e2", "surrealdb_e2", "graph-filtered search p50 ms", None): (_F132, _BEFORE_F132),
-    ("e2", "surrealdb_e2_server", "graph-filtered search p50 ms", None): (_F132, _BEFORE_F132),
-    ("e2", "surrealdb_e2_server", "retrieval p50 ms", "e2_500k"): (_F134, _BEFORE_F134),
-    ("e2", "surrealdb_e2_server", "retrieval recall@10", "e2_500k"): (_F134, _BEFORE_F134),
-    ("e2", "composed_qdrant_neo4j", None, None): (_F133, _BEFORE_F133),
-    ("e2", "neo4j_e2", None, None): (_F164_E2, _BEFORE_F164),
-    ("l3d", "neo4j_dense", None, None): (_F164_DENSE, _BEFORE_F164),
-    **{("docs_oltp", "surrealdb_tpc_server", c, None): (_F165_WRITES, _SURREAL_SERVED_SYNCED)
-       for c in ("new-order p50 ms", "new-order p99 ms", "payment p50 ms", "insert p50 ms", "update p50 ms",
-                 "delete p50 ms", "OLTP ops/s")},
-    **{("l2", "surrealdb_graph_server", c, None): (_F165_WRITES, _SURREAL_SERVED_SYNCED)
-       for c in ("insert p50 ms", "update p50 ms", "delete p50 ms")},
-    **{("e2", "surrealdb_e2_server", c, None): (_F165_E2, _SURREAL_SERVED_SYNCED)
-       for c in ("transaction p50 ms", "transaction p99 ms")},
-}
-
-
-def _rows_behind(table_id, backend_key, scale=None):
-    """The frozen rows a table entry is built from: its lane and workload, the
-    relaxed class where the cell has one (the main tables drop a strict row
-    beside a relaxed one)."""
-    lane_wl = _TABLE_LANE.get(table_id)
-    if not lane_wl:
-        return []
-    lane, wl = lane_wl
-    # A table whose lane has one workload maps to None, which means any workload here: the literal comparison
-    # matched no dense, sparse, time-series, or lifecycle row, so a stale entry on those tables could never fire.
-    rs = [r for r in (_FROZEN_ROWS or []) if r.get("lane") == lane and (wl is None or r.get("workload") == wl)
-          and r.get("backend") == backend_key and (scale is None or str(r.get("scale")) == str(scale))]
-    relaxed = [r for r in rs if str(r.get("durability_class")) == "relaxed"]
-    return relaxed or rs
-
-
-def _stale(table_id, backend_key, scale, pred):
-    return any(pred(r) for r in _rows_behind(table_id, backend_key, scale))
-
-
-def _withdrawn_now(table_id):
-    """Backend keys whose whole row on `table_id` is down right now."""
-    return {bk for (tid, bk, col, _sc), (_why, pred) in STALE_UNTIL_RERUN.items()
-            if tid == table_id and col is None and _stale(tid, bk, None, pred)}
 
 
 # EVERY ABSENCE ON A TABLE, AS DATA RATHER THAN AS PROSE.
@@ -1996,8 +1632,7 @@ _DECLARED_ABSENCES = collections.defaultdict(list)
 # THE PAGE IS READ BY PEOPLE WHO HAVE NEVER SEEN THIS REPOSITORY. Our prose
 # cites its own paper trail -- "(DECISIONS #82b, #100)", "(BUGS F55)" -- and
 # those citations were going out on the page, where they name documents no
-# reader can open. Found 2026-09-21 by the user reading /next: forty-seven of
-# them on one table.
+# reader can open. Forty-seven of them once appeared on one table.
 #
 # Stripped at the single point the payload is written rather than at the forty
 # places the sentences are built, because those live in three modules and the
@@ -2022,7 +1657,7 @@ def _public_prose(text):
     A STRING WITH NOTHING TO STRIP IS RETURNED UNTOUCHED. The tidy-up below
     collapses runs of whitespace and pulls punctuation back, which is right
     for a sentence a citation was just cut out of and wrong for every other
-    sentence on the page: page_check holds each October sentence against
+    sentence on the page: page_check holds each registered sentence against
     OCT_PROSE by exact text, and rewriting one space made two registered
     sentences unrecognisable to the gate that registers them. Cleaning what
     was not dirty is how a sanitiser becomes a source of drift.
@@ -2104,7 +1739,7 @@ def _refuse_internal_refs(payload):
             print(f"  {path}: {m!r} in {ctx!r}")
         raise SystemExit(f"{len(bad)} internal reference(s) would have been published")
 
-    # OUR MACHINES ARE INTERNAL VOICE TOO (user, 2026-09-22: "whether we use
+    # OUR MACHINES ARE INTERNAL VOICE TOO (user,: "whether we use
     # laptop or mini is internal voice. it shouldn't be in the page"). Same
     # rule as the document citations above and found the same way -- by the
     # user reading the page -- so it gets the same refusal rather than a
@@ -2162,30 +1797,6 @@ def _withhold_cells(tables):
                     e["metrics"].pop(column)
                     notes[tid].append(why)
                     _declare_absence(tid, backend, column, "withheld", why)
-    # A MARK, NOT A GAP (DECISIONS #117, the user: "just write place holders").
-    # The row stays and its cells say `re-run`, so a reader sees the engine is
-    # on the table and why its number is not; `outcome` keeps everything that
-    # ranks or averages from reading the row as a measurement.
-    for (tid, bkey, column, only_scale), (why, pred) in STALE_UNTIL_RERUN.items():
-        for t in tables:
-            if t.get("id") != tid:
-                continue
-            for e in t.get("entries", []):
-                hit = (str(e.get("backend_key")) == bkey
-                       and (only_scale is None or str(e.get("scale")) == only_scale)
-                       and _stale(tid, bkey, e.get("scale"), pred))
-                if not hit:
-                    continue
-                if column is None:
-                    e["outcome"] = "withdrawn"
-                    e["version_name"] = None   # the stand-in's version would read as the engine's
-                    e["metrics"] = {c: {"text": "re-run"} for c in (t.get("columns") or [])}
-                    notes[tid].append(_gen(why))
-                    _declare_absence(tid, str(e.get("backend")), None, "withdrawn", why)
-                elif column in (e.get("metrics") or {}):
-                    e["metrics"][column] = {"text": "re-run"}
-                    notes[tid].append(_gen(why))
-                    _declare_absence(tid, str(e.get("backend")), column, "withheld", why)
     for t in tables:
         for why in dict.fromkeys(notes.get(t.get("id"), [])):
             t.setdefault("conditions", [])
@@ -2194,215 +1805,23 @@ def _withhold_cells(tables):
     return tables
 
 
-# THE ZERO AGES (BUGS F146, DECISIONS #119). Until the re-pin the LDBC loader
-# read the epoch-millisecond `birthday` as a date string, so every person's age
-# loaded as 0: the three-hop read's filter matched no one on any engine, and
-# "average friend age" is 0 for every city. The fixed loader writes
-# `ldbc_age_parse` into every graph row; a row without it was measured on the
-# zero ages, and the sentence below stays until no such row is left behind the
-# table. The rows that lack the marker ran the October query, whose threshold
-# was this number (graph_common before HOP3F_MIN_AGE existed).
-_ZERO_AGE_HOP3F_MIN_AGE = 30
-
-
-def _ldbc_age_note(table_id, rows):
-    """The zero-ages sentence for the graph table or the graph analytics
-    table, or None when every LDBC row behind it carries the fixed parse."""
-    workload = {"l2": "oltp", "l2olap": "olap"}.get(table_id)
-    if workload is None or not _OCTOBER_ENV:
-        # The September page stays as it was frozen (#83, #119 point 2).
-        return None
-    stale = [r for r in rows
-             if r.get("lane") == "l2" and r.get("workload") == workload
-             and str(r.get("graph_source") or "").startswith("ldbc")
-             and not r.get("ldbc_age_parse")]
-    if not stale:
-        return None
-    if table_id == "l2":
-        return _gen("In this measurement every person's age loaded as zero, through a date-parsing "
-                    f"error in our data loader, so the 3-hop filtered read (age above "
-                    f"{_ZERO_AGE_HOP3F_MIN_AGE}) matched no one on any engine: its times are three "
-                    "hops plus a check on every end node.", _ZERO_AGE_HOP3F_MIN_AGE)
-    return _gen("In this measurement every person's age loaded as zero, through a date-parsing "
-                "error in our data loader, so average friend age is zero for every city; its "
-                "times still read every friend's age.")
-
-
-# THE FRIENDSHIPS ARE STORED ONE WAY (BUGS F169, DECISIONS #151 items 1 and 2).
-# LDBC's person_knows_person file lists each friendship once, always from the
-# smaller person id to the larger (180,623 of 180,623 rows at SF1), the lane
-# loads each row as one KNOWS edge, and every graph question the October rows
-# answer follows `-[:KNOWS]->`. So 1-hop counts only the friends with a larger
-# id, 2-hop and 3-hop reach along rising ids, "most friends" and "degree
-# distribution" count friends with a larger id, and the triangle count is 0 on
-# every engine by construction (a directed 3-cycle needs a < b < c < a). The
-# timings stand (identical work on every engine); the meaning is disclosed, the
-# way F146's zero ages are. The re-pin asks every question in each dialect's
-# undirected form and writes `knows_direction` into every graph row (CAMPAIGN
-# section 7 row 56); a row without it asked the directed questions, and the
-# sentence stays until no such row is left behind the table. LDBC rows only: the
-# synthetic generator's edges point either way. No share is quoted: the share
-# of a start person's friends 1-hop sees was measured on the laptop
-# (`.notes/bench/repros/validity-20261004`), not by anything the rows carry.
-_KNOWS_DIRECTION_FIELD = "knows_direction"
-
-
-def _knows_one_way_rows(rows, workload):
-    """The October LDBC graph rows of this workload that asked the directed
-    questions, i.e. that do not record `knows_direction`."""
-    return [r for r in rows
-            if r.get("lane") == "l2" and r.get("workload") == workload
-            and str(r.get("instrument") or "") == "2026-10"
-            and str(r.get("graph_source") or "").startswith("ldbc")
-            and not str(r.get(_KNOWS_DIRECTION_FIELD) or "").strip()]
-
-
-def _knows_one_way_note(table_id, rows):
-    """The one-way friendship sentence for the graph table or the graph
-    analytics table, or None when every LDBC row behind it asked undirected."""
-    workload = {"l2": "oltp", "l2olap": "olap"}.get(table_id)
-    if workload is None or not _OCTOBER_ENV:
-        return None
-    if not _knows_one_way_rows(rows, workload):
-        return None
-    lead = ("Each friendship is one edge, pointing from the person with the smaller id to "
-            "the person with the larger.")
-    if table_id == "l2":
-        text = (f"{lead} The engines can follow an edge from either end, but the 1-hop, 2-hop, "
-                "and 3-hop reads follow it only the way it points, so 1-hop counts only the "
-                "friends with a larger id than the start person, and 2-hop and 3-hop reach only "
-                "people along a chain of rising ids.")
-    else:
-        text = (f"{lead} The triangle count follows edges only the way they point, so it looks "
-                "for three people whose ids rise all the way round a cycle, which cannot "
-                "happen: it finds no triangle on any engine, by construction. For the same "
-                "reason, most friends and degree distribution count only the friends with a "
-                "larger id.")
-    return _gen(text)
-
-
-# LSQB'S NODE INEQUALITY RAN ON THE ID PROPERTY (BUGS F174, DECISIONS #154
-# items 1 and 2). LSQB's q5, q6, q8, and q9 ask that two matched nodes be
-# different (`tag1 <> tag2`, `person1 <> person3`). From 2026-09-18
-# (`d1fe3183a0`) graph_common.LSQB_QUERIES and the other dialects' spellings
-# compared their ids instead (`tag1.id <> tag2.id`, `person1.id <> person3.id`),
-# on the belief that ArcadeDB's openCypher needed the property form. It does
-# not, and its planner recognises only the inequality between two node
-# variables for the count operators it has for q5, q6, and q9, and at the pin
-# LSQB's text ran faster than the id form on all four; the rewrite cost Neo4j
-# time too on q9. The answers are identical either way, so every digest
-# agreed. The timings stand and the text is disclosed, the way F146's zero
-# ages and F169's one-way friendships are. The re-pin runs LSQB's own text on every engine and writes
-# `lsqb_text` into every graph analytics row (CAMPAIGN section 7 row 60); a row
-# without it ran the id form, and the sentence stays until no such row is left
-# behind the table. The queries are named the way the table's columns name
-# them, and only the ones such a row measured (q6 and q9 do not run at the
-# full-network tier, DECISIONS #109). No ratio is quoted: the costs were
-# measured on the laptop (`.notes/bench/repros/perf-lsqb-q9-20261004`), not by
-# anything the rows carry.
-_LSQB_TEXT_FIELD = "lsqb_text"
-_LSQB_ID_FORM_QUERIES = ("lsqb_q5", "lsqb_q6", "lsqb_q8", "lsqb_q9")
-
-
-def _lsqb_id_form_queries(rows):
-    """The graph analytics table's names ("LSQB Q5", ...) for the id-form
-    queries that an October graph analytics row without `lsqb_text`
-    measured, in query order; empty when no such row is left."""
-    stale = [r for r in rows
-             if r.get("lane") == "l2" and r.get("workload") == "olap"
-             and str(r.get("instrument") or "") == "2026-10"
-             and not str(r.get(_LSQB_TEXT_FIELD) or "").strip()]
-    labels = {f: str(lbl) for f, lbl in OCT_TABLE_METRICS["l2olap"] if isinstance(f, str)}
-    out = []
-    for q in _LSQB_ID_FORM_QUERIES:
-        field = f"{q}_p50_ms"
-        if field in labels and any(_num(r.get(field)) is not None for r in stale):
-            out.append(re.sub(r" p50 ms$", "", labels[field]))
-    return out
-
-
-def _lsqb_id_form_note(table_id, rows):
-    """The id-form sentence for the graph analytics table, or None when
-    every graph analytics row behind it ran LSQB's own text."""
-    if table_id != "l2olap" or not _OCTOBER_ENV:
-        return None
-    names = _lsqb_id_form_queries(rows)
-    if not names:
-        return None
-    # Only what holds for every query the sentence can name, on the build the
-    # rows measured: at the pin (417314c18, config A, laptop) LSQB's text ran
-    # faster on ArcadeDB than the id form for each of q5, q6, q8, and q9, with
-    # and without the lane's view (perf-lsqb-q9-20261004 out/summary-all-runs.md,
-    # recA1-oct and recA2-oct). Not "the operators it has": the hunt found
-    # dedicated count operators for q5, q6, and q9, not for q8. Not "slows other
-    # engines": that was measured on Neo4j and on q9 only. On newer main q5's
-    # order reverses, hence "the build measured here".
-    text = (f"In {_join_and(names)}, the check that two matched nodes are different compared "
-            f"their id properties, where LSQB's own text compares the nodes themselves. The "
-            f"answers are the same either way, but on the build measured here the id form "
-            f"keeps ArcadeDB on a slower plan than LSQB's own text gets.")
-    return _gen(text, *names)
-
-
-# ARCADEDB'S GRAPH ANALYTICAL VIEW COVERS PERSON AND KNOWS ONLY (DECISIONS
-# #154 item 3, found with F174). Both ArcadeDB adapters in l2_graph.py build
-# the view with `VERTEX TYPES (Person) EDGE TYPES (KNOWS)`, and every LSQB
-# query reads types outside it, so the view serves none of them; the table's
-# own sentence calls the view "a copy of the graph". The re-pin builds it over
-# every type, as ArcadeDB's documentation and upstream's own LSQB runner do,
-# keeps the no-view arm as the like-for-like row, and writes `gav_types` (the
-# types the view covers) into every ArcadeDB with-view graph analytics row
-# (CAMPAIGN section 7 row 61); a with-view row without it built the narrow view.
+# THE VIEW MUST LIST THE `Message` SUPERTYPE FROM 26.11.1. l2_graph.py `_gav_types()` lists the concrete message types
+# (Post, Comment) and leaves their abstract supertype out when listing it returns a wrong count for one LSQB query on a
+# release before upstream PR #9320 (26.11.1); from 26.11.1 the supertype belongs in the list. A row records the types the
+# ENGINE says the view covers (`gav_types`, "vertex: Person, ...; edge: KNOWS, ..."), so a with-view row from release
+# 26.11.1 or later that covers Post or Comment without Message is refused: the measurement cannot be published with the
+# stale list. A tier with no message half covers Person and KNOWS only and is not concerned.
 _GAV_TYPES_FIELD = "gav_types"
-
-
-def _gav_narrow_rows(rows):
-    """The October ArcadeDB graph analytics rows that built the view over
-    Person and KNOWS only, i.e. with-view rows without `gav_types`."""
-    return [r for r in rows
-            if r.get("lane") == "l2" and r.get("workload") == "olap"
-            and str(r.get("instrument") or "") == "2026-10"
-            and str(r.get("backend") or "").startswith("arcadedb")
-            and str(r.get("gav")) != "False"
-            and not str(r.get(_GAV_TYPES_FIELD) or "").strip()]
-
-
-def _gav_scope_note(table_id, rows):
-    """The narrow-view sentence for the graph analytics table, or None when
-    every ArcadeDB with-view row behind it recorded the types its view covers."""
-    if table_id != "l2olap" or not _OCTOBER_ENV or not _gav_narrow_rows(rows):
-        return None
-    return _gen(
-        "In this measurement ArcadeDB's Graph Analytical View covers only the persons and their "
-        "friendships. Every LSQB query reads kinds of node the view leaves out, so none of them "
-        "can use it.")
-
-
-# THE VIEW MUST NOT LIST THE `Message` SUPERTYPE ON 26.10.x AND MUST LIST IT FROM
-# 26.11.1. l2_graph.py `_gav_types()` lists the concrete message types (Post,
-# Comment) and leaves their abstract supertype out, because listing it returns a
-# wrong count for one LSQB query on 26.10.x; upstream PR #9320 (26.11.1) makes
-# the listing correct, and the 26.11.1 measurement needs the supertype in the
-# list. A row records the types the ENGINE says the view covers (`gav_types`,
-# "vertex: Person, ...; edge: KNOWS, ..."), so this reads the rows twice: a
-# 26.10.x row that covers Post or Comment without Message gets the declaration
-# below, and a 26.11.1-or-later row that does so is refused, so that the
-# measurement cannot be published with the stale list. A tier with no message
-# half covers Person and KNOWS only and is not concerned.
-# REMOVE WHEN: the 26.11.1 pass has landed with `Message` in `gav_types` (the
-# declaration then has no 26.10.x row left to describe, and l2_graph.py's
-# `_gav_types()` has been changed in its own harness PR).
 _GAV_SUPERTYPE = "Message"
 _GAV_SUPERTYPE_LISTED_FROM = (26, 11, 1)
 
 
 def _gav_message_rows(rows):
-    """[(release tuple or None, row)] for the October ArcadeDB with-view graph analytics rows whose
+    """[(release tuple or None, row)] for the ArcadeDB with-view graph analytics rows whose
     `gav_types` cover a message type (Post or Comment) but not the Message supertype."""
     out = []
     for r in rows:
         if not (r.get("lane") == "l2" and r.get("workload") == "olap"
-                and str(r.get("instrument") or "") == "2026-10"
                 and str(r.get("backend") or "").startswith("arcadedb")
                 and str(r.get("gav")) != "False"):
             continue
@@ -2414,127 +1833,53 @@ def _gav_message_rows(rows):
     return out
 
 
-def _gav_supertype_note(table_id, rows):
-    """The declaration for the graph analytics table while its ArcadeDB view lacks the Message supertype
-    on a release before 26.11.1; SystemExit when a 26.11.1-or-later row lacks it (see the comment above)."""
-    if table_id != "l2olap" or not _OCTOBER_ENV:
-        return None
-    hits = _gav_message_rows(rows)
-    stale = [r for v, r in hits if v is not None and v >= _GAV_SUPERTYPE_LISTED_FROM]
+def _refuse_gav_without_supertype(rows):
+    """SystemExit when a with-view row from 26.11.1 or later built the view without the Message supertype."""
+    stale = [r for v, r in _gav_message_rows(rows) if v is not None and v >= _GAV_SUPERTYPE_LISTED_FROM]
     if stale:
         raise SystemExit(
             f"{len(stale)} ArcadeDB graph analytics row(s) from release "
             f"{'.'.join(map(str, _GAV_SUPERTYPE_LISTED_FROM))} or later built the view without the "
             f"{_GAV_SUPERTYPE} supertype; l2_graph.py _gav_types() must list it from that release")
-    if not any(v is None or v < _GAV_SUPERTYPE_LISTED_FROM for v, _r in hits):
-        return None
-    fixed = ".".join(map(str, _GAV_SUPERTYPE_LISTED_FROM))
-    return _gen(
-        f"ArcadeDB's Graph Analytical View covers the message types Post and Comment but not their "
-        f"{_GAV_SUPERTYPE} supertype, because listing the supertype makes this release return a wrong count for one "
-        f"of the graph queries; the measurement on release {fixed} builds the view with it listed.", fixed)
 
 
-# ARCADEDB'S SPARSE SEARCH RETURNS WHOLE RECORDS (DECISIONS #153 item 1). The
-# timed ArcadeDB search, embedded and served, is `SELECT expand(
-# vector.sparseNeighbors(...))`, which returns each hit's whole record (and
-# its properties again), while every comparator is told to return ids
-# (Qdrant `with_payload=False`, Elasticsearch `_source=False`, Milvus no output
-# fields, pgvector `SELECT id`). The table said nothing about what each engine
-# returns. The re-pin projects ArcadeDB to `SELECT id, score FROM (...)` and
-# writes `sparse_result` into every ArcadeDB sparse row (CAMPAIGN section 7
-# row 62); a row without it returned whole records. Off-page arms do not hold
-# the sentence up.
-_SPARSE_RESULT_FIELD = "sparse_result"
-
-
-def _sparse_whole_record_rows(rows):
-    """The October ArcadeDB sparse rows on the page that returned whole
-    records, i.e. that do not record `sparse_result`."""
-    return [r for r in rows
-            if r.get("lane") == "l3s"
-            and str(r.get("instrument") or "") == "2026-10"
-            and str(r.get("backend") or "").startswith("arcadedb")
-            and str(r.get("backend")) not in OFF_PAGE_ARMS
-            and not str(r.get(_SPARSE_RESULT_FIELD) or "").strip()]
-
-
-# ARCADEDB'S DENSE DELETE RAN WITHOUT AN ID INDEX (humemai/arcadedb-embedded-
-# python#291, DECISIONS #178). The mutation pass deletes by the vector's id.
-# Half the comparators address records by a key they always index; ArcadeDB
-# stored `vid` as a plain property, so each delete batch scanned the type
-# (8.1x the comparator median at 1M). BENCH_DENSE_ID_INDEX=1 gives ArcadeDB and
-# every other engine that stores the id as a plain property (pgvector, Neo4j,
-# Memgraph, FalkorDB, DuckDB, LanceDB) an index on it, and the rows stamp
-# `dense_id_index`. A measured ArcadeDB delete row without the stamp ran
-# without the index. Off-page arms do not hold the sentence up.
+# THE DENSE ID INDEX (PROTOCOL, index parity). The dense mutation pass deletes by the vector's id, so every engine gets
+# an index on it, built inside `ingest_s`, and each dense row stamps `dense_id_index`.
 _DENSE_ID_INDEX_FIELD = "dense_id_index"
 
 
-def _dense_unindexed_delete_rows(rows):
-    """The October ArcadeDB dense rows on the page that timed a delete without
-    an id index, i.e. that record a delete time and no `dense_id_index`."""
-    return [r for r in rows
-            if r.get("lane") == "l3d"
-            and str(r.get("instrument") or "") == "2026-10"
-            and str(r.get("backend") or "").startswith("arcadedb")
-            and str(r.get("backend")) not in OFF_PAGE_ARMS
-            and _present_number(r.get("mutate_delete_per_op_ms"))
-            and not str(r.get(_DENSE_ID_INDEX_FIELD) or "").strip()]
-
-
-def _present_number(v):
-    try:
-        return v not in (None, "") and float(v) == float(v)
-    except (TypeError, ValueError):
-        return False
-
-
 def _dense_id_index_note(table_id, rows):
-    """The id-index sentence for the dense table, or None when no ArcadeDB
-    delete behind it ran without the index."""
-    if table_id != "l3d" or not _OCTOBER_ENV or not _dense_unindexed_delete_rows(rows):
+    """The id-index sentence for the dense table, naming the engines whose rows stamp it, or None."""
+    if table_id != "l3d":
         return None
-    return _next_item("dense_id_index", _gen(
-        "On this table ArcadeDB's delete finds each vector by an id that has no index, so every "
-        "delete batch reads the whole collection, while most of the other engines find it "
-        "through a key they always index. A measurement after the paper indexes the id on ArcadeDB "
-        "and on every other engine that stores it the same way (pgvector, Neo4j, Memgraph, FalkorDB, "
-        "DuckDB, and LanceDB), counts the index in the load time, and measures all of them again."))
-
-
-def _sparse_whole_record_note(table_id, rows):
-    """The whole-record sentence for the sparse table, or None when every
-    ArcadeDB sparse row behind it returned ids."""
-    if table_id != "l3s" or not _OCTOBER_ENV or not _sparse_whole_record_rows(rows):
+    names = sorted({engine_family(display_name(str(r.get("backend")))) for r in rows
+                    if r.get("lane") == "l3d" and str(r.get("backend")) not in OFF_PAGE_ARMS
+                    and str(r.get(_DENSE_ID_INDEX_FIELD) or "").strip()})
+    if not names:
         return None
-    return _gen(
-        "On this table each ArcadeDB search returns every hit's whole record, while every other "
-        "engine returns the ids of its hits, not the records.")
+    return _gen(f"{_join_and(names)} {'has' if len(names) == 1 else 'have'} an index on the vector id, the key the "
+                f"delete pass finds each vector by, and building it is part of the ingest time.", *names)
 
 
-# ARCADEDB EMBEDDED'S DOCUMENTS LOAD GOES ROW BY ROW (DECISIONS #153 item 2,
-# the user's choice). The documents tables' ingest-path sentence already says
-# what ran (insert_many, one JSON payload per batch, beside DuckDB's in-memory
-# frames), so there is no table sentence; only the page-level list says what
-# changes. The re-pin loads ArcadeDB embedded through the bindings' columnar
-# insert once it ships (own issue #150) and writes `columnar_insert` into
-# every ArcadeDB embedded documents row (CAMPAIGN section 7 row 63); a row
-# without it loaded through insert_many.
-_COLUMNAR_INSERT_FIELD = "columnar_insert"
-_DOCS_TABLE_WORKLOAD = {"docs_oltp": "oltp", "docs_olap": "olap"}
+# THE SPARSE WARM-UP: N untimed searches after the build and before the timed pass, queries disjoint from the timed set,
+# the same for every engine. Each sparse row stamps `sparse_warmup_queries` and `sparse_warmup_source`.
+_SPARSE_WARMUP_SOURCES = {"extra_queries": "the dataset's extra queries",
+                          "document_sample": "a fixed-seed sample of documents used as queries"}
 
 
-def _docs_row_load_tables(tables, rows):
-    """The titles of the documents tables on the page whose ArcadeDB
-    (embedded) rows loaded through insert_many, i.e. lack `columnar_insert`."""
-    stale = {str(r.get("workload")) for r in rows
-             if r.get("lane") == "l1tpc"
-             and str(r.get("instrument") or "") == "2026-10"
-             and str(r.get("backend")) == "arcadedb_embedded"
-             and not str(r.get(_COLUMNAR_INSERT_FIELD) or "").strip()}
-    return [str(t.get("title") or t.get("id")) for t in tables
-            if _DOCS_TABLE_WORKLOAD.get(t.get("id")) in stale]
+def _sparse_warmup_note(table_id, rows):
+    """The warm-up sentence for the sparse table, from the counts and sources its rows stamp, or None."""
+    if table_id != "l3s":
+        return None
+    rs = [r for r in rows if r.get("lane") == "l3s" and _num(r.get("sparse_warmup_queries"))]
+    if not rs:
+        return None
+    counts = [f"{c:,}" for c in sorted({int(_num(r.get("sparse_warmup_queries"))) for r in rs})]
+    srcs = [_SPARSE_WARMUP_SOURCES.get(s, s) for s in sorted({str(r.get("sparse_warmup_source") or "") for r in rs} - {""})]
+    where = f" ({_join_and(srcs)})" if srcs else ""
+    return _gen(f"After its index is built and before the timed pass, each engine on this table answers "
+                f"{_join_and(counts)} untimed searches drawn from queries outside the timed set{where}, so the first timed "
+                f"queries do not include a JVM engine's code compilation.", *counts, *srcs)
 
 
 def _equivalence_notes(rows):
@@ -2566,8 +1911,7 @@ def _equivalence_notes(rows):
                     # the error is the engine's own text: SurrealDB's parse errors
                     # carry positions like [1:8], digits with no source that
                     # page_check refuses, and with every lifecycle engine declared
-                    # the sentence ran to 11,000 characters (rehearsing the
-                    # 26.10.1 publish, 2026-10-02). The statement and the answer
+                    # the sentence ran to 11,000 characters. The statement and the answer
                     # stay on the row, as the per-engine sentence says.
                     _why = str(d)[len(bench_common.UNEXPRESSIBLE_PREFIX):].split("; tried ", 1)[0]
                     unexpr[tid].setdefault((query, _why), set()).add(display_name(str(be)))
@@ -2605,8 +1949,7 @@ def _lifecycle_answer_note(groups):
     NOT the generic note. That one lists every declared absence with its
     reason, and on this table each engine's missing situations already have
     their own sentence (_lifecycle_table): with six embedded engines it ran to
-    5,273 characters restating them (rehearsing the 26.10.1 publish,
-    2026-10-02). This says only what those sentences do not: which situations'
+    5,273 characters restating them. This says only what those sentences do not: which situations'
     reads were compared with ArcadeDB's and how, which had nothing to compare
     with, and why the server rows stand apart. Derived from the gate's own
     groups (equivalence_check splits the lifecycle read by deployment), so a
@@ -2670,146 +2013,27 @@ def _lifecycle_answer_note(groups):
     return _gen(" ".join(parts), *[phrase(k) for k in sits], *alone, *served)
 
 
-def _graph_first_pass_note(rows):
-    """The graph table's read columns are the FIRST of two passes, said so.
-
-    The graph lane times every read twice over the same start persons and the
-    table prints the first pass (`point_p50_ms`; the second is
-    `warm_point_p50_ms`, l2_graph's `_read_pass("warm_")`). Its rows still
-    carry NA_COLD_WARM_TXN, "each operation runs against an already-built,
-    already-warm database by construction", and for the engines on a JVM that
-    is not true of the reads: the first pass includes the JIT compiling the
-    query path. October's SF1 point p50 is 3.59x the second pass for ArcadeDB
-    embedded, 1.46x served, and 2.13x for Neo4j, against 0.89x to 1.10x for
-    every other engine. No ratio is quoted on the page (narrative about the
-    numbers is written at the freeze, with pins); the sentence says what the
-    column is. It says "includes" on purpose: at this pin the reads format the
-    id into the query text, so a cache keyed on that text can also favour the
-    second pass over the same ids, and the sentence holds either way.
-
-    KEYED ON THE ROWS: a row without `read_warmup` was measured without the
-    untimed warm-up on other start persons that the lane now
-    records, and the sentence stays until no such row is behind the table. The
-    JVM engines are named from the rows, by the heap they recorded, the same
-    test _jvm_memory_note uses.
-    """
-    if not _OCTOBER_ENV:
-        return None
-    stale = [r for r in rows
-             if r.get("lane") == "l2" and r.get("workload") == "oltp"
-             and str(r.get("instrument") or "") == "2026-10"
-             and not str(r.get("read_warmup") or "").strip()]
-    if not stale:
-        return None
-    jvm = sorted({display_name(str(r.get("backend"))) for r in stale
-                  if str(r.get("heap") or r.get("server_heap") or "").strip()})
-    parts = ["Each read on this table is timed twice over the same start persons, and the "
-             "table prints the first pass, so its read columns include each engine's warm-up."]
-    if jvm:
-        _one = len(jvm) == 1
-        parts.append(f"On {_join_and(jvm)}, which {'runs' if _one else 'run'} on a JVM, that "
-                     f"warm-up includes the JVM compiling the query path.")
-    return _gen(" ".join(parts), *jvm)
-
-
-# THE DOCUMENT OPERATIONS ARE TIMED FROM THE FIRST ONE AFTER THE LOAD
-# (DECISIONS #157, found by the commit-cost hunt, `.notes/bench/repros/
-# perf-commit-20261004/`). l1_tpc times its 1,000 new-orders right after the
-# cell's load, then the payments and the four single-record operations, each
-# leaving out only its first 20 from the percentiles, so the statements run
-# for the first time inside the timed window. Its rows still stamp
-# NA_COLD_WARM_TXN, "already-built, already-warm database by construction",
-# and on the JVM engines that is not true: on the October rows ArcadeDB
-# embedded's new-order is 2.34x (SF1) and 2.56x (SF10) its own payment, timed
-# right after it, against 0.94x to 1.30x for every engine that is not on a
-# JVM. No ratio is quoted on the page (narrative about the numbers is written
-# at the freeze, with pins); the sentence says what the columns include. The
-# durability table prints the same operations from the same rows, both
-# classes, so it carries the sentence too.
-#
-# KEYED ON THE ROWS: the re-pin gives every engine an untimed warm-up on keys
-# disjoint from and below the timed ones and writes `oltp_warmup` (the
-# warm-up count) into every documents OLTP row (CAMPAIGN section 7 row 65); a
-# row without it was timed from the first operation after the load, and the
-# sentence stays until no such row is behind the table. The JVM engines are
-# named from the rows, by the heap they recorded, as _graph_first_pass_note
-# does; off-page arms are never named.
-_OLTP_WARMUP_FIELD = "oltp_warmup"
-
-
-def _docs_cold_window_rows(rows):
-    """The October documents OLTP rows on the page timed from the first
-    operation after the load, i.e. that do not record `oltp_warmup`."""
-    return [r for r in rows
-            if r.get("lane") == "l1tpc" and r.get("workload") == "oltp"
-            and str(r.get("instrument") or "") == "2026-10"
-            and str(r.get("backend")) not in OFF_PAGE_ARMS
-            and not str(r.get(_OLTP_WARMUP_FIELD) or "").strip()]
-
-
-def _docs_warmup_note(table_id, rows):
-    """The warm-up sentence for the documents OLTP table and the durability
-    table, or None when every documents OLTP row behind it recorded its
-    untimed warm-up."""
-    if table_id not in ("docs_oltp", "durability") or not _OCTOBER_ENV:
-        return None
-    stale = _docs_cold_window_rows(rows)
-    if not stale:
-        return None
-    jvm = sorted({display_name(str(r.get("backend"))) for r in stale
-                  if str(r.get("heap") or r.get("server_heap") or "").strip()})
-    if table_id == "docs_oltp":
-        parts = ["The operations on this table are timed from the first one after the data is "
-                 "loaded, so its columns include each engine's warm-up."]
-    else:
-        parts = ["The document operations here are timed from the first one after the data is "
-                 "loaded, so their cells include each engine's warm-up."]
-    if jvm:
-        _one = len(jvm) == 1
-        parts.append(f"On {_join_and(jvm)}, which {'runs' if _one else 'run'} on a JVM, that "
-                     f"warm-up includes the JVM compiling the statement path.")
-    return _gen(" ".join(parts), *jvm)
-
-
 def _cold_note(table_id, rows, columns=()):
     """The one clause this table owes about its cold column."""
     src = OCT_COLD_SOURCE.get(table_id)
     if not src:
         return None
     lane, workload = src
-    rs = [r for r in rows if r.get("lane") == lane and r.get("workload") == workload
-          and str(r.get("instrument") or "") == "2026-10"]
+    rs = [r for r in rows if r.get("lane") == lane and r.get("workload") == workload]
     if not rs:
         return None
-    # The graph table's rows say "already warm by construction", and its read
-    # columns are a first pass that is not (_graph_first_pass_note).
-    if table_id == "l2":
-        _first = _graph_first_pass_note(rs)
-        if _first:
-            return _first
-    # So do the documents OLTP table's, and its operations are timed from the
-    # first one after the load (_docs_warmup_note, DECISIONS #157).
-    if table_id == "docs_oltp":
-        _window = _docs_warmup_note(table_id, rs)
-        if _window:
-            return _window
     na = sorted({str(r["cold_warm_na"]) for r in rs if r.get("cold_warm_na")})
     if na:
         # A table whose cold columns come from elsewhere (the dense table's
         # first timed pass, the sparse table's multipass overlay) must not
         # also say it has none; the sentence that describes those columns is
-        # the registered one (2026-09-16, the October audit).
+        # the registered one.
         if any(str(c).startswith("cold ") for c in columns):
             return None
         return _gen("There is no cold column on this table, and the reason is "
                     "recorded on the rows themselves: " + na[0], na[0])
-    # The documents Q1 is not all of TPC-H Q1 until its rows are (BUGS F170):
-    # the cold column names it as the table's own "Q1", which its query words
-    # describe, rather than as TPC-H Q1.
-    cold_names = (dict(COLD_QUERY_NAMES, q1="Q1")
-                  if table_id == "docs_olap" and _partial_q1(rs) else COLD_QUERY_NAMES)
-    names = sorted({cold_names.get(str(r.get("cold_first_query_name")),
-                                   str(r.get("cold_first_query_name")))
+    names = sorted({COLD_QUERY_NAMES.get(str(r.get("cold_first_query_name")),
+                                         str(r.get("cold_first_query_name")))
                     for r in rs if r.get("cold_first_query_name")})
     if not names:
         return None
@@ -2822,61 +2046,37 @@ def _cold_note(table_id, rows, columns=()):
                 f"that opens a database per request actually asks.", *names)
 
 
-def _instrument_of(lane):
-    """'2026-10', '2026-09', or a refusal when the lane's rows mix the two."""
-    # The PQ arms are their own row family on the next instrument: they do not make a lane "mixed"
-    seen = {str(r.get("instrument") or "2026-09") for r in _FROZEN_ROWS
-            if r.get("lane") == lane and r.get("backend") not in bench_common.DENSE_PQ_ARMS}
-    if len(seen) > 1:
-        raise SystemExit(f"REFUSING: lane {lane} carries rows from two instruments {sorted(seen)}; "
-                         "a table cannot mix them (DECISIONS #84). Re-freeze from one campaign.")
-    return next(iter(seen), "2026-09")
-
-
-# THE 2026-11 MEMORY COLUMN (issue #352, PROTOCOL "Memory per phase"): owned memory (anonymous plus shared) of every
+# THE PER-PHASE MEMORY COLUMN (issue #352, PROTOCOL "Memory per phase"): owned memory (anonymous plus shared) of every
 # container of the cell at the end of the timed queries. Every engine has it, and it is the only memory column added;
-# the other phases, the peaks and the per-runtime JVM and process readings stay on the rows. Only a lane whose rows
-# all carry instrument 2026-11 gets it, so a 2026-10 payload is unchanged.
+# the other phases, the peaks and the per-runtime JVM and process readings stay on the rows.
 MEM_PHASE_COLUMN = ("mem_queries_owned_mib", "owned memory after queries GiB")
 
 
 def _metrics_for(table_id, spec, src_lane=None):
-    cols = _metrics_for_instrument(table_id, spec, src_lane)
-    if _instrument_of(src_lane or table_id) == "2026-11":
-        cols = cols + [MEM_PHASE_COLUMN]
-    return cols
+    """The columns this TABLE prints, as (field, label) pairs.
 
-
-def _metrics_for_instrument(table_id, spec, src_lane=None):
-    """The columns this TABLE prints, under the instrument its ROWS were run on.
-
-    Two identifiers, deliberately: l2olap is a second view of the graph lane's
-    rows, so the instrument comes from the lane that produced them (src_lane)
-    while the column set belongs to the table (table_id). Keyed on the lane
-    alone, the graph analytics table would have been handed the graph
-    transactional table's October columns.
-    """
-    src_lane = src_lane or table_id
-    oct_ = _instrument_of(src_lane) in ("2026-10", "2026-11")
-    if oct_ and table_id in OCT_TABLE_METRICS:
+    Two identifiers, deliberately: l2olap is a second view of the graph lane's rows (src_lane) while the column set
+    belongs to the table (table_id). The dense table adds the matched-recall columns when its rows carry the sweep."""
+    if table_id in OCT_TABLE_METRICS:
         cols = list(OCT_TABLE_METRICS[table_id])
         # THE GRAPH TABLE'S COLD COLUMN, once its reads are timed after an untimed warm-up (CAMPAIGN
         # section 7 row 55): the first query of the session. A row without `read_warmup` timed the
         # FIRST of two passes, whose columns are the cold ones, so a table built from such rows
-        # grows no column (and the October payload is unchanged by this).
+        # grows no column.
         if table_id == "l2" and any(str(r.get("read_warmup") or "").strip()
                                     for r in _FROZEN_ROWS if r.get("lane") == "l2"):
             at = next(i for i, (f, _l) in enumerate(cols) if f == "delete_p50_ms") + 1
             cols.insert(at, ("cold_first_query_ms", "cold first query ms"))
-        return cols
-    return (list(spec["metrics"]) + (OCT_METRICS.get(src_lane, []) if oct_ else [])
-            + (_beam_metrics() if table_id == "l3d" and not oct_ else []))
+    else:
+        cols = list(spec["metrics"])
+    if table_id == "l3d":
+        cols = cols + _beam_metrics()
+    return cols + [MEM_PHASE_COLUMN]
 
 
 # THE MATCHED-RECALL HEADLINE OF THE DENSE TABLE (instrument 2026-11, dense_beam.py): latency at a fixed
 # recall target, with the search beam (ef, or nProbe for an IVF engine) that reached it. 0.95 is the
-# headline; 0.90 and 0.99 are the secondary columns. The columns exist only when a dense row carries the
-# sweep, so a 2026-10 payload does not change.
+# headline; 0.90 and 0.99 are the secondary columns. The columns exist only when a dense row carries the sweep.
 BEAM_TARGETS = ((0.95, "r095"), (0.90, "r090"), (0.99, "r099"))
 BEAM_BEAM_LABEL = "ef or nProbe at recall {t:.2f}"
 
@@ -2888,8 +2088,7 @@ def _beam_label(kind, t):
 
 def _beam_metrics():
     """The matched-recall columns, when a frozen dense row carries the sweep (else none)."""
-    if not any(r.get("lane") == "l3d" and r.get("beam_kind") and str(r.get("instrument")) == "2026-11"
-               for r in _FROZEN_ROWS):
+    if not any(r.get("lane") == "l3d" and r.get("beam_kind") for r in _FROZEN_ROWS):
         return []
     cols = []
     for t, k in BEAM_TARGETS:
@@ -2898,6 +2097,20 @@ def _beam_metrics():
             cols.append((f"matched_{k}_p99_ms", _beam_label("p99", t)))
         cols.append((f"matched_{k}_beam", _beam_label("beam", t)))
     return cols
+
+
+def _carry_beam(overlay_entries, campaign_by_key):
+    """The matched-recall columns and the recall-latency curve live on the campaign cell, not in the multipass overlay,
+    whose files carry only the query passes. An overlay entry that replaces a campaign entry keeps them, the way it keeps
+    peak memory and disk; an overlay entry has its own value where it has one."""
+    cols = [label for _f, label in _beam_metrics()]
+    for e in overlay_entries:
+        camp = campaign_by_key.get(e["backend_key"]) or {}
+        for col in cols:
+            if col in (camp.get("metrics") or {}) and col not in e["metrics"]:
+                e["metrics"][col] = camp["metrics"][col]
+        if "beam_curve" in camp and "beam_curve" not in e:
+            e["beam_curve"] = camp["beam_curve"]
 
 
 def _beam_extras(entry, rs):
@@ -2929,70 +2142,6 @@ def _beam_extras(entry, rs):
     entry["beam_curve"] = {"kind": kind, "points": curve}
 
 
-# ---------------------------------------------------------------------------
-# SKELETON MODE (DECISIONS #86). BENCH_SKELETON=1 says the frozen rows are the
-# laptop's micro-scale placeholder run, published to the preview route so the
-# October page's SHAPE can be read weeks before mini measures anything. It
-# changes nothing about how a cell is aggregated; it stamps the payload so
-# that neither a reader nor the live publish can mistake a placeholder for a
-# measurement.
-# SAID IN THE WORDS A READER WOULD USE (user, 2026-09-14: "laptop runs other
-# processes in parallel, so the time measurement like latency should be taken
-# with a grain of salt"). "Placeholder at micro scale" is benchmark jargon for
-# a reader who has just landed on a table of millisecond figures; what they
-# need to be told is that the machine was busy with other things while these
-# were timed, so the numbers cannot be compared with each other or with the
-# live page.
-SKELETON_BANNER = (
-    "These numbers were timed on a shared machine that was running other work at the "
-    "same time: a browser, an editor, and whatever else happened to be open. "
-    "Nothing here had the machine to itself, no cell was given cores of its "
-    "own, and each one ran once instead of five times, on the smallest data "
-    "set each benchmark has. A time on this page can therefore be out by a "
-    "large factor in either direction, and two engines in the same table "
-    "cannot be compared with each other, or with anything on the live page. "
-    "They are here so the shape of the October page can be read and edited "
-    "early: its tables, its columns, its conditions, and its prose. The "
-    "machine the real numbers will be measured on has measured nothing yet.")
-SKELETON_TABLE_NOTE = (
-    "Take every number in this table with a grain of salt. It was timed on a "
-    "shared machine that was running other work at the same time, with no cores set "
-    "aside for the benchmark and one run per cell, so these times can be out "
-    "by a large factor and the engines here cannot be compared with each "
-    "other, or with the same table on the live page. The columns, the "
-    "conditions, and the sizes are October's; the values are filler until the "
-    "the real run measures them.")
-# The two invariants that describe the BENCH HOST rather than the comparison.
-# A laptop skeleton cannot satisfy either (no cpuset pinning, no per-scale
-# memory envelope), and every other gate must pass exactly as it will in
-# October. Named in the payload so the waiver is published, not assumed.
-# What a laptop skeleton cannot draw, and why, published beside the banner so
-# the reader is not left wondering whether a table was dropped or forgotten.
-SKELETON_ABSENT = {
-    "l3smp": "the second sparse pass is a separate run on the benchmark "
-             "machine; this placeholder measures each benchmark once.",
-    "l3d warm columns": "the dense warm pass comes from the same multipass "
-                        "driver; the skeleton's dense table is cold only.",
-    "e4": "the client/server decomposition is its own overlay, measured on "
-          "the benchmark machine.",
-    "pycost": "the Python-cost table comes from the binding suite's own "
-              "measurements, which this placeholder run does not cover.",
-    "the summary figure": "it is a ratio of every table against its best "
-                          "comparator, and a ratio between two one-repetition "
-                          "placeholder cells would look like a result while "
-                          "being noise; it is drawn from the real measurements.",
-}
-# NAMED BY WHAT THEY ARE, not by our invariant numbers: "FAIRNESS F1" means
-# nothing to a reader of the page, and the thing it labels -- cpuset pinning
-# -- means everything.
-SKELETON_WAIVERS = [
-    "CPU pinning: the skeleton runs on a shared cpuset, not a "
-    "pinned one.",
-    "Memory envelope: this placeholder run uses the smallest memory caps, not "
-    "the per-size limits the real measurements use.",
-]
-
-
 LANES = {
     "l3s": {
         "title": "Sparse vector search",
@@ -3005,17 +2154,6 @@ LANES = {
                     ("build_s", "ingest+index total s"),
                     (MEM_PEAK_FIELD, "peak memory GiB"),
                     (_disk_data, "disk GiB")],
-        "conditions": [
-            "Recall is reported beside every latency: ArcadeDB quantizes posting weights to int8 by default, so a latency number without its recall is not comparable.",
-            "ingest+index total s is one timer around inserting the documents and building the index; the two are not timed separately (Qdrant builds its index while ingesting, so the split is not defined there). ingest+index vectors/s divides the document count by it.",
-            "Elasticsearch runs with index-time token pruning disabled. Its 9.x default prunes on thresholds tuned for a different model's vectors and costs recall on this corpus, which would have printed a quality gap belonging to that default rather than to the engine, and printed it in our favour.",
-            # The build ratio ("roughly twice"), the per-document non-zero count
-            # (about 127) and the numbers-per-document (about 254) came off this
-            # sentence on 2026-09-16: they were typed from a September run and
-            # nothing pinned them. The ratio is in the two build cells; the
-            # corpus statistics belong in the notes, not under a table.
-            "ArcadeDB's server takes longer to build than its embedded deployment, and that gap is loading the data, not building the index. Both run the same index code. The embedded one is handed the numbers directly, because the database is running inside the same program. The server has to be sent them, and the only way in is a written-out INSERT statement: every non-zero weight of every document arrives as an index and a value spelled out as text, which the server then has to read back into numbers.",
-        ],
     },
     "l3d": {
         "title": "Dense vector search",
@@ -3025,42 +2163,24 @@ LANES = {
         # column identically: l3d_dense runs 20 untimed warmups then ONE timed
         # pass, and dense_multipass_driver runs those same 20 warmups before
         # each of its five, so overlay pass 0 IS the campaign protocol. The
-        # Since 2026-09-10 (qDB) the 1M size has its own multipass overlay, so
-        # both sizes carry cold and warm from one protocol.
+        # Both sizes have their own multipass overlay, so both carry cold and
+        # warm from one protocol.
         "metrics": [("query_p50_ms", "cold p50 ms"), ("query_p99_ms", "cold p99 ms"),
                     ("recall_at_10", "recall@10"),
                     ("build_docs_per_s", "ingest+index vectors/s"),
                     ("build_s", "ingest+index total s"),
                     (MEM_PEAK_FIELD, "peak memory GiB"),
                     (_disk_data, "disk GiB")],
-        "conditions": [
-            "ingest+index total s is one timer around inserting the vectors and building the index; the two are not timed separately (Qdrant and Chroma build the index while ingesting, so the split is not defined there). ingest+index vectors/s divides the vector count by it.",
-            "ArcadeDB's maxConnections is a Vamana per-layer degree, not hnswlib's M. Matching the parameter names would compare a half-degree graph against a full-degree one, so the graphs are matched by effect instead.",
-*(["ArangoDB's vector index is FAISS IVF (inverted lists over trained centroids), not HNSW, so the degree match above does not apply to it; its rows record nLists (about the square root of the corpus) and nProbe (an eighth of the lists) instead."]
-              if any(str(r.get("backend")).startswith("arangodb_dense") for r in _dense_rows_for_note()) else []),
-            *(["ArangoDB's int8 row is the same IVF with the lists holding 8-bit scalar-quantized codes (the FAISS factory `IVF<nLists>,SQ8`), its nProbe calibrated to the same recall target as the fp32 row's."]
-              if any(str(r.get("backend")) == "arangodb_dense_int8" for r in _dense_rows_for_note()) else []),
-            "Milvus's dense rows run with segments sealed at 50% of the maximum segment size (the image default is 12%), so a 10M ingest lands directly in the few-large-segments layout that Milvus's own compaction otherwise reaches at an unpredictable moment; without it, half the runs queried many small segments and read slower with higher recall. One line changed from the image's configuration; sparse rows are at the default.",
-            *([("ArcadeDB fp32 rows at 9.99M carry graphBuildCacheSize pinned to the corpus size (9,990,000) on both deployments, a user decision so the served build is not left on the wrong side of the engine's cache knee (issue #7146; the budget 26.10.1 makes the default). INT8 rows run this engine's default of 100,000. Comparators have no equivalent setting.")]
-              if _dense_overlay_is_pinned() else []),
-        ],
     },
     "l2": {
         "title": "Graph OLTP",
         "dataset": "LDBC-SNB Interactive (SF1, SF10)",
-        # THE PROJECTION TIERS, NAMED RATHER THAN INHERITED. October adds
-        # sf1full to PAPER_SCALES["l2"] for the ANALYTICS table, and this
-        # table draws from the same lane; without naming its tiers it would
-        # print the persons-and-KNOWS projection beside the full network,
-        # which is two corpora in one table and PAGE-SPEC rule 4's whole
-        # subject.
-        # THE SKELETON'S OLTP CORPUS IS micro, NOT sf1. This branch carried
-        # l2olap's value, and the two lanes ran different corpora on the
-        # laptop: 22 OLTP rows at micro, and the OLAP slice at sf1. Filtering
-        # the transactional table to sf1 left it with no rows at all, so the
-        # whole table vanished from the preview -- a silent loss, because a
-        # table with no entries is simply not emitted.
-        "only_scales": {"micro"} if SKELETON else {"sf1", "sf10"},
+        # THE PROJECTION TIERS, NAMED RATHER THAN INHERITED. sf1full belongs to
+        # the analytics table's tier set; this table draws from the same lane,
+        # and without naming its tiers it would print the persons-and-KNOWS
+        # projection beside the full network, which is two corpora in one
+        # table (PAGE-SPEC rule 4).
+        "only_scales": {"sf1", "sf10"},
         # Peak memory last, and present at all because the page had no memory
         # column anywhere while every lane has measured it since the #52 fix.
         # It is also the column that shows our largest loss on this lane:
@@ -3086,16 +2206,6 @@ LANES = {
         # exposes any grouping key the table is missing, which is worth
         # remembering the next time a column is added anywhere.
         "only_workload": "oltp",
-        # Two conditions came off this list on 2026-08-14 for being written to a
-        # reviewer and read by everyone else. One explained that bidirectional
-        # edges are a pointer-storage choice rather than a semantic one, which
-        # answers a fairness objection nobody browsing the page has raised; the
-        # other explained 2-hop dispersion in terms of seed degree, which needs
-        # the seed-sampling method in hand to parse. Both remain in the papers,
-        # where the reader has that context. The page states what was run.
-        "conditions": [
-            "Every engine traverses the same persons-and-KNOWS projection, with edges stored in both directions.",
-        ],
     },
     # A second view of the graph lane: the same corpus and the same engines,
     # but the analytical queries rather than the transactional ones. It is a
@@ -3103,44 +2213,17 @@ LANES = {
     # a row no other table has: the same engine with its Graph Analytical View
     # turned off. The paper reports all six numbers.
     #
-    # SF1 and SF10 since 2026-09-07 (qCS measured the view-off arm at SF1;
-    # until then it existed at SF10 only). Kept for the record:
-    # The ablation was run at SF10, so SF1 has no view-off arm, and a table
-    # with an ablation row that is dashed at one scale invites the reader to
-    # read the dash as a failure.
     "l2olap": {
         "title": "Graph OLAP",
         "dataset": "LDBC-SNB, SF10",
         "lane_source": "l2",
-        # The campaign's published graph tiers. A laptop skeleton runs the
-        # lane's micro generator instead, and with this set to the campaign's
-        # two tiers the graph analytics table was the one section of the
-        # October page the skeleton silently did not draw: the rows were
-        # frozen, the table was never built, and nothing said so.
-        # The skeleton's analytics rows are the capped LDBC SF1 slice the LSQB
-        # smoke ran (DECISIONS #104a), not the micro generator: the nine LSQB
-        # columns need the message half, which only the ldbc source loads.
-        #
-        # OCTOBER MOVES THIS TO {"sf1full"}, the full SF1 network, as this
-        # table's SINGLE size: it is the one table #108 leaves at one size,
-        # because the full network at SF10 is not feasible. It stays at the
-        # two projection tiers until October's rows land. #103b's rule that a
-        # raise REPLACES a tier once every engine has landed is retired by
-        # #108: elsewhere the large size is a row group, and an engine absent
-        # from it is a declared outcome (#103g) rather than a block on every
-        # other engine's rows. September's attempt did not switch, and those
-        # nine sf1full rows publish in October at October's pin.
-        # OCTOBER IS THE FULL NETWORK, one size (#108's table: "graph
-        # analytics -- full SF1 network -- SF10 full network is not
-        # feasible"). September keeps the two projection tiers it published,
-        # so the live page is untouched. This is the switch the comment above
-        # anticipated: the sf1full rows publish in October at October's pin.
-        "only_scales": ({"sf1"} if SKELETON
-                        else {"sf1full"} if _OCTOBER_ENV else {"sf1", "sf10"}),
+        # The full SF1 network as this table's SINGLE size: the one table left
+        # at one size, because the full network at SF10 is not feasible. Elsewhere
+        # the large size is a row group, and an engine absent from it is a declared
+        # outcome (#103g).
+        "only_scales": {"sf1full"},
         "only_workload": "olap",
-        # p50, not the mean the page printed until 2026-09-10 (the lane's own
-        # comment says p50 first, and it recorded one); p99 arrives with the
-        # 100-iteration rows (F29).
+        # p50 first, with p99 beside it (F29).
         "metrics": [(_rate(("n_persons_ingested", "n_edges_ingested"), "build_s"), "ingest vertices+edges/s"),
                     ("build_s", "ingest total s"),
                     ("friend_age_by_city_p50_ms", "average friend age p50 ms"),
@@ -3161,68 +2244,14 @@ LANES = {
                     ("gav_build_s", "view build s"),
                     (MEM_PEAK_FIELD, "peak memory GiB"),
                     (_disk_data, "disk GiB")],
-        "conditions": [
-            "Three questions, each asked of the whole graph. Average friend age: for every city, the average age of the friends of the people who live there. Friends in same city: how many friendships connect two people in the same city. Most friends: which people have the highest number of friends. All three times are milliseconds.",
-            "The two rows labelled ArcadeDB (embedded) are the same engine on the same data, differing only in whether that view is built. Both return identical answers.",
-            "The benefit is uneven, and the three queries show why. Top degree gains most because it only walks adjacency. The other two read a property from the far end of every edge traversed, and that lookup costs the same either way, so it comes to dominate once the traversal itself is cheap.",
-        ],
-    },
-    "l1olap": {
-        "title": "Document OLAP, query by query",
-        "dataset": "Synthetic orders workload, the five analytical queries behind the OLAP total",
-        "lane_source": "l1",
-        "only_workload": "olap",
-        "metrics": [("olap_agg_by_region_ms", "aggregate by region ms"),
-                    ("olap_top_customers_ms", "top customers ms"),
-                    ("olap_filtered_avg_ms", "filtered average ms"),
-                    ("olap_status_histogram_ms", "status histogram ms"),
-                    ("olap_range_agg_ms", "range aggregate ms"),
-                    # p50/p99 over 100 iterations (F29); the mean columns above
-                    # come out once every row carries these.
-                    ("olap_agg_by_region_p50_ms", "aggregate by region p50 ms"),
-                    ("olap_agg_by_region_p99_ms", "aggregate by region p99 ms"),
-                    ("olap_top_customers_p50_ms", "top customers p50 ms"),
-                    ("olap_top_customers_p99_ms", "top customers p99 ms"),
-                    ("olap_filtered_avg_p50_ms", "filtered average p50 ms"),
-                    ("olap_filtered_avg_p99_ms", "filtered average p99 ms"),
-                    ("olap_status_histogram_p50_ms", "status histogram p50 ms"),
-                    ("olap_status_histogram_p99_ms", "status histogram p99 ms"),
-                    ("olap_range_agg_p50_ms", "range aggregate p50 ms"),
-                    ("olap_range_agg_p99_ms", "range aggregate p99 ms")],
-        "conditions": [
-            "The same five queries whose sum is the OLAP total in the table above, one column each, so a reader can see which shapes an engine is slow on rather than one number.",
-        ],
     },
     "e2atom": {
         "title": "Cross-model transaction: what survives a crash",
         "dataset": "The same vector-graph-document operation, killed mid-way, then inspected",
         "lane_source": "e2",
         "only_workload": "atomicity",
-        # crashes raised equalled trials on every row (2026-09-12, DECISIONS
-        # #73): the kill always lands, so the column said nothing.
+        # No `crashes raised` column: the kill always lands, so it said nothing (DECISIONS #73).
         "metrics": [("trials", "trials"), ("torn_count", "torn results")],
-        "conditions": [
-            "A trial writes the three products, kills the process between them, reopens, and checks whether every product is present or none. Torn means some but not all: the counts the page's E2 prose quotes are these.",
-        ],
-    },
-    "l1": {
-        "title": "Documents: OLTP and OLAP",
-        "dataset": "Synthetic orders workload",
-        "metrics": [("read_p50_ms", "read p50 ms"), ("read_p99_ms", "read p99 ms"),
-                    ("insert_p50_ms", "insert p50 ms"), ("insert_p99_ms", "insert p99 ms"),
-                    ("update_p50_ms", "update p50 ms"), ("update_p99_ms", "update p99 ms"),
-                    ("oltp_ops_per_s", "OLTP ops/s"), ("ingest_rows_per_s", "ingest documents/s"),
-                    ("ingest_s", "ingest total s"),
-                    ("olap_total_ms", "OLAP total ms"),
-                    ("olap_total_p50_ms", "OLAP total p50 ms"),
-                    (MEM_PEAK_FIELD, "peak memory GiB"),
-                    (_disk_data, "disk GiB")],
-        # No memory condition is typed here. This table once carried a sentence with
-        # PostgreSQL's cell and its client share as typed numbers, written for the anonymous
-        # peak that left PostgreSQL's shared memory out. The column is owned memory now (issue
-        # #353); the document tables print the client and database split of PostgreSQL's cell
-        # from the rows (_pg_memory_note).
-        "conditions": [],
     },
     "l1tpc": {
         "title": "Documents (TPC-H and TPC-C shapes)",
@@ -3234,21 +2263,13 @@ LANES = {
                     (_rate(("n_lineitem", "n_part"), "build_s"), "ingest documents/s"),
                     ("build_s", "ingest total s"),
                     # THE SPLIT, beside the total rather than replacing it (FAIRNESS F14).
-                    # `ingest total s` keeps meaning what it has always meant, the whole of
-                    # build(), so September's rows and October's say the same thing by that
-                    # name. The two below say how that total divides, under the names the
-                    # dense table has used since it was written. A row with no index_s --
-                    # every September row, and any arm that builds no index -- does not fill
-                    # them, and a column no row fills is dropped, so the split shows up
-                    # exactly where it was measured.
+                    # `ingest total s` is the whole of build(); the two below say how that
+                    # total divides. An arm that builds no index does not fill them, and a
+                    # column no row fills is dropped.
                     ("ingest_s", "ingest s"),
                     ("index_s", "index s"),
                     (MEM_PEAK_FIELD, "peak memory GiB"),
                     (_disk_data, "disk GiB")],
-        "conditions": [
-            "Q1 and Q6 are TPC-H's own query numbers. Q1 groups and aggregates the whole line-item table, so it measures a full scan; Q6 sums one column under a narrow filter, so it measures how well an engine skips what it does not need.",
-            "New-order is TPC-C's checkout transaction: it reads a customer and a warehouse, inserts an order with its line items, and updates stock, all in one transaction.",
-        ],
     },
     "e2": {
         "title": "Cross-model transaction",
@@ -3269,27 +2290,10 @@ LANES = {
         # injections per system, composed half-updated in all 200, both single
         # engines in none.
         "only_workload": "hybrid",
-        # Nothing on this table is blanked for running in memory any more:
-        # SurrealDB embedded re-ran on the SDK's SurrealKV disk store (qDN,
-        # 2026-09-12) and carries a disk cell. September's composed arm ran
-        # its Qdrant half as :memory:, so its disk value is Neo4j's and is
-        # printed as such (the condition below says so); October runs the
-        # Qdrant server beside Neo4j in one container (DECISIONS #117, BUGS
-        # F133) and October tables do not carry these conditions. The key
-        # stays for the mechanism at the disk_data_mb skip; it was
-        # surrealdb_e2 until 2026-09-13.
-        "in_memory": (),
-        "conditions": [
-            "Atomic means all or nothing: the whole update happens, or none of it does, with no state in between that anyone can observe. One engine can promise that across a vector, a graph edge, and a document because they share a transaction. Qdrant and Neo4j cannot promise it to each other, because nothing spans the two.",
-            "So the interesting result here is not the speed. It is what a crash halfway through leaves behind. The raw data records, for each run, whether an interrupted write left the two stores disagreeing, and whether they still disagreed after restarting. That is what this comparison exists to show.",
-            "Read the times with one caveat, which cuts against ArcadeDB. Every engine on this table writes to disk except the composed stack's vector half: Qdrant runs in memory (:memory:), so part of why the composed stack's queries answer as they do is that half of it never touches a disk. The all-or-nothing result above does not depend on this, since a half-finished update is visible in memory just as it is on disk, but the millisecond columns do.",
-            "Because the composed stack's Qdrant half runs in memory, its disk value is Neo4j's alone. SurrealDB embedded runs on the SDK's SurrealKV store on disk and SurrealDB server on RocksDB, and each has its own disk reading.",
-        ],
     },
     # THE SERVER RESTART (DECISIONS #139 item 2, l6_restart.py): what every
     # served engine costs to come back on the same data, and to go down
-    # cleanly. October-only: no September row exists, so its conditions are
-    # OCT_PROSE's and the list here stays empty.
+    # cleanly.
     "restart": {
         "title": "Server restart",
         "dataset": "Each engine's own data on one model (documents, graph, dense vectors, or time series), restarted in place",
@@ -3303,418 +2307,58 @@ LANES = {
         # runs mongot, which a restart has to bring back.
         "labels": {"mongodb_dense": "MongoDB + MongoDB Search",
                    "arcadedb_ts_native_server": "ArcadeDB (server)"},
-        "conditions": [],
     },
 }
 
-GLOBAL_CONDITIONS = [
-    "Every engine runs in Docker under an identical cpuset and memory cap, one job at a time, on the same host.",
-    "Peak memory is the largest amount an engine held as its own, added over every container a run used: the memory it allocated plus the shared memory it holds, a buffer pool for example. It leaves out the file cache the kernel keeps on the engine's behalf, for every engine alike, so it reads low for an engine that leaves its data in that cache instead of holding it.",
-    "Each printed cell is the median of 5 repetitions, with min and max carried alongside; nothing here is a single sample.",
-    "Defaults first. Where a default would make the comparison meaningless, it is equalized and the override is disclosed rather than hidden.",
-    "Comparators are pinned by sha256 image digest, not by a floating tag.",
-    DISK_DETAIL,
-    "Durability is at each engine's default, and the defaults differ: ArcadeDB does "
-    "not flush its write-ahead log at commit (txWalFlush=0), PostgreSQL and Neo4j "
-    "fsync at every commit, and SQLite is the one comparator not at its default: it runs "
-    "in WAL mode with synchronous=NORMAL, the common production setting, because its "
-    "default rollback journal fsyncs twice per commit. On the write rows (document OLTP, TPC-C new-order, "
-    "graph writes, the cross-model transaction) ArcadeDB's lead over the fsyncing servers is largely this default plus the "
-    "absence of a network hop, not the engine. The next campaign matches every engine at the "
-    "relaxed end instead: each one commits without waiting for the disk, which is what SQLite\'s "
-    "setting above already means. Three engines have no setting for it, Neo4j, DuckDB, and "
-    "LadybugDB, each measured rather than assumed, and each is named on the tables it appears on.",
-]
 
-# WHAT A SKELETON CAN AND CANNOT SAY ABOUT ITS OWN CONDITIONS (DECISIONS #86).
-# Two of the sentences above describe the bench machine's protocol and are
-# false on this page: the cells did not have the machine to themselves, and
-# each printed cell is one run rather than the median of five. A page that
-# repeats them under a placeholder banner is still telling a reader the numbers
-# were measured carefully. They are replaced, in the reader's own words, rather
-# than dropped, so the page says what actually happened.
-SKELETON_CONDITION_SWAPS = {
-    "Every engine runs in Docker under an identical cpuset and memory cap, one job at a time, on the same host.":
-        "Every engine ran in Docker under the same memory cap, one cell at a "
-        "time, on one shared machine. That machine was not doing only this: a browser, "
-        "an editor, and the rest of a working machine kept running beside every "
-        "cell, so no cell had cores of its own and the times below are not "
-        "comparable between engines.",
-    "Each printed cell is the median of 5 repetitions, with min and max carried alongside; nothing here is a single sample.":
-        "Each printed cell here is ONE run, not the median of five, and the "
-        "min and max beside it are that same single sample. The campaign runs "
-        "five and prints the median; this page does not.",
-}
-
-
-def _thermal_note():
-    """NOT PUBLISHED since 2026-09-21, by the user's decision: the throttle
-    data is internal documentation, so no page carries it in any phrasing.
-
-    Kept, not deleted: every row still records `host_temp_c_*`,
-    `host_throttle_count_*` and `host_throttled_ms` (and since BUGS F80 the
-    embedded arms record them too), and this is the reader for that evidence
-    when a question about the host needs answering off the page.
-
-    Was: the bench host throttles, and the page has to say so (PAGE-SPEC 7).
-
-    The September page does NOT carry this: the spec required it and the
-    payload never had it, in any phrasing (BUGS.md F71). Generated from the
-    rows rather than typed, so the numbers describe the campaign that is
-    publishing rather than a measurement taken once in September: a row that
-    records no throttle counter contributes nothing, and if no row records
-    one the sentence is omitted instead of guessed.
-    """
-    ms = []
-    for r in _FROZEN_ROWS:
-        v = r.get("host_throttled_ms")
-        try:
-            if v not in (None, ""):
-                ms.append(float(v))
-        except (TypeError, ValueError):
-            continue
-    if not ms:
-        return None
-    ms.sort()
-    med = ms[len(ms) // 2] / 1000.0
-    worst = ms[-1] / 1000.0
-    return _gen(
-        "The benchmark machine is a mobile-class part in a small chassis and it "
-        "throttles under sustained load. The power mode is left exactly as the "
-        "machine ships -- governor `powersave`, turbo enabled -- because "
-        "pinning the clock would lower every absolute number here, so a long "
-        "build and a short query do not see the same clock. That is also why "
-        f"every cell runs one at a time. Of the {len(ms)} cells on this page "
-        "that record the kernel's throttle counters, the median spent "
-        f"{med:.1f} s throttled and the worst {worst:.0f} s; every row carries "
-        "its package temperature and both counters either side of the cell, so "
-        "a slow run can be told from a throttled machine.",
-        len(ms), f"{med:.1f}", f"{worst:.0f}")
-
-
-# THE CPU IDLE STATES (DECISIONS #177): always on, text only. The benchmark host leaves them as it ships.
-CPU_IDLE_NOTE = (
-    "CPU idle states are not controlled on the benchmark host (the intel_idle driver is on, with sleep states down to C10 "
-    "enabled), so a time under a millisecond for a single client includes the time the processor cores take to wake up."
-)
-
-
-_DEV_BUILD = re.compile(r"(dev\d*|SNAPSHOT)\b", re.I)
-
-# THE RELEASE THE PAPER PINS (DECISIONS #176): ArcadeDB 26.11.1. The 26.10.1
-# rows are a measurement on the way there, so while the ArcadeDB rows' release
-# is another one the list of coming measurements says ArcadeDB's numbers are
-# re-measured on it and the comparators' carry over (_next_measurement_note).
-# The same release is the one that fixes the 26.10.1 defects the page declares
-# (_REFUSAL_FIXED_IN). When the rows are this release, the line goes by itself.
-#
-# THE OTHER 26.10.1 DEFECTS FIXED IN 26.11.1 MARK NO PRINTED CELL (checked
-# 2026-10-08, humemai/arcadedb-embedded-python#274), so no mark is keyed on
-# them, and none is to be added without a printed cell that depends on it:
-#  * ArcadeData/arcadedb#9400 (country-partitioned triangle count about 4x
-#    slower, LSQB Q3, the l2olap "LSQB Q3 p50 ms" cell): the regression came in
-#    with #9383 (merge f5bb4acc39, milestone 26.11.1), which is NOT an ancestor
-#    of the 26.10.1 build d36b4ca3a. 26.10.1 never had it; no cell is slow.
-#  * #9397 (openCypher IN and lookupByKey lose a key during a commit that
-#    deletes and re-creates it): needs a reader running against a concurrent
-#    committing writer. l2_graph.py, l1_tpc.py and e2_hybrid.py run one client
-#    at a time, so no printed cell exercises it.
-#  * #9452 (time series rows of acknowledged commits missing after kill -9
-#    while COMPACT TIMESERIES TYPE runs, txWalFlush 1 or 2): needs a kill and a
-#    concurrent compaction. l4_tsbs.py compacts once after the ingest and never
-#    kills; e3_recovery.py kills but has no table on the page.
-_PAPER_RELEASE = "26.11.1"
-
-# THE FIRST PACKAGE VERSION BUILT WITH THE FASTER PYTHON BINDINGS (humemai/
-# arcadedb-embedded-python#283). The 26.10.1 rows ran on the bindings as they
-# were at the re-pin; since then the per-call glue, the Java-array parameter
-# path, and the result readers got faster (#277, #281, #286, #295, #320), and
-# they reach the page only through a wheel built after those changes. The
-# first such wheel is 26.10.2: all five PRs are ancestors of the 26.10.2 tag,
-# the release run for that tag built the PyPI wheel, and the wheel's Python
-# sources are byte-identical to the tag's. The embedded rows record the
-# wheel's package version as their engine_version, so a row below this version
-# predates the change and a 26.10.2 row does not. Bump the constant (and keep
-# it equal to the version of the first wheel that carries the change) when a
-# later bindings change should also be announced; the line goes by itself once
-# the rows come from a wheel at or above it.
-_BINDINGS_FASTER_FROM = "26.10.2"
-
-
-# THE MEASUREMENTS AFTER THIS ONE, AND WHAT EACH CHANGES, on the page itself
-# (the user, 2026-10-04: "let's write what'll change in the October page").
-# The plan (CAMPAIGN section 7, "Switches and the 26.11.1 re-measure"): the
-# paper's rows are the 26.10.1 measurement's instrument. ArcadeDB is measured
-# again on 26.10.2 and on 26.11.1 with that same instrument, so only an engine
-# or bindings release can move its rows. A default-off switch or a method change
-# goes on only in a measurement after the paper, where every engine it touches is
-# measured again. So a line is one of three kinds, and says which by name:
-#  * "the 26.11.1 measurement" (or the 26.10.2 one): a newer release only;
-#  * "a measurement after the paper": a switch or a method change;
-#  * nothing about a later measurement: the change is already in the rows the
-#    page will carry, so its table sentence says only what the old rows did.
-# test_next_measurement_wording.py holds this: no string in this file promises
-# one single coming measurement, because there is none.
-# Each line stands for a sentence under a table, and is printed only while that
-# sentence is on the page: the helper that writes the table sentence (keyed on
-# the rows) files it here under the line's key, and _next_measurement_note
-# looks for it in the tables' conditions. So a line leaves the page on the same
-# rows, and in the same publish, as the table sentence it summarises.
-_NEXT_ITEM_SENTENCES = {}
-
-# What a table sentence says for a switch-gated change (CAMPAIGN section 7).
-_AFTER_PAPER = "a measurement after the paper"
-# The words that mark a table sentence as describing a later measurement.
-_LATER_MARKERS = (f"the {_PAPER_RELEASE} measurement", f"{_BINDINGS_FASTER_FROM} and {_PAPER_RELEASE} measurements",
-                  _AFTER_PAPER)
-
-
-def _next_item(key, text):
-    """File `text`, a table sentence, under the page-level line `key`."""
-    _NEXT_ITEM_SENTENCES.setdefault(key, set()).add(text)
+# THE CPU IDLE STATES (DECISIONS #177): the runner holds /dev/cpu_dma_latency for the length of each timed cell, and
+# each row stamps `cpu_dma_latency_us` (the target, in microseconds) and `cpu_dma_latency_held` (True or False).
+def _cpu_idle_note(rows):
+    """The idle-state sentence, from what the rows stamp; a row that could not take the hold says so."""
+    held = [r for r in rows if str(r.get("cpu_dma_latency_held")).lower() in ("true", "1")]
+    us = sorted({str(int(_num(r.get("cpu_dma_latency_us")))) for r in held if _num(r.get("cpu_dma_latency_us")) is not None},
+                key=int)
+    if not held:
+        return ("CPU idle states are not held on the benchmark host for these rows, so a time under a millisecond for a "
+                "single client includes the time the processor cores take to wake up.")
+    text = ("The benchmark host's processor cores are held out of their deep idle states while a cell is timed"
+            + (f": the runner holds `/dev/cpu_dma_latency` at {_join_and(us)} microseconds" if us else "")
+            + ", so a time under a millisecond for a single client does not include the time a core takes to wake up.")
+    missing = len(rows) - len(held)
+    if missing:
+        text += (f" {missing} of {len(rows)} rows could not take the hold, or did not record it, and their times "
+                 f"under a millisecond include that wake-up.")
     return text
 
 
-def _arcadedb_dev_build_date(rows):
-    """The date of the development build the ArcadeDB rows measured, read
-    from the build timestamp the server stamps into `engine_version`
-    ("26.10.1-SNAPSHOT (build <sha>/<epoch ms>/main)"), or None when the rows
-    carry no timestamp or more than one date."""
-    import datetime as _dt
-    dates = set()
-    for r in rows:
-        ev = str(r.get("engine_version") or "")
-        if not str(r.get("backend") or "").startswith("arcadedb") or not _DEV_BUILD.search(ev):
-            continue
-        m = re.search(r"/(\d{13})/", ev)
-        if m:
-            dates.add(_dt.datetime.fromtimestamp(int(m.group(1)) / 1000, _dt.timezone.utc)
-                      .date().isoformat())
-    return dates.pop() if len(dates) == 1 else None
-
-
-def _arcadedb_releases_behind(engine_versions):
-    """The x.y.z releases the ArcadeDB rows' engine_version names (served rows
-    read "server:26.10.1 (build <sha>)") that are not the paper's release, in
-    order. Development builds are the caller's case, not this one's."""
-    got = {m.group(1) for ev in engine_versions
-           for m in [re.search(r"(\d+\.\d+\.\d+)", ev)] if m}
-    return sorted(got - {_PAPER_RELEASE}, key=lambda v: tuple(int(x) for x in v.split(".")))
-
-
-def _bindings_behind(engine_versions):
-    """True when an embedded ArcadeDB row ran on a wheel older than
-    _BINDINGS_FASTER_FROM. Served rows ("server:...") run no Python bindings
-    inside the engine and are not counted."""
-    cut = tuple(int(x) for x in _BINDINGS_FASTER_FROM.split("."))
-    for ev in engine_versions:
-        m = re.match(r"\s*(\d+)\.(\d+)\.(\d+)", ev)
-        if m and tuple(int(x) for x in m.groups()) < cut:
-            return True
-    return False
-
-
-def _next_measurement_note(tables):
-    """WHAT THE MEASUREMENTS AFTER THIS ONE CHANGE, said for the page: a list of
-    sentences, the first saying that more come and one per change after it.
-
-    There is no single coming measurement (CAMPAIGN section 7, "Switches and the
-    26.11.1 re-measure"). The lines name the measurement they belong to: the
-    26.10.2 and 26.11.1 measurements run ArcadeDB again on newer releases with
-    this page's method, and a measurement after the paper is where a switch or
-    a method change goes on and every engine it touches is measured again. No
-    date, because none is fixed. A change already in the rows the page will
-    carry has no line.
-
-    KEYED ON THE ROWS: the whole list is shown while the ArcadeDB rows behind
-    the page are a development build, which is what this campaign measured,
-    and while a table still defers something. Rows from a release other than
-    the paper's (_PAPER_RELEASE) show it with the line that ArcadeDB is
-    measured again on that release and the comparators' numbers carry over;
-    rows from the paper's release take it off the page, and so does a page
-    with nothing left to re-measure. Each line after the first is keyed on what
-    its table sentence is keyed on.
-    """
-    if not _OCTOBER_ENV or SKELETON:
-        return []
-    ev_rows = [str(r.get("engine_version") or "") for r in _FROZEN_ROWS
-               if str(r.get("backend") or "").startswith("arcadedb")]
-    dev = any(_DEV_BUILD.search(ev) for ev in ev_rows)
-    behind = [] if dev else _arcadedb_releases_behind(ev_rows)
-    bindings = _bindings_behind(ev_rows)
-    if not (dev or behind):
-        return []
-    conds = [(t, str(c)) for t in tables for c in t.get("conditions") or []]
-    filed = [s for ss in _NEXT_ITEM_SENTENCES.values() for s in ss]
-
-    def carried_by(key):
-        """The titles of the tables that carry a sentence filed under `key`."""
-        ss = _NEXT_ITEM_SENTENCES.get(key) or ()
-        return list(dict.fromkeys(str(t.get("title") or t.get("id"))
-                                  for t, c in conds if any(s in c for s in ss)))
-
-    rerun = any((cell or {}).get("text") == "re-run"
-                for t in tables for e in t.get("entries") or []
-                for cell in (e.get("metrics") or {}).values() if isinstance(cell, dict))
-    other = any(any(m in c.lower() for m in _LATER_MARKERS) and not any(s in c for s in filed)
-                for _t, c in conds)
-    items = []
-    ts_oom = carried_by("ts_doc_oom")
-    if ts_oom:
-        items.append(_gen(f"On the {_join_and(ts_oom)} table, the {_BINDINGS_FASTER_FROM} and {_PAPER_RELEASE} "
-                          f"measurements run ArcadeDB's embedded time-series document load at "
-                          f"{_TS_OOM_HOSTS:,} hosts again, on Python bindings that read the load a "
-                          f"chunk at a time.", *ts_oom, f"{_TS_OOM_HOSTS:,}", _BINDINGS_FASTER_FROM, _PAPER_RELEASE))
-    dense_idx = carried_by("dense_id_index")
-    if dense_idx:
-        items.append(_gen(f"On the {_join_and(dense_idx)} table, {_AFTER_PAPER} gives every engine an "
-                          f"index on the vector id for the delete, so ArcadeDB and the six engines that "
-                          f"had no such index are measured again there.", *dense_idx))
-    if rerun:
-        items.append(_gen("The cells marked `re-run` are measured again."))
-    if bindings:
-        items.append(_gen(f"The {_BINDINGS_FASTER_FROM} and {_PAPER_RELEASE} measurements run ArcadeDB on newer "
-                          f"Python bindings, which are faster at reading results and binding parameters, so "
-                          f"ArcadeDB's embedded numbers are expected to move for that reason as well as for "
-                          f"the engine release.", _BINDINGS_FASTER_FROM, _PAPER_RELEASE))
-    if behind:
-        # Release rows (DECISIONS #176): the move to the paper's release is the
-        # release line, made with this page's method; the comparators are already
-        # at their latest stable release, so their numbers carry over rather
-        # than move again.
-        out = [_gen("More measurements come after this one, and the lines below say what they change."),
-               _gen(f"ArcadeDB's numbers here are from release {_join_and(behind)}. The {_PAPER_RELEASE} "
-                    f"measurement runs ArcadeDB again on release {_PAPER_RELEASE}, the one the "
-                    f"paper reports, with the method used here, and every other engine's numbers carry over"
-                    + (" unless a line below says they are measured again" if dense_idx else "") + ".",
-                    *behind, _PAPER_RELEASE)]
-        out += items
-        if other:
-            out.append(_gen("The notes under the tables describe other changes to come."))
-        return out
-    if not (items or other):
-        return []
-    date = _arcadedb_dev_build_date(_FROZEN_ROWS)
-    build = f"the development build of {date}" if date else "the development build measured here"
-    out = [_gen("More measurements come after this one, and the lines below say what they change."),
-           _gen(f"ArcadeDB moves from {build} to its next release, and every other engine "
-                f"to its latest stable release.", *([date] if date else []))]
-    out += items
-    if other:
-        out.append(_gen("The notes under the tables describe other changes to come."))
-    return out
-
-
-def _global_conditions(tables, october):
+def _global_conditions(tables):
     reps = _reps_note(tables)
-    if october:
-        out = [_R("GLOBAL", "docker_skeleton" if SKELETON else "docker"), _R("GLOBAL", "memory")]
-        if reps:
-            out.append(reps)
-        out += [_R("GLOBAL", "defaults"), _R("GLOBAL", "digest"),
-                _R("GLOBAL", "index_order"), _R("GLOBAL", "jvm_heap")]
-        # The list of coming measurements goes last, and is appended in main()
-        # once _finish_table has run: it reads the finished tables' sentences.
-        return out
-    out = []
-    for c in GLOBAL_CONDITIONS:
-        if c.startswith("Each printed cell is the median of") and reps:
-            c = reps
-        out.append(SKELETON_CONDITION_SWAPS.get(c, c) if SKELETON else c)
+    out = [_R("GLOBAL", "docker"), _R("GLOBAL", "memory")]
+    if reps:
+        out.append(reps)
+    out += [_R("GLOBAL", "defaults"), _R("GLOBAL", "digest"),
+            _R("GLOBAL", "index_order"), _R("GLOBAL", "jvm_heap")]
     return out
 
-# THE 2026-10 DURABILITY CONDITION (DECISIONS #81). It replaces the paragraph
-# above, which describes the September rows: from October every engine that
-# has the knob is set to the same class, so the sentence stops being a list of
-# differences and becomes one rule plus its named exceptions. Written from the
-# ROWS, not typed: each table's own engines decide which exceptions it names,
-# so a table with no Neo4j row never mentions Neo4j.
+
+# THE DURABILITY CONDITION (DECISIONS #81): every engine that has the knob is set to the same class, so the sentence is
+# one rule plus its named exceptions. Written from the ROWS, not typed: each table's own engines decide which exceptions
+# it names, so a table with no Neo4j row never mentions Neo4j.
 OCT_DURABILITY_CONDITION = (
     "Durability is matched at the relaxed end: on every engine that has the "
     "setting, a commit returns without waiting for the disk and the log is "
     "flushed by the engine's own background policy, which is ArcadeDB's engine "
     "default and a documented production mode for each of the others.")
-# "Every engine's setting was read out of the engine rather than assumed" was
-# printed under every table and was false for three kinds of row, each of which
-# says so in its own `durability` string: the served ArcadeDB arms, whose flag is
-# set on the server's JVM options and cannot be read back; the SurrealDB server,
-# whose rows record that no setting was found (BUGS F165); and the sparse lane's
-# three served comparators, which time no transactional write and record "engine
-# default". The sentence now names them, read off the rows.
+# What each row says about how its setting was established, in its own `durability` string: the served ArcadeDB arms,
+# whose flag is set on the server's JVM options and cannot be read back; and the sparse lane's served comparators, which
+# time no transactional write and record "engine default". The sentence names them, read off the rows.
 _DURABILITY_READ = "Each row records what it ran as `durability`"
 _NOT_READ_BACK = "no read-back"
 _DEFAULT_UNREAD = "engine default; no transactional write timed"
 
-# OUR ENGINE LOADED THE CROSS-MODEL CATALOG WITH THE LOG OFF (BUGS F113).
-# `graph_batch` turns the write-ahead log off for a bulk load unless asked not
-# to, and the e2 arm did not ask until 12b2012b74 (2026-09-23), after every
-# October e2 row was measured. The timed operations ran after the batch closed,
-# with the log on; the ingest column did not. No field on the row records it, so
-# the rows are dated against the fix commit's time, kept here as a constant so the
-# export never asks git; a row with no readable time counts as before the fix, the
-# direction that over-discloses for our own engine.
-_F113_FIX = "12b2012b74"
-_F113_FIX_UTC = "2026-09-22T20:44:12+00:00"   # `git show -s --format=%cI 12b2012b74`, in UTC
-_F113_BACKENDS = {"arcadedb_e2"}
-
-
-def _loaded_wal_off(r):
-    """True for a cross-model ArcadeDB row measured before the F113 fix."""
-    if str(r.get("backend")) not in _F113_BACKENDS:
-        return False
-    import datetime as _dt
-    fix = _dt.datetime.fromisoformat(_F113_FIX_UTC)
-    try:
-        ts = _dt.datetime.fromisoformat(str(r.get("ts_utc") or "").replace("Z", "+00:00"))
-    except ValueError:
-        return True
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=_dt.timezone.utc)
-    return ts < fix
-
-
-# ARCADEDB'S STRICT CLASS WAS AN FSYNC, AND THE 26.10.1 MEASUREMENT'S IS AN
-# FDATASYNC. `txWalFlush=2` is FileChannel.force(true) (WALFile.YES_FULL): the
-# log's data and metadata at every commit. SQLite's FULL in WAL mode is one
-# fdatasync per commit, which is `txWalFlush=1` (force(false)), and upstream's
-# own transactions documentation recommends 1 for production and says 2 adds
-# no recovery value over it. The strict class moves to 1 at the re-pin
-# (CAMPAIGN section 7, row 5, the user's decision of 2026-10-04), and the page
-# says so beside the rows measured at 2. Keyed on the text those rows record,
-# not on bench_common.DURABILITY_ARCADEDB_STRICT, which changes at the re-pin:
-# the sentence goes when the last row recording the full sync does.
-_ARCADEDB_FULL_SYNC = "txWalFlush=2: the WAL is flushed and synced at every commit"
-_ARCADEDB_STRICT_NEXT = 1     # the re-pin's txWalFlush for the strict class
-
-
-def _arcadedb_full_sync_note(rows):
-    """(sentence, the values it inserted) for a table that shows ArcadeDB rows
-    run at the full sync, or None. `rows` are the rows behind its cells."""
-    if not _OCTOBER_ENV:
-        return None
-    full = [str(r.get("durability")) for r in rows
-            if str(r.get("backend") or "").startswith("arcadedb")
-            and str(r.get("durability") or "").startswith(_ARCADEDB_FULL_SYNC)]
-    if not full:
-        return None
-    measured = re.match(r"txWalFlush=(\d+)", full[0]).group(1)
-    nxt = str(_ARCADEDB_STRICT_NEXT)
-    # "Was set to", not "synced": on this table a defect note says one
-    # ArcadeDB arm's later commits skipped the log, and the setting is what
-    # every arm's row records either way.
-    text = (f"In the runs that wait for the disk, ArcadeDB was set to sync its write-ahead "
-            f"log's data and metadata at every commit (`txWalFlush={measured}`, an fsync). "
-            f"SQLite's FULL setting syncs only the data (fdatasync), which is "
-            f"`txWalFlush={nxt}`; ArcadeDB's documentation recommends it for production "
-            f"and says it recovers everything the full sync does.")
-    return text, [measured, nxt]
-
 
 def _durability_note(entries, rows, table_lane=None):
     """The durability sentence THIS table needs, from the engines it shows.
-
-    Returns None for a table whose rows predate the 2026-10 instrument, so a
-    September payload is untouched.
 
     EXACT LABELS, AND THE TABLE'S OWN LANE. A row counted when its label was a
     SUBSTRING of an entry's, so the graph lane's "Neo4j" rows matched the
@@ -3725,19 +2369,14 @@ def _durability_note(entries, rows, table_lane=None):
     import bench_common
     want = {str(e.get("backend")) for e in entries if e.get("outcome") != "withdrawn"}
     seen = {}
-    not_read_back, defaults, wal_off = set(), set(), set()
-    shown = []
+    not_read_back, defaults = set(), set()
     for r in rows:
-        if str(r.get("instrument") or "") != "2026-10":
-            continue
         if table_lane and r.get("lane") != table_lane:
             continue
         lbl = display_name(str(r.get("backend") or ""))
         if lbl not in want:
             continue
-        shown.append(r)
-        cls = ("synced_default" if _SURREAL_SERVED_SYNCED(r)
-               else bench_common.durability_class(r.get("durability")))
+        cls = bench_common.durability_class(r.get("durability"))
         if cls:
             seen.setdefault(cls, set()).add(lbl)
         dur = str(r.get("durability") or "")
@@ -3745,11 +2384,9 @@ def _durability_note(entries, rows, table_lane=None):
             not_read_back.add(lbl)
         if dur.startswith(_DEFAULT_UNREAD):
             defaults.add(lbl)
-        if _loaded_wal_off(r):
-            wal_off.add(lbl)
     if not seen:
         return None
-    unread = not_read_back | defaults | seen.get("synced_default", set())
+    unread = not_read_back | defaults
     parts = [OCT_DURABILITY_CONDITION]
     if unread:
         parts.append(f"{_DURABILITY_READ}, and the setting was read out of the engine rather than "
@@ -3783,38 +2420,14 @@ def _durability_note(entries, rows, table_lane=None):
         parts.append(f"{names} exposes no durability setting at all and what it does at "
                      f"commit could not be established, so it is in neither class and its "
                      f"row says so rather than claiming one.")
-    if seen.get("synced_default"):
-        names = _join_and(sorted(seen["synced_default"]))
-        parts.append(f"{names}'s rows record that no setting was found, and its server log shows "
-                     f"what it ran: its default in both runs, a sync to disk at every commit (the log "
-                     f"reads \"Sync mode: every transaction commit\" in every run), although it has a "
-                     f"setting that does not wait.")
-    if wal_off:
-        names = sorted(wal_off)
-        _one = len(names) == 1
-        parts.append(f"{_join_and(names)} loaded {'its' if _one else 'their'} catalog with the write-ahead "
-                     f"log off, which the bulk-load helper {'it' if _one else 'they'} used does by default, "
-                     f"so {'its' if _one else 'their'} ingest figures had less durability than the relaxed "
-                     f"setting; {'its' if _one else 'their'} timed operations ran with the log on.")
-    # Today no table reaches this with an ArcadeDB strict row: main() sets a
-    # strict row aside wherever its cell has a relaxed one, and the durability
-    # table, which shows them, says it in its own conditions. Here for a table
-    # that ever shows one.
-    _full_sync = _arcadedb_full_sync_note(shown)
-    if _full_sync:
-        parts.append(_full_sync[0])
-    return _gen(" ".join(parts), *sorted(_strict_only | seen.get("unverified", set())
-                                         | seen.get("synced_default", set()) | unread | wal_off),
-                *(_full_sync[1] if _full_sync else ()))
+    return _gen(" ".join(parts), *sorted(_strict_only | seen.get("unverified", set()) | unread))
 
 
 # _pinned_dir cannot be used here: it is defined below and this is module scope.
-# Resolved the same way, and for the same reason -- e4decomp_2681 is a 2026-08-07
-# artifact on 26.8.1, so a pinned re-run must be able to supersede it without an
-# edit here. The "_2681" name is kept as the fallback because that is what exists.
+# Resolved the same way: the pinned directory only, never a fallback to an older artifact.
 E4_DIR = RESULTS / f"e4decomp_{os.environ.get('BENCH_ENGINE_COMMIT', '').strip() or 'UNPINNED'}"
-if not E4_DIR.is_dir() and not SKELETON:
-    raise SystemExit(f"{E4_DIR.name} missing; E4 is pinned only since 2026-09-08 (e4decomp_2681 retired), run the e4 lane")
+if not E4_DIR.is_dir():
+    raise SystemExit(f"{E4_DIR.name} missing; E4 is pinned only, run the e4 lane")
 
 # Named so the page can say what each step is rather than showing three opaque
 # arm names. embedded -> inproc_http isolates the wire format with the process
@@ -3829,7 +2442,7 @@ E4_ARMS = [
 # THE CLIENT AXIS (CAMPAIGN section 7 row 72). An artifact written since the lean client carries `meta.arm_clients` (arm -> client key) and
 # measures every HTTP arm under both clients: `inproc_http` and `docker_http` through the probe's own session, `<arm>_lean` through
 # lean_http. Its table names the client in every HTTP column, so the three costs it separates (the wire format, the client, the process
-# boundary) each sit between two columns that differ in that one thing. An artifact without `arm_clients` (October's, measured before
+# boundary) each sit between two columns that differ in that one thing. An artifact without `arm_clients` (measured before
 # row 72) keeps the three columns above, unchanged: which client it ran through was not recorded, and is not inferred.
 E4_PLACES = [("inproc_http", "in-process server, HTTP ms"), ("docker_http", "separate container, HTTP ms")]
 E4_CLIENT_LABELS = {"requests": "requests client", "urllib_shim": "urllib client", "lean": "lean client"}
@@ -3866,8 +2479,7 @@ def _e4_client_sentences(meta):
     if not (legacy and lean):
         return []
     return [_gen(f"Each HTTP column is measured through two Python clients, in the same rounds against the same server: {legacy}, the client this "
-                 f"table was measured with before the second was added, and {lean}, one persistent connection, which the benchmark's served "
-                 "ArcadeDB arms use from the 26.10.1 re-pin on. "
+                 f"table was measured with before the second was added, and {lean}, one persistent connection. "
                  "Two columns of one deployment differ only in the client; the HTTP columns against the in-process column add the wire format "
                  "and, for the separate container, the process boundary.", legacy, lean)]
 
@@ -3910,10 +2522,10 @@ def _e4_table():
                               "min": round(per_arm[arm], 4),
                               "max": round(per_arm[arm], 4),
                               "n": len(loaded)}
-        # The two derived differences (packing cost, separate process) left
-        # the table on 2026-09-12 (DECISIONS #73): a negative "cost" cell
-        # confused more than the subtraction saved, and the prose beside the
-        # table names which two columns to subtract.
+        # No derived differences (packing cost, separate process) beside the
+        # two columns (DECISIONS #73): a negative "cost" cell confused more than
+        # the subtraction saved, and the prose beside the table names which two
+        # columns to subtract.
 
         entries.append({
             "backend": f"{int(size):,} documents",
@@ -3928,14 +2540,10 @@ def _e4_table():
             "metrics": metrics,
         })
 
-    # AT THE PIN OR NOT, BY COMMIT. This compared the artifact's engine VERSION
-    # with "26.9.1", September's release line, so once e4 was re-measured at
-    # October's pin (a 26.10.1.dev0 build of 417314c18) it announced "not yet
-    # re-run at the engine commit the rest of the page reports" over rows that
-    # were. The page's pin is a commit, so the artifact is held to the commit:
-    # every arm's engine_commit against BENCH_ENGINE_COMMIT, prefix either way
-    # because one side may be truncated. No commit on the artifact is not at
-    # the pin.
+    # AT THE PIN OR NOT, BY COMMIT. The page's pin is a commit, so the artifact is
+    # held to the commit: every arm's engine_commit against BENCH_ENGINE_COMMIT,
+    # prefix either way because one side may be truncated. No commit on the
+    # artifact is not at the pin.
     _pin = os.environ.get("BENCH_ENGINE_COMMIT", "").strip()
     _commits = {str(m.get("engine_commit") or "").strip()
                 for m in (meta, meta.get("docker_client_conditions") or {})}
@@ -3967,46 +2575,17 @@ def _e4_table():
     }
 
 
-L4_FILE = RESULTS / "l4_tsbs.jsonl"
-L4_NATIVE = RESULTS / "ts_2681"
-
 # One configuration, so these are constants of the experiment.
 # The workload name only. "scale" lived here too and was a typed "2.59M
 # points" that outlived the one-tier assumption it was written under; the size
 # now comes from each row group's own tier through _l4_points.
 L4_SHAPE = {"workload": "TSBS cpu-only"}
 
-# Field names differ from the other lanes and one of them is a trap.
-# `q_global_ms` is the 12-hour aggregation (it returns 12 rows, one per hour).
-# `q_range_ms` is a 60-row range query and is NOT that number; reading it as
-# the aggregation gives 4.41 ms against the paper's 25.0 and invites the
-# conclusion that the paper is wrong. It is not.
-# Last-point is reported unbounded, which is the faster of the two and the one
-# the paper quotes (0.720 against 0.860 windowed).
-# Last-point takes the first field a source actually has. The native probe
-# records both an unbounded and a recency-windowed variant and the paper quotes
-# the unbounded one (0.720, faster than the windowed 0.860); the other engines
-# record a single unbounded number under the plainer name. Preferring the
-# unbounded field everywhere keeps the column comparing like with like.
-L4_METRICS = [
-    ("ingest_pts_per_s", "ingest points/s"),
-    ("ingest_s", "ingest total s"),
-    # "last-point" is TSBS's own name for this query and it reads as "the
-    # final point" rather than "the newest one", which is what it means.
-    # The page says what the query does; the papers keep the TSBS term.
-    (("q_last_unbounded_ms", "q_last_ms"), "newest reading p50 ms"),
-    ("q_last_p99_ms", "newest reading p99 ms"),
-    ("q_global_ms", "12h aggregate p50 ms"),
-    ("q_global_p99_ms", "12h aggregate p99 ms"),
-    (MEM_PEAK_FIELD, "peak memory GiB"),
-    ("disk_data_mb", "disk GiB"),
-]
-
 
 # backend -> the label this table has always used. Canonical rows name backends
 # the way runner.BACKENDS does; the legacy files named them by hand.
 L4_CANON_LABELS = {
-    # Named like every other table's ArcadeDB rows (2026-09-11): the engine
+    # Named like every other table's ArcadeDB rows: the engine
     # capitalised, the mode first, then which storage path the row took.
     "arcadedb_ts_native": "ArcadeDB (embedded, native time series)",
     "arcadedb_ts_doc":    "ArcadeDB (embedded, document path)",
@@ -4018,7 +2597,7 @@ L4_CANON_LABELS = {
     "timescaledb":        "timescaledb",
     "postgres_ts":        "postgresql",
     "duckdb":             "duckdb",
-    # The plain-table comparators (2026-09-15), named like their rows on the
+    # The plain-table comparators, named like their rows on the
     # document and graph tables.
     "surrealdb_ts":        "SurrealDB (embedded)",
     "surrealdb_ts_server": "SurrealDB (server)",
@@ -4031,11 +2610,8 @@ def _l4_settle_note(settles):
 
     The registered sentence beside this one says sealing "makes the
     aggregation faster and the last-point query slower" and does not say by
-    how long anyone waited. That magnitude is the whole difference between
-    this page's newest-reading column and September's: September ran at the
-    lane's default settle of 0 and read 0.42 ms, October waits and reads
-    2.11 ms on the same corpus, same iteration count, same engine family.
-    A reader moving between the two pages sees 5x and is handed the direction
+    how long anyone waited. That magnitude is what separates this page's newest-reading column
+    from one measured at the lane's default settle of 0: a reader is handed the direction
     without the cause.
 
     Generated from `settle_s` rather than typed, so it cannot outlive the
@@ -4056,20 +2632,37 @@ def _l4_settle_note(settles):
         *[f"{v:g}" for v in vals])]
 
 
-def _l4_canonical(all_rows):
-    """Frozen l4 rows, grouped by display label, or None when the lane is absent.
+# THE READ PATH OF THE TWO LARGE-RESULT QUERIES (PROTOCOL, `read_path`): high-usage and per-host hourly return thousands of
+# rows, so each engine reads them its documented bulk way for the headline columns, and `<query>_plain_ms` times the plain
+# row read (`read_path_plain`) beside it. Each l4 row stamps `read_path` and `read_path_plain`.
+_READ_PATH_PHRASES = {"arrow": "as an Arrow table", "fetchall": "with fetchall, which has no bulk path",
+                      "rows": "as a list of rows"}
 
-    PREFERRED OVER THE LEGACY FILES, and the reason is a published number that
-    was wrong. _l4_rows() read results/l4_tsbs.jsonl (every ts_utc 2026-08-08,
-    engine 26.8.1, engine_commit null) plus the ts_2681 native probe (2026-08-06).
-    Against those, published QuestDB ingest is 432,375 pts/s where the pinned
-    lane measures 1,305,766 -- so the page read as a 4.3x ArcadeDB ingest lead
-    where the corrected rows give 1.41x. The lane also promoted ArcadeNativeTS
-    into itself (l4_tsbs.py:113-132), so the bespoke probe is no longer the only
-    source of the native arm and need not be read at all.
+
+def _l4_read_path_note(rows):
+    """The sentence naming how each engine read the two large results, from the rows, as a list of 0 or 1."""
+    rs = [r for r in rows if r.get("lane") == "l4" and str(r.get("read_path") or "").strip() not in ("", "None")]
+    if not rs:
+        return []
+    by = {}
+    for r in rs:
+        label = L4_CANON_LABELS.get(r.get("backend")) or str(r.get("backend"))
+        by.setdefault(str(r["read_path"]), set()).add(display_name(label) if label in DISPLAY_NAMES else label)
+    groups = [f"{_join_and(sorted(names))} {_READ_PATH_PHRASES.get(path, f'by {path}')}" for path, names in sorted(by.items())]
+    plain = sorted({str(r.get("read_path_plain")) for r in rs if str(r.get("read_path_plain") or "").strip() not in ("", "None")})
+    text = (f"The two queries that return thousands of rows, high-usage and per-host hourly, are read the way each "
+            f"engine documents for a large result: {'; '.join(groups)}.")
+    if any(_num(r.get(f)) is not None for r in rs for f in ("q_high_plain_ms", "q_groupby_plain_ms")):
+        text += (f" The plain-read columns time the same queries read as a list of rows"
+                 f"{f' ({_join_and(plain)})' if plain else ''}, so the price of that choice is visible beside the headline.")
+    return [_gen(text, *[n for names in by.values() for n in sorted(names)], *plain)]
+
+
+def _l4_canonical(all_rows):
+    """Frozen l4 rows, grouped by display label and tier, or None when the lane is absent.
 
     Returns None rather than an empty dict when there are no l4 rows, so the
-    caller falls back instead of rendering an empty table.
+    caller can say why instead of rendering an empty table.
     """
     grouped = defaultdict(list)
     for r in all_rows:
@@ -4077,65 +2670,20 @@ def _l4_canonical(all_rows):
             continue
         label = L4_CANON_LABELS.get(r.get("backend"))
         if label:
-            # KEYED ON THE TIER TOO. This grouped by display label alone,
-            # which was right while the lane had one tier and silently wrong
-            # the moment October added `ts1000`: every published cell became a
-            # median across BOTH corpora -- 2,592,000 points and 25,920,000
-            # together -- under a table labelled "2.59M points". ArcadeDB's
-            # newest-reading p50 published as 2.3889 ms with n=10, where the
-            # ts100-only median is 2.1124 and the ts1000-only one is 3.1835:
-            # a number belonging to neither corpus, with its min taken from
-            # one tier and its max from the other.
-            #
-            # All six gates passed on it. None of them compares a cell's row
-            # count against the tiers its table claims to print.
+            # KEYED ON THE TIER TOO: grouped by display label alone, a table with
+            # two tiers (ts100, ts1000) would publish every cell as a median across
+            # BOTH corpora, a number belonging to neither (BUGS F110).
             grouped[(label, str(r.get("scale")))].append(r)
     return grouped or None
 
 
-def _l4_rows():
-    """Both ArcadeDB arms plus the comparators, from the two files that hold them.
-
-    The native TIMESERIES arm lives in ts_2681/ and the document path and the
-    comparators in l4_tsbs.jsonl. Publishing only the second file would show
-    ArcadeDB at 40.1k pts/s against DuckDB's 1.86M, which is our slowest arm
-    against everyone else's best. The papers report both arms precisely so that
-    46x is read as what the general-purpose path costs rather than as the
-    engine losing, and the same has to hold here.
-    """
-    out = defaultdict(list)
-
-    for path in sorted(L4_NATIVE.glob("nosettle_r*.json")):
-        d = json.loads(path.read_text(encoding="utf-8"))
-        # One arm only. The file set is a single arm today, but primitive= and
-        # numpy_cols= are part of what is being claimed, so assert rather than
-        # assume: mixing arms would report a number no paper claims.
-        if d.get("primitive") is True and d.get("numpy_cols") is True:
-            out["ArcadeDB (embedded, native time series)"].append(d)
-
-    if L4_FILE.exists():
-        for line in L4_FILE.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            try:
-                r = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            backend = r.get("backend")
-            label = ("ArcadeDB (embedded, document path)" if backend == "arcadedb"
-                     else str(backend))
-            out[label].append(r)
-
-    return out
-
-
 # (overlay filename arm, runner backend key, display label)
 # Optional arms: shown when their files exist, never required for the pinned
-# directory to count as complete (the fp32 served arm was added 2026-09-07).
+# directory to count as complete (the fp32 served arm was added).
 SPARSE_MP_OPTIONAL_ARMS = [
     ("arc_srv_fp32", "arcadedb_sparse_server_fp32", "ArcadeDB (server, fp32)"),
-    ("pgvector", "pgvector_sparse", "pgvector"),   # 2026-09-11, files land with qDK
-    ("qdrant_uint8", "qdrant_sparse_uint8", "Qdrant (uint8)"),   # DECISIONS #135, 2026-10-02
+    ("pgvector", "pgvector_sparse", "pgvector"),   #, files land with qDK
+    ("qdrant_uint8", "qdrant_sparse_uint8", "Qdrant (uint8)"),   # DECISIONS #135
 ]
 SPARSE_MP_ARMS = [
     ("arc_int8", "arcadedb_sparse_embedded", "ArcadeDB (embedded, int8)"),
@@ -4166,7 +2714,7 @@ def _sparse_multipass_table():
     if not root.is_dir():
         return None
     entries = []
-    # 100k joined the second-pass run on 2026-09-11 (qDP); its files are
+    # 100k joined the second-pass run (qDP); its files are
     # optional so the table renders before they land, and the sparse
     # condition says whether 100k has a second pass by looking, not by text.
     for tier in ("medium", "small", "tiny"):
@@ -4259,7 +2807,7 @@ LIFECYCLE_SCENARIOS = [
     ("write_own", "reopen, commit into the structure's OWN data, close"),
     ("write_own_read", "write then read in one session"),
 ]
-# Reader-facing names for the page (2026-09-11): the harness keys above stay
+# Reader-facing names for the page: the harness keys above stay
 # in the rows and the source CSV, the page says what the session did.
 LIFECYCLE_SCENARIO_LABELS = {
     "clean": "open and close ms",
@@ -4270,7 +2818,7 @@ LIFECYCLE_SCENARIO_LABELS = {
 # The scratch-type write ("write": commit one row into a type no situation
 # owns) was the control for "what does committing anything cost"; on the
 # page it sat beside the real write and read as two writes. It stays in the
-# rows and the CSV, not in the columns (2026-09-12, DECISIONS #73).
+# rows and the CSV, not in the columns (DECISIONS #73).
 LIFECYCLE_PAGE_SCENARIOS = [k for k, _ in LIFECYCLE_SCENARIOS if k in LIFECYCLE_SCENARIO_LABELS]
 LIFECYCLE_SITUATION_LABELS = {
     "empty": "Empty database", "doc": "Documents", "doc_idx10": "Documents, ten indexes",
@@ -4328,66 +2876,11 @@ def _lc_short_reason(text):
 # all) but the same edit changed its SCOPE from 100 seeds to an unbounded
 # whole-graph 2-hop, so its numbers describe the query written rather than the
 # view. Withheld rather than published with a caveat nobody reads.
-# The bounded seed set returns in a measurement after the paper (CAMPAIGN section 7 row 34), not in this campaign.
-LIFECYCLE_WITHHELD = {"graph_gav": "its query grew from a bounded set of seeds to an unbounded 2-hop, so it stays off this table until a measurement after the paper bounds the query again."}   # PAGE-SPEC rule 7
-
-# SURREALDB'S OCTOBER LIFECYCLE ROWS CARRY OUR INPUT LIST (BUGS F161, DECISIONS #134). Its build fed the
-# engine from one in-memory Python list while the ArcadeDB arm streamed, fixed in the lane on 2026-09-30.
-# The re-run of every SurrealDB lifecycle cell (qOA6) was stopped by decision, because the 26.10.1
-# measurement re-runs them with the streamed input, so the October rows are all from before the fix. Two
-# things on them carried our list and come down: each row's peak memory, and the 10M vector row, whose
-# kill at the cap was our allocation (the kernel log names python), not SurrealDB's. The two other 10M
-# kills named SurrealDB's own storage thread and stand, as does the 1M vector timeout; the session timings
-# ran after the build and stand too. KEYED ON THE ROWS (the October pin), so the 26.10.1 rows are not
-# recognised and the cells return at their landing with nothing to edit.
-# (backend key, situation or None, scale or None, column or None for the whole entry) -> (why, stale)
-_SURREAL_LIST = ("SurrealDB's peak memory on this table is withheld, and its 10M dense-vector cell is not shown: "
-                 "our build fed SurrealDB from one in-memory Python list while the ArcadeDB arm streamed, so its "
-                 "memory reading was partly ours, and the 10M vector build was killed for our allocation, not "
-                 "SurrealDB's. Its session timings ran after the build and stand. Both are re-measured "
-                 "with the input streamed.")
-_SURREAL_LIST_ROW = lambda r: str(r.get("engine_commit") or "").startswith("417314c18")   # noqa: E731
-LIFECYCLE_STALE = {
-    ("surrealdb_lifecycle", None, None, "peak memory GiB"): (_SURREAL_LIST, _SURREAL_LIST_ROW),
-    ("surrealdb_lifecycle", "vector", "lc10m", None): (_SURREAL_LIST, _SURREAL_LIST_ROW),
-}
+# The bounded seed set returns with CAMPAIGN section 7 row 34.
+LIFECYCLE_WITHHELD = {"graph_gav": "its query grew from a bounded set of seeds to an unbounded 2-hop, so it stays off this table until the query is bounded again."}   # PAGE-SPEC rule 7
 
 
-def _lifecycle_stale(row):
-    """The LIFECYCLE_STALE entry that takes this row's whole cell down, if any: the censored-cell
-    reader must not print a withdrawn row's failure as the engine's."""
-    for (bk, situation, scale, column), (why, pred) in LIFECYCLE_STALE.items():
-        if (column is None and str(row.get("backend")) == bk
-                and situation in (None, row.get("workload")) and scale in (None, str(row.get("scale")))
-                and pred(row)):
-            return why
-    return None
-
-
-def _lc_vector_note(rows):
-    """The disclosure sentence for the vector situation, with its numbers
-    computed from the rows it describes (they were typed until 2026-09-08;
-    10M then arrived and the sentence still said 1M was the top)."""
-    def med(scale, field):
-        vals = [_num(r.get(field)) for r in rows
-                if r.get("workload") == "vector" and r.get("scale") == scale
-                and not str(r.get("backend", "")).endswith("_server") and _num(r.get(field)) is not None]
-        return statistics.median(vals) if vals else None
-    parts = []
-    for scale, label in (("lc10k", "10k"), ("lc1m", "1M"), ("lc10m", "10M")):
-        v = med(scale, "clean_session_ms")
-        if v is not None:
-            parts.append(f"{v / 1000:.1f} s at {label}" if v >= 1000 else f"{v:.0f} ms at {label}")
-    rd = med("lc10m", "read_session_ms")
-    tail = (f", and a session with one search in it at 10M is {rd / 1000:.1f} s" if rd else "")
-    return _gen("Known at this engine build: a vector database's no-op session close grows with the index ("
-                + _join_and(parts) + ")" + tail
-                + ", because the first search after a write started a full asynchronous graph rebuild and close() waited on it. "
-                "Filed as #7183, fixed upstream in #7191 for 26.10.1; the October re-pin re-measures it.",
-                *parts, (f"{rd / 1000:.1f} s" if rd else None))
-
-
-def _lifecycle_table(all_rows):
+def _lifecycle_table(all_rows, twin_rows=()):
     """Built from the FROZEN CSV, like every other table in this file.
 
     The first version called load_canonical(), which is make_paper_tables' name
@@ -4399,10 +2892,14 @@ def _lifecycle_table(all_rows):
     rows = [r for r in all_rows if r.get("lane") == "lifecycle"]
     if not rows:
         return None
+    twin_by = {}
+    for r in twin_rows:
+        if r.get("lane") == "lifecycle" and not r.get("lifecycle_situation_unexpressible"):
+            twin_by.setdefault((r.get("workload"), r.get("scale"), str(r.get("backend", "")).endswith("_server"),
+                                _lifecycle_engine(r.get("backend", ""))), []).append(r)
 
-    # Rows fold by situation, size, deployment, and ENGINE. Until 2026-09-16
-    # every row was ArcadeDB's and the label named only the situation; the
-    # SurrealDB embedded arm (DECISIONS #95a) shares the table now, so a
+    # Rows fold by situation, size, deployment, and ENGINE. An ArcadeDB
+    # label names only the situation; the comparator arms (DECISIONS #95a) share the table, so a
     # comparator row names its engine inside the parentheses and carries an
     # explicit `engine` for the coverage table, which otherwise reads the
     # engine off the label. The ArcadeDB labels are unchanged: the page's
@@ -4412,7 +2909,7 @@ def _lifecycle_table(all_rows):
 
     by, declared = {}, []
     for r in rows:
-        _srv = str(r.get("backend", "")).endswith("_server")   # served twin, 2026-09-07
+        _srv = str(r.get("backend", "")).endswith("_server")   # served twin
         if r.get("lifecycle_situation_unexpressible"):
             # DECLARED, NOT BUILT (DECISIONS #88, #92): the arm could not
             # express the situation and the row says why. No session number
@@ -4422,13 +2919,12 @@ def _lifecycle_table(all_rows):
             continue
         by.setdefault((r.get("workload"), r.get("scale"), _srv, _engine_of(r)), []).append(r)
 
-    entries, stale_notes = [], []
+    entries = []
     _lc_columns = (["JVM start ms", "first open ms", "cold process ms"]
                    + [LIFECYCLE_SCENARIO_LABELS[k] for k in LIFECYCLE_PAGE_SCENARIOS])
     for (situation, scale, _srv, engine), rs in sorted(by.items()):
         if situation in LIFECYCLE_WITHHELD:
             continue
-        _name = LIFECYCLE_SITUATION_LABELS.get(situation, situation)
         _ours = engine == "ArcadeDB"
         _mode = "server" if _srv else "embedded"
         entry = {
@@ -4464,40 +2960,36 @@ def _lifecycle_table(all_rows):
             if got is not None:
                 entry["metrics"][LIFECYCLE_SCENARIO_LABELS[key]] = got
         # The rows carried peak memory and disk from the start; the page
-        # never read them here (2026-09-10). Disk is SERVER ROWS ONLY: the
+        # never read them here. Disk is SERVER ROWS ONLY: the
         # embedded database lives on a host bind mount (/lcdb) so its page
         # cache can be evicted for the cold columns, and the disk reading
         # (writable layer plus volumes) does not see a bind mount. Every
         # embedded row read 0.0 GiB beside a 5.6 GiB server twin at 10M
-        # (2026-09-11); a blind spot is a blank, not a zero.
-        # No disk column on this table (2026-09-13, user): a session-cost
+        #; a blind spot is a blank, not a zero.
+        # No disk column on this table (user): a session-cost
         # table is not about footprint, and the embedded rows could not carry
         # it anyway (bind mount, see the comment above).
         for field, label in ((MEM_PEAK_FIELD, "peak memory GiB"),):
             got = _agg(rs, field)
             if got is not None:
                 entry["metrics"][label] = got
-        for (bk, sit, sc, column), (why, pred) in LIFECYCLE_STALE.items():
-            if (bk != entry["backend_key"] or sit not in (None, situation) or sc not in (None, str(scale))
-                    or not any(pred(r) for r in rs)):
-                continue
-            if column is None:
-                entry["outcome"] = "withdrawn"
-                entry["metrics"] = {c: {"text": "re-run"} for c in _lc_columns}
-                _declare_absence("lifecycle", entry["backend"], None, "withdrawn", why)
-            elif column in entry["metrics"]:
-                entry["metrics"][column] = {"text": "re-run"}
-                _declare_absence("lifecycle", entry["backend"], column, "withheld", why)
-            else:
-                continue
-            if why not in stale_notes:
-                stale_notes.append(why)
+        _trs = twin_by.get((situation, scale, _srv, engine))
+        if _trs and entry["metrics"]:
+            twin_metrics = {}
+            for field, label in (("jvm_start_ms", "JVM start ms"), ("first_open_ms", "first open ms"),
+                                 ("cold_process_ms", "cold process ms"),
+                                 *[(f"{k}_session_ms", LIFECYCLE_SCENARIO_LABELS[k]) for k in LIFECYCLE_PAGE_SCENARIOS],
+                                 (MEM_PEAK_FIELD, "peak memory GiB")):
+                got = _agg(_trs, field)
+                if got is not None:
+                    twin_metrics[label] = got
+            _attach_twin(entry, twin_metrics, _trs)
         if entry["metrics"]:
             entries.append(entry)
 
     if not entries:
         return None
-    # The declared situations, ONE sentence per engine (2026-10-02): the
+    # The declared situations, ONE sentence per engine: the
     # situations it cannot build, grouped by reason, each reason the head of
     # the adapter's own statement. One sentence per situation printed 21
     # near-identical sentences for four engines; the statement the adapter
@@ -4534,23 +3026,9 @@ def _lifecycle_table(all_rows):
         "id": "lifecycle",
         "title": "Session cost, open to close",
         "dataset": "synthetic, one structure per row",
-        "conditions": ([_R("lifecycle", k) for k in ("session", "cold_start", "clean_close", "server_rows")]
-                       if _instrument_of("lifecycle") == "2026-10" else [
-            "The SESSION is open + action + close. Reporting open and close alone "
-            "hides work triggered between them.",
-            "Cold start is measured in a fresh subprocess and reported beside every "
-            "session number, because a millisecond open inside a process that takes "
-            "half a second to reach its first database call is not a millisecond to "
-            "whoever launched it.",
-            _lc_vector_note(rows),
-            "A clean close should be O(what was written), not O(what is stored): "
-            "write nothing and closing should cost the same at 10k documents and 10M.",
-            "Server rows have no JVM start, first open, or cold process: the server is "
-            "already running when the probe connects, so those three columns describe "
-            "the embedded process only. The session columns are measured for both.",
-        ]) + [_gen(f"{LIFECYCLE_SITUATION_LABELS.get(k, k)} is withheld: {v}", v) for k, v in sorted(LIFECYCLE_WITHHELD.items())]
-           + [_gen(w) for w in stale_notes] + declared_notes
-           + _engine_defect_notes("lifecycle", entries),
+        "conditions": [_R("lifecycle", k) for k in ("session", "cold_start", "clean_close", "server_rows")]
+                      + [_gen(f"{LIFECYCLE_SITUATION_LABELS.get(k, k)} is withheld: {v}", v) for k, v in sorted(LIFECYCLE_WITHHELD.items())]
+                      + declared_notes,
         "columns": _lc_columns,
         "withheld_scales": [],
         "withheld_reason": None,
@@ -4622,7 +3100,7 @@ def _durability_scope_note(entries):
     The registered sentence said "Every timed write on the page is here: the
     six document operations, the three graph writes, and the cross-model
     transaction" -- a description of the table's DESIGN, printed whatever the
-    table contained. The October campaign lands one lane at a time, so on the
+    table contained. A campaign lands one lane at a time, so on the
     first landing the table held the cross-model transaction alone and said it
     held ten writes; on a graph-only landing it would have held three and said
     the same.
@@ -4669,86 +3147,9 @@ def _durability_scope_note(entries):
         *[str(ops[k]) for k in ("doc", "graph", "crossmodel") if ops[k]])
 
 
-# KNOWN ENGINE DEFECTS AT THE MEASURED BUILD (2026-09-23). A cell can be
-# measured correctly and still not mean what its column says, because the
-# engine under test had a defect that changes what the operation does. The
-# durability table published ArcadeDB's embedded cross-model commit at a
-# "cost of waiting" of 1.01x -- durable for free -- and the reason is an engine
-# defect, not a property: after an LSM_VECTOR index is built, later commits in
-# the same session skipped the write-ahead log entirely, so there was nothing
-# to wait for. Filed as ArcadeData/arcadedb#8129, fixed by #8221 (merge
-# a618b3ae5a) for 26.10.1, verified on the laptop against cbd0947c18.
-#
-# The campaign holds its pin, so the row stays and the page says why. Each note
-# RETIRES ITSELF: it prints only while the fix commit is not an ancestor of the
-# pin being published, so at the re-pin to a build that carries the fix it
-# disappears without anyone having to remember to delete it. When git cannot
-# answer -- the pin is unknown to this checkout -- it prints: for a number that
-# flatters our own engine, over-disclosing is the safe direction.
-ENGINE_DEFECTS_AT_PIN = {
-    # ArcadeDB #8852 (ours, 2026-10-01; fixed by PR #8863, merge 09a7aeff90, after the
-    # October pin 417314c18): the first vector search after a reopen re-reads every
-    # vector's document on one thread. The lifecycle sessions that search after opening
-    # (one query, write then query) are dominated by it from 1M up at the pin: 853 and
-    # 897 ms at 1M (open and close 98 and 16), 17.9 and 18.1 s at 10M (1.4 s and 15 ms),
-    # embedded and server alike. One entry names the embedded row and speaks for both.
-    "lifecycle": [{
-        "backend": "Dense vectors (embedded)",
-        "fix": "09a7aeff90",
-        "issue": "8852",
-        "release": "26.10.1",
-        "text": ("The dense-vector rows' one-query and write-then-query sessions, embedded and server alike, "
-                 "carry a defect in the engine build measured here, ArcadeDB issue #{issue} "
-                 "(https://github.com/ArcadeData/arcadedb/issues/{issue}): the first vector search after a "
-                 "database is reopened re-reads every vector's record on one thread, so from a million vectors "
-                 "up those sessions are mostly that re-read, and ArcadeDB {release} fixes it."),
-    }],
-    "durability": [{
-        "backend": "ArcadeDB (one transaction)",
-        "fix": "a618b3ae5a",
-        "issue": "8129",
-        "release": "26.10.1",
-        "text": ("{backend} shows almost no cost of waiting because of a defect in the "
-                 "engine build measured here, ArcadeDB issue #{issue} "
-                 "(https://github.com/ArcadeData/arcadedb/issues/{issue}): after the "
-                 "vector index is built, later commits in the same session skip the "
-                 "write-ahead log, so there is nothing to wait for, and ArcadeDB "
-                 "{release} fixes it."),
-    }],
-}
-
-
-def _pin_carries(fix, pin):
-    """True when commit `fix` is an ancestor of `pin` in this checkout."""
-    if not pin:
-        return False
-    try:
-        return subprocess.run(
-            ["git", "-C", str(HERE), "merge-base", "--is-ancestor", fix, pin],
-            capture_output=True, timeout=60).returncode == 0
-    except (OSError, subprocess.SubprocessError):
-        return False
-
-
-def _engine_defect_notes(table_id, entries):
-    """One generated sentence per known defect whose arm is on this table and
-    whose fix the published pin does not carry."""
-    pin = os.environ.get("BENCH_ENGINE_COMMIT", "").strip()
-    names = {str(e.get("backend")) for e in entries}
-    out = []
-    for d in ENGINE_DEFECTS_AT_PIN.get(table_id, []):
-        if d["backend"] in names and not _pin_carries(d["fix"], pin):
-            out.append(_gen(d["text"].format(**d), d["issue"], d["release"]))
-    return out
-
-
 # OPERATIONS WHOSE COST GROWS WITH THE CORPUS: one row per corpus size, never a
 # median pooled across sizes (_durability_table, "ACROSS CORPORA ON PURPOSE").
 DURABILITY_PER_SCALE = {"crossmodel_txn"}
-
-# SurrealDB's graph insert ran as two transactions at the October pin (BUGS F130);
-# the re-pin's rows carry another commit.
-_F130_ROW = lambda r: str(r.get("engine_commit") or "").startswith("417314c18")   # noqa: E731
 
 
 def _durability_corpus(lane, scale):
@@ -4766,28 +3167,6 @@ def _durability_scale_rank(lane, scale):
         from e2_hybrid import SCALE_PRODUCTS  # noqa: E402
         return int(SCALE_PRODUCTS.get(scale, 0))
     return SCALE_ORDER.index(scale) if scale in SCALE_ORDER else len(SCALE_ORDER)
-
-
-def _durability_stale(lane, workload, field, backend, scale):
-    """The STALE_UNTIL_RERUN reason that withholds this write on its own table,
-    or None. A whole-row entry withholds every write of that backend; a column
-    entry withholds the write only when the column is the one this operation
-    reads (by OCT_TABLE_METRICS' field -> label mapping)."""
-    src_tid = EQUIVALENCE_TABLE_OF.get((lane, workload))
-    src_col = next((lbl for f, lbl in OCT_TABLE_METRICS.get(lane, []) if f == field), None)
-    for (tid, bkey, column, only_scale), (why, pred) in STALE_UNTIL_RERUN.items():
-        if tid != src_tid or bkey != backend:
-            continue
-        if column is not None and column != src_col:
-            continue
-        if only_scale is not None and scale is not None and str(only_scale) != str(scale):
-            continue
-        if pred is _SURREAL_SERVED_SYNCED:
-            # DECISIONS #136 item 1: a synced write is exactly what the waiting column measures
-            continue
-        if _stale(tid, bkey, only_scale if only_scale is not None else scale, pred):
-            return why
-    return None
 
 
 def _no_knob_sentence(no_knob):
@@ -4818,8 +3197,7 @@ def _durability_table(all_rows):
     """The same write per engine at both durability settings, with the ratio.
 
     An engine with no setting (Neo4j, DuckDB, LadybugDB) runs the same way in
-    both cells, as the SurrealDB 3.2.4 server did at the October pin (its
-    default, a sync at every commit, in both; BUGS F165), so printing its two numbers as a
+    both cells, so printing its two numbers as a
     relaxed/strict pair would invent a comparison the engine cannot make. It
     gets ONE number, and the conditions name it, which is also what puts it on
     an equal footing rather than reading as fast-or-slow against everyone
@@ -4830,12 +3208,9 @@ def _durability_table(all_rows):
     """
     import bench_common
     entries = []
-    withdrawn = {}        # display name -> [operation label, ...]
-    waiting_rows = []     # the rows behind the printed waiting-column cells
     for lane, workload, field, op_key, op_label in DURABILITY_WRITES:
         rows = [r for r in all_rows
-                if r.get("lane") == lane and r.get("workload") == workload
-                and str(r.get("instrument") or "") == "2026-10"]
+                if r.get("lane") == lane and r.get("workload") == workload]
         per_scale = op_key in DURABILITY_PER_SCALE
         by = {}
         for r in rows:
@@ -4909,12 +3284,6 @@ def _durability_table(all_rows):
                 bench_common.durability_class(r.get("durability")) for r in _stamped)
             entry["_durability_note_class"] = (
                 _classes.most_common(1)[0][0] if (no_setting and _classes) else None)
-            # BUGS F165: the SurrealDB server's rows say "not verified", and
-            # what they ran is now known from its own log: a sync at every
-            # commit, its default, in both cells. The setting existed; the
-            # harness missed it. Its own sentence, not the unknown's.
-            if no_setting and _stamped and all(_SURREAL_SERVED_SYNCED(r) for r in _stamped):
-                entry["_durability_note_class"] = "synced_default"
             # ACROSS CORPORA ON PURPOSE, AND MEASURED BEFORE SAYING SO. Each
             # row here is one engine running ONE operation, and the graph
             # lane times its writes at both sf1 and sf10, so these rows span
@@ -4922,8 +3291,8 @@ def _durability_table(all_rows):
             # operation rather than a size.
             #
             # It is only defensible because the operation is a SINGLE record
-            # and does not depend on how much is already there. Checked at the
-            # October pin before passing the flag: ArcadeDB's delete is 0.494
+            # and does not depend on how much is already there. Checked at an
+            # earlier pin before passing the flag: ArcadeDB's delete is 0.494
             # ms at sf1 against 0.464 at sf10, its strict update 8.435 against
             # 8.591, Neo4j's delete 6.062 against 6.452 -- within 6% on every
             # pair. Compare the time-series lane, where the same span put
@@ -4957,23 +3326,8 @@ def _durability_table(all_rows):
                     entry["metrics"]["cost of waiting"] = {
                         "median": round(ratio, 2), "min": round(ratio, 2),
                         "max": round(ratio, 2), "n": min(rel["n"], strc["n"])}
-            # A WRITE WITHHELD ON ITS OWN TABLE IS WITHHELD HERE TOO. This
-            # table re-reads the rows the write tables print, and it did not
-            # read STALE_UNTIL_RERUN, so a cell marked `re-run` on its own
-            # table (Neo4j's and the composed stack's cross-model rows, the
-            # SurrealDB server's writes) printed here as a measurement, and
-            # ArangoDB's cross-model pair compared a configuration without its
-            # index against one with it (BUGS F168). The same entries, keyed
-            # the same way, so the cells return here when they return there.
-            if entry["metrics"] and _durability_stale(lane, workload, field, backend, sc):
-                entry["metrics"] = {c: {"text": "re-run"} for c in entry["metrics"]}
-                entry["outcome"] = "withdrawn"
-                entry["version_name"] = None
-                withdrawn.setdefault(entry["backend"], []).append(op_label_s)
             if entry["metrics"]:
                 entries.append(entry)
-                if not entry.get("outcome") and "waits for the disk ms" in entry["metrics"]:
-                    waiting_rows.extend(rs if no_setting else strict)
     if not entries:
         return None
     # The sentences below explain the numbers a row PRINTS, so a row taken
@@ -4983,34 +3337,8 @@ def _durability_table(all_rows):
                        if e.get("_durability_note_class") == "strict"})
     _unverified = sorted({e["backend"] for e in _shown
                           if e.get("_durability_note_class") == "unverified"})
-    _synced_default = sorted({e["backend"] for e in _shown
-                              if e.get("_durability_note_class") == "synced_default"})
     for e in entries:
         e.pop("_durability_note_class", None)
-    _gone = sorted(withdrawn)
-    _gone_note = (_gen(f"{_join_and(_gone)} {'have' if len(_gone) > 1 else 'has'} cells marked `re-run` "
-                       f"here because the same writes are withheld on the table{'s' if len(_gone) > 1 else ''} "
-                       f"they come from, and the note under each of those tables says why.", *_gone)
-                  if _gone else None)
-    for name in _gone:
-        _declare_absence("durability", name, None, "withdrawn", _gone_note)
-    # TWO TRANSACTIONS WHERE THE OPERATION IS ONE (BUGS F130). At the October
-    # pin SurrealDB's graph insert sends `CREATE person ...; RELATE ...` with
-    # no BEGIN/COMMIT around them, and SurrealDB commits each statement of
-    # such a request on its own, so its strict cell waits for the disk twice
-    # per insert. The re-pin wraps them in one transaction; keyed on the rows
-    # at this pin, so the sentence goes when the re-pin's rows arrive.
-    _two_txn = sorted({e["backend"] for e in _shown
-                       if e.get("scale") == "graph_insert" and e["backend"].startswith("SurrealDB")
-                       and any(_F130_ROW(r) for r in all_rows
-                               if r.get("lane") == "l2" and r.get("workload") == "oltp"
-                               and display_name(str(r.get("backend"))) == e["backend"])})
-    _two_txn_note = (_gen(f"{_join_and(_two_txn)} {'send' if len(_two_txn) > 1 else 'sends'} the graph insert's person and its edge as two "
-                          f"statements with no transaction around them, so each commits on its own: "
-                          f"the run that waits for the disk waits twice for each insert, and the cost "
-                          f"of waiting on that row counts both.", *_two_txn)
-                     if _two_txn else None)
-
     def _verb(names):
         return "have" if len(names) > 1 else "has"
     # EVERY SINGLE NUMBER IS ACCOUNTED FOR, or the table does not publish.
@@ -5021,7 +3349,7 @@ def _durability_table(all_rows):
     # off whichever row sorted first. Refusing here is the capability table's
     # rule -- refuse the kind you cannot define rather than printing it and
     # hoping -- applied to the one other table that prints a lone number.
-    _explained = set(_no_knob) | set(_unverified) | set(_synced_default)
+    _explained = set(_no_knob) | set(_unverified)
     _lone = sorted({e["backend"] for e in _shown
                     if e["metrics"].get("waits for the disk ms")
                     and not e["metrics"].get("no wait ms")}
@@ -5034,9 +3362,6 @@ def _durability_table(all_rows):
             f"it is indistinguishable from a setting that failed to take. Stamp the "
             f"engine's `durability` on its rows, or add the sentence that says how "
             f"its behaviour at commit was established.")
-    # ArcadeDB's waiting column is a full sync until the re-pin's rows arrive.
-    _full_sync = _arcadedb_full_sync_note(waiting_rows)
-
     return {
         "id": "durability",
         "title": "What waiting for the disk costs",
@@ -5054,17 +3379,6 @@ def _durability_table(all_rows):
                     f"number printed is in neither class. It is placed in the "
                     f"waiting column because that is the safer reading of an "
                     f"unknown, and this line is why it is there.", *_unverified)] if _unverified else []),
-            *([_gen(f"{_join_and(_synced_default)} ran at {'their' if len(_synced_default) > 1 else 'its'} "
-                    f"default in both runs, a sync to disk at every commit: the server log of every run "
-                    f"reads \"Sync mode: every transaction commit\", and a trace counts one sync per "
-                    f"commit. So the one number printed is in the waiting column. "
-                    f"{'They have' if len(_synced_default) > 1 else 'It has'} a setting that does not "
-                    f"wait, which our harness missed.",
-                    *_synced_default)] if _synced_default else []),
-            *([_gen(_full_sync[0], *_full_sync[1])] if _full_sync else []),
-            *_engine_defect_notes("durability", _shown),
-            *([_two_txn_note] if _two_txn_note else []),
-            *([_gone_note] if _gone_note else []),
             _R("durability", "ratio"),
         ],
         "columns": ["no wait ms", "waits for the disk ms", "cost of waiting"],
@@ -5100,10 +3414,6 @@ MULTIMODEL_CELLS = {"measured": "measured", "declared": "declared", "none": "no 
 MULTIMODEL_KINDS = {"censored": "censored", "withheld": "withheld",
                     "unexpressible": "cannot express", "envelope": "out of memory",
                     "failed": "failed",
-                    # "withdrawn" is not "withheld": a withheld cell is one
-                    # number pulled from a row that stands, a withdrawn one is
-                    # the whole row taken down until it is measured again.
-                    "withdrawn": "withdrawn",
                     # A row a defect in the engine's own release decided
                     # (_not_comparable_entries), marked `n/c` on its table.
                     "not comparable": "not comparable"}
@@ -5145,28 +3455,27 @@ def multimodel_cell(table, engine):
 
 
 def _page_table_order():
-    """The order the October page places its tables in, read from the prose
-    file's own benchmarkTable blocks (documents first, then graph, ...), so
-    the coverage table's columns read left to right as the page reads top to
-    bottom. Payload order when the site checkout is not at hand."""
+    """The order the page places its tables in, read from the lane page's own
+    tableId entries (documents first, then graph, ...), so the coverage table's
+    columns read left to right as the page reads top to bottom. Payload order
+    when the site checkout is not at hand."""
     site = os.environ.get("BENCH_SITE_DIR")
-    prose = Path(site) / "src" / "lib" / "projects" / "items" / "arcadedb-next.ts" if site else None
+    prose = Path(site) / "src" / "lib" / "dbbench" / "lanes.ts" if site else None
     if not prose or not prose.exists():
         return []
     return re.findall(r'tableId:\s*"([A-Za-z0-9_]+)"', prose.read_text(encoding="utf-8"))
 
 
 def multimodel_sources(finished):
-    """The October tables the coverage table reads, in the page's order."""
+    """The tables the coverage table reads, in the page's order."""
     order = _page_table_order()
     rank = {tid: i for i, tid in enumerate(order)}
-    sources = [t for t in finished
-               if t.get("id") != "multimodel" and t.get("instrument") == "2026-10"]
+    sources = [t for t in finished if t.get("id") != "multimodel"]
     return sorted(sources, key=lambda t: (rank.get(t.get("id"), len(rank)), sources.index(t)))
 
 
 def _multimodel_table(finished):
-    """One row per engine in MULTIMODEL_ENGINES, one column per October
+    """One row per engine in MULTIMODEL_ENGINES, one column per
     comparison table already in the payload (its title), each cell derived
     from that table's rows and declared absences. Built AFTER _finish_table
     has run on every other table, because that is where the absences land."""
@@ -5175,7 +3484,7 @@ def _multimodel_table(finished):
         return None
     columns = [str(t.get("title")) for t in sources]
     if len(set(columns)) != len(columns):
-        raise SystemExit("REFUSING: two October tables share a title, so the "
+        raise SystemExit("REFUSING: two tables share a title, so the "
                          "capability table cannot key its columns on titles: "
                          f"{columns}")
     entries, kinds_seen = [], set()
@@ -5206,7 +3515,7 @@ def _multimodel_table(finished):
             "precision": None,
             "image": None,
             # DERIVED, not None. This table publishes one row per engine
-            # summarising every other October table, and a reader needs to
+            # summarising every other table, and a reader needs to
             # know which build that coverage describes. The sources carry it;
             # if they disagree the join makes the disagreement visible and
             # version_consistency_check's family rules then refuse it, which
@@ -5230,15 +3539,6 @@ def _multimodel_table(finished):
         "envelope": "out of memory, the cell reached the memory envelope every engine "
                     "on that table had and was killed by the kernel",
         "failed": "failed, the cell reported an error inside its budget",
-        # NOT THE SAME AS withheld. Withheld is one number pulled from a row
-        # that stands; withdrawn is the whole row taken down until it is
-        # measured again. It said "the query it answered was not the one the
-        # other engines answered", which fits a stand-in engine (BUGS F133) and
-        # not a row measured before its own index existed (F168).
-        "withdrawn": "withdrawn, the row was measured before a fix to our harness and "
-                     "came down until it is measured again",
-        "unrun": "not run, the placeholder run did not cover this "
-                 "workload for that engine",
         "not comparable": "not comparable, a defect in the engine's own release decided "
                           "the result, and the note under that table names it",
     }
@@ -5270,8 +3570,8 @@ def _multimodel_table(finished):
     return {
         "id": "multimodel",
         "title": "What the four multi-model engines cover",
-        "dataset": "Every October table on this page, read for which engine has a row",
-        "instrument": "2026-10",
+        "dataset": "Every table on this page, read for which engine has a row",
+        "instrument": _PI.PUBLISH_INSTRUMENT,
         "conditions": [sentence],
         "columns": columns,
         "directions": {},
@@ -5284,8 +3584,7 @@ def _multimodel_table(finished):
     }
 
 
-def _l4_table(all_rows):
-    # Canonical first; the 2026-08 files are the fallback, not the source.
+def _l4_table(all_rows, twin_rows=()):
     grouped = _l4_canonical(all_rows)
     if not grouped:
         # A LANE SCOPED OUT IS NOT A MISSING ARTIFACT, the third place today
@@ -5301,9 +3600,7 @@ def _l4_table(all_rows):
             print(f"  l4 table omitted: not in this landing's lanes "
                   f"({','.join(sorted(_only))})")
             return None
-        raise SystemExit("no canonical l4 rows at the pin; the legacy l4_tsbs.jsonl/ts_2681 readers were retired 2026-09-08")
-    if not grouped:
-        return None
+        raise SystemExit("no canonical l4 rows at the pin")
 
     order = ["ArcadeDB (embedded, native time series)", "ArcadeDB (embedded, document path)",
              "questdb", "duckdb", "sqlite", "mongodb", "timescaledb", "postgresql",
@@ -5317,12 +3614,10 @@ def _l4_table(all_rows):
                      "ArcadeDB (embedded, document path)": "embedded",
                      "questdb": "server", "duckdb": "embedded", "sqlite": "embedded", "mongodb": "server", "timescaledb": "server", "postgresql": "server",
                      "SurrealDB (embedded)": "embedded", "SurrealDB (server)": "server", "ArangoDB": "server"}
-    # The October set REPLACES L4_METRICS (see OCT_TABLE_METRICS): five
-    # queries, one p99, one cold column, in the order the section reads.
-    # Resolved once, before the loop, so the table's column list cannot come
-    # from a different instrument than its cells.
-    _l4_cols = (OCT_TABLE_METRICS["l4"] if _instrument_of("l4") == "2026-10"
-                else list(L4_METRICS))
+    # Five queries, one p99, one cold column, in the order the section reads
+    # (OCT_TABLE_METRICS), resolved once so the column list and the cells agree.
+    _l4_cols = OCT_TABLE_METRICS["l4"] + [MEM_PHASE_COLUMN]
+    twin_grouped = _l4_canonical(twin_rows) or {}
     entries = []
     # Tier first, then the engine order the section reads, so the table shows
     # each corpus as its own row group the way every other multi-tier lane
@@ -5336,21 +3631,13 @@ def _l4_table(all_rows):
         entry = {
             "backend": display_name(label) if label in DISPLAY_NAMES else label,
             "backend_key": str(rs[0].get("backend")),
-            # case-insensitive: the labels read "ArcadeDB (...)" since
-            # 2026-09-11 and the lowercase test unshaded all four rows for a day
+            # case-insensitive: the labels read "ArcadeDB (...)"
             "is_arcadedb": "arcadedb" in label.lower(),
             "scale": f"{_l4_points(_scale)} points",
-            # THE SIZE COLUMN NAMES THE CORPUS THAT RAN. This lane has one
-            # tier, so its size was a typed constant, and under a skeleton the
-            # table then printed the campaign's corpus over a laptop slice of
-            # it -- the one thing SKELETON_SCALE_LABELS exists to stop. The
-            # scale key stays as it is because page_check and the figures
-            # address cells by it.
-            # FROM THE ROW'S OWN TIER, via the lane's constant. Typed as one
-            # string while the lane had one tier; with two, a typed label puts
-            # the smaller corpus's name on the larger corpus's numbers.
-            "scale_label": (scale_label("l4", _scale) if SKELETON
-                            else f"{_l4_points(_scale)} points"),
+            # THE SIZE COLUMN NAMES THE CORPUS THAT RAN, from the row's own tier via
+            # the lane's constant. The scale key stays as it is because page_check
+            # and the figures address cells by it.
+            "scale_label": f"{_l4_points(_scale)} points",
             "workload": L4_SHAPE["workload"],
             "n_docs": str(rs[0].get("n_points")),
             "deployment": L4_DEPLOYMENT[label],
@@ -5371,6 +3658,16 @@ def _l4_table(all_rows):
                 if got is not None:
                     entry["metrics"][lab] = got
                     break
+        _trs = twin_grouped.get(key)
+        if _trs and entry["metrics"]:
+            twin_metrics = {}
+            for field, lab in _l4_cols:
+                for candidate in ((field,) if isinstance(field, str) else field):
+                    got = _agg(_trs, candidate)
+                    if got is not None:
+                        twin_metrics[lab] = got
+                        break
+            _attach_twin(entry, twin_metrics, _trs)
         if entry["metrics"]:
             entries.append(entry)
 
@@ -5389,22 +3686,7 @@ def _l4_table(all_rows):
         "conditions": ([_R("l4", "settle" if symmetric else "settle_rows")]
                        + _l4_settle_note(settles)
                        + [_R("l4", "schema"), _R("l4", "newest")]
-                       if _instrument_of("l4") == "2026-10" else [
-            # The two-arm explanation moved into the page caption, where a
-            # reader meets the rows; saying it in both places said it twice.
-            "No engine settles inside the ingest timer. QuestDB's WAL apply runs after the clock stops, "
-            "and the newest-reading query is asked unbounded on every engine, so the unsealed tail a scan "
-            "walks costs the same everywhere. Sealing the write buffer makes the aggregation faster and the "
-            "last-point query slower, and settling only ours would have been a one-sided advantage."
-            + ("" if symmetric else " Rows that record a settle time did that settling after the timer stopped."),
-            # The one-tag/ten-tag pricing (2.0x, 2.6x) was an ablation result,
-            # not a row; it lives in the notes, the statement stays.
-            "One tag and three fields, not the ten and ten the TSBS cpu schema "
-            "defines. The reduction is applied identically to every engine, so "
-            "the comparison is internally fair, but it is not the full "
-            "benchmark.",
-            _l4_lastpoint_note(all_rows),
-        ]),
+                       + _l4_read_path_note(all_rows)),
         "columns": [lab for _, lab in _l4_cols],
         "withheld_scales": [],
         "withheld_reason": None,
@@ -5458,10 +3740,10 @@ def _overhead_medians():
             # Parse BEFORE touching the defaultdict: a PROVENANCE line split by
             # the csv reader reaches here with len >= 8, and `out[k].append(
             # float(...))` created key k and then raised, leaving an empty list
-            # that statistics.median refused (2026-09-07, first pinned file).
+            # that statistics.median refused (first pinned file).
             try:
                 # Column 7 is p50. Column 6 is the MEAN, and the page printed
-                # it as a median from 2026-09-07 to 2026-09-11 under a global
+                # it as a median under a global
                 # condition that says every cell is a median (PAGE-SPEC rule 2, the conditions block).
                 val = float(row[7])
             except ValueError:
@@ -5496,13 +3778,11 @@ def _python_cost_table():
     if not _ident:
         # ABSENT BEATS UNVERSIONED. This table is fed by the binding suite's own
         # frozen file, not by a lane, and PAGE-SPEC says it returns "when its
-        # artifact is re-measured at the October pin". Until then the artifact
+        # artifact is re-measured at the pin". Until then the artifact
         # carries no provenance line this payload can read, and building the
         # table anyway publishes measurements that name no engine -- which
         # version_consistency_check refuses by name, correctly, and which is
-        # exactly the defect that check exists for. The skeleton already lists
-        # pycost among its declared absences; a real October payload should
-        # reach the same answer rather than a worse one.
+        # exactly the defect that check exists for.
         print("  pycost table omitted: its artifact carries no engine identity "
               "at this pin (PAGE-SPEC: it returns when re-measured)")
         return None
@@ -5518,7 +3798,7 @@ def _python_cost_table():
         if value_us is None or baseline_us is None:
             return
         # n is the number of runs behind the median (5 at the pin, 3-5 in the
-        # 2026-08-10 file); it was the literal 1 until 2026-09-07.
+        # 2026-08-10 file); it was the literal 1 until.
         _n = _counts.get((workload_key(workload), arm), 1) if arm else 1
         rows_out.append({
             "backend": label,
@@ -5650,7 +3930,7 @@ def _embedded_vs_tables():
 
 
 # One row order for every table, applied last so no builder has to remember
-# it. The reader asked for it on 2026-09-09: l3smp appended the served fp32
+# it. The reader asked for it: l3smp appended the served fp32
 # arm after the comparators, l3d listed fp32 before int8 at 10M and Qdrant
 # before Chroma, lifecycle sorted lc100k before lc10k as strings.
 #
@@ -5665,65 +3945,16 @@ DEPLOYMENT_ORDER = {"embedded": 0, "server": 1}
 PRECISION_ORDER = {"int8": 0, "fp32": 1}
 
 
-# The ingest path per engine and deployment, said under every table that
-# prints an ingest pair. Embedded goes through the Python package or the Java
-# API; served goes through HTTP with statements as text. Read from the lane
-# scripts, not from memory (2026-09-11).
-INGEST_NOTES = {
-    "l1": ("Ingest paths: ArcadeDB embedded sends batches of 500 INSERT statements as one "
-           "sqlscript per transaction through the Python package; ArcadeDB served sends the "
-           "same batches to the HTTP command endpoint; PostgreSQL uses COPY FROM STDIN; DuckDB "
-           "inserts 5,000-row DataFrames with INSERT INTO ... SELECT. The ArcadeDB indexes exist "
-           "before its load; PostgreSQL's and DuckDB's are created after theirs."),
-    "l1tpc": ("Ingest paths: ArcadeDB embedded loads through the Python package's insert_many in "
-              "10,000-row batches, one JSON payload per batch; served sends INSERT statements as "
-              "sqlscript batches over HTTP; PostgreSQL COPY FROM STDIN; DuckDB CREATE TABLE AS "
-              "SELECT from in-memory frames."),
-    "l2": ("Ingest paths: ArcadeDB embedded loads through the Java API (newVertex, newEdge) in "
-           "5,000-record transactions; served sends CREATE VERTEX and CREATE EDGE statements as "
-           "sqlscript batches over HTTP; Neo4j and Memgraph UNWIND batches over bolt; FalkorDB the "
-           "same UNWIND batches over the Redis protocol; LadybugDB COPY from CSV, its native bulk "
-           "path; DuckPGQ Arrow INSERT SELECT into the persons and knows tables under a property "
-           "graph."),
-    "e2": ("ingest+index total s is one timer around loading the vertices and edges and creating the vector index. Ingest paths: ArcadeDB embedded loads with the Python package's graph_batch (5,000 "
-           "records per commit, vertices then edges) and then CREATE INDEX ... LSM_VECTOR; served "
-           "sends CREATE VERTEX and CREATE EDGE batches as sqlscript over HTTP, then the same CREATE "
-           "INDEX; SurrealDB embedded inserts through its Python SDK into the SDK's SurrealKV store "
-           "on disk, and SurrealDB server through the same SDK over WebSocket onto RocksDB; the "
-           "composed stack upserts vectors into Qdrant and loads the graph into Neo4j with UNWIND."),
-    "l4": ("Ingest paths: the ArcadeDB document path issues INSERT per point through the Python "
-           "package (embedded) or sqlscript batches over HTTP (served); the native TIMESERIES type "
-           "takes columns through the async executor's append_samples (embedded) or InfluxDB line "
-           "protocol at /api/v1/ts/{db}/write (served); DuckDB inserts an Arrow table; QuestDB takes "
-           "line protocol over TCP."),
-    "l3d": ("Ingest paths: ArcadeDB embedded issues INSERT per vector in 10,000-row transactions "
-            "through the Python package, then CREATE INDEX ... LSM_VECTOR; served sends 500-statement "
-            "sqlscript batches over HTTP with each vector spelled out as text, then the same CREATE "
-            "INDEX; Chroma add() in batches of 5,000; LanceDB an Arrow table then create_index; Qdrant "
-            "and Milvus upsert in batches; DuckDB VSS and sqlite-vec executemany."),
-    "l3s": ("Ingest paths: ArcadeDB embedded loads through the Java API (newDocument with int and "
-            "float arrays) in 500-record transactions, then COMPACT INDEX; served sends INSERT "
-            "statements as sqlscript batches over HTTP; Qdrant, Milvus, and Elasticsearch upsert or "
-            "bulk-index in batches, then settle (Elasticsearch refresh and force-merge, Milvus flush "
-            "and load)."),
-}
-INGEST_NOTES["l2olap"] = INGEST_NOTES["l2"]
-INGEST_NOTES["l3smp"] = INGEST_NOTES["l3s"]
-
-
 # Which lane and workload each page table shows, for the censored-cell note.
 
 # ---------------------------------------------------------------------------
-# WHERE A CONDITION SENTENCE MAY COME FROM (2026-09-16, after BUGS F52).
+# WHERE A CONDITION SENTENCE MAY COME FROM.
 #
 # The rule for the page is that every number on it is produced from the frozen
 # rows by this file, and a typed number appears only under a pin that
-# page_check evaluates at every publish. Table cells always met it; the
-# condition sentences under the tables never did, and an audit of the October
-# preview found typed September numbers (a memory split, a build ratio, two
-# ablation results, a view build time) under tables whose rows said otherwise.
-# So a condition sentence now has exactly two sources, and the gate
-# (page_check._check_conditions) can tell which one produced it:
+# page_check evaluates at every publish. So a condition sentence has exactly
+# two sources, and the gate (page_check._check_conditions) can tell which one
+# produced it:
 #
 #   GENERATED: written by a function of the rows or of a lane constant, and
 #   registered through _gen() together with the strings it inserted. The gate
@@ -5731,21 +3962,15 @@ INGEST_NOTES["l3smp"] = INGEST_NOTES["l3s"]
 #   or a non-measurement token (an issue number, a date, a tier name), so a
 #   generator that types a number beside the ones it computes is caught too.
 #
-#   REGISTERED: an October sentence typed here in OCT_PROSE, keyed by table,
-#   with a pin (regex, lambda over the page cells and the rows) for each
-#   number it carries; a number no pin can reach is not typed.
+#   REGISTERED: a sentence typed here in OCT_PROSE, keyed by table, with a pin
+#   (regex, lambda over the page cells and the rows) for each number it
+#   carries; a number no pin can reach is not typed.
 #
-# Under the 2026-10 instrument a table's conditions may come from nowhere
-# else: the September lists (LANES[...]["conditions"], INGEST_NOTES, DISK_NOTE,
-# GLOBAL_CONDITIONS) are not a source for an October payload, and the gate
-# refuses an October sentence that is neither generated nor registered.
+# The gate refuses a sentence that is neither generated nor registered.
 # Narrative that comments on the numbers ("only ArcadeDB moves between them",
 # "the benefit is uneven", "every comparator is within 3%") is not written
 # during the campaign at all; it is written at the freeze, with pins, so it is
 # absent here on purpose.
-#
-# The September page keeps every sentence it has; its typed numbers are pinned
-# in page_check.SEPT_CONDITION_PINS.
 _GENERATED = []
 
 
@@ -5757,66 +3982,6 @@ def _gen(text, *values):
     if rec not in _GENERATED:
         _GENERATED.append(rec)
     return text
-
-
-def _table_instrument(table_id):
-    """'2026-10' when every row behind this table ran on the October
-    instrument, else '2026-09'. The durability table exists only under
-    2026-10; artifact-backed tables (e4, pycost, l3smp) are September's."""
-    if table_id in ("durability", "multimodel"):
-        return "2026-10"
-    lane_wl = _TABLE_LANE.get(table_id)
-    if not lane_wl:
-        # ARTIFACT-BACKED, AND THE ARTIFACT PATH IS PIN-SCOPED. The flat
-        # "September's" above was true while the only artifacts on disk were
-        # September's; it stopped being true the moment e4 was re-measured,
-        # and it failed in the direction that matters. `_october` at the
-        # bottom of this file is an ALL() over the tables, so one table
-        # wrongly marked September made the whole payload September --
-        # stamping `instrument: 2026-09` on a page of October rows and
-        # handing `_global_conditions` the September condition set.
-        #
-        # The evidence is the path: these tables read
-        # `results/<name>_<BENCH_ENGINE_COMMIT>/`, so an artifact that
-        # resolves at all was produced at the pin being published. It cannot
-        # be a leftover from the other campaign, because the other campaign's
-        # artifacts sit in a differently named directory. A meta stamp is
-        # better still and newer artifacts carry one, so prefer it and fall
-        # back to the campaign this publish is for.
-        return _artifact_instrument(table_id)
-    return _instrument_of(lane_wl[0])
-
-
-def _artifact_instrument(table_id):
-    """The instrument behind a table fed by a pin-scoped artifact directory."""
-    stamped = set()
-    src = SOURCES.get(table_id)
-    # SOURCES holds repo-relative paths for the published link; resolve
-    # against the repo root rather than the caller's cwd, which is the bench
-    # repo for a landing and the experiments directory for a hand run.
-    dirs = [HERE.parents[1] / str(src)] if isinstance(src, str) else []
-    for path in sorted(p for d in dirs if d.is_dir() for p in d.glob("*.json")):
-        try:
-            meta = json.loads(path.read_text(encoding="utf-8")).get("meta") or {}
-        except (ValueError, OSError):
-            continue
-        if meta.get("instrument"):
-            stamped.add(str(meta["instrument"]))
-    if len(stamped) > 1:
-        raise SystemExit(f"REFUSING: the {table_id} artifacts carry two instruments "
-                         f"{sorted(stamped)}; a table cannot mix them (DECISIONS #84)")
-    if stamped:
-        return next(iter(stamped))
-    # THE INFERENCE IS ONLY SOUND FOR A PIN-SCOPED PATH. e4 reads
-    # `e4decomp_<pin>/`, so its presence dates it; pycost reads a single CSV
-    # whose name never changes, and that file is as old as whenever it was
-    # last written. Answering "October" for it would be the original bug
-    # inverted -- an artifact measured under the old instrument labelled with
-    # the new one, which is the direction that puts a wrong provenance under
-    # real numbers rather than merely withholding a table.
-    _pin = os.environ.get("BENCH_ENGINE_COMMIT", "").strip()
-    _scoped = bool(_pin) and isinstance(src, str) and _pin in src
-    return "2026-10" if (_OCTOBER_ENV and _scoped) else "2026-09"
 
 
 def _const(module, name):
@@ -5853,48 +4018,33 @@ OCT_DISK_DETAIL = (
     "in 256 MiB steps, which is how Neo4j uses disk, so they stay in.")
 
 # A pin is (regex with one capture, fn(P, rows) -> number) or the same with a
-# third element "const" when the number is a lane or runner constant, which the
-# gate compares on a skeleton too (a row-derived pin is presence-only there,
-# like the page prose pins).
+# third element "const" when the number is a lane or runner constant.
 OCT_PROSE = {
     "GLOBAL": {
         "docker": ("Every engine runs in Docker under an identical cpuset and memory cap, one job at a time, on the same host.", []),
-        "docker_skeleton": ("Every engine ran in Docker under the same memory cap, one cell at a "
-                            "time, on one shared machine. That machine was not doing only this: a browser, "
-                            "an editor, and the rest of a working machine kept running beside every "
-                            "cell, so no cell had cores of its own and the times below are not "
-                            "comparable between engines.", []),
         "memory": ("Peak memory is the largest amount an engine held as its own, added over every container a run used: the memory it allocated plus the shared memory it holds, a buffer pool for example. It leaves out the file cache the kernel keeps on the engine's behalf, for every engine alike, so it reads low for an engine that leaves its data in that cache instead of holding it.", []),
         "defaults": ("Defaults first. Where a default would make the comparison meaningless, it is equalized and the override is disclosed rather than hidden.", []),
         "digest": ("Comparators are pinned by sha256 image digest, not by a floating tag.", []),
         # TWO DECLARATIONS WHERE THE MEASUREMENT DEPARTS FROM ARCADEDB'S OWN ADVICE (no number in either).
-        # REMOVE WHEN: the instrument that follows this campaign changes the index order (index_order) or
-        # stops pinning the initial heap while memory is measured (jvm_heap).
+        # REMOVE WHEN: the instrument that follows this one changes the index order (index_order) or
+        # stops pinning the initial heap of the server engines while memory is measured (jvm_heap).
         "index_order": ("ArcadeDB's maintainers advise creating indexes after a bulk load, and the ArcadeDB rows create most of "
                         "theirs before it (the id, key and time-series key indexes and the sparse vector index) and build only the "
                         "shipping-date index on documents and the dense vector indexes after it; no measurement here shows whether "
                         "that order changes ArcadeDB's totals.", []),
-        "jvm_heap": ("Every JVM-based engine runs with the initial heap pinned to the maximum heap, the image-defaults ArcadeDB row excepted, "
-                     "although ArcadeDB's guidance is not to pin them when measuring memory.", []),
+        "jvm_heap": ("The server engines that run on a JVM (ArcadeDB served, Elasticsearch, and Neo4j) run with the initial heap pinned "
+                     "to the maximum heap, the image-defaults ArcadeDB row excepted, although ArcadeDB's guidance is not to pin it when "
+                     "measuring memory; ArcadeDB embedded sets only the maximum heap, from the cell's memory budget, as its Python "
+                     "bindings document, and QuestDB keeps its image's heap settings.", []),
         # THE PIN FOLLOWS THE CLAUSE IT PINS. The settle tolerance moved out of
         # the per-table disk note with the sentence that states it.
         "disk_detail": (OCT_DISK_DETAIL, [(r"agree within (\d+)%", lambda P, rows: _const("runner", "DISK_SETTLE_TOL") * 100, "const")]),
     },
     "*": {
-        "skeleton": (SKELETON_TABLE_NOTE, []),
         "disk": (OCT_DISK_NOTE, []),
     },
-    # e4's explanatory sentences. They were unregistered until the table
-    # was correctly dated October (it is artifact-backed, and the instrument
-    # was inferred from a lane map it is not in), at which point the October
-    # rule applies: a sentence that is not generated is registered here, by
-    # the table that prints it. Neither states a measured quantity, so neither
-    # carries a pin. A third ("the separate-process column goes slightly
-    # negative at the smaller result sizes") described the two derived
-    # difference columns DECISIONS #73 took off the table on 2026-09-12; the
-    # cells left behind cross at 1,000 and 10,000 documents, not at the
-    # smallest sizes, so it was describing columns that no longer exist and
-    # was dropped (2026-10-03).
+    # e4's explanatory sentences: neither states a measured quantity, so neither
+    # carries a pin.
     "e4": {
         "same_materialisation": ('All three deployments turn the answer into Python objects the same way, so the difference is how the database was deployed and not how we read the result.', []),
         "same_machine": ('The separate container runs on the same machine, talking over the local network interface. It says what running the database beside your program costs, and says nothing about a database on another machine across a real network.', []),
@@ -5909,7 +4059,7 @@ OCT_PROSE = {
         # reason (DECISIONS #92: an engine is left off a table only when its
         # documentation shows the query cannot be expressed, and then the
         # absence is declared, never left blank). Facts about documentation,
-        # read 2026-09-16, with no number in them, so no pin. _oct_conditions
+        # read from each engine's documentation, with no number in them, so no pin. _oct_conditions
         # prints them under the sparse table and registers each as a
         # whole-row absence the coverage gate and the four-engine table read.
         "no_sparse_arangodb": (
@@ -5946,9 +4096,7 @@ OCT_PROSE = {
     },
     "l3d": {
         # WHY AN ANGULAR DATASET IS MEASURED WITH EVERY ENGINE ON L2. A fair
-        # question from a reader who knows this corpus, and until 2026-09-23
-        # the answer lived only in a code comment in load_dataset(). No number
-        # in it, so no pin.
+        # question from a reader who knows this corpus. No number in it, so no pin.
         "metric": ("Every engine searches this corpus with the same distance, squared Euclidean, "
                    "although the corpus is one whose published neighbours were computed by angle. "
                    "The two agree here: every vector and every query is scaled to unit length "
@@ -5998,16 +4146,6 @@ OCT_PROSE = {
         "settle_rows": ("No engine settles inside the ingest timer. QuestDB's WAL apply runs after the clock stops, and the newest-reading query is asked unbounded on every engine, so the unsealed tail a scan walks costs the same everywhere. Sealing the write buffer makes the aggregation faster and the last-point query slower, and settling only ours would have been a one-sided advantage. Rows that record a settle time did that settling after the timer stopped.", []),
         "schema": ("One tag and three fields, not the ten and ten the TSBS cpu schema defines. The reduction is applied identically to every engine, so the comparison is internally fair, but it is not the full benchmark.", []),
         "newest": ("Newest reading means the most recent value each sensor has reported, which is what a monitoring dashboard asks for when it shows the current state of a fleet. TSBS calls this query last-point. It is run without a time bound; the same query bounded to the past hour is measured beside it and kept on the row rather than printed.", []),
-        # "withheld_hourly" was registered here while the served native arm's
-        # per-host hourly cell was withheld. The October pin carries the fix
-        # (see WITHHELD_CELLS above), the cell publishes, and the sentence is
-        # no longer emitted, so its registration is gone with it.
-        # THE DOCUMENT ARM'S LOADER CHANGED WITH F115 (2026-09-23). It used to
-        # say "issues INSERT per point ... or sqlscript batches over HTTP", and
-        # that was accurate until this pin: the arm really was the only one on
-        # the table driven a row at a time. September's copy in INGEST_NOTES
-        # still says so, correctly, because September's rows were produced that
-        # way; only the October sentence moves.
         "ingest": ("Ingest paths: the ArcadeDB document path bulk-inserts through the Python package in batched transactions (embedded) or posts INSERT ... CONTENT batches over HTTP (served); the native TIMESERIES type takes columns through the async executor's append_samples (embedded) or InfluxDB line protocol at /api/v1/ts/{db}/write (served); DuckDB inserts an Arrow table; QuestDB takes line protocol over TCP; SQLite executemany in batched transactions; MongoDB insert_many in batches into a time-series collection; TimescaleDB COPY into a hypertable and PostgreSQL COPY into an ordinary table, each as one stream followed by a (host, ts) index and an ANALYZE, all inside the ingest timer; ArangoDB import_bulk; SurrealDB inserts through its Python SDK.", []),
     },
     "lifecycle": {
@@ -6015,18 +4153,16 @@ OCT_PROSE = {
         "cold_start": ("Cold start is measured in a fresh subprocess and reported beside every session number, because a millisecond open inside a process that takes half a second to reach its first database call is not a millisecond to whoever launched it.", []),
         "clean_close": ("A clean close should be O(what was written), not O(what is stored): write nothing and closing should cost the same at 10k documents and 10M.", []),
         "server_rows": ("Server rows have no JVM start, first open, or cold process: the server is already running when the probe connects, so those three columns describe the embedded process only. The session columns are measured for both.", []),
-        # The SurrealDB embedded arm (2026-09-16, DECISIONS #95a): a fact about
-        # the engine, not a number, so it carries no pin.
-        # BUGS F159, 2026-09-29: l5_lifecycle.cycle() reads LSMVectorIndex.getStats() for the vector situation after
-        # the action timer stops and before close(). The read is untimed, but at the October pin it raises the close
-        # it precedes (laptop, 1M vectors: 6.4 -> 15.3 ms before #8630; 3.0 -> 3.5 after), so the embedded
-        # dense-vector "open and close" cell is not a session that touched nothing. No number here: the split is
-        # measured on the laptop only. Retires with CAMPAIGN section 7 row 22 (the read moves to an untimed cycle).
+        # BUGS F159: l5_lifecycle.cycle() reads LSMVectorIndex.getStats() for the vector situation after
+        # the action timer stops and before close(). The read is untimed, but it raises the close it
+        # precedes, so the embedded dense-vector "open and close" cell is not a session that touched
+        # nothing. No number here: the split is not measured on the benchmark host. Retires with CAMPAIGN
+        # section 7 row 22 (the read moves to an untimed cycle).
         "vector_stats": ("ArcadeDB's embedded dense-vector rows read the index's statistics just before close, to record whether a rebuild ran. The read is outside the timers, but on this engine build it raises the cost of the close that follows it, so that row's open and close figure is an upper bound for a session that touches nothing.", []),
         # The lead of the declared-situations sentences (one per engine, built in _lifecycle_table).
         "declared": ("An engine with no row for a situation cannot build it, and its adapter says so rather than leaving the row blank; the declared row keeps the statement the adapter tried and the engine's own answer.", []),
         "surreal_rows": ("SurrealDB rows have no JVM start: the SurrealDB core is a compiled extension that the Python import loads, so there is no runtime to start apart from the import. Their first open is the first open with the SDK already imported, and their cold process is interpreter start, import, open, and close, the same span the ArcadeDB embedded rows time. SurrealDB's time-series row is a plain table of timestamped records, the footing its time-series rows elsewhere on this page run on, because the engine has no time-series type.", []),
-        # The other in-process engines (row 40, 2026-10-02, l5_lifecycle_embedded): facts about each engine's
+        # The other in-process engines (row 40, l5_lifecycle_embedded): facts about each engine's
         # session, not numbers, so no pins. Printed only when that engine's rows are on the table.
         "ladybug_rows": ("LadybugDB's documents, graph, and time-series rows each carry one index that ArcadeDB's do not: a LadybugDB node table must have a primary key, and the engine keeps a hash index on it. Its time-series row is a plain table of timestamped rows keyed on the timestamp.", []),
         "chroma_rows": ("A Chroma open is the client plus a handle on each collection the database holds, which is what ArcadeDB's open does with its schema, and Chroma loads a collection's HNSW index on its first query. Every Chroma record carries an embedding, so the scratch collection that the empty row writes into holds one-dimensional vectors.", []),
@@ -6046,23 +4182,8 @@ OCT_PROSE = {
                    [(r"binds ([\d,]+)-row INSERT", lambda P, rows: _const("l1_tpc", "ArcadeServerTPC").load_batch, "const")]),
     },
 }
-# THE SENTENCE FOR ROWS THAT LOADED ArcadeDB EMBEDDED THROUGH insert_many (the October pin's): kept beside the columnar one
-# (CAMPAIGN section 7 row 63) and chosen from the rows behind the table, so no table says "insert_columns" about rows that
-# loaded through insert_many (_docs_ingest_note).
-OCT_PROSE["docs_oltp"]["ingest_insert_many"] = (
-    "Ingest paths: ArcadeDB embedded loads through the Python package's insert_many in 10,000-row batches, one JSON payload per batch; served binds 2,000-row INSERT ... CONTENT batches over HTTP; PostgreSQL COPY FROM STDIN; DuckDB CREATE TABLE AS SELECT from in-memory frames; SQLite executemany; MongoDB insert_many; ArangoDB import_bulk; SurrealDB inserts through its Python SDK.",
-    [(r"in ([\d,]+)-row batches", lambda P, rows: _const("l1_tpc", "BATCH"), "const"),
-     (r"binds ([\d,]+)-row INSERT", lambda P, rows: _const("l1_tpc", "ArcadeServerTPC").load_batch, "const")])
-OCT_PROSE["docs_olap"] = {"ingest": OCT_PROSE["docs_oltp"]["ingest"],
-                          "ingest_insert_many": OCT_PROSE["docs_oltp"]["ingest_insert_many"]}
+OCT_PROSE["docs_olap"] = {"ingest": OCT_PROSE["docs_oltp"]["ingest"]}
 
-
-def _docs_ingest_note(table, october_note):
-    """The documents tables' ingest sentence: the columnar one when every ArcadeDB embedded row behind the table
-    recorded `columnar_insert`, the insert_many one while any did not (the October pin's rows)."""
-    if table.get("id") in _DOCS_TABLE_WORKLOAD and _docs_row_load_tables([table], _FROZEN_ROWS):
-        return OCT_PROSE[table["id"]]["ingest_insert_many"][0]
-    return october_note
 # The server restart (DECISIONS #139 item 2). Facts about the protocol, no
 # numbers, so no pins: the counts (cycles, batch size) are on every row.
 OCT_PROSE["restart"] = {
@@ -6089,7 +4210,7 @@ OCT_PROSE["restart"] = {
 }
 OCT_PROSE["l2olap"]["ingest"] = OCT_PROSE["l2"]["ingest"]
 
-# The registered sentences each October table opens with, in order. Sentences
+# The registered sentences each table opens with, in order. Sentences
 # that depend on which engines are on the table are added by _oct_conditions.
 OCT_TABLE_PROSE = {
     "l3s": ["recall", "one_timer", "es_pruning"],
@@ -6123,7 +4244,7 @@ _WORDS = {1: "One", 2: "Two", 3: "Three", 4: "Four", 5: "Five",
 # What each timed query or operation asks, in plain words, keyed by the page's
 # own column label with its statistic stripped. The sentence is generated
 # from the table's columns, so a query added to a table describes itself and a
-# query dropped from one stops being described: the September sentence said
+# query dropped from one stops being described: a typed sentence said
 # "three questions" under a five-query table.
 QUERY_WORDS = {
     "l2olap": ("questions, each asked of the whole graph", "All times are milliseconds.", {
@@ -6170,14 +4291,6 @@ def _query_words_note(table):
         return None
     kind, tail, words = spec
     values = []
-    # The documents Q1 is described as what ran while the rows are the
-    # partial Q1 (_partial_q1_words, BUGS F170); "TPC-H's own Q1" comes back
-    # with the rows of the full query.
-    if table.get("id") == "docs_olap" and _OCTOBER_ENV:
-        _q1 = _partial_q1_words(_FROZEN_ROWS)
-        if _q1:
-            words = {**words, "Q1": _q1[0]}
-            values = _q1[1]
     labels = []
     for c in table.get("columns") or []:
         base = re.sub(r" p(50|99) ms$", "", str(c))
@@ -6187,51 +4300,6 @@ def _query_words_note(table):
         return None
     body = " ".join(f"{lbl[0].upper() + lbl[1:]}: {words[lbl]}." for lbl in labels)
     return _gen(f"{_WORDS.get(len(labels), str(len(labels)))} {kind}. {body} {tail}", *values)
-
-
-def _surreal_pair_note(table):
-    """The two SurrealDB rows are two engines, and the page has to say so.
-
-    Embedded vs served is the axis this page invites a reader to read, and for
-    every other engine the pair is one build behind two transports. SurrealDB's
-    is not: the embedded arm runs the core the Python SDK carries and the
-    served arm runs the container we pin, and on 2026-09-22 those are 2.3.10
-    and 3.2.4 -- two major versions, a different store (SurrealKV against
-    RocksDB), and a different threading profile. COMPARATORS.md has said this
-    since DECISIONS #95 and BUGS F39; the PAGE said nothing, so the whole gap
-    between those two rows read as a deployment result.
-
-    Not a defect in the arms and not fixable by re-running: the embedded path
-    goes through the SDK, so its core is whatever the SDK ships. The honest
-    move is to disclose it where the comparison is made.
-
-    Both version strings are READ FROM THE ENTRIES rather than typed, so the
-    sentence cannot drift from the rows the way a typed pin would, and it says
-    nothing at all on a table that shows only one of the two arms.
-    """
-    ent = {str(e.get("backend")): e for e in table.get("entries") or []}
-    emb = ent.get("SurrealDB (embedded)")
-    srv = ent.get("SurrealDB (server)")
-    if not emb or not srv:
-        return None
-    # ONE SPELLING, here too. `version_name` is normalised on its way into the
-    # payload, but a version quoted inside a SENTENCE misses that walk: this
-    # note first published "surrealdb 2.3.10 and surrealdb v3.2.4", the exact
-    # two-spellings-of-one-identifier defect _one_spelling exists to stop, one
-    # layer further out.
-    ev = _one_spelling(str(emb.get("version_name") or ""))
-    sv = _one_spelling(str(srv.get("version_name") or ""))
-    if not ev or not sv or ev == sv:
-        return None
-    return _gen(
-        f"The two SurrealDB rows are not one engine in two deployments. The "
-        f"embedded arm runs the core its Python driver carries and the served "
-        f"arm runs the released server, and here those are {ev} and {sv} -- "
-        f"different versions on different storage engines, released about a "
-        f"year apart. Read each row against the other engines on the table "
-        f"rather than against each other: the distance between these two is "
-        f"not the cost of a network hop.",
-        ev, sv)
 
 
 def _jvm_reported_heap(r):
@@ -6296,11 +4364,15 @@ def _entry_heaps(e, lane, wl, exact_only=False):
 
 
 def _heap_not_pinned(e, lane, wl):
-    """True when every row behind this table entry records a JVM that started with far less heap
-    than it may take (`server_jvm_initial_heap_bytes` below half of `server_jvm_max_heap_bytes`):
-    no -Xms, as ArcadeDB's image defaults run (CAMPAIGN 7 row 69). Read from the JVM's own
-    report, never from the arm's name; an entry whose rows recorded neither field is not
-    this and gets the fixed-heap sentence as before."""
+    """True when this table entry's JVM started with far less heap than it may take: embedded ArcadeDB
+    (no -Xms in this instrument), or an entry whose every row records `server_jvm_initial_heap_bytes`
+    below half of `server_jvm_max_heap_bytes` (no -Xms, as ArcadeDB's image defaults run, CAMPAIGN 7
+    row 69). The served case is read from the JVM's own report, never from the arm's name; an entry whose
+    rows recorded neither field is not this and gets the fixed-heap sentence."""
+    # EMBEDDED ARCADEDB LEAVES -Xms UNSET in this instrument (PROTOCOL, "JVM initial heap"): only -Xmx is
+    # passed, from the cell's memory budget, so its JVM starts with no initial heap of its own.
+    if e.get("is_arcadedb") and e.get("deployment") == "embedded":
+        return True
     rs = [r for r in _FROZEN_ROWS
           if r.get("lane") == lane and (not wl or r.get("workload") == wl)
           and display_name(str(r.get("backend"))) == e.get("backend")
@@ -6351,11 +4423,8 @@ def _jvm_memory_note_fixed_heap(table):
 
     THE COLUMN IS NOT ONE MEASUREMENT, and it is the column ArcadeDB looks
     worst in, which is exactly why it gets said. An in-process C library's
-    cell is what it needed; a JVM engine's cell is close to the heap it was
-    given. Measured across September's rows at a FIXED memory cap of 8g, the
-    peak moved with the heap and not with the work: 4g heap -> 2,781 MiB,
-    8g -> 6,604, 16g -> 17,312, 24g -> 29,103, a ratio of 0.68 to 1.19, and
-    every other cap/heap pair on the page sits in the same band.
+    cell is what it needed; a JVM engine started with its initial heap set to
+    its maximum has a cell close to the heap it was given.
 
     The page used to make the disclosure in the other direction too, for
     PostgreSQL, whose cell read artificially LOW while the column was the
@@ -6383,7 +4452,7 @@ def _jvm_memory_note_fixed_heap(table):
     found = {}
     for e in table.get("entries", []):
         cell = (e.get("metrics") or {}).get("peak memory GiB")
-        # A MARK IS NOT A VALUE (DECISIONS #111, #117): a censored or `re-run`
+        # A MARK IS NOT A VALUE (DECISIONS #111): a censored or withdrawn
         # row carries text where the median would be.
         if not cell or e.get("outcome") or cell.get("median") is None:
             continue
@@ -6415,32 +4484,15 @@ def _jvm_memory_note_fixed_heap(table):
     tail = ("Every engine on a table gets the same memory envelope; how much of it a JVM "
             "takes is a property of the runtime, so read these cells against each other "
             "rather than against an engine that manages its own memory.")
-    # NO BAND ACROSS THE OCTOBER PAGE. The sentence adds "across every heap
-    # this page has run the peak lands between about two thirds of the heap and
-    # a fifth above it", a band measured on September's 8g-cap rows (the
-    # docstring above) and typed here. October's rows contradict it (about 40
-    # per cent on one table, 3 to 8 per cent on the lifecycle arms), and a
-    # typed band has no October row behind it, so an October table quotes only
-    # the cell it names. The September page keeps the band it was measured on.
-    band = _table_instrument(table.get("id")) != "2026-10"
     if not quotable:
         # Every JVM arm here ran more than one heap across this table's sizes,
         # so there is no single figure to quote and the sentence says the thing
         # that is true without one.
-        if not band:
-            return _gen(f"{head}. {tail}", names)
-        return _gen(f"{head}: across every heap this page has run, the peak lands between "
-                    f"about two thirds of the heap and a fifth above it. {tail}", names)
+        return _gen(f"{head}. {tail}", names)
     who, (heap, gib) = max(quotable.items(), key=lambda kv: kv[1][1])
     pct = f"{gib / float(heap[:-1]) * 100:.0f}"
-    if not band:
-        return _gen(f"{head}: {who}'s {gib:.2f} GiB here is about {pct} per cent of its {heap} heap. {tail}",
-                    names, f"{gib:.2f}", pct, heap)
-    return _gen(
-        f"{head}: {who}'s {gib:.2f} GiB here is about {pct} per cent of its {heap} heap, and "
-        f"across every heap this page has run the peak lands between about two thirds of the "
-        f"heap and a fifth above it. {tail}",
-        names, f"{gib:.2f}", pct, heap)
+    return _gen(f"{head}: {who}'s {gib:.2f} GiB here is about {pct} per cent of its {heap} heap. {tail}",
+                names, f"{gib:.2f}", pct, heap)
 
 
 def _owned_side(r, side):
@@ -6455,7 +4507,7 @@ def _pg_memory_note(table):
     the server). The cell is owned memory, which already includes the database's shared memory
     (issue #353), so this is no longer a disclosure that the cell reads low; it says how much of
     the cell is the database and how much is the client every served engine is measured through.
-    Until 2026-09-16 the split was typed; it is generated so it cannot drift from the cell."""
+    Generated, not typed, so it cannot drift from the cell."""
     lane_wl = _TABLE_LANE.get(table.get("id"))
     if not lane_wl:
         return None
@@ -6485,9 +4537,7 @@ def _pg_memory_note(table):
 
 
 def _gav_pair_note(table):
-    """Only when the table carries both arms of the ablation; a skeleton has
-    the view-on rows alone and the September sentence described a pair that
-    was not there."""
+    """Only when the table carries both arms of the ablation: the sentence must not describe a pair that is not there."""
     names = {str(e["backend"]) for e in table.get("entries", [])}
     pairs = [(a, a[:-1] + ", GAV)") for a in sorted(names)
              if a.startswith("ArcadeDB (") and "GAV" not in a and (a[:-1] + ", GAV)") in names]
@@ -6497,55 +4547,6 @@ def _gav_pair_note(table):
     return _gen(f"Each pair of rows labelled with and without GAV ({listed}) is the same engine on "
                 f"the same data, differing only in whether that view is built; the answer check "
                 f"confirms both return the same answers.", *[n for p in pairs for n in p])
-
-
-def _gav_build_note(table):
-    """September: the view build time, from the cell rather than typed (the
-    literal 2.0 s sat under a cell reading 2.058)."""
-    gav = [e for e in table.get("entries", [])
-           if str(e.get("backend")) == "ArcadeDB (embedded, GAV)" and "view build s" in (e.get("metrics") or {})]
-    if not gav:
-        return None
-    e = max(gav, key=lambda x: SCALE_ORDER.index(x["scale"]) if x["scale"] in SCALE_ORDER else -1)
-    v = f"{float(e['metrics']['view build s']['median']):.1f}"
-    sl = e.get("scale_label") or scale_label("l2", e["scale"])
-    return _gen(f"The Graph Analytical View is a copy of the graph that ArcadeDB builds in memory, laid "
-                f"out for questions that sweep the whole graph rather than follow a few links. Building "
-                f"it took {v} seconds here at {sl}, once, before any query was timed.", v, sl)
-
-
-def _dense_cold_warm_note(table):
-    """September: what the cold and warm passes are, and how far each side
-    moves between them, from the cells. The typed version said every
-    comparator was within 3% of itself while SurrealDB's served 1M row moved
-    from 1.5 s to 4 ms and Neo4j by a tenth (2026-09-16)."""
-    ours, theirs = [], []
-    for e in table.get("entries", []):
-        m = e.get("metrics") or {}
-        cold, warm = m.get("cold p50 ms") or {}, m.get("warm p50 ms") or {}
-        # A MARK IS NOT A VALUE (DECISIONS #111, #117), as in _jvm_memory_note: a withdrawn or `re-run` row carries
-        # text where the median would be, and reading it stopped the September build (Neo4j fp32, issue #355).
-        if e.get("outcome") or cold.get("median") is None or warm.get("median") is None:
-            continue
-        c, w = float(cold["median"]), float(warm["median"])
-        if not w:
-            continue
-        (ours if e.get("is_arcadedb") else theirs).append((abs(c - w) / w, c / w, e))
-    if not ours or not theirs:
-        return None
-    a = f"{max(x[1] for x in ours):.1f}"
-    worst = max(theirs, key=lambda x: x[0])
-    # A change past 100% reads as a factor, not a percentage (SurrealDB's
-    # served 1M row: a cold pass 378 times its warm one).
-    pct = (f"a factor of {worst[1]:.0f}" if worst[0] >= 1 else f"{worst[0] * 100:.0f}%")
-    who = f"{worst[2]['backend']} at {worst[2].get('scale_label') or worst[2].get('scale')}"
-    rest = sorted(theirs, key=lambda x: x[0])[:-1]
-    rest_pct = f"{max(x[0] for x in rest) * 100:.0f}" if rest else None
-    tail = (f"; every other comparator is within {rest_pct}% of itself" if rest_pct else "")
-    return _gen("Cold is the first timed pass after the index is built; warm is a repeat of the same "
-                f"query set. ArcadeDB's cold pass is up to {a}x its warm one, because it pages its index "
-                f"off disk while the others are resident from build. Among the comparators the largest "
-                f"cold-to-warm change is {pct} ({who}){tail}.", a, pct, who, rest_pct)
 
 
 def _ingest_split_note(table):
@@ -6577,26 +4578,6 @@ def _reps_note(tables):
                     "prints the median; this page does not.")
     return _gen(f"Each printed cell is the median of {n} repetitions, with min and max carried "
                 f"alongside; nothing here is a single sample.", str(n))
-
-
-def _l4_lastpoint_note(rows):
-    """September: the bounded/unbounded pair for the newest-reading query,
-    from the rows (q_last_windowed_ms beside q_last_ms) rather than typed."""
-    head = ("Newest reading means the most recent value each sensor has reported, which is what a "
-            "monitoring dashboard asks for when it shows the current state of a fleet. TSBS calls "
-            "this query last-point. It is run without a time bound; the same query bounded to the "
-            "past hour is measured beside it and stays on the row")
-    rs = [r for r in rows if r.get("lane") == "l4" and str(r.get("backend")) == "arcadedb_ts_native"
-          and _num(r.get("q_last_windowed_ms")) is not None
-          and (_num(r.get("q_last_unbounded_ms")) is not None or _num(r.get("q_last_ms")) is not None)]
-    if not rs:
-        return _gen(head + ".")
-    w = statistics.median(_num(r.get("q_last_windowed_ms")) for r in rs)
-    u = statistics.median((_num(r.get("q_last_unbounded_ms")) if _num(r.get("q_last_unbounded_ms")) is not None
-                           else _num(r.get("q_last_ms"))) for r in rs)
-    ws, us_ = f"{w:.3f}", f"{u:.3f}"
-    return _gen(head + f" (ArcadeDB embedded, native time series: {ws} ms bounded against {us_} unbounded).",
-                ws, us_)
 
 
 def _filter_strategy_note(table):
@@ -6654,7 +4635,7 @@ def _txn_scope_note(table):
     The cross-model operation is a vector search, a one-hop expansion, and an
     update of the touched products. Every engine commits the update
     atomically; they differ in whether the two READS run inside the same
-    transaction. The user decided on 2026-09-26 that the operation is defined
+    transaction. The user decided that the operation is defined
     by the atomic update, with the reads allowed outside, since that is what
     every engine here can do (MongoDB refuses $vectorSearch inside a
     multi-document transaction, and says so on its own rows), and that each
@@ -6738,7 +4719,7 @@ def _filtered_modes():
 # and ivf_recall_target_source, and ivf_nprobe. A size whose ArangoDB row is
 # not on the table (the 10M cell, withheld, _one_list_note) is not described.
 _RECALL_TARGET_SOURCE = re.compile(
-    r"^(runs_paper(?:_oct)?\.csv) (arcadedb_dense_embedded) (fp32) (\S+) median of (\d+)$")
+    r"^(runs_paper\.csv) (arcadedb_dense_embedded) (fp32) (\S+) median of (\d+)$")
 
 
 def _arango_ivf_note(table, rows):
@@ -6748,7 +4729,7 @@ def _arango_ivf_note(table, rows):
              if str(e.get("backend_key") or "").startswith("arangodb") and not e.get("outcome")}
     rs = [r for r in rows
           if r.get("lane") == "l3d" and str(r.get("backend") or "").startswith("arangodb")
-          and str(r.get("instrument") or "") == "2026-10" and str(r.get("scale")) in shown
+          and str(r.get("scale")) in shown
           and _num(r.get("ivf_nlists")) and _num(r.get("n_docs"))]
     if not rs:
         return None
@@ -6787,9 +4768,7 @@ def _arango_ivf_note(table, rows):
         m = _RECALL_TARGET_SOURCE.match(next(iter(srcs))) if len(srcs) == 1 else None
         if m:
             arc = f"{display_name(m.group(2))[:-1]}, {m.group(3)})"
-            when = ("in the previous published measurement" if m.group(1) == "runs_paper.csv"
-                    else "in this measurement")
-            target = f"the median recall@10 of {arc} at the same size {when}"
+            target = f"the median recall@10 of {arc} at the same size in the previous published measurement"
             values.append(arc)
         else:
             target = "the recall target its rows record"
@@ -6815,10 +4794,42 @@ def _arango_ivf_note(table, rows):
     return _gen(" ".join(parts), *dict.fromkeys(values))
 
 
+def _attach_twin(entry, twin_metrics, twin_rows):
+    """Put the twin beside the headline entry, over the labels the headline cell has (the same metric labels, no more)."""
+    kept = {k: v for k, v in twin_metrics.items() if k in entry["metrics"]}
+    if kept:
+        entry["client_twin"] = {"client": _twin_client(twin_rows), "metrics": kept}
+
+
+def _twin_client(rs):
+    """The client a twin cell's rows name (one name in a clean freeze), or None."""
+    named = collections.Counter(str(r.get("arcadedb_http_client") or "") for r in rs)
+    return named.most_common(1)[0][0] or None if named else None
+
+
+def _arcadedb_client_note(table):
+    """What the served ArcadeDB rows ran through, from the rows: the official driver is the headline and the lean
+    HTTP client's twin is printed beside it as a labelled sensitivity (`client_twin` on the entry), never pooled
+    into the headline median. None for a table with no served ArcadeDB row."""
+    heads = sorted({str(r.get("arcadedb_http_client")) for r in _FROZEN_ROWS
+                    if str(r.get("backend") or "").startswith("arcadedb") and str(r.get("backend")).endswith("_server")
+                    and str(r.get("arcadedb_http_client") or "").strip() not in ("", "None")
+                    and any(e.get("backend_key") == r.get("backend") for e in table.get("entries") or [])})
+    twins = sorted({str((e.get("client_twin") or {}).get("client")) for e in table.get("entries") or []
+                    if (e.get("client_twin") or {}).get("client")})
+    if not heads:
+        return None
+    text = (f"ArcadeDB's served rows time every call through {_join_and(heads)}, the vendor's official Python client, "
+            f"the same kind of client the other engines are measured through.")
+    if twins:
+        text += (f" The same cells also ran through the benchmark's own lean HTTP client ({_join_and(twins)}); "
+                 f"each is printed on its row as a labelled sensitivity and is not part of the headline median.")
+    return _gen(text, *heads, *twins)
+
+
 def _oct_conditions(table):
-    """The registered and generated sentences an October table carries beyond
-    what its builder and main() already put there: (head, tail). The head
-    goes right after the skeleton note when there is one."""
+    """The registered and generated sentences a table carries beyond
+    what its builder and main() already put there: (head, tail)."""
     tid = table.get("id")
     names = {str(e.get("backend")) for e in table.get("entries", [])}
     head, tail = [], [_R(tid, k) for k in OCT_TABLE_PROSE.get(tid, [])]
@@ -6835,6 +4846,9 @@ def _oct_conditions(table):
         split = _ingest_split_note(table)
         if split:
             head.append(split)
+        _idx = _dense_id_index_note(tid, _FROZEN_ROWS)
+        if _idx:
+            tail.append(_idx)
         if any(c.startswith("cold ") for c in table.get("columns") or []):
             tail.insert(0, _R("l3d", "cold"))
         _ivf = _arango_ivf_note(table, _FROZEN_ROWS)
@@ -6843,11 +4857,14 @@ def _oct_conditions(table):
         if any(n.startswith("Milvus") for n in names):
             tail.append(_R("l3d", "milvus"))
     if tid == "l3s":
+        _warm = _sparse_warmup_note(tid, _FROZEN_ROWS)
+        if _warm:
+            tail.append(_warm)
         # The three multi-model engines with no sparse index type (DECISIONS
         # #92, #95): printed under the table and registered as whole-row
         # absences, so the coverage gate counts them declared and the
         # four-engine table reads "declared, cannot express" rather than
-        # "no arm". October only, which is where this function runs.
+        # "no arm".
         for engine, key in (("ArangoDB", "no_sparse_arangodb"),
                             ("MongoDB", "no_sparse_mongodb"),
                             ("SurrealDB", "no_sparse_surrealdb")):
@@ -6882,11 +4899,11 @@ def _oct_conditions(table):
         pg = _pg_memory_note(table)
         if pg:
             tail.append(pg)
-    # THE JVM DISCLOSURE, which the October path never carried at first: a JVM
-    # engine's memory cell reads close to its heap, and owned memory does not
-    # change that. September's tables have carried it since f5a6ccedcb (the
-    # user settled on 2026-09-22 that the disclosure stays); this is the same
-    # generated sentence.
+    # THE JVM DISCLOSURE: a JVM engine's memory cell reads close to its heap,
+    # and owned memory does not change that.
+    _client = _arcadedb_client_note(table)
+    if _client:
+        tail.append(_client)
     jvm = _jvm_memory_note(table)
     if jvm:
         tail.append(jvm)
@@ -6919,7 +4936,7 @@ def _table_scales(table_id):
 
     A note about a cell the table does not show is a note about nothing: the
     graph analytics table prints the LDBC slice and its notes named the micro
-    generator's rows (2026-09-18)."""
+    generator's rows."""
     spec = LANES.get(table_id) or {}
     return spec.get("only_scales")
 
@@ -6930,7 +4947,7 @@ _CENSORED_PHASE = {}   # (lane, scale, backend, workload) -> phase phrase
 
 
 def _server_hit_envelope(r):
-    """A served cell whose SERVER was killed at its memory cap (2026-09-26).
+    """A served cell whose SERVER was killed at its memory cap.
 
     `oom_killed` is the client container's state. Rows since the runner reads
     the server's own State.OOMKilled carry `server_oom_killed`; older rows are
@@ -6954,9 +4971,7 @@ def _server_hit_envelope(r):
 
 def _run_log_rows():
     """The rows this publish's censored cells and declared outcomes are read
-    from: the skeleton's own frozen file, else the campaign's run log."""
-    if _SKELETON_ENV:
-        return list(csv.DictReader(FROZEN.open())) if FROZEN.exists() else []
+    from: the campaign's run log."""
     path = RESULTS / os.environ.get("BENCH_RUNS_JSONL", "runs.jsonl")
     if not path.exists():
         return []
@@ -7005,37 +5020,15 @@ def _censored_cells():
     backend, workload) -> budget seconds. A timeout is a censored observation
     (the engine needed more than the budget every arm got), recorded once by
     the probe rule and never retried bigger; the table says so instead of
-    leaving a gap a reader cannot tell from an unmeasured cell (2026-09-13)."""
+    leaving a gap a reader cannot tell from an unmeasured cell."""
     global _CENSORED_CACHE
     if _CENSORED_CACHE is not None:
         return _CENSORED_CACHE
     pin = os.environ.get("BENCH_ENGINE_COMMIT", "").strip()
     timeouts, clean = {}, set()
-    # THE LOG THIS PUBLISH IS BUILT FROM, not always the campaign's. A skeleton
-    # reads its own results file (DECISIONS #86), and with this pinned to
-    # runs.jsonl a laptop timeout left the engine off the table with no note at
-    # all, which is exactly the gap-versus-censored confusion this function
-    # exists to remove.
-    # THE CENSORED CELLS COME FROM THE ROWS THIS PUBLISH IS BUILT FROM. The
-    # comment above says a skeleton reads its own results file, and nothing
-    # made that true: BENCH_RUNS_JSONL defaults to runs.jsonl, no skeleton
-    # jsonl exists, and so a laptop placeholder page picked up the BENCH
-    # HOST's censored cells -- including one at a corpus size the skeleton has
-    # no label for, which is how this surfaced (the export died rather than
-    # published, which is the good failure). A skeleton refuses bench-host
-    # ROWS by design; it must refuse their outcomes for the same reason.
     rows = _run_log_rows()
-    # SCOPE TO THE PIN THIS PUBLISH IS FOR. `pin` was read at the top of this
-    # function and never used, so the only scoping was a date, and BOTH
-    # campaigns are after it. A cell censored in September therefore carried
-    # its note, and its September budget, onto an October page.
-    #
-    # The reverse -- an October timeout hidden by a September success -- was
-    # never possible, because the cancel below drops any key with a clean row
-    # at any pin. So the defect ran one way: a claim about the engine we no
-    # longer publish, printed beside numbers from the one we do. Six cells in
-    # l2, l3d and l1tpc are censored at September's pin alone today, and all
-    # three of those lanes are still to land.
+    # SCOPE TO THE PIN THIS PUBLISH IS FOR: a cell censored at another pin would carry
+    # its note, and its budget, onto this page.
     #
     # Comparator rows carry the campaign's pin too (the launcher stamps every
     # row, not just ArcadeDB's), so scoping does not silently drop the
@@ -7050,14 +5043,8 @@ def _censored_cells():
         return bool(got) and (got.startswith(pin) or pin.startswith(got))
 
     for r in rows:
-        if str(r.get("ts_utc", "")) < "2026-09-01":
-            continue
         if not _same_pin(r):
             continue
-        if r.get("lane") == "lifecycle" and _lifecycle_stale(r):
-            continue   # withdrawn, marked `re-run`: its failure was ours (LIFECYCLE_STALE)
-        if _query_budget_raised(r):
-            continue   # a raised-budget row is not the headline and never cancels the default's outcome (DECISIONS #176)
         key = (r.get("lane"), str(r.get("scale")), r.get("backend"), r.get("workload"))
         err = str(r.get("error") or "")
         if not err:
@@ -7093,19 +5080,15 @@ def _censored_cells():
             timeouts[key] = ("envelope", _cap, _peak)
         else:
             # A CELL THAT FAILED FOR ANOTHER REASON IS STILL A CENSORED
-            # OBSERVATION. 2026-09-14: the served SurrealDB cells at
+            # OBSERVATION.: the served SurrealDB cells at
             # 9.99M built their index and then lost the connection
             # mid-query, twice; a timeout-only rule left the page with
             # no row and no note, which reads as a cell nobody ran.
             # The reason is carried as a string so the note can say it.
             timeouts[key] = err.strip().splitlines()[-1][:90] or "an error"
-    # A cell the 26.10.1 query heap budget refused at the default is a declared
-    # outcome of its own (_top_parts_refusals), not an unexplained failure.
-    declared = {("l1tpc", scale, backend, "olap") for backend, scale in _top_parts_refusals()}
-    declared |= _ts_doc_oom_cells()
-    _CENSORED_CACHE = {k: v for k, v in timeouts.items() if k not in clean and k not in declared}
+    _CENSORED_CACHE = {k: v for k, v in timeouts.items() if k not in clean}
     # THE CAP RULE, AT REPORT TIME (DECISIONS #188): rows already measured meet the rule the unmeasured cells met when they ran.
-    _CENSORED_CACHE.update(_rule_censored(set(_CENSORED_CACHE) | declared, clean))
+    _CENSORED_CACHE.update(_rule_censored(set(_CENSORED_CACHE), clean))
     return _CENSORED_CACHE
 
 
@@ -7129,7 +5112,7 @@ def _timeout_phase(hint):
     cypherglot audit standard, and read by nothing -- so a censored cell said
     only "exceeded its budget", leaving a reader unable to tell an engine that
     spent two hours ingesting from one that reached the queries and stalled on
-    the ninth. The two censored cells of the October campaign are exactly that
+    the ninth. Two censored cells of one campaign were exactly that
     pair: SurrealDB at 500k was `build-running t=7046.8s` and never queried,
     while ArcadeDB's graph analytics cell was on `olap-lsqb_q9-start` after
     lsqb_q8 returned a p50 of 77,857 ms.
@@ -7188,14 +5171,8 @@ _MARK_MEANINGS = {
     "OOM": "killed at the cell's memory envelope rather than running out of time",
     "lost": "the connection dropped mid-query",
     "err": "the cell failed inside its budget; the note says what it reported",
-    # DECISIONS #117. Not a dash: on this page a dash means an operation the
-    # engine cannot express, and these ran; they measured our mistake.
-    # Not "is being measured again": the cell stays off the table until the measurement with the fix, and
-    # the note says what was wrong.
-    "re-run": "the cell was measured before a fix to our harness and stays off the table until it is measured again; the note says what was wrong",
-    # Not `re-run`: nothing was wrong with our harness, and the cell is not
-    # measured again at this release. Not `err`: the cell finished. A defect in
-    # the engine's own release decided what it returned (_one_list_note).
+    # Not `err`: the cell finished. A defect in the engine's own release decided
+    # what it returned (_one_list_note).
     "n/c": "not comparable, because a defect in the engine's release decided the cell's result; none of its numbers is printed, and the note names the defect",
 }
 
@@ -7260,7 +5237,7 @@ def _censored_entries(table):
     scales = _table_scales(table.get("id"))
     cols = list(table.get("columns") or [])
     # A MARK KEEPS A COMPARISON COMPLETE, SO IT NEEDS A COMPARISON TO JOIN.
-    # Found on the publish diff, 2026-09-21: docs_olap withholds its SF10 row
+    # Found on the publish diff,: docs_olap withholds its SF10 row
     # group under #103b -- DuckDB and both PostgreSQL arms MEASURED there and
     # are not printed -- so adding the five censored SF10 rows gave the page a
     # size at which every engine failed, hiding that three had succeeded. That
@@ -7564,7 +5541,7 @@ def _index_note(table_id, table=None):
     # Off the table: a withdrawn arm, and an ablation arm the page never
     # prints (OFF_PAGE_ARMS). Naming "PostgreSQL (tuned)" here put a name
     # under the documents table that no row on it carries.
-    _gone = {display_name(bk) for bk in _withdrawn_now(table_id)} | {
+    _gone = {
         display_name(bk) for bk in OFF_PAGE_ARMS} | {
         display_name(bk) for bk, tabs in ARM_TABLES.items() if table_id not in tabs}
     have = sorted({display_name(be) for be, d in decided.items()
@@ -7590,7 +5567,7 @@ def _index_note(table_id, table=None):
         return any(isinstance((e.get("metrics") or {}).get(col), dict)
                    and (e["metrics"][col] or {}).get("median") is not None
                    for e in ((table or {}).get("entries") or []) if not e.get("outcome"))
-    if table is None or _filled("index s") or _table_instrument(table_id) != "2026-10":
+    if table is None or _filled("index s"):
         where = "The time an index took to build is the index column."
     elif _filled("ingest+index total s"):
         where = ("This table has no index column: the time an index took to build is inside "
@@ -7605,7 +5582,7 @@ def _index_note(table_id, table=None):
     except Exception:  # noqa: BLE001 - the page must still build without it
         _timed = {}
     extra = []
-    if where.endswith("is the index column.") and _table_instrument(table_id) == "2026-10":
+    if where.endswith("is the index column."):
         for (ln, be), _decl in sorted(_timed.items()):
             words = _NONE_ARM_DDL_WORDS.get((ln, be))
             if ln == lane and words and display_name(be) in none:
@@ -7838,14 +5815,6 @@ def _censored_notes(table_id):
         notes.append(why)
         for e in engines:
             _declare_absence(table_id, e, None, kind, why)
-    refusal = _top_parts_refusal_note(table_id)
-    if refusal:
-        notes.append(refusal)
-    oom = _ts_doc_oom_note(table_id)
-    if oom:
-        notes.append(oom)
-        for backend in sorted({k[2] for k in _ts_doc_oom_cells()}):
-            _declare_absence(table_id, display_name(backend), None, "envelope", oom)
     return notes
 
 
@@ -7856,11 +5825,9 @@ def _censored_notes(table_id):
 # budget produce: the loop stopped at the budget, the row carries a p50 over
 # the iterations it took (the cold pass always runs, so there is at least one)
 # and says so in <q>_censored, <q>_budget_s and <q>_iters (the time-series
-# lane adds <q>_elapsed_s). The cell keeps its number; what the table owed and
-# did not print until 2026-09-15 is the sentence beside the counts note that
-# says which cells did NOT run the hundred iterations it announces -- three
-# skeleton triangle counts stood at 16, 5 and 18 iterations under a note that
-# said 100. Not a declared absence: the coverage gate reads absences as blanks
+# lane adds <q>_elapsed_s). The cell keeps its number; what the table owes is
+# the sentence beside the counts note that says which cells did NOT run the
+# hundred iterations it announces. Not a declared absence: the coverage gate reads absences as blanks
 # and this cell is not blank.
 #
 #   table id -> (lane, workload, {query field stem: column label},
@@ -7978,7 +5945,7 @@ def _query_budget_notes(table_id):
 
     notes = []
     of = f" of {asked}" if asked else ""
-    # ONE CELL READS AS ONE (2026-09-28): the plural-only template would print
+    # ONE CELL READS AS ONE: the plural-only template would print
     # "One query cells ... in those cells" the first time a table had a single
     # censored query (found on `repin-prep`, where the graph reads' budget
     # censors exactly one).
@@ -8027,7 +5994,7 @@ def _mutation_note(rows):
     itself (it names a decision number and the tier by its internal key), and
     it printed on the page as "(scale deep10m is not the one-million tier;
     #82d runs the two mutation operations at small only)" the first time a
-    dense table reached the preview (2026-10-06). The tiers are named the way
+    dense table reached a page. The tiers are named the way
     the table names them, and the sentence says the one fact.
     """
     ran, skipped = set(), set()
@@ -8230,7 +6197,7 @@ def _zero_growth_notes(table_id):
 
     A served row's disk cell is the server container's growth over its empty
     footprint (_disk_data). A growth of exactly zero after a corpus was loaded
-    is not a size, it is a floor: verified 2026-09-15 on SurrealDB 3.2.4, whose
+    is not a size, it is a floor: verified on SurrealDB 3.2.4, whose
     RocksDB store preallocates a write-ahead log of about 70 MB at start (the
     74.4 MB baseline is that log plus its manifest files), so 100,000 inserted
     rows changed the container's SizeRw by zero bytes and only the tiers whose
@@ -8282,7 +6249,7 @@ def _zero_growth_notes(table_id):
         mb, gib = f"{sb:.0f}", f"{sb / 1024:.2f}"
         # THE CAUSE WAS TRACED ON ONE ENGINE AND WAS BEING TOLD ABOUT ALL OF
         # THEM. The preallocated write-ahead log is SurrealDB 3.2.4's, verified
-        # 2026-09-15; the clause naming it was printed on every zero-growth
+        #; the clause naming it was printed on every zero-growth
         # server row, so FalkorDB's sentence read "its disk cell is 0.0 ...
         # which for SurrealDB's server includes a preallocated write-ahead log
         # of about 6 MB" -- another engine's explanation, wearing FalkorDB's
@@ -8293,7 +6260,7 @@ def _zero_growth_notes(table_id):
         # printed for all and the cause only where it was established. An
         # engine whose floor we have not traced gets a sentence that says what
         # was measured and stops, which is the honest shape.
-        # FALKORDB'S CAUSE, TRACED 2026-09-24 on the pinned image
+        # FALKORDB'S CAUSE, TRACED on the pinned image
         # (falkordb/falkordb@sha256:0a9fe4d1...): `CONFIG GET save` answers
         # "3600 1 300 100 60 10000", `appendonly` is "no", the data directory
         # /var/lib/falkordb/data starts empty, and the image declares no volume.
@@ -8329,7 +6296,7 @@ def _zero_growth_notes(table_id):
 
 def _counts_note(table_id, entries):
     """How many operations stand behind one cell, read from the lane's own
-    constants and the rows (user, 2026-09-13: the page said n=5 but not what
+    constants and the rows (user,: the page said n=5 but not what
     each repetition ran). Never typed here: the numbers come from the lane
     modules the runner executes, so a change there changes the sentence."""
     try:
@@ -8340,9 +6307,7 @@ def _counts_note(table_id, entries):
     scales = sorted({str(e.get("scale")) for e in entries})
     if table_id == "docs_oltp":
         n, c = f"{L['l1_tpc'].OLTP_OPS:,}", f"{L['l1_tpc'].CRUD_OPS:,}"
-        if _instrument_of("l1tpc") == "2026-10":
-            return [_gen(f"Each repetition runs {n} new-order transactions and {n} payments, then {c} each of the single-record insert, read, update, and delete; the p50 and p99 are over those, and OLTP ops/s is the rate of the two transactions together.", n, c)]
-        return [_gen(f"Each repetition runs {n} new-order transactions; the p50 and p99 are over those, and OLTP ops/s is their rate.", n)]
+        return [_gen(f"Each repetition runs {n} new-order transactions and {n} payments, then {c} each of the single-record insert, read, update, and delete; the p50 and p99 are over those, and OLTP ops/s is the rate of the two transactions together.", n, c)]
     if table_id == "docs_olap":
         n = str(L['l1_tpc'].OLAP_ITER)
         return [_gen(f"Each repetition runs every query {n} times; the p50 and p99 are over those runs.", n)]
@@ -8385,7 +6350,7 @@ def _counts_note(table_id, entries):
     if table_id == "l2olap":
         n = str(L['graph_common'].OLAP_ITERATIONS)
         return [_gen(f"Each repetition runs every query {n} times; the p50 and p99 are over those runs.", n)]
-    if table_id == "l3s" and _instrument_of("l3s") == "2026-10":
+    if table_id == "l3s":
         # NOT THE DENSE SENTENCE. The branch below describes the dense
         # multipass overlay (one query set, cold then warm passes over the same
         # queries, pooled over five builds), and on this table it printed "warm
@@ -8426,7 +6391,7 @@ def _counts_note(table_id, entries):
     if table_id in ("l3d", "l3s"):
         n = f"{L['l3d_dense'].N_QUERIES:,}"
         if not any("warm p50 ms" in (e.get("metrics") or {}) for e in entries):
-            # No second pass on this table (a skeleton, or a table before its
+            # No second pass on this table (a table before its
             # multipass overlay lands): the sentence must not describe one.
             return [_gen(f"Each timed pass answers {n} queries.", n)]
         builds = collections.Counter(int(st.get("n") or 0) for e in entries
@@ -8463,12 +6428,12 @@ def _withheld_recall_items():
 # ARANGODB 3.12.11 ANSWERS FROM ONE LIST (BUGS F175, DECISIONS #156). On that
 # release, once an IVF index has 10,000 or more lists, every multithreaded
 # query probes the same single list, so its top 10 is one document repeated.
-# The October rep 1 at 9.99M vectors (12,643 lists) finished with recall 0.0,
+# A rep at 9.99M vectors (12,643 lists) finished with recall 0.0,
 # while the 1M size (4,000 lists) answers correctly. The threshold is exact
 # (9,999 lists pass, 10,000 fail, whatever the data), the stored index is sound
 # (single-threaded queries on it answer with recall 1.0), and 3.12.12 passes
 # the minimal repro (`.notes/bench/repros/arango-recall-20261004/`); it is also
-# the cause of September's withheld 10M cell (F55). So this is no longer an
+# the cause of a withheld 10M cell (F55). So this is no longer an
 # unexplained broken index: the row stays on the table marked `n/c`, none of
 # its numbers is printed, and the sentence says why and that the next
 # measurement runs ArangoDB at its latest stable release (CAMPAIGN section 7
@@ -8481,10 +6446,10 @@ def _withheld_recall_items():
 # (make_paper_tables.WITHHELD_RECALL). A repeat on 3.12.11 is caught the same
 # way, and rows from a new release, or a sidecar written before those two
 # fields, keep the unexplained sentence below, so the declaration retires when
-# the version changes. October only: September's page stays as it was frozen.
+# the version changes.
 #
 # The floor is the defect's own signature, one list of about 800 vectors out
-# of ten million, so recall near 0 (0.0 in October, 0.0001 in September), well
+# of ten million, so recall near 0 (0.0 to 0.0001), well
 # under the freeze's 0.5; a withheld row between the two is some other failure
 # and keeps the unexplained sentence.
 _ONE_LIST_MIN_NLISTS = 10_000
@@ -8501,7 +6466,7 @@ def _one_list_release(engine_version):
 def _one_list_groups(table_id):
     """(backend, scale) -> the withheld rows behind this table that the
     one-list defect decided, as the freeze recorded them; {} when none is."""
-    if table_id != "l3d" or not _OCTOBER_ENV:
+    if table_id != "l3d":
         return {}
     out = {}
     for it in _withheld_recall_items():
@@ -8577,10 +6542,8 @@ def _withheld_recall_cells(table_id):
         # THE PRECISION, WHERE THE LANE HAS ARMS THAT DIFFER IN IT. This named
         # sqlite-vec's int8 arm "sqlite-vec" while the table prints its fp32 arm
         # at the same size, with a good recall, so the sentence read as a
-        # statement about the row beside it (the first October dense landing,
-        # 2026-10-06). The table's own label for the arm is the name to use.
-        label = (_dense_row_label(backend) if lane == "l3d" and _OCTOBER_ENV
-                 else display_name(backend))
+        # statement about the row beside it. The table's own label for the arm is the name to use.
+        label = _dense_row_label(backend) if lane == "l3d" else display_name(backend)
         try:
             size = scale_label(lane, scale)
         except Exception:  # noqa: BLE001
@@ -8590,7 +6553,7 @@ def _withheld_recall_cells(table_id):
         # and has to declare itself as one: the condition gate reads an
         # unregistered sentence as typed and fails every number in it as
         # UNPINNED, which is what it did the moment this generator (main) met
-        # the condition-source rule (october-instrument) in one tree.
+        # the condition-source rule in one tree.
         notes.append((backend, scale, _gen(
             f"{label} at {size} is withheld: its search answered with a recall@10 of "
             f"{max(recs):.4f} across {len(recs)} repetition(s), which is not a measurement of "
@@ -8599,240 +6562,6 @@ def _withheld_recall_cells(table_id):
             f"is claimed about it (BUGS F55).",
             label, size, f"{max(recs):.4f}", str(len(recs))), False))
     return notes
-
-
-# ARCADEDB 26.10.1 REFUSES THE TPC-H SF10 `top_parts` AGGREGATE AT ITS DEFAULTS
-# (DECISIONS #176, ArcadeData/arcadedb#9402, fixed by #9415 for 26.11.1). That
-# release gives all the queries of a JVM one budget for their in-heap buffers,
-# and the budget shrinks as cores are added, so on the benchmark host's 12 cores
-# the GROUP BY over about 2,000,000 parts is refused in both ArcadeDB arms. The
-# embedded row records the engine's own message ("Query heap budget exceeded");
-# the served row records the query's HTTP 500 and `PHASE query-top_parts-start`
-# as its last phase marker, and nothing else (the server's message is in its
-# log). The row then has no numbers, so it follows the precedent of the
-# ArangoDB one-list cell (_one_list_groups): it stays on the table marked `n/c`
-# in every cell, with ONE sentence that names the cause and the fix, and
-# nothing counts it as a measurement.
-#
-# KEYED ON THE ROWS, not on a cell: the l1tpc olap rows at tpch10 of an
-# ArcadeDB backend that failed with the refusal, whose release (engine_version,
-# else the image tag, else a sibling row of the same pin and backend) is
-# 26.10.1, and which carry no raised-budget stamp. A 26.11.1 row that completes
-# is clean, so nothing is declared and the cell prints its number; a row on any
-# other release, or one that failed some other way, keeps the failed-cell
-# sentence (_censored_notes).
-#
-# THE RAISED-BUDGET ROWS ARE NOT THE HEADLINE (DECISIONS #176, after #175 and
-# humemai/arcadedb-embedded-python#260): a row that carries
-# `arcadedb_query_max_heap_ram_mb` ran with the budget raised, an escape hatch
-# and no measurement at the engine's defaults. They are excluded here
-# (_query_budget_raised): from the declaration, from the cancelling of a failed
-# default row by a clean one (_censored_cells), and from the frozen rows the
-# tables are built from (main), so a repair-stage row never silently replaces
-# the refusal on the page.
-_REFUSAL_RELEASES = ("26.10.1",)
-_REFUSAL_FIXED_IN = _PAPER_RELEASE
-_REFUSAL_BUDGET_MESSAGE = "Query heap budget exceeded"
-_TOP_PARTS_GROUPS = 2_000_000    # TPC-H SF10: 200,000 parts per scale factor
-_REFUSAL_SCALE = "tpch10"
-_REFUSAL_ISSUES = ("ArcadeData/arcadedb#9402", "#9415")
-_REFUSAL_CACHE = None
-
-
-def _query_budget_raised(r):
-    """True for an l1tpc ArcadeDB row that ran with the query heap budget
-    raised (the repair stage, `arcadedb_query_max_heap_ram_mb` on the row)."""
-    return (r.get("lane") == "l1tpc" and str(r.get("backend") or "").startswith("arcadedb")
-            and bool(str(r.get("arcadedb_query_max_heap_ram_mb") or "").strip()))
-
-
-def _cpuset_cores(spec):
-    """The number of cores in a cpuset string such as "0-11", or None."""
-    n = 0
-    for part in str(spec or "").split(","):
-        m = re.fullmatch(r"\s*(\d+)(?:-(\d+))?\s*", part)
-        if not m:
-            return None
-        n += int(m.group(2) or m.group(1)) - int(m.group(1)) + 1
-    return n or None
-
-
-def _top_parts_refusals():
-    """(backend, scale) -> {"release": x.y.z, "cores": n or None} for the
-    ArcadeDB documents analytics cells the 26.10.1 query heap budget refused at
-    the engine's defaults, read from the run log (see the comment above)."""
-    global _REFUSAL_CACHE
-    if _REFUSAL_CACHE is not None:
-        return _REFUSAL_CACHE
-    pin = os.environ.get("BENCH_ENGINE_COMMIT", "").strip()
-
-    def at_pin(r):
-        if not pin:
-            return True
-        got = str(r.get("engine_commit") or "")
-        return bool(got) and (got.startswith(pin) or pin.startswith(got))
-
-    rows = [r for r in _run_log_rows()
-            if r.get("lane") == "l1tpc" and str(r.get("backend") or "").startswith("arcadedb")
-            and str(r.get("backend")) not in OFF_PAGE_ARMS and at_pin(r)
-            and str(r.get("instrument") or "") == "2026-10" and not _query_budget_raised(r)]
-
-    def release(r):
-        got = _one_list_release(r.get("engine_version")) or _one_list_release(r.get("server_image_ref"))
-        if got:
-            return got
-        sib = {_one_list_release(o.get("engine_version")) for o in rows
-               if o.get("backend") == r.get("backend") and o.get("engine_commit") == r.get("engine_commit")}
-        sib.discard(None)
-        return next(iter(sib)) if len(sib) == 1 else None
-
-    def refused(r):
-        err = str(r.get("error") or "")
-        if not err or err.startswith("timeout_after_") or r.get("oom_killed"):
-            return False
-        if _REFUSAL_BUDGET_MESSAGE in err:
-            return True
-        phases = re.findall(r"PHASE\s+(\S+)", err)
-        return bool(phases) and phases[-1] == "query-top_parts-start" and "500 Server Error" in err
-
-    out, by = {}, {}
-    for r in rows:
-        if r.get("workload") == "olap" and str(r.get("scale")) == _REFUSAL_SCALE:
-            by.setdefault((str(r.get("backend")), _REFUSAL_SCALE), []).append(r)
-    for key, rs in by.items():
-        if any(not str(r.get("error") or "").strip() for r in rs):
-            continue   # a clean default row stands: the cell has a number
-        if not all(refused(r) and release(r) in _REFUSAL_RELEASES for r in rs):
-            continue
-        cores = {_cpuset_cores(r.get("server_cpuset") or r.get("cpuset")) for r in rs}
-        out[key] = {"release": release(rs[0]), "cores": cores.pop() if len(cores) == 1 else None}
-    _REFUSAL_CACHE = out
-    return out
-
-
-def _top_parts_refusal_note(table_id):
-    """The one sentence the refused cells carry, or None. Filed under the
-    release move, which the page's list of changes states for ArcadeDB."""
-    if table_id != "docs_olap" or not _OCTOBER_ENV:
-        return None
-    found = _top_parts_refusals()
-    if not found:
-        return None
-    releases = sorted({v["release"] for v in found.values()})
-    cores = {v["cores"] for v in found.values()}
-    core_n = next(iter(cores)) if len(cores) == 1 else None
-    who = _join_and(sorted(display_name(b) for b, _ in found))
-    size = scale_label("l1tpc", _REFUSAL_SCALE).split(" (")[0]    # "TPC-H SF10", without the line-item count
-    groups = f"{_TOP_PARTS_GROUPS:,}"
-    host = f"on the benchmark host's {core_n} cores" if core_n else "on the benchmark host"
-    text = (f"The top parts query at {size} is refused on {who} at the engine's default settings: "
-            f"ArcadeDB {_join_and(releases)} gives each query a heap budget that shrinks as cores are "
-            f"added, and {host} it refuses this {groups}-group aggregate, while ArcadeDB "
-            f"{_REFUSAL_FIXED_IN} fixes it ({_REFUSAL_ISSUES[0]}, fixed by {_REFUSAL_ISSUES[1]}) and the "
-            f"{_REFUSAL_FIXED_IN} measurement re-measures it.")
-    return _next_item("release", _gen(text, who, size, *releases, groups, _REFUSAL_FIXED_IN,
-                                      *_REFUSAL_ISSUES, *([str(core_n)] if core_n else [])))
-
-
-# ARCADEDB'S EMBEDDED TIME-SERIES DOCUMENT LOAD RAN OUT OF MEMORY IN THE
-# BINDINGS WE SHIP (CAMPAIGN section 7 row 86; humemai/arcadedb-embedded-python
-# #294, fixed by #295). In the 26.10.1 campaign the l4 `arcadedb_ts_doc` ingest
-# at ts1000 was OOM-killed at the tier's memory cap: `Database.insert_many`
-# held the whole input three times at once (the Python list, one JSON text, one
-# parsed array on the Java heap). The defect is in our bindings and not in the
-# engine; the fix reads 10,000 rows at a time, and the 26.10.2 and 26.11.1
-# measurements run with it. The cell has no row to print, so it is a declared outcome of its own
-# (an `envelope` absence with one plain sentence), not an unexplained failure.
-#
-# KEYED ON THE ROWS, like _top_parts_refusals: the l4 ingest rows at ts1000 of
-# `arcadedb_ts_doc` at this publish's pin, every one OOM-killed (`oom_killed`),
-# and each recording an embedded bindings version below _BINDINGS_FASTER_FROM
-# (the first wheel built with the fix, 26.10.2). A row
-# that completes stands and the cell prints its number; a failure from a wheel
-# at or above the cut, or one that cannot be placed on a wheel, keeps the
-# generic failed-cell sentence. So the sentence goes by itself once a row from
-# the fixed bindings completes.
-_TS_OOM_BACKEND = "arcadedb_ts_doc"
-_TS_OOM_SCALE = "ts1000"
-_TS_OOM_HOSTS = 1000
-_TS_OOM_CACHE = None
-
-
-def _ts_doc_oom_cells():
-    """{("l4", "ts1000", "arcadedb_ts_doc", "ingest")} when the rows behind
-    this publish declare the cell, else the empty set (see the comment above)."""
-    global _TS_OOM_CACHE
-    if _TS_OOM_CACHE is not None:
-        return _TS_OOM_CACHE
-    pin = os.environ.get("BENCH_ENGINE_COMMIT", "").strip()
-
-    def at_pin(r):
-        if not pin:
-            return True
-        got = str(r.get("engine_commit") or "")
-        return bool(got) and (got.startswith(pin) or pin.startswith(got))
-
-    rows = [r for r in _run_log_rows()
-            if r.get("lane") == "l4" and r.get("backend") == _TS_OOM_BACKEND and at_pin(r)
-            and str(r.get("instrument") or "") == "2026-10"]
-    mine = [r for r in rows if str(r.get("scale")) == _TS_OOM_SCALE and r.get("workload") == "ingest"]
-    out = set()
-    if mine and all(str(r.get("error") or "").strip() or str(r.get("rc") or "") not in ("", "0", "None")
-                    for r in mine):
-        def killed(r):
-            return str(r.get("oom_killed")).strip().lower() in ("true", "1")
-
-        def wheel(r):
-            got = _one_list_release(r.get("engine_version"))
-            if got:
-                return got
-            sib = {_one_list_release(o.get("engine_version")) for o in rows
-                   if o.get("engine_commit") == r.get("engine_commit")}
-            sib.discard(None)
-            return next(iter(sib)) if len(sib) == 1 else None
-
-        if all(killed(r) and wheel(r) and _bindings_behind([wheel(r)]) for r in mine):
-            out = {("l4", _TS_OOM_SCALE, _TS_OOM_BACKEND, "ingest")}
-    _TS_OOM_CACHE = out
-    return out
-
-
-def _ts_doc_oom_note(table_id):
-    """The one sentence the declared cell carries, or None."""
-    if table_id != "l4" or not _OCTOBER_ENV or not _ts_doc_oom_cells():
-        return None
-    hosts = f"{_TS_OOM_HOSTS:,}"
-    return _next_item("ts_doc_oom", _gen(
-        f"ArcadeDB's embedded time-series document load at {hosts} hosts ran out of memory because the "
-        f"Python bindings held the whole load in memory at once; the bindings are fixed and the "
-        f"{_BINDINGS_FASTER_FROM} and {_PAPER_RELEASE} measurements run it again.",
-        hosts, _BINDINGS_FASTER_FROM, _PAPER_RELEASE))
-
-
-def _refusal_entries(table):
-    """Rows for the documents analytics cells the budget refusal decided: the
-    shape _not_comparable_entries builds, `n/c` in every cell, declared absent
-    with the sentence. Only at a size the table prints measured rows at."""
-    why = _top_parts_refusal_note(table.get("id"))
-    if not why:
-        return [], set()
-    measured_scales = {str(e.get("scale")) for e in table.get("entries") or []
-                       if not e.get("outcome")}
-    cols = list(table.get("columns") or [])
-    out = []
-    for (backend, scale) in sorted(_top_parts_refusals()):
-        if scale not in measured_scales:
-            continue
-        label = display_name(backend)
-        out.append({"backend": label, "backend_key": backend,
-                    "is_arcadedb": True, "precision": None, "scale": scale,
-                    "scale_label": scale_label("l1tpc", scale), "workload": "olap",
-                    "n_docs": None, "deployment": deployment_of(backend),
-                    "image": None, "version_name": None, "host": None,
-                    "outcome": "not comparable",
-                    "metrics": {c: {"text": "n/c"} for c in cols}})
-        _declare_absence(table.get("id"), label, None, "not comparable", why)
-    return out, ({"n/c"} if out else set())
 
 
 def _withheld_recall_notes(table_id):
@@ -8859,8 +6588,6 @@ def _declare_withheld_tier_absences(table):
     """
     tid = table.get("id")
     entries = table.get("entries", [])
-    if not _OCTOBER_ENV:
-        return   # September's page stays as it was frozen (DECISIONS #83)
     for backend, scale, note, known in _withheld_recall_cells(tid):
         if known:
             continue
@@ -8901,23 +6628,10 @@ def _drop_arms_not_printed_here(table):
 
 def _finish_table(table: dict) -> dict:
     _drop_arms_not_printed_here(table)
-    table["instrument"] = _table_instrument(table.get("id"))
-    october = table["instrument"] == "2026-10"
+    table["instrument"] = _PI.PUBLISH_INSTRUMENT
     base = list(table.get("conditions") or [])
-    if october:
-        head, tail = _oct_conditions(table)
-        at = 1 if base and base[0] == SKELETON_TABLE_NOTE else 0
-        base = base[:at] + head + base[at:] + tail
-    else:
-        # September's generated replacements for two typed numbers: the
-        # PostgreSQL client/server split and the view build time.
-        for note in (_surreal_pair_note(table),
-                     _jvm_memory_note(table),
-                     _pg_memory_note(table) if table.get("id") in ("docs_oltp", "docs_olap") else None,
-                     _gav_build_note(table) if table.get("id") == "l2olap" else None,
-                     _dense_cold_warm_note(table) if table.get("id") == "l3d" else None):
-            if note:
-                base.append(note)
+    head, tail = _oct_conditions(table)
+    base = head + base + tail
     _declare_withheld_tier_absences(table)
     table["conditions"] = (base
                            + _counts_note(table.get("id"), table.get("entries", []))
@@ -8933,72 +6647,6 @@ def _finish_table(table: dict) -> dict:
                            + _zero_growth_notes(table.get("id"))
                            + _unexpressible_notes(table.get("id"), table.get("entries", []))
                            + _withheld_recall_notes(table.get("id")))
-    # AN ARM THE SKELETON NEVER RAN IS NOT A GAP IN THE CAMPAIGN. The laptop
-    # placeholder runs one small corpus per lane and does not always run every
-    # workload of it: `surrealdb_tpc` has OLTP rows and no analytics row,
-    # while its served twin has both. The coverage gate is right to refuse an
-    # engine that is registered for a lane, prints nothing, and says nothing
-    # -- that is how a silently dropped arm looks. So the skeleton says it,
-    # derived from the rows rather than typed into a list that would go stale
-    # the first time the placeholder run changed shape. Campaign payloads are
-    # untouched: there an unrun arm IS a finding, and must stay one.
-    if SKELETON:
-        _lane_wl = _TABLE_LANE.get(table.get("id"))
-        if _lane_wl:
-            _lane, _wl = _lane_wl
-            _have = {str(e.get("backend_key") or "") for e in table.get("entries") or []}
-            # MERGED, for the reason every other note on this page is merged:
-            # these differ only in a name, and thirteen of them under one
-            # table is a loop's output. One sentence, every engine named.
-            # Not the off-page arms: they are absent from every table by
-            # decision (OFF_PAGE_ARMS), and saying "the skeleton did not cover"
-            # them names an arm the page does not print, which page_check's
-            # OFF-PAGE check refuses (found rehearsing the 26.10.1 publish).
-            # Nor an arm that does not run this table's workload (runner.ARM_RUNS) or is
-            # printed on another table only (ARM_TABLES): it is not owed here.
-            _norow = [display_name(_be) for _be in (LANES_RUNNER.get(_lane) or ())
-                      if _be not in _have and _be not in OFF_PAGE_ARMS
-                      and arm_runs(_lane, _wl, _be)
-                      and table.get("id") in ARM_TABLES.get(_be, (table.get("id"),))]
-            if _norow:
-                _who = _join_and(_norow)
-                _why = _gen(f"{_who} {'has' if len(_norow) == 1 else 'have'} no row on this "
-                            f"table: the skeleton is a placeholder run and did not cover this "
-                            f"workload for {'it' if len(_norow) == 1 else 'them'}. The real "
-                            f"run does.", _who)
-                table.setdefault("conditions", [])
-                if _why not in table["conditions"]:
-                    table["conditions"].append(_why)
-                for _n in _norow:
-                    _declare_absence(table.get("id"), _n, None, "unrun", _why)
-            # AND THE PARTIAL ROWS, which are the harder half. `surrealdb_tpc`
-            # HAS a row here: its OLTP run supplies ingest, disk and memory,
-            # so the arm looks present while every analytics cell is empty.
-            # A whole-row declaration does not cover it and a reader cannot
-            # tell those blanks from a slow engine. One sentence per engine,
-            # and a declaration per column, which is what the gate reads.
-            _partial = {}
-            for _e in table.get("entries") or []:
-                _miss = tuple(c for c in (table.get("columns") or [])
-                              if (_e.get("metrics") or {}).get(c) is None)
-                if not _miss or _e.get("outcome"):
-                    continue
-                _partial.setdefault(_miss, []).append(str(_e.get("backend")))
-            for _miss, _whos in sorted(_partial.items(), key=str):
-                _who = _join_and(_whos)
-                _why = _gen(f"{_who} {'prints' if len(_whos) == 1 else 'print'} no "
-                            f"{_join_and(list(_miss))} here: the skeleton is a placeholder "
-                            f"run and did not cover that workload for "
-                            f"{'this arm' if len(_whos) == 1 else 'those arms'}, though it ran "
-                            f"the ingest the other columns come from. The real run measures both.",
-                            _who, _join_and(list(_miss)))
-                table.setdefault("conditions", [])
-                if _why not in table["conditions"]:
-                    table["conditions"].append(_why)
-                for _n in _whos:
-                    for _c in _miss:
-                        _declare_absence(table.get("id"), _n, _c, "unrun", _why)
-
     # DECISIONS #111. Added AFTER every note and number is computed, so
     # nothing that averages, ranks or counts a measurement can see them.
     _marked, _marks = _censored_entries(table)
@@ -9008,16 +6656,7 @@ def _finish_table(table: dict) -> dict:
         table, {(str(m.get("backend_key")), str(m.get("scale"))) for m in _marked})
     _marked = _marked + _nc
     _marks = set(_marks) | _nc_marks
-    # The same mark for the documents analytics cells the 26.10.1 query heap
-    # budget refused at the engine's defaults (_top_parts_refusals).
-    _rf, _rf_marks = _refusal_entries(table)
-    _marked = _marked + _rf
-    _marks = set(_marks) | _rf_marks
-    # ONE LEGEND for every mark on the table: the censored rows' and the
-    # `re-run` cells the #117 withholding placed on rows that stand.
-    _marks = set(_marks) | {st["text"] for e in table.get("entries", [])
-                            for st in (e.get("metrics") or {}).values()
-                            if isinstance(st, dict) and st.get("text") == "re-run"}
+    # ONE LEGEND for every mark on the table.
     if _marks:
         table["conditions"] = table["conditions"] + _mark_legend(_marks)
     # ONE ROW PER ENGINE AND SIZE. A cell killed after its load finished
@@ -9025,7 +6664,7 @@ def _finish_table(table: dict) -> dict:
     # the error, and the table builder made a measured-looking entry of them
     # next to the censored one: the served SurrealDB SF10 analytics cell would
     # have printed twice, once with 55 minutes of ingest and once as `OOM`
-    # (rehearsal of qOE's landing, 2026-09-26). A cell is censored only when
+    # (rehearsal of qOE's landing). A cell is censored only when
     # it has no clean row, so an entry sharing its engine and size was built
     # from failed rows alone; the censored row and its note stand for it.
     # A censored cell takes its engine's measured entries at that scale off the table. The lifecycle table holds one entry per
@@ -9054,7 +6693,7 @@ def _finish_table(table: dict) -> dict:
                 DEPLOYMENT_ORDER.get(e.get("deployment"), 2),
                 PRECISION_ORDER.get(e.get("precision"), 2))
     table["entries"] = sorted(entries, key=key)
-    # THE HEAP BESIDE THE PEAK (DECISIONS #116 item 7, decided 2026-09-26: the
+    # THE HEAP BESIDE THE PEAK (DECISIONS #116 item 7, decided: the
     # memory column stays the peak an operator has to provision, with the heap
     # printed beside it for JVM engines). A JVM engine's peak sits close to the
     # heap it was given, so the setting belongs next to the number. From the
@@ -9083,7 +6722,7 @@ def _finish_table(table: dict) -> dict:
                 extra.append(m)
     tail = [m for m in ("peak memory GiB", "JVM heap", "disk GiB") if m in extra]
     cols = cols + [m for m in extra if m not in tail] + tail
-    # ONE ORDER FOR EVERY TABLE (2026-09-11): the workload's own columns in
+    # ONE ORDER FOR EVERY TABLE: the workload's own columns in
     # the order its spec lists them, then recall, then the ingest pair (rate,
     # then total), then peak memory, then disk. Tables used to put ingest
     # wherever the spec happened to list it.
@@ -9099,26 +6738,25 @@ def _finish_table(table: dict) -> dict:
             return 4
         if c == "JVM heap":
             return 4.5
+        if c == MEM_PHASE_COLUMN[1]:
+            return 4.6
         if c == "disk GiB":
             return 5
         return 0
     cols = sorted(cols, key=lambda c: (_rank(c), cols.index(c)))
     # And no column without a value in any row: a metric a lane records only
     # since a given date would otherwise print a column of dashes until the
-    # re-run lands (the analytical p99s, 2026-09-10).
+    # re-run lands (the analytical p99s).
     # A MARK IS NOT A VALUE. Without the outcome filter a column that only
     # censored rows carry would print as a column of `>2h` and nothing else,
     # which is a column the campaign never measured (DECISIONS #111).
     present = {m for e in table["entries"] if not e.get("outcome")
                for m, v in e.get("metrics", {}).items() if v is not None}
     table["columns"] = [c for c in cols if c in present]
-    note = ((OCT_PROSE.get(table["id"]) or {}).get("ingest", (None,))[0] if october
-            else INGEST_NOTES.get(table["id"]))
-    if october and note:
-        note = _docs_ingest_note(table, note)
+    note = (OCT_PROSE.get(table["id"]) or {}).get("ingest", (None,))[0]
     if note and any("ingest" in c for c in table["columns"]) and note not in table.get("conditions", []):
         table["conditions"] = list(table.get("conditions", [])) + [note]
-    # Which way is better, per column, so the header can say it (2026-09-11).
+    # Which way is better, per column, so the header can say it.
     # Rates, throughput, recall, and gain go up; times and footprints go down;
     # plain counts (trials, crashes raised) have no direction.
     dirs = {}
@@ -9145,7 +6783,6 @@ def _finish_table(table: dict) -> dict:
 # is by that -- but nothing with a hostname in it reaches the page.
 HOST_ROLE = {
     "mini": "benchmark machine",
-    "laptop": "development machine",
 }
 
 HOST_HARDWARE = {
@@ -9155,23 +6792,12 @@ HOST_HARDWARE = {
         "storage": "Samsung 980 PRO 2 TB NVMe",
         "os": "Ubuntu 26.04 LTS, Linux 7.0, Docker 29",
     },
-    # The development machine. It publishes nothing but the skeleton
-    # (DECISIONS #86), and the skeleton's own banner says so on every table.
-    "laptop": {
-        "cpu": "Intel Core Ultra X9 388H, 16 cores, 16 threads, 18 MiB L3",
-        "memory": "30 GiB",
-        "storage": "NVMe",
-        "os": "Ubuntu 26.04 LTS, Linux 7.0, Docker 29",
-    },
 }
 
 
-# The machine the published rows ran on, READ FROM THE ROWS since 2026-10
-# (DECISIONS #74 item 3): every row records bench_host. It was typed as "mini"
-# while no lane stamped the host, which is also why the skeleton could not
-# have been published honestly before. A payload whose rows disagree about the
-# host names them all; one with no bench_host at all (a September freeze)
-# falls back to the machine every September row ran on.
+# The machine the published rows ran on, READ FROM THE ROWS (DECISIONS #74 item 3): every row records bench_host. A
+# payload whose rows disagree about the host names them all; a host with no HOST_HARDWARE entry stops the export, so
+# a run from the development machine is not published. One with no bench_host at all falls back to the benchmark machine.
 PAGE_HOST = "mini"
 
 
@@ -9201,11 +6827,9 @@ def _dense_columns(spec, src_lane):
 
     Warm and gain come from the multipass overlay rather than from the lane,
     so they are not in any metrics list and have always been spliced in here.
-    Under the October instrument the rest of the list is OCT_TABLE_METRICS,
-    which adds the ingest and index timers as two columns (DECISIONS #74) and
-    the search-after-insert and search-after-delete passes (#82d); a skeleton
-    has no overlay, so the warm columns render empty and the banner names them
-    as a table the skeleton cannot draw.
+    The rest of the list is OCT_TABLE_METRICS, which has the ingest and index
+    timers as two columns (DECISIONS #74) and the search-after-insert and
+    search-after-delete passes (#82d).
     """
     cols = [label for _, label in _metrics_for("l3d", spec, src_lane)]
     warm = ["warm p50 ms", "warm p99 ms"]
@@ -9218,7 +6842,7 @@ def _dense_columns(spec, src_lane):
 
 
 def _restructure_tables(tables, rows):
-    """Page-level reshaping that no single lane can do (2026-09-11):
+    """Page-level reshaping that no single lane can do:
 
     - the sparse second-pass table folds into the sparse search table as warm
       columns, the way the dense table already shows both passes;
@@ -9231,10 +6855,11 @@ def _restructure_tables(tables, rows):
         mp = {(e["backend"], e["scale"]): e for e in by["l3smp"]["entries"]}
         for e in by["l3s"]["entries"]:
             m = e["metrics"]
-            if "p50 ms" in m:
-                m["cold p50 ms"] = m.pop("p50 ms")
-            if "p99 ms" in m:
-                m["cold p99 ms"] = m.pop("p99 ms")
+            for mm in (m, (e.get("client_twin") or {}).get("metrics") or {}):
+                if "p50 ms" in mm:
+                    mm["cold p50 ms"] = mm.pop("p50 ms")
+                if "p99 ms" in mm:
+                    mm["cold p99 ms"] = mm.pop("p99 ms")
             src = mp.get((e["backend"], e["scale"]))
             if src:
                 for k in ("warm p50 ms", "warm p99 ms", "gain"):
@@ -9251,149 +6876,96 @@ def _restructure_tables(tables, rows):
         t["source_urls"] = list(t.get("source_urls") or []) + list(by["l3smp"].get("source_urls") or [])
         tables.remove(by["l3smp"])
     elif "l3s" in by:
-        # NO SECOND PASS TO FOLD, the lane's own pass is still the cold one.
-        # The skeleton declares l3smp absent, and a sparse landing can arrive
-        # before its overlay; either way the single pass is the first after
-        # the build, so its columns are labelled cold as the folded table's
-        # are, and the query set's `cold p50 ms` is a column (page_check
-        # coverage A1 refused the skeleton's `p50 ms`, rehearsing the 26.10.1
-        # publish, 2026-10-02). No warm columns: there is no warm pass to show.
+        # NO SECOND PASS TO FOLD, the lane's own pass is still the cold one: a sparse
+        # landing can arrive before its overlay, and the single pass is the first after
+        # the build, so its columns are labelled cold as the folded table's are (the
+        # coverage gate refuses a bare `p50 ms`). No warm columns: there is no warm
+        # pass to show.
         t = by["l3s"]
         for e in t["entries"]:
-            m = e["metrics"]
-            if "p50 ms" in m:
-                m["cold p50 ms"] = m.pop("p50 ms")
-            if "p99 ms" in m:
-                m["cold p99 ms"] = m.pop("p99 ms")
+            for mm in (e["metrics"], (e.get("client_twin") or {}).get("metrics") or {}):
+                if "p50 ms" in mm:
+                    mm["cold p50 ms"] = mm.pop("p50 ms")
+                if "p99 ms" in mm:
+                    mm["cold p99 ms"] = mm.pop("p99 ms")
         t["columns"] = [{"p50 ms": "cold p50 ms", "p99 ms": "cold p99 ms"}.get(c, c) for c in t["columns"]]
-    # KEYED ON l1tpc ALONE, because that is the only table this split reads.
-    # It used to require l1 and l1olap to be present too, which was true in
-    # September and stops being true in October: DECISIONS #72 withdrew the
-    # synthetic document set, so those two lanes are not run, `all(...)` is
-    # false, and the page would quietly go back to one raw l1tpc table with
-    # every transactional and analytical column in it. The two retired tables
-    # are still removed when they exist, which is what the condition was
-    # actually for.
     if "l1tpc" in by:
-        # THE PAGE SHOWS THE STANDARD DOCUMENT BENCHMARKS ONLY (2026-09-11).
-        # The synthetic 20M-order workload and TPC measure different things
-        # (reads/inserts/updates against a new-order transaction; five bespoke
-        # aggregates against Q1/Q6), so one table per workload holding both
-        # was half blank. TPC-C is the transactions table, TPC-H the
-        # analytics table; the synthetic set stays in the paper and the
-        # harness.
+        # THE PAGE SHOWS THE STANDARD DOCUMENT BENCHMARKS ONLY: TPC-C is the
+        # transactions table, TPC-H the analytics table, with the dataset in the
+        # Size column, the way the graph section is split (the synthetic 20M-order
+        # workload stays in the paper and the harness).
         def clone(e, keep):
             n = dict(e)
             n["metrics"] = {k: v for k, v in e["metrics"].items() if k in keep}
+            if e.get("client_twin"):
+                n["client_twin"] = dict(e["client_twin"], metrics={k: v for k, v in e["client_twin"]["metrics"].items()
+                                                                    if k in keep})
             return n
-        OLTP_KEEP = {"new-order p50 ms", "new-order p99 ms", "OLTP ops/s",
-                     "ingest documents/s", "ingest total s", "peak memory GiB", "disk GiB"}
-        OLAP_KEEP = {"Q1 p50 ms", "Q1 p99 ms", "Q6 p50 ms", "Q6 p99 ms",
-                     "ingest documents/s", "ingest total s", "peak memory GiB", "disk GiB"}
-        _oct = _instrument_of("l1tpc") == "2026-10"
-        # The October set is a REPLACEMENT, matching OCT_TABLE_METRICS: six
-        # transactional operations (#82a) and five analytical queries (#82),
+        # Six transactional operations (#82a) and five analytical queries (#82),
         # each a warm median, with a ninety-ninth percentile on the headline
         # query only and the cold column on the analytical table, where the
         # split applies (#89).
-        OCT_OLTP_COLS = ["new-order p50 ms", "new-order p99 ms", "payment p50 ms",
-                         "insert p50 ms", "read p50 ms", "update p50 ms",
-                         "delete p50 ms", "OLTP ops/s"]
-        OCT_OLAP_COLS = ["Q1 p50 ms", "Q1 p99 ms", "Q6 p50 ms", "top parts p50 ms",
-                         "ship mode p50 ms", "by month p50 ms", "cold first query ms"]
-        # The ingest/index split rides with the total (FAIRNESS F14), as on
-        # every other October table; without it here the documents tables
-        # printed the total alone although their rows record both phases
-        # (humemai/arcadedb-embedded-python#8).
-        # In the order every other October table prints them, and named in
-        # "columns" up front: the notes that read a table's columns (the
-        # ingest/index split sentence among them) run before the columns an
-        # entry carries beyond that list are appended, so a column left to
-        # that append printed out of order and without its sentence.
+        OLTP_COLS = ["new-order p50 ms", "new-order p99 ms", "payment p50 ms",
+                     "insert p50 ms", "read p50 ms", "update p50 ms",
+                     "delete p50 ms", "OLTP ops/s"]
+        OLAP_COLS = ["Q1 p50 ms", "Q1 p99 ms", "Q6 p50 ms", "top parts p50 ms",
+                     "ship mode p50 ms", "by month p50 ms", "cold first query ms"]
+        # The ingest/index split rides with the total (FAIRNESS F14), then the
+        # two memory columns and the disk. Named in "columns" up front: the notes
+        # that read a table's columns (the ingest/index split sentence among them)
+        # run before the columns an entry carries beyond that list are appended,
+        # so a column left to that append printed out of order and without its
+        # sentence.
         SHARED_ORDER = ["ingest documents/s", "ingest total s", "ingest s", "index s",
-                        "peak memory GiB", "disk GiB"]
-        SHARED_COLS = set(SHARED_ORDER)
-        if _oct:
-            OLTP_KEEP = set(OCT_OLTP_COLS) | SHARED_COLS
-            OLAP_KEEP = set(OCT_OLAP_COLS) | SHARED_COLS
-        src = by["l1tpc"]
+                        "peak memory GiB", MEM_PHASE_COLUMN[1], "disk GiB"]
+        OLTP_KEEP = set(OLTP_COLS) | set(SHARED_ORDER)
+        OLAP_KEEP = set(OLAP_COLS) | set(SHARED_ORDER)
         # The tuned PostgreSQL arm answered its question (image defaults do
         # not distort the comparison: 2.33 vs 2.39 ms new-order, 337 vs 331 ms
         # Q1) and stays in the rows; on the page it read as a second engine
-        # (user, 2026-09-13, DECISIONS #76).
-        src = dict(src, entries=[e for e in src["entries"] if e.get("backend_key") not in OFF_PAGE_ARMS])
+        # (DECISIONS #76).
+        src = dict(by["l1tpc"], entries=[e for e in by["l1tpc"]["entries"] if e.get("backend_key") not in OFF_PAGE_ARMS])
         base = {"withheld_scales": [], "withheld_reason": None,
                 "source_paths": src.get("source_paths"), "source_urls": src.get("source_urls")}
         tables.append({"id": "docs_oltp", "title": "Document OLTP",
-                       "dataset": ("TPC-C new-order on the TPC-H tables (SF1, SF10)" if _oct else
-                                   "TPC-C new-order on the TPC-H SF1 tables"),
+                       "dataset": "TPC-C new-order on the TPC-H tables (SF1, SF10)",
                        "conditions": list(src["conditions"]),
-                       "columns": (OCT_OLTP_COLS + SHARED_ORDER if _oct else
-                                   ["new-order p50 ms", "new-order p99 ms", "OLTP ops/s"]),
+                       "columns": OLTP_COLS + SHARED_ORDER,
                        "entries": [clone(e, OLTP_KEEP) for e in src["entries"]], **base})
-        # THE ARCADEDB ROWS ARE WITHDRAWN FROM THIS TABLE (2026-09-14, BUGS F42
-        # and F43). Cross-engine answer checking, built for October, found that
-        # the two queries ArcadeDB ran here were not the questions the
-        # comparators answered: our Q1 text computed four aggregates where every
-        # comparator computes five, and Q6's discount bound excluded the 0.05
-        # bucket because the engine evaluates `>= 0.05` against a decimal literal
-        # as strictly greater (reproduced on fifty rows: `= 0.05` returns none,
-        # `BETWEEN` is correct). Both errors make ArcadeDB's numbers faster than
-        # the truth, so the cells come down rather than stand with a caveat, and
-        # October re-measures them with the answers checked.
-        #
-        # SEPTEMBER'S ROWS ONLY. October runs the corrected query texts, and its
-        # answers are checked: at SF1 all ten engines, both ArcadeDB arms
-        # included, return the same digest for all five queries, and at SF10
-        # both ArcadeDB arms match DuckDB and SQLite on all five. Applied to the
-        # October payload too, this block withdrew those checked rows and
-        # printed September's reason under a table whose own condition
-        # sentences described ArcadeDB's SF10 cells (caught rehearsing qOE's
-        # landing, 2026-09-25, BUGS F127).
-        _withdrawn = [] if _oct else [e for e in src["entries"]
-                                      if str(e.get("backend", "")).lower().startswith("arcadedb")]
-        _olap_entries = [clone(e, OLAP_KEEP) for e in src["entries"] if e not in _withdrawn]
-        # GENERATED, NOT TYPED. Under the October instrument every sentence
-        # must be one or the other, and this one was a bare string: September
-        # never checked, so the withdrawal that has been on the page since
-        # 2026-09-14 failed the first October-instrument payload to be gated.
-        _withdrawal = _gen("ArcadeDB has no row on this table. Answer checking built for the next campaign "
-                       "found that the two queries it ran here were not the questions the comparators "
-                       "answered: one of the five aggregates was missing from our Q1 text, and its Q6 "
-                       "excluded the boundary discount because the engine reads `>= 0.05` against a "
-                       "decimal literal as strictly greater. Both errors made its numbers faster than "
-                       "the truth, so they are withdrawn rather than shown with a caveat, and the next "
-                       "run measures them with every engine's answer compared.", "0.05")
-        # THE SENTENCE IS NOT THE DECLARATION. A reader gets the prose above; the
-        # coverage gate reads `declared_absences`, and under the 2026-10
-        # instrument it fails a registered arm that has neither a row nor an
-        # entry there. September never hit it because that check is skipped on
-        # the older instrument, so the withdrawal has been prose-only since
-        # 2026-09-14 and the first October-instrument payload to be gated --
-        # the skeleton -- failed on both ArcadeDB arms.
-        for _e in _withdrawn:
-            _declare_absence("docs_olap", str(_e.get("backend")), None, "withdrawn", _withdrawal)
         tables.append({"id": "docs_olap", "title": "Document OLAP",
-                       "dataset": ("TPC-H Q1, Q6, top parts, ship mode, and by month (SF1, SF10)" if _oct else
-                                   "TPC-H Q1 and Q6 at SF1"),
-                       "conditions": list(src["conditions"]) + ([_withdrawal] if _withdrawn else []),
-                       "columns": (OCT_OLAP_COLS + SHARED_ORDER if _oct else
-                                   ["Q1 p50 ms", "Q1 p99 ms", "Q6 p50 ms", "Q6 p99 ms"]),
-                       "entries": _olap_entries, **base})
-        for i in ("l1", "l1olap", "l1tpc"):
-            if i in by:
-                tables.remove(by[i])
+                       "dataset": "TPC-H Q1, Q6, top parts, ship mode, and by month (SF1, SF10)",
+                       "conditions": list(src["conditions"]),
+                       "columns": OLAP_COLS + SHARED_ORDER,
+                       "entries": [clone(e, OLAP_KEEP) for e in src["entries"]], **base})
+        tables.remove(by["l1tpc"])
     return tables
 
 
+def _refuse_selector():
+    """BENCH_INSTRUMENT is not a publish-side selector: unset and 2026-11 both mean 2026-11, anything else is refused."""
+    sel = os.environ.get("BENCH_INSTRUMENT", "").strip()
+    if sel and sel != _PI.PUBLISH_INSTRUMENT:
+        raise SystemExit(f"REFUSING: BENCH_INSTRUMENT={sel} selects an instrument this tooling does not publish. This tooling "
+                         f"publishes {_PI.PUBLISH_INSTRUMENT} rows only; unset it (DECISIONS #196).")
+
+
 def main() -> int:
+    _refuse_selector()
     if not FROZEN.exists():
         print(f"missing {FROZEN}; run make_paper_tables.py first", file=sys.stderr)
         return 2
 
     rows = list(csv.DictReader(FROZEN.open()))
-    # The PQ row family is the next instrument's: a PQ row without instrument 2026-11 is not printed
-    rows = bench_common.drop_unstamped_pq_rows(rows)
+    _PI.refuse_other_instruments(rows, FROZEN_NAME)
+    _refuse_gav_without_supertype(rows)
+    # THE SERVED ARCADEDB CLIENT TWIN IS NOT THE HEADLINE. Every served ArcadeDB cell runs twice: through the official
+    # driver (role `headline`) and through the benchmark's lean HTTP client (role `sensitivity`). The twin's rows are kept
+    # apart from every table's rows, so they are never pooled into a headline median, and are printed beside the
+    # headline cell as `client_twin`.
+    _twin_rows = [r for r in rows if str(r.get("arcadedb_http_client_role") or "") == "sensitivity"]
+    if _twin_rows:
+        _twin_ids = {id(r) for r in _twin_rows}
+        rows = [r for r in rows if id(r) not in _twin_ids]
     # THE CAP RULE, AT REPORT TIME (DECISIONS #188): an arm-cell whose pass-1 median is over its rule cap is shown censored
     # (_censored_cells) and its numbers are not shown, so its rows leave the tables here. Strict-class rows are the
     # durability table's and stay.
@@ -9410,25 +6982,6 @@ def main() -> int:
             rows = [r for r in rows if id(r) not in _gone]
     global _FROZEN_ROWS
     _FROZEN_ROWS = rows
-    # F39: rows frozen before 2026-09-13 stamp the SurrealDB SDK version as the
-    # embedded engine; the core is a function of the pinned wheel, resolved once.
-    import surreal_common
-    for _r in rows:
-        if str(_r.get("engine_version") or "").startswith("surrealdb-embedded:"):
-            _r["engine_version"] = surreal_common.legacy_stamp_fixup(_r["engine_version"])
-
-    # THE RAISED-BUDGET ROWS ARE NOT THE HEADLINE (DECISIONS #176; the comment
-    # above _top_parts_refusals). A row that carries
-    # `arcadedb_query_max_heap_ram_mb` ran with the engine's query heap budget
-    # raised, so it is left out of every table, and the cell it repaired keeps
-    # the engine's default outcome: the refusal sentence, or the number a
-    # release that completes at its defaults measured.
-    _raised = [r for r in rows if _query_budget_raised(r)]
-    if _raised:
-        print(f"  {len(_raised)} ArcadeDB documents rows ran with the query heap budget raised: "
-              f"not the headline, left off the tables")
-        rows = [r for r in rows if not _query_budget_raised(r)]
-
     # WITHHELD: ArcadeDB rows whose engine_version identifies no build.
     #
     # Not rendered, and said out loud rather than dropped quietly. A number we
@@ -9448,13 +7001,12 @@ def main() -> int:
         print("    -> re-run these lanes at the pin; they are the cheap ones")
         rows = [r for r in rows if r not in _unusable]
 
-    # ONE SETTING PER TABLE. The 2026-10 instrument runs every timed write
-    # twice, once at each durability setting (DECISIONS #90), and the frozen
-    # set holds both. Every table except the durability table reports the
-    # relaxed setting, as its condition says, so a strict row is dropped here
-    # whenever a relaxed row of the same cell exists. Without this the
-    # skeleton's write cells were medians over one relaxed and one strict run
-    # (BUGS F52). An engine with no setting has strict rows only and keeps them.
+    # ONE SETTING PER TABLE. The instrument runs every timed write twice, once at
+    # each durability setting (DECISIONS #90), and the frozen set holds both.
+    # Every table except the durability table reports the relaxed setting, as its
+    # condition says, so a strict row is dropped here whenever a relaxed row of
+    # the same cell exists (BUGS F52). An engine with no setting has strict rows
+    # only and keeps them.
     _all_rows = list(rows)
     _has_relaxed = {(r.get("lane"), r.get("workload"), r.get("backend"), str(r.get("scale")))
                     for r in rows if str(r.get("durability_class")) == "relaxed"}
@@ -9476,7 +7028,7 @@ def main() -> int:
     # the workload that produced it, so aggregating over the union puts each
     # number in exactly the cell it belongs to. The vector and graph lanes are
     # unaffected: they run a single workload each.
-    MERGED_WORKLOAD_LANES = {"l1", "l1tpc"}
+    MERGED_WORKLOAD_LANES = {"l1tpc"}
     # ... with one exception, added when memory arrived. The merge is sound for
     # a metric that appears in only ONE workload's rows: aggregating over the
     # union puts each number in the cell it belongs to. Memory is not like
@@ -9499,6 +7051,10 @@ def main() -> int:
         # have sprung it.
         grouped[(r["lane"], r["scale"], r["backend"], wl,
                  r.get("gav") or "")].append(r)
+    twin_grouped = defaultdict(list)
+    for r in _twin_rows:
+        wl = "" if r["lane"] in MERGED_WORKLOAD_LANES else r.get("workload", "")
+        twin_grouped[(r["lane"], r["scale"], r["backend"], wl, r.get("gav") or "")].append(r)
 
     tables = []
     for lane, spec in LANES.items():
@@ -9514,12 +7070,13 @@ def main() -> int:
                 continue
             # Row-level, not group-level: merged lanes (l1, l1tpc) group both
             # workloads under one key with a blank label, so a group-level
-            # test never matched and the per-query OLAP table was empty from
-            # the day the merge landed until 2026-09-11 (BUGS F30).
+            # test never matched and the per-query OLAP table was empty (BUGS F30).
+            _trs = twin_grouped.get((ln, scale, backend, workload, gav), [])
             if spec.get("only_workload"):
                 rs = [r for r in rs if r.get("workload") == spec["only_workload"]]
                 if not rs:
                     continue
+                _trs = [r for r in _trs if r.get("workload") == spec["only_workload"]]
             # The no-settle ablation is MEASURED but not PUBLISHED, and the
             # page was the only place it appeared. Neither paper reports it:
             # T4 is a clean head-to-head, one ArcadeDB row against three
@@ -9543,7 +7100,7 @@ def main() -> int:
             # digest). When the runner has since been re-pinned and the re-run
             # has not landed, the config's image is the wrong one: the Neo4j
             # graph rows measured on 5-community would have carried the
-            # 2026.07.1 digest and name (publish rehearsal, 2026-09-11). Same
+            # 2026.07.1 digest and name (publish rehearsal). Same
             # digest: keep the config's ref and its tag name. Different: the
             # row's digest on the config's repository, and the row's own
             # engine_version as the name.
@@ -9586,7 +7143,7 @@ def main() -> int:
                 "backend": label,
                 # The runner's own key for the arm, so a gate can hold the
                 # table against runner.LANES without parsing the label
-                # (page_check._check_lane_roster, 2026-09-18).
+                # (page_check._check_lane_roster).
                 "backend_key": backend,
                 "is_arcadedb": "arcade" in backend,
                 # Precision is a FIELD, not a suffix on the name. The page
@@ -9604,7 +7161,7 @@ def main() -> int:
                 # OUR served rows name the image that ran (the row's
                 # server_image_ref, arcadedb-c25:<commit>), never the registry's
                 # default string; the page carried arcadedata/arcadedb:26.8.1@sha256
-                # on every served ArcadeDB row until 2026-09-08 (BUGS F16, the
+                # on every served ArcadeDB row (BUGS F16, the
                 # field the label fix did not touch).
                 "image": (rs[0].get("server_image_ref") or rs[0].get("server_image") or image)
                          if str(backend).startswith("arcadedb") else image,
@@ -9642,21 +7199,24 @@ def main() -> int:
                 "host": rs[0].get("host") or None,
                 "metrics": {},
             }
+            twin_metrics = {}
             for field, label in _metrics_for(lane, spec, src_lane):
-                if field == "disk_data_mb" and backend in spec.get("in_memory", ()):
-                    # An engine with no disk at all reads as a blank with the
-                    # note below, not as 0.00 (SurrealDB at mem://).
-                    continue
-                src = rs
+                src, tsrc = rs, _trs
                 if field in MEM_FIELDS and src_lane in MERGED_WORKLOAD_LANES:
                     # See MEM_FIELDS above: this lane's rows were merged across
                     # workloads, which is right for a metric that only one
                     # workload produces and wrong for one both produce. Report
                     # the transactional run rather than a median straddling two.
                     src = [r for r in rs if r.get("workload") == "oltp"] or rs
+                    tsrc = [r for r in _trs if r.get("workload") == "oltp"] or _trs
                 got = _agg(src, field)
                 if got is not None:
                     entry["metrics"][label] = got
+                if tsrc:
+                    tgot = _agg(tsrc, field)
+                    if tgot is not None:
+                        twin_metrics[label] = tgot
+            _attach_twin(entry, twin_metrics, _trs)
             if lane == "l3d":
                 _beam_extras(entry, rs)
             if entry["metrics"]:
@@ -9685,7 +7245,7 @@ def main() -> int:
             # lines in one table (F5) on top of the double-measurement this
             # REPLACE was written to prevent (Qdrant at 1.295 and again at 1.342).
             #
-            # 2026-09-07, REVERSED for the tier: the overlay wins whenever it
+            #, REVERSED for the tier: the overlay wins whenever it
             # exists. The 8d6af9475 campaign put single-pass 10M rows in the
             # CSV with ArcadeDB in them, the rule above then dropped the
             # overlay, and the page showed one timed pass per build (cold
@@ -9697,6 +7257,8 @@ def main() -> int:
             # overlay or, with no overlay on disk, all CSV.
             _mp = _dense_overlay_entries("deep10m")
             if _mp:
+                _campaign_deep = {e["backend_key"]: e for e in entries if e["scale"] == "deep10m"}
+                _carry_beam(_mp, _campaign_deep)
                 entries = [e for e in entries if e["scale"] != "deep10m"]
                 entries.extend(_mp)
             # The 1M size reads its own multipass overlay the same way, so the
@@ -9713,8 +7275,7 @@ def main() -> int:
                 # passes. Replacing the 1M entries with the overlay's dropped
                 # the six #82d columns from the table, and the page's own
                 # sentence about them ("run at 1M vectors") stood over columns
-                # that were not there (the first October dense landing,
-                # 2026-10-06; page_check A1 caught it). They are carried over
+                # that were not there (page_check A1 caught it). They are carried over
                 # the way peak memory and disk already are: from the campaign
                 # cell of the same arm at the same size. An overlay row keeps
                 # its own value where it has one.
@@ -9726,6 +7287,7 @@ def main() -> int:
                     for _col in _mutate_cols:
                         if _col in _src and _col not in _e["metrics"]:
                             _e["metrics"][_col] = _src[_col]
+                _carry_beam(_mps, _campaign_small)
                 entries = [e for e in entries if e["scale"] != "small"]
                 entries.extend(_mps)
         if entries:
@@ -9749,10 +7311,9 @@ def main() -> int:
                 "id": lane,
                 "title": spec["title"],
                 "dataset": spec["dataset"],
-                # An October table starts from nothing: its sentences come from
-                # OCT_PROSE and the generators (_finish_table), never from the
-                # September list above.
-                "conditions": ([] if _instrument_of(src_lane or lane) == "2026-10" else spec["conditions"]),
+                # A table starts from nothing: its sentences come from
+                # OCT_PROSE and the generators (_finish_table).
+                "conditions": [],
                 "columns": ([label for _, label in _metrics_for(lane, spec, src_lane)]
                             if lane != "l3d" else _dense_columns(spec, src_lane)),
                 "withheld_scales": withheld,
@@ -9790,20 +7351,12 @@ def main() -> int:
     # The function stays because the SciPy paper still publishes these rows and
     # a future page may want them WITH the matrix. Restoring them means adding
     # the matrix too, and re-adding their cells to page_check.MAPPING.
-    # A SKELETON CARRIES NO CELL IT DID NOT MEASURE (DECISIONS #86). The
-    # sparse second-pass table, the client/server decomposition, and the
-    # Python-cost table are all built from artifacts of the bench host's
-    # campaign, not from the skeleton's own rows, and dropping a laptop banner
-    # over a mini measurement is the same lie in the other direction. They are
-    # withheld and NAMED in the payload, so the reader can see which of the
-    # October page's tables the skeleton could not draw and why.
-    # The durability table sits beside the session-cost table (DECISIONS #90)
-    # and is built from the same 2026-10 rows the write tables are; a September
-    # payload has no cell that ran twice, so it returns None and the page does
-    # not carry it.
-    _extras = [_l4_table(rows), _lifecycle_table(rows), _durability_table(_all_rows)]
-    if not SKELETON:
-        _extras = [_sparse_multipass_table()] + _extras + [_e4_table(), _python_cost_table()]
+    # The sparse second-pass table, the client/server decomposition, and the
+    # Python-cost table are built from artifacts of the campaign, not from the
+    # frozen rows; the durability table sits beside the session-cost table
+    # (DECISIONS #90) and is built from the same rows the write tables are.
+    _extras = [_sparse_multipass_table(), _l4_table(rows, _twin_rows), _lifecycle_table(rows, _twin_rows), _durability_table(_all_rows),
+               _e4_table(), _python_cost_table()]
     for extra in _extras:
         if extra and extra["entries"]:
             tables.append(extra)
@@ -9825,13 +7378,8 @@ def main() -> int:
     for _t in tables:
         if any("disk GiB" in e.get("metrics", {}) for e in _t.get("entries", [])):
             _t.setdefault("conditions", [])
-            _dn = OCT_DISK_NOTE if _table_instrument(_t.get("id")) == "2026-10" else DISK_NOTE
-            if _dn not in _t["conditions"]:
-                _t["conditions"].append(_dn)
-    # EVERY TABLE SAYS IT, not only the banner at the top (DECISIONS #86). A
-    # reader who lands on one table, or who screenshots one, must see it.
-    # THE DURABILITY CLASS, ON THE TABLE THAT PAYS FOR IT (DECISIONS #81).
-    # Before the skeleton note, so the placeholder warning stays first.
+            if OCT_DISK_NOTE not in _t["conditions"]:
+                _t["conditions"].append(OCT_DISK_NOTE)
     # WHAT THE COLD COLUMN IS, OR WHY THERE IS NONE (DECISIONS #89). One
     # clause per table, from the rows: the lane either records a first-query
     # timing or records the reason a cold and warm split does not apply to it,
@@ -9844,32 +7392,6 @@ def main() -> int:
             _t.setdefault("conditions", [])
             if _eq not in _t["conditions"]:
                 _t["conditions"].append(_eq)
-    for _t in tables:
-        _ages = _ldbc_age_note(_t.get("id"), rows)
-        if _ages:
-            _t.setdefault("conditions", [])
-            if _ages not in _t["conditions"]:
-                _t["conditions"].append(_ages)
-        _one_way = _knows_one_way_note(_t.get("id"), rows)
-        if _one_way:
-            _t.setdefault("conditions", [])
-            if _one_way not in _t["conditions"]:
-                _t["conditions"].append(_one_way)
-        # The rest of what later measurements change about a table, each
-        # keyed on a field its rows will record (BUGS F174, DECISIONS #153,
-        # #154, #157). The documents OLTP table carries its warm-up sentence
-        # in place of the cold-column one (_cold_note); the durability table
-        # has no cold column and carries it here.
-        for _note in (_lsqb_id_form_note(_t.get("id"), rows),
-                      _gav_scope_note(_t.get("id"), rows),
-                      _gav_supertype_note(_t.get("id"), rows),
-                      _sparse_whole_record_note(_t.get("id"), rows),
-                      _dense_id_index_note(_t.get("id"), rows),
-                      _docs_warmup_note(_t.get("id"), rows) if _t.get("id") == "durability" else None):
-            if _note:
-                _t.setdefault("conditions", [])
-                if _note not in _t["conditions"]:
-                    _t["conditions"].append(_note)
     for _t in tables:
         _cold = _cold_note(_t.get("id"), rows, _t.get("columns") or [])
         if _cold:
@@ -9906,7 +7428,7 @@ def main() -> int:
             _t.setdefault("conditions", [])
             if _note not in _t["conditions"]:
                 _t["conditions"].append(_note)
-    # A CLEAN STOP THAT DOES NOT END CLEANLY (2026-10-02, milvus-io/milvus#53947).
+    # A CLEAN STOP THAT DOES NOT END CLEANLY (milvus-io/milvus#53947).
     # The restart lane sends the image's own stop signal and records the exit
     # code; 0, or 143 for a process that ends by the signal after its shutdown
     # hook ran (every JVM here), is a normal end. Milvus ends every clean stop
@@ -9935,14 +7457,12 @@ def main() -> int:
     # THE OVERRIDES A READER MEETS (CAMPAIGN section 7 row 21). PROTOCOL.md
     # section 7 lists every default this benchmark overrides, and the rows its
     # last column marked NOWHERE were named in no sentence under any table. One
-    # sentence per override, under every October table that shows an arm that
+    # sentence per override, under every table that shows an arm that
     # runs it, generated from the rows (override_registry.py); page_check refuses a
     # table that shows such an arm and prints no sentence saying so, and
     # fairness_check refuses a row that lacks the engine's own read-back.
     import override_registry as _OV
     for _t in tables:
-        if _table_instrument(_t.get("id")) != "2026-10":
-            continue
         _lane = (_TABLE_LANE.get(_t.get("id")) or (None,))[0]
         for _text, _vals in _OV.notes_for_table(
                 _t.get("id"), _lane,
@@ -9951,22 +7471,12 @@ def main() -> int:
             _t.setdefault("conditions", [])
             if _note not in _t["conditions"]:
                 _t["conditions"].append(_note)
-    if SKELETON:
-        for _t in tables:
-            _t.setdefault("conditions", [])
-            if SKELETON_TABLE_NOTE not in _t["conditions"]:
-                _t["conditions"].insert(0, SKELETON_TABLE_NOTE)
-    _october = bool(tables) and all(_table_instrument(_t.get("id")) == "2026-10" for _t in tables)
     payload = {
         "source": f"benchmarks/experiments/results/{FROZEN_NAME}",
         "generator": "benchmarks/experiments/export_web.py",
-        # DECISIONS #86. Present and false on a real payload, so a reader (and
-        # refresh_web_page's live publish) tests a field that always exists
-        # rather than an absence that could mean "old file".
-        "skeleton": SKELETON,
-        "skeleton_banner": SKELETON_BANNER if SKELETON else None,
-        "gates_waived": SKELETON_WAIVERS if SKELETON else [],
-        "skeleton_absent_tables": SKELETON_ABSENT if SKELETON else {},
+        # Always present and false: this tooling publishes measured rows only, and a reader tests a field that always
+        # exists rather than an absence that could mean "old file".
+        "skeleton": False,
         # Read from the rows, not asserted here. The literal "26.8.1" survived a
         # re-pin and two campaigns because nothing recomputed it (DECISIONS #49).
         "arcadedb_version": _arcadedb_identity(rows),
@@ -10009,8 +7519,8 @@ def main() -> int:
             c for c in (r.get("engine_commit") for r in rows
                         if str(r.get("backend", "")).startswith("arcadedb")) if c}),
         # The instrument the whole payload ran on; a table carries its own.
-        "instrument": "2026-10" if _october else "2026-09",
-        "conditions": _global_conditions(tables, _october),
+        "instrument": _PI.PUBLISH_INSTRUMENT,
+        "conditions": _global_conditions(tables),
         # SAID THE WAY A READER READS IT. This sentence used our words for
         # our own plumbing -- which "lanes" record a host, what "this file"
         # can prove -- and the fact it carries is simpler than that: some
@@ -10031,7 +7541,7 @@ def main() -> int:
             # that must have hardware on record.
             "hosts": _host_hardware(hosts, rows),
             "cpuset": _dominant_cpuset(rows),
-            "cpu_idle_note": CPU_IDLE_NOTE,
+            "cpu_idle_note": _cpu_idle_note(rows),
             "memory_cap_by_size": MEM_BY_SCALE,
             "jvm_heap_by_size": HEAP_BY_SCALE,
         },
@@ -10043,23 +7553,10 @@ def main() -> int:
     # source-path loop and the entry count below see it; the global
     # conditions above were computed before it existed, so its text cells
     # never enter the repetition count.
-    _mm = _multimodel_table(payload["tables"]) if _october else None
+    _mm = _multimodel_table(payload["tables"])
     if _mm:
-        if SKELETON:
-            # The every-table skeleton banner speaks of timings; this table has
-            # none, so it says what a skeleton means for a coverage table.
-            _mm["conditions"].insert(0, _gen(
-                "This table carries no number. On the skeleton it is derived "
-                "from placeholder tables, so it shows which engines the October "
-                "page will compare on each workload, not anything measured yet."))
         tables.append(_mm)
         payload["tables"].append(_mm)
-    # WHAT THE COMING MEASUREMENTS CHANGE, last among the page's conditions and
-    # read off the FINISHED tables: _finish_table adds the query words and the
-    # repetition sentences, so the list cannot be built with the global
-    # conditions above, which are computed before it runs.
-    if _october:
-        payload["conditions"] += _next_measurement_note(payload["tables"])
 
     # A table can draw on more than one artifact, so this is a LIST. It was a
     # single string, and on 2026-08-13 that made the page lie: the DEEP-10M
@@ -10083,8 +7580,7 @@ def main() -> int:
         table["source_url"] = f"{REPO}/{paths[0]}" if paths else None
 
     # WHICH SENTENCES WERE GENERATED, with the strings they inserted, so
-    # page_check can hold every other sentence to the registry (October) or
-    # to its pins (September). Recorded after _finish_table, which is where
+    # page_check can hold every other sentence to the registry. Recorded after _finish_table, which is where
     # most generators run.
     payload["condition_provenance"] = {"generated": list(_GENERATED)}
     # Last thing before the bytes: take our paper trail out of the prose, then

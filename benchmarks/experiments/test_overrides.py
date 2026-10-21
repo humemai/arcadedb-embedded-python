@@ -271,17 +271,6 @@ def test_a_row_of_a_batch_arm_must_stamp_the_limit_and_say_whether_it_was_read_o
                 if f["key"] == "arcadedb_http_body_limit"]
 
 
-def test_rows_on_the_pin_that_had_no_body_limit_are_not_judged_for_it():
-    """The October pin (a September commit) has no `arcadedb.server.httpBodyContentMaxSize`: the override is not in force for its rows."""
-    old = _row(lane="l2", backend="arcadedb_graph_server", server_query_max_heap_elements=5000000, engine_commit="417314c18abc")
-    assert OV.stamp_findings([old]) == ([], 1)                                      # only the cap is judged
-    new = dict(old, engine_commit="d36b4ca3a1")
-    assert [f["key"] for f in OV.stamp_findings([new])[0]] == ["arcadedb_http_body_limit"]
-    # and no sentence about it may stand under a table built only from such rows
-    assert not [n for n in OV.notes_for_table("l2", "l2", ["arcadedb_graph_server"], [dict(old, lane="l2")]) if "request body" in n[0]]
-    assert [n for n in OV.notes_for_table("l2", "l2", ["arcadedb_graph_server"], [dict(new, lane="l2")]) if "request body" in n[0]]
-
-
 def test_the_runner_stamps_what_the_engine_lists_and_labels_a_request(monkeypatch):
     """observe_server's body-limit read-back, against a stub server that lists the setting, one that does not (a pre-26.10.1 build),
     and one that cannot be reached."""
@@ -340,7 +329,7 @@ def test_the_runner_stamps_what_the_engine_lists_and_labels_a_request(monkeypatc
 # page_check's half: a table that shows the arm and prints no sentence fails
 
 def _table(tid, backend, conditions):
-    return {"id": tid, "instrument": "2026-10", "entries": [{"backend_key": backend}],
+    return {"id": tid, "instrument": OV.INSTRUMENT, "entries": [{"backend_key": backend}],
             "conditions": conditions}
 
 
@@ -377,7 +366,7 @@ def test_a_table_with_no_such_arm_owes_nothing():
 
 
 def test_the_artifact_backed_e4_table_owes_the_cap_sentence_from_the_runner_constant():
-    e4 = {"id": "e4", "instrument": "2026-10", "entries": [{"backend": "1,000 documents"}], "conditions": []}
+    e4 = {"id": "e4", "instrument": OV.INSTRUMENT, "entries": [{"backend": "1,000 documents"}], "conditions": []}
     assert any("arcadedb_query_cap" in f for f in OV.sentence_findings([e4], lambda tid: None, None))
     (text, values), = [n for n in OV.notes_for_table("e4", None, [], []) if "ArcadeDB server" in n[0]]
     assert "5,000,000" in text and values == ["5,000,000"]
@@ -399,7 +388,7 @@ def test_notes_for_table_follow_the_arms_on_the_table_and_its_lane():
 # fairness_check's half: a row without the engine's own answer fails
 
 def _row(**kw):
-    base = {"instrument": "2026-10", "scale": "micro", "workload": "search", "cpuset": "0-11"}
+    base = {"instrument": OV.INSTRUMENT, "scale": "micro", "workload": "search", "cpuset": "0-11"}
     base.update(kw)
     return base
 
@@ -425,8 +414,8 @@ def test_a_failed_read_back_is_named_on_the_finding():
     assert all("ConnectionError" in f["text"] for f in found)
 
 
-def test_september_rows_and_other_lanes_are_not_judged():
-    assert OV.stamp_findings([_row(lane="l3s", backend="elasticsearch_sparse", instrument="2026-09")]) == ([], 0)
+def test_rows_of_another_instrument_and_other_lanes_are_not_judged():
+    assert OV.stamp_findings([_row(lane="l3s", backend="elasticsearch_sparse", instrument="")]) == ([], 0)
     assert OV.stamp_findings([_row(lane="l1", backend="duckdb")]) == ([], 0)
 
 

@@ -6,8 +6,7 @@ worth agreeing on, and twice now it was not: every LDBC age loaded as 0, so the
 filtered three-hop read matched nobody on nine engines for two months (BUGS
 F146), and the graph analytics triangle count is 0 on every engine on the LDBC
 projection, because each friendship is stored once from the smaller id to the
-larger and a directed 3-cycle cannot exist in that graph (validity hunt
-2026-10-04). Both were visible in the rows; nothing looked.
+larger and a directed 3-cycle cannot exist in that graph. Both were visible in the rows; nothing looked.
 
 What this flags, per (lane, workload, scale, query), on the majority digest:
 
@@ -22,7 +21,7 @@ What this flags, per (lane, workload, scale, query), on the majority digest:
 Answers that are constant BY DESIGN are listed in BY_DESIGN with the reason, so
 a flag is either a defect or a sentence someone wrote down.
 
-    python3 degenerate_check.py results/runs.jsonl [--instrument 2026-10]
+    python3 degenerate_check.py results/runs.jsonl [--instrument 2026-11]
 """
 import argparse
 import ast
@@ -30,6 +29,8 @@ import collections
 import csv
 import json
 import sys
+
+from publish_instrument import PUBLISH_INSTRUMENT
 
 NULL = "<null>"
 # (lane, query, column or None) -> why the answer is constant by construction
@@ -74,7 +75,7 @@ def by_design(lane, q, col):
 
 
 def self_test():
-    """October's three F146 answers, profiled the way record_result now does, must each be flagged."""
+    """The three F146 answers, profiled the way record_result now does, must each be flagged."""
     import os
     import tempfile
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -105,7 +106,7 @@ def self_test():
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("rows")
-    ap.add_argument("--instrument", default="2026-10")
+    ap.add_argument("--instrument", default=PUBLISH_INSTRUMENT)
     a = ap.parse_args()
     groups = collections.defaultdict(lambda: collections.Counter())
     keep = {}

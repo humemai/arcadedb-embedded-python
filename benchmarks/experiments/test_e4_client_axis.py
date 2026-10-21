@@ -288,7 +288,7 @@ def test_main_measures_every_http_arm_under_both_clients_and_names_them(run_prob
 
 def test_the_artifact_stays_loadable_where_the_old_one_was(run_probe):
     rc, art, _ = run_probe("requests")
-    for arm in ("embedded", "inproc_http", "docker_http"):            # export_web's three October arms keep their keys and fields
+    for arm in ("embedded", "inproc_http", "docker_http"):            # export_web's three arms keep their keys and fields
         assert set(art["results"][arm]) == {"1", "10", "100"} and "p50_ms" in art["results"][arm]["10"]
 
 
@@ -302,23 +302,17 @@ def test_the_row_lists_the_clients_it_measured(run_probe):
 # ------------------------------------------------------------------------------------------------- the page table
 @pytest.fixture(scope="module")
 def EW():
-    """export_web, loaded as a PRIVATE module (skeleton mode, so it does not insist on the pin's artifact directory) so the shared
-    `export_web` other tests import is untouched."""
-    mp = pytest.MonkeyPatch()
-    mp.setenv("BENCH_SKELETON", "1")
-    mp.setenv("BENCH_ENGINE_COMMIT", "417314c18")
-    try:
-        spec = importlib.util.spec_from_file_location("export_web_e4_client_axis", HERE / "export_web.py")
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-    finally:
-        mp.undo()
+    """export_web, loaded as a PRIVATE module so the shared `export_web` other tests import is untouched (the session's
+    fixture results/ holds the pin's e4 artifact directory the module insists on)."""
+    spec = importlib.util.spec_from_file_location("export_web_e4_client_axis", HERE / "export_web.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
     return mod
 
 
 def _artifact(arms, arm_clients=None, client_names=None, rep=1):
-    meta = {"rows": 200000, "engine_version": "26.10.1", "engine_commit": "417314c18", "reps": 15, "warmup": 3, "cpuset": "0-11",
-            "mem_cap": "8g", "heap": "6g", "ts_utc": "2026-10-07T00:00:00+00:00", "host": "h", "row_count_agreement": "ok"}
+    meta = {"rows": 200000, "engine_version": "26.11.1", "engine_commit": "261100fix", "reps": 15, "warmup": 3, "cpuset": "0-11",
+            "mem_cap": "8g", "heap": "6g", "ts_utc": "2026-11-07T00:00:00+00:00", "host": "h", "row_count_agreement": "ok"}
     if arm_clients:
         meta["arm_clients"], meta["client_names"] = arm_clients, client_names
     ms = {"embedded": 1.0, "inproc_http": 2.5, "inproc_http_lean": 1.5, "docker_http": 3.0, "docker_http_lean": 2.0}

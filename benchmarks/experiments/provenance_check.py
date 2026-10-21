@@ -41,7 +41,9 @@ import sys
 from collections import Counter
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-RESULTS = os.path.join(HERE, "results")
+sys.path.insert(0, HERE)
+import publish_instrument  # noqa: E402
+RESULTS = str(publish_instrument.results_dir())
 
 # The keys the harness has used for "which engine produced this row". Kept as a
 # list rather than normalised away, because old result files are immutable and
@@ -134,29 +136,16 @@ FEEDS = {
     # fed the superseded dev-era dense rows and are deliberately NOT listed,
     # so the unmapped-input check reports them as the dead overlays they are.
     # batch1 was read by the time-series half and never mapped: a blind spot.
-    "T5": [None],   # time-series rows come from load_canonical() since 2026-09-08   # None -> make_paper_tables.dense_mp_dir() at import
+    "T5": [None],   # time-series rows come from load_canonical(); None -> make_paper_tables.dense_mp_dir() at import
 }
 import make_paper_tables as _MPT
-# A SKELETON HAS NO OVERLAY (DECISIONS #86). dense_mp_dir() and the pinned
-# sparse selection are both bench-host artifacts of a campaign the skeleton is
-# not part of; asking for them here would refuse the skeleton before a single
-# check ran. The skeleton's own rows feed every table it draws, and
-# BENCH_RUNS_JSONL names the log they came from.
-SKELETON = os.environ.get("BENCH_SKELETON") == "1"
-if SKELETON:
-    FEEDS["T5"] = []
-    FEEDS["T4"] = [os.environ.get("BENCH_RUNS_JSONL", "runs.jsonl")]
-else:
-    FEEDS["T5"][0] = os.path.basename(_MPT.dense_mp_dir())
-    _sparse = _MPT._pinned_sparse_rows()
-    if _sparse is None:
-        raise SystemExit("pinned sparse rows incomplete; T4 has no fallback since 2026-09-08")
-    if not _sparse:
-        # Absent, not partial: the sparse arm has not run at this pin. T4 has
-        # no October feed yet and the table is simply not drawn; refusing here
-        # would block every landing until the sparse stage (8 of 10) finished.
-        FEEDS["T4"] = []
-    FEEDS["T4"] = ["runs.jsonl"]
+FEEDS["T5"][0] = os.path.basename(_MPT.dense_mp_dir())
+_sparse = _MPT._pinned_sparse_rows()
+if _sparse is None:
+    raise SystemExit("pinned sparse rows incomplete; T4 has no fallback")
+# An empty selection is absent, not partial: the sparse arm has not run at this
+# pin, and refusing here would block every landing until the sparse stage finished.
+FEEDS["T4"] = ["runs.jsonl"]
 
 # Top-level result FILES that feed published tables, as opposed to the overlay
 # DIRECTORIES above. This map exists because the audit had a blind spot exactly
@@ -184,11 +173,8 @@ else:
 # is also the cleanest evidence for the l4 gap: e2, l1, l1tpc, l2, l3d, l3s,
 # and no l4 at all.
 FEEDS_FILES = {
-    # T5's time-series block reads load_canonical() (runs.jsonl) since
-    # 2026-09-08; results/l4_tsbs.jsonl (2026-08-08, 26.8.1) feeds nothing.
-    # A skeleton reads its own log instead (DECISIONS #86).
-    "T2/T3/T5": [os.environ.get("BENCH_RUNS_JSONL", "runs.jsonl")
-                 if SKELETON else "runs.jsonl"],
+    # T5's time-series block reads load_canonical() (runs.jsonl); results/l4_tsbs.jsonl feeds nothing.
+    "T2/T3/T5": ["runs.jsonl"],
 }
 
 # Engine changes big enough that measuring on the wrong side of one produces a
@@ -268,10 +254,8 @@ def caption_versions():
     a provenance claim, and until something compares it to the data it is
     exactly as trustworthy as a driver that hardcodes its own version.
     """
-    # _MPT.GENERATED, not a literal "generated": the generator writes each
-    # campaign's artifacts into its own directory (make_paper_tables
-    # .GENERATED_NAME), and this module already imports it, so the name is
-    # taken from the definition rather than repeated here.
+    # _MPT.GENERATED, not a literal "generated": this module already imports
+    # it, so the name is taken from the definition rather than repeated here.
     paper = os.path.join(
         os.environ.get("BENCH_PAPER_DIR", _MPT.GENERATED), "paper.tex")
     paper = os.path.normpath(paper)
@@ -520,7 +504,7 @@ def caption_n():
     # freeze holds one lane, so the OTHER tables are left unregenerated and
     # this reports N=0 behind cells their stale text still claims -- four BAD
     # findings about the document table during an e2-only landing, none of
-    # them about anything being published. The paper was dropped on 2026-09-11
+    # them about anything being published. The paper was dropped
     # (DECISIONS #72) and these files are not on the page; a landing scoped to
     # a lane regenerates the PAGE, and auditing the paper against a freeze
     # that was never meant to fill it is a false finding.
@@ -550,13 +534,6 @@ def caption_n():
         M.mmm, M.mmm_rec = _tag(_mmm), _tag(_rec)
         M.write = lambda name, body: captured.__setitem__(name, body)
         rows = M.load_canonical()
-        # T4 and T5 are the campaign's tables and a skeleton does not generate
-        # them (see make_paper_tables.main); asking for them here would raise
-        # the same refusal one function deeper.
-        if SKELETON:
-            print("  skeleton: no paper tables are generated, so there are no "
-                  "captions to check against\n")
-            return 0
         for fn in (M.tabular_table, M.graph_table, M.sparse_table,
                    M.dense_ts_table):
             try:
@@ -706,8 +683,8 @@ def check_schema_homogeneity(rows):
                      "backend", "lane", "scale", "workload", "rep", "tier",
                      "topology", "rc", "error", "oom", "disk_note",
                      # DIAGNOSTICS, not measurements: what the engine chose or
-                     # logged, captured only once the capture worked (BUGS F1-F4,
-                     # 2026-09-02/03). A family split on these is a split in
+                     # logged, captured only once the capture worked (BUGS F1-F4).
+                     # A family split on these is a split in
                      # instrumentation history, not in what was measured.
                      "graph_build_cache", "graph_build_access", "driver_")
     def measured(r):
@@ -754,7 +731,7 @@ def check_schema_homogeneity(rows):
             sets = [measured(r) for r in brs]
             union, inter = set().union(*sets), set.intersection(*sets)
             # The disk fields come from a post-run sampler that can miss a
-            # rep (one SF1 rep per SurrealDB graph arm, 2026-09-13); a null
+            # rep (one SF1 rep per SurrealDB graph arm); a null
             # beside four numbers is a sampler miss, not a lane measuring a
             # different thing, and the cell's median stands on the rest.
             diff = {f for f in (union - inter) if "disk" not in f}
@@ -1027,8 +1004,7 @@ def main():
         print(f"  NOT CHECKED: {_e.__class__.__name__}: {_e}")
     bad += bad_schema
 
-    # CARRIED-FORWARD ROWS ARE PROVENANCE, and until 2026-09-19 nothing said
-    # so. `carried_forward_from` and `carried_forward_reason` are written by
+    # CARRIED-FORWARD ROWS ARE PROVENANCE. `carried_forward_from` and `carried_forward_reason` are written by
     # the merge and read by NOTHING (BUGS F72's sweep): 79 frozen rows were
     # measured in an earlier campaign file and carried across an ArcadeDB
     # re-pin under DECISIONS #42, which is sound -- a comparator's number does
@@ -1039,8 +1015,7 @@ def main():
     try:
         import csv as _csv
         _carried = {}
-        with open(os.path.join(_repo_root(), "benchmarks", "experiments",
-                               "results", "runs_paper.csv"), newline="") as _fh:
+        with open(os.path.join(RESULTS, "runs_paper.csv"), newline="") as _fh:
             for _r in _csv.DictReader(_fh):
                 _src = _r.get("carried_forward_from")
                 if _src:
@@ -1063,7 +1038,7 @@ def main():
              if not args.table else ""))
     if not _CAPTION_CHECK_RAN and not args.table:
         print("  caption-vs-data check skipped: no paper.tex (the page carries "
-              "no paper captions since 2026-09-11; BENCH_PAPER_DIR would enable it)")
+              "no paper captions; BENCH_PAPER_DIR would enable it)")
     return 1 if bad else 0
 
 

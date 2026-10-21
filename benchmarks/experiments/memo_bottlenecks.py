@@ -17,8 +17,11 @@ import os
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PAYLOAD = os.path.join(HERE, "results", "web_benchmarks.json")
-OUT = os.path.join(HERE, "results", "generated", "memo_bottlenecks.html")
+sys.path.insert(0, HERE)
+import publish_instrument  # noqa: E402
+RESULTS = str(publish_instrument.results_dir())
+PAYLOAD = os.path.join(RESULTS, "web_benchmarks.json")
+OUT = os.path.join(RESULTS, "generated", "memo_bottlenecks.html")
 
 
 # ------------------------------------------------------------------ data
@@ -329,7 +332,7 @@ TEMPLATE = r'''<title>ArcadeDB Bottlenecks</title>
 </style>
 <main>
   <header>
-    <p class="meta">ArcadeDB, engine build {pin}, one machine, September 2026</p>
+    <p class="meta">ArcadeDB, engine build {pin}, one machine</p>
     <h1>Where ArcadeDB wins and where it loses, by data model</h1>
     <p class="lede">Every number below is read from the project page's published data: a median of five runs on the same host, every engine in the same container envelope, one job at a time. Ratios are ArcadeDB against the best other engine on that row; on vector rows the best engine is the fastest one whose recall is at least ArcadeDB's. Latencies are p50 over 1,000 queries per pass for search rows, 1,000 transactions or writes for the transactional rows, and 100 runs per rep for analytical queries. Causes are marked as our reading: we measured the engine, we did not profile it.</p>
   </header>
@@ -371,7 +374,7 @@ TEMPLATE = r'''<title>ArcadeDB Bottlenecks</title>
     <tbody>
       <tr><td class="model">TPC-H Q1, Q6</td><td class="how">Standard query text over a DOCUMENT TYPE <code>LineItem</code> with a NOTUNIQUE index on <code>l_shipdate</code>: <code>db.query("sql", q).to_list()</code>. 100 runs per rep, first run recorded as cold, median of the rest as warm.</td><td class="how">Same query text. DuckDB: native tables created from the same frames. PostgreSQL: tables loaded with COPY. SQLite: the same index on <code>l_shipdate</code>.</td></tr>
       <tr><td class="model">Graph analytics</td><td class="how">openCypher: <code>MATCH (p:Person)-[:KNOWS]-&gt;(:Person) RETURN p.id, count(*) AS d ORDER BY d DESC LIMIT 10</code>; <code>MATCH (a)-[:KNOWS]-&gt;(b) WHERE a.city = b.city RETURN a.city, count(*)</code>; <code>MATCH (p)-[:KNOWS]-&gt;(f) RETURN p.city, avg(f.age), count(*)</code>. Run once with <code>CREATE GRAPH ANALYTICAL VIEW ... VERTEX TYPES (Person) EDGE TYPES (KNOWS) ... UPDATE MODE OFF</code> built beforehand (its build time is on the page) and once without it. 100 runs per rep.</td><td class="how">The identical Cypher on Neo4j and LadybugDB, no view or projection on either.</td></tr>
-      <tr><td class="model">Time-series 12h aggregate</td><td class="how"><code>SELECT ts.timeBucket('1h', ts) AS h, avg(uu) AS v FROM Point WHERE ts &gt;= a AND ts &lt; b GROUP BY h ORDER BY h</code> on the native TIMESERIES type. 100 runs per rep. (Until 2026-09-12 the embedded arm wrote <code>BETWEEN a AND b-1</code>, which the engine answers about 3x slower; the row is re-run with the half-open form.)</td><td class="how">QuestDB: the same window with <code>SAMPLE BY 1h</code>. DuckDB and SQLite: an hourly bucket over the same rows.</td></tr>
+      <tr><td class="model">Time-series 12h aggregate</td><td class="how"><code>SELECT ts.timeBucket('1h', ts) AS h, avg(uu) AS v FROM Point WHERE ts &gt;= a AND ts &lt; b GROUP BY h ORDER BY h</code> on the native TIMESERIES type. 100 runs per rep.</td><td class="how">QuestDB: the same window with <code>SAMPLE BY 1h</code>. DuckDB and SQLite: an hourly bucket over the same rows.</td></tr>
     </tbody>
   </table></div>
   <p class="note"><strong>Our reading.</strong> One thread walks the records, materialises each document, and evaluates the expression per record: no column pruning, no batching, no parallel scan. PostgreSQL is also a row store on page-at-a-time storage and is {pg_scan_ratio} faster on the same two scans, so this is the executor, not the page layout.</p>
@@ -438,12 +441,6 @@ TEMPLATE = r'''<title>ArcadeDB Bottlenecks</title>
 '''
 
 
-PAYLOADS = {
-    "live": PAYLOAD,
-    "next": os.path.join(HERE, "results", "web_benchmarks_next.json"),
-}
-
-
 def triage(payload_path):
     """Rank every cell by how far ArcadeDB trails, as candidates to investigate.
 
@@ -453,7 +450,7 @@ def triage(payload_path):
     ranks by the gap, so the list is decided by the data rather than by what
     last month's author found interesting.
 
-    Filing upstream is a standing part of this benchmark (the user, 2026-09-22:
+    Filing upstream is a standing part of this benchmark (the user:
     "upstream is generally interested in the weaknesses of arcadedb ... you can
     file issues upstream with detailed java explanations ... make it a routine
     in this benchmarking"). This is the input to that routine; CAMPAIGN.md holds
@@ -463,13 +460,10 @@ def triage(payload_path):
     comparator in that column -- so most lines are "not the category leader"
     rather than a defect. The gap is a place to LOOK, never a finding.
 
-    READ THE PAYLOAD THE LANDINGS WRITE, AND COMPARE WITHIN ONE SCALE (#136).
-    The memo renders the live page (`web_benchmarks.json`), but a landing writes
-    the preview payload (`web_benchmarks_next.json`), so in October a triage of
-    the live page described the September engine. And pooling scales compared
-    our best value at one scale with the field at another, which hid ArcadeDB
-    being last of six at TPC-H scale 10 (Q1 32x the median engine). Every line
-    therefore names its scale, and the header names the payload and the engine.
+    COMPARE WITHIN ONE SCALE (#136). Pooling scales compared our best value at
+    one scale with the field at another, which hid ArcadeDB being last of six
+    at TPC-H scale 10 (Q1 32x the median engine). Every line therefore names its
+    scale, and the header names the payload and the engine.
     """
     with open(payload_path, encoding="utf-8") as fh:
         payload = json.load(fh)
@@ -492,8 +486,8 @@ def triage(payload_path):
                 # RANK BY THE MEDIAN COMPARATOR, NOT THE BEST ONE. Gap-to-best puts
                 # category differences on top -- SQLite's in-process B-tree seek at
                 # 2 us, an in-process C library's memory against a JVM's -- and
-                # buries a cell where we are genuinely behind the field. On
-                # 2026-09-22 the gap-to-best list ranked the time-series last-point
+                # buries a cell where we are genuinely behind the field. The
+                # gap-to-best list once ranked the time-series last-point
                 # query first, where we are mid-pack with MongoDB and QuestDB, and
                 # put the point lookup where we are 6th of 8 further down. Two dead
                 # ends were investigated in that order before the ranking was fixed.
@@ -521,10 +515,8 @@ def triage(payload_path):
 
 def main():
     if "--triage" in sys.argv:
-        # --payload next (default: the rows the landings write), live (the page
-        # the memo renders), or a path.
-        choice = sys.argv[sys.argv.index("--payload") + 1] if "--payload" in sys.argv else "next"
-        path = PAYLOADS.get(choice, choice)
+        # --payload <path> names another payload; the default is the page's own.
+        path = sys.argv[sys.argv.index("--payload") + 1] if "--payload" in sys.argv else PAYLOAD
         if not os.path.exists(path):
             raise SystemExit(f"memo: no payload at {path}")
         return triage(path)
