@@ -143,8 +143,10 @@ def test_arcadedb_is_refused_in_the_comparator_mode_and_comparators_in_the_relea
 
 
 def test_check_refuses_another_instrument_in_the_environment():
+    # refused by whichever layer sees it first: bench_common at import (it measures one instrument), or the generator's own check
     r = run(["--check"], env_extra={"BENCH_INSTRUMENT": "2026-10"})
-    assert r.returncode != 0 and "mix" in (r.stdout + r.stderr)
+    out = r.stdout + r.stderr
+    assert r.returncode != 0 and ("mix" in out or "measures only" in out), out[-400:]
 
 
 def test_second_list_lanes_need_the_flag():
