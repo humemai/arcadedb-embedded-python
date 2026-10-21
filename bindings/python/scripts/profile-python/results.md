@@ -8,10 +8,10 @@ This directory keeps one current benchmark artifact and one short summary.
 
 Run used to produce it:
 
-from `bindings/python`:
+from the repository root:
 
 ```bash
-python scripts/profile-python/profile_bindings.py --preset full --runs 3 --records 5000 --person-count 2000 --vector-records 1500 --vector-k 10 --query-runs 100 --heap-size 4g
+uv run python bindings/python/scripts/profile-python/profile_bindings.py --preset full --runs 3 --records 5000 --person-count 2000 --vector-records 1500 --vector-k 10 --query-runs 100 --heap-size 4g
 ```
 
 ## Current Numbers

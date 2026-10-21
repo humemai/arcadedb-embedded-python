@@ -28,10 +28,10 @@ Required fixes are done. Any further work is optional tuning.
 
 ## Run
 
-From `bindings/python`:
+From the repository root:
 
 ```bash
-python scripts/profile-python/profile_bindings.py --preset full --runs 3 --records 5000 --person-count 2000 --vector-records 1500 --vector-k 10 --query-runs 100 --heap-size 4g
+uv run python bindings/python/scripts/profile-python/profile_bindings.py --preset full --runs 3 --records 5000 --person-count 2000 --vector-records 1500 --vector-k 10 --query-runs 100 --heap-size 4g
 ```
 
 ## Read The Report

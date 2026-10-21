@@ -58,10 +58,6 @@ _ALLOWED = {
     "struct": {"MAP", "EMBEDDED"},
 }
 
-# Python values per cross-bridge call. A batch is converted whole before it is written, so this bounds the extra
-# memory a very large frame needs (10,000 matches insert_columns' commit_every).
-DEFAULT_BATCH_SIZE = 10_000
-
 
 def _import_pyarrow(what: str):
     try:

@@ -100,10 +100,6 @@ def _read_error(exc: BaseException) -> ArcadeDBError:
     return error
 
 
-def _java_class_name(value: Any) -> str:
-    return str(value.getClass().getName())
-
-
 def _cast_all_to_string(arrs: list, pa) -> list:
     """
     Cast every array to a string type.
