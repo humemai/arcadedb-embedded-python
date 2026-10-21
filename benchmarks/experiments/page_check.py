@@ -2263,7 +2263,7 @@ def _check_top_parts_refusal(payload):
 def _check_ts_doc_oom(payload):
     """The time-series document load that ran out of memory in our bindings
     (humemai/arcadedb-embedded-python#294) carries the sentence that says so
-    and that the next measurement runs it again. Re-decided from the run log,
+    and that the 26.10.2 and 26.11.1 measurements run it again. Re-decided from the run log,
     as the exporter decides it; rows from the fixed bindings that complete
     declare nothing. Returns bad count."""
     import export_web as EW
