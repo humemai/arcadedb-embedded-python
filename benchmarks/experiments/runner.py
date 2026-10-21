@@ -44,6 +44,7 @@ from datetime import datetime, timezone
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import bench_common  # noqa: E402  (INSTRUMENT, stamped on every row)
+import memory_probe  # noqa: E402  (memory per phase, instrument 2026-11 only)
 DATA = os.path.abspath(os.environ.get("BENCH_DATA", os.path.join(HERE, "data")))
 RESULTS = os.path.join(HERE, "results")
 RAW = os.path.join(RESULTS, "raw")
@@ -2967,6 +2968,7 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
     # branch, and it is only taken once the client starts, so from then
     # until this line every server_not_ready became an UnboundLocalError.
     server_cid, cli_cid, samplers, _therm0 = None, None, [], {}
+    _mp = None   # the memory-per-phase probe, set once the client is about to start
     try:
         if be["topology"] == "client_server":
             if SERVER_MEM_FRACTION:
@@ -3266,6 +3268,8 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
         if be.get("server_image"):
             bench_env += ["-e", f"BENCH_SERVER_IMAGE={be['server_image']}"]
 
+        _mp = memory_probe.HostProbe.maybe(run_id, RAW)   # None unless instrument 2026-11 (memory per phase)
+        bench_env += _mp.docker_args() if _mp else []
         cmd = (["docker", "run", "-d", "--network", net_name,
                 *RUNNER_LABELS,
                 "--name", f"cli-{run_id}", "--cpuset-cpus", cpuset]
@@ -3303,6 +3307,8 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
         s_cli = CgroupSampler(cli_cid)
         s_cli.start()
         samplers.append(("client", s_cli))
+        if _mp:
+            _mp.start(samplers, cgroup_dir, lambda c: container_disk(c, tries=1))
 
         _therm0 = _thermal()
         timeout_s = TIMEOUT_BY_SCALE[scale]
@@ -3598,6 +3604,8 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                                     f"was larger than the final one, so no growth is recorded")
                 row["disk_data_mb"] = None
 
+        if _mp:
+            row.update(_mp.finish(row))
         for name, s in samplers:
             s.finish()
             row[f"{name}_peak_mib"] = mib(s.peak)          # incl. page cache
