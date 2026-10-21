@@ -594,17 +594,17 @@ class NativeDatabase:
 
     def new_vertex(self, type_name: str):
         """A vertex that is created by ``save()`` (``CREATE VERTEX .. CONTENT``)."""
-        from .records import NativeVertex
+        from .records import Vertex
 
         self._check_not_closed()
-        return NativeVertex(self, type_name)
+        return Vertex(self, type_name)
 
     def new_document(self, type_name: str):
         """A document that is created by ``save()`` (``INSERT INTO .. CONTENT``)."""
-        from .records import NativeDocument
+        from .records import Document
 
         self._check_not_closed()
-        return NativeDocument(self, type_name)
+        return Document(self, type_name)
 
     def graph_batch(self, *args, **kwargs):
         not_yet("GraphBatch")

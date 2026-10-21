@@ -50,6 +50,7 @@ NATIVE_JVM_MARKERS = (
     "without JVM",
     "Java Virtual Machine is not running",
     "'_java_db'",
+    "'_java_result'",
     "bridge jar",
     "'nextRows'",
     "getClass",

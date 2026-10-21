@@ -8,9 +8,18 @@ dict, and every write is one DSL statement (``CREATE VERTEX .. CONTENT``, ``INSE
 from typing import Any, Dict, List, Optional
 
 from ..exceptions import ArcadeDBError
-from ..graph import Document, Edge, Vertex
+from ..graph import Document as _BaseDocument
+from ..graph import Edge as _BaseEdge
+from ..graph import Vertex as _BaseVertex
 from . import not_yet
 from .codec import RID
+
+
+def _java_object():
+    from .database import _JavaObject
+
+    return _JavaObject()
+
 
 _UNSAVED = "#-1:-1"
 
@@ -26,7 +35,7 @@ class _Mixin:
     _DELETE = "DELETE FROM {rid}"
 
     def __init__(self, database, type_name, rid=None, props=None, mutable=False):
-        self._java_document = None
+        self._java_document = _java_object()
         self._database = database
         self._db = database
         self._type = type_name
@@ -121,11 +130,11 @@ class _Mixin:
         return f"<{type(self).__name__} rid={self.get_rid()} type={self._type}>"
 
 
-class NativeDocument(_Mixin, Document):
+class Document(_Mixin, _BaseDocument):
     pass
 
 
-class NativeVertex(_Mixin, Vertex):
+class Vertex(_Mixin, _BaseVertex):
     _CREATE = "CREATE VERTEX {t} CONTENT :row"
     _DELETE = "DELETE FROM {rid}"
 
@@ -141,7 +150,7 @@ class NativeVertex(_Mixin, Vertex):
         row = self._db.command(
             "sql", sql, *(({"row": kwargs},) if kwargs else ())
         ).first()
-        edge = NativeEdge(self._db, label, mutable=False)
+        edge = Edge(self._db, label, mutable=False)
         edge._adopt(row)
         return edge
 
@@ -161,7 +170,7 @@ class NativeVertex(_Mixin, Vertex):
         return self._edges("bothE", labels)
 
 
-class NativeEdge(_Mixin, Edge):
+class Edge(_Mixin, _BaseEdge):
 
     def _end(self, fn: str) -> "Vertex":
         self._check_open()
@@ -181,5 +190,5 @@ def _wrap(database, row):
     if not meta:
         return None
     rid, type_name, kind = meta
-    cls = {"v": NativeVertex, "e": NativeEdge}.get(kind, NativeDocument)
+    cls = {"v": Vertex, "e": Edge}.get(kind, Document)
     return cls(database, type_name, rid, row._props)
