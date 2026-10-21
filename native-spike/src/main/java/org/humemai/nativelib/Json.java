@@ -197,7 +197,7 @@ final class Json {
     return out;
   }
 
-  /** Python -> Java tagged values: n Decimal, i big int, D date, T datetime (UTC wall clock), s set, b bytes (base64), F float[]. */
+  /** Python -> Java tagged values: n Decimal, i big int, D date, T datetime (UTC wall clock), s set, b bytes (base64), F float[], R RID. */
   @SuppressWarnings("unchecked")
   private static Object decodeTag(final String kind, final Object payload) {
     switch (kind) {
@@ -213,6 +213,8 @@ final class Json {
       return new HashSet<>((List<Object>) payload);
     case "b":
       return Base64.getDecoder().decode((String) payload);
+    case "R":
+      return new com.arcadedb.database.RID((String) payload);
     case "F": {
       final List<Object> l = (List<Object>) payload;
       final float[] f = new float[l.size()];

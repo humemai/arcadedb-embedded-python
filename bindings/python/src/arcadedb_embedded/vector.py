@@ -27,6 +27,12 @@ def _quote_identifier(identifier: str) -> str:
 _FLOAT_ARRAY = None
 
 
+def _native_enabled():
+    from . import _native
+
+    return _native.enabled()
+
+
 def to_java_float_array(vector):
     """
     Convert a Python array-like object to a Java float array.
@@ -42,6 +48,8 @@ def to_java_float_array(vector):
     Returns:
         Java float array compatible with ArcadeDB vector indexes
     """
+    if _native_enabled():
+        return _np.asarray(vector, dtype=_np.float32)
     global _FLOAT_ARRAY
     float_array = _FLOAT_ARRAY
     if float_array is None:

@@ -16,6 +16,8 @@ _EPOCH_NAIVE = datetime(1970, 1, 1)
 
 def _default(value):
     """json.dumps hook: the values JSON cannot carry, as tagged objects (see Json.java)."""
+    if isinstance(value, RID):
+        return {TAG: ["R", value.text]}
     if isinstance(value, Decimal):
         return {TAG: ["n", str(value)]}
     if isinstance(value, datetime):
@@ -65,6 +67,27 @@ def encode_params(args) -> str:
     return json.dumps({"pos": list(values)}, default=_default)
 
 
+class RID:
+    """A record id as the engine returns it in a row; passed back as a parameter it is a link, not a string."""
+
+    __slots__ = ("text",)
+
+    def __init__(self, text):
+        self.text = text
+
+    def __str__(self):
+        return self.text
+
+    def __repr__(self):
+        return f"RID({self.text!r})"
+
+    def __eq__(self, other):
+        return self.text == (other.text if isinstance(other, RID) else other)
+
+    def __hash__(self):
+        return hash(self.text)
+
+
 def _restore_float(text):
     return float(text)
 
@@ -82,6 +105,7 @@ _SIMPLE = {
     "s": set,
     "f": _restore_float,
     "m": _restore_map,
+    "R": RID,
 }
 
 

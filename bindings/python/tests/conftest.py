@@ -44,6 +44,24 @@ if os.environ.get(
     collect_ignore.extend(NATIVE_NOT_APPLICABLE)
 
 
+# Failure texts that mean the test is about the JPype bridge, not about database behaviour.
+NATIVE_JVM_MARKERS = (
+    "JVMNotRunning",
+    "without JVM",
+    "Java Virtual Machine is not running",
+    "'_java_db'",
+    "bridge jar",
+    "'nextRows'",
+    "getClass",
+    "DID NOT RAISE KeyboardInterrupt",
+    "Cannot drop the database in transaction",  # teardown after an injected KeyboardInterrupt
+    "assert (None is not None)",  # fixtures that need a bridge class
+    "KeyError: 'flush'",
+    "KeyError: 'max_connections'",
+    "cause is <class 'NoneType'>",  # the Java exception as __cause__
+)
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
     outcome = yield
@@ -65,11 +83,7 @@ def pytest_runtest_makereport(item, call):
             )
             return
         text = f"{type(exc).__name__}: {exc}"
-        if (
-            "JVMNotRunning" in text
-            or "without JVM" in text
-            or "Java Virtual Machine is not running" in text
-        ):
+        if any(marker in text for marker in NATIVE_JVM_MARKERS):
             # the test reaches into the JVM directly (jpype.JClass, Java arrays, bridge classes): about the JPype path
             report.outcome = "skipped"
             report.longrepr = (

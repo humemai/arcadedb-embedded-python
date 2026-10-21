@@ -499,33 +499,42 @@ class NativeDatabase:
     def lookup_by_key(self, type_name: str, keys: List[str], values: List[Any]):
         self._check_not_closed()
         where = " AND ".join(f"`{k}` = ?" for k in keys)
-        return self.query(
-            "sql", f"SELECT FROM `{type_name}` WHERE {where} LIMIT 1", list(values)
-        ).first()
+        try:
+            return self.query(
+                "sql", f"SELECT FROM `{type_name}` WHERE {where} LIMIT 1", list(values)
+            ).first()
+        except ArcadeDBError as e:
+            raise ArcadeDBError(f"Failed to lookup by key in '{type_name}': {e}") from e
 
     def insert_many(
         self, type_name: str, rows, commit_every: int = 10_000, parallel: bool = False
     ) -> int:
-        """Bulk insert through ``INSERT INTO t CONTENT :row`` in transactions of ``commit_every`` rows."""
+        """Bulk insert through ``INSERT INTO t CONTENT :row``. Inside the caller's transaction nothing is committed;
+        otherwise every ``commit_every`` rows are one transaction (0: all rows in one).
+        """
         self._check_not_closed()
+        sql = f"INSERT INTO `{type_name}` CONTENT :row"
         total = 0
+        if self.is_transaction_active():
+            for row in rows:
+                self.command("sql", sql, {"row": row}).close()
+                total += 1
+            return total
+        every = int(commit_every)
         batch: List[dict] = []
 
         def flush():
             nonlocal total
-            if not batch:
-                return
-            with self.transaction():
-                for row in batch:
-                    self.command(
-                        "sql", f"INSERT INTO `{type_name}` CONTENT :row", {"row": row}
-                    ).close()
-            total += len(batch)
-            batch.clear()
+            if batch:
+                with self.transaction():
+                    for row in batch:
+                        self.command("sql", sql, {"row": row}).close()
+                total += len(batch)
+                batch.clear()
 
         for row in rows:
             batch.append(row)
-            if len(batch) >= int(commit_every):
+            if every > 0 and len(batch) >= every:
                 flush()
         flush()
         return total
@@ -587,6 +596,16 @@ class NativeDatabase:
         not_yet("Database.set_auto_transaction")
 
 
+class _JavaObject:
+    """What the JPype Schema returns where the native one has no Java object: any use says so."""
+
+    def __bool__(self):
+        return True
+
+    def __getattr__(self, name):
+        not_yet(f"the Java object a Schema method returns ({name})")
+
+
 class NativeSchema:
     """Type, property and index creation as SQL statements. Returns None where the JPype Schema returns a Java object."""
 
@@ -600,24 +619,25 @@ class NativeSchema:
         ine = " IF NOT EXISTS" if if_not_exists else ""
         suffix = f" BUCKETS {int(buckets)}" if buckets else ""
         self._run(f"CREATE {kind} TYPE `{name}`{ine}{suffix}")
+        return _JavaObject()
 
     def create_document_type(self, name, buckets=None):
-        self._type("DOCUMENT", name, buckets)
+        return self._type("DOCUMENT", name, buckets)
 
     def create_vertex_type(self, name, buckets=None):
-        self._type("VERTEX", name, buckets)
+        return self._type("VERTEX", name, buckets)
 
     def create_edge_type(self, name, buckets=None):
-        self._type("EDGE", name, buckets)
+        return self._type("EDGE", name, buckets)
 
     def get_or_create_document_type(self, name, buckets=None):
-        self._type("DOCUMENT", name, buckets, True)
+        return self._type("DOCUMENT", name, buckets, True)
 
     def get_or_create_vertex_type(self, name, buckets=None):
-        self._type("VERTEX", name, buckets, True)
+        return self._type("VERTEX", name, buckets, True)
 
     def get_or_create_edge_type(self, name, buckets=None):
-        self._type("EDGE", name, buckets, True)
+        return self._type("EDGE", name, buckets, True)
 
     def exists_type(self, name):
         rows = self._db.query(
@@ -632,6 +652,7 @@ class NativeSchema:
         t = getattr(property_type, "value", property_type)
         o = f" OF {getattr(of_type, 'value', of_type)}" if of_type else ""
         self._run(f"CREATE PROPERTY `{type_name}`.`{property_name}` {t}{o}")
+        return _JavaObject()
 
     def get_or_create_property(
         self, type_name, property_name, property_type, of_type=None
@@ -645,12 +666,21 @@ class NativeSchema:
     def drop_property(self, type_name, property_name):
         self._run(f"DROP PROPERTY `{type_name}`.`{property_name}`")
 
+    _INDEX_KIND = {
+        ("LSM_TREE", True): "UNIQUE",
+        ("LSM_TREE", False): "NOTUNIQUE",
+        ("HASH", True): "UNIQUE_HASH",
+        ("HASH", False): "NOTUNIQUE_HASH",
+    }
+
     def create_index(
         self, type_name, property_names, unique=False, index_type="LSM_TREE"
     ):
-        kind = "UNIQUE" if unique else getattr(index_type, "value", index_type)
+        kind = getattr(index_type, "value", index_type)
+        kind = self._INDEX_KIND.get((kind, bool(unique)), kind)
         cols = ", ".join(f"`{p}`" for p in property_names)
         self._run(f"CREATE INDEX ON `{type_name}` ({cols}) {kind}")
+        return _JavaObject()
 
     def exists_index(self, index_name):
         return bool(

@@ -10,8 +10,9 @@
  *   {"\u0001": ["Z", "...+00:00"]}   Instant, ZonedDateTime, OffsetDateTime (UTC)
  *   {"\u0001": ["s", [..]]}       Set                  {"\u0001": ["f", "NaN"]}     non-finite Float/Double
  *   {"\u0001": ["m", [[k, v]..]]} Map with non-String keys
+ *   {"\u0001": ["R", "#12:3"]}    RID (a record link value; Python restores a RID object that goes back out as a RID)
  *
- * A RID is its text ("#12:3"); a record nested in a value is an object with "@rid" and "@type" members next to its
+ * A record nested in a value is an object with "@rid" and "@type" members next to its
  * properties; float[] and double[] are JSON number lists (a float widens to double, as it does through the bridge);
  * byte[], short[], int[], long[] and boolean[] are lists.
  */
@@ -166,7 +167,7 @@ final class NativeCodec {
     } else if (value instanceof Document doc) {
       appendDocument(sb, doc);
     } else if (value instanceof Identifiable id) {
-      quote(sb, id.getIdentity().toString());
+      tagged(sb, "R").append('"').append(id.getIdentity().toString()).append("\"]}");
     } else if (value instanceof Map<?, ?> map) {
       boolean stringKeys = true;
       for (final Object key : map.keySet())
