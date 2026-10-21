@@ -315,13 +315,14 @@ jobs:
         run: |
           # Packages needed by the examples, listed once here for every later step.
           # PyTorch is required by sentence-transformers, even on macOS (its CPU build supports MPS acceleration).
-          # tqdm, py7zr and lxml are for the dataset downloads.
+          # tqdm, py7zr and lxml are for the dataset downloads; pandas, polars and pyarrow for
+          # 27_dataframe_arrow_ingest.py.
           if [[ "$OSTYPE" == "darwin"* ]]; then
             numpy_spec="numpy<2.0"
           else
             numpy_spec="numpy"
           fi
-          printf '%s\n' torch "$numpy_spec" requests sentence-transformers tqdm py7zr lxml > "$EXAMPLE_REQUIREMENTS"
+          printf '%s\n' torch "$numpy_spec" requests sentence-transformers tqdm py7zr lxml pandas polars pyarrow > "$EXAMPLE_REQUIREMENTS"
           # Build the environment now, so a dependency that cannot be resolved or installed fails here.
           EXAMPLES_PYTHON=(uv run --no-project --python "${{ matrix.python-version }}" --with "$ARCADEDB_WHEEL" --with-requirements "$EXAMPLE_REQUIREMENTS" python)
           "${EXAMPLES_PYTHON[@]}" -c "import sys; print(sys.version)"
