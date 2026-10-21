@@ -1205,7 +1205,13 @@ def main():
             "does not exist.\nSet it to the directory holding paper.tex.")
     os.makedirs(FIGS, exist_ok=True)
     rows = canonical()
-    f3_sparse_perquery()
+    # f3 reads results/sparse_cliff.jsonl, the one-shot sparse_cliff_probe.py artifact of the retired instruments, and f3 is
+    # not built (PAGE-SPEC.md section 3). A tree without that file (the 2026-11 fixture, a fresh checkout) skips it, said out
+    # loud; a tree with it still draws it.
+    if os.path.exists(os.path.join(RESULTS, "sparse_cliff.jsonl")):
+        f3_sparse_perquery()
+    else:
+        print("  f3 skipped: no results/sparse_cliff.jsonl (a one-shot probe artifact of the retired instruments; f3 is not built)")
     f4_one_vs_n(rows)
     f6_memory_ceiling(rows)
     f7_e2(rows)
