@@ -2852,7 +2852,64 @@ def _metrics_for_instrument(table_id, spec, src_lane=None):
             at = next(i for i, (f, _l) in enumerate(cols) if f == "delete_p50_ms") + 1
             cols.insert(at, ("cold_first_query_ms", "cold first query ms"))
         return cols
-    return list(spec["metrics"]) + (OCT_METRICS.get(src_lane, []) if oct_ else [])
+    return (list(spec["metrics"]) + (OCT_METRICS.get(src_lane, []) if oct_ else [])
+            + (_beam_metrics() if table_id == "l3d" and not oct_ else []))
+
+
+# THE MATCHED-RECALL HEADLINE OF THE DENSE TABLE (instrument 2026-11, dense_beam.py): latency at a fixed
+# recall target, with the search beam (ef, or nProbe for an IVF engine) that reached it. 0.95 is the
+# headline; 0.90 and 0.99 are the secondary columns. The columns exist only when a dense row carries the
+# sweep, so a 2026-10 payload does not change.
+BEAM_TARGETS = ((0.95, "r095"), (0.90, "r090"), (0.99, "r099"))
+BEAM_BEAM_LABEL = "ef or nProbe at recall {t:.2f}"
+
+
+def _beam_label(kind, t):
+    return {"p50": f"p50 ms at recall {t:.2f}", "p99": f"p99 ms at recall {t:.2f}",
+            "beam": BEAM_BEAM_LABEL.format(t=t)}[kind]
+
+
+def _beam_metrics():
+    """The matched-recall columns, when a frozen dense row carries the sweep (else none)."""
+    if not any(r.get("lane") == "l3d" and r.get("beam_kind") and str(r.get("instrument")) == "2026-11"
+               for r in _FROZEN_ROWS):
+        return []
+    cols = []
+    for t, k in BEAM_TARGETS:
+        cols.append((f"matched_{k}_p50_ms", _beam_label("p50", t)))
+        if k == "r095":
+            cols.append((f"matched_{k}_p99_ms", _beam_label("p99", t)))
+        cols.append((f"matched_{k}_beam", _beam_label("beam", t)))
+    return cols
+
+
+def _beam_extras(entry, rs):
+    """Mark a target no run reached, and attach the recall-latency curve (median over runs) to the entry.
+
+    A cell with no latency says so: an engine that never reaches the target has no headline (the
+    status text names the best recall it did reach), it is not a blank and not a worse number."""
+    sweep = [r for r in rs if r.get("beam_kind")]
+    if not sweep:
+        return
+    best = max((float(r.get("beam_max_recall_at_10") or 0.0) for r in sweep), default=0.0)
+    for t, k in BEAM_TARGETS:
+        label = _beam_label("p50", t)
+        if label not in entry["metrics"] and all(r.get(f"matched_{k}_status") == "not reached" for r in sweep):
+            entry["metrics"][label] = {"text": f"not reached (best recall {best:.3f})"}
+    kind = sweep[0].get("beam_kind")
+    if kind == "none":
+        entry["beam_curve"] = {"kind": "none", "na": sweep[0].get("beam_na")}
+        return
+    values = [v for v in str(sweep[0].get("beam_values") or "").split(",") if v]
+    curve = []
+    for v in values:
+        pt = {"beam": int(v)}
+        for fld, key in (("recall_at_10", "recall"), ("query_p50_ms", "p50"), ("query_p99_ms", "p99")):
+            xs = [float(r[f"{kind}{v}_{fld}"]) for r in sweep if r.get(f"{kind}{v}_{fld}") not in (None, "")]
+            if xs:
+                pt[key] = round(statistics.median(xs), 4)
+        curve.append(pt)
+    entry["beam_curve"] = {"kind": kind, "points": curve}
 
 
 # ---------------------------------------------------------------------------
@@ -9581,6 +9638,8 @@ def main() -> int:
                 got = _agg(src, field)
                 if got is not None:
                     entry["metrics"][label] = got
+            if lane == "l3d":
+                _beam_extras(entry, rs)
             if entry["metrics"]:
                 entries.append(entry)
         if lane == "l3d":

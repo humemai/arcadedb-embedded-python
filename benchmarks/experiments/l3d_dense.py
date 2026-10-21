@@ -31,6 +31,7 @@ import traceback
 import numpy as np
 import bench_common
 import surreal_common
+import dense_beam
 import arango_common
 import mongo_common
 
@@ -433,6 +434,24 @@ class Base:
 
     name = "?"
     version = "?"
+
+    # THE SEARCH BEAM THE 2026-11 SWEEP TURNS (dense_beam.py). "ef" is an HNSW beam read from
+    # the module's EF_SEARCH at every search(), so the default set_beam only has to move that
+    # one global; an adapter that bakes it into the connection or the collection overrides
+    # set_beam. "nprobe" is an IVF engine's lists probed; None is an engine with no setting,
+    # which runs the sweep's single pass and says why in beam_na.
+    beam_kind = "ef"
+    beam_na = None
+
+    def beam_values(self):
+        return dense_beam.ef_values()
+
+    def beam_default(self):
+        return EF_SEARCH
+
+    def set_beam(self, value):
+        global EF_SEARCH
+        EF_SEARCH = int(value)
 
     def connect(self):
         pass
@@ -865,6 +884,23 @@ class Chroma(Base):
     # ablation.
     quantization = "fp32"
     name = "chroma_dense"
+
+    def set_beam(self, value):
+        # ef_search is collection configuration, but a live index keeps the ef it loaded with: a modify() on the open
+        # collection changed the configuration and not one result (chromadb 1.5.9, recall 0.273 before and after).
+        # So write it, reopen the client at the same path, and read the value back from the reopened collection.
+        import chromadb
+        from chromadb.api.shared_system_client import SharedSystemClient
+        super().set_beam(value)
+        self.col.modify(configuration={"hnsw": {"ef_search": int(value)}})
+        self.client.close()
+        SharedSystemClient.clear_system_cache()
+        self.client = chromadb.PersistentClient(path="/tmp/l3d_chroma")
+        self.col = self.client.get_collection("articles")
+        got = self.col.configuration["hnsw"]["ef_search"]
+        if int(got) != int(value):
+            raise RuntimeError(f"chroma ef_search read back {got!r}, not {value}: the sweep would stamp a beam it did not run")
+
     # chromadb 1.5.9 HAS a close: Client.close() releases the client's system
     # and stops it when it is the last client. This said there was none until
     # 2026-10-02, from dir(chromadb.Client), which is the factory function
@@ -1028,6 +1064,8 @@ class SqliteVec(Base):
     # ablation.
     quantization = "fp32"
     name = "sqlite_vec_dense"
+    beam_kind = None
+    beam_na = "exact scan (vec0 brute force): there is no search beam to set, recall is 1.0 by construction"
 
     def close(self):
         self.cx.close()
@@ -1188,6 +1226,10 @@ class DuckVSS(Base):
         self.index_s = round(time.perf_counter() - _t1, 2)
         self.cx.execute(f"SET hnsw_ef_search = {EF_SEARCH}")
 
+    def set_beam(self, value):
+        super().set_beam(value)
+        self.cx.execute(f"SET hnsw_ef_search = {int(value)}")
+
     def search(self, qvec, k):
         rows = self.cx.execute(
             f"SELECT id FROM t ORDER BY array_distance(vec, ?::FLOAT[{DIM}]) "
@@ -1334,6 +1376,11 @@ class PgVector(Base):
                       f"WITH (m = {COMPARATOR_M}, ef_construction = {EF_CONSTRUCTION})")
             self.index_s = round(time.perf_counter() - _t1, 2)
             c.execute(f"SET hnsw.ef_search = {EF_SEARCH}")
+
+    def set_beam(self, value):
+        super().set_beam(value)
+        with self.cx.cursor() as c:
+            c.execute(f"SET hnsw.ef_search = {int(value)}")
 
     def search(self, qvec, k):
         with self.cx.cursor() as c:
@@ -1781,6 +1828,18 @@ class ArangoDense(Base):
     quantization = "fp32"
     name = "arangodb_dense"
     calibrates = True
+    # IVF has no HNSW beam; the sweep turns nProbe around the calibrated value (dense_beam.nprobe_values)
+    beam_kind = "nprobe"
+
+    def beam_values(self):
+        return dense_beam.nprobe_values(self.ivf_nprobe, self.ivf_nlists)
+
+    def beam_default(self):
+        return self.ivf_nprobe
+
+    def set_beam(self, value):
+        self.ivf_nprobe = int(value)
+
     # None: plain IVF over the floats. The int8 arm sets a FAISS factory
     # string; either way the server's params are read back and a mismatch
     # refuses the cell (BUGS F164).
@@ -2357,6 +2416,9 @@ class MemgraphDense(Base):
     """
     quantization = "fp32"
     name = "memgraph_dense"
+    beam_kind = None
+    beam_na = ("USearch expansion_search is fixed at the engine's default (64) and not settable through "
+               "Memgraph 3.13.1; the query's LIMIT is a result count, not a beam, so there is no beam to sweep")
     ID_INDEX_DDL = "CREATE INDEX ON :Article(vid)"
     # The element type USearch stores, set in the definition and read back from
     # SHOW VECTOR INDEX INFO onto the row; a mismatch refuses the cell (F164).
@@ -2475,6 +2537,9 @@ class FalkorDense(Base):
     """
     quantization = "fp32"
     name = "falkordb_dense"
+    beam_kind = None
+    beam_na = ("efRuntime is an index-creation option and db.idx.vector.queryNodes takes no per-query beam, "
+               "so the built index has one operating point")
     ID_INDEX_DDL = "CREATE INDEX FOR (a:Article) ON (a.vid)"
 
     def connect(self):
@@ -2909,6 +2974,17 @@ def main():
     # rebuild it provoked exists only in the AFTER-SEARCH counters. Comparing
     # the two is what tells a reader whether the timings above include one.
     out["engine_stats_after_search"] = b.engine_stats()
+
+    # THE SEARCH-BEAM SWEEP (instrument 2026-11 only, dense_beam.py): the cold pass above is
+    # unchanged and keeps the cold p50/p99; the index is NOT rebuilt, and each beam value gets its
+    # own held-out warm-up and timed pass. The headline is the latency at matched recall.
+    if dense_beam.enabled():
+        with _beat.phase("beam-sweep", kind=str(b.beam_kind)):
+            _kind, _pts, _na = dense_beam.run_sweep(
+                b, test, gt, timed_n, K, WARM, surreal_common.keep, pct, statistics.mean,
+                {"recall": out["recall_at_10"], "p50": out["query_p50_ms"], "p99": out["query_p99_ms"]},
+                beat=_beat)
+        out.update(dense_beam.row_fields(_kind, _pts, _na))
 
     # ----------------------------------------------------------------------
     # THE TWO MUTATION OPERATIONS (DECISIONS #82d), in the order DELETE then
