@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Example 27: Python functions in SQL and openCypher, and record event callbacks.
+"""Example 28: Python functions in SQL and openCypher, and record event callbacks.
 
 Two things no query language can express:
 - db.register_function() makes a Python function callable from SQL and openCypher

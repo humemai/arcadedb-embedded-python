@@ -513,7 +513,7 @@ refuse_blank.remove()   # stops this callback only
   thread for async writes; the GIL serializes the calls. Keep callbacks quick.
 
 See [`on`](../../api/database.md#on) for the full contract and
-[Example 27](../../examples/27_python_functions_and_record_events.md).
+[Example 27](../../examples/28_python_functions_and_record_events.md).
 
 ## See Also
 

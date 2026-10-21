@@ -710,7 +710,7 @@ db.query("opencypher", "MATCH (p:Person) RETURN py.slugify(p.name) AS slug")
   the function until `db.unregister_function(name)` or until the `Database` that registered
   it is closed. Register before concurrent statements run.
 - **Cost.** One call crosses between the engine and Python once per row. Measured with
-  [Example 27](../../examples/27_python_functions_and_record_events.md) on a 20,000-row type
+  [Example 27](../../examples/28_python_functions_and_record_events.md) on a 20,000-row type
   (best of 5 runs of `SELECT plus_one(n) FROM Number` against `SELECT n + 1 FROM Number`,
   JVM warm, a laptop core with the JVM heap at 1 GB), the Python function cost about 5 to
   10 microseconds more per row than the SQL expression. A statement that calls it on a

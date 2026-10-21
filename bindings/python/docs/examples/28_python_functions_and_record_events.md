@@ -1,6 +1,6 @@
-# 27 - Python Functions And Record Events
+# 28 - Python Functions And Record Events
 
-[View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/examples/27_python_functions_and_record_events.py)
+[View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/examples/28_python_functions_and_record_events.py)
 
 Two things no query language can express, which `sqlite3` and DuckDB also offer from Python:
 
@@ -19,7 +19,7 @@ The example also measures what one Python call costs against the same expression
 From `bindings/python/examples`:
 
 ```bash
-python 27_python_functions_and_record_events.py --rows 20000
+python 28_python_functions_and_record_events.py --rows 20000
 ```
 
 The database is created under `./my_test_databases/python_functions_events` (`--db-path`).

@@ -405,7 +405,7 @@ DataFrames and Arrow tables loaded straight into a type, and a result back out a
 
 **Learn:** How a DataFrame becomes documents or vertices without a row loop, and what each
 Arrow type is stored as
-### 🧩 [27_python_functions_and_record_events.py](./27_python_functions_and_record_events.py)
+### 🧩 [28_python_functions_and_record_events.py](./28_python_functions_and_record_events.py)
 **Python Functions | Record Events | SQL + openCypher**
 
 Two things no query language can express:
