@@ -694,7 +694,8 @@ vertices and no column convention for them is fixed here.
   duplicate key, a value past a declared property's range). The batch in flight is rolled
   back, the batches before it stay committed, and the message says how many rows that is.
   A transaction the caller opened is left to the caller (a vertex load refuses to run
-  inside one, as `GraphBatch` does)
+  inside one, as `GraphBatch` does): the batches join it, the message then says the rows
+  were written in your transaction, not committed, and a rollback removes them
 
 **Example:**
 
@@ -741,8 +742,8 @@ below; a declared property converts to its declared type (next table).
 | `string`, `large_string`, `string_view` | `STRING` |
 | `dictionary` (a pandas categorical, a Polars `Categorical`) | its value type |
 | `binary`, `large_binary` | `byte[]`, read back as a list of signed ints |
-| `timestamp`, no time zone, unit `s`, `ms`, `us`, or `ns` | `DATETIME`: the wall clock as it shows |
-| `timestamp` with a time zone, any unit | `DATETIME`: converted to UTC |
+| `timestamp`, no time zone, unit `s`, `ms`, `us`, or `ns` | a UTC date-time: the wall clock as it shows, with the input's precision (see below) |
+| `timestamp` with a time zone, any unit | a UTC date-time: converted to UTC |
 | `date32`, `date64` | `DATE` |
 | `decimal128`, `decimal256` | `DECIMAL`, every digit kept |
 | `list`, `large_list`, `fixed_size_list` | `LIST` (an `ARRAY_OF_*` when declared so) |
@@ -755,10 +756,17 @@ A null is stored as a missing property.
 **DATETIME precisions.** A `DATETIME` is a UTC wall clock, whatever the host's time zone. A
 timestamp with a zone is converted to UTC; one without is taken as the wall clock it
 shows (the rule `Document.set()` applies to a `datetime`). The value is read from the
-integer epoch count, so a `ns` column is not cut to microseconds on the way in. What is
-kept is what the property's type keeps: `DATETIME` milliseconds, `DATETIME_MICROS`
-microseconds, `DATETIME_NANOS` nanoseconds, `DATETIME_SECOND` seconds (a Python
-`datetime` reads back to the microsecond at most).
+integer epoch count, so a `ns` column is not cut to microseconds on the way in. For a
+declared property what is kept is what the property's type keeps: `DATETIME`
+milliseconds, `DATETIME_MICROS` microseconds, `DATETIME_NANOS` nanoseconds,
+`DATETIME_SECOND` seconds. A column the type does not declare keeps the input's own
+precision (a `ns` column is stored with its nanoseconds).
+
+**Reading timestamps back is coarser than storing them.** `Result.get()` returns a Python
+`datetime`, which holds microseconds at most. `to_arrow()`, `to_polars()`, `to_dataframe()`
+and `to_columns()` return milliseconds (`timestamp[ms]`, `datetime64[ms]`), also for
+`DATETIME_MICROS` and `DATETIME_NANOS` properties and for `DATE`. Nanoseconds do not
+come back through the bindings: keep an integer epoch-nanosecond column if you need them.
 
 **Declared properties.** A property the type declares converts, but only along the pairs
 below, checked before a row is written. Anything else raises `TypeError` that names the

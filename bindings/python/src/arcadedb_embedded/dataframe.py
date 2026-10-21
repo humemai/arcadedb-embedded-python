@@ -291,6 +291,9 @@ def insert_table(
         return 0
 
     written = 0
+    # a document load inside the caller's own transaction joins it (insert_columns commits
+    # nothing then); a vertex load refuses to run inside one
+    in_caller_transaction = (not is_vertex) and bool(db._java_db.isTransactionActive())
     graph_batch = db.graph_batch() if is_vertex else None
     try:
         for batch in table.to_batches(max_chunksize=batch_size):
@@ -310,6 +313,13 @@ def insert_table(
                         type_name, columns, commit_every=batch_size, parallel=parallel
                     )
             except ArcadeDBError as exc:
+                if written and in_caller_transaction:
+                    # the batches joined the caller's transaction: nothing is committed
+                    # until the caller commits, and a rollback removes them
+                    raise ArcadeDBError(
+                        f"{exc}; the {written} row(s) of the batches before this one "
+                        f"were written in your transaction, not committed"
+                    ) from exc
                 if written:
                     raise ArcadeDBError(
                         f"{exc}; the {written} row(s) of the batches before this one "

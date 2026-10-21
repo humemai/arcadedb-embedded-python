@@ -1051,7 +1051,9 @@ class Database:
                 The batch in flight is rolled back; batches before it stay
                 committed, and the message says how many rows that is. A
                 transaction the caller opened is left to the caller (for
-                documents; a vertex load refuses to run inside one).
+                documents; a vertex load refuses to run inside one): the
+                batches join it, the message then says the rows were written
+                in your transaction, not committed, and a rollback removes them.
 
         Example:
             >>> import pandas as pd
@@ -1099,19 +1101,22 @@ class Database:
         | string, large_string, string_view | STRING |
         | dictionary (categorical) | its value type |
         | binary, large_binary | byte[] |
-        | timestamp without a time zone, any unit | DATETIME, the wall clock as it shows |
-        | timestamp with a time zone, any unit | DATETIME, converted to UTC |
+        | timestamp without a time zone, any unit | a UTC date-time, the wall clock as it shows |
+        | timestamp with a time zone, any unit | a UTC date-time, converted to UTC |
         | date32, date64 | DATE |
         | decimal128, decimal256 | DECIMAL |
         | list, large_list, fixed_size_list | LIST (ARRAY_OF_* when declared so) |
         | struct | MAP |
         | null (only nulls) | no value |
 
-        A DATETIME is a UTC wall clock, and the precision is the declared one:
-        DATETIME_MICROS and DATETIME_NANOS keep more than an undeclared
-        timestamp (the engine's DATETIME keeps milliseconds), DATETIME_SECOND
-        keeps less. Nanosecond input is read from the integer epoch value, so it
-        is not cut to microseconds on the way in. Time-of-day, duration, and map
+        A date-time is a UTC wall clock. A declared property keeps its own
+        precision: DATETIME milliseconds, DATETIME_MICROS microseconds,
+        DATETIME_NANOS nanoseconds, DATETIME_SECOND seconds; a column the type
+        does not declare keeps the input's precision. Nanosecond input is read
+        from the integer epoch value, so it is not cut to microseconds on the
+        way in. Reading back is coarser: ``Result.get()`` returns a Python
+        ``datetime`` (microseconds at most) and ``to_arrow()``, ``to_polars()``,
+        ``to_dataframe()`` and ``to_columns()`` return milliseconds. Time-of-day, duration, and map
         columns have no mapping and raise ``TypeError``. A null is stored as a
         missing property.
 

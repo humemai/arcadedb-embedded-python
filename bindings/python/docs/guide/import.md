@@ -215,7 +215,15 @@ back = db.query("sql", "SELECT FROM Trip").to_polars()  # and out again
   [`insert_arrow`](../api/database.md#insert_arrow).
 - pandas `NaN` is a null; Polars `NaN` stays `NaN`. The pandas index is not loaded.
 - Declare the schema first when types matter: an undeclared integer column is stored as
-  `LONG`, an undeclared timestamp as the engine's millisecond `DATETIME`.
+  `LONG`, an undeclared timestamp keeps the precision of the input (a `ns` column keeps its
+  nanoseconds), and a property declared `DATETIME` keeps milliseconds. Reading back is
+  coarser: `get()` returns a Python `datetime` (microseconds at most), and `to_arrow()`,
+  `to_polars()`, `to_dataframe()` and `to_columns()` return milliseconds (`timestamp[ms]`).
+  To get nanoseconds back in Python, store an integer epoch-nanosecond column as well.
+- A failed load keeps the batches before the failing one. Outside a transaction the error
+  says how many rows were committed. Inside your own transaction the load joins it, the
+  error says the rows were written in your transaction, not committed, and a rollback
+  removes them.
 - Needs pyarrow (`pip install 'arcadedb-embedded[arrow]'`), plus pandas or
   `pip install 'arcadedb-embedded[polars]'`. See Example 27.
 

@@ -550,6 +550,39 @@ class TestBatching:
             temp_db.insert_dataframe("Dup", pd.DataFrame({"id": ids}), batch_size=10)
         assert _count(temp_db, "Dup") == 10
 
+    def test_the_failure_message_tells_committed_from_written_in_your_transaction(
+        self, temp_db
+    ):
+        """Outside a transaction the earlier batches are committed; inside the caller's own they
+        joined it, so the message must not claim they are committed (a rollback removes them).
+        """
+        temp_db.command("sql", "CREATE DOCUMENT TYPE Dup2")
+        temp_db.command("sql", "CREATE PROPERTY Dup2.id LONG")
+        temp_db.command("sql", "CREATE INDEX ON Dup2 (id) UNIQUE")
+        frame = pd.DataFrame({"id": list(range(10)) + [3]})  # the 11th row repeats id 3
+
+        with pytest.raises(ArcadeDBError) as outside:
+            temp_db.insert_dataframe("Dup2", frame, batch_size=10)
+        assert "10 row(s) of the batches before this one were committed" in str(
+            outside.value
+        )
+        assert _count(temp_db, "Dup2") == 10
+        with temp_db.transaction():
+            temp_db.command("sql", "DELETE FROM Dup2")
+
+        temp_db.begin()
+        try:
+            with pytest.raises(ArcadeDBError) as inside:
+                temp_db.insert_dataframe("Dup2", frame, batch_size=10)
+        finally:
+            temp_db.rollback()
+        assert "10 row(s) of the batches before this one were written in your" in str(
+            inside.value
+        )
+        assert "not committed" in str(inside.value)
+        assert "were committed" not in str(inside.value)
+        assert _count(temp_db, "Dup2") == 0  # the caller's rollback removed them
+
     def test_a_callers_transaction_is_left_to_the_caller(self, temp_db):
         temp_db.command("sql", "CREATE DOCUMENT TYPE Mine")
         with pytest.raises(RuntimeError, match="stop"):
