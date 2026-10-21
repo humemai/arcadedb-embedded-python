@@ -60,6 +60,17 @@ repos:
         files: ^bindings/python/.*\.sh$
         # The vendored design system is copied byte for byte; its verify.sh must stay identical to the source.
         exclude: ^bindings/python/docs/brand/
+  # A/B numbers in the Python bindings docs are generated from result files, never typed:
+  # this fails when a table between <!-- ab-table --> markers differs from what its result file
+  # renders (bindings/python/docs/development/documentation.md, "A/B Result Tables").
+  - repo: local
+    hooks:
+      - id: render-ab-tables
+        name: A/B tables match their result files
+        language: python
+        entry: python bindings/python/scripts/render_ab_tables.py --check
+        pass_filenames: false
+        files: ^bindings/python/(docs/.*\.(md|json)|scripts/render_ab_tables\.py)$
   - repo: https://github.com/rbubley/mirrors-prettier
     rev: v3.9.9
     hooks:

@@ -79,6 +79,22 @@ not something we currently encourage as the default Python import story.
     `new_edges()` methods run at or near Java speed; see Example 16 and the graph
     examples.
 
+### Measured: ingest path, parallel load, async SQL path
+
+The results of the bindings A/B study for the recommendations above appear here as they are published. Each table is generated from a result file (see [Documentation Development](../development/documentation.md#ab-result-tables)); do not edit it by hand.
+
+<!-- ab-table: ingest-path -->
+*Measurement pending: figure `ingest-path` (Bulk ingest path: insert_many, insert_columns, insert_dataframe, insert_arrow). No recommendation on this page changes until the A/B result for it is published.*
+<!-- /ab-table -->
+
+<!-- ab-table: parallel-buckets -->
+*Measurement pending: figure `parallel-buckets` (Synchronous load against parallel=True, and the bucket count). No recommendation on this page changes until the A/B result for it is published.*
+<!-- /ab-table -->
+
+<!-- ab-table: async-sql-path -->
+*Measurement pending: figure `async-sql-path` (Async executor SQL command path against insert_many(parallel=True)). No recommendation on this page changes until the A/B result for it is published.*
+<!-- /ab-table -->
+
 ## Example 15 and 16 Benchmark Structure
 
 Example 15 and 16 are the repository's focused ingest comparison harnesses.
@@ -295,6 +311,10 @@ you do choose the SQL import path.
 | 100K to 1M rows | 10,000 to 50,000 |
 | > 1M rows | 50,000 to 100,000 |
 
+<!-- ab-table: commit-size -->
+*Measurement pending: figure `commit-size` (Commit size: commit_every of insert_many and commitEvery of IMPORT DATABASE). No recommendation on this page changes until the A/B result for it is published.*
+<!-- /ab-table -->
+
 ### Drop Heavy Indexes Before Bulk Loads
 
 For large one-shot imports, remove expensive indexes first and recreate them afterward.
@@ -311,6 +331,10 @@ db.command(
 
 db.command("sql", "CREATE INDEX ON User (email) UNIQUE_HASH")
 ```
+
+<!-- ab-table: index-before-after -->
+*Measurement pending: figure `index-before-after` (Index created before or after the load, by index type and engine version). No recommendation on this page changes until the A/B result for it is published.*
+<!-- /ab-table -->
 
 ### Validate the Input Up Front
 
