@@ -112,6 +112,16 @@ def test_bindings_line_goes_with_the_new_wheel(EW, note):
     assert note(_release_rows("26.11.1")) == []
 
 
+def test_the_26_10_2_wheel_already_carries_the_bindings_change(EW, note):
+    """The PRs the line is about (#277, #281, #286, #295, #320) are all in the 26.10.2 tag and the PyPI 26.10.2 wheel was built
+    from it, so a 26.10.2 embedded row must not be told it predates them; the release line stays, since 26.10.2 is not the paper's."""
+    assert EW._BINDINGS_FASTER_FROM == "26.10.2"
+    out = note(_release_rows("26.10.2"))
+    assert any("release 26.10.2" in x for x in out) and not any("Python bindings" in x for x in out)
+    # a 26.10.1 embedded row beside it still does
+    assert any("Python bindings" in x for x in note(_release_rows("26.10.2") + [("arcadedb_embedded", "26.10.1")]))
+
+
 def test_served_rows_alone_do_not_trigger_the_bindings_line(EW, note):
     out = note([("arcadedb_server", SERVED.format(v="26.10.1"))])
     assert not any("Python bindings" in x for x in out)
