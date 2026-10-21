@@ -54,7 +54,9 @@ this one was not measured). Instead of a `KeyboardInterrupt` from the call you s
   SIGINT, with a traceback that names `InterruptedException`.
 - `RuntimeError: Fatal error occurred`, with `Fatal error in exception handling` and
   `Handling: java.lang.InterruptedException: sleep interrupted` on stderr. `finally` blocks
-  and `atexit` hooks still ran.
+  and `atexit` hooks still ran. A statement that calls a Python function (`register_function()`)
+  maps this `RuntimeError` to the `KeyboardInterrupt`, chained from an `ArcadeDBError`, because
+  Ctrl-C is the only thing that causes it there.
 
 SIGINT at a random moment of a 1.5 s `Thread.sleep()` on two pinned cores gave one of these in
 14 of 400 interrupts (3.5%) with the cores idle, and in 26 of 200 (13%) with two busy loops

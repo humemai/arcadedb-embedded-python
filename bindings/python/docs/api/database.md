@@ -1052,7 +1052,9 @@ query, an error raised while the rows are produced surfaces when you read the re
 A `KeyboardInterrupt` (Ctrl-C) in `fn`, or a signal that lands while the statement runs, is
 the one exception: the statement is aborted and the caller gets a `KeyboardInterrupt`,
 chained from the `ArcadeDBError`, whether the signal landed in `fn`, in the engine, or
-between the two. The database works as before. A return value that cannot be converted
+between the two, or while JPype converts the engine's exception (JPype then fails with
+`RuntimeError: Fatal error occurred`, which the bindings report as that `KeyboardInterrupt`,
+with the `ArcadeDBError` that holds the JPype text as its cause). The database works as before. A return value that cannot be converted
 (a numpy array, an integer past 2\*\*63) fails the statement with a `TypeError` or
 `OverflowError` in the `ArcadeDBError` text.
 

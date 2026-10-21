@@ -54,6 +54,21 @@ def _bridge_class(name: str):
 _PENDING = threading.local()
 
 
+def _is_jpype_interrupt_race(error: BaseException) -> bool:
+    """True for the ``RuntimeError`` JPype raises when it loses its race with Ctrl-C.
+
+    JPype's SIGINT handler (``interrupt=False``) interrupts the Java thread first and tells
+    Python afterwards (test_sigint.py, #179, jpype-project/jpype#1496). JPype's own Java
+    call, while it converts a Java exception to a Python one, then fails with
+    ``InterruptedException: sleep interrupted``, and the call ends in
+    ``RuntimeError: Fatal error occurred``. It means Ctrl-C: the signal reached the statement
+    while the engine handled the failure of a Python function (a KeyboardInterrupt raised on
+    entering the callback arrives as ``org.jpype.PyExceptionProxy``, one raised in the
+    function as ``KeyboardInterrupt``).
+    """
+    return isinstance(error, RuntimeError) and "Fatal error occurred" in str(error)
+
+
 def _raise_to_java(error: BaseException):
     """Hand a Python exception to the engine as a Java RuntimeException.
 
@@ -66,10 +81,7 @@ def _raise_to_java(error: BaseException):
     )
     if isinstance(error, KeyboardInterrupt):
         _PENDING.interrupt = error
-    elif isinstance(error, RuntimeError) and "Fatal error occurred" in str(error):
-        # JPype's own race with Ctrl-C (test_sigint.py, #179): its SIGINT handler interrupts the
-        # Java thread first, and a Java sleep or wait in the engine then fails inside JPype with
-        # this RuntimeError before Python's handler runs. It means Ctrl-C.
+    elif _is_jpype_interrupt_race(error):
         _PENDING.interrupt = KeyboardInterrupt(
             "interrupted while a Python function was called"
         )
@@ -105,7 +117,9 @@ def raise_pending_interrupt(error: BaseException, java_exc: BaseException) -> No
     """Raise the KeyboardInterrupt a Python callback left, chained from ``error``, if there is one."""
     interrupt = getattr(_PENDING, "interrupt", None)
     _PENDING.interrupt = None
-    if interrupt is None and _escaped_python_exception(java_exc):
+    if interrupt is None and (
+        _escaped_python_exception(java_exc) or _is_jpype_interrupt_race(java_exc)
+    ):
         interrupt = KeyboardInterrupt("interrupted while a Python function was called")
     if interrupt is not None:
         raise interrupt from error
