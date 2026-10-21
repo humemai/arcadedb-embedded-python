@@ -487,16 +487,18 @@ def caption_n():
     whose N no longer matches also reports BAD, so a re-measure that reaches
     N=5 forces the caption to be corrected rather than left stale.
     """
+    # THE 2026-11 INSTRUMENT RUNS 3 TO 5 REPETITIONS PER CELL, chosen at generation (make_2611_stages `--reps`, default 3,
+    # at most MAX_REPS), where the retired instruments ran 5. A cell inside that range is the instrument's own N and needs no
+    # disclosure; one below the range is a shortfall; one with no rows at all is not a count (its cells print "--", and the
+    # page's roster check owns an arm that should have rows). The disclosed exceptions of the retired instruments (T4's
+    # 8.84M row, T5's four warm passes) described rows that no longer exist, and a stale disclosure of a limitation we
+    # removed is its own defect, so the table starts empty: a row outside the range is listed here, with where its caption
+    # says so, or it is BAD.
+    MIN_REPS = 3
+    import make_2611_stages as _MS
+    MAX_REPS = _MS.MAX_REPS
     EXPECTED = {
         # rendered row label -> (N, where it is disclosed)
-        "ArcadeDB (emb, int8)": ({3, 5}, "T4 caption: N=5 except the 8.84M row"),
-        "ArcadeDB (emb)": ({4, 5}, "T5 caption: four warm passes over one build"),
-        "ArcadeDB (emb, int8, 16GiB)": ({4}, "T5 caption: same treatment"),
-        "ArcadeDB (srv, fp32)": ({4, 5}, "T5 caption: same treatment"),
-        # The native-TS row was listed here at N=3. It was re-measured to N=5
-        # on the current line (results/ts59), so the entry is gone and the
-        # caption's exception with it. Leaving a stale disclosure claiming a
-        # limitation we fixed is its own defect.
     }
     print("=== repetitions behind each published cell ===")
     # THE PAPER'S TABLES ARE NOT PART OF A PER-LANE LANDING. This audit reads
@@ -555,7 +557,9 @@ def caption_n():
                 continue
             label = re.sub("\x01\\d+\x02", "", line).split("&")[0]
             label = re.sub(r"\\[a-zA-Z]+\{?|\}|\\,|\\", "", label).strip()
-            if ns == {5}:
+            if ns == {0}:
+                continue
+            if MIN_REPS <= min(ns) and max(ns) <= MAX_REPS:
                 continue
             exp = EXPECTED.get(label)
             if exp and ns <= exp[0]:
@@ -565,8 +569,8 @@ def caption_n():
                       f"{sorted(exp[0])} ({exp[1]}); update the caption")
                 bad += 1
             else:
-                print(f"  {name} {label:32} N={sorted(ns)} BAD: below N=5 and "
-                      f"disclosed in no caption")
+                print(f"  {name} {label:32} N={sorted(ns)} BAD: outside the instrument's "
+                      f"{MIN_REPS} to {MAX_REPS} repetitions and disclosed in no caption")
                 bad += 1
     if bad:
         print("  The protocol section, the intro and the integrity section all\n"

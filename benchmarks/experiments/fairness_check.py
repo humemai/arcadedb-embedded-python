@@ -232,7 +232,7 @@ def _dense_rows():
         # with server_mem_cap at this scale inherits that row's server-side
         # fields; embedded arms have none and keep their own mem_cap.
         _srv = _served_envelopes()
-        if "server_mem_cap" not in r and r.get("backend") in _srv:
+        if r.get("backend") in _srv:
             for _k, _v in _srv[r["backend"]].items():
                 r.setdefault(_k, _v)
         out.append(r)
@@ -254,8 +254,6 @@ def _served_envelopes():
                     continue
                 if r.get("lane") != "l3d" or r.get("scale") != "deep10m" or r.get("error"):
                     continue
-                if not r.get("server_mem_cap"):
-                    continue
                 be = r.get("backend")
                 if be not in newest or str(r.get("ts_utc")) > str(newest[be].get("ts_utc")):
                     newest[be] = r
@@ -264,8 +262,15 @@ def _served_envelopes():
     # server_query_max_heap_elements: the served ArcadeDB's query limit, which the runner
     # reads from the engine for the campaign cell and the multipass driver cannot
     # (CAMPAIGN section 7 row 21, override_registry.py).
+    #
+    # THE OVERRIDE STAMPS COME FROM THE CAMPAIGN ROW TOO, for every dense arm, embedded ones included. The multipass driver
+    # writes none of them (it measures search, the lane's adapter builds the index), so a gate that read them off the overlay
+    # file would fail every real deep10m cell as NOT STAMPED; the campaign row of the same cell is the adapter's own record.
+    import override_registry as _OV
+    _stamp_fields = {c.field for ov in _OV.OVERRIDES for c in ov.carriers if c.lane == "l3d" and c.field}
+    _stamp_fields |= {k for ov in _OV.OVERRIDES if any(c.lane == "l3d" for c in ov.carriers) for k in ov.companions}
     keys = ("server_mem_cap", "server_heap", "mem_split", "client_mem_cap", "server_mem_cap_g", "role",
-            "server_query_max_heap_elements")
+            "server_query_max_heap_elements") + tuple(sorted(_stamp_fields))
     _served_envelopes._cache = {be: {kk: r[kk] for kk in keys if r.get(kk) is not None} for be, r in newest.items()}
     return _served_envelopes._cache
 

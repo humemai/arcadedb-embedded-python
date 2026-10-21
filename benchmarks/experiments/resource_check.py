@@ -80,6 +80,11 @@ SKIP_LANES = {
 }
 
 
+def _engine(backend):
+    """The engine an arm belongs to: the first word of its backend key (arcadedb_embedded and arcadedb_server are both arcadedb)."""
+    return str(backend).split("_")[0]
+
+
 def _num(v):
     try:
         return None if v in (None, "") else float(v)
@@ -152,7 +157,11 @@ def check(rows):
                     med[be] = statistics.median(vals)
                     notes[be] = next((r["disk_note"] for r in rs if r.get("disk_note")), None) \
                         if metric == "disk" else None
-            if len(med) < MIN_ENGINES:
+            # THREE ENGINES, NOT THREE ARMS. ArcadeDB's embedded and served arms (and the PQ and int8 siblings of any engine)
+            # are one engine measured twice; counted as peers they outvote the group, and a JVM engine's two arms then
+            # make an in-process Rust or C engine read as far below "the others" (SurrealDB's lifecycle memory against
+            # ArcadeDB's two deployments). The comparison needs three engines before the median means anything.
+            if len({_engine(be) for be in med}) < MIN_ENGINES:
                 continue
             group = statistics.median(med.values())
             for be, v in med.items():

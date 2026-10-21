@@ -114,10 +114,12 @@ def test_the_dense_table_headlines_latency_at_matched_recall(published):
     labels = set().union(*(e["metrics"] for e in t["entries"]))
     assert {"p50 ms at recall 0.95", "p99 ms at recall 0.95", "ef or nProbe at recall 0.95",
             "p50 ms at recall 0.90", "p50 ms at recall 0.99"} <= labels
+    # the 1M tier: the fixture also carries one deep10m campaign row per overlay arm (the envelope the gates read), which is
+    # not part of this median
     rows = [r for r in _fixture_rows() if r["lane"] == "l3d" and r["backend"] == "arcadedb_dense_embedded"
-            and r.get("matched_r095_p50_ms") is not None]
+            and r["scale"] == "small" and r.get("matched_r095_p50_ms") is not None]
     want = statistics.median(r["matched_r095_p50_ms"] for r in rows)
-    entry = next(e for e in t["entries"] if e["backend_key"] == "arcadedb_dense_embedded")
+    entry = next(e for e in t["entries"] if e["backend_key"] == "arcadedb_dense_embedded" and e["scale"] == "small")
     assert entry["metrics"]["p50 ms at recall 0.95"]["median"] == pytest.approx(want, rel=1e-3)
     assert entry["beam_curve"]["kind"] == "ef" and len(entry["beam_curve"]["points"]) == 4
 

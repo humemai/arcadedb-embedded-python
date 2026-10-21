@@ -616,6 +616,12 @@ def main() -> int:
     print("\nevery override a table meets is named under it (CAMPAIGN section 7 row 21)")
     ov_bad = _check_override_disclosures(payload, rows)
     print(f"  {ov_bad} undisclosed override(s)")
+    # #432 deleted this call and left `or j_bad` in the return below, which made every run end in a NameError; the check itself
+    # still protects a 2026-11 page, because the image-defaults ArcadeDB arm is in the 2026-11 subset (make_2611_stages)
+    print("\nthe ArcadeDB row at the image's own JVM settings is explained wherever it is printed "
+          "(CAMPAIGN section 7 row 69)")
+    j_bad = _check_jvm_defaults_disclosure(payload)
+    print(f"  {j_bad} table(s) missing the sentence")
     return 1 if (i_bad or d_bad or a_bad or l_bad or c_bad
                  or r_bad or m_bad or not u_ok or k_bad or o_bad or n_bad or iv_bad or ov_bad or j_bad) else 0
 
@@ -753,6 +759,10 @@ NOT_PRINTED = [
      "page prints the matched-recall headline read off the curve, and carries the curve itself on the "
      "entry (`beam_curve`, median over runs); the best recall reached is in the text of a target no "
      "beam reached"),
+    (r"^pq_(subspaces|clusters|index_bytes)$",
+     "the product-quantization arms' codebook shape and index size (QUANTIZATION.md), kept on the rows as the "
+     "evidence of which PQ configuration ran. The page names the precision (`pq`); the shape is in the rows "
+     "and in QUANTIZATION.md, not a column"),
     (r"^matched_r\d+_recall_at_10$",
      "the recall measured at the beam that first reached the target: it qualifies the matched latency "
      "beside it, which is the column"),
@@ -1158,8 +1168,8 @@ def _check_coverage(payload):
             import export_web as _EW
             _lane = _EW._TABLE_LANE.get(tid, (None,))[0]
             _wl = _EW._TABLE_LANE.get(tid, (None, None))[1]
-            if _ONLY_LANES and _lane and (_lane not in _ONLY_LANES
-                                          or not _lane_has_rows(_lane, _wl)):
+            if _lane and ((_ONLY_LANES and _lane not in _ONLY_LANES)
+                          or not _lane_has_rows(_lane, _wl)):
                 # Same distinction the roster check draws one function down: a
                 # table absent because its lane is outside this landing, or
                 # because that lane has no rows at this pin yet, is the
@@ -1266,6 +1276,34 @@ def _check_coverage(payload):
     return bad, (expected, present, declared, undeclared)
 
 
+def _roster_arms(lane, RN, table):
+    """(registered arms of the lane including the PQ arms a payload carries, the subset of them the 2026-11 page owes a row).
+
+    TWO FACTS THE ROSTER MUST KNOW ABOUT 2026-11. The dense lane's PQ arms join runner.LANES only under BENCH_DENSE_PQ=1, but a
+    payload that carries PQ rows carries them whether or not this process was started with the switch, so they are registered
+    for the lane whenever the table has such an entry (a row whose arm the roster does not know would read as STRAY, and a
+    switch left off in the gate's shell would fail a publish whose rows are all right). And the instrument measures a SUBSET
+    of the registered arms (make_2611_stages.OUTSIDE names the rest: Elasticsearch, Chroma, LanceDB, Milvus, FalkorDB, QuestDB,
+    the Neo4j cross-model arm), so an arm outside it is owed no row and no declaration. An outside arm that has a row anyway is
+    still on the page and still keyed; it is only not owed.
+    """
+    import bench_common as BC
+    import make_2611_stages as MS
+    registered = list(RN.LANES[lane][1])
+    if any(str(e.get("backend_key")) in BC.DENSE_PQ_ARMS for e in table.get("entries", [])):
+        registered += [a for a in BC.DENSE_PQ_ARMS if a not in registered and lane == "l3d"]
+    owed = {a for a in registered if not MS.is_outside(a)}
+    if lane == "l3d":
+        # THE DENSE TABLE IS THE MULTIPASS OVERLAY'S (export_web: with an overlay on disk the table is all overlay, apart
+        # from the PQ arms), so it carries the overlay's arms, and an arm registered for the lane that has no multipass
+        # protocol (Memgraph, LadybugDB, the int8 siblings of Neo4j, MongoDB and ArangoDB) is not on it and is not owed a row.
+        import export_web as EW
+        import make_paper_tables as MPT
+        overlay = {bk for arm, bk, _label, _ours in EW.DENSE_10M_ARMS if arm in MPT.MP_ARMS}
+        owed = {a for a in owed if a in overlay or a in BC.DENSE_PQ_ARMS}
+    return registered, owed
+
+
 def _check_lane_roster(payload):
     """A3, the roster: every backend runner.LANES registers for a lane is on
     each table the lane feeds, as a row or a declared absence.
@@ -1277,8 +1315,7 @@ def _check_lane_roster(payload):
     for tid, (lane, _wl) in sorted(EW._TABLE_LANE.items()):
         t = tables.get(tid)
         if t is None:
-            if _ONLY_LANES and (lane not in _ONLY_LANES
-                                or not _lane_has_rows(lane, _wl)):
+            if (_ONLY_LANES and lane not in _ONLY_LANES) or not _lane_has_rows(lane, _wl):
                 # A LANDING SCOPED TO ONE LANE CARRIES ONE LANE'S TABLES. This
                 # roster check exists so a registered arm cannot vanish from a
                 # table silently, and it reads the RUNNER's lanes rather than
@@ -1291,12 +1328,17 @@ def _check_lane_roster(payload):
                 # rows": a lane can be in scope because a later landing will
                 # add it. A lane with no rows at this pin has not been
                 # measured yet, the payload declares it pending, and that is
-                # not a roster finding either.
+                # not a roster finding either. This holds with or without a
+                # scope: the 2026-11 instrument runs a subset of the lanes
+                # (make_2611_stages.CORE_LANES, SECOND_LANES), so the restart
+                # lane and a lane still queued have no table, and the page's
+                # own table list (refresh_web_page.check_table_coverage) is
+                # what refuses a table the page names and the payload lacks.
                 continue
             print(f"  MISS    {tid}: the payload has no such table")
             bad += 1
             continue
-        registered = list(RN.LANES[lane][1])
+        registered, owed = _roster_arms(lane, RN, t)
         keyed = {}
         for e in t.get("entries", []):
             key = e.get("backend_key")
@@ -1310,6 +1352,8 @@ def _check_lane_roster(payload):
         absent = {str(a.get("backend")) for a in (t.get("declared_absences") or [])
                   if not a.get("column")}
         for key in registered:
+            if key not in owed:
+                continue
             # An arm that runs one workload of its lane only (runner.ARM_RUNS) is not owed
             # on the other workload's table: not a row, not a declared absence.
             if not RN.arm_runs(lane, _wl, key):

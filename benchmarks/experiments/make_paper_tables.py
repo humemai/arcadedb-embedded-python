@@ -734,8 +734,10 @@ def graph_table(rows):
              r"2-hop p99 (ms) & Peak memory (GiB) \\", r"\midrule"]
     for be in order:
         for sc in ("sf1", "sf10"):
+            # ONE DURABILITY CLASS: the headline (relaxed) one. The strict rows are the durability table's, and pooling
+            # them with the relaxed ones printed a median over two settings behind an N that counted both.
             g = [r for r in l2 if r["backend"] == be and r["scale"] == sc
-                 and r["workload"] == "oltp"]
+                 and r["workload"] == "oltp" and (r.get("durability_class") or "relaxed") == "relaxed"]
             if not g:
                 continue
             lines.append(" & ".join([
@@ -1228,11 +1230,11 @@ def dense_ts_table(rows):
     _dev = sorted(v for v in _v if ".dev" in v)
     if _dev:
         print("  !! T5 time-series ArcadeDB row is NOT on the release: %s.\n"
-              "     Re-run the native TS probe on 26.8.1 before submission; "
+              "     Re-measure the native TS arm on the release pin before submission; "
               "this row is not publishable as measured." % ", ".join(_dev),
               file=sys.stderr)
-    elif len(native) < 5:
-        print("  !! T5 time-series ArcadeDB row has %d reps, not 5." % len(native),
+    elif len(native) < 3:
+        print("  !! T5 time-series ArcadeDB row has %d reps, fewer than the instrument's 3." % len(native),
               file=sys.stderr)
     if native:
         lines.append(" & ".join([
