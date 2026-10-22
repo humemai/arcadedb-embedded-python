@@ -137,6 +137,16 @@ rather than a `get()` per value, or upgrade JPype to the release that carries th
 objects with `sys.getallocatedblocks()` before and after a read to see whether your path is
 affected.
 
+## Free-threaded Python (3.13t, 3.14t)
+
+The bindings install and run on a free-threaded CPython (no GIL). JPype 1.7.1 publishes `cp313t` and `cp314t` wheels, and the GIL stays off after `import jpype` and after the JVM starts. `tests/test_free_threading.py` runs many threads against one database and against one database each (inserts, numpy vector rows, queries, vector searches, Python functions and record events) and compares the result with a sequential run. What it found:
+
+- Threads whose first call was `create_database()` or `open_database()` raced into `start_jvm()` and all but one failed with `Failed to start JVM`. This happened with the GIL as well. `start_jvm()` now holds a lock, and the threads that lose the race join the running JVM.
+- The first `register_function()` or `on()` defines a JPype proxy class. Threads that did it together each defined one (the leak the cache exists to avoid). The definition now happens once, under a lock.
+- Open: when many threads make their first Java calls at the same moment, JPype 1.7.1 can crash the process in `JPHintsConversion::matches` (its lazy type-conversion setup). It was seen on 3.14t and not with the GIL. Open a database and run one statement on the main thread before the worker threads start; this is a precaution, not a verified fix.
+- Open: on 3.14t the Python heap grows with every `register_function()` and `on()` cycle (`test_registering_again_and_again_does_not_grow_the_python_heap` fails there), and it stays flat with the GIL. The cause is not found.
+- A process in which a thread other than the main thread called Java does not exit, with or without the GIL ([jpype#1169](https://github.com/jpype-project/jpype/issues/1169)). End such a thread with `jpype.java.lang.Thread.detach()`, or set `jpype.config.destroy_jvm = False` before the exit (it skips the JVM shutdown, so the engine's shutdown hook does not run).
+
 ## Fixed in 26.10.2
 
 These entries left the page when 26.10.2 shipped. On 26.10.1, upgrade: `pip install -U arcadedb-embedded`.

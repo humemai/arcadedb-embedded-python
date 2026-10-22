@@ -4,6 +4,7 @@ ArcadeDB Python Bindings - JVM Management
 Handles JVM initialization and JAR file management.
 """
 
+import functools
 import glob
 import os
 import platform
@@ -12,6 +13,7 @@ import shlex
 import shutil
 import sys
 import tempfile
+import threading
 import zipfile
 from pathlib import Path
 from typing import Iterable, Optional, Union
@@ -25,6 +27,10 @@ from .exceptions import ArcadeDBError
 _LOGGER = get_logger(__name__)
 
 _JVM_CONFIG = None
+# One start at a time: JPype's startJVM is not safe to call twice at once, and a free-threaded CPython (no GIL) lets
+# threads whose first call is create_database() or open_database() reach it together. The thread that loses the race
+# waits here, then takes the "JVM already started" branch of start_jvm().
+_START_LOCK = threading.RLock()
 # Default heap when neither heap_size nor a user flag sets one: this share of the
 # RAM the JVM sees (the container limit inside a container, the machine's RAM
 # otherwise). Chosen from memory probes, see the "Memory" note in the JVM guide.
@@ -286,6 +292,16 @@ def get_bundled_jre_lib_path() -> str:
     return str(jvm_lib_path)
 
 
+def _serialized(function):
+    @functools.wraps(function)
+    def locked(*args, **kwargs):
+        with _START_LOCK:
+            return function(*args, **kwargs)
+
+    return locked
+
+
+@_serialized
 def start_jvm(
     heap_size: Optional[str] = None,
     disable_xml_limits: bool = False,

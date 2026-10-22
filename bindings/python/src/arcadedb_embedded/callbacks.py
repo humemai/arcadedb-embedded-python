@@ -157,67 +157,80 @@ def _arity(fn: Callable) -> Tuple[int, int]:
 # a @JImplements class defined on every registration leaked about 6 KB of Python heap per
 # registration, which neither the engine's unregister nor gc gave back. State is per instance.
 _PROXY_CLASSES = {}
+# defined under a lock: on a free-threaded CPython (no GIL) two threads that register their first function or event together would
+# each define a class, and the second definition leaks like the one this cache exists to avoid
+_PROXY_LOCK = threading.Lock()
 
 
 def _function_proxy_class():
     cls = _PROXY_CLASSES.get("function")
     if cls is None:
+        with _PROXY_LOCK:
+            cls = _PROXY_CLASSES.get("function")
+            if cls is None:
 
-        @jpype.JImplements(
-            _bridge_class("com.arcadedb.python.PythonFunctions$Callback")
-        )
-        class _PythonFunction:
-            def __init__(self, fn, database_ref):
-                self._fn = fn
-                self._database_ref = database_ref
+                @jpype.JImplements(
+                    _bridge_class("com.arcadedb.python.PythonFunctions$Callback")
+                )
+                class _PythonFunction:
+                    def __init__(self, fn, database_ref):
+                        self._fn = fn
+                        self._database_ref = database_ref
 
-            @jpype.JOverride
-            def call(self, args):
-                from .core import _wrap_java_record
+                    @jpype.JOverride
+                    def call(self, args):
+                        from .core import _wrap_java_record
 
-                try:
-                    values = []
-                    for arg in args:
-                        value = convert_java_to_python(arg)
-                        values.append(_wrap_java_record(value, self._database_ref()))
-                    result = convert_python_to_java(self._fn(*values))
-                    if result is not None:
-                        # Convert to a Java Object here, inside the try: left to JPype's return
-                        # conversion an unconvertible value (a numpy array, an int past 2**63)
-                        # reaches the engine as an opaque org.jpype.PyExceptionProxy.
-                        result = jpype.JObject(result, jpype.JObject)
-                    return result
-                except BaseException as e:  # pylint: disable=broad-except
-                    _raise_to_java(e)
+                        try:
+                            values = []
+                            for arg in args:
+                                value = convert_java_to_python(arg)
+                                values.append(
+                                    _wrap_java_record(value, self._database_ref())
+                                )
+                            result = convert_python_to_java(self._fn(*values))
+                            if result is not None:
+                                # Convert to a Java Object here, inside the try: left to JPype's return
+                                # conversion an unconvertible value (a numpy array, an int past 2**63)
+                                # reaches the engine as an opaque org.jpype.PyExceptionProxy.
+                                result = jpype.JObject(result, jpype.JObject)
+                            return result
+                        except BaseException as e:  # pylint: disable=broad-except
+                            _raise_to_java(e)
 
-        cls = _PROXY_CLASSES["function"] = _PythonFunction
+                cls = _PROXY_CLASSES["function"] = _PythonFunction
     return cls
 
 
 def _event_proxy_class():
     cls = _PROXY_CLASSES.get("event")
     if cls is None:
+        with _PROXY_LOCK:
+            cls = _PROXY_CLASSES.get("event")
+            if cls is None:
 
-        @jpype.JImplements(
-            _bridge_class("com.arcadedb.python.PythonRecordEvents$Callback")
-        )
-        class _PythonListener:
-            def __init__(self, fn, is_before, database_ref):
-                self._fn = fn
-                self._is_before = is_before
-                self._database_ref = database_ref
+                @jpype.JImplements(
+                    _bridge_class("com.arcadedb.python.PythonRecordEvents$Callback")
+                )
+                class _PythonListener:
+                    def __init__(self, fn, is_before, database_ref):
+                        self._fn = fn
+                        self._is_before = is_before
+                        self._database_ref = database_ref
 
-            @jpype.JOverride
-            def call(self, record):
-                from .core import _wrap_java_record
+                    @jpype.JOverride
+                    def call(self, record):
+                        from .core import _wrap_java_record
 
-                try:
-                    result = self._fn(_wrap_java_record(record, self._database_ref()))
-                except BaseException as e:  # pylint: disable=broad-except
-                    _raise_to_java(e)
-                return not (self._is_before and result is False)
+                        try:
+                            result = self._fn(
+                                _wrap_java_record(record, self._database_ref())
+                            )
+                        except BaseException as e:  # pylint: disable=broad-except
+                            _raise_to_java(e)
+                        return not (self._is_before and result is False)
 
-        cls = _PROXY_CLASSES["event"] = _PythonListener
+                cls = _PROXY_CLASSES["event"] = _PythonListener
     return cls
 
 
