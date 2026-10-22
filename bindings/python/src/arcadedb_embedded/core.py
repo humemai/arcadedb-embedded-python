@@ -1351,6 +1351,8 @@ class Database:
         pq_clusters: Optional[int] = None,
         pq_center_globally: Optional[bool] = None,
         pq_training_limit: Optional[int] = None,
+        rerank_oversample: Optional[int] = None,
+        fused_pq: Optional[bool] = None,
         build_graph_now: bool = True,
     ) -> "VectorIndex":
         """
@@ -1416,7 +1418,17 @@ class Database:
             pq_center_globally: Whether to globally center vectors before PQ.
                 Requires quantization="PRODUCT".
             pq_training_limit: Max vectors to use for PQ training. Requires
-                quantization="PRODUCT".
+                quantization="PRODUCT". The codebook is trained on a random sample
+                of this size (the engine caps it at 128000).
+            rerank_oversample: Candidates per requested neighbour that a search
+                walking on the PQ codes scores again on the stored vectors
+                (maps to the index setting "rerankOversample"; the engine default
+                is 10, 0 returns the PQ scores alone, negative is refused).
+                Requires quantization="PRODUCT". A query can override it with the
+                `rerank` option of `vectorNeighbors`.
+            fused_pq: Whether the graph file stores the PQ codes of every node's
+                neighbours inline (jvector FusedPQ; maps to the index setting
+                "fusedPQ"; off by default). Requires quantization="PRODUCT".
             build_graph_now: If True (default), eagerly builds the vector graph
                 immediately after index creation. If False, graph preparation is
                 deferred and may happen lazily on first search.
@@ -1463,6 +1475,8 @@ class Database:
                     pq_clusters,
                     pq_center_globally,
                     pq_training_limit,
+                    rerank_oversample,
+                    fused_pq,
                 )
             ):
                 if not quantization or quantization.upper() != "PRODUCT":
@@ -1523,6 +1537,10 @@ class Database:
                 builder.withPQTrainingLimit(int(pq_training_limit))
 
             metadata_cfg = {}
+            if rerank_oversample is not None:
+                metadata_cfg["rerankOversample"] = int(rerank_oversample)
+            if fused_pq is not None:
+                metadata_cfg["fusedPQ"] = bool(fused_pq)
             if store_vectors_in_graph:
                 metadata_cfg["storeVectorsInGraph"] = True
             if add_hierarchy is not None:

@@ -343,14 +343,87 @@ rows = db.query(
 - In current ArcadeDB engine builds, PRODUCT/PQ also needs enough indexed vectors per
   bucket for training. For very small corpora, set `pq_clusters` to a value no larger
   than the number of indexed vectors in that bucket, or use `INT8`, `BINARY`, or `None`.
-- `"PRODUCT"`/PQ is not recommended in these bindings: current engine builds score SQL search
-  (`vectorNeighbors`) candidates with the full-precision vectors, so PQ gives no search speedup,
-  and the index files are larger than with `None` because PQ codes are written that nothing reads
-  ([ArcadeDB #10514](https://github.com/ArcadeData/arcadedb/issues/10514)).
+- `"PRODUCT"` (PQ) walks the graph on in-memory PQ codes and re-ranks on the stored vectors.
+  See [Product quantization (PQ) in SQL](#product-quantization-pq-in-sql) for the statement,
+  the settings, and what was measured. It needs ArcadeDB 26.11.1 or later to do that; the
+  26.10.x wheels score every candidate on the full-precision vectors and write PQ codes
+  that nothing reads.
 - SQL quantization helpers: `vector.quantizeInt8` / `vector.dequantizeInt8` and
   `vector.quantizeBinary` / `vector.dequantizeBinary(v[, low, high])`. Binary
   quantization keeps only the sign of each element; dequantize reconstructs it as
   `low`/`high` (default `-1.0`/`1.0`).
+
+## Product quantization (PQ) in SQL
+
+A `PRODUCT` index trains a PQ codebook on a sample of the vectors, keeps one small code per
+vector in memory, and walks the graph on those codes. SQL `vectorNeighbors`, the Cypher
+procedure `db.index.vector.queryNodes`, and `VectorIndex.find_nearest()` then keep the best
+`k * rerankOversample` candidates and score them on the stored vectors, so the distances
+they return are exact. Create the index with the statement; every PQ setting is a `METADATA`
+key, and `create_vector_index()` passes the same keys when you use the helper:
+
+```python
+db.command(
+    "sql",
+    """
+    CREATE INDEX ON Doc (embedding) LSM_VECTOR METADATA {
+        "dimensions": 128, "similarity": "EUCLIDEAN",
+        "quantization": "PRODUCT",
+        "pqSubspaces": 32, "pqClusters": 256, "pqTrainingLimit": 128000,
+        "rerankOversample": 10, "fusedPQ": false
+    }
+    """,
+)
+```
+
+| `METADATA` key | `create_vector_index()` | Meaning |
+| --- | --- | --- |
+| `pqSubspaces` | `pq_subspaces` | Subspaces (M). Default: dimensions / 4, capped at 512 |
+| `pqClusters` | `pq_clusters` | Clusters per subspace (K), default 256. Must not exceed the vectors a bucket holds at training |
+| `pqCenterGlobally` | `pq_center_globally` | Centre the vectors before encoding, default `true` |
+| `pqTrainingLimit` | `pq_training_limit` | Size of the random sample the codebook is trained on, default 128000 (the engine caps it there) |
+| `rerankOversample` | `rerank_oversample` | Candidates per requested neighbour scored again on the stored vectors, default 10. `0` returns the PQ scores alone; a negative value is refused |
+| `fusedPQ` | `fused_pq` | Store the PQ codes of every node's neighbours in the graph file (jvector FusedPQ), default `false`. Ignored unless `pqClusters` is 256 |
+
+`rerankOversample` is the default for every search of the index. One query overrides it with
+the `rerank` option of `vectorNeighbors`; `0` returns the PQ scores alone, without reading a
+stored vector, and the distances are then PQ estimates:
+
+```python
+rows = db.query(
+    "sql",
+    "SELECT title, distance FROM "
+    "(SELECT expand(vectorNeighbors('Doc[embedding]', ?, 10, { efSearch: 100, rerank: 30 })))",
+    to_java_float_array(query_vec),
+).to_list()
+```
+
+Measured on SIFT-1M (1 million 128-dimensional vectors) with 32 subspaces, on an ArcadeDB
+26.11.1 development build that includes ArcadeData/arcadedb#10545, recall@10 against the
+exact neighbours:
+
+| `efSearch` | 10 | 50 | 100 | 200 | 400 |
+| --- | --- | --- | --- | --- | --- |
+| `NONE` | 0.764 | 0.965 | 0.990 | 0.997 | 0.999 |
+| `PRODUCT`, `rerankOversample` 10 (default) | 0.986 | 0.986 | 0.986 | 0.996 | 0.999 |
+| `PRODUCT`, `rerankOversample` 0 (PQ scores only) | 0.617 | 0.713 | 0.720 | 0.722 | 0.722 |
+
+The index files were 170.0 MiB for `PRODUCT` against 144.9 MiB for `NONE` (1.17 times; the
+engine before #10545 wrote 7.9 times). Without a re-rank the recall stops near 0.72 at any
+beam, because PQ cannot tell apart neighbours that share most of their codes. Nothing here
+is a speed claim: no `ab.py` timing of PQ search exists yet, so this guide does not say PQ
+search is faster or slower than `NONE`.
+
+- The ranking of a re-ranked search can differ from the exact walk's, and more is lost at
+  fewer subspaces. Raise `rerank` (or `rerankOversample`) and `efSearch` to close the gap, or
+  use `INT8` when the exact walk is what matters.
+- `VectorIndex.find_nearest()` takes the same path as SQL on a `PRODUCT` index (it has no
+  `rerank` argument: use SQL for a per-query value). Grouped search (`groupBy`) and the
+  other quantizations keep their exact walk.
+- `VectorIndex.find_nearest_approximate()` is the PQ scores alone, with no beam and no
+  re-rank. Use SQL with `rerank: 0` and an `efSearch` for the PQ scores with a beam.
+- A search that arrives before the graph exists is answered exactly from the delta scan, so
+  call `build_graph_now()` before you measure recall.
 
 ## SQL Helpers
 
@@ -563,9 +636,10 @@ options. All keys are optional:
 | `groupBy` | Property to group the hits by; `k` then counts groups |
 | `groupSize` | Hits kept per group (default 1) |
 | `maxDistance` | Drop hits farther than this distance |
+| `rerank` | `PRODUCT` indexes only: candidates per requested neighbour scored again on the stored vectors, overriding the index's `rerankOversample`; `0` returns the PQ scores alone. Needs ArcadeDB 26.11.1 or later |
 
-An unknown key raises an error that lists the allowed ones. `where` raises that error on an
-engine older than 26.11.1, and the 26.10.x wheels carry one.
+An unknown key raises an error that lists the allowed ones. `where` and `rerank` raise that
+error on an engine older than 26.11.1, and the 26.10.x wheels carry one.
 
 ### Filter by RID and by predicate
 

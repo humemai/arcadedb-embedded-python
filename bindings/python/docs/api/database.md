@@ -1345,10 +1345,12 @@ specifically need that surface.
   or `None` for full precision (default: `"INT8"`, a choice of this helper; a SQL
   `CREATE INDEX` without `"quantization"` in its `METADATA` builds a full-precision index,
   the engine's `NONE`). Prefer `"INT8"` for current
-  production usage in these bindings; `"PRODUCT"`/PQ is not recommended: in current engine builds the SQL search
-  (`vectorNeighbors`) scores candidates with the full-precision vectors, so PQ gives no
-  search speedup, and the index files are larger than with `None` because the engine writes
-  PQ codes that it does not read ([ArcadeDB #10514](https://github.com/ArcadeData/arcadedb/issues/10514)). In current ArcadeDB engine builds, `"PRODUCT"` also requires
+  production usage in these bindings. `"PRODUCT"` walks the graph on PQ codes and re-ranks on
+  the stored vectors from ArcadeDB 26.11.1 on; the measured size and recall are in
+  [Product quantization (PQ) in SQL](../guide/vectors.md#product-quantization-pq-in-sql),
+  which also says no timing of PQ search exists yet. On the 26.10.x wheels it scores every
+  candidate on the full-precision vectors and writes PQ codes nothing reads
+  ([ArcadeDB #10514](https://github.com/ArcadeData/arcadedb/issues/10514)). `"PRODUCT"` also requires
   enough indexed vectors per bucket for PQ training. For tiny corpora, set `pq_clusters`
   explicitly to a small value or prefer another quantization mode.
 - `encoding` (str | None): Optional storage encoding for the document property.
@@ -1371,7 +1373,15 @@ specifically need that surface.
   `quantization="PRODUCT"`. In current ArcadeDB engine builds, this should not exceed
   the number of indexed vectors available for PQ training in a bucket.
 - `pq_center_globally` (bool | None): PQ global centering flag. Requires `quantization="PRODUCT"`.
-- `pq_training_limit` (int | None): PQ training sample cap. Requires `quantization="PRODUCT"`.
+- `pq_training_limit` (int | None): PQ training sample cap (the codebook is trained on a random
+  sample of this size; the engine caps it at 128000). Requires `quantization="PRODUCT"`.
+- `rerank_oversample` (int | None): Candidates per requested neighbour a PQ search scores again
+  on the stored vectors (index setting `rerankOversample`; engine default 10; `0` returns the
+  PQ scores alone; negative is refused). Requires `quantization="PRODUCT"`. A query overrides
+  it with the `rerank` option of `vectorNeighbors`.
+- `fused_pq` (bool | None): Store the PQ codes of every node's neighbours in the graph file
+  (index setting `fusedPQ`; off by default; ignored unless `pq_clusters` is 256). Requires
+  `quantization="PRODUCT"`. Both new settings need ArcadeDB 26.11.1 or later.
   Current engine builds ignore it ([ArcadeDB #10514](https://github.com/ArcadeData/arcadedb/issues/10514)).
 - `build_graph_now` (bool): If `True` (default), eagerly builds/loads the vector graph immediately after index creation. Set to `False` to defer graph preparation to first query.
 

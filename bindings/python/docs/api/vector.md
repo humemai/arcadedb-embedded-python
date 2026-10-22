@@ -306,8 +306,15 @@ Find k-nearest neighbors to the query vector.
 Treat this as a helper/manual API. For normal application queries, prefer SQL
 `vectorNeighbors` so search composes naturally with filtering, projection, and record
 exclusion. This method takes `ef_search` and `allowed_rids` only. The other options of the
-SQL function (`where`, `groupBy`, `groupSize`, `maxDistance`) are SQL-only; see
+SQL function (`where`, `groupBy`, `groupSize`, `maxDistance`, `rerank`) are SQL-only; see
 [Search Options in SQL](../guide/vectors.md#search-options-in-sql).
+
+On a `PRODUCT` index (ArcadeDB 26.11.1 or later) the method answers like SQL
+`vectorNeighbors`: the walk scores on the PQ codes and the best `k * rerankOversample`
+candidates are re-ranked on the stored vectors, so the distances are exact and the ranking
+can differ from an exact walk's. Before 26.11.1, and on every other quantization, it is the
+exact walk. See
+[Product quantization (PQ) in SQL](../guide/vectors.md#product-quantization-pq-in-sql).
 
 **Note:** With default settings (`build_graph_now=True` in `create_vector_index`), graph
 preparation runs during index creation. In the preferred SQL path, this eager behavior is
@@ -321,7 +328,7 @@ also the default. If you explicitly disable eager preparation, the first call to
     - NumPy array: `np.array([0.1, 0.2, ...])`
     - Any array-like iterable
 - `k` (int): Number of neighbors to return (default: 10)
-- `ef_search` (int | None): Optional exact-search beam width override. `None` uses
+- `ef_search` (int | None): Optional search beam width override. `None` uses
   ArcadeDB's default/adaptive search behavior. Anything but a positive integer raises
   `ArcadeDBError`.
 - `allowed_rids` (List[str]): Optional list of RID strings (e.g. `["#1:0", "#2:5"]`) to
@@ -428,6 +435,11 @@ returned. If you want to exclude it, do that in SQL/Cypher with a `WHERE` clause
 
 Find k nearest neighbors using Product Quantization (PQ) approximate search.
 
+The answer is the PQ scores alone: there is no beam and no re-rank on the stored vectors,
+so recall stops near 0.72 on SIFT-1M with 32 subspaces and the distances are PQ estimates.
+`find_nearest()` re-ranks and returns exact distances. For the PQ scores with a beam, run
+SQL `vectorNeighbors` with `rerank: 0` and an `efSearch`.
+
 Only available on indexes created with `quantization="PRODUCT"`; calling it on any
 other index raises `ArcadeDBError`.
 
@@ -513,6 +525,7 @@ Return stable vector index metadata as a Python dictionary.
     - `graph_build_cache_size`, `mutations_before_rebuild`, `store_vectors_in_graph`
     - `build_state`
     - `pq_subspaces`, `pq_clusters`, `pq_center_globally`, `pq_training_limit`
+    - `rerank_oversample`, `fused_pq`
 
 **Example:**
 
