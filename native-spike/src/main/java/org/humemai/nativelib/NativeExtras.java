@@ -131,9 +131,55 @@ public final class NativeExtras {
     return v instanceof Number n ? n.intValue() : def;
   }
 
-  private static Object[] varargs(final Object props) {
+  private static final Object[] NO_PROPS = new Object[0]; // never written to: one shared array for every property-less edge and vertex
+
+  /**
+   * Edges without properties from two ';'-joined RID texts ("#12:34;#12:35"), as EdgeBatcher.newEdgesJoined does on the JPype path, but
+   * each RID is read straight from the text into the engine's RID(bucket, position): no substring, split array or per-RID String.
+   */
+  static void newEdgesJoined(final GraphBatch batch, final String src, final String type, final String dst) {
+    if (src.isEmpty() && dst.isEmpty())
+      return;
+    int a = 0, b = 0;
+    while (true) {
+      int ae = src.indexOf(';', a), be = dst.indexOf(';', b);
+      if (ae < 0)
+        ae = src.length();
+      if (be < 0)
+        be = dst.length();
+      batch.newEdge(rid(src, a, ae), type, rid(dst, b, be), NO_PROPS);
+      final boolean lastSrc = ae >= src.length(), lastDst = be >= dst.length();
+      if (lastSrc != lastDst)
+        throw new IllegalArgumentException("source_rids and destination_rids differ in length");
+      if (lastSrc)
+        return;
+      a = ae + 1;
+      b = be + 1;
+    }
+  }
+
+  /** The RID of "#bucket:position" in text[from, to) (the '#' is optional); anything else goes through RID(String), which refuses it. */
+  private static RID rid(final String text, final int from, final int to) {
+    int p = from;
+    if (p < to && text.charAt(p) == '#')
+      p++;
+    long bucket = 0, position = 0;
+    int digits = p;
+    while (p < to && text.charAt(p) >= '0' && text.charAt(p) <= '9' && p - digits < 9)
+      bucket = bucket * 10 + (text.charAt(p++) - '0');
+    if (p == digits || p >= to || text.charAt(p) != ':')
+      return new RID(text.substring(from, to));
+    digits = ++p;
+    while (p < to && text.charAt(p) >= '0' && text.charAt(p) <= '9' && p - digits < 18)
+      position = position * 10 + (text.charAt(p++) - '0');
+    if (p == digits || p != to)
+      return new RID(text.substring(from, to));
+    return new RID((int) bucket, position);
+  }
+
+  static Object[] varargs(final Object props) {
     if (!(props instanceof Map<?, ?> m) || m.isEmpty())
-      return new Object[0];
+      return NO_PROPS;
     final Object[] out = new Object[m.size() * 2];
     int i = 0;
     for (final Map.Entry<?, ?> e : m.entrySet()) {
@@ -143,7 +189,7 @@ public final class NativeExtras {
     return out;
   }
 
-  private static String ridList(final RID[] rids) {
+  static String ridList(final RID[] rids) {
     final StringBuilder sb = new StringBuilder("[");
     for (int i = 0; i < rids.length; i++) {
       if (i > 0)
@@ -236,33 +282,41 @@ public final class NativeExtras {
       if (entry == null)
         throw new IllegalArgumentException("unknown GraphBatch " + h);
       final GraphBatch batch = entry.batch();
-      final Map<String, Object> a = args(argsJson);
-      switch (ArcadeNative.str(op)) {
+      final String opName = ArcadeNative.str(op);
+      final ArcadeNative.Chars chars = ArcadeNative.chars(argsJson);
+      final List<Object[]> flats = new ArrayList<>(); // create_vertices: one property array per streamed row
+      final Map<String, Object> a;
+      if (chars.n == 0)
+        a = new HashMap<>();
+      else if (opName.equals("create_vertices"))
+        a = Json.object(chars.b, chars.n, "rows", row -> flats.add(varargs(row)));
+      else
+        a = (Map<String, Object>) Json.parse(chars.b, chars.n, null, 0);
+      switch (opName) {
       case "create_vertex" -> {
         final MutableVertex v = batch.createVertex((String) a.get("type"), varargs(a.get("props")));
         return ArcadeNative.out("{\"ok\":true,\"rid\":\"" + v.getIdentity() + "\"}");
       }
       case "create_vertices" -> {
         final RID[] rids;
-        if (a.get("rows") == null)
+        if (!(a.get("rows") instanceof Integer))
           rids = batch.createVertices((String) a.get("type"), intOf(a.get("count"), 0));
-        else {
-          final List<Object> rows = (List<Object>) a.get("rows");
-          final Object[][] matrix = new Object[rows.size()][];
-          for (int i = 0; i < matrix.length; i++)
-            matrix[i] = varargs(rows.get(i));
-          rids = batch.createVertices((String) a.get("type"), matrix);
-        }
+        else
+          rids = batch.createVertices((String) a.get("type"), flats.toArray(new Object[0][]));
         return ArcadeNative.out("{\"ok\":true,\"rids\":" + ridList(rids) + "}");
       }
       case "new_edge" -> batch.newEdge(new RID((String) a.get("src")), (String) a.get("type"), new RID((String) a.get("dst")),
           varargs(a.get("props")));
       case "new_edges" -> {
+        if (a.get("src") instanceof String srcText && a.get("dst") instanceof String dstText) {
+          newEdgesJoined(batch, srcText, (String) a.get("type"), dstText);
+          return ArcadeNative.OK();
+        }
         final List<Object> src = (List<Object>) a.get("src"), dst = (List<Object>) a.get("dst");
         final List<Object> props = (List<Object>) a.get("props");
         for (int i = 0; i < src.size(); i++)
           batch.newEdge(new RID((String) src.get(i)), (String) a.get("type"), new RID((String) dst.get(i)),
-              props == null ? new Object[0] : varargs(props.get(i)));
+              props == null ? NO_PROPS : varargs(props.get(i)));
       }
       case "flush" -> batch.flush();
       case "close" -> {

@@ -99,6 +99,8 @@ def _call(prefix: str, name: str, *args) -> dict:
 class NativeGraphBatch(_BaseGraphBatch):
     """``GraphBatch`` over the engine's batch builder in the image (same names and behaviour as the JPype wrapper)."""
 
+    _BULK_CHUNK = 10_000  # rows per crossing: small enough that a chunk's text, rows and reply die in the young generation
+
     def __init__(self, database, handle: int):
         self._db = database
         self._gb = handle
@@ -203,19 +205,46 @@ class NativeGraphBatch(_BaseGraphBatch):
         owns_transaction = not db.is_transaction_active()
         prefix = f"Failed to create batch vertices for type '{type_name}'"
         try:
+            chunk = self._BULK_CHUNK
             if isinstance(count_or_properties, int):
-                return self._op(
-                    prefix, "create_vertices", type=type_name, count=count_or_properties
-                )["rids"]
+                rids = []
+                for start in range(0, count_or_properties, chunk):
+                    rids.extend(
+                        self._op(
+                            prefix,
+                            "create_vertices",
+                            type=type_name,
+                            count=min(chunk, count_or_properties - start),
+                        )["rids"]
+                    )
+                if not count_or_properties:
+                    rids = self._op(prefix, "create_vertices", type=type_name, count=0)[
+                        "rids"
+                    ]
+                return rids
             rows = list(count_or_properties)
             for row in rows:
                 if row is not None and not isinstance(row, dict):
                     raise TypeError(
                         "create_vertices() property rows must be dicts or None"
                     )
-            return self._op(
-                prefix, "create_vertices", type=type_name, rows=[r or {} for r in rows]
-            )["rids"]
+            # chunked, as the JPype wrapper does: one crossing, one JSON text and one reply per chunk, so a 1M-vertex load
+            # never holds the text, the parsed rows and the reply of all of it at once (the Serial GC copies what lives)
+            rids = []
+            for start in range(0, len(rows), chunk):
+                rids.extend(
+                    self._op(
+                        prefix,
+                        "create_vertices",
+                        type=type_name,
+                        rows=[r or {} for r in rows[start : start + chunk]],
+                    )["rids"]
+                )
+            if not rows:
+                rids = self._op(prefix, "create_vertices", type=type_name, rows=[])[
+                    "rids"
+                ]
+            return rids
         except BaseException as e:
             if owns_transaction:
                 try:
@@ -277,6 +306,19 @@ class NativeGraphBatch(_BaseGraphBatch):
                         f"Failed to buffer batch edges '{edge_type}': property names must be str, got {key!r}"
                     )
         chunk = self._BULK_CHUNK
+        if properties is None:
+            # no properties: the RIDs of a chunk go over as two ';'-joined texts (as EdgeBatcher.newEdgesJoined takes them on the
+            # JPype path) and are read straight into RIDs, not as two JSON lists of Strings
+            for start in range(0, len(source_rids), chunk):
+                self._op(
+                    f"Failed to buffer batch edges '{edge_type}'",
+                    "new_edges",
+                    src=";".join(source_rids[start : start + chunk]),
+                    type=edge_type,
+                    dst=";".join(destination_rids[start : start + chunk]),
+                    props=None,
+                )
+            return self
         for start in range(0, len(source_rids), chunk):
             self._op(
                 f"Failed to buffer batch edges '{edge_type}'",
