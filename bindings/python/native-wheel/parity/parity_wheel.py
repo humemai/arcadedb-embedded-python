@@ -11,6 +11,7 @@ with NOTYET) / other skips / TIMEOUT-or-crash. Files in tests/conftest.py's NATI
 import argparse
 import glob
 import os
+import shutil
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
@@ -21,7 +22,11 @@ p.add_argument("--python", default=sys.executable)
 p.add_argument("--backend", default="native")
 p.add_argument("--out", required=True)
 p.add_argument("--timeout", type=int, default=900)
-p.add_argument("--cores", default="0-5,8-11")
+p.add_argument(
+    "--cores",
+    default="0-5,8-11",
+    help="taskset core list (Linux only; ignored where taskset does not exist)",
+)
 p.add_argument("--files", default="")
 p.add_argument("--alias", required=True)
 a = p.parse_args()
@@ -69,12 +74,16 @@ for f in files:
     name = os.path.basename(f)
     xml = os.path.join(xmldir, name + ".xml")
     cmd = [
-        "taskset",
-        "-c",
-        a.cores,
-        "nice",
-        "-n",
-        "10",
+        *(
+            ["taskset", "-c", a.cores]
+            if sys.platform == "linux" and shutil.which("taskset")
+            else []
+        ),
+        *(
+            ["nice", "-n", "10"]
+            if sys.platform != "win32" and shutil.which("nice")
+            else []
+        ),
         a.python,
         "-m",
         "pytest",

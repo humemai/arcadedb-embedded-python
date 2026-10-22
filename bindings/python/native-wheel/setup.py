@@ -1,6 +1,6 @@
 """arcadedb-embedded-native: a pure-Python tree plus one prebuilt shared library, tagged py3-none-<platform>.
 
-The platform tag comes from ARCADEDB_NATIVE_PLAT (build_wheel.py computes it from the library's glibc symbol versions).
+The platform tag comes from ARCADEDB_NATIVE_PLAT (build_wheel.py computes it from the library: glibc floor, macOS minimum version, win_amd64).
 """
 
 import os

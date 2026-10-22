@@ -205,11 +205,21 @@ step 4. A dev tag publishes to the real PyPI index and becomes the `latest` docs
 
 ## Native Preview Releases (`native-vX.Y.Z.devN`)
 
-The native preview is a second package built from the `native-preview` branch: distribution `arcadedb-embedded-native`, import name `arcadedb_native`, Linux x86-64 `manylinux_2_34` only for now (see `bindings/python/native-wheel/README.md`). It has its own release line and does not touch the steps above.
+The native preview is a second package built from the `native-preview` branch: distribution `arcadedb-embedded-native`, import name `arcadedb_native`, one wheel per platform (table below; see `bindings/python/native-wheel/README.md`). It has its own release line and does not touch the steps above.
 
 - **Version**: the engine release the image links plus a suffix, `A.B.C.devN` -> `A.B.C` -> `A.B.C.postN`; never `aN`, `bN` or `rcN`. A rebuild of the same engine raises `N`. The workflow rejects a version that is not in this canonical form, and the wheel's version must equal the tag's.
 - **Tag**: `git tag native-v26.10.2.dev0 && git push origin native-v26.10.2.dev0`, from a commit on `native-preview` that you have tested. The tag version is the wheel version.
-- **Workflow** (`native-preview.yml`, see [CI Setup](ci-setup.md#native-previewyml)): builds the image in a `manylinux_2_34` container, gates on `auditwheel show`, `twine check` and the bindings tests run against the installed wheel, then publishes with trusted publishing (environment `pypi-native`, tags `native-v*` only, no token). A push to the branch or a manual dispatch builds and tests but never publishes.
+- **Workflow** (`native-preview.yml`, see [CI Setup](ci-setup.md#native-previewyml)): builds one image and wheel per platform, gates each on its wheel check (`auditwheel show`, `delocate-listdeps`) plus `twine check` and the bindings tests run against the installed wheel, then publishes with trusted publishing (environment `pypi-native`, tags `native-v*` only, no token). A push to the branch or a manual dispatch builds and tests but never publishes.
+- **Platforms** (free GitHub-hosted standard runners only; a platform that fails does not stop the others):
+
+  | Platform key | Runner | Build | Wheel tag | Library |
+  | --- | --- | --- | --- | --- |
+  | `linux-x86_64` | `ubuntu-latest` | `manylinux_2_34` container | `manylinux_2_34_x86_64` | `libarcadedb.so` + `libjvector-x86_64.so` |
+  | `linux-aarch64` | `ubuntu-24.04-arm` | `manylinux_2_34_aarch64` container | `manylinux_2_34_aarch64` | `libarcadedb.so` |
+  | `macos-arm64` | `macos-15` (7 GB: `-J-Xmx5g`, `-H:NumberOfThreads=2`) | on the runner | `macosx_<minos>_arm64` (minos read from the load commands) | `libarcadedb.dylib` |
+  | `windows-x64` | `windows-latest` (MSVC environment from `vcvars64.bat`) | on the runner | `win_amd64` | `libarcadedb.dll` |
+
+- **Which platforms gate a release**: the single list `REQUIRED_PLATFORMS` at the top of the workflow (now `linux-x86_64 linux-aarch64 macos-arm64`, each green in runs 10 and 11; `windows-x64` is not yet in it). The publish job fails without a passed parity run for each listed platform, and then uploads every wheel that passed, required or not. Add a platform to the list when it is green.
 - **Why its own PyPI name**: PyPI keeps one file per name, version and platform tag, so a native build cannot sit beside the JVM wheel under `arcadedb-embedded`. The name goes away when the bindings move to `arcadedb` on PyPI.
 
 ## Python Versioning Strategy

@@ -79,10 +79,14 @@ def text(b):
 
 
 def parse_classpath(build_log):
-    for line in Path(build_log).read_text(errors="replace").splitlines():
+    for line in (
+        Path(build_log).read_text(encoding="utf-8", errors="replace").splitlines()
+    ):
         m = re.search(r"native-image -cp (\S+) --shared", line)
         if m:
-            return m.group(1).split(":")
+            # ':' on Linux/macOS, ';' with C:\... paths on Windows (the repository part is matched below as ".m2/repository/")
+            cp = m.group(1).strip('"')  # an @args file quotes the classpath
+            return [j.replace("\\", "/") for j in cp.split(";" if ";" in cp else ":")]
     sys.exit(f"gen_notices: no 'native-image -cp ... --shared' line in {build_log}")
 
 
@@ -186,6 +190,7 @@ def fence(body):
 
 
 def main():
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     global M2
     ap = argparse.ArgumentParser()
     g = ap.add_mutually_exclusive_group(required=True)
@@ -217,7 +222,11 @@ def main():
             "gen_notices: arcadedb-studio is on the classpath; its ApexCharts assets are not Apache-2.0 compatible (see module docstring)"
         )
     G = Path(a.graalvm_home)
-    rel = dict(re.findall(r'^(\w+)="?(.*?)"?$', (G / "release").read_text(), re.M))
+    rel = dict(
+        re.findall(
+            r'^(\w+)="?(.*?)"?$', (G / "release").read_text(encoding="utf-8"), re.M
+        )
+    )
 
     jars = [j for j in (jar_info(c) for c in cp) if j]
     review = []  # (what, why)
@@ -358,10 +367,10 @@ def main():
     body = "\n".join(out)
     body = re.sub(r"\n{3,}", "\n\n", body).rstrip() + "\n"
     if a.out:
-        Path(a.out).write_text(body)
+        Path(a.out).write_text(body, encoding="utf-8", newline="\n")
     status = 0
     if a.check:
-        have = Path(a.check).read_text()
+        have = Path(a.check).read_text(encoding="utf-8")
         if have != body:
             print(
                 f"gen_notices: {a.check} differs from the generated notices; run gen_notices.py --out {a.check}",

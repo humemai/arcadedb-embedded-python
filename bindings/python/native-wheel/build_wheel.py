@@ -4,11 +4,15 @@
   python build_wheel.py --lib-dir ~/build-scratch/native-lib/preview --version 26.10.2.dev0 --engine 26.10.2 --out <dir>
 
 Steps: copy src/arcadedb_embedded to <out>/stage/src/arcadedb_native with every name rewritten (the shared tree is not duplicated in git);
-rewrite `import jpype` to the bundled stub; flip the default backend to native; add libarcadedb.so + libjvector-x86_64.so;
-add LICENSE/NOTICE/GraalVM licence texts; check THIRD_PARTY_NOTICES.md against gen_notices.py (fails on drift); compute the manylinux tag from the library's GLIBC symbol versions; build with `uv build --wheel`.
+rewrite `import jpype` to the bundled stub; flip the default backend to native; add the library of the build platform (libarcadedb.so on Linux,
+libarcadedb.dylib on macOS, libarcadedb.dll on Windows; on Linux x86-64 also libjvector-x86_64.so, jvector's Highway library: no other platform ships it);
+add LICENSE/NOTICE/GraalVM licence texts; check THIRD_PARTY_NOTICES.md against gen_notices.py (fails on drift); compute the platform tag from the library
+(Linux: manylinux_<glibc floor>_<x86_64|aarch64> from the GLIBC symbol versions; macOS: macosx_<minos>_arm64 from the load commands; Windows: win_amd64);
+build with `uv build --wheel`. Run it on the platform the library was built on.
 """
 
 import argparse
+import platform
 import re
 import shutil
 import subprocess
@@ -20,6 +24,24 @@ PKG = HERE.parent  # bindings/python
 REPO = PKG.parent.parent
 
 
+LIB_NAMES = {
+    "linux": "libarcadedb.so",
+    "darwin": "libarcadedb.dylib",
+    "win32": "libarcadedb.dll",
+}
+JVECTOR = "libjvector-x86_64.so"  # Highway, taken from the jvector jar by preview-build.sh on Linux x86-64 only
+
+
+def host_arch() -> str:
+    m = platform.machine().lower()
+    return {
+        "x86_64": "x86_64",
+        "amd64": "x86_64",
+        "aarch64": "aarch64",
+        "arm64": "aarch64",
+    }.get(m, m)
+
+
 def glibc_floor(lib: Path) -> str:
     out = subprocess.run(
         ["objdump", "-T", str(lib)], capture_output=True, text=True, check=True
@@ -29,7 +51,40 @@ def glibc_floor(lib: Path) -> str:
         for m in re.findall(r"GLIBC_(\d+\.\d+(?:\.\d+)?)", out)
     }
     major, minor = max(v[:2] for v in vers)
-    return f"manylinux_{major}_{minor}_x86_64"
+    return f"manylinux_{major}_{minor}_{host_arch()}"
+
+
+def macos_tag(lib: Path) -> str:
+    """macosx_<minos>_arm64 from LC_BUILD_VERSION (minos) or LC_VERSION_MIN_MACOSX (version) of the library."""
+    out = subprocess.run(
+        ["otool", "-l", str(lib)], capture_output=True, text=True, check=True
+    ).stdout
+    m = re.search(r"minos\s+(\d+)\.(\d+)", out) or re.search(
+        r"LC_VERSION_MIN_MACOSX.*?\n\s+cmdsize \d+\n\s+version (\d+)\.(\d+)", out, re.S
+    )
+    if not m:
+        sys.exit(f"no minimum macOS version in the load commands of {lib}:\n{out}")
+    print(f"load command minimum macOS version: {m.group(1)}.{m.group(2)}")
+    arch = subprocess.run(
+        ["lipo", "-archs", str(lib)], capture_output=True, text=True, check=True
+    ).stdout.split()
+    if arch != ["arm64"]:
+        sys.exit(f"{lib} has architectures {arch}, expected only arm64")
+    return f"macosx_{m.group(1)}_{m.group(2)}_arm64"
+
+
+def platform_tag(lib: Path) -> str:
+    if sys.platform.startswith("linux"):
+        return glibc_floor(lib)
+    if sys.platform == "darwin":
+        return macos_tag(lib)
+    if sys.platform == "win32":
+        if host_arch() != "x86_64":
+            sys.exit(
+                f"Windows wheels are win_amd64 only, this machine is {platform.machine()}"
+            )
+        return "win_amd64"
+    sys.exit(f"unsupported platform {sys.platform}")
 
 
 def main():
@@ -37,7 +92,7 @@ def main():
     ap.add_argument(
         "--lib-dir",
         required=True,
-        help="directory with libarcadedb.so and libjvector-x86_64.so",
+        help="directory with the library of this platform (libarcadedb.so / .dylib / .dll) and, on Linux x86-64, libjvector-x86_64.so",
     )
     ap.add_argument(
         "--version",
@@ -80,6 +135,9 @@ def main():
     ap.add_argument("--plat", default="", help="override the computed platform tag")
     a = ap.parse_args()
     lib_dir, out = Path(a.lib_dir), Path(a.out).resolve()
+    libname = LIB_NAMES.get(sys.platform) or sys.exit(
+        f"unsupported platform {sys.platform}"
+    )
     if not a.skip_notices_check:
         # THIRD_PARTY_NOTICES.md is generated from the classpath of the image build (preview-build.sh writes <lib-dir>/build.log):
         # refuse to build a wheel whose notices differ from the library's real contents. Licence-review items are printed, not fatal.
@@ -122,7 +180,7 @@ def main():
     )
     left = []
     for f in dst.rglob("*.py"):
-        t = f.read_text()
+        t = f.read_text(encoding="utf-8")
         t = (
             t.replace('"arcadedb-embedded"', '"arcadedb-embedded-native"')
             .replace(
@@ -147,14 +205,15 @@ def main():
         t = jp.sub(sub, t)
         if re.search(r"^\s*(import|from)\s+jpype", t, re.M):
             left.append(f.name)
-        f.write_text(t)
+        f.write_text(t, encoding="utf-8")
     if left:
         sys.exit(f"jpype imports left in: {left}")
     init = dst / "_native" / "__init__.py"
-    t = init.read_text()
+    t = init.read_text(encoding="utf-8")
     assert t.count('_DEFAULT_BACKEND = "jpype"') == 1, "default-backend line not found"
     init.write_text(
-        t.replace('_DEFAULT_BACKEND = "jpype"', '_DEFAULT_BACKEND = "native"')
+        t.replace('_DEFAULT_BACKEND = "jpype"', '_DEFAULT_BACKEND = "native"'),
+        encoding="utf-8",
     )
     shutil.copy(HERE / "_jpype_stub.py", dst / "_jpype_stub.py")
 
@@ -163,13 +222,14 @@ def main():
     ).stdout.strip()
     (dst / "_build_info.py").write_text(
         f'"""Written by native-wheel/build_wheel.py."""\n'
-        f'ENGINE_VERSION = "{a.engine}"  # the ArcadeDB engine release compiled into libarcadedb.so\n'
+        f'ENGINE_VERSION = "{a.engine}"  # the ArcadeDB engine release compiled into {libname}\n'
         f'NATIVE_IMAGE = "GraalVM CE 25.4.4.1.1, -O2, -march={a.march}"\n'
         f'NATIVE_MARCH = "{a.march}"  # lib.py checks the CPU only for an x86-64-v3 image\n'
-        f'SOURCE_COMMIT = "{commit}"  # humemai/arcadedb-embedded-python (fork tae898/arcadedb) commit of the bindings and the Java glue\n'
+        f'SOURCE_COMMIT = "{commit}"  # humemai/arcadedb-embedded-python (fork tae898/arcadedb) commit of the bindings and the Java glue\n',
+        encoding="utf-8",
     )
     ip = dst / "__init__.py"
-    t = ip.read_text()
+    t = ip.read_text(encoding="utf-8")
     t = t.replace(
         "# Import async execution\n",
         "from ._build_info import ENGINE_VERSION, NATIVE_IMAGE, NATIVE_MARCH, SOURCE_COMMIT  # noqa: F401\n\n# Import async execution\n",
@@ -180,9 +240,14 @@ def main():
         '__all__ = [\n    "__version__",\n    "ENGINE_VERSION",\n    "NATIVE_IMAGE",\n    "SOURCE_COMMIT",',
         1,
     )
-    ip.write_text(t)
+    ip.write_text(t, encoding="utf-8")
 
-    for n in ("libarcadedb.so", "libjvector-x86_64.so"):
+    ship = [libname]
+    if sys.platform.startswith("linux") and host_arch() == "x86_64":
+        ship.append(
+            JVECTOR
+        )  # the only platform that ships Highway; lib.py does not need it elsewhere
+    for n in ship:
         shutil.copy(
             lib_dir / n, dst / "_native" / n
         )  # lib.py looks next to itself (_native/)
@@ -204,11 +269,14 @@ def main():
         str(lic), str(stage / "licenses")
     )  # dist-info licenses only: one copy in the wheel
     (stage / "pyproject.toml").write_text(
-        (HERE / "pyproject.toml").read_text().replace("@VERSION@", a.version)
+        (HERE / "pyproject.toml")
+        .read_text(encoding="utf-8")
+        .replace("@VERSION@", a.version),
+        encoding="utf-8",
     )
     shutil.copy(HERE / "setup.py", stage / "setup.py")
 
-    plat = a.plat or glibc_floor(lib_dir / "libarcadedb.so")
+    plat = a.plat or platform_tag(lib_dir / libname)
     print("platform tag:", plat)
     import os
 
