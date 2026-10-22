@@ -6,7 +6,7 @@
 > <https://github.com/humemai/arcadedb-embedded-python/issues> and say that you use the native wheel.
 
 ArcadeDB (SQL, openCypher, document, graph, vector, time series) embedded in your Python process **without a JVM and without JPype**.
-The engine is compiled ahead of time with GraalVM Community Edition to `libarcadedb.so`; Python loads it with `ctypes`.
+The engine is compiled ahead of time with GraalVM Community Edition to a shared library (`libarcadedb.so`, `.dylib` or `.dll`); Python loads it with `ctypes`.
 
 ## Install
 
@@ -35,9 +35,17 @@ with arcadedb.create_database("/tmp/demo") as db:
 
 ## Platforms
 
-Linux x86-64 only, CPython 3.11 to 3.14, glibc 2.34 or newer (wheel tag `py3-none-manylinux_2_34_x86_64`; one wheel serves every
-Python version because the library is loaded with `ctypes`, not compiled against CPython). The image is built for baseline x86-64
-(`-march=compatibility`), so it runs on any x86-64 CPU. macOS, Windows and Linux arm64 wheels do not exist yet.
+CPython 3.11 to 3.14; one wheel per platform serves every Python version because the library is loaded with `ctypes`, not compiled against
+CPython. Images are built for the baseline CPU of the platform (`-march=compatibility`).
+
+| Platform | Wheel tag | Status |
+| --- | --- | --- |
+| Linux x86-64, glibc 2.34+ | `manylinux_2_34_x86_64` | published |
+| Linux arm64, glibc 2.34+ | `manylinux_2_34_aarch64` | built in CI, not published until its parity run is green |
+| macOS arm64 | `macosx_<minos>_arm64` | built in CI, not published until its parity run is green |
+| Windows x64 | `win_amd64` | built in CI, not published until its parity run is green |
+
+Intel macOS and Windows arm64 are not built.
 
 ## Not supported yet
 
