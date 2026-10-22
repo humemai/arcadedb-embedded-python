@@ -225,9 +225,13 @@ jobs:
           if (-not $vs) { throw "no Visual Studio with the C++ tools" }
           $bat = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
           Write-Host "vcvars: $bat"
+          $keep = '^(PATH|INCLUDE|LIB|LIBPATH|VC.*|VS.*|WindowsSdk.*|WindowsSDK.*|UCRT.*|UniversalCRT.*|DevEnv.*|Framework.*|NETFXSDK.*|Platform|CommandPromptType)$'
           cmd /c "`"$bat`" >nul && set" | ForEach-Object {
-            if ($_ -match '^([^=]+)=(.*)$' -and $Matches[1] -match '^(PATH|INCLUDE|LIB|LIBPATH|VC.*|VS.*|WindowsSdk.*|WindowsSDK.*|UCRT.*|UniversalCRT.*|DevEnv.*|Framework.*|NETFXSDK.*|Platform|CommandPromptType)$') {
-              Add-Content -Path $env:GITHUB_ENV -Value "$($Matches[1])=$($Matches[2])"
+            # the name and value are taken before the second -match, which would overwrite $Matches
+            $i = $_.IndexOf('=')
+            if ($i -gt 0) {
+              $name = $_.Substring(0, $i)
+              if ($name -match $keep) { Add-Content -Path $env:GITHUB_ENV -Value $_ }
             }
           }
 
