@@ -11,7 +11,7 @@ Decided 2026-10-22. Status: local build and parity only; no CI workflow, no PyPI
 | Shared Python code | Not duplicated in git. `build_wheel.py` copies `src/arcadedb_embedded` to `arcadedb_native` at build time, renames the package, and rewrites `import jpype` to a bundled stub (`_jpype_stub.py`) so the wheel has no JPype dependency. One line (`_native/__init__.py: _DEFAULT_BACKEND`) is flipped to `"native"`. | One source tree, one test suite; the build fails if any `jpype` import is left or the default-backend line is missing. |
 | Native library | `libarcadedb.so` and `libjvector-x86_64.so` inside `arcadedb_native/_native/`. `lib.py` already finds them next to itself and sets `ARCADEDB_NATIVE_LIBDIR`. | No search path or env var needed for users; `ARCADEDB_NATIVE_LIB` still overrides. |
 | Wheel tag | `py3-none-manylinux_2_34_x86_64`, image built with `-march=compatibility` (baseline x86-64) | The library is loaded with ctypes, so it does not depend on the CPython ABI. 2.34 is the highest `GLIBC_` symbol version in `objdump -T libarcadedb.so` (libjvector: 2.14; `build_wheel.py` computes the tag from the library). Other NEEDED: libz.so.1, libm, libc, libstdc++, libgcc_s (manylinux-allowed). |
-| Version | PEP 440 pre-release of the engine release the image links: `26.10.2a1` | The image is built from the **26.10.2 release jars** (Maven Central, `-Darcadedb.version=26.10.2`; `native-spike/pom.xml`), never a local SNAPSHOT: a SNAPSHOT in `~/.m2` is not reproducible. The bindings and the Java glue come from branch `native-preview` (`SOURCE_COMMIT` in `arcadedb_native/_build_info.py`). When the engine moves (26.11.1), rebuild with `ARCADEDB_ENGINE_VERSION=26.11.1` and publish `26.11.1a1`; a rebuild of the same engine increments `aN`. |
+| Version | `26.10.2.dev1`: the engine release the image links plus `.devN`. Owner convention A.B.C.devN -> A.B.C -> A.B.C.postN; no aN/bN/rcN. | The image is built from the **26.10.2 release jars** (Maven Central, `-Darcadedb.version=26.10.2`; `native-spike/pom.xml`), never a local SNAPSHOT: a SNAPSHOT in `~/.m2` is not reproducible. The bindings and the Java glue come from branch `native-preview` (`SOURCE_COMMIT` in `arcadedb_native/_build_info.py`). When the engine moves (26.11.1), rebuild with `ARCADEDB_ENGINE_VERSION=26.11.1` and publish `26.11.1.dev1`; a rebuild of the same engine increments `devN`. |
 | Classifier | `Development Status :: 3 - Alpha` | Preview. |
 | Licence | Apache-2.0 (`license = "Apache-2.0"`) plus the third-party texts below | ArcadeDB and the bindings are Apache-2.0. |
 | Python requirement | `>=3.11`, no hard dependencies; extras numpy / arrow / pandas / polars | Same as the JPype wheel's optional stacks. |
@@ -36,7 +36,7 @@ source-offer wording reviewed. The Highway library `libjvector-x86_64.so` is tak
 # 1. the image, detached, through quiet_build (13 GB, builder -J-Xmx12g)
 NEED_GB=13 JOB_MEM_GB=14 .notes/bench/tools/quiet_build.sh bash native-spike/scripts/preview-build.sh   # -> ~/build-scratch/native-lib/preview
 # 2. the wheel
-python bindings/python/native-wheel/build_wheel.py --lib-dir ~/build-scratch/native-lib/preview --version 26.10.2a1 --engine 26.10.2 --out <dir>
+python bindings/python/native-wheel/build_wheel.py --lib-dir ~/build-scratch/native-lib/preview --version 26.10.2.dev1 --engine 26.10.2 --out <dir>
 # 3. check the tag
 uvx auditwheel show <dir>/dist/*.whl
 ```
@@ -49,7 +49,7 @@ with `arcadedb_embedded` aliased to the installed `arcadedb_native`.
 - PyPI has a pending trusted publisher for project `arcadedb-embedded-native`: GitHub repo `humemai/arcadedb-embedded-python`, workflow
   file `.github/workflows/native-preview.yml`, environment `pypi-native`.
 - The repo environment `pypi-native` exists and allows deployments only from tags matching `native-v*`.
-- Release tag: `native-v<version>` (for example `native-v26.10.2a1`). The publish job must run in environment `pypi-native` with
+- Release tag: `native-v<version>` (for example `native-v26.10.2.dev1`). The publish job must run in environment `pypi-native` with
   `permissions: id-token: write` and use `pypa/gh-action-pypi-publish`. No API token.
 - The workflow does not exist yet (not part of this task). Image builds are heavy (about 13 GB, 6-10 min on 4 cores): paid-runner budget applies (builds only
   on `native-v*` tags or manual dispatch; the image build needs a manylinux_2_34-or-older container so the glibc floor is controlled).
