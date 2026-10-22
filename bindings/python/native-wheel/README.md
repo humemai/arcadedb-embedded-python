@@ -2,7 +2,7 @@
 
 > **Preview, alpha quality.** This is an experiment, not a release. The API follows `arcadedb-embedded`, but the engine runs as a
 > GraalVM native-image shared library, a different runtime with its own bugs. Do not use it for data you cannot lose. Versions are
-> pre-releases (`26.10.2.dev0`): `pip install --pre arcadedb-embedded-native`. Report problems at
+> pre-releases (`26.10.2.dev1`): `pip install --pre arcadedb-embedded-native`. Report problems at
 > <https://github.com/humemai/arcadedb-embedded-python/issues> and say that you use the native wheel.
 
 ArcadeDB (SQL, openCypher, document, graph, vector, time series) embedded in your Python process **without a JVM and without JPype**.

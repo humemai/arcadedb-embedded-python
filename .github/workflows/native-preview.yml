@@ -30,9 +30,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Wheel version to build (PEP 440, e.g. 26.10.2.dev0; A.B.C.devN, A.B.C or A.B.C.postN); a tag push takes it from the tag"
+        description: "Wheel version to build (PEP 440, e.g. 26.10.2.dev1; A.B.C.devN, A.B.C or A.B.C.postN); a tag push takes it from the tag"
         required: false
-        default: "26.10.2.dev0"
+        default: "26.10.2.dev1"
         type: string
 
 concurrency:
@@ -68,7 +68,7 @@ jobs:
         env:
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
-          INPUT_VERSION: ${{ inputs.version || '26.10.2.dev0' }}
+          INPUT_VERSION: ${{ inputs.version || '26.10.2.dev1' }}
         run: |
           set -euo pipefail
           if [ "$REF_TYPE" = "tag" ]; then
@@ -76,7 +76,7 @@ jobs:
           else
             version="$INPUT_VERSION"
           fi
-          # The engine release the image links is the release segment of the version (26.10.2.dev0, 26.10.2, 26.10.2.post1 -> 26.10.2).
+          # The engine release the image links is the release segment of the version (26.10.2.dev1, 26.10.2, 26.10.2.post1 -> 26.10.2).
           engine="$(printf '%s' "$version" | grep -Eo '^[0-9]+(\.[0-9]+)+')"
           [ -n "$engine" ] || { echo "cannot derive the engine version from '$version'" >&2; exit 1; }
           echo "version=$version" >> "$GITHUB_OUTPUT"

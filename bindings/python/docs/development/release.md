@@ -208,7 +208,7 @@ step 4. A dev tag publishes to the real PyPI index and becomes the `latest` docs
 The native preview is a second package built from the `native-preview` branch: distribution `arcadedb-embedded-native`, import name `arcadedb_native`, one wheel per platform (table below; see `bindings/python/native-wheel/README.md`). It has its own release line and does not touch the steps above.
 
 - **Version**: the engine release the image links plus a suffix, `A.B.C.devN` -> `A.B.C` -> `A.B.C.postN`; never `aN`, `bN` or `rcN`. A rebuild of the same engine raises `N`. The workflow rejects a version that is not in this canonical form, and the wheel's version must equal the tag's.
-- **Tag**: `git tag native-v26.10.2.dev0 && git push origin native-v26.10.2.dev0`, from a commit on `native-preview` that you have tested. The tag version is the wheel version.
+- **Tag**: `git tag native-v26.10.2.dev1 && git push origin native-v26.10.2.dev1`, from a commit on `native-preview` that you have tested. The tag version is the wheel version.
 - **Workflow** (`native-preview.yml`, see [CI Setup](ci-setup.md#native-previewyml)): builds one image and wheel per platform, gates each on its wheel check (`auditwheel show`, `delocate-listdeps`) plus `twine check` and the bindings tests run against the installed wheel, then publishes with trusted publishing (environment `pypi-native`, tags `native-v*` only, no token). A push to the branch or a manual dispatch builds and tests but never publishes.
 - **Platforms** (free GitHub-hosted standard runners only; a platform that fails does not stop the others):
 
