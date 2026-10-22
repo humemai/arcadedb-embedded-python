@@ -456,7 +456,7 @@ Local build (the image through `.notes/bench/tools/quiet_build.sh`, about 13 GB)
 ```bash
 NEED_GB=13 JOB_MEM_GB=14 .notes/bench/tools/quiet_build.sh bash native-spike/scripts/preview-build.sh
 python bindings/python/native-wheel/build_wheel.py --lib-dir ~/build-scratch/native-lib/preview \
-  --version 26.10.2.dev1 --engine 26.10.2 --out <dir>
+  --version 26.10.2.dev0 --engine 26.10.2 --out <dir>
 uvx auditwheel show <dir>/dist/*.whl
 ```
 
