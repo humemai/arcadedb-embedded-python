@@ -1,7 +1,10 @@
 # arcadedb-embedded-native (preview wheel): build, test, publish.
 #
 #   push of a tag native-v<version>   build + test + publish to PyPI (trusted publishing, environment pypi-native)
-#   workflow_dispatch                 build + test only; never publishes (the publish job needs a native-v* tag ref)
+#   push to branch native-preview     build + test only (dry run; also what a dispatch does)
+#   workflow_dispatch                 build + test only; never publishes (the publish job needs a native-v* tag ref).
+#                                     GitHub offers a dispatch only for a workflow file on the default branch, and this file is
+#                                     deliberately not on main, so the branch push is the way to dry-run it from native-preview.
 #
 # The wheel is py3-none-manylinux_2_34_x86_64: libarcadedb.so is a GraalVM native-image shared library loaded with ctypes.
 # Design and decisions: bindings/python/native-wheel/PACKAGING.md. Gates: the glibc floor (image built in a manylinux_2_34
@@ -12,6 +15,8 @@ name: Native preview wheel
 
 on:
   push:
+    branches:
+      - native-preview
     tags:
       - "native-v*"
   workflow_dispatch:
@@ -24,8 +29,8 @@ on:
 
 concurrency:
   group: native-preview-${{ github.ref }}
-  # A dispatch is superseded by a newer one; a tag run is never cancelled (a half-done release is worse than a queued one).
-  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' }}
+  # A dry run (dispatch or branch push) is superseded by a newer one; a tag run is never cancelled (a half-done release is worse than a queued one).
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
 
 permissions:
   contents: read
@@ -55,12 +60,12 @@ jobs:
       - name: Resolve the version
         id: ver
         env:
-          EVENT: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
-          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_VERSION: ${{ inputs.version || '26.10.2a1' }}
         run: |
           set -euo pipefail
-          if [ "$EVENT" = "push" ]; then
+          if [ "$REF_TYPE" = "tag" ]; then
             version="${REF_NAME#native-v}"
           else
             version="$INPUT_VERSION"
