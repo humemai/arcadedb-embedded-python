@@ -110,6 +110,23 @@ def pytest_runtest_call(item):
 TEST_PASSWORD = "test12345"  # nosec B105
 
 
+def free_port():
+    """A free local TCP port, for a server's ``http_port``.
+
+    The server's default is the fixed port 2480, so a test that starts a server
+    without choosing a port fails with "Unable to listen to a HTTP port in the
+    configured port range 2480 - 2480" whenever anything else on the machine
+    holds 2480 (the laptop, 2026-10-22). Every test that starts a server passes
+    ``config={"http_port": free_port()}``. For several distinct ports at once,
+    see ``_free_ports`` in test_server_wire_protocols.py.
+    """
+    import socket
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
 @pytest.fixture
 def temp_server_root():
     """Create a temporary server root directory."""

@@ -11,14 +11,16 @@ import time
 
 import arcadedb_embedded as arcadedb
 import pytest
-from tests.conftest import TEST_PASSWORD
+from tests.conftest import TEST_PASSWORD, free_port
 
 
 @pytest.fixture
 def http_server(tmp_path):
     requests = pytest.importorskip("requests")
     server = arcadedb.create_server(
-        root_path=str(tmp_path / "srv"), root_password=TEST_PASSWORD
+        root_path=str(tmp_path / "srv"),
+        root_password=TEST_PASSWORD,
+        config={"http_port": free_port()},
     )
     server.start()
     time.sleep(1)
