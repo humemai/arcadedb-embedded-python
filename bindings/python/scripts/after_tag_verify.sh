@@ -99,12 +99,13 @@ for py in 3.12 3.14; do
         continue
     }
     ENG_SHA="$ENG_SHA" ENG_BUILD="$ENG_BUILD" V="$V" ${PIN:+taskset -c "$PIN"} "${UVRUN[@]}" python - << 'EOF' > "$W/smoke-$py.log" 2>&1
-import hashlib, os, pathlib, tempfile, zipfile
+import hashlib, os, pathlib, re, tempfile, zipfile
 import arcadedb_embedded as adb
 assert adb.__version__ == os.environ["V"], adb.__version__
 jars = pathlib.Path(adb.__file__).parent / "jars"
 eng = sorted(jars.glob("arcadedb-engine-*.jar"))
-assert len(eng) == 1 and eng[0].name == "arcadedb-engine-%s.jar" % os.environ["V"], eng
+# A Python-only hotfix X.Y.Z.postN ships the X.Y.Z engine jar (release.md, Hotfix Release)
+assert len(eng) == 1 and eng[0].name == "arcadedb-engine-%s.jar" % re.sub(r"\.post[0-9]+$", "", os.environ["V"]), eng
 sha = hashlib.sha256(eng[0].read_bytes()).hexdigest()
 props = zipfile.ZipFile(eng[0]).read("com/arcadedb/arcadedb.properties").decode()
 build = [l.split("=", 1)[1].strip() for l in props.splitlines() if l.startswith("buildNumber")][0]
