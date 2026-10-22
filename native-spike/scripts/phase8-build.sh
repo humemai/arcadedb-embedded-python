@@ -12,7 +12,7 @@ export NATIVE_IMAGE_OPTIONS="-J-Dfastops.mode=1 -J-Xmx12g -H:-DeleteLocalSymbols
 cd "$WT"
 rm -f native-spike/target/libarcadedb.so   # a failed build must not leave the previous image behind for the copy below (2026-10-22: img2 failed and shipped img1 bytes)
 QBX=$QB; [ -n "${NO_QB:-}" ] && QBX=""   # NO_QB=1: the caller already holds a quiet_build slot (no nested waits)
-NEED_GB=14 $QBX taskset -c 12-15 ./mvnw -B --no-transfer-progress -f native-spike/pom.xml -DskipTests -Dgraalvm.version=25.4.4.1.1 -Dnative.opt=-O2 package > "$OUT/build-$tag.log" 2>&1
+NEED_GB=13 JOB_MEM_GB=14 $QBX taskset -c 12-15 ./mvnw -B --no-transfer-progress -f native-spike/pom.xml -DskipTests -Dgraalvm.version=25.4.4.1.1 -Dnative.opt=-O2 package > "$OUT/build-$tag.log" 2>&1
 rc=$?; mkdir -p "$OUT/$tag"; rm -f "$OUT/$tag/libarcadedb.so"
 [ $rc = 0 ] && cp native-spike/target/libarcadedb.so "$OUT/$tag/"; cp "$HOME/build-scratch/native-lib/dir6/libjvector-x86_64.so" "$OUT/$tag/"
 echo "full $tag rc=$rc $(grep -a 'Finished generating' "$OUT/build-$tag.log")" > "$OUT/build-$tag.done"
