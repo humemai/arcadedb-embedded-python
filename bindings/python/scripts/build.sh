@@ -167,7 +167,9 @@ if [[ -n "$JAR_LIB_DIR" ]]; then
         exit 1
     fi
 
-    if ! find "$JAR_LIB_DIR" -maxdepth 1 -name "*.jar" -print -quit | grep -q .; then
+    # -H: find does not follow a symlinked starting point on its own, so a JAR_LIB_DIR that is
+    # a symlink to a directory looked empty and failed with "No JAR files found".
+    if ! find -H "$JAR_LIB_DIR" -maxdepth 1 -name "*.jar" -print -quit | grep -q .; then
         echo -e "${RED}❌ No JAR files found in: ${JAR_LIB_DIR}${NC}"
         exit 1
     fi
@@ -182,7 +184,9 @@ if [[ -n "$JAR_LIB_DIR" ]]; then
         echo -e "${CYAN}📦 Using provided JAR directory: ${YELLOW}${JAR_LIB_DIR}${NC}"
         rm -rf "$LOCAL_JARS_DIR"
         mkdir -p "$LOCAL_JARS_DIR"
-        cp -a "$JAR_LIB_DIR"/*.jar "$LOCAL_JARS_DIR"/
+        # -L: a jar that is itself a symlink is staged as a file. A copied link would dangle in the
+        # Docker build context and the hash below (find -type f) would skip it.
+        cp -aL "$JAR_LIB_DIR"/*.jar "$LOCAL_JARS_DIR"/
         JAR_SOURCE_DESC="${JAR_LIB_DIR} (staged into local-jars)"
     fi
 
