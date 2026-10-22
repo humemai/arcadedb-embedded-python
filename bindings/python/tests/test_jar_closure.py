@@ -19,6 +19,13 @@ pool names and requires that the package is provided by a shipped jar or by the
 JDK. A package that nothing provides must be in ``ALLOWED_DANGLING`` with a
 reason.
 
+The same gap exists one level down: the bundled JRE is a jlink image without the
+modules in ``scripts/jre_module_exclusions.txt`` (``java.desktop``, ``jdk.jfr``,
+``java.compiler``). A shipped class that names a package of one of those modules
+fails with ``NoClassDefFoundError`` when its code path runs, and jdeps cannot say
+so, because the build removes those modules from jdeps's answer. The second half of
+this file reads the class files against the packages the running JVM provides.
+
 If this test fails after you excluded a jar, the jar is needed: take it off
 ``jar_exclusions.txt``. If it fails after an engine or dependency update, a new
 class refers to a library the wheel does not ship: decide whether the code path
@@ -33,10 +40,11 @@ import zipfile
 import pytest
 from arcadedb_embedded.jvm import get_jar_path
 
-# Packages the JDK provides. The bundled JRE is a jlink image, so a module that
-# is not in it (jdk.httpserver, say) is not provided either; the point of the
-# test is the jars, and a JDK module missing from the JRE is caught by jdeps at
-# build time, which derives the module list from these same jars.
+# Packages the JDK provides. The first test checks the jars only. The bundled JRE
+# is a jlink image, and the modules it lacks on purpose are checked by the tests
+# at the end of this file (REMOVED_MODULE_PACKAGES); any other module that is
+# missing is caught by jdeps at build time, which derives the module list from
+# these same jars.
 JDK_PREFIXES = (
     "java/",
     "javax/",
@@ -278,3 +286,250 @@ def test_polyglot_engine_is_off_while_no_graalvm_language_ships(tmp_path):
                     "sql",
                     'DEFINE FUNCTION jsfn.add "return a + b;" PARAMETERS [a,b] LANGUAGE js',
                 )
+
+
+# The JDK modules that scripts/jre_module_exclusions.txt keeps out of the bundled
+# runtime, with the packages each one provides in the full JDK. A package that is
+# in this table and that the running JVM does not provide is "removed on purpose".
+# java.datatransfer and java.prefs go with java.desktop, the only module that
+# requires them.
+REMOVED_MODULES = (
+    "java.desktop",
+    "java.datatransfer",
+    "java.prefs",
+    "jdk.jfr",
+    "java.compiler",
+)
+REMOVED_MODULE_PACKAGES = (
+    "java/awt",  # java.desktop, and java/awt/datatransfer of java.datatransfer
+    "java/beans",
+    "java/applet",
+    "java/util/prefs",
+    "javax/swing",
+    "javax/imageio",
+    "javax/sound",
+    "javax/print",
+    "javax/accessibility",
+    "javax/tools",  # java.compiler
+    "javax/lang/model",
+    "javax/annotation/processing",
+    "jdk/jfr",
+    "sun/awt",
+    "sun/java2d",
+    "sun/swing",
+    "com/sun/beans",
+    "com/sun/java/swing",
+)
+
+# (referencing jar name prefix, package prefix, why the code path is unreachable).
+# Same rule as ALLOWED_DANGLING: the entry excuses only that jar and that package.
+# Every entry was checked by reading the callers in the shipped jars (2026-10-22):
+# no class outside the named one refers to it.
+ALLOWED_REMOVED_MODULE_USE = (
+    (
+        "jts-core-",
+        "java/awt",
+        "org.locationtech.jts.awt (AWT shape reader and writer for drawing) and "
+        "util.TestBuilderProxy. ArcadeDB parses, indexes and tests geometries and "
+        "never refers to the awt package, and no other JTS class does.",
+    ),
+    (
+        "jackson-databind-",
+        "java/beans",
+        "ext.Java7SupportImpl (@ConstructorProperties and @Transient). Jackson "
+        "loads it in a try block and works without that annotation support; "
+        "test_jackson_and_yaml_work_without_java_beans runs it on this runtime.",
+    ),
+    (
+        "snakeyaml-",
+        "java/beans",
+        "introspector.MethodProperty, the bean mapper of Yaml, Constructor and "
+        "Representer. Nothing in the wheel creates a Yaml object: "
+        "jackson-dataformat-yaml uses only the parser and the emitter.",
+    ),
+    (
+        "commons-lang3-",
+        "java/beans",
+        "concurrent.AbstractCircuitBreaker (PropertyChangeSupport), which nothing "
+        "in the wheel extends.",
+    ),
+    (
+        "commons-math3-",
+        "java/awt",
+        "geometry.euclidean.twod.Line (AffineTransform), a 2-D geometry class. "
+        "jvector refers to other commons-math3 classes only.",
+    ),
+    (
+        "micrometer-core-",
+        "java/beans",
+        "binder.logging.Log4j2Metrics, bound only by an application that registers "
+        "it; the wheel logs through java.util.logging and ships no Log4j2.",
+    ),
+    (
+        "jakarta.xml.bind-api-",
+        "java/beans",
+        "javax.xml.bind.JAXB, a convenience class. swagger-core refers to the "
+        "javax.xml.bind.annotation annotations only, which need no JDK module.",
+    ),
+    (
+        "jakarta.activation-api-",
+        "java/awt/datatransfer",
+        "javax.activation.DataHandler and its content handlers (data flavors for "
+        "JAXB attachments). No class outside the jar refers to javax.activation.",
+    ),
+    (
+        "arcadedb-engine-",
+        "jdk/jfr",
+        "utility.JVMGCHistogramReporter (Flight Recorder allocation stream). No "
+        "class, command or setting calls it; the JFR events of the JVM itself "
+        "need no Java module.",
+    ),
+    (
+        "agrona-",
+        "javax/tools",
+        "org.agrona.generation, agrona's code generator that compiles source at "
+        "run time. Neither jvector nor the engine calls it.",
+    ),
+)
+
+
+def _runtime_packages():
+    """The packages of every module in the running JVM's boot layer, as ``a/b/c``."""
+    import jpype
+    from arcadedb_embedded.jvm import start_jvm
+
+    start_jvm()
+    modules = jpype.JClass("java.lang.ModuleLayer").boot().modules()
+    return {
+        str(package).replace(".", "/")
+        for module in modules
+        for package in module.getPackages()
+    }
+
+
+def _removed_module_references(jar_dir, runtime_packages):
+    """Return ``{(jar, package): example class}`` for packages of removed modules.
+
+    Unlike ``_scan`` this reads the multi-release classes under
+    ``META-INF/versions/<n>`` for ``n`` up to the runtime's Java 25, as jdeps
+    does with ``--multi-release 25``, because the JVM loads them.
+    """
+    found = {}
+    for jar in sorted(n for n in os.listdir(jar_dir) if n.endswith(".jar")):
+        with zipfile.ZipFile(os.path.join(jar_dir, jar)) as archive:
+            for name in archive.namelist():
+                if not name.endswith(".class"):
+                    continue
+                if name.startswith("META-INF/versions/"):
+                    version, _, rest = name[len("META-INF/versions/") :].partition("/")
+                    if not version.isdigit() or int(version) > 25:
+                        continue
+                    class_file = rest
+                elif name.startswith("META-INF/"):
+                    continue
+                else:
+                    class_file = name
+                if class_file == "module-info.class":
+                    continue
+                for ref in _class_references(archive.read(name)):
+                    package = _package_of(ref)
+                    if package in runtime_packages:
+                        continue
+                    if any(
+                        package == removed or package.startswith(removed + "/")
+                        for removed in REMOVED_MODULE_PACKAGES
+                    ):
+                        found.setdefault((jar, package), class_file)
+    return found
+
+
+def _removed_module_use_is_allowed(jar, package):
+    return any(
+        jar.startswith(jar_prefix) and package.startswith(package_prefix)
+        for jar_prefix, package_prefix, _ in ALLOWED_REMOVED_MODULE_USE
+    )
+
+
+def test_bundled_runtime_lacks_the_excluded_modules():
+    """The runtime really is the trimmed one, so the closure test below means something."""
+    import jpype
+    from arcadedb_embedded.jvm import start_jvm
+
+    start_jvm()
+    layer = jpype.JClass("java.lang.ModuleLayer").boot()
+    present = [m for m in REMOVED_MODULES if layer.findModule(m).isPresent()]
+    assert not present, (
+        f"the bundled JRE contains {present}, which scripts/jre_module_exclusions.txt "
+        "keeps out; the wheel was built without that list"
+    )
+
+
+def test_no_shipped_class_needs_a_module_the_runtime_lacks():
+    """Every class that names a removed module's package is on the allow list."""
+    found = _removed_module_references(get_jar_path(), _runtime_packages())
+    unexplained = sorted(
+        (jar, package, example)
+        for (jar, package), example in found.items()
+        if not _removed_module_use_is_allowed(jar, package)
+    )
+    assert not unexplained, (
+        "classes in the wheel refer to a package of a JDK module that the bundled "
+        "JRE lacks (scripts/jre_module_exclusions.txt), so the code path that uses "
+        "them fails with NoClassDefFoundError:\n"
+        + "\n".join(
+            f"  {package.replace('/', '.')}  (from {jar}, e.g. {example})"
+            for jar, package, example in unexplained
+        )
+        + "\nKeep the module (remove it from jre_module_exclusions.txt), or, when the"
+        " code path cannot be reached from the bindings, add an entry with a reason"
+        " to ALLOWED_REMOVED_MODULE_USE in this file."
+    )
+
+
+def test_removed_module_scan_sees_the_known_references():
+    """With no runtime packages the scan finds the references, so a pass means something."""
+    found = _removed_module_references(get_jar_path(), set())
+    seen = {(jar.split("-")[0], package) for jar, package in found}
+    assert ("jackson", "java/beans") in seen
+    assert ("jts", "java/awt/geom") in seen
+    assert ("arcadedb", "jdk/jfr/consumer") in seen
+    assert ("agrona", "javax/tools") in seen
+
+
+def test_allowed_removed_module_entries_still_match_a_reference():
+    """An entry that no class needs any more is dead text: remove it."""
+    found = _removed_module_references(get_jar_path(), set())
+    stale = [
+        (jar_prefix, package_prefix)
+        for jar_prefix, package_prefix, _ in ALLOWED_REMOVED_MODULE_USE
+        if not any(
+            jar.startswith(jar_prefix) and package.startswith(package_prefix)
+            for jar, package in found
+        )
+    ]
+    assert not stale, f"entries of ALLOWED_REMOVED_MODULE_USE match nothing: {stale}"
+
+
+def test_jackson_and_yaml_work_without_java_beans(tmp_path):
+    """Jackson and the YAML mapper run on this runtime, which has no java.beans.
+
+    The allow list says jackson-databind's java.beans use is optional and that the
+    YAML mapper does not touch snakeyaml's bean introspector. Run both.
+    """
+    import jpype
+    from arcadedb_embedded.jvm import start_jvm
+
+    start_jvm()
+    mapper = jpype.JClass("com.fasterxml.jackson.databind.ObjectMapper")()
+    tree = mapper.readTree('{"a":[1,2,{"b":"c"}],"d":null}')
+    assert str(mapper.writeValueAsString(tree)) == '{"a":[1,2,{"b":"c"}],"d":null}'
+    hash_map = jpype.JClass("java.util.LinkedHashMap")()
+    hash_map.put("name", "arcade")
+    hash_map.put("n", jpype.JClass("java.lang.Integer")(3))
+    assert "arcade" in str(mapper.writeValueAsString(hash_map))
+
+    yaml = jpype.JClass("com.fasterxml.jackson.dataformat.yaml.YAMLMapper")()
+    text = str(yaml.writeValueAsString(hash_map))
+    assert "name: " in text and "arcade" in text
+    back = yaml.readTree(text)
+    assert str(back.get("name").asText()) == "arcade"

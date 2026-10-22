@@ -535,7 +535,8 @@ The Python binding is distributed as a **single, self-contained package** (`arca
   (so the server is single-node), metrics and tracing, the JavaScript stack (js,
   truffle, icu4j, and regex), and jline. Jackson, snappy-java, and commons-math3 ship: the
   server's OpenAPI route, its snappy-compressed request bodies, and jvector refer to them, and
-  `tests/test_jar_closure.py` fails when a shipped class refers to a package no shipped jar has.
+  `tests/test_jar_closure.py` fails when a shipped class refers to a package no shipped jar has,
+  or a package of a JDK module the bundled runtime lacks on purpose (`scripts/jre_module_exclusions.txt`).
 - **Wire protocols**: the Postgres, Redis, and Bolt plugins ship, and the server starts
   each one only when its plugin is configured (see `create_server()`).
 - **Zero Configuration**: No external Java installation required.

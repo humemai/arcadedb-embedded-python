@@ -134,7 +134,7 @@ asserts, so the list below stops at the file.
 | `test_bridge_fixes.py` | Two fixes in the Java bridge: nested values read back as Python in the same transaction, and a date written as midnight UTC in any JVM time zone |
 | `test_java_package_shadowing.py` | A folder named `java/` or `com/` must not change what a query returns |
 | `test_runtime_cache.py` | The dev-mode runtime cache follows the wheel it was extracted from |
-| `test_jar_closure.py` | No class in a shipped jar refers to a package no shipped jar provides (the check that would have caught Jackson, snappy-java, and commons-math3 excluded while the server and jvector use them), and the polyglot engine is off while no GraalVM language ships |
+| `test_jar_closure.py` | No class in a shipped jar refers to a package no shipped jar provides (the check that would have caught Jackson, snappy-java, and commons-math3 excluded while the server and jvector use them), no class refers to a package of a JDK module the bundled runtime lacks (`java.desktop`, `jdk.jfr`, `java.compiler`; each exception is listed with a reason), the runtime lacks those modules, Jackson and its YAML mapper run without `java.beans`, and the polyglot engine is off while no GraalVM language ships |
 | `test_jar_provenance.py` | The wheel can say which engine it carries, not only which version it is |
 | `test_wheel_platform_tag.py` | The wheel's manylinux platform tag, and `__version__` equals the installed distribution version |
 | `test_wheel_size.py` | The wheel size gate: a wheel at or over 100 decimal megabytes fails the build |

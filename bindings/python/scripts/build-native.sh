@@ -21,6 +21,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PY_BINDINGS_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 DIST_DIR="$PY_BINDINGS_DIR/dist"
 JAR_EXCLUSIONS_FILE="$SCRIPT_DIR/jar_exclusions.txt"
+JRE_MODULE_EXCLUSIONS_FILE="$SCRIPT_DIR/jre_module_exclusions.txt"
 
 # Parameters
 PLATFORM="${1:-}"
@@ -256,13 +257,23 @@ fi
 # jdk.incubator.vector: Required for vectorized execution paths
 # NOTE: the java.se umbrella used to be force-added as a safety net; with the
 # package embedded-only and jdeps detection fixed, the detected set gates the
-# JRE (full suite + examples verify each build). java.se remains the fallback
-# when detection yields nothing.
-if [ -n "$FILTERED_MODULES" ]; then
-    REQUIRED_MODULES="${FILTERED_MODULES},jdk.management,jdk.zipfs,jdk.unsupported,jdk.incubator.vector"
-else
-    REQUIRED_MODULES="java.se,jdk.management,jdk.zipfs,jdk.unsupported,jdk.incubator.vector"
+# JRE (full suite + examples verify each build). Detection that yields nothing
+# stops the build: the java.se umbrella would bring back the excluded modules.
+# JDK modules the bundled JRE must not contain (jre_module_exclusions.txt says why).
+# Removed from the detected set here, and checked in the finished JRE below.
+if [[ ! -f "$JRE_MODULE_EXCLUSIONS_FILE" ]]; then
+    echo -e "${RED}❌ JRE module exclusion file not found: ${JRE_MODULE_EXCLUSIONS_FILE}${NC}"
+    exit 1
 fi
+EXCLUDED_MODULES_LIST="$(mktemp)"
+grep -v '^#' "$JRE_MODULE_EXCLUSIONS_FILE" | tr -d '\r' | sed '/^[[:space:]]*$/d' > "$EXCLUDED_MODULES_LIST"
+echo -e "${CYAN}📦 Excluded modules: ${YELLOW}$(paste -sd ',' "$EXCLUDED_MODULES_LIST")${NC}"
+FILTERED_MODULES=$(echo "$FILTERED_MODULES" | tr ',' '\n' | sed '/^$/d' | { grep -vxFf "$EXCLUDED_MODULES_LIST" || true; } | paste -sd "," -)
+if [ -z "$FILTERED_MODULES" ]; then
+    echo -e "${RED}❌ jdeps found no modules; the java.se fallback would bring back the excluded modules, so the build stops${NC}"
+    exit 1
+fi
+REQUIRED_MODULES="${FILTERED_MODULES},jdk.management,jdk.zipfs,jdk.unsupported,jdk.incubator.vector"
 
 echo -e "${CYAN}📦 Detected modules (raw): ${YELLOW}${DETECTED_MODULES}${NC}"
 echo -e "${CYAN}📦 Detected modules (filtered): ${YELLOW}${FILTERED_MODULES}${NC}"
@@ -280,6 +291,14 @@ jlink \
     --output "$PY_BINDINGS_DIR/temp_jre"
 
 echo -e "${GREEN}✅ JRE built${NC}"
+# A module that another module requires comes back through jlink's own resolution.
+BAD_MODULES=$("$PY_BINDINGS_DIR/temp_jre/bin/java" --list-modules | tr -d '\r' | sed 's/@.*//' | { grep -xFf "$EXCLUDED_MODULES_LIST" || true; })
+rm -f "$EXCLUDED_MODULES_LIST"
+if [ -n "$BAD_MODULES" ]; then
+    echo -e "${RED}❌ the JRE contains excluded modules (another module requires them): ${BAD_MODULES}${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✅ No excluded module in the JRE${NC}"
 JRE_SIZE=$(du -sh "$PY_BINDINGS_DIR/temp_jre" | cut -f1)
 echo -e "${CYAN}📊 JRE size: ${YELLOW}${JRE_SIZE}${NC}"
 

@@ -45,7 +45,7 @@ remains the source of the core database.
 
 ## 📦 What the wheel includes
 
-- Approximate size: ~70 MiB download, ~98 MiB installed.
+- Approximate size: ~65 MiB download, ~86 MiB installed.
 - Lightweight Java 25 runtime (jlink) bundled per platform.
 - ArcadeDB JARs required for the embedded engine.
 - Python bindings and source modules.

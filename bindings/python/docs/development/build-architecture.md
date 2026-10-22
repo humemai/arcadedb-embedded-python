@@ -6,7 +6,7 @@ This document describes the build architecture for creating platform-specific Py
 
 **Goal:** Distribute a single `arcadedb-embedded` package that works on 4 platforms with **zero Java installation required**.
 
-**Achievement:** 4 platform-specific wheels with a bundled platform-specific JRE, built and tested on GitHub Actions using native runners. The 26.10.1.dev0 linux/amd64 wheel measured on 2026-09-29 is about 69 MB compressed and 96 MB installed; other platforms and versions vary slightly.
+**Achievement:** 4 platform-specific wheels with a bundled platform-specific JRE, built and tested on GitHub Actions using native runners. The 26.11.1.dev0 linux/amd64 wheel measured on 2026-10-22 is about 68 MB compressed and 90 MB installed; other platforms and versions vary slightly.
 
 ## Supported Platforms
 
@@ -20,7 +20,7 @@ This document describes the build architecture for creating platform-specific Py
 **All supported platforms:**
 
 - ✅ Full bindings suite passes on every platform build
-- ✅ About 33 MB of JARs (measured on the linux/amd64 wheel; the same JAR set on every platform; includes server/Studio)
+- ✅ About 44 MB of JARs (measured on the linux/amd64 wheel; the same JAR set on every platform; includes server/Studio)
 - ✅ All native runners (no QEMU emulation)
 - ✅ Pinned runner versions (the Docker build still pulls the moving `X.Y.Z-SNAPSHOT` image tag, so two builds of the same commit can differ)
 
@@ -211,6 +211,34 @@ Filtering happens in the build that packages the JARs, so every wheel gets the s
   on Windows still matches
 - **Result:** Consistent filtered JAR contents across all platforms
 
+## JRE Module Exclusion
+
+The bundled runtime is a jlink image. Its module list is not written by hand: both build
+scripts run `jdeps --print-module-deps` over the shipped JARs and add `jdk.management`,
+`jdk.zipfs`, `jdk.unsupported`, and `jdk.incubator.vector`. jdeps names a module as soon as one
+class in one JAR refers to it, so optional users pull in large modules that no code path of the
+wheel reaches. `scripts/jre_module_exclusions.txt` lists the modules to keep out: `java.desktop`
+(with `java.datatransfer` and `java.prefs`, which only it requires), `jdk.jfr`, and
+`java.compiler`. The file says which class in which JAR made jdeps name each module.
+
+- `scripts/Dockerfile.build` (Linux) and `scripts/build-native.sh` (macOS, Windows) remove the
+  listed modules from the jdeps answer before `jlink`.
+- After `jlink`, both scripts run `java --list-modules` on the new runtime and fail the build when a
+  listed module is still in it, which happens when another module requires it.
+- When jdeps finds no modules at all, the build stops: the `java.se` fallback would bring the
+  excluded modules back.
+- On Linux the Dockerfile also runs `strip --strip-unneeded` over the runtime's `.so` files
+  (`libjvm.so` ships with its symbol table); `jlink` already runs with `--strip-debug`,
+  `--no-header-files`, and `--no-man-pages`. A crash report of the JVM names fewer native
+  frames as a result. macOS and Windows keep their libraries as `jlink` writes them.
+
+**Check before you add a module.** `tests/test_jar_closure.py` starts the bundled runtime, reads
+the class files of the shipped JARs, and fails on a reference into a package of a removed module
+unless the reference is on a list with a reason (JTS's AWT classes, Jackson's `java.beans`
+annotations, and so on). It also asserts that the running runtime lacks each listed module, and
+runs Jackson and its YAML mapper on it. A new JAR or a new version of one that starts to need
+`java.desktop` fails there, not for a user.
+
 ## Test Parsing
 
 ### JUnit XML for Reliable Results
@@ -251,9 +279,10 @@ COPY bindings/python/local-jars/lib/ /build/local-jars/
 # Reads jar_exclusions.txt
 # Filters out excluded JARs before packaging
 # Compiles arcadedb-python-bridge.jar from bindings/python/src/java with javac
-# Runs jdeps on the JARs and adds jdk.management, jdk.zipfs, jdk.unsupported,
-# and jdk.incubator.vector to the detected modules
-# Runs jlink → creates /build/jre (platform-specific!)
+# Runs jdeps on the JARs, removes the modules in jre_module_exclusions.txt, and adds
+# jdk.management, jdk.zipfs, jdk.unsupported, and jdk.incubator.vector
+# Runs jlink → creates /build/jre (platform-specific!), checks that no excluded module
+# came back, and strips the native libraries (Linux only)
 
 # Stage 3: python-builder (builds wheel)
 FROM python:${PYTHON_VERSION}-slim AS python-builder
@@ -291,7 +320,8 @@ fi
 
 # 3. Compile arcadedb-python-bridge.jar from src/java with javac
 
-# 4. Create platform-specific JRE via jlink
+# 4. Create platform-specific JRE via jlink ($MODULES = jdeps answer minus
+#    jre_module_exclusions.txt, plus the manual additions)
 jlink --output jre \
   --add-modules "$MODULES" \
   --strip-debug \
@@ -402,13 +432,13 @@ bindings/python/
 
 ## Size Breakdown (current ballpark)
 
-Measured on the 26.10.1.dev0 linux/amd64 wheel on 2026-09-29; other platforms and
+Measured on the 26.11.1.dev0 linux/amd64 wheel on 2026-10-22; other platforms and
 versions vary slightly:
 
-- Wheel: about 69 MB (compressed)
-- JRE: about 63 MB (uncompressed)
-- JARs: about 33 MB (uncompressed)
-- Installed package: about 96 MB
+- Wheel: about 68 MB (compressed; 80.8 MB before the JRE trim)
+- JRE: about 46 MB (uncompressed; 15 modules)
+- JARs: about 44 MB (uncompressed)
+- Installed package: about 90 MB
 
 ## Development
 
