@@ -86,7 +86,7 @@ def _make_index(db, vectors, metadata=""):
                 "sql",
                 "INSERT INTO PqDoc SET id = ?, embedding = ?",
                 i,
-                arcadedb.to_java_float_array(vec.tolist()),
+                arcadedb.to_java_float_array(vec),
             )
     _build(db)
 
@@ -101,7 +101,7 @@ def _search(db, query, options="{ efSearch: 100 }", k=K):
         "sql",
         "SELECT id, distance FROM "  # nosec B608 - test-owned option literals
         f"(SELECT expand(vectorNeighbors('PqDoc[embedding]', ?, {k}, {options})))",  # nosec B608
-        arcadedb.to_java_float_array(query.tolist()),
+        arcadedb.to_java_float_array(query),
     ).to_list()
 
 
@@ -243,7 +243,7 @@ class TestProductQuantizationSql:
                     "sql",
                     "INSERT INTO PqDoc SET id = ?, embedding = ?",
                     i,
-                    arcadedb.to_java_float_array(vec.tolist()),
+                    arcadedb.to_java_float_array(vec),
                 )
 
         _build(test_db)
