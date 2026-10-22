@@ -1,0 +1,299 @@
+# arcadedb-embedded-native (preview wheel): build, test, publish.
+#
+#   push of a tag native-v<version>   build + test + publish to PyPI (trusted publishing, environment pypi-native)
+#   workflow_dispatch                 build + test only; never publishes (the publish job needs a native-v* tag ref)
+#
+# The wheel is py3-none-manylinux_2_34_x86_64: libarcadedb.so is a GraalVM native-image shared library loaded with ctypes.
+# Design and decisions: bindings/python/native-wheel/PACKAGING.md. Gates: the glibc floor (image built in a manylinux_2_34
+# container), `auditwheel show` (manylinux_2_34, no ISA warning), `twine check`, wheel version == tag version, and the bindings
+# test suite run against the INSTALLED wheel (parity_wheel.py). PyPI side: pending/active trusted publisher for
+# humemai/arcadedb-embedded-python, workflow native-preview.yml, environment pypi-native (allows native-v* tags only). No API token.
+name: Native preview wheel
+
+on:
+  push:
+    tags:
+      - "native-v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Wheel version to build (PEP 440, e.g. 26.10.2a1); a tag push takes it from the tag"
+        required: false
+        default: "26.10.2a1"
+        type: string
+
+concurrency:
+  group: native-preview-${{ github.ref }}
+  # A dispatch is superseded by a newer one; a tag run is never cancelled (a half-done release is worse than a queued one).
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' }}
+
+permissions:
+  contents: read
+
+env:
+  # GraalVM CE 25.4.4.1.1 from the official graalvm-ce-builds release; the sha256 is the release asset's digest (GitHub API).
+  GRAALVM_VERSION: "25.4.4.1.1"
+  GRAALVM_URL: https://github.com/graalvm/graalvm-ce-builds/releases/download/graal-25.4.4.1.1/graalvm-community-jdk-25i4-25.0.4.1.1_linux-x64_bin.tar.gz
+  GRAALVM_SHA256: 05ccbbe783210b6886ff7b08fcd0b061c5dce4852b05db87284fc0e24abb08e2
+  MANYLINUX_IMAGE: quay.io/pypa/manylinux_2_34_x86_64:latest
+  UV_VERSION: "0.12.0"
+
+jobs:
+  build:
+    name: Image and wheel (manylinux_2_34)
+    runs-on: ubuntu-latest
+    # The laptop builds the image in ~5 min on 12 cores; a 4-core runner is 3x slower at worst, plus Maven and the download.
+    timeout-minutes: 75
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      engine: ${{ steps.ver.outputs.engine }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Resolve the version
+        id: ver
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "push" ]; then
+            version="${REF_NAME#native-v}"
+          else
+            version="$INPUT_VERSION"
+          fi
+          # The engine release the image links is the release segment of the version (26.10.2a1 -> 26.10.2).
+          engine="$(printf '%s' "$version" | grep -Eo '^[0-9]+(\.[0-9]+)+')"
+          [ -n "$engine" ] || { echo "cannot derive the engine version from '$version'" >&2; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "engine=$engine" >> "$GITHUB_OUTPUT"
+          echo "wheel version $version, engine $engine"
+
+      - name: Install uv
+        run: |
+          installer="$(mktemp)"
+          curl -LsSf --retry 5 --retry-all-errors --retry-delay 5 -o "$installer" "https://astral.sh/uv/${UV_VERSION}/install.sh"
+          sh "$installer"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Add swap (the image build runs with -J-Xmx12g on a 16 GB runner)
+        run: |
+          set -euo pipefail
+          sudo fallocate -l 8G /swapfile.native
+          sudo chmod 600 /swapfile.native
+          sudo mkswap /swapfile.native
+          sudo swapon /swapfile.native
+          free -m
+
+      - name: Download GraalVM CE and verify its sha256
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 -o "$RUNNER_TEMP/graalvm.tar.gz" "$GRAALVM_URL"
+          echo "$GRAALVM_SHA256  $RUNNER_TEMP/graalvm.tar.gz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/graalvm"
+          tar -xzf "$RUNNER_TEMP/graalvm.tar.gz" -C "$RUNNER_TEMP/graalvm" --strip-components=1
+          rm "$RUNNER_TEMP/graalvm.tar.gz"
+          grep -F "GRAALVM_VERSION=\"$GRAALVM_VERSION\"" "$RUNNER_TEMP/graalvm/release"
+          "$RUNNER_TEMP/graalvm/bin/native-image" --version
+
+      # The very script the laptop build uses (-march=compatibility, -J-Xmx12g, -H:-VectorAPISupport, fastops.mode 1), inside the
+      # manylinux_2_34 container (glibc 2.34) so the glibc floor of libarcadedb.so is a guarantee, not a property of the runner.
+      - name: Build the native image in manylinux_2_34
+        env:
+          ENGINE: ${{ steps.ver.outputs.engine }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/lib" "$RUNNER_TEMP/m2"
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/work" -v "$RUNNER_TEMP/graalvm:/graalvm:ro" -v "$RUNNER_TEMP/lib:/out" -v "$RUNNER_TEMP/m2:/root/.m2" \
+            -e GRAALVM_HOME_P5=/graalvm -e ARCADEDB_ENGINE_VERSION="$ENGINE" -e MARCH=compatibility \
+            "$MANYLINUX_IMAGE" bash -euo pipefail -c '
+              ldd --version | head -1
+              dnf install -y --setopt=install_weak_deps=False zlib-devel unzip which >/dev/null
+              cd /work
+              bash native-spike/scripts/preview-build.sh /out
+            ' || { tail -n 80 "$RUNNER_TEMP/lib/build.log" || true; exit 1; }
+          # the container ran as root: give the files back to the runner user
+          sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/lib" "$GITHUB_WORKSPACE"
+          cat "$RUNNER_TEMP/lib/build.done"
+          cat "$RUNNER_TEMP/lib/sha256.txt"
+          ls -l "$RUNNER_TEMP/lib"
+
+      - name: Glibc floor of the libraries
+        run: |
+          set -euo pipefail
+          for so in "$RUNNER_TEMP/lib/libarcadedb.so" "$RUNNER_TEMP/lib/libjvector-x86_64.so"; do
+            top="$(objdump -T "$so" | grep -Eo 'GLIBC_[0-9]+\.[0-9]+(\.[0-9]+)?' | sort -uV | tail -n 1)"
+            echo "$(basename "$so"): highest $top"
+            [ "$(printf '%s\nGLIBC_2.34\n' "$top" | sort -V | tail -n 1)" = "GLIBC_2.34" ] || { echo "$so needs $top, above the manylinux_2_34 floor" >&2; exit 1; }
+          done
+
+      - name: Build the wheel
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          ENGINE: ${{ steps.ver.outputs.engine }}
+        run: |
+          set -euo pipefail
+          python3 bindings/python/native-wheel/build_wheel.py --lib-dir "$RUNNER_TEMP/lib" --version "$VERSION" --engine "$ENGINE" \
+            --graalvm-home "$RUNNER_TEMP/graalvm" --out "$RUNNER_TEMP/wheel"
+          ls -l "$RUNNER_TEMP/wheel/dist"
+          shopt -s nullglob
+          wheels=("$RUNNER_TEMP"/wheel/dist/*.whl)
+          [ "${#wheels[@]}" = 1 ]
+
+      - name: "Gate: auditwheel grants manylinux_2_34, no ISA warning"
+        run: |
+          set -euo pipefail
+          w="$(ls "$RUNNER_TEMP"/wheel/dist/*.whl)"
+          uvx auditwheel show "$w" | tee "$RUNNER_TEMP/auditwheel.txt"
+          grep -F 'consistent with the following platform tag' "$RUNNER_TEMP/auditwheel.txt"
+          grep -F '"manylinux_2_34_x86_64"' "$RUNNER_TEMP/auditwheel.txt"
+          if grep -Eiq 'instruction set|x86_64_v[0-9]' "$RUNNER_TEMP/auditwheel.txt"; then
+            echo "auditwheel reports an ISA warning: the image is not baseline x86-64" >&2
+            exit 1
+          fi
+
+      - name: "Gate: twine check"
+        run: uvx twine check --strict "$RUNNER_TEMP"/wheel/dist/*.whl
+
+      - name: "Gate: the wheel version equals the requested (tag) version"
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          w="$(ls "$RUNNER_TEMP"/wheel/dist/*.whl)"
+          uv run --no-project --with packaging python - "$w" "$VERSION" <<'PY'
+          import sys
+          from packaging.utils import parse_wheel_filename
+          from packaging.version import Version
+          name, version, _build, tags = parse_wheel_filename(sys.argv[1].rsplit("/", 1)[-1])
+          want = Version(sys.argv[2])
+          print(f"wheel {name} {version} {sorted(map(str, tags))}; requested {want}")
+          assert str(name) == "arcadedb-embedded-native", name
+          assert version == want, f"wheel version {version} != requested {want}"
+          assert [str(t) for t in tags] == ["py3-none-manylinux_2_34_x86_64"], tags
+          PY
+
+      - name: Collect the build record
+        run: |
+          mkdir -p "$RUNNER_TEMP/dist-out"
+          cp "$RUNNER_TEMP"/wheel/dist/*.whl "$RUNNER_TEMP/dist-out/"
+          mkdir -p "$RUNNER_TEMP/record"
+          cp "$RUNNER_TEMP/auditwheel.txt" "$RUNNER_TEMP/lib/sha256.txt" "$RUNNER_TEMP/lib/build.done" "$RUNNER_TEMP/record/"
+          tail -n 400 "$RUNNER_TEMP/lib/build.log" > "$RUNNER_TEMP/record/build.log.tail"
+          sha256sum "$RUNNER_TEMP"/dist-out/*.whl | tee "$RUNNER_TEMP/record/wheel.sha256"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-wheel
+          path: ${{ runner.temp }}/dist-out/*.whl
+          if-no-files-found: error
+          retention-days: 30
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: native-build-record
+          path: ${{ runner.temp }}/record/
+          if-no-files-found: ignore
+          retention-days: 30
+
+  test:
+    name: Parity against the installed wheel
+    needs: build
+    runs-on: ubuntu-latest
+    # 70 test files, one process each (900 s per-file cap in parity_wheel.py); the laptop run is ~25 min on 4 cores.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        run: |
+          installer="$(mktemp)"
+          curl -LsSf --retry 5 --retry-all-errors --retry-delay 5 -o "$installer" "https://astral.sh/uv/${UV_VERSION}/install.sh"
+          sh "$installer"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: native-wheel
+          path: ${{ runner.temp }}/wheel
+
+      # The tests of this checkout run with `arcadedb_embedded` aliased to the installed `arcadedb_native` (parity/alias), in a clean
+      # environment that contains the wheel and the test dependencies, not the source tree. The same dependency set as the preview chain.
+      - name: Run the parity suite
+        run: |
+          set -euo pipefail
+          w="$(ls "$RUNNER_TEMP"/wheel/*.whl)"
+          mkdir -p "$RUNNER_TEMP/parity"
+          uv run --no-project --python 3.12 --with "$w" --with pytest --with numpy --with requests --with jpype1 --with pyarrow \
+            --with polars --with pandas --with duckdb --with networkx --with "psycopg[binary]" --with adbc-driver-postgresql \
+            --with redis --with neo4j \
+            python bindings/python/native-wheel/parity/parity_wheel.py --repo "$GITHUB_WORKSPACE" \
+              --alias "$GITHUB_WORKSPACE/bindings/python/native-wheel/parity/alias" --backend native \
+              --out "$RUNNER_TEMP/parity/parity-wheel.tsv" --cores "0-$(($(nproc) - 1))" | tee "$RUNNER_TEMP/parity/parity-wheel.run.log"
+
+      - name: "Gate: no failure, error, crash or timeout"
+        run: |
+          set -euo pipefail
+          tsv="$RUNNER_TEMP/parity/parity-wheel.tsv"
+          awk -F'\t' '
+            NR == 1 { next }
+            $1 == "TOTAL" { passed = $2; failed = $3; err = $4; notyet = $5; na = $6; skipped = $7; tot = 1; next }
+            $8 != "" { bad = bad " " $1 "(" $8 ")" }
+            END {
+              if (!tot) { print "no TOTAL row" > "/dev/stderr"; exit 1 }
+              printf "parity: passed=%s failed=%s error=%s notyet=%s na_jvm=%s skipped=%s\n", passed, failed, err, notyet, na, skipped
+              if (bad != "") { print "files with a status:" bad > "/dev/stderr"; exit 1 }
+              if (passed + 0 == 0 || failed + 0 != 0 || err + 0 != 0) exit 1
+            }' "$tsv" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: native-parity
+          path: |
+            ${{ runner.temp }}/parity/parity-wheel.tsv
+            ${{ runner.temp }}/parity/parity-wheel.run.log
+            ${{ runner.temp }}/parity/parity-wheel-xml/
+          if-no-files-found: warn
+          retention-days: 30
+
+  publish:
+    name: Publish to PyPI
+    needs: [build, test]
+    # Tag pushes only: a dispatch can never reach this job. The environment also allows native-v* tags only.
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/native-v') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: pypi-native
+      url: https://pypi.org/project/arcadedb-embedded-native/
+    permissions:
+      id-token: write # PyPI trusted publishing (OIDC); no API token anywhere
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: native-wheel
+          path: dist
+
+      - name: Check the wheel before upload
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          ls -l dist
+          shopt -s nullglob
+          wheels=(dist/*.whl)
+          [ "${#wheels[@]}" = 1 ]
+          [ "${wheels[0]}" = "dist/arcadedb_embedded_native-${VERSION}-py3-none-manylinux_2_34_x86_64.whl" ] || { echo "unexpected wheel for tag version $VERSION" >&2; exit 1; }
+
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: dist
