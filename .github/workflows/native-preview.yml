@@ -22,9 +22,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Wheel version to build (PEP 440, e.g. 26.10.2a1); a tag push takes it from the tag"
+        description: "Wheel version to build (PEP 440, e.g. 26.10.2.dev1; A.B.C.devN, A.B.C or A.B.C.postN); a tag push takes it from the tag"
         required: false
-        default: "26.10.2a1"
+        default: "26.10.2.dev1"
         type: string
 
 concurrency:
@@ -62,7 +62,7 @@ jobs:
         env:
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
-          INPUT_VERSION: ${{ inputs.version || '26.10.2a1' }}
+          INPUT_VERSION: ${{ inputs.version || '26.10.2.dev1' }}
         run: |
           set -euo pipefail
           if [ "$REF_TYPE" = "tag" ]; then
@@ -70,7 +70,7 @@ jobs:
           else
             version="$INPUT_VERSION"
           fi
-          # The engine release the image links is the release segment of the version (26.10.2a1 -> 26.10.2).
+          # The engine release the image links is the release segment of the version (26.10.2.dev1, 26.10.2, 26.10.2.post1 -> 26.10.2).
           engine="$(printf '%s' "$version" | grep -Eo '^[0-9]+(\.[0-9]+)+')"
           [ -n "$engine" ] || { echo "cannot derive the engine version from '$version'" >&2; exit 1; }
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -178,6 +178,7 @@ jobs:
           want = Version(sys.argv[2])
           print(f"wheel {name} {version} {sorted(map(str, tags))}; requested {want}")
           assert str(name) == "arcadedb-embedded-native", name
+          assert str(want) == sys.argv[2], f"{sys.argv[2]} is not the canonical PEP 440 form {want}: fix the tag"
           assert version == want, f"wheel version {version} != requested {want}"
           assert [str(t) for t in tags] == ["py3-none-manylinux_2_34_x86_64"], tags
           PY
