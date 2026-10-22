@@ -5,9 +5,18 @@ A PRODUCT index walks its graph on the in-memory PQ codes and re-ranks the best
 `k * rerankOversample` candidates on the stored vectors. The vector guide's "Product
 quantization in SQL" section shows the statements these tests run: the
 `CREATE INDEX ... METADATA` settings (`rerankOversample`, `fusedPQ`, `pqTrainingLimit`)
-and the per-query `rerank` option of `vectorNeighbors`. They fail on the 26.10.2 wheel,
-which has neither the settings nor the option, and pass on the engine the suite builds
-against.
+and the per-query `rerank` option of `vectorNeighbors`.
+
+CI builds its wheel from upstream's 26.11.1-SNAPSHOT image, which is republished only when
+upstream's deploy job succeeds and at the time of this change still held an engine from before
+#10545, with the same version string as the engine that has it. So the version cannot tell the
+two apart, and `has_pq_rerank` probes the one thing that changed: the index setting
+`rerankOversample` is accepted. On an engine without #10545 the same tests assert the old
+answer (the settings and the option are refused, `find_nearest` is the exact walk SQL also
+takes), with no skips, as `test_vector_sql.py` does for `where` (the repository accepts no
+skips, scripts/check_test_skips.py). When 26.11.1 is released and the wheel the suite runs on
+is built from it, delete `has_pq_rerank` and the old-answer branches. The new-answer branch runs in CI
+only on a build from source (`engine-from-source: true`).
 """
 
 import arcadedb_embedded as arcadedb
@@ -25,6 +34,24 @@ def test_db(tmp_path):
     db = create_database(str(tmp_path / "test_vector_pq_db"))
     yield db
     db.drop()
+
+
+@pytest.fixture
+def has_pq_rerank(tmp_path):
+    """True when the engine has #10545: it accepts the `rerankOversample` index setting."""
+    with create_database(str(tmp_path / "probe")) as probe:
+        probe.command("sql", "CREATE DOCUMENT TYPE Probe")
+        probe.command("sql", "CREATE PROPERTY Probe.embedding ARRAY_OF_FLOATS")
+        try:
+            probe.command(
+                "sql",
+                "CREATE INDEX ON Probe (embedding) LSM_VECTOR METADATA "
+                '{"dimensions": 4, "quantization": "PRODUCT", "rerankOversample": 1}',
+            )
+        except Exception as e:
+            assert "Unsupported metadata key" in str(e), e
+            return False
+    return True
 
 
 @pytest.fixture(scope="module")
@@ -95,8 +122,12 @@ def _recall(db, vectors, queries, options):
 
 
 class TestProductQuantizationSql:
-    def test_index_settings_reach_the_index(self, test_db, corpus):
+    def test_index_settings_reach_the_index(self, test_db, corpus, has_pq_rerank):
         vectors, _ = corpus
+        if not has_pq_rerank:
+            with pytest.raises(Exception, match="Unsupported metadata key"):
+                _make_index(test_db, vectors, ', "rerankOversample": 30')
+            return
         _make_index(
             test_db,
             vectors,
@@ -113,20 +144,29 @@ class TestProductQuantizationSql:
         assert int(meta.pqClusters) == 64
 
     def test_rerank_oversample_defaults_to_ten_and_fused_pq_to_off(
-        self, test_db, corpus
+        self, test_db, corpus, has_pq_rerank
     ):
         _make_index(test_db, corpus[0])
 
         meta = _metadata(test_db)
 
+        if not has_pq_rerank:
+            assert not hasattr(meta, "rerankOversample")
+            return
+
         assert int(meta.rerankOversample) == 10
         assert bool(meta.fusedPQ) is False
 
-    def test_negative_rerank_oversample_is_refused(self, test_db):
+    def test_negative_rerank_oversample_is_refused(self, test_db, has_pq_rerank):
         test_db.command("sql", "CREATE DOCUMENT TYPE PqDoc")
         test_db.command("sql", "CREATE PROPERTY PqDoc.embedding ARRAY_OF_FLOATS")
+        refused = (
+            "rerankOversample must be at least 0"
+            if has_pq_rerank
+            else "Unsupported metadata key 'rerankOversample'"
+        )
 
-        with pytest.raises(Exception, match="rerankOversample must be at least 0"):
+        with pytest.raises(Exception, match=refused):
             test_db.command(
                 "sql",
                 "CREATE INDEX ON PqDoc (embedding) LSM_VECTOR METADATA "
@@ -151,9 +191,15 @@ class TestProductQuantizationSql:
 
         assert _recall(test_db, vectors, queries, "{ efSearch: 100 }") >= 0.9
 
-    def test_rerank_zero_returns_pq_estimates_with_lower_recall(self, test_db, corpus):
+    def test_rerank_zero_returns_pq_estimates_with_lower_recall(
+        self, test_db, corpus, has_pq_rerank
+    ):
         vectors, queries = corpus
         _make_index(test_db, vectors)
+        if not has_pq_rerank:
+            with pytest.raises(Exception, match="Unknown option 'rerank'"):
+                _search(test_db, queries[0], "{ efSearch: 100, rerank: 0 }")
+            return
 
         reranked = _recall(test_db, vectors, queries, "{ efSearch: 100 }")
         pq_only = _recall(test_db, vectors, queries, "{ efSearch: 100, rerank: 0 }")
@@ -167,24 +213,30 @@ class TestProductQuantizationSql:
             for row in rows
         )
 
-    def test_negative_rerank_option_is_refused(self, test_db, corpus):
+    def test_negative_rerank_option_is_refused(self, test_db, corpus, has_pq_rerank):
         _make_index(test_db, corpus[0])
+        refused = "rerank must be >= 0" if has_pq_rerank else "Unknown option 'rerank'"
 
-        with pytest.raises(Exception, match="rerank must be >= 0"):
+        with pytest.raises(Exception, match=refused):
             _search(test_db, corpus[1][0], "{ rerank: -1 }")
 
-    def test_fused_pq_index_returns_k_results(self, test_db, corpus):
+    def test_fused_pq_index_returns_k_results(self, test_db, corpus, has_pq_rerank):
         vectors, queries = corpus
         test_db.command("sql", "CREATE DOCUMENT TYPE PqDoc")
         test_db.command("sql", "CREATE PROPERTY PqDoc.id INTEGER")
         test_db.command("sql", "CREATE PROPERTY PqDoc.embedding ARRAY_OF_FLOATS")
-        test_db.command(
+        create_fused = lambda: test_db.command(  # noqa: E731
             "sql",
             "CREATE INDEX ON PqDoc (embedding) LSM_VECTOR METADATA "
             f'{{"dimensions": {DIMS}, "similarity": "EUCLIDEAN", '
             '"quantization": "PRODUCT", "pqSubspaces": 8, "pqClusters": 256, '
             '"fusedPQ": true}',
         )
+        if not has_pq_rerank:
+            with pytest.raises(Exception, match="Unsupported metadata key 'fusedPQ'"):
+                create_fused()
+            return
+        create_fused()
         with test_db.transaction():
             for i, vec in enumerate(vectors):
                 test_db.command(
@@ -201,10 +253,17 @@ class TestProductQuantizationSql:
 
 
 class TestProductQuantizationHelpers:
-    def test_find_nearest_answers_like_sql_on_a_product_index(self, test_db, corpus):
-        """With rerankOversample 0 both return the PQ scores; the exact walk would not."""
+    def test_find_nearest_answers_like_sql_on_a_product_index(
+        self, test_db, corpus, has_pq_rerank
+    ):
+        """With rerankOversample 0 both return the PQ scores; the exact walk would not.
+
+        An engine without #10545 has no such setting and answers both exactly.
+        """
         vectors, queries = corpus
-        _make_index(test_db, vectors, ', "rerankOversample": 0')
+        _make_index(
+            test_db, vectors, ', "rerankOversample": 0' if has_pq_rerank else ""
+        )
         index = test_db.schema.get_vector_index("PqDoc", "embedding")
         query = queries[0]
 
@@ -215,6 +274,8 @@ class TestProductQuantizationHelpers:
         assert [score for _, score in found] == pytest.approx(
             [r["distance"] for r in sql_rows]
         )
+        if not has_pq_rerank:
+            return
         _, exact = _exact_neighbors(vectors, query)
         assert any(
             score != pytest.approx(float(exact[rec.get("id")]), rel=1e-4)
@@ -233,11 +294,10 @@ class TestProductQuantizationHelpers:
         for rec, score in found:
             assert score == pytest.approx(float(exact[rec.get("id")]), rel=1e-4)
 
-    def test_create_vector_index_passes_the_new_settings(self, test_db, corpus):
-        vectors, _ = corpus
+    def test_create_vector_index_passes_the_new_settings(self, test_db, has_pq_rerank):
         test_db.command("sql", "CREATE VERTEX TYPE PqVertex")
         test_db.command("sql", "CREATE PROPERTY PqVertex.embedding ARRAY_OF_FLOATS")
-        index = test_db.create_vector_index(
+        create = lambda: test_db.create_vector_index(  # noqa: E731
             "PqVertex",
             "embedding",
             dimensions=DIMS,
@@ -248,6 +308,13 @@ class TestProductQuantizationHelpers:
             rerank_oversample=25,
             fused_pq=False,
         )
+        if not has_pq_rerank:
+            with pytest.raises(
+                arcadedb.ArcadeDBError, match="Unsupported metadata key"
+            ):
+                create()
+            return
+        index = create()
 
         meta = index.get_metadata()
 
@@ -255,7 +322,7 @@ class TestProductQuantizationHelpers:
         assert meta["fused_pq"] is False
         assert meta["pq_subspaces"] == 8
 
-    def test_get_metadata_reports_the_engine_defaults(self, test_db):
+    def test_get_metadata_reports_the_engine_defaults(self, test_db, has_pq_rerank):
         test_db.command("sql", "CREATE VERTEX TYPE PqVertex")
         test_db.command("sql", "CREATE PROPERTY PqVertex.embedding ARRAY_OF_FLOATS")
         index = test_db.create_vector_index(
@@ -264,6 +331,9 @@ class TestProductQuantizationHelpers:
 
         meta = index.get_metadata()
 
+        if not has_pq_rerank:
+            assert "rerank_oversample" not in meta and "fused_pq" not in meta
+            return
         assert meta["rerank_oversample"] == 10
         assert meta["fused_pq"] is False
 

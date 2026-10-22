@@ -104,7 +104,7 @@ asserts, so the list below stops at the file.
 | `test_hash_index_schema.py` | HASH index create, discover, idempotent `get_or_create_index`, force drop, the `UNIQUE_HASH` id path, and a named-list `IN` parameter on an `LSM_TREE` index |
 | `test_vector.py` | `LSM_VECTOR` indexes: creation, search, filters, approximate search, quantization, persistence, and distance functions |
 | `test_vector_sql.py` | The SQL vector functions, index creation, and search flows |
-| `test_vector_product_quantization.py` | `PRODUCT` (PQ) indexes after ArcadeData/arcadedb#10545: the `METADATA` settings `rerankOversample` and `fusedPQ`, the `rerank` option of `vectorNeighbors`, `find_nearest` answering like SQL, and the new `create_vector_index` and `get_metadata` fields (it fails on the 26.10.2 wheel) |
+| `test_vector_product_quantization.py` | `PRODUCT` (PQ) indexes after ArcadeData/arcadedb#10545: the `METADATA` settings `rerankOversample` and `fusedPQ`, the `rerank` option of `vectorNeighbors`, `find_nearest` answering like SQL, and the new `create_vector_index` and `get_metadata` fields. A fixture probes whether the engine has #10545 (the snapshot image CI uses may not) and on an engine without it the tests assert the old answer; delete that branch when 26.11.1 ships |
 | `test_vector_params_verification.py` | Vector index parameter validation |
 | `test_vector_delta_visibility.py` | Vectors written after a build are searchable, and deleted ones filtered, before any rebuild |
 | `test_vector_second_pass.py` | A repeated query set returns the same neighbours as its first pass |

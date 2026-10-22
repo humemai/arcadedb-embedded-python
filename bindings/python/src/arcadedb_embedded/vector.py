@@ -447,7 +447,11 @@ class VectorIndex:
                 )
             return idx.findNeighborsFromVectorApproximate(java_vector, k)
 
-        if str(idx.getMetadata().quantizationType) == "PRODUCT":
+        # An engine without ArcadeData/arcadedb#10545 (ArcadeDB before 26.11.1) has no
+        # findNeighbors and answers SQL with the exact walk too: keep that walk there.
+        if str(idx.getMetadata().quantizationType) == "PRODUCT" and hasattr(
+            idx, "findNeighbors"
+        ):
             # The entry point SQL vectorNeighbors, Cypher and the select share: a
             # PRODUCT index walks on its PQ codes and re-ranks the best
             # k * rerankOversample candidates on the stored vectors, so this
@@ -591,12 +595,14 @@ class VectorIndex:
         Returns:
             dict: Index metadata including names, dimensions, similarity function,
             id property, quantization, and selected tuning settings.
+            ``rerank_oversample`` and ``fused_pq`` are present when the engine has
+            them (ArcadeDB 26.11.1 or later).
         """
         try:
             index = self._get_primary_lsm_index()
             meta = self._get_primary_metadata()
 
-            return {
+            info = {
                 "index_name": str(self._java_index.getName()),
                 "bucket_index_name": str(index.getName()),
                 "type_name": str(index.getTypeName()),
@@ -620,9 +626,12 @@ class VectorIndex:
                 "pq_clusters": int(meta.pqClusters),
                 "pq_center_globally": bool(meta.pqCenterGlobally),
                 "pq_training_limit": int(meta.pqTrainingLimit),
-                "rerank_oversample": int(meta.rerankOversample),
-                "fused_pq": bool(meta.fusedPQ),
             }
+            # ArcadeDB before 26.11.1 (ArcadeData/arcadedb#10545) has neither setting
+            if hasattr(meta, "rerankOversample"):
+                info["rerank_oversample"] = int(meta.rerankOversample)
+                info["fused_pq"] = bool(meta.fusedPQ)
+            return info
         except Exception as e:
             raise ArcadeDBError(f"Failed to read vector index metadata: {e}") from e
 
