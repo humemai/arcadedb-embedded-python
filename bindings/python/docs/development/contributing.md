@@ -151,6 +151,7 @@ arcadedb-embedded-python/bindings/python/
 │   ├── setup_jars.py              # JAR staging script
 │   ├── verify_wheel_platform_tag.py # Wheel platform tag verifier
 │   ├── verify_wheel_size.py       # Wheel size policy check
+│   ├── verify_wheel_no_studio.py  # Fails a wheel that contains a Studio jar or an ApexCharts file
 │   ├── write_version.py           # Version writing
 │   └── Dockerfile.build           # Build container
 └── mkdocs.yml                     # Documentation config
@@ -205,8 +206,8 @@ arcadedb-embedded-python/bindings/python/
 
 A wheel built from a JAR directory carries only the JARs in that directory (less those in
 `scripts/jar_exclusions.txt`). Use the full assembly's `lib` directory, as above. The
-headless assembly, which `scripts/build_and_install_locally.sh` stages, omits Studio, Bolt,
-Redis, and GraphQL, and its wheel fails `test_server_packaging.py`. To test a change to the
+headless assembly, which `scripts/build_and_install_locally.sh` stages, omits Bolt,
+Redis, and GraphQL (and Studio, which the wheels leave out anyway), and its wheel fails `test_server_packaging.py`. To test a change to the
 bindings, build against the image's JARs; use a JAR directory to test an engine change.
 
 ### Development Install

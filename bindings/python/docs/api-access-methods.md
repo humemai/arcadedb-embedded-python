@@ -4,7 +4,7 @@
 talks to it through direct JVM calls via JPype. That is the primary mode and
 the reason the package exists.
 
-It also bundles an **optional in-process HTTP server** with the Studio web UI.
+It also bundles an **optional in-process HTTP server** (no Studio web UI: it is not bundled, see [Server Mode](guide/server.md#studio-is-not-bundled)).
 It is off until you call `create_server()`, and it lets the process that owns
 the database expose that same data over HTTP to other processes and languages.
 See [Server Mode](guide/server.md) for what it costs on disk (about +8 MB) and
@@ -299,7 +299,6 @@ embedded path, see `benchmarks/python-bindings/jpype_overhead/REPORT.md` in the 
 - Multiple programming languages
 - Microservices architecture
 - Cross-network access
-- You want Studio on live data
 
 ### Use Hybrid Access When:
 
@@ -337,5 +336,5 @@ To move data across, use [`export_database`](api/database.md) / SQL
     - ✅ Both can be used simultaneously on the same server
 - ❌ **"Performance difference means HTTP is broken"**
     - ✅ Performance difference is expected (network vs direct calls)
-- ❌ **"I need a separate server to use Studio on my embedded data"**
-    - ✅ `create_server()` serves Studio from the same process that holds the database
+- ❌ **"I need a separate server to expose my embedded data over HTTP"**
+    - ✅ `create_server()` serves the HTTP API from the same process that holds the database (Studio is not bundled; run the ArcadeDB Docker image for it)

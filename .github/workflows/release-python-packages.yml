@@ -96,6 +96,13 @@ jobs:
           path: dist/
           merge-multiple: true
 
+      - name: Check out the verification scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: repo-scripts
+          sparse-checkout: bindings/python/scripts
+          persist-credentials: false
+
       - name: Verify wheels
         run: |
           ls -lh dist/
@@ -124,6 +131,10 @@ jobs:
             fi
           done
           echo "✅ Every wheel is under 100 MB"
+
+          # Licence guard: Studio bundles ApexCharts, which is not open source since 5.1.0 (ArcadeData/arcadedb#10579).
+          # A wheel with a Studio jar or an ApexCharts file must never reach PyPI.
+          python3 repo-scripts/bindings/python/scripts/verify_wheel_no_studio.py dist/*.whl
 
           # Show checksums to verify wheels are different
           echo ""

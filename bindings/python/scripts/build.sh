@@ -505,6 +505,15 @@ else
     "$SIZE_PY" "$SCRIPT_DIR/verify_wheel_size.py" "$NEWEST_WHEEL" || exit 1
 fi
 
+# THE LICENCE GUARD: Studio bundles ApexCharts, which is not open source since 5.1.0, and this package is Apache-2.0.
+# A wheel with a Studio jar or an ApexCharts file fails here (https://github.com/ArcadeData/arcadedb/issues/10579).
+if [[ -z "$SIZE_PY" ]]; then
+    echo -e "${RED}❌ No python found: the Studio/ApexCharts check cannot run${NC}"
+    exit 1
+else
+    "$SIZE_PY" "$SCRIPT_DIR/verify_wheel_no_studio.py" "$NEWEST_WHEEL" || exit 1
+fi
+
 echo -e "${GREEN}🎉 Build completed successfully!${NC}"
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""

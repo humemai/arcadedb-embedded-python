@@ -186,7 +186,7 @@ Measured on the 26.10.1.dev0 linux/amd64 wheel on 2026-09-29:
 
 **All platforms include:**
 
-- The same JAR set (includes server/Studio; the exclusions are in `scripts/jar_exclusions.txt`)
+- The same JAR set (includes the server, not Studio; the exclusions are in `scripts/jar_exclusions.txt`)
 - A platform-specific JRE
 - Native runners (no QEMU emulation anywhere)
 

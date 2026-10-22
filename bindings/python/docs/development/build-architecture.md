@@ -20,7 +20,7 @@ This document describes the build architecture for creating platform-specific Py
 **All supported platforms:**
 
 - ✅ Full bindings suite passes on every platform build
-- ✅ About 33 MB of JARs (measured on the linux/amd64 wheel; the same JAR set on every platform; includes server/Studio)
+- ✅ About 30 MB of JARs (the 33 MB measured on the linux/amd64 wheel before Studio was left out, less its 2.9 MB; the same JAR set on every platform; includes the server, not Studio)
 - ✅ All native runners (no QEMU emulation)
 - ✅ Pinned runner versions (the Docker build still pulls the moving `X.Y.Z-SNAPSHOT` image tag, so two builds of the same commit can differ)
 

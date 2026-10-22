@@ -1,13 +1,12 @@
 # Server API
 
-The `ArcadeDBServer` class enables HTTP API access and the Studio web interface for managing and querying ArcadeDB databases. Perfect for interactive exploration, debugging, and web applications.
+The `ArcadeDBServer` class enables HTTP API access to ArcadeDB databases (the Studio web interface is not bundled, see [Studio is not bundled](../guide/server.md#studio-is-not-bundled)). Perfect for debugging and web applications.
 
 ## Overview
 
 The server provides:
 
 - **HTTP REST API**: Query databases via HTTP endpoints
-- **Studio Web UI**: Visual database exploration and query editor
 - **Multi-database Management**: Create and access multiple databases
 - **Remote Access**: Access from other applications via HTTP
 
@@ -236,7 +235,7 @@ db.close()
 server.stop()
 ```
 
-**Important:** This method properly registers the database with the server, making it immediately visible in Studio UI.
+**Important:** This method properly registers the database with the server, making it immediately visible to the server's HTTP API.
 
 ---
 
@@ -259,11 +258,11 @@ print(server.get_http_port())  # 8080
 
 ### `get_studio_url() -> str`
 
-Get the full URL for the Studio web interface.
+Get the full URL of the server root. Studio is not bundled in the wheel, so `GET /` returns the server's "Studio is not bundled" page; the HTTP API is under `/api/v1` (see [Studio is not bundled](../guide/server.md#studio-is-not-bundled)).
 
 **Returns:**
 
-- `str`: Studio URL (e.g., `"http://localhost:2480/"`)
+- `str`: root URL (e.g., `"http://localhost:2480/"`)
 
 **Example:**
 
@@ -271,8 +270,8 @@ Get the full URL for the Studio web interface.
 server = arcadedb.create_server(root_password="password123")
 server.start()
 
-print(f"Open Studio at: {server.get_studio_url()}")
-# Open Studio at: http://localhost:2480/
+print(f"Server root: {server.get_studio_url()}")
+# Server root: http://localhost:2480/
 ```
 
 ---
@@ -318,7 +317,7 @@ server = arcadedb.create_server(config=config)
 
 | Behaviour | `"development"` | `"test"` | `"production"` |
 |-----------|-----------------|----------|----------------|
-| Studio web UI | Served | Served | Not served, unless `"studio_enabled": True` (`arcadedb.studio.enabled`) |
+| Root page (`GET /`) | Served | Served | Not served, unless `"studio_enabled": True` (`arcadedb.studio.enabled`) |
 | `detail` (cause chain) in HTTP error bodies | Included | Included | Omitted |
 | Log level for user-triggered request errors | INFO | FINE | FINE |
 | Log level for internal faults | SEVERE | WARNING | WARNING |
@@ -327,8 +326,8 @@ server = arcadedb.create_server(config=config)
 
 The two production defaults are set on the process-wide configuration, so a database
 the same Python process opens afterwards inherits them too. Production mode also logs a
-checklist of settings at startup. A server in production mode serves no Studio page, so
-`get_studio_url()` points at nothing there unless Studio is re-enabled.
+checklist of settings at startup. A server in production mode serves no root page, so
+`get_studio_url()` points at nothing there unless `studio_enabled` is set.
 
 **Recommendation:** Use `"development"` for local dev, `"production"` for deployment.
 

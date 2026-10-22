@@ -1,6 +1,6 @@
 # Server Mode
 
-ArcadeDB Python bindings include a full HTTP server with the Studio web UI. This guide covers server setup, configuration, and management.
+ArcadeDB Python bindings include a full HTTP server (without the Studio web UI, see [Studio is not bundled](#studio-is-not-bundled)). This guide covers server setup, configuration, and management.
 
 ## What it costs you
 
@@ -12,7 +12,6 @@ the package sizes are in
 
 | JAR | MB (uncompressed) | contains |
 |---|---|---|
-| `arcadedb-studio` | 2.88 | web UI assets, **no** `.class` files |
 | `undertow-core` | 2.33 | HTTP server, 1,510 classes |
 | `arcadedb-server` | 1.09 | the server itself, 373 classes |
 | `micrometer-core` | 0.92 | metrics, required at server startup |
@@ -24,7 +23,7 @@ the package sizes are in
 | `jboss-logging` | 0.06 | |
 | `micrometer-commons` | 0.05 | |
 | `wildfly-client-config` | 0.05 | |
-| **total** | **8.58** | |
+| **total** | **5.70** | |
 
 **Memory and CPU, if you never call `create_server()`.** The JARs sit on the
 classpath and the JVM loads classes lazily, so nothing is initialised, no
@@ -34,11 +33,13 @@ threads start, and no heap is allocated for them.
 Undertow starts listener threads and buffer pools. That is the real cost, and
 it arrives when you ask for it.
 
-**Studio specifically is free until browsed.** Its JAR contains 120 entries,
-all static JS/HTML/CSS/SVG/PNG, and **zero** `.class` files: it cannot execute
-anything. Assets are read out of the zip only when a browser requests them.
-(`tests/test_server_packaging.py` asserts this, so the claim fails loudly if a
-future Studio release starts shipping code.)
+### Studio is not bundled
+
+The wheels do not contain the `arcadedb-studio` jar. Studio bundles ApexCharts, which has not been open source since version 5.1.0: its licence does not allow embedding it in a product used by other people without a paid OEM licence. This package is Apache-2.0 and ships nothing that is not open source, so the jar is left out until ArcadeDB replaces the library ([ArcadeData/arcadedb#10579](https://github.com/ArcadeData/arcadedb/issues/10579)). The wheels of 26.2.1 to 26.10.2 did include it; `26.10.2.post1` and later do not.
+
+Everything else in server mode is unchanged: the HTTP API, the wire protocols and database management. A browser that opens `get_studio_url()` (the server root, `GET /`) gets the server's own page that says Studio is not bundled; the REST API stays at `/api/v1`. To get Studio, run the official ArcadeDB Docker image (`arcadedata/arcadedb`) instead of, or next to, your Python process.
+
+The build fails a wheel that contains a Studio jar or an ApexCharts file (`scripts/verify_wheel_no_studio.py`), and `tests/test_server_packaging.py` checks the installed package.
 
 ### When to use the Docker distribution instead
 
@@ -52,7 +53,6 @@ where one process wants both embedded access and an HTTP surface.
 Server mode provides:
 
 - **HTTP REST API**: Access your database via HTTP
-- **Studio Web UI**: Visual database explorer and query editor
 - **Multi-database Management**: Host multiple databases
 - **Authentication**: User management and security
 - **Development & Production**: Suitable for both environments
@@ -71,7 +71,7 @@ server = arcadedb.create_server("./databases", root_password="my_secure_password
 server.start()
 
 print(f"🚀 Server started at: {server.get_studio_url()}")
-print("📊 Access Studio UI in your browser")
+print("🌐 HTTP API is up (Studio is not bundled)")
 
 # Keep server running
 input("Press Enter to stop server...")
@@ -112,9 +112,9 @@ server = arcadedb.create_server(
 |--------|---------|-------------|
 | `root_path` | `"./databases"` | Directory for database storage |
 | `root_password` | None | Root user password (recommended). `None` on a fresh `root_path` makes `start()` prompt for it on stdin |
-| `http_port` | 2480 | HTTP API/Studio port (binding pins to a single port; Java default is the 2480-2489 range) |
+| `http_port` | 2480 | HTTP API port (binding pins to a single port; Java default is the 2480-2489 range) |
 | `host` | "localhost" | Host to bind to |
-| `mode` | "development" | Server mode (`development` or `production`). `production` also flushes the WAL at every commit (`arcadedb.txWalFlush=1`, unless you set it yourself), serves no Studio, and refuses LOAD CSV file URLs; see [Durability](core/transactions.md#durability-what-a-commit-survives) |
+| `mode` | "development" | Server mode (`development` or `production`). `production` also flushes the WAL at every commit (`arcadedb.txWalFlush=1`, unless you set it yourself), serves no root page, and refuses LOAD CSV file URLs; see [Durability](core/transactions.md#durability-what-a-commit-survives) |
 
 Any other key is forwarded to ArcadeDB as `arcadedb.<key with _ replaced by
 .>`. That is how the wire protocols below are configured.
@@ -149,7 +149,7 @@ with the server from the start (see [Access Methods](../api-access-methods.md)).
 ## Wire Protocols
 
 The wheel bundles three protocol plugins besides HTTP. They are **opt-in**: a
-default server starts HTTP and Studio only, and 5432/6379/7687 stay closed.
+default server starts HTTP only, and 5432/6379/7687 stay closed.
 
 ```python
 server = arcadedb.create_server(
@@ -512,8 +512,7 @@ with arcadedb.create_server("./databases", root_password="my_secure_password") a
 1. **True Multi-Process Access**: Multiple Python processes can work with the same database
 2. **Language Agnostic**: Access from JavaScript, Java, Python, curl, etc.
 3. **Network Access**: Remote applications can connect
-4. **Web UI**: Built-in Studio for visual database exploration
-5. **Production Ready**: Proper authentication and security
+4. **Production Ready**: Proper authentication and security
 
 ### When to Use Each Mode
 
@@ -559,6 +558,6 @@ with arcadedb.create_database("./mydb") as db:
 
 ## Next Steps
 
-- **[Graph Operations](graphs.md)**: Visualize graphs in Studio
+- **[Graph Operations](graphs.md)**: Graph queries and traversals
 - **[Vector Search](vectors.md)**: Add vector search to your server
 - **[Data Import](import.md)**: Bulk import data into server databases

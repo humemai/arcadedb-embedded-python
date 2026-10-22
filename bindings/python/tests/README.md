@@ -1,6 +1,6 @@
 # ArcadeDB Python Bindings - Tests
 
-Test suite for the ArcadeDB Python bindings. It runs against the built wheel, so it covers the embedded engine (SQL, OpenCypher, vectors, graphs) and the optional in-process HTTP server with Studio.
+Test suite for the ArcadeDB Python bindings. It runs against the built wheel, so it covers the embedded engine (SQL, OpenCypher, vectors, graphs) and the optional in-process HTTP server (Studio is not bundled).
 
 The [Testing Guide](https://docs.humem.ai/arcadedb/latest/development/testing/) lists every test file and what it checks, and describes the markers, the zero-skips gate, and how to write a test for this suite.
 
