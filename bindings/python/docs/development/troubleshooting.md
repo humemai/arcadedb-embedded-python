@@ -289,7 +289,7 @@ A Java `OutOfMemoryError` inside a query reaches Python as `ArcadeDBError`, with
     start_jvm(heap_size="8g")
     ```
 
-    In a container, the default heap is already 50 percent of the limit, and the rest is for Python, thread stacks, metaspace and off-heap buffers. A heap above about 60 percent of the limit, less the data that Python holds, can trade a Java `OutOfMemoryError` for a kernel kill. This 60 percent is a rule of thumb from the probe, which measured 50 and 75 percent, not 60. If the container needs more heap, raise the container limit too. With several Python processes in one container, see [Several processes in one container](../api/jvm.md#several-processes-in-one-container).
+    In a container, the default heap is already 50 percent of the limit, and the rest is for Python, thread stacks, metaspace and off-heap buffers. Raising the heap above the default can trade a Java `OutOfMemoryError` for a kernel kill (probe below). If the container needs more heap, raise the container limit too. With several Python processes in one container, see [Several processes in one container](../api/jvm.md#several-processes-in-one-container).
 
     Probe (one laptop, one mix: Docker `-m 2g` with no swap, Java heap filled to 85 percent of its cap, then a query that needs more): the default heap (1024 MB) gave `ArcadeDBError` and the container survived, also with 600 MB held by Python. `heap_size="1536m"` (75 percent) with 600 MB held by Python was killed by the kernel (exit 137) with no Python exception.
 

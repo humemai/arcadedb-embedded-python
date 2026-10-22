@@ -77,7 +77,7 @@ Override the default when you know better:
 
 Raise the share when the Python side is small (a script that only runs queries); lower it when Python holds large results (a big `to_list()`, NumPy arrays) in the same process. Read the resolved values with `java.lang.Runtime.getRuntime().maxMemory()` and `GlobalConfiguration.MAX_PAGE_RAM.getValueAsLong()`.
 
-In a container, do not raise the share far above the default. A heap above about 60 percent of the limit, less the data that Python holds, can turn a Java `OutOfMemoryError` into a kernel kill, which gives no Python exception and no cleanup. This 60 percent is a rule of thumb from the probe below, which measured 50 and 75 percent, not 60. See [Out of Memory Errors](../development/troubleshooting.md#out-of-memory-errors).
+In a container, keep the default share. In a probe at Docker `-m 2g`, a heap of 75 percent of the limit with 600 MB held by Python was killed by the kernel instead of raising a Java `OutOfMemoryError`; a kernel kill gives no Python exception and no cleanup. If the container needs more heap, raise the container limit too. See [Out of Memory Errors](../development/troubleshooting.md#out-of-memory-errors) for the probe.
 
 #### Several processes in one container
 
