@@ -19,7 +19,7 @@ is stored twice, once as SQL text and once as a bound parameter, and the two
 sums are compared against the double the text denotes.
 
     docker run --rm --cpuset-cpus 12-15 --memory 1500m --memory-swap 1500m \
-        -e ARCADEDB_HEAP=512m -v "$PWD":/probe:ro -w /tmp dbbench:arcadedb \
+        -e ARCADEDB_HEAP=512m -v "$PWD":/probe:ro -w /tmp dbbench:arcadedb-<version> \
         python -u /probe/arcadedb_literal_precision_probe.py
 
 MEASURED 2026-09-14 on wheel 26.8.1: six of fifteen literals were stored at

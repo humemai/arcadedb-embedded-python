@@ -152,6 +152,10 @@ def check_runtime(code):
     checked = 0
     for target in sorted(targets):
         pins = targets[target]
+        if target == "arcadedb":
+            # tagged dbbench:arcadedb-<version>, never floating: runner.py reads its version back before cell 1 (engine_pin.py)
+            notes.append("dbbench:arcadedb-<version> is read back by runner.py before the first cell (engine_pin.py), not here")
+            continue
         if target not in present:
             # A MISSING IMAGE IS NOT A PASS. qOD ran two arms whose images
             # nobody built, and the cells recorded `server_not_ready`, which

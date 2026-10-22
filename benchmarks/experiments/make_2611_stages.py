@@ -55,6 +55,7 @@ import sys
 import bench_common
 import cap_rule
 import runner
+import engine_pin
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -661,7 +662,7 @@ def _images_for(backends):
         for key in ("image", "server_image"):
             img = d.get(key, "")
             if img.startswith("dbbench:"):
-                out.add(img.split(":", 1)[1])
+                out.add(engine_pin.build_target(img))  # dbbench:arcadedb-<version> is built as the `arcadedb` target
     return sorted(out)
 
 
@@ -800,10 +801,10 @@ ARCADE_POST_CHECKS = '''# VERIFY THE ARM, NOT THE FILE: read the version out of 
 # The pair check below is the REPO copy, not ~/verify_pair_c25.sh: that
 # one is a stale copy from 2026-08-30 and would miss its own fourth
 # check. A script pulled with the tree cannot drift from it.
-IV=$(docker run --rm --entrypoint python3 dbbench:arcadedb -c      'import importlib.metadata as m; print(m.version("arcadedb-embedded"))' 2>/dev/null | tr -dc "0-9a-zA-Z.-")
+IV=$(docker run --rm --entrypoint python3 "dbbench:arcadedb-$WV" -c      'import importlib.metadata as m; print(m.version("arcadedb-embedded"))' 2>/dev/null | tr -dc "0-9a-zA-Z.-")
 [ "$IV" = "$WV" ] || {{ say "$ID ABORT: dbbench:arcadedb carries wheel $IV, dist has $WV"; exit 1; }}
 say "$ID: dbbench:arcadedb carries wheel $IV, matching dist"
-IJ=$(docker run --rm --entrypoint python3 dbbench:arcadedb -c 'import jpype; print(jpype.__version__)' 2>/dev/null | tr -dc "0-9a-zA-Z.-")
+IJ=$(docker run --rm --entrypoint python3 "dbbench:arcadedb-$WV" -c 'import jpype; print(jpype.__version__)' 2>/dev/null | tr -dc "0-9a-zA-Z.-")
 [ "$IJ" = "{jpype_version}" ] || {{ say "$ID ABORT: dbbench:arcadedb runs JPype '$IJ', the pin is {jpype_version} (Dockerfile.bench, ARG JPYPE_VERSION); rebuild dbbench:arcadedb, which installs the pin"; exit 1; }}
 say "$ID: dbbench:arcadedb runs JPype $IJ, the pin"
 PAIR_IMAGE="$ARCADEDB_SERVER_IMAGE" ./verify_pair_c25.sh "$SHA" >> "$S" 2>&1 || {{ say "$ID ABORT: pair unverified at the pin"; exit 1; }}
@@ -994,7 +995,9 @@ BENCH_ALLOW_DEV=0 ./build_images.sh {images} >> "$S" 2>&1 || {{ say "$ID ABORT: 
 # nothing leaves no image, and the first cell to want it reports
 # server_not_ready. Check here, where the message can name the cause.
 for _img in {images}; do
-  docker image inspect "dbbench:$_img" >/dev/null 2>&1 || {{ say "$ID ABORT: dbbench:$_img missing after build"; exit 1; }}
+  # the arcadedb image is tagged with the pinned version, never floating (engine_pin.py)
+  _tag="dbbench:$_img"; [ "$_img" = "arcadedb" ] && _tag="dbbench:arcadedb-$(basename "$ARCADEDB_WHEEL" | cut -d- -f2)"
+  docker image inspect "$_tag" >/dev/null 2>&1 || {{ say "$ID ABORT: $_tag missing after build"; exit 1; }}
 done
 say "$ID: images present: {images}"
 # AND THE ONES WE PULL RATHER THAN BUILD. Everything above checks images this

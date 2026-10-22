@@ -303,7 +303,7 @@ def _run_snippet(tmp_path, preamble, snippet):
 def test_a_runner_stage_aborts_when_the_image_runs_another_jpype(stages, tmp_path, image_says, aborts):
     text = (stages / f"{_stage_ids(stages)[0]}.sh").read_text()
     snippet = _snippet(text, "IJ=$(docker run", "ABORT: dbbench:arcadedb runs JPype")
-    r, status = _run_snippet(tmp_path, f"docker() {{ printf '%s\\n' '{image_says}'; }}", snippet)
+    r, status = _run_snippet(tmp_path, f"WV=26.10.2; docker() {{ printf '%s\\n' '{image_says}'; }}", snippet)
     if not aborts:
         assert r.returncode == 0 and "PASSED" in r.stdout and status == ""
         return

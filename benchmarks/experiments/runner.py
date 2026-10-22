@@ -1703,6 +1703,10 @@ if bool(_LOCAL_WHEEL) != bool(_LOCAL_SERVER_IMAGE):
         "package/src/main/docker/Dockerfile over package/target/arcadedb-*.dir for the server."
     )
 _LOCAL_ENGINE_COMMIT = os.environ.get("ARCADEDB_ENGINE_COMMIT", "").strip() or None
+# THE STAGE'S PINNED ARCADEDB VERSION, and the image tag that names it (engine_pin.py, 2026-10-22). BACKENDS says `dbbench:arcadedb`, the
+# logical build target; the image a cell runs is `dbbench:arcadedb-<version>`, swapped in below, so no cell can start on a floating tag.
+import engine_pin  # noqa: E402
+_ENGINE_PIN = engine_pin.pin_from_wheel(_LOCAL_WHEEL)
 
 
 def _require_engine_commit(tier, backends):
@@ -1783,6 +1787,12 @@ if _LOCAL_SERVER_IMAGE:
             _swapped += 1
     print(f"[engine] local build: wheel={os.path.basename(_LOCAL_WHEEL)} "
           f"server={_LOCAL_SERVER_IMAGE} ({_swapped} server arms swapped)")
+
+
+if _ENGINE_PIN:
+    for _cfg in BACKENDS.values():
+        if _cfg.get("image") == engine_pin.LOGICAL_IMAGE:
+            _cfg["image"] = engine_pin.versioned_image(_ENGINE_PIN)
 
 
 # Which backends run on a JVM, and therefore have a heap worth recording and
@@ -2091,11 +2101,13 @@ def build_manifest(ts, args, workers, shards, jobs):
     # importing it there: what the image holds, not what the pin says. Each row records what its own process imported
     # (`jpype_version`). Empty when the batch has no arm that runs in the ArcadeDB bench image, or the image cannot be read.
     manifest["jpype_version"] = _batch_jpype_version(jobs)
+    # THE ENGINE VERSION EACH IMAGE REPORTED BEFORE THE FIRST CELL (engine_pin.py): the pin and what every ArcadeDB image of the batch said.
+    manifest["engine_pin"] = {"pin": _ENGINE_PIN, "readback": _ENGINE_PIN_READBACK}
     return manifest
 
 
 # The image the embedded ArcadeDB arms run in (BACKENDS "image"): the only bench image whose wheel pulls JPype in.
-ARCADEDB_BENCH_IMAGE = "dbbench:arcadedb"
+ARCADEDB_BENCH_IMAGE = engine_pin.versioned_image(_ENGINE_PIN) if _ENGINE_PIN else engine_pin.LOGICAL_IMAGE
 
 
 def jpype_version_in_image(image, timeout=180):
@@ -2115,6 +2127,47 @@ def _batch_jpype_version(jobs):
     if not any(BACKENDS[j["backend"]].get("image") == ARCADEDB_BENCH_IMAGE for j in jobs):
         return ""
     return jpype_version_in_image(ARCADEDB_BENCH_IMAGE)
+
+
+_ENGINE_PIN_READBACK = {}
+
+
+def _arcadedb_images(jobs):
+    """(embedded images, served images) of the ArcadeDB arms in this batch."""
+    emb, srv = set(), set()
+    for j in jobs:
+        cfg = BACKENDS[j["backend"]]
+        if str(cfg.get("image") or "").startswith(engine_pin.LOGICAL_IMAGE):
+            emb.add(cfg["image"])
+        img = str(cfg.get("server_image") or "")
+        if img.startswith("arcadedata/arcadedb") or (_LOCAL_SERVER_IMAGE and img == _LOCAL_SERVER_IMAGE):
+            srv.add(img)
+    return emb, srv
+
+
+def _require_engine_pin(jobs):
+    """Refuse to start when an ArcadeDB arm of this batch would run another version than the stage pinned (engine_pin.py), or on a
+    floating image tag. Reads the version out of each image that will run, before any cell; a batch with no ArcadeDB arm is not judged."""
+    global _ENGINE_PIN_READBACK
+    emb, srv = _arcadedb_images(jobs)
+    if not (emb or srv):
+        return
+    if not _ENGINE_PIN:
+        raise SystemExit("REFUSING: this batch runs an ArcadeDB arm and no version is pinned. Export ARCADEDB_WHEEL=<the pinned wheel> with "
+                         "ARCADEDB_SERVER_IMAGE (the stage scripts do); its file name is the pin every ArcadeDB image is read back against "
+                         "(engine_pin.py).")
+    for img in sorted(emb | {i for j in jobs for i in [BACKENDS[j["backend"]].get("image"), BACKENDS[j["backend"]].get("server_image")]
+                             if i and i.startswith("dbbench:")}):
+        why = engine_pin.check_image_tag(img, _ENGINE_PIN)
+        if why:
+            raise SystemExit(f"REFUSING: {why}.\n  Rebuild with ARCADEDB_WHEEL=<the pinned wheel> ./build_images.sh arcadedb.")
+    readback, problems = engine_pin.verify(_ENGINE_PIN, emb, srv)
+    if problems:
+        raise SystemExit("REFUSING: an ArcadeDB arm would not run the stage's pinned version (engine_pin.py).\n  "
+                         + "\n  ".join(problems)
+                         + "\n  Fix the image or the pin; a cell on the wrong engine is a row nobody can use.")
+    _ENGINE_PIN_READBACK = readback
+    print(f"[engine pin] {_ENGINE_PIN}: " + ", ".join(sorted(readback)) + " read back and match")
 
 
 # False under a diagnostic --heap or --mem override, which breaks the policy on purpose (see main()).
@@ -4094,6 +4147,7 @@ def main():
                          "BENCH_GRAPH_DATA, default /data/ldbc); the synthetic "
                          "generator does not know sf1/sf10.")
     _require_local_server_image()
+    _require_engine_pin(jobs)
     only = {int(x) for x in args.only_reps.split(",") if x.strip()}
     cells = [(j, r) for j in jobs for r in range(1, args.reps + 1)
              if not only or r in only]

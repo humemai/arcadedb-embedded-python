@@ -23,7 +23,8 @@ IMG="${PAIR_IMAGE:-arcadedb-c25:${SHORT}}"
 # tree and exits (test_pair_scripts.py holds this).
 REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../.." && pwd)"
 [ -z "${BENCH_PRINT_REPO:-}" ] || { echo "REPO=$REPO"; exit 0; }
-EMBEDDED_IMAGE="${EMBEDDED_IMAGE:-dbbench:arcadedb}"   # the image the embedded arm runs (the runner names dbbench:arcadedb)
+# The image the embedded arm runs: dbbench:arcadedb-<version> (build_images.sh tags it with the wheel's version; there is no floating tag).
+EMBEDDED_IMAGE="${EMBEDDED_IMAGE:-}"
 fail() { echo "PAIR UNVERIFIED: $*"; exit 1; }
 
 command -v docker >/dev/null || fail "no docker"
@@ -31,6 +32,7 @@ docker image inspect "$IMG" >/dev/null 2>&1 || fail "no image $IMG"
 
 W=$(ls -t "$REPO"/bindings/python/dist/*.whl 2>/dev/null | head -1)
 [ -n "$W" ] || fail "no wheel in bindings/python/dist"
+[ -n "$EMBEDDED_IMAGE" ] || EMBEDDED_IMAGE="dbbench:arcadedb-$(basename "$W" | cut -d- -f2)"
 
 # 1. the image's jars
 ISHA=$(docker run --rm --entrypoint sh "$IMG" -c 'cat /home/arcadedb/lib/arcadedb-engine-*.jar' \

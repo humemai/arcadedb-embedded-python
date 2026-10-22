@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Build the per-backend bench images. ARCADEDB_WHEEL=<path> bakes a local wheel
-# into dbbench:arcadedb instead of the PyPI pin.
+# Build the per-backend bench images. ARCADEDB_WHEEL=<path> bakes a wheel into the arcadedb image, which is tagged with
+# the wheel's version, dbbench:arcadedb-<version>, and never with a floating dbbench:arcadedb (engine_pin.py, 2026-10-22).
 set -eu
 cd "$(dirname "$0")"
 
@@ -108,6 +108,16 @@ case "$_pin" in
     echo "      in the paper, which pins to stable releases (DECISIONS #42)." >&2 ;;
 esac
 echo "arcadedb pin: $_pin"
+# NO FLOATING ENGINE TAG (2026-10-22, engine_pin.py). dbbench:arcadedb pointed at whichever wheel was built last, and on the laptop it still
+# pointed at 26.10.1 after October was retired. The image that carries ArcadeDB is named for the version it carries, and runner.py refuses
+# any other tag for it.
+ARCADEDB_TAG=""
+if [ -n "$_pin" ]; then
+  case "$_pin" in
+    [0-9]*.[0-9]*.[0-9]*) ARCADEDB_TAG="dbbench:arcadedb-$_pin" ;;
+    *) echo "REFUSING: the wheel name '$(basename "$ARCADEDB_WHEEL")' carries no x.y.z version, so the arcadedb image cannot be tagged" >&2; exit 1 ;;
+  esac
+fi
 
 # JPYPE IS PART OF THE INSTRUMENT, SO IT IS PINNED TOO (CAMPAIGN 7 row 73). The
 # wheel declares jpype1>=1.5.0 with no upper bound, and an image built on the day
@@ -155,8 +165,10 @@ for be in "${targets[@]}"; do
   # caller deriving target names from runner.BACKENDS deserves to be told
   # when a name does not exist rather than handed a hollow image.
   [ -n "${PKGS[$be]+set}" ] || { echo "  unknown target '$be' (not a PKGS key and not a special case)" >&2; exit 1; }
-  echo "=== dbbench:$be (${PKGS[$be]})"
-  docker build -q -t "dbbench:$be" --build-arg PIP_PACKAGES="${PKGS[$be]}" \
+  _tag="dbbench:$be"
+  [ "$be" = "arcadedb" ] && _tag="$ARCADEDB_TAG"
+  echo "=== $_tag (${PKGS[$be]})"
+  docker build -q -t "$_tag" --build-arg PIP_PACKAGES="${PKGS[$be]}" \
     --build-arg JPYPE_VERSION="$JPYPE_VERSION" \
     -f Dockerfile.bench . >/dev/null && echo "  ok"
 done
