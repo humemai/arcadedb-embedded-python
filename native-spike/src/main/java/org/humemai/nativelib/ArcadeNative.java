@@ -239,7 +239,7 @@ public final class ArcadeNative {
       Map<String, Object> named = null;
       Object[] pos = null;
       if (p != null && !p.isEmpty()) {
-        final Map<String, Object> env = (Map<String, Object>) Json.parse(p, buf, bufFloats);
+        final Map<String, Object> env = (Map<String, Object>) Json.parse(p, buf.rawValue(), bufFloats);
         final Object n = env.get("named");
         if (n instanceof Map<?, ?> m)
           named = (Map<String, Object>) m;
@@ -541,7 +541,7 @@ public final class ArcadeNative {
       Map<String, Object> named = null;
       Object[] pos = null;
       if (p != null && !p.isEmpty()) {
-        final Map<String, Object> env = (Map<String, Object>) Json.parse(p, buf, bufFloats);
+        final Map<String, Object> env = (Map<String, Object>) Json.parse(p, buf.rawValue(), bufFloats);
         final Object n = env.get("named");
         if (n instanceof Map<?, ?> m)
           named = (Map<String, Object>) m;

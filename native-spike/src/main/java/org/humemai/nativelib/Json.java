@@ -8,6 +8,7 @@
 package org.humemai.nativelib;
 
 import org.graalvm.nativeimage.c.type.CFloatPointer;
+import org.graalvm.word.WordFactory;
 
 
 import java.math.BigDecimal;
@@ -39,13 +40,13 @@ final class Json {
 
   private final byte[] s;
   private final int n;
-  private final CFloatPointer buf;
+  private final long buf; // address of the float32 side buffer, 0 for none (a plain long: no Word value flows through this shared parser)
   private final long bufFloats;
   private int i;
   private String[] cache; // direct-mapped: short ASCII keys and values shared across rows instead of one new String per occurrence
   private Map<String, Object> rowMap = new HashMap<>();
 
-  private Json(final byte[] s, final int n, final CFloatPointer buf, final long bufFloats) {
+  private Json(final byte[] s, final int n, final long buf, final long bufFloats) {
     this.s = s;
     this.n = n;
     this.buf = buf;
@@ -55,16 +56,16 @@ final class Json {
   }
 
   static Object parse(final String text) {
-    return parse(text, null, 0);
+    return parse(text, 0L, 0);
   }
 
   /** buf: the float32 side buffer that {"\u0001":["B",offset,count]} values point into (offset and count in floats); may be null. */
-  static Object parse(final String text, final CFloatPointer buf, final long bufFloats) {
+  static Object parse(final String text, final long buf, final long bufFloats) {
     final byte[] b = text.getBytes(StandardCharsets.UTF_8);
     return parse(b, b.length, buf, bufFloats);
   }
 
-  static Object parse(final byte[] b, final int len, final CFloatPointer buf, final long bufFloats) {
+  static Object parse(final byte[] b, final int len, final long buf, final long bufFloats) {
     final Json j = new Json(b, len, buf, bufFloats);
     final Object v = j.value();
     j.end();
@@ -74,7 +75,7 @@ final class Json {
   /** Streams the elements of a top-level array of objects to the sink (one reused map, so no tree of the whole payload is built). */
   @SuppressWarnings("unchecked")
   static void rows(final byte[] b, final int len, final RowSink sink) {
-    final Json j = new Json(b, len, null, 0);
+    final Json j = new Json(b, len, 0L, 0);
     j.rowsOf(sink);
     j.end();
   }
@@ -85,7 +86,7 @@ final class Json {
    */
   @SuppressWarnings("unchecked")
   static Map<String, Object> object(final byte[] b, final int len, final String streamKey, final RowSink sink) {
-    final Json j = new Json(b, len, null, 0);
+    final Json j = new Json(b, len, 0L, 0);
     j.ws();
     if (j.i >= j.n || j.s[j.i] != '{')
       throw new IllegalArgumentException("expected a JSON object");
@@ -416,11 +417,12 @@ final class Json {
       // binary side buffer: float32 values [offset, offset + count) of the buffer passed beside the JSON, no text round trip
       final long off = ((Number) payload).longValue();
       final int count = ((Number) tag.get(2)).intValue();
-      if (buf == null || buf.isNull() || off < 0 || count < 0 || off + count > bufFloats)
+      if (buf == 0 || off < 0 || count < 0 || off + count > bufFloats)
         throw new IllegalArgumentException("binary parameter outside the side buffer");
       final float[] f = new float[count];
+      final CFloatPointer fp = WordFactory.pointer(buf);
       for (int k = 0; k < count; k++)
-        f[k] = buf.read((int) off + k);
+        f[k] = fp.read((int) off + k);
       return f;
     }
     case "n":

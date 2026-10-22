@@ -291,7 +291,7 @@ public final class NativeExtras {
       else if (opName.equals("create_vertices"))
         a = Json.object(chars.b, chars.n, "rows", row -> flats.add(varargs(row)));
       else
-        a = (Map<String, Object>) Json.parse(chars.b, chars.n, null, 0);
+        a = (Map<String, Object>) Json.parse(chars.b, chars.n, 0L, 0);
       switch (opName) {
       case "create_vertex" -> {
         final MutableVertex v = batch.createVertex((String) a.get("type"), varargs(a.get("props")));
