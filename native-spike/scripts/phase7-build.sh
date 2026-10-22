@@ -10,8 +10,9 @@ export JAVA_HOME=$G PATH=$G/bin:$PATH
 tag=$1; shift
 export NATIVE_IMAGE_OPTIONS="-J-Dfastops.mode=1 -J-Xmx12g -H:-DeleteLocalSymbols -H:-VectorAPISupport $*"
 cd "$WT"
+rm -f native-spike/target/libarcadedb.so   # a failed build must not leave the previous image behind for the copy below (2026-10-22: img2 failed and shipped img1 bytes)
 NEED_GB=14 $QB taskset -c 12-15 ./mvnw -B --no-transfer-progress -f native-spike/pom.xml -DskipTests -Dgraalvm.version=25.4.4.1.1 -Dnative.opt=-O2 package > "$OUT/build-$tag.log" 2>&1
-rc=$?; mkdir -p "$OUT/$tag"
-cp native-spike/target/libarcadedb.so "$OUT/$tag/" 2>/dev/null; cp "$HOME/build-scratch/native-lib/dir6/libjvector-x86_64.so" "$OUT/$tag/"
+rc=$?; mkdir -p "$OUT/$tag"; rm -f "$OUT/$tag/libarcadedb.so"
+[ $rc = 0 ] && cp native-spike/target/libarcadedb.so "$OUT/$tag/"; cp "$HOME/build-scratch/native-lib/dir6/libjvector-x86_64.so" "$OUT/$tag/"
 echo "full $tag rc=$rc $(grep -a 'Finished generating' "$OUT/build-$tag.log")" > "$OUT/build-$tag.done"
 cat "$OUT/build-$tag.done"
