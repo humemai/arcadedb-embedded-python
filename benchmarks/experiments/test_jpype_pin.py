@@ -119,7 +119,7 @@ def _run_build_images(tmp_path, args, wheel=None):
     import shutil
     work = tmp_path / "w"
     work.mkdir(parents=True)
-    for n in ("build_images.sh", "Dockerfile.bench"):
+    for n in ("build_images.sh", "Dockerfile.bench", "wheel_guard.py"):
         shutil.copy(HERE / n, work / n)
     bindir = tmp_path / "bin"
     bindir.mkdir(parents=True)
@@ -130,6 +130,35 @@ def _run_build_images(tmp_path, args, wheel=None):
         env["ARCADEDB_WHEEL"] = str(wheel)
     r = subprocess.run(["bash", str(work / "build_images.sh")] + args, cwd=work, env=env, capture_output=True, text=True)
     return r, work
+
+
+def _fake_wheel(path, chunked):
+    """A tiny zip with arcadedb_embedded/core.py, carrying the chunking marker or not."""
+    import zipfile
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("arcadedb_embedded/core.py", "_INSERT_MANY_CHUNK = 10000\n" if chunked else "def insert_many(rows): ...\n")
+    return path
+
+
+def test_wheel_guard_accepts_a_chunked_wheel_and_refuses_the_whole_input_one(tmp_path):
+    guard = [sys.executable, str(HERE / "wheel_guard.py")]
+    ok = _fake_wheel(tmp_path / "arcadedb_embedded-26.10.2-x.whl", chunked=True)
+    old = _fake_wheel(tmp_path / "arcadedb_embedded-26.10.1-x.whl", chunked=False)
+    assert subprocess.run(guard + [str(ok)], capture_output=True, text=True).returncode == 0
+    r = subprocess.run(guard + [str(old)], capture_output=True, text=True)
+    assert r.returncode == 1 and "_INSERT_MANY_CHUNK" in r.stderr and "26.10.2 or newer" in r.stderr
+    junk = tmp_path / "junk.whl"
+    junk.write_bytes(b"x")
+    r = subprocess.run(guard + [str(junk)], capture_output=True, text=True)
+    assert r.returncode == 1 and "cannot be opened" in r.stderr
+
+
+def test_build_images_refuses_a_wheel_without_the_chunked_insert_many(tmp_path):
+    old = _fake_wheel(tmp_path / "arcadedb_embedded-26.10.1-cp312-cp312-manylinux_2_34_x86_64.whl", chunked=False)
+    for args in (["arcadedb"], ["duckdb"]):          # the generic images carry the wheel too
+        r, work = _run_build_images(tmp_path / args[0], args, wheel=old)
+        assert r.returncode == 1 and "26.10.2 or newer" in r.stderr, args
+        assert not list((work / "docker-wheels").glob("*.whl"))
 
 
 def test_build_images_has_no_pypi_fallback_for_the_arcadedb_image(tmp_path):
@@ -148,8 +177,7 @@ def test_the_images_that_take_no_wheel_build_without_one_and_carry_none(tmp_path
     r, work = _run_build_images(tmp_path, ["duckdb", "client"])
     assert r.returncode == 0, r.stderr
     assert not list((work / "docker-wheels").glob("*.whl"))
-    wheel = tmp_path / "arcadedb_embedded-26.10.2-cp312-cp312-manylinux_2_34_x86_64.whl"
-    wheel.write_bytes(b"x")
+    wheel = _fake_wheel(tmp_path / "arcadedb_embedded-26.10.2-cp312-cp312-manylinux_2_34_x86_64.whl", chunked=True)
     r, work = _run_build_images(tmp_path / "with", ["arcadedb", "duckdb"], wheel=wheel)
     assert r.returncode == 0, r.stderr
     assert [w.name for w in (work / "docker-wheels").glob("*.whl")] == [wheel.name]

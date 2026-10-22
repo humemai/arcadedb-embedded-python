@@ -26,6 +26,8 @@ ARCADE_PKGS="$HARNESS_PKGS"
 mkdir -p docker-wheels && rm -f docker-wheels/*.whl
 if [ -n "${ARCADEDB_WHEEL:-}" ]; then
   [ -f "$ARCADEDB_WHEEL" ] || { echo "REFUSING: ARCADEDB_WHEEL=$ARCADEDB_WHEEL is not a file" >&2; exit 1; }
+  # A whole-input insert_many (pre-26.10.2) killed l4/ts1000/arcadedb_ts_doc; no image may carry such a wheel (wheel_guard.py).
+  python3 wheel_guard.py "$ARCADEDB_WHEEL" || exit 1
   cp "$ARCADEDB_WHEEL" docker-wheels/
   echo "using local wheel: $(basename "$ARCADEDB_WHEEL")"
 fi
