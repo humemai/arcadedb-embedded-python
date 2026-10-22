@@ -3,6 +3,7 @@
 #   push of a tag native-v<version>   build + test + publish to PyPI (trusted publishing, environment pypi-native)
 #   push to branch native-preview     build + test only (dry run; also what a dispatch does)
 #   push to branch native-platforms   the same dry run, for the multi-platform work
+#   push to branch native-inline      the same dry run, for the jvector force-inline hints
 #   workflow_dispatch                 build + test only; never publishes (the publish job needs a native-v* tag ref).
 #                                     GitHub offers a dispatch only for a workflow file on the default branch, and this file is
 #                                     deliberately not on main, so the branch push is the way to dry-run it from native-preview.
@@ -26,6 +27,7 @@ on:
       - native-preview
       - native-platforms
       - native-windows
+      - native-inline
     tags:
       - "native-v*"
   workflow_dispatch:
