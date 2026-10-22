@@ -256,18 +256,12 @@ jobs:
           printf 'public class Hello { public static void main(String[] a) { System.out.println("hi"); } }\n' > Hello.java
           "$GRAALVM_HOME_P5/bin/javac" Hello.java
           "$GRAALVM_HOME_P5/bin/native-image.cmd" -cp . Hello 2>&1 | tail -n 12 | cut -c1-400 || true
-          echo "--- variant A: NATIVE_IMAGE_OPTIONS as preview-build.sh sets them"
-          NATIVE_IMAGE_OPTIONS="-J-Dfastops.mode=1 -J-Xmx12g -H:-VectorAPISupport -march=compatibility" "$GRAALVM_HOME_P5/bin/native-image.cmd" -cp . Hello 2>&1 | grep -E "LNK|Finished|Error:" | cut -c1-300 || true
-          echo "--- variant B: JAVA_HOME and PATH as preview-build.sh sets them"
-          ( G="$(cygpath -u "$GRAALVM_HOME_P5")"; export JAVA_HOME=$G PATH=$G/bin:$PATH; native-image.cmd -cp . Hello 2>&1 | grep -E "LNK|Finished|Error:" | cut -c1-300 ) || true
-          echo "--- variant C: through the Maven wrapper's JVM (env as the plugin's child sees it)"
-          cd "$GITHUB_WORKSPACE" && ( export JAVA_HOME="$(cygpath -u "$GRAALVM_HOME_P5")"; export PATH=$JAVA_HOME/bin:$PATH; cat > "$T/Env.java" <<'JAVA'
-          public class Env { public static void main(String[] a) throws Exception {
-            ProcessBuilder pb = new ProcessBuilder("cmd", "/c", "echo LIB=%LIB%"); pb.inheritIO(); pb.start().waitFor();
-            System.out.println("keys: " + System.getenv().keySet().stream().filter(k -> k.equalsIgnoreCase("lib") || k.equalsIgnoreCase("path")).toList());
-          } }
-          JAVA
-          java "$T/Env.java" | cut -c1-200 ) || true
+          echo "--- variant E: a shared library with the same environment"
+          "$GRAALVM_HOME_P5/bin/native-image.cmd" --shared -cp . -o libhello Hello 2>&1 | grep -E "LNK|Finished|Error:|Failed" | cut -c1-300 || true
+          echo "--- variant D: the engine build through the Maven wrapper's batch file (native environment)"
+          cd "$GITHUB_WORKSPACE" && ( export JAVA_HOME="$(cygpath -u "$GRAALVM_HOME_P5")"; export PATH=$JAVA_HOME/bin:$PATH
+            export NATIVE_IMAGE_OPTIONS="-J-Dfastops.mode=1 -J-Xmx12g -H:-VectorAPISupport -march=compatibility"
+            timeout 300 cmd //c "mvnw.cmd -B --no-transfer-progress -f native-spike/pom.xml -DskipTests -Darcadedb.version=${{ needs.version.outputs.engine }} -Dgraalvm.version=25.4.4.1.1 -Dnative.opt=-O2 package" 2>&1 | grep -E "LNK|Finished generating|Failed generating|BUILD" | cut -c1-300 ) || true
 
       # The very script the laptop build uses (-march=compatibility, -J-Xmx12g, -H:-VectorAPISupport, fastops.mode 1), inside the
       # manylinux_2_34 container (glibc 2.34) so the glibc floor of libarcadedb.so is a guarantee, not a property of the runner.
