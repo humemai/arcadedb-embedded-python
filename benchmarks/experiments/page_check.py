@@ -945,7 +945,7 @@ NOT_PRINTED = [
      "engine (embedded: GlobalConfiguration; served: the server's settings over HTTP) or named as the request in the source field when "
      "the engine could not be asked: the evidence behind the sentence that names the raised budget"),
     (r"^dense_id_index$",
-     "the statement that built the dense arm's index on the vector id when BENCH_DENSE_ID_INDEX was on (#291, DECISIONS #178), or "
+     "the statement that built the dense arm's index on the vector id (#291, DECISIONS #178), or "
      "\"key\" where the engine's own record key is the id: the evidence behind the sentence that names the id index"),
     (r"^arcadedb_ts_result_format$",
      "how a served ArcadeDB time-series arm read its query answers when BENCH_ARCADEDB_TS_NDJSON was on (CAMPAIGN section 7 row 85): "
