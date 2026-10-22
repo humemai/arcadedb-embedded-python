@@ -19,6 +19,9 @@ if sys.platform == "win32":
     # LadybugDB's compiled module does not load in this process on Windows (it falls back to a C-API library its
     # wheel does not ship), so the Cypher half of the equivalence checks runs on Linux and macOS (#347)
     collect_ignore.append("test_equivalence_ladybug.py")
+if os.environ.get("ARCADEDB_BACKEND", "jpype").lower() != "native":
+    # Java -> Python upcalls (Python functions in SQL) exist on the native backend only
+    collect_ignore.append("test_native_udf.py")
 if not os.path.isdir(os.path.join(os.path.dirname(os.path.dirname(__file__)), "docs")):
     # the upstream pull request branch has no docs/ directory
     collect_ignore.append("test_docs_examples.py")
