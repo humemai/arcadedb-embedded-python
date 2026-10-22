@@ -1,0 +1,57 @@
+# Runs the benchmark harness's own tests (benchmarks/experiments/test_*.py: the runner's guards, the stage generator, the exporter, the
+# publish gates). Nothing ran them before: #456 merged with test_export_client_twin.py failing, found a day later. No Docker, no timed
+# cell and no engine runs here; the tests fake docker and read fixtures. Only changes under benchmarks/ start it.
+#
+# Fork-only: upstream has no benchmark harness, so this is absent from make-upstream-pr-branch.sh's INCLUDE_PATHS and present in
+# sync-upstream.sh's FORK_GITHUB_ALLOWLIST (same as docs-build.yml).
+name: Test Benchmarks Experiments
+
+on:
+  pull_request:
+    paths:
+      - 'benchmarks/**'
+      - '.github/workflows/test-benchmarks-experiments.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'benchmarks/**'
+      - '.github/workflows/test-benchmarks-experiments.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: pytest benchmarks/experiments
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Setup UV package manager
+        run: |
+          # Same pinned version and retry pattern as the other workflows.
+          installer="$(mktemp)"
+          curl -LsSf --retry 5 --retry-all-errors --retry-delay 5 -o "$installer" https://astral.sh/uv/0.12.0/install.sh
+          sh "$installer"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$PATH"
+          uv --version
+
+      # Latest releases of the five libraries the harness imports (no pins: the tests hold no number from them). The suite takes about
+      # 75 s locally, nothing in it needs the wheel or a JVM.
+      - name: Run the harness tests
+        working-directory: benchmarks/experiments
+        run: uv run --no-project --with pytest --with numpy --with pandas --with pyarrow --with requests python -m pytest -q -p no:cacheprovider .
