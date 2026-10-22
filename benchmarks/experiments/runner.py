@@ -45,6 +45,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import bench_common  # noqa: E402  (INSTRUMENT, stamped on every row)
 import memory_probe  # noqa: E402  (memory per phase, instrument 2026-11 only)
+import vendor_memory  # noqa: E402  (Neo4j's and Elasticsearch's own memory rules, DECISIONS #202)
 DATA = os.path.abspath(os.environ.get("BENCH_DATA", os.path.join(HERE, "data")))
 RESULTS = os.path.join(HERE, "results")
 RAW = os.path.join(RESULTS, "raw")
@@ -2107,7 +2108,20 @@ def _batch_jpype_version(jobs):
     return jpype_version_in_image(ARCADEDB_BENCH_IMAGE)
 
 
-def _pagecache_for(server_mem_bytes, heap):
+# False under a diagnostic --heap or --mem override, which breaks the policy on purpose (see main()).
+VENDOR_MEMORY = True
+
+
+def heap_for(backend, scale):
+    """The heap one arm runs with at one tier: HEAP_BY_SCALE's, except Neo4j (the vendor tool's number for the cell's
+    cap) and Elasticsearch (at most half the cap and under the compressed-oops threshold), from vendor_memory.py."""
+    tier = HEAP_BY_SCALE[scale]
+    if not VENDOR_MEMORY:
+        return tier
+    return vendor_memory.heap_for(backend, tier, MEM_BY_SCALE[scale])
+
+
+def _pagecache_for(server_mem_bytes, heap, backend=None, cap=None):
     """What is left for an off-heap page cache once the heap is taken out.
 
     Neo4j's own guidance is heap + page cache + about 1g of JVM overhead
@@ -2127,6 +2141,10 @@ def _pagecache_for(server_mem_bytes, heap):
     forced = os.environ.get("BENCH_NEO4J_PAGECACHE")
     if forced:
         return forced
+    # Neo4j's own tool decides (vendor_memory.py): the page cache `neo4j-admin server memory-recommendation` prints for the
+    # cell's cap, beside the heap it prints. The 1 GiB reserve below is the formula for any other caller.
+    if VENDOR_MEMORY and backend is not None and vendor_memory.is_neo4j(backend) and cap is not None:
+        return vendor_memory.neo4j_pagecache(cap)
     reserve = 1 << 30
     left = server_mem_bytes - mem_bytes(heap) - reserve
     gib = left / float(1 << 30)
@@ -2542,8 +2560,9 @@ def observe_server(cid):
         hits = re.findall(r"heap[_.]max_?_?size=(\d+)([gGmM])", envs, re.I)
     if hits:
         val, unit = hits[-1]
+        # Exact, not rounded down to whole GiB: Neo4j's own tool recommends heaps such as 3600m (DECISIONS #202).
         out["server_heap"] = (f"{val}g" if unit in "gG"
-                              else f"{int(val) // 1024}g")
+                              else (f"{int(val) // 1024}g" if int(val) % 1024 == 0 else f"{int(val)}m"))
     # The other half of Neo4j's memory contract, and the setting the audit
     # found pinned at the image default of 512M on every tier. Recorded so a
     # future reader can see it was sized rather than inherited.
@@ -2929,7 +2948,9 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
     if os.path.exists(stale):
         os.unlink(stale)  # belt-and-braces vs stale out-file reads
     total_mem = mem_bytes(MEM_BY_SCALE[scale])
-    heap = HEAP_BY_SCALE[scale]
+    # THE HEAP THIS ARM RUNS WITH: the tier's half-cap heap, except Neo4j and Elasticsearch, whose vendors give their own rule
+    # (vendor_memory.py, DECISIONS #202). A diagnostic --heap or --mem override turns that off (VENDOR_MEMORY).
+    heap = heap_for(job["backend"], scale)
     # ENGINE PROVENANCE. A locally built wheel reports version "26.9.1.dev0" no matter which commit it
     # came from, so two engines a day apart are indistinguishable in engine_version. Since the project page
     # now tracks main rather than a release, the commit is the only thing that identifies what was measured
@@ -2968,6 +2989,10 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
               if any(t in job["backend"] for t in JVM_BACKENDS) else {}),
            "mem_cap": MEM_BY_SCALE[scale],
            "ts_utc": datetime.now(timezone.utc).isoformat()}
+    # WHICH RULE SET THIS ARM'S HEAP (DECISIONS #202): stamped on the Neo4j and Elasticsearch arms that took their vendor's memory rule, so
+    # a row measured before it (heap at half the cap) is told apart from one after, and fairness_check judges each by its own rule.
+    if VENDOR_MEMORY and (vendor_memory.is_neo4j(job["backend"]) or vendor_memory.is_elasticsearch(job["backend"])):
+        row["vendor_memory"] = "vendor_memory.py, DECISIONS #202"
 
     # cli_cid initialised HERE, not at its assignment 90 lines down: the
     # finally block reads it, and a server that fails to start returns
@@ -3049,7 +3074,7 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                              "--cpuset-cpus", cpuset,
                              "--memory", str(server_mem), "--memory-swap", str(server_mem),
                              "--shm-size", str(server_mem)]
-                            + [s.format(heap=heap, pagecache=_pagecache_for(server_mem, heap),
+                            + [s.format(heap=heap, pagecache=_pagecache_for(server_mem, heap, job["backend"], MEM_BY_SCALE[scale]),
                                         **_fit)
                                for s in be.get("server_env", [])]
                             + be.get("server_volumes", [])
@@ -3949,6 +3974,8 @@ def main():
         # instead of measuring. Same diagnostic-only warning as --heap.
         for k in MEM_BY_SCALE:
             MEM_BY_SCALE[k] = args.mem
+        global VENDOR_MEMORY
+        VENDOR_MEMORY = False
         print(f"MEM CAP OVERRIDE: {args.mem} (diagnostic)")
     if args.heap:
         # Applied to every scale, because an invocation runs one scale and a
@@ -3956,6 +3983,7 @@ def main():
         # records it.
         for k in HEAP_BY_SCALE:
             HEAP_BY_SCALE[k] = args.heap
+        VENDOR_MEMORY = False
         print(f"HEAP OVERRIDE: {args.heap} (diagnostic; breaks the heap policy)")
     if args.timeout:
         for k in TIMEOUT_BY_SCALE:

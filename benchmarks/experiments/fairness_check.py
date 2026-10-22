@@ -36,6 +36,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import publish_instrument  # noqa: E402
+import vendor_memory  # noqa: E402
 RESULTS = str(publish_instrument.results_dir())
 FULL_CPUSET = "0-11"
 # Fallback only. Every served row records its own mem_split; this is for the
@@ -431,6 +432,17 @@ def _total_envelope(r):
     return (str(r.get("heap")), f"{cap:g}g")
 
 
+def _vendor_heap(r):
+    """The heap the vendor rule gives this Neo4j or Elasticsearch row's tier (vendor_memory.heap_for), or None when the
+    row's cap is not one the table covers."""
+    import runner  # noqa: E402
+    cap = str(r.get("mem_cap"))
+    scale = r.get("scale")
+    if cap not in vendor_memory.NEO4J_MEMORY or scale not in runner.HEAP_BY_SCALE:
+        return None
+    return vendor_memory.heap_for(r.get("backend"), runner.HEAP_BY_SCALE[scale], cap)
+
+
 def check_envelope(rows):
     """F3: same memory/heap envelope across backends within a (lane, scale)."""
     print("\n=== F3: same memory envelope per (lane, scale) ===")
@@ -448,6 +460,7 @@ def check_envelope(rows):
     rows = rows + _dense_rows()
     g = collections.defaultdict(lambda: collections.defaultdict(set))
     noheap = collections.defaultdict(set)
+    vendor_bad = []
     for r in rows:
         h, m = _total_envelope(r)
         # THE DECLARED IMAGE-DEFAULTS ARM (JVM_DEFAULTS_ARMS): the memory CAP is judged
@@ -455,6 +468,16 @@ def check_envelope(rows):
         # F3b holds it to that against the JVM's own report), so it is not a "no
         # witness" gap either.
         if str(r.get("backend")) in JVM_DEFAULTS_ARMS:
+            g[(r["lane"], r["scale"])][r["backend"]].add(("n/a", m))
+            continue
+        # NEO4J AND ELASTICSEARCH RUN THEIR VENDORS' MEMORY RULE (DECISIONS #202, vendor_memory.py): their heap is not
+        # ArcadeDB's, so it is judged against the vendor table below instead of against the other engines' heap. The cap
+        # is judged with everyone else's. A row measured before the rule (no `vendor_memory` stamp) is judged as it always was.
+        # A row that carries no heap witness is left to the NO-WITNESS rule above.
+        if r.get("vendor_memory"):
+            want = _vendor_heap(r)
+            if h not in ("NO-WITNESS", "None", "", "n/a", None) and want is not None and _gib(h) != _gib(want):
+                vendor_bad.append(f"{r['lane']} {r['scale']} {r['backend']}: heap {h}, the vendor rule gives {want}")
             g[(r["lane"], r["scale"])][r["backend"]].add(("n/a", m))
             continue
         # A JVM heap is only comparable between engines that HAVE one. Qdrant,
@@ -480,6 +503,9 @@ def check_envelope(rows):
             h = "n/a"
         g[(r["lane"], r["scale"])][r["backend"]].add((h, m))
     bad = 0
+    for line in sorted(set(vendor_bad)):
+        bad += 1
+        print(f"  FAIL {line}")
     for key in sorted(g, key=str):
         per_be = g[key]
         envs = {e for s in per_be.values() for e in s}

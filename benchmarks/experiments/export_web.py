@@ -4366,6 +4366,9 @@ def _entry_heaps(e, lane, wl, exact_only=False):
     column (DECISIONS #116 item 7), so the two cannot name different heaps."""
     rs = _entry_rows(e, lane, wl, exact_only)
     heaps = {str(r.get("heap") or r.get("server_heap") or _jvm_reported_heap(r) or "").strip() for r in rs}
+    # A heap in MiB (Neo4j's own tool recommends 3600m, DECISIONS #202) is read as the GiB it is.
+    heaps = {(f"{float(h[:-1]) / 1024:.2f}".rstrip("0").rstrip(".") + "g")
+             if h and h[-1].lower() == "m" and h[:-1].isdigit() else h for h in heaps}
     heaps = {h for h in heaps if h and h[-1].lower() == "g" and h[:-1].replace(".", "").isdigit()}
     return heaps
 
