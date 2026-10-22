@@ -158,7 +158,7 @@ JVM arguments use two flag types:
 
 | Flag | Purpose |
 |------|---------|
-| `-XX:MaxRAMPercentage=50` | Default heap ceiling: half of the RAM the JVM sees (the container limit inside a container). Added only when you give no `heap_size`, no `-Xmx` and no other max-heap flag in `jvm_args` or `ARCADEDB_JVM_ARGS`; a `heap_size` you pass always wins |
+| `-XX:MaxRAMPercentage=50` | Default heap ceiling: half of the RAM the JVM sees (the container limit inside a container). Added only when you give no `heap_size`, no `-Xmx` and no other max-heap flag in `jvm_args` or `ARCADEDB_JVM_ARGS`; a `heap_size` you pass always wins. This assumes one JVM per container: each Python process starts its own JVM and sees the whole limit, so with several processes set `heap_size` in each (see [Several processes in one container](../api/jvm.md#several-processes-in-one-container)) |
 | `-Darcadedb.server.logsDirectory=<log dir>` and `-Djava.util.logging.config.file=<log dir>/logging.properties` | Put the engine log (`arcadedb.log.*`) in the per-user log directory instead of `./log` in the working directory; see [Where the logs go](#where-the-logs-go). A value of either flag in `jvm_args` or `ARCADEDB_JVM_ARGS` wins |
 | `-XX:ErrorFile=<log dir>/hs_err_pid%p.log` | JVM crash log location (`ARCADEDB_JVM_ERROR_FILE` or an `-XX:ErrorFile=` in `jvm_args` overrides it) |
 | `--add-modules=jdk.incubator.vector` | Enable JVector SIMD acceleration |
@@ -191,6 +191,8 @@ Set `ARCADEDB_LOG_DIR` to use another directory. The directory is created when t
 
 !!! warning "One JVM configuration per process"
     JVM options are locked after the JVM starts. Set `start_jvm(...)` or pass `jvm_kwargs` **before** the first database is created. To change JVM settings, start a new Python process.
+
+    Each Python process starts its own JVM, and each JVM sees the whole container limit. With several Python processes in one container, give each process its own `heap_size`; the default of 50 percent of the limit is for one process. See [Several processes in one container](../api/jvm.md#several-processes-in-one-container).
 
 !!! tip "Environment variable (optional)"
     If you must configure JVM flags externally (CI, shell scripts), set `ARCADEDB_JVM_ARGS`. It is always read, and `jvm_args` passed in code are appended after it. In-code configuration is preferred.

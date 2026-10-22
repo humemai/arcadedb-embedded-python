@@ -59,10 +59,9 @@ process: through the embedded handle, materialised to a list of dicts, and
 through the HTTP query endpoint. Same JVM, same heap, same page cache, so the
 difference is the wire format alone: serialise, socket, parse. At 10, 1,000, and
 10,000 rows the example prints both medians and the gap. The
-[project page](https://humem.ai/research/arcadedb) adds a third arm, the same
+[DBBench page](https://humem.ai/research/dbbench) adds a third arm, the same
 query against a separate container, to price the process
-boundary on top; on that measurement the boundary, not the wire format, is most
-of what a served deployment costs.
+boundary on top of the wire format.
 
 ## Why This Example Exists
 

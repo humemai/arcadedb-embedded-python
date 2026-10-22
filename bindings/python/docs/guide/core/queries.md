@@ -1,7 +1,7 @@
 # Query Languages Guide
 
 !!! warning "Known engine issues"
-    Open ArcadeDB bugs can return a wrong answer or refuse a lookup; see
+    Known bugs that can return a wrong answer or refuse a lookup, and the releases that fixed earlier ones, are listed on
     [Known Engine Issues](../known-issues.md).
 
 The bindings run SQL and OpenCypher through `db.query()` and `db.command()`. Use them

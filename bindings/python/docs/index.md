@@ -177,7 +177,7 @@ See [Java API Coverage](java-api-coverage.md) for detailed comparison.
 ArcadeDB is measured against the engines you would otherwise reach for, on one machine, one
 job at a time, with every timed query's answer compared across engines before any latency is
 published. The results live on the
-[project page](https://humem.ai/research/arcadedb); the
+[DBBench page](https://humem.ai/research/dbbench), whose first results are due in November 2026; the
 [Benchmarks](benchmarks/index.md) section documents the protocol, the answer checking, how
 to run a lane yourself, and how to read the output.
 

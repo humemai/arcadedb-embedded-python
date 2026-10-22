@@ -10,8 +10,8 @@ in scope and in where they publish, not in the kind of thing they measure.
 - `experiments/` is the **live harness**: ArcadeDB, embedded and served,
   against specialist and multi-model engines on documents,
   graph, dense and sparse vectors, time series, and cross-model queries. It
-  is what every campaign runs, and its results are the project page at
-  <https://humem.ai/research/arcadedb>. The page is the living artifact, and
+  is what every campaign runs, and its results are the DBBench page at
+  <https://humem.ai/research/dbbench> (the first 2026-11 results are due in November 2026). The page is the living artifact, and
   every number on it is generated from the frozen rows by the exporter and
   checked by gates before it can be published; a paper written from the same
   rows pins a stable release where the page may pin a commit (DECISIONS #42).
