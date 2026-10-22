@@ -278,14 +278,20 @@ start_jvm(heap_size="8g", jvm_args="-XX:MaxDirectMemorySize=8g")
 
 **Problem**: `OutOfMemoryError` or heap space errors
 
+A Java `OutOfMemoryError` inside a query reaches Python as `ArcadeDBError`, with the Java class in the message (`Query failed: ... caused by java.lang.OutOfMemoryError: Java heap space`), not as a JPype exception. In the probe below the process could continue after it. A process that the kernel kills (exit status 137, `OOMKilled=true` in Docker) gives no Python exception at all.
+
 **Solutions**:
 
-1. **Increase Heap (preferred)**:
+1. **Increase Heap (preferred on a machine; in a container, see the next paragraph)**:
     ```python
     from arcadedb_embedded.jvm import start_jvm
 
     start_jvm(heap_size="8g")
     ```
+
+    In a container, the default heap is already 50 percent of the limit, and the rest is for Python, thread stacks, metaspace and off-heap buffers. Raising the heap above the default can trade a Java `OutOfMemoryError` for a kernel kill (probe below). If the container needs more heap, raise the container limit too. With several Python processes in one container, see [Several processes in one container](../api/jvm.md#several-processes-in-one-container).
+
+    Probe (one laptop, one mix: Docker `-m 2g` with no swap, Java heap filled to 85 percent of its cap, then a query that needs more): the default heap (1024 MB) gave `ArcadeDBError` and the container survived, also with 600 MB held by Python. `heap_size="1536m"` (75 percent) with 600 MB held by Python was killed by the kernel (exit 137) with no Python exception.
 
 2. **Lower the caches' heap share** (for vector workloads). The build and
    search caches size themselves automatically inside a share of the heap
