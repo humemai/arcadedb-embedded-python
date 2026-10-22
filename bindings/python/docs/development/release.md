@@ -219,7 +219,7 @@ The native preview is a second package built from the `native-preview` branch: d
   | `macos-arm64` | `macos-15` (7 GB: `-J-Xmx5g`, `-H:NumberOfThreads=2`) | on the runner | `macosx_<minos>_arm64` (minos read from the load commands) | `libarcadedb.dylib` |
   | `windows-x64` | `windows-latest` (MSVC environment from `vcvars64.bat`) | on the runner | `win_amd64` | `libarcadedb.dll` |
 
-- **Which platforms gate a release**: the single list `REQUIRED_PLATFORMS` at the top of the workflow (now `linux-x86_64`). The publish job fails without a passed parity run for each listed platform, and then uploads every wheel that passed, required or not. Add a platform to the list when it is green.
+- **Which platforms gate a release**: the single list `REQUIRED_PLATFORMS` at the top of the workflow (now `linux-x86_64 linux-aarch64 macos-arm64`, each green in runs 10 and 11; `windows-x64` is not yet in it). The publish job fails without a passed parity run for each listed platform, and then uploads every wheel that passed, required or not. Add a platform to the list when it is green.
 - **Why its own PyPI name**: PyPI keeps one file per name, version and platform tag, so a native build cannot sit beside the JVM wheel under `arcadedb-embedded`. The name goes away when the bindings move to `arcadedb` on PyPI.
 
 ## Python Versioning Strategy
