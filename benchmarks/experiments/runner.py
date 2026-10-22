@@ -2356,6 +2356,47 @@ class CgroupSampler(threading.Thread):
         self.join(timeout=5)
 
 
+def split_server_budget(server_budget, sidecars):
+    """The server side of a cell has ONE memory budget, whatever it runs as: the cell's cap for every other engine, so a
+    deployment of several containers (Milvus: server, etcd, MinIO) splits it. Returns (server container bytes, {sidecar
+    name: bytes}) with server + sum(sidecars) == server_budget exactly. The sidecars keep their own declared caps."""
+    caps = {sc["name"]: mem_bytes(sc["mem"]) for sc in sidecars}
+    server = server_budget - sum(caps.values())
+    if server <= 0:
+        raise SystemExit(f"sidecar memory caps {caps} leave nothing of the {server_budget}-byte server budget")
+    return server, caps
+
+
+def _fold_sidecars(row, sc_samplers):
+    """Server-side memory, CPU and I/O figures cover the WHOLE deployment: server container plus sidecars. The server
+    container's own figures stay under server_container_*, each sidecar's under sidecar_<name>_*."""
+    mib = lambda b: round((b or 0) / 2**20, 1)   # as run_cell's own
+    def add(a, b):
+        return None if a is None or b is None else round(a + b, 1)
+    keys = {"peak_mib": lambda x: x.peak, "peak_anon_mib": lambda x: x.peak_anon, "end_anon_mib": lambda x: x.end_anon,
+            "peak_shmem_mib": lambda x: x.peak_shmem, "peak_file_mib": lambda x: x.peak_file,
+            "io_read_mib": lambda x: x.io.get("rbytes"), "io_write_mib": lambda x: x.io.get("wbytes"),
+            "end_file_mib": lambda x: x.end_file}
+    for name, smp in sc_samplers:
+        smp.finish()
+        for k, get in keys.items():
+            v = mib(get(smp))
+            row[f"sidecar_{name}_{k}"] = v
+            row[f"server_container_{k}"] = row.get(f"server_container_{k}", row.get(f"server_{k}"))
+            row[f"server_{k}"] = add(row.get(f"server_{k}"), v)
+        _cu = smp.cpu.get("usage_usec") or 0
+        row["server_container_cpu_usec"] = row.get("server_container_cpu_usec", row.get("server_cpu_usec"))
+        row["server_cpu_usec"] = (row.get("server_cpu_usec") or 0) + _cu
+        # the cell-wide sums: sidecars are one more server-side container
+        for k, v in (("peak_mib_sum", smp.peak), ("peak_anon_mib_sum", smp.peak_anon),
+                     ("peak_shmem_mib_sum", smp.peak_shmem), ("end_anon_mib_sum", smp.end_anon or 0),
+                     ("peak_owned_mib_sum", smp.peak_anon + smp.peak_shmem),
+                     ("io_write_mib_sum", smp.io.get("wbytes") or 0), ("io_read_mib_sum", smp.io.get("rbytes") or 0)):
+            if row.get(k) is not None:
+                row[k] = add(row[k], mib(v))
+        row["cpu_usec_sum"] = (row.get("cpu_usec_sum") or 0) + _cu
+
+
 def mem_bytes(spec):
     m = re.fullmatch(r"(\d+)([gm])", spec)
     n, u = int(m.group(1)), m.group(2)
@@ -3054,7 +3095,7 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
     # branch, and it is only taken once the client starts, so from then
     # until this line every server_not_ready became an UnboundLocalError.
     server_cid, cli_cid, samplers, _therm0 = None, None, [], {}
-    sidecar_cids, _sc = [], {}
+    sidecar_cids, _sc, sidecar_by_name, sc_samplers = [], {}, {}, []
     _mp = None   # the memory-per-phase probe, set once the client is about to start
     try:
         if be["topology"] == "client_server":
@@ -3069,7 +3110,12 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                 client_mem = mem_bytes(CLIENT_MEM)
                 row["mem_split"] = "full+client"
                 row["client_mem_cap"] = CLIENT_MEM
-            row["server_mem_cap_g"] = round(server_mem / 2**30, 1)
+            row["server_mem_cap_g"] = round(server_mem / 2**30, 1)   # the server SIDE's whole budget, sidecars included
+            if be.get("sidecars"):
+                _budget = server_mem
+                server_mem, _sc_caps = split_server_budget(_budget, be["sidecars"])
+                row["server_container_mem_cap_g"] = round(server_mem / 2**30, 2)
+                row["sidecar_mem_caps"] = {k: round(v / 2**30, 2) for k, v in _sc_caps.items()}
             # Buffer-pool sizing derived from this container's own budget, on
             # PostgreSQL's own guidance (a quarter resident, three quarters
             # assumed cached). Only the tuned arm uses these; every other
@@ -3130,6 +3176,7 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                             "--memory", str(mem_bytes(_s["mem"])), "--memory-swap", str(mem_bytes(_s["mem"]))]
                            + _s["env"] + [_s["image"]] + [c.format(**_sc) for c in _s["cmd"]])
                 sidecar_cids.append(_scid)
+                sidecar_by_name[_s["name"]] = _scid
                 if len(_scid) < 12 or not wait_ready(_scid, _s["ready"]):
                     row["error"] = f"sidecar_{_s['name']}_not_ready"
                     return row
@@ -3207,6 +3254,15 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             # No settle loop here, the engine is idle and just booted.
             row["server_disk_baseline_mb"] = container_disk(
                 server_cid, tries=1)["disk_mb"]
+            for _n, _c in sidecar_by_name.items():   # the deployment's footprint includes etcd and MinIO
+                _bd = container_disk(_c, tries=1)["disk_mb"]
+                row[f"sidecar_{_n}_disk_baseline_mb"] = _bd
+                row["server_disk_baseline_mb"] = (None if row["server_disk_baseline_mb"] is None or _bd is None
+                                                  else round(row["server_disk_baseline_mb"] + _bd, 1))
+            for _n, _c in sidecar_by_name.items():
+                _ss = CgroupSampler(_c)
+                _ss.start()
+                sc_samplers.append((_n, _ss))
             s_srv = CgroupSampler(server_cid)
             s_srv.start()
             samplers.append(("server", s_srv))
@@ -3640,6 +3696,14 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             row["server_disk_mb"] = d["disk_mb"]
             row["server_disk_rw_mb"] = d["disk_rw_mb"]
             row["server_disk_vol_mb"] = d["disk_vol_mb"]
+            if sidecar_by_name:
+                row["server_container_disk_mb"] = d["disk_mb"]
+                for _n, _c in sidecar_by_name.items():
+                    _sd = container_disk(_c)
+                    row[f"sidecar_{_n}_disk_mb"] = _sd["disk_mb"]
+                    for _k, _sk in (("server_disk_mb", "disk_mb"), ("server_disk_rw_mb", "disk_rw_mb"),
+                                    ("server_disk_vol_mb", "disk_vol_mb")):
+                        row[_k] = (None if row[_k] is None or _sd[_sk] is None else round(row[_k] + _sd[_sk], 1))
             row["server_disk_settled"] = d["disk_settled"]
             if d["disk_note"]:
                 row["server_disk_note"] = d["disk_note"]
@@ -3748,6 +3812,8 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             row["io_read_mib_sum"] = mib(samplers[0][1].io.get("rbytes"))
             row["end_anon_mib_sum"] = row.get("client_end_anon_mib")
             row["cpu_usec_sum"] = row.get("client_cpu_usec")
+        if sc_samplers:
+            _fold_sidecars(row, sc_samplers)
         # THE HOST THROTTLES FOR EVERY CELL, NOT ONLY TWO-CONTAINER ONES.
         # This sat inside `if len(samplers) == 2`, a branch about summing a
         # client's and a server's memory, which has nothing to do with the

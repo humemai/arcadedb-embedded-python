@@ -266,3 +266,5 @@ Prefer the loud failure. The same script that wrote those 94 quiet rows also cra
 ## Still open
 
 Whether any engine's disk IO scheduling differs under the same cap (CAMPAIGN.md section 7, item 20).
+
+- **Multi-container deployments share the cell's cap (Milvus compose, 2026-10-22).** Every engine's server side gets exactly the cell's memory cap. Milvus's three containers split it (etcd 512m and MinIO 1g out of the cap, the rest to Milvus), and the memory, CPU, I/O and disk figures on its row cover all three, so neither the budget nor the measurement flatters or handicaps the deployment. `test_milvus_compose.py` asserts server + sidecars == cap for every backend with sidecars.

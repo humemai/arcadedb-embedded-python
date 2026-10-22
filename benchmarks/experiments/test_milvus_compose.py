@@ -123,3 +123,54 @@ def test_search_shape_is_ids_and_distances_only():
 def test_client_image_carries_the_bulk_writer_extra():
     src = open(os.path.join(HERE, "build_images.sh"), encoding="utf-8").read()
     assert "pymilvus[bulk_writer]==3.0.2" in src and "minio==" in src
+
+
+def _cell_caps(r):
+    return [r.mem_bytes(v) for v in r.MEM_BY_SCALE.values()]
+
+
+def test_server_plus_sidecars_equal_the_cell_cap_for_every_backend_with_sidecars(monkeypatch):
+    """The Milvus deployment gets the cell's cap, as every other engine does, not the cap plus etcd and MinIO."""
+    r = _runner(monkeypatch)
+    with_sidecars = [a for a, be in r.BACKENDS.items() if be.get("sidecars")]
+    assert set(ARMS) <= set(with_sidecars)
+    for a in with_sidecars:
+        for cap in _cell_caps(r):
+            server, caps = r.split_server_budget(cap, r.BACKENDS[a]["sidecars"])
+            assert server + sum(caps.values()) == cap, (a, cap)
+            assert server > 0 and set(caps) == {s["name"] for s in r.BACKENDS[a]["sidecars"]}
+            assert all(caps[s["name"]] == r.mem_bytes(s["mem"]) for s in r.BACKENDS[a]["sidecars"]), "sidecars keep their caps"
+
+
+def test_a_budget_the_sidecars_would_swallow_is_refused(monkeypatch):
+    r = _runner(monkeypatch)
+    with pytest.raises(SystemExit):
+        r.split_server_budget(r.mem_bytes("1g"), r.BACKENDS["milvus_dense"]["sidecars"])
+
+
+def test_run_cell_applies_the_split_before_it_sizes_the_server():
+    src = open(os.path.join(HERE, "runner.py"), encoding="utf-8").read()
+    i = src.index("split_server_budget(_budget, be[\"sidecars\"])")
+    assert i < src.index("srv_gb = max(1, server_mem"), "the server's heap and caps derive from the reduced budget"
+    assert i < src.index('"--memory", str(server_mem)')
+
+
+def test_server_side_figures_fold_the_sidecars_in(monkeypatch):
+    r = _runner(monkeypatch)
+
+    class S:
+        def __init__(self, peak):
+            self.peak = self.peak_anon = peak * 2**20
+            self.peak_shmem = self.peak_file = 0
+            self.end_anon = self.end_file = 0
+            self.io, self.cpu = {"rbytes": 0, "wbytes": 0}, {"usage_usec": 10}
+        def finish(self):
+            pass
+
+    row = {"server_peak_mib": 100.0, "server_peak_anon_mib": 100.0, "server_cpu_usec": 5, "peak_mib_sum": 150.0,
+           "peak_anon_mib_sum": 150.0, "peak_shmem_mib_sum": 0.0, "peak_owned_mib_sum": 150.0, "end_anon_mib_sum": 0.0,
+           "io_write_mib_sum": 0.0, "io_read_mib_sum": 0.0, "cpu_usec_sum": 7}
+    r._fold_sidecars(row, [("etcd", S(20)), ("minio", S(30))])
+    assert row["server_peak_mib"] == 150.0 and row["server_container_peak_mib"] == 100.0
+    assert row["sidecar_etcd_peak_mib"] == 20.0 and row["sidecar_minio_peak_mib"] == 30.0
+    assert row["peak_mib_sum"] == 200.0 and row["server_cpu_usec"] == 25 and row["cpu_usec_sum"] == 27
