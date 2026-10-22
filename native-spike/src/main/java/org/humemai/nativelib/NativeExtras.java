@@ -17,16 +17,20 @@ package org.humemai.nativelib;
 import com.arcadedb.database.Database;
 import com.arcadedb.database.DatabaseInternal;
 import com.arcadedb.database.Document;
+import com.arcadedb.database.DocumentCallback;
 import com.arcadedb.database.Identifiable;
 import com.arcadedb.database.MutableDocument;
 import com.arcadedb.database.RID;
 import com.arcadedb.database.async.DatabaseAsyncExecutor;
 import com.arcadedb.database.async.ErrorCallback;
+import com.arcadedb.database.async.NewEdgeCallback;
+import com.arcadedb.engine.ErrorRecordCallback;
 import com.arcadedb.engine.WALFile;
 import com.arcadedb.function.sql.DefaultSQLFunctionFactory;
 import com.arcadedb.function.sql.SQLFunctionAbstract;
 import com.arcadedb.graph.GraphBatch;
 import com.arcadedb.graph.MutableVertex;
+import com.arcadedb.graph.Vertex;
 import com.arcadedb.integration.exporter.Exporter;
 import com.arcadedb.integration.importer.Importer;
 import com.arcadedb.query.sql.executor.CommandContext;
@@ -75,6 +79,32 @@ public final class NativeExtras {
       final CCharPointer reply = fn.invoke(id, in.get());
       return reply.isNull() ? null : CTypeConversion.toJavaString(reply);
     }
+  }
+
+  /** A callback failure that must not stop an async writer: reported on stderr, not lost. */
+  static void swallowed(final String where, final Throwable t) {
+    System.err.println("[arcadedb-native] " + where + " failed: " + t);
+  }
+
+  /** Calls Python with an event whose reply nobody reads; a Python exception (reported in the reply) is logged, not lost. */
+  static void fire(final String where, final long cb, final String message) {
+    final String reply = upcall(cb, message);
+    if (reply != null && reply.startsWith("{\"error\""))
+      swallowed(where, new RuntimeException(reply));
+  }
+
+  /** Calls Python with an event whose reply is {"v":bool}: true (or no answer) goes on, false stops. */
+  @SuppressWarnings("unchecked")
+  static boolean goOn(final String where, final long cb, final String message) {
+    final String reply = upcall(cb, message);
+    if (reply == null)
+      return true;
+    final Map<String, Object> r = (Map<String, Object>) Json.parse(reply);
+    if (r.get("error") != null) {
+      swallowed(where, new RuntimeException(reply));
+      return false;
+    }
+    return !Boolean.FALSE.equals(r.get("v"));
   }
 
   private static String event(final String kind, final String body) {
@@ -265,11 +295,40 @@ public final class NativeExtras {
   private static ErrorCallback errorCallback(final long cb) {
     return t -> {
       try {
-        upcall(cb, event("error", errorBody(t)));
-      } catch (final Throwable ignored) {
-        // a failing Python error handler must not take down an async writer
+        fire("error callback", cb, event("error", errorBody(t)));
+      } catch (final Throwable e) {
+        swallowed("error callback", e); // a failing Python error handler must not take down an async writer
       }
     };
+  }
+
+  private static NewEdgeCallback edgeCallback(final long cb) {
+    if (cb == 0)
+      return null;
+    return (edge, createdSource, createdDestination) -> {
+      try {
+        final StringBuilder sb = new StringBuilder("\"edge\":");
+        NativeCodec.append(sb, edge);
+        sb.append(",\"src\":").append(createdSource).append(",\"dst\":").append(createdDestination);
+        fire("edge callback", cb, event("edge", sb.toString()));
+      } catch (final Throwable e) {
+        swallowed("edge callback", e);
+      }
+    };
+  }
+
+  @SuppressWarnings("unchecked")
+  private static String[] strings(final Object list) {
+    final List<Object> in = (List<Object>) list;
+    final String[] out = new String[in.size()];
+    for (int i = 0; i < out.length; i++)
+      out[i] = (String) in.get(i);
+    return out;
+  }
+
+  @SuppressWarnings("unchecked")
+  private static Object[] objects(final Object list) {
+    return ((List<Object>) list).toArray();
   }
 
   /**
@@ -326,9 +385,9 @@ public final class NativeExtras {
           try {
             final StringBuilder sb = new StringBuilder("\"rec\":");
             NativeCodec.append(sb, rec);
-            upcall(cb, event("record", sb.toString()));
-          } catch (final Throwable ignored) {
-            // the writer goes on
+            fire("record callback", cb, event("record", sb.toString()));
+          } catch (final Throwable e) {
+            swallowed("record callback", e); // the writer goes on
           }
         };
         if (errCb == 0)
@@ -344,9 +403,9 @@ public final class NativeExtras {
             if (cb == 0)
               return;
             try {
-              upcall(cb, event("result", "\"reply\":" + replyRows(rs)));
-            } catch (final Throwable ignored) {
-              // the writer goes on
+              fire("result callback", cb, event("result", "\"reply\":" + replyRows(rs)));
+            } catch (final Throwable e) {
+              swallowed("result callback", e); // the writer goes on
             }
           }
 
@@ -375,12 +434,34 @@ public final class NativeExtras {
       }
       case "on_ok" -> ex.onOk(() -> {
         try {
-          upcall(cb, event("ok", ""));
-        } catch (final Throwable ignored) {
-          // the writer goes on
+          fire("on_ok callback", cb, event("ok", ""));
+        } catch (final Throwable e) {
+          swallowed("on_ok callback", e); // the writer goes on
         }
       });
       case "on_error" -> ex.onError(errorCallback(cb));
+      case "new_edge" -> {
+        final Vertex src = db.lookupByRID(new RID((String) a.get("src")), true).asVertex();
+        ex.newEdge(src, (String) a.get("type"), new RID((String) a.get("dst")), Boolean.TRUE.equals(a.get("light")), edgeCallback(cb),
+            varargs(a.get("props")));
+      }
+      case "new_edge_by_keys" -> ex.newEdgeByKeys((String) a.get("src_type"), strings(a.get("src_names")), objects(a.get("src_values")),
+          (String) a.get("dst_type"), strings(a.get("dst_names")), objects(a.get("dst_values")), Boolean.TRUE.equals(a.get("create")),
+          (String) a.get("type"), Boolean.TRUE.equals(a.get("bidirectional")), Boolean.TRUE.equals(a.get("light")), edgeCallback(cb),
+          varargs(a.get("props")));
+      case "scan_type" -> {
+        final DocumentCallback onRecord = rec -> {
+          final StringBuilder sb = new StringBuilder("\"rec\":");
+          NativeCodec.append(sb, rec);
+          return goOn("scan callback", cb, event("record", sb.toString()));
+        };
+        final boolean polymorphic = !Boolean.FALSE.equals(a.get("polymorphic"));
+        if (errCb == 0)
+          ex.scanType((String) a.get("type"), polymorphic, onRecord);
+        else
+          ex.scanType((String) a.get("type"), polymorphic, onRecord, (rid, t) -> goOn("scan error callback", errCb,
+              event("scan_error", "\"rid\":\"" + rid + "\"," + errorBody(t))));
+      }
       case "append_samples" -> {
         final List<Object> ts = (List<Object>) a.get("ts");
         final long[] stamps = new long[ts.size()];
@@ -403,20 +484,30 @@ public final class NativeExtras {
           first.compareAndSet(null, t);
         };
         final String type = (String) a.get("type");
-        for (final Object row : (List<Object>) a.get("rows")) {
-          final MutableDocument doc = db.newDocument(type);
-          for (final Map.Entry<String, Object> e : ((Map<String, Object>) row).entrySet())
-            doc.set(e.getKey(), e.getValue());
-          ex.createRecord(doc, null, onError);
+        try {
+          for (final Object row : (List<Object>) a.get("rows")) {
+            final MutableDocument doc = db.newDocument(type);
+            for (final Map.Entry<String, Object> e : ((Map<String, Object>) row).entrySet())
+              doc.set(e.getKey(), e.getValue());
+            ex.createRecord(doc, null, onError);
+          }
+        } catch (final Throwable t) {
+          ASYNC_FAILS.remove(fid); // the caller gets the error, not a token to read failures from
+          ASYNC_FIRST.remove(fid);
+          throw t;
         }
         return ArcadeNative.out("{\"ok\":true,\"fid\":" + fid + "}");
       }
       case "failures" -> {
         final long fid = ((Number) a.get("fid")).longValue();
         final AtomicLong count = ASYNC_FAILS.remove(fid);
-        final Throwable first = ASYNC_FIRST.remove(fid).get();
+        final AtomicReference<Throwable> firstRef = ASYNC_FIRST.remove(fid);
+        final Throwable first = firstRef == null ? null : firstRef.get();
         final StringBuilder sb = new StringBuilder("{\"ok\":true,\"count\":").append(count == null ? 0 : count.get()).append(",\"first\":");
-        NativeCodec.quote(sb, first == null ? null : first.toString());
+        if (first == null)
+          sb.append("null");
+        else
+          NativeCodec.quote(sb, first.toString());
         return ArcadeNative.out(sb.append('}').toString());
       }
       default -> throw new IllegalArgumentException("unknown async operation " + ArcadeNative.str(op));

@@ -241,7 +241,7 @@ def export_to_csv(
         if file_dir and not os.path.exists(file_dir):
             os.makedirs(file_dir, exist_ok=True)
 
-        if isinstance(results, ResultSet):
+        if isinstance(results, ResultSet) or hasattr(results, "iter_json_batches"):
             # Stream rows via batched Java-side JSON serialization (one JPype
             # crossing per batch instead of several per row — measured ~5x on
             # 100k-row exports). Values carry JSON-native types, so DATE and

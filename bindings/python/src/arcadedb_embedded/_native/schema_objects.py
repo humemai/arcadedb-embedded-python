@@ -133,6 +133,11 @@ class _IndexShim:
             ).close()
 
 
+def _rid_text(value) -> str:
+    get_rid = getattr(value, "get_rid", None)
+    return get_rid() if get_rid is not None else str(value)
+
+
 class NativeVectorIndex(_BaseVectorIndex):
     """``VectorIndex`` over ``vectorNeighbors``: ``find_nearest`` returns ``[(record, distance)]`` like the JPype wrapper."""
 
@@ -147,12 +152,8 @@ class NativeVectorIndex(_BaseVectorIndex):
     def _run_search(
         self, *, query_vector, k, allowed_rids, approximate, ef_search=None
     ):
-        if allowed_rids is not None:
-            not_yet("VectorIndex search restricted to allowed_rids")
         if approximate:
-            not_yet("VectorIndex.find_nearest_approximate")
-        if ef_search is not None:
-            not_yet("VectorIndex search with ef_search")
+            not_yet("VectorIndex.find_nearest_approximate over PRODUCT quantization")
         from .records import _wrap_dict
 
         vector = (
@@ -160,13 +161,29 @@ class NativeVectorIndex(_BaseVectorIndex):
             if hasattr(query_vector, "tolist")
             else list(query_vector)
         )
-        rows = self._database.query(
-            "sql",
-            "SELECT expand(vectorNeighbors(?, ?, ?))",
-            self._shim._name,
-            vector,
-            int(k),
-        )
+        # the statement's own options: efSearch, and filter (the RIDs the search may return), as the JPype path passes them
+        options = {}
+        if ef_search is not None:
+            options["efSearch"] = int(ef_search)
+        if allowed_rids:
+            options["filter"] = [_rid_text(r) for r in allowed_rids]
+        if options:
+            rows = self._database.query(
+                "sql",
+                "SELECT expand(vectorNeighbors(?, ?, ?, ?))",
+                self._shim._name,
+                vector,
+                int(k),
+                options,
+            )
+        else:
+            rows = self._database.query(
+                "sql",
+                "SELECT expand(vectorNeighbors(?, ?, ?))",
+                self._shim._name,
+                vector,
+                int(k),
+            )
         out = []
         for row in rows:
             nested = row.get("record")
@@ -180,8 +197,11 @@ class NativeVectorIndex(_BaseVectorIndex):
             out.append((record, float(row.get("distance"))))
         return self._sort_results(out)[:k]
 
-    def find_nearest_approximate(self, *args, **kwargs):
-        not_yet("VectorIndex.find_nearest_approximate")
+    def find_nearest_approximate(self, query_vector, k=10, allowed_rids=None):
+        """PQ approximate search needs PRODUCT quantization; the search itself has no statement form (not on native yet)."""
+        if self.get_quantization() != "PRODUCT":
+            raise ArcadeDBError("Approximate search requires quantization=PRODUCT (PQ)")
+        not_yet("VectorIndex.find_nearest_approximate over PRODUCT quantization")
 
     def _lookup_query_vector_by_key(self, key):
         type_name, prop = self._shim._type, self._shim._prop

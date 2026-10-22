@@ -60,3 +60,65 @@ def test_async_callbacks_run_on_a_writer_thread_and_see_the_record(temp_db):
     executor.wait_completion()
     assert sorted(seen) == list(range(20))
     assert threading.get_ident() not in threads
+
+
+def _two_vertices(db):
+    db.command("sql", "CREATE VERTEX TYPE P")
+    db.command("sql", "CREATE PROPERTY P.n INTEGER")
+    db.command("sql", "CREATE INDEX ON P (n) UNIQUE")
+    db.command("sql", "CREATE EDGE TYPE K")
+    with db.transaction():
+        a = db.new_vertex("P").set("n", 1).save()
+        b = db.new_vertex("P").set("n", 2).save()
+    return a, b
+
+
+def test_async_new_edge_runs_the_callback_with_the_edge(temp_db):
+    a, b = _two_vertices(temp_db)
+    seen = []
+    executor = temp_db.async_executor()
+    executor.new_edge(
+        a,
+        "K",
+        b,
+        callback=lambda edge, src, dst: seen.append((edge.get("w"), src, dst)),
+        w=5,
+    )
+    executor.wait_completion()
+    assert seen == [(5, False, False)]
+    assert temp_db.query("sql", "SELECT count(*) AS c FROM K").first().get("c") == 1
+
+
+def test_async_new_edge_by_keys_creates_the_missing_vertex(temp_db):
+    _two_vertices(temp_db)
+    seen = []
+    executor = temp_db.async_executor()
+    executor.new_edge_by_keys(
+        "P",
+        "n",
+        1,
+        "P",
+        "n",
+        3,
+        True,
+        "K",
+        True,
+        False,
+        callback=lambda edge, src, dst: seen.append((src, dst)),
+    )
+    executor.wait_completion()
+    assert seen == [(False, True)]
+    assert temp_db.query("sql", "SELECT count(*) AS c FROM P").first().get("c") == 3
+
+
+def test_async_scan_type_calls_back_for_every_record_and_can_stop(temp_db):
+    _two_vertices(temp_db)
+    ns = []
+    executor = temp_db.async_executor()
+    executor.scan_type("P", lambda record: ns.append(record.get("n")))
+    executor.wait_completion()
+    assert sorted(ns) == [1, 2]
+    stopped = []
+    executor.scan_type("P", lambda record: stopped.append(record.get("n")) or False)
+    executor.wait_completion()
+    assert len(stopped) == 1

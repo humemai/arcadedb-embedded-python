@@ -4,7 +4,7 @@ import json
 import os
 import time as _time
 from collections import deque
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Dict, Iterator, List, Optional
 
 from ..exceptions import ArcadeDBError
@@ -13,6 +13,7 @@ from . import lib, not_yet
 from .codec import encode_params, json_native, loads
 
 _FIRST_BATCH = 256
+_EPOCH_DAY_ORDINAL = date(1970, 1, 1).toordinal()
 _NEXT_BATCH = 2048
 _KIND = {"v": "v", "e": "e", "d": "d"}
 
@@ -107,6 +108,11 @@ class NativeResult:
     def to_json(self) -> str:
         self._check_open()
         out = json_native(self._props)
+        for key, value in self._props.items():
+            if isinstance(value, date) and not isinstance(value, datetime):
+                out[key] = (
+                    value.toordinal() - _EPOCH_DAY_ORDINAL
+                )  # as the engine writes a DATE property: days since the epoch
         if self._meta:
             rid, type_name, kind = self._meta
             out = dict(out)
@@ -632,6 +638,24 @@ class NativeDatabase:
         flush()
         return total
 
+    def _parallel_load_failed(self, type_name, error) -> ArcadeDBError:
+        """The error for a parallel load that failed while handing rows to the writers: waits for the queue to drain first, so
+        the caller sees a final state, and says that the rows handed over before the failure may have been stored.
+        """
+        try:
+            self._async().wait_completion()
+        except Exception:  # nosec B110 - the original error is the one to report
+            pass
+        text = str(error)
+        prefix = "Failed to bulk-insert: "
+        if text.startswith(prefix):
+            text = text[len(prefix) :]
+        return ArcadeDBError(
+            f"Failed to bulk-insert into '{type_name}': {text}; the rows handed to the "
+            f"parallel writers before the failure may have been stored (the call waited "
+            f"for them before raising)"
+        )
+
     def _insert_many_parallel(self, type_name, rows) -> int:
         """insert_many(parallel=True): chunks go to the async writers; the failure count is read after the final wait."""
         import itertools
@@ -645,8 +669,14 @@ class NativeDatabase:
                 chunk = list(itertools.islice(iterator, 10_000))
                 if not chunk:
                     break
-                tokens.append(extras.insert_parallel(self, type_name, chunk)["fid"])
+                try:
+                    tokens.append(extras.insert_parallel(self, type_name, chunk)["fid"])
+                except ArcadeDBError as e:
+                    # as the JPype path: the rows handed to the writers before the failure are written whatever this call does
+                    raise self._parallel_load_failed(type_name, e) from e
                 n += len(chunk)
+        except ArcadeDBError:
+            raise
         except BaseException:
             try:
                 self._async().wait_completion()

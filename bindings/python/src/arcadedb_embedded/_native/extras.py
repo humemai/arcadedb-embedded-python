@@ -81,6 +81,12 @@ def _error_from(message: dict) -> ArcadeDBError:
     return exc
 
 
+def _rid_of(value) -> str:
+    """The RID text of a record wrapper, a RID or its text."""
+    get_rid = getattr(value, "get_rid", None)
+    return get_rid() if get_rid is not None else str(value)
+
+
 def _call(prefix: str, name: str, *args) -> dict:
     from .database import _call as call
 
@@ -147,12 +153,12 @@ class NativeGraphBatch(_BaseGraphBatch):
                 f"Failed to create batch vertex of type '{type_name}'",
                 "create_vertex",
                 type=type_name,
-                props=properties,
+                props=self._to_java_varargs(properties),
             )
             if started:
                 db.commit()
             return Vertex(db, type_name, reply["rid"], properties)
-        except BaseException:
+        except BaseException as e:
             if started:
                 try:
                     if db.is_transaction_active():
@@ -161,7 +167,35 @@ class NativeGraphBatch(_BaseGraphBatch):
                     Exception
                 ):  # nosec B110 - the original error is the one to report
                     pass
-            raise
+            if isinstance(e, ArcadeDBError) or not isinstance(e, Exception):
+                raise
+            raise ArcadeDBError(
+                f"Failed to create batch vertex of type '{type_name}': {e}"
+            ) from e
+
+    def _to_java_varargs(self, properties: dict) -> dict:
+        """The properties of one vertex as the library takes them (the step the JPype path converts to Java values in)."""
+        if not isinstance(properties, dict):
+            raise TypeError("vertex properties must be a dict")
+        for key in properties:
+            if type(key) is not str:
+                raise TypeError(f"property names must be str, got {key!r}")
+        return properties
+
+    def _create_vertices_json_bulk(self, type_name: str, rows):
+        """The bulk path (JSON rows in, RIDs out): the RIDs, or None for rows JSON would change (the caller falls back)."""
+        from ..type_conversion import json_bulk_scalar_ok
+
+        for row in rows:
+            for key, value in (row or {}).items():
+                if type(key) is not str or not json_bulk_scalar_ok(value):
+                    return None
+        return self._op(
+            f"Failed to create batch vertices for type '{type_name}'",
+            "create_vertices",
+            type=type_name,
+            rows=[r or {} for r in rows],
+        )["rids"]
 
     def create_vertices(self, type_name: str, count_or_properties) -> list:
         self._check_not_closed()
@@ -421,7 +455,9 @@ class NativeAsyncExecutor:
         if callback is not None:
 
             def on_result(message):
-                callback(NativeResultSet(self._db, message["reply"]))
+                # the JPype wrapper calls the callback once per row of the completed statement
+                for row in NativeResultSet(self._db, message["reply"]):
+                    callback(row)
 
             cb = _register(on_result)
         err = self._error_callback(error_callback) if error_callback is not None else 0
@@ -460,27 +496,138 @@ class NativeAsyncExecutor:
     def append_samples(
         self, type_name, timestamps, *column_values, primitive: bool = False
     ):
-        if primitive:
-            not_yet("AsyncExecutor.append_samples(primitive=True)")
-
         def plain(values):
+            kind = getattr(getattr(values, "dtype", None), "kind", None)
+            if (
+                kind == "b"
+            ):  # a numpy bool array is a 0/1 numeric column (a list of bools is not: the engine refuses it)
+                values = values.astype("int64")
             return values.tolist() if hasattr(values, "tolist") else list(values)
 
+        stamps = [int(t) for t in plain(timestamps)]
+        if primitive:
+            # the engine's primitive TimeSeriesBatch is a JVM-boundary optimisation (no boxing per value); here the rows cross
+            # as one JSON text either way, so the columns take the same path, with the primitive path's length check
+            for index, values in enumerate(column_values):
+                if len(values) != len(stamps):
+                    raise ValueError(
+                        f"column {index} has {len(values)} values for {len(stamps)} timestamps"
+                    )
         self._op(
             "append_samples",
             type=type_name,
-            ts=[int(t) for t in plain(timestamps)],
+            ts=stamps,
             cols=[plain(c) for c in column_values],
         )
 
-    def new_edge(self, *args, **kwargs):
-        not_yet("AsyncExecutor.new_edge")
+    def _edge_callback(self, callback):
+        """The handler of an edge-created event: ``callback(edge, created_source, created_destination)``."""
+        from .records import _wrap_dict
 
-    def new_edge_by_keys(self, *args, **kwargs):
-        not_yet("AsyncExecutor.new_edge_by_keys")
+        def handler(message):
+            callback(
+                _wrap_dict(self._db, message["edge"], "e"),
+                bool(message["src"]),
+                bool(message["dst"]),
+            )
 
-    def scan_type(self, *args, **kwargs):
-        not_yet("AsyncExecutor.scan_type")
+        return _register(handler)
+
+    def new_edge(
+        self,
+        source_vertex,
+        edge_type: str,
+        destination_vertex_or_rid,
+        light: bool = False,
+        callback=None,
+        **properties,
+    ):
+        cb = self._edge_callback(callback) if callback is not None else 0
+        self._op(
+            "new_edge",
+            src=_rid_of(source_vertex),
+            type=edge_type,
+            dst=_rid_of(destination_vertex_or_rid),
+            light=bool(light),
+            props=properties,
+            cb=cb,
+        )
+
+    def new_edge_by_keys(
+        self,
+        source_vertex_type: str,
+        source_key_names,
+        source_key_values,
+        destination_vertex_type: str,
+        destination_key_names,
+        destination_key_values,
+        create_vertex_if_not_exist: bool,
+        edge_type: str,
+        bidirectional: bool,
+        light: bool,
+        callback=None,
+        **properties,
+    ):
+        def listed(names, values, what):
+            if isinstance(names, str):
+                names = [names]
+                values = list(values) if isinstance(values, (list, tuple)) else [values]
+            names, values = list(names), list(values)
+            if len(names) != len(values):
+                raise ValueError(
+                    f"{what}_key_names and {what}_key_values must have same size"
+                )
+            return names, values
+
+        src_names, src_values = listed(source_key_names, source_key_values, "source")
+        dst_names, dst_values = listed(
+            destination_key_names, destination_key_values, "destination"
+        )
+        cb = self._edge_callback(callback) if callback is not None else 0
+        self._op(
+            "new_edge_by_keys",
+            src_type=source_vertex_type,
+            src_names=src_names,
+            src_values=src_values,
+            dst_type=destination_vertex_type,
+            dst_names=dst_names,
+            dst_values=dst_values,
+            create=bool(create_vertex_if_not_exist),
+            type=edge_type,
+            bidirectional=bool(bidirectional),
+            light=bool(light),
+            props=properties,
+            cb=cb,
+        )
+
+    def scan_type(
+        self,
+        type_name: str,
+        callback,
+        polymorphic: bool = True,
+        error_callback=None,
+    ):
+        """Scan every record of a type on the writer threads: ``callback(record) -> bool`` (False stops the scan; None goes on)."""
+        from .records import _wrap_dict
+
+        def on_record(message):
+            result = callback(_wrap_dict(self._db, message["rec"], "d"))
+            return {"v": True if result is None else bool(result)}
+
+        cb = _register(on_record)
+        err = 0
+        if error_callback is not None:
+
+            def on_error(message):
+                result = error_callback(
+                    message.get("rid"), _error_from({"err": message.get("err")})
+                )
+                return {"v": True if result is None else bool(result)}
+
+            err = _register(on_error)
+        self._op(
+            "scan_type", type=type_name, polymorphic=bool(polymorphic), cb=cb, err=err
+        )
 
     def transaction(self, *args, **kwargs):
         not_yet("AsyncExecutor.transaction")
