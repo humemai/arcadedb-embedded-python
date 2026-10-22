@@ -463,7 +463,8 @@ Without `JAR_LIB_DIR`, the Linux build copies its JARs from the
 in the wheel. To test a local or freshly synced engine change, build the engine JARs
 first (the `build.sh` header shows a Docker `mvnw` command that needs no host Java)
 and pass their directory as the third argument. `build.sh` stages them into
-`local-jars/lib` and the Docker build uses them instead of the image's.
+`local-jars/lib` and the Docker build uses them instead of the image's. The directory,
+and any jar in it, may be a symlink: `build.sh` follows both and stages real files.
 
 `build.sh` reads the ArcadeDB tag from `pom.xml` and passes it on. If you call the lower-level
 scripts directly, `build-native.sh` needs `PLATFORM PACKAGE_NAME PACKAGE_DESCRIPTION ARCADEDB_TAG [BUILD_VERSION]`
