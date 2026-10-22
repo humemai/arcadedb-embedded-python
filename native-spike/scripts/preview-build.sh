@@ -36,8 +36,8 @@ if [ "$EXT" = dll ]; then
     dependency:build-classpath -Dmdep.outputFile=target/runtime.cp >> "$OUT/build.log" 2>&1
   echo "native-image -cp native-spike/target/arcadedb-native-lib-0.0.1.jar;$(tr -d '\r\n' < native-spike/target/runtime.cp) --shared" >> "$OUT/build.log"
 fi
-# the jvector force-inline filters (native-image.properties in the glue jar) must be picked up: the build output lists the option and its origin
-grep -a -q "'-H:PriorityForceInline' (origin(s): 'META-INF/native-image/org.humemai/arcadedb-native-lib/native-image.properties'" "$OUT/build.log" \
+# the jvector force-inline filters (native-image.properties in the glue jar) must be picked up: the build output lists the option and its origin (Windows prints the path with backslashes)
+grep -a -E -q 'PriorityForceInline. \(origin\(s\): .META-INF.native-image.org\.humemai.arcadedb-native-lib.native-image\.properties' "$OUT/build.log" \
   || { echo "-H:PriorityForceInline from native-image.properties is not in the build output: the jvector force-inline hints were not applied" >&2; exit 1; }
 INLINE_LOG="PriorityForceInline picked up from native-image.properties ($(grep -a -c 'PriorityForceInline' "$OUT/build.log") log lines)"
 cp "native-spike/target/$LIBFILE" "$OUT/"
