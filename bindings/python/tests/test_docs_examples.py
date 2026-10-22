@@ -266,6 +266,11 @@ def test_docs_installation_examples(temp_dir_factory):
         "ArcadeDB Python bindings version:",
         base_dir / "installation_verify",
     )
+
+
+def test_docs_installation_jvm_examples(temp_dir_factory):
+    base_dir = Path(temp_dir_factory("docs_installation_jvm_"))
+
     _run_doc_block(
         "getting-started/installation.md",
         "from arcadedb_embedded.jvm import start_jvm",

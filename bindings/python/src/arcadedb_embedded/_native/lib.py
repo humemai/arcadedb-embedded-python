@@ -26,6 +26,8 @@ CMD_PATH = os.environ.get("ARCADEDB_NATIVE_CMD", "1") != "0"
 CLOSE_BATCH = int(os.environ.get("ARCADEDB_NATIVE_CLOSE_BATCH", "64"))
 FAST_ENCODE = os.environ.get("ARCADEDB_NATIVE_FASTENC", "1") != "0"
 INSERT_ROWS = os.environ.get("ARCADEDB_NATIVE_INSERT_ROWS", "1") != "0"
+# ARCADEDB_NATIVE_EXEC_MANY: the rows of an insert_many chunk that JSON text cannot carry unchanged go in one crossing (arcadedb_n_exec_many), not one call each
+EXEC_MANY = os.environ.get("ARCADEDB_NATIVE_EXEC_MANY", "1") != "0"
 
 _lock = threading.Lock()
 _lib = None
@@ -192,7 +194,7 @@ def _load():
                 )
                 else ctypes.c_long if name == "arcadedb_n_cmd" else ctypes.c_void_p
             )
-        global BINARY_PARAMS, CMD_PATH, CLOSE_BATCH, INSERT_ROWS
+        global BINARY_PARAMS, CMD_PATH, CLOSE_BATCH, INSERT_ROWS, EXEC_MANY
         if not hasattr(
             lib, "arcadedb_n_exec_bin"
         ):  # a library built before the binary path
@@ -203,6 +205,8 @@ def _load():
             CLOSE_BATCH = 0
         if not hasattr(lib, "arcadedb_n_insert_rows"):
             INSERT_ROWS = False
+        if not hasattr(lib, "arcadedb_n_exec_many"):
+            EXEC_MANY = False
         _isolate = isolate
         _creator = threading.get_ident()
         _local.thread = _Thread(thread, owned=False)

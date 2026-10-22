@@ -83,6 +83,31 @@ NATIVE_NA_TESTS = {
 }
 
 
+# Tests that exercise the JVM itself, so the native backend (no JVM, no jars) has nothing to run. Skipped before they start,
+# with the reason; a test whose behaviour native shares (Ctrl-C in a Python loop, the zone of to_json_list) is not listed.
+NATIVE_NA_JVM_TESTS = {
+    "test_ctrl_c_raises_keyboard_interrupt_and_runs_cleanup[java]": "a Java call blocked in JPype's SIGINT handler (#179)",
+    "test_interrupt_true_keeps_the_jvm_handling_sigint": "start_jvm(interrupt=True): the JVM handles SIGINT",
+    "test_docs_installation_jvm_examples": "documents start_jvm() and jvm_kwargs",
+    "test_to_java_int_array_keeps_values_that_fit": "to_java_int_array builds a Java int[] (JPype)",
+    "test_to_java_int_array_refuses_values_beyond_32_bits_in_an_array": "to_java_int_array builds a Java int[] (JPype)",
+    "test_to_java_byte_array_accepts_bytes_like_fast_paths": "to_java_byte_array builds a Java byte[] (JPype)",
+    "test_to_java_int_array": "to_java_int_array builds a Java int[] (JPype)",
+    "test_to_java_int_array_accepts_numpy_directly": "to_java_int_array builds a Java int[] (JPype)",
+    "test_to_java_int_array_round_trips_through_a_sparse_vector": "to_java_int_array builds a Java int[] (JPype)",
+    "test_the_host_reaches_exactly_the_listener_bind_settings": "reads the engine's GlobalConfiguration through the JVM",
+}
+
+
+def pytest_collection_modifyitems(config, items):
+    if os.environ.get("ARCADEDB_BACKEND", "jpype").lower() != "native":
+        return
+    for item in items:
+        reason = NATIVE_NA_JVM_TESTS.get(item.name)
+        if reason:
+            item.add_marker(pytest.mark.skip(reason=f"NA-JVM: {reason}"))
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
     outcome = yield

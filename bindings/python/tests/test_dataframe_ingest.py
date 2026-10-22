@@ -717,7 +717,7 @@ class TestToPolars:
         monkeypatch.setitem(sys.modules, "polars", None)
         with pytest.raises(
             ImportError,
-            match=r"polars is required for to_polars\(\).*arcadedb-embedded\[polars\]",
+            match=r"polars is required for to_polars\(\).*arcadedb-embedded(-native)?\[polars\]",
         ):
             temp_db.query("sql", "SELECT FROM NoPolars").to_polars()
 

@@ -5,6 +5,7 @@ does; a wheel older than the fix fails them.
 """
 
 import json
+import os
 import subprocess  # nosec B404 - test-controlled child process
 import sys
 
@@ -47,9 +48,13 @@ import sys
 from datetime import date
 
 import arcadedb_embedded as arcadedb
-from arcadedb_embedded.jvm import start_jvm
+from arcadedb_embedded._native import enabled
 
-start_jvm(heap_size="1g", jvm_args=["-Duser.timezone=" + sys.argv[2]])
+native = enabled()  # the native backend has no JVM: its zone is the TZ the process was started with
+if not native:
+    from arcadedb_embedded.jvm import start_jvm
+
+    start_jvm(heap_size="1g", jvm_args=["-Duser.timezone=" + sys.argv[2]])
 db = arcadedb.create_database(sys.argv[1])
 db.command("sql", "CREATE DOCUMENT TYPE Event")
 with db.transaction():
@@ -64,9 +69,12 @@ with db.transaction():
     )
 batch = db.query("sql", "SELECT FROM Event").to_json_list()[0]
 single = json.loads(db.query("sql", "SELECT FROM Event").first().to_json())
-from jpype import JClass  # noqa: E402  (after start_jvm)
-mapped = JClass("com.arcadedb.schema.Type").getTypeByValue(JClass("java.time.LocalDate").of(2024, 1, 2))
-print(json.dumps({"batch": batch, "single": single, "local_date_type": str(mapped)}), flush=True)
+if native:
+    mapped = "native"  # no Java class to ask: the check below accepts either form
+else:
+    from jpype import JClass  # noqa: E402  (after start_jvm)
+    mapped = str(JClass("com.arcadedb.schema.Type").getTypeByValue(JClass("java.time.LocalDate").of(2024, 1, 2)))
+print(json.dumps({"batch": batch, "single": single, "local_date_type": mapped}), flush=True)
 db.close()
 """
 
@@ -90,6 +98,9 @@ def test_to_json_list_writes_a_date_as_midnight_utc_in_any_jvm_zone(tmp_path, zo
         capture_output=True,
         text=True,
         timeout=180,
+        env=dict(
+            os.environ, TZ=zone
+        ),  # the native image takes its zone from here; the JVM gets -Duser.timezone
     )
     assert proc.returncode == 0, proc.stderr[-2000:]
     out = json.loads(proc.stdout.strip().splitlines()[-1])
@@ -98,6 +109,8 @@ def test_to_json_list_writes_a_date_as_midnight_utc_in_any_jvm_zone(tmp_path, zo
     assert batch["day"] == MIDNIGHT_UTC_2024_01_02
     if out["local_date_type"] == "DATE":
         assert single["day"] == EPOCH_DAY_2024_01_02
+    elif out["local_date_type"] == "native":
+        assert single["day"] in (EPOCH_DAY_2024_01_02, MIDNIGHT_UTC_2024_01_02)
     elif out["local_date_type"] == "None":
         assert single["day"] == MIDNIGHT_UTC_2024_01_02
     else:

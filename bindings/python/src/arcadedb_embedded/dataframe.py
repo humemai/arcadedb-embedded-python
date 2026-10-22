@@ -9,8 +9,16 @@ sends across the bridge (a document type), or the property rows
 ``GraphBatch.create_vertices`` takes (a vertex type). No Java was added: both
 paths use the existing glue (``DocumentBatcher.insertColumns`` and the
 ``GraphBatch`` vertex batcher).
+
+The native backend (``arcadedb-embedded-native``) shares everything but the
+last step: the checks, the type mapping, the batching and the error wording are
+the same code. A document batch goes over as one JSON text through
+``Database.insert_many`` (one crossing per 10,000 rows), a vertex batch through
+``GraphBatch.create_vertices``, and a value JSON cannot carry (a date-time, a
+decimal, bytes) travels as a tagged value the image decodes.
 """
 
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 import jpype
@@ -144,6 +152,46 @@ def to_arrow_table(data, *, what: str):
     )
 
 
+def _is_native(db) -> bool:
+    """True for the native backend's database (no JVM: schema reads are SQL, values cross as tagged JSON)."""
+    return not hasattr(db, "_java_db")
+
+
+_PROPERTY = re.compile(r"name: (.+?), type: ([A-Z_]+)")
+
+
+def _declared_types_native(
+    db, type_name: str, names: List[str]
+) -> Tuple[bool, Dict[str, str]]:
+    """:func:`_declared_types` for the native backend: the ``schema:types`` rows, walking the parent types."""
+    rows = {r["name"]: r for r in db.query("sql", "SELECT FROM schema:types").to_list()}
+    row = rows.get(type_name)
+    if row is None:
+        raise ArcadeDBError(
+            f"Cannot load into '{type_name}': the type does not exist "
+            f"(create it first, with or without declared properties)"
+        )
+    kind = row.get("type")
+    if kind == "edge":
+        raise ArcadeDBError(
+            f"Cannot load into '{type_name}': it is an edge type. Load the vertices, "
+            f"then buffer the edges with graph_batch().new_edges()"
+        )
+    declared: Dict[str, str] = {}
+    seen, queue = set(), [type_name]
+    while queue:  # the type first, then its parents: the nearest declaration wins
+        current = queue.pop(0)
+        if current in seen or current not in rows:
+            continue
+        seen.add(current)
+        for text in rows[current].get("properties") or []:
+            m = _PROPERTY.search(text)
+            if m and m.group(1) in names:
+                declared.setdefault(m.group(1), m.group(2))
+        queue.extend(rows[current].get("parentTypes") or [])
+    return kind == "vertex", declared
+
+
 def _declared_types(
     db, type_name: str, names: List[str]
 ) -> Tuple[bool, Dict[str, str]]:
@@ -151,6 +199,8 @@ def _declared_types(
 
     Raises ArcadeDBError when the type does not exist or is an edge type.
     """
+    if _is_native(db):
+        return _declared_types_native(db, type_name, names)
     java_schema = db._java_db.getSchema()
     if not java_schema.existsType(type_name):
         raise ArcadeDBError(
@@ -222,7 +272,50 @@ def _temporal_to_java(chunk, pa):
     ]
 
 
-def _column_values(name: str, chunk, pa):
+def _temporal_to_tagged(chunk, pa):
+    """A timestamp or date chunk as tagged values (``T`` date-time, ``D`` date) for the native backend, with the same
+    reading rules as :func:`_temporal_to_java`: ISO text of the integer epoch value, so a nanosecond value keeps its
+    nanoseconds (a Python ``datetime`` would cut them to microseconds).
+    """
+    import numpy as np
+
+    from ._native.codec import TAG
+
+    types = pa.types
+    mask = chunk.is_null().to_numpy(zero_copy_only=False)
+    if types.is_date(chunk.type):
+        raw = chunk.cast(pa.int64() if types.is_date64(chunk.type) else pa.int32())
+        days = raw.fill_null(0).to_numpy(zero_copy_only=False).astype(np.int64)
+        if types.is_date64(chunk.type):
+            days = days // 86_400_000
+        text = days.astype("datetime64[D]").astype(str).tolist()
+        tag = "D"
+    else:
+        unit = chunk.type.unit
+        values = chunk.cast(pa.int64()).fill_null(0).to_numpy(zero_copy_only=False)
+        text = (
+            values.astype(np.int64).astype(f"datetime64[{unit}]").astype(str).tolist()
+        )
+        tag = "T"
+    return [None if m else {TAG: [tag, s]} for s, m in zip(text, mask)]
+
+
+def _scalars_to_tagged(kind: str, chunk):
+    """A decimal or binary chunk as tagged values (``n`` decimal text, ``b`` base64) for the native backend."""
+    from ._native.codec import TAG
+
+    values = chunk.to_pylist()
+    if kind == "decimal":
+        return [None if v is None else {TAG: ["n", str(v)]} for v in values]
+    import base64
+
+    return [
+        None if v is None else {TAG: ["b", base64.b64encode(v).decode("ascii")]}
+        for v in values
+    ]
+
+
+def _column_values(name: str, chunk, pa, native: bool = False):
     """One Arrow array as what ``Database.insert_columns`` takes: a numpy array when the column crosses as one
     buffer (integers, floats and booleans without nulls), else a list of values (``None`` is a null).
     """
@@ -231,6 +324,15 @@ def _column_values(name: str, chunk, pa):
         chunk = chunk.cast(chunk.type.value_type)
     kind = _kind(pa, chunk.type)
     if kind in ("integer", "floating", "bool"):
+        if native and types.is_uint64(chunk.type) and len(chunk) > chunk.null_count:
+            import pyarrow.compute as pc
+
+            if (
+                pc.max(chunk).as_py() > 2**63 - 1
+            ):  # insert_columns refuses it on the JPype path, with this text
+                raise ValueError(
+                    f"column {name!r} holds a value beyond the 64-bit signed range"
+                )
         if chunk.null_count == 0:
             values = chunk.to_numpy(zero_copy_only=False)
             if values.dtype.kind == "f" and values.dtype.itemsize < 8:
@@ -238,7 +340,11 @@ def _column_values(name: str, chunk, pa):
             return values
         return chunk.to_pylist()
     if kind in ("timestamp", "date"):
-        return _temporal_to_java(chunk, pa)
+        return (
+            _temporal_to_tagged(chunk, pa) if native else _temporal_to_java(chunk, pa)
+        )
+    if native and kind in ("decimal", "binary"):
+        return _scalars_to_tagged(kind, chunk)
     if kind == "null":
         return [None] * len(chunk)
     # strings, binary, decimal, list, struct: Python values, which insert_columns converts element by element
@@ -290,23 +396,28 @@ def insert_table(
     if table.num_rows == 0:
         return 0
 
+    native = _is_native(db)
     written = 0
     # a document load inside the caller's own transaction joins it (insert_columns commits
     # nothing then); a vertex load refuses to run inside one
-    in_caller_transaction = (not is_vertex) and bool(db._java_db.isTransactionActive())
+    in_caller_transaction = (not is_vertex) and bool(db.is_transaction_active())
     graph_batch = db.graph_batch() if is_vertex else None
     try:
         for batch in table.to_batches(max_chunksize=batch_size):
             if batch.num_rows == 0:
                 continue
             columns = {
-                name: _column_values(name, batch.column(i), pa)
+                name: _column_values(name, batch.column(i), pa, native)
                 for i, name in enumerate(names)
             }
             try:
                 if is_vertex:
                     _insert_vertices(
                         graph_batch, type_name, names, columns, batch.num_rows
+                    )
+                elif native:
+                    _insert_documents_native(
+                        db, type_name, names, columns, batch_size, parallel
                     )
                 else:
                     db.insert_columns(
@@ -343,4 +454,27 @@ def _insert_vertices(
         lists.append(values.tolist() if hasattr(values, "tolist") else values)
     graph_batch.create_vertices(
         type_name, [dict(zip(names, row)) for row in zip(*lists)]
+    )
+
+
+def _insert_documents_native(
+    db,
+    type_name: str,
+    names: List[str],
+    columns: Dict[str, Any],
+    batch_size: int,
+    parallel: bool,
+):
+    """One batch of documents on the native backend: the columns as one dict per row, handed to ``insert_many``
+    (one crossing per 10,000 rows; the batch is one transaction, or joins the caller's).
+    """
+    lists = [
+        columns[name].tolist() if hasattr(columns[name], "tolist") else columns[name]
+        for name in names
+    ]
+    db.insert_many(
+        type_name,
+        [dict(zip(names, row)) for row in zip(*lists)],
+        commit_every=batch_size,
+        parallel=parallel,
     )

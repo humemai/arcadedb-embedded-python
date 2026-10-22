@@ -83,8 +83,12 @@ def main():
     left = []
     for f in dst.rglob("*.py"):
         t = f.read_text()
-        t = t.replace('"arcadedb-embedded"', '"arcadedb-embedded-native"').replace(
-            "arcadedb_embedded", "arcadedb_native"
+        t = (
+            t.replace('"arcadedb-embedded"', '"arcadedb-embedded-native"')
+            .replace(
+                "'arcadedb-embedded[", "'arcadedb-embedded-native["
+            )  # the extras named in install hints
+            .replace("arcadedb_embedded", "arcadedb_native")
         )
 
         def sub(m):

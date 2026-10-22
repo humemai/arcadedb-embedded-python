@@ -239,7 +239,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/parity"
           uv run --no-project --python 3.12 --with "$w" --with pytest --with numpy --with requests --with jpype1 --with pyarrow \
             --with polars --with pandas --with duckdb --with networkx --with "psycopg[binary]" --with adbc-driver-postgresql \
-            --with redis --with neo4j \
+            --with redis --with neo4j --with ladybug \
             python bindings/python/native-wheel/parity/parity_wheel.py --repo "$GITHUB_WORKSPACE" \
               --alias "$GITHUB_WORKSPACE/bindings/python/native-wheel/parity/alias" --backend native \
               --out "$RUNNER_TEMP/parity/parity-wheel.tsv" --cores "0-$(($(nproc) - 1))" | tee "$RUNNER_TEMP/parity/parity-wheel.run.log"

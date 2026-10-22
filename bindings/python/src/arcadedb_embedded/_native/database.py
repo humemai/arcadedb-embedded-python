@@ -310,11 +310,15 @@ class NativeResultSet:
             import polars as pl
         except ImportError as exc:
             raise ImportError(
-                "polars is required for to_polars(); install it with 'pip install polars pyarrow'"
+                "polars is required for to_polars(). "
+                "Install with: pip install 'arcadedb-embedded[polars]'"
             ) from exc
         table = self.to_arrow(batch_size, columns)
         if table is None:
-            raise ImportError("pyarrow is required for to_polars()")
+            raise ImportError(
+                "to_polars() reads through Arrow, which needs pyarrow and numpy. "
+                "Install with: pip install 'arcadedb-embedded[polars]'"
+            )
         return pl.from_arrow(table)
 
     def iter_chunks(self, size: int = 1000, convert_types: bool = True):
@@ -709,6 +713,11 @@ class NativeDatabase:
                 if not reply.get("ok"):
                     raise _error(f"Failed to bulk-insert into '{type_name}'", reply)
                 return
+        if lib.EXEC_MANY:
+            # values JSON text cannot carry unchanged (a date-time, a decimal, NaN, a big integer): the same statement per
+            # row, but all rows of the chunk in one crossing (arcadedb_n_exec_many), not one call per row
+            self._command_many("sql", sql, [{"row": row} for row in chunk])
+            return
         for row in chunk:
             self.command("sql", sql, {"row": row}).close()
 
@@ -1033,16 +1042,41 @@ class NativeDatabase:
     def insert_dataframe(
         self, type_name, df, *, batch_size: int = 10_000, parallel: bool = False
     ) -> int:
-        """A pandas or Polars DataFrame as rows (NaN and NaT are nulls) through :meth:`insert_many`."""
-        records = df.to_dicts() if hasattr(df, "to_dicts") else df.to_dict("records")
-        rows = ({k: (None if v != v else v) for k, v in r.items()} for r in records)
-        return self.insert_many(type_name, rows, batch_size, parallel)
+        """A pandas or Polars DataFrame into a type, in batches: the strict Arrow loading of ``Database.insert_dataframe``
+        (dtype refusals, declared types, NaN rules, the committed-rows message), batches through :meth:`insert_many` for a
+        document type and ``GraphBatch.create_vertices`` for a vertex type (``arcadedb_embedded/dataframe.py``).
+        """
+        from ..dataframe import insert_table, to_arrow_table
+
+        self._check_not_closed()
+        table = to_arrow_table(df, what="insert_dataframe()")
+        return insert_table(
+            self,
+            type_name,
+            table,
+            batch_size=batch_size,
+            parallel=parallel,
+            what="insert_dataframe()",
+        )
 
     def insert_arrow(
         self, type_name, table, *, batch_size: int = 10_000, parallel: bool = False
     ) -> int:
-        """An Arrow table as rows through :meth:`insert_many`."""
-        return self.insert_many(type_name, table.to_pylist(), batch_size, parallel)
+        """An Arrow table (or ``RecordBatch``, ``RecordBatchReader``, Arrow PyCapsule object) into a type, in batches; as
+        :meth:`insert_dataframe`.
+        """
+        from ..dataframe import insert_table, to_arrow_table
+
+        self._check_not_closed()
+        arrow_table = to_arrow_table(table, what="insert_arrow()")
+        return insert_table(
+            self,
+            type_name,
+            arrow_table,
+            batch_size=batch_size,
+            parallel=parallel,
+            what="insert_arrow()",
+        )
 
     def set_wal_flush(self, mode: str):
         self._check_not_closed()

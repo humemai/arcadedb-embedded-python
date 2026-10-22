@@ -469,6 +469,17 @@ class TestVectorSQL:
 
     def test_vector_neighbors_on_native_int8_storage_sql(self, test_db):
         """Verify that vectorNeighbors works against native INT8-encoded storage."""
+        from arcadedb_embedded._native import enabled
+
+        # a BINARY value and a float[] parameter: Java arrays on the JPype path, bytes and a float32 array on the native one
+        if enabled():
+            import numpy as np
+
+            to_bytes = bytes
+            to_floats = lambda v: np.array(v, dtype=np.float32)  # noqa: E731
+        else:
+            to_bytes = arcadedb.to_java_byte_array
+            to_floats = arcadedb.to_java_float_array
         test_db.command("sql", "CREATE VERTEX TYPE SqlNativeInt8SearchDoc")
         test_db.command("sql", "CREATE PROPERTY SqlNativeInt8SearchDoc.id STRING")
         test_db.command("sql", "CREATE PROPERTY SqlNativeInt8SearchDoc.vec BINARY")
@@ -491,19 +502,19 @@ class TestVectorSQL:
                 "sql",
                 "INSERT INTO SqlNativeInt8SearchDoc SET id = ?, vec = ?",
                 "doc_a",
-                arcadedb.to_java_byte_array([127, 0, 0, 0]),
+                to_bytes([127, 0, 0, 0]),
             )
             test_db.command(
                 "sql",
                 "INSERT INTO SqlNativeInt8SearchDoc SET id = ?, vec = ?",
                 "doc_b",
-                arcadedb.to_java_byte_array([120, 10, 0, 0]),
+                to_bytes([120, 10, 0, 0]),
             )
             test_db.command(
                 "sql",
                 "INSERT INTO SqlNativeInt8SearchDoc SET id = ?, vec = ?",
                 "doc_c",
-                arcadedb.to_java_byte_array([0, 127, 0, 0]),
+                to_bytes([0, 127, 0, 0]),
             )
 
         rows = test_db.query(
@@ -513,7 +524,7 @@ class TestVectorSQL:
                 "(SELECT expand(vectorNeighbors('SqlNativeInt8SearchDoc[vec]', ?, 2))) "
                 "ORDER BY distance"
             ),
-            arcadedb.to_java_float_array([1.0, 0.0, 0.0, 0.0]),
+            to_floats([1.0, 0.0, 0.0, 0.0]),
         ).to_list()
 
         assert [row.get("id") for row in rows] == ["doc_a", "doc_b"]

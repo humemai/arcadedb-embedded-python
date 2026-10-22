@@ -54,21 +54,6 @@ Each of these raises `NotOnNativeYet` (a `NotImplementedError`) instead of misbe
 The parity suite (the bindings' own tests run against the installed wheel) passes with 0 failures; the remaining tests are the
 "not yet" items above or JVM-only by nature. Numbers are in the project notes, not here.
 
-## Performance, untimed
-
-One laptop, one or two runs each, other jobs running: **directions, not benchmarks**. No `ab.py` (paired, noise-checked) result
-exists yet; do not quote these as such.
-
-| workload (same machine, same session) | native | JPype (JVM) |
-|---|---|---|
-| 1M documents, `insert_many` | about 9 s, 200 MB peak RSS | about 5 s, 700 MB |
-| 1M documents, one statement per row | about 20 s, 180 MB | about 12 s, 520-570 MB |
-| 200k edges | about 19 s, 380 MB | about 13 s, 1,290 MB |
-| 100k vectors: load / build / 1,000 searches | 3.5 s / 170-214 s / 1.3-1.5 s | 3.6-6.8 s / 139-148 s / 1.4-2.2 s |
-
-Reading: memory is about 3x lower, bulk writes and vector build are 1.2-1.8x slower, searches are about equal. There is no JVM
-warm-up. A measured comparison on the benchmark machine will replace this table.
-
 ## Licence
 
 Apache-2.0 for ArcadeDB and these bindings. The library also contains the GraalVM Community Edition runtime and JDK class
