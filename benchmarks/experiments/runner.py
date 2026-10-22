@@ -60,6 +60,10 @@ CPUSET = os.environ.get("BENCH_CPUSET", "0-11")
 # milvus-dense.yaml overrides (BUGS F8; the override is read from the yaml).
 DISK_SETTLE_TOL = 0.01
 MILVUS_IMAGE_SEAL_PROPORTION = 0.12
+# The dense arms seal at this proportion of the 1024 MB segment, set by the env var
+# DATACOORD_SEGMENT_SEALPROPORTION on the Milvus container (BUGS F8). It used to be a mounted
+# copy of the whole milvus.yaml; a stale copy would pin every OTHER 3.0.1 default under 3.0.3.
+MILVUS_SEAL_PROPORTION = 0.5
 MEM_BY_SCALE = {"micro": "8g", "tiny": "8g", "small": "16g", "medium": "32g",
                 "large": "48g",
                 # Lifecycle tiers (l5). Small caps on purpose: this lane
@@ -442,6 +446,64 @@ LC_HOST_DIR = os.path.abspath(os.environ.get(
 PG_FIT_CMD = ["-c", "max_worker_processes={pg_procs}", "-c", "max_parallel_workers={pg_par}",
               "-c", "max_parallel_workers_per_gather={pg_workers}",
               "-c", "max_parallel_maintenance_workers={pg_workers}", "-c", "work_mem={pg_work_mem}"]
+
+# MILVUS 3.0.3, THE VENDOR'S OWN COMPOSE STANDALONE (2026-10-22, Zilliz's review, PR for issue "Milvus as Zilliz recommends").
+# Replaces the single container with embedded etcd (3.0.1, re-pinned 2026-09-19 from v2.6.13, DECISIONS #87/#103d).
+# The deployment is milvus-standalone-docker-compose.yaml of release v3.0.3: etcd, MinIO and Milvus as three containers. The
+# runner starts them itself (the `sidecars` key of run_cell), in the cell's cpuset and network, each with its own memory cap,
+# and removes them after the cell; it does not call `docker compose`, so the cell's cgroup envelope, samplers and cleanup stay
+# the ones every other arm gets. Every image is pinned by its amd64 manifest digest (`docker manifest inspect -v <tag>`):
+#   milvusdb/milvus:v3.0.3                            sha256:812cb91a...  (3.0.3 is the latest 3.0 release, 2026-10-14)
+#   quay.io/coreos/etcd:v3.5.25                       sha256:dc2bdc58...
+#   milvusdb/minio:RELEASE.2024-12-18T13-15-44Z       sha256:34c8e2f5...  (the 3.0.3 compose names this image; the 3.0.1 compose's
+#                                                       minio/minio tag was no longer pullable, which is why 3.0.1 rows from
+#                                                       the 2026-10-19 A/B used bitnamilegacy/minio)
+# Deliberate differences from the compose file: no bind-mounted volumes (data lives in each container's writable layer, which
+# the disk reading counts), no host port mappings (the cell's network is private), and `--security-opt seccomp=unconfined`
+# is kept. The compose file's milvus-volume-init service only fixes ownership of a bind mount and has nothing to do here.
+# STORAGE MODE (Zilliz 2026-10-22): Storage V2 is Milvus's default and the headline arm. Storage V3 is a sensitivity
+# configuration, one switch: BENCH_MILVUS_STORAGE=v3 sets `common.storage.useLoonFFI=true` (docs: milvus.io/docs/storage-v3.md).
+# Every row records `milvus_storage`; a V3 run goes to its own results file and is never merged into a V2 table.
+MILVUS_IMAGE = "milvusdb/milvus@sha256:812cb91ad04e847e5ebb4d19593c69f2e207593073063ede0fd604bbba5fddf1"  # v3.0.3
+MILVUS_ETCD_IMAGE = "quay.io/coreos/etcd@sha256:dc2bdc588d2adc5272204a1fff7f1d89f31e8caacea78fdf509fd409d7162a9d"  # v3.5.25
+MILVUS_MINIO_IMAGE = "milvusdb/minio@sha256:34c8e2f52a5984492555427fee07254c80036bdb7079bb91679232abd7a4fa20"  # RELEASE.2024-12-18T13-15-44Z
+MILVUS_STORAGE = os.environ.get("BENCH_MILVUS_STORAGE", "v2").strip().lower()
+if MILVUS_STORAGE not in ("v2", "v3"):
+    raise SystemExit(f"BENCH_MILVUS_STORAGE must be v2 or v3, got {MILVUS_STORAGE!r}")
+
+
+def _milvus_arm(dense):
+    """One Milvus arm on the 3.0.3 compose standalone. `dense` adds the segment seal override of the dense lane (BUGS F8)."""
+    env = ["-e", "MINIO_REGION=us-east-1", "-e", "ETCD_ENDPOINTS={etcd}:2379", "-e", "MINIO_ADDRESS={minio}:9000"]
+    if dense:
+        env += ["-e", f"DATACOORD_SEGMENT_SEALPROPORTION={MILVUS_SEAL_PROPORTION}"]
+    if MILVUS_STORAGE == "v3":
+        env += ["-e", "COMMON_STORAGE_USELOONFFI=true"]
+    return {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": MILVUS_IMAGE,
+        "sidecars": [
+            {"name": "etcd", "mem": "512m", "image": MILVUS_ETCD_IMAGE,
+             "env": ["-e", "ETCD_AUTO_COMPACTION_MODE=revision", "-e", "ETCD_AUTO_COMPACTION_RETENTION=1000",
+                     "-e", "ETCD_QUOTA_BACKEND_BYTES=4294967296", "-e", "ETCD_SNAPSHOT_COUNT=50000"],
+             "cmd": ["etcd", "-advertise-client-urls=http://{etcd}:2379",
+                     "-listen-client-urls", "http://0.0.0.0:2379", "--data-dir", "/etcd"],
+             "ready": r"ready to serve client requests"},
+            {"name": "minio", "mem": "1g", "image": MILVUS_MINIO_IMAGE,
+             "env": ["-e", "MINIO_ACCESS_KEY=minioadmin", "-e", "MINIO_SECRET_KEY=minioadmin"],
+             "cmd": ["minio", "server", "/minio_data", "--console-address", ":9001"],
+             "ready": r"API: http"},
+        ],
+        "server_env": env,
+        "server_volumes": ["--security-opt", "seccomp=unconfined"],
+        "server_cmd": ["milvus", "run", "standalone"],
+        "server_port": 19530,
+        "ready_regex": r"successfully started",
+        "stamp": {"milvus_storage": MILVUS_STORAGE, "milvus_deployment": "compose_standalone_3.0.3",
+                  "milvus_seal_proportion": MILVUS_SEAL_PROPORTION if dense else None},
+    }
+
 
 BACKENDS = {
     "arcadedb_embedded": {
@@ -1250,37 +1312,7 @@ BACKENDS = {
         "server_port": 6333,
         "ready_regex": r"Qdrant (HTTP|gRPC) listening|Actix runtime found",
     },
-    # MILVUS 3.0.1 (re-pinned 2026-09-19 from v2.6.13, DECISIONS #87/#103d).
-    #
-    # 3.0.1 AND NOT 3.0.2. v3.0.2 has a git tag and pushed images (2026-09-18)
-    # but no GitHub release and no entry in milvus-docs release_notes: it is a
-    # tag, not an announced release, and #87 pins to the latest stable RELEASE.
-    # 3.0.1 is the newest version the project has published notes for, and its
-    # own compatibility table names pymilvus 3.0.1 as the matching client --
-    # which is the pin build_images.sh already carried, against a 2.6 server.
-    # The client was a major ahead of the server until this commit.
-    #
-    # THE SINGLE-CONTAINER STANDALONE SURVIVES THE MAJOR. 3.0 replaces the
-    # message queue with Woodpecker, which in the Docker standalone deployment
-    # defaults to a local-filesystem WAL, so the deployment stays what the
-    # runner can start: one container, embedded etcd, local storage, no MinIO
-    # and no external MQ. ETCD_USE_EMBED / COMMON_STORAGETYPE=local below are
-    # unchanged, and the dataCoord.segment.* keys the dense arm overrides are
-    # not renamed in 3.0.
-    "milvus_sparse": {
-        "topology": "client_server",
-        "image": "dbbench:client",
-        "server_image": "milvusdb/milvus@sha256:2b2fc2cf499ad897c93d4b90ee251646f718522845261a342d74d7c0c66bb274",
-        "server_env": ["-e", "DEPLOY_MODE=STANDALONE",
-                       "-e", "ETCD_USE_EMBED=true",
-                       "-e", "ETCD_DATA_DIR=/var/lib/milvus/etcd",
-                       "-e", "ETCD_CONFIG_PATH=/milvus/configs/embedEtcd.yaml",
-                       "-e", "COMMON_STORAGETYPE=local"],
-        "server_volumes": ["-v", f"{HERE}/docker-conf/embedEtcd.yaml:/milvus/configs/embedEtcd.yaml"],
-        "server_cmd": ["milvus", "run", "standalone"],
-        "server_port": 19530,
-        "ready_regex": r"Proxy successfully started|successfully started",
-    },
+    "milvus_sparse": _milvus_arm(dense=False),
     "elasticsearch_sparse": {
         "topology": "client_server",
         "image": "dbbench:client",
@@ -1522,52 +1554,9 @@ BACKENDS = {
     # LadybugDB: embedded in the client image, as the graph arm is; the
     # adapter fits its threads and buffer pool to the cell (F160).
     "ladybug_dense": {"topology": "embedded", "image": "dbbench:client"},
-    "milvus_dense": {
-        "topology": "client_server",
-        "image": "dbbench:client",
-        "server_image": "milvusdb/milvus@sha256:2b2fc2cf499ad897c93d4b90ee251646f718522845261a342d74d7c0c66bb274",
-        "server_env": ["-e", "DEPLOY_MODE=STANDALONE",
-                       "-e", "ETCD_USE_EMBED=true",
-                       "-e", "ETCD_DATA_DIR=/var/lib/milvus/etcd",
-                       "-e", "ETCD_CONFIG_PATH=/milvus/configs/embedEtcd.yaml",
-                       "-e", "COMMON_STORAGETYPE=local"],
-        "server_volumes": ["-v", f"{HERE}/docker-conf/embedEtcd.yaml:/milvus/configs/embedEtcd.yaml",
-                           # BUGS F8: the image seals growing segments at 12% of 1024 MB,
-                           # so a 10M ingest lands as 26-28 ~150 MB segments that Milvus's
-                           # own compaction merges to 6-8 at an unpredictable moment, and a
-                           # manual compact() after the fact merges nothing. Sealing at 50%
-                           # produces that end layout directly. One line changed from the
-                           # image default; disclosed in PROTOCOL section 7.
-                           "-v", f"{HERE}/docker-conf/milvus-dense.yaml:/milvus/configs/milvus.yaml"],
-        "server_cmd": ["milvus", "run", "standalone"],
-        "server_port": 19530,
-        "ready_regex": r"Proxy successfully started|successfully started",
-    },
-    # The int8 arm of milvus_dense: identical image digest, port and
-    # readiness probe, because only the INDEX precision differs. Cloned
-    # rather than referenced so a future digest bump cannot move one arm
-    # of an ablation without the other.
-    "milvus_dense_int8": {
-        "topology": "client_server",
-        "image": "dbbench:client",
-        "server_image": "milvusdb/milvus@sha256:2b2fc2cf499ad897c93d4b90ee251646f718522845261a342d74d7c0c66bb274",
-        "server_env": ["-e", "DEPLOY_MODE=STANDALONE",
-                       "-e", "ETCD_USE_EMBED=true",
-                       "-e", "ETCD_DATA_DIR=/var/lib/milvus/etcd",
-                       "-e", "ETCD_CONFIG_PATH=/milvus/configs/embedEtcd.yaml",
-                       "-e", "COMMON_STORAGETYPE=local"],
-        "server_volumes": ["-v", f"{HERE}/docker-conf/embedEtcd.yaml:/milvus/configs/embedEtcd.yaml",
-                           # BUGS F8: the image seals growing segments at 12% of 1024 MB,
-                           # so a 10M ingest lands as 26-28 ~150 MB segments that Milvus's
-                           # own compaction merges to 6-8 at an unpredictable moment, and a
-                           # manual compact() after the fact merges nothing. Sealing at 50%
-                           # produces that end layout directly. One line changed from the
-                           # image default; disclosed in PROTOCOL section 7.
-                           "-v", f"{HERE}/docker-conf/milvus-dense.yaml:/milvus/configs/milvus.yaml"],
-        "server_cmd": ["milvus", "run", "standalone"],
-        "server_port": 19530,
-        "ready_regex": r"Proxy successfully started|successfully started",
-    },
+    "milvus_dense": _milvus_arm(dense=True),
+    # The int8 arm: the same deployment, built by the same function; only the index precision differs.
+    "milvus_dense_int8": _milvus_arm(dense=True),
 }
 # The fp32 ablation on the served deployment shares the served arm's
 # topology, images, heap and GC settings to the byte; only the adapter's DDL
@@ -2367,6 +2356,47 @@ class CgroupSampler(threading.Thread):
         self.join(timeout=5)
 
 
+def split_server_budget(server_budget, sidecars):
+    """The server side of a cell has ONE memory budget, whatever it runs as: the cell's cap for every other engine, so a
+    deployment of several containers (Milvus: server, etcd, MinIO) splits it. Returns (server container bytes, {sidecar
+    name: bytes}) with server + sum(sidecars) == server_budget exactly. The sidecars keep their own declared caps."""
+    caps = {sc["name"]: mem_bytes(sc["mem"]) for sc in sidecars}
+    server = server_budget - sum(caps.values())
+    if server <= 0:
+        raise SystemExit(f"sidecar memory caps {caps} leave nothing of the {server_budget}-byte server budget")
+    return server, caps
+
+
+def _fold_sidecars(row, sc_samplers):
+    """Server-side memory, CPU and I/O figures cover the WHOLE deployment: server container plus sidecars. The server
+    container's own figures stay under server_container_*, each sidecar's under sidecar_<name>_*."""
+    mib = lambda b: round((b or 0) / 2**20, 1)   # as run_cell's own
+    def add(a, b):
+        return None if a is None or b is None else round(a + b, 1)
+    keys = {"peak_mib": lambda x: x.peak, "peak_anon_mib": lambda x: x.peak_anon, "end_anon_mib": lambda x: x.end_anon,
+            "peak_shmem_mib": lambda x: x.peak_shmem, "peak_file_mib": lambda x: x.peak_file,
+            "io_read_mib": lambda x: x.io.get("rbytes"), "io_write_mib": lambda x: x.io.get("wbytes"),
+            "end_file_mib": lambda x: x.end_file}
+    for name, smp in sc_samplers:
+        smp.finish()
+        for k, get in keys.items():
+            v = mib(get(smp))
+            row[f"sidecar_{name}_{k}"] = v
+            row[f"server_container_{k}"] = row.get(f"server_container_{k}", row.get(f"server_{k}"))
+            row[f"server_{k}"] = add(row.get(f"server_{k}"), v)
+        _cu = smp.cpu.get("usage_usec") or 0
+        row["server_container_cpu_usec"] = row.get("server_container_cpu_usec", row.get("server_cpu_usec"))
+        row["server_cpu_usec"] = (row.get("server_cpu_usec") or 0) + _cu
+        # the cell-wide sums: sidecars are one more server-side container
+        for k, v in (("peak_mib_sum", smp.peak), ("peak_anon_mib_sum", smp.peak_anon),
+                     ("peak_shmem_mib_sum", smp.peak_shmem), ("end_anon_mib_sum", smp.end_anon or 0),
+                     ("peak_owned_mib_sum", smp.peak_anon + smp.peak_shmem),
+                     ("io_write_mib_sum", smp.io.get("wbytes") or 0), ("io_read_mib_sum", smp.io.get("rbytes") or 0)):
+            if row.get(k) is not None:
+                row[k] = add(row[k], mib(v))
+        row["cpu_usec_sum"] = (row.get("cpu_usec_sum") or 0) + _cu
+
+
 def mem_bytes(spec):
     m = re.fullmatch(r"(\d+)([gm])", spec)
     n, u = int(m.group(1)), m.group(2)
@@ -3065,6 +3095,7 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
     # branch, and it is only taken once the client starts, so from then
     # until this line every server_not_ready became an UnboundLocalError.
     server_cid, cli_cid, samplers, _therm0 = None, None, [], {}
+    sidecar_cids, _sc, sidecar_by_name, sc_samplers = [], {}, {}, []
     _mp = None   # the memory-per-phase probe, set once the client is about to start
     try:
         if be["topology"] == "client_server":
@@ -3079,7 +3110,12 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                 client_mem = mem_bytes(CLIENT_MEM)
                 row["mem_split"] = "full+client"
                 row["client_mem_cap"] = CLIENT_MEM
-            row["server_mem_cap_g"] = round(server_mem / 2**30, 1)
+            row["server_mem_cap_g"] = round(server_mem / 2**30, 1)   # the server SIDE's whole budget, sidecars included
+            if be.get("sidecars"):
+                _budget = server_mem
+                server_mem, _sc_caps = split_server_budget(_budget, be["sidecars"])
+                row["server_container_mem_cap_g"] = round(server_mem / 2**30, 2)
+                row["sidecar_mem_caps"] = {k: round(v / 2**30, 2) for k, v in _sc_caps.items()}
             # Buffer-pool sizing derived from this container's own budget, on
             # PostgreSQL's own guidance (a quarter resident, three quarters
             # assumed cached). Only the tuned arm uses these; every other
@@ -3130,6 +3166,23 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             # cgroup limit, so the envelope is unchanged; only the mount's
             # ceiling moves. Applied to every server, recorded on the row.
             row["server_shm_size"] = str(server_mem)
+            # SIDECARS (the Milvus compose standalone: etcd and MinIO beside the server). They share the cell's
+            # cpuset and network, carry their own memory caps, are recorded on the row, and are removed in `finally`.
+            for _s in be.get("sidecars", []):
+                _sc[_s["name"]] = f"{_s['name']}-{run_id.replace('_', '-')}"  # MinIO endpoints refuse underscores in a hostname
+            for _s in be.get("sidecars", []):
+                _scid = sh(["docker", "run", "-d", "--network", net_name, *RUNNER_LABELS,
+                            "--name", _sc[_s["name"]], "--cpuset-cpus", cpuset,
+                            "--memory", str(mem_bytes(_s["mem"])), "--memory-swap", str(mem_bytes(_s["mem"]))]
+                           + _s["env"] + [_s["image"]] + [c.format(**_sc) for c in _s["cmd"]])
+                sidecar_cids.append(_scid)
+                sidecar_by_name[_s["name"]] = _scid
+                if len(_scid) < 12 or not wait_ready(_scid, _s["ready"]):
+                    row["error"] = f"sidecar_{_s['name']}_not_ready"
+                    return row
+            if be.get("sidecars"):
+                row["sidecars"] = {_s["name"]: {"image": _s["image"], "mem": _s["mem"]} for _s in be["sidecars"]}
+            row.update(be.get("stamp", {}))
             server_cid = sh(["docker", "run", "-d", "--network", net_name,
                              *RUNNER_LABELS,
                              "--name", f"srv-{run_id}",
@@ -3137,7 +3190,7 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                              "--memory", str(server_mem), "--memory-swap", str(server_mem),
                              "--shm-size", str(server_mem)]
                             + [s.format(heap=heap, pagecache=_pagecache_for(server_mem, heap, job["backend"], MEM_BY_SCALE[scale]),
-                                        **_fit)
+                                        **_fit, **_sc)
                                for s in be.get("server_env", [])]
                             + be.get("server_volumes", [])
                             + [be["server_image"]]
@@ -3201,12 +3254,23 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             # No settle loop here, the engine is idle and just booted.
             row["server_disk_baseline_mb"] = container_disk(
                 server_cid, tries=1)["disk_mb"]
+            for _n, _c in sidecar_by_name.items():   # the deployment's footprint includes etcd and MinIO
+                _bd = container_disk(_c, tries=1)["disk_mb"]
+                row[f"sidecar_{_n}_disk_baseline_mb"] = _bd
+                row["server_disk_baseline_mb"] = (None if row["server_disk_baseline_mb"] is None or _bd is None
+                                                  else round(row["server_disk_baseline_mb"] + _bd, 1))
+            for _n, _c in sidecar_by_name.items():
+                _ss = CgroupSampler(_c)
+                _ss.start()
+                sc_samplers.append((_n, _ss))
             s_srv = CgroupSampler(server_cid)
             s_srv.start()
             samplers.append(("server", s_srv))
             client_caps = ["--memory", str(client_mem), "--memory-swap", str(client_mem)]
             bench_env = ["-e", f"BENCH_SERVER_HOST=srv-{run_id}",
                          "-e", f"BENCH_SERVER_PORT={be['server_port']}"]
+            # where the client reaches a sidecar (Milvus bulk import uploads its files to MinIO)
+            bench_env += [x for _n, _h in _sc.items() for x in ("-e", f"BENCH_SIDECAR_{_n.upper()}={_h}")]
         else:
             client_caps = ["--memory", str(total_mem), "--memory-swap", str(total_mem)]
             bench_env = []
@@ -3632,6 +3696,14 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             row["server_disk_mb"] = d["disk_mb"]
             row["server_disk_rw_mb"] = d["disk_rw_mb"]
             row["server_disk_vol_mb"] = d["disk_vol_mb"]
+            if sidecar_by_name:
+                row["server_container_disk_mb"] = d["disk_mb"]
+                for _n, _c in sidecar_by_name.items():
+                    _sd = container_disk(_c)
+                    row[f"sidecar_{_n}_disk_mb"] = _sd["disk_mb"]
+                    for _k, _sk in (("server_disk_mb", "disk_mb"), ("server_disk_rw_mb", "disk_rw_mb"),
+                                    ("server_disk_vol_mb", "disk_vol_mb")):
+                        row[_k] = (None if row[_k] is None or _sd[_sk] is None else round(row[_k] + _sd[_sk], 1))
             row["server_disk_settled"] = d["disk_settled"]
             if d["disk_note"]:
                 row["server_disk_note"] = d["disk_note"]
@@ -3740,6 +3812,8 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             row["io_read_mib_sum"] = mib(samplers[0][1].io.get("rbytes"))
             row["end_anon_mib_sum"] = row.get("client_end_anon_mib")
             row["cpu_usec_sum"] = row.get("client_cpu_usec")
+        if sc_samplers:
+            _fold_sidecars(row, sc_samplers)
         # THE HOST THROTTLES FOR EVERY CELL, NOT ONLY TWO-CONTAINER ONES.
         # This sat inside `if len(samplers) == 2`, a branch about summing a
         # client's and a server's memory, which has nothing to do with the
@@ -3763,6 +3837,8 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                                         - _therm0["host_throttle_total_ms"])
         if server_cid:
             docker_rm(server_cid)
+        for _c in sidecar_cids:
+            docker_rm(_c)
     return row
 
 

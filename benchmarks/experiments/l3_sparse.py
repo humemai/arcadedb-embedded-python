@@ -574,14 +574,17 @@ class Milvus(Base):
                                   index_params=index_params)
 
     def build(self, n_docs):
-        batch = []
-        for i, idx, vals in gen_docs(n_docs):
-            batch.append({"id": i, "emb": dict(zip(idx, vals))})
-            if len(batch) >= INGEST_BATCH:
-                self.cl.insert(self.COLL, batch)
-                batch = []
-        if batch:
-            self.cl.insert(self.COLL, batch)
+        """Bulk import (Zilliz 2026-10-22): Parquet files into Milvus's MinIO through RemoteBulkWriter, one import job.
+        milvus_common documents what the timer covers."""
+        import milvus_common
+        from pymilvus import CollectionSchema, DataType, FieldSchema
+        orm = CollectionSchema([FieldSchema("id", DataType.INT64, is_primary=True),
+                                FieldSchema("emb", DataType.SPARSE_FLOAT_VECTOR)])
+        self._n = n_docs
+        self._bulk_info = milvus_common.bulk_import(
+            self.cl, os.environ["BENCH_SERVER_HOST"], self.COLL, orm,
+            ({"id": i, "emb": dict(zip(idx, vals))} for i, idx, vals in gen_docs(n_docs)))
+        self._bulk_info.pop("ingest_s")   # the lane's build timer already covers it
 
     def post_build(self):
         """Wait for the real index, not merely for the collection to load.
@@ -601,23 +604,13 @@ class Milvus(Base):
         This MOVES PUBLISHED NUMBERS: all 15 sparse Milvus rows re-run and the
         change is disclosed.
         """
-        self.cl.flush(self.COLL)
-        deadline = time.time() + 7200
-        d = None
-        while time.time() < deadline:
-            d = self.cl.describe_index(self.COLL, "emb")
-            if (d.get("state") == "Finished"
-                    and int(d.get("pending_index_rows", 0)) == 0
-                    and int(d.get("indexed_rows", -1)) == int(d.get("total_rows", -2))):
-                break
-            time.sleep(1.0)
-        else:
-            raise RuntimeError(f"milvus sparse index did not finish within 7200s: {d}")
-        self.cl.load_collection(self.COLL)
+        import milvus_common
+        waits = milvus_common.wait_sealed_and_indexed(self.cl, self.COLL, "emb", self._n)
+        self.row_extra = {**milvus_common.SEARCH_SHAPE, **self._bulk_info, **waits}
 
     def search(self, idx, vals, k):
         res = self.cl.search(self.COLL, data=[dict(zip(idx, vals))],
-                             anns_field="emb", limit=k,
+                             anns_field="emb", limit=k, filter="", output_fields=[],
                              search_params={"metric_type": "IP"})
         return [hit["id"] for hit in res[0]]
 

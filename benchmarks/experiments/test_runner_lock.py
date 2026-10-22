@@ -161,6 +161,6 @@ def test_sweep_removes_only_the_orphans(monkeypatch, tmp_path, capsys):
 def test_every_container_the_runner_starts_names_its_runner():
     assert RN.RUNNER_LABELS == ("--label", "dbbench=1", "--label", f"dbbench.runner={os.getpid()}")
     src = (HERE / "runner.py").read_text()
-    assert src.count("*RUNNER_LABELS") == 2                       # the server and the client container
+    assert src.count("*RUNNER_LABELS") == 3                       # the Milvus sidecars (etcd, MinIO), the server and the client container
     assert '"--label", "dbbench=1"' not in src.replace('RUNNER_LABELS = ("--label", "dbbench=1"', "")
     assert '{{.Label "dbbench.runner"}}' in src                  # the sweep reads it

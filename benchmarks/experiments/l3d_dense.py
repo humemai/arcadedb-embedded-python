@@ -1942,24 +1942,34 @@ class Milvus(Base):
             self.version = ("pymilvus:" + lib_version(pymilvus, "pymilvus")
                             + f" (server unreachable: {e.__class__.__name__})")
 
+    INDEX_TYPE = "HNSW"
+    INDEX_EXTRA = {}
+
     def build(self, vecs):
+        """Bulk import (Zilliz 2026-10-22, https://milvus.io/docs/import-data.md): the collection is created with its
+        index, the rows go to Parquet in Milvus's own MinIO through RemoteBulkWriter, and ONE import job loads them.
+        milvus_common documents the timing: file preparation, upload and the job are all inside ingest_s."""
         from pymilvus import DataType
+        import milvus_common
         sch = self.cl.create_schema()
         sch.add_field("id", DataType.INT64, is_primary=True)
         sch.add_field("vec", DataType.FLOAT_VECTOR, dim=DIM)
         idx = self.cl.prepare_index_params()
-        idx.add_index("vec", index_type="HNSW", metric_type="L2",
-                      params={"M": COMPARATOR_M, "efConstruction": EF_CONSTRUCTION})
+        idx.add_index("vec", index_type=self.INDEX_TYPE, metric_type="L2",
+                      params={"M": COMPARATOR_M, "efConstruction": EF_CONSTRUCTION, **self.INDEX_EXTRA})
         self.cl.create_collection("articles", schema=sch, index_params=idx)
-        _t0 = time.perf_counter()
-        for i in range(0, len(vecs), BATCH):
-            self.cl.insert("articles", [
-                {"id": i + j, "vec": vecs[i + j].tolist()}
-                for j in range(min(BATCH, len(vecs) - i))])
-        # The boundary Milvus has: inserts accepted here; post_build() flushes,
-        # waits for the HNSW index on every sealed segment, compacts, and
-        # loads, and that whole wait is index_s (#74 item 2).
-        self.ingest_s = round(time.perf_counter() - _t0, 2)
+        self._n_rows = len(vecs)
+        # The orm schema RemoteBulkWriter wants, rebuilt from the same fields
+        from pymilvus import CollectionSchema, FieldSchema
+        orm = CollectionSchema([FieldSchema("id", DataType.INT64, is_primary=True),
+                                FieldSchema("vec", DataType.FLOAT_VECTOR, dim=DIM)])
+        info = milvus_common.bulk_import(
+            self.cl, os.environ["BENCH_SERVER_HOST"], "articles", orm,
+            ({"id": i, "vec": vecs[i]} for i in range(len(vecs))))
+        # The boundary Milvus has: the import job is complete here; post_build() waits until every segment is sealed,
+        # the index is built on all of them, compacts, and loads, and that whole wait is index_s (#74 item 2).
+        self.ingest_s = info.pop("ingest_s")
+        self._bulk_info = info
 
     def post_build(self):
         """Wait for the HNSW index to EXIST before stopping the clock.
@@ -1993,62 +2003,14 @@ class Milvus(Base):
         every scale has to be re-run and the change disclosed. It is not a patch
         to apply quietly to existing rows.
         """
+        # The comments above and below are the dense lane's history; the steps themselves now live in milvus_common
+        # (seal -> index -> compaction passes until the segment set stops moving, re-waiting the index after each -> load),
+        # and each wait is timed on its own and recorded by engine_stats().
+        import milvus_common
         _t1 = time.perf_counter()
-        self.cl.flush("articles")
-        # COMPACT, THEN WAIT FOR THE INDEX. Not the other way round, and not
-        # index-only. At deep10m every row reported state=Finished with all
-        # 9,990,000 rows indexed, and the rows still split into two modes:
-        # build 470-570 s / p50 3.7 ms / recall 0.994, or build ~900 s /
-        # p50 1.6 ms / recall 0.986, three-and-two on both arms (BUGS F8).
-        # Measured on a laptop, 200k: compaction completes in seconds and then
-        # describe_index reads state=Finished with pending_index_rows=200000,
-        # i.e. "Finished" is a stale flag and the merged segment is served by
-        # the interim index until it is re-indexed. So a run where Milvus's
-        # background compaction fired AFTER our index wait passed spent its
-        # queries on the interim index (higher recall, 2.3x slower) and the
-        # row said nothing. Forcing compaction here, then re-waiting the
-        # index, gives every run the same segment layout: the steady state an
-        # operator reaches once Milvus's own compaction has run. Loop until a
-        # compaction stops shrinking the segment set, since one call may not
-        # merge everything at 10M.
-        # ORDER MATTERS: milvus.yaml ships indexBasedCompaction=true, so a
-        # compaction plan only takes segments that are ALREADY indexed. The
-        # first version of this settle compacted right after flush, before the
-        # index existed, and "Completed" merged nothing: qCM's rows stayed 3/2
-        # bimodal (26-28 segments against 6-8). So: index first, then compact
-        # until the segment set stops moving, re-waiting the index after each
-        # pass because a merged segment is unindexed until it is not, then load.
-        def _wait_index(what):
-            deadline = time.time() + 7200
-            d = None
-            while time.time() < deadline:
-                d = self.cl.describe_index("articles", "vec")
-                if (d.get("state") == "Finished"
-                        and int(d.get("pending_index_rows", 0)) == 0
-                        and int(d.get("indexed_rows", -1)) == int(d.get("total_rows", -2))):
-                    return
-                time.sleep(1.0)
-            raise RuntimeError(f"milvus index did not finish within 7200s ({what}): {d}")
-
-        _wait_index("after flush")
-        self._compactions = 0
-        self._segments_trace = [len(self.cl.list_persistent_segments("articles"))]
-        for _ in range(8):
-            job = self.cl.compact("articles")
-            t0 = time.time()
-            while time.time() - t0 < 7200:
-                if "Completed" in str(self.cl.get_compaction_state(job)):
-                    break
-                time.sleep(1.0)
-            else:
-                raise RuntimeError(f"milvus compaction {job} did not complete within 7200s")
-            self._compactions += 1
-            _wait_index(f"after compaction {self._compactions}")
-            n = len(self.cl.list_persistent_segments("articles"))
-            self._segments_trace.append(n)
-            if n >= self._segments_trace[-2]:
-                break
-        self.cl.load_collection("articles")
+        self._waits = milvus_common.wait_sealed_and_indexed(self.cl, "articles", "vec", self._n_rows, compact=True)
+        self._compactions = self._waits["milvus_compactions_forced"]
+        self._segments_trace = self._waits["milvus_segments_trace"]
         self.index_s = round(time.perf_counter() - _t1, 2)
 
     def engine_stats(self):
@@ -2070,7 +2032,11 @@ class Milvus(Base):
         it would move a published number, so it does not belong in the same step
         as finding out.
         """
-        out = {}
+        import milvus_common
+        out = dict(milvus_common.SEARCH_SHAPE)
+        out.update(getattr(self, "_bulk_info", {}))
+        out.update({k: v for k, v in getattr(self, "_waits", {}).items()
+                    if k not in ("milvus_compactions_forced", "milvus_segments_trace")})
         try:
             desc = self.cl.describe_index("articles", "vec")
             for k in ("index_type", "state", "indexed_rows", "total_rows",
@@ -2092,7 +2058,8 @@ class Milvus(Base):
         return out
 
     def search(self, qvec, k):
-        res = self.cl.search("articles", data=[qvec.tolist()], limit=k,
+        # ids and distances only: no output_fields, no vector field, no filter (recorded by engine_stats)
+        res = self.cl.search("articles", data=[qvec.tolist()], limit=k, filter="", output_fields=[],
                              search_params={"params": {"ef": EF_SEARCH}})
         return [int(h["id"]) for h in res[0]]
 
@@ -2248,26 +2215,8 @@ class MilvusInt8(Milvus):
     # ablation.
     quantization = "INT8"
     name = "milvus_dense_int8"
-
-    def build(self, vecs):
-        from pymilvus import DataType
-        sch = self.cl.create_schema()
-        sch.add_field("id", DataType.INT64, is_primary=True)
-        sch.add_field("vec", DataType.FLOAT_VECTOR, dim=DIM)
-        idx = self.cl.prepare_index_params()
-        idx.add_index("vec", index_type="HNSW_SQ", metric_type="L2",
-                      params={"M": COMPARATOR_M, "efConstruction": EF_CONSTRUCTION,
-                              "sq_type": "SQ8"})
-        self.cl.create_collection("articles", schema=sch, index_params=idx)
-        _t0 = time.perf_counter()
-        for i in range(0, len(vecs), BATCH):
-            self.cl.insert("articles", [
-                {"id": i + j, "vec": vecs[i + j].tolist()}
-                for j in range(min(BATCH, len(vecs) - i))])
-        # The boundary Milvus has: inserts accepted here; post_build() flushes,
-        # waits for the HNSW index on every sealed segment, compacts, and
-        # loads, and that whole wait is index_s (#74 item 2).
-        self.ingest_s = round(time.perf_counter() - _t0, 2)
+    INDEX_TYPE = "HNSW_SQ"
+    INDEX_EXTRA = {"sq_type": "SQ8"}
 
 
 class ElasticDense(Base):

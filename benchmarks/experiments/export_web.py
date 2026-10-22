@@ -3997,13 +3997,8 @@ def _const(module, name):
 
 
 def _milvus_seal_proportion():
-    """The sealProportion docker-conf/milvus-dense.yaml mounts over the
-    image's own (BUGS F8), read from the file the runner mounts."""
-    for line in (HERE / "docker-conf" / "milvus-dense.yaml").read_text(encoding="utf-8").splitlines():
-        m = re.match(r"\s*sealProportion:\s*([0-9.]+)", line)
-        if m:
-            return float(m.group(1))
-    return None
+    """The sealProportion the runner sets on the Milvus container (DATACOORD_SEGMENT_SEALPROPORTION, BUGS F8)."""
+    return _const("runner", "MILVUS_SEAL_PROPORTION")
 
 
 L3S_SECOND_PASS = (
@@ -4115,10 +4110,11 @@ OCT_PROSE = {
                    "latencies comparable at all.", []),
         "cold": ("Cold p50 and p99 are the first timed pass over the query set after the index is built; a short untimed warm-up on held-out queries runs before it, so cold means an index that has not yet answered the timed queries, not a process that has done nothing. Warm columns, where present, are the passes after it.", []),
         "degree": ("ArcadeDB's maxConnections is a Vamana per-layer degree, not hnswlib's M. Matching the parameter names would compare a half-degree graph against a full-degree one, so the graphs are matched by effect instead.", []),
-        "milvus": ("Milvus's dense rows run with segments sealed at 50% of the maximum segment size, where the image default is 12%, so a large ingest lands in the few-large-segments layout that Milvus's own compaction otherwise reaches at an unpredictable moment. One line changed from the image's configuration; sparse rows are at the default.",
+        "milvus": ("Milvus's dense rows run with segments sealed at 50% of the maximum segment size, where the image default is 12%, so a large ingest lands in the few-large-segments layout that Milvus's own compaction otherwise reaches at an unpredictable moment. One setting changed from the image's configuration; sparse rows are at the default. Milvus runs as the vendor's Docker Compose standalone (etcd, MinIO and Milvus as three containers) on Storage V2, its default; each row records its storage mode.",
                    [(r"sealed at (\d+)%", lambda P, rows: _milvus_seal_proportion() * 100, "const"),
+                    (r"Storage V(\d)", lambda P, rows: int(_const("runner", "MILVUS_STORAGE").lstrip("v")), "const"),
                     (r"image default is (\d+)%", lambda P, rows: _const("runner", "MILVUS_IMAGE_SEAL_PROPORTION") * 100, "const")]),
-        "ingest": ("Ingest paths: ArcadeDB embedded loads through the Python package's graph_batch with the WAL on, 10,000 vectors per commit, each vector as one Java float array, then CREATE INDEX ... LSM_VECTOR; served binds 2,000-row INSERT ... CONTENT batches over HTTP with each vector as a JSON array, then the same CREATE INDEX; Chroma add() in batches of 5,000; LanceDB an Arrow table then create_index; Qdrant and Milvus upsert in batches; DuckDB VSS and sqlite-vec executemany; pgvector COPY FROM STDIN then CREATE INDEX; Elasticsearch creates its index first and bulk-indexes the vectors in batches of 5,000, then refreshes and force-merges to one segment, all inside the build time; Memgraph loads UNWIND batches of 5,000 over bolt and then creates its vector index, which returns once it holds every node; FalkorDB loads UNWIND batches of 5,000 over the Redis protocol, creates its vector index, and waits until the index reports itself operational, which counts as index time; LadybugDB loads Arrow tables of up to 100,000 vectors with COPY and then builds its vector index; Neo4j loads then builds its vector index; MongoDB insert_many then its vector search index; ArangoDB import_bulk then its FAISS IVF index; SurrealDB inserts through its Python SDK under the HNSW index it defines first; the server builds that index in the background, so the served build time includes waiting until a query probe shows the index has caught up.",
+        "ingest": ("Ingest paths: ArcadeDB embedded loads through the Python package's graph_batch with the WAL on, 10,000 vectors per commit, each vector as one Java float array, then CREATE INDEX ... LSM_VECTOR; served binds 2,000-row INSERT ... CONTENT batches over HTTP with each vector as a JSON array, then the same CREATE INDEX; Chroma add() in batches of 5,000; LanceDB an Arrow table then create_index; Qdrant upserts in batches; Milvus writes Parquet files to its MinIO with the vendor's bulk writer and runs one import job (file preparation, upload and the job are all inside the ingest time); DuckDB VSS and sqlite-vec executemany; pgvector COPY FROM STDIN then CREATE INDEX; Elasticsearch creates its index first and bulk-indexes the vectors in batches of 5,000, then refreshes and force-merges to one segment, all inside the build time; Memgraph loads UNWIND batches of 5,000 over bolt and then creates its vector index, which returns once it holds every node; FalkorDB loads UNWIND batches of 5,000 over the Redis protocol, creates its vector index, and waits until the index reports itself operational, which counts as index time; LadybugDB loads Arrow tables of up to 100,000 vectors with COPY and then builds its vector index; Neo4j loads then builds its vector index; MongoDB insert_many then its vector search index; ArangoDB import_bulk then its FAISS IVF index; SurrealDB inserts through its Python SDK under the HNSW index it defines first; the server builds that index in the background, so the served build time includes waiting until a query probe shows the index has caught up.",
                    [(r"on, ([\d,]+) vectors per commit", lambda P, rows: _const("l3d_dense", "BATCH"), "const"),
                     (r"binds ([\d,]+)-row INSERT", lambda P, rows: _const("l3d_dense", "ArcadeServer").load_batch, "const"),
                     (r"batches of ([\d,]+); LanceDB", lambda P, rows: _const("l3d_dense", "CHROMA_BATCH"), "const"),
