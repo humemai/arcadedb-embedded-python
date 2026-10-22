@@ -139,6 +139,14 @@ def _load():
             "arcadedb_n_server_db": [P, L, S, I],
             "arcadedb_n_diag": [P],
             "arcadedb_n_sample_dump": [P],
+            "arcadedb_n_dbset": [P, L, S, S],
+            "arcadedb_n_gb_create": [P, L, S],
+            "arcadedb_n_gb": [P, L, S, S],
+            "arcadedb_n_async": [P, L, S, S],
+            "arcadedb_n_import": [P, L, S],
+            "arcadedb_n_export": [P, L, S, S, I, S],
+            "arcadedb_n_udf_register": [P, S, L, I, I],
+            "arcadedb_n_set_upcall": [P, P],
             "arcadedb_free": [P, P],
         }
         for name, argtypes in sigs.items():
@@ -148,7 +156,12 @@ def _load():
             fn.argtypes = argtypes
             fn.restype = (
                 None
-                if name in ("arcadedb_free", "arcadedb_n_rs_close_many")
+                if name
+                in (
+                    "arcadedb_free",
+                    "arcadedb_n_rs_close_many",
+                    "arcadedb_n_set_upcall",
+                )
                 else ctypes.c_long if name == "arcadedb_n_cmd" else ctypes.c_void_p
             )
         global BINARY_PARAMS, CMD_PATH, CLOSE_BATCH, INSERT_ROWS
@@ -220,6 +233,12 @@ def call_bin(name: str, *args):
     finally:
         lib.arcadedb_free(th, ptr)
     return raw.decode("utf-8"), floats
+
+
+def call_void(name: str, *args) -> None:
+    """Run an entry point that returns nothing (``arcadedb_n_set_upcall``)."""
+    lib = _lib or _load()
+    getattr(lib, name)(_thread_handle(), *args)
 
 
 def b(value) -> bytes:

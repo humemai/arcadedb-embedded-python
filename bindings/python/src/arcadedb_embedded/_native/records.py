@@ -192,3 +192,13 @@ def _wrap(database, row):
     rid, type_name, kind = meta
     cls = {"v": Vertex, "e": Edge}.get(kind, Document)
     return cls(database, type_name, rid, row._props)
+
+
+def _wrap_dict(database, record: dict, kind: str = "d"):
+    """The wrapper for a nested record the engine sent as a dict with ``@rid``, ``@type`` and ``@cat`` members."""
+    props = dict(record)
+    rid = props.pop("@rid", None)
+    type_name = props.pop("@type", None)
+    kind = props.pop("@cat", kind)
+    cls = {"v": Vertex, "e": Edge}.get(kind, Document)
+    return cls(database, type_name, rid, props)

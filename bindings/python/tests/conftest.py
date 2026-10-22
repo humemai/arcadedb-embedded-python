@@ -19,6 +19,9 @@ if sys.platform == "win32":
     # LadybugDB's compiled module does not load in this process on Windows (it falls back to a C-API library its
     # wheel does not ship), so the Cypher half of the equivalence checks runs on Linux and macOS (#347)
     collect_ignore.append("test_equivalence_ladybug.py")
+if os.environ.get("ARCADEDB_BACKEND", "jpype").lower() != "native":
+    # Java -> Python upcalls (Python functions in SQL) exist on the native backend only
+    collect_ignore.append("test_native_udf.py")
 if not os.path.isdir(os.path.join(os.path.dirname(os.path.dirname(__file__)), "docs")):
     # the upstream pull request branch has no docs/ directory
     collect_ignore.append("test_docs_examples.py")
@@ -60,6 +63,8 @@ NATIVE_JVM_MARKERS = (
     "KeyError: 'flush'",
     "KeyError: 'max_connections'",
     "cause is <class 'NoneType'>",  # the Java exception as __cause__
+    "findNeighborsFromVector",  # the test calls the Java vector index directly
+    "to_java_rid",
 )
 
 
@@ -74,6 +79,7 @@ NATIVE_NOTYET_MARKERS = (
 NATIVE_NA_TESTS = {
     "test_non_scalars_keep_the_general_path",
     "test_a_subclass_of_a_scalar_is_not_assumed_to_be_one",
+    "test_lsm_vector_search_looks_up_all_hits_in_one_bridge_call",  # counts GraphCalls bridge crossings
 }
 
 

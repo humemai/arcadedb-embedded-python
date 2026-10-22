@@ -39,10 +39,10 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 public final class ArcadeNative {
-  private static final Map<Long, Database> DBS = new ConcurrentHashMap<>();
+  static final Map<Long, Database> DBS = new ConcurrentHashMap<>();
   private static final Map<Long, ResultSet> RESULT_SETS = new ConcurrentHashMap<>();
   private static final Map<Long, ArcadeDBServer> SERVERS = new ConcurrentHashMap<>();
-  private static final AtomicLong IDS = new AtomicLong(1);
+  static final AtomicLong IDS = new AtomicLong(1);
 
   static {
     // ARCADEDB_VECTOR_PROVIDER = native | panama | default (jvector's VectorizationProvider, forced); unset: jvector chooses
@@ -418,22 +418,22 @@ public final class ArcadeNative {
 
   // ---- plumbing
 
-  private static Database db(final long h) {
+  static Database db(final long h) {
     final Database db = DBS.get(h);
     if (db == null)
       throw new IllegalArgumentException("unknown database handle " + h);
     return db;
   }
 
-  private static String str(final CCharPointer p) {
+  static String str(final CCharPointer p) {
     return CTypeConversion.toJavaString(p);
   }
 
-  private static CCharPointer OK() {
+  static CCharPointer OK() {
     return out("{\"ok\":true}");
   }
 
-  private static CCharPointer err(final Throwable t) {
+  static CCharPointer err(final Throwable t) {
     return out(errorJson(t));
   }
 
@@ -649,7 +649,7 @@ public final class ArcadeNative {
     }
   }
 
-  private static CCharPointer out(final String s) {
+  static CCharPointer out(final String s) {
     final byte[] b = s.getBytes(StandardCharsets.UTF_8);
     final CCharPointer p = UnmanagedMemory.malloc(b.length + 1);
     for (int i = 0; i < b.length; i++)

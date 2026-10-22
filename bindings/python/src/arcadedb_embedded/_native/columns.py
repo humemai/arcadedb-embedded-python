@@ -50,12 +50,45 @@ def _ms(v):
     return datetime(v.year, v.month, v.day)
 
 
+def _float_vectors(values):
+    """A column of equal-length float lists (None allowed) that float32 holds exactly, as a (count, dim) float32 array with
+    NaN rows for the nulls; None for any other column. Rows cannot say float[] from List<Double>, so only a column whose every
+    value survives float32 unchanged is read as a vector column (the JPype path decides on the Java element type).
+    """
+    import numpy as np
+
+    dim = 0
+    for v in values:
+        if v is None:
+            continue
+        if type(v) is not list or not v or not all(type(x) is float for x in v):
+            return None
+        if dim == 0:
+            dim = len(v)
+        elif len(v) != dim:
+            return None
+    if dim == 0:
+        return None
+    arr = np.full((len(values), dim), np.nan, dtype=np.float32)
+    for i, v in enumerate(values):
+        if v is not None:
+            arr[i] = v
+            if not np.array_equal(arr[i].astype(np.float64), np.array(v)):
+                return None
+    return arr
+
+
 def to_columns(rows, columns=None):
     import numpy as np
 
     out = {}
     for name in _names(rows, columns):
         values = [row.get(name) for row in rows]
+        if _kind(values) == "obj":
+            vectors = _float_vectors(values)
+            if vectors is not None:
+                out[name] = vectors
+                continue
         has_null = any(v is None for v in values)
         kind = _kind(values)
         if kind == "i":
@@ -101,7 +134,14 @@ def to_arrow(rows, columns=None):
         if kind == "i":
             arrays[name] = pa.array(values, type=pa.int64())
         elif kind == "f":
-            arrays[name] = pa.array(values, type=pa.float64())
+            try:
+                arrays[name] = pa.array(values, type=pa.float64())
+            except (
+                pa.ArrowInvalid
+            ):  # an int beyond +-2**53 next to floats: the column degrades to exact text
+                arrays[name] = pa.array(
+                    [None if v is None else str(v) for v in values], type=pa.string()
+                )
         elif kind == "b":
             arrays[name] = pa.array(values, type=pa.bool_())
         elif kind == "dt":
