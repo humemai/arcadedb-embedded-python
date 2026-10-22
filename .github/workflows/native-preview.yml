@@ -126,7 +126,8 @@ jobs:
             plat_re: macosx_[0-9]+_[0-9]+_arm64
             # 7 GB runner: a capped builder heap and two threads
             xmx: 5g
-            ni_extra: -H:NumberOfThreads=2
+            # -mmacosx-version-min: the link ignores MACOSX_DEPLOYMENT_TARGET alone (run 9: minos 15.0)
+            ni_extra: -H:NumberOfThreads=2 -H:NativeLinkerOption=-mmacosx-version-min=11.0
             # the minimum macOS the library (and so the wheel tag) promises; clang defaults to the runner's 15.0 otherwise
             macos_target: "11.0"
             build_minutes: 150
@@ -261,7 +262,11 @@ jobs:
             "$MANYLINUX_IMAGE" bash -euo pipefail -c '
               ldd --version | sed -n 1p # not `head -1`: under pipefail its early exit can SIGPIPE ldd
               uname -m
-              dnf install -y --setopt=install_weak_deps=False zlib-devel unzip which >/dev/null
+              # zlib-devel, unzip and which are in the base repositories; EPEL is not needed and its mirrors fail now and then
+              for i in 1 2 3 4 5; do
+                dnf install -y --disablerepo="epel*" --setopt=install_weak_deps=False zlib-devel unzip which >/dev/null && break
+                [ "$i" -lt 5 ] && { echo "dnf failed, retry $i in $((i * 20))s" >&2; sleep $((i * 20)); } || exit 1
+              done
               cd /work
               bash native-spike/scripts/preview-build.sh /out
             ' || { tail -n 80 "$T/lib/build.log" || true; exit 1; }

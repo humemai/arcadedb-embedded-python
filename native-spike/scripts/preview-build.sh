@@ -28,12 +28,13 @@ export NATIVE_IMAGE_OPTIONS="-J-Dfastops.mode=1 -J-Xmx$XMX -H:-VectorAPISupport 
 cd "$WT"
 rm -f "native-spike/target/$LIBFILE" "$OUT/$LIBFILE"
 ./mvnw -B --no-transfer-progress -f native-spike/pom.xml -DskipTests -Darcadedb.version="$ENGINE" -Dgraalvm.version=25.4.4.1.1 -Dnative.opt=-O2 package > "$OUT/build.log" 2>&1
-# Windows: the Maven plugin hands native-image its arguments in an @args file, so build.log has no "native-image -cp <classpath> --shared"
-# line, which gen_notices.py reads. Append one, rebuilt from the args file (one argument per line).
+# Windows: the Maven plugin hands native-image its arguments in an @args file that it deletes at exit, so build.log has no
+# "native-image -cp <classpath> --shared" line, which gen_notices.py reads. Append one: the glue jar plus the runtime classpath that
+# dependency:build-classpath resolves with the same properties (checked on Linux: the same 59 jars as the logged classpath, plus the glue jar).
 if [ "$EXT" = dll ]; then
-  for a in native-spike/target/tmp/native-image-*.args; do
-    if [ -f "$a" ]; then { printf 'native-image '; tr '\r\n' '  ' < "$a"; echo; } >> "$OUT/build.log"; fi
-  done
+  ./mvnw -B -q --no-transfer-progress -f native-spike/pom.xml -Darcadedb.version="$ENGINE" -Dgraalvm.version=25.4.4.1.1 -DincludeScope=runtime \
+    dependency:build-classpath -Dmdep.outputFile=target/runtime.cp >> "$OUT/build.log" 2>&1
+  echo "native-image -cp native-spike/target/arcadedb-native-lib-0.0.1.jar;$(tr -d '\r\n' < native-spike/target/runtime.cp) --shared" >> "$OUT/build.log"
 fi
 cp "native-spike/target/$LIBFILE" "$OUT/"
 LIBS=("$OUT/$LIBFILE")
