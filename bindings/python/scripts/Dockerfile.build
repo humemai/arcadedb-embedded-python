@@ -69,6 +69,8 @@ RUN if [ "$USE_LOCAL_JARS" = "1" ]; then \
 
 # Copy JAR exclusion list
 COPY bindings/python/scripts/jar_exclusions.txt /build/jar_exclusions.txt
+# JDK modules the bundled JRE must not contain (see the file for why)
+COPY bindings/python/scripts/jre_module_exclusions.txt /build/jre_module_exclusions.txt
 
 # Remove excluded JARs based on jar_exclusions.txt
 RUN echo "🗑️  Removing excluded JARs..." && \
@@ -107,11 +109,14 @@ RUN echo "🔍 Analyzing JARs with jdeps..." && \
     else \
         FILTERED_MODULES="${DETECTED_MODULES}" ; \
     fi && \
-    if [ -n "${FILTERED_MODULES}" ]; then \
-        REQUIRED_MODULES="${FILTERED_MODULES},jdk.management,jdk.zipfs,jdk.unsupported,jdk.incubator.vector" ; \
-    else \
-        REQUIRED_MODULES="java.se,jdk.management,jdk.zipfs,jdk.unsupported,jdk.incubator.vector" ; \
+    grep -v '^#' /build/jre_module_exclusions.txt | tr -d '\r' | sed '/^[[:space:]]*$/d' > /build/jre_excluded_modules.list && \
+    echo "📦 Excluded modules: $(paste -sd ',' /build/jre_excluded_modules.list)" && \
+    FILTERED_MODULES=$(echo "${FILTERED_MODULES}" | tr ',' '\n' | sed '/^$/d' | grep -vxFf /build/jre_excluded_modules.list | paste -sd "," -) && \
+    if [ -z "${FILTERED_MODULES}" ]; then \
+        echo "❌ jdeps found no modules; the java.se fallback would bring back the excluded modules, so the build stops" && \
+        exit 1 ; \
     fi && \
+    REQUIRED_MODULES="${FILTERED_MODULES},jdk.management,jdk.zipfs,jdk.unsupported,jdk.incubator.vector" && \
     echo "🔨 Building minimal JRE for platform: ${TARGET_PLATFORM}" && \
     echo "📦 Detected modules (raw): ${DETECTED_MODULES}" && \
     echo "📦 Detected modules (filtered): ${FILTERED_MODULES}" && \
@@ -135,6 +140,15 @@ RUN echo "🔍 Analyzing JARs with jdeps..." && \
         fi ; \
         echo "" ; \
         echo "✅ JRE build complete!" ; \
+        echo "📊 JRE size after jlink: $(du -sm /build/jre | cut -f1) MB" ; \
+        BAD_MODULES=$(/build/jre/bin/java --list-modules | sed 's/@.*//' | grep -xFf /build/jre_excluded_modules.list || true) ; \
+        if [ -n "$BAD_MODULES" ]; then \
+            echo "❌ the JRE contains excluded modules (another module requires them): $BAD_MODULES" ; \
+            exit 1 ; \
+        fi ; \
+        echo "✅ No excluded module in the JRE" ; \
+        find /build/jre -name '*.so' -type f -exec strip --strip-unneeded {} + ; \
+        echo "📊 JRE size after stripping native libraries: $(du -sm /build/jre | cut -f1) MB" ; \
     else \
         echo "⚠️  jmods directory not found under ${JAVA_HOME}. Falling back to copying full JDK runtime." ; \
         mkdir -p /build/jre ; \

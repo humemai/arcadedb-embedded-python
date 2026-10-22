@@ -56,11 +56,11 @@ with arcadedb.create_database("./mydb") as db:
 
 ## ✨ Features
 
-- ☕ **No Java Installation Required**: Bundled JRE (~63 MiB uncompressed)
+- ☕ **No Java Installation Required**: Bundled JRE (~44 MiB uncompressed)
 - 🌍 **4 Platforms Supported**: Linux (x86_64, ARM64), macOS (ARM64), Windows (x86_64)
 - 🚀 **Embedded Mode**: Direct database access in Python process (no network)
 - 🌐 **Server Mode**: Optional in-process HTTP server with the Studio web UI: it costs ~8MB of wheel and nothing at runtime until you call `create_server()`
-- 📦 **Self-contained**: All dependencies bundled (~69 MiB current Linux wheel)
+- 📦 **Self-contained**: All dependencies bundled (~65 MiB current Linux wheel)
 - 🔄 **Multi-model**: Graph, Document, Key/Value, Vector, Time Series
 - 🔍 **Multiple query languages**: SQL and OpenCypher
 - ⚡ **High performance**: Direct JVM integration via JPype
@@ -76,10 +76,10 @@ The `arcadedb-embedded` package is platform-specific and self-contained:
 
 **Package Contents (the 26.10.1 Linux x86_64 wheel; varies by platform and version):**
 
-- **Wheel size (compressed)**: ~69 MiB
-- **ArcadeDB JARs (uncompressed)**: ~41 MiB across 71 JARs
-- **Bundled JRE (uncompressed)**: ~63 MiB (platform-specific Java 25 runtime via jlink)
-- **Installed package size**: ~97 MiB
+- **Wheel size (compressed)**: ~65 MiB
+- **ArcadeDB JARs (uncompressed)**: ~42 MiB across 71 JARs
+- **Bundled JRE (uncompressed)**: ~44 MiB (platform-specific Java 25 runtime via jlink, 15 modules)
+- **Installed package size**: ~86 MiB
 
 The compressed wheel size is measured from `dist/*.whl`, and the installed package size
 is measured from the extracted `site-packages/arcadedb_embedded/` directory.

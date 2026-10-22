@@ -1,0 +1,24 @@
+# JDK modules the bundled jlink runtime must NOT contain, one per line.
+#
+# The module list of the runtime comes from `jdeps --print-module-deps` over the
+# shipped jars. jdeps names a module as soon as one class in one jar refers to it,
+# so optional users pull in big modules that no code path of the wheel reaches.
+# Both build scripts (Dockerfile.build for Linux, build-native.sh for macOS and
+# Windows) remove the modules below from that list, and after jlink they fail the
+# build when one of them is still in `java --list-modules` (a module that another
+# module requires comes back that way). Removing java.desktop also removes
+# java.datatransfer and java.prefs, which only it requires.
+#
+# tests/test_jar_closure.py reads the class files of the shipped jars and fails
+# when a class refers to a package of a JDK module that the runtime lacks, unless
+# that reference is listed there with a reason. Adding a module here means adding
+# the references of the jars it breaks to that list, or keeping the module.
+#
+# java.desktop: java.beans in Jackson (Java7SupportImpl), snakeyaml, commons-lang3,
+#   Micrometer Log4j2Metrics; java.awt in JTS (org.locationtech.jts.awt) and
+#   commons-math3; java.awt.datatransfer in jakarta.activation. About 12 MB of the wheel.
+# jdk.jfr: only com.arcadedb.utility.JVMGCHistogramReporter, which nothing calls.
+# java.compiler: only org.agrona.generation (agrona's code generator), which nothing calls.
+java.desktop
+jdk.jfr
+java.compiler

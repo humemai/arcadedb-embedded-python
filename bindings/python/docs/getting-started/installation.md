@@ -29,14 +29,19 @@ other platforms are in the same range:
 | macOS Apple Silicon | `macosx_11_0_arm64` | 64.8 MiB |
 | Windows x86_64 | `win_amd64` | 66.1 MiB |
 
+These are the published 26.10.2 files. The bundled runtime of later builds leaves out the JDK
+modules `java.desktop`, `jdk.jfr`, and `java.compiler`, which no code path of the wheel uses, and
+its native libraries are stripped: the Linux x86_64 wheel of 26.11.1.dev0 built from the same
+JARs is 13.2 MB smaller (80.8 MB before, 67.7 MB after, 64.6 MiB; measured 2026-10-22).
+
 Every wheel is platform-specific, built on a native runner of its platform, and carries a
 JRE for that platform, so pip needs no hint to pick the right one. Unpacked, the Linux
 x86_64 wheel holds:
 
-- **ArcadeDB JARs**: ~41 MiB across 71 JARs, including the optional server and Studio stack
+- **ArcadeDB JARs**: ~42 MiB across 71 JARs, including the optional server and Studio stack
   ([Server Mode](../guide/server.md#what-it-costs-you) lists it; `arcadedb.jar_fingerprint()`
   counts and hashes the installed JARs)
-- **Bundled JRE**: ~63 MiB (Java 25 runtime trimmed with jlink to 20 modules)
+- **Bundled JRE**: ~44 MiB (Java 25 runtime trimmed with jlink to 15 modules; `scripts/jre_module_exclusions.txt` lists the JDK modules left out)
 
 Engine modules the bindings do not use are left out to keep the wheel small: the gRPC and
 MongoDB wire protocols, Raft HA, and Gremlin among them (`scripts/jar_exclusions.txt` in the

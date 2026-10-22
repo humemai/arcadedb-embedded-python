@@ -147,6 +147,7 @@ arcadedb-embedded-python/bindings/python/
 │   ├── extract_version.py         # Version extraction
 │   ├── fix_markdown.py            # Docs formatter
 │   ├── jar_exclusions.txt         # JAR optimization list
+│   ├── jre_module_exclusions.txt  # JDK modules the bundled JRE must not contain
 │   ├── list_image_jars_by_size.sh # Image JAR inspection helper
 │   ├── profile-python/            # Result-consumption profiler
 │   ├── setup_jars.py              # JAR staging script
@@ -176,7 +177,7 @@ arcadedb-embedded-python/bindings/python/
    `scripts/jar_exclusions.txt`; a native build reuses `src/arcadedb_embedded/jars/` when it
    already holds JARs
 3. Compiles the bridge JAR (`arcadedb-python-bridge.jar`) from `src/java/`
-4. Builds the bundled JRE with `jlink`
+4. Builds the bundled JRE with `jlink`, without the modules in `scripts/jre_module_exclusions.txt`
 5. Builds the wheel; on Linux, `scripts/verify_wheel_platform_tag.py` checks the manylinux tag
    against the highest GLIBC version the JRE needs
 6. On Linux only, installs the wheel in a clean image and runs a smoke script that creates a

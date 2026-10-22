@@ -8,7 +8,7 @@ The CI/CD workflows build and release across **4 platforms** for a total of **16
 
 ### Single-Package Strategy
 
-- **arcadedb-embedded**: All platforms, JRE bundled, no external Java needed. The 26.10.1.dev0 linux/amd64 wheel measured on 2026-09-29 is about 69 MB compressed and 96 MB installed; other platforms and versions vary slightly.
+- **arcadedb-embedded**: All platforms, JRE bundled, no external Java needed. The 26.11.1.dev0 linux/amd64 wheel measured on 2026-10-22 is about 68 MB compressed and 90 MB installed; other platforms and versions vary slightly.
 
 ### Platforms (All Native Runners)
 
@@ -193,11 +193,11 @@ After a successful release, you should see:
 
 ### Package Contents
 
-Measured on the 26.10.1.dev0 linux/amd64 wheel on 2026-09-29:
+Measured on the 26.11.1.dev0 linux/amd64 wheel on 2026-10-22:
 
 | Wheel | JRE | JARs | Installed |
 |-------|-----|------|-----------|
-| about 69 MB | about 63 MB | about 33 MB | about 96 MB |
+| about 68 MB | about 46 MB | about 44 MB | about 90 MB |
 
 **All platforms include:**
 
