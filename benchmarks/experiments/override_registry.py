@@ -459,9 +459,10 @@ def _arcadedb_query_ram(rows):
             "table have no such limit.", [str(int(float(got[0]))), f"{int(float(got[0])):,}"] if len(got) == 1 and _int(got[0]) else [])
 
 
-# THE DENSE ID INDEX (humemai/arcadedb-embedded-python#291, CAMPAIGN section 7 row 84, DECISIONS #178): OFF unless the launching
-# environment sets BENCH_DENSE_ID_INDEX=1, so the override is in force for exactly the rows that carry the stamp. Every dense arm
-# stamps it when on: the statement that built its id index, or "key" where its own record key is the id.
+# THE DENSE ID INDEX (humemai/arcadedb-embedded-python#291, CAMPAIGN section 7 row 84, DECISIONS #178): built unconditionally by
+# every dense arm that would otherwise scan for the delete (no environment switch since the 2026-11 instrument), so the override is
+# in force for exactly the rows that carry the stamp. Every dense arm stamps it: the statement that built its id index, or "key"
+# where its own record key is the id.
 DENSE_ID_INDEX_CARRIERS = tuple(("l3d", be) for be in (
     "arcadedb_dense_embedded", "arcadedb_dense_embedded_int8", "arcadedb_dense_server", "arcadedb_dense_server_int8",
     "pgvector_dense", "neo4j_dense", "neo4j_dense_int8", "memgraph_dense", "memgraph_dense_int8", "falkordb_dense",
@@ -656,7 +657,7 @@ OVERRIDES = (
         applies=_query_ram_in_force),
     Override(
         key="dense_id_index",
-        setting="BENCH_DENSE_ID_INDEX=1: an index on the vector id before the load",
+        setting="an index on the vector id before the load, on every dense arm that would scan",
         carriers=tuple(Carrier(lane, be, "dense_id_index") for lane, be in DENSE_ID_INDEX_CARRIERS),
         check=_id_index_is_named, sentence=_dense_id_index,
         says=(r"id-index", r"every engine", r"load time"),

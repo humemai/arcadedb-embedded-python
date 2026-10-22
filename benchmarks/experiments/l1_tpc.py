@@ -10,7 +10,7 @@ paper states plainly as a dialect boundary rather than papering over.
 OLTP: a New-Order-STYLE transactional mix over the same schema (disclosed
 as TPC-C-inspired, not official TPC-C): per transaction, read a part row,
 insert an order document, bump the part's stock counter, one ACID txn.
-Since the 2026-10 instrument (DECISIONS #82) a PAYMENT-style transaction
+Since DECISIONS #82 a PAYMENT-style transaction
 follows: read an order placed by new-order, mark it paid, insert a payment
 row, one ACID txn; the two are 88% of TPC-C's mix. OLTP ops/s covers both.
 

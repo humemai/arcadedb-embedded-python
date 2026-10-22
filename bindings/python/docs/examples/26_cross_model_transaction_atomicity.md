@@ -11,11 +11,11 @@ two ways:
 - **inside a transaction**: the exception rolls everything back, torn 0 of 20
 - **without one**: each write commits on its own, torn 20 of 20
 
-This is the small version of the project page's
-[cross-model table](https://humem.ai/research/arcadedb#crossmodel), which applies
+This is the small version of the DBBench
+[cross-model lane](https://humem.ai/research/dbbench/cross-model), which applies
 the same interruption to every engine in that lane (see the
 [benchmark overview](../benchmarks/index.md)). The composed Qdrant plus Neo4j
-stack there is left torn every time, because no transaction spans its two engines.
+stack there has no transaction that spans its two engines, so an interrupted write leaves it torn.
 
 ## Run
 

@@ -109,7 +109,7 @@ knowledge that is not applied to the comparators.
 !!! warning "An override nobody can find is a defect, whichever way it moves the number"
     Every override is stamped on the row where a field exists, and the full inventory, with
     a column saying which way each one moves the number, is published in the methodology
-    section of the project page. Several of them run against us.
+    section of the DBBench page. Several of them run against us.
 
 ## Durability
 
