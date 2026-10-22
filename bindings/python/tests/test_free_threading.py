@@ -11,7 +11,7 @@ database state are compared with a sequential run of the same workload.
 
 import os
 import shutil
-import subprocess
+import subprocess  # nosec B404 - test-controlled child process
 import sys
 import tempfile
 import textwrap
@@ -146,8 +146,8 @@ def _work(db, tid, udf_name):
             r["m"]
             for r in db.query(
                 "sql",
-                f"SELECT {udf_name}(val, seq) AS m FROM Doc WHERE tid = ? ORDER BY seq",
-                tid,  # nosec B608
+                f"SELECT {udf_name}(val, seq) AS m FROM Doc WHERE tid = ? ORDER BY seq",  # nosec B608 - test-owned UDF name
+                tid,
             ).to_list()
         ]
     return out
@@ -313,7 +313,7 @@ def first_start_race(tmp, n=THREADS):
         f.write(FIRST_START)
     work = os.path.join(tmp, "fs")
     os.makedirs(work)
-    r = subprocess.run(
+    r = subprocess.run(  # nosec B603
         [sys.executable, script, str(n), work],
         capture_output=True,
         text=True,
