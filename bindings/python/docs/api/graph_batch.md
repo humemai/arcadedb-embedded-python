@@ -84,7 +84,7 @@ memory of a `GraphBatch` load grew with the number of vertices (created, and con
 Our test: a fresh process per point, `use_wal=False`, 300,000 random edges between the vertices, JVM heap capped at 3 GB. The same edges between 16 times more distinct vertices raised peak RSS by well over half, and creating the vertices alone was a large part of that. Cutting `batch_size` 30-fold at a fixed number of vertices saved a much smaller share. The sizes were small (hundreds of thousands of vertices) and the shape was one random graph, so take the direction as the guidance and measure your own graph for a number.
 
 - Do: plan the JVM heap (see [JVM](jvm.md)) and the container limit from the vertex count.
-- Avoid: lowering `batch_size` as the fix for an `OutOfMemoryError`; give the JVM more heap.
+- Avoid: lowering `batch_size` as the fix for an `OutOfMemoryError`; give the JVM more heap, within the container limit (see [Out of Memory Errors](../development/troubleshooting.md#out-of-memory-errors)).
 
 ## Transactions
 

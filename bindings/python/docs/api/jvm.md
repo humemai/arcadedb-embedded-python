@@ -56,7 +56,7 @@ start_jvm(
 
 ### Memory
 
-By default the JVM heap is 50 percent of the RAM the JVM sees: the machine's RAM, or the memory limit of the container (cgroup) it runs in. You do not have to size it, and it follows the container limit. The other half is left for what is not heap: the Python process and its objects, thread stacks, metaspace and the JVM's GC structures, and direct (off-heap) buffers, whose cap (`-XX:MaxDirectMemorySize`) defaults to the maximum heap.
+By default the JVM heap is 50 percent of the RAM the JVM sees: the machine's RAM, or the memory limit of the container (cgroup) it runs in. You do not have to size it, and it follows the container limit. The other half is left for what is not heap: the Python process and its objects, thread stacks, metaspace and the JVM's GC structures, and direct (off-heap) buffers, whose cap (`-XX:MaxDirectMemorySize`) defaults to the maximum heap. That holds for one JVM per container: every Python process starts its own JVM, and each JVM sees the whole limit. With several processes in one container, see [Several processes in one container](#several-processes-in-one-container).
 
 ArcadeDB's page cache follows the heap with no setting of its own: when `arcadedb.maxPageRAM` is not set, it is a quarter of the maximum heap. A value you set above 80 percent of the heap is reduced to half of it.
 
@@ -76,6 +76,20 @@ Override the default when you know better:
 - If you pass a `heap_size` (or `-Xmx`) and an `-Xms` larger than it, `start_jvm` raises `ValueError` naming both values before the JVM starts, because the JVM would otherwise end the whole Python process ("Initial heap size set to a larger value than the maximum heap size"). `-Xms` alone, without `heap_size` or another max-heap flag, is not an error: the JVM raises the maximum heap to the initial size when that is above the default share (measured: `-Xms17g` on a 31 GB machine gave a 17 GB maximum, above the 50 percent default).
 
 Raise the share when the Python side is small (a script that only runs queries); lower it when Python holds large results (a big `to_list()`, NumPy arrays) in the same process. Read the resolved values with `java.lang.Runtime.getRuntime().maxMemory()` and `GlobalConfiguration.MAX_PAGE_RAM.getValueAsLong()`.
+
+In a container, do not raise the share far above the default. A heap above about 60 percent of the limit, less the data that Python holds, can turn a Java `OutOfMemoryError` into a kernel kill, which gives no Python exception and no cleanup. This 60 percent is a rule of thumb from the probe below, which measured 50 and 75 percent, not 60. See [Out of Memory Errors](../development/troubleshooting.md#out-of-memory-errors).
+
+#### Several processes in one container
+
+Every Python process starts its own JVM, and every JVM sees the whole container limit. The default heap of 50 percent of the limit is right for one process and too large for several: `multiprocessing` workers, gunicorn workers, or two scripts in one container can claim the whole limit between them, and then the kernel kills the processes instead of Java raising an error. Call `start_jvm(heap_size=...)` in each process. For N processes, give each one at most:
+
+```text
+heap_size = (container limit - N x 0.4 GB - the data that process holds in Python) / N
+```
+
+Each process needs memory outside its heap. In the probe below it was 0.2 to 0.35 GB per process, and the rule uses 0.4 GB. Start lower when the processes hold much data in Python.
+
+Probe (one laptop, one mix: Docker `-m 4g` with no swap, two Python processes in one container, each filling its heap to 85 percent): at the default heap (2048 MB cap each, 4096 MB in total) the kernel killed both processes (`OOMKilled=true`) with no Python exception. With `heap_size="1536m"` each (3072 MB in total) both finished, and the container peaked at 3.6 GB of 4 GB.
 
 ## shutdown_jvm
 
