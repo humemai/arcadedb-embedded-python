@@ -9,6 +9,11 @@ database or server is created.
     `DatabaseFactory(...)`, or `create_server(...)`. `database_exists()` takes no
     `jvm_kwargs` and starts the JVM with the default settings.
 
+`start_jvm()` is safe to call from several threads at once: one thread starts the JVM, and the others
+wait and then join it. Threads whose first call is `create_database()` or `open_database()` need no
+earlier `start_jvm()` call. See "Free-threaded Python" on [Known Engine Issues](../guide/known-issues.md)
+for what else to know when threads run without the GIL.
+
 ## Overview
 
 The `arcadedb_embedded.jvm` module provides these public entry points:

@@ -3,6 +3,7 @@ Python functions called from SQL and openCypher (``Database.register_function``)
 Python callbacks on record events (``Database.on``).
 """
 
+import sys
 import threading
 from datetime import datetime
 from decimal import Decimal
@@ -198,6 +199,15 @@ def test_unconvertible_return_values_are_readable_errors(db):
     assert db.query("sql", "SELECT bad(1) AS x").first().get("x") == 2**62
 
 
+@pytest.mark.xfail(
+    not getattr(sys, "_is_gil_enabled", lambda: True)(),
+    reason=(
+        "free-threaded CPython only: the Python heap grows about 520 to 610 bytes per "
+        "register, on, remove cycle, cause not attributed (JPype proxy cleanup suspected, "
+        "jpype-project/jpype#1506); see 'Free-threaded Python' on the Known Engine Issues page"
+    ),
+    strict=False,
+)
 def test_registering_again_and_again_does_not_grow_the_python_heap(db):
     """The JPype proxy class is defined once, not per registration (it leaked about 6 KB each)."""
     import gc
