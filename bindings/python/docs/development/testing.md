@@ -117,7 +117,7 @@ asserts, so the list below stops at the file.
 
 | File | What it checks |
 | --- | --- |
-| `test_server.py` | Server lifecycle, configuration, the Studio URL, databases through the Java API, and a failed start that must not hang process exit |
+| `test_server.py` | Server lifecycle, configuration, the Studio URL and the "Studio is not bundled" page, databases through the Java API, and a failed start that must not hang process exit |
 | `test_server_patterns.py` | Standalone embedded, server-managed embedded, and HTTP access, side by side |
 | `test_server_http_endpoints.py` | The HTTP features the bindings document but do not wrap: multi-request transactions, server database commands, and line-protocol time-series writes, plus a projection read |
 | `test_server_wire_protocols.py` | PostgreSQL (including a bound-parameter `{cypher}` query and Arrow ADBC), Bolt, and the Redis port setting, each with its real client; a default server opens none of their ports |

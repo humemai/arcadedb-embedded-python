@@ -28,7 +28,7 @@ arcadedb_embedded/
 ├── jvm.py               # JVM startup (bundled JRE, JAR discovery)
 ├── results.py           # ResultSet, Result (query results)
 ├── schema.py            # Schema/Index/Property helpers
-├── server.py            # ArcadeDBServer (HTTP/Studio)
+├── server.py            # ArcadeDBServer (HTTP server)
 ├── transactions.py      # TransactionContext (ACID guard)
 ├── type_conversion.py   # Java ↔ Python value conversion
 └── vector.py            # VectorIndex + array helpers
@@ -126,7 +126,7 @@ arcadedb_embedded/
 
 **`server.py`**
 
-- `ArcadeDBServer`: HTTP/Studio server lifecycle, db management
+- `ArcadeDBServer`: HTTP server lifecycle, db management
 
 **`exceptions.py`**
 

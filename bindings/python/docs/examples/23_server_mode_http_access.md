@@ -24,7 +24,7 @@ From `bindings/python/examples`:
 python3 23_server_mode_http_access.py
 ```
 
-Keep the server open so you can inspect Studio manually:
+Keep the server open so you can inspect the HTTP API manually:
 
 ```bash
 python3 23_server_mode_http_access.py --wait-for-enter
@@ -50,7 +50,7 @@ python3 23_server_mode_http_access.py --http-port 2491 --server-root ./my_test_d
   port and prints the chosen value.
 - By default the example exits as soon as the scripted verification steps finish,
   which shuts the server down immediately. Use `--wait-for-enter` if you want time
-  to open Studio and inspect the database before shutdown.
+  to call the HTTP API yourself before shutdown (Studio is not bundled).
 
 ## Where the client/server cost lives
 

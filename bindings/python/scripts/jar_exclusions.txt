@@ -18,6 +18,11 @@ regex-*.jar
 arcadedb-ha-raft-*.jar
 arcadedb-metrics-*.jar
 arcadedb-mongodbw-*.jar
+# Studio bundles ApexCharts, which has not been open source since 5.1.0 (Studio has shipped it since 26.1.1), and this
+# package is Apache-2.0. Do not add this line back before upstream replaces the library:
+# https://github.com/ArcadeData/arcadedb/issues/10579 . scripts/verify_wheel_no_studio.py fails a wheel that
+# contains a Studio jar or an ApexCharts file anyway.
+arcadedb-studio-*.jar
 # Verified 2026-07-05 by quarantine + full suite/examples gate; micrometer must STAY
 # (server startup requires it):
 arcadedb-tracing-*.jar

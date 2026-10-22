@@ -266,7 +266,7 @@ def main() -> int:
             "mode": "development",
         },
     ) as server:
-        print(f"Studio URL: {server.get_studio_url()}")
+        print(f"Server URL: {server.get_studio_url()}")
 
         server_info = wait_for_server(base_url, basic_headers, timeout_sec=90.0)
         print_rows(
@@ -455,10 +455,10 @@ def main() -> int:
             )
         if args.wait_for_enter:
             print(
-                "Server is still running. Open Studio in your browser now if you "
-                "want to inspect the database."
+                "Server is still running. Call the HTTP API now if you want to "
+                "inspect the database (Studio is not bundled)."
             )
-            print(f"Studio URL: {server.get_studio_url()}")
+            print(f"Server URL: {server.get_studio_url()}")
             input("Press Enter to stop the server and exit the example...")
 
         db.close()

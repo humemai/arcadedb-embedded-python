@@ -1,7 +1,7 @@
 """
 ArcadeDB Python Bindings - Server Management
 
-ArcadeDB server for HTTP API and Studio web interface.
+ArcadeDB server for the HTTP API (Studio is not bundled in the wheel).
 """
 
 import functools
@@ -48,7 +48,7 @@ def _all_interfaces_host_settings():
 
 
 class ArcadeDBServer:
-    """ArcadeDB Server wrapper for enabling HTTP API and Studio access."""
+    """ArcadeDB Server wrapper for enabling HTTP API access."""
 
     def __init__(
         self,
@@ -242,7 +242,7 @@ class ArcadeDBServer:
         Create a new database on the server.
 
         This uses the server's built-in database management, which properly
-        registers the database and makes it immediately visible in Studio.
+        registers the database and makes it immediately visible to the HTTP API.
 
         Args:
             name: Database name
@@ -270,7 +270,7 @@ class ArcadeDBServer:
         return self._config.get("http_port", 2480)
 
     def get_studio_url(self) -> str:
-        """Get the URL for the Studio web interface."""
+        """Get the URL of the server root (Studio is not bundled, so ``GET /`` shows the "Studio is not bundled" page)."""
         host = self._config.get("host", "localhost")
         if host in ("0.0.0.0", "::"):  # nosec B104
             host = "localhost"

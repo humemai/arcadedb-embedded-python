@@ -23,11 +23,10 @@ import zipfile
 import pytest
 
 # The JAR families that make server mode work. Sizes as measured on the
-# 26.8.1-SNAPSHOT image (uncompressed, MB) are in docs/guide/server.md; the
-# whole set is ~7.65 MB uncompressed and ~7.3 MB on the wheel.
+# 26.8.1-SNAPSHOT image (uncompressed, MB) are in docs/guide/server.md. Studio is
+# deliberately NOT in this list: the wheels leave it out (test_studio_is_not_bundled).
 REQUIRED_JAR_PREFIXES = [
     "arcadedb-server",  # the server itself, 0.66 MB
-    "arcadedb-studio",  # web UI assets, 2.60 MB, contains zero .class files
     "undertow-core",  # HTTP server, 2.21 MB
     "xnio-api",  # undertow's IO layer
     "xnio-nio",
@@ -76,28 +75,57 @@ def test_server_api_is_importable_and_exported():
     assert "create_server" in adb.__all__, "create_server missing from __all__"
 
 
-def test_studio_jar_carries_no_classes():
-    """Studio is static assets only, which is why bundling it is cheap.
+def test_studio_is_not_bundled():
+    """No Studio jar and no ApexCharts file in the installed package.
 
-    docs/guide/server.md tells users Studio costs disk and nothing else,
-    on the grounds that a JAR with no ``.class`` entries cannot execute. If a
-    future Studio release starts shipping code, that claim stops being true
-    and the documentation needs revisiting, so assert the premise rather than
-    trusting it.
+    Studio bundles ApexCharts, which has not been open source since 5.1.0, and this
+    package is Apache-2.0 (https://github.com/ArcadeData/arcadedb/issues/10579).
+    scripts/jar_exclusions.txt leaves the jar out and scripts/verify_wheel_no_studio.py
+    guards the wheel; this checks what pip actually installed.
     """
     from arcadedb_embedded.jvm import get_jar_path
 
     jar_dir = get_jar_path()
-    studio = [n for n in os.listdir(jar_dir) if n.startswith("arcadedb-studio")]
-    assert studio, "studio JAR missing (see test_server_jars_are_bundled)"
+    studio = [n for n in os.listdir(jar_dir) if n.lower().startswith("arcadedb-studio")]
+    assert not studio, f"Studio jar bundled again: {studio}"
 
-    with zipfile.ZipFile(os.path.join(jar_dir, studio[0])) as z:
-        classes = [n for n in z.namelist() if n.endswith(".class")]
-    assert not classes, (
-        f"arcadedb-studio now ships {len(classes)} .class files. "
-        f"docs/guide/server.md claims Studio costs disk only because it "
-        f"contains no executable code; update that claim."
-    )
+    package_dir = os.path.dirname(jar_dir)
+    for root, _dirs, files in os.walk(package_dir):
+        for name in files:
+            path = os.path.join(root, name)
+            assert (
+                "apexcharts" not in name.lower()
+            ), f"ApexCharts file in the wheel: {path}"
+            if name.endswith(".jar"):
+                with zipfile.ZipFile(path) as z:
+                    hits = [n for n in z.namelist() if "apexcharts" in n.lower()]
+                assert not hits, f"{name} carries ApexCharts files: {hits[:3]}"
+
+
+@pytest.mark.server
+def test_server_root_says_studio_is_not_bundled(temp_server_root):
+    """GET / answers 200 with the server's own "Studio is not bundled" page.
+
+    Without the Studio jar the server serves a self-contained notice at the root
+    (GetDynamicContentHandler.missingResourceFallback) instead of a bare 404 that
+    would look like a broken server. Other missing assets stay 404.
+    """
+    requests = pytest.importorskip("requests")
+    from arcadedb_embedded import create_server
+    from tests.conftest import TEST_PASSWORD
+
+    with create_server(
+        root_path=temp_server_root, root_password=TEST_PASSWORD
+    ) as server:
+        base = server.get_studio_url()
+        root = requests.get(base, timeout=30)
+        assert root.status_code == 200
+        assert "text/html" in root.headers.get("Content-Type", "")
+        assert "not bundled" in root.text
+        assert "ArcadeDB Server is running" in root.text
+        assert "apexcharts" not in root.text.lower()
+        missing = requests.get(base + "studio-does-not-exist.js", timeout=30)
+        assert missing.status_code == 404
 
 
 @pytest.mark.server
