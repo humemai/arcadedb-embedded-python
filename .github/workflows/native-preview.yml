@@ -142,8 +142,11 @@ jobs:
           ENGINE: ${{ steps.ver.outputs.engine }}
         run: |
           set -euo pipefail
+          # the container logged /root/.m2/repository in the native-image classpath; on the runner that is $RUNNER_TEMP/m2/repository
+          mkdir -p "$RUNNER_TEMP/record"
           python3 bindings/python/native-wheel/build_wheel.py --lib-dir "$RUNNER_TEMP/lib" --version "$VERSION" --engine "$ENGINE" \
-            --graalvm-home "$RUNNER_TEMP/graalvm" --out "$RUNNER_TEMP/wheel"
+            --graalvm-home "$RUNNER_TEMP/graalvm" --m2-repo "$RUNNER_TEMP/m2/repository" \
+            --notices-out "$RUNNER_TEMP/record/THIRD_PARTY_NOTICES.generated.md" --out "$RUNNER_TEMP/wheel"
           ls -l "$RUNNER_TEMP/wheel/dist"
           shopt -s nullglob
           wheels=("$RUNNER_TEMP"/wheel/dist/*.whl)
@@ -183,6 +186,13 @@ jobs:
           assert [str(t) for t in tags] == ["py3-none-manylinux_2_34_x86_64"], tags
           PY
 
+      # also on failure: the generated notices and the full build log are what a drift needs to be diagnosed
+      - name: Keep the build log and generated notices
+        if: ${{ always() }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/record"
+          cp "$RUNNER_TEMP/lib/build.log" "$RUNNER_TEMP/record/build.log" || true
+
       - name: Collect the build record
         run: |
           mkdir -p "$RUNNER_TEMP/dist-out"
@@ -200,7 +210,7 @@ jobs:
           retention-days: 30
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         with:
           name: native-build-record
           path: ${{ runner.temp }}/record/

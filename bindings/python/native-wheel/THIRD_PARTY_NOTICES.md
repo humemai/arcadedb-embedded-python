@@ -90,7 +90,7 @@ Dependencies whose licence is not in the allowed permissive set or whose provena
 
 ## Verbatim texts
 
-### ArcadeDB NOTICE (engine tag 26.10.2)
+### ArcadeDB NOTICE (engine release 26.10.2)
 
 ```
 SPDX-License-Identifier: Apache-2.0

@@ -63,6 +63,16 @@ def main():
         help="-march the image was built with (preview-build.sh MARCH)",
     )
     ap.add_argument(
+        "--m2-repo",
+        default="",
+        help="Maven repository the image classpath jars are read from (default ~/.m2/repository; the CI container build uses another)",
+    )
+    ap.add_argument(
+        "--notices-out",
+        default="",
+        help="also write the generated notices here (CI keeps it in the build record)",
+    )
+    ap.add_argument(
         "--skip-notices-check",
         action="store_true",
         help="do not compare THIRD_PARTY_NOTICES.md with the gen_notices.py output (needs <lib-dir>/build.log)",
@@ -87,6 +97,8 @@ def main():
                 "--check",
                 str(HERE / "THIRD_PARTY_NOTICES.md"),
             ]
+            + (["--m2-repo", a.m2_repo] if a.m2_repo else [])
+            + (["--out", a.notices_out] if a.notices_out else [])
         )
         if chk.returncode:
             sys.exit(

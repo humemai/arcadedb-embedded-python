@@ -9,7 +9,11 @@ Inputs, all read from disk, nothing typed by hand except the policy tables below
   1. the `native-image -cp ...` line that preview-build.sh logs in build.log (the exact jar set of the image);
   2. each jar: licence names from its Maven pom (parent poms followed), verbatim LICENSE/NOTICE files from the jar itself;
   3. the GraalVM CE home: release file, LICENSE.txt (GPLv2 + Classpath Exception + UPL), legal/java.base notices;
-  4. the ArcadeDB NOTICE file at the engine release tag.
+  4. the ArcadeDB NOTICE file: META-INF/NOTICE* of the arcadedb-engine jar on the classpath if it has one (what ships); otherwise the
+     NOTICE at the engine release tag (`git show`, needs the tag fetched); otherwise the NOTICE of the checked-out repository.
+     The heading in the output does not name the source (the three are the same text for a release); stderr does.
+Paths: the classpath of a container build names jars as /root/.m2/repository/...; they are read from --m2-repo (default
+~/.m2/repository) by their path below `.m2/repository/`, and no absolute path reaches the output.
 notice-texts/ holds licence texts that are in no jar: the ANTLR and JTS BSD texts (their poms only link them) and, for libjvector,
 the Highway LICENSE and jvector NOTICE.txt at jvector tag 4.0.2.
 
@@ -21,6 +25,7 @@ and the script exits 2 with --strict. It never decides such a case; the maintain
 """
 
 import argparse
+import difflib
 import hashlib
 import os
 import re
@@ -32,7 +37,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent.parent
-M2 = Path.home() / ".m2" / "repository"
+M2 = Path.home() / ".m2" / "repository"  # replaced by --m2-repo in main()
+M2_MARK = ".m2/repository/"
 TEXTS = HERE / "notice-texts"
 
 ALLOWED = {
@@ -119,11 +125,17 @@ def choose(spdx_options):
 
 
 def jar_info(jar):
-    p = Path(jar)
-    try:
-        rel = p.relative_to(M2)
-    except ValueError:
+    # The classpath may name the repository as /root/.m2/repository (container build) while it is read from M2 here: map by the part
+    # below ".m2/repository/", never by the absolute prefix.
+    i = jar.find(M2_MARK)
+    if i < 0:
         return None  # the glue jar of this repository (Apache-2.0, native-spike/)
+    rel = Path(jar[i + len(M2_MARK) :])
+    p = M2 / rel
+    if not p.exists():
+        sys.exit(
+            f"gen_notices: {jar} is on the classpath but {p} does not exist (--m2-repo?)"
+        )
     ver = rel.parts[-2]
     art = rel.parts[-3]
     grp = ".".join(rel.parts[:-3])
@@ -149,15 +161,23 @@ def jar_info(jar):
     )
 
 
-def git_show(engine, path, fallback=None):
+def engine_notice(engine, jars):
+    """(label, bytes) of the ArcadeDB NOTICE: engine jar first, then the release tag, then this checkout's NOTICE."""
+    for j in jars:
+        if j["grp"] == "com.arcadedb" and j["art"] == "arcadedb-engine":
+            for n, b in sorted(j["files"].items()):
+                if re.search(r"(^|/)META-INF/NOTICE[^/]*$", n, re.I):
+                    return f"{j['gav']}!/{n}", b
     r = subprocess.run(
-        ["git", "-C", str(REPO), "show", f"{engine}:{path}"], capture_output=True
+        ["git", "-C", str(REPO), "show", f"{engine}:NOTICE"], capture_output=True
     )
     if r.returncode == 0:
-        return r.stdout
-    if fallback and Path(fallback).exists():
-        return Path(fallback).read_bytes()
-    sys.exit(f"gen_notices: cannot read {path} at tag {engine} (git fetch --tags?)")
+        return f"tag {engine}", r.stdout
+    if (REPO / "NOTICE").exists():
+        return "repository checkout (tag not fetched)", (REPO / "NOTICE").read_bytes()
+    sys.exit(
+        f"gen_notices: no NOTICE in the engine jar, at tag {engine} or in the checkout"
+    )
 
 
 def fence(body):
@@ -166,6 +186,7 @@ def fence(body):
 
 
 def main():
+    global M2
     ap = argparse.ArgumentParser()
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument(
@@ -175,6 +196,11 @@ def main():
     g.add_argument("--lib-dir", help="shortcut: <lib-dir>/build.log")
     ap.add_argument("--engine", required=True, help="engine release tag, e.g. 26.10.2")
     ap.add_argument("--graalvm-home", required=True)
+    ap.add_argument(
+        "--m2-repo",
+        default=str(M2),
+        help="Maven repository the classpath jars are read from (a container build logs /root/.m2/repository)",
+    )
     ap.add_argument("--out")
     ap.add_argument("--check", help="compare with this file; exit 1 when it differs")
     ap.add_argument(
@@ -183,6 +209,7 @@ def main():
         help="exit 2 when the licence review list is not empty",
     )
     a = ap.parse_args()
+    M2 = Path(a.m2_repo)
     log = a.build_log or str(Path(a.lib_dir) / "build.log")
     cp = parse_classpath(log)
     if any("arcadedb-studio" in c for c in cp):
@@ -302,8 +329,10 @@ def main():
 
     # ---- appendix ----
     w("## Verbatim texts\n")
-    w("### ArcadeDB NOTICE (engine tag %s)\n" % a.engine)
-    w(fence(text(git_show(a.engine, "NOTICE", REPO / "NOTICE"))))
+    src, nb = engine_notice(a.engine, jars)
+    print(f"gen_notices: ArcadeDB NOTICE read from {src}", file=sys.stderr)
+    w("### ArcadeDB NOTICE (engine release %s)\n" % a.engine)
+    w(fence(text(nb)))
     w(
         "### GraalVM Community Edition LICENSE.txt (GPLv2, Classpath Exception, UPL-1.0, BSD-3-Clause)\n"
     )
@@ -332,11 +361,25 @@ def main():
         Path(a.out).write_text(body)
     status = 0
     if a.check:
-        if Path(a.check).read_text() != body:
+        have = Path(a.check).read_text()
+        if have != body:
             print(
                 f"gen_notices: {a.check} differs from the generated notices; run gen_notices.py --out {a.check}",
                 file=sys.stderr,
             )
+            diff = list(
+                difflib.unified_diff(
+                    have.splitlines(),
+                    body.splitlines(),
+                    "committed",
+                    "generated",
+                    lineterm="",
+                )
+            )
+            for l in diff[:80]:
+                print(l[:300], file=sys.stderr)
+            if len(diff) > 80:
+                print(f"... {len(diff) - 80} more diff lines", file=sys.stderr)
             status = 1
     for what, why in review:
         print(f"licence review: {what}: {why}", file=sys.stderr)
