@@ -12,7 +12,7 @@ from ..exceptions import ArcadeDBError
 _LIB_NAMES = {
     "linux": "libarcadedb.so",
     "darwin": "libarcadedb.dylib",
-    "win32": "arcadedb.dll",
+    "win32": "libarcadedb.dll",
 }
 
 # ARCADEDB_NATIVE_BINARY=0 turns off the float32 side buffer for numpy float parameters (phase 6: on by default when the library has it)
@@ -148,7 +148,8 @@ def _load():
         lib.graal_attach_thread.restype = ctypes.c_int
         lib.graal_detach_thread.argtypes = [ctypes.c_void_p]
         lib.graal_detach_thread.restype = ctypes.c_int
-        P, L, I, S = ctypes.c_void_p, ctypes.c_long, ctypes.c_int, ctypes.c_char_p
+        # a Java long is 64 bits on every platform; C long is 32 bits on Windows, so L is long long (the same size as c_long elsewhere)
+        P, L, I, S = ctypes.c_void_p, ctypes.c_longlong, ctypes.c_int, ctypes.c_char_p
         sigs = {
             "arcadedb_n_open": [P, S, I],
             "arcadedb_n_close": [P, L, I],
@@ -192,7 +193,7 @@ def _load():
                     "arcadedb_n_rs_close_many",
                     "arcadedb_n_set_upcall",
                 )
-                else ctypes.c_long if name == "arcadedb_n_cmd" else ctypes.c_void_p
+                else ctypes.c_longlong if name == "arcadedb_n_cmd" else ctypes.c_void_p
             )
         global BINARY_PARAMS, CMD_PATH, CLOSE_BATCH, INSERT_ROWS, EXEC_MANY
         if not hasattr(
@@ -326,7 +327,9 @@ def flush_closes() -> None:
         ids = _pending[:]
         del _pending[: len(ids)]
         if ids:
-            arr = (ctypes.c_long * len(ids))(*ids)
+            arr = (ctypes.c_long * len(ids))(
+                *ids
+            )  # arcadedb_n_rs_close_many takes a C `long *` (CLongPointer): c_long on every platform
             _lib.arcadedb_n_rs_close_many(_thread_handle(), arr, len(ids))
 
 

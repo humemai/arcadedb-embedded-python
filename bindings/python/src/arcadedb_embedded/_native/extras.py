@@ -21,7 +21,9 @@ from .codec import _PLAIN, _default, _prep, loads
 
 # -------------------------------------------------------------------------------------------------------- upcall
 
-_UPCALL_TYPE = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_long, ctypes.c_char_p)
+_UPCALL_TYPE = ctypes.CFUNCTYPE(
+    ctypes.c_void_p, ctypes.c_longlong, ctypes.c_char_p
+)  # (Java long id, char *json)
 _callbacks: dict = {}
 _callback_ids = itertools.count(1)
 _callbacks_lock = threading.Lock()

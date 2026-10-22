@@ -82,7 +82,9 @@ def parse_classpath(build_log):
     for line in Path(build_log).read_text(errors="replace").splitlines():
         m = re.search(r"native-image -cp (\S+) --shared", line)
         if m:
-            return m.group(1).split(":")
+            # ':' on Linux/macOS, ';' with C:\... paths on Windows (the repository part is matched below as ".m2/repository/")
+            cp = m.group(1)
+            return [j.replace("\\", "/") for j in cp.split(";" if ";" in cp else ":")]
     sys.exit(f"gen_notices: no 'native-image -cp ... --shared' line in {build_log}")
 
 
