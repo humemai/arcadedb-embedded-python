@@ -15,17 +15,20 @@ import com.arcadedb.database.Database;
 import com.arcadedb.database.DatabaseFactory;
 import com.arcadedb.database.DatabaseInternal;
 import com.arcadedb.database.LocalDatabase;
+import com.arcadedb.database.MutableDocument;
 import com.arcadedb.database.TransactionContext;
 import com.arcadedb.engine.ComponentFile;
 import com.arcadedb.exception.DuplicatedKeyException;
 import com.arcadedb.exception.NeedRetryException;
 import com.arcadedb.query.sql.executor.ResultSet;
+import com.arcadedb.schema.VertexType;
 import com.arcadedb.server.ArcadeDBServer;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.UnmanagedMemory;
 import org.graalvm.nativeimage.c.function.CEntryPoint;
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.nativeimage.c.type.CFloatPointer;
+import org.graalvm.nativeimage.c.type.CLongPointer;
 import org.graalvm.word.WordFactory;
 import org.graalvm.nativeimage.c.type.CTypeConversion;
 
@@ -507,6 +510,140 @@ public final class ArcadeNative {
     try {
       final java.nio.ByteBuffer bb = CTypeConversion.asByteBuffer(buf, (int) bufBytes);
       return out("{\"ok\":true,\"n\":" + BulkOps.insertColumns(db(h), str(type), str(header), bb) + "}");
+    } catch (final Throwable t) {
+      return err(t);
+    }
+  }
+
+  // ---- phase 8: fewer crossings and no reply text for a command whose rows are read late or never; batches of statements and rows per crossing
+
+  private static final ThreadLocal<String> LAST_ERROR = new ThreadLocal<>();
+
+  /**
+   * A command (flags bit 0 selects command, else query) whose first rows are pulled but not encoded (as flags bit 1 of arcadedb_n_exec).
+   * Returns the cursor id (> 0, read with arcadedb_n_next, closed with arcadedb_n_rs_close or arcadedb_n_rs_close_many), 0 when the
+   * statement gave no cursor, -1 on error: the error text is then read with arcadedb_n_last_error on the same thread. No reply text, so
+   * no malloc, no arcadedb_free and no JSON decode in the caller.
+   */
+  @CEntryPoint(name = "arcadedb_n_cmd")
+  @SuppressWarnings("unchecked")
+  public static long cmd(final IsolateThread thread, final long h, final int flags, final CCharPointer language, final CCharPointer text,
+      final CCharPointer params, final CFloatPointer buf, final long bufFloats, final int max) {
+    ResultSet rs = null;
+    try {
+      final long t0 = System.nanoTime();
+      final Database db = db(h);
+      final String lang = str(language);
+      final String sql = str(text);
+      final String p = str(params);
+      final boolean command = (flags & 1) != 0;
+      final long t1 = System.nanoTime();
+      Map<String, Object> named = null;
+      Object[] pos = null;
+      if (p != null && !p.isEmpty()) {
+        final Map<String, Object> env = (Map<String, Object>) Json.parse(p, buf, bufFloats);
+        final Object n = env.get("named");
+        if (n instanceof Map<?, ?> m)
+          named = (Map<String, Object>) m;
+        else
+          pos = ((List<Object>) env.get("pos")).toArray();
+      }
+      final long t2 = System.nanoTime();
+      if (named != null)
+        rs = command ? db.command(lang, sql, named) : db.query(lang, sql, named);
+      else if (pos != null)
+        rs = command ? db.command(lang, sql, pos) : db.query(lang, sql, pos);
+      else
+        rs = command ? db.command(lang, sql) : db.query(lang, sql);
+      final long t3 = System.nanoTime();
+      long id = 0;
+      if (rs != null) {
+        id = IDS.getAndIncrement();
+        RESULT_SETS.put(id, new Prefetched(rs, max));
+      }
+      final long t4 = System.nanoTime();
+      T[0]++;
+      T[1] += t1 - t0;
+      T[2] += t2 - t1;
+      T[3] += t3 - t2;
+      T[4] += t4 - t3;
+      return id;
+    } catch (final Throwable t) {
+      closeQuietly(rs);
+      LAST_ERROR.set(errorJson(t));
+      return -1;
+    }
+  }
+
+  /** The error of the last failed arcadedb_n_cmd on this thread, in the usual {"ok":false,...} form. */
+  @CEntryPoint(name = "arcadedb_n_last_error")
+  public static CCharPointer lastError(final IsolateThread thread) {
+    final String e = LAST_ERROR.get();
+    return out(e != null ? e : "{\"ok\":false,\"error\":\"no error recorded\",\"cls\":\"java.lang.IllegalStateException\",\"chain\":[],\"retry\":null,\"retry_ms\":0}");
+  }
+
+  /** Closes n cursors in one crossing (ids is an array of n longs). */
+  @CEntryPoint(name = "arcadedb_n_rs_close_many")
+  public static void rsCloseMany(final IsolateThread thread, final CLongPointer ids, final int n) {
+    try {
+      for (int i = 0; i < n; i++)
+        closeQuietly(RESULT_SETS.remove(ids.read(i)));
+    } catch (final Throwable ignored) {
+      // closing is best effort, as in arcadedb_n_rs_close
+    }
+  }
+
+  /**
+   * One statement run once per row of rowsJson, all in this crossing and in the caller's transaction (none is opened here). rowsJson is
+   * [[positional values],..] or [{named},..] (tagged values, see Json). The cursors are drained and closed. On a failure the reply is the
+   * usual error plus "at": the index of the failed row; the rows before it stay done.
+   */
+  @CEntryPoint(name = "arcadedb_n_exec_many")
+  @SuppressWarnings("unchecked")
+  public static CCharPointer execMany(final IsolateThread thread, final long h, final CCharPointer language, final CCharPointer text,
+      final CCharPointer rowsJson) {
+    int i = 0;
+    try {
+      final Database db = db(h);
+      final String lang = str(language);
+      final String sql = str(text);
+      final List<Object> rows = (List<Object>) Json.parse(str(rowsJson));
+      for (; i < rows.size(); i++) {
+        final Object row = rows.get(i);
+        final ResultSet rs = row instanceof Map<?, ?> m ? db.command(lang, sql, (Map<String, Object>) m)
+            : db.command(lang, sql, ((List<Object>) row).toArray());
+        if (rs != null) {
+          while (rs.hasNext())
+            rs.next();
+          rs.close();
+        }
+      }
+      return out("{\"ok\":true,\"n\":" + rows.size() + "}");
+    } catch (final Throwable t) {
+      final String e = errorJson(t);
+      return out(e.substring(0, e.length() - 1) + ",\"at\":" + i + "}");
+    }
+  }
+
+  /**
+   * Documents (or vertices of a vertex type) from rows [{property: value},..], one record per row through newDocument/newVertex, set per
+   * property and save, as DocumentBatcher.insertManyJson does on the JPype path; no transaction is opened or closed here.
+   */
+  @CEntryPoint(name = "arcadedb_n_insert_rows")
+  @SuppressWarnings("unchecked")
+  public static CCharPointer insertRows(final IsolateThread thread, final long h, final CCharPointer type, final CCharPointer rowsJson) {
+    try {
+      final Database db = db(h);
+      final String t = str(type);
+      final List<Object> rows = (List<Object>) Json.parse(str(rowsJson));
+      final boolean vertex = db.getSchema().getType(t) instanceof VertexType;
+      for (final Object r : rows) {
+        final MutableDocument doc = vertex ? db.newVertex(t) : db.newDocument(t);
+        for (final Map.Entry<String, Object> e : ((Map<String, Object>) r).entrySet())
+          doc.set(e.getKey(), e.getValue());
+        doc.save();
+      }
+      return out("{\"ok\":true,\"n\":" + rows.size() + "}");
     } catch (final Throwable t) {
       return err(t);
     }

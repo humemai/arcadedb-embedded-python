@@ -1,5 +1,6 @@
 """NativeDatabase, NativeDatabaseFactory, NativeResultSet and NativeResult: the DSL-first core over libarcadedb."""
 
+import itertools
 import json
 import os
 import time as _time
@@ -9,11 +10,15 @@ from typing import Any, Dict, Iterator, List, Optional
 
 from ..exceptions import ArcadeDBError
 from ..transactions import TransactionContext
+from ..type_conversion import json_bulk_dumps
 from . import lib, not_yet
+from .codec import _default as codec_default
+from .codec import _prep as _prep_row
 from .codec import encode_params, json_native, loads
 
 _LAZY_COMMAND_ROWS = os.environ.get("ARCADEDB_NATIVE_LAZY_CMD", "1") != "0"
 _BINARY_REPLY = os.environ.get("ARCADEDB_NATIVE_BIN_REPLY", "1") != "0"
+_INSERT_MANY_CHUNK = 10_000
 _FIRST_BATCH = 256
 _NEXT_BATCH = 2048
 _KIND = {"v": "v", "e": "e", "d": "d"}
@@ -144,6 +149,19 @@ class NativeResultSet:
         # have been consumed, as it is on the JPype path (the cursor is already finished on the Java side)
         self._pending_error = reply.get("rerr")
 
+    @classmethod
+    def _lazy(cls, database, rs_id: int) -> "NativeResultSet":
+        """The result of arcadedb_n_cmd: a cursor id and nothing read yet (id 0: no cursor)."""
+        self = cls.__new__(cls)
+        self._database = database
+        self._rs = rs_id
+        self._buf = deque()
+        self._more = rs_id > 0
+        self._closed = False
+        self._exhausted = False
+        self._pending_error = None
+        return self
+
     # -- state
 
     def _readable(self) -> bool:
@@ -199,7 +217,7 @@ class NativeResultSet:
         self._closed = True
         if self._more and self._rs:
             try:
-                lib.call("arcadedb_n_rs_close", self._rs)
+                lib.close_rs(self._rs)
             except Exception:  # nosec B110 - best effort
                 pass
         self._more = False
@@ -373,12 +391,14 @@ class NativeDatabase:
             self._closed = True
             return
         try:
+            lib.flush_closes()
             _call("Failed to close database", "arcadedb_n_close", self._h, 0)
         finally:
             self._closed = True
 
     def drop(self):
         self._check_not_closed()
+        lib.flush_closes()
         _call("Failed to drop database", "arcadedb_n_close", self._h, 1)
         self._closed = True
 
@@ -412,6 +432,22 @@ class NativeDatabase:
         self, flags: int, prefix: str, language: str, command: str, args
     ) -> NativeResultSet:
         self._check_not_closed()
+        if flags & 1 and _LAZY_COMMAND_ROWS and lib.CMD_PATH:
+            # phase 8: the cursor id comes back as a long (no reply text to free and decode); the rows are read late or never
+            text, buf, count = encode_params(args, binary=True)
+            rid = lib.cmd(
+                self._h,
+                1,
+                lib.bc(language),
+                lib.bc(command),
+                lib.bc(text),
+                buf,
+                count,
+                _FIRST_BATCH,
+            )
+            if rid < 0:
+                raise _error(prefix, json.loads(lib.last_error()))
+            return NativeResultSet._lazy(self, rid)
         # phase 7 (arcadedb_n_exec flags): 2 = a command's rows are pulled but encoded only when read, 4 = float arrays come back as a float32 tail
         if flags & 1 and _LAZY_COMMAND_ROWS:
             flags |= 2
@@ -468,6 +504,8 @@ class NativeDatabase:
 
     def _tx(self, op: int, prefix: str) -> dict:
         self._check_not_closed()
+        if (op == 1 or op == 2) and lib.CLOSE_BATCH:
+            lib.flush_closes()
         return _call(prefix, "arcadedb_n_tx", self._h, op)
 
     def begin(self):
@@ -586,37 +624,85 @@ class NativeDatabase:
     def insert_many(
         self, type_name: str, rows, commit_every: int = 10_000, parallel: bool = False
     ) -> int:
-        """Bulk insert through ``INSERT INTO t CONTENT :row``. Inside the caller's transaction nothing is committed;
-        otherwise every ``commit_every`` rows are one transaction (0: all rows in one).
+        """Bulk insert. Rows go in chunks of 10,000, one JSON text and one crossing per chunk (``arcadedb_n_insert_rows``: a
+        newDocument/set/save loop inside the image, as ``DocumentBatcher.insertManyJson`` on the JPype path); a chunk with a value the
+        JSON text cannot carry unchanged goes row by row through ``INSERT INTO t CONTENT :row``. Inside the caller's transaction nothing is
+        committed; otherwise every ``commit_every`` rows are one transaction (0: all rows in one).
         """
         self._check_not_closed()
         if parallel:
             not_yet("insert_many(parallel=True) (the async executor)")
         sql = f"INSERT INTO `{type_name}` CONTENT :row"
-        total = 0
-        if self.is_transaction_active():
-            for row in rows:
-                self.command("sql", sql, {"row": row}).close()
-                total += 1
-            return total
+        rows = iter(rows)
+        was_active = self.is_transaction_active()
         every = int(commit_every)
-        batch: List[dict] = []
+        n = 0
+        try:
+            if not was_active:
+                self.begin()
+            while True:
+                size = _INSERT_MANY_CHUNK
+                if not was_active and every > 0:
+                    size = min(size, every - n % every)
+                chunk = list(itertools.islice(rows, size))
+                if not chunk:
+                    break
+                self._insert_chunk(type_name, sql, chunk)
+                n += len(chunk)
+                if not was_active and every > 0 and n % every == 0:
+                    self.commit()
+                    self.begin()
+            if not was_active:
+                self.commit()
+            return n
+        except BaseException:
+            if not was_active:
+                try:
+                    if self.is_transaction_active():
+                        self.rollback()
+                except Exception:  # nosec B110 - best-effort rollback
+                    pass
+            raise
 
-        def flush():
-            nonlocal total
-            if batch:
-                with self.transaction():
-                    for row in batch:
-                        self.command("sql", sql, {"row": row}).close()
-                total += len(batch)
-                batch.clear()
+    def _insert_chunk(self, type_name: str, sql: str, chunk) -> None:
+        if lib.INSERT_ROWS:
+            try:
+                payload = json_bulk_dumps(chunk)
+            except (TypeError, ValueError):
+                payload = None
+            if payload is not None:
+                reply = json.loads(
+                    lib.call(
+                        "arcadedb_n_insert_rows",
+                        self._h,
+                        lib.b(type_name),
+                        lib.b(payload),
+                    )
+                )
+                if not reply.get("ok"):
+                    raise _error(f"Failed to bulk-insert into '{type_name}'", reply)
+                return
+        for row in chunk:
+            self.command("sql", sql, {"row": row}).close()
 
-        for row in rows:
-            batch.append(row)
-            if every > 0 and len(batch) >= every:
-                flush()
-        flush()
-        return total
+    def _command_many(self, language: str, command: str, rows) -> int:
+        """Experimental (phase 8): the statement once per row of ``rows`` (each a list of positional values or a dict of named values),
+        all in one crossing and in the open transaction; the cursors are drained and closed. Not part of the public API.
+        """
+        self._check_not_closed()
+        payload = json.dumps([_prep_row(r) for r in rows], default=codec_default)
+        reply = json.loads(
+            lib.call(
+                "arcadedb_n_exec_many",
+                self._h,
+                lib.b(language),
+                lib.b(command),
+                lib.b(payload),
+            )
+        )
+        if not reply.get("ok"):
+            raise _error("Command failed", reply)
+        return reply["n"]
 
     # -- not on native yet
 

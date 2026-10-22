@@ -18,6 +18,15 @@ _LIB_NAMES = {
 # ARCADEDB_NATIVE_BINARY=0 turns off the float32 side buffer for numpy float parameters (phase 6: on by default when the library has it)
 BINARY_PARAMS = os.environ.get("ARCADEDB_NATIVE_BINARY", "1") != "0"
 
+# phase 8 switches (each defaults on when the library has the entry point; 0 turns one off, for A/B runs in one image):
+# ARCADEDB_NATIVE_CMD: commands go through arcadedb_n_cmd (cursor id back as a long: no reply text, no free, no JSON decode)
+# ARCADEDB_NATIVE_CLOSE_BATCH: result sets closed by Python are closed 64 at a time in one crossing (0: one crossing each)
+# ARCADEDB_NATIVE_FASTENC: positional parameters of plain scalars are encoded by the cached json encoder, no default hook
+CMD_PATH = os.environ.get("ARCADEDB_NATIVE_CMD", "1") != "0"
+CLOSE_BATCH = int(os.environ.get("ARCADEDB_NATIVE_CLOSE_BATCH", "64"))
+FAST_ENCODE = os.environ.get("ARCADEDB_NATIVE_FASTENC", "1") != "0"
+INSERT_ROWS = os.environ.get("ARCADEDB_NATIVE_INSERT_ROWS", "1") != "0"
+
 _lock = threading.Lock()
 _lib = None
 _isolate = None
@@ -120,6 +129,11 @@ def _load():
             "arcadedb_n_insert_cols": [P, L, S, S, S, L],
             "arcadedb_n_next": [P, L, I],
             "arcadedb_n_rs_close": [P, L],
+            "arcadedb_n_cmd": [P, L, I, S, S, S, S, L, I],
+            "arcadedb_n_last_error": [P],
+            "arcadedb_n_rs_close_many": [P, P, I],
+            "arcadedb_n_exec_many": [P, L, S, S, S],
+            "arcadedb_n_insert_rows": [P, L, S, S],
             "arcadedb_n_server_start": [P, S],
             "arcadedb_n_server_stop": [P, L],
             "arcadedb_n_server_db": [P, L, S, I],
@@ -132,12 +146,22 @@ def _load():
             if fn is None:  # a library built before this entry point existed
                 continue
             fn.argtypes = argtypes
-            fn.restype = None if name == "arcadedb_free" else ctypes.c_void_p
-        global BINARY_PARAMS
+            fn.restype = (
+                None
+                if name in ("arcadedb_free", "arcadedb_n_rs_close_many")
+                else ctypes.c_long if name == "arcadedb_n_cmd" else ctypes.c_void_p
+            )
+        global BINARY_PARAMS, CMD_PATH, CLOSE_BATCH, INSERT_ROWS
         if not hasattr(
             lib, "arcadedb_n_exec_bin"
         ):  # a library built before the binary path
             BINARY_PARAMS = False
+        if not hasattr(lib, "arcadedb_n_cmd"):  # a library built before phase 8
+            CMD_PATH = False
+        if not hasattr(lib, "arcadedb_n_rs_close_many"):
+            CLOSE_BATCH = 0
+        if not hasattr(lib, "arcadedb_n_insert_rows"):
+            INSERT_ROWS = False
         _isolate = isolate
         _creator = threading.get_ident()
         _local.thread = _Thread(thread, owned=False)
@@ -200,6 +224,59 @@ def call_bin(name: str, *args):
 
 def b(value) -> bytes:
     return value.encode("utf-8") if isinstance(value, str) else value
+
+
+_bytes_cache = {}
+
+
+def bc(value: str) -> bytes:
+    """UTF-8 of a statement text or language name, remembered (the same few texts cross a million times in a load)."""
+    r = _bytes_cache.get(value)
+    if r is None:
+        r = value.encode("utf-8")
+        if len(_bytes_cache) < 4096:
+            _bytes_cache[value] = r
+    return r
+
+
+def cmd(handle, flags, language, command, params, buf, count, first) -> int:
+    """``arcadedb_n_cmd``: the cursor id (> 0), 0 for no cursor, -1 for an error (read it with :func:`last_error`)."""
+    lib = _lib or _load()
+    t = _local.__dict__.get("thread")
+    th = t.handle if t is not None else _thread_handle()
+    return lib.arcadedb_n_cmd(
+        th, handle, flags, language, command, params, buf, count, first
+    )
+
+
+def last_error() -> str:
+    return call("arcadedb_n_last_error")
+
+
+# --- result sets closed in batches (one crossing for CLOSE_BATCH cursors)
+_pending = []
+_pending_lock = threading.Lock()
+
+
+def close_rs(rs_id: int) -> None:
+    if CLOSE_BATCH <= 0:
+        call("arcadedb_n_rs_close", rs_id)
+        return
+    _pending.append(rs_id)
+    if len(_pending) >= CLOSE_BATCH:
+        flush_closes()
+
+
+def flush_closes() -> None:
+    """Close every cursor whose close is waiting; called before a commit, a rollback and a database close, and when the batch is full."""
+    if not _pending or _lib is None:
+        return
+    with _pending_lock:
+        ids = _pending[:]
+        del _pending[: len(ids)]
+        if ids:
+            arr = (ctypes.c_long * len(ids))(*ids)
+            _lib.arcadedb_n_rs_close_many(_thread_handle(), arr, len(ids))
 
 
 def diag() -> dict:

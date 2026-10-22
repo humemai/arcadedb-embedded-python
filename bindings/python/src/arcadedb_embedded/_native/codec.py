@@ -1,6 +1,7 @@
 """Python <-> native JSON: query parameters out, typed rows in."""
 
 import json
+import os
 from collections.abc import Mapping
 from datetime import date, datetime, timezone
 from decimal import Decimal
@@ -64,6 +65,8 @@ def _default(value, _bin=None):
 
 
 _PLAIN = frozenset((str, int, float, bool, type(None)))
+_dumps = json.dumps
+_fast = os.environ.get("ARCADEDB_NATIVE_FASTENC", "1") != "0"
 
 
 def _prep(value):
@@ -92,6 +95,10 @@ def encode_params(args, binary=False):
         return ("", None, 0) if binary else ""
     values = args[0] if len(args) == 1 and isinstance(args[0], (list, tuple)) else args
     plain = _PLAIN
+    if _fast and set(map(type, values)) <= plain:
+        # all plain scalars (the per-row INSERT of a load): the cached default encoder, no default hook, no per-call encoder object
+        text = _dumps({"pos": values if type(values) is list else list(values)})
+        return (text, None, 0) if binary else text
     if len(values) == 1 and isinstance(values[0], Mapping):
         named = values[0]
         if not all(type(v) in plain for v in named.values()):
