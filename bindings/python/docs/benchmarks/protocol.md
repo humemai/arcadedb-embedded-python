@@ -46,6 +46,11 @@ worker at the publishing tier. A cell measured two-at-once is exploration foreve
   engine's own documentation. Embedded ArcadeDB leaves `-Xms` unset, as the Python bindings
   document, and the server engines keep the initial heap their vendors recommend.
 - **Raising a resource for one engine obliges a re-measure of every engine at that tier.**
+- **Neo4j and Elasticsearch run their vendors' memory rules.** Neo4j takes the heap and page cache
+  that its own `neo4j-admin server memory-recommendation` prints for the cell's memory cap, and
+  Elasticsearch a heap of at most half the cap and under the compressed-oops threshold (26 GiB).
+  Both keep the initial heap equal to the maximum, as their documentation recommends, and every
+  engine still gets the same memory cap.
 
 !!! note "The memory contract cuts against ArcadeDB, and is kept anyway"
     The JVM heap lives inside the container cap, so ArcadeDB's heap leaves the rest of the
