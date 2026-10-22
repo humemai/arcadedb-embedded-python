@@ -447,6 +447,22 @@ class VectorIndex:
                 )
             return idx.findNeighborsFromVectorApproximate(java_vector, k)
 
+        if str(idx.getMetadata().quantizationType) == "PRODUCT":
+            # The entry point SQL vectorNeighbors, Cypher and the select share: a
+            # PRODUCT index walks on its PQ codes and re-ranks the best
+            # k * rerankOversample candidates on the stored vectors, so this
+            # helper answers like the statement does (findNeighborsFromVector is
+            # the exact walk). -1 for the beam and the re-rank: index defaults.
+            guard = jpype.JClass("com.arcadedb.query.sql.executor.WorkGuard")
+            return idx.findNeighbors(
+                java_vector,
+                k,
+                -1 if ef_search is None else int(ef_search),
+                -1,
+                allowed_rids_set,
+                guard.forCommandDeadline(None),
+            )
+
         if allowed_rids_set is not None and ef_search is not None:
             return idx.findNeighborsFromVector(
                 java_vector, k, ef_search, allowed_rids_set
@@ -517,6 +533,13 @@ class VectorIndex:
     ):
         """
         Find k nearest neighbors to the query vector.
+
+        On a ``PRODUCT`` index this takes the same engine path as SQL
+        ``vectorNeighbors``: the walk scores on the in-memory PQ codes and the best
+        ``k * rerankOversample`` candidates are re-ranked on the stored vectors, so
+        the distances returned are exact and the ranking can differ from an exact
+        walk's. Every other quantization takes the exact walk. For the per-query
+        ``rerank`` option, use ``vectorNeighbors`` in SQL.
 
         Args:
             query_vector: Query vector as Python list, NumPy array, or array-like
@@ -597,6 +620,8 @@ class VectorIndex:
                 "pq_clusters": int(meta.pqClusters),
                 "pq_center_globally": bool(meta.pqCenterGlobally),
                 "pq_training_limit": int(meta.pqTrainingLimit),
+                "rerank_oversample": int(meta.rerankOversample),
+                "fused_pq": bool(meta.fusedPQ),
             }
         except Exception as e:
             raise ArcadeDBError(f"Failed to read vector index metadata: {e}") from e
@@ -686,6 +711,11 @@ class VectorIndex:
     ):
         """
         Find k nearest neighbors using Product Quantization (PQ) approximate search.
+
+        The answer is the PQ scores alone: no re-rank on the stored vectors and no
+        beam, so recall stops improving at about 0.72 on SIFT-1M with 32 subspaces
+        and the distances are PQ estimates. ``find_nearest`` re-ranks and returns
+        exact distances.
 
         Args:
             query_vector: Query vector as Python list, NumPy array, or array-like
