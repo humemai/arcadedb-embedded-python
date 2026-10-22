@@ -73,6 +73,7 @@ FIGURES: dict[str, str] = {
     "udf-cost": "Python function in SQL against the equivalent SQL expression",
     "callback-cost": "Per-record callback cost of Database.on(...)",
     "heap-pinned": "JVM heap pinned (-Xms equal to -Xmx) against unpinned",
+    "float-vector-crossing": "Float vectors across the bridge as one binary buffer against JSON text or one JPype call per element",
 }
 
 OPEN = re.compile(r"<!-- ab-table: (?P<id>[A-Za-z0-9_-]+) -->")

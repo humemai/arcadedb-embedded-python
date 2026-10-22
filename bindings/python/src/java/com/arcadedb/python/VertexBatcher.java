@@ -24,15 +24,31 @@ public final class VertexBatcher {
   }
 
   public static String createVerticesJson(final GraphBatch batch, final String typeName, final String jsonRows) {
+    return createVerticesJson(batch, typeName, jsonRows, null, null);
+  }
+
+  /**
+   * As {@link #createVerticesJson(GraphBatch, String, String)}, with float vectors that did not go through the JSON text:
+   * {@code vectorNames[c]} is set on vertex i to row i of {@code vectors[c]}, a {@link FloatVectors.Matrix} with one row per
+   * JSON row. Both are null when there are none.
+   */
+  public static String createVerticesJson(final GraphBatch batch, final String typeName, final String jsonRows,
+      final String[] vectorNames, final Object[] vectors) {
     final JSONArray rows = new JSONArray(jsonRows);
+    FloatVectors.check(vectorNames, vectors, rows.length());
+    final int extra = vectorNames == null ? 0 : vectorNames.length;
     final Object[][] matrix = new Object[rows.length()][];
     for (int i = 0; i < rows.length(); i++) {
       final JSONObject row = rows.getJSONObject(i);
-      final Object[] flat = new Object[row.length() * 2];
+      final Object[] flat = new Object[(row.length() + extra) * 2];
       int j = 0;
       for (final String key : row.keySet()) {
         flat[j++] = key;
         flat[j++] = row.isNull(key) ? null : row.get(key);
+      }
+      for (int c = 0; c < extra; c++) {
+        flat[j++] = vectorNames[c];
+        flat[j++] = ((FloatVectors.Matrix) vectors[c]).row(i);
       }
       matrix[i] = flat;
     }

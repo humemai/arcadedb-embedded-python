@@ -13,6 +13,11 @@ from typing import Any, NamedTuple
 
 import jpype
 
+try:
+    import numpy as _np
+except ImportError:  # numpy is optional
+    _np = None
+
 
 class _JavaTimeTypes(NamedTuple):
     instant: Any
@@ -504,6 +509,16 @@ def convert_python_to_java(value: Any) -> Any:
         # Not a bool subclass: JPype would store it as the Double 1.0 or 0.0.
         return bool(value)
 
+    if _np is not None and isinstance(value, _np.ndarray):
+        # A numpy array reached the JVM as a TypeError ("only integer scalar
+        # arrays can be converted to a scalar index") from JPype. A float32 vector
+        # crosses as ONE float[] (one buffer copy), what an ARRAY_OF_FLOATS
+        # property stores; any other array is the list it would have been
+        # (exact values: a float64 array keeps its doubles).
+        if value.ndim == 1 and value.dtype == _np.float32:
+            return jpype.JArray(jpype.JFloat)(value)
+        return convert_python_to_java(value.tolist())
+
     java_python_types = _get_java_python_types()
 
     if isinstance(value, Decimal):
@@ -705,3 +720,92 @@ def json_bulk_dumps(rows: Any) -> str:
                     value
                 )  # nested lists and dicts, and subclasses of the types above
     return json.dumps(rows, allow_nan=False)
+
+
+_FLOAT_VECTORS = None  # the bridge's FloatVectors class once resolved; False when the bridge jar lacks it
+
+
+def _float_vectors_class():
+    global _FLOAT_VECTORS
+    if _FLOAT_VECTORS is None:
+        try:
+            _FLOAT_VECTORS = jpype.JClass("com.arcadedb.python.FloatVectors")
+        except Exception:  # an older bridge jar: the JSON text carries the vectors
+            _FLOAT_VECTORS = False
+    return _FLOAT_VECTORS or None
+
+
+def declared_float_vectors(java_db, type_name):
+    """The names of the ARRAY_OF_FLOATS properties of `type_name` (inherited ones too), [] when there are none or no numpy."""
+    vectors = _float_vectors_class() if _np is not None else None
+    if vectors is None:
+        return []
+    return [str(name) for name in vectors.declared(java_db, type_name)]
+
+
+def is_vector_candidate(value):
+    """A value split_float_vectors may take out of the JSON: a list or a numpy array."""
+    return type(value) is list or (_np is not None and isinstance(value, _np.ndarray))
+
+
+def split_float_vectors(java_db, type_name, rows, declared=None):
+    """Take the float vectors of `rows` out of the JSON text of a bulk load.
+
+    A list of floats costs Python about 450 ns a number to write as text and the
+    engine about as much again to parse it, so a vector load spent most of its
+    time on the text. For each property of `type_name` that is declared
+    ARRAY_OF_FLOATS, whose value in EVERY row is a list or a numpy array of
+    numbers of one length, the vectors cross as one float32 matrix instead
+    (``FloatVectors.Matrix``, one buffer copy). The engine converts the numbers of a list to float for
+    such a property, so the float32 matrix stores the same values. Every other
+    property, and a column that is missing in a row, ragged, not numeric, or
+    null in a row, stays in the JSON.
+
+    Returns ``(rest_rows, names, matrices)``: `rest_rows` are the rows without
+    those properties, `names` a ``String[]`` and `matrices` an ``Object[]`` of
+    ``FloatVectors.Matrix`` for the bridge; or None when no property qualifies
+    (the caller sends `rows` as they are).
+    """
+    if _np is None or not rows:
+        return None
+    vectors = _float_vectors_class()
+    if vectors is None:
+        return None
+    if declared is None:
+        declared = declared_float_vectors(java_db, type_name)
+    taken = []
+    matrices = []
+    for name in declared:
+        try:
+            column = [row[name] for row in rows]
+        except (KeyError, TypeError):
+            continue
+        if not is_vector_candidate(column[0]):
+            continue
+        try:
+            array = _np.array(column)
+        except (ValueError, TypeError):
+            continue
+        if array.ndim != 2 or array.shape[1] == 0 or array.dtype.kind not in "fiu":
+            continue
+        with _np.errstate(
+            all="ignore"
+        ):  # a double beyond float32 becomes Infinity, as in the engine
+            flat = _np.ascontiguousarray(array, dtype=_np.float32).reshape(-1)
+        taken.append(name)
+        matrices.append(
+            vectors.Matrix(jpype.JArray(jpype.JFloat)(flat), int(array.shape[1]))
+        )
+    if not taken:
+        return None
+    if len(taken) == 1:
+        only = taken[0]
+        rest = [{k: v for k, v in row.items() if k != only} for row in rows]
+    else:
+        gone = set(taken)
+        rest = [{k: v for k, v in row.items() if k not in gone} for row in rows]
+    return (
+        rest,
+        jpype.JArray(jpype.JString)(taken),
+        jpype.JArray(jpype.JObject)(matrices),
+    )

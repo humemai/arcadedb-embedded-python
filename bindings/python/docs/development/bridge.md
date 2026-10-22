@@ -6,13 +6,14 @@ sources live in `bindings/python/src/java/com/arcadedb/python/`:
 |---|---|
 | `RowBatcher` | Serializes up to N result rows into one JSON-array string per call (batched row transport) |
 | `ColumnBatcher` | Encodes up to N rows into one `byte[]` of typed little-endian column buffers plus null bitmaps (binary columnar transport) |
-| `DocumentBatcher` | Inserts a whole batch of documents from one JSON-rows string (transactional or async parallel writers), or from whole typed columns (`insertColumns`, one `long[]`, `double[]`, `boolean[]`, or `Object[]` per property); also boxes numpy numeric arrays for `append_samples` |
+| `DocumentBatcher` | Inserts a whole batch of documents from one JSON-rows string (transactional or async parallel writers), or from whole typed columns (`insertColumns`, one `long[]`, `double[]`, `boolean[]`, or `Object[]` per property); also boxes numpy numeric arrays for `append_samples`; a float vector of an `ARRAY_OF_FLOATS` property crosses as a binary `FloatVectors.Matrix` beside the JSON (`insertManyJson`) or as a whole 2-D `float32` column |
 | `EdgeBatcher` | Buffers a whole batch of edges into `GraphBatch` from one call (RID strings, or JSON rows for edges with properties) |
 | `VertexBatcher` | Creates a whole batch of vertices from one JSON-rows string, returning all RIDs as one joined string |
 | `TimeSeriesBatcher` | Fills the engine's primitive `TimeSeriesBatch` one column per call, so numeric samples are never boxed |
 | `RowAccess` | Hands a row's names and values to Python in one call (`namesAndValues`), and up to N such rows per call (`nextRows`, the fallback for `to_list()` when the bridge jar lacks `TypedRows`); the values are the engine's own objects, so Python converts them with full type fidelity. Also the first row of a result set with the set closed (`firstAndClose`, behind `ResultSet.first()`) and a property or null (`propertyOrNull`, behind `Result.get()`), each in one call instead of two or three |
 | `TypedRows` | Up to N rows per call as one JSON string, type-faithful (`nextRows`, which also reports whether the result set is drained): DECIMAL, BigInteger, DATE, DATETIME, Instant and zoned values, and sets are tagged and restored exactly by Python, and every other value (RIDs, embedded documents, `float[]` and `double[]`, non-finite floats, maps with non-String keys, years Python cannot hold) is returned in a side array as the engine's own object and converted by Python as before. Behind `ResultSet.to_list()` (up to 1,000 rows or 4 MiB of JSON per call, whichever comes first) and `ResultSet.iter_dicts()` (one row per call, so a lazy caller reads rows when it asks) |
-| `GraphCalls` | Every edge of `Vertex.getEdges(direction, labels)` in one call (`outEdges`, `inEdges`, `bothEdges`, behind `Vertex.get_out_edges()` and its siblings), and the record and score of every vector search hit in one call (`hits`, behind `LSMVectorIndex` search results) |
+| `FloatVectors` | Float vectors as one binary buffer instead of JSON text or a JPype call per element: `Matrix` (n vectors in one `float[]`, a row copied into each document), and `declared` (which properties of a type are `ARRAY_OF_FLOATS`); behind `insert_many()`, `insert_columns()` and `GraphBatch.create_vertices()` |
+| `GraphCalls` | Every edge of `Vertex.getEdges(direction, labels)` in one call (`outEdges`, `inEdges`, `bothEdges`, behind `Vertex.get_out_edges()` and its siblings), and the record and score of every vector search hit in one call (`hits`, behind `LSMVectorIndex` search results), and the `allowed_rids` set of a vector search from RID strings in one call (`ridSet`) |
 | `DbCalls` | One-row statements and lookups in one call: `commandNamed`, `queryNamed`, `commandPositional`, and `queryPositional` take the parameters as the varargs of a single non-overloaded method and build the map Java-side (behind `Database.command()` and `Database.query()`), and `lookupFirst` is the whole of `Database.lookup_by_key()` |
 | `PythonFunctions` | Registers a Python callable as an engine `SQLFunction` in the process-wide function factory (so SQL and openCypher resolve it): the arity check, one `CommandExecutionException` naming the function for any failure of the callable, and a revoked flag so an unregistered function fails clearly. Behind `Database.register_function()` and `unregister_function()`. Each call is one JNI round trip |
 | `PythonRecordEvents` | One listener class for the six write events (before and after create, update, delete) that forwards each to a Python callback; a `false` from a before event is the veto, and a failure is wrapped in a `DatabaseOperationException` naming the event. Behind `Database.on()` |
@@ -41,10 +42,10 @@ crossing per batch**, receiving a bulk payload it can decode at C speed: the
 | `ResultSet.to_json_list()` / `iter_json_batches()` | `RowBatcher` |
 | `ResultSet.to_list()` (rows in batches), `ResultSet.iter_dicts()` (one row per call) | `TypedRows` |
 | `Result.to_dict()` (one row) | `RowAccess` |
-| `Vertex.get_out_edges()` / `get_in_edges()` / `get_both_edges()`, vector search results | `GraphCalls` |
+| `Vertex.get_out_edges()` / `get_in_edges()` / `get_both_edges()`, vector search results and their `allowed_rids` set | `GraphCalls` |
 | `ResultSet.to_columns()` / fast `to_dataframe()` / `to_arrow()` | `ColumnBatcher` |
-| `Database.insert_many()` | `DocumentBatcher` |
-| `Database.insert_columns()` | `DocumentBatcher` |
+| `Database.insert_many()` | `DocumentBatcher`, `FloatVectors` (vector properties) |
+| `Database.insert_columns()` | `DocumentBatcher`, `FloatVectors` (a 2-D `float32` column) |
 | `Database.insert_dataframe()` / `insert_arrow()` | `DocumentBatcher` (document types, through `insert_columns()`), `VertexBatcher` (vertex types, through `GraphBatch.create_vertices()`); the Arrow-to-column conversion is Python (`dataframe.py`) |
 | `ResultSet.to_polars()` | `ColumnBatcher` (through `to_arrow()`) |
 | `AsyncExecutor.append_samples()` (numpy numeric-column boxing) | `DocumentBatcher` |

@@ -273,6 +273,43 @@ Notes:
 - For euclidean, skip normalization if magnitude should matter. For dot_product,
   normalize: the engine expects unit-length vectors.
 
+### Loading many vectors
+
+Declare the property `ARRAY_OF_FLOATS`, then load the vectors in bulk. The vectors of a chunk cross the bridge as one `float32` buffer, not as JSON text and not one JPype call per element:
+
+```python
+db.command("sql", "CREATE DOCUMENT TYPE Doc")
+db.command("sql", "CREATE PROPERTY Doc.embedding ARRAY_OF_FLOATS")
+
+# rows with a list or a numpy array per vector (the property must be declared ARRAY_OF_FLOATS)
+db.insert_many("Doc", [{"id": i, "embedding": x[i]} for i in range(len(x))])
+
+# or whole columns: a 2-D float32 matrix is one column of vectors
+db.insert_columns("Doc", {"id": ids, "embedding": x})  # x: float32, shape (n, dims)
+
+# a graph load takes the same rows
+with db.graph_batch() as gb:
+    gb.create_vertices("Vx", [{"id": i, "embedding": x[i]} for i in range(len(x))])
+```
+
+A `float64` list or array stores the same values it always did (the engine converts it to float for this property). Declaring the property is what makes the path apply: an undeclared property keeps the exact doubles in a list. A numpy array is accepted wherever a vector is a property value (`Document.set`, `insert_many`, `create_vertices`).
+
+The figures below compare the bindings before this change (A, JSON text or one JPype call per element) with the bindings after it (B, one binary buffer), built from one base wheel so the engine jars and the JVM are identical. The workload is 128-d `float32` vectors on an `ARRAY_OF_FLOATS` property, a JVM heap of 4 GB, one fresh process per run. `insert_columns` takes a different path in A: a wheel without 2-D columns offers one `float[]` per row, so its row compares that best case with the 2-D column.
+
+<!-- ab-table: float-vector-crossing -->
+| Case | Metric | A | B | A median | B median | B vs A (95% interval) | Sign test (B) | Verdict | Clean pairs |
+|---|---|---|---|---|---|---|---|---|---|
+| insert_many, 100,000 dict rows, 128-d float32, chunks of 20,000 | time (ms, lower is better) | before | one buffer | 14,215 | 2,621 | 0.185 (0.180 to 0.191) | 10 better, 0 worse, p = 0.00195 | B better by 81 to 82 percent | 10 (2 dropped) |
+| insert_columns, 100,000 rows, 128-d float32 | time (ms, lower is better) | before | one buffer | 609 | 521 | 0.862 (0.833 to 0.947) | 8 better, 2 worse, p = 0.109 | B better by 5 to 17 percent | 10 (2 dropped) |
+| graph_batch create_vertices, 50,000 rows, 128-d float32 | time (ms, lower is better) | before | one buffer | 3,596 | 1,083 | 0.300 (0.289 to 0.315) | 10 better, 0 worse, p = 0.00195 | B better by 68 to 71 percent | 10 (2 dropped) |
+| find_nearest(k=10) with 5,000 allowed RIDs, 200 queries, 20,000 vectors | time (ms, lower is better) | before | one buffer | 2,296 | 569 | 0.246 (0.235 to 0.257) | 10 better, 0 worse, p = 0.00195 | B better by 74 to 76 percent | 10 (2 dropped) |
+| all four steps of the probe | total time (ms, lower is better) | before | one buffer | 20,605 | 4,785 | 0.232 (0.230 to 0.236) | 10 better, 0 worse, p = 0.00195 | B better by 76 to 77 percent | 10 (2 dropped) |
+
+Medians are over the clean pairs of interleaved runs, one fresh process per run, round 0 dropped. B vs A is the median of the per-round ratios with its bootstrap 95% interval; above 1.000 means B is worse (B / A for a time, A / B for a rate). A verdict needs the interval to exclude 1.000 and at least 7 clean pairs.
+
+Engine 26.11.1, wheel 26.11.1.dev0, cores 2 (pinned), machine x86-64 laptop, 16 cores.
+<!-- /ab-table -->
+
 ## Preferred Search Surface: SQL / Cypher
 
 For new code, prefer query APIs for search. Bind the query vector as a parameter
