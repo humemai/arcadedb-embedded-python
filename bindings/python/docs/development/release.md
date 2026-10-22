@@ -203,6 +203,15 @@ A dev tag is released from `main` while `pom.xml` reads `X.Y.Z-SNAPSHOT`: the re
 workflow compares only the base version (`X.Y.Z`). Tag and check it exactly as in
 step 4. A dev tag publishes to the real PyPI index and becomes the `latest` docs.
 
+## Native Preview Releases (`native-vX.Y.Z.devN`)
+
+The native preview is a second package built from the `native-preview` branch: distribution `arcadedb-embedded-native`, import name `arcadedb_native`, Linux x86-64 `manylinux_2_34` only for now (see `bindings/python/native-wheel/README.md`). It has its own release line and does not touch the steps above.
+
+- **Version**: the engine release the image links plus a suffix, `A.B.C.devN` -> `A.B.C` -> `A.B.C.postN`; never `aN`, `bN` or `rcN`. A rebuild of the same engine raises `N`. The workflow rejects a version that is not in this canonical form, and the wheel's version must equal the tag's.
+- **Tag**: `git tag native-v26.10.2.dev1 && git push origin native-v26.10.2.dev1`, from a commit on `native-preview` that you have tested. The tag version is the wheel version.
+- **Workflow** (`native-preview.yml`, see [CI Setup](ci-setup.md#native-previewyml)): builds the image in a `manylinux_2_34` container, gates on `auditwheel show`, `twine check` and the bindings tests run against the installed wheel, then publishes with trusted publishing (environment `pypi-native`, tags `native-v*` only, no token). A push to the branch or a manual dispatch builds and tests but never publishes.
+- **Why its own PyPI name**: PyPI keeps one file per name, version and platform tag, so a native build cannot sit beside the JVM wheel under `arcadedb-embedded`. The name goes away when the bindings move to `arcadedb` on PyPI.
+
 ## Python Versioning Strategy
 
 ### Overview

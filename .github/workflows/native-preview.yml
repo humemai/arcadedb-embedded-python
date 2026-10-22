@@ -7,7 +7,7 @@
 #                                     deliberately not on main, so the branch push is the way to dry-run it from native-preview.
 #
 # The wheel is py3-none-manylinux_2_34_x86_64: libarcadedb.so is a GraalVM native-image shared library loaded with ctypes.
-# Design and decisions: bindings/python/native-wheel/PACKAGING.md. Gates: the glibc floor (image built in a manylinux_2_34
+# Design and decisions: bindings/python/docs/development/build-architecture.md (Native Preview Wheel); release procedure: release.md. Gates: the glibc floor (image built in a manylinux_2_34
 # container), `auditwheel show` (manylinux_2_34, no ISA warning), `twine check`, wheel version == tag version, and the bindings
 # test suite run against the INSTALLED wheel (parity_wheel.py). PyPI side: pending/active trusted publisher for
 # humemai/arcadedb-embedded-python, workflow native-preview.yml, environment pypi-native (allows native-v* tags only). No API token.

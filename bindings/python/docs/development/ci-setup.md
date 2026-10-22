@@ -108,6 +108,10 @@ Every `uses:` is pinned to a full commit SHA with a `# vX.Y.Z` comment (enforced
 
 The workflows follow the project rule for Python tooling: no `pip install` and no `uv pip` anywhere. One-off tools run with `uvx` at an exact version (`bandit`, `pip-audit`, `mkdocs` with its plugins, `mike`). The inline `pyyaml` check in `lint-workflows.yml` runs with `uv run --no-project --with pyyaml==...`. The test and example jobs run `uv run --no-project --python <matrix version> --with <built wheel> --with-requirements <file> ...`, so the wheel and its test or example packages live in a throwaway environment and nothing is installed into the runner's interpreter. The macOS and Windows wheel builds (`scripts/build-native.sh`) need a Python with the `build` module on `PATH`, so those steps run `bash ./scripts/build.sh` under `uv run --with build --with wheel --with setuptools`. The examples take `torch` from the PyTorch CPU index (`UV_INDEX`) with `UV_INDEX_STRATEGY=unsafe-best-match`, so torch gets its CPU build from there while every other package still takes the newest release on either index. The Docker build of the Linux wheels still installs its build tools inside the image (`scripts/Dockerfile.build`), which is outside the workflows.
 
+### `native-preview.yml`
+
+Named `Native preview wheel`. Lives on the `native-preview` branch only (a dispatch needs the file on the default branch, so the branch push is the dry run). **Trigger**: a push to `native-preview` or a manual dispatch (**build** and **test** only), or a pushed `native-v*` tag (also **publish**). **build** compiles the GraalVM native image in a `manylinux_2_34` container and builds the wheel; **test** installs it in a clean environment and runs the bindings tests against it; **publish** needs both, runs on tag pushes only, and uploads `arcadedb-embedded-native` through the `pypi-native` environment (trusted publishing). Procedure: [Native Preview Releases](release.md#native-preview-releases-native-vxyzdevn).
+
 ### `deploy-python-docs.yml`
 
 Deploys the docs with mike on a version tag or a manual dispatch. See

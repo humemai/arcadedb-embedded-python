@@ -441,6 +441,25 @@ needs `--build-arg ARCADEDB_TAG=<tag>`.
 uv run pytest
 ```
 
+## Native Preview Wheel
+
+`bindings/python/native-wheel/` builds `arcadedb-embedded-native`, the same Python API over a GraalVM native-image library (`libarcadedb.so`) loaded with `ctypes`, with no JVM and no JPype. User-facing facts (install, platforms, unsupported APIs) are in its `README.md`; the release procedure is in [Release Workflow](release.md#native-preview-releases-native-vxyzdevn). Design decisions:
+
+- **Shared Python code**: not duplicated in git. `build_wheel.py` copies `src/arcadedb_embedded` to `arcadedb_native`, replaces `import jpype` with a bundled stub, and flips `_DEFAULT_BACKEND` to `"native"`. The build fails if a `jpype` import is left or that line is missing.
+- **Library and tag**: `libarcadedb.so` and `libjvector-x86_64.so` sit in `arcadedb_native/_native/`. The tag is `py3-none-manylinux_2_34_x86_64`: 2.34 is the highest `GLIBC_` symbol in the library (`build_wheel.py` computes it), and the image is built with `-march=compatibility` (baseline x86-64) because a manylinux tag promises it. GraalVM CE 25.4 defaults to x86-64-v3, which `auditwheel` would refuse; `MARCH=x86-64-v3 preview-build.sh` builds a reference image, and `lib.py::_check_cpu` guards such an image against a CPU without avx2, bmi2 or fma.
+- **Engine and glue**: the image links the engine's Maven Central release jars (`ARCADEDB_ENGINE_VERSION`), never a local SNAPSHOT. The bindings and Java glue come from the branch (`SOURCE_COMMIT` in `_build_info.py`).
+- **Licences**: Apache-2.0 for ArcadeDB and the bindings. The image also contains GraalVM CE and OpenJDK classes (GPLv2 with the Classpath Exception, which permits this linking). The wheel ships `LICENSE`, `NOTICE`, `THIRD_PARTY_NOTICES.md` and the GraalVM texts in `*.dist-info/licenses/`. Oracle GraalVM (GFTC) is not used. Before a non-preview release: generate `THIRD_PARTY_NOTICES.md` from the resolved classpath (it is hand-written now) and have the GPL source-offer wording reviewed.
+- **Open**: arm64 needs a native arm64 build (no cross-compile in CE) and an arm64 runner; `-H:-VectorAPISupport` works around a CE crash in `PanamaVectorUtilSupport.dotProductPreferred` (retest on newer CE); the README's performance table is untimed and must be replaced by `ab.py` results.
+
+Local build (the image through `.notes/bench/tools/quiet_build.sh`, about 13 GB):
+
+```bash
+NEED_GB=13 JOB_MEM_GB=14 .notes/bench/tools/quiet_build.sh bash native-spike/scripts/preview-build.sh
+python bindings/python/native-wheel/build_wheel.py --lib-dir ~/build-scratch/native-lib/preview \
+  --version 26.10.2.dev1 --engine 26.10.2 --out <dir>
+uvx auditwheel show <dir>/dist/*.whl
+```
+
 ## References
 
 - **jlink documentation:** [Oracle jlink man page](https://docs.oracle.com/en/java/javase/25/docs/specs/man/jlink.html)
