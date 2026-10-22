@@ -5,7 +5,7 @@
 
 Steps: copy src/arcadedb_embedded to <out>/stage/src/arcadedb_native with every name rewritten (the shared tree is not duplicated in git);
 rewrite `import jpype` to the bundled stub; flip the default backend to native; add libarcadedb.so + libjvector-x86_64.so;
-add LICENSE/NOTICE/GraalVM licence texts; compute the manylinux tag from the library's GLIBC symbol versions; build with `uv build --wheel`.
+add LICENSE/NOTICE/GraalVM licence texts; check THIRD_PARTY_NOTICES.md against gen_notices.py (fails on drift); compute the manylinux tag from the library's GLIBC symbol versions; build with `uv build --wheel`.
 """
 
 import argparse
@@ -62,9 +62,37 @@ def main():
         default="compatibility",
         help="-march the image was built with (preview-build.sh MARCH)",
     )
+    ap.add_argument(
+        "--skip-notices-check",
+        action="store_true",
+        help="do not compare THIRD_PARTY_NOTICES.md with the gen_notices.py output (needs <lib-dir>/build.log)",
+    )
     ap.add_argument("--plat", default="", help="override the computed platform tag")
     a = ap.parse_args()
     lib_dir, out = Path(a.lib_dir), Path(a.out).resolve()
+    if not a.skip_notices_check:
+        # THIRD_PARTY_NOTICES.md is generated from the classpath of the image build (preview-build.sh writes <lib-dir>/build.log):
+        # refuse to build a wheel whose notices differ from the library's real contents. Licence-review items are printed, not fatal.
+        chk = subprocess.run(
+            [
+                sys.executable,
+                "-I",
+                str(HERE / "gen_notices.py"),
+                "--build-log",
+                str(lib_dir / "build.log"),
+                "--engine",
+                a.engine,
+                "--graalvm-home",
+                a.graalvm_home,
+                "--check",
+                str(HERE / "THIRD_PARTY_NOTICES.md"),
+            ]
+        )
+        if chk.returncode:
+            sys.exit(
+                "THIRD_PARTY_NOTICES.md is out of date: python native-wheel/gen_notices.py --build-log <lib-dir>/build.log "
+                f"--engine {a.engine} --graalvm-home {a.graalvm_home} --out native-wheel/THIRD_PARTY_NOTICES.md"
+            )
     stage = out / "stage"
     shutil.rmtree(stage, ignore_errors=True)
     dst = stage / "src" / "arcadedb_native"

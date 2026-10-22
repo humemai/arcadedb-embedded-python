@@ -5909,48 +5909,6 @@
    "glob": "ratis-version.properties"
   },
   {
-   "glob": "static/ai.html"
-  },
-  {
-   "glob": "static/api.html"
-  },
-  {
-   "glob": "static/cluster.html"
-  },
-  {
-   "glob": "static/database.html"
-  },
-  {
-   "glob": "static/index.html"
-  },
-  {
-   "glob": "static/popup-login.html"
-  },
-  {
-   "glob": "static/profiler.html"
-  },
-  {
-   "glob": "static/query.html"
-  },
-  {
-   "glob": "static/resources.html"
-  },
-  {
-   "glob": "static/security.html"
-  },
-  {
-   "glob": "static/server.html"
-  },
-  {
-   "glob": "static/settings.html"
-  },
-  {
-   "glob": "static/support.html"
-  },
-  {
-   "glob": "static/timeseries.html"
-  },
-  {
    "module": "java.base",
    "glob": "jdk/internal/icu/impl/data/icudt76b/nfc.nrm"
   },
@@ -5964,9 +5922,6 @@
   },
   {
    "glob": "META-INF/services/**"
-  },
-  {
-   "glob": "static/**"
   },
   {
    "glob": "com/arcadedb/**/*.properties"
