@@ -59,6 +59,27 @@ class _Thread:
                 pass
 
 
+def _check_cpu() -> None:
+    """The image is built for x86-64-v3 (AVX2, BMI2, FMA): fail with a clear error instead of SIGILL on an older CPU."""
+    if sys.platform != "linux" or os.environ.get("ARCADEDB_NATIVE_SKIP_CPU_CHECK"):
+        return
+    import platform
+
+    if platform.machine() not in ("x86_64", "AMD64"):
+        return
+    try:
+        with open("/proc/cpuinfo") as f:
+            flags = next((ln for ln in f if ln.startswith("flags")), "").split()
+    except OSError:
+        return
+    missing = [x for x in ("avx2", "bmi2", "fma") if flags and x not in flags]
+    if missing:
+        raise ArcadeDBError(
+            f"The native library needs an x86-64-v3 CPU (AVX2, BMI2, FMA); this CPU lacks {', '.join(missing)}. "
+            "Use the arcadedb-embedded (JVM) package instead, or set ARCADEDB_NATIVE_SKIP_CPU_CHECK=1 at your own risk."
+        )
+
+
 def _load():
     global _lib, _isolate, _main_thread, _creator
     with _lock:
@@ -70,6 +91,7 @@ def _load():
                 f"Native library not found at {path}. Build it from the native-spike workflow or set "
                 "ARCADEDB_NATIVE_LIB."
             )
+        _check_cpu()
         # jvector's Highway library (libjvector-<arch>.so) is looked for next to the engine library
         os.environ.setdefault("ARCADEDB_NATIVE_LIBDIR", str(path.resolve().parent))
         lib = ctypes.CDLL(str(path))

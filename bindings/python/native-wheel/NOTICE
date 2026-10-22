@@ -1,0 +1,25 @@
+arcadedb-embedded-native
+Copyright 2021-present Arcade Data Ltd; Python bindings copyright Taewoon Kim (humem.ai)
+Licensed under the Apache License, Version 2.0 (licenses/Apache-2.0.txt, LICENSE).
+
+This wheel contains the ArcadeDB engine (https://github.com/ArcadeData/arcadedb, release named in
+arcadedb_native.ENGINE_VERSION) compiled ahead of time with GraalVM Community Edition 25.4.4.1.1 into libarcadedb.so.
+Also see the NOTICE file of ArcadeDB: it includes components developed for OrientDB (Apache-2.0) and the openCypher grammar
+(Apache-2.0, Neo4j Sweden AB), which are part of the engine.
+
+GraalVM native-image runtime and JDK classes in libarcadedb.so
+  A native image links the Substrate VM runtime (garbage collector, threads, runtime support) and parts of the OpenJDK class library
+  into the library. These parts are licensed under the GNU General Public License version 2 WITH the "Classpath" Exception
+  (licenses/GraalVM-CE-LICENSE.txt, licenses/GraalVM-native-image-LICENSE.txt). The exception lets you link and distribute them with code
+  under other licences, and it is why this wheel as a whole stays Apache-2.0 for ArcadeDB's own code. The corresponding source:
+    GraalVM:  https://github.com/oracle/graal            (release vm-25.4.4.1.1 line; the build used community-25.4.4.1.1+1.1)
+    OpenJDK:  https://github.com/openjdk/jdk             (jdk-25 line used by that GraalVM build)
+  Other GraalVM modules carry the licences in licenses/GraalVM-THIRD_PARTY_LICENSE.txt (graal-sdk and polyglot: UPL-1.0).
+  Oracle GraalVM (GFTC) is not used; only Community Edition.
+
+libjvector-x86_64.so
+  The native vector kernels of JVector 4.0.2 (https://github.com/datastax/jvector), Apache-2.0, unmodified, taken from the jvector jar.
+
+Java libraries inside libarcadedb.so: THIRD_PARTY_NOTICES.md.
+
+System libraries linked dynamically and NOT shipped: libz.so.1, libm.so.6, libc.so.6, libstdc++.so.6, libgcc_s.so.1.

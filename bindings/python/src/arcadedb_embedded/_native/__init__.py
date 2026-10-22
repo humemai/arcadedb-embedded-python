@@ -17,9 +17,14 @@ class NotOnNativeYet(NotImplementedError):
     """The feature needs the Java object API, which the native backend does not expose (yet)."""
 
 
+# The backend used when ARCADEDB_BACKEND is unset. "jpype" here; the arcadedb-embedded-native wheel build
+# (native-wheel/build_wheel.py) rewrites this one line to "native".
+_DEFAULT_BACKEND = "jpype"
+
+
 def enabled() -> bool:
-    """True when ``ARCADEDB_BACKEND=native`` (read at call time, so a test can switch it)."""
-    return os.environ.get("ARCADEDB_BACKEND", "jpype").lower() == "native"
+    """True when the native backend is selected: ``ARCADEDB_BACKEND=native``, or unset in the arcadedb-embedded-native wheel (read at call time, so a test can switch it)."""
+    return os.environ.get("ARCADEDB_BACKEND", _DEFAULT_BACKEND).lower() == "native"
 
 
 def not_yet(what: str):
