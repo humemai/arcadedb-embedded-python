@@ -256,12 +256,11 @@ jobs:
           printf 'public class Hello { public static void main(String[] a) { System.out.println("hi"); } }\n' > Hello.java
           "$GRAALVM_HOME_P5/bin/javac" Hello.java
           "$GRAALVM_HOME_P5/bin/native-image.cmd" -cp . Hello 2>&1 | tail -n 12 | cut -c1-400 || true
-          echo "--- variant E: a shared library with the same environment"
-          "$GRAALVM_HOME_P5/bin/native-image.cmd" --shared -cp . -o libhello Hello 2>&1 | grep -E "LNK|Finished|Error:|Failed" | cut -c1-300 || true
-          echo "--- variant D: the engine build through the Maven wrapper's batch file (native environment)"
-          cd "$GITHUB_WORKSPACE" && ( export JAVA_HOME="$(cygpath -u "$GRAALVM_HOME_P5")"; export PATH=$JAVA_HOME/bin:$PATH
-            export NATIVE_IMAGE_OPTIONS="-J-Dfastops.mode=1 -J-Xmx12g -H:-VectorAPISupport -march=compatibility"
-            timeout 300 cmd //c "mvnw.cmd -B --no-transfer-progress -f native-spike/pom.xml -DskipTests -Darcadedb.version=${{ needs.version.outputs.engine }} -Dgraalvm.version=25.4.4.1.1 -Dnative.opt=-O2 package" 2>&1 | grep -E "LNK|Finished generating|Failed generating|BUILD" | cut -c1-300 ) || true
+          # Shim in front of native-image.cmd: records the environment native-image receives from the Maven plugin (printed after the build).
+          bin="$(cygpath -w "$GRAALVM_HOME_P5/bin")"
+          mv "$GRAALVM_HOME_P5/bin/native-image.cmd" "$GRAALVM_HOME_P5/bin/native-image-real.cmd"
+          printf '@echo off\r\nset > "%s\\env-dump-%%RANDOM%%.txt"\r\ncall "%%~dp0native-image-real.cmd" %%*\r\n' "$bin" > "$GRAALVM_HOME_P5/bin/native-image.cmd"
+          cat "$GRAALVM_HOME_P5/bin/native-image.cmd"
 
       # The very script the laptop build uses (-march=compatibility, -J-Xmx12g, -H:-VectorAPISupport, fastops.mode 1), inside the
       # manylinux_2_34 container (glibc 2.34) so the glibc floor of libarcadedb.so is a guarantee, not a property of the runner.
@@ -306,6 +305,15 @@ jobs:
           cat "$T/lib/build.done"
           cat "$T/lib/sha256.txt"
           ls -l "$T/lib"
+
+      - name: Show the environment native-image received (Windows diagnostics)
+        if: ${{ always() && matrix.kind == 'windows' }}
+        run: |
+          for f in "$GRAALVM_HOME_P5"/bin/env-dump-*.txt; do
+            echo "== $f"
+            grep -iE '^(lib|include|path|java_home|native_image_options)=' "$f" | cut -c1-400 || true
+            grep -ciE '^lib=' "$f" || true
+          done
 
       - name: Glibc floor of the libraries
         if: ${{ matrix.kind == 'linux' }}
