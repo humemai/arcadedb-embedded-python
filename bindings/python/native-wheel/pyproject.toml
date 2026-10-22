@@ -42,4 +42,4 @@ Repository = "https://github.com/humemai/arcadedb-embedded-python"
 where = ["src"]
 
 [tool.setuptools.package-data]
-arcadedb_native = ["*.so"]
+arcadedb_native = ["_native/*.so"]

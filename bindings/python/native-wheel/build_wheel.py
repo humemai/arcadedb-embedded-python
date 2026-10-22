@@ -135,7 +135,9 @@ def main():
     ip.write_text(t)
 
     for n in ("libarcadedb.so", "libjvector-x86_64.so"):
-        shutil.copy(lib_dir / n, dst / n)
+        shutil.copy(
+            lib_dir / n, dst / "_native" / n
+        )  # lib.py looks next to itself (_native/)
     lic = out / "licenses-tmp"
     shutil.rmtree(lic, ignore_errors=True)
     lic.mkdir()
