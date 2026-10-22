@@ -1,7 +1,7 @@
 # Graph Analytics Guide
 
 !!! warning "Known engine issues"
-    Open ArcadeDB bugs can return a wrong answer or refuse a lookup; see
+    Known bugs that can return a wrong answer or refuse a lookup, and the releases that fixed earlier ones, are listed on
     [Known Engine Issues](known-issues.md).
 
 ArcadeDB ships two things for whole-graph questions such as "who matters most" or
