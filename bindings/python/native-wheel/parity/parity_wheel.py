@@ -35,15 +35,20 @@ pkg = os.path.join(a.repo, "bindings", "python")
 files = sorted(glob.glob(os.path.join(pkg, "tests", "test_*.py")))
 import ast
 
-na_files = {}
+na_files, win_files = {}, {}
 for node in ast.parse(open(os.path.join(pkg, "tests", "conftest.py")).read()).body:
-    if (
-        isinstance(node, ast.Assign)
-        and getattr(node.targets[0], "id", "") == "NATIVE_NOT_APPLICABLE"
-    ):
-        na_files = ast.literal_eval(node.value)
+    if isinstance(node, ast.Assign):
+        name = getattr(node.targets[0], "id", "")
+        if name == "NATIVE_NOT_APPLICABLE":
+            na_files = ast.literal_eval(node.value)
+        elif name == "WINDOWS_NOT_APPLICABLE":
+            win_files = ast.literal_eval(node.value)
 if a.backend == "native":
     files = [f for f in files if os.path.basename(f) not in na_files]
+if (
+    sys.platform == "win32"
+):  # conftest.py's collect_ignore does not apply to a file named on the command line
+    files = [f for f in files if os.path.basename(f) not in win_files]
 if a.files:
     want = set(a.files.split(","))
     files = [f for f in files if os.path.basename(f) in want]

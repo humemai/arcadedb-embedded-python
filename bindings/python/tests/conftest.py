@@ -13,12 +13,17 @@ import pytest
 # A test file that cannot run here is not collected, so nothing is reported as skipped: a skip means
 # a test that should have run, and scripts/check_test_skips.py fails the CI job on any skip.
 collect_ignore = []
-if sys.platform == "win32":
+# Files that cannot run on Windows (native-wheel/parity/parity_wheel.py reads this table too: it passes every file to pytest by name,
+# and a file named on the command line is collected even when it is in collect_ignore).
+WINDOWS_NOT_APPLICABLE = {
     # test_sigint.py sends SIGINT to a child process, which Windows cannot deliver
-    collect_ignore.append("test_sigint.py")
+    "test_sigint.py": "SIGINT to a child process",
     # LadybugDB's compiled module does not load in this process on Windows (it falls back to a C-API library its
     # wheel does not ship), so the Cypher half of the equivalence checks runs on Linux and macOS (#347)
-    collect_ignore.append("test_equivalence_ladybug.py")
+    "test_equivalence_ladybug.py": "LadybugDB does not load on Windows",
+}
+if sys.platform == "win32":
+    collect_ignore.extend(WINDOWS_NOT_APPLICABLE)
 if os.environ.get("ARCADEDB_BACKEND", "jpype").lower() != "native":
     # Java -> Python upcalls (Python functions in SQL) exist on the native backend only
     collect_ignore.append("test_native_udf.py")
