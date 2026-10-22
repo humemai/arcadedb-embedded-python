@@ -4034,15 +4034,16 @@ OCT_PROSE = {
         "digest": ("Comparators are pinned by sha256 image digest, not by a floating tag.", []),
         # TWO DECLARATIONS WHERE THE MEASUREMENT DEPARTS FROM ARCADEDB'S OWN ADVICE (no number in either).
         # REMOVE WHEN: the instrument that follows this one changes the index order (index_order) or
-        # stops pinning the initial heap of the server engines while memory is measured (jvm_heap).
+        # stops pinning the initial heap of Elasticsearch and Neo4j while memory is measured (jvm_heap).
         "index_order": ("ArcadeDB's maintainers advise creating indexes after a bulk load, and the ArcadeDB rows create most of "
                         "theirs before it (the id, key and time-series key indexes and the sparse vector index) and build only the "
                         "shipping-date index on documents and the dense vector indexes after it; no measurement here shows whether "
                         "that order changes ArcadeDB's totals.", []),
-        "jvm_heap": ("The server engines that run on a JVM (ArcadeDB served, Elasticsearch, and Neo4j) run with the initial heap pinned "
-                     "to the maximum heap, the image-defaults ArcadeDB row excepted, although ArcadeDB's guidance is not to pin it when "
-                     "measuring memory; ArcadeDB embedded sets only the maximum heap, from the cell's memory budget, as its Python "
-                     "bindings document, and QuestDB keeps its image's heap settings.", []),
+        "jvm_heap": ("The server engines that run on a JVM other than ArcadeDB (Elasticsearch and Neo4j) run with the initial heap pinned "
+                     "to the maximum heap, as their documentation recommends, although ArcadeDB's guidance is not to pin it when "
+                     "measuring memory; ArcadeDB, embedded and served, sets only the maximum heap, from the cell's memory budget, as its "
+                     "guidance for a fixed memory budget and its Python bindings document (the image-defaults ArcadeDB row sets none and "
+                     "runs the image's own), and QuestDB keeps its image's heap settings.", []),
         # THE PIN FOLLOWS THE CLAUSE IT PINS. The settle tolerance moved out of
         # the per-table disk note with the sentence that states it.
         "disk_detail": (OCT_DISK_DETAIL, [(r"agree within (\d+)%", lambda P, rows: _const("runner", "DISK_SETTLE_TOL") * 100, "const")]),
@@ -4376,8 +4377,8 @@ def _entry_heaps(e, lane, wl, exact_only=False):
 def _heap_not_pinned(e, lane, wl):
     """True when this table entry's JVM started with far less heap than it may take: embedded ArcadeDB
     (no -Xms in this instrument), or an entry whose every row records `server_jvm_initial_heap_bytes`
-    below half of `server_jvm_max_heap_bytes` (no -Xms, as ArcadeDB's image defaults run, CAMPAIGN 7
-    row 69). The served case is read from the JVM's own report, never from the arm's name; an entry whose
+    below half of `server_jvm_max_heap_bytes` (no -Xms: the served ArcadeDB arms, which pass -Xmx only
+    since DECISIONS #200, and the image-defaults arm, CAMPAIGN 7 row 69). The served case is read from the JVM's own report, never from the arm's name; an entry whose
     rows recorded neither field is not this and gets the fixed-heap sentence."""
     # EMBEDDED ARCADEDB LEAVES -Xms UNSET in this instrument (PROTOCOL, "JVM initial heap"): only -Xmx is
     # passed, from the cell's memory budget, so its JVM starts with no initial heap of its own.
@@ -5711,12 +5712,28 @@ def _jvm_defaults_notes(table):
                    if str(r.get("server_mem_cap", "")).rstrip("g").replace(".", "").isdigit()})
     gcs = sorted({str(r.get("server_jvm_gc")) for r in arm if r.get("server_jvm_gc")})
     main_gcs = sorted({str(r.get("server_jvm_gc")) for r in main if r.get("server_jvm_gc")})
+    # WHETHER THE MAIN SERVED ROW PINNED ITS INITIAL HEAP is read from the JVM's own report, never assumed: rows
+    # measured before DECISIONS #200 pinned -Xms to -Xmx, rows after it pass -Xmx only.
+    pairs = []
+    for r in main:
+        try:
+            pairs.append((float(r["server_jvm_initial_heap_bytes"]), float(r["server_jvm_max_heap_bytes"])))
+        except (KeyError, TypeError, ValueError):
+            pass
+    main_init = "unknown"
+    if pairs and len(pairs) == len(main):
+        if all(i >= 0.9 * m for i, m in pairs):
+            main_init = "pinned"
+        elif all(i < 0.5 * m for i, m in pairs):
+            main_init = "unset"
     values = []
-    other = "The main ArcadeDB server row gives the JVM a fixed heap"
+    other = "The main ArcadeDB server row gives the JVM a " + ("fixed heap" if main_init == "pinned" else "maximum heap")
     if len(main_heap) == 1:
         other += f" of {fmt(main_heap[0])} GiB"
         values.append(fmt(main_heap[0]))
     other += " and the " + (f"{main_gcs[0]} collector" if len(main_gcs) == 1 else "collector the JVM chooses by default")
+    if main_init == "unset":
+        other += " and sets no initial heap size"
     other += ", and the embedded rows are configured the same way, so that the two deployments differ in transport only"
     took = "this row sets neither, so the image applied its own"
     if len(arm_heap) == 1:
@@ -5730,10 +5747,12 @@ def _jvm_defaults_notes(table):
         took += ": a heap of 75 per cent of its container"
         values.append("75")
     took += (f", the {gcs[0]} collector" if len(gcs) == 1 else ", the image's default collector")
-    took += ", and no initial heap size"
+    if main_init != "unset":
+        took += ", and no initial heap size"
+    tail = ("the heap, the collector, and the heap's warm-up together, not any one of them."
+            if main_init == "pinned" else "the heap and the collector together, not either of them alone.")
     text = (f"{display_name(JVM_DEFAULTS_ARM)} is the one row here that runs the ArcadeDB image's own JVM "
-            f"settings. {other}; {took}. Its difference from the main served row is the heap, the collector, "
-            f"and the heap's warm-up together, not any one of them.")
+            f"settings. {other}; {took}. Its difference from the main served row is {tail}")
     return [_gen(text, *values)]
 
 

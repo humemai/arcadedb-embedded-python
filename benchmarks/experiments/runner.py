@@ -241,9 +241,10 @@ HEAP_BY_SCALE = {"micro": "4g", "tiny": "4g", "small": "8g", "medium": "16g",
                  # cells exited 137 with no output. Heap must therefore fit the
                  # 75% SERVER-CONTAINER share with room left for metaspace,
                  # code cache, thread stacks, GC structures, direct buffers and
-                 # the page cache of the engine's own files. JVMs here pin
-                 # -Xms=-Xmx, so the heap is committed up front and the
-                 # headroom is real, not notional.
+                 # the page cache of the engine's own files. Elasticsearch and
+                 # Neo4j pin -Xms=-Xmx, so their heap is committed up front and
+                 # the headroom is real, not notional; ArcadeDB (embedded and
+                 # served) sets only -Xmx, so its heap grows inside the cap.
                  #
                  # Every tier is heap = 50% of cap. deep10m is the exception at
                  # 67% (24g in 36g), and the heap side of that is demand: the
@@ -455,6 +456,13 @@ BACKENDS = {
         # policy per scale tier) — the image's own default is -Xmx2G, which
         # starved the server vs embedded's per-scale heap.
         #
+        # -Xms IS LEFT UNSET, LIKE THE EMBEDDED ARMS (embedded since #429, served since DECISIONS #200).
+        # ARCADEDB_OPTS_MEMORY carries only -Xmx{heap} on every served ArcadeDB arm, so both deployments
+        # run one JVM configuration again (G1, -Xmx half the cell's memory, no -Xms) and the JVM starts
+        # with its own initial heap, as ArcadeDB's maintainers advise for a container with a fixed memory
+        # budget (ArcadeData/arcadedb#9167). Pinning cost memory and bought a few percent either way
+        # (the embedded A/B behind DECISIONS #200), and it made the memory column read the pin.
+        #
         # ARCADEDB_OPTS_GC IS A SEPARATE VARIABLE AND MUST BE CLEARED EXPLICITLY.
         # This comment used to claim that setting JAVA_OPTS "also drops the
         # image's ZGC default: both deployments run the same default GC (G1)".
@@ -467,7 +475,7 @@ BACKENDS = {
         # STILL NOT FULLY MATCHED, and it cannot be from this file: the server
         # image ships JDK 21.0.11 and the embedded wheel bundles Corretto 25.0.4.
         # That is a disclosure, not something to paper over here.
-        "server_env": ["-e", "ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap}",
+        "server_env": ["-e", "ARCADEDB_OPTS_MEMORY=-Xmx{heap}",
         # see the ARCADEDB_OPTS_GC note above
         "-e", "ARCADEDB_OPTS_GC=",
                        # SAME BUILD-CACHE POLICY AS THE EMBEDDED ARM. l3d_dense.py passes
@@ -729,7 +737,7 @@ BACKENDS = {
         "topology": "client_server",
         "image": "dbbench:client",
         "server_image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",  # RELEASED 26.8.1, matches the 26.8.1 wheel (F5: one engine line per table)
-        "server_env": ["-e", "ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap}",
+        "server_env": ["-e", "ARCADEDB_OPTS_MEMORY=-Xmx{heap}",
         # see the ARCADEDB_OPTS_GC note above
         "-e", "ARCADEDB_OPTS_GC=",
                        # SAME BUILD-CACHE POLICY AS THE EMBEDDED ARM. l3d_dense.py passes
@@ -1199,7 +1207,7 @@ BACKENDS = {
         # STILL NOT FULLY MATCHED, and it cannot be from this file: the server
         # image ships JDK 21.0.11 and the embedded wheel bundles Corretto 25.0.4.
         # That is a disclosure, not something to paper over here.
-        "server_env": ["-e", "ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap}",
+        "server_env": ["-e", "ARCADEDB_OPTS_MEMORY=-Xmx{heap}",
         # see the ARCADEDB_OPTS_GC note above
         "-e", "ARCADEDB_OPTS_GC=",
                        # SAME BUILD-CACHE POLICY AS THE EMBEDDED ARM. l3d_dense.py passes
@@ -1304,7 +1312,7 @@ BACKENDS = {
         "topology": "client_server",
         "image": "dbbench:client",
         "server_image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",  # RELEASED 26.8.1, matches the 26.8.1 wheel (F5: one engine line per table)
-        "server_env": ["-e", "ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap}",
+        "server_env": ["-e", "ARCADEDB_OPTS_MEMORY=-Xmx{heap}",
         # see the ARCADEDB_OPTS_GC note above
         "-e", "ARCADEDB_OPTS_GC=",
                        # SAME BUILD-CACHE POLICY AS THE EMBEDDED ARM. l3d_dense.py passes
@@ -1340,7 +1348,7 @@ BACKENDS = {
         "topology": "client_server",
         "image": "dbbench:client",
         "server_image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",  # RELEASED 26.8.1, matches the 26.8.1 wheel
-        "server_env": ["-e", "ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap}",
+        "server_env": ["-e", "ARCADEDB_OPTS_MEMORY=-Xmx{heap}",
         # see the ARCADEDB_OPTS_GC note above
         "-e", "ARCADEDB_OPTS_GC=",
                        # -XX:+UseCompactObjectHeaders, because jvm.py's _build_jvm_args adds it to
@@ -1638,9 +1646,10 @@ if bench_common.arcade_query_ram_mb():
 
 # THE SENSITIVITY ARM AT THE IMAGE'S OWN JVM DEFAULTS (CAMPAIGN 7 row 69, DECISIONS
 # #159). Every served ArcadeDB arm above sets ARCADEDB_OPTS_MEMORY to
-# `-Xms{heap} -Xmx{heap}` and clears ARCADEDB_OPTS_GC, so that the embedded-versus-
+# `-Xmx{heap}` and clears ARCADEDB_OPTS_GC, so that the embedded-versus-
 # served comparison isolates transport: one JVM configuration on both deployments
-# (G1, a heap half the cell's memory, -Xms equal to -Xmx). ArcadeDB's maintainers
+# (G1, a heap half the cell's memory as -Xmx, and no -Xms, as the embedded arms since #429 and the
+# served arms since DECISIONS #200). ArcadeDB's maintainers
 # answered (ArcadeData/arcadedb#9167) that the image's own defaults are a heap of
 # 75% of the container limit, generational ZGC, and no -Xms. This arm is started
 # WITHOUT those two variables, so the image applies exactly that, and it is printed
@@ -3097,7 +3106,7 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             # mode behind "server:latest" and the dev22-stamped dev20 run.
             row.update(observe_server(server_cid))
             # THE JVM FLAGS THE SERVED ARCADEDB RUNS, read from the process (CAMPAIGN 7
-            # row 69): on every served ArcadeDB arm, so the main arms' G1 and fixed heap
+            # row 69): on every served ArcadeDB arm, so the main arms' G1 and half-memory -Xmx
             # are evidence beside the image-defaults arm's ZGC and 75%.
             if "arcadedb" in job["backend"]:
                 row.update(server_jvm_readback(server_cid))
