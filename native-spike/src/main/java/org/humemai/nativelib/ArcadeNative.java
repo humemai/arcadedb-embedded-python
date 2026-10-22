@@ -239,7 +239,7 @@ public final class ArcadeNative {
       Map<String, Object> named = null;
       Object[] pos = null;
       if (p != null && !p.isEmpty()) {
-        final Map<String, Object> env = (Map<String, Object>) Json.parse(p, buf, bufFloats);
+        final Map<String, Object> env = (Map<String, Object>) Json.parse(p, buf.rawValue(), bufFloats);
         final Object n = env.get("named");
         if (n instanceof Map<?, ?> m)
           named = (Map<String, Object>) m;
@@ -541,7 +541,7 @@ public final class ArcadeNative {
       Map<String, Object> named = null;
       Object[] pos = null;
       if (p != null && !p.isEmpty()) {
-        final Map<String, Object> env = (Map<String, Object>) Json.parse(p, buf, bufFloats);
+        final Map<String, Object> env = (Map<String, Object>) Json.parse(p, buf.rawValue(), bufFloats);
         final Object n = env.get("named");
         if (n instanceof Map<?, ?> m)
           named = (Map<String, Object>) m;
@@ -630,23 +630,47 @@ public final class ArcadeNative {
    * property and save, as DocumentBatcher.insertManyJson does on the JPype path; no transaction is opened or closed here.
    */
   @CEntryPoint(name = "arcadedb_n_insert_rows")
-  @SuppressWarnings("unchecked")
   public static CCharPointer insertRows(final IsolateThread thread, final long h, final CCharPointer type, final CCharPointer rowsJson) {
     try {
       final Database db = db(h);
       final String t = str(type);
-      final List<Object> rows = (List<Object>) Json.parse(str(rowsJson));
-      final boolean vertex = db.getSchema().getType(t) instanceof VertexType;
-      for (final Object r : rows) {
-        final MutableDocument doc = vertex ? db.newVertex(t) : db.newDocument(t);
-        for (final Map.Entry<String, Object> e : ((Map<String, Object>) r).entrySet())
-          doc.set(e.getKey(), e.getValue());
-        doc.save();
-      }
-      return out("{\"ok\":true,\"n\":" + rows.size() + "}");
+      final Chars c = chars(rowsJson);
+      return out("{\"ok\":true,\"n\":" + BulkOps.insertRows(db, t, c.b, c.n) + "}");
     } catch (final Throwable t) {
       return err(t);
     }
+  }
+
+  /** The bytes of a C string in a per-thread scratch array (grown on demand, zero-terminated at n): no String and no new array per call. */
+  static final class Chars {
+    byte[] b = new byte[1 << 16];
+    int n;
+  }
+
+  private static final int SCRATCH_KEEP = 32 << 20; // a payload above this is read into a one-off array, not kept by the thread
+  private static final ThreadLocal<Chars> CHARS = ThreadLocal.withInitial(Chars::new);
+
+  static Chars chars(final CCharPointer p) {
+    int n = 0;
+    while (p.read(n) != 0)
+      n++;
+    final Chars c = CHARS.get();
+    byte[] b = c.b;
+    if (b.length <= n) {
+      b = new byte[Math.max(n + 1, b.length * 2)];
+      if (b.length <= SCRATCH_KEEP)
+        c.b = b;
+    }
+    CTypeConversion.asByteBuffer(p, n).get(b, 0, n);
+    b[n] = 0;
+    if (b != c.b) {
+      final Chars once = new Chars();
+      once.b = b;
+      once.n = n;
+      return once;
+    }
+    c.n = n;
+    return c;
   }
 
   static CCharPointer out(final String s) {

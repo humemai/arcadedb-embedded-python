@@ -110,4 +110,23 @@ final class BulkOps {
     }
     return n;
   }
+
+  /**
+   * Documents (or vertices of a vertex type) from rows [{property: value},..] in the UTF-8 JSON text b[0, n): one record per row through
+   * newDocument/newVertex, set per property and save, as DocumentBatcher.insertManyJson does on the JPype path; no transaction is opened
+   * or closed here. The rows are parsed one at a time into one reused map (the property order of a fresh HashMap), so no tree of the
+   * chunk and no String of the whole text is built.
+   */
+  static int insertRows(final Database db, final String type, final byte[] b, final int n) {
+    final boolean vertex = db.getSchema().getType(type) instanceof VertexType;
+    final int[] count = new int[1];
+    Json.rows(b, n, row -> {
+      final MutableDocument doc = vertex ? db.newVertex(type) : db.newDocument(type);
+      for (final Map.Entry<String, Object> e : row.entrySet())
+        doc.set(e.getKey(), e.getValue());
+      doc.save();
+      count[0]++;
+    });
+    return count[0];
+  }
 }
