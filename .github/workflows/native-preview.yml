@@ -49,6 +49,7 @@ env:
   GRAALVM_VERSION: "25.4.4.1.1"
   GRAALVM_BASE: https://github.com/graalvm/graalvm-ce-builds/releases/download/graal-25.4.4.1.1
   UV_VERSION: "0.12.0"
+  PYTHONUTF8: "1" # Windows defaults to cp1252; the notices contain non-ASCII author names
   # The platforms (matrix keys) whose parity run must pass before a tag publishes. Others publish too when they passed, and are only
   # informational otherwise. Promote a platform here once it is green.
   REQUIRED_PLATFORMS: "linux-x86_64"

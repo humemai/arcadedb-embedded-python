@@ -180,7 +180,7 @@ def main():
     )
     left = []
     for f in dst.rglob("*.py"):
-        t = f.read_text()
+        t = f.read_text(encoding="utf-8")
         t = (
             t.replace('"arcadedb-embedded"', '"arcadedb-embedded-native"')
             .replace(
@@ -205,14 +205,15 @@ def main():
         t = jp.sub(sub, t)
         if re.search(r"^\s*(import|from)\s+jpype", t, re.M):
             left.append(f.name)
-        f.write_text(t)
+        f.write_text(t, encoding="utf-8")
     if left:
         sys.exit(f"jpype imports left in: {left}")
     init = dst / "_native" / "__init__.py"
-    t = init.read_text()
+    t = init.read_text(encoding="utf-8")
     assert t.count('_DEFAULT_BACKEND = "jpype"') == 1, "default-backend line not found"
     init.write_text(
-        t.replace('_DEFAULT_BACKEND = "jpype"', '_DEFAULT_BACKEND = "native"')
+        t.replace('_DEFAULT_BACKEND = "jpype"', '_DEFAULT_BACKEND = "native"'),
+        encoding="utf-8",
     )
     shutil.copy(HERE / "_jpype_stub.py", dst / "_jpype_stub.py")
 
@@ -224,10 +225,11 @@ def main():
         f'ENGINE_VERSION = "{a.engine}"  # the ArcadeDB engine release compiled into {libname}\n'
         f'NATIVE_IMAGE = "GraalVM CE 25.4.4.1.1, -O2, -march={a.march}"\n'
         f'NATIVE_MARCH = "{a.march}"  # lib.py checks the CPU only for an x86-64-v3 image\n'
-        f'SOURCE_COMMIT = "{commit}"  # humemai/arcadedb-embedded-python (fork tae898/arcadedb) commit of the bindings and the Java glue\n'
+        f'SOURCE_COMMIT = "{commit}"  # humemai/arcadedb-embedded-python (fork tae898/arcadedb) commit of the bindings and the Java glue\n',
+        encoding="utf-8",
     )
     ip = dst / "__init__.py"
-    t = ip.read_text()
+    t = ip.read_text(encoding="utf-8")
     t = t.replace(
         "# Import async execution\n",
         "from ._build_info import ENGINE_VERSION, NATIVE_IMAGE, NATIVE_MARCH, SOURCE_COMMIT  # noqa: F401\n\n# Import async execution\n",
@@ -238,7 +240,7 @@ def main():
         '__all__ = [\n    "__version__",\n    "ENGINE_VERSION",\n    "NATIVE_IMAGE",\n    "SOURCE_COMMIT",',
         1,
     )
-    ip.write_text(t)
+    ip.write_text(t, encoding="utf-8")
 
     ship = [libname]
     if sys.platform.startswith("linux") and host_arch() == "x86_64":
@@ -267,7 +269,10 @@ def main():
         str(lic), str(stage / "licenses")
     )  # dist-info licenses only: one copy in the wheel
     (stage / "pyproject.toml").write_text(
-        (HERE / "pyproject.toml").read_text().replace("@VERSION@", a.version)
+        (HERE / "pyproject.toml")
+        .read_text(encoding="utf-8")
+        .replace("@VERSION@", a.version),
+        encoding="utf-8",
     )
     shutil.copy(HERE / "setup.py", stage / "setup.py")
 
