@@ -2,9 +2,9 @@
 
 This page lists the known bugs that can return a wrong answer, store a wrong value, change the
 wrong rows, or refuse a read or a write. The first entry is an engine bug that is fixed on
-upstream's main and not yet in a release. The other two, about
+upstream's main and not yet in a release. The next two, about
 Ctrl-C and about memory held by results, are not engine bugs: they are in JPype, the library that connects
-Python to the engine. Each entry names the versions it was measured on, what you see, a workaround that was
+Python to the engine. The last one covers running on a free-threaded CPython: two bugs in the bindings that are fixed, and the open JPype issues and one hang that you may meet there. Each entry names the versions it was measured on, what you see, a workaround that was
 checked on the same reproduction, and the release that fixes it once there is one. Entries leave
 this page when the fix ships in a release these bindings package.
 An entry with a `Tests:` line has a test of its workaround. An entry for a bug that is fixed on upstream's main but not yet in a release says so, with the release that will carry the fix.
@@ -139,13 +139,15 @@ affected.
 
 ## Free-threaded Python (3.13t, 3.14t)
 
-The bindings install and run on a free-threaded CPython (no GIL). JPype 1.7.1 publishes `cp313t` and `cp314t` wheels, and the GIL stays off after `import jpype` and after the JVM starts. `tests/test_free_threading.py` runs many threads against one database and against one database each (inserts, numpy vector rows, queries, vector searches, Python functions and record events) and compares the result with a sequential run. What it found:
+The bindings install and run on a free-threaded CPython (no GIL), measured on 3.14t with JPype 1.7.1, which publishes `cp313t` and `cp314t` wheels and keeps the GIL off after `import jpype` and after the JVM starts. 3.13t was not measured. `tests/test_free_threading.py` runs many threads against one database and against one database each (inserts, numpy vector rows, queries, vector searches, Python functions and record events) and compares the result with a sequential run. It passes with the GIL as well. What it found:
 
-- Threads whose first call was `create_database()` or `open_database()` raced into `start_jvm()` and all but one failed with `Failed to start JVM`. This happened with the GIL as well. `start_jvm()` now holds a lock, and the threads that lose the race join the running JVM.
-- The first `register_function()` or `on()` defines a JPype proxy class. Threads that did it together each defined one (the leak the cache exists to avoid). The definition now happens once, under a lock.
-- Open: when many threads make their first Java calls at the same moment, JPype 1.7.1 can crash the process in `JPHintsConversion::matches` (its lazy type-conversion setup). It was seen on 3.14t and not with the GIL. Open a database and run one statement on the main thread before the worker threads start; this is a precaution, not a verified fix.
-- Open: on 3.14t the Python heap grows with every `register_function()` and `on()` cycle (`test_registering_again_and_again_does_not_grow_the_python_heap` fails there), and it stays flat with the GIL. The cause is not found.
-- A process in which a thread other than the main thread called Java does not exit, with or without the GIL ([jpype#1169](https://github.com/jpype-project/jpype/issues/1169)). End such a thread with `jpype.java.lang.Thread.detach()`, or set `jpype.config.destroy_jvm = False` before the exit (it skips the JVM shutdown, so the engine's shutdown hook does not run).
+- Fixed, with the GIL too: threads whose first call was `create_database()` or `open_database()` raced into `start_jvm()`, and all but one failed with `Failed to start JVM`. `start_jvm()` now holds a lock, and the threads that lose the race join the running JVM.
+- Fixed: the first `register_function()` or `on()` defines a JPype proxy class. Threads that did it together each defined one, which is the leak the cache exists to avoid. The definition now happens once, under a lock.
+- Open, in JPype: when many threads make their first Java calls at the same moment, JPype 1.7.1 can crash the process with a SIGSEGV in `JPHintsConversion::matches`, which belongs to its lazy type-conversion setup. It was seen on 3.14t and not with the GIL, and it is rare: 2 of 30 first-start runs on 3.14t, 0 of 27 with the GIL. The fault is in JPype's native code. As a precaution, make the first Java call from one thread, for example open a database and run one statement, before you start the worker threads. This is untested: it is the obvious step, not a checked workaround.
+- Open, cause not found: on 3.14t the Python heap grows by about 520 to 610 bytes with every `register_function()`, `on()` and `remove()` cycle. It stays flat with the GIL. `test_registering_again_and_again_does_not_grow_the_python_heap` is marked `xfail` (not strict) on a free-threaded build for this reason. The proxy objects are suspected not to be freed there, which resembles [jpype#1506](https://github.com/jpype-project/jpype/issues/1506), but this is not shown. If you register functions or handlers in a long loop on 3.14t, watch the memory of the process.
+- Not specific to free threading: a process in which a thread other than the main thread called Java does not exit. It hangs at exit in JPype's JVM shutdown, with or without the GIL ([jpype#1169](https://github.com/jpype-project/jpype/issues/1169)). The bindings keep JPype's default. There are two workarounds, both checked on a thread that creates a database. End such a thread with `jpype.java.lang.Thread.detach()`, and the process exits. Or set `jpype.config.destroy_jvm = False` before the exit: the process exits too, but JPype then skips the JVM shutdown, so the engine's JVM shutdown hooks do not run (databases that are still open are closed by the bindings as before). `attachAsDaemon()` did not help.
+
+Tests: `tests/test_free_threading.py` covers the two fixes, the start race and the single proxy class. The crash, the heap growth and the exit hang have no test in the suite.
 
 ## Fixed in 26.10.2
 
