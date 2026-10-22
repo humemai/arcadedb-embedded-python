@@ -38,7 +38,7 @@ Every wheel is platform-specific, built on a native runner of its platform, and 
 JRE for that platform, so pip needs no hint to pick the right one. Unpacked, the Linux
 x86_64 wheel holds:
 
-- **ArcadeDB JARs**: ~42 MiB across 71 JARs, including the optional server and Studio stack
+- **ArcadeDB JARs**: ~39 MiB across 70 JARs, including the optional server stack (Studio is not bundled)
   ([Server Mode](../guide/server.md#what-it-costs-you) lists it; `arcadedb.jar_fingerprint()`
   counts and hashes the installed JARs)
 - **Bundled JRE**: ~44 MiB (Java 25 runtime trimmed with jlink to 15 modules; `scripts/jre_module_exclusions.txt` lists the JDK modules left out)
@@ -60,7 +60,7 @@ Python process's, and it bundles the Postgres, Redis, and Bolt wire protocols (o
 - ✅ **Vector Search**: Graph-based indexing for embeddings
 - ✅ **Data Import**: CSV, XML, and ArcadeDB JSONL import
 - ✅ **Server Mode**: Optional in-process HTTP server
-- ✅ **Studio Web UI**: Visual database explorer and query editor
+- ❌ **Studio Web UI**: not bundled, because it ships ApexCharts, which is not open source ([Server Mode](../guide/server.md#studio-is-not-bundled))
 
 ## Python Version
 

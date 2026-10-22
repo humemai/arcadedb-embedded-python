@@ -120,7 +120,7 @@ The measurements and the reasons are in the
 
 !!! success "Core Features"
     - 🚀 **Embedded Mode** - Direct database access in Python process
-    - 🌐 **Server Mode** - Optional in-process HTTP server with Studio UI
+    - 🌐 **Server Mode** - Optional in-process HTTP server (no Studio UI, see [Server Mode](guide/server.md#studio-is-not-bundled))
     - 📦 **Self-contained** - All JARs and JRE bundled
     - 🔄 **Multi-model** - Graph, Document, Key/Value, Vector, Time Series
     - 🔍 **Multiple languages** - SQL and OpenCypher
@@ -164,7 +164,7 @@ developers:
 |--------|--------|-------------|
 | Core Operations | ✅ Supported | Database, queries, transactions |
 | Schema Management | ✅ Supported | Types, properties, indexes |
-| Server Mode | ✅ Supported | HTTP server, Studio UI, database management |
+| Server Mode | ✅ Supported | HTTP server, database management (no Studio UI) |
 | Vector Search | ✅ Supported | HNSW (JVector) indexing, similarity search |
 | Data Import | ✅ Supported | CSV, XML, and ArcadeDB JSONL |
 | Data Export | ✅ Supported | JSONL; CSV for query results |
@@ -187,7 +187,7 @@ We provide a **single, self-contained package** that works on all major platform
 
 | Platforms | Package Name | Size | What's Included |
 |----------|-------------|------|-----------------|
-| linux/amd64, linux/arm64, darwin/arm64, windows/amd64 | `arcadedb-embedded` | ~65 MiB wheel, ~86 MiB installed | Full ArcadeDB + Bundled JRE + Studio UI |
+| linux/amd64, linux/arm64, darwin/arm64, windows/amd64 | `arcadedb-embedded` | ~62 MiB wheel, ~83 MiB installed | Full ArcadeDB + Bundled JRE (no Studio UI) |
 
 The package uses the standard import:
 

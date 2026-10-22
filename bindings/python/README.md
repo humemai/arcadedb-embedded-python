@@ -59,8 +59,8 @@ with arcadedb.create_database("./mydb") as db:
 - ☕ **No Java Installation Required**: Bundled JRE (~44 MiB uncompressed)
 - 🌍 **4 Platforms Supported**: Linux (x86_64, ARM64), macOS (ARM64), Windows (x86_64)
 - 🚀 **Embedded Mode**: Direct database access in Python process (no network)
-- 🌐 **Server Mode**: Optional in-process HTTP server with the Studio web UI: it costs ~8MB of wheel and nothing at runtime until you call `create_server()`
-- 📦 **Self-contained**: All dependencies bundled (~65 MiB current Linux wheel)
+- 🌐 **Server Mode**: Optional in-process HTTP server (HTTP API and wire protocols; the Studio web UI is not bundled, see [Server Mode](https://docs.humem.ai/arcadedb/latest/guide/server/#studio-is-not-bundled)): it costs about 5 MB of wheel and nothing at runtime until you call `create_server()`
+- 📦 **Self-contained**: All dependencies bundled (~62 MiB current Linux wheel)
 - 🔄 **Multi-model**: Graph, Document, Key/Value, Vector, Time Series
 - 🔍 **Multiple query languages**: SQL and OpenCypher
 - ⚡ **High performance**: Direct JVM integration via JPype
@@ -76,19 +76,19 @@ The `arcadedb-embedded` package is platform-specific and self-contained:
 
 **Package Contents (the 26.10.1 Linux x86_64 wheel; varies by platform and version):**
 
-- **Wheel size (compressed)**: ~65 MiB
-- **ArcadeDB JARs (uncompressed)**: ~42 MiB across 71 JARs
+- **Wheel size (compressed)**: ~62 MiB
+- **ArcadeDB JARs (uncompressed)**: ~39 MiB across 70 JARs
 - **Bundled JRE (uncompressed)**: ~44 MiB (platform-specific Java 25 runtime via jlink, 15 modules)
-- **Installed package size**: ~86 MiB
+- **Installed package size**: ~83 MiB
 
 The compressed wheel size is measured from `dist/*.whl`, and the installed package size
 is measured from the extracted `site-packages/arcadedb_embedded/` directory.
 
-Of that, the optional **server stack is 12 JARs, 8.58MB uncompressed**. [Server
+Of that, the optional **server stack is 11 JARs, 5.70MB uncompressed**. [Server
 Mode](https://docs.humem.ai/arcadedb/latest/guide/server/) breaks the cost down and
 explains what you pay at runtime (nothing, until you start a server).
 
-**Note**: Some JARs are excluded to optimize package size (e.g., gRPC wire protocol). See [`scripts/jar_exclusions.txt`](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/scripts/jar_exclusions.txt) for details.
+**Note**: Some JARs are excluded to optimize package size (e.g., gRPC wire protocol). The Studio jar is excluded because Studio bundles ApexCharts, which is not open source ([ArcadeData/arcadedb#10579](https://github.com/ArcadeData/arcadedb/issues/10579)). See [`scripts/jar_exclusions.txt`](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/scripts/jar_exclusions.txt) for details.
 
 Import: `import arcadedb_embedded as arcadedb`
 
@@ -155,7 +155,7 @@ arcadedb_embedded/
 ├── _logging.py          # Internal logging helpers
 ├── results.py           # ResultSet and Result wrappers
 ├── schema.py            # Schema management API
-├── server.py            # ArcadeDBServer for optional HTTP/Studio mode
+├── server.py            # ArcadeDBServer for optional HTTP server mode
 ├── transactions.py      # TransactionContext manager
 ├── type_conversion.py   # Python-Java type conversion utilities
 └── vector.py            # Vector search and HNSW (JVector) indexing

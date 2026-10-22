@@ -29,7 +29,7 @@ query cannot express, such as opening a database read-only.
 | `Index` rebuild, compaction | `REBUILD INDEX name\|*`, `COMPACT INDEX name\|*` | |
 
 These statements are covered in [SQL for Constraints, Scans, and Maintenance](api/database.md#sql-for-constraints-scans-and-maintenance).
-The package bundles the optional in-process server (HTTP API + Studio); see
+The package bundles the optional in-process server (HTTP API, no Studio); see
 [Server Mode](guide/server.md). For a server whose lifetime is independent of
 your Python process, or for HA/TLS, use the official ArcadeDB distribution.
 
@@ -49,7 +49,7 @@ your Python process, or for HA/TLS, use the official ArcadeDB distribution.
 | Async Execution | ✅ Supported | `AsyncExecutor` plus record-level and SQL/Cypher async flows, `scan_type()` |
 | Data Import | ✅ Supported | SQL import workflows plus a narrow `db.import_documents(...)` wrapper for document files |
 | Data Export | ✅ Supported | JSONL + CSV for query results |
-| Server Mode | ✅ Supported | Embedded server lifecycle + Studio access |
+| Server Mode | ✅ Supported | Embedded server lifecycle and HTTP access |
 | Advanced/Low-level | ❌ Not exposed | WAL internals, binary protocol, HA/replication |
 
 ### Detailed Coverage
@@ -264,7 +264,7 @@ db.query("opencypher", "MATCH (a)-[:Follows]->(b) RETURN b")
 | Graph analytics with Cypher | ✅ Excellent | SQL and OpenCypher supported |
 | Document store | ✅ Excellent | SQL and schema APIs |
 | Vector similarity search | ✅ Excellent | JVector + NumPy integration |
-| Development with Studio UI | ✅ Excellent | Server mode included |
+| Development with Studio UI | ❌ Not bundled | Studio is not in the wheel (ApexCharts licence, see [Server Mode](guide/server.md#studio-is-not-bundled)); use the ArcadeDB Docker image |
 | Data migration (CSV/XML/JSONL import) | ✅ Good | SQL import workflows exercised by tests |
 | Async SQL commands as a bulk load | ❌ Not recommended | `async_executor().command(...)` is not a bulk-write path; see [Bulk Ingest Recommendation](guide/import.md#bulk-ingest-recommendation). Use `insert_many()`, `insert_columns()`, or `GraphBatch` |
 | Multi-master replication | ❌ Not supported | Java server only |

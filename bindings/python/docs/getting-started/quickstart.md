@@ -42,7 +42,7 @@ with arcadedb.create_database("./mydb") as db:
         print(record.get("name"))
 ```
 
-### Server Mode (HTTP + Studio)
+### Server Mode (HTTP)
 
 When another process, another language, or a browser needs the same data, start
 the bundled server. The owning process keeps full-speed embedded access:
