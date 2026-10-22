@@ -127,6 +127,8 @@ jobs:
             # 7 GB runner: a capped builder heap and two threads
             xmx: 5g
             ni_extra: -H:NumberOfThreads=2
+            # the minimum macOS the library (and so the wheel tag) promises; clang defaults to the runner's 15.0 otherwise
+            macos_target: "11.0"
             build_minutes: 150
             test_minutes: 150
           - key: windows-x64
@@ -241,27 +243,6 @@ jobs:
           mv /usr/bin/link.exe /usr/bin/link-gnu.exe || true
           echo "link is now: $(command -v link || echo none)"
 
-      - name: Check the MSVC toolchain (cl, LIB, a static-CRT link)
-        if: ${{ matrix.kind == 'windows' }}
-        run: |
-          echo "cl: $(command -v cl || echo none)"
-          echo "LIB entries:"; printf '%s\n' "$LIB" | tr ';' '\n'
-          echo "INCLUDE entries:"; printf '%s\n' "$INCLUDE" | tr ';' '\n'
-          printf 'int main(void){return 0;}\n' > "$T/t.c"
-          (cd "$T" && cl //nologo t.c && echo "cl + link of a static-CRT program: OK") || echo "cl + link FAILED"
-          find "$(cygpath -u "${VCINSTALLDIR:-/c}")" -ipath '*x64*' -iname 'libcmt.lib' 2> /dev/null | head -5
-          echo "what a native child process sees:"; cmd //c "echo LIB=%LIB%" | cut -c1-300; cmd //c "echo INCLUDE=%INCLUDE%" | cut -c1-200
-          # native-image on a hello world with this environment: does its C compiler step see LIB?
-          mkdir -p "$T/hello" && cd "$T/hello"
-          printf 'public class Hello { public static void main(String[] a) { System.out.println("hi"); } }\n' > Hello.java
-          "$GRAALVM_HOME_P5/bin/javac" Hello.java
-          "$GRAALVM_HOME_P5/bin/native-image.cmd" -cp . Hello 2>&1 | tail -n 12 | cut -c1-400 || true
-          # Shim in front of native-image.cmd: records the environment native-image receives from the Maven plugin (printed after the build).
-          bin="$(cygpath -w "$GRAALVM_HOME_P5/bin")"
-          mv "$GRAALVM_HOME_P5/bin/native-image.cmd" "$GRAALVM_HOME_P5/bin/native-image-real.cmd"
-          printf '@echo off\r\nset > "%s\\env-dump-%%RANDOM%%.txt"\r\ncall "%%~dp0native-image-real.cmd" %%*\r\n' "$bin" > "$GRAALVM_HOME_P5/bin/native-image.cmd"
-          cat "$GRAALVM_HOME_P5/bin/native-image.cmd"
-
       # The very script the laptop build uses (-march=compatibility, -J-Xmx12g, -H:-VectorAPISupport, fastops.mode 1), inside the
       # manylinux_2_34 container (glibc 2.34) so the glibc floor of libarcadedb.so is a guarantee, not a property of the runner.
       - name: Build the native image in manylinux_2_34
@@ -298,6 +279,7 @@ jobs:
           MARCH: compatibility
           XMX: ${{ matrix.xmx }}
           NI_EXTRA: ${{ matrix.ni_extra }}
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos_target }}
         run: |
           set -euo pipefail
           mkdir -p "$T/lib"
@@ -305,15 +287,6 @@ jobs:
           cat "$T/lib/build.done"
           cat "$T/lib/sha256.txt"
           ls -l "$T/lib"
-
-      - name: Show the environment native-image received (Windows diagnostics)
-        if: ${{ always() && matrix.kind == 'windows' }}
-        run: |
-          for f in "$GRAALVM_HOME_P5"/bin/env-dump-*.txt; do
-            echo "== $f"
-            grep -iE '^(lib|include|path|java_home|native_image_options)=' "$f" | cut -c1-400 || true
-            grep -ciE '^lib=' "$f" || true
-          done
 
       - name: Glibc floor of the libraries
         if: ${{ matrix.kind == 'linux' }}

@@ -21,15 +21,15 @@ case "$(uname -s)" in
   MINGW* | MSYS* | CYGWIN*) EXT=dll; G=$(cygpath -u "$G") ;;
   *) echo "unsupported platform $(uname -s)" >&2; exit 1 ;;
 esac
-LIB=libarcadedb.$EXT
+LIBFILE=libarcadedb.$EXT  # not LIB: the MSVC environment on Windows exports LIB (library search path)
 sha256() { if command -v sha256sum > /dev/null; then sha256sum "$@"; else shasum -a 256 "$@"; fi; }
 export JAVA_HOME=$G PATH=$G/bin:$PATH
 export NATIVE_IMAGE_OPTIONS="-J-Dfastops.mode=1 -J-Xmx$XMX -H:-VectorAPISupport -march=$MARCH${NI_EXTRA:+ $NI_EXTRA}"
 cd "$WT"
-rm -f "native-spike/target/$LIB" "$OUT/$LIB"
+rm -f "native-spike/target/$LIBFILE" "$OUT/$LIBFILE"
 ./mvnw -B --no-transfer-progress -f native-spike/pom.xml -DskipTests -Darcadedb.version="$ENGINE" -Dgraalvm.version=25.4.4.1.1 -Dnative.opt=-O2 package > "$OUT/build.log" 2>&1
-cp "native-spike/target/$LIB" "$OUT/"
-LIBS=("$OUT/$LIB")
+cp "native-spike/target/$LIBFILE" "$OUT/"
+LIBS=("$OUT/$LIBFILE")
 # Highway (jvector's native provider), found next to libarcadedb.so by the image (ARCADEDB_NATIVE_LIBDIR); Linux x86-64 only: the other
 # platforms ship no jvector library and the image falls back to the Java providers
 if [ "$EXT" = so ] && [ "$(uname -m)" = x86_64 ]; then
