@@ -16,16 +16,17 @@ import time
 
 import pytest
 from arcadedb_embedded import ArcadeDBServer
-from tests.conftest import TEST_PASSWORD
+from tests.conftest import TEST_PASSWORD, free_port
 
 
 @pytest.mark.server
 def test_server_creation(temp_server_root):
     """Test creating and starting a server."""
+    port = free_port()
     server = ArcadeDBServer(
         root_path=temp_server_root,
         root_password=TEST_PASSWORD,
-        config={"http_port": 2480},
+        config={"http_port": port},
     )
 
     assert not server.is_started()
@@ -35,10 +36,10 @@ def test_server_creation(temp_server_root):
     # Give server a moment to start
     time.sleep(1)
 
-    assert server.get_http_port() == 2480
+    assert server.get_http_port() == port
     studio_url = server.get_studio_url()
     assert "http://" in studio_url
-    assert "2480" in studio_url
+    assert str(port) in studio_url
 
     server.stop()
     assert not server.is_started()
@@ -55,7 +56,9 @@ def test_server_database_operations(temp_server_root):
     - Operations within same Python process (embedded access)
     """
     with ArcadeDBServer(
-        root_path=temp_server_root, root_password=TEST_PASSWORD
+        root_path=temp_server_root,
+        root_password=TEST_PASSWORD,
+        config={"http_port": free_port()},
     ) as server:
         # Server auto-starts in context manager
         time.sleep(1)
@@ -84,7 +87,8 @@ def test_server_database_operations(temp_server_root):
 @pytest.mark.server
 def test_server_custom_config(temp_server_root):
     """Test server with custom configuration."""
-    config = {"http_port": 8080, "host": "127.0.0.1", "mode": "production"}
+    port = free_port()
+    config = {"http_port": port, "host": "127.0.0.1", "mode": "production"}
 
     server = ArcadeDBServer(
         root_path=temp_server_root, root_password=TEST_PASSWORD, config=config
@@ -92,7 +96,7 @@ def test_server_custom_config(temp_server_root):
     server.start()
     time.sleep(1)
 
-    assert server.get_http_port() == 8080
+    assert server.get_http_port() == port
 
     server.stop()
 
