@@ -28,6 +28,13 @@ export NATIVE_IMAGE_OPTIONS="-J-Dfastops.mode=1 -J-Xmx$XMX -H:-VectorAPISupport 
 cd "$WT"
 rm -f "native-spike/target/$LIBFILE" "$OUT/$LIBFILE"
 ./mvnw -B --no-transfer-progress -f native-spike/pom.xml -DskipTests -Darcadedb.version="$ENGINE" -Dgraalvm.version=25.4.4.1.1 -Dnative.opt=-O2 package > "$OUT/build.log" 2>&1
+# Windows: the Maven plugin hands native-image its arguments in an @args file, so build.log has no "native-image -cp <classpath> --shared"
+# line, which gen_notices.py reads. Append one, rebuilt from the args file (one argument per line).
+if [ "$EXT" = dll ]; then
+  for a in native-spike/target/tmp/native-image-*.args; do
+    if [ -f "$a" ]; then { printf 'native-image '; tr '\r\n' '  ' < "$a"; echo; } >> "$OUT/build.log"; fi
+  done
+fi
 cp "native-spike/target/$LIBFILE" "$OUT/"
 LIBS=("$OUT/$LIBFILE")
 # Highway (jvector's native provider), found next to libarcadedb.so by the image (ARCADEDB_NATIVE_LIBDIR); Linux x86-64 only: the other
