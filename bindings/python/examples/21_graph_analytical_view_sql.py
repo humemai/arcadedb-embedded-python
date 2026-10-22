@@ -19,7 +19,8 @@ Workflow covered:
   results against the expanded graph
 - alter update mode and compaction threshold through SQL
 - add another growth wave under SYNCHRONOUS mode and verify live counts
-- reopen the database and confirm persisted GAV restoration
+- reopen the database and confirm persisted GAV restoration (the restore is lazy: one
+  query through the view first, then poll the metadata row)
 
 Requirements:
 - A packaged ArcadeDB runtime with Graph Analytical View SQL support
@@ -534,6 +535,40 @@ def wait_for_gav_status(
         time.sleep(0.25)
 
 
+def wait_for_gav_counts(
+    db,
+    name: str,
+    expected_nodes: int,
+    expected_edges: int,
+    timeout_sec: float = 180.0,
+) -> dict:
+    """Poll schema:graphAnalyticalViews until the view is READY with real counts.
+
+    A view restored when the database opens is restored lazily: the row answers
+    READY with nodeCount 0 and edgeCount 0 until the first query that uses the
+    view. Run one such query before calling this, or the 0 stays.
+    """
+    start = time.perf_counter()
+    last_metadata = None
+    while True:
+        metadata = fetch_gav_metadata(db, name)
+        if metadata is not None:
+            last_metadata = metadata
+            if (
+                metadata["status"] == "READY"
+                and metadata["nodeCount"] == expected_nodes
+                and metadata["edgeCount"] == expected_edges
+            ):
+                return metadata
+        if time.perf_counter() - start > timeout_sec:
+            raise RuntimeError(
+                f"Timed out waiting for GAV {name} to report "
+                f"{expected_nodes} nodes and {expected_edges} edges. "
+                f"Last metadata: {last_metadata}"
+            )
+        time.sleep(0.25)
+
+
 def query_direct_neighbor_sample(
     db,
     origin_code: str,
@@ -866,7 +901,15 @@ def main() -> int:
 
     print("Phase 6: Reopen the database and confirm persisted GAV restoration")
     with arcadedb.open_database(str(db_path)) as reopened_db:
-        restored_metadata = wait_for_gav_status(reopened_db, GAV_NAME, {"READY"})
+        # The restore on open is lazy: until a query uses the view, the schema row
+        # can say READY with nodeCount 0 and edgeCount 0. Run one query first, then
+        # poll the row for the real counts.
+        direct_neighbors = query_direct_neighbor_sample(
+            reopened_db, anchor_code, args.sample_limit
+        )
+        restored_metadata = wait_for_gav_counts(
+            reopened_db, GAV_NAME, expected_sync_nodes, expected_sync_edges
+        )
         require(
             restored_metadata["nodeCount"] == expected_sync_nodes,
             f"Expected restored GAV nodeCount = {expected_sync_nodes}",
@@ -878,7 +921,7 @@ def main() -> int:
         print_gav_metadata("Metadata after reopen:", restored_metadata)
         print_rows(
             "Sample direct neighbors after reopen:",
-            query_direct_neighbor_sample(reopened_db, anchor_code, args.sample_limit),
+            direct_neighbors,
         )
         print_rows(
             "Region sample after reopen:",

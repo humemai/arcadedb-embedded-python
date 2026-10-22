@@ -56,6 +56,10 @@ python3 21_graph_analytical_view_sql.py --base-cities 1200 --stale-growth-cities
 - The script demonstrates both manual refresh (`UPDATE MODE OFF` + `REBUILD`) and live
   refresh (`UPDATE MODE SYNCHRONOUS`).
 - The database is left on disk so you can reopen it and inspect the persisted GAV.
+- After a reopen the view is restored lazily. `schema:graphAnalyticalViews` can answer
+  `READY` with `nodeCount` 0 and `edgeCount` 0 until the first query that uses the view,
+  so the example runs one query through the view and then polls the row for the real
+  counts. Polling the row alone does not trigger the restore.
 
 ## Why This Example Exists
 

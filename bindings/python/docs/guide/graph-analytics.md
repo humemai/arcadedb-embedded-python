@@ -239,12 +239,17 @@ unknown mode in `ALTER ... UPDATE MODE` and a `DROP` of a missing view raise too
   create one for the types you query, not for everything.
 - `SYNCHRONOUS` costs write throughput on every commit; `ASYNCHRONOUS` can lag behind
   the commit, so do not read your own write through a view without polling.
+- After a database reopen a view can answer `READY` with `nodeCount` 0 and `edgeCount` 0
+  until the first query that uses it, so the `wait_ready` loop above can return a
+  zero row. Run one query through the view (a `MATCH` or an `algo.*` call), then poll
+  the row again. Seen in `examples/21_graph_analytical_view_sql.py` on the 26.11.1
+  main engine; the query and the counts match the records, only the row lags.
 - `OFF` is the default. A view you create without `UPDATE MODE` goes stale on the
   first write.
 - Left out of this page because they were not run here: contraction hierarchies
   (`CCH (...)` and `algo.cchShortestPath`), what a view serves inside a transaction
-  that has uncommitted changes, whether a weighted PageRank uses a view, and a view
-  across a database reopen.
+  that has uncommitted changes, whether a weighted PageRank uses a view, and whether a
+  reopened view is read from its persisted file or rebuilt.
 
 ## References
 
