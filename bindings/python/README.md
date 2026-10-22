@@ -60,7 +60,7 @@ with arcadedb.create_database("./mydb") as db:
 - 🌍 **4 Platforms Supported**: Linux (x86_64, ARM64), macOS (ARM64), Windows (x86_64)
 - 🚀 **Embedded Mode**: Direct database access in Python process (no network)
 - 🌐 **Server Mode**: Optional in-process HTTP server (HTTP API and wire protocols; the Studio web UI is not bundled, see [Server Mode](https://docs.humem.ai/arcadedb/latest/guide/server/#studio-is-not-bundled)): it costs about 6 MB of wheel and nothing at runtime until you call `create_server()`
-- 📦 **Self-contained**: All dependencies bundled (~66 MiB current Linux wheel)
+- 📦 **Self-contained**: All dependencies bundled (~67 MiB current Linux wheel)
 - 🔄 **Multi-model**: Graph, Document, Key/Value, Vector, Time Series
 - 🔍 **Multiple query languages**: SQL and OpenCypher
 - ⚡ **High performance**: Direct JVM integration via JPype
@@ -76,7 +76,7 @@ The `arcadedb-embedded` package is platform-specific and self-contained:
 
 **Package Contents (the 26.10.1 Linux x86_64 wheel; varies by platform and version):**
 
-- **Wheel size (compressed)**: ~66 MiB
+- **Wheel size (compressed)**: ~67 MiB
 - **ArcadeDB JARs (uncompressed)**: ~32 MiB across 63 JARs
 - **Bundled JRE (uncompressed)**: ~63 MiB (platform-specific Java 25 runtime via jlink)
 - **Installed package size**: ~95 MiB

@@ -186,7 +186,7 @@ We provide a **single, self-contained package** that works on all major platform
 
 | Platforms | Package Name | Size | What's Included |
 |----------|-------------|------|-----------------|
-| linux/amd64, linux/arm64, darwin/arm64, windows/amd64 | `arcadedb-embedded` | ~66 MiB wheel, ~95 MiB installed | Full ArcadeDB + Bundled JRE (no Studio UI) |
+| linux/amd64, linux/arm64, darwin/arm64, windows/amd64 | `arcadedb-embedded` | ~67 MiB wheel, ~95 MiB installed | Full ArcadeDB + Bundled JRE (no Studio UI) |
 
 The package uses the standard import:
 
