@@ -111,7 +111,8 @@ def test_the_setup_and_the_sparse_table_say_what_the_rows_stamp(payloads):
     dense = " ".join(_table(plain, "l3d")["conditions"])
     assert "index on the vector id" in dense
     glob = " ".join(plain["conditions"])
-    assert "ArcadeDB embedded sets only the maximum heap" in glob
+    # #456: the served arms leave -Xms unset too, so the sentence names both deployments
+    assert "ArcadeDB, embedded and served, sets only the maximum heap" in glob
 
 
 def test_the_exporter_refuses_another_selector(tmp_path):

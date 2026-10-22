@@ -75,6 +75,7 @@ FORK_GITHUB_ALLOWLIST=(
     # is deliberately NOT in make-upstream-pr-branch.sh's INCLUDE_PATHS.
     ".github/workflows/lint-workflows.yml"
     ".github/workflows/docs-build.yml"               # ours; not upstream (strict docs build for documentation-only changes)
+    ".github/workflows/test-benchmarks-experiments.yml" # ours; not upstream (the benchmark harness tests, only for changes under benchmarks/)
     ".github/dependabot.yml"                         # ours since #378 (upstream has its own; we keep our copy)
 )
 
