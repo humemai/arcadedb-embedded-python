@@ -279,6 +279,7 @@ Python bindings follow the ArcadeDB main project version from `pom.xml`:
 - **Release tag**: `X.Y.Z` (GitHub Release)
 - **PyPI version**: `X.Y.Z[.devN|.postN]` (extracted automatically, no `v` prefix)
 - **Docs version**: `X.Y.Z` (extracted from tag, no `v` prefix)
+- **Counting**: `devN` starts at 0 (`X.Y.Z.dev0`, `.dev1`, ...), `postN` at 1 (the release itself is the zeroth build). No `aN`, `bN` or `rcN`. A number is never reused: PyPI refuses a version it has seen, even after a delete. The release workflow rejects any other tag form.
 
 **How version is determined:**
 

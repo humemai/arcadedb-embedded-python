@@ -31,8 +31,14 @@ jobs:
           TAG_VERSION="${{ github.ref_name }}"
           echo "📌 Git tag version: $TAG_VERSION"
 
-          # Extract base version from tag (remove .dev0, .post1, etc.)
-          TAG_BASE=$(echo "$TAG_VERSION" | sed -E 's/\.(dev|post|rc|a|b)[0-9]+$//')
+          # Only X.Y.Z, X.Y.Z.devN (N from 0) or X.Y.Z.postN (N from 1); no aN/bN/rcN (release.md, Version Numbering)
+          if ! [[ "$TAG_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.dev(0|[1-9][0-9]*)|\.post[1-9][0-9]*)?$ ]]; then
+            echo "❌ Tag $TAG_VERSION is not X.Y.Z, X.Y.Z.devN or X.Y.Z.postN (devN from 0, postN from 1)"
+            exit 1
+          fi
+
+          # Extract base version from tag (remove .dev0, .post1)
+          TAG_BASE=$(echo "$TAG_VERSION" | sed -E 's/\.(dev|post)[0-9]+$//')
           echo "📌 Tag base version: $TAG_BASE"
 
           # Get version from pom.xml
