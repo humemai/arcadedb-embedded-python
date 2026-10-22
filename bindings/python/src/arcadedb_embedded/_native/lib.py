@@ -60,9 +60,15 @@ class _Thread:
 
 
 def _check_cpu() -> None:
-    """The image is built for x86-64-v3 (AVX2, BMI2, FMA): fail with a clear error instead of SIGILL on an older CPU."""
+    """An image built for x86-64-v3 (AVX2, BMI2, FMA) needs them: fail with a clear error instead of SIGILL on an older CPU."""
     if sys.platform != "linux" or os.environ.get("ARCADEDB_NATIVE_SKIP_CPU_CHECK"):
         return
+    try:  # the arcadedb-embedded-native wheel records its image's -march; a source checkout uses a locally built (default v3) image
+        from .._build_info import NATIVE_MARCH
+    except ImportError:
+        NATIVE_MARCH = "x86-64-v3"
+    if NATIVE_MARCH == "compatibility":
+        return  # baseline x86-64: runs on every x86-64 CPU
     import platform
 
     if platform.machine() not in ("x86_64", "AMD64"):

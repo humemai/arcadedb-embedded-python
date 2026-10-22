@@ -53,6 +53,11 @@ def main():
             / "build-scratch/graalvm-dl-25.4.4.1.1/graalvm-community-25.4.4.1.1+1.1"
         ),
     )
+    ap.add_argument(
+        "--march",
+        default="compatibility",
+        help="-march the image was built with (preview-build.sh MARCH)",
+    )
     ap.add_argument("--plat", default="", help="override the computed platform tag")
     a = ap.parse_args()
     lib_dir, out = Path(a.lib_dir), Path(a.out).resolve()
@@ -111,14 +116,15 @@ def main():
     (dst / "_build_info.py").write_text(
         f'"""Written by native-wheel/build_wheel.py."""\n'
         f'ENGINE_VERSION = "{a.engine}"  # the ArcadeDB engine release compiled into libarcadedb.so\n'
-        f'NATIVE_IMAGE = "GraalVM CE 25.4.4.1.1, -O2"\n'
+        f'NATIVE_IMAGE = "GraalVM CE 25.4.4.1.1, -O2, -march={a.march}"\n'
+        f'NATIVE_MARCH = "{a.march}"  # lib.py checks the CPU only for an x86-64-v3 image\n'
         f'SOURCE_COMMIT = "{commit}"  # humemai/arcadedb-embedded-python (fork tae898/arcadedb) commit of the bindings and the Java glue\n'
     )
     ip = dst / "__init__.py"
     t = ip.read_text()
     t = t.replace(
         "# Import async execution\n",
-        "from ._build_info import ENGINE_VERSION, NATIVE_IMAGE, SOURCE_COMMIT  # noqa: F401\n\n# Import async execution\n",
+        "from ._build_info import ENGINE_VERSION, NATIVE_IMAGE, NATIVE_MARCH, SOURCE_COMMIT  # noqa: F401\n\n# Import async execution\n",
         1,
     )
     t = t.replace(

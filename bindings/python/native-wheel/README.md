@@ -36,8 +36,8 @@ with arcadedb.create_database("/tmp/demo") as db:
 ## Platforms
 
 Linux x86-64 only, CPython 3.11 to 3.14, glibc 2.34 or newer (wheel tag `py3-none-manylinux_2_34_x86_64`; one wheel serves every
-Python version because the library is loaded with `ctypes`, not compiled against CPython). The CPU needs AVX2 (the image is built for
-x86-64-v3). macOS, Windows and Linux arm64 wheels do not exist yet.
+Python version because the library is loaded with `ctypes`, not compiled against CPython). The image is built for baseline x86-64
+(`-march=compatibility`), so it runs on any x86-64 CPU. macOS, Windows and Linux arm64 wheels do not exist yet.
 
 ## Not supported yet
 
