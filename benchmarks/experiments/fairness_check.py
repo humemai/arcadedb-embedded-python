@@ -61,11 +61,11 @@ DISCLOSED = {}
 # THE ONE ARM THAT DIFFERS FROM THE OTHERS ON PURPOSE (CAMPAIGN 7 row 69). Every
 # served ArcadeDB arm runs ONE JVM configuration so that the embedded-versus-served
 # comparison isolates transport: the JVM's default collector (G1) and a heap of half
-# the cell's memory with -Xms equal to -Xmx. The arm below is started without those
+# the cell's memory as -Xmx (no -Xms, as the embedded arms). The arm below is started without those
 # settings and runs the vendor image's own defaults instead (ArcadeDB's maintainers,
 # ArcadeData/arcadedb#9167): a heap of 75% of the container limit, the generational
-# ZGC collector, and no -Xms. It changes the heap, the collector, and the warm-up
-# of the heap together, so it is NOT comparable with the main arm's heap column and
+# ZGC collector, and no -Xms. It changes the heap and the collector
+# together, so it is NOT comparable with the main arm's heap column and
 # it is not an F3 envelope violation: the memory CAP is the same, only the heap the
 # JVM takes inside it differs. It is declared, printed beside the main arm on one lane
 # (documents OLTP, served, the 2M-part cell), and checked against what the JVM itself
@@ -74,7 +74,7 @@ DISCLOSED = {}
 JVM_DEFAULTS_ARMS = {
     "arcadedb_imgdefaults_server": "the vendor image's own JVM settings (a heap of 75% of the "
                                    "container limit, generational ZGC, no -Xms) beside the main "
-                                   "arm's G1 and fixed half-memory heap, documents OLTP, 2M parts",
+                                   "arm's G1 and half-memory -Xmx, documents OLTP, 2M parts",
 }
 
 

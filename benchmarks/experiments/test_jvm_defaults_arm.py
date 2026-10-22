@@ -269,10 +269,10 @@ def EW():
     return export_web
 
 
-def _frozen(heap_main=8 * GIB, heap_arm=12 * GIB, gc_main="G1"):
+def _frozen(heap_main=8 * GIB, heap_arm=12 * GIB, gc_main="G1", main_initial=128 << 20):
     base = {"lane": "l1tpc", "workload": "oltp", "scale": "tpch10", "server_mem_cap": "16g"}
     return [dict(base, backend="arcadedb_server", server_jvm_max_heap_bytes=heap_main, server_jvm_gc=gc_main,
-                 server_jvm_initial_heap_bytes=heap_main),          # -Xms equal to -Xmx
+                 server_jvm_initial_heap_bytes=main_initial),        # no -Xms: the JVM's own initial heap (DECISIONS #200)
             dict(base, backend=ARM, server_jvm_defaults=True, server_jvm_max_heap_bytes=heap_arm,
                  server_jvm_initial_heap_bytes=48 << 20, server_jvm_gc="ZGC generational")]
 
@@ -299,7 +299,7 @@ def test_heap_column_prints_what_the_jvm_reported(EW, monkeypatch):
 def test_sentence_is_generated_from_the_recorded_flags(EW, monkeypatch):
     monkeypatch.setattr(EW, "_FROZEN_ROWS", _frozen())
     (text,) = EW._jvm_defaults_notes(_table("arcadedb_server", ARM))
-    for want in ("the ArcadeDB image's own JVM settings", "fixed heap of 8 GiB", "G1 collector",
+    for want in ("the ArcadeDB image's own JVM settings", "maximum heap of 8 GiB", "G1 collector",
                  "a heap of 12 GiB, 75 per cent of its 16 GiB container", "ZGC generational collector",
                  "no initial heap size"):
         assert want in text, want
@@ -313,12 +313,12 @@ def test_sentence_is_generated_from_the_recorded_flags(EW, monkeypatch):
 def test_sentence_changes_with_the_rows_not_with_the_code(EW, monkeypatch):
     monkeypatch.setattr(EW, "_FROZEN_ROWS", _frozen(heap_main=4 * GIB, heap_arm=6 * GIB, gc_main="Parallel"))
     (text,) = EW._jvm_defaults_notes(_table(ARM))
-    assert "fixed heap of 4 GiB" in text and "Parallel collector" in text and "a heap of 6 GiB" in text
+    assert "maximum heap of 4 GiB" in text and "Parallel collector" in text and "a heap of 6 GiB" in text
     # a main row with no read-back is said without its numbers, not guessed
     rows = [r for r in _frozen() if r["backend"] == ARM]
     monkeypatch.setattr(EW, "_FROZEN_ROWS", rows)
     (text,) = EW._jvm_defaults_notes(_table(ARM))
-    assert "a fixed heap and the collector the JVM chooses by default" in text
+    assert "a maximum heap and the collector the JVM chooses by default" in text
 
 
 def test_no_arm_no_sentence(EW, monkeypatch):
@@ -383,7 +383,7 @@ def test_memory_note_is_true_of_each_arm(EW, monkeypatch):
     """The arm is not "close to the heap it was given": it started with no heap. The note says that of it,
     from the JVM's own report of its initial heap, and keeps the fixed-heap sentence for the arm that has one."""
     monkeypatch.setattr(EW, "_FROZEN_ROWS", [dict(r, heap="8g") if r["backend"] == "arcadedb_server" else r
-                                              for r in _frozen()])
+                                              for r in _frozen(main_initial=8 * GIB)])    # a main row that pinned -Xms (measured before DECISIONS #200)
     text = EW._jvm_memory_note(_mem_table(("arcadedb_server", 7.5), (ARM, 0.3)))
     fixed, _, clause = text.partition(" ArcadeDB (server, image JVM defaults) runs on a JVM too")
     assert "ArcadeDB (server) runs on a JVM" in fixed and "close to the heap it was given" in fixed
@@ -399,6 +399,31 @@ def test_memory_note_is_true_of_each_arm(EW, monkeypatch):
     assert "7.50" in vals
 
 
+def test_a_main_served_row_that_started_with_no_heap_is_named_in_the_clause_too(EW, monkeypatch):
+    """Since DECISIONS #200 the main served arms pass -Xmx only, so their rows record an initial heap far below the
+    maximum and the note says of them what it says of the embedded and image-defaults arms, from the JVM's own report."""
+    monkeypatch.setattr(EW, "_FROZEN_ROWS", [dict(r, heap="8g") if r["backend"] == "arcadedb_server" else r for r in _frozen()])
+    text = EW._jvm_memory_note(_mem_table(("arcadedb_server", 3.1), (ARM, 0.3)))
+    assert "run on a JVM too, but they start with no initial heap size" in text
+    assert "close to the heap it was given" not in text and "ArcadeDB (server)" in text.split(" run on a JVM")[0]
+
+
+def test_the_arms_sentence_says_which_main_row_it_is_beside(EW, monkeypatch):
+    monkeypatch.setattr(EW, "_FROZEN_ROWS", _frozen(main_initial=8 * GIB))          # an older main row, -Xms equal to -Xmx
+    (old,) = EW._jvm_defaults_notes(_table("arcadedb_server", ARM))
+    assert "fixed heap of 8 GiB" in old and old.endswith("not any one of them.") and "no initial heap size" in old
+    monkeypatch.setattr(EW, "_FROZEN_ROWS", _frozen())                              # a main row that set -Xmx only
+    (new,) = EW._jvm_defaults_notes(_table("arcadedb_server", ARM))
+    assert "maximum heap of 8 GiB" in new and "sets no initial heap size" in new and "warm-up" not in new
+
+
+def test_no_served_arcadedb_arm_pins_xms():
+    mem = {n: [str(e) for e in be.get("server_env", []) if str(e).startswith("ARCADEDB_OPTS_MEMORY=")]
+           for n, be in RN.BACKENDS.items()}
+    mem = {n: v for n, v in mem.items() if v}
+    assert len(mem) >= 5 and all(v == ["ARCADEDB_OPTS_MEMORY=-Xmx{heap}"] for v in mem.values()), mem
+
+
 def test_memory_note_leaves_an_arm_with_no_readback_as_it_was(EW, monkeypatch):
     rows = [{k: v for k, v in r.items() if not k.startswith("server_jvm_initial")} for r in _frozen()]
     monkeypatch.setattr(EW, "_FROZEN_ROWS", [dict(r, heap="8g") for r in rows])
@@ -410,7 +435,7 @@ def test_the_arms_own_sentence_no_longer_makes_the_memory_claim(EW, monkeypatch)
     monkeypatch.setattr(EW, "_FROZEN_ROWS", _frozen())
     (text,) = EW._jvm_defaults_notes(_table("arcadedb_server", ARM))
     assert "peak memory" not in text
-    assert text.endswith("not any one of them.")
+    assert text.endswith("not either of them alone.")
 
 
 def test_the_index_note_leaves_the_arm_to_the_analytics_table_rules(EW):

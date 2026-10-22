@@ -43,8 +43,9 @@ worker at the publishing tier. A cell measured two-at-once is exploration foreve
 - **One JVM heap per tier, identical for every JVM engine.** The heap a row records is the
   heap the engine **ran**, read back out of the container, not the heap the cell asked for.
   The cap on the heap (`-Xmx`) is the same for every JVM engine; the initial heap follows each
-  engine's own documentation. Embedded ArcadeDB leaves `-Xms` unset, as the Python bindings
-  document, and the server engines keep the initial heap their vendors recommend.
+  engine's own documentation. ArcadeDB, embedded and served, leaves `-Xms` unset, as the Python
+  bindings document and ArcadeDB's maintainers advise for a container with a fixed memory budget,
+  and the other server engines keep the initial heap their vendors recommend.
 - **Raising a resource for one engine obliges a re-measure of every engine at that tier.**
 - **Neo4j and Elasticsearch run their vendors' memory rules.** Neo4j takes the heap and page cache
   that its own `neo4j-admin server memory-recommendation` prints for the cell's memory cap, and

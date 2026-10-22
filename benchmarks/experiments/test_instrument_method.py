@@ -241,10 +241,11 @@ def test_l4_reads_large_results_as_arrow_and_says_when_it_could_not():
 
 
 # -------------------------------------------------------------------------------------------- the embedded JVM's -Xms (DECISIONS, bindings)
-def test_no_embedded_arm_pins_xms_and_the_servers_keep_theirs():
+def test_no_arcadedb_arm_pins_xms_and_the_other_servers_keep_theirs():
     for f in ("l1_tabular.py", "l2_graph.py", "l3_sparse.py", "l3d_dense.py", "l4_tsbs.py", "l1_tpc.py", "e2_hybrid.py", "l5_lifecycle.py"):
         src = open(os.path.join(HERE, f)).read()
         assert "-Xms{" not in src, f
     runner = open(os.path.join(HERE, "runner.py")).read()
-    assert runner.count("ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap}") >= 5      # served ArcadeDB keeps its pin
+    assert "ARCADEDB_OPTS_MEMORY=-Xms" not in runner                              # served ArcadeDB leaves -Xms unset too (DECISIONS #200)
+    assert runner.count("ARCADEDB_OPTS_MEMORY=-Xmx{heap}") >= 5                   # and keeps -Xmx from the tier heap
     assert runner.count("ES_JAVA_OPTS=-Xms{heap} -Xmx{heap}") >= 2               # Elasticsearch keeps its own
