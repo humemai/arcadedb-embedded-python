@@ -60,6 +60,8 @@ NATIVE_JVM_MARKERS = (
     "KeyError: 'flush'",
     "KeyError: 'max_connections'",
     "cause is <class 'NoneType'>",  # the Java exception as __cause__
+    "findNeighborsFromVector",  # the test calls the Java vector index directly
+    "to_java_rid",
 )
 
 
@@ -74,6 +76,7 @@ NATIVE_NOTYET_MARKERS = (
 NATIVE_NA_TESTS = {
     "test_non_scalars_keep_the_general_path",
     "test_a_subclass_of_a_scalar_is_not_assumed_to_be_one",
+    "test_lsm_vector_search_looks_up_all_hits_in_one_bridge_call",  # counts GraphCalls bridge crossings
 }
 
 

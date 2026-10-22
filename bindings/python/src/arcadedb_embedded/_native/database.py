@@ -350,6 +350,10 @@ class NativeDatabase:
         self._h = handle
         self._closed = False
         self._server_owned = owned_by_server
+        self._async_executors: list = []
+        self._vector_meta: dict = {}
+        self._vector_dimensions: dict = {}
+        self._vector_id_properties: dict = {}
 
     # -- lifecycle
 
@@ -366,6 +370,7 @@ class NativeDatabase:
     def close(self):
         if self._closed:
             return
+        self._close_async_executors()
         if self._server_owned:
             # owned by the server: the engine refuses the close, and this handle is done either way
             self._closed = True
@@ -374,6 +379,25 @@ class NativeDatabase:
             _call("Failed to close database", "arcadedb_n_close", self._h, 0)
         finally:
             self._closed = True
+
+    def _discard_async_executor(self, executor) -> None:
+        try:
+            self._async_executors.remove(executor)
+        except ValueError:
+            pass
+
+    def _close_async_executors(self):
+        first_error = None
+        while self._async_executors:
+            executor = self._async_executors.pop()
+            try:
+                executor.close()
+            except Exception as e:
+                first_error = first_error or ArcadeDBError(
+                    f"Failed to close async executor: {e}"
+                )
+        if first_error is not None:
+            raise first_error
 
     def drop(self):
         self._check_not_closed()
@@ -482,6 +506,10 @@ class NativeDatabase:
         state = self._tx(3, "Failed to read the transaction state")
         return state["active"], state["depth"]
 
+    def _transaction_commit_mark(self):
+        """The commit count of the current transaction (the witness that a BATCH boundary published part of its work)."""
+        return self._tx(3, "Failed to read the transaction state")["commits"]
+
     def _end_transactions_opened_since(self, mark):
         was_active, depth_before = mark
         first_error = None
@@ -509,9 +537,7 @@ class NativeDatabase:
             commits_at_start = None
             try:
                 self.begin()
-                commits_at_start = self._tx(3, "Failed to read the transaction state")[
-                    "commits"
-                ]
+                commits_at_start = self._transaction_commit_mark()
                 result = fn()
                 self.commit()
                 return result
@@ -532,12 +558,7 @@ class NativeDatabase:
                     duplicated_key_retried = True
                 if commits_at_start is not None:
                     try:
-                        if (
-                            self._tx(3, "Failed to read the transaction state")[
-                                "commits"
-                            ]
-                            != commits_at_start
-                        ):
+                        if self._transaction_commit_mark() != commits_at_start:
                             raise
                     except ArcadeDBError:
                         pass
@@ -584,7 +605,7 @@ class NativeDatabase:
         """
         self._check_not_closed()
         if parallel:
-            not_yet("insert_many(parallel=True) (the async executor)")
+            return self._insert_many_parallel(type_name, rows)
         sql = f"INSERT INTO `{type_name}` CONTENT :row"
         total = 0
         if self.is_transaction_active():
@@ -611,6 +632,61 @@ class NativeDatabase:
         flush()
         return total
 
+    def _insert_many_parallel(self, type_name, rows) -> int:
+        """insert_many(parallel=True): chunks go to the async writers; the failure count is read after the final wait."""
+        import itertools
+
+        from . import extras
+
+        iterator = iter(rows)
+        tokens, n = [], 0
+        try:
+            while True:
+                chunk = list(itertools.islice(iterator, 10_000))
+                if not chunk:
+                    break
+                tokens.append(extras.insert_parallel(self, type_name, chunk)["fid"])
+                n += len(chunk)
+        except BaseException:
+            try:
+                self._async().wait_completion()
+            except Exception:  # nosec B110 - the original error is the one to report
+                pass
+            raise
+        try:
+            self._async().wait_completion()
+        except Exception as e:
+            raise ArcadeDBError(f"Failed to bulk-insert into '{type_name}': {e}") from e
+        n_failed, first = 0, None
+        for token in tokens:
+            result = extras.failures(self, token)
+            if result["count"] and first is None:
+                first = result["first"]
+            n_failed += result["count"]
+        if n_failed:
+            raise ArcadeDBError(
+                f"Failed to bulk-insert into '{type_name}': the parallel writers reported {n_failed} failed record(s) "
+                f"of {n}; the rest may have been stored (first failure: {first})"
+            )
+        return n
+
+    def _kind_of(self, type_name):
+        """'v', 'e' or 'd' for a type (cached): which wrapper a record of that type gets."""
+        kinds = self.__dict__.setdefault("_type_kinds", {})
+        if type_name not in kinds:
+            row = self.query(
+                "sql", "SELECT type FROM schema:types WHERE name = ?", type_name
+            ).first()
+            kinds[type_name] = {"vertex": "v", "edge": "e"}.get(
+                row.get("type") if row else None, "d"
+            )
+        return kinds[type_name]
+
+    def _async(self):
+        from .extras import NativeAsyncExecutor
+
+        return NativeAsyncExecutor(self)
+
     # -- not on native yet
 
     def get_java_database(self):
@@ -630,11 +706,27 @@ class NativeDatabase:
         self._check_not_closed()
         return Document(self, type_name)
 
-    def graph_batch(self, *args, **kwargs):
-        not_yet("GraphBatch")
+    def graph_batch(self, **options):
+        """A GraphBatch for bulk graph loads (keywords as :meth:`Database.graph_batch`)."""
+        from .extras import NativeGraphBatch
 
-    def async_executor(self, *args, **kwargs):
-        not_yet("AsyncExecutor")
+        self._check_not_closed()
+        return NativeGraphBatch.create(self, **options)
+
+    def async_executor(self):
+        """The database's async executor."""
+        from .extras import NativeAsyncExecutor
+
+        self._check_not_closed()
+        executor = NativeAsyncExecutor(self)
+        self._async_executors.append(executor)
+        return executor
+
+    def register_function(self, name, fn, min_args=0, max_args=-1):
+        """Make a Python callable available to SQL (process-wide, see ``extras.register_function``)."""
+        from .extras import register_function
+
+        register_function(name, fn, min_args, max_args)
 
     @property
     def schema(self):
@@ -642,35 +734,170 @@ class NativeDatabase:
         self._check_not_closed()
         return NativeSchema(self)
 
-    def create_vector_index(self, *args, **kwargs):
-        not_yet("Database.create_vector_index (use CREATE INDEX ... LSM_VECTOR)")
+    def create_vector_index(
+        self,
+        vertex_type,
+        vector_property,
+        dimensions,
+        id_property=None,
+        distance_function="cosine",
+        max_connections=32,
+        beam_width=100,
+        quantization="INT8",
+        encoding=None,
+        location_cache_size=None,
+        graph_build_cache_size=None,
+        mutations_before_rebuild=None,
+        store_vectors_in_graph=False,
+        add_hierarchy=True,
+        pq_subspaces=None,
+        pq_clusters=None,
+        pq_center_globally=None,
+        pq_training_limit=None,
+        build_graph_now=True,
+    ):
+        """A vector index (``CREATE INDEX .. LSM_VECTOR``) and its :class:`VectorIndex` wrapper; arguments as the JPype path."""
+        from .schema_objects import create_vector_index
 
-    def import_documents(self, *args, **kwargs):
-        not_yet("Database.import_documents")
+        self._check_not_closed()
+        if location_cache_size is not None:
+            raise ValueError(
+                "location_cache_size is no longer supported (ArcadeDB issues #5559 and #5568): a vector location is the only "
+                "mapping from a vector id to its record, so capping the location index drops vectors from searches and from "
+                "countEntries() instead of spilling them to disk. Remove the argument and size the heap for the live vector "
+                "set instead."
+            )
+        return create_vector_index(
+            self,
+            vertex_type,
+            vector_property,
+            dimensions,
+            id_property,
+            distance_function,
+            max_connections,
+            beam_width,
+            quantization,
+            encoding,
+            graph_build_cache_size,
+            mutations_before_rebuild,
+            store_vectors_in_graph,
+            add_hierarchy,
+            pq_subspaces,
+            pq_clusters,
+            pq_center_globally,
+            pq_training_limit,
+            build_graph_now,
+        )
 
-    def export_database(self, *args, **kwargs):
-        not_yet("Database.export_database (use EXPORT DATABASE)")
+    def import_documents(
+        self,
+        source,
+        document_type: str = "Document",
+        *,
+        file_type=None,
+        delimiter=None,
+        header=None,
+        skip_entries=None,
+        properties_include=None,
+        commit_every=None,
+        parallel=None,
+        wal=None,
+        verbose_level=None,
+        probe_only=None,
+        force_database_create=None,
+        trim_text=None,
+        on_row_error=None,
+        extra_settings=None,
+    ):
+        """Import document-shaped files (CSV, JSON, ...) through the engine's importer; same arguments as the JPype path."""
+        from ..importer import (
+            ImportResult,
+            _build_import_settings,
+            normalize_import_source,
+        )
+        from . import extras
 
-    def export_to_csv(self, *args, **kwargs):
-        not_yet("Database.export_to_csv")
+        self._check_not_closed()
+        source_url = normalize_import_source(source)
+        settings = _build_import_settings(
+            source_url,
+            document_type=document_type,
+            file_type=file_type,
+            delimiter=delimiter,
+            header=header,
+            skip_entries=skip_entries,
+            properties_include=properties_include,
+            commit_every=commit_every,
+            parallel=parallel,
+            wal=wal,
+            verbose_level=verbose_level,
+            probe_only=probe_only,
+            force_database_create=force_database_create,
+            trim_text=trim_text,
+            on_row_error=on_row_error,
+            extra_settings=extra_settings,
+        )
+        try:
+            stats = extras.run_import(self, settings, parallel, commit_every, wal)
+            return ImportResult(
+                result="PROBE_ONLY" if probe_only and stats is None else "OK",
+                operation="import documents",
+                source_url=source_url,
+                statistics=stats or {},
+            )
+        except Exception as e:
+            raise ArcadeDBError(f"Document import failed: {e}") from e
+
+    def export_database(
+        self,
+        file_path,
+        format: str = "jsonl",
+        overwrite: bool = False,
+        include_types=None,
+        exclude_types=None,
+        verbose: int = 1,
+    ) -> dict:
+        self._check_not_closed()
+        from ..exporter import export_database
+
+        return export_database(
+            self, file_path, format, overwrite, include_types, exclude_types, verbose
+        )
+
+    def export_to_csv(
+        self, query: str, file_path: str, language: str = "sql", fieldnames=None
+    ):
+        self._check_not_closed()
+        from ..exporter import export_to_csv
+
+        export_to_csv(self.query(language, query), file_path, fieldnames)
 
     def insert_columns(
         self, type_name, columns, commit_every: int = 10_000, parallel: bool = False
     ) -> int:
         """Bulk insert from whole columns (dict of name -> numpy array or list), as rows through :meth:`insert_many`."""
-        names = list(columns)
-        if not names:
+        self._check_not_closed()
+        items = list(columns.items()) if hasattr(columns, "items") else None
+        if not items:
             raise ValueError("insert_columns needs at least one column")
-        if not all(isinstance(n, str) for n in names):
-            raise ValueError("insert_columns: column names must be strings")
-        data = [
-            c.tolist() if hasattr(c, "tolist") else list(c) for c in columns.values()
-        ]
-        lengths = {len(c) for c in data}
-        if len(lengths) > 1:
-            raise ValueError(
-                f"insert_columns: columns differ in length: {sorted(lengths)}"
-            )
+        for name, values in items:
+            if not isinstance(name, str):
+                raise ValueError(f"column names must be strings, got {name!r}")
+            if isinstance(values, (str, bytes, bytearray)):
+                raise TypeError(
+                    f"column {name!r} is a {type(values).__name__}, not a sequence of values; "
+                    f"wrap a single value in a list"
+                )
+        known = {n: len(v) for n, v in items if hasattr(v, "__len__")}
+        if len(set(known.values())) > 1:
+            raise ValueError(f"columns differ in length: {known}")
+        names = [n for n, _ in items]
+        data = [_column_values(n, v) for n, v in items]
+        lengths = {n: len(c) for n, c in zip(names, data)}
+        if len(set(lengths.values())) != 1:
+            raise ValueError(f"columns differ in length: {lengths}")
+        if not data[0]:
+            return 0
         rows = (dict(zip(names, vals)) for vals in zip(*data))
         return self.insert_many(type_name, rows, commit_every, parallel)
 
@@ -688,17 +915,70 @@ class NativeDatabase:
         """An Arrow table as rows through :meth:`insert_many`."""
         return self.insert_many(type_name, table.to_pylist(), batch_size, parallel)
 
-    def set_wal_flush(self, *args, **kwargs):
-        not_yet("Database.set_wal_flush")
+    def set_wal_flush(self, mode: str):
+        self._check_not_closed()
+        valid = {"no": "NO", "yes_nometadata": "YES_NOMETADATA", "yes_full": "YES_FULL"}
+        if mode not in valid:
+            raise ValueError(
+                f"Invalid WAL flush mode: {mode}. Must be one of: {list(valid)}"
+            )
+        from .extras import db_set
 
-    def set_read_your_writes(self, *args, **kwargs):
-        not_yet("Database.set_read_your_writes")
+        try:
+            db_set(self, "wal_flush", valid[mode])
+        except ArcadeDBError as e:
+            raise ArcadeDBError(f"Failed to set WAL flush mode: {e}") from e
 
-    def is_read_your_writes(self, *args, **kwargs):
-        not_yet("Database.is_read_your_writes")
+    def set_read_your_writes(self, enabled: bool):
+        self._check_not_closed()
+        from .extras import db_set
 
-    def set_auto_transaction(self, *args, **kwargs):
-        not_yet("Database.set_auto_transaction")
+        db_set(self, "read_your_writes", "true" if enabled else "false")
+
+    def is_read_your_writes(self) -> bool:
+        self._check_not_closed()
+        from .extras import db_set
+
+        return bool(db_set(self, "read_your_writes")["v"])
+
+    def set_auto_transaction(self, enabled: bool):
+        self._check_not_closed()
+        from .extras import db_set
+
+        db_set(self, "auto_transaction", "true" if enabled else "false")
+
+
+def _column_values(name, values):
+    """One ``insert_columns`` column as a list of Python values, with the JPype path's refusals (a dtype that does not
+    cross, a value beyond the 64-bit signed range, a column that is not one-dimensional).
+    """
+    try:
+        import numpy as np
+    except ImportError:  # pragma: no cover
+        np = None
+    if hasattr(values, "to_numpy") and not isinstance(values, (list, tuple)):
+        dtype = getattr(values, "dtype", None)
+        if np is not None and isinstance(dtype, np.dtype):
+            values = values.to_numpy()
+        else:  # a pandas extension dtype (Int64, string, boolean, category): its <NA> is a null
+            values = values.to_numpy(dtype=object, na_value=None)
+    if np is not None and isinstance(values, np.ndarray):
+        if values.ndim != 1:
+            raise ValueError(
+                f"column {name!r} is {values.ndim}-dimensional; a column is one-dimensional"
+            )
+        kind = values.dtype.kind
+        if kind == "u" and values.size and int(values.max()) > np.iinfo(np.int64).max:
+            raise ValueError(
+                f"column {name!r} holds a value beyond the 64-bit signed range"
+            )
+        if kind in "MmcV":
+            raise TypeError(
+                f"column {name!r} has dtype {values.dtype}, which does not cross natively; "
+                "convert it to Python values or use insert_many"
+            )
+        return values.tolist()
+    return list(values)
 
 
 class _JavaObject:
@@ -797,6 +1077,78 @@ class NativeSchema:
 
     def drop_index(self, index_name, force=False):
         self._run(f"DROP INDEX `{index_name}`")
+
+    # -- reads, as small objects with the engine's accessors (schema_objects.py)
+
+    def get_type(self, name):
+        from .schema_objects import NativeType
+
+        rows = self._db.query(
+            "sql", "SELECT FROM schema:types WHERE name = ?", name
+        ).to_list()
+        return NativeType(rows[0]) if rows else None
+
+    def get_types(self):
+        from .schema_objects import NativeType
+
+        return [
+            NativeType(r)
+            for r in self._db.query("sql", "SELECT FROM schema:types").to_list()
+        ]
+
+    def get_indexes(self):
+        from .schema_objects import NativeIndex
+
+        return [
+            NativeIndex(r)
+            for r in self._db.query("sql", "SELECT FROM schema:indexes").to_list()
+        ]
+
+    def get_index_by_name(self, index_name):
+        from .schema_objects import NativeIndex
+
+        rows = self._db.query(
+            "sql", "SELECT FROM schema:indexes WHERE name = ?", index_name
+        ).to_list()
+        return NativeIndex(rows[0]) if rows else None
+
+    def get_or_create_index(
+        self, type_name, property_names, unique=False, index_type="LSM_TREE"
+    ):
+        kind = getattr(index_type, "value", index_type)
+        kind = self._INDEX_KIND.get((kind, bool(unique)), kind)
+        cols = ", ".join(f"`{p}`" for p in property_names)
+        try:
+            self._run(f"CREATE INDEX IF NOT EXISTS ON `{type_name}` ({cols}) {kind}")
+        except ArcadeDBError as e:
+            raise ArcadeDBError(
+                f"Failed to get/create index on '{type_name}[{','.join(property_names)}]': {e}"
+            ) from e
+        name = f"{type_name}[{','.join(property_names)}]"
+        return self.get_index_by_name(name) or _JavaObject()
+
+    def _vector_rows(self):
+        # the type-level rows (named Type[prop]); the per-bucket rows carry a file id
+        return [
+            r
+            for r in self._db.query(
+                "sql", "SELECT FROM schema:indexes WHERE indexType = 'LSM_VECTOR'"
+            ).to_list()
+            if "[" in r["name"] and "fileId" not in r
+        ]
+
+    def get_vector_index(self, vertex_type, vector_property):
+        from .schema_objects import NativeVectorIndex
+
+        for r in self._vector_rows():
+            if r["typeName"] == vertex_type and r["properties"] == [[vector_property]]:
+                return NativeVectorIndex(
+                    self._db, vertex_type, vector_property, r["name"]
+                )
+        return None
+
+    def list_vector_indexes(self):
+        return [r["name"] for r in self._vector_rows()]
 
     def __getattr__(self, name):
         if name.startswith("_"):

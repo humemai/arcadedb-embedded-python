@@ -73,8 +73,6 @@ def export_database(
         - JSONL format is recommended for full backup/restore
         - Exported files are compressed (.tgz format)
     """
-    start_jvm()
-
     # Validate format
     supported_formats = ["jsonl", "graphml", "graphson"]
     if export_format.lower() not in supported_formats:
@@ -92,6 +90,26 @@ def export_database(
     if export_dir and not os.path.exists(export_dir):
         os.makedirs(export_dir, exist_ok=True)
 
+    from . import _native
+
+    if _native.enabled():
+        settings = {}
+        if include_types:
+            settings["includeTypes"] = ",".join(include_types)
+        if exclude_types:
+            settings["excludeTypes"] = ",".join(exclude_types)
+        if verbose is not None:
+            settings["verboseLevel"] = str(verbose)
+        try:
+            from ._native.extras import export_database as native_export
+
+            return native_export(
+                db, file_path, export_format.lower(), overwrite, settings
+            )
+        except Exception as e:
+            raise _export_error(e, export_format, file_path) from e
+
+    start_jvm()
     try:
         import jpype
 
@@ -136,31 +154,36 @@ def export_database(
         return python_result
 
     except Exception as e:
-        # Check for specific error messages
-        error_msg = str(e)
-        # Only GraphML and GraphSON come from arcadedb-gremlin; "not found" also matches a missing type or file.
-        if export_format.lower() in ("graphml", "graphson") and (
-            "arcadedb-gremlin" in error_msg
-            or "Format not supported" in error_msg
-            or "not found" in error_msg
-        ):
-            raise ArcadeDBError(
-                f"Export format '{export_format}' requires additional modules: "
-                f"GraphML and GraphSON come from the engine's optional "
-                f"arcadedb-gremlin module, which this package does not bundle. "
-                f"Use export_format='jsonl'. Error: {error_msg}"
-            ) from e
-        elif (
-            "already exists" in error_msg
-            or "already exist" in error_msg
-            or "cannot be overwritten" in error_msg
-        ):
-            raise ArcadeDBError(
-                f"Export file '{file_path}' already exists. "
-                f"Use overwrite=True to replace it. Error: {error_msg}"
-            ) from e
-        else:
-            raise ArcadeDBError(f"Database export failed: {error_msg}") from e
+        raise _export_error(e, export_format, file_path) from e
+
+
+def _export_error(e, export_format, file_path):
+    """The ArcadeDBError for a failed export (shared by the JPype and native paths)."""
+    # Check for specific error messages
+    error_msg = str(e)
+    # Only GraphML and GraphSON come from arcadedb-gremlin; "not found" also matches a missing type or file.
+    if export_format.lower() in ("graphml", "graphson") and (
+        "arcadedb-gremlin" in error_msg
+        or "Format not supported" in error_msg
+        or "not found" in error_msg
+    ):
+        return ArcadeDBError(
+            f"Export format '{export_format}' requires additional modules: "
+            f"GraphML and GraphSON come from the engine's optional "
+            f"arcadedb-gremlin module, which this package does not bundle. "
+            f"Use export_format='jsonl'. Error: {error_msg}"
+        )
+    elif (
+        "already exists" in error_msg
+        or "already exist" in error_msg
+        or "cannot be overwritten" in error_msg
+    ):
+        return ArcadeDBError(
+            f"Export file '{file_path}' already exists. "
+            f"Use overwrite=True to replace it. Error: {error_msg}"
+        )
+    else:
+        return ArcadeDBError(f"Database export failed: {error_msg}")
 
 
 def _column_union(rows) -> List[str]:
