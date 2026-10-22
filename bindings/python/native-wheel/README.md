@@ -72,5 +72,5 @@ warm-up. A measured comparison on the benchmark machine will replace this table.
 ## Licence
 
 Apache-2.0 for ArcadeDB and these bindings. The library also contains the GraalVM Community Edition runtime and JDK class
-library code, licensed GPLv2 **with the Classpath Exception**, plus the Apache/BSD/MIT/UPL/EDL third-party Java libraries and the Studio web assets
+library code, licensed GPLv2 **with the Classpath Exception**, plus the Apache/BSD/MIT/UPL/EDL third-party Java libraries
 listed in `THIRD_PARTY_NOTICES.md`. All texts and the source locations are in the wheel's `*.dist-info/licenses/`.

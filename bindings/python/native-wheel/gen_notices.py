@@ -8,21 +8,20 @@
 Inputs, all read from disk, nothing typed by hand except the policy tables below:
   1. the `native-image -cp ...` line that preview-build.sh logs in build.log (the exact jar set of the image);
   2. each jar: licence names from its Maven pom (parent poms followed), verbatim LICENSE/NOTICE files from the jar itself;
-  3. the Studio web assets (`static/**` of arcadedb-studio.jar is a registered image resource): production npm packages from
-     studio/package-lock.json at the engine release tag, licence texts vendored in notice-texts/npm (see below);
-  4. the GraalVM CE home: release file, LICENSE.txt (GPLv2 + Classpath Exception + UPL), legal/java.base notices;
-  5. the ArcadeDB NOTICE file at the engine release tag.
-notice-texts/ holds licence texts that are in no jar: npm package LICENSE/NOTICE files (npm pack of each locked version) and the
-ANTLR and JTS BSD texts (Maven poms only link them). The generator fails when a package has no vendored directory.
+  3. the GraalVM CE home: release file, LICENSE.txt (GPLv2 + Classpath Exception + UPL), legal/java.base notices;
+  4. the ArcadeDB NOTICE file at the engine release tag.
+notice-texts/ holds licence texts that are in no jar: the ANTLR and JTS BSD texts (their poms only link them) and, for libjvector,
+the Highway LICENSE and jvector NOTICE.txt at jvector tag 4.0.2.
 
-Licence policy: the wheel ships under Apache-2.0. ALLOWED are permissive licences; CONDITIONS are allowed with an obligation that the
-notices file records (attribution, font name); anything else is listed under "Licence review" and the script exits 2 with --strict.
-It never decides such a case; the maintainer does.
+NO STUDIO: arcadedb-studio is not on the image classpath (its web assets bundle ApexCharts >= 5.1.0, a Community/Commercial licence
+that is not compatible with Apache-2.0). This script refuses a classpath that contains it.
+
+Licence policy: the wheel ships under Apache-2.0. ALLOWED are permissive licences; anything else is listed under "Licence review"
+and the script exits 2 with --strict. It never decides such a case; the maintainer does.
 """
 
 import argparse
 import hashlib
-import json
 import os
 import re
 import subprocess
@@ -48,11 +47,6 @@ ALLOWED = {
     "CC0-1.0",
     "BlueOak-1.0.0",
 }
-CONDITIONS = {
-    "CC-BY-4.0": "attribution required (Font Awesome icons)",
-    "OFL-1.1": "SIL OFL 1.1 (Font Awesome webfonts): keep the notice, do not sell the font alone, do not use the reserved name for a modified font",
-}
-
 # pom <license><name> -> SPDX. Several <license> entries in one pom are alternatives (Maven convention), not a conjunction.
 POM_NAMES = [
     (r"apache", "Apache-2.0"),
@@ -65,14 +59,7 @@ POM_NAMES = [
     (r"cc0|public domain", "CC0-1.0"),
 ]
 
-# Studio web assets that need an explicit statement beyond the lock file (all facts from the vendored texts / banners).
-NPM_NOTES = {
-    "jszip": "dual MIT OR GPL-3.0-or-later; used under MIT (notice-texts/npm/jszip@3.10.2/LICENSE.markdown)",
-    "apexcharts": "NOT an open-source licence: ApexCharts Community/Commercial licence (see Licence review)",
-    "apex-commons": "NOT an open-source licence: ApexCharts licence (see Licence review)",
-}
-
-NO_LICENSE_FILE_NOTE = "no licence file in the npm package; the lock file declares the licence, no copyright holder is stated"
+HIGHWAY_COMMIT = "16f5f5c768064d0bb52952888a14236bec75c104"  # jvector 4.0.2: jvector-native/src/main/native/third_party/highway
 
 
 def sha(b):
@@ -129,60 +116,6 @@ def choose(spdx_options):
         if o in ALLOWED:
             return o
     return None
-
-
-def eval_spdx(expr):
-    """npm SPDX expression -> (verdict, chosen). verdict: allowed | conditions | review."""
-    expr = expr.strip()
-    tokens = re.findall(r"\(|\)|AND|OR|[A-Za-z0-9.\-+]+", expr)
-    pos = 0
-
-    def parse_or():
-        nonlocal pos
-        v = parse_and()
-        while pos < len(tokens) and tokens[pos] == "OR":
-            pos += 1
-            w = parse_and()
-            v = best(v, w)
-        return v
-
-    def parse_and():
-        nonlocal pos
-        v = parse_atom()
-        while pos < len(tokens) and tokens[pos] == "AND":
-            pos += 1
-            w = parse_atom()
-            v = (worst(v[0], w[0]), v[1] + [x for x in w[1] if x not in v[1]])
-        return v
-
-    def parse_atom():
-        nonlocal pos
-        t = tokens[pos]
-        pos += 1
-        if t == "(":
-            v = parse_or()
-            pos += 1  # ")"
-            return v
-        if t in ALLOWED:
-            return ("allowed", [t])
-        if t in CONDITIONS:
-            return ("conditions", [t])
-        return ("review", [t])
-
-    rank = {"allowed": 0, "conditions": 1, "review": 2}
-
-    def best(a, b):
-        return a if rank[a[0]] <= rank[b[0]] else b
-
-    def worst(a, b):
-        return a if rank[a] >= rank[b] else b
-
-    if not tokens or tokens[0] in ("SEE", "None", "UNLICENSED"):
-        return ("review", [expr or "none declared"])
-    try:
-        return parse_or()
-    except IndexError:
-        return ("review", [expr])
 
 
 def jar_info(jar):
@@ -252,6 +185,10 @@ def main():
     a = ap.parse_args()
     log = a.build_log or str(Path(a.lib_dir) / "build.log")
     cp = parse_classpath(log)
+    if any("arcadedb-studio" in c for c in cp):
+        sys.exit(
+            "gen_notices: arcadedb-studio is on the classpath; its ApexCharts assets are not Apache-2.0 compatible (see module docstring)"
+        )
     G = Path(a.graalvm_home)
     rel = dict(re.findall(r'^(\w+)="?(.*?)"?$', (G / "release").read_text(), re.M))
 
@@ -264,8 +201,8 @@ def main():
     w(
         f"Generated by `native-wheel/gen_notices.py` from the classpath that built `libarcadedb.so` (engine {a.engine}, "
         f"GraalVM CE {rel.get('GRAALVM_VERSION')}). Do not edit by hand: `build_wheel.py` fails when this file differs from the "
-        "generator output. Licence names come from each artifact's own Maven pom (or the npm lock file); notice texts are copied "
-        "verbatim from the jars, the npm packages, the engine tag and the GraalVM home. A text of the Apache License 2.0 is in "
+        "generator output. Licence names come from each artifact's own Maven pom; notice texts are copied "
+        "verbatim from the jars, the engine tag and the GraalVM home. A text of the Apache License 2.0 is in "
         "`licenses/Apache-2.0.txt`.\n"
     )
 
@@ -309,100 +246,22 @@ def main():
     # ---- native code ----
     w("## Native code shipped next to the library\n")
     w(
-        "`libjvector-x86_64.so` is taken unmodified from `io.github.jbellis:jvector:4.0.2` (Apache-2.0, pom). The jar carries no "
-        "licence file or source for the kernels inside it; the library is built from Google Highway, which upstream offers under "
-        "Apache-2.0 or BSD-3-Clause. That last fact is not recorded in the jar (see Licence review).\n"
+        "`libjvector-x86_64.so` is taken unmodified from `io.github.jbellis:jvector:4.0.2` (Apache-2.0, pom). Its sources are in the "
+        "jvector repository at tag `4.0.2` (`jvector-native/src/main/native`): jvector's own C++ kernels (Apache-2.0) and the Google Highway "
+        f"library, pinned there as a git submodule at commit `{HIGHWAY_COMMIT}`. Highway's `LICENSE` at that commit says: "
+        "dual-licensed under the Apache License 2.0 or the BSD 3-Clause License, except `hwy/contrib/random/random-inl.h` (CC0 1.0). "
+        "Applied here: Apache-2.0. The `LICENSE` of Highway and the `NOTICE.txt` of jvector are reproduced verbatim below. "
+        "The library links `libstdc++.so.6`, `libm.so.6`, `libgcc_s.so.1` and `libc.so.6` dynamically (not shipped).\n"
     )
-    review.append(
+    for f, who in (
         (
-            "libjvector-x86_64.so",
-            "binary kernels of unknown provenance inside the jvector jar (Highway, Apache-2.0 OR BSD-3-Clause per upstream, not verifiable from the jar); confirm against the jvector 4.0.2 source",
-        )
-    )
-
-    # ---- Studio web assets ----
-    lock = json.loads(git_show(a.engine, "studio/package-lock.json"))
-    w("## ArcadeDB Studio web assets (resource `static/**` inside libarcadedb.so)\n")
-    w(
-        "The engine's `arcadedb-studio` jar bundles browser libraries (webpack output under `static/dist`, `static/swagger-ui`). The image "
-        "registers `static/**` as a resource, so they are inside `libarcadedb.so`. Production packages of `studio/package-lock.json` at tag "
-        f"`{a.engine}`; the lock file also resolves their transitive packages, which pdfmake and jszip bundle.\n"
-    )
-    w("| npm package | Version | Declared licence | Verdict | Note |")
-    w("|---|---|---|---|---|")
-    npm_texts = {}
-    pkgs = sorted(
-        {
-            (k.split("node_modules/")[-1], v["version"], v.get("license", "None"))
-            for k, v in lock["packages"].items()
-            if k and not v.get("dev")
-        }
-    )
-    for name, ver, lic in pkgs:
-        d = TEXTS / "npm" / f"{name.replace('/', '__')}@{ver}"
-        if not d.is_dir():
-            sys.exit(
-                f"gen_notices: no vendored licence directory {d}; run npm pack {name}@{ver} and copy LICENSE/NOTICE files"
-            )
-        verdict, chosen = eval_spdx(lic)
-        files = sorted(p for p in d.iterdir() if p.is_file())
-        note = NPM_NOTES.get(name, "" if files else NO_LICENSE_FILE_NOTE)
-        if verdict == "review" and name in NPM_NOTES:
-            pass  # recorded once, with the full reason, in the ApexCharts entry below
-        elif verdict == "review":
-            if not (
-                name == "png-js"
-                and any("MIT" in f.read_text(errors="replace")[:20] for f in files)
-            ):
-                review.append(
-                    (
-                        f"npm {name}@{ver}",
-                        f"declared licence '{lic}' is not in the allowed set",
-                    )
-                )
-            else:
-                verdict, note = (
-                    "allowed",
-                    "lock file declares none; the package's LICENSE file is MIT",
-                )
-        if verdict == "conditions":
-            note = "; ".join(CONDITIONS[c] for c in chosen if c in CONDITIONS)
-        for f in files:
-            b = f.read_bytes()
-            npm_texts.setdefault(sha(b), [f"{name}@{ver}/{f.name}", text(b), []])[
-                2
-            ].append(f"{name}@{ver}")
-        w(f"| {name} | {ver} | {lic} | {verdict} | {note} |")
-    w("")
-    # banners the webpack build kept in the jar
-    studio = next((c for c in cp if "arcadedb-studio" in c), None)
-    banners = []
-    if studio:
-        with zipfile.ZipFile(studio) as z:
-            for n in sorted(z.namelist()):
-                if n.endswith(".LICENSE.txt") and n.startswith("static/"):
-                    banners.append((n, text(z.read(n))))
-    w(
-        "Also inside the jar and the library: Roboto fonts in `static/dist/js/vfs_fonts.js` (pdfmake's default font bundle; Roboto is "
-        "Apache-2.0, Google), Font Awesome webfonts and CSS, and ArcadeDB's own Studio code (Apache-2.0).\n"
-    )
-    review.append(
-        (
-            "static/dist/js/vfs_fonts.js (Roboto)",
-            "font licence is taken from upstream knowledge (Apache-2.0), no licence file in the jar or the npm package of pdfmake",
-        )
-    )
-
-    # ApexCharts
-    review.insert(
-        0,
-        (
-            "npm apexcharts@7.8.0 + apex-commons@0.8.1 (static/dist/js/apexcharts.min.js, in libarcadedb.so)",
-            "ApexCharts is under a dual Community/Commercial licence, not an open-source licence: free only for organizations under USD 2M "
-            "annual revenue/budget/funding; redistribution as part of a product used by other people needs a paid OEM licence; text in "
-            "notice-texts/npm/apexcharts@7.8.0/LICENSE.md. Not compatible with shipping under Apache-2.0.",
+            f"highway-{HIGHWAY_COMMIT}.LICENSE.txt",
+            "libjvector-x86_64.so (google/highway)",
         ),
-    )
+        ("jvector-4.0.2.NOTICE.txt", "io.github.jbellis:jvector:4.0.2"),
+    ):
+        b_ = (TEXTS / "java" / f).read_bytes()
+        appendix_java.setdefault(sha(b_), [f, text(b_), []])[2].append(who)
 
     # ---- GraalVM / JDK ----
     w("## GraalVM Community Edition runtime and JDK classes in libarcadedb.so\n")
@@ -467,18 +326,6 @@ def main():
         w(f"#### {n} [{k}]\n")
         w("Applies to: " + ", ".join(sorted(who)) + "\n")
         w(fence(t))
-    w("### Studio npm packages: licence and notice files (de-duplicated by content)\n")
-    for k, (n, t, who) in sorted(npm_texts.items(), key=lambda kv: kv[1][0].lower()):
-        w(f"#### {n} [{k}]\n")
-        w("Applies to: " + ", ".join(sorted(who)) + "\n")
-        w(fence(t))
-    w(
-        "### Banners kept by webpack in `arcadedb-studio.jar` (`static/dist/js/*.LICENSE.txt`)\n"
-    )
-    for n, t in banners:
-        w(f"#### {n}\n")
-        w(fence(t))
-
     body = "\n".join(out)
     body = re.sub(r"\n{3,}", "\n\n", body).rstrip() + "\n"
     if a.out:

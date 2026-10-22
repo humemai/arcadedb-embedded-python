@@ -1,4 +1,4 @@
-"""In-process server on the native backend (HTTP API, Studio, wire-protocol plugins as configured)."""
+"""In-process server on the native backend (HTTP API, wire-protocol plugins as configured; no Studio in the native wheel)."""
 
 import os
 from typing import Any, Dict, Optional

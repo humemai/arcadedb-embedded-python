@@ -155,30 +155,9 @@
         <exclusion><groupId>org.apache.commons</groupId><artifactId>commons-math3</artifactId></exclusion>
       </exclusions>
     </dependency>
-    <dependency>
-      <groupId>com.arcadedb</groupId>
-      <artifactId>arcadedb-studio</artifactId>
-      <version>${arcadedb.version}</version>
-      <exclusions>
-        <exclusion><groupId>com.arcadedb</groupId><artifactId>arcadedb-gremlin</artifactId></exclusion>
-        <exclusion><groupId>com.arcadedb</groupId><artifactId>arcadedb-grpcw</artifactId></exclusion>
-        <exclusion><groupId>org.graalvm.js</groupId><artifactId>*</artifactId></exclusion>
-        <exclusion><groupId>org.graalvm.shadowed</groupId><artifactId>icu4j</artifactId></exclusion>
-        <exclusion><groupId>org.graalvm.truffle</groupId><artifactId>*</artifactId></exclusion>
-        <exclusion><groupId>org.graalvm.regex</groupId><artifactId>*</artifactId></exclusion>
-        <exclusion><groupId>com.arcadedb</groupId><artifactId>arcadedb-ha-raft</artifactId></exclusion>
-        <exclusion><groupId>com.arcadedb</groupId><artifactId>arcadedb-metrics</artifactId></exclusion>
-        <exclusion><groupId>com.arcadedb</groupId><artifactId>arcadedb-mongodbw</artifactId></exclusion>
-        <exclusion><groupId>com.fasterxml.jackson.core</groupId><artifactId>*</artifactId></exclusion>
-        <exclusion><groupId>com.fasterxml.jackson.dataformat</groupId><artifactId>*</artifactId></exclusion>
-        <exclusion><groupId>com.fasterxml.jackson.datatype</groupId><artifactId>*</artifactId></exclusion>
-        <exclusion><groupId>org.graalvm.polyglot</groupId><artifactId>js</artifactId></exclusion>
-        <exclusion><groupId>org.xerial.snappy</groupId><artifactId>*</artifactId></exclusion>
-        <exclusion><groupId>com.arcadedb</groupId><artifactId>arcadedb-tracing</artifactId></exclusion>
-        <exclusion><groupId>org.jline</groupId><artifactId>*</artifactId></exclusion>
-        <exclusion><groupId>org.apache.commons</groupId><artifactId>commons-math3</artifactId></exclusion>
-      </exclusions>
-    </dependency>
+    <!-- No arcadedb-studio: its web assets bundle ApexCharts (>= 5.1.0: Community/Commercial licence, not Apache-2.0 compatible) and are a
+         registered image resource. Without the jar the server answers "/" with its built-in "Studio is not bundled" page and every other
+         static path with 404 (GetDynamicContentHandler); /api/v1, Bolt, Postgres, Redis, GraphQL, MCP are unaffected. -->
     <dependency>
       <groupId>com.arcadedb</groupId>
       <artifactId>arcadedb-postgresw</artifactId>
