@@ -1396,7 +1396,7 @@ class Neo4jVector(Base):
     Neo4j exposes no per-query ef_search; the note under the table says so.
 
     THE QUANTIZATION IS SET, NOT LEFT TO THE DEFAULT (BUGS F164, DECISIONS
-    #135). Neo4j 2026.08.1 builds a vector index BINARY-quantized, with a
+    #135). Neo4j 2026.08.1 to 2026.10.0 build a vector index BINARY-quantized, with a
     search expansion factor of 3, when the definition names no
     `vector.quantization.type`, and this arm's definition named none until
     2026-10-02 while it recorded fp32: every Neo4j dense row at the October
@@ -1410,7 +1410,7 @@ class Neo4jVector(Base):
     QUANT_TYPE = "NONE"
     # THE SEARCH EXPANSION, SET AND READ BACK (2026-10-02). Each quantization
     # type brings its own default `vector.default_search_expansion_factor`
-    # (2026.08.1 and 2026.09.0: NONE 1.0, SCALAR 1.5, BINARY 3.0), the multiple
+    # (2026.08.1, 2026.09.0 and 2026.10.0: NONE 1.0, SCALAR 1.5, BINARY 3.0), the multiple
     # of the requested candidates the index searches before re-scoring. The lane
     # matches search effort at ef 100 and Neo4j, which has no per-query ef, asks
     # for 100 candidates and keeps 10, so a default 1.5 would give the int8 arm

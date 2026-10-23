@@ -1182,7 +1182,7 @@ class Neo4jE2:
                 s.run("UNWIND $rows AS r MATCH (a:Product {pid: r.s}), (b:Product {pid: r.d}) CREATE (a)-[:RELATED]->(b)",
                       rows=eb[b0:b0 + BATCH]).consume()
             # `vector.quantization.type` set, never left to the default: Neo4j
-            # 2026.08.1 builds BINARY when the definition names none, which this
+            # 2026.08.1 to 2026.10.0 build BINARY when the definition names none (re-probed on 2026.10.0, 2026-10-23), which this
             # one did until 2026-10-02 (BUGS F164, DECISIONS #135). Read back.
             s.run(f"CREATE VECTOR INDEX prod_emb IF NOT EXISTS FOR (p:Product) ON (p.embedding) "
                   f"OPTIONS {{indexConfig: {{`vector.dimensions`: {DIM}, `vector.similarity_function`: 'euclidean', "
@@ -1194,7 +1194,7 @@ class Neo4jE2:
             if cfg.get("vector.quantization.type") != "NONE":
                 raise RuntimeError(f"neo4j vector index quantization read back "
                                    f"{cfg.get('vector.quantization.type')!r}, not 'NONE' (BUGS F164)")
-            # NONE's own default is 1.0 (2026.08.1, 2026.09.0); set and checked so
+            # NONE's own default is 1.0 (2026.08.1, 2026.09.0, 2026.10.0); set and checked so
             # a release that moves it cannot widen the candidate pool unseen.
             if float(cfg.get("vector.default_search_expansion_factor") or 0) != 1.0:
                 raise RuntimeError(f"neo4j vector index search expansion read back "
@@ -1266,7 +1266,7 @@ class Neo4jE2:
 
 
 class MemgraphE2:
-    """Memgraph 3.13.1 alone, served (DECISIONS #131 item 4, from the 26.10.1
+    """Memgraph 3.13.1 alone (re-pinned to 3.14.0 on 2026-10-23), served (DECISIONS #131 item 4, from the 26.10.1
     measurement): Product nodes carrying their embedding under Memgraph's
     vector index, RELATED edges, the views counter on the node; the hit, the
     hop, and the update run in one explicit Bolt transaction, and the injected

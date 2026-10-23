@@ -84,7 +84,7 @@ def image_versions():
     engine runs in a container takes its version from the image digest in
     `runner.BACKENDS`, not from a pypi pin, and comparing the two is a category
     error: `neo4j_graph` records the SERVER's 2026.07.1 while BACKEND_PKG maps
-    it to the `neo4j` python DRIVER pinned at 6.3.1, so a correct row was
+    it to the `neo4j` python DRIVER pinned at 6.4.1 (6.3.1 before 2026-10-23), so a correct row was
     reported STALE against a number that describes a different piece of
     software. Same for milvus (server 2.6.13 against pymilvus 3.0.1).
 
@@ -158,7 +158,7 @@ def main():
             #
             # Comparing it to a pypi pin is a category error and produced four
             # false STALEs: neo4j_graph's server 2026.07.1 against the `neo4j`
-            # DRIVER at 6.3.1, and milvus_dense/milvus_sparse's server 2.6.13
+            # DRIVER at 6.4.1 (6.3.1 before 2026-10-23), and milvus_dense/milvus_sparse's server 2.6.13
             # against `pymilvus` 3.0.1. Those rows are correct and pinned; the
             # check was comparing two different pieces of software.
             pkg, state = "image digest", "IMAGE-PINNED"
