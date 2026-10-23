@@ -604,7 +604,7 @@ class SQLiteTPC:
 
 
 class MongoTPC:
-    """MongoDB 8.2: lineitem and part as collections, ISO-text dates like the
+    """MongoDB (9.0.4 from 2026-10-23): lineitem and part as collections, ISO-text dates like the
     ArcadeDB and SQLite arms, Q1/Q6 as aggregation pipelines, new-order as
     one multi-document transaction (which is why the server runs as a
     single-node replica set) (2026-09-11)."""

@@ -834,7 +834,7 @@ class ArangoE2:
 
 
 class MongoE2:
-    """MongoDB 8.2.12 with MongoDB Search (mongot) Community 1.70.4, served
+    """MongoDB 9.0.4 with MongoDB Search (mongot) Community 1.70.5, served
     (2026-09-15): product documents with an embedding under a `vectorSearch`
     index, `related` as an edge collection, the vector hit through
     $vectorSearch, the hop through $lookup, and the document updates inside

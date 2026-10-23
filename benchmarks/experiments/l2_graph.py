@@ -2825,7 +2825,7 @@ class ArangoGraph(Base):
 
 
 class MongoGraph(Base):
-    """MongoDB 8.2.12 served (2026-09-15): `person` documents keyed by the LDBC
+    """MongoDB served (2026-09-15; mongod 9.0.4 from 2026-10-23): `person` documents keyed by the LDBC
     id and `knows` as an edge document collection, the same questions as
     aggregation pipelines.
 
