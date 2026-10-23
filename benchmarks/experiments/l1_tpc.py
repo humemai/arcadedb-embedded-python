@@ -1458,9 +1458,8 @@ class CrateTPC:
 
     SETTINGS, each with its vendor source in COMPARATORS.md and read back onto the row (cratedb_common.readback): one shard per
     CPU of the cell, no replica, the translog durability of the cell's class, the engine's default refresh followed by one
-    explicit REFRESH TABLE inside the build timer. INDEXES: CrateDB indexes every column automatically and offers no index DDL
-    to add or time, so there is no index step (`index_before_load`); the decision and its measurement are in
-    fairness_check.INDEX_DECISIONS. The engine's own ANALYZE (table statistics for its planner) is the counterpart of the
+    explicit REFRESH TABLE inside the build timer. INDEXES: CrateDB indexes every column automatically (the engine default), so there is no index step to time
+    (`index_before_load`); the decision, and the measurement it still owes, are in fairness_check.INDEX_DECISIONS. The engine's own ANALYZE (table statistics for its planner) is the counterpart of the
     PostgreSQL arm's ANALYZE and is in the build timer too.
     """
     name = "cratedb_tpc"

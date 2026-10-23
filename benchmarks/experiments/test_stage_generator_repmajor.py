@@ -83,8 +83,8 @@ def test_priority_names_every_subset_engine_and_arcadedb_leads():
     assert list(G.ENGINE_PRIORITY[1:13]) == ["surrealdb", "arangodb", "postgresql", "mongodb", "redis", "qdrant-neo4j", "neo4j",
                                               "qdrant", "duckdb", "sqlite", "memgraph", "ladybug"]
     assert G.ENGINE_PRIORITY[-1] == "cratedb"
-    # an engine whose adapter is not merged (cratedb) is not in ENGINES: skipped cleanly, nothing breaks; redis joined with its dense arm
-    assert "redis" in G.ENGINES and "cratedb" not in G.ENGINES
+    # both comparator batches are merged: Redis with its dense arm, CrateDB (last in priority) with its three lanes
+    assert "redis" in G.ENGINES and "cratedb" in G.ENGINES
 
 
 def test_a_single_rep_keeps_the_ids_and_one_pass(tmp_path):

@@ -1328,8 +1328,8 @@ class CrateTS:
     TimescaleDB arm also keeps in its one default chunk. One shard per CPU of the cell, no replica, the translog durability of the
     cell's class, all read back (cratedb_common.readback). The load is `INSERT ... SELECT * FROM unnest(<one array per column>)`
     per batch (the PostgreSQL wire has no COPY); the ts column is sent as epoch milliseconds and cast on the server.
-    CrateDB indexes every column automatically, so the (host, ts DESC) index of the PostgreSQL arms has no counterpart
-    to build or time (`index_before_load`; fairness_check.INDEX_DECISIONS). REFRESH TABLE then ANALYZE close the load, inside
+    CrateDB indexes every column automatically (the engine default), so the (host, ts DESC) index of the PostgreSQL arms has
+    no counterpart to build or time (`index_before_load`; fairness_check.INDEX_DECISIONS, which names the measurement still owed). REFRESH TABLE then ANALYZE close the load, inside
     the ingest timer, as the PostgreSQL arms' ANALYZE does.
     """
     name = "cratedb_ts"
