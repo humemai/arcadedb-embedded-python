@@ -17,7 +17,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 INDEXED_HERE = {"arcadedb_dense_embedded", "arcadedb_dense_server", "pgvector_dense", "neo4j_dense", "memgraph_dense",
-                "falkordb_dense", "duckdb_vss_dense", "lancedb_dense"}
+                "falkordb_dense", "duckdb_vss_dense", "lancedb_dense", "cratedb_dense"}
 
 
 @pytest.fixture(scope="module")

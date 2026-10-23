@@ -363,12 +363,18 @@ ENGINES = collections.OrderedDict([
     ("neo4j", ("Neo4j on its own: graph and dense", ("neo4j_graph", "neo4j_dense"))),
     ("qdrant", ("Qdrant on its own: dense, and sparse on the second list", ("qdrant_dense", "qdrant_sparse"))),
     ("redis", ("Redis 8 (Query Engine): dense", ("redis_",))),
+    ("cratedb", ("CrateDB 6.4: documents analytics (TPC-H), dense, time series", ("cratedb_",))),
     ("ladybug", ("LadybugDB, embedded graph and vector, on every lane it supports", ("ladybug",))),
 ])
 # TimescaleDB completes the PostgreSQL arm (pgvector, AGE, TimescaleDB) and runs whenever the time-series lane does
 TIMESCALEDB = "timescaledb"
 # registered arms that are NOT in the subset (prefixes). Neo4j's cross-model arm is the composed stack's part.
 OUTSIDE = ("neo4j_e2", "falkordb", "milvus", "elasticsearch", "chroma", "lancedb", "questdb")
+
+# Arms in the subset that no row exists for yet. The page gate (page_check._roster_arms) owes them no row and no declaration, so a
+# payload measured before they ran does not fail as "registered, no row". An arm that has a row anyway is still on the page and keyed.
+# REMOVE WHEN the arm has rows in the frozen results (CrateDB: after its first full measurement).
+NOT_YET_MEASURED = ("cratedb_",)
 
 CORE_LANES = ("l2", "e2", "l1tpc", "l3d")
 SECOND_LANES = ("l3s", "l4", "lifecycle")
@@ -406,6 +412,10 @@ def engine_of(backend):
         if backend.startswith(prefixes):
             return eng
     return None
+
+
+def not_yet_measured(backend):
+    return backend.startswith(NOT_YET_MEASURED)
 
 
 def is_outside(backend):

@@ -168,7 +168,8 @@ UNVERIFIED_MARK = "not verified"
 STRICT_MARKS = ("txWalFlush=2", "txWalFlush=1:", "synchronous=FULL", "j=true", "commit.mode=sync",
                 "SURREAL_SYNC_DATA=true", "waitForSync=true", "synchronous_commit=on",
                 # the colon keeps "=1:" from matching the relaxed "=100000"
-                "flush-every-n-tx=1:", "appendfsync=always", "sync=every")
+                "flush-every-n-tx=1:", "appendfsync=always", "sync=every",
+                "translog.durability=REQUEST")
 
 
 def durability_class(text):
@@ -290,6 +291,8 @@ DURABILITY_FALKORDB = ("appendonly=no, RDB save '3600 1 300 100 60 10000' (image
                        "nothing is synced at commit")
 DURABILITY_REDIS = ("appendonly=no, RDB save '3600 1 300 100 60 10000' (image default): "
                     "nothing is synced at commit")
+DURABILITY_CRATEDB = ("translog.durability=ASYNC, translog.sync_interval=5s (set on every table): the translog "
+                      "is fsynced in the background every 5 s, not at commit")
 DURABILITY_CHROMA = "fsync at commit, not configurable (Chroma's SQLite in rollback-journal mode)"
 DURABILITY_LANCEDB = "no sync at commit, not configurable (LanceDB writes each table version unsynced)"
 
@@ -335,6 +338,8 @@ DURABILITY_SURREAL_SERVER_STRICT = "RocksDB, sync=every (the engine default): sy
 DURABILITY_ARANGO_STRICT = "waitForSync=true: the commit waits for the WAL sync"
 DURABILITY_PG_ON = "synchronous_commit=on"
 DURABILITY_MEMGRAPH_STRICT = "storage-wal-file-flush-every-n-tx=1: the WAL is fsynced at every commit"
+DURABILITY_CRATEDB_STRICT = ("translog.durability=REQUEST (the engine default): the translog is fsynced "
+                             "before every commit is acknowledged")
 DURABILITY_FALKORDB_STRICT = "appendonly=yes, appendfsync=always: the AOF is fdatasynced at every write"
 DURABILITY_REDIS_STRICT = "appendonly=yes, appendfsync=always: the AOF is fdatasynced at every write"
 
@@ -373,6 +378,7 @@ STRICT_OF = {
     DURABILITY_MEMGRAPH: DURABILITY_MEMGRAPH_STRICT,
     DURABILITY_FALKORDB: DURABILITY_FALKORDB_STRICT,
     DURABILITY_REDIS: DURABILITY_REDIS_STRICT,
+    DURABILITY_CRATEDB: DURABILITY_CRATEDB_STRICT,
 }
 
 
@@ -408,6 +414,26 @@ def pg_durability_string(value, cls=None):
     want = pg_expected(cls)
     return f"synchronous_commit={value}" + ("" if value == want
                                             else f" (NOT the #90 {cls or DURABILITY_CLASS} setting)")
+
+
+CRATEDB_SYNC_INTERVAL_MS = 5000      # translog.sync_interval, the engine default (create-table.rst), left unset on the table
+
+
+def cratedb_expected(cls=None):
+    """What `information_schema.tables` must answer for translog.durability at this class."""
+    return "REQUEST" if (cls or DURABILITY_CLASS) == CLASS_STRICT else "ASYNC"
+
+
+def cratedb_durability_string(durability, sync_interval_ms, cls=None):
+    """Read, not asserted: CrateDB's own table settings, as the class's string, or marked when the table did not take them.
+
+    `durability` and `sync_interval_ms` are what `information_schema.tables.settings['translog']` answered for the table
+    the lane built (the interval is the engine default, 5000 ms, when no one set it)."""
+    want = cratedb_expected(cls)
+    if str(durability).upper() == want and (want == "REQUEST" or int(sync_interval_ms) == CRATEDB_SYNC_INTERVAL_MS):
+        return DURABILITY_CRATEDB_STRICT if want == "REQUEST" else DURABILITY_CRATEDB
+    return (f"translog.durability={durability}, translog.sync_interval={sync_interval_ms}ms "
+            f"(NOT the #90 {cls or DURABILITY_CLASS} setting)")
 
 
 def arcade_jvm_args(base="", cls=None):

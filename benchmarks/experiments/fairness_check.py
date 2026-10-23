@@ -1001,6 +1001,8 @@ INDEX_DECISIONS = {
         "sqlite":               "NONE: the index costs it, 53.4 -> 63.3 ms",
         "arangodb_tpc":         "NONE: the index costs it, 684 -> 881 ms",
         "duckdb":               "NONE: no effect, 6.0 -> 6.2 ms; columnar with zone maps",
+        # no index DDL exists: every column carries an automatic Lucene index and a column store (the ship date's is the one Q6 uses)
+        "cratedb_tpc":          "the engine default, an automatic Lucene index on every column; `INDEX OFF` on the filtered columns was not measured (owed before the campaign cell, F14)",
     },
     # e2 WAS LEFT OUT OF THIS MAP AND SHOULD NOT HAVE BEEN. The scoping note
     # above said an index decision can only go wrong where a query filters
@@ -1049,6 +1051,7 @@ INDEX_DECISIONS = {
         "surrealdb_ts_server":        "(host, ts)",
         "arangodb_ts":                "persistent (host, ts)",
         "mongodb":                    "time-series collection, metaField=host timeField=ts",
+        "cratedb_ts":                 "the engine default, an automatic Lucene index on every column; `INDEX OFF` on the filtered columns was not measured (owed before the campaign cell, F14)",
         "questdb":                    "NONE: measured, 1.93 -> 1.75 ms last-point, inside the "
                                       "spread of seven samples; host is unindexed by default and "
                                       "the columnar layout answers it in 1.93 ms where SQLite "
@@ -1299,6 +1302,7 @@ PHASE_SPLIT_DECLARED = {
     # #131 item 3. Lucene builds a graph per segment while
     # documents are indexed and the force-merge rebuilds it into one.
     ("l3d", "elasticsearch_dense"): "builds its HNSW per segment as documents are indexed, and the refresh and the force-merge into one segment, which rebuilds the graph, are inside the build timer",
+    ("l3d", "cratedb_dense"): "builds its HNSW per segment (Lucene) as documents are indexed, and the refresh and the OPTIMIZE into one segment, which rebuilds the graph, are inside the build timer",
     ("l3d", "elasticsearch_dense_int8"): "builds its HNSW per segment as documents are indexed, and the refresh and the force-merge into one segment, which rebuilds the graph, are inside the build timer",
 }
 # EMPTY (CAMPAIGN section 7 row 44): DuckDB VSS and ArangoDB

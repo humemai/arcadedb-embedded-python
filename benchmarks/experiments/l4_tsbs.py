@@ -1320,6 +1320,95 @@ class PostgresTS:
         self.cx.close()
 
 
+class CrateTS:
+    """CrateDB 6.4.6 over the PostgreSQL wire (2026-10-23, the multi-model comparator batch): one plain table, the TimescaleDB
+    arm's shape (host TEXT, ts TIMESTAMPTZ, three DOUBLEs), the five queries and the order-limit one in CrateDB's dialect.
+
+    NOT PARTITIONED: the vendor's partitioning is for retention and pruning over many periods; the corpus is three days, which the
+    TimescaleDB arm also keeps in its one default chunk. One shard per CPU of the cell, no replica, the translog durability of the
+    cell's class, all read back (cratedb_common.readback). The load is `INSERT ... SELECT * FROM unnest(<one array per column>)`
+    per batch (the PostgreSQL wire has no COPY); the ts column is sent as epoch milliseconds and cast on the server.
+    CrateDB indexes every column automatically (the engine default), so the (host, ts DESC) index of the PostgreSQL arms has
+    no counterpart to build or time (`index_before_load`; fairness_check.INDEX_DECISIONS, which names the measurement still owed). REFRESH TABLE then ANALYZE close the load, inside
+    the ingest timer, as the PostgreSQL arms' ANALYZE does.
+    """
+    name = "cratedb_ts"
+    index_before_load = True
+    BATCH = 50_000
+
+    def connect(self):
+        import cratedb_common
+        self.cc = cratedb_common
+        self.cx = cratedb_common.connect()
+        with self.cx.cursor() as c:
+            c.execute("SET TIME ZONE 'UTC'")
+            c.execute("SELECT version()")
+            self._v = c.fetchone()[0].split(" (")[0]
+        self.row_extra = {}
+
+    def version(self):
+        return self._v
+
+    def ingest(self, pts):
+        n = self.cc.ncpu()
+        with self.cx.cursor() as c:
+            c.execute("CREATE TABLE p (host TEXT, ts TIMESTAMP WITH TIME ZONE NOT NULL, uu DOUBLE PRECISION, "
+                      "us DOUBLE PRECISION, ui DOUBLE PRECISION) " + self.cc.with_clause(n))
+            for i in range(0, len(pts), self.BATCH):
+                ch = pts[i:i + self.BATCH]
+                c.execute("INSERT INTO p (host, ts, uu, us, ui) SELECT h, CAST(t AS TIMESTAMP WITH TIME ZONE), a, b, d "
+                          "FROM unnest(%s::text[], %s::bigint[], %s::double precision[], %s::double precision[], "
+                          "%s::double precision[]) AS x(h, t, a, b, d)",
+                          ([r[0] for r in ch], [r[1] * 1000 for r in ch], [r[2] for r in ch], [r[3] for r in ch],
+                           [r[4] for r in ch]))
+            self.cc.refresh(self.cx, "p")
+            c.execute("ANALYZE")
+        _v, extra, self.durability = self.cc.readback(self.cx, "p", n)
+        self.row_extra = {**self.row_extra, **extra}
+
+    def _t(self, s):
+        return _dt.datetime.fromtimestamp(s, _dt.timezone.utc)
+
+    def q_last(self):
+        with self.cx.cursor() as c:
+            c.execute("SELECT ts, uu FROM p WHERE host = %s ORDER BY ts DESC LIMIT 1", (HOST,))
+            return c.fetchall()
+
+    def q_range(self):
+        with self.cx.cursor() as c:
+            c.execute("SELECT date_trunc('minute', ts) AS m, max(uu) FROM p WHERE host = %s AND ts >= %s AND ts < %s "
+                      "GROUP BY m ORDER BY m", (HOST, self._t(T0), self._t(T0 + 3600)))
+            return c.fetchall()
+
+    def q_global(self):
+        with self.cx.cursor() as c:
+            c.execute("SELECT date_trunc('hour', ts) AS h, avg(uu) FROM p WHERE ts >= %s AND ts < %s GROUP BY h ORDER BY h",
+                      (self._t(T0), self._t(T0 + 43200)))
+            return c.fetchall()
+
+    def q_groupby(self):
+        with self.cx.cursor() as c:
+            c.execute("SELECT host, date_trunc('hour', ts) AS h, avg(uu) FROM p WHERE ts >= %s AND ts < %s "
+                      "GROUP BY host, h ORDER BY host, h", (self._t(T0), self._t(T0 + 43200)))
+            return c.fetchall()
+
+    def q_high(self):
+        with self.cx.cursor() as c:
+            c.execute("SELECT host, ts, uu FROM p WHERE ts >= %s AND ts < %s AND uu > %s",
+                      (self._t(T0), self._t(T0 + 43200), HIGH))
+            return c.fetchall()
+
+    def q_orderlimit(self):
+        with self.cx.cursor() as c:
+            c.execute("SELECT date_trunc('hour', ts) AS h, max(uu) FROM p WHERE ts >= %s AND ts < %s "
+                      "GROUP BY h ORDER BY h DESC LIMIT %s",
+                      (self._t(T0), self._t(T0 + 43200), ORDERLIMIT_N))
+            return c.fetchall()
+
+    def close(self):
+        self.cx.close()
+
+
 class QuestTS:
     name = "questdb"
 
@@ -1688,7 +1777,7 @@ class ArangoTS:
 _CLIENT_SERVER = {"questdb", "surrealdb_ts_server", "arangodb_ts"}
 
 BACKENDS = {c.name: c for c in (ArcadeTS, ArcadeTSServer, ArcadeNativeTS, ArcadeNativeTSServer, DuckTS, SQLiteTS, MongoTS, TimescaleTS, QuestTS,
-                                SurrealTS, SurrealTSServer, ArangoTS, PostgresTS)}
+                                SurrealTS, SurrealTSServer, ArangoTS, PostgresTS, CrateTS)}
 
 # DECISIONS #81: what each arm runs at commit, recorded on the row. DuckDB is
 # the named exception here; TimescaleDB reads the server's own
@@ -1711,6 +1800,8 @@ DURABILITY = {
     "arangodb_ts": arango_common.DURABILITY,
     # Read back with SHOW at connect (the adapter's own answer wins).
     "postgres_ts": bench_common.DURABILITY_PG_OFF,
+    # Read back from the table at ingest (the adapter's own answer wins).
+    "cratedb_ts": bench_common.DURABILITY_CRATEDB,
 }
 
 

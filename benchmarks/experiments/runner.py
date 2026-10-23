@@ -1465,6 +1465,42 @@ BACKENDS = {
         "ready_regex": r"(?s)PostgreSQL init process complete.*"
                        r"database system is ready to accept connections",
     },
+    # CRATEDB 6.4.6 (2026-10-23, the multi-model comparator batch): documents (TPC-H analytics only: no multi-statement
+    # transactions, so no new-order or payment), dense (`float_vector` + `knn_match`), time series. The official image, the
+    # amd64 digest of `crate:latest`; Apache 2.0, no benchmark clause. One server config for the three lanes, each setting
+    # with its vendor source in COMPARATORS.md "CrateDB" and PROTOCOL.md section 7:
+    #   CRATE_HEAP_SIZE={heap}: a quarter of the cap, 1 GB to 30.5 GB (vendor_memory.cratedb_heap; "Memory configuration");
+    #   -Cprocessors={ncpu}: the node.rst `processors` setting, which sizes the thread pools and otherwise reads the host (F6);
+    #   -Cdiscovery.type=single-node: one node, no cluster formation (the docker-run page of the vendor's Docker guide).
+    # Shards, replicas, translog durability and refresh are TABLE settings and live in the lane adapters (read back there).
+    # The PostgreSQL wire is port 5432; the HTTP port (4200) is the engine's own and the adapters use it for read-backs only.
+    "cratedb_tpc": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "crate@sha256:e7bded344df487e2595f59d7edaa0cf96979a00ba51f12ee66d7fcf8cd65f5f4",  # 6.4.6, amd64
+        "server_env": ["-e", "CRATE_HEAP_SIZE={heap}"],
+        "server_cmd": ["-Cdiscovery.type=single-node", "-Cprocessors={ncpu}"],
+        "server_port": 5432,
+        "ready_regex": r"\bstarted\b",
+    },
+    "cratedb_dense": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "crate@sha256:e7bded344df487e2595f59d7edaa0cf96979a00ba51f12ee66d7fcf8cd65f5f4",  # 6.4.6, amd64
+        "server_env": ["-e", "CRATE_HEAP_SIZE={heap}"],
+        "server_cmd": ["-Cdiscovery.type=single-node", "-Cprocessors={ncpu}"],
+        "server_port": 5432,
+        "ready_regex": r"\bstarted\b",
+    },
+    "cratedb_ts": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "crate@sha256:e7bded344df487e2595f59d7edaa0cf96979a00ba51f12ee66d7fcf8cd65f5f4",  # 6.4.6, amd64
+        "server_env": ["-e", "CRATE_HEAP_SIZE={heap}"],
+        "server_cmd": ["-Cdiscovery.type=single-node", "-Cprocessors={ncpu}"],
+        "server_port": 5432,
+        "ready_regex": r"\bstarted\b",
+    },
     # Neo4j's own vector index, on the same pinned Neo4j the graph lane runs.
     "neo4j_dense": {
         "topology": "client_server",
@@ -1820,7 +1856,7 @@ if _ENGINE_PIN:
 
 # Which backends run on a JVM, and therefore have a heap worth recording and
 # checking. Substring match against the backend name.
-JVM_BACKENDS = ("arcadedb", "neo4j", "elasticsearch", "questdb")
+JVM_BACKENDS = ("arcadedb", "neo4j", "elasticsearch", "questdb", "cratedb")
 
 # What each lane reads out of /data, which is BENCH_DATA bind-mounted read-only.
 # Checked on the HOST before any cell starts.
@@ -1878,7 +1914,9 @@ LANES = {
            ["oltp", "olap"]),
     "l1tpc": ("l1_tpc.py",
               ["arcadedb_embedded", "arcadedb_server", "arcadedb_imgdefaults_server", "duckdb", "sqlite", "mongodb",
-               "surrealdb_tpc", "surrealdb_tpc_server", "arangodb_tpc", "postgres", "postgres_tuned"],
+               "surrealdb_tpc", "surrealdb_tpc_server", "arangodb_tpc", "postgres", "postgres_tuned",
+               # the multi-model comparator batch (2026-10-23): analytics only (ARM_RUNS)
+               "cratedb_tpc"],
               ["oltp", "olap"]),
     "e2": ("e2_hybrid.py",
            ["arcadedb_e2", "arcadedb_e2_server", "surrealdb_e2", "surrealdb_e2_server",
@@ -1943,6 +1981,7 @@ LANES = {
              "elasticsearch_dense", "memgraph_dense", "falkordb_dense", "ladybug_dense",
              # the multi-model comparator batch (2026-10-23)
              "redis_dense",
+             "cratedb_dense",
              # int8 arms for every dense engine that ships a quantized index
              # (QUANTIZATION.md). Chroma, DuckDB-VSS, pgvector and SurrealDB
              # ship no int8 mode; FalkorDB and LadybugDB document none.
@@ -1988,7 +2027,9 @@ LANES = {
             # SQLite's footing, see l4_tsbs.SurrealTS / ArangoTS.
             "surrealdb_ts", "surrealdb_ts_server", "arangodb_ts",
             # Plain PostgreSQL beside TimescaleDB (DECISIONS #131 item 6).
-            "postgres_ts"],
+            "postgres_ts",
+            # the multi-model comparator batch (2026-10-23)
+            "cratedb_ts"],
            ["ingest"]),
 }
 
@@ -2690,6 +2731,9 @@ def observe_server(cid):
     hits = re.findall(r"-Xmx(\d+)([gGmM])", envs)
     if not hits:
         hits = re.findall(r"heap[_.]max_?_?size=(\d+)([gGmM])", envs, re.I)
+    if not hits:
+        # CrateDB takes its heap as CRATE_HEAP_SIZE=<n>g (the vendor's setting; the node's own answer is read from sys.nodes)
+        hits = re.findall(r"CRATE_HEAP_SIZE=(\d+)([gGmM])", envs)
     if hits:
         val, unit = hits[-1]
         # Exact, not rounded down to whole GiB: Neo4j's own tool recommends heaps such as 3600m (DECISIONS #202).
@@ -2956,7 +3000,7 @@ MP_LABELS = {
     "surrealdb_dense": "surreal", "surrealdb_dense_server": "surrealsrv",
     "arangodb_dense": "arango", "mongodb_dense": "mongo",
     "sqlite_vec_dense": "sqlitevec", "sqlite_vec_dense_int8": "sqlitevec_int8",
-    "elasticsearch_dense": "elastic", "elasticsearch_dense_int8": "elastic_int8",
+    "elasticsearch_dense": "elastic", "elasticsearch_dense_int8": "elastic_int8", "cratedb_dense": "cratedb",
     "memgraph_dense": "memgraph", "falkordb_dense": "falkordb", "ladybug_dense": "ladybug",
     "redis_dense": "redis",
     # DECISIONS #135 (2026-10-02)
@@ -3124,7 +3168,8 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
            "ts_utc": datetime.now(timezone.utc).isoformat()}
     # WHICH RULE SET THIS ARM'S HEAP (DECISIONS #202): stamped on the Neo4j and Elasticsearch arms that took their vendor's memory rule, so
     # a row measured before it (heap at half the cap) is told apart from one after, and fairness_check judges each by its own rule.
-    if VENDOR_MEMORY and (vendor_memory.is_neo4j(job["backend"]) or vendor_memory.is_elasticsearch(job["backend"])):
+    if VENDOR_MEMORY and (vendor_memory.is_neo4j(job["backend"]) or vendor_memory.is_elasticsearch(job["backend"])
+                          or vendor_memory.is_cratedb(job["backend"])):
         row["vendor_memory"] = "vendor_memory.py, DECISIONS #202"
 
     # cli_cid initialised HERE, not at its assignment 90 lines down: the
@@ -4011,6 +4056,12 @@ def split_cpuset(cpuset, n):
 # sizes; page_check does not owe the arm on another workload's table; build_jobs does not
 # make its other workloads. An arm absent from the map runs the whole lane, as before.
 ARM_RUNS = {
+    # CrateDB has no multi-statement transaction (its documentation: one statement is the unit), so the new-order and payment
+    # transactions of the OLTP table are not expressible on it; the analytics table is (COMPARATORS.md "Not added, and why").
+    "cratedb_tpc": {
+        "l1tpc": {"workloads": ("olap",), "scales": ("tpch1", "tpch10"),
+                  "title": "documents analytics, CrateDB (no multi-statement transaction, so no OLTP table)"},
+    },
     "arcadedb_imgdefaults_server": {
         "l1tpc": {"workloads": ("oltp",), "scales": ("tpch10",), "reps": 3, "durability": "relaxed",
                   "title": "documents OLTP, served ArcadeDB at the image's own JVM defaults, the 2M-part cell"},
