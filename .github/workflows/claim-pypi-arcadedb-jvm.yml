@@ -1,0 +1,65 @@
+# REMOVE WHEN: the PyPI project `arcadedb-jvm` exists (then delete this file; the real package is released from ArcadeData/arcadedb-python).
+# Publishes a first release of `arcadedb-jvm` to PyPI that only depends on `arcadedb-embedded`, so the name is held by us for the JVM build of the
+# Python bindings, in case the main name `arcadedb` later goes to the native build. Run once by hand: Actions -> this workflow -> Run workflow.
+# Needs a pending trusted publisher on PyPI for project `arcadedb-jvm` bound to this repo, this workflow file and the `pypi` environment.
+name: Claim PyPI name arcadedb-jvm
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - name: Setup UV package manager
+        run: |
+          # Same pinned version and retry pattern as the other workflows: the script is downloaded first so a retried
+          # transfer is never piped half-written into sh.
+          installer="$(mktemp)"
+          curl -LsSf --retry 5 --retry-all-errors --retry-delay 5 -o "$installer" https://astral.sh/uv/0.12.0/install.sh
+          sh "$installer"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$PATH"
+          uv --version
+
+      - name: Build the placeholder package
+        run: |
+          mkdir pkg && cd pkg
+          cat > pyproject.toml <<'EOF'
+          [build-system]
+          requires = ["setuptools>=77"]
+          build-backend = "setuptools.build_meta"
+
+          [project]
+          name = "arcadedb-jvm"
+          version = "0.0.1"
+          description = "ArcadeDB for Python, JVM build: for now installs arcadedb-embedded, the embedded multi-model database with a bundled JRE."
+          readme = "README.md"
+          license = "Apache-2.0"
+          requires-python = ">=3.11"
+          dependencies = ["arcadedb-embedded"]
+
+          [project.urls]
+          Homepage = "https://arcadedb.com"
+          Source = "https://github.com/ArcadeData/arcadedb-python"
+          EOF
+          cat > README.md <<'EOF'
+          # arcadedb-jvm
+
+          This name is reserved for the JVM build of ArcadeDB's Python bindings (https://github.com/ArcadeData/arcadedb-python).
+          For now `pip install arcadedb-jvm` installs [`arcadedb-embedded`](https://pypi.org/project/arcadedb-embedded/),
+          the embedded ArcadeDB database with a bundled JRE (`import arcadedb_embedded`).
+          EOF
+          uv build
+          ls dist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: pkg/dist/
