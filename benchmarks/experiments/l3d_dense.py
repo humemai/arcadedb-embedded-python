@@ -193,7 +193,9 @@ def degree_stamp(backend):
                      # 2026-10-02 (#131 item 3): Elasticsearch's index_options.m
                      # is Lucene's, doubled at layer 0 like mongot's; FalkorDB's
                      # vector index takes hnswlib's M itself.
-                     "elasticsearch_dense", "falkordb_dense"}
+                     "elasticsearch_dense", "falkordb_dense",
+                     # Redis Query Engine: M is hnswlib's (max edges per layer, layer 0 holds twice that)
+                     "redis_dense"}
     # A PRECISION ARM IS THE SAME INDEX AT A DIFFERENT PRECISION, so it keeps
     # its parent's degree and unit. Without this strip, qdrant_dense_int8 and
     # milvus_dense_int8 missed the set and were stamped "exact_scan_no_ann" --
@@ -1606,7 +1608,7 @@ class SurrealDenseServer(SurrealDense):
         self.index_s = round(time.perf_counter() - _t, 2)
 
 class MongoDense(Base):
-    """MongoDB 8.2.12 with MongoDB Search (mongot) Community 1.70.4, served
+    """MongoDB 9.0.4 with MongoDB Search (mongot) Community 1.70.5, served
     (2026-09-15): article documents with an embedding array through
     insert_many, then a `vectorSearch` index that mongot builds out of band,
     queried with the $vectorSearch aggregation stage.
@@ -2536,6 +2538,112 @@ class FalkorDense(Base):
         self.db.connection.close()
 
 
+class RedisDense(Base):
+    """Redis 8.10.2 served (2026-10-23, the multi-model comparator batch): the Redis Query Engine, one HASH per vector
+    (`a:<id>`, field `embedding` as little-endian float32 bytes), `FT.CREATE ... VECTOR HNSW` at the matched operating point
+    (M = COMPARATOR_M, which Redis takes as hnswlib's M with the base layer doubled; EF_CONSTRUCTION; the beam EF_RUNTIME is
+    sent with every query), L2, queried through `FT.SEARCH ... =>[KNN k @embedding $q EF_RUNTIME ef]` with NOCONTENT, so the
+    reply is the key names and the id is the key's suffix. The index is created before the load (the documented path: every HSET
+    is indexed as it arrives) and the wait for the background workers to drain is inside the build timer.
+
+    THREADS FITTED to the cpuset (FAIRNESS F6): io-threads and search-workers from runner.py, read back with CONFIG GET.
+    """
+    quantization = "fp32"
+    name = "redis_dense"
+    ID_INDEX_DDL = "key"
+    PREFIX = "a:"
+
+    def connect(self):
+        import redis
+        import importlib.metadata as _md
+        self.r = redis.Redis(host=os.environ["BENCH_SERVER_HOST"], port=int(os.environ.get("BENCH_SERVER_PORT", "6379")),
+                             socket_timeout=3600, protocol=2)
+        self.version = "redis:" + self.r.info("server")["redis_version"]
+
+        def _cfg(name):
+            v = self.r.config_get(name)
+            return v.get(name) if isinstance(v, dict) else v
+        mods = {(m.get(b"name") or m.get("name")): (m.get(b"ver") or m.get("ver")) for m in self.r.module_list()}
+        mods = {(k.decode() if isinstance(k, bytes) else k): v for k, v in mods.items()}
+        self.row_extra = {
+            "driver_version": f"redis-py:{_md.version('redis')}",
+            "redis_io_threads": _cfg("io-threads"),
+            "redis_search_workers": _cfg("search-workers"),
+            "redis_maxmemory": _cfg("maxmemory"),
+            "redis_maxmemory_policy": _cfg("maxmemory-policy"),
+            "redis_search_module": mods.get("search"),
+            "redis_protocol": 2,
+        }
+        self.durability = self._durability_readback()
+
+    def _durability_readback(self):
+        ao, fsync, save = (self.r.config_get(k).get(k) for k in ("appendonly", "appendfsync", "save"))
+        if ao == "no" and save == "3600 1 300 100 60 10000":
+            return bench_common.DURABILITY_REDIS
+        if ao == "yes" and fsync == "always":
+            return bench_common.DURABILITY_REDIS_STRICT
+        return (f"appendonly={ao}, appendfsync={fsync}, save={save!r}, which is neither class (DECISIONS #90)")
+
+    def _blob(self, v):
+        return np.asarray(v, dtype="<f4").tobytes()
+
+    def build(self, vecs):
+        self.r.execute_command(
+            "FT.CREATE", "dense", "ON", "HASH", "PREFIX", "1", self.PREFIX, "SCHEMA", "embedding", "VECTOR", "HNSW", "12",
+            "TYPE", "FLOAT32", "DIM", str(DIM), "DISTANCE_METRIC", "L2", "M", str(COMPARATOR_M),
+            "EF_CONSTRUCTION", str(EF_CONSTRUCTION), "EF_RUNTIME", str(EF_SEARCH))
+        for i in range(0, len(vecs), BATCH):
+            pipe = self.r.pipeline(transaction=False)
+            for j in range(i, min(i + BATCH, len(vecs))):
+                pipe.hset(f"{self.PREFIX}{j}", mapping={"embedding": self._blob(vecs[j])})
+            pipe.execute()
+
+    def _info(self):
+        raw = self.r.execute_command("FT.INFO", "dense")
+        raw = raw if isinstance(raw, dict) else {raw[i]: raw[i + 1] for i in range(0, len(raw), 2)}
+        return {(k.decode() if isinstance(k, bytes) else k): v for k, v in raw.items()}
+
+    def _await_indexed(self, timeout_s=36000):
+        t = time.perf_counter()
+        while True:
+            if not self._background_busy():
+                return
+            if time.perf_counter() - t > timeout_s:
+                raise RuntimeError(f"redis: index not drained after {timeout_s} s: {self._info()}")
+            time.sleep(0.2)
+
+    def _background_busy(self):
+        """The Query Engine's own counters (INFO search): a write thread still working, or an index still indexing.
+        Both read 7 and 1 right after a bulk load and 0 once the workers have drained (laptop probe, 2026-10-23)."""
+        s = self.r.info("search")
+        return (int(s.get("search_total_active_write_threads", 0) or 0) > 0
+                or int(s.get("search_number_of_active_indexes_indexing", 0) or 0) > 0
+                or float(self._info().get("percent_indexed", 1) or 1) < 1.0)
+
+    def post_build(self):
+        self._await_indexed()
+
+    def search(self, qvec, k):
+        res = self.r.execute_command(
+            "FT.SEARCH", "dense", f"*=>[KNN {k} @embedding $q EF_RUNTIME {EF_SEARCH} AS s]", "PARAMS", "2", "q", self._blob(qvec),
+            "SORTBY", "s", "ASC", "NOCONTENT", "LIMIT", "0", str(k), "DIALECT", "2")
+        return [int(x.split(b":")[1]) for x in res[1:]]
+
+    def insert_vectors(self, ids, vecs):
+        pipe = self.r.pipeline(transaction=False)
+        for j, v in enumerate(ids):
+            pipe.hset(f"{self.PREFIX}{int(v)}", mapping={"embedding": self._blob(vecs[j])})
+        pipe.execute()
+        self._await_indexed()
+
+    def delete_vectors(self, ids):
+        self.r.delete(*[f"{self.PREFIX}{int(v)}" for v in ids])
+        self._await_indexed()
+
+    def close(self):
+        self.r.close()
+
+
 def _ladybug_fit():
     """(threads, buffer_pool_bytes) for LadybugDB in THIS cell, the graph lane's
     fit (l2_graph._ladybug_fit, FAIRNESS F6, BUGS F160): left at 0 it sizes its
@@ -2906,7 +3014,7 @@ BACKENDS = {b.name: b for b in
              ArcadeEmbeddedInt8, QdrantInt8, MilvusInt8,
              ArcadeServerInt8, SqliteVecInt8,
              # #131 item 3 (2026-10-02)
-             ElasticDense, ElasticDenseInt8, MemgraphDense, FalkorDense, LadybugDense,
+             ElasticDense, ElasticDenseInt8, MemgraphDense, FalkorDense, LadybugDense, RedisDense,
              # the quantization survey's int8 counterparts (DECISIONS #135, 2026-10-02)
              MongoDenseInt8, MemgraphDenseInt8, LanceDBFlat, ArangoDenseInt8)}
 # The PQ arms: only under instrument 2026-11 AND BENCH_DENSE_PQ=1 (bench_common.dense_pq_enabled)

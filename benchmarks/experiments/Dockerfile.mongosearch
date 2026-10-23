@@ -1,23 +1,25 @@
-# MongoDB Community 8.2.12 + MongoDB Search (mongot) Community 1.70.4 in one
+# MongoDB Community 9.0.4 + MongoDB Search (mongot) Community 1.70.5 in one
 # container: the self-hosted, generally available way to run $vectorSearch.
 #
-# mongod DID NOT MOVE IN THE OCTOBER RE-PIN, and this is the one engine where
-# DECISIONS #103d overrode #87. 8.3.11 is the newer release and it cannot be
-# measured on the bench kernel: it refuses to boot with "Linux kernel versions
-# 6.19 and newer has a known incompatibility with this version of MongoDB"
-# (SERVER-121912), the same guard that moved this project off 8.0. Reproduced
-# on the laptop at kernel 7.0.0-29-generic on 2026-09-19; 8.2.12 boots on the
-# same kernel. The reasoning is in runner.py beside the "mongodb" backend.
-# It is still the SAME digest every other MongoDB arm runs, so the vector rows
-# and the document rows come from one engine build.
+# THE OCTOBER HOLD AT mongod 8.2.12 / mongot 1.70.4 WAS LIFTED ON 2026-10-23.
+# 8.3.13 still refuses to boot on the bench kernel (SERVER-121912, the
+# kernel-6.19 guard; SERVER-136848 is the open ticket for Ubuntu kernels whose
+# `uname -r` stays 7.0.0 although they are upstream 7.0.14), with mongot 1.70.4
+# or 1.70.5 alike. 9.0.4 boots and answered the repo's TPC adapter checks like
+# 8.2.12 and a $vectorSearch run through mongot 1.70.5 with recall 1.000 (fp32)
+# and 0.878 (scalar) against exact search. MongoDB's own compatibility table for
+# Search lists mongot 1.70.1+ against MongoDB Server 8.3 only and calls 8.2
+# "no longer a supported source deployment", so the old pairing was outside
+# vendor support; 9.0 is also not in the table, which is the one gap left.
+# The reasoning and the check table are in COMPARATORS.md, "Held below the
+# newest, and why". It is still the SAME mongod digest every other MongoDB arm
+# runs, so the vector rows and the document rows come from one engine build.
 #
-# mongot's VERSION did not move -- 1.70.4 is still the newest MongoDB Search
-# Community release -- but its DIGEST did, because the 1.70.4 tag was rebuilt
-# on 2026-09-16. The old pin was also the wrong KIND of digest: 63ebc805 is
-# the multi-arch INDEX digest, not the amd64 manifest digest this file and
-# COMPARATORS.md say every pin is. Both forms resolve, so nothing was ever
-# wrong on the wire; the pin is normalised here to the amd64 manifest digest
-# so the convention the docs state is the convention the file keeps.
+# mongot 1.70.5 (2026-09-29) is the newest Search Community release: security
+# dependency upgrades only, and its default image moved to a distroless UBI9
+# base; /mongot-community is laid out as before, so the COPY below is unchanged.
+# Both digests are the amd64 MANIFEST digest (not the multi-arch index digest),
+# the convention COMPARATORS.md states for every pin.
 #
 # WHY THIS AND NOT mongodb/mongodb-atlas-local. atlas-local is the same two
 # processes in one image and it would have been less work, but MongoDB's own
@@ -39,8 +41,8 @@
 # document rows come from one engine build rather than two.
 #
 # Built as dbbench:mongo-search by build_images.sh.
-FROM mongodb/mongodb-community-search@sha256:24c0cd30baf06c93607f3dbd4816587036996de347f5f11ef47cf998cf4e898c AS mongot
-FROM mongo@sha256:41afd6e1183f57e4e4d03ab733070671fca8553da2b36f15d6e3fc9760494d17
+FROM mongodb/mongodb-community-search@sha256:6232a8acec5ea4cce2cf52fa7c17b57da5758eac11538ffc35dab43abde8d366 AS mongot
+FROM mongo@sha256:b609cdfba3a865331378cc4158bc52522a3bf176d59a7ff2c43fab52f5d9d5cb
 # mongot bundles its own jlink'd JDK under bin/jdk, so the whole directory is
 # self-contained and nothing has to be installed into the mongod image.
 COPY --from=mongot /mongot-community /mongot-community

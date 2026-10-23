@@ -144,7 +144,7 @@ for be in "${targets[@]}"; do
     continue
   fi
   if [ "$be" = "mongo-search" ]; then
-    # MongoDB Community 8.2.12 + mongot (MongoDB Search Community) 1.70.4 in
+    # MongoDB Community 9.0.4 + mongot (MongoDB Search Community) 1.70.5 in
     # one container (Dockerfile.mongosearch), the dense and cross-model arms'
     # server. Both halves pinned by digest inside the Dockerfile, so a local
     # build has the same provenance a pulled image would.

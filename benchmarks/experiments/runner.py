@@ -575,25 +575,34 @@ BACKENDS = {
         "topology": "embedded",
         "image": "dbbench:client",
     },
-    # MongoDB 8.2 (8.0 refuses to start on Linux >= 6.19, SERVER-121912).
-    #
-    # AND IT STAYS AT 8.2.12 THROUGH THE OCTOBER RE-PIN, which is the one place
-    # DECISIONS #103d bit instead of #87. 8.3.11 is the newer release and it
-    # CANNOT BE MEASURED HERE: it refuses to boot on the bench kernel with
+    # MongoDB 9.0.4 (from 2026-10-23). History: 8.0 refused to start on Linux
+    # >= 6.19 (SERVER-121912) and the pin moved to 8.2.12; in September and early
+    # October the 8.3 line (8.3.11) refused to boot on the bench kernel with
     #   "MongoDB cannot start: Linux kernel versions 6.19 and newer has a known
     #    incompatibility with this version of MongoDB" (SERVER-121912)
-    # -- the SAME guard that moved this pin off 8.0, reappearing on the 8.3
-    # line. Reproduced on the laptop (kernel 7.0.0-29-generic, 2026-09-19): the
-    # 8.3.11 container exits immediately and the cell dies server_not_ready
-    # after the readiness timeout, while 8.2.12 on the same kernel reaches
-    # "Waiting for connections" and reports 8.2.12. 8.2.12 is also the newest
-    # release on the 8.2 line, so it IS the latest measurable MongoDB.
+    # so 8.2.12 was the latest measurable release (DECISIONS #103d over #87).
     #
-    # Intermediate 8.3.x were deliberately NOT hunted for one that predates the
-    # guard. The guard is MongoDB declaring this kernel incompatible with the
-    # 8.3 line; running an older 8.3 that merely lacks the warning would be
-    # running a configuration its own vendor now calls unsafe, which is worse
-    # than staying on the line that runs.
+    # THE HOLD IS LIFTED, by 9.0.4 and NOT by 8.3. Re-tested 2026-10-23 on the
+    # laptop (kernel 7.0.0-38-generic, upstream 7.0.14 under Ubuntu's X.Y.0
+    # release string; mini runs 7.0.0-31-generic):
+    #   8.3.13 (mongo@sha256:93ca11e6b730...)  REFUSES to start, same guard,
+    #          also inside the Search image with mongot 1.70.4 and 1.70.5;
+    #   9.0.4  (mongo@sha256:b609cdfba3a8...)  boots, answers like 8.2.12;
+    #   8.2.12 (the old pin)                   boots (reference).
+    # SERVER-125742 exempts kernels >= 7.0.14 from the check but reads
+    # `uname -r`, which Ubuntu keeps at 7.0.0 (open as SERVER-136848, reported
+    # against 8.3.11 and 9.0.2); 9.0.4 starts on it, 8.3.13 does not. Why 9.0.4
+    # starts was not investigated. The old reasoning that an older 8.3.x lacking
+    # the warning would be "unsafe" no longer holds either: the bench kernel
+    # carries the userspace fix SERVER-125742 names (upstream 7.0.14).
+    #
+    # Why move at all, with 8.2.12 booting: MongoDB's compatibility table for
+    # MongoDB Search says mongot 1.70.1 and later work with MongoDB Server 8.3
+    # and "MongoDB Server 8.2 has reached end of life and is no longer a
+    # supported source deployment for MongoDB Search" -- so 8.2.12 + mongot
+    # 1.70.4 was a Search pairing its vendor no longer supports. 9.0 is not in
+    # that table either (it names 8.3 only); mongot 1.70.5 on 9.0.4 was
+    # exercised, not documented. The evidence is in COMPARATORS.md.
     #
     # --replSet: TPC-C new-order is one multi-document transaction, and
     # MongoDB only allows those on a replica set; the adapter initiates the
@@ -628,7 +637,7 @@ BACKENDS = {
     "mongodb": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "mongo@sha256:41afd6e1183f57e4e4d03ab733070671fca8553da2b36f15d6e3fc9760494d17",  # 8.2.12
+        "server_image": "mongo@sha256:b609cdfba3a865331378cc4158bc52522a3bf176d59a7ff2c43fab52f5d9d5cb",  # 9.0.4
         "server_cmd": ["--replSet", "rs0", "--bind_ip_all"],
         "server_port": 27017,
         "ready_regex": r"Waiting for connections",
@@ -642,7 +651,7 @@ BACKENDS = {
     "mongodb_graph": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "mongo@sha256:41afd6e1183f57e4e4d03ab733070671fca8553da2b36f15d6e3fc9760494d17",  # 8.2.12
+        "server_image": "mongo@sha256:b609cdfba3a865331378cc4158bc52522a3bf176d59a7ff2c43fab52f5d9d5cb",  # 9.0.4
         "server_cmd": ["--replSet", "rs0", "--bind_ip_all"],
         "server_port": 27017,
         "ready_regex": r"Waiting for connections",
@@ -1551,6 +1560,31 @@ BACKENDS = {
         # Run in the server before its final disk reading, relaxed class only (#349): see the reading below.
         "pre_disk_cmd": ["redis-cli", "SAVE"],
     },
+    # REDIS 8.10.2 (2026-10-23, the multi-model comparator batch), the official image, Redis Query Engine for the dense lane
+    # (HNSW over a HASH field). Vendor settings, each with its source (COMPARATORS.md "Redis"):
+    #   --maxmemory {mem90_mib}mb --maxmemory-policy noeviction: redis.conf asks for a maxmemory below the RAM
+    #     the process may use, and `noeviction` (the default, stated) makes a full instance refuse writes
+    #     instead of dropping keys, so no cell can lose data silently; 90% of the cap is the rule Memgraph's
+    #     arm applies too, and it leaves room for the fork of a snapshot;
+    #   --io-threads {io_threads}: redis.conf, "if you have a four cores boxes, try to use 3 I/O threads, if you
+    #     have a 8 cores, try to use 7 threads", i.e. cores - 1; the default is 1, so this is a fit to the
+    #     cpuset (F6), read back;
+    #   --search-workers {io_threads}: the Query Engine's worker pool (default 0 = queries and HNSW inserts on
+    #     the main thread), the same cpuset fit, read back;
+    #   --protected-mode no: the cell network is private and the image sets no password.
+    # Durability (DECISIONS #90): the relaxed class is the image default (RDB snapshots, no AOF), the strict
+    # class adds "--appendonly yes --appendfsync always" in durability_server_patch; both are read back onto the row.
+    "redis_dense": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "redis@sha256:13ad9044b4b2fd2abe4c5aad8c384b0504a71006fa33f023fc68998453a2eeca",  # 8.10.2, amd64
+        "server_cmd": ["--maxmemory", "{mem90_mib}mb", "--maxmemory-policy", "noeviction",
+                       "--io-threads", "{io_threads}", "--search-workers", "{io_threads}",
+                       "--protected-mode", "no"],
+        "server_port": 6379,
+        "ready_regex": r"Ready to accept connections",
+        "pre_disk_cmd": ["redis-cli", "SAVE"],
+    },
     # LadybugDB: embedded in the client image, as the graph arm is; the
     # adapter fits its threads and buffer pool to the cell (F160).
     "ladybug_dense": {"topology": "embedded", "image": "dbbench:client"},
@@ -1907,6 +1941,8 @@ LANES = {
              # #131 item 3 (2026-10-02): Elasticsearch, Memgraph, FalkorDB,
              # LadybugDB; Elasticsearch's int8 arm with the int8 arms below.
              "elasticsearch_dense", "memgraph_dense", "falkordb_dense", "ladybug_dense",
+             # the multi-model comparator batch (2026-10-23)
+             "redis_dense",
              # int8 arms for every dense engine that ships a quantized index
              # (QUANTIZATION.md). Chroma, DuckDB-VSS, pgvector and SurrealDB
              # ship no int8 mode; FalkorDB and LadybugDB document none.
@@ -2020,6 +2056,10 @@ def durability_server_patch(cfg, cls):
     # for 3,011 writes). REDIS_ARGS is the image entrypoint's own hook.
     if "falkordb" in str(cfg.get("server_image", "")):
         env += ["-e", "REDIS_ARGS=--appendonly yes --appendfsync always"]
+        notes.append("appendonly=yes, appendfsync=always")
+    # Redis (the official image): the same persistence switches as FalkorDB's, passed as server arguments.
+    if str(cfg.get("server_image", "")).startswith("redis@"):
+        cmd += ["--appendonly", "yes", "--appendfsync", "always"]
         notes.append("appendonly=yes, appendfsync=always")
     # SurrealDB served (BUGS F165): the sync mode is a query parameter on the
     # storage path, `sync=never|every|<interval>`; the relaxed path carries
@@ -2918,6 +2958,7 @@ MP_LABELS = {
     "sqlite_vec_dense": "sqlitevec", "sqlite_vec_dense_int8": "sqlitevec_int8",
     "elasticsearch_dense": "elastic", "elasticsearch_dense_int8": "elastic_int8",
     "memgraph_dense": "memgraph", "falkordb_dense": "falkordb", "ladybug_dense": "ladybug",
+    "redis_dense": "redis",
     # DECISIONS #135 (2026-10-02)
     "mongodb_dense_int8": "mongo_int8", "memgraph_dense_int8": "memgraph_int8",
     "lancedb_dense_fp32": "lancedb_fp32", "arangodb_dense_int8": "arango_int8",
@@ -3143,6 +3184,7 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             _ncpu = _cpuset_size(cpuset)
             _fit = dict(ncpu=_ncpu,
                         mem90_mib=int(server_mem * 0.9) >> 20,
+                        io_threads=max(1, _ncpu - 1),
                         pg_workers=max(1, _ncpu - 1),
                         pg_par=_ncpu,
                         pg_procs=_ncpu + 2,
