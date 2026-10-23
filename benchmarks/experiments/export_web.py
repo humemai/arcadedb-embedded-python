@@ -690,6 +690,9 @@ OFF_PAGE_ARMS = {
 # Read from each vendor's docs AND source at the version we run, never inferred
 # from the recall we measured:
 #
+#   Qdrant v1.20.0   fp32. (Re-checked 2026-10-23 at v1.20.0: DimWeight is still f32 and
+#                    VectorStorageDatatype still #[default] Float32; the release notes list nothing
+#                    sparse. The text below is the v1.19.1 reading, unchanged by that.)
 #   Qdrant v1.19.1   fp32. RE-VERIFIED AT THE NEW PIN, and one
 #                    clause of the old citation was wrong. `datatype` is
 #                    NOT documented with a default: the schema text for
@@ -805,7 +808,7 @@ DENSE_PRECISION = {
     # mongot's vectorSearch index with "quantization": "none", read back off
     # the created index and recorded on the row as mongot_quantization.
     "mongodb_dense": "fp32",
-    # Neo4j 2026.08.1 quantizes BINARY unless told otherwise (BUGS F164); the arms set NONE and SCALAR and
+    # Neo4j 2026.08.1 to 2026.10.0 quantize BINARY unless told otherwise (BUGS F164); the arms set NONE and SCALAR and
     # read the applied type back as neo4j_vector_quantization.
     "neo4j_dense": "fp32", "neo4j_dense_int8": "int8",
     "qdrant_dense": "fp32",
