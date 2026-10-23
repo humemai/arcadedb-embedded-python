@@ -521,15 +521,13 @@ def start_jvm(
                 classpath=classpath,
                 interrupt=_JVM_INTERRUPT,
             )
-        except Exception as aot_exc:
-            if not aot_flags:
-                raise
-            # The cache is only an optimisation: start again without it.
-            _LOGGER.debug("JVM start with AOT flags failed (%s), retrying", aot_exc)
+        except Exception:
+            # A JVM cannot be created twice in one process (JPype cannot retry
+            # after a failed start), so there is no fallback here: free the
+            # training lock and report as usual. The flags are only added for a
+            # JRE that supports them, so this is not expected.
             _aot.release_training(aot_flags)
-            jpype.startJVM(
-                jvm_path, *jvm_args, classpath=classpath, interrupt=_JVM_INTERRUPT
-            )
+            raise
         # AOT flags stay out of the recorded config: they differ per process
         # (training file name) and must not make a later start_jvm() look changed.
         _JVM_CONFIG = tuple(jvm_args)
