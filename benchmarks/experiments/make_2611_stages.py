@@ -27,7 +27,12 @@ of the image, the pinned wheel by sha256, the cap rule, the ALL-DONE trap. What 
   * REPS. `--reps N` (default 3, at most 5) is baked in as `REPS=N`; a stage environment that declares fewer (the image
     defaults arm) keeps its own.
   * THE CHAIN. `--after <stage>` is the marker the first stage waits for (`grep -qx "<stage> ALL-DONE"`), or `none`. It is
-    required: the previous chain's last stage is not a default anyone should inherit.
+    required: the previous chain's last stage is not a default anyone should inherit. It must be the LAST item of the
+    queue already on the machine (2026-10-23: `qMA06 ALL-DONE` was already in mini's STATUS.txt because the study was
+    skipped, so drafts waiting on it would have started beside the running A/Bs). `--status-file PATH` is required with a
+    marker: the generator reads that copy of the machine's STATUS.txt and REFUSES a marker already in it, because a wait
+    that is true at once is no wait. `--status-file none` says on purpose that there is no queue (the chain starts
+    when launched, or the file is a fresh machine's).
   * ORDER. `biggest-last` (default) or `paper` (the table order); `--project CELLS_TSV` prices each stage from a per-cell
     hours table, scaled to N repetitions.
 
@@ -35,10 +40,11 @@ Usage:
   python3 make_2611_stages.py --check [--drafts DIR]       # selection, coverage and instrument proofs; lints DIR's scripts
   python3 make_2611_stages.py --project CELLS.tsv --check   # plus the projected hours per stage
   ARCADEDB_WHEEL=... ARCADEDB_SERVER_IMAGE=... ARCADEDB_ENGINE_COMMIT=<40 hex> \\
-      python3 make_2611_stages.py --after qR15 --id-prefix qS --out DIR [--engines a,b] [--lanes graph,dense] [--second-list]
+      python3 make_2611_stages.py --after qR15 --status-file STATUS.txt --id-prefix qS --out DIR [--engines a,b] [--lanes graph,dense] [--second-list]
   python3 make_2611_stages.py --arcadedb-release 26.11.1 --engine-commit <40 hex> --image-digest sha256:<64 hex> \\
       --wheel-name arcadedb_embedded-26.11.1-<tags>.whl --wheel-sha256 <64 hex> --wheel-url <https url> \\
-      --after <last comparator stage> --id-prefix qT --out DIR
+      --after <last comparator stage> --status-file STATUS.txt --id-prefix qT --out DIR
+  python3 make_2611_stages.py --check --drafts DIR [--status-file STATUS.txt]   # also: the drafts' first wait is not already in STATUS.txt
 """
 from __future__ import annotations
 
@@ -215,7 +221,8 @@ def _page_lanes():
 def stage_backends(spec):
     only = spec[8] if len(spec) > 8 and spec[8] else None
     # a lane's main stage leaves out the arms that run only part of it: they have stages of their own
-    return list(only) if only else [b for b in runner.LANES[spec[2]][1] if b not in runner.restricted_arms(spec[2])]
+    bes = list(only) if only else [b for b in runner.LANES[spec[2]][1] if b not in runner.restricted_arms(spec[2])]
+    return sorted(bes, key=engine_rank)   # stable: arms of one engine keep the lane's order
 
 
 def check_coverage(stages=None):
@@ -377,6 +384,19 @@ BIGGEST = (("l3d", ("memgraph_dense",), ("deep10m",)),
            ("l1tpc", ("surrealdb_tpc",), ("tpch1",)),
            ("l2", None, ("sf1full",)))
 SECOND_ORDER = ("lifecycle", "l3s", "l4")
+
+
+# THE ORDER INSIDE A LANE (the user, 2026-10-23: "order the comparators in priority"), highest first: when a pass is cut short the
+# engines that matter most have their rep. ArcadeDB's four 26.11.1 arms (JVM/native x embedded/server) go on top when 26.11.1
+# ships. Redis 8 and CrateDB are named here before their adapters are merged: an engine that is not in ENGINES is skipped cleanly.
+ENGINE_PRIORITY = ("arcadedb", "surrealdb", "arangodb", "postgresql", "mongodb", "redis", "qdrant-neo4j", "neo4j", "qdrant",
+                   "duckdb", "sqlite", "memgraph", "ladybug", "cratedb")
+
+
+def engine_rank(backend):
+    """Sort key of an arm: its engine's place in ENGINE_PRIORITY (an engine outside the list sorts last)."""
+    eng = engine_of(backend)
+    return ENGINE_PRIORITY.index(eng) if eng in ENGINE_PRIORITY else len(ENGINE_PRIORITY)
 
 
 def engine_of(backend):
@@ -586,21 +606,46 @@ def lint_draft(text, name, engines=None):
     return out
 
 
-def lint_drafts(directory, engines=None):
-    """Lint every script in a folder, and check the chain: each stage waits for the one before it in id order."""
+def marker_in_status(marker, status_file):
+    """True when `marker ALL-DONE` is already a whole line of the STATUS file (the test every wait makes: `grep -qx`)."""
+    want = f"{marker} ALL-DONE"
+    with open(status_file, encoding="utf-8", errors="replace") as fh:
+        return any(line.rstrip("\n") == want for line in fh)
+
+
+def status_problems(marker, status_file):
+    """A wait on a marker the machine already holds is no wait: the stage starts at once, beside whatever still runs.
+    2026-10-23: `qMA06 ALL-DONE` was in mini's STATUS.txt (the study was skipped) while four A/B jobs still ran."""
+    if marker is None or status_file is None:
+        return []
+    if not os.path.isfile(status_file):
+        return [f"--status-file {status_file}: no such file"]
+    if marker_in_status(marker, status_file):
+        return [f"the start marker `{marker} ALL-DONE` is already a line of {status_file}: a stage waiting on it starts at "
+                f"once. Pick the LAST item of the queue that is still to run (it writes its marker whether it runs or skips)"]
+    return []
+
+
+def lint_drafts(directory, engines=None, status_file=None):
+    """Lint every script in a folder, and check the chain: each stage waits for the one before it in id order.
+    With a STATUS file, the first stage's wait must not already be true there."""
     files = sorted(glob.glob(os.path.join(directory, "*.sh")))
     out = []
     if not files:
         return [f"{directory}: no stage scripts"]
     prev = None
+    first = True
     for f in files:
         name = os.path.basename(f)
         text = open(f, encoding="utf-8").read()
         out += lint_draft(text, name, engines)
-        waits = re.findall(r'^while ! grep -qx "(\S+) ALL-DONE"', text, re.M)
+        waits = re.findall(r'^while ! grep -qx "([^"]+?) ALL-DONE"', text, re.M)
         if prev is not None and waits != [prev]:
             out.append(f"{name}: waits for {waits or 'nothing'}, expected {prev}")
         prev = name[:-3]
+        if status_file is not None and first:
+            out += [f"{name}: {p}" for p in status_problems(waits[0] if len(waits) == 1 else None, status_file)]
+        first = False
     return out
 
 
@@ -844,6 +889,7 @@ RF="runs_page_${{PIN}}{rows_suffix}.jsonl"   # land_stage.py pulls this exact na
                               # a second convention would only mean
                               # land_stage silently pulls nothing.
 REPS={reps}   # fixed at generation (make_2611_stages --reps)
+PASS={pass_no}   # the ONE repetition this stage runs (rep-major: the chain runs pass 1 of every stage, then pass 2, ...)
 say() {{ echo "[$(date -Is)] $*" >> "$S"; }}
 {wait}
 # AN ABORT MUST NOT STRAND THE CHAIN. Every ABORT hands on (the convention of the qMA stages: "an EXIT trap set after the wait
@@ -1031,25 +1077,28 @@ export BENCH_CPUSET=0-11 BENCH_GRAPH_SOURCE=ldbc
 {stage_env}
 
 BACKENDS="{backends}"
-say "$ID START: {title}, {nbe} engines, REPS=$REPS, pin $PIN, instrument {instrument}"
+say "$ID START: {title}, {nbe} engines, rep pass $PASS of $REPS, pin $PIN, instrument {instrument}"
 
 {cap_rule_helpers}
+{rep_helpers}
 run_overlay() {{  # <label> <scale> <cap> <be> <wl> <driver> <outdir> <rf> <reps> <env>
   local label=$1 scale=$2 cap=$3 be=$4 wl=$5 drv=$6 outdir=$7 orf=$8 oreps=$9 oenv=${{10}}
-  # ONE RECORDED FAILURE PER ARM (BUGS F162, DECISIONS #127). Every rep in one invocation re-ran a build that cannot
-  # finish inside the cap once per rep: October's qOH spent 5 x 7,200 s on SurrealDB embedded at small after its lane
-  # cell had already timed out, where September's stage ran rep 1 alone and skipped the rest. Rep 1 first, as
-  # run_cell does; the rest only when it left a clean row. One rep (the sparse driver repeats inside itself) runs as is.
+  # ONE RECORDED FAILURE PER ARM (BUGS F162, DECISIONS #127). Rep 1 first; the later passes run only when rep 1 left a clean row
+  # (rep_gate). The sparse driver repeats inside itself (oreps 1): it runs in pass 1 only, as one invocation.
   cap_rule_skip "$label" "$be|$wl|" && return 0
-  if [ "$oreps" -lt 2 ]; then
-    env $oenv python3 runner.py --lanes {lane} --scale "$scale" --backends "$be"       --workloads "$wl" --tier paper --workers 1 --timeout "$cap"       --reps "$oreps" --driver "$drv" --driver-out-dir "$outdir"       --results-file "$orf" >> "$S" 2>&1       || say "$ID: $label OVERLAY failed (the table reads this, not the lane row)"
-    return 0
+  [ "$PASS" -le "$oreps" ] || return 0
+  rep_gate "$label" || return 0
+  local onlyreps=
+  [ "$oreps" -lt 2 ] || onlyreps="--only-reps $PASS"
+  if env $oenv python3 runner.py --lanes {lane} --scale "$scale" --backends "$be" \\
+    --workloads "$wl" --tier paper --workers 1 --timeout "$cap" $onlyreps --reps "$oreps" --driver "$drv" \\
+    --driver-out-dir "$outdir" --results-file "$orf" >> "$S" 2>&1; then
+    rep_note "$label" "$PASS" ok
+  else
+    rep_note "$label" "$PASS" fail
+    say "$ID: $label OVERLAY rep $PASS failed (the table reads this, not the lane row)"
   fi
-  if ! env $oenv python3 runner.py --lanes {lane} --scale "$scale" --backends "$be"       --workloads "$wl" --tier paper --workers 1 --timeout "$cap"       --only-reps 1 --reps "$oreps" --driver "$drv" --driver-out-dir "$outdir"       --results-file "$orf" >> "$S" 2>&1; then
-    say "$ID: $label OVERLAY rep 1 left no clean row, reps 2-$oreps skipped (one recorded failure per arm)"
-    return 0
-  fi
-  env $oenv python3 runner.py --lanes {lane} --scale "$scale" --backends "$be"     --workloads "$wl" --tier paper --workers 1 --timeout "$cap"     --only-reps "$(seq -s, 2 "$oreps")" --reps "$oreps" --driver "$drv" --driver-out-dir "$outdir"     --results-file "$orf" >> "$S" 2>&1     || say "$ID: $label OVERLAY failed (the table reads this, not the lane row)"
+  return 0
 }}
 
 run_cell() {{   # run_cell <label> <scale> <cap> <backend> <workload> <env-or-empty> [durability-flag]
@@ -1062,19 +1111,43 @@ run_cell() {{   # run_cell <label> <scale> <cap> <backend> <workload> <env-or-em
   # the runner as two words, which is what bash does here.
   local dur=${{7:-}}
   cap_rule_skip "$label" "$be|$wl|$dur" && return 0
+  rep_gate "$label" || return 0
   env $envset python3 runner.py --lanes {lane} --scale "$scale" --backends "$be" \\
     --workloads "$wl" --tier paper --workers 1 --timeout "$cap" $dur \\
-    --only-reps 1 --reps "$REPS" --results-file "$RF" >> "$S" 2>&1
+    --only-reps "$PASS" --reps "$REPS" --results-file "$RF" >> "$S" 2>&1
   if [ $? -ne 0 ]; then
-    cap_rule_note "$be|$wl|$dur" "$scale"
-    say "$ID: $label rep 1 failed, not repeating it"
+    rep_note "$label" "$PASS" fail
+    # only a TIMEOUT of rep 1 censors the larger sizes; a later pass fails on its own
+    if [ "$PASS" -eq 1 ]; then cap_rule_note "$be|$wl|$dur" "$scale"; say "$ID: $label rep 1 failed, not repeating it"
+    else say "$ID: $label rep $PASS failed"; fi
     return 0
   fi
-  [ "$REPS" -lt 2 ] || env $envset python3 runner.py --lanes {lane} --scale "$scale" \\
-    --backends "$be" --workloads "$wl" --tier paper --workers 1 --timeout "$cap" $dur \\
-    --only-reps "$(seq -s, 2 "$REPS")" --reps "$REPS" --results-file "$RF" >> "$S" 2>&1
+  rep_note "$label" "$PASS" ok
 }}
 '''
+
+
+REP_HELPERS = r"""
+# REP-MAJOR (the user, 2026-10-23: "do n=1 for all dbs and then do the n=2, etc."). This stage runs ONE repetition, $PASS, of every
+# cell it owns. The chain runs pass 1 of every stage (core lanes, then the second list), then pass 2 of every stage, then pass 3,
+# so when time runs out every engine has the same n, and reps days apart show drift. WHICH REPS EXIST is written to REPSTATE, one
+# line per finished repetition (<label> TAB <rep> TAB ok|fail); the runner's own rows (rep numbered in the row, appended to $RF) are
+# the data, this file only drives the order. Stopping after any pass leaves a valid n; a later pass picks up from it with no
+# regeneration, and a restarted stage skips what is already clean. Delete REPSTATE to start the chain over.
+REPSTATE=$HOME/rep-state-@INSTRUMENT@-$PIN.tsv
+rep_done() {  # <label> <rep>: true when that repetition of the cell finished CLEAN (a fail is retried by a restart)
+  grep -qxF -- "$1"$'\t'"$2"$'\t'ok "$REPSTATE" 2>/dev/null
+}
+rep_note() {  # <label> <rep> <ok|fail>
+  printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$REPSTATE"
+}
+rep_gate() {  # <label>: true when this pass may run the cell; says why when it may not
+  [ "$PASS" -le "$REPS" ] || return 1   # a cell whose stage environment declares fewer reps (REPS=k) is done after k passes
+  if rep_done "$1" "$PASS"; then say "$ID: $1 rep $PASS is already clean, not rerun"; return 1; fi
+  if [ "$PASS" -gt 1 ] && ! rep_done "$1" 1; then say "$ID: $1 has no clean rep 1, rep $PASS not run (rep 1 first)"; return 1; fi
+  return 0
+}
+""".replace("@INSTRUMENT@", INSTRUMENT)
 
 
 def stage_params(reps):
@@ -1082,7 +1155,8 @@ def stage_params(reps):
     files they write, the pin whose rows cell_cost_check scores a tier from until this pass has measured it, the JPype pin and
     the cap rule's bash."""
     return {"instrument": INSTRUMENT, "reps": reps, "banner": BANNER, "rows_suffix": ROWS_SUFFIX, "prior": PRIOR_PIN,
-            "jpype_version": bench_common.JPYPE_PIN, "cap_rule_helpers": CAP_RULE_HELPERS.lstrip("\n")}
+            "jpype_version": bench_common.JPYPE_PIN, "cap_rule_helpers": CAP_RULE_HELPERS.lstrip("\n"),
+            "rep_helpers": REP_HELPERS.lstrip("\n"), "pass_no": 1}
 
 
 def _pair_part(text, pins, params):
@@ -1151,15 +1225,39 @@ def emit_all(out, stages, pins, first_after, reps):
     wheel = pins["ARCADEDB_WHEEL"]
     wheel_sha = pins.get("ARCADEDB_WHEEL_SHA256") or hashlib.sha256(open(wheel, "rb").read()).hexdigest()
     pins = dict(pins, wheel_name=os.path.basename(wheel), wheel_sha256=wheel_sha)
-    params = stage_params(reps)
-    for i, spec in enumerate(stages):
-        after = first_after if i == 0 else stages[i - 1][0]
+    plan = pass_plan(stages, reps)
+    for i, (spec, pass_no) in enumerate(plan):
+        after = first_after if i == 0 else plan[i - 1][0][0]
+        params = dict(stage_params(reps), pass_no=pass_no)
         p = os.path.join(out, f"{spec[0]}.sh")
         with open(p, "w", encoding="utf-8") as fh:
-            fh.write(stage_script(i, len(stages), spec, after, pins, params))
+            fh.write(stage_script(i, len(plan), spec, after, pins, params))
         os.chmod(p, 0o755)
-        print(f"  {spec[0]}.sh  lane={spec[2]:9} backends={len(stage_backends(spec)):2}  "
+        print(f"  {spec[0]}.sh  pass {pass_no}/{reps} lane={spec[2]:9} backends={len(stage_backends(spec)):2}  "
               f"scales={','.join(spec[4]) or '-'}  after={after}")
+
+
+def stage_reps(spec, reps):
+    """The repetitions a stage runs: the chain's, or fewer when its environment declares REPS=k (the image defaults arm)."""
+    for e in (spec[7] if len(spec) > 7 and spec[7] else []):
+        if isinstance(e, str) and e.startswith("REPS="):
+            return min(reps, int(e[5:]))
+    return reps
+
+
+def pass_plan(stages, reps):
+    """REP-MAJOR. [(stage spec, pass)] in run order: pass 1 of every stage in `stages` (their own order), then pass 2 of the stages
+    that run a second repetition, and so on up to `reps`. Ids are renumbered over the whole run, keeping the prefix of the first
+    stage's, so each stage still waits on the one before it in id order. A single pass keeps `stages` as numbered."""
+    if reps == 1 or not stages:
+        return [(s, 1) for s in stages]
+    prefix = re.match(r"^(\D+)", stages[0][0]).group(1)
+    runs = [(s, p) for p in range(1, reps + 1) for s in stages if stage_reps(s, reps) >= p]
+    out = []
+    for k, (s, p) in enumerate(runs):
+        title = f"{s[1]} [rep pass {p} of {reps}]"
+        out.append((tuple([f"{prefix}{k + 1:02d}", title] + list(s[2:])), p))
+    return out
 
 
 def _after_arg(text):
@@ -1311,7 +1409,12 @@ def _after(text):
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="the next instrument's multi-model subset stages")
     ap.add_argument("--out", help="directory for the generated scripts (a draft folder, not the repo)")
-    ap.add_argument("--after", help="the stage the first one waits on (its ALL-DONE marker); `none` for no wait. Required to emit")
+    ap.add_argument("--after", help="the marker the first stage waits on (`<name> ALL-DONE`): the LAST item of the queue already on the "
+                                    "machine, e.g. `mini-ab FINAL` on mini; `none` for no wait. Required to emit, no default")
+    ap.add_argument("--status-file", metavar="PATH|none",
+                    help="a copy of the machine's STATUS.txt: the generator refuses an --after marker already in it (the first stage "
+                         "would start at once). Required to emit with a marker; `none` says there is no queue to wait for. "
+                         "With --check --drafts DIR: also refuses drafts whose first wait is already true there")
     ap.add_argument("--id-prefix", default=DEFAULT_PREFIX, help=f"stage id prefix (default {DEFAULT_PREFIX})")
     ap.add_argument("--engines", help=f"comma list of subset engines ({', '.join(ENGINES)}); default every engine of the mode")
     ap.add_argument("--lanes", help="comma list: graph, cross-model, documents, dense (core); sparse, timeseries, lifecycle "
@@ -1334,6 +1437,7 @@ def main(argv=None) -> int:
     ap.add_argument("--wheel-sha256")
     ap.add_argument("--wheel-url")
     a = ap.parse_args(argv)
+    status_file = None if a.status_file is None or a.status_file.strip().lower() == "none" else a.status_file
 
     problems = instrument_problems()
     if problems:
@@ -1364,7 +1468,7 @@ def main(argv=None) -> int:
         bes = stage_backends(st)
         print(f"  {st[0]}  {st[2]:9} {','.join(st[4]) or '-':26} {len(bes):2} arms  {st[1]}")
     if a.check and a.drafts:
-        problems += lint_drafts(a.drafts, set(engines))
+        problems += lint_drafts(a.drafts, set(engines), status_file)
     for p in problems:
         print(f"  PROBLEM {p}")
     if problems:
@@ -1383,6 +1487,14 @@ def main(argv=None) -> int:
     after = _after(a.after)
     if after is False:
         raise SystemExit("--after is required to emit: the stage whose ALL-DONE the first stage waits for, or `none`")
+    if after is not None and a.status_file is None:
+        raise SystemExit("--status-file is required with an --after marker: a copy of the machine's STATUS.txt, which must not "
+                         "hold `<marker> ALL-DONE` yet (or `--status-file none` when there is no queue)")
+    bad = status_problems(after, status_file)
+    if bad:
+        for p in bad:
+            print(f"  PROBLEM {p}")
+        return 1
     if pins is None:
         pins = installed_pins()
     os.makedirs(a.out, exist_ok=True)
