@@ -25,6 +25,7 @@ Metrics per rep: ingest points/s, per-query p50 and p99 ms over QITER iterations
 import argparse
 import datetime as _dt
 import json
+import math
 import os
 import statistics
 import time
@@ -1774,10 +1775,122 @@ class ArangoTS:
 # Backends whose cell runs a SEPARATE server container, so run_conditions reads
 # the driver's cgroup and not the engine's. Kept as data beside the adapters so
 # adding a served arm cannot forget to update the role test.
-_CLIENT_SERVER = {"questdb", "surrealdb_ts_server", "arangodb_ts"}
+class RedisTS:
+    """Redis 8.10.2 served, TimeSeries (2026-10-23, the multi-model comparator batch): one series per (host, field), key
+    `cpu:<host>:<field>` with LABELS host and field, compressed chunks and the other series options at the vendor's defaults.
+    Ingest is TS.MADD in pipelines, 50,000 points per round trip (MongoDB's insert_many batch), one TS.MADD command per field per
+    round (50,000 samples each). The timestamps are epoch MILLISECONDS, the unit TimeSeries takes.
+
+    QUERIES, each one command of the engine's own range family:
+      q_last       TS.GET on the host's usage_user series: the newest sample, unbounded.
+      q_range      TS.RANGE ... AGGREGATION max 60000 over [T0, T0 + 3600 s) (the range is inclusive, so the end is one ms short).
+      q_global     TS.MRANGE ... AGGREGATION avg 3600000 FILTER field=uu GROUPBY field REDUCE avg: the average of the per-host hourly
+                   averages. Every host has the same number of samples in every hour (the corpus is a regular 10 s grid), so it
+                   equals the average over all samples; the answer digest checks that against the other arms.
+      q_groupby    TS.MRANGE ... AGGREGATION avg 3600000 FILTER field=uu: one series per host.
+      q_high       TS.MRANGE ... FILTER_BY_VALUE <next double above 90> inf FILTER field=uu: FILTER_BY_VALUE is inclusive, so the lower
+                   bound is the smallest double above 90.0, which is `> 90`.
+      q_orderlimit TS.MREVRANGE ... COUNT 5 AGGREGATION max 3600000 GROUPBY field REDUCE max: the five newest hourly buckets.
+    """
+    name = "redis_ts"
+    durability = bench_common.DURABILITY_REDIS
+    BATCH = 50_000
+    FIELDS = ("uu", "us", "ui")
+
+    def connect(self):
+        import redis
+        import importlib.metadata as _md
+        self.r = redis.Redis(host=os.environ["BENCH_SERVER_HOST"], port=int(os.environ.get("BENCH_SERVER_PORT", "6379")),
+                             socket_timeout=3600, protocol=2)
+        self._v = self.r.info("server")["redis_version"]
+
+        def _cfg(name):
+            v = self.r.config_get(name)
+            return v.get(name) if isinstance(v, dict) else v
+        mods = {}
+        for m in self.r.module_list():
+            m = {(k.decode() if isinstance(k, bytes) else k): v for k, v in m.items()}
+            n = m.get("name")
+            mods[n.decode() if isinstance(n, bytes) else n] = m.get("ver")
+        self.row_extra = {
+            "driver_version": f"redis-py:{_md.version('redis')}",
+            "redis_io_threads": _cfg("io-threads"),
+            "redis_maxmemory": _cfg("maxmemory"),
+            "redis_maxmemory_policy": _cfg("maxmemory-policy"),
+            "redis_timeseries_module": mods.get("timeseries"),
+            "redis_protocol": 2,
+        }
+        ao, fsync, save = (_cfg(k) for k in ("appendonly", "appendfsync", "save"))
+        if ao == "no" and save == "3600 1 300 100 60 10000":
+            self.durability = bench_common.DURABILITY_REDIS
+        elif ao == "yes" and fsync == "always":
+            self.durability = bench_common.DURABILITY_REDIS_STRICT
+        else:
+            self.durability = f"appendonly={ao}, appendfsync={fsync}, save={save!r}, which is neither class (DECISIONS #90)"
+
+    def version(self):
+        return f"redis {self._v} with TimeSeries {self.row_extra.get('redis_timeseries_module')}"
+
+    def ingest(self, pts):
+        r = self.r
+        r.flushall()
+        hosts = sorted({p[0] for p in pts})
+        pipe = r.pipeline(transaction=False)
+        for h in hosts:
+            for f in self.FIELDS:
+                pipe.execute_command("TS.CREATE", f"cpu:{h}:{f}", "LABELS", "host", h, "field", f)
+        pipe.execute()
+        for lo in range(0, len(pts), self.BATCH):
+            pipe = r.pipeline(transaction=False)
+            for j, f in enumerate(self.FIELDS):
+                args = []
+                for p in pts[lo:lo + self.BATCH]:
+                    args += (f"cpu:{p[0]}:{f}", p[1] * 1000, p[2 + j])
+                pipe.execute_command("TS.MADD", *args)
+            pipe.execute()
+
+    @staticmethod
+    def _f(v):
+        return float(v)
+
+    def q_last(self):
+        ts, v = self.r.execute_command("TS.GET", f"cpu:{HOST}:uu")
+        return [(int(ts), self._f(v))]
+
+    def q_range(self):
+        res = self.r.execute_command("TS.RANGE", f"cpu:{HOST}:uu", T0 * 1000, (T0 + 3600) * 1000 - 1,
+                                     "AGGREGATION", "max", 60_000)
+        return [(int(t), self._f(v)) for t, v in res]
+
+    def _grouped(self, cmd, hi_s, pre=(), group=()):
+        """TS.MRANGE / TS.MREVRANGE: the vendor's order is range options, then FILTER, then GROUPBY / REDUCE."""
+        return self.r.execute_command(cmd, T0 * 1000, hi_s * 1000 - 1, *pre, "FILTER", "field=uu", *group)
+
+    def q_global(self):
+        res = self._grouped("TS.MRANGE", T0 + 43200, ("AGGREGATION", "avg", 3_600_000), ("GROUPBY", "field", "REDUCE", "avg"))
+        return [(int(t), self._f(v)) for t, v in res[0][2]]
+
+    def q_groupby(self):
+        res = self._grouped("TS.MRANGE", T0 + 43200, ("AGGREGATION", "avg", 3_600_000))
+        return [(k.decode().split(":")[1], int(t), self._f(v)) for k, _labels, samples in res for t, v in samples]
+
+    def q_high(self):
+        res = self._grouped("TS.MRANGE", T0 + 43200, ("FILTER_BY_VALUE", repr(math.nextafter(HIGH, math.inf)), "inf"))
+        return [(k.decode().split(":")[1], int(t), self._f(v)) for k, _labels, samples in res for t, v in samples]
+
+    def q_orderlimit(self):
+        res = self._grouped("TS.MREVRANGE", T0 + 43200, ("COUNT", ORDERLIMIT_N, "AGGREGATION", "max", 3_600_000),
+                            ("GROUPBY", "field", "REDUCE", "max"))
+        return [(int(t), self._f(v)) for t, v in res[0][2]]
+
+    def close(self):
+        self.r.close()
+
+
+_CLIENT_SERVER = {"questdb", "surrealdb_ts_server", "arangodb_ts", "redis_ts"}
 
 BACKENDS = {c.name: c for c in (ArcadeTS, ArcadeTSServer, ArcadeNativeTS, ArcadeNativeTSServer, DuckTS, SQLiteTS, MongoTS, TimescaleTS, QuestTS,
-                                SurrealTS, SurrealTSServer, ArangoTS, PostgresTS, CrateTS)}
+                                SurrealTS, SurrealTSServer, ArangoTS, PostgresTS, CrateTS, RedisTS)}
 
 # DECISIONS #81: what each arm runs at commit, recorded on the row. DuckDB is
 # the named exception here; TimescaleDB reads the server's own
@@ -1802,6 +1915,8 @@ DURABILITY = {
     "postgres_ts": bench_common.DURABILITY_PG_OFF,
     # Read back from the table at ingest (the adapter's own answer wins).
     "cratedb_ts": bench_common.DURABILITY_CRATEDB,
+    # Redis: read back from CONFIG GET at connect (the adapter's own answer wins).
+    "redis_ts": bench_common.DURABILITY_REDIS,
 }
 
 

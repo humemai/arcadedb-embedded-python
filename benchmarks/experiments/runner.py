@@ -1621,6 +1621,34 @@ BACKENDS = {
         "ready_regex": r"Ready to accept connections",
         "pre_disk_cmd": ["redis-cli", "SAVE"],
     },
+    # REDIS 8.10.2, documents (l1tpc) and time series (l4): the same image, digest, memory rule, thread fit and durability
+    # patch as redis_dense above (one server, three models). Lane-specific settings, each from the vendor's docs:
+    #   --search-on-timeout fail (documents only): the Query Engine's default query timeout is 500 ms and its default
+    #     policy RETURNS the partial result when it expires
+    #     (https://redis.io/docs/latest/develop/ai/search-and-query/administration/configuration/#search-on-timeout);
+    #     a benchmark must never time a short answer, so a timeout is an error, and every query also sends TIMEOUT 0;
+    #   no --search-workers on the time-series arm: it uses TimeSeries commands, not the Query Engine.
+    "redis_tpc": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "redis@sha256:13ad9044b4b2fd2abe4c5aad8c384b0504a71006fa33f023fc68998453a2eeca",  # 8.10.2, amd64
+        "server_cmd": ["--maxmemory", "{mem90_mib}mb", "--maxmemory-policy", "noeviction",
+                       "--io-threads", "{io_threads}", "--search-workers", "{io_threads}",
+                       "--search-on-timeout", "fail", "--protected-mode", "no"],
+        "server_port": 6379,
+        "ready_regex": r"Ready to accept connections",
+        "pre_disk_cmd": ["redis-cli", "SAVE"],
+    },
+    "redis_ts": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "redis@sha256:13ad9044b4b2fd2abe4c5aad8c384b0504a71006fa33f023fc68998453a2eeca",  # 8.10.2, amd64
+        "server_cmd": ["--maxmemory", "{mem90_mib}mb", "--maxmemory-policy", "noeviction",
+                       "--io-threads", "{io_threads}", "--protected-mode", "no"],
+        "server_port": 6379,
+        "ready_regex": r"Ready to accept connections",
+        "pre_disk_cmd": ["redis-cli", "SAVE"],
+    },
     # LadybugDB: embedded in the client image, as the graph arm is; the
     # adapter fits its threads and buffer pool to the cell (F160).
     "ladybug_dense": {"topology": "embedded", "image": "dbbench:client"},
@@ -1916,7 +1944,9 @@ LANES = {
               ["arcadedb_embedded", "arcadedb_server", "arcadedb_imgdefaults_server", "duckdb", "sqlite", "mongodb",
                "surrealdb_tpc", "surrealdb_tpc_server", "arangodb_tpc", "postgres", "postgres_tuned",
                # the multi-model comparator batch (2026-10-23): analytics only (ARM_RUNS)
-               "cratedb_tpc"],
+               "cratedb_tpc",
+               # Redis JSON + FT.AGGREGATE
+               "redis_tpc"],
               ["oltp", "olap"]),
     "e2": ("e2_hybrid.py",
            ["arcadedb_e2", "arcadedb_e2_server", "surrealdb_e2", "surrealdb_e2_server",
@@ -2029,7 +2059,9 @@ LANES = {
             # Plain PostgreSQL beside TimescaleDB (DECISIONS #131 item 6).
             "postgres_ts",
             # the multi-model comparator batch (2026-10-23)
-            "cratedb_ts"],
+            "cratedb_ts",
+            # Redis TimeSeries
+            "redis_ts"],
            ["ingest"]),
 }
 
@@ -4061,6 +4093,13 @@ ARM_RUNS = {
     "cratedb_tpc": {
         "l1tpc": {"workloads": ("olap",), "scales": ("tpch1", "tpch10"),
                   "title": "documents analytics, CrateDB (no multi-statement transaction, so no OLTP table)"},
+    },
+    # Redis keeps the data in memory under noeviction: the SF0.1 smoke put the server at 681 MiB for 600,572 line items (1.19 KB a
+    # row with the JSON document and the SORTABLE index), so SF1 needs about 7 GB (fits the 14.4 GB maxmemory of the 16g cap) and
+    # SF10 about 71 GB, far above the 28.8 GB of the 32g cap. The tpch10 cells are not queued.
+    "redis_tpc": {
+        "l1tpc": {"workloads": ("oltp", "olap"), "scales": ("tpch1",),
+                  "title": "documents, Redis (in memory: tpch1 only, tpch10 does not fit the 32g cap)"},
     },
     "arcadedb_imgdefaults_server": {
         "l1tpc": {"workloads": ("oltp",), "scales": ("tpch10",), "reps": 3, "durability": "relaxed",

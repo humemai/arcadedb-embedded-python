@@ -362,7 +362,7 @@ ENGINES = collections.OrderedDict([
     ("qdrant-neo4j", ("the composed Qdrant plus Neo4j stack", ("composed_qdrant_neo4j",))),
     ("neo4j", ("Neo4j on its own: graph and dense", ("neo4j_graph", "neo4j_dense"))),
     ("qdrant", ("Qdrant on its own: dense, and sparse on the second list", ("qdrant_dense", "qdrant_sparse"))),
-    ("redis", ("Redis 8 (Query Engine): dense", ("redis_",))),
+    ("redis", ("Redis 8: dense (Query Engine), documents (JSON + FT.AGGREGATE), time series (TimeSeries)", ("redis_",))),
     ("cratedb", ("CrateDB 6.4: documents analytics (TPC-H), dense, time series", ("cratedb_",))),
     ("ladybug", ("LadybugDB, embedded graph and vector, on every lane it supports", ("ladybug",))),
 ])
@@ -373,8 +373,8 @@ OUTSIDE = ("neo4j_e2", "falkordb", "milvus", "elasticsearch", "chroma", "lancedb
 
 # Arms in the subset that no row exists for yet. The page gate (page_check._roster_arms) owes them no row and no declaration, so a
 # payload measured before they ran does not fail as "registered, no row". An arm that has a row anyway is still on the page and keyed.
-# REMOVE WHEN the arm has rows in the frozen results (CrateDB: after its first full measurement).
-NOT_YET_MEASURED = ("cratedb_",)
+# REMOVE WHEN the arm has rows in the frozen results (CrateDB, Redis documents and time series: after their first full measurement).
+NOT_YET_MEASURED = ("cratedb_", "redis_tpc", "redis_ts")
 
 CORE_LANES = ("l2", "e2", "l1tpc", "l3d")
 SECOND_LANES = ("l3s", "l4", "lifecycle")

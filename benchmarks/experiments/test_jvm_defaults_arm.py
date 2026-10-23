@@ -536,9 +536,9 @@ def test_a_second_restricted_arm_needs_no_special_case(monkeypatch):
     monkeypatch.setitem(RN.ARM_RUNS, second, {"l2": {"workloads": ("oltp",), "scales": ("sf1",), "reps": 2,
                                                      "durability": None, "title": "graph reads, one size"}})
     derived = M._derived_stages(M.STATIC_STAGES)
-    assert [d[0] for d in derived] == ["qRI", "qRJ", "qRK"]                   # ids continue the sequence (the CrateDB analytics stage is the second)
+    assert [d[0] for d in derived] == ["qRI", "qRJ", "qRK", "qRL"]          # ids continue the sequence (the CrateDB analytics and Redis stages follow)
     by_arm = {M.stage_backends(d)[0]: d for d in derived}
-    assert set(by_arm) == {second, ARM, "cratedb_tpc"}
+    assert set(by_arm) == {second, ARM, "cratedb_tpc", "redis_tpc"}
     stages = M.STATIC_STAGES + derived
     problems, _e, _c = M.check_coverage(stages)
     assert problems == []
