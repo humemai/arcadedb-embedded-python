@@ -166,6 +166,9 @@ def test_damaged_cache_is_never_used_and_is_rebuilt(env, monkeypatch, damage):
     else:
         meta.write_text("{nope")
     monkeypatch.undo()  # real pid check again; the earlier trainer is gone
+    # undo() also restored the real sys.platform, so put back the fixture's "linux": on macOS and Windows
+    # cache_dir() would otherwise leave XDG_CACHE_HOME for ~/Library/Caches or %LOCALAPPDATA%
+    monkeypatch.setattr(aot.sys, "platform", "linux")
     monkeypatch.setenv("XDG_CACHE_HOME", str(env["dir"].parents[1]))
     monkeypatch.setattr(
         aot, "jpype_support_jar", lambda: Path(env["cp"]).parent / "org.jpype.jar"
