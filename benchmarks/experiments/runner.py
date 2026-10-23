@@ -604,7 +604,7 @@ BACKENDS = {
     "timescaledb": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "timescale/timescaledb@sha256:f7036933154c52dbc500f7b08ff8e28404a8ccabbf8ce3528142cde6ab253eef",  # 2.30.1-pg18
+        "server_image": "timescale/timescaledb@sha256:26e20a5e5a7ab6bec7ff217a52ffe21c9f4799603816718b2a573e7be839d8b4",  # 2.31.0-pg18
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
         "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
                        "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=4GB"] + PG_FIT_CMD,
@@ -953,7 +953,7 @@ BACKENDS = {
     "pgage_graph": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "dbbench:pg-age",  # PostgreSQL 18 + pgvector 0.8.6 + AGE 1.8.0, built from Dockerfile.pgage
+        "server_image": "dbbench:pg-age",  # PostgreSQL 18 + pgvector 0.8.7 + AGE 1.8.0, built from Dockerfile.pgage
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
         "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
                        "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=4GB"] + PG_FIT_CMD,
@@ -980,7 +980,7 @@ BACKENDS = {
     "pg_age_e2": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "dbbench:pg-age",  # PostgreSQL 18 + pgvector 0.8.6 + AGE 1.8.0, built from Dockerfile.pgage
+        "server_image": "dbbench:pg-age",  # PostgreSQL 18 + pgvector 0.8.7 + AGE 1.8.0, built from Dockerfile.pgage
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
         "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
                        "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=4GB"] + PG_FIT_CMD,
@@ -1429,7 +1429,7 @@ BACKENDS = {
         "server_port": 6333,
         "ready_regex": r"Qdrant (HTTP|gRPC) listening|Actix runtime found",
     },
-    # pgvector 0.8.6 on PostgreSQL 18. maintenance_work_mem at half the cap:
+    # pgvector 0.8.7 on PostgreSQL 18. maintenance_work_mem at half the cap:
     # the HNSW build spills to a slow path when the graph outgrows it, and at
     # the 64 MB default a 10M build does not finish inside the envelope.
     # shared_buffers a quarter of the cap so the index can be resident, the
@@ -1437,7 +1437,7 @@ BACKENDS = {
     "pgvector_dense": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "pgvector/pgvector@sha256:1d50c689b0a6511b9ea0a15615281c81a59fd04a08eb35057ec8646fb3a2118a",  # 0.8.6-pg18
+        "server_image": "pgvector/pgvector@sha256:ad249f9fb9572979643a47694e59b9a8cdcdf6abc6accebf49bb80ad5f20ff9b",  # 0.8.7-pg18
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
         "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
                        "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=8GB"] + PG_FIT_CMD,
@@ -1448,7 +1448,7 @@ BACKENDS = {
     "pgvector_sparse": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "pgvector/pgvector@sha256:1d50c689b0a6511b9ea0a15615281c81a59fd04a08eb35057ec8646fb3a2118a",  # 0.8.6-pg18
+        "server_image": "pgvector/pgvector@sha256:ad249f9fb9572979643a47694e59b9a8cdcdf6abc6accebf49bb80ad5f20ff9b",  # 0.8.7-pg18
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
         "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
                        "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=8GB"] + PG_FIT_CMD,

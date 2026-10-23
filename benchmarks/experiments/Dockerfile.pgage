@@ -1,4 +1,4 @@
-# PostgreSQL 18 + pgvector 0.8.6 + Apache AGE 1.8.0: the "one engine" rival to
+# PostgreSQL 18 + pgvector 0.8.7 + Apache AGE 1.8.0: the "one engine" rival to
 # the cross-model transaction (pgvector hit, Cypher hop through AGE, row update,
 # one transaction). Base image pinned by digest; AGE from the PGDG apt repo the
 # postgres image already carries. Built as dbbench:pg-age by build_images.sh.
@@ -24,6 +24,6 @@
 # measured on (`dpkg-query` on dbbench:pg-age: 1.8.0~rc0-2.pgdg12+1, which the
 # rows record as age:1.8.0). If PGDG stops serving it, the build fails here
 # rather than moving AGE silently.
-FROM pgvector/pgvector@sha256:1d50c689b0a6511b9ea0a15615281c81a59fd04a08eb35057ec8646fb3a2118a
+FROM pgvector/pgvector@sha256:ad249f9fb9572979643a47694e59b9a8cdcdf6abc6accebf49bb80ad5f20ff9b
 RUN apt-get update && apt-get install -y --no-install-recommends postgresql-18-age=1.8.0~rc0-2.pgdg12+1 \
     && rm -rf /var/lib/apt/lists/*

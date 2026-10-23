@@ -24,7 +24,7 @@ import sparse_multipass_driver as D  # noqa: E402
 
 @pytest.mark.parametrize("backend,adapter_says", [
     ("qdrant_sparse", "qdrant:1.19.1"), ("qdrant_sparse_uint8", "qdrant:1.19.1"),
-    ("milvus_sparse", "milvus:3.0.1"), ("pgvector_sparse", "pgvector:0.8.6 on 18"),
+    ("milvus_sparse", "milvus:3.0.1"), ("pgvector_sparse", "pgvector:0.8.7 on 18"),
     ("elasticsearch_sparse", "9.5.4"),            # the one adapter that reports the bare number
 ])
 def test_a_comparator_pass_keeps_a_lib_version_that_starts_with_its_engine(backend, adapter_says):
