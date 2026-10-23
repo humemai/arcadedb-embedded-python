@@ -1292,7 +1292,7 @@ def _roster_arms(lane, RN, table):
     registered = list(RN.LANES[lane][1])
     if any(str(e.get("backend_key")) in BC.DENSE_PQ_ARMS for e in table.get("entries", [])):
         registered += [a for a in BC.DENSE_PQ_ARMS if a not in registered and lane == "l3d"]
-    owed = {a for a in registered if not MS.is_outside(a)}
+    owed = {a for a in registered if not MS.is_outside(a) and not MS.not_yet_measured(a)}
     if lane == "l3d":
         # THE DENSE TABLE IS THE MULTIPASS OVERLAY'S (export_web: with an overlay on disk the table is all overlay, apart
         # from the PQ arms), so it carries the overlay's arms, and an arm registered for the lane that has no multipass

@@ -80,6 +80,13 @@ EF_SEARCH = 100
 # expansion_add 128, expansion_search 64, none settable through Memgraph
 # 3.13.1 (see degree_stamp and MemgraphDense).
 MEMGRAPH_USEARCH_CONNECTIVITY = 16
+# CrateDB 6.4.6 builds its HNSW graph through Lucene 10.4.0 with the codec's default format, which neither CrateDB's CrateCodec
+# (it only wraps the delegate's KnnVectorsFormat) nor any table or column setting changes: Lucene99HnswVectorsFormat
+# DEFAULT_MAX_CONN 16 (doubled at layer 0, so hnswlib's M=16) and DEFAULT_BEAM_WIDTH 100 (= EF_CONSTRUCTION), read from the
+# class constants of the jars in the pinned image (2026-10-23, COMPARATORS.md "CrateDB"). Recorded as the value it builds, the
+# way Memgraph's is; it equals COMPARATOR_M only at the lane's default M, which the arm checks at build time.
+CRATEDB_LUCENE_MAX_CONN = 16
+CRATEDB_LUCENE_BEAM_WIDTH = 100
 MEMGRAPH_USEARCH_EXPANSION_ADD = 128
 MEMGRAPH_USEARCH_EXPANSION_SEARCH = 64
 SCALE_DOCS = {"micro": 5_000, "tiny": 100_000, "small": 1_000_000,
@@ -220,6 +227,9 @@ def degree_stamp(backend):
     # connectivity 2, 16, and 64). Recorded as the value it builds.
     if base == "memgraph_dense":
         return MEMGRAPH_USEARCH_CONNECTIVITY, "hnswlib_m_doubled_at_base"
+    # CrateDB: Lucene's fixed default (CRATEDB_LUCENE_MAX_CONN above), the engine's own value.
+    if base == "cratedb_dense":
+        return CRATEDB_LUCENE_MAX_CONN, "hnswlib_m_doubled_at_base"
     # LadybugDB's HNSW has two layers: `ml` is the base layer's degree and
     # `mu` the upper layer's, so the base degree is recorded as is, at the
     # 2 x COMPARATOR_M the hnswlib-style engines reach at their layer 0.
@@ -1385,6 +1395,84 @@ class PgVector(Base):
         with self.cx.cursor() as c:
             c.execute("DELETE FROM articles WHERE vid = ANY(%s)", ([int(v) for v in ids],))
         self.cx.commit()
+
+    def close(self):
+        self.cx.close()
+
+
+class CrateDense(Base):
+    """CrateDB 6.4.6 over the PostgreSQL wire (2026-10-23, the multi-model comparator batch): a `float_vector(DIM)` column, the
+    Lucene HNSW index CrateDB builds on it, and `knn_match(col, query, k)` for the search.
+
+    F7, DEGREE: CrateDB exposes no HNSW parameter (no m, no ef_construction; CREATE TABLE and the float_vector type take none).
+    The graph is Lucene's default, MaxConn 16 (doubled at layer 0 = hnswlib's M 16) and BeamWidth 100 = EF_CONSTRUCTION, read
+    from the class constants of Lucene 10.4.0 in the pinned image and from CrateCodec, which sets no format of its own
+    (CRATEDB_LUCENE_MAX_CONN). So the engine's fixed degree and the lane's matched COMPARATOR_M coincide at the default M, which
+    build() asserts; at any other M the arm refuses rather than print a label the engine did not run. Stamped as a fixed-degree
+    engine would be: the value it builds, family hnswlib_m_doubled_at_base.
+
+    SEARCH BEAM: `knn_match`'s k is Lucene's per-shard candidate count (CrateDB's scalar-functions page), the counterpart of
+    ef_search, and with ONE shard it is the whole query's. The arm asks for max(k, EF_SEARCH) candidates, keeps the best k by
+    `_score`, exactly as Elasticsearch's `num_candidates` and Neo4j's SEARCH ... LIMIT do. `_score` is
+    1 / (1 + squared L2) for the default euclidean similarity, so descending `_score` is ascending L2.
+
+    SETTLE: REFRESH TABLE then OPTIMIZE TABLE ... WITH (max_num_segments = 1), the Lucene-engine counterpart of Elasticsearch's
+    refresh + force-merge, inside the build timer. NO INGEST/INDEX SPLIT (F14c, fairness_check.PHASE_SPLIT_DECLARED): Lucene
+    builds the graph per segment while documents are indexed, and the merge rebuilds it.
+    """
+    quantization = "fp32"
+    name = "cratedb_dense"
+    ID_INDEX_DDL = "vid INTEGER PRIMARY KEY"
+
+    def connect(self):
+        self.row_extra = {**(getattr(self, "row_extra", None) or {}), "pg_client_path": "executemany_insert"}
+        import cratedb_common
+        self.cc = cratedb_common
+        self.cx = cratedb_common.connect()
+        with self.cx.cursor() as c:
+            c.execute("SELECT version()")
+            self.version = "cratedb:" + c.fetchone()[0].split(" (")[0].replace("CrateDB ", "")
+
+    def build(self, vecs):
+        if COMPARATOR_M != CRATEDB_LUCENE_MAX_CONN or EF_CONSTRUCTION != CRATEDB_LUCENE_BEAM_WIDTH:
+            raise RuntimeError(f"cratedb builds Lucene's fixed MaxConn {CRATEDB_LUCENE_MAX_CONN} / BeamWidth "
+                               f"{CRATEDB_LUCENE_BEAM_WIDTH}; the lane asks for M={COMPARATOR_M}, efc={EF_CONSTRUCTION}: "
+                               f"F7 cannot be met at this point")
+        with self.cx.cursor() as c:
+            _t0 = time.perf_counter()
+            c.execute(f"CREATE TABLE articles (vid INTEGER PRIMARY KEY, embedding FLOAT_VECTOR({DIM})) "
+                      + self.cc.with_clause(1))
+            self.id_index = self.ID_INDEX_DDL
+            for i in range(0, len(vecs), BATCH):
+                c.executemany("INSERT INTO articles (vid, embedding) VALUES (%s, %s)",
+                              [(i + j, vecs[i + j].tolist()) for j in range(len(vecs[i:i + BATCH]))])
+            self.ingest_s = round(time.perf_counter() - _t0, 2)
+
+    def post_build(self):
+        self.cc.refresh(self.cx, "articles")
+        with self.cx.cursor() as c:
+            c.execute("OPTIMIZE TABLE articles WITH (max_num_segments = 1)")
+        _v, extra, self.durability = self.cc.readback(self.cx, "articles", 1)
+        self.row_extra = {**self.row_extra, **extra, "cratedb_knn_candidates": EF_SEARCH,
+                          "cratedb_lucene_max_conn": CRATEDB_LUCENE_MAX_CONN,
+                          "cratedb_lucene_beam_width": CRATEDB_LUCENE_BEAM_WIDTH}
+
+    def search(self, qvec, k):
+        with self.cx.cursor() as c:
+            c.execute("SELECT vid FROM articles WHERE knn_match(embedding, %s, %s) ORDER BY _score DESC LIMIT %s",
+                      (qvec.tolist(), max(k, EF_SEARCH), k))
+            return [int(r[0]) for r in c.fetchall()]
+
+    def insert_vectors(self, ids, vecs):
+        with self.cx.cursor() as c:
+            c.executemany("INSERT INTO articles (vid, embedding) VALUES (%s, %s)",
+                          [(int(v), [float(x) for x in vecs[j]]) for j, v in enumerate(ids)])
+            c.execute("REFRESH TABLE articles")
+
+    def delete_vectors(self, ids):
+        with self.cx.cursor() as c:
+            c.execute("DELETE FROM articles WHERE vid = ANY(%s)", ([int(v) for v in ids],))
+            c.execute("REFRESH TABLE articles")
 
     def close(self):
         self.cx.close()
@@ -3015,6 +3103,8 @@ BACKENDS = {b.name: b for b in
              ArcadeServerInt8, SqliteVecInt8,
              # #131 item 3 (2026-10-02)
              ElasticDense, ElasticDenseInt8, MemgraphDense, FalkorDense, LadybugDense, RedisDense,
+             # the multi-model comparator batch (2026-10-23)
+             CrateDense,
              # the quantization survey's int8 counterparts (DECISIONS #135, 2026-10-02)
              MongoDenseInt8, MemgraphDenseInt8, LanceDBFlat, ArangoDenseInt8)}
 # The PQ arms: only under instrument 2026-11 AND BENCH_DENSE_PQ=1 (bench_common.dense_pq_enabled)
@@ -3055,6 +3145,7 @@ def pct(vals):
 # Every string, and the evidence for the default it names, is in bench_common.
 DURABILITY_INGEST_ONLY = "engine default; no transactional write timed on this lane"
 DURABILITY = {
+    "cratedb_dense": bench_common.DURABILITY_CRATEDB,   # read back from the table at post_build (the adapter's own answer wins)
     "arcadedb_dense_embedded": bench_common.DURABILITY_ARCADEDB,
     "arcadedb_dense_embedded_int8": bench_common.DURABILITY_ARCADEDB,
     "arcadedb_dense_server": bench_common.DURABILITY_ARCADEDB,

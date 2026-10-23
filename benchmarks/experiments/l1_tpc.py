@@ -200,6 +200,15 @@ ARCADE_OLAP = {
     "by_month": ("SELECT l_shipdate.substring(0, 7) AS m, sum(l_extendedprice * (1 - l_discount)) AS rev, "
                  "count(*) AS n FROM LineItem GROUP BY m ORDER BY m"),
 }
+# CrateDB's dialect: no DATE type (the ship date is a TIMESTAMP, compared with the ISO literal), date_trunc for the month. The
+# remaining text is the DuckDB text.
+CRATE_OLAP = {
+    "q1": Q1_DUCK.replace("DATE '1998-09-02'", "'1998-09-02'"),
+    "q6": Q6_DUCK.replace("DATE '1994-01-01'", "'1994-01-01'").replace("DATE '1995-01-01'", "'1995-01-01'"),
+    "top_parts": TOP_PARTS_SQL, "ship_mode": SHIP_MODE_SQL,
+    "by_month": ("SELECT date_trunc('month', l_shipdate) AS m, sum(l_extendedprice * (1 - l_discount)) AS rev, "
+                 "count(*) AS n FROM lineitem GROUP BY m ORDER BY m"),
+}
 DUCK_OLAP = {"q1": Q1_DUCK, "q6": Q6_DUCK, "top_parts": TOP_PARTS_SQL, "ship_mode": SHIP_MODE_SQL, "by_month": BY_MONTH_DUCK}
 
 LI_COLS = ["l_orderkey", "l_partkey", "l_quantity", "l_extendedprice",
@@ -1437,6 +1446,80 @@ class PostgresTunedTPC(PostgresTPC):
     name = "postgres_tuned"
 
 
+class CrateTPC:
+    """CrateDB 6.4.6 over the PostgreSQL wire (2026-10-23, the multi-model comparator batch): the ANALYTICS table only.
+
+    CrateDB has no multi-statement transaction (a statement is its unit), so new-order and payment cannot be written as one
+    ACID transaction and the arm is registered for the `olap` workload alone (runner.ARM_RUNS; COMPARATORS.md "Not added, and
+    why"). The lineitem and part tables are loaded exactly as the PostgreSQL arm loads them (same columns, same batches, same
+    types: DOUBLE for the money columns, a TIMESTAMP for the ship date); the five queries are the DuckDB texts, which CrateDB's
+    SQL runs unchanged. The load is `INSERT ... SELECT * FROM unnest(<one array per column>)`, one statement per streamed
+    batch, because the PostgreSQL wire has no COPY (cratedb_common.py).
+
+    SETTINGS, each with its vendor source in COMPARATORS.md and read back onto the row (cratedb_common.readback): one shard per
+    CPU of the cell, no replica, the translog durability of the cell's class, the engine's default refresh followed by one
+    explicit REFRESH TABLE inside the build timer. INDEXES: CrateDB indexes every column automatically and offers no index DDL
+    to add or time, so there is no index step (`index_before_load`); the decision and its measurement are in
+    fairness_check.INDEX_DECISIONS. The engine's own ANALYZE (table statistics for its planner) is the counterpart of the
+    PostgreSQL arm's ANALYZE and is in the build timer too.
+    """
+    name = "cratedb_tpc"
+    index_before_load = True
+
+    def connect(self):
+        self.row_extra = {**(getattr(self, "row_extra", None) or {}), "pg_client_path": "unnest_insert"}
+        import cratedb_common
+        self.cc = cratedb_common
+        self.cx = cratedb_common.connect()
+        with self.cx.cursor() as c:
+            c.execute("SELECT version()")
+            self.version = c.fetchone()[0].split(" (")[0]
+
+    def _unnest(self, cur, table, cols, types, arrays, casts=None):
+        """One bulk statement: INSERT INTO table (cols) SELECT * FROM unnest(arrays); `casts` wraps a column's select item."""
+        ph = ", ".join(f"%s::{t}[]" for t in types)
+        names = ", ".join(f"c{i}" for i in range(len(cols)))
+        sel = ", ".join((casts or {}).get(i, f"c{i}") for i in range(len(cols)))
+        cur.execute(f"INSERT INTO {table} ({', '.join(cols)}) SELECT {sel} FROM unnest({ph}) AS t({names})", arrays)
+
+    def build(self, li, part):
+        cur = self.cx.cursor()
+        n = self.cc.ncpu()
+        self._shards = n
+        cur.execute("CREATE TABLE lineitem (l_orderkey BIGINT, l_partkey BIGINT, l_quantity DOUBLE PRECISION, "
+                    "l_extendedprice DOUBLE PRECISION, l_discount DOUBLE PRECISION, l_returnflag TEXT, l_linestatus TEXT, "
+                    "l_shipdate TIMESTAMP WITHOUT TIME ZONE, l_shipmode TEXT, l_tax DOUBLE PRECISION) "
+                    + self.cc.with_clause(n))
+        cols = ["l_orderkey", "l_partkey", "l_quantity", "l_extendedprice", "l_discount", "l_returnflag", "l_linestatus",
+                "l_shipdate", "l_shipmode", "l_tax"]
+        types = ["bigint", "bigint", "double precision", "double precision", "double precision", "text", "text", "text",
+                 "text", "double precision"]
+        casts = {7: "CAST(c7 AS TIMESTAMP WITHOUT TIME ZONE)"}
+        for df in li.frames():
+            self._unnest(cur, "lineitem", cols, types, [df[c].tolist() for c in cols], casts)
+        cur.execute("CREATE TABLE part (p_partkey BIGINT PRIMARY KEY, p_retailprice DOUBLE PRECISION, stock INT DEFAULT 100) "
+                    + self.cc.with_clause(1))
+        for i in range(0, len(part), BATCH):
+            ch = part.iloc[i:i + BATCH]
+            self._unnest(cur, "part", ["p_partkey", "p_retailprice"], ["bigint", "double precision"],
+                         [ch["p_partkey"].tolist(), ch["p_retailprice"].tolist()])
+        # the vendor's settle step: every row visible, then the planner's statistics (the PostgreSQL arm's ANALYZE)
+        self.cc.refresh(self.cx, "lineitem")
+        self.cc.refresh(self.cx, "part")
+        cur.execute("ANALYZE")
+        # READ BACK, after the load and before any timed query: the table's own shards, replicas, translog settings
+        _v, extra, self.durability = self.cc.readback(self.cx, "lineitem", self._shards)
+        self.row_extra = {**self.row_extra, **extra}
+
+    def olap(self, which):
+        cur = self.cx.cursor()
+        cur.execute(CRATE_OLAP[which])
+        return cur.fetchall()
+
+    def close(self):
+        self.cx.close()
+
+
 class ArangoTPC:
     """ArangoDB 3.12.11 served through python-arango (2026-09-13): lineitem
     and part as collections through the bulk import API, ISO-text dates like
@@ -1584,7 +1667,7 @@ class ArcadeServerImgDefaultsTPC(ArcadeServerTPC):
     name = "arcadedb_imgdefaults_server"
 
 
-BACKENDS = {c.name: c for c in (DuckTPC, SQLiteTPC, MongoTPC, SurrealTPC, SurrealServedTPC, ArangoTPC, PostgresTPC, PostgresTunedTPC,
+BACKENDS = {c.name: c for c in (DuckTPC, SQLiteTPC, MongoTPC, SurrealTPC, SurrealServedTPC, ArangoTPC, PostgresTPC, PostgresTunedTPC, CrateTPC,
                                 ArcadeTPC, ArcadeServerTPC, ArcadeServerImgDefaultsTPC)}
 
 
