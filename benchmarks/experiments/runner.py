@@ -1560,6 +1560,31 @@ BACKENDS = {
         # Run in the server before its final disk reading, relaxed class only (#349): see the reading below.
         "pre_disk_cmd": ["redis-cli", "SAVE"],
     },
+    # REDIS 8.10.2 (2026-10-23, the multi-model comparator batch), the official image, Redis Query Engine for the dense lane
+    # (HNSW over a HASH field). Vendor settings, each with its source (COMPARATORS.md "Redis"):
+    #   --maxmemory {mem90_mib}mb --maxmemory-policy noeviction: redis.conf asks for a maxmemory below the RAM
+    #     the process may use, and `noeviction` (the default, stated) makes a full instance refuse writes
+    #     instead of dropping keys, so no cell can lose data silently; 90% of the cap is the rule Memgraph's
+    #     arm applies too, and it leaves room for the fork of a snapshot;
+    #   --io-threads {io_threads}: redis.conf, "if you have a four cores boxes, try to use 3 I/O threads, if you
+    #     have a 8 cores, try to use 7 threads", i.e. cores - 1; the default is 1, so this is a fit to the
+    #     cpuset (F6), read back;
+    #   --search-workers {io_threads}: the Query Engine's worker pool (default 0 = queries and HNSW inserts on
+    #     the main thread), the same cpuset fit, read back;
+    #   --protected-mode no: the cell network is private and the image sets no password.
+    # Durability (DECISIONS #90): the relaxed class is the image default (RDB snapshots, no AOF), the strict
+    # class adds "--appendonly yes --appendfsync always" in durability_server_patch; both are read back onto the row.
+    "redis_dense": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "redis@sha256:13ad9044b4b2fd2abe4c5aad8c384b0504a71006fa33f023fc68998453a2eeca",  # 8.10.2, amd64
+        "server_cmd": ["--maxmemory", "{mem90_mib}mb", "--maxmemory-policy", "noeviction",
+                       "--io-threads", "{io_threads}", "--search-workers", "{io_threads}",
+                       "--protected-mode", "no"],
+        "server_port": 6379,
+        "ready_regex": r"Ready to accept connections",
+        "pre_disk_cmd": ["redis-cli", "SAVE"],
+    },
     # LadybugDB: embedded in the client image, as the graph arm is; the
     # adapter fits its threads and buffer pool to the cell (F160).
     "ladybug_dense": {"topology": "embedded", "image": "dbbench:client"},
@@ -1916,6 +1941,8 @@ LANES = {
              # #131 item 3 (2026-10-02): Elasticsearch, Memgraph, FalkorDB,
              # LadybugDB; Elasticsearch's int8 arm with the int8 arms below.
              "elasticsearch_dense", "memgraph_dense", "falkordb_dense", "ladybug_dense",
+             # the multi-model comparator batch (2026-10-23)
+             "redis_dense",
              # int8 arms for every dense engine that ships a quantized index
              # (QUANTIZATION.md). Chroma, DuckDB-VSS, pgvector and SurrealDB
              # ship no int8 mode; FalkorDB and LadybugDB document none.
@@ -2029,6 +2056,10 @@ def durability_server_patch(cfg, cls):
     # for 3,011 writes). REDIS_ARGS is the image entrypoint's own hook.
     if "falkordb" in str(cfg.get("server_image", "")):
         env += ["-e", "REDIS_ARGS=--appendonly yes --appendfsync always"]
+        notes.append("appendonly=yes, appendfsync=always")
+    # Redis (the official image): the same persistence switches as FalkorDB's, passed as server arguments.
+    if str(cfg.get("server_image", "")).startswith("redis@"):
+        cmd += ["--appendonly", "yes", "--appendfsync", "always"]
         notes.append("appendonly=yes, appendfsync=always")
     # SurrealDB served (BUGS F165): the sync mode is a query parameter on the
     # storage path, `sync=never|every|<interval>`; the relaxed path carries
@@ -2927,6 +2958,7 @@ MP_LABELS = {
     "sqlite_vec_dense": "sqlitevec", "sqlite_vec_dense_int8": "sqlitevec_int8",
     "elasticsearch_dense": "elastic", "elasticsearch_dense_int8": "elastic_int8",
     "memgraph_dense": "memgraph", "falkordb_dense": "falkordb", "ladybug_dense": "ladybug",
+    "redis_dense": "redis",
     # DECISIONS #135 (2026-10-02)
     "mongodb_dense_int8": "mongo_int8", "memgraph_dense_int8": "memgraph_int8",
     "lancedb_dense_fp32": "lancedb_fp32", "arangodb_dense_int8": "arango_int8",
@@ -3152,6 +3184,7 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             _ncpu = _cpuset_size(cpuset)
             _fit = dict(ncpu=_ncpu,
                         mem90_mib=int(server_mem * 0.9) >> 20,
+                        io_threads=max(1, _ncpu - 1),
                         pg_workers=max(1, _ncpu - 1),
                         pg_par=_ncpu,
                         pg_procs=_ncpu + 2,

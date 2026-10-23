@@ -288,6 +288,8 @@ DURABILITY_MEMGRAPH = ("storage-wal-enabled=true, storage-wal-file-flush-every-n
                        "(image default): the WAL is fsynced every 100,000 transactions, not at commit")
 DURABILITY_FALKORDB = ("appendonly=no, RDB save '3600 1 300 100 60 10000' (image default): "
                        "nothing is synced at commit")
+DURABILITY_REDIS = ("appendonly=no, RDB save '3600 1 300 100 60 10000' (image default): "
+                    "nothing is synced at commit")
 DURABILITY_CHROMA = "fsync at commit, not configurable (Chroma's SQLite in rollback-journal mode)"
 DURABILITY_LANCEDB = "no sync at commit, not configurable (LanceDB writes each table version unsynced)"
 
@@ -334,6 +336,7 @@ DURABILITY_ARANGO_STRICT = "waitForSync=true: the commit waits for the WAL sync"
 DURABILITY_PG_ON = "synchronous_commit=on"
 DURABILITY_MEMGRAPH_STRICT = "storage-wal-file-flush-every-n-tx=1: the WAL is fsynced at every commit"
 DURABILITY_FALKORDB_STRICT = "appendonly=yes, appendfsync=always: the AOF is fdatasynced at every write"
+DURABILITY_REDIS_STRICT = "appendonly=yes, appendfsync=always: the AOF is fdatasynced at every write"
 
 # THE ENGINES WITH NO KNOB. #90: "The three engines with no knob (Neo4j,
 # DuckDB, and LadybugDB, each straced rather than assumed) print one number in
@@ -369,6 +372,7 @@ STRICT_OF = {
     DURABILITY_ARANGO: DURABILITY_ARANGO_STRICT,
     DURABILITY_MEMGRAPH: DURABILITY_MEMGRAPH_STRICT,
     DURABILITY_FALKORDB: DURABILITY_FALKORDB_STRICT,
+    DURABILITY_REDIS: DURABILITY_REDIS_STRICT,
 }
 
 
