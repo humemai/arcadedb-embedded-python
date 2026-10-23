@@ -46,6 +46,8 @@ start_jvm(
 - `common_pool_parallelism` (`Optional[int]`, default `None`): Explicit cap for `ForkJoinPool.common.parallelism`; a value below 1 raises `ArcadeDBError`
 - `interrupt` (`Optional[bool]`, default `None`, meaning `False`): What Ctrl-C does. `False` leaves SIGINT to Python, so a `KeyboardInterrupt` is raised and `finally` blocks, `atexit` hooks, and the rollback of a `with db.transaction():` run. A Java call in progress, such as a slow query, is not interrupted: the `KeyboardInterrupt` arrives when it returns (about 9 s after Ctrl-C for a 10 s query, measured). After the JVM starts, the bindings give SIGINT and SIGTERM back to Python, so a long blocking Python call (`time.sleep()`, `Lock.acquire()`, `queue.get()`) is interrupted at once and `kill -TERM` ends the process with status -15 and no Python cleanup; see [Known Engine Issues](../guide/known-issues.md). `True` is JPype's script default: the JVM handles SIGINT and ends the whole process with exit status 130, without Python cleanup. It can be given only to the first `start_jvm()`; a different value afterwards raises `ArcadeDBError`
 
+- `aot` (`Optional[bool]`, default `None`): Opt in to the JDK AOT cache, see [Faster start-up](#faster-start-up-the-aot-cache-opt-in). `None` follows `ARCADEDB_AOT` (off when unset). Ignored when the JVM is already started
+
 **Raises:**
 
 - `ArcadeDBError`: If the JVM is already started with a different configuration, the bundled runtime is missing, or JPype cannot start the JVM
@@ -95,6 +97,35 @@ heap_size = (container limit - N x 0.4 GB - the data that process holds in Pytho
 Each process needs memory outside its heap. In the probe below it was 0.2 to 0.35 GB per process, and the rule uses 0.4 GB. Start lower when the processes hold much data in Python.
 
 Probe (one laptop, one mix: Docker `-m 4g` with no swap, two Python processes in one container, each filling its heap to 85 percent): at the default heap (2048 MB cap each, 4096 MB in total) the kernel killed both processes (`OOMKilled=true`) with no Python exception. With `heap_size="1536m"` each (3072 MB in total) both finished, and the container peaked at 3.6 GB of 4 GB.
+
+## Faster start-up: the AOT cache (opt-in)
+
+The bundled JVM (JDK 25) can keep a per-user ahead-of-time cache of the classes it loads and links while it starts (Project Leyden, JEP 483/514/515). A later start maps the cache instead of redoing that work. It is **off by default**.
+
+```bash
+ARCADEDB_AOT=1 python my_script.py
+```
+
+or `start_jvm(aot=True)` (or `jvm_kwargs={"aot": True}`) before the first database is opened; `aot=False` turns it off when the environment variable is set.
+
+What happens:
+
+- The first process on a machine trains the cache: it starts with `-XX:AOTCacheOutput=<temporary file>`, and the JVM writes the file when the process **exits normally** (this adds a few seconds at exit once; a process that is killed or ends with `os._exit()` writes nothing, and the next start trains again).
+- The next start checks the file and moves it into place with an atomic rename, then every later start uses it with `-XX:AOTCache=<file> -XX:AOTMode=auto`. With `auto` the JVM ignores a cache it cannot use instead of failing.
+- Only one process trains at a time (a lock file with the process id); other processes that start meanwhile start normally.
+- A cache records absolute jar paths and each jar's modification time and size, so it cannot ship inside the wheel and it is valid only on the machine and install that made it. Its file name is a hash of the package version, the bundled JRE version, the jars (names and contents), the class path and the platform. A new version, a replaced or touched jar or another environment therefore makes a new file; old files stay until you delete them.
+- A cache file whose size or checksum differs from what was recorded is deleted and rebuilt, and the JVM must accept a new cache before it is used.
+- Every problem (unwritable directory, full disk, unsupported JDK, a cache the JVM refuses) leads to a normal start and one debug log line from the `arcadedb_embedded.aot` logger; it never raises. If you pass your own `-XX:AOTCache`, `-XX:AOTMode`, `-XX:AOTConfiguration`, `-XX:SharedArchiveFile` or `-Xshare` flag, the bindings add nothing.
+
+| | |
+|---|---|
+| Enable | `ARCADEDB_AOT=1`, or `start_jvm(aot=True)` |
+| Cache directory | Linux `$XDG_CACHE_HOME/arcadedb/aot` or `~/.cache/arcadedb/aot`; macOS `~/Library/Caches/arcadedb/aot`; Windows `%LOCALAPPDATA%\arcadedb\Cache\aot` |
+| Other location | `ARCADEDB_AOT_CACHE=<file>` (the file still carries the key, and is rebuilt when it does not match) |
+| Clear | delete the directory (or the file); the next start trains again |
+| Size | about 30 MB per cache |
+
+Measured on the laptop with `ab.py` (study `jvm-aot-ab-laptop-20261022` in the benchmark notes): a cache lowers the cold start (import, JVM start, first database open) by roughly a third, and no difference could be detected in steady-state inserts, lookups or scans. A training run as small as one insert and one select was as good as a broad one. Whether the default should change is still open: it needs another `ab.py` run on the release wheel.
 
 ## shutdown_jvm
 
