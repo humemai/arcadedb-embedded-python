@@ -613,6 +613,10 @@ def main() -> int:
     print("\nthe dense table's ArangoDB IVF sentence says what the harness does, from the rows")
     iv_bad = _check_arango_ivf_sentence(payload, rows)
     print(f"  {iv_bad} IVF sentence finding(s)")
+    print("\nevery table built from LDBC data says it is not an LDBC Benchmark Result and how it differs "
+          "(LDBC fair-use policy)")
+    l_notice_bad = _check_ldbc_notice(payload)
+    print(f"  {l_notice_bad} table(s) missing the wording")
     print("\nevery override a table meets is named under it (CAMPAIGN section 7 row 21)")
     ov_bad = _check_override_disclosures(payload, rows)
     print(f"  {ov_bad} undisclosed override(s)")
@@ -623,7 +627,7 @@ def main() -> int:
     j_bad = _check_jvm_defaults_disclosure(payload)
     print(f"  {j_bad} table(s) missing the sentence")
     return 1 if (i_bad or d_bad or a_bad or l_bad or c_bad
-                 or r_bad or m_bad or not u_ok or k_bad or o_bad or n_bad or iv_bad or ov_bad or j_bad) else 0
+                 or r_bad or m_bad or not u_ok or k_bad or o_bad or n_bad or iv_bad or ov_bad or j_bad or l_notice_bad) else 0
 
 
 # --------------------------------------------------------------------------
@@ -1435,6 +1439,7 @@ CONDITION_ALLOWED = [
 # Literal facts that are neither a row nor a lane constant, each with why.
 CONDITION_EXEMPT = [
     (r"preallocates in 256 MiB steps", "Neo4j's documented transaction-log rotation size"),
+    (r"CC BY 4\.0", "the licence LDBC's fair-use policy asks derived work to credit"),
 ]
 
 
@@ -1524,6 +1529,30 @@ def _check_conditions(payload, rows):
         for f in findings:
             print(f"    {f}")
         bad += len(findings)
+    return bad
+
+
+def _check_ldbc_notice(payload):
+    """A table built from LDBC data opens with LDBC's disclaimer and lists its deviations from the standard.
+
+    LDBC's fair-use policy (https://ldbcouncil.org/benchmarks/fair-use-policies) lets only an audited result be called an LDBC
+    Benchmark Result; unaudited or derived work says it is not one, credits LDBC under CC BY, and says how it differs. A table is
+    LDBC-derived when it is one of export_web.LDBC_DERIVED_TABLES or its dataset or a size label names LDBC. The exporter adds
+    both sentences from the registry; this holds the payload to the exact text, so a refactor that drops them, or rewords the
+    disclaimer, fails here and not on the published page. Returns bad count."""
+    import export_web as EW
+    bad = 0
+    for t in payload.get("tables", []):
+        named = ("LDBC" in str(t.get("dataset") or "")
+                 or any("LDBC" in str(e.get("scale_label") or "") for e in t.get("entries") or []))
+        if t.get("id") not in EW.LDBC_DERIVED_TABLES and not named:
+            continue
+        conds = [str(c) for c in (t.get("conditions") or [])]
+        if EW.LDBC_NOTICE in conds and any(c.startswith(EW.LDBC_DEVIATIONS_LEAD) for c in conds):
+            print(f"  {t['id']}: carries the LDBC wording")
+        else:
+            print(f"    MISSING {t['id']}: built from LDBC data and does not carry LDBC's disclaimer and its deviations")
+            bad += 1
     return bad
 
 
