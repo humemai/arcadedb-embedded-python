@@ -36,14 +36,14 @@ def run(args, tmp_path=None, env_extra=None, drop=()):
 
 
 def waits(path):
-    return re.findall(r'^while ! grep -qx "(\S+) ALL-DONE"', path.read_text(), re.M)
+    return re.findall(r'^while ! grep -qx "([^"]+?) ALL-DONE"', path.read_text(), re.M)
 
 
 @pytest.fixture(scope="module")
 def drafts(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("g")
     out = tmp / "stages"
-    r = run(["--second-list", "--after", "qR20", "--out", str(out)], tmp)
+    r = run(["--second-list", "--after", "qR20", "--status-file", "none", "--out", str(out)], tmp)
     assert r.returncode == 0, r.stdout[-600:] + r.stderr[-600:]
     return out
 
@@ -192,7 +192,7 @@ def test_release_mode_refuses_without_the_digests():
 
 def test_release_mode_writes_the_pair_install_and_arcadedb_only_stages(tmp_path):
     out = tmp_path / "rel"
-    r = run(_release_args() + ["--after", "qS12", "--id-prefix", "qT", "--lanes", "graph,dense", "--out", str(out)])
+    r = run(_release_args() + ["--after", "qS12", "--status-file", "none", "--id-prefix", "qT", "--lanes", "graph,dense", "--out", str(out)])
     assert r.returncode == 0, r.stdout[-500:] + r.stderr[-500:]
     pair = (out / "qT00.sh").read_text()
     assert DIGEST in pair and WSHA in pair and "build_matched_pair.sh" in pair and waits(out / "qT00.sh") == ["qS12"]
@@ -305,8 +305,8 @@ def test_a_pre_start_abort_writes_the_marker_so_the_chain_goes_on(tmp_path):
 SHA_LIST = HERE / "stage_drafts_2611.sha256"
 GENERATIONS = {
     # case: (arguments, whether the comparator pair comes from the environment)
-    "comparators": (["--second-list", "--after", "qR20"], True),
-    "comparators-paper-5reps": (["--second-list", "--order", "paper", "--reps", "5", "--after", "qR20", "--id-prefix", "qU"], True),
+    "comparators": (["--second-list", "--after", "qR20", "--status-file", "none"], True),
+    "comparators-paper-5reps": (["--second-list", "--order", "paper", "--reps", "5", "--after", "qR20", "--status-file", "none", "--id-prefix", "qU"], True),
     "arcadedb-release": (None, False),
 }
 

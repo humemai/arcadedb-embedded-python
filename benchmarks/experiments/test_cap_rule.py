@@ -148,7 +148,7 @@ def test_every_mode_emits_the_helpers_at_the_patched_insertion_points_and_still_
         assert text.index("declare -A CENSORED_AT") < text.index("run_overlay() {"), f.name
         assert 'cap_rule_skip "$label" "$be|$wl|" && return 0' in text, f.name
         assert 'cap_rule_skip "$label" "$be|$wl|$dur" && return 0' in text, f.name
-        assert re.search(r'cap_rule_note "\$be\|\$wl\|\$dur" "\$scale"\n    say "\$ID: \$label rep ', text), f.name
+        assert re.search(r'cap_rule_note "\$be\|\$wl\|\$dur" "\$scale"; say "\$ID: \$label rep 1 failed', text), f.name
         assert subprocess.run(["bash", "-n", str(f)]).returncode == 0, f.name
 
 
