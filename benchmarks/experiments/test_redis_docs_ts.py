@@ -186,6 +186,10 @@ def test_time_series_commands_are_the_documented_forms():
     assert "GROUPBY" not in grp and grp[grp.index("AGGREGATION") + 1] == "avg"
     lo = float(high[high.index("FILTER_BY_VALUE") + 1])
     assert lo > L.HIGH and math.nextafter(L.HIGH, -math.inf) < L.HIGH and lo == math.nextafter(L.HIGH, math.inf)
+    for a in (glob, grp, high, ol):          # the vendor's order: range options, FILTER, then GROUPBY / REDUCE
+        assert a.index("FILTER") < (a.index("GROUPBY") if "GROUPBY" in a else 10**6)
+        assert "AGGREGATION" not in a or a.index("AGGREGATION") < a.index("FILTER")
+    assert glob.index("GROUPBY") < glob.index("REDUCE")
     assert ol[0] == "TS.MREVRANGE" and ol[ol.index("COUNT") + 1] == L.ORDERLIMIT_N
 
 

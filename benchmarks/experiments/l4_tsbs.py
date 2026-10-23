@@ -1862,25 +1862,25 @@ class RedisTS:
                                      "AGGREGATION", "max", 60_000)
         return [(int(t), self._f(v)) for t, v in res]
 
-    def _grouped(self, cmd, hi_s, *opts):
-        res = self.r.execute_command(cmd, T0 * 1000, hi_s * 1000 - 1, *opts, "FILTER", "field=uu")
-        return res
+    def _grouped(self, cmd, hi_s, pre=(), group=()):
+        """TS.MRANGE / TS.MREVRANGE: the vendor's order is range options, then FILTER, then GROUPBY / REDUCE."""
+        return self.r.execute_command(cmd, T0 * 1000, hi_s * 1000 - 1, *pre, "FILTER", "field=uu", *group)
 
     def q_global(self):
-        res = self._grouped("TS.MRANGE", T0 + 43200, "AGGREGATION", "avg", 3_600_000, "GROUPBY", "field", "REDUCE", "avg")
+        res = self._grouped("TS.MRANGE", T0 + 43200, ("AGGREGATION", "avg", 3_600_000), ("GROUPBY", "field", "REDUCE", "avg"))
         return [(int(t), self._f(v)) for t, v in res[0][2]]
 
     def q_groupby(self):
-        res = self._grouped("TS.MRANGE", T0 + 43200, "AGGREGATION", "avg", 3_600_000)
+        res = self._grouped("TS.MRANGE", T0 + 43200, ("AGGREGATION", "avg", 3_600_000))
         return [(k.decode().split(":")[1], int(t), self._f(v)) for k, _labels, samples in res for t, v in samples]
 
     def q_high(self):
-        res = self._grouped("TS.MRANGE", T0 + 43200, "FILTER_BY_VALUE", repr(math.nextafter(HIGH, math.inf)), "inf")
+        res = self._grouped("TS.MRANGE", T0 + 43200, ("FILTER_BY_VALUE", repr(math.nextafter(HIGH, math.inf)), "inf"))
         return [(k.decode().split(":")[1], int(t), self._f(v)) for k, _labels, samples in res for t, v in samples]
 
     def q_orderlimit(self):
-        res = self._grouped("TS.MREVRANGE", T0 + 43200, "COUNT", ORDERLIMIT_N, "AGGREGATION", "max", 3_600_000,
-                            "GROUPBY", "field", "REDUCE", "max")
+        res = self._grouped("TS.MREVRANGE", T0 + 43200, ("COUNT", ORDERLIMIT_N, "AGGREGATION", "max", 3_600_000),
+                            ("GROUPBY", "field", "REDUCE", "max"))
         return [(int(t), self._f(v)) for t, v in res[0][2]]
 
     def close(self):

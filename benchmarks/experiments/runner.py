@@ -4094,6 +4094,13 @@ ARM_RUNS = {
         "l1tpc": {"workloads": ("olap",), "scales": ("tpch1", "tpch10"),
                   "title": "documents analytics, CrateDB (no multi-statement transaction, so no OLTP table)"},
     },
+    # Redis keeps the data in memory under noeviction: the SF0.1 smoke put the server at 681 MiB for 600,572 line items (1.19 KB a
+    # row with the JSON document and the SORTABLE index), so SF1 needs about 7 GB (fits the 14.4 GB maxmemory of the 16g cap) and
+    # SF10 about 71 GB, far above the 28.8 GB of the 32g cap. The tpch10 cells are not queued.
+    "redis_tpc": {
+        "l1tpc": {"workloads": ("oltp", "olap"), "scales": ("tpch1",),
+                  "title": "documents, Redis (in memory: tpch1 only, tpch10 does not fit the 32g cap)"},
+    },
     "arcadedb_imgdefaults_server": {
         "l1tpc": {"workloads": ("oltp",), "scales": ("tpch10",), "reps": 3, "durability": "relaxed",
                   "title": "documents OLTP, served ArcadeDB at the image's own JVM defaults, the 2M-part cell"},
