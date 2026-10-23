@@ -355,6 +355,7 @@ ENGINES = collections.OrderedDict([
     ("qdrant-neo4j", ("the composed Qdrant plus Neo4j stack", ("composed_qdrant_neo4j",))),
     ("neo4j", ("Neo4j on its own: graph and dense", ("neo4j_graph", "neo4j_dense"))),
     ("qdrant", ("Qdrant on its own: dense, and sparse on the second list", ("qdrant_dense", "qdrant_sparse"))),
+    ("redis", ("Redis 8 (Query Engine): dense", ("redis_",))),
     ("ladybug", ("LadybugDB, embedded graph and vector, on every lane it supports", ("ladybug",))),
 ])
 # TimescaleDB completes the PostgreSQL arm (pgvector, AGE, TimescaleDB) and runs whenever the time-series lane does
