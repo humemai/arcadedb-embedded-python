@@ -46,7 +46,7 @@ ALLOWED_SPLITS: dict[str, str] = {
         "version lines, not one engine measured twice: the embedded arm runs "
         "the Rust core bundled inside the pinned SDK wheel "
         "(surrealdb-embedded:2.3.10, sdk 2.0.0) and the served arm runs the "
-        "standalone server binary (surrealdb-server:3.2.4). The embedded arm "
+        "standalone server binary (surrealdb-server:3.3.4). The embedded arm "
         "can only be as new as the wheel ships, which is an asymmetry the "
         "page states rather than hides, and every row names its deployment",
     "qdrant":
@@ -96,7 +96,7 @@ _OURS = re.compile(r"^2[0-9]\.[0-9]{1,2}\.[0-9]+$")
 # THE CAPABILITY TABLE CARRIES NO MEASUREMENT, so its version field is not a
 # version: it is a SUMMARY of the versions the other tables carry, joined with
 # " / " when an engine legitimately wears more than one (SurrealDB embedded is
-# core 2.3.10 and its server is 3.2.4, two engines by DECISIONS #95). Read as a
+# core 2.3.10 and its server is 3.3.4, two engines by DECISIONS #95). Read as a
 # row's own version it becomes a third spelling that no engine ever reported,
 # and the checks below then fail an engine for a string this file's own
 # generator invented.

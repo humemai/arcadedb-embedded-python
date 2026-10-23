@@ -1509,7 +1509,7 @@ class SurrealDense(Base):
     article records with an embedding array under a SurrealQL HNSW index at
     the matched operating point (M=COMPARATOR_M, EFC=EF_CONSTRUCTION), the
     <|k,ef|> nearest-neighbour operator at EF_SEARCH (2026-09-11). The served
-    twin runs the 3.2.4 server on RocksDB."""
+    twin runs the 3.3.4 server on RocksDB."""
     quantization = "fp32"
     name = "surrealdb_dense"
     URL = "surrealkv:///tmp/l3d_surrealkv"

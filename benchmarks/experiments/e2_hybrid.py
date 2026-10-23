@@ -564,7 +564,7 @@ class SurrealE2:
     """SurrealDB embedded through its Python SDK, on the SDK's SurrealKV disk
     store (2026-09-11; it ran at mem:// before, which no other engine on the
     table was allowed). The SDK bundles core 2.3.10 behind an SDK version of 2.0.0; the served twin below
-    runs the 3.2.4 server on RocksDB."""
+    runs the 3.3.4 server on RocksDB."""
     name = "surrealdb_e2"
     # WHAT THE TIMED TRANSACTION HOLDS (DECISIONS #118): the two reads run first
     # and only the update is wrapped in a transaction.
@@ -710,7 +710,7 @@ class SurrealE2:
 
 
 class SurrealServedE2(SurrealE2):
-    """SurrealDB 3.2.4 server on RocksDB, reached over WebSocket; the same
+    """SurrealDB 3.3.4 server on RocksDB, reached over WebSocket; the same
     SurrealQL as the embedded arm."""
     name = "surrealdb_e2_server"
     # THE BUILD WAITS FOR THE SERVER'S BACKGROUND INDEX (BUGS F134, DECISIONS
@@ -1552,7 +1552,7 @@ class LadybugE2:
 
 
 class DuckE2:
-    """DuckDB 1.5.4 alone, embedded (DECISIONS #131 item 4: tested before it
+    """DuckDB 1.5.6 alone, embedded (DECISIONS #131 item 4: tested before it
     was added, and it ran the whole transaction): the products in one table
     with a FLOAT[64] embedding under the `vss` extension's HNSW index, RELATED
     in an edge table, a DuckPGQ property graph over the two, and the views

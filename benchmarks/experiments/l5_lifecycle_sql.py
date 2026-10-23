@@ -5,7 +5,7 @@ DECISIONS #131 item 5 (CAMPAIGN.md section 7 row 40, queued last by #133): each
 embedded engine on the page runs the lifecycle workloads its model supports.
 This module is the two in-process SQL engines the page already runs, through
 their own Python packages: SQLite (stdlib sqlite3, WAL with synchronous=NORMAL
-as on every SQLite arm, DECISIONS #70) and DuckDB 1.5.4 (the pinned
+as on every SQLite arm, DECISIONS #70) and DuckDB 1.5.6 (the pinned
 dbbench:duckdb image, its thread pool fitted to the cpuset, FAIRNESS F6).
 
 WHAT IS THE SAME as l5_lifecycle_surreal.py, so a row reads against the

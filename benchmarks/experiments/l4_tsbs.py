@@ -5,7 +5,7 @@ Backends: arcadedb (embedded; Point documents with a composite (host, ts)
 index -- its idiomatic timeseries shape), duckdb (table + ART index),
 questdb (server; ILP ingest on 9009, SQL over pg-wire). InfluxDB3 omitted
 (no stable embedded/pinnable OSS artifact at eval time; disclosed).
-SurrealDB (embedded core 2.3.10 through the SDK, and the served 3.2.4) and
+SurrealDB (embedded core 2.3.10 through the SDK, and the served 3.3.4) and
 ArangoDB 3.12.11 joined 2026-09-15 on SQLite's footing: a plain table with a
 datetime field and a composite (host, ts) index, no time-series type.
 Plain PostgreSQL 18.6 (`postgres_ts`) joins at the 26.10.1 measurement on the
@@ -1575,7 +1575,7 @@ class SurrealTS:
 
 
 class SurrealTSServer(SurrealTS):
-    """The same table, index and SurrealQL against the served 3.2.4 on RocksDB,
+    """The same table, index and SurrealQL against the served 3.3.4 on RocksDB,
     through the shared reconnecting client (DECISIONS #91)."""
     name = "surrealdb_ts_server"
     durability = bench_common.DURABILITY_SURREAL_SERVER

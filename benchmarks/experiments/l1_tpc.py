@@ -753,7 +753,7 @@ class SurrealTPC:
     """SurrealDB embedded through its Python SDK on SurrealKV (SDK 2.0.0, which carries core 2.3.10):
     lineitem and part as tables, part keyed by record id, dates as ISO text,
     Q1/Q6 in SurrealQL, new-order as one BEGIN/COMMIT transaction
-    (2026-09-11). The served twin runs the 3.2.4 server on RocksDB."""
+    (2026-09-11). The served twin runs the 3.3.4 server on RocksDB."""
     name = "surrealdb_tpc"   # not "surrealdb": that is the cross-model lane's old row name
     URL = "surrealkv:///tmp/tpc_surrealkv"
     # DECISIONS #81. Every string, and the evidence for the default it

@@ -53,21 +53,29 @@ declare -A PKGS=(
   # months behind is unfair in our favour, and it is the first thing a reviewer
   # checks. qdrant-client, pymilvus, elasticsearch and ladybug were all behind.
   [arcadedb]="$ARCADE_PKGS"
-  # 1.5.4, NOT 1.5.5 (DECISIONS #103d, #103e): the community-extensions
-  # registry has a DuckPGQ build for 1.5.4 and none for 1.5.5 (or 1.6.0), and
-  # the graph arm cannot be measured on a version whose graph extension 404s.
-  # One DuckDB version wears the page (#103c's sibling rule, the two-version
-  # trap this file guards against below), so documents, time series, dense VSS
-  # and the DuckPGQ graph arm all pin here, and September's DuckDB rows are
-  # re-measured at it. The client and dense lines carry the OCTOBER RE-PIN of
+  # 1.5.6, NOT 2.0.0 (2026-10-23, the bump from 1.5.4): DuckDB 2.0.0 is out and
+  # its `vss` build and the `duckpgq` community build both exist for it, but
+  # DuckPGQ LOADs on 2.0.0 (build 29ca668a22) without registering any of its
+  # syntax: CREATE PROPERTY GRAPH and GRAPH_TABLE ... MATCH both answer
+  # "Parser Error: syntax error", with or without `SET enable_legacy_parser`
+  # and `allow_parser_override_extension` (laptop, duckdb 2.0.0 from PyPI), so
+  # the graph arm cannot be measured on it. 1.5.6 is the newest DuckDB at
+  # which every arm can be measured (DECISIONS #103d: latest MEASURABLE, not
+  # highest): VSS HNSW and DuckPGQ (build 61f5d082) both work on it. Drop this
+  # hold when a DuckPGQ build for 2.x parses; check with
+  # `INSTALL duckpgq FROM community; LOAD duckpgq; CREATE PROPERTY GRAPH g
+  # VERTEX TABLES (t)` on the new duckdb. One DuckDB version wears the page
+  # (#103c's sibling rule, the two-version trap this file guards against
+  # below), so documents, time series, dense VSS and the DuckPGQ graph arm
+  # all pin here. The client and dense lines carry the OCTOBER RE-PIN of
   # 2026-09-19 (COMPARATORS.md, "The October re-pin").
-  [duckdb]="duckdb==1.5.4 $HARNESS_PKGS"
+  [duckdb]="duckdb==1.5.6 $HARNESS_PKGS"
   # ladybug 0.21.2, not 0.20.4 (2026-10-02, #129): 0.20.4 crashes the dense
   # arm's mutation phase after a deleted vector key is re-inserted, and 0.21.1
   # carries #1074 (COPY linear for compressible columns) and #1075 (the pool
   # sized from the cgroup limit). 0.21.2 (2026-10-01) is the newest stable.
-  [client]="requests==2.34.2 psycopg[binary]==3.3.6 $HARNESS_PKGS surrealdb==2.0.0 qdrant-client==1.19.1 pymilvus[bulk_writer]==3.0.2 minio==7.2.20 azure-storage-blob==12.31.0 ml-dtypes==0.6.0 elasticsearch==9.5.1 neo4j==6.3.1 ladybug==0.21.2 pymongo==4.18.1 python-arango==8.3.5 falkordb==1.7.1 redis==8.1.0 neo4j-rust-ext==6.3.1.0 pgvector==0.5.0 arcadedb-driver==0.2.0"
-  [dense]="chromadb==1.5.9 lancedb==0.39.0 sqlite-vec==0.1.9 duckdb==1.5.4 $HARNESS_PKGS"
+  [client]="requests==2.34.2 psycopg[binary]==3.3.6 $HARNESS_PKGS surrealdb==2.0.0 qdrant-client==1.19.1 pymilvus[bulk_writer]==3.0.2 minio==7.2.20 azure-storage-blob==12.31.0 ml-dtypes==0.6.0 elasticsearch==9.5.1 neo4j==6.3.1 ladybug==0.21.2 pymongo==4.18.1 python-arango==8.3.6 falkordb==1.7.1 redis==8.1.0 neo4j-rust-ext==6.3.1.0 pgvector==0.5.0 arcadedb-driver==0.2.0"
+  [dense]="chromadb==1.5.9 lancedb==0.39.0 sqlite-vec==0.1.9 duckdb==1.5.6 $HARNESS_PKGS"
 )
 # A GUARD, not a comment. The dev pin above survived because nothing checked
 # it. BENCH_ALLOW_DEV=1 is the deliberate escape hatch for engine debugging.

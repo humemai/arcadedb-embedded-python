@@ -4,7 +4,7 @@ The Python SDK (`surrealdb` on PyPI) compiles a SurrealDB core into its
 extension module; `db.version()` reports the SDK's own version, not that
 core's. At the September 2026 pin the SDK is 2.0.0 (uploaded 2026-04-23) and
 the core it carries is surrealdb-core 2.3.10 (released 2025-09-19), while the
-served twin runs v3.2.4. Every embedded row stamped "surrealdb-embedded:2.0.0"
+served twin runs v3.3.4. Every embedded row stamped "surrealdb-embedded:2.0.0"
 until 2026-09-13, which named the client library as the engine (BUGS F39).
 
 The core version is read from the compiled extension's bytes (the crate
@@ -66,9 +66,11 @@ def apply_durability(cls: str | None = None) -> str:
     passed to it. Verified by strace in #81's evidence block: unset gives 6
     fsync calls at both 50 and 250 commits, "true" gives 56 and 256.
 
-    The served twin has no equivalent -- SurrealDB 3.2.4 exposes no sync
-    setting at all -- and is a declared no-setting engine instead of being
-    given a flag the server does not read.
+    The served twin has no environment variable for it; its mode is the
+    `?sync=never|every` query parameter on the storage path, set by the runner
+    and read back from the server's startup log (BUGS F165; checked again on
+    v3.3.4, 2026-10-23: `Sync mode: never (handled by the OS` and
+    `Sync mode: every transaction commit`).
     """
     import os
     import bench_common

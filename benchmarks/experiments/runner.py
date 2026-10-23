@@ -933,14 +933,14 @@ BACKENDS = {
         # Run in the server before its final disk reading, relaxed class only (#349): see the reading below.
         "pre_disk_cmd": ["redis-cli", "SAVE"],
     },
-    # DUCKPGQ on DuckDB 1.5.4 (2026-09-17, DECISIONS #103d/#103e), embedded in
+    # DUCKPGQ on DuckDB 1.5.6 (1.5.4 until 2026-10-23; DECISIONS #103d/#103e), embedded in
     # the DuckDB image (which carries pyarrow for the bulk load). SQL/PGQ over
     # a PROPERTY GRAPH on the persons and knows tables (l2_graph.DuckpgqGraph).
     # The `INSTALL duckpgq FROM community` at connect needs the cell network,
     # which every embedded cell already has (the DuckDB VSS dense arm installs
-    # its extension the same way); it is why the DuckDB arms pin to 1.5.4
-    # rather than 1.5.5, the newest DuckDB the community registry has a
-    # DuckPGQ build for.
+    # its extension the same way); it is why the DuckDB arms pin to 1.5.6
+    # rather than 2.0.0, whose DuckPGQ build loads but parses no PGQ
+    # (build_images.sh), the newest DuckDB at which DuckPGQ works.
     "duckpgq_graph": {
         "topology": "embedded",
         "image": "dbbench:duckdb",
@@ -1087,8 +1087,8 @@ BACKENDS = {
     "surrealdb_graph_server": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",  # v3.2.4
-        # NO DURABILITY FLAG HERE, because 3.2.4 has none to set. This
+        "server_image": "surrealdb/surrealdb@sha256:0d25256bbbe25235beb0ae8d785065fbafade32169956c5b468daebc67de31df",  # v3.3.4, amd64
+        # NO DURABILITY ENV VAR HERE, because the server has none to set (3.2.4 and 3.3.4 alike). This
         # carried SURREAL_DATASTORE_SYNC_DATA=never, which the server does not
         # read: the pinned binary contains zero occurrences of "SYNC_DATA" and
         # zero of "SURREAL_DATASTORE", and of the 110 SURREAL_* variables it
@@ -1106,8 +1106,8 @@ BACKENDS = {
     "surrealdb_tpc_server": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",  # v3.2.4
-        # NO DURABILITY FLAG HERE, because 3.2.4 has none to set. This
+        "server_image": "surrealdb/surrealdb@sha256:0d25256bbbe25235beb0ae8d785065fbafade32169956c5b468daebc67de31df",  # v3.3.4, amd64
+        # NO DURABILITY ENV VAR HERE, because the server has none to set (3.2.4 and 3.3.4 alike). This
         # carried SURREAL_DATASTORE_SYNC_DATA=never, which the server does not
         # read: the pinned binary contains zero occurrences of "SYNC_DATA" and
         # zero of "SURREAL_DATASTORE", and of the 110 SURREAL_* variables it
@@ -1138,8 +1138,8 @@ BACKENDS = {
     "surrealdb_dense_server": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",  # v3.2.4
-        # NO DURABILITY FLAG HERE, because 3.2.4 has none to set. This
+        "server_image": "surrealdb/surrealdb@sha256:0d25256bbbe25235beb0ae8d785065fbafade32169956c5b468daebc67de31df",  # v3.3.4, amd64
+        # NO DURABILITY ENV VAR HERE, because the server has none to set (3.2.4 and 3.3.4 alike). This
         # carried SURREAL_DATASTORE_SYNC_DATA=never, which the server does not
         # read: the pinned binary contains zero occurrences of "SYNC_DATA" and
         # zero of "SURREAL_DATASTORE", and of the 110 SURREAL_* variables it
@@ -1156,8 +1156,8 @@ BACKENDS = {
     "surrealdb_e2_server": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",  # v3.2.4
-        # NO DURABILITY FLAG HERE, because 3.2.4 has none to set. This
+        "server_image": "surrealdb/surrealdb@sha256:0d25256bbbe25235beb0ae8d785065fbafade32169956c5b468daebc67de31df",  # v3.3.4, amd64
+        # NO DURABILITY ENV VAR HERE, because the server has none to set (3.2.4 and 3.3.4 alike). This
         # carried SURREAL_DATASTORE_SYNC_DATA=never, which the server does not
         # read: the pinned binary contains zero occurrences of "SYNC_DATA" and
         # zero of "SURREAL_DATASTORE", and of the 110 SURREAL_* variables it
@@ -1179,7 +1179,7 @@ BACKENDS = {
     "surrealdb_ts_server": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",  # v3.2.4
+        "server_image": "surrealdb/surrealdb@sha256:0d25256bbbe25235beb0ae8d785065fbafade32169956c5b468daebc67de31df",  # v3.3.4, amd64
         # No durability flag: 3.2.4 has none to set (see surrealdb_graph_server).
         "server_cmd": ["start", "--user", "root", "--pass", "root", "--log", "info", "rocksdb:/tmp/surreal/db?sync=never"],
         "server_port": 8000,
