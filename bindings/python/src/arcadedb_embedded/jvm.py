@@ -11,6 +11,7 @@ import platform
 import re
 import shlex
 import shutil
+import signal
 import sys
 import tempfile
 import threading
@@ -362,14 +363,12 @@ def start_jvm(
         What Ctrl-C (SIGINT) does. The default, False, leaves it to Python: a
         KeyboardInterrupt is raised, so ``finally`` blocks, ``atexit`` hooks and
         the rollback of a ``with db.transaction():`` run. A Java call in
-        progress (a slow query) is not interrupted: the KeyboardInterrupt
-        arrives when it returns (``kill -TERM`` from another terminal still
-        ends the process at once, through the JVM's shutdown hooks). A Java call
-        that waits in an interruptible way (``Thread.sleep``, ``Object.wait``,
-        the engine's async ``wait_completion()``) is woken by Ctrl-C, and JPype
-        1.7.1 can then raise ``java.lang.InterruptedException`` or
-        ``RuntimeError`` and deliver the ``KeyboardInterrupt`` late; "Known
-        Engine Issues" in the documentation has the workaround.
+        progress (a slow query, a wait in the engine) is not interrupted: the
+        KeyboardInterrupt arrives when it returns. SIGINT and SIGTERM are the
+        process's own again after the JVM starts, as in a script without a
+        JVM: a long blocking Python call (``time.sleep``, ``Lock.acquire``,
+        ``queue.get``) is interrupted at once, and ``kill -TERM`` ends the
+        process with status -15 without running Python cleanup.
         Pass True for JPype's script default, where the JVM handles SIGINT and
         ends the whole process at once with exit status 130, with no Python
         cleanup.
@@ -504,6 +503,9 @@ def start_jvm(
     except Exception as e:
         raise ArcadeDBError(f"Failed to start JVM: {e}") from e
 
+    if not _JVM_INTERRUPT:
+        _restore_python_signal_handlers()
+
     # Registered AFTER JPype's own atexit hook so it runs BEFORE it (atexit
     # is LIFO): close any Database left open. Engine >= 850ce7c37 (#5418)
     # also daemonizes its background threads and installs its own JVM
@@ -523,6 +525,36 @@ def start_jvm(
         import faulthandler
 
         faulthandler.disable()
+
+
+def _restore_python_signal_handlers() -> None:
+    """Give SIGINT and SIGTERM back to Python after JPype took them (``interrupt=False``).
+
+    JPype installs ``sun.misc.Signal`` handlers for both signals while it starts the JVM, which
+    replaces the handlers Python had registered with the operating system. A SIGINT is then
+    delivered to the JVM, which tells Python from its signal-dispatcher thread
+    (``PyErr_SetInterruptEx``). That sets the "interrupt pending" flag but wakes nobody: the main
+    thread, blocked in a long ``time.sleep()``, ``Lock.acquire()``, ``queue.get()`` or
+    ``Thread.join()``, got EINTR before the flag was set, went back to sleep, and raises the
+    ``KeyboardInterrupt`` only when the call ends (observed: a process with an open transaction
+    that did not exit for the whole 30 s or 120 s of the sleep; 10 of 10 on the JVM wheel, never
+    on the native one). A SIGTERM with no Python handler crashed the process with exit status -6
+    (jpype-project/jpype#1497). The same JPype handler also interrupts the Java thread first,
+    which is the race of jpype-project/jpype#1496.
+
+    Registering the handler Python already has again puts the operating-system disposition back
+    (``signal.signal`` calls ``sigaction``), so SIGINT raises ``KeyboardInterrupt`` in the main
+    thread exactly as in a process without a JVM and SIGTERM ends the process with status -15.
+    A Java call in progress is then not interrupted by Ctrl-C: the ``KeyboardInterrupt`` arrives
+    when it returns. Only the main thread may do this; elsewhere it is skipped.
+    """
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        try:
+            current = signal.getsignal(signum)
+            if current is not None:  # None: set by C code, nothing Python can restore
+                signal.signal(signum, current)
+        except (ValueError, OSError):  # not the main thread / not settable
+            _LOGGER.debug("could not restore the Python handler for signal %s", signum)
 
 
 def _close_active_databases():
