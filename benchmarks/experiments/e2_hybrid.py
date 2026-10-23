@@ -1552,7 +1552,7 @@ class LadybugE2:
 
 
 class DuckE2:
-    """DuckDB 1.5.4 alone, embedded (DECISIONS #131 item 4: tested before it
+    """DuckDB 1.5.6 alone, embedded (DECISIONS #131 item 4: tested before it
     was added, and it ran the whole transaction): the products in one table
     with a FLOAT[64] embedding under the `vss` extension's HNSW index, RELATED
     in an edge table, a DuckPGQ property graph over the two, and the views

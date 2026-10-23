@@ -1381,16 +1381,20 @@ class LadybugGraph(Base):
 
 class DuckpgqGraph(Base):
     """DuckDB with the DuckPGQ community extension (embedded, in-process through
-    the duckdb Python package on the pinned dbbench:duckdb image, duckdb==1.5.4).
+    the duckdb Python package on the pinned dbbench:duckdb image, duckdb==1.5.6).
     The persons-and-knows data lives in two DuckDB tables; a PROPERTY GRAPH over
     them answers every graph read in SQL/PGQ (`GRAPH_TABLE ... MATCH`), and the
     writes are plain SQL on the underlying tables, one statement group per
     transaction (DECISIONS #103d, #92).
 
-    WHY 1.5.4 AND NOT 1.5.5. The community-extensions registry has a DuckPGQ
-    build for 1.5.4 and none for 1.5.5 or 1.6.0, so the page pins every DuckDB
-    arm to 1.5.4 (DECISIONS #103d): `INSTALL duckpgq FROM community` on 1.5.5
-    answers HTTP 404. Verified on the image, INSTALL/LOAD both succeed on 1.5.4.
+    WHY 1.5.6 AND NOT 2.0.0. The community registry has a DuckPGQ build for
+    2.0.0, but it LOADs without registering its syntax: CREATE PROPERTY GRAPH
+    and GRAPH_TABLE answer "Parser Error: syntax error" (2026-10-23, with and
+    without the legacy-parser and parser-override settings), so the page pins
+    every DuckDB arm to 1.5.6, the newest DuckDB at which DuckPGQ works
+    (DECISIONS #103d; 1.5.4 until 2026-10-23, and `INSTALL duckpgq FROM
+    community` answered HTTP 404 on 1.5.5, which is why 1.5.5 was skipped).
+    INSTALL, LOAD and a property graph all work on 1.5.6.
 
     NOTHING IS UNEXPRESSIBLE ON THIS LANE. All twelve questions run in SQL/PGQ
     and every digest matched the Cypher engines' on the micro corpus (laptop,
@@ -1496,7 +1500,7 @@ class DuckpgqGraph(Base):
         # sched_getaffinity sees the mask. Same fix as the other DuckDB arms.
         self._threads = len(os.sched_getaffinity(0))
         self.cx.execute(f"PRAGMA threads={self._threads}")
-        # The community DuckPGQ build for the pinned 1.5.4 (404 on 1.5.5).
+        # The community DuckPGQ build for the pinned 1.5.6 (404 on 1.5.5; loads but parses nothing on 2.0.0).
         self.cx.execute("INSTALL duckpgq FROM community; LOAD duckpgq;")
         _ext = self.cx.execute(
             "SELECT extension_version FROM duckdb_extensions() "

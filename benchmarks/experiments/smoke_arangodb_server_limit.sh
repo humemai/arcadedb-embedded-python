@@ -30,7 +30,7 @@ docker run -d --name "$NAME" --cpuset-cpus "$CORES" --memory "$MEM" -p "$PORT:85
 for _ in $(seq 1 120); do docker logs "$NAME" 2>&1 | grep -q "is ready for business" && break; sleep 1; done
 docker logs "$NAME" 2>&1 | grep -q "is ready for business" || { echo "SMOKE FAIL: server not ready"; exit 1; }
 EXP=$PWD BENCH_SERVER_HOST=localhost BENCH_SERVER_PORT=$PORT LIMIT=$LIMIT SLACK=$SLACK \
-  nice -n 19 taskset -c "$CORES" uv run --directory ../.. --with python-arango==8.3.5 python -I - <<'PY' || exit 1
+  nice -n 19 taskset -c "$CORES" uv run --directory ../.. --with python-arango==8.3.6 python -I - <<'PY' || exit 1
 import os, random, sys, time
 sys.path.insert(0, os.environ["EXP"])
 import graph_common as G
