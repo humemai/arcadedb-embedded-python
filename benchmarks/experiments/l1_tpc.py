@@ -1793,9 +1793,10 @@ class RedisTPC:
                 raise RuntimeError(f"redis: index not drained after {timeout_s} s: {info}")
             time.sleep(0.2)
 
-    def index_readback(self):
+    def _readback(self):
         """The count the engine indexed, read back after the build: it must equal the rows the stream delivered."""
         return {"redis_index_docs": self.index_docs}
+    index_readback = _readback    # the lane's main stamps what an arm read back through this name
 
     # --- the five analytics queries -------------------------------------------------------------------------------------
     _DISC = "@price*(1-@disc)"
