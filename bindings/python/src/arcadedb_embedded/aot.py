@@ -28,7 +28,7 @@ import os
 import platform
 import re
 import secrets
-import subprocess
+import subprocess  # nosec B404 - only runs the bundled JRE's java to validate a cache
 import sys
 import tempfile
 import time
@@ -271,7 +271,7 @@ def _jvm_accepts(
         classpath,
         "-version",
     ]
-    result = subprocess.run(
+    result = subprocess.run(  # nosec B603 - argv list, no shell: the bundled java, fixed flags, our own cache path
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,  # the JVM reports start-up errors on stdout
