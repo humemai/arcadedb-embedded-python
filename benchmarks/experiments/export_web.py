@@ -4022,6 +4022,16 @@ OCT_DISK_DETAIL = (
     "the stopped container. Neo4j's value includes the transaction-log files it preallocates "
     "in 256 MiB steps, which is how Neo4j uses disk, so they stay in.")
 
+# LDBC's fair-use policy: the disclaimer wording is LDBC's own ("These are not LDBC Benchmark Results"). The tables
+# built from LDBC data are listed in LDBC_DERIVED_TABLES; page_check._check_ldbc_notice holds each of them to
+# LDBC_NOTICE and to a sentence that starts LDBC_DEVIATIONS_LEAD.
+LDBC_NOTICE = (
+    "These are not LDBC Benchmark Results. This table is derived from the LDBC Social Network Benchmark and credits the "
+    "Linked Data Benchmark Council (LDBC) under CC BY 4.0; we ran it ourselves, it was not audited by an "
+    "LDBC-approved auditor, and LDBC has not endorsed it.")
+LDBC_DEVIATIONS_LEAD = "How this differs from the LDBC standard:"
+LDBC_DERIVED_TABLES = ("l2", "l2olap", "restart")
+
 # A pin is (regex with one capture, fn(P, rows) -> number) or the same with a
 # third element "const" when the number is a lane or runner constant.
 OCT_PROSE = {
@@ -4048,6 +4058,11 @@ OCT_PROSE = {
     },
     "*": {
         "disk": (OCT_DISK_NOTE, []),
+        # LDBC'S FAIR-USE POLICY (https://ldbcouncil.org/benchmarks/fair-use-policies): only a result audited by an
+        # LDBC-approved auditor may be called an LDBC Benchmark Result; unaudited or derived work says it is not one,
+        # credits LDBC under CC BY, and says how it differs from the standard. Every table built from LDBC data
+        # opens with this sentence and then its own deviations (OCT_TABLE_PROSE; page_check._check_ldbc_notice).
+        "ldbc": (LDBC_NOTICE, []),
     },
     # e4's explanatory sentences: neither states a measured quantity, so neither
     # carries a pin.
@@ -4131,10 +4146,24 @@ OCT_PROSE = {
     },
     "l2": {
         "projection": ("Every engine traverses the same persons-and-KNOWS projection, with edges stored in both directions.", []),
+        "ldbc_deviations": (LDBC_DEVIATIONS_LEAD + " the data is the persons-and-KNOWS projection of LDBC's published Interactive "
+                            "datasets at SF1 and SF10, without the messages, forums and tags; the seven operations are our own "
+                            "templates (point lookup, one hop, two hops, three hops filtered on the far end, insert, update and "
+                            "delete), not the Interactive complex, short or update queries; there is no LDBC driver, no operation "
+                            "mix, no throughput-at-target-latency run, no ACID or recovery test and no price/performance figure; "
+                            "the harness is our own Python code, and the engines are embedded in that process or served from "
+                            "containers under one fixed CPU set and memory cap, not a system under test as an audit describes it.", []),
         "ingest": ("Ingest paths: ArcadeDB embedded loads through the Python package's graph_batch, the engine's bulk graph loader, with the WAL on, fed 5,000 records at a time; served streams the vertices and edges as JSONL to the HTTP batch endpoint with the WAL on; Neo4j and Memgraph UNWIND batches over bolt; FalkorDB the same UNWIND batches over the Redis protocol; LadybugDB COPY from CSV, its native bulk path; DuckPGQ registers each batch as an Arrow table and INSERT ... SELECTs from it into the Person and knows tables, then defines the property graph over them; PostgreSQL + AGE writes each vertex label and each edge label, the message half included, with one COPY ... FROM STDIN stream into AGE's own label tables, with the ids AGE's sequences would assign, then builds a btree on the Person id property and runs ANALYZE, all inside the build timer; ArangoDB import_bulk; MongoDB insert_many; SurrealDB inserts the persons through its Python SDK and the KNOWS edges as bulk relation inserts.",
                    [(r"fed ([\d,]+) records at a time", lambda P, rows: _const("l2_graph", "INGEST_BATCH"), "const")]),
     },
     "l2olap": {
+        "ldbc_deviations": (LDBC_DEVIATIONS_LEAD + " the data is the full SF1 network of LDBC's published Interactive datasets, not a "
+                            "Business Intelligence dataset; the nine pattern-matching counts are LSQB's (the Labelled Subgraph "
+                            "Query Benchmark, which LDBC hosts), taken nearly verbatim from its published Cypher, with the "
+                            "friends-of-friends pair excluded at this size, and the other queries are our own; there is no LDBC "
+                            "Business Intelligence workload, driver, update microbatch, power or throughput test, no audit and no "
+                            "price/performance figure; the harness is our own Python code, and the engines are embedded in that "
+                            "process or served from containers under one fixed CPU set and memory cap.", []),
         "gav": ("The Graph Analytical View is a copy of the graph that ArcadeDB builds in memory, laid out for questions that sweep the whole graph rather than follow a few links. Rows labelled GAV ran with it built, once, before any query was timed, and the view build column is what that took.", []),
     },
     "e2atom": {
@@ -4194,6 +4223,10 @@ OCT_PROSE["docs_olap"] = {"ingest": OCT_PROSE["docs_oltp"]["ingest"]}
 # The server restart (DECISIONS #139 item 2). Facts about the protocol, no
 # numbers, so no pins: the counts (cycles, batch size) are on every row.
 OCT_PROSE["restart"] = {
+    "ldbc_deviations": (LDBC_DEVIATIONS_LEAD + " the graph rows restart an engine holding the persons-and-KNOWS projection of LDBC's "
+                        "published Interactive datasets at SF1 and SF10, and a restart time is not an LDBC measure; no LDBC "
+                        "workload, driver, audit or price/performance figure is involved, and the harness is our own Python code. "
+                        "The documents, vector and time series rows contain no LDBC data.", []),
     "what": ("A served engine has no open or close of its own to time, so this table times what it has instead: a "
              "restart. Each engine is stopped the way its own image stops it, started again on the same data in the "
              "same container, and timed until a fixed read answers exactly as it did before the stop. Start is the "
@@ -4222,11 +4255,11 @@ OCT_PROSE["l2olap"]["ingest"] = OCT_PROSE["l2"]["ingest"]
 OCT_TABLE_PROSE = {
     "l3s": ["recall", "one_timer", "es_pruning"],
     "l3d": ["metric", "degree"],
-    "l2": ["projection"],
-    "l2olap": ["gav"],
+    "l2": ["ldbc", "ldbc_deviations", "projection"],
+    "l2olap": ["ldbc", "ldbc_deviations", "gav"],
     "e2atom": ["trial"],
     "e2": ["atomic", "interesting", "disk_split"],
-    "restart": ["what", "stops", "warm_cache", "durability", "models"],
+    "restart": ["ldbc", "ldbc_deviations", "what", "stops", "warm_cache", "durability", "models"],
 }
 
 
@@ -4240,7 +4273,8 @@ def _oct_entries(table_id):
 
 
 def _R(table_id, key):
-    return OCT_PROSE[table_id][key][0]
+    entry = (OCT_PROSE.get(table_id) or {}).get(key) or OCT_PROSE["*"][key]
+    return entry[0]
 
 
 _WORDS = {1: "One", 2: "Two", 3: "Three", 4: "Four", 5: "Five",
