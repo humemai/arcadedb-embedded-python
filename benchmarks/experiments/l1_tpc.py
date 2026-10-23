@@ -1666,8 +1666,270 @@ class ArcadeServerImgDefaultsTPC(ArcadeServerTPC):
     name = "arcadedb_imgdefaults_server"
 
 
+class RedisTPC:
+    """Redis 8.10.2 served (2026-10-23, the multi-model comparator batch): the documents model is JSON (RedisJSON, built into the
+    official image) and the analytics are the Redis Query Engine's FT.AGGREGATE, the vendor's own aggregation pipeline.
+
+    LAYOUT. One JSON document per line item (`li:<n>`, the LI_COLS plus `l_shipdate_n`, the date as the integer YYYYMMDD, which
+    is the numeric key the engine's range index needs; the ISO text `l_shipdate` stays beside it as on every other arm), one per
+    part (`part:<partkey>`, with the stock counter), order (`ord:<okey>`), payment (`pay:<seq>`) and single-record row
+    (`crud:<ckey>`). The record key IS the id index (as the dense arm's), so no id index is built.
+
+    INDEX. One `FT.CREATE ... ON JSON PREFIX 1 li:` after the load, inside the index timer like every arm that indexes after the
+    load, and the wait for the background indexer to drain is inside it too. `l_shipdate_n`, `l_discount` and `l_quantity` are
+    NUMERIC (the Q1 and Q6 filters), and the fields the aggregations read are SORTABLE, which is the vendor's rule for FT.AGGREGATE
+    (a field that is not SORTABLE is LOADed from the document, key by key). Q1 and Q6 filter in the query string, so the date
+    range is served by the numeric index as MongoDB's l_shipdate index serves its match.
+
+    QUERIES (all five of the lane, none dropped). Each is one FT.AGGREGATE: APPLY for the revenue expressions, GROUPBY with the
+    REDUCE functions SUM, AVG and COUNT, SORTBY with the same total order the other arms use. `TIMEOUT 0` on every query (the
+    default `search-timeout` is 500 ms, and on a timeout the engine would hand back a PARTIAL answer; the server also runs
+    `--search-on-timeout fail`, so a timeout is an error and never a short answer).
+
+    TRANSACTIONS. new-order and payment are optimistic transactions, the vendor's documented form: WATCH the key read, read it, then
+    MULTI / JSON.SET / JSON.NUMINCRBY / EXEC. Atomic and isolated; durable per the cell's class (appendfsync always syncs the EXEC
+    before it is acknowledged). THERE IS NO ROLLBACK: a command that fails inside EXEC does not undo the others. This workload
+    has no abort path (every transaction commits), so rollback is never exercised, and the row says so in `redis_txn_model`.
+    The single-record operations are single commands, atomic by themselves.
+    """
+    name = "redis_tpc"
+    durability = bench_common.DURABILITY_REDIS
+    index_before_load = False
+    INDEX = "li"
+    LOAD_BATCH = 50_000           # MongoDB's insert_many batch: the closest document arm
+    TXN_MODEL = "WATCH + MULTI/EXEC: atomic and isolated, no rollback; the workload has no abort path"
+
+    def connect(self):
+        import redis
+        import importlib.metadata as _md
+        self.r = redis.Redis(host=os.environ["BENCH_SERVER_HOST"], port=int(os.environ.get("BENCH_SERVER_PORT", "6379")),
+                             socket_timeout=3600, protocol=2)
+        self.version = "redis:" + self.r.info("server")["redis_version"]
+
+        def _cfg(name):
+            v = self.r.config_get(name)
+            return v.get(name) if isinstance(v, dict) else v
+        mods = {}
+        for m in self.r.module_list():
+            m = {(k.decode() if isinstance(k, bytes) else k): v for k, v in m.items()}
+            n = m.get("name")
+            mods[n.decode() if isinstance(n, bytes) else n] = m.get("ver")
+        self.row_extra = {
+            "driver_version": f"redis-py:{_md.version('redis')}",
+            "redis_io_threads": _cfg("io-threads"),
+            "redis_search_workers": _cfg("search-workers"),
+            "redis_maxmemory": _cfg("maxmemory"),
+            "redis_maxmemory_policy": _cfg("maxmemory-policy"),
+            "redis_search_on_timeout": _cfg("search-on-timeout"),
+            "redis_search_module": mods.get("search"),
+            "redis_json_module": mods.get("ReJSON"),
+            "redis_protocol": 2,
+            "redis_txn_model": self.TXN_MODEL,
+        }
+        ao, fsync, save = (_cfg(k) for k in ("appendonly", "appendfsync", "save"))
+        if ao == "no" and save == "3600 1 300 100 60 10000":
+            self.durability = bench_common.DURABILITY_REDIS
+        elif ao == "yes" and fsync == "always":
+            self.durability = bench_common.DURABILITY_REDIS_STRICT
+        else:
+            self.durability = f"appendonly={ao}, appendfsync={fsync}, save={save!r}, which is neither class (DECISIONS #90)"
+        self._pay_seq = 0
+
+    @staticmethod
+    def _date_n(s):
+        return int(s[:4]) * 10000 + int(s[5:7]) * 100 + int(s[8:10])
+
+    def build(self, li, part):
+        r = self.r
+        r.flushall()
+        enc = json.JSONEncoder(default=lambda o: o.item()).encode
+        seq = 0
+        pipe = r.pipeline(transaction=False)
+        for t in li.rows():
+            d = dict(zip(LI_COLS, t))
+            d["l_shipdate_n"] = self._date_n(d["l_shipdate"])
+            pipe.execute_command("JSON.SET", f"li:{seq}", "$", enc(d))
+            seq += 1
+            if seq % self.LOAD_BATCH == 0:
+                pipe.execute()
+        pipe.execute()
+        pipe = r.pipeline(transaction=False)
+        n = 0
+        for k, v in part[["p_partkey", "p_retailprice"]].itertuples(index=False, name=None):
+            pipe.execute_command("JSON.SET", f"part:{int(k)}", "$",
+                                 enc({"p_partkey": int(k), "p_retailprice": float(v), "stock": STOCK_START}))
+            n += 1
+            if n % self.LOAD_BATCH == 0:
+                pipe.execute()
+        pipe.execute()
+        with index_timer(self):
+            r.execute_command(
+                "FT.CREATE", self.INDEX, "ON", "JSON", "PREFIX", "1", "li:", "SCHEMA",
+                "$.l_shipdate_n", "AS", "ship", "NUMERIC",
+                "$.l_discount", "AS", "disc", "NUMERIC", "SORTABLE",
+                "$.l_quantity", "AS", "qty", "NUMERIC", "SORTABLE",
+                "$.l_extendedprice", "AS", "price", "NUMERIC", "SORTABLE",
+                "$.l_tax", "AS", "tax", "NUMERIC", "SORTABLE",
+                "$.l_partkey", "AS", "partkey", "NUMERIC", "SORTABLE",
+                "$.l_returnflag", "AS", "rflag", "TAG", "SORTABLE",
+                "$.l_linestatus", "AS", "lstatus", "TAG", "SORTABLE",
+                "$.l_shipmode", "AS", "smode", "TAG", "SORTABLE",
+                "$.l_shipdate", "AS", "sdate", "TAG", "SORTABLE")
+            self._await_indexed()
+
+    def _await_indexed(self, timeout_s=36000):
+        t = time.perf_counter()
+        while True:
+            s = self.r.info("search")
+            raw = self.r.execute_command("FT.INFO", self.INDEX)
+            raw = raw if isinstance(raw, dict) else {raw[i]: raw[i + 1] for i in range(0, len(raw), 2)}
+            info = {(k.decode() if isinstance(k, bytes) else k): v for k, v in raw.items()}
+            if (int(s.get("search_total_active_write_threads", 0) or 0) == 0
+                    and int(s.get("search_number_of_active_indexes_indexing", 0) or 0) == 0
+                    and float(info.get("percent_indexed", 1) or 1) >= 1.0):
+                self.index_docs = int(float(info.get("num_docs", 0) or 0))
+                return
+            if time.perf_counter() - t > timeout_s:
+                raise RuntimeError(f"redis: index not drained after {timeout_s} s: {info}")
+            time.sleep(0.2)
+
+    def index_readback(self):
+        """The count the engine indexed, read back after the build: it must equal the rows the stream delivered."""
+        return {"redis_index_docs": self.index_docs}
+
+    # --- the five analytics queries -------------------------------------------------------------------------------------
+    _DISC = "@price*(1-@disc)"
+
+    def _agg(self, query, *pipeline):
+        res = self.r.execute_command("FT.AGGREGATE", self.INDEX, query, *pipeline, "TIMEOUT", "0", "DIALECT", "2")
+        out = []
+        for row in res[1:]:
+            d = {(row[i].decode() if isinstance(row[i], bytes) else row[i]): row[i + 1] for i in range(0, len(row), 2)}
+            out.append(d)
+        return out
+
+    @staticmethod
+    def _s(v):
+        return v.decode() if isinstance(v, bytes) else v
+
+    def _q1(self):
+        rows = self._agg(
+            "@ship:[-inf 19980902]",
+            "APPLY", self._DISC, "AS", "dp", "APPLY", f"{self._DISC}*(1+@tax)", "AS", "ch",
+            "GROUPBY", "2", "@rflag", "@lstatus",
+            "REDUCE", "SUM", "1", "@qty", "AS", "sum_qty", "REDUCE", "SUM", "1", "@price", "AS", "sum_base",
+            "REDUCE", "SUM", "1", "@dp", "AS", "sum_disc", "REDUCE", "SUM", "1", "@ch", "AS", "sum_charge",
+            "REDUCE", "AVG", "1", "@qty", "AS", "avg_qty", "REDUCE", "AVG", "1", "@price", "AS", "avg_price",
+            "REDUCE", "AVG", "1", "@disc", "AS", "avg_disc", "REDUCE", "COUNT", "0", "AS", "n",
+            "SORTBY", "4", "@rflag", "ASC", "@lstatus", "ASC", "MAX", "100")
+        return [(self._s(d["rflag"]), self._s(d["lstatus"]), float(d["sum_qty"]), float(d["sum_base"]), float(d["sum_disc"]),
+                 float(d["sum_charge"]), float(d["avg_qty"]), float(d["avg_price"]), float(d["avg_disc"]), int(d["n"]))
+                for d in rows]
+
+    def _q6(self):
+        rows = self._agg(
+            "@ship:[19940101 19941231] @disc:[0.05 0.07] @qty:[-inf (24]",
+            "APPLY", "@price*@disc", "AS", "rv",
+            "GROUPBY", "0", "REDUCE", "SUM", "1", "@rv", "AS", "revenue", "REDUCE", "COUNT", "0", "AS", "n")
+        return [(float(d["revenue"]), int(d["n"])) for d in rows]
+
+    def _top_parts(self):
+        rows = self._agg(
+            "*", "APPLY", self._DISC, "AS", "dp",
+            "GROUPBY", "1", "@partkey", "REDUCE", "SUM", "1", "@dp", "AS", "rev",
+            "SORTBY", "4", "@rev", "DESC", "@partkey", "ASC", "MAX", "10")
+        return [(int(float(d["partkey"])), float(d["rev"])) for d in rows]
+
+    def _ship_mode(self):
+        rows = self._agg("*", "GROUPBY", "1", "@smode", "REDUCE", "COUNT", "0", "AS", "n",
+                         "SORTBY", "2", "@smode", "ASC", "MAX", "100")
+        return [(self._s(d["smode"]), int(d["n"])) for d in rows]
+
+    def _by_month(self):
+        rows = self._agg(
+            "*", "APPLY", self._DISC, "AS", "dp", "APPLY", "substr(@sdate,0,7)", "AS", "m",
+            "GROUPBY", "1", "@m", "REDUCE", "SUM", "1", "@dp", "AS", "rev", "REDUCE", "COUNT", "0", "AS", "n",
+            "SORTBY", "2", "@m", "ASC", "MAX", "1000")
+        return [(self._s(d["m"]), float(d["rev"]), int(d["n"])) for d in rows]
+
+    def olap(self, which):
+        return {"q1": self._q1, "q6": self._q6, "top_parts": self._top_parts,
+                "ship_mode": self._ship_mode, "by_month": self._by_month}[which]()
+
+    # --- the two transactions (WATCH, read, MULTI, write, EXEC) --------------------------------------------------------
+    def new_order(self, i, pkey):
+        pk, ok = f"part:{pkey}", f"ord:{i}"
+        with self.r.pipeline() as p:
+            p.watch(pk)
+            p.execute_command("JSON.GET", pk, "$.p_retailprice", "$.stock")
+            p.multi()
+            p.execute_command("JSON.SET", ok, "$", json.dumps({"okey": i, "pkey": pkey, "qty": 1, "paid": 0}))
+            p.execute_command("JSON.NUMINCRBY", pk, "$.stock", -1)
+            p.execute()
+
+    def payment(self, okey):
+        ok = f"ord:{okey}"
+        with self.r.pipeline() as p:
+            p.watch(ok)
+            o = p.execute_command("JSON.GET", ok, "$.pkey", "$.qty")
+            pkey = (json.loads(o).get("$.pkey") or [0])[0] if o else 0
+            p.multi()
+            p.execute_command("JSON.SET", ok, "$.paid", "1")
+            p.execute_command("JSON.SET", f"pay:{self._pay_seq}", "$", json.dumps({"okey": okey, "pkey": pkey, "amount": 1.0}))
+            p.execute()
+        self._pay_seq += 1
+
+    # --- the four single-record operations: single commands, atomic by themselves --------------------------------------
+    def crud_insert(self, i, pkey):
+        self.r.execute_command("JSON.SET", f"crud:{i}", "$", json.dumps({"ckey": i, "pkey": pkey, "qty": 1, "price": 9.99}))
+
+    def crud_read(self, i):
+        v = self.r.execute_command("JSON.GET", f"crud:{i}", "$.ckey", "$.pkey", "$.qty")
+        if not v:
+            return []
+        d = json.loads(v)
+        return [(d["$.ckey"][0], d["$.pkey"][0], d["$.qty"][0])]
+
+    def crud_update(self, i):
+        self.r.execute_command("JSON.SET", f"crud:{i}", "$.qty", "2")
+
+    def crud_delete(self, i):
+        self.r.delete(f"crud:{i}")
+
+    # --- untimed read-backs (the post-state digests) -------------------------------------------------------------------
+    def _scan(self, prefix, *paths):
+        keys = sorted(self.r.scan_iter(match=f"{prefix}*", count=10_000))
+        out = []
+        for lo in range(0, len(keys), 5_000):
+            chunk = keys[lo:lo + 5_000]
+            pipe = self.r.pipeline(transaction=False)
+            for k in chunk:
+                pipe.execute_command("JSON.GET", k, *paths)
+            for v in pipe.execute():
+                if v:
+                    out.append(json.loads(v))
+        return out
+
+    def crud_scan(self):
+        return [(d["$.ckey"][0], d["$.pkey"][0], d["$.qty"][0]) for d in self._scan("crud:", "$.ckey", "$.pkey", "$.qty")]
+
+    def oltp_scan(self):
+        return [(d["$.okey"][0], d["$.pkey"][0], d["$.qty"][0], d["$.paid"][0])
+                for d in self._scan("ord:", "$.okey", "$.pkey", "$.qty", "$.paid")]
+
+    def stock_scan(self):
+        return [(d["$.p_partkey"][0], d["$.stock"][0]) for d in self._scan("part:", "$.p_partkey", "$.stock")
+                if d["$.stock"][0] != STOCK_START]
+
+    def payments_n(self):
+        return sum(1 for _ in self.r.scan_iter(match="pay:*", count=10_000))
+
+    def close(self):
+        self.r.close()
+
+
 BACKENDS = {c.name: c for c in (DuckTPC, SQLiteTPC, MongoTPC, SurrealTPC, SurrealServedTPC, ArangoTPC, PostgresTPC, PostgresTunedTPC, CrateTPC,
-                                ArcadeTPC, ArcadeServerTPC, ArcadeServerImgDefaultsTPC)}
+                                ArcadeTPC, ArcadeServerTPC, ArcadeServerImgDefaultsTPC, RedisTPC)}
 
 
 def main():
