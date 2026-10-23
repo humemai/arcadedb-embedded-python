@@ -62,30 +62,14 @@ class _Thread:
 
 
 def _check_cpu() -> None:
-    """An image built for x86-64-v3 (AVX2, BMI2, FMA) needs them: fail with a clear error instead of SIGILL on an older CPU."""
-    if sys.platform != "linux" or os.environ.get("ARCADEDB_NATIVE_SKIP_CPU_CHECK"):
-        return
-    try:  # the arcadedb-embedded-native wheel records its image's -march; a source checkout uses a locally built (default v3) image
+    """A reference image built above the platform baseline (x86-64-v3, armv8.1-a) fails with a clear error on an older CPU, not SIGILL; wheels are built with -march=compatibility and skip it."""
+    try:  # the arcadedb-embedded-native wheel records its image's -march; a source checkout uses a locally built image (GraalVM's default baseline)
         from .._build_info import NATIVE_MARCH
     except ImportError:
-        NATIVE_MARCH = "x86-64-v3"
-    if NATIVE_MARCH == "compatibility":
-        return  # baseline x86-64: runs on every x86-64 CPU
-    import platform
+        NATIVE_MARCH = "native"
+    from .cpu import check_cpu
 
-    if platform.machine() not in ("x86_64", "AMD64"):
-        return
-    try:
-        with open("/proc/cpuinfo") as f:
-            flags = next((ln for ln in f if ln.startswith("flags")), "").split()
-    except OSError:
-        return
-    missing = [x for x in ("avx2", "bmi2", "fma") if flags and x not in flags]
-    if missing:
-        raise ArcadeDBError(
-            f"The native library needs an x86-64-v3 CPU (AVX2, BMI2, FMA); this CPU lacks {', '.join(missing)}. "
-            "Use the arcadedb-embedded (JVM) package instead, or set ARCADEDB_NATIVE_SKIP_CPU_CHECK=1 at your own risk."
-        )
+    check_cpu(NATIVE_MARCH)
 
 
 def _load():

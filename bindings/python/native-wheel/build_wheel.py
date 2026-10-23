@@ -224,7 +224,7 @@ def main():
         f'"""Written by native-wheel/build_wheel.py."""\n'
         f'ENGINE_VERSION = "{a.engine}"  # the ArcadeDB engine release compiled into {libname}\n'
         f'NATIVE_IMAGE = "GraalVM CE 25.4.4.1.1, -O2, -march={a.march}"\n'
-        f'NATIVE_MARCH = "{a.march}"  # lib.py checks the CPU only for an x86-64-v3 image\n'
+        f'NATIVE_MARCH = "{a.march}"  # _native/cpu.py checks the CPU only for an image above the platform baseline\n'
         f'SOURCE_COMMIT = "{commit}"  # humemai/arcadedb-embedded-python (fork tae898/arcadedb) commit of the bindings and the Java glue\n',
         encoding="utf-8",
     )

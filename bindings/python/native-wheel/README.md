@@ -47,6 +47,21 @@ CPython. Images are built for the baseline CPU of the platform (`-march=compatib
 
 Intel macOS and Windows arm64 are not built.
 
+## CPU requirements
+
+The wheels are built with `-march=compatibility`, the baseline of each platform: any x86-64 CPU (no AVX2 needed), and generic armv8-a on arm64. They run on a Celeron or Pentium N/J (for example J4125, N5105), on a Proxmox VM with the default CPU type (`x86-64-v2-AES`, `kvm64`), under QEMU's default model, on a Raspberry Pi 4 (Cortex-A72, ARMv8.0) and on AWS Graviton1. Apple Silicon is always fine.
+
+GraalVM CE's own default is higher: x86-64-v3 on x86-64 (AVX, AVX2, BMI1, BMI2, FMA, F16C, LZCNT, MOVBE) and armv8.1-a on arm64 (LSE atomics). An image built that way (`MARCH=x86-64-v3 preview-build.sh`, or a local build with GraalVM's default) dies with `Illegal instruction` and no message on an older CPU. The loader therefore checks the CPU before it loads such an image, and raises `ArcadeDBError` that names the missing features and the baseline:
+
+| Platform | Where the features are read |
+| --- | --- |
+| Linux x86-64 | the `flags` line of `/proc/cpuinfo` (LZCNT is `lzcnt` or `abm`) |
+| Linux arm64 | the `Features` line of `/proc/cpuinfo` (`atomics` is LSE) |
+| Windows x86-64 | `IsProcessorFeaturePresent(PF_AVX2_INSTRUCTIONS_AVAILABLE)` |
+| macOS | not checked (Apple Silicon only) |
+
+If the CPU cannot be read, the check does not block. Set `ARCADEDB_NATIVE_SKIP_CPU_CHECK=1` to skip it. The fallback on a CPU below the baseline is the JVM package, `pip install arcadedb-embedded`, which runs on any x86-64 CPU. The check is in `arcadedb_embedded/_native/cpu.py`.
+
 ## Not supported yet
 
 Each of these raises `NotOnNativeYet` (a `NotImplementedError`) instead of misbehaving:
