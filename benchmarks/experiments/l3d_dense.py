@@ -1606,7 +1606,7 @@ class SurrealDenseServer(SurrealDense):
         self.index_s = round(time.perf_counter() - _t, 2)
 
 class MongoDense(Base):
-    """MongoDB 8.2.12 with MongoDB Search (mongot) Community 1.70.4, served
+    """MongoDB 9.0.4 with MongoDB Search (mongot) Community 1.70.5, served
     (2026-09-15): article documents with an embedding array through
     insert_many, then a `vectorSearch` index that mongot builds out of band,
     queried with the $vectorSearch aggregation stage.

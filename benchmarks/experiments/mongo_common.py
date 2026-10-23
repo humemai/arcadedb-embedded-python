@@ -12,7 +12,7 @@ query.
 
 WHICH DEPLOYMENT, AND WHY
 
-  documents / TPC / time series   `mongo` 8.2.12, no access control, one-node
+  documents / TPC / time series   `mongo` 9.0.4, no access control, one-node
                                   replica set (a multi-document transaction
                                   needs one). Unchanged.
   graph                           THE SAME IMAGE AND THE SAME DIGEST. The
@@ -20,7 +20,7 @@ WHICH DEPLOYMENT, AND WHY
                                   $lookup, both core mongod, so the graph arm
                                   needs nothing mongot does.
   dense vectors / cross-model     `dbbench:mongo-search`: the same mongod
-                                  digest plus mongot 1.70.4, MongoDB Search
+                                  digest plus mongot 1.70.5, MongoDB Search
                                   Community, in one container
                                   (Dockerfile.mongosearch). mongot requires
                                   SCRAM or x509 against its sync source, so
@@ -130,7 +130,7 @@ def search_version(cl) -> str:
 
     A row that names only the mongod version describes half of the deployment:
     the vector index is built and served by a different binary on a different
-    release line, and "mongodb 8.2.12" alone cannot be re-measured.
+    release line, and "mongodb 9.0.4" alone cannot be re-measured.
 
     mongod answers for its own build and knows nothing about mongot's, and
     mongot's health port is bound to localhost inside the server container, so
@@ -158,7 +158,8 @@ def search_version(cl) -> str:
 # assumed. $vectorSearch takes an HNSW index whose degree and construction
 # beam are `hnswOptions.maxEdges` and `hnswOptions.numEdgeCandidates`, and the
 # search-time candidate list is the stage's own `numCandidates`. Verified
-# accepted on this pin (Community 8.2.12 + mongot 1.70.4, laptop 2026-09-15):
+# accepted on Community 8.2.12 + mongot 1.70.4 (laptop 2026-09-15; the quantization field
+# was read back again on 9.0.4 + 1.70.5, 2026-10-23):
 # the created index reads back
 #   "indexingMethod": "hnsw", "hnswOptions": {"maxEdges": 16, "numEdgeCandidates": 100}
 # which is exactly the lane's matched point (COMPARATOR_M=16,
