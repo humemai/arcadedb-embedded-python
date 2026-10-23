@@ -839,7 +839,7 @@ BACKENDS = {
     "neo4j_graph": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "neo4j@sha256:e702d6b535d9d3ae01ee7b132ec87aa40e23d3f0ace82fbfc344e2048cb81960",  # 2026.08.1-community
+        "server_image": "neo4j@sha256:c3903fa96db31479c2a28e5d00e05260b039ff856f8b2cca7280c78299877731",  # 2026.10.0-community
         # heap parity with the ArcadeDB deployments (same per-scale heap)
         "server_env": ["-e", "NEO4J_AUTH=neo4j/dbbenchpass",
                        "-e", "NEO4J_server_memory_heap_initial__size={heap}",
@@ -879,7 +879,7 @@ BACKENDS = {
         "topology": "embedded",
         "image": "dbbench:client",
     },
-    # MEMGRAPH 3.13.1 (2026-09-17), served, Bolt through the same neo4j driver
+    # MEMGRAPH 3.14.0 (2026-10-23; re-pinned from 3.13.1, first served 2026-09-17), served, Bolt through the same neo4j driver
     # the Neo4j arm uses and the lane's Cypher verbatim (l2_graph.MemgraphGraph).
     # Four of its defaults are sized from the HOST or unbounded, and each is
     # set from the cell here and read back onto the row by the adapter:
@@ -903,7 +903,7 @@ BACKENDS = {
     "memgraph_graph": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "memgraph/memgraph@sha256:4710bee1ab5b47599876e30f17ae1679d0bbb2262d84dc06641521fecb7c89ce",  # 3.13.1
+        "server_image": "memgraph/memgraph@sha256:c7478d1737edb77fa2b1fcd4e37e34a68f10272d0ec7d7f9aa92d0afc8e0be9f",  # 3.14.0
         "server_cmd": ["--log-level=INFO", "--also-log-to-stderr=true",
                        "--bolt-num-workers={ncpu}",
                        "--storage-snapshot-thread-count={ncpu}",
@@ -1004,7 +1004,7 @@ BACKENDS = {
     "memgraph_e2": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "memgraph/memgraph@sha256:4710bee1ab5b47599876e30f17ae1679d0bbb2262d84dc06641521fecb7c89ce",  # 3.13.1
+        "server_image": "memgraph/memgraph@sha256:c7478d1737edb77fa2b1fcd4e37e34a68f10272d0ec7d7f9aa92d0afc8e0be9f",  # 3.14.0
         "server_cmd": ["--log-level=INFO", "--also-log-to-stderr=true",
                        "--bolt-num-workers={ncpu}",
                        "--storage-snapshot-thread-count={ncpu}",
@@ -1027,7 +1027,7 @@ BACKENDS = {
     "neo4j_e2": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "neo4j@sha256:e702d6b535d9d3ae01ee7b132ec87aa40e23d3f0ace82fbfc344e2048cb81960",  # 2026.08.1-community
+        "server_image": "neo4j@sha256:c3903fa96db31479c2a28e5d00e05260b039ff856f8b2cca7280c78299877731",  # 2026.10.0-community
         "server_env": ["-e", "NEO4J_AUTH=neo4j/dbbenchpass",
                        "-e", "NEO4J_server_memory_heap_initial__size={heap}",
                        "-e", "NEO4J_server_memory_heap_max__size={heap}",
@@ -1207,8 +1207,8 @@ BACKENDS = {
         "topology": "client_server",
         "image": "dbbench:client",
         # NEO4J + QDRANT IN ONE CONTAINER since DECISIONS #117 (BUGS F133): the
-        # Neo4j digest every Neo4j arm runs (2026.08.1-community) with the
-        # Qdrant server binary from the dense lane's pinned v1.19.1 image,
+        # Neo4j digest every Neo4j arm runs (2026.10.0-community) with the
+        # Qdrant server binary from the dense lane's pinned v1.20.0 image,
         # built by build_images.sh from Dockerfile.composed, so the one server
         # cgroup caps, pins and measures both halves. The vector half was the
         # client's in-memory local mode until then.
@@ -1309,7 +1309,7 @@ BACKENDS = {
     "qdrant_sparse": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "qdrant/qdrant@sha256:0699e7733a6fa7fa7f6b95dcbed84ebb04584110da525cdfdef9f305c4f57738",  # v1.19.1
+        "server_image": "qdrant/qdrant@sha256:2d1b0bfd0a961275481ea09400fc98008216ae54e1b52ed7d24520d63050c644",  # v1.20.0
         "server_port": 6333,
         "ready_regex": r"Qdrant (HTTP|gRPC) listening|Actix runtime found",
     },
@@ -1317,7 +1317,7 @@ BACKENDS = {
     "qdrant_sparse_uint8": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "qdrant/qdrant@sha256:0699e7733a6fa7fa7f6b95dcbed84ebb04584110da525cdfdef9f305c4f57738",  # v1.19.1
+        "server_image": "qdrant/qdrant@sha256:2d1b0bfd0a961275481ea09400fc98008216ae54e1b52ed7d24520d63050c644",  # v1.20.0
         "server_port": 6333,
         "ready_regex": r"Qdrant (HTTP|gRPC) listening|Actix runtime found",
     },
@@ -1423,7 +1423,7 @@ BACKENDS = {
     "qdrant_dense": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "qdrant/qdrant@sha256:0699e7733a6fa7fa7f6b95dcbed84ebb04584110da525cdfdef9f305c4f57738",  # v1.19.1
+        "server_image": "qdrant/qdrant@sha256:2d1b0bfd0a961275481ea09400fc98008216ae54e1b52ed7d24520d63050c644",  # v1.20.0
         "server_port": 6333,
         "ready_regex": r"Qdrant (HTTP|gRPC) listening|Actix runtime found",
     },
@@ -1434,7 +1434,7 @@ BACKENDS = {
     "qdrant_dense_int8": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "qdrant/qdrant@sha256:0699e7733a6fa7fa7f6b95dcbed84ebb04584110da525cdfdef9f305c4f57738",  # v1.19.1
+        "server_image": "qdrant/qdrant@sha256:2d1b0bfd0a961275481ea09400fc98008216ae54e1b52ed7d24520d63050c644",  # v1.20.0
         "server_port": 6333,
         "ready_regex": r"Qdrant (HTTP|gRPC) listening|Actix runtime found",
     },
@@ -1469,7 +1469,7 @@ BACKENDS = {
     "neo4j_dense": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "neo4j@sha256:e702d6b535d9d3ae01ee7b132ec87aa40e23d3f0ace82fbfc344e2048cb81960",  # 2026.08.1-community
+        "server_image": "neo4j@sha256:c3903fa96db31479c2a28e5d00e05260b039ff856f8b2cca7280c78299877731",  # 2026.10.0-community
         "server_env": ["-e", "NEO4J_AUTH=neo4j/dbbenchpass",
                        "-e", "NEO4J_server_memory_heap_initial__size={heap}",
                        "-e", "NEO4J_server_memory_heap_max__size={heap}",
@@ -1480,7 +1480,7 @@ BACKENDS = {
     "neo4j_dense_int8": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "neo4j@sha256:e702d6b535d9d3ae01ee7b132ec87aa40e23d3f0ace82fbfc344e2048cb81960",  # 2026.08.1-community
+        "server_image": "neo4j@sha256:c3903fa96db31479c2a28e5d00e05260b039ff856f8b2cca7280c78299877731",  # 2026.10.0-community
         "server_env": ["-e", "NEO4J_AUTH=neo4j/dbbenchpass",
                        "-e", "NEO4J_server_memory_heap_initial__size={heap}",
                        "-e", "NEO4J_server_memory_heap_max__size={heap}",
@@ -1520,7 +1520,7 @@ BACKENDS = {
     "memgraph_dense": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "memgraph/memgraph@sha256:4710bee1ab5b47599876e30f17ae1679d0bbb2262d84dc06641521fecb7c89ce",  # 3.13.1, the graph arm's
+        "server_image": "memgraph/memgraph@sha256:c7478d1737edb77fa2b1fcd4e37e34a68f10272d0ec7d7f9aa92d0afc8e0be9f",  # 3.14.0, the graph arm's
         "server_cmd": ["--log-level=INFO", "--also-log-to-stderr=true",
                        "--bolt-num-workers={ncpu}",
                        "--storage-snapshot-thread-count={ncpu}",
@@ -1535,7 +1535,7 @@ BACKENDS = {
     "memgraph_dense_int8": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "memgraph/memgraph@sha256:4710bee1ab5b47599876e30f17ae1679d0bbb2262d84dc06641521fecb7c89ce",  # 3.13.1, the graph arm's
+        "server_image": "memgraph/memgraph@sha256:c7478d1737edb77fa2b1fcd4e37e34a68f10272d0ec7d7f9aa92d0afc8e0be9f",  # 3.14.0, the graph arm's
         "server_cmd": ["--log-level=INFO", "--also-log-to-stderr=true",
                        "--bolt-num-workers={ncpu}",
                        "--storage-snapshot-thread-count={ncpu}",

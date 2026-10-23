@@ -47,8 +47,8 @@ def neo4j_rows():
     for scale, cache in (("sf1", "3.00GiB"), ("sf10", "11.00GiB")):
         for cls, text in (("relaxed", "fsync at commit"), ("strict", "fsync at commit")):
             out.append(row(run_id=f"n_{scale}_{cls}", backend="neo4j_graph", scale=scale, durability_class=cls,
-                           durability=text, engine_version="neo4j:2026.08.1",
-                           server_image_ref="neo4j@sha256:e702d6b535d9",
+                           durability=text, engine_version="neo4j:2026.10.0",
+                           server_image_ref="neo4j@sha256:c3903fa96db3",
                            neo4j_pagecache=cache, neo4j_checkpoint_interval="5s",
                            neo4j_checkpoint_interval_default="15m", server_pagecache=cache.replace("GiB", "g")))
     return out
