@@ -27,7 +27,12 @@ of the image, the pinned wheel by sha256, the cap rule, the ALL-DONE trap. What 
   * REPS. `--reps N` (default 3, at most 5) is baked in as `REPS=N`; a stage environment that declares fewer (the image
     defaults arm) keeps its own.
   * THE CHAIN. `--after <stage>` is the marker the first stage waits for (`grep -qx "<stage> ALL-DONE"`), or `none`. It is
-    required: the previous chain's last stage is not a default anyone should inherit.
+    required: the previous chain's last stage is not a default anyone should inherit. It must be the LAST item of the
+    queue already on the machine (2026-10-23: `qMA06 ALL-DONE` was already in mini's STATUS.txt because the study was
+    skipped, so drafts waiting on it would have started beside the running A/Bs). `--status-file PATH` is required with a
+    marker: the generator reads that copy of the machine's STATUS.txt and REFUSES a marker already in it, because a wait
+    that is true at once is no wait. `--status-file none` says on purpose that there is no queue (the chain starts
+    when launched, or the file is a fresh machine's).
   * ORDER. `biggest-last` (default) or `paper` (the table order); `--project CELLS_TSV` prices each stage from a per-cell
     hours table, scaled to N repetitions.
 
@@ -35,10 +40,11 @@ Usage:
   python3 make_2611_stages.py --check [--drafts DIR]       # selection, coverage and instrument proofs; lints DIR's scripts
   python3 make_2611_stages.py --project CELLS.tsv --check   # plus the projected hours per stage
   ARCADEDB_WHEEL=... ARCADEDB_SERVER_IMAGE=... ARCADEDB_ENGINE_COMMIT=<40 hex> \\
-      python3 make_2611_stages.py --after qR15 --id-prefix qS --out DIR [--engines a,b] [--lanes graph,dense] [--second-list]
+      python3 make_2611_stages.py --after qR15 --status-file STATUS.txt --id-prefix qS --out DIR [--engines a,b] [--lanes graph,dense] [--second-list]
   python3 make_2611_stages.py --arcadedb-release 26.11.1 --engine-commit <40 hex> --image-digest sha256:<64 hex> \\
       --wheel-name arcadedb_embedded-26.11.1-<tags>.whl --wheel-sha256 <64 hex> --wheel-url <https url> \\
-      --after <last comparator stage> --id-prefix qT --out DIR
+      --after <last comparator stage> --status-file STATUS.txt --id-prefix qT --out DIR
+  python3 make_2611_stages.py --check --drafts DIR [--status-file STATUS.txt]   # also: the drafts' first wait is not already in STATUS.txt
 """
 from __future__ import annotations
 
@@ -586,21 +592,46 @@ def lint_draft(text, name, engines=None):
     return out
 
 
-def lint_drafts(directory, engines=None):
-    """Lint every script in a folder, and check the chain: each stage waits for the one before it in id order."""
+def marker_in_status(marker, status_file):
+    """True when `marker ALL-DONE` is already a whole line of the STATUS file (the test every wait makes: `grep -qx`)."""
+    want = f"{marker} ALL-DONE"
+    with open(status_file, encoding="utf-8", errors="replace") as fh:
+        return any(line.rstrip("\n") == want for line in fh)
+
+
+def status_problems(marker, status_file):
+    """A wait on a marker the machine already holds is no wait: the stage starts at once, beside whatever still runs.
+    2026-10-23: `qMA06 ALL-DONE` was in mini's STATUS.txt (the study was skipped) while four A/B jobs still ran."""
+    if marker is None or status_file is None:
+        return []
+    if not os.path.isfile(status_file):
+        return [f"--status-file {status_file}: no such file"]
+    if marker_in_status(marker, status_file):
+        return [f"the start marker `{marker} ALL-DONE` is already a line of {status_file}: a stage waiting on it starts at "
+                f"once. Pick the LAST item of the queue that is still to run (it writes its marker whether it runs or skips)"]
+    return []
+
+
+def lint_drafts(directory, engines=None, status_file=None):
+    """Lint every script in a folder, and check the chain: each stage waits for the one before it in id order.
+    With a STATUS file, the first stage's wait must not already be true there."""
     files = sorted(glob.glob(os.path.join(directory, "*.sh")))
     out = []
     if not files:
         return [f"{directory}: no stage scripts"]
     prev = None
+    first = True
     for f in files:
         name = os.path.basename(f)
         text = open(f, encoding="utf-8").read()
         out += lint_draft(text, name, engines)
-        waits = re.findall(r'^while ! grep -qx "(\S+) ALL-DONE"', text, re.M)
+        waits = re.findall(r'^while ! grep -qx "([^"]+?) ALL-DONE"', text, re.M)
         if prev is not None and waits != [prev]:
             out.append(f"{name}: waits for {waits or 'nothing'}, expected {prev}")
         prev = name[:-3]
+        if status_file is not None and first:
+            out += [f"{name}: {p}" for p in status_problems(waits[0] if len(waits) == 1 else None, status_file)]
+        first = False
     return out
 
 
@@ -1311,7 +1342,12 @@ def _after(text):
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="the next instrument's multi-model subset stages")
     ap.add_argument("--out", help="directory for the generated scripts (a draft folder, not the repo)")
-    ap.add_argument("--after", help="the stage the first one waits on (its ALL-DONE marker); `none` for no wait. Required to emit")
+    ap.add_argument("--after", help="the marker the first stage waits on (`<name> ALL-DONE`): the LAST item of the queue already on the "
+                                    "machine, e.g. `mini-ab FINAL` on mini; `none` for no wait. Required to emit, no default")
+    ap.add_argument("--status-file", metavar="PATH|none",
+                    help="a copy of the machine's STATUS.txt: the generator refuses an --after marker already in it (the first stage "
+                         "would start at once). Required to emit with a marker; `none` says there is no queue to wait for. "
+                         "With --check --drafts DIR: also refuses drafts whose first wait is already true there")
     ap.add_argument("--id-prefix", default=DEFAULT_PREFIX, help=f"stage id prefix (default {DEFAULT_PREFIX})")
     ap.add_argument("--engines", help=f"comma list of subset engines ({', '.join(ENGINES)}); default every engine of the mode")
     ap.add_argument("--lanes", help="comma list: graph, cross-model, documents, dense (core); sparse, timeseries, lifecycle "
@@ -1334,6 +1370,7 @@ def main(argv=None) -> int:
     ap.add_argument("--wheel-sha256")
     ap.add_argument("--wheel-url")
     a = ap.parse_args(argv)
+    status_file = None if a.status_file is None or a.status_file.strip().lower() == "none" else a.status_file
 
     problems = instrument_problems()
     if problems:
@@ -1364,7 +1401,7 @@ def main(argv=None) -> int:
         bes = stage_backends(st)
         print(f"  {st[0]}  {st[2]:9} {','.join(st[4]) or '-':26} {len(bes):2} arms  {st[1]}")
     if a.check and a.drafts:
-        problems += lint_drafts(a.drafts, set(engines))
+        problems += lint_drafts(a.drafts, set(engines), status_file)
     for p in problems:
         print(f"  PROBLEM {p}")
     if problems:
@@ -1383,6 +1420,14 @@ def main(argv=None) -> int:
     after = _after(a.after)
     if after is False:
         raise SystemExit("--after is required to emit: the stage whose ALL-DONE the first stage waits for, or `none`")
+    if after is not None and a.status_file is None:
+        raise SystemExit("--status-file is required with an --after marker: a copy of the machine's STATUS.txt, which must not "
+                         "hold `<marker> ALL-DONE` yet (or `--status-file none` when there is no queue)")
+    bad = status_problems(after, status_file)
+    if bad:
+        for p in bad:
+            print(f"  PROBLEM {p}")
+        return 1
     if pins is None:
         pins = installed_pins()
     os.makedirs(a.out, exist_ok=True)
