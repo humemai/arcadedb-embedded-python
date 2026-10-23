@@ -68,7 +68,7 @@ def test_land_stage_pulls_the_names_a_generated_stage_writes(tmp_path):
     import test_stage_generator_2611 as G
 
     out = tmp_path / "stages"
-    r = G.run(["--second-list", "--after", "qR20", "--out", str(out)], tmp_path)
+    r = G.run(["--second-list", "--after", "qR20", "--status-file", "none", "--out", str(out)], tmp_path)
     assert r.returncode == 0, r.stdout[-400:] + r.stderr[-400:]
     text = "".join(f.read_text() for f in sorted(out.glob("*.sh")))
     pin = "${PIN}"
