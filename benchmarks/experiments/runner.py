@@ -575,25 +575,34 @@ BACKENDS = {
         "topology": "embedded",
         "image": "dbbench:client",
     },
-    # MongoDB 8.2 (8.0 refuses to start on Linux >= 6.19, SERVER-121912).
-    #
-    # AND IT STAYS AT 8.2.12 THROUGH THE OCTOBER RE-PIN, which is the one place
-    # DECISIONS #103d bit instead of #87. 8.3.11 is the newer release and it
-    # CANNOT BE MEASURED HERE: it refuses to boot on the bench kernel with
+    # MongoDB 9.0.4 (from 2026-10-23). History: 8.0 refused to start on Linux
+    # >= 6.19 (SERVER-121912) and the pin moved to 8.2.12; in September and early
+    # October the 8.3 line (8.3.11) refused to boot on the bench kernel with
     #   "MongoDB cannot start: Linux kernel versions 6.19 and newer has a known
     #    incompatibility with this version of MongoDB" (SERVER-121912)
-    # -- the SAME guard that moved this pin off 8.0, reappearing on the 8.3
-    # line. Reproduced on the laptop (kernel 7.0.0-29-generic, 2026-09-19): the
-    # 8.3.11 container exits immediately and the cell dies server_not_ready
-    # after the readiness timeout, while 8.2.12 on the same kernel reaches
-    # "Waiting for connections" and reports 8.2.12. 8.2.12 is also the newest
-    # release on the 8.2 line, so it IS the latest measurable MongoDB.
+    # so 8.2.12 was the latest measurable release (DECISIONS #103d over #87).
     #
-    # Intermediate 8.3.x were deliberately NOT hunted for one that predates the
-    # guard. The guard is MongoDB declaring this kernel incompatible with the
-    # 8.3 line; running an older 8.3 that merely lacks the warning would be
-    # running a configuration its own vendor now calls unsafe, which is worse
-    # than staying on the line that runs.
+    # THE HOLD IS LIFTED, by 9.0.4 and NOT by 8.3. Re-tested 2026-10-23 on the
+    # laptop (kernel 7.0.0-38-generic, upstream 7.0.14 under Ubuntu's X.Y.0
+    # release string; mini runs 7.0.0-31-generic):
+    #   8.3.13 (mongo@sha256:93ca11e6b730...)  REFUSES to start, same guard,
+    #          also inside the Search image with mongot 1.70.4 and 1.70.5;
+    #   9.0.4  (mongo@sha256:b609cdfba3a8...)  boots, answers like 8.2.12;
+    #   8.2.12 (the old pin)                   boots (reference).
+    # SERVER-125742 exempts kernels >= 7.0.14 from the check but reads
+    # `uname -r`, which Ubuntu keeps at 7.0.0 (open as SERVER-136848, reported
+    # against 8.3.11 and 9.0.2); 9.0.4 starts on it, 8.3.13 does not. Why 9.0.4
+    # starts was not investigated. The old reasoning that an older 8.3.x lacking
+    # the warning would be "unsafe" no longer holds either: the bench kernel
+    # carries the userspace fix SERVER-125742 names (upstream 7.0.14).
+    #
+    # Why move at all, with 8.2.12 booting: MongoDB's compatibility table for
+    # MongoDB Search says mongot 1.70.1 and later work with MongoDB Server 8.3
+    # and "MongoDB Server 8.2 has reached end of life and is no longer a
+    # supported source deployment for MongoDB Search" -- so 8.2.12 + mongot
+    # 1.70.4 was a Search pairing its vendor no longer supports. 9.0 is not in
+    # that table either (it names 8.3 only); mongot 1.70.5 on 9.0.4 was
+    # exercised, not documented. The evidence is in COMPARATORS.md.
     #
     # --replSet: TPC-C new-order is one multi-document transaction, and
     # MongoDB only allows those on a replica set; the adapter initiates the
@@ -628,7 +637,7 @@ BACKENDS = {
     "mongodb": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "mongo@sha256:41afd6e1183f57e4e4d03ab733070671fca8553da2b36f15d6e3fc9760494d17",  # 8.2.12
+        "server_image": "mongo@sha256:b609cdfba3a865331378cc4158bc52522a3bf176d59a7ff2c43fab52f5d9d5cb",  # 9.0.4
         "server_cmd": ["--replSet", "rs0", "--bind_ip_all"],
         "server_port": 27017,
         "ready_regex": r"Waiting for connections",
@@ -642,7 +651,7 @@ BACKENDS = {
     "mongodb_graph": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "mongo@sha256:41afd6e1183f57e4e4d03ab733070671fca8553da2b36f15d6e3fc9760494d17",  # 8.2.12
+        "server_image": "mongo@sha256:b609cdfba3a865331378cc4158bc52522a3bf176d59a7ff2c43fab52f5d9d5cb",  # 9.0.4
         "server_cmd": ["--replSet", "rs0", "--bind_ip_all"],
         "server_port": 27017,
         "ready_regex": r"Waiting for connections",

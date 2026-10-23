@@ -202,7 +202,8 @@ def durability_class(text):
 #               commit; ladybug 0.20.4's Database() takes no sync option.
 #   PostgreSQL  read per row, not asserted: each adapter runs
 #   family      SHOW synchronous_commit on connect and records the answer.
-#   MongoDB     server 8.2.12: getParameter journalCommitInterval = 100 ms;
+#   MongoDB     server 8.2.12 and 9.0.4 (read on both): getParameter
+#               journalCommitInterval = 100 ms; the rest of this entry was read on 8.2.12 only (history, 9.0.4 not re-read):
 #               the implicit default write concern is w:majority with
 #               writeConcernMajorityJournalDefault true, which the timed
 #               writes override with w=1, j=false.
