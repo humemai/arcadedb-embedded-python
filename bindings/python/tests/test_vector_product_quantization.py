@@ -7,8 +7,9 @@ quantization in SQL" section shows the statements these tests run: the
 `CREATE INDEX ... METADATA` settings (`rerankOversample`, `fusedPQ`, `pqTrainingLimit`)
 and the per-query `rerank` option of `vectorNeighbors`.
 
-CI builds its wheel from upstream's 26.11.1-SNAPSHOT image, which is republished only when
-upstream's deploy job succeeds and at the time of this change still held an engine from before
+CI builds its wheel from this repository's engine source, which lacks #10545 until an upstream sync
+brings it, and upstream's 26.11.1-SNAPSHOT image (the other engine a wheel can be built from) is
+republished only when upstream's deploy job succeeds; either can hold an engine from before
 #10545, with the same version string as the engine that has it. So the version cannot tell the
 two apart, and `has_pq_rerank` probes the one thing that changed: the index setting
 `rerankOversample` is accepted. On an engine without #10545 the same tests assert the old
@@ -16,7 +17,7 @@ answer (the settings and the option are refused, `find_nearest` is the exact wal
 takes), with no skips, as `test_vector_sql.py` does for `where` (the repository accepts no
 skips, scripts/check_test_skips.py). When 26.11.1 is released and the wheel the suite runs on
 is built from it, delete `has_pq_rerank` and the old-answer branches. The new-answer branch runs in CI
-only on a build from source (`engine-from-source: true`).
+once this repository's engine source carries #10545.
 """
 
 import arcadedb_embedded as arcadedb

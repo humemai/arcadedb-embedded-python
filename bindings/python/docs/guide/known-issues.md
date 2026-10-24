@@ -38,8 +38,8 @@ matches nothing, literal or parameter. openCypher's `=` matches with or without 
 
 Tests: `tests/test_collection_equality_known_issues.py` asserts the fixed answer for the SQL
 literals, `<>` and the parameter through a `BY ITEM` index, and keeps the two workarounds
-passing on every engine. Upstream's snapshot image that CI builds the wheel from may still hold
-the engine from before the fix, with the same version string, so the test file probes the
+passing on every engine. An engine from before the fix has the same version string as one with it (the engine source of this
+repository until upstream's fix is merged into it, or upstream's snapshot image), so the test file probes the
 behavior and asserts the old answer on such an engine.
 
 ## Ctrl-C and `kill -TERM` with the JVM started (fixed in the next release of these bindings)

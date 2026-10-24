@@ -220,8 +220,8 @@ A skip that is truly unavoidable (a Windows limitation, a case that needs an eng
 still upstream) goes on the list in `scripts/check_test_skips.py` with the platform, the reason,
 and the upstream issue. For an engine bug prefer a strict `xfail`: it fails the suite as soon as
 the fix reaches the engine the suite runs on, which is the cue to convert it to a plain test.
-CI builds its wheel from upstream's current snapshot jars, so that can be days before a release
-carries the fix. The entry stays on the Known Engine Issues page until a release that carries the
+CI builds its wheel from this repository's engine source, so the cue comes when the fix is merged
+into that source (an upstream sync), which can be days before a release carries it. The entry stays on the Known Engine Issues page until a release that carries the
 fix ships.
 
 A passing run ends with a summary of the form `N passed`, with no failures, errors, or skips. One test is marked `xfail` at present, and only on a free-threaded CPython (`sys._is_gil_enabled()` is false): `test_registering_again_and_again_does_not_grow_the_python_heap`, see "Free-threaded Python" on [Known Engine Issues](../guide/known-issues.md). It is not strict, so it may pass there without failing the suite. With the GIL no test is marked `xfail`. An entry on [Known Engine Issues](../guide/known-issues.md) whose fix is in the engine the suite builds against but not in the 26.10.1 wheel has plain regression tests that fail on that wheel. Run with `-rs` to see why a test skipped locally.
