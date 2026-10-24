@@ -115,10 +115,8 @@ class _IndexShim:
         return self._db._vector_id_properties.get((self._type, self._prop), "id")
 
     def countEntries(self):
-        row = self._db.query(
-            "sql",
-            f"SELECT count(*) AS c FROM `{self._type}` WHERE `{self._prop}` IS NOT NULL",
-        ).first()
+        count_sql = f"SELECT count(*) AS c FROM `{self._type}` WHERE `{self._prop}` IS NOT NULL"  # nosec B608 - backtick-quoted schema identifiers, no values
+        row = self._db.query("sql", count_sql).first()
         return int(row.get("c"))
 
     def warmUp(self):
@@ -206,11 +204,8 @@ class NativeVectorIndex(_BaseVectorIndex):
     def _lookup_query_vector_by_key(self, key):
         type_name, prop = self._shim._type, self._shim._prop
         id_prop = self._shim.getIdPropertyName()
-        row = self._database.query(
-            "sql",
-            f"SELECT `{prop}` AS `query_vector` FROM `{type_name}` WHERE `{id_prop}` = ? LIMIT 1",
-            key,
-        ).first()
+        lookup_sql = f"SELECT `{prop}` AS `query_vector` FROM `{type_name}` WHERE `{id_prop}` = ? LIMIT 1"  # nosec B608 - backtick-quoted schema identifiers; the key goes through the ? parameter
+        row = self._database.query("sql", lookup_sql, key).first()
         if row is None:
             raise ArcadeDBError(
                 f"No record found in type '{type_name}' where {id_prop} = {key!r}"

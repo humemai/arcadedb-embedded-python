@@ -3,6 +3,7 @@
 import itertools
 import json
 import os
+import re
 import time as _time
 from collections import deque
 from datetime import date, datetime
@@ -19,6 +20,7 @@ from .codec import encode_params, json_native, loads
 _LAZY_COMMAND_ROWS = os.environ.get("ARCADEDB_NATIVE_LAZY_CMD", "1") != "0"
 _BINARY_REPLY = os.environ.get("ARCADEDB_NATIVE_BIN_REPLY", "1") != "0"
 _INSERT_MANY_CHUNK = 10_000
+_RID_RE = re.compile(r"#?-?\d+:-?\d+")
 _FIRST_BATCH = 256
 _EPOCH_DAY_ORDINAL = date(1970, 1, 1).toordinal()
 _NEXT_BATCH = 2048
@@ -626,7 +628,8 @@ class NativeDatabase:
     def count_type(self, type_name: str) -> int:
         self._check_not_closed()
         try:
-            row = self.query("sql", f"SELECT count(*) AS c FROM `{type_name}`").first()
+            count_sql = f"SELECT count(*) AS c FROM `{type_name}`"  # nosec B608 - backtick-quoted schema identifier, no values
+            row = self.query("sql", count_sql).first()
         except ArcadeDBError as e:
             if "was not found" in str(e):
                 return 0
@@ -636,7 +639,10 @@ class NativeDatabase:
     def lookup_by_rid(self, rid: str):
         """The record at ``rid`` as a Document, Vertex or Edge wrapper."""
         self._check_not_closed()
-        row = self.query("sql", f"SELECT FROM {rid}").first()
+        if not _RID_RE.fullmatch(str(rid)):
+            raise ArcadeDBError(f"Failed to lookup RID '{rid}': not a record id")
+        rid_sql = f"SELECT FROM {rid}"  # nosec B608 - rid matched _RID_RE above
+        row = self.query("sql", rid_sql).first()
         if row is None:
             raise ArcadeDBError(f"Failed to lookup RID '{rid}': record not found")
         return row.get_element()
@@ -645,9 +651,8 @@ class NativeDatabase:
         self._check_not_closed()
         where = " AND ".join(f"`{k}` = ?" for k in keys)
         try:
-            row = self.query(
-                "sql", f"SELECT FROM `{type_name}` WHERE {where} LIMIT 1", list(values)
-            ).first()
+            lookup_sql = f"SELECT FROM `{type_name}` WHERE {where} LIMIT 1"  # nosec B608 - backtick-quoted identifiers; values go through ? parameters
+            row = self.query("sql", lookup_sql, list(values)).first()
             return row.get_element() if row is not None else None
         except ArcadeDBError as e:
             raise ArcadeDBError(f"Failed to lookup by key in '{type_name}': {e}") from e
