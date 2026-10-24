@@ -126,7 +126,7 @@ def _env(tmp_path):
 
 def _gen(tmp_path, name, *extra):
     out = tmp_path / name
-    r = subprocess.run([sys.executable, str(HERE / "make_2611_stages.py"), "--second-list", "--out", str(out),
+    r = subprocess.run([sys.executable, str(HERE / "make_2611_stages.py"), "--profile", "full", "--second-list", "--out", str(out),
                         "--after", "none", *extra], cwd=HERE, env=_env(tmp_path), capture_output=True, text=True)
     assert r.returncode == 0, r.stdout[-400:] + r.stderr[-400:]
     return out

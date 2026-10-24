@@ -54,7 +54,7 @@ def test_every_generated_stage_passes_its_own_backends(tmp_path):
     env.update(ARCADEDB_WHEEL=str(wheel), ARCADEDB_SERVER_IMAGE="arcadedb-c25:26.10.1",
                ARCADEDB_ENGINE_COMMIT="d36b4ca3ae4c170abc73598e0dffa2bb58e06621")
     out = tmp_path / "stages"
-    r = subprocess.run([sys.executable, str(HERE / "make_2611_stages.py"), "--second-list", "--after", "none", "--out", str(out)],
+    r = subprocess.run([sys.executable, str(HERE / "make_2611_stages.py"), "--profile", "full", "--second-list", "--after", "none", "--out", str(out)],
                        cwd=HERE, env=env, capture_output=True, text=True)
     assert r.returncode == 0, r.stdout[-400:] + r.stderr[-400:]
     scripts = sorted(out.glob("*.sh"))

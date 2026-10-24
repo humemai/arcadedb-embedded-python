@@ -27,7 +27,7 @@ from test_stage_generator_2611 import run, waits  # noqa: E402
 def chain(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("rm")
     out = tmp / "stages"
-    r = run(["--no-tiers", "--second-list", "--after", "none", "--status-file", "none", "--reps", "3", "--out", str(out)], tmp)   # the plain rep-major chain; the tiered one is tested in test_stage_generator_2611.py
+    r = run(["--no-tiers", "--profile", "full", "--second-list", "--after", "none", "--status-file", "none", "--reps", "3", "--out", str(out)], tmp)   # the plain rep-major chain; the tiered one is tested in test_stage_generator_2611.py
     assert r.returncode == 0, r.stdout[-600:] + r.stderr[-600:]
     return out
 

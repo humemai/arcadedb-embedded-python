@@ -4,6 +4,8 @@ One row per engine. The digest is the amd64 manifest digest (`docker manifest in
 
 Which arms are on the October page, with their rows and columns, is PAGE-SPEC.md section 2; the queue chain is CAMPAIGN.md section 6. This file says only what each engine is pinned to and why it runs the way it does.
 
+**The 2026-11 queue runs the paper subset (profile `paper-2611`, the owner, 2026-10-25; CAMPAIGN.md section 6).** Every engine below stays in the subset, but not every cell of it is staged. Dropped, and listed by `make_2611_stages.py --check`: the second list for every engine (lifecycle, sparse, time series, so Redis time series, TimescaleDB, the Qdrant and pgvector sparse arms and the ArcadeDB and SurrealDB lifecycle cells), because it is out of scope for the paper; the dense-lane cells of Neo4j and Memgraph (they keep graph, and cross-model where they have a cross-model arm: Memgraph, and Neo4j through the composed stack); and every int8 or PQ dense arm (Qdrant, MongoDB, ArangoDB, sqlite-vec and ArcadeDB, embedded and served), because quantized arms are not like-for-like across engines and quantization is out of the paper's scope (fp32 for every engine; ArcadeDB's own INT8 and BINARY are out by the owner's rule; jvector PQ, BQ and NVQ are studied after the paper). The dense table is fp32 only, and ArcadeDB keeps its fp32 arms, embedded and served. The rows below still describe the pins and the arms the harness registers, whether or not this queue stages them.
+
 
 ## In the harness
 
