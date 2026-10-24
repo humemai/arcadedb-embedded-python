@@ -27,6 +27,8 @@ if sys.platform == "win32":
 if os.environ.get("ARCADEDB_BACKEND", "jpype").lower() != "native":
     # Java -> Python upcalls (Python functions in SQL) exist on the native backend only
     collect_ignore.append("test_native_udf.py")
+    # the native library's start-up output (#477) can only be checked with the native library loaded
+    collect_ignore.append("test_native_startup_runtime.py")
 if not os.path.isdir(os.path.join(os.path.dirname(os.path.dirname(__file__)), "docs")):
     # the upstream pull request branch has no docs/ directory
     collect_ignore.append("test_docs_examples.py")
