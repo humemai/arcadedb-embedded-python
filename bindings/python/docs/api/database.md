@@ -1345,11 +1345,11 @@ specifically need that surface.
   `maxConnections` in HNSW (JVector).
 - `beam_width` (int): Beam width for search/construction (default: 100). Maps to
   `beamWidth` in HNSW (JVector).
-- `quantization` (str | None): `"INT8"` (recommended), `"BINARY"`, `"PRODUCT"` for PQ,
+- `quantization` (str | None): `"INT8"`, `"BINARY"`, `"PRODUCT"` for PQ,
   or `None` for full precision (default: `"INT8"`, a choice of this helper; a SQL
   `CREATE INDEX` without `"quantization"` in its `METADATA` builds a full-precision index,
-  the engine's `NONE`). Prefer `"INT8"` for current
-  production usage in these bindings. `"PRODUCT"` walks the graph on PQ codes and re-ranks on
+  the engine's `NONE`). No finished study shows `"INT8"` is the best choice; see
+  [Quantization](../guide/vectors.md#quantization). `"PRODUCT"` walks the graph on PQ codes and re-ranks on
   the stored vectors from ArcadeDB 26.11.1 on; the measured size and recall are in
   [Product quantization (PQ) in SQL](../guide/vectors.md#product-quantization-pq-in-sql),
   which also says no timing of PQ search exists yet. On the 26.10.x wheels it scores every

@@ -220,8 +220,10 @@ class VectorIndex:
            - Lower values indicate higher similarity (larger positive dot product).
 
     Quantization:
-        The index supports vector quantization to reduce memory usage and speed up search:
-        - **NONE** (Default): Full precision (float32).
+        The index supports vector quantization, which trades precision for smaller
+        stored vectors:
+        - **NONE**: Full precision (float32); the default of SQL ``CREATE INDEX``
+          (``Database.create_vector_index()`` passes INT8).
         - **INT8**: 8-bit integer quantization.
         - **BINARY**: 1-bit quantization (for high-dimensional binary vectors).
     """

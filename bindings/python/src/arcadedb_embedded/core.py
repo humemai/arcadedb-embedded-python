@@ -1426,7 +1426,8 @@ class Database:
                 Maps to `beamWidth` in JVector.
             quantization: Vector quantization type (default: INT8).
                 Options: "INT8", "BINARY", "PRODUCT" (PQ).
-                Reduces memory usage and speeds up search at the cost of some precision.
+                The default is a choice of this helper (the engine's own default is
+                no quantization); no finished study compares INT8 with full precision.
                 "PRODUCT" enables PQ data for approximate search (zero-disk-I/O path).
                 In current ArcadeDB engine builds, PRODUCT also requires enough indexed
                 vectors per bucket for PQ training; for tiny corpora, set `pq_clusters`
