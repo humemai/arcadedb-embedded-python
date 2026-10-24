@@ -17,6 +17,7 @@ Paths in this file are relative to the repository root (the directory that conta
 | reporting an engine bug upstream, sending a low-hanging engine fix, or checking an upstream fix to one of our issues | `bindings/python/docs/development/upstream-issues.md` |
 | sending the periodic `bindings/python` update to ArcadeData/arcadedb | `bindings/python/docs/development/upstream-bindings-pr.md` |
 | releasing | `bindings/python/docs/development/release.md` |
+| publishing the last `arcadedb-embedded` and `arcadedb-embedded-native` releases (the deprecation shims), or telling users how to move | `bindings/python/deprecation/README.md`, `bindings/python/deprecation/MIGRATION.md` |
 | debugging a build, JVM or test failure | `bindings/python/docs/development/troubleshooting.md` |
 | making a performance claim, or working around an engine bug | `bindings/python/docs/guide/performance.md`, `bindings/python/docs/guide/known-issues.md`, `bindings/python/docs/benchmarks/protocol.md` |
 

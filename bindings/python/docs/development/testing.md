@@ -141,6 +141,7 @@ asserts, so the list below stops at the file.
 | `test_wheel_platform_tag.py` | The wheel's manylinux platform tag, and `__version__` equals the installed distribution version |
 | `test_wheel_size.py` | The wheel size gate: a wheel at or over 100 decimal megabytes fails the build |
 | `test_check_test_skips.py` | The skip gate described below |
+| `test_deprecation_shims.py` | The shims for the old PyPI names (`deprecation/`): both build with `uv build` as pure `py3-none-any` wheels, each pins the new package at the same version, the version follows the counting rule, and against a stub `arcadedb` the import warns once with a `FutureWarning` and names, submodules (also not-yet-imported and nested ones) and private attributes resolve to the new module. Not collected where `deprecation/` is absent (the upstream pull request branch) |
 
 ### Docs and open engine findings
 
