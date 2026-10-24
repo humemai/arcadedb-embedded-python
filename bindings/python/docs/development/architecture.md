@@ -610,7 +610,7 @@ The test suite, how to run it, and the CI gates it must pass are documented unde
 ```python
 # pyproject.toml configuration
 [build-system]
-requires = ["build>=0.7.0", "setuptools>=61.0", "wheel", "jpype1"]
+requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
