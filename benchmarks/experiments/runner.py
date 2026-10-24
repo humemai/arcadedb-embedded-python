@@ -1024,6 +1024,15 @@ BACKENDS = {
         "topology": "embedded",
         "image": "dbbench:duckdb",
     },
+    # THE COMPOSED EMBEDDED TRIO (the owner, 2026-10-25): SQLite (documents) +
+    # LanceDB (vectors) + LadybugDB (graph) in ONE Python process, the embedded
+    # counterpart of the composed Qdrant + Neo4j stack. It runs in the dense
+    # image (chromadb, lancedb, sqlite-vec, duckdb, and since this arm
+    # ladybug==0.21.2, the pin the client image carries); SQLite is the stdlib's.
+    "composed_embedded_sqlite_lance_ladybug": {
+        "topology": "embedded",
+        "image": "dbbench:dense",
+    },
     "neo4j_e2": {
         "topology": "client_server",
         "image": "dbbench:client",
@@ -1951,7 +1960,7 @@ LANES = {
     "e2": ("e2_hybrid.py",
            ["arcadedb_e2", "arcadedb_e2_server", "surrealdb_e2", "surrealdb_e2_server",
             "arangodb_e2", "mongodb_e2", "pg_age_e2", "neo4j_e2", "memgraph_e2", "ladybug_e2",
-            "duckdb_e2", "composed_qdrant_neo4j"],
+            "duckdb_e2", "composed_qdrant_neo4j", "composed_embedded_sqlite_lance_ladybug"],
            ["hybrid", "atomicity"]),
     # L5 measures OPEN and CLOSE, which every embedded deployment does and no
     # benchmark measures. Situations ride the WORKLOAD axis, so each is its own

@@ -9,7 +9,8 @@ of the image, the pinned wheel by sha256, the cap rule, the ALL-DONE trap. What 
 
   * THE SUBSET (PLAN-26111): ArcadeDB (embedded and served), SurrealDB (embedded and served), ArangoDB, Memgraph, PostgreSQL
     with pgvector and AGE (and plain PostgreSQL where a lane uses it), MongoDB (with MongoDB Search), DuckDB (with VSS and
-    DuckPGQ), SQLite (with sqlite-vec), and the composed Qdrant plus Neo4j stack. Core lanes: graph (interactive and
+    DuckPGQ), SQLite (with sqlite-vec), the composed Qdrant plus Neo4j stack, and the composed embedded SQLite, LanceDB and LadybugDB stack
+    (cross-model lane only, 2026-10-25). Core lanes: graph (interactive and
     analytics), cross-model, documents (TPC-C and TPC-H), dense. The second list (sparse, time series, lifecycle) exists only
     under `--profile full --second-list`.
   * THE PROFILE (the owner, 2026-10-25: the paper's experiments must finish by 2026-11-10). `--profile paper-2611` is the default and
@@ -390,6 +391,8 @@ ENGINES = collections.OrderedDict([
     ("duckdb", ("DuckDB with VSS and DuckPGQ", ("duckdb", "duckpgq"))),
     ("sqlite", ("SQLite with sqlite-vec", ("sqlite",))),
     ("qdrant-neo4j", ("the composed Qdrant plus Neo4j stack", ("composed_qdrant_neo4j",))),
+    ("composed-embedded", ("the composed embedded stack: SQLite, LanceDB and LadybugDB in one process (cross-model only)",
+                           ("composed_embedded",))),
     ("neo4j", ("Neo4j on its own: graph and dense", ("neo4j_graph", "neo4j_dense"))),
     ("qdrant", ("Qdrant on its own: dense, and sparse on the second list", ("qdrant_dense", "qdrant_sparse"))),
     ("redis", ("Redis 8: dense (Query Engine), documents (JSON + FT.AGGREGATE), time series (TimeSeries)", ("redis_",))),
@@ -404,7 +407,7 @@ OUTSIDE = ("neo4j_e2", "falkordb", "milvus", "elasticsearch", "chroma", "lancedb
 # Arms in the subset that no row exists for yet. The page gate (page_check._roster_arms) owes them no row and no declaration, so a
 # payload measured before they ran does not fail as "registered, no row". An arm that has a row anyway is still on the page and keyed.
 # REMOVE WHEN the arm has rows in the frozen results (CrateDB, Redis documents and time series: after their first full measurement).
-NOT_YET_MEASURED = ("cratedb_", "redis_tpc", "redis_ts")
+NOT_YET_MEASURED = ("cratedb_", "redis_tpc", "redis_ts", "composed_embedded")
 
 CORE_LANES = ("l2", "e2", "l1tpc", "l3d")
 SECOND_LANES = ("l3s", "l4", "lifecycle")
@@ -554,8 +557,8 @@ SECOND_ORDER = ("lifecycle", "l3s", "l4")
 # THE ORDER INSIDE A LANE (the user, 2026-10-23: "order the comparators in priority"), highest first: when a pass is cut short the
 # engines that matter most have their rep. ArcadeDB's four 26.11.1 arms (JVM/native x embedded/server) go on top when 26.11.1
 # ships. Redis 8 and CrateDB are named here before their adapters are merged: an engine that is not in ENGINES is skipped cleanly.
-ENGINE_PRIORITY = ("arcadedb", "surrealdb", "arangodb", "postgresql", "mongodb", "redis", "qdrant-neo4j", "neo4j", "qdrant",
-                   "duckdb", "sqlite", "memgraph", "ladybug", "cratedb")
+ENGINE_PRIORITY = ("arcadedb", "surrealdb", "arangodb", "postgresql", "mongodb", "redis", "qdrant-neo4j", "composed-embedded", "neo4j",
+                   "qdrant", "duckdb", "sqlite", "memgraph", "ladybug", "cratedb")
 
 
 # ENGINE TIERS (the user, 2026-10-24). Tier 1: ArcadeDB x4 (inserted by --arcadedb-release), SurrealDB (embedded and served),
@@ -564,7 +567,7 @@ ENGINE_PRIORITY = ("arcadedb", "surrealdb", "arangodb", "postgresql", "mongodb",
 # TimescaleDB. An engine of ENGINES in neither is a decision this table forces (arm_problems); an arm that still has no tier
 # runs after Tier 2 (TIER_REST), "everything else later".
 TIER_ENGINES = {
-    1: ("arcadedb", "surrealdb", "arangodb", "postgresql", "mongodb", "qdrant-neo4j", "duckdb", "sqlite", "ladybug"),
+    1: ("arcadedb", "surrealdb", "arangodb", "postgresql", "mongodb", "qdrant-neo4j", "composed-embedded", "duckdb", "sqlite", "ladybug"),
     2: ("memgraph", "neo4j", "qdrant", "redis", "cratedb"),
 }
 # An arm that sits in a different tier than its engine. TimescaleDB is an arm of the `postgresql` engine here (it completes
