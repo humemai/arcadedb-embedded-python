@@ -68,6 +68,11 @@ test = [
     "duckdb>=1.4.2",
     "ladybug>=0.21.2",
     "networkx>=3.4",
+    # tests/test_wheel_packages.py runs `setup.py build_py` on a copy of the sources to prove the JVM wheel ships every
+    # subpackage; Python 3.12+ venvs have no setuptools, so without it here the test fails on those legs instead of running.
+    # Floor 84.1.0: the dependency-floor audit resolves the lowest version; pip-audit (2026-10-24) finds no known
+    # vulnerability in 84.1.0, while 78.1.1 still has PYSEC-2026-3447 and GHSA-xmj3-9gf7-h52w.
+    "setuptools>=84.1.0",
 ]
 dev = [
     "black",
