@@ -10,7 +10,7 @@ build. In the wheel's test container there is no ``setup.py``, so it checks the 
 
 import os
 import shutil
-import subprocess
+import subprocess  # nosec B404 - test-controlled child process
 import sys
 from pathlib import Path
 
@@ -34,7 +34,7 @@ def _built_root(tmp_path: Path):
         ignore=shutil.ignore_patterns("__pycache__"),
     )
     build_lib = tmp_path / "lib"
-    subprocess.run(
+    subprocess.run(  # nosec B603 - fixed argv (sys.executable setup.py build_py), no shell
         [sys.executable, "setup.py", "-q", "build_py", "--build-lib", str(build_lib)],
         cwd=project,
         check=True,
@@ -67,4 +67,6 @@ def test_backend_selection_imports_without_native_library(tmp_path):
         "import arcadedb_embedded.core, arcadedb_embedded._native as n;"
         "assert n.enabled() is False"
     )
-    subprocess.run([sys.executable, "-c", code], check=True, cwd=tmp_path, env=env)
+    subprocess.run(  # nosec B603 - fixed argv, no shell, test-owned code string
+        [sys.executable, "-c", code], check=True, cwd=tmp_path, env=env
+    )
