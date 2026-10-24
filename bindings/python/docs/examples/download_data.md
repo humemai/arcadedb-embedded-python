@@ -18,6 +18,7 @@ All datasets are stored under `bindings/python/examples/data/`.
 - **MovieLens**: `movielens-small`, `movielens-large`
 - **Stack Exchange**: `stackoverflow-tiny`, `stackoverflow-small`, `stackoverflow-medium`, `stackoverflow-large`, `stackoverflow-xlarge`, `stackoverflow-full`
 - **MSMARCO v2.1**: `msmarco-1m`, `msmarco-5m`, `msmarco-10m`
+- **DBpedia OpenAI embeddings**: `dbpedia-openai3-1536-100k`, `dbpedia-openai3-1536-1m`
 - **TPC-H**: `tpch-sf1`, `tpch-sf10`, `tpch-sf100`
 - **LDBC SNB Interactive**: `ldbc-snb-sf1`, `ldbc-snb-sf10`, `ldbc-snb-sf100`
 
@@ -37,6 +38,8 @@ python download_data.py stackoverflow-large
 python download_data.py stackoverflow-xlarge
 python download_data.py stackoverflow-full
 python download_data.py msmarco-1m
+python download_data.py dbpedia-openai3-1536-100k
+python download_data.py dbpedia-openai3-1536-1m
 python download_data.py tpch-sf1
 python download_data.py ldbc-snb-sf1
 
@@ -54,11 +57,14 @@ python download_data.py stackoverflow-small --verify-only
 - For Stack Exchange datasets, the script emits a copy-friendly entity count block after run
     (`User`, `Post`, `Comment`, `Badge`, `Vote`, `PostLink`, `Tag`, `PostHistory`, `Total`) so you can paste directly into markdown.
 - **MSMARCO** downloads parquet shards and converts them to vector shards with a ground-truth file.
+- **DBpedia OpenAI embeddings** download pinned parquet files from Hugging Face and convert them to vector shards with an id file and a ground-truth file. Every parquet file is checked against a pinned size and sha256 before it is read, and a file that does not match stops the run. See [DBpedia OpenAI embeddings](#dbpedia-openai-embeddings).
 - **TPC-H** downloads the `dbgen` source and generates the tables with Docker.
 - **LDBC SNB** generates the Interactive dataset with the LDBC datagen in Docker.
 - `--verify-only` checks a dataset that is already on disk and skips the download. For
     MovieLens and Stack Exchange it samples up to 100K rows; for MSMARCO, TPC-H, and LDBC SNB it
-    only checks that the dataset's marker file exists.
+    only checks that the dataset's marker file exists. For DBpedia OpenAI embeddings it checks the
+    `.meta.json` file and that the shard files hold `count x dim` float32 values.
+- The vector corpora of the DBBench lanes (ann-benchmarks SIFT-128 and DEEP-96) are not fetched by `download_data.py`. The steps are in the docstring of `benchmarks/experiments/gen_dense_npy.py`. They move with the benchmarks when those are split into their own repository.
 
 ## Dependencies
 
@@ -67,6 +73,7 @@ Install only what you need for the datasets you plan to download:
 - Stack Exchange: `py7zr`
 - Stack Exchange vectors: `sentence-transformers`, `torch`, `numpy`
 - MSMARCO: `huggingface_hub`, `numpy`, `pyarrow`
+- DBpedia OpenAI embeddings: `numpy`, `pyarrow` (the download uses `wget`, `curl`, or plain Python, not `huggingface_hub`)
 
 ## Output Locations
 
@@ -75,6 +82,7 @@ Install only what you need for the datasets you plan to download:
 - Stack Exchange vectors: `examples/data/stackoverflow-<size>/vectors/`
     - Includes per-corpus files (`questions`, `answers`, `comments`) and combined `all` files
 - MSMARCO: `examples/data/MSMARCO-<size>/`
+- DBpedia OpenAI embeddings: `examples/data/DBPEDIA-OPENAI3-1536-<size>/` (`100K` or `1M`). The verified parquet files stay in `$HF_HOME`, or `examples/data/hf_cache/` when `HF_HOME` is not set, so a second run does not download them again.
 - TPC-H: `examples/data/tpch-sf<scale>/`
 - LDBC SNB: `examples/data/ldbc-snb-sf<scale>/`
 
@@ -89,6 +97,20 @@ Install only what you need for the datasets you plan to download:
     - Vectors are 384-D, L2-normalized (all-MiniLM-L6-v2).
 - **MSMARCO**: binary vector shards (`.f32`) plus `.meta.json` and `.gt.jsonl`.
     - Vectors are 1024‑D; 1M/5M/10M indicate the number of vectors.
+- **DBpedia OpenAI embeddings**: the MSMARCO layout, plus an id file: binary vector shards (`.f32`), `.meta.json`, `.ids.jsonl`, and `.gt.jsonl`.
+    - Files: `dbpedia-openai3-1536-<count>.shardNNNN.f32`, `.meta.json`, `.ids.jsonl`, `.gt.jsonl`, where `<count>` is `100000` or `1000000`.
+    - Vectors are 1536-D float32 and L2-normalized. The shards hold 100,000 vectors each.
+    - `.ids.jsonl` has one line per vector, in shard order: `{"id": <row number>, "dbpedia_id": "<dbpedia:...>", "title": "..."}`. The entity text is not copied; it stays in the parquet files.
+    - `.gt.jsonl` has the same format as the MSMARCO file: 1000 sampled vectors with their exact top-50 neighbors by inner product. The sample uses a fixed seed (42), so the file can be rebuilt. `.meta.json` lists the shards, the source repository, the pinned revision, and the licence.
+
+## DBpedia OpenAI embeddings
+
+- **Source:** the Hugging Face dataset [`Qdrant/dbpedia-entities-openai3-text-embedding-3-large-1536-1M`](https://huggingface.co/datasets/Qdrant/dbpedia-entities-openai3-text-embedding-3-large-1536-1M). It holds the first 1M entries of [`BeIR/dbpedia-entity`](https://huggingface.co/datasets/BeIR/dbpedia-entity), each embedded from title plus text with OpenAI `text-embedding-3-large` at 1536 dimensions.
+- **Licence:** MIT, as stated on the dataset card.
+- **Slices:** `dbpedia-openai3-1536-100k` converts the first 100,000 rows and fetches only the first 3 of the 26 parquet files. `dbpedia-openai3-1536-1m` converts all 1,000,000 rows from all 26 files. This is how `msmarco-1m`, `msmarco-5m`, and `msmarco-10m` take the first `count` rows.
+- **Pinning:** the script holds the size and sha256 of each of the 26 files (read from the Hugging Face file listing, field `lfs.oid`) and downloads from one pinned repository revision, not from `main`. A file on disk that matches is reused. Any other file is downloaded and checked. If it still does not match, it is deleted and the run stops with an error.
+- **Memory:** each parquet file is streamed in batches of 4096 rows, so memory stays bounded for the full set.
+- **Examples 11 and 12:** they read the MSMARCO and Stack Exchange vector layouts by name. The DBpedia files use the same shard format, but those two examples do not list the dataset yet.
 
 ## Stack Overflow (sizes & counts)
 
@@ -197,6 +219,8 @@ These counts come from generated `vectors/stackoverflow-<size>-all.meta.json` fi
 | MSMARCO 1M | — | ~3.9 GB |
 | MSMARCO 5M | — | ~20 GB |
 | MSMARCO 10M | — | ~39 GB |
+| DBpedia OpenAI 100K | ~1.1 GB download (3 parquet files) | ~0.6 GB |
+| DBpedia OpenAI 1M | ~9.55 GB download (26 parquet files) | ~6.1 GB |
 | StackOverflow tiny | ~34 MB | ~35 MB |
 | StackOverflow small | ~642 MB | ~495 MB |
 | StackOverflow medium | ~2.9 GB | ~2.0 GB |
