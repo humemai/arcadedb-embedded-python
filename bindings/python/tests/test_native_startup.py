@@ -2,7 +2,7 @@
 
 import os
 import re
-import subprocess
+import subprocess  # nosec B404 - test-controlled child process
 import sys
 from pathlib import Path
 
@@ -38,7 +38,7 @@ def test_the_first_open_writes_nothing_at_warning(tmp_path):
         "db.query('sql', 'SELECT 1 AS v').first()\n"
         "db.close()\n"
     )
-    done = subprocess.run(
+    done = subprocess.run(  # nosec B603 - fixed argv, no shell, test-owned code string
         [sys.executable, "-c", code], capture_output=True, text=True, timeout=120
     )
     assert done.returncode == 0, done.stderr
