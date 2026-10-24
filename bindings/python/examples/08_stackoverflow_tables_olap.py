@@ -13,6 +13,7 @@ import json
 import os
 import random
 import re
+import shlex
 import shutil
 import sqlite3
 import subprocess
@@ -48,6 +49,21 @@ def uv_bootstrap_commands(python_cmd: str) -> List[str]:
         ),
         'export PATH="/tmp/uv-bin:$PATH"',
     ]
+
+
+def uv_run_command(python_cmd: str, requirements: List[str], command: str) -> str:
+    """Return the shell command that runs `command` in a uv environment.
+
+    `command` is the example script and its arguments. The environment holds exactly
+    `requirements` on top of the container's `python_cmd` interpreter, and
+    `bench_exec.py` prints the installed versions, then replaces itself with
+    `python -u <command>`, so the measured process is the one that printed them.
+    """
+    with_args = " ".join(f"--with {shlex.quote(r)}" for r in requirements)
+    return (
+        f"uv run --no-project --python {python_cmd} {with_args} "
+        f"python bench_exec.py {command}"
+    )
 
 
 EXPECTED_DATASETS = {
@@ -1471,25 +1487,24 @@ def run_in_docker(args):
         packages.append("duckdb")
     if args.db == "postgresql":
         packages.append("psycopg[binary]")
-    packages_str = " ".join(packages)
-
     inner_cmd_parts = []
     python_cmd = "python"
     if args.db == "postgresql":
         inner_cmd_parts.append(
-            "apt-get update && apt-get install -y postgresql python3 python3-venv && rm -rf /var/lib/apt/lists/*"
+            "apt-get update && apt-get install -y postgresql python3 && rm -rf /var/lib/apt/lists/*"
         )
         python_cmd = "python3"
-    inner_cmd_parts.append(f"{python_cmd} -m venv /tmp/bench-venv")
-    inner_cmd_parts.append(". /tmp/bench-venv/bin/activate")
     inner_cmd_parts.extend(uv_bootstrap_commands(python_cmd))
-    inner_cmd_parts.append(f"uv pip install {packages_str}")
+    requirements = list(packages)
     if arcadedb_wheel_mount_path is not None:
-        inner_cmd_parts.append(f'uv pip install "{arcadedb_wheel_mount_path}"')
-    inner_cmd_parts.append("echo 'Starting benchmark...'")
-    inner_cmd_parts.append(
-        f"{python_cmd} -u 08_stackoverflow_tables_olap.py {' '.join(filtered_args)}"
+        requirements.append(arcadedb_wheel_mount_path)
+    benchmark_cmd = uv_run_command(
+        python_cmd,
+        requirements,
+        f"08_stackoverflow_tables_olap.py {' '.join(filtered_args)}",
     )
+    inner_cmd_parts.append("echo 'Starting benchmark...'")
+    inner_cmd_parts.append(benchmark_cmd)
     if args.db == "postgresql":
         db_name = build_benchmark_db_name(
             args.dataset,

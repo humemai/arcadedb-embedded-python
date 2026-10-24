@@ -44,8 +44,10 @@ every table. The DuckDB path skips manual secondary indexes for this benchmark.
 !!! note "The script re-launches itself in Docker"
     When `docker` is on `PATH`, the script re-runs itself in a container
     (`--docker-image`, default `python:3.12-slim`) and applies the `--mem-limit`
-    budget to the container; for ArcadeDB it installs the wheel from
-    `bindings/python/dist` and runs natively if none is there. On Windows, under GitHub
+    budget to the container; for ArcadeDB it runs with the wheel from
+    `bindings/python/dist` (through `uv run --with`, nothing is installed) and runs natively
+    if none is there. The container log starts with `[bench-env]` lines that list the
+    interpreter and every installed package version. On Windows, under GitHub
     Actions, or without `docker` it runs natively, and no container enforces
     `--mem-limit`.
 

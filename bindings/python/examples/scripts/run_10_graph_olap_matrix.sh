@@ -124,7 +124,7 @@ for ((run = 1; run <= RUNS; run++)); do
             run_label="$(matrix_build_summary_run_label "$internal_run_label" "$MEM_LIMIT")"
 
             cmd=(
-                python3 "$PY_SCRIPT"
+                "${MATRIX_PYTHON[@]}" "$PY_SCRIPT"
                 --dataset "$DATASET"
                 --db "$db_engine"
                 --threads "$THREADS"

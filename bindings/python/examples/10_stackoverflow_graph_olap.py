@@ -15,6 +15,7 @@ import os
 import pickle
 import random
 import re
+import shlex
 import shutil
 import sqlite3
 import subprocess
@@ -50,6 +51,21 @@ def uv_bootstrap_commands(python_cmd: str) -> List[str]:
         ),
         'export PATH="/tmp/uv-bin:$PATH"',
     ]
+
+
+def uv_run_command(python_cmd: str, requirements: List[str], command: str) -> str:
+    """Return the shell command that runs `command` in a uv environment.
+
+    `command` is the example script and its arguments. The environment holds exactly
+    `requirements` on top of the container's `python_cmd` interpreter, and
+    `bench_exec.py` prints the installed versions, then replaces itself with
+    `python -u <command>`, so the measured process is the one that printed them.
+    """
+    with_args = " ".join(f"--with {shlex.quote(r)}" for r in requirements)
+    return (
+        f"uv run --no-project --python {python_cmd} {with_args} "
+        f"python bench_exec.py {command}"
+    )
 
 
 EXPECTED_DATASETS = {
@@ -6543,12 +6559,13 @@ def run_in_docker(args) -> bool:
             "apt-get update",
             "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends docker-cli",
             "rm -rf /var/lib/apt/lists/*",
-            "python -m venv /tmp/bench-venv",
-            ". /tmp/bench-venv/bin/activate",
             *uv_bootstrap_commands("python"),
-            "uv pip install lxml neo4j",
             "echo 'Starting benchmark...'",
-            f"python -u 10_stackoverflow_graph_olap.py {' '.join(filtered_args)}",
+            uv_run_command(
+                "python",
+                ["lxml", "neo4j"],
+                f"10_stackoverflow_graph_olap.py {' '.join(filtered_args)}",
+            ),
         ]
         if host_uid is not None and host_gid is not None:
             inner_cmd_parts.insert(
@@ -6573,19 +6590,19 @@ def run_in_docker(args) -> bool:
         if args.db == "duckdb":
             packages.append("duckdb")
 
-        packages_str = " ".join(packages)
-
         inner_cmd_parts = []
         python_cmd = "python"
-        inner_cmd_parts.append(f"{python_cmd} -m venv /tmp/bench-venv")
-        inner_cmd_parts.append(". /tmp/bench-venv/bin/activate")
         inner_cmd_parts.extend(uv_bootstrap_commands(python_cmd))
-        inner_cmd_parts.append(f"uv pip install {packages_str}")
+        requirements = list(packages)
         if arcadedb_wheel_mount_path is not None:
-            inner_cmd_parts.append(f'uv pip install "{arcadedb_wheel_mount_path}"')
+            requirements.append(arcadedb_wheel_mount_path)
         inner_cmd_parts.append("echo 'Starting benchmark...'")
         inner_cmd_parts.append(
-            f"{python_cmd} -u 10_stackoverflow_graph_olap.py {' '.join(filtered_args)}"
+            uv_run_command(
+                python_cmd,
+                requirements,
+                f"10_stackoverflow_graph_olap.py {' '.join(filtered_args)}",
+            )
         )
 
         inner_cmd = " && ".join(inner_cmd_parts)

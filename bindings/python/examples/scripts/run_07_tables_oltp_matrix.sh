@@ -88,7 +88,7 @@ for ((run = 1; run <= RUNS; run++)); do
             run_docker_image="$POSTGRESQL_IMAGE"
         fi
         cmd=(
-            python3 "$PY_SCRIPT"
+            "${MATRIX_PYTHON[@]}" "$PY_SCRIPT"
             --dataset "$DATASET"
             --db "$db"
             --threads "$THREADS"
