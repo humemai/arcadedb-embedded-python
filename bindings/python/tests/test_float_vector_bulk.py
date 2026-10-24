@@ -48,7 +48,10 @@ def _rows(x):
 def _stored(db, type_name):
     """{id: stored vector as float64} for every record of the type."""
     out = {}
-    for r in db.query("sql", f"SELECT id, embedding FROM {type_name}").to_list():
+    query = (
+        f"SELECT id, embedding FROM {type_name}"  # nosec B608 - test-owned type name
+    )
+    for r in db.query("sql", query).to_list():
         out[r["id"]] = np.array(r["embedding"], dtype=np.float64)
     return out
 
@@ -261,9 +264,10 @@ class TestInsertColumns:
 
 class TestCreateVertices:
     def _ids(self, db, type_name="Vx"):
+        query = f"SELECT id, embedding FROM {type_name}"  # nosec B608 - test-owned type name
         return {
             r["id"]: np.array(r["embedding"], dtype=np.float64)
-            for r in db.query("sql", f"SELECT id, embedding FROM {type_name}").to_list()
+            for r in db.query("sql", query).to_list()
         }
 
     def test_list_vectors(self, vec_db):
@@ -274,9 +278,8 @@ class TestCreateVertices:
         _assert_float32_of(self._ids(vec_db), x)
         # the RIDs come back in row order
         for i in (0, 17, N - 1):
-            assert (
-                vec_db.query("sql", f"SELECT id FROM {rids[i]}").first().get("id") == i
-            )
+            query = f"SELECT id FROM {rids[i]}"  # nosec B608 - a RID from this test
+            assert vec_db.query("sql", query).first().get("id") == i
 
     @pytest.mark.parametrize("dtype", [np.float32, np.float64])
     def test_numpy_rows(self, vec_db, dtype):
