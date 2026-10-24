@@ -45,6 +45,13 @@ public final class ArcadeNative {
   static final AtomicLong IDS = new AtomicLong(1);
 
   static {
+    // The image carries no GraalVM polyglot languages by design, so the engine's polyglot registration can only find none and
+    // would log "GraalVM Polyglot Engine: no languages found" at WARNING in every process (#477). Turn the engine off before the
+    // first database is opened (QueryEngineManager reads this when it first loads); no other warning is touched.
+    GlobalConfiguration.POLYGLOT_ENGINE_ENABLED.setValue(false);
+  }
+
+  static {
     // ARCADEDB_VECTOR_PROVIDER = native | panama | default (jvector's VectorizationProvider, forced); unset: jvector chooses
     // (Highway through the FFM downcalls when the bundled libjvector loads, else the Vector API classes).
     final String forced = System.getenv("ARCADEDB_VECTOR_PROVIDER");
