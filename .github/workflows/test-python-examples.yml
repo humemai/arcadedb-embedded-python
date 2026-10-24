@@ -43,7 +43,7 @@ on:
         required: false
         type: string
       engine-from-source:
-        description: "Build the engine jars from this commit's source (the package module) instead of downloading upstream's snapshot image"
+        description: "Build the engine jars from this commit's source (the package module) instead of downloading the jars of the arcadedata/arcadedb image that pom.xml names. Off for a caller that does not set it, so the release workflow keeps its jars."
         required: false
         type: boolean
         default: false
@@ -56,10 +56,10 @@ on:
         required: false
         default: "0[1-9]_*.py 1[0-9]_*.py 2[0-9]_*.py"
       engine-from-source:
-        description: "Build the engine jars from this commit's source (the package module) instead of downloading upstream's snapshot image"
+        description: "Build the engine jars from this commit's source (the package module). Turn off to download the jars of the arcadedata/arcadedb image that pom.xml names (upstream's moving snapshot between releases) instead."
         required: false
         type: boolean
-        default: false
+        default: true
 
 # SUPERSEDE, do not race.
 #
@@ -94,6 +94,8 @@ jobs:
     runs-on: ubuntu-24.04
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     timeout-minutes: 90
+    outputs:
+      engine-from-source: ${{ steps.mode.outputs.engine-from-source }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -101,12 +103,34 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      # ENGINE FROM SOURCE (workflow_dispatch or workflow_call with engine-from-source):
-      # test a branch (an upstream sync, for example) against the engine source on
-      # that branch, not upstream's moving snapshot image, which can be newer or older
-      # than the merge being tested. Push and pull_request runs never take this path.
+      # WHICH ENGINE THE TESTS RUN ON. A push, a pull request and a manual dispatch test the engine built from this
+      # commit's source: the jars of upstream's moving snapshot image can carry fixes this repository's source does
+      # not have yet (five strict-xfail tripwires fired on 2026-10-04 for that reason, #143), so a green run would say
+      # nothing about the code in the checkout. A dispatch can turn it off (engine-from-source: false) to test the
+      # snapshot image. A workflow_call that does not set the input (the release workflow) keeps the image's jars.
+      # `inputs.*` is empty on push and pull_request, a boolean on the other two.
+      - name: Choose where the engine jars come from
+        id: mode
+        shell: bash
+        env:
+          ENGINE_FROM_SOURCE_INPUT: ${{ inputs.engine-from-source }}
+        run: |
+          echo "engine-from-source=${ENGINE_FROM_SOURCE_INPUT:-true}" >> "$GITHUB_OUTPUT"
+
+      # The jars depend only on the engine source tree, so they are cached under a hash of it: a bindings-only change
+      # restores them in seconds, and the Maven build runs only when an engine module, a pom or the
+      # Maven wrapper changes (an upstream sync, for example). Raise the `v1` to rebuild after a change to the build
+      # steps below.
+      - name: Restore the engine jars of this source tree
+        id: engine-cache
+        if: steps.mode.outputs.engine-from-source == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: bindings/python/src/arcadedb_embedded/jars
+          key: engine-jars-v1-${{ hashFiles('pom.xml', 'mvnw', '.mvn/**', '**/pom.xml', '**/src/main/**', '!bindings/**', '!benchmarks/**', '!e2e*/**', '!load-tests/**', '!docs/**') }}
+
       - name: Set up JDK 21 (engine from source)
-        if: inputs.engine-from-source == true
+        if: steps.mode.outputs.engine-from-source == 'true' && steps.engine-cache.outputs.cache-hit != 'true'
         uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
@@ -114,7 +138,7 @@ jobs:
           cache: maven
 
       - name: Build the engine jars from source
-        if: inputs.engine-from-source == true
+        if: steps.mode.outputs.engine-from-source == 'true' && steps.engine-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           ./mvnw -B -q -DskipTests -pl package -am package
@@ -136,7 +160,7 @@ jobs:
           unzip -p "$ENGINE" META-INF/MANIFEST.MF | tr -d '\r' | grep -i -E "build|version" || true
 
       - name: Download JARs from ArcadeDB Docker image
-        if: inputs.engine-from-source != true
+        if: steps.mode.outputs.engine-from-source != 'true'
         shell: bash
         run: |
           cd bindings/python
@@ -277,7 +301,7 @@ jobs:
       - name: Build arcadedb-embedded (${{ matrix.platform }})
         shell: bash
         env:
-          ENGINE_FROM_SOURCE: ${{ inputs.engine-from-source }}
+          ENGINE_FROM_SOURCE: ${{ needs.download-jars.outputs.engine-from-source }}
         run: |
           cd bindings/python
           echo "🔨 Building arcadedb-embedded for ${{ matrix.platform }} with Python ${{ matrix.python-version }}..."
