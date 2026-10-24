@@ -335,6 +335,25 @@ jobs:
             echo "EXAMPLE_PROJECT=$RUNNER_TEMP/example-project"
           } >> "$GITHUB_ENV"
 
+      # REMOVE WHEN: jpype1 publishes cp315 wheels (JPype > 1.7.1)
+      # JPype has no cp315 wheel yet, so the Python 3.15 leg compiles it from a pinned commit of JPype master
+      # (it supports 3.15: jpype-project/jpype#1493, #1498, #1501). That build needs a JDK (jni.h, javac) and
+      # Apache Ant, only to build JPype itself. The tests still run on the wheel's bundled JRE.
+      - name: Set up JDK and Ant to build JPype (Python 3.15)
+        if: matrix.python-version == '3.15'
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Check Ant for the JPype build (Python 3.15)
+        if: matrix.python-version == '3.15'
+        shell: bash
+        run: |
+          command -v ant > /dev/null || { sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ant; }
+          ant -version
+          test -f "$JAVA_HOME/include/jni.h"
+
       - name: Install example dependencies
         shell: bash
         run: |
@@ -358,6 +377,8 @@ jobs:
           dependencies = [
             "torch", "numpy", "requests", "sentence-transformers", "tqdm", "py7zr", "lxml",
             "pandas", "polars", "pyarrow",
+            # REMOVE WHEN: jpype1 publishes cp315 wheels (JPype > 1.7.1)
+            "jpype1 @ git+https://github.com/jpype-project/jpype@ed2cc2095c4b45dd3bfcb4fe1af28369c131e166 ; python_version >= '3.15'",
           ]
 
           [tool.uv.sources]
