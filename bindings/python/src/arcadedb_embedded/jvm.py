@@ -22,6 +22,7 @@ from typing import Iterable, Optional, Union
 import jpype
 import jpype.imports
 
+from . import aot as _aot
 from ._logging import get_logger
 from .exceptions import ArcadeDBError
 
@@ -309,6 +310,7 @@ def start_jvm(
     jvm_args: Optional[Union[Iterable[str], str]] = None,
     common_pool_parallelism: Optional[int] = None,
     interrupt: Optional[bool] = None,
+    aot: Optional[bool] = None,
 ):
     """
     Start the JVM with ArcadeDB JARs if not already started.
@@ -409,6 +411,21 @@ def start_jvm(
             # Explicit thread cap for reproducible benchmarks
             start_jvm(heap_size="8g", common_pool_parallelism=8)
 
+    aot (optional)
+        Opt in to the JDK AOT cache (Project Leyden): a per-user cache of loaded
+        and linked classes that makes later starts faster. ``None`` (the default)
+        follows ``ARCADEDB_AOT`` (``1`` = on), which is off when unset; ``True``
+        and ``False`` override it. The first process trains the cache and the JVM
+        writes it when that process exits normally. Any problem falls back to a
+        normal start. Ignored when the JVM is already started or when ``jvm_args``
+        carry their own ``-XX:AOT*`` or ``-Xshare`` flags. See the JVM guide.
+
+    ARCADEDB_AOT (optional)
+        ``1`` turns the AOT cache on (see ``aot``). ``ARCADEDB_AOT_CACHE=<file>``
+        names the cache file; default: a file keyed by package version, JRE and
+        jars in the per-user cache directory (Linux ``$XDG_CACHE_HOME/arcadedb/aot``
+        or ``~/.cache/arcadedb/aot``).
+
     ARCADEDB_LOG_DIR (optional)
         Directory for the engine log (arcadedb.log.*), the JVM crash log and the
         generated logging.properties. Default: a per-user state directory,
@@ -488,6 +505,7 @@ def start_jvm(
         log_dir=log_dir,
     )
     _check_initial_heap(jvm_args)
+    aot_flags = _aot_flags(aot, jvm_args, classpath)
 
     try:
         # Always use bundled JRE
@@ -495,9 +513,23 @@ def start_jvm(
         # handles SIGINT and ends the process with status 130, bypassing Python's
         # signal handler, KeyboardInterrupt, `finally` and `atexit` (#118).
         _JVM_INTERRUPT = bool(interrupt)
-        jpype.startJVM(
-            jvm_path, *jvm_args, classpath=classpath, interrupt=_JVM_INTERRUPT
-        )
+        try:
+            jpype.startJVM(
+                jvm_path,
+                *jvm_args,
+                *aot_flags,
+                classpath=classpath,
+                interrupt=_JVM_INTERRUPT,
+            )
+        except Exception:
+            # A JVM cannot be created twice in one process (JPype cannot retry
+            # after a failed start), so there is no fallback here: free the
+            # training lock and report as usual. The flags are only added for a
+            # JRE that supports them, so this is not expected.
+            _aot.release_training(aot_flags)
+            raise
+        # AOT flags stay out of the recorded config: they differ per process
+        # (training file name) and must not make a later start_jvm() look changed.
         _JVM_CONFIG = tuple(jvm_args)
         _LOG_DIR_USED = log_dir
     except Exception as e:
@@ -555,6 +587,25 @@ def _restore_python_signal_handlers() -> None:
                 signal.signal(signum, current)
         except (ValueError, OSError):  # not the main thread / not settable
             _LOGGER.debug("could not restore the Python handler for signal %s", signum)
+
+
+def _aot_flags(aot: Optional[bool], jvm_args: list, classpath: str) -> list:
+    """AOT cache flags for this start; empty when off, unsupported or on any error."""
+    if not _aot.enabled(aot):
+        return []
+    try:
+        from . import __version__
+
+        return _aot.jvm_flags_for(
+            jvm_args,
+            _extract_runtime_resource("jre"),
+            classpath,
+            __version__,
+            jar_fingerprint()["sha256"],
+        )
+    except Exception as exc:  # noqa: BLE001 - an optimisation must never fail a start
+        _LOGGER.debug("AOT cache skipped: %s: %s", type(exc).__name__, exc)
+        return []
 
 
 def _close_active_databases():
