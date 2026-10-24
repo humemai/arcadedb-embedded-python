@@ -21,7 +21,7 @@ next sync.
   at that commit.
 
 !!! warning "Upstream uses the same version numbers"
-    ArcadeDB's release tags carry the same numbers as ours (`26.9.1` is both their
+    ArcadeDB's release tags carry the same numbers as ours (`26.10.2` is both their
     engine release and our wheel release). Always fetch `upstream` with `--no-tags`
     (`sync-upstream.sh` does). If their tag is ever fetched, `git tag -a X.Y.Z` fails
     with "already exists", but `git push origin X.Y.Z` still succeeds and publishes
@@ -169,7 +169,7 @@ gh release create X.Y.Z -R humemai/arcadedb-embedded-python --verify-tag \
 Always pass `-R humemai/arcadedb-embedded-python`: in a checkout of this fork, `gh`
 resolves its default repository to upstream, where a release would be a mistake. The
 release is created at <https://github.com/humemai/arcadedb-embedded-python/releases>;
-every release there is named by its tag (`26.9.1`, `26.5.1.post1`) and has no assets,
+every release there is named by its tag (`26.10.2`, `26.10.2.post1`) and has no assets,
 because the wheels go to PyPI.
 
 #### What the release body contains
@@ -224,9 +224,9 @@ The Python bindings use an **automated versioning system** that extracts version
 
 | Maven Version (pom.xml) | Python Version | Use Case |
 |-------------------------|----------------|----------|
-| `26.10.1-SNAPSHOT` | `26.10.1.dev0` | Development builds |
-| `26.9.1` | `26.9.1` | Release builds |
-| `26.9.1` (tag `26.9.1.post1`) | `26.9.1.post1` | Python-only fix to a release |
+| `26.11.1-SNAPSHOT` | `26.11.1.dev0` | Development builds |
+| `26.10.2` | `26.10.2` | Release builds |
+| `26.10.2` (tag `26.10.2.post1`) | `26.10.2.post1` | Python-only fix to a release |
 
 ### Development Mode vs Release Mode
 
@@ -237,14 +237,14 @@ The Python bindings use an **automated versioning system** that extracts version
   `scripts/.dev_version_tracker.json` and is 0 when that file has no entry for the version
   (no build step adds one)
 - Purpose: Pre-release development builds
-- Example: `26.10.1-SNAPSHOT` → `26.10.1.dev0`
+- Example: `26.11.1-SNAPSHOT` → `26.11.1.dev0`
 
 **Release Mode** (clean versions):
 
 - Triggered by: No `-SNAPSHOT` suffix in `pom.xml`
 - Conversion: `X.Y.Z` → `X.Y.Z` (a `.postN` version comes from the tag; see below)
 - Purpose: Official releases to PyPI
-- Example: `26.9.1` → `26.9.1`
+- Example: `26.10.2` → `26.10.2`
 
 ### Python-Specific Patches
 
@@ -256,7 +256,7 @@ they export it as `BUILD_VERSION`, and `build.sh` hands it to the Docker build o
 from `pom.xml`. To build such a wheel locally:
 
 ```bash
-BUILD_VERSION=26.9.1.post1 ./scripts/build.sh
+BUILD_VERSION=26.10.2.post1 ./scripts/build.sh
 ```
 
 Without `BUILD_VERSION`, `extract_version.py` derives the version from `pom.xml` as
@@ -397,7 +397,7 @@ uv run --project .. --group docs mike alias --update-aliases \
 ### Version check fails
 
 - The release workflow stops if the tag's base version differs from the `pom.xml`
-  base version (for example tag `26.9.1.dev0` while `pom.xml` reads `26.10.1-SNAPSHOT`)
+  base version (for example tag `26.10.2.dev0` while `pom.xml` reads `26.11.1-SNAPSHOT`)
 - Check which commit the tag points to, and which `pom.xml` version that commit has
 
 ### Documentation deployment fails
