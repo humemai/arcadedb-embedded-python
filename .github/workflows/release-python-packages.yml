@@ -31,11 +31,11 @@ jobs:
           TAG_VERSION="${{ github.ref_name }}"
           echo "📌 Git tag version: $TAG_VERSION"
 
-          # Only X.Y.Z, X.Y.Z.devN (N from 0) or X.Y.Z.postN (N from 1); no aN/bN/rcN (release.md, Version Numbering)
-          if ! [[ "$TAG_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.dev(0|[1-9][0-9]*)|\.post[1-9][0-9]*)?$ ]]; then
-            echo "❌ Tag $TAG_VERSION is not X.Y.Z, X.Y.Z.devN or X.Y.Z.postN (devN from 0, postN from 1)"
-            exit 1
-          fi
+          # The counting rule (release.md, Version Numbering): only X.Y.Z, X.Y.Z.devN (N from 0) or
+          # X.Y.Z.postN (N from 1), never aN/bN/rcN, and the tag must be the next number after the
+          # versions already in the git tags and on PyPI. It checks only and fails closed: a source
+          # it cannot read stops the release.
+          python3 scripts/check_version.py "$TAG_VERSION" --git-remote origin --pypi arcadedb-embedded
 
           # Extract base version from tag (remove .dev0, .post1)
           TAG_BASE=$(echo "$TAG_VERSION" | sed -E 's/\.(dev|post)[0-9]+$//')
