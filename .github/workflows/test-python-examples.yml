@@ -12,6 +12,7 @@ on:
     paths:
       - 'bindings/python/src/**'
       - 'bindings/python/tests/**'
+      - 'bindings/python/deprecation/**'
       - 'bindings/python/examples/**'
       - 'bindings/python/scripts/**'
       - 'bindings/python/pyproject.toml'
@@ -24,6 +25,7 @@ on:
     paths:
       - 'bindings/python/src/**'
       - 'bindings/python/tests/**'
+      - 'bindings/python/deprecation/**'
       - 'bindings/python/examples/**'
       - 'bindings/python/scripts/**'
       - 'bindings/python/pyproject.toml'

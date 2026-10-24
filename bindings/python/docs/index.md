@@ -1,5 +1,9 @@
 # ArcadeDB Python Bindings
 
+!!! warning "Moved to ArcadeData/arcadedb-python"
+
+    These bindings move to [ArcadeData/arcadedb-python](https://github.com/ArcadeData/arcadedb-python) as the PyPI package `arcadedb` (import `arcadedb`; `arcadedb-native` for the native build), with docs at [docs.arcadedb.com/arcadedb-python](https://docs.arcadedb.com/arcadedb-python/). This repository will be archived. See the [migration guide](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/deprecation/MIGRATION.md).
+
 <div class="grid cards" markdown>
 
 -   :material-rocket-launch:{ .lg .middle } **Production Ready**
