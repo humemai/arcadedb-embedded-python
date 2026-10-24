@@ -449,6 +449,7 @@ jobs:
           duckdb>=1.4.2
           ladybug>=0.21.2
           networkx>=3.4
+          setuptools>=84.1.0
           REQ
           # Build that environment now, so a dependency that cannot be resolved or installed
           # fails here and not in the middle of the test step.
