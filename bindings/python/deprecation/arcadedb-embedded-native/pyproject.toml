@@ -1,0 +1,47 @@
+# Deprecation shim for arcadedb-embedded-native (the last release). Built by ../build_shims.py; see ../README.md.
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "arcadedb-embedded-native"
+version = "26.11.1"
+description = "Deprecated: arcadedb-embedded-native has moved to arcadedb-native (import arcadedb). Last release, a thin shim."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Taewoon Kim", email = "taewoon@humem.ai" }]
+keywords = ["arcadedb", "deprecated", "moved", "database"]
+classifiers = [
+    "Development Status :: 7 - Inactive",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Database",
+]
+# The shim installs exactly the package it points to, at the same version.
+dependencies = ["arcadedb-native==26.11.1"]
+
+# The extras people installed from the old name, forwarded to the new one.
+[project.optional-dependencies]
+vector = ["arcadedb-native[vector]==26.11.1"]
+arrow = ["arcadedb-native[arrow]==26.11.1"]
+pandas = ["arcadedb-native[pandas]==26.11.1"]
+polars = ["arcadedb-native[polars]==26.11.1"]
+
+[project.urls]
+Homepage = "https://github.com/ArcadeData/arcadedb-python"
+Documentation = "https://docs.arcadedb.com/arcadedb-python/"
+Source = "https://github.com/ArcadeData/arcadedb-python"
+Issues = "https://github.com/ArcadeData/arcadedb-python/issues"
+"Replaced by" = "https://pypi.org/project/arcadedb-native/"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/arcadedb_embedded"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "README.md", "LICENSE", "pyproject.toml"]
