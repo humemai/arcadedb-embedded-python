@@ -748,7 +748,12 @@ class TestLSMVectorIndex:
         assert hit_calls["count"] == 1
 
     def test_lsm_vector_search_uses_database_rid_conversion(self, test_db, monkeypatch):
-        """RID whitelist conversion should go through the Database wrapper."""
+        """RID whitelist conversion should go through the Database wrapper.
+
+        A list of RID strings is the exception: it becomes the whole set in one bridge call
+        (GraphCalls.ridSet, tested in test_float_vector_bulk.py), so this test passes one RID
+        as a Java RID object, which makes the list take the per-RID path.
+        """
 
         test_db.command("sql", "CREATE VERTEX TYPE Doc")
         test_db.command("sql", "CREATE PROPERTY Doc.id INTEGER")
@@ -778,6 +783,7 @@ class TestLSMVectorIndex:
             )
         ]
 
+        mixed_rids = [allowed_rids[0], test_db.to_java_rid(allowed_rids[1])]
         rid_conversion_calls = []
         original_to_java_rid = test_db.to_java_rid
 
@@ -787,7 +793,7 @@ class TestLSMVectorIndex:
 
         monkeypatch.setattr(test_db, "to_java_rid", wrapped_to_java_rid)
 
-        results = index.find_nearest([1.0, 0.0, 0.0], k=2, allowed_rids=allowed_rids)
+        results = index.find_nearest([1.0, 0.0, 0.0], k=2, allowed_rids=mixed_rids)
 
         assert len(results) == 2
         assert rid_conversion_calls[: len(allowed_rids)] == allowed_rids

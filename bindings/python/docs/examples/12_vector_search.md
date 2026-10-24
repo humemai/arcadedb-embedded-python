@@ -46,7 +46,7 @@ python 12_vector_search.py \
 
 When `docker` is on `PATH`, the script re-runs itself in a container (`--docker-image`,
 with a per-backend default) with the repository mounted. For `arcadedb_sql` the container
-installs the wheel from `bindings/python/dist`; if no wheel is there, the script runs
+runs with the wheel from `bindings/python/dist` (through `uv run --with`, nothing is installed; the log starts with `[bench-env]` lines that list the interpreter and every installed package version); if no wheel is there, the script runs
 natively. It also runs natively on Windows, under GitHub Actions, and when it is already
 inside a container.
 

@@ -7,9 +7,10 @@ name: Build ArcadeDB engine jars
 #   * verifying an upstream fix at its merge commit without building on the
 #     laptop, whose cores are kept for timing work (repository ArcadeData/arcadedb,
 #     ref the merge SHA; download with `gh run download <run> -n arcadedb-lib`);
-#   * the bindings and examples workflows' `engine-from-source` option, which
-#     tests a branch (an upstream sync, for example) against the engine source on
-#     that branch instead of upstream's moving snapshot image.
+#   * (not a caller) the bindings and examples workflows build and cache the same
+#     distribution themselves, by default, so that a push, a pull request and a
+#     dispatch test the engine source of the commit instead of upstream's moving
+#     snapshot image.
 
 on:
   workflow_dispatch:

@@ -613,7 +613,7 @@ BACKENDS = {
     "timescaledb": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "timescale/timescaledb@sha256:f7036933154c52dbc500f7b08ff8e28404a8ccabbf8ce3528142cde6ab253eef",  # 2.30.1-pg18
+        "server_image": "timescale/timescaledb@sha256:26e20a5e5a7ab6bec7ff217a52ffe21c9f4799603816718b2a573e7be839d8b4",  # 2.31.0-pg18
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
         "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
                        "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=4GB"] + PG_FIT_CMD,
@@ -626,7 +626,7 @@ BACKENDS = {
     "postgres_ts": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "postgres@sha256:7341002d2b8c7c5bdd7542a671a95b36196c0b5b888daf454ae4fc33ba5346d7",  # 18.6, the `postgres` arm's digest
+        "server_image": "postgres@sha256:9770878138a2e83abcb10856d30cc3f24dae0d317bb956db6ab9159de6c3c80d",  # 18.6, the `postgres` arm's digest
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
         "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
                        "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=4GB"] + PG_FIT_CMD,
@@ -736,7 +736,7 @@ BACKENDS = {
     "postgres": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "postgres@sha256:7341002d2b8c7c5bdd7542a671a95b36196c0b5b888daf454ae4fc33ba5346d7",  # 18.6
+        "server_image": "postgres@sha256:9770878138a2e83abcb10856d30cc3f24dae0d317bb956db6ab9159de6c3c80d",  # 18.6
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
         # DURABILITY MATCHED AT THE RELAXED END (DECISIONS #81): a commit
         # returns when the WAL record is in the OS, the walwriter flushes it
@@ -782,7 +782,7 @@ BACKENDS = {
     "postgres_tuned": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "postgres@sha256:7341002d2b8c7c5bdd7542a671a95b36196c0b5b888daf454ae4fc33ba5346d7",  # 18.6, same digest as the default arm
+        "server_image": "postgres@sha256:9770878138a2e83abcb10856d30cc3f24dae0d317bb956db6ab9159de6c3c80d",  # 18.6, same digest as the default arm
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
         # Sized from the container, not written as a constant. The two lanes
         # that run PostgreSQL get different envelopes (24g at medium, 12g at
@@ -839,7 +839,7 @@ BACKENDS = {
     "neo4j_graph": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "neo4j@sha256:e702d6b535d9d3ae01ee7b132ec87aa40e23d3f0ace82fbfc344e2048cb81960",  # 2026.08.1-community
+        "server_image": "neo4j@sha256:c3903fa96db31479c2a28e5d00e05260b039ff856f8b2cca7280c78299877731",  # 2026.10.0-community
         # heap parity with the ArcadeDB deployments (same per-scale heap)
         "server_env": ["-e", "NEO4J_AUTH=neo4j/dbbenchpass",
                        "-e", "NEO4J_server_memory_heap_initial__size={heap}",
@@ -879,7 +879,7 @@ BACKENDS = {
         "topology": "embedded",
         "image": "dbbench:client",
     },
-    # MEMGRAPH 3.13.1 (2026-09-17), served, Bolt through the same neo4j driver
+    # MEMGRAPH 3.14.0 (2026-10-23; re-pinned from 3.13.1, first served 2026-09-17), served, Bolt through the same neo4j driver
     # the Neo4j arm uses and the lane's Cypher verbatim (l2_graph.MemgraphGraph).
     # Four of its defaults are sized from the HOST or unbounded, and each is
     # set from the cell here and read back onto the row by the adapter:
@@ -903,7 +903,7 @@ BACKENDS = {
     "memgraph_graph": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "memgraph/memgraph@sha256:4710bee1ab5b47599876e30f17ae1679d0bbb2262d84dc06641521fecb7c89ce",  # 3.13.1
+        "server_image": "memgraph/memgraph@sha256:c7478d1737edb77fa2b1fcd4e37e34a68f10272d0ec7d7f9aa92d0afc8e0be9f",  # 3.14.0
         "server_cmd": ["--log-level=INFO", "--also-log-to-stderr=true",
                        "--bolt-num-workers={ncpu}",
                        "--storage-snapshot-thread-count={ncpu}",
@@ -962,7 +962,7 @@ BACKENDS = {
     "pgage_graph": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "dbbench:pg-age",  # PostgreSQL 18 + pgvector 0.8.6 + AGE 1.8.0, built from Dockerfile.pgage
+        "server_image": "dbbench:pg-age",  # PostgreSQL 18 + pgvector 0.8.7 + AGE 1.8.0, built from Dockerfile.pgage
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
         "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
                        "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=4GB"] + PG_FIT_CMD,
@@ -989,7 +989,7 @@ BACKENDS = {
     "pg_age_e2": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "dbbench:pg-age",  # PostgreSQL 18 + pgvector 0.8.6 + AGE 1.8.0, built from Dockerfile.pgage
+        "server_image": "dbbench:pg-age",  # PostgreSQL 18 + pgvector 0.8.7 + AGE 1.8.0, built from Dockerfile.pgage
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
         "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
                        "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=4GB"] + PG_FIT_CMD,
@@ -1004,7 +1004,7 @@ BACKENDS = {
     "memgraph_e2": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "memgraph/memgraph@sha256:4710bee1ab5b47599876e30f17ae1679d0bbb2262d84dc06641521fecb7c89ce",  # 3.13.1
+        "server_image": "memgraph/memgraph@sha256:c7478d1737edb77fa2b1fcd4e37e34a68f10272d0ec7d7f9aa92d0afc8e0be9f",  # 3.14.0
         "server_cmd": ["--log-level=INFO", "--also-log-to-stderr=true",
                        "--bolt-num-workers={ncpu}",
                        "--storage-snapshot-thread-count={ncpu}",
@@ -1027,7 +1027,7 @@ BACKENDS = {
     "neo4j_e2": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "neo4j@sha256:e702d6b535d9d3ae01ee7b132ec87aa40e23d3f0ace82fbfc344e2048cb81960",  # 2026.08.1-community
+        "server_image": "neo4j@sha256:c3903fa96db31479c2a28e5d00e05260b039ff856f8b2cca7280c78299877731",  # 2026.10.0-community
         "server_env": ["-e", "NEO4J_AUTH=neo4j/dbbenchpass",
                        "-e", "NEO4J_server_memory_heap_initial__size={heap}",
                        "-e", "NEO4J_server_memory_heap_max__size={heap}",
@@ -1207,8 +1207,8 @@ BACKENDS = {
         "topology": "client_server",
         "image": "dbbench:client",
         # NEO4J + QDRANT IN ONE CONTAINER since DECISIONS #117 (BUGS F133): the
-        # Neo4j digest every Neo4j arm runs (2026.08.1-community) with the
-        # Qdrant server binary from the dense lane's pinned v1.19.1 image,
+        # Neo4j digest every Neo4j arm runs (2026.10.0-community) with the
+        # Qdrant server binary from the dense lane's pinned v1.20.0 image,
         # built by build_images.sh from Dockerfile.composed, so the one server
         # cgroup caps, pins and measures both halves. The vector half was the
         # client's in-memory local mode until then.
@@ -1309,7 +1309,7 @@ BACKENDS = {
     "qdrant_sparse": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "qdrant/qdrant@sha256:0699e7733a6fa7fa7f6b95dcbed84ebb04584110da525cdfdef9f305c4f57738",  # v1.19.1
+        "server_image": "qdrant/qdrant@sha256:2d1b0bfd0a961275481ea09400fc98008216ae54e1b52ed7d24520d63050c644",  # v1.20.0
         "server_port": 6333,
         "ready_regex": r"Qdrant (HTTP|gRPC) listening|Actix runtime found",
     },
@@ -1317,7 +1317,7 @@ BACKENDS = {
     "qdrant_sparse_uint8": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "qdrant/qdrant@sha256:0699e7733a6fa7fa7f6b95dcbed84ebb04584110da525cdfdef9f305c4f57738",  # v1.19.1
+        "server_image": "qdrant/qdrant@sha256:2d1b0bfd0a961275481ea09400fc98008216ae54e1b52ed7d24520d63050c644",  # v1.20.0
         "server_port": 6333,
         "ready_regex": r"Qdrant (HTTP|gRPC) listening|Actix runtime found",
     },
@@ -1423,7 +1423,7 @@ BACKENDS = {
     "qdrant_dense": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "qdrant/qdrant@sha256:0699e7733a6fa7fa7f6b95dcbed84ebb04584110da525cdfdef9f305c4f57738",  # v1.19.1
+        "server_image": "qdrant/qdrant@sha256:2d1b0bfd0a961275481ea09400fc98008216ae54e1b52ed7d24520d63050c644",  # v1.20.0
         "server_port": 6333,
         "ready_regex": r"Qdrant (HTTP|gRPC) listening|Actix runtime found",
     },
@@ -1434,11 +1434,11 @@ BACKENDS = {
     "qdrant_dense_int8": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "qdrant/qdrant@sha256:0699e7733a6fa7fa7f6b95dcbed84ebb04584110da525cdfdef9f305c4f57738",  # v1.19.1
+        "server_image": "qdrant/qdrant@sha256:2d1b0bfd0a961275481ea09400fc98008216ae54e1b52ed7d24520d63050c644",  # v1.20.0
         "server_port": 6333,
         "ready_regex": r"Qdrant (HTTP|gRPC) listening|Actix runtime found",
     },
-    # pgvector 0.8.6 on PostgreSQL 18. maintenance_work_mem at half the cap:
+    # pgvector 0.8.7 on PostgreSQL 18. maintenance_work_mem at half the cap:
     # the HNSW build spills to a slow path when the graph outgrows it, and at
     # the 64 MB default a 10M build does not finish inside the envelope.
     # shared_buffers a quarter of the cap so the index can be resident, the
@@ -1446,7 +1446,7 @@ BACKENDS = {
     "pgvector_dense": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "pgvector/pgvector@sha256:1d50c689b0a6511b9ea0a15615281c81a59fd04a08eb35057ec8646fb3a2118a",  # 0.8.6-pg18
+        "server_image": "pgvector/pgvector@sha256:ad249f9fb9572979643a47694e59b9a8cdcdf6abc6accebf49bb80ad5f20ff9b",  # 0.8.7-pg18
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
         "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
                        "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=8GB"] + PG_FIT_CMD,
@@ -1457,7 +1457,7 @@ BACKENDS = {
     "pgvector_sparse": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "pgvector/pgvector@sha256:1d50c689b0a6511b9ea0a15615281c81a59fd04a08eb35057ec8646fb3a2118a",  # 0.8.6-pg18
+        "server_image": "pgvector/pgvector@sha256:ad249f9fb9572979643a47694e59b9a8cdcdf6abc6accebf49bb80ad5f20ff9b",  # 0.8.7-pg18
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
         "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
                        "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=8GB"] + PG_FIT_CMD,
@@ -1465,11 +1465,47 @@ BACKENDS = {
         "ready_regex": r"(?s)PostgreSQL init process complete.*"
                        r"database system is ready to accept connections",
     },
+    # CRATEDB 6.4.6 (2026-10-23, the multi-model comparator batch): documents (TPC-H analytics only: no multi-statement
+    # transactions, so no new-order or payment), dense (`float_vector` + `knn_match`), time series. The official image, the
+    # amd64 digest of `crate:latest`; Apache 2.0, no benchmark clause. One server config for the three lanes, each setting
+    # with its vendor source in COMPARATORS.md "CrateDB" and PROTOCOL.md section 7:
+    #   CRATE_HEAP_SIZE={heap}: a quarter of the cap, 1 GB to 30.5 GB (vendor_memory.cratedb_heap; "Memory configuration");
+    #   -Cprocessors={ncpu}: the node.rst `processors` setting, which sizes the thread pools and otherwise reads the host (F6);
+    #   -Cdiscovery.type=single-node: one node, no cluster formation (the docker-run page of the vendor's Docker guide).
+    # Shards, replicas, translog durability and refresh are TABLE settings and live in the lane adapters (read back there).
+    # The PostgreSQL wire is port 5432; the HTTP port (4200) is the engine's own and the adapters use it for read-backs only.
+    "cratedb_tpc": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "crate@sha256:e7bded344df487e2595f59d7edaa0cf96979a00ba51f12ee66d7fcf8cd65f5f4",  # 6.4.6, amd64
+        "server_env": ["-e", "CRATE_HEAP_SIZE={heap}"],
+        "server_cmd": ["-Cdiscovery.type=single-node", "-Cprocessors={ncpu}"],
+        "server_port": 5432,
+        "ready_regex": r"\bstarted\b",
+    },
+    "cratedb_dense": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "crate@sha256:e7bded344df487e2595f59d7edaa0cf96979a00ba51f12ee66d7fcf8cd65f5f4",  # 6.4.6, amd64
+        "server_env": ["-e", "CRATE_HEAP_SIZE={heap}"],
+        "server_cmd": ["-Cdiscovery.type=single-node", "-Cprocessors={ncpu}"],
+        "server_port": 5432,
+        "ready_regex": r"\bstarted\b",
+    },
+    "cratedb_ts": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "crate@sha256:e7bded344df487e2595f59d7edaa0cf96979a00ba51f12ee66d7fcf8cd65f5f4",  # 6.4.6, amd64
+        "server_env": ["-e", "CRATE_HEAP_SIZE={heap}"],
+        "server_cmd": ["-Cdiscovery.type=single-node", "-Cprocessors={ncpu}"],
+        "server_port": 5432,
+        "ready_regex": r"\bstarted\b",
+    },
     # Neo4j's own vector index, on the same pinned Neo4j the graph lane runs.
     "neo4j_dense": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "neo4j@sha256:e702d6b535d9d3ae01ee7b132ec87aa40e23d3f0ace82fbfc344e2048cb81960",  # 2026.08.1-community
+        "server_image": "neo4j@sha256:c3903fa96db31479c2a28e5d00e05260b039ff856f8b2cca7280c78299877731",  # 2026.10.0-community
         "server_env": ["-e", "NEO4J_AUTH=neo4j/dbbenchpass",
                        "-e", "NEO4J_server_memory_heap_initial__size={heap}",
                        "-e", "NEO4J_server_memory_heap_max__size={heap}",
@@ -1480,7 +1516,7 @@ BACKENDS = {
     "neo4j_dense_int8": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "neo4j@sha256:e702d6b535d9d3ae01ee7b132ec87aa40e23d3f0ace82fbfc344e2048cb81960",  # 2026.08.1-community
+        "server_image": "neo4j@sha256:c3903fa96db31479c2a28e5d00e05260b039ff856f8b2cca7280c78299877731",  # 2026.10.0-community
         "server_env": ["-e", "NEO4J_AUTH=neo4j/dbbenchpass",
                        "-e", "NEO4J_server_memory_heap_initial__size={heap}",
                        "-e", "NEO4J_server_memory_heap_max__size={heap}",
@@ -1520,7 +1556,7 @@ BACKENDS = {
     "memgraph_dense": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "memgraph/memgraph@sha256:4710bee1ab5b47599876e30f17ae1679d0bbb2262d84dc06641521fecb7c89ce",  # 3.13.1, the graph arm's
+        "server_image": "memgraph/memgraph@sha256:c7478d1737edb77fa2b1fcd4e37e34a68f10272d0ec7d7f9aa92d0afc8e0be9f",  # 3.14.0, the graph arm's
         "server_cmd": ["--log-level=INFO", "--also-log-to-stderr=true",
                        "--bolt-num-workers={ncpu}",
                        "--storage-snapshot-thread-count={ncpu}",
@@ -1535,7 +1571,7 @@ BACKENDS = {
     "memgraph_dense_int8": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "memgraph/memgraph@sha256:4710bee1ab5b47599876e30f17ae1679d0bbb2262d84dc06641521fecb7c89ce",  # 3.13.1, the graph arm's
+        "server_image": "memgraph/memgraph@sha256:c7478d1737edb77fa2b1fcd4e37e34a68f10272d0ec7d7f9aa92d0afc8e0be9f",  # 3.14.0, the graph arm's
         "server_cmd": ["--log-level=INFO", "--also-log-to-stderr=true",
                        "--bolt-num-workers={ncpu}",
                        "--storage-snapshot-thread-count={ncpu}",
@@ -1581,6 +1617,34 @@ BACKENDS = {
         "server_cmd": ["--maxmemory", "{mem90_mib}mb", "--maxmemory-policy", "noeviction",
                        "--io-threads", "{io_threads}", "--search-workers", "{io_threads}",
                        "--protected-mode", "no"],
+        "server_port": 6379,
+        "ready_regex": r"Ready to accept connections",
+        "pre_disk_cmd": ["redis-cli", "SAVE"],
+    },
+    # REDIS 8.10.2, documents (l1tpc) and time series (l4): the same image, digest, memory rule, thread fit and durability
+    # patch as redis_dense above (one server, three models). Lane-specific settings, each from the vendor's docs:
+    #   --search-on-timeout fail (documents only): the Query Engine's default query timeout is 500 ms and its default
+    #     policy RETURNS the partial result when it expires
+    #     (https://redis.io/docs/latest/develop/ai/search-and-query/administration/configuration/#search-on-timeout);
+    #     a benchmark must never time a short answer, so a timeout is an error, and every query also sends TIMEOUT 0;
+    #   no --search-workers on the time-series arm: it uses TimeSeries commands, not the Query Engine.
+    "redis_tpc": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "redis@sha256:13ad9044b4b2fd2abe4c5aad8c384b0504a71006fa33f023fc68998453a2eeca",  # 8.10.2, amd64
+        "server_cmd": ["--maxmemory", "{mem90_mib}mb", "--maxmemory-policy", "noeviction",
+                       "--io-threads", "{io_threads}", "--search-workers", "{io_threads}",
+                       "--search-on-timeout", "fail", "--protected-mode", "no"],
+        "server_port": 6379,
+        "ready_regex": r"Ready to accept connections",
+        "pre_disk_cmd": ["redis-cli", "SAVE"],
+    },
+    "redis_ts": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "redis@sha256:13ad9044b4b2fd2abe4c5aad8c384b0504a71006fa33f023fc68998453a2eeca",  # 8.10.2, amd64
+        "server_cmd": ["--maxmemory", "{mem90_mib}mb", "--maxmemory-policy", "noeviction",
+                       "--io-threads", "{io_threads}", "--protected-mode", "no"],
         "server_port": 6379,
         "ready_regex": r"Ready to accept connections",
         "pre_disk_cmd": ["redis-cli", "SAVE"],
@@ -1820,7 +1884,7 @@ if _ENGINE_PIN:
 
 # Which backends run on a JVM, and therefore have a heap worth recording and
 # checking. Substring match against the backend name.
-JVM_BACKENDS = ("arcadedb", "neo4j", "elasticsearch", "questdb")
+JVM_BACKENDS = ("arcadedb", "neo4j", "elasticsearch", "questdb", "cratedb")
 
 # What each lane reads out of /data, which is BENCH_DATA bind-mounted read-only.
 # Checked on the HOST before any cell starts.
@@ -1878,7 +1942,11 @@ LANES = {
            ["oltp", "olap"]),
     "l1tpc": ("l1_tpc.py",
               ["arcadedb_embedded", "arcadedb_server", "arcadedb_imgdefaults_server", "duckdb", "sqlite", "mongodb",
-               "surrealdb_tpc", "surrealdb_tpc_server", "arangodb_tpc", "postgres", "postgres_tuned"],
+               "surrealdb_tpc", "surrealdb_tpc_server", "arangodb_tpc", "postgres", "postgres_tuned",
+               # the multi-model comparator batch (2026-10-23): analytics only (ARM_RUNS)
+               "cratedb_tpc",
+               # Redis JSON + FT.AGGREGATE
+               "redis_tpc"],
               ["oltp", "olap"]),
     "e2": ("e2_hybrid.py",
            ["arcadedb_e2", "arcadedb_e2_server", "surrealdb_e2", "surrealdb_e2_server",
@@ -1943,6 +2011,7 @@ LANES = {
              "elasticsearch_dense", "memgraph_dense", "falkordb_dense", "ladybug_dense",
              # the multi-model comparator batch (2026-10-23)
              "redis_dense",
+             "cratedb_dense",
              # int8 arms for every dense engine that ships a quantized index
              # (QUANTIZATION.md). Chroma, DuckDB-VSS, pgvector and SurrealDB
              # ship no int8 mode; FalkorDB and LadybugDB document none.
@@ -1988,7 +2057,11 @@ LANES = {
             # SQLite's footing, see l4_tsbs.SurrealTS / ArangoTS.
             "surrealdb_ts", "surrealdb_ts_server", "arangodb_ts",
             # Plain PostgreSQL beside TimescaleDB (DECISIONS #131 item 6).
-            "postgres_ts"],
+            "postgres_ts",
+            # the multi-model comparator batch (2026-10-23)
+            "cratedb_ts",
+            # Redis TimeSeries
+            "redis_ts"],
            ["ingest"]),
 }
 
@@ -2690,6 +2763,9 @@ def observe_server(cid):
     hits = re.findall(r"-Xmx(\d+)([gGmM])", envs)
     if not hits:
         hits = re.findall(r"heap[_.]max_?_?size=(\d+)([gGmM])", envs, re.I)
+    if not hits:
+        # CrateDB takes its heap as CRATE_HEAP_SIZE=<n>g (the vendor's setting; the node's own answer is read from sys.nodes)
+        hits = re.findall(r"CRATE_HEAP_SIZE=(\d+)([gGmM])", envs)
     if hits:
         val, unit = hits[-1]
         # Exact, not rounded down to whole GiB: Neo4j's own tool recommends heaps such as 3600m (DECISIONS #202).
@@ -2956,7 +3032,7 @@ MP_LABELS = {
     "surrealdb_dense": "surreal", "surrealdb_dense_server": "surrealsrv",
     "arangodb_dense": "arango", "mongodb_dense": "mongo",
     "sqlite_vec_dense": "sqlitevec", "sqlite_vec_dense_int8": "sqlitevec_int8",
-    "elasticsearch_dense": "elastic", "elasticsearch_dense_int8": "elastic_int8",
+    "elasticsearch_dense": "elastic", "elasticsearch_dense_int8": "elastic_int8", "cratedb_dense": "cratedb",
     "memgraph_dense": "memgraph", "falkordb_dense": "falkordb", "ladybug_dense": "ladybug",
     "redis_dense": "redis",
     # DECISIONS #135 (2026-10-02)
@@ -3124,7 +3200,8 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
            "ts_utc": datetime.now(timezone.utc).isoformat()}
     # WHICH RULE SET THIS ARM'S HEAP (DECISIONS #202): stamped on the Neo4j and Elasticsearch arms that took their vendor's memory rule, so
     # a row measured before it (heap at half the cap) is told apart from one after, and fairness_check judges each by its own rule.
-    if VENDOR_MEMORY and (vendor_memory.is_neo4j(job["backend"]) or vendor_memory.is_elasticsearch(job["backend"])):
+    if VENDOR_MEMORY and (vendor_memory.is_neo4j(job["backend"]) or vendor_memory.is_elasticsearch(job["backend"])
+                          or vendor_memory.is_cratedb(job["backend"])):
         row["vendor_memory"] = "vendor_memory.py, DECISIONS #202"
 
     # cli_cid initialised HERE, not at its assignment 90 lines down: the
@@ -4011,6 +4088,19 @@ def split_cpuset(cpuset, n):
 # sizes; page_check does not owe the arm on another workload's table; build_jobs does not
 # make its other workloads. An arm absent from the map runs the whole lane, as before.
 ARM_RUNS = {
+    # CrateDB has no multi-statement transaction (its documentation: one statement is the unit), so the new-order and payment
+    # transactions of the OLTP table are not expressible on it; the analytics table is (COMPARATORS.md "Not added, and why").
+    "cratedb_tpc": {
+        "l1tpc": {"workloads": ("olap",), "scales": ("tpch1", "tpch10"),
+                  "title": "documents analytics, CrateDB (no multi-statement transaction, so no OLTP table)"},
+    },
+    # Redis keeps the data in memory under noeviction: the SF0.1 smoke put the server at 681 MiB for 600,572 line items (1.19 KB a
+    # row with the JSON document and the SORTABLE index), so SF1 needs about 7 GB (fits the 14.4 GB maxmemory of the 16g cap) and
+    # SF10 about 71 GB, far above the 28.8 GB of the 32g cap. The tpch10 cells are not queued.
+    "redis_tpc": {
+        "l1tpc": {"workloads": ("oltp", "olap"), "scales": ("tpch1",),
+                  "title": "documents, Redis (in memory: tpch1 only, tpch10 does not fit the 32g cap)"},
+    },
     "arcadedb_imgdefaults_server": {
         "l1tpc": {"workloads": ("oltp",), "scales": ("tpch10",), "reps": 3, "durability": "relaxed",
                   "title": "documents OLTP, served ArcadeDB at the image's own JVM defaults, the 2M-part cell"},

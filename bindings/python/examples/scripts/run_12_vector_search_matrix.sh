@@ -351,7 +351,7 @@ for ((run = 1; run <= RUNS; run++)); do
         fi
 
         cmd=(
-            python3 "$PY_SCRIPT"
+            "${MATRIX_PYTHON[@]}" "$PY_SCRIPT"
             --backend "$backend"
             --dataset "$DATASET"
             --db-path "$db_path"

@@ -1740,7 +1740,7 @@ class PgAgeGraph(Base):
     """PostgreSQL with Apache AGE, served (DECISIONS #128): every graph read
     and write is the lane's own Cypher text, run through AGE's `cypher()`
     table function, on the `dbbench:pg-age` image the cross-model lane already
-    pins (PostgreSQL 18 + pgvector 0.8.6 + AGE 1.8.0~rc0; the row records the
+    pins (PostgreSQL 18 + pgvector 0.8.7 + AGE 1.8.0~rc0; the row records the
     versions the server reports).
 
     THE TEXTS RUN AS WRITTEN (laptop probe 2026-10-02,

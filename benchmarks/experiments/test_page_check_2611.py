@@ -148,3 +148,43 @@ def test_the_gate_run_refuses_a_payload_of_another_instrument(built, tmp_path):
                           env=E2E._env(results), capture_output=True, text=True, timeout=900)
     assert done.returncode == 1 and "WRONG INSTRUMENT" in done.stdout
     assert "Traceback" not in done.stderr
+
+
+def test_every_ldbc_table_says_it_is_not_an_ldbc_benchmark_result(at, capsys):
+    _results, payload = at
+    ldbc = [t for t in payload["tables"] if t["id"] in ("l2", "l2olap", "restart")]
+    assert ldbc, "the fixture payload carries no LDBC-derived table"
+    for t in ldbc:
+        assert "These are not LDBC Benchmark Results." in " ".join(t["conditions"])
+    assert PC._check_ldbc_notice(payload) == 0
+
+
+def test_a_table_that_lost_the_ldbc_wording_is_caught(at, capsys):
+    _results, payload = at
+    table = next(t for t in payload["tables"] if t["id"] == "l2")
+    table["conditions"] = [c for c in table["conditions"] if "LDBC" not in c]
+    assert PC._check_ldbc_notice(payload) == 1
+    assert "MISSING l2" in capsys.readouterr().out
+
+
+def test_a_reworded_ldbc_disclaimer_is_caught(at):
+    _results, payload = at
+    table = next(t for t in payload["tables"] if t["id"] == "l2")
+    table["conditions"] = [c.replace("These are not LDBC Benchmark Results.", "Inspired by LDBC.") for c in table["conditions"]]
+    assert PC._check_ldbc_notice(payload) == 1
+
+
+def test_the_ldbc_sentences_carry_no_unpinned_number(at, capsys):
+    """The gate that reads every condition sentence for numbers sees none it cannot place in the LDBC wording."""
+    import export_web as EW
+    _results, payload = at
+    PC._check_conditions(payload, [])
+    out = capsys.readouterr().out
+    assert not [l for l in out.splitlines() if ("UNPINNED" in l or "UNREGISTERED" in l) and "LDBC" in l], out
+    spans = lambda text: [m.group(0) for m in PC.CONDITION_TOKEN.finditer(text)]   # noqa: E731
+    for tid in EW.LDBC_DERIVED_TABLES:
+        for key in ("ldbc", "ldbc_deviations"):
+            text = EW._R(tid, key)
+            allowed = PC._spans([p for p, _ in PC.CONDITION_ALLOWED] + [p for p, _ in PC.CONDITION_EXEMPT], text)
+            loose = [t for t in PC.CONDITION_TOKEN.finditer(text) if not PC._covered(t.span(), allowed)]
+            assert not loose, (tid, key, [t.group(0) for t in loose])

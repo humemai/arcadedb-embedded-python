@@ -11,9 +11,10 @@ The workarounds that were documented (openCypher `=`, and a named SQL parameter,
 `Long` elements) must keep passing on every engine. The three SQL tests that were strict `xfail`
 tripwires are plain tests now: they assert the fixed answer.
 
-CI builds its wheel from upstream's 26.11.1-SNAPSHOT image, which carries no build number and is
-republished only when upstream's deploy job succeeds; at the time of this change it still held the
-engine from before #10457, with the same version string as the fixed engine. So the version cannot
+CI builds its wheel from this repository's engine source, which lacks the fix until an upstream sync
+brings it, and upstream's 26.11.1-SNAPSHOT image (the other engine a wheel can be built from) carries no
+build number and is republished only when upstream's deploy job succeeds; either can hold the engine
+from before #10457, with the same version string as the fixed engine. So the version cannot
 tell the two apart, and `fixed` probes the one behavior that changed: two lists that differ only in
 the element class are equal. On an engine without the fix the same tests assert the old answer (no
 row), as `test_vector_sql.py` does for `where` (the repository accepts no skips,

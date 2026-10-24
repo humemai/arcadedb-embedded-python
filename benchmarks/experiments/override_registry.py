@@ -467,7 +467,7 @@ DENSE_ID_INDEX_CARRIERS = tuple(("l3d", be) for be in (
     "arcadedb_dense_embedded", "arcadedb_dense_embedded_int8", "arcadedb_dense_server", "arcadedb_dense_server_int8",
     "pgvector_dense", "neo4j_dense", "neo4j_dense_int8", "memgraph_dense", "memgraph_dense_int8", "falkordb_dense",
     "duckdb_vss_dense", "lancedb_dense", "lancedb_dense_fp32", "chroma_dense", "qdrant_dense", "qdrant_dense_int8",
-    "milvus_dense", "milvus_dense_int8", "redis_dense", "elasticsearch_dense", "elasticsearch_dense_int8", "mongodb_dense",
+    "milvus_dense", "milvus_dense_int8", "redis_dense", "cratedb_dense", "elasticsearch_dense", "elasticsearch_dense_int8", "mongodb_dense",
     "mongodb_dense_int8", "arangodb_dense", "arangodb_dense_int8", "surrealdb_dense", "surrealdb_dense_server",
     "sqlite_vec_dense", "sqlite_vec_dense_int8", "ladybug_dense"))
 

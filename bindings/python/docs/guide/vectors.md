@@ -105,8 +105,9 @@ Important:
 - `beam_width` (ef/efConstruction): higher → better recall, slower search/build (default: 100).
 - `ef_search` (runtime, exact search only): higher → better recall, slower search.
     - Unset, the engine picks the beam: 100 below 10,000 vectors, and `max(2k, 20)` from
-      there up. On 20,000 random 32-dimension vectors that default found 80% of the true
-      top 10, where a beam of 100 found 99.7%. Set it for the recall you need.
+      there up (20 for `k` = 10). That is the engine's policy, not a bug in a filter or a
+      hop; see [Recall at the default beam](#recall-at-the-default-beam) for what it costs
+      in recall.
 
 ### The search beam in SQL
 
@@ -120,6 +121,49 @@ the number that ran:
 ```sql
 SELECT expand(vectorNeighbors('Doc[embedding]', :q, 10, 100))
 ```
+
+### Recall at the default beam
+
+Observation, not a tuned recommendation. A plain `vectorNeighbors(index, vector, 10)` on an
+index of 10,000 vectors or more uses a beam of 20, and recall drops as the index grows.
+Measured on the published JVM wheel `arcadedb-embedded==26.10.2.post1`, untimed, `k` = 10,
+an index created before the load with the default `METADATA` (only `dimensions` and
+`similarity` set; `maxConnections` 32, `beamWidth` 100), 3 independent loads per cell, 300
+queries per load, no filter and no hop. The figures are the study's own (the self-hit counts
+are medians over the loads); the study is "LSM_VECTOR recall at default settings" (2026-10-24) and its tables are in
+[ArcadeData/arcadedb#10704](https://github.com/ArcadeData/arcadedb/issues/10704).
+
+SIFT (128-dimensional, Euclidean; 300 `sift_test` queries against the exact top 10),
+recall@10:
+
+| Vectors | default beam | `efSearch` 100 | `efSearch` 400 |
+| --- | --- | --- | --- |
+| 10,000 | 0.984 | 1.000 | 1.000 |
+| 100,000 | 0.929 | 0.998 | 1.000 |
+
+Random unit vectors (1024-dimensional, cosine), where the query is the stored vector of a
+record and the table counts how often that record comes back as the first row (of 300). Random
+high-dimensional vectors are a worst case for any graph index, so read these as a lower bound,
+not as what real embeddings do:
+
+| Vectors | default beam | `efSearch` 100 | `efSearch` 400 |
+| --- | --- | --- | --- |
+| 10,000 | 295 | 300 | 300 |
+| 50,000 | 229 | 297 | 300 |
+| 100,000 | 174 | 282 | 300 |
+
+An earlier footprint study on the same wheel (100,000 entities with 1024-dimensional
+vectors, 3 loads of 100 queries, JVM and native) saw the same drop through the plain SQL
+statement: the stored vector was the first row in 295 to 299 of 300 queries at 10,000
+entities and in 168 to 182 of 300 at 100,000.
+
+What this supports: passing the beam in the query (`vectorNeighbors(..., 10, 100)`) raised
+recall in every cell above, so state it when recall matters and when you compare engines or
+settings. What it does not support: a recommended value. The studies did not time a query, so
+the cost of a larger beam is unmeasured here; on the random 1024-dimensional vectors even a
+beam of 400 found only 0.40 of the exact top 10 at 100,000 vectors (0.154 at the default
+beam), and a larger graph (`maxConnections` 64, `beamWidth` 200, one load) with a beam of 100 found 0.544.
+Check recall against an exact search on your own data before you rely on a setting.
 
 ### Searches while the graph rebuilds
 
@@ -273,6 +317,43 @@ Notes:
 - For euclidean, skip normalization if magnitude should matter. For dot_product,
   normalize: the engine expects unit-length vectors.
 
+### Loading many vectors
+
+Declare the property `ARRAY_OF_FLOATS`, then load the vectors in bulk. The vectors of a chunk cross the bridge as one `float32` buffer, not as JSON text and not one JPype call per element:
+
+```python
+db.command("sql", "CREATE DOCUMENT TYPE Doc")
+db.command("sql", "CREATE PROPERTY Doc.embedding ARRAY_OF_FLOATS")
+
+# rows with a list or a numpy array per vector (the property must be declared ARRAY_OF_FLOATS)
+db.insert_many("Doc", [{"id": i, "embedding": x[i]} for i in range(len(x))])
+
+# or whole columns: a 2-D float32 matrix is one column of vectors
+db.insert_columns("Doc", {"id": ids, "embedding": x})  # x: float32, shape (n, dims)
+
+# a graph load takes the same rows
+with db.graph_batch() as gb:
+    gb.create_vertices("Vx", [{"id": i, "embedding": x[i]} for i in range(len(x))])
+```
+
+A `float64` list or array stores the same values it always did (the engine converts it to float for this property). Declaring the property is what makes the path apply: an undeclared property keeps the exact doubles in a list. A numpy array is accepted wherever a vector is a property value (`Document.set`, `insert_many`, `create_vertices`).
+
+The figures below compare the bindings before this change (A, JSON text or one JPype call per element) with the bindings after it (B, one binary buffer), built from one base wheel so the engine jars and the JVM are identical. The workload is 128-d `float32` vectors on an `ARRAY_OF_FLOATS` property, a JVM heap of 4 GB, one fresh process per run. `insert_columns` takes a different path in A: a wheel without 2-D columns offers one `float[]` per row, so its row compares that best case with the 2-D column.
+
+<!-- ab-table: float-vector-crossing -->
+| Case | Metric | A | B | A median | B median | B vs A (95% interval) | Sign test (B) | Verdict | Clean pairs |
+|---|---|---|---|---|---|---|---|---|---|
+| insert_many, 100,000 dict rows, 128-d float32, chunks of 20,000 | time (ms, lower is better) | before | one buffer | 14,215 | 2,621 | 0.185 (0.180 to 0.191) | 10 better, 0 worse, p = 0.00195 | B better by 81 to 82 percent | 10 (2 dropped) |
+| insert_columns, 100,000 rows, 128-d float32 | time (ms, lower is better) | before | one buffer | 609 | 521 | 0.862 (0.833 to 0.947) | 8 better, 2 worse, p = 0.109 | B better by 5 to 17 percent | 10 (2 dropped) |
+| graph_batch create_vertices, 50,000 rows, 128-d float32 | time (ms, lower is better) | before | one buffer | 3,596 | 1,083 | 0.300 (0.289 to 0.315) | 10 better, 0 worse, p = 0.00195 | B better by 68 to 71 percent | 10 (2 dropped) |
+| find_nearest(k=10) with 5,000 allowed RIDs, 200 queries, 20,000 vectors | time (ms, lower is better) | before | one buffer | 2,296 | 569 | 0.246 (0.235 to 0.257) | 10 better, 0 worse, p = 0.00195 | B better by 74 to 76 percent | 10 (2 dropped) |
+| all four steps of the probe | total time (ms, lower is better) | before | one buffer | 20,605 | 4,785 | 0.232 (0.230 to 0.236) | 10 better, 0 worse, p = 0.00195 | B better by 76 to 77 percent | 10 (2 dropped) |
+
+Medians are over the clean pairs of interleaved runs, one fresh process per run, round 0 dropped. B vs A is the median of the per-round ratios with its bootstrap 95% interval; above 1.000 means B is worse (B / A for a time, A / B for a rate). A verdict needs the interval to exclude 1.000 and at least 7 clean pairs.
+
+Engine 26.11.1, wheel 26.11.1.dev0, cores 2 (pinned), machine x86-64 laptop, 16 cores.
+<!-- /ab-table -->
+
 ## Preferred Search Surface: SQL / Cypher
 
 For new code, prefer query APIs for search. Bind the query vector as a parameter
@@ -334,10 +415,12 @@ rows = db.query(
     - SQL `CREATE INDEX ... LSM_VECTOR` follows the engine: no quantization (`NONE`, full
       precision) and no hierarchy (`addHierarchy` false) unless the `METADATA` sets them.
       The quick start above sets both, so it builds the same index as the helper.
-- INT8 is the recommended setting. To get it from SQL, put `"quantization": "INT8"` in the
-  `METADATA`.
-- Use `quantization=None` only when you explicitly need full-precision vectors and can
-  accept higher memory usage.
+- `INT8` is what `create_vector_index()` passes; the engine itself defaults to no
+  quantization. This guide does not call INT8 the best setting: no finished study compares
+  its recall, speed or memory with full precision (`NONE`), so check it on your data. To get
+  the helper's setting from SQL, put `"quantization": "INT8"` in the `METADATA`.
+- Pass `quantization=None` for a full-precision index, which is what SQL `CREATE INDEX`
+  builds without a `quantization` key.
 - PQ tunables (require `quantization="PRODUCT"`): `pq_subspaces` (M), `pq_clusters` (K),
   `pq_center_globally`, `pq_training_limit`.
 - In current ArcadeDB engine builds, PRODUCT/PQ also needs enough indexed vectors per
@@ -459,8 +542,8 @@ search is faster or slower than `NONE`.
   any of those layouts (or a number/list) back into a vector, e.g.
   `SELECT [1.0, 2.5].asString('NUMPY').asVector()`. `.asSparse([threshold])` converts
   a dense vector to a sparse one (see Sparse Vectors).
-- Quantization via SQL: `METADATA {"quantization": "INT8"}` is the recommended path for
-  embedded usage.
+- Quantization via SQL: `METADATA {"quantization": "INT8"}` sets INT8 on an index created
+  with `CREATE INDEX` (see [Quantization](#quantization)).
 
 ## Native INT8 Storage
 

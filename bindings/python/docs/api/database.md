@@ -506,6 +506,8 @@ db.insert_many(type_name: str, rows, commit_every: int = 10_000,
                parallel: bool = False) -> int
 ```
 
+Float vectors take a binary path: for a property declared `ARRAY_OF_FLOATS` whose value in every row of a chunk is a list or a numpy array of numbers of one length, the vectors of the chunk cross as one `float32` matrix beside the JSON, instead of as text. The stored values are the list's (the engine converts a list for such a property to float). A property that is not declared `ARRAY_OF_FLOATS`, or a vector that is ragged, missing or null in a row, stays in the JSON.
+
 Bulk-insert documents with **one FFI crossing per chunk of rows** instead of
 several JNI calls per row. The iterable is read 10,000 rows at a time and each
 chunk is serialized to one JSON string and looped Java-side, so memory stays
@@ -594,6 +596,8 @@ same rows, cores, and engine, p50 of 3): 8.21 s against 18.42 s for
 row-wise bridges gained only 2-12% (tuples plus `dict(zip())`, `DataFrame.to_json`).
 Same failure contract as `insert_many`: the transaction the call opened is
 rolled back on any failure, a transaction the caller opened is left to the caller.
+
+A column can also be a 2-D numpy `float32` array: a column of vectors. The whole matrix crosses as one `float[]` (one buffer copy) and each document gets one row of it, which is what an `ARRAY_OF_FLOATS` property stores; no list, no JSON text. Another dtype (cast with `astype(np.float32)`), or a matrix with no columns, raises `ValueError`.
 
 **Parameters:**
 
@@ -1341,11 +1345,11 @@ specifically need that surface.
   `maxConnections` in HNSW (JVector).
 - `beam_width` (int): Beam width for search/construction (default: 100). Maps to
   `beamWidth` in HNSW (JVector).
-- `quantization` (str | None): `"INT8"` (recommended), `"BINARY"`, `"PRODUCT"` for PQ,
+- `quantization` (str | None): `"INT8"`, `"BINARY"`, `"PRODUCT"` for PQ,
   or `None` for full precision (default: `"INT8"`, a choice of this helper; a SQL
   `CREATE INDEX` without `"quantization"` in its `METADATA` builds a full-precision index,
-  the engine's `NONE`). Prefer `"INT8"` for current
-  production usage in these bindings. `"PRODUCT"` walks the graph on PQ codes and re-ranks on
+  the engine's `NONE`). No finished study shows `"INT8"` is the best choice; see
+  [Quantization](../guide/vectors.md#quantization). `"PRODUCT"` walks the graph on PQ codes and re-ranks on
   the stored vectors from ArcadeDB 26.11.1 on; the measured size and recall are in
   [Product quantization (PQ) in SQL](../guide/vectors.md#product-quantization-pq-in-sql),
   which also says no timing of PQ search exists yet. On the 26.10.x wheels it scores every

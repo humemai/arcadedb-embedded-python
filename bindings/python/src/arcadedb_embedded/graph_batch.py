@@ -11,7 +11,13 @@ import jpype
 from ._logging import get_logger, log_swallowed_exception
 from .exceptions import ArcadeDBError
 from .graph import Document, Vertex
-from .type_conversion import convert_python_to_java, json_bulk_scalar_ok
+from .type_conversion import (
+    convert_python_to_java,
+    declared_float_vectors,
+    is_vector_candidate,
+    json_bulk_scalar_ok,
+    split_float_vectors,
+)
 
 _LOGGER = get_logger(__name__)
 
@@ -180,7 +186,10 @@ class GraphBatch:
             type_name: Vertex type name.
             count_or_properties: Either an integer vertex count or an iterable of
                 per-vertex property dictionaries. Use `None` or `{}` for vertices
-                without properties when passing an iterable.
+                without properties when passing an iterable. A property declared
+                ``ARRAY_OF_FLOATS`` whose value in every row is a list or a numpy
+                array of numbers of one length crosses as one binary float32
+                matrix instead of JSON text.
         """
         self._check_not_closed()
         # From engine 26.10.1 the engine refuses to run inside a transaction the
@@ -228,23 +237,31 @@ class GraphBatch:
 
     def _create_vertices_json_bulk(self, type_name, rows):
         """Bulk path: rows cross as one JSON string, RIDs return as one joined
-        string (two bulk copies instead of per-value marshaling — measured
-        ~2.4x). Returns None when unavailable/unsuitable so the caller falls
-        back to the property-matrix path."""
+        string (two bulk copies instead of per-value marshaling, measured
+        ~2.4x). The float vectors of ARRAY_OF_FLOATS properties cross as one
+        binary matrix beside the JSON instead of as text (split_float_vectors).
+        Returns None when unavailable/unsuitable so the caller falls back to
+        the property-matrix path."""
         try:
             vertex_batcher = jpype.JClass("com.arcadedb.python.VertexBatcher")
+            declared = set(declared_float_vectors(self._java_db, type_name))
         except Exception:
             return None
 
         for row in rows:
             if row:
                 for key, value in row.items():
-                    if type(key) is not str or not json_bulk_scalar_ok(value):
+                    if type(key) is not str:
+                        # a property name that is not a str, which json.dumps would
+                        # write as text ({1: "a"} as "1") where the matrix path
+                        # refuses it
+                        return None
+                    if key in declared and is_vector_candidate(value):
+                        continue  # the vector split below takes it, or its chunk goes the matrix way
+                    if not json_bulk_scalar_ok(value):
                         # e.g. datetime/bytes (the matrix path preserves types), or a
                         # value JSON would change: an integer beyond 64 bits, NaN or
-                        # Infinity, a lone surrogate; or a property name that is not
-                        # a str, which json.dumps would write as text ({1: "a"} as
-                        # "1") where the matrix path refuses it
+                        # Infinity, a lone surrogate
                         return None
 
         import json
@@ -253,16 +270,38 @@ class GraphBatch:
         rids = []
         for start in range(0, len(rows), self._BULK_CHUNK):
             chunk = rows[start : start + self._BULK_CHUNK]
-            joined = str(
-                vertex_batcher.createVerticesJson(
-                    self._java_graph_batch,
-                    type_name,
-                    json.dumps([row or {} for row in chunk]),
+            split = split_float_vectors(self._java_db, type_name, chunk, declared)
+            rest = split[0] if split else chunk
+            if declared and not self._json_bulk_ok(rest):
+                # a list the matrix cannot carry (ragged, a null, not numbers)
+                # is left in this chunk: the property-matrix path takes the chunk
+                java_rids = self._java_graph_batch.createVertices(
+                    type_name, self._to_java_property_matrix(chunk)
                 )
-            )
+                rids.extend(str(rid) for rid in java_rids)
+                continue
+            text = json.dumps([row or {} for row in rest])
+            if split:
+                joined = vertex_batcher.createVerticesJson(
+                    self._java_graph_batch, type_name, text, split[1], split[2]
+                )
+            else:
+                joined = vertex_batcher.createVerticesJson(
+                    self._java_graph_batch, type_name, text
+                )
+            joined = str(joined)
             if joined:
                 rids.extend(joined.split(";"))
         return rids
+
+    @staticmethod
+    def _json_bulk_ok(rows):
+        for row in rows:
+            if row:
+                for value in row.values():
+                    if not json_bulk_scalar_ok(value):
+                        return False
+        return True
 
     def new_edge(
         self,

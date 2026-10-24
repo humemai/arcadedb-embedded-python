@@ -1,6 +1,6 @@
 """The memory settings of the two comparators whose vendors give a rule for them (DECISIONS #202).
 
-Every engine runs as its vendor recommends. For two JVM comparators the vendor's rule differs from the half-cap heap the
+Every engine runs as its vendor recommends. For three JVM comparators the vendor's rule differs from the half-cap heap the
 rest of the harness uses (`runner.HEAP_BY_SCALE`), so their arms take their heap, and Neo4j its page cache, from here:
 
   * Neo4j: the numbers `neo4j-admin server memory-recommendation` prints for the cell's cap, run from the pinned image
@@ -8,6 +8,9 @@ rest of the harness uses (`runner.HEAP_BY_SCALE`), so their arms take their heap
     below with that file). The tool sets the initial heap equal to the maximum heap, as the Neo4j manual recommends.
   * Elasticsearch: the heap is no more than 50% of the cell's cap and below the compressed-oops threshold ("26GB is safe
     on most systems"), `-Xms` = `-Xmx`.
+  * CrateDB: "a good starting point for the heap space is 25% of the system memory ... the heap shouldn't be set below 1GB and
+    not above 30.5GB" (https://cratedb.com/docs/guide/admin/memory.html), set with `CRATE_HEAP_SIZE`. The rest of the cap is
+    left to Lucene's memory-mapped files and the file system cache, as the page says.
 
 Nothing here imports the runner, so the runner, the tests and the page generator all read one table.
 """
@@ -20,8 +23,8 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 NEO4J_RECOMMENDATION_FILE = os.path.join(HERE, "neo4j_memory_recommendation.json")
 
-# The image the tool ran from: the digest every Neo4j arm in runner.BACKENDS pins (2026.08.1-community).
-NEO4J_IMAGE_DIGEST = "sha256:e702d6b535d9d3ae01ee7b132ec87aa40e23d3f0ace82fbfc344e2048cb81960"
+# The image the tool ran from: the digest every Neo4j arm in runner.BACKENDS pins (2026.10.0-community).
+NEO4J_IMAGE_DIGEST = "sha256:c3903fa96db31479c2a28e5d00e05260b039ff856f8b2cca7280c78299877731"
 # The command that produced the table, per cap (`{cap}` is the cell's memory cap). It runs against an empty data directory, so
 # the page cache it recommends is the one for a server whose memory is the only input, as for the cells that build their store.
 NEO4J_RECOMMENDATION_COMMAND = ("docker run --rm -m 2g --entrypoint neo4j-admin neo4j@" + NEO4J_IMAGE_DIGEST
@@ -43,6 +46,16 @@ NEO4J_MEMORY = {
 # than the threshold for compressed ordinary object pointers ... 26GB is safe on most systems".
 ES_HEAP_CAP_FRACTION = 0.5
 ES_HEAP_OOPS_CEILING_GIB = 26
+
+
+# CrateDB: the heap is 25% of the memory the node may use, between 1 GB and 30.5 GB.
+CRATEDB_HEAP_FRACTION = 0.25
+CRATEDB_HEAP_MIN_GIB = 1
+CRATEDB_HEAP_MAX_GIB = 30.5
+
+
+def is_cratedb(backend):
+    return str(backend).startswith("cratedb")
 
 
 def is_neo4j(backend):
@@ -73,12 +86,20 @@ def elasticsearch_heap(tier_heap, cap):
     return f"{int(gib)}g" if gib == int(gib) else f"{int(gib * 1024)}m"
 
 
+def cratedb_heap(cap):
+    """CrateDB's documented heap for a cell whose cap is `cap`: a quarter of it, clamped to [1 GB, 30.5 GB], as `<n>g` or `<n>m`."""
+    gib = min(max(_gib(cap) * CRATEDB_HEAP_FRACTION, CRATEDB_HEAP_MIN_GIB), CRATEDB_HEAP_MAX_GIB)
+    return f"{int(gib)}g" if gib == int(gib) else f"{int(gib * 1024)}m"
+
+
 def heap_for(backend, tier_heap, cap):
     """The heap this arm runs with at a tier whose half-cap heap is `tier_heap` and whose cap is `cap`."""
     if is_neo4j(backend):
         return NEO4J_MEMORY[cap][0]
     if is_elasticsearch(backend):
         return elasticsearch_heap(tier_heap, cap)
+    if is_cratedb(backend):
+        return cratedb_heap(cap)
     return tier_heap
 
 

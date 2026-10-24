@@ -22,7 +22,7 @@ This document describes the build architecture for creating platform-specific Py
 - ✅ Full bindings suite passes on every platform build
 - ✅ About 41 MB of JARs (the 44 MB measured on the linux/amd64 wheel before Studio was left out, less its 2.9 MB; the same JAR set on every platform; includes the server, not Studio)
 - ✅ All native runners (no QEMU emulation)
-- ✅ Pinned runner versions (the Docker build still pulls the moving `X.Y.Z-SNAPSHOT` image tag, so two builds of the same commit can differ)
+- ✅ Pinned runner versions (CI builds the engine jars from the commit's own source, so two builds of the same commit agree; a local `build.sh` without `JAR_LIB_DIR`, and the release workflow, still take the jars of the `arcadedata/arcadedb:X.Y.Z[-SNAPSHOT]` image, whose snapshot tag moves)
 
 ## Architecture
 
@@ -111,7 +111,7 @@ See `bindings/python/setup.py` for the complete implementation.
 jobs:
   download-jars:
     runs-on: ubuntu-24.04
-    # Copies the ArcadeDB JARs out of the upstream image (or builds them from source when engine-from-source is set), uploads artifact
+    # Builds the ArcadeDB JARs from this commit's source (cached under a hash of the engine source tree), or copies them out of the upstream image when engine-from-source is off, uploads artifact
 
   test:
     needs: download-jars
@@ -416,7 +416,7 @@ bindings/python/
 **Key sections:**
 
 1. **download-jars job**
-    - Copies the ArcadeDB JARs out of the upstream image, or builds them from this commit's source when `engine-from-source` is set (manual dispatch and `workflow_call` only)
+    - Builds the ArcadeDB JARs from this commit's source, restoring them from a cache keyed on a hash of the engine source tree when it is unchanged. This is the default for pushes, pull requests and manual dispatches; with `engine-from-source` off (a dispatch input, and the default of a `workflow_call` that does not set it, as in the release workflow) it copies them out of the upstream image instead
     - Uploads artifact for native builds
 
 2. **test job matrix**

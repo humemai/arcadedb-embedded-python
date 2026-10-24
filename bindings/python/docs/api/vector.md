@@ -332,7 +332,8 @@ also the default. If you explicitly disable eager preparation, the first call to
   ArcadeDB's default/adaptive search behavior. Anything but a positive integer raises
   `ArcadeDBError`.
 - `allowed_rids` (List[str]): Optional list of RID strings (e.g. `["#1:0", "#2:5"]`) to
-  restrict search (default: `None`)
+  restrict search (default: `None`). RIDs given as text become the filter set in one bridge
+  call; a list that holds RID objects is added one by one.
 
 **Returns:**
 

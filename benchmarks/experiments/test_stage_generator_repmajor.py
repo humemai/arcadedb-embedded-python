@@ -27,7 +27,7 @@ from test_stage_generator_2611 import run, waits  # noqa: E402
 def chain(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("rm")
     out = tmp / "stages"
-    r = run(["--second-list", "--after", "none", "--status-file", "none", "--reps", "3", "--out", str(out)], tmp)
+    r = run(["--no-tiers", "--second-list", "--after", "none", "--status-file", "none", "--reps", "3", "--out", str(out)], tmp)   # the plain rep-major chain; the tiered one is tested in test_stage_generator_2611.py
     assert r.returncode == 0, r.stdout[-600:] + r.stderr[-600:]
     return out
 
@@ -83,8 +83,8 @@ def test_priority_names_every_subset_engine_and_arcadedb_leads():
     assert list(G.ENGINE_PRIORITY[1:13]) == ["surrealdb", "arangodb", "postgresql", "mongodb", "redis", "qdrant-neo4j", "neo4j",
                                               "qdrant", "duckdb", "sqlite", "memgraph", "ladybug"]
     assert G.ENGINE_PRIORITY[-1] == "cratedb"
-    # an engine whose adapter is not merged (cratedb) is not in ENGINES: skipped cleanly, nothing breaks; redis joined with its dense arm
-    assert "redis" in G.ENGINES and "cratedb" not in G.ENGINES
+    # both comparator batches are merged: Redis with its dense arm, CrateDB (last in priority) with its three lanes
+    assert "redis" in G.ENGINES and "cratedb" in G.ENGINES
 
 
 def test_a_single_rep_keeps_the_ids_and_one_pass(tmp_path):

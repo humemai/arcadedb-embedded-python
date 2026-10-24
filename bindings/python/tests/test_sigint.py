@@ -48,6 +48,10 @@ try:
             server = jpype.JClass("java.net.ServerSocket")(0, 1, loopback)
             server.setSoTimeout(4000)
             server.accept()
+        elif sys.argv[1] == "sleep":
+            # ONE long blocking call, not a loop of short ones: the main thread is
+            # in a single clock_nanosleep() and only a signal delivered to it wakes it.
+            time.sleep(60)
         else:
             while True:
                 time.sleep(0.05)
@@ -60,7 +64,10 @@ db.close()
 """
 
 
-def _run_sigint(tmp_path, mode, interrupt):
+def _run_signal(tmp_path, mode, interrupt, sig=signal.SIGINT, bound=60):
+    """Send ``sig`` to a child with an open transaction; fail if it has not exited within
+    ``bound`` seconds (a KeyboardInterrupt stuck behind a blocking call looks like this).
+    """
     proc = subprocess.Popen(  # nosec B603 - fixed argv, no shell, test-owned
         [sys.executable, "-c", _CHILD, mode, str(tmp_path / "db"), interrupt],
         stdout=subprocess.PIPE,
@@ -73,9 +80,18 @@ def _run_sigint(tmp_path, mode, interrupt):
     )
     assert "READY" in proc.stdout.readline()
     time.sleep(1.0)
-    proc.send_signal(signal.SIGINT)
-    out, _ = proc.communicate(timeout=60)
+    proc.send_signal(sig)
+    try:
+        out, _ = proc.communicate(timeout=bound)
+    except subprocess.TimeoutExpired:
+        proc.kill()  # our own child
+        proc.communicate()
+        pytest.fail(f"child still running {bound} s after signal {int(sig)}")
     return proc.returncode, out
+
+
+def _run_sigint(tmp_path, mode, interrupt):
+    return _run_signal(tmp_path, mode, interrupt)
 
 
 @pytest.mark.parametrize("mode", ["python", "java"])
@@ -89,6 +105,30 @@ def test_ctrl_c_raises_keyboard_interrupt_and_runs_cleanup(tmp_path, mode):
     assert "KEYBOARD_INTERRUPT" in lines and "FINALLY" in lines
     assert "COUNT" in lines and lines[lines.index("COUNT") + 1] == "0"
     assert "ATEXIT" in lines
+
+
+def test_ctrl_c_wakes_a_long_blocking_call_with_a_transaction_open(tmp_path):
+    """A single time.sleep(60) in the main thread inside a transaction: Ctrl-C ends it at once
+    (KeyboardInterrupt, rollback, cleanup, exit 0). With JPype's own SIGINT handler left in
+    place the KeyboardInterrupt was pending but nobody woke the sleeping thread, so the
+    process did not exit for the 60 s (10 of 10 runs on the JVM wheel; never on the native).
+    """
+    t0 = time.monotonic()
+    code, out = _run_signal(tmp_path, "sleep", "0", bound=20)
+    assert time.monotonic() - t0 < 25
+    assert code == 0, out
+    lines = out.split()
+    assert "KEYBOARD_INTERRUPT" in lines and "FINALLY" in lines
+    assert lines[lines.index("COUNT") + 1] == "0"
+    assert "ATEXIT" in lines
+
+
+def test_sigterm_ends_the_process_with_status_minus_15(tmp_path):
+    """No Python handler for SIGTERM, as in a plain script: the process dies by SIGTERM, as
+    without a JVM. JPype's handler used to crash it with SIGABRT (exit -6, jpype#1497).
+    """
+    code, _ = _run_signal(tmp_path, "sleep", "0", sig=signal.SIGTERM, bound=20)
+    assert code == -signal.SIGTERM
 
 
 def test_interrupt_true_keeps_the_jvm_handling_sigint(tmp_path):

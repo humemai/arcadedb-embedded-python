@@ -33,7 +33,7 @@ docker run -d --name "$NAME" --cpuset-cpus "$CORES" --memory "$MEM" -p "$PORT:76
 for _ in $(seq 1 90); do docker logs "$NAME" 2>&1 | grep -q "Bolt server is fully armed and operational" && break; sleep 1; done
 docker logs "$NAME" 2>&1 | grep -q "Bolt server is fully armed and operational" || { echo "SMOKE FAIL: server not ready"; exit 1; }
 EXP=$PWD BENCH_SERVER_HOST=localhost BENCH_SERVER_PORT=$PORT LIMIT=$LIMIT SLACK=$SLACK \
-  nice -n 19 taskset -c "$CORES" uv run --directory ../.. --with neo4j==6.3.1 python -I - <<'PY' || exit 1
+  nice -n 19 taskset -c "$CORES" uv run --directory ../.. --with neo4j==6.4.1 python -I - <<'PY' || exit 1
 import os, sys, time
 sys.path.insert(0, os.environ["EXP"])
 import neo4j

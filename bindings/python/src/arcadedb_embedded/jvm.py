@@ -11,6 +11,7 @@ import platform
 import re
 import shlex
 import shutil
+import signal
 import sys
 import tempfile
 import threading
@@ -21,6 +22,7 @@ from typing import Iterable, Optional, Union
 import jpype
 import jpype.imports
 
+from . import aot as _aot
 from ._logging import get_logger
 from .exceptions import ArcadeDBError
 
@@ -308,6 +310,7 @@ def start_jvm(
     jvm_args: Optional[Union[Iterable[str], str]] = None,
     common_pool_parallelism: Optional[int] = None,
     interrupt: Optional[bool] = None,
+    aot: Optional[bool] = None,
 ):
     """
     Start the JVM with ArcadeDB JARs if not already started.
@@ -362,14 +365,12 @@ def start_jvm(
         What Ctrl-C (SIGINT) does. The default, False, leaves it to Python: a
         KeyboardInterrupt is raised, so ``finally`` blocks, ``atexit`` hooks and
         the rollback of a ``with db.transaction():`` run. A Java call in
-        progress (a slow query) is not interrupted: the KeyboardInterrupt
-        arrives when it returns (``kill -TERM`` from another terminal still
-        ends the process at once, through the JVM's shutdown hooks). A Java call
-        that waits in an interruptible way (``Thread.sleep``, ``Object.wait``,
-        the engine's async ``wait_completion()``) is woken by Ctrl-C, and JPype
-        1.7.1 can then raise ``java.lang.InterruptedException`` or
-        ``RuntimeError`` and deliver the ``KeyboardInterrupt`` late; "Known
-        Engine Issues" in the documentation has the workaround.
+        progress (a slow query, a wait in the engine) is not interrupted: the
+        KeyboardInterrupt arrives when it returns. SIGINT and SIGTERM are the
+        process's own again after the JVM starts, as in a script without a
+        JVM: a long blocking Python call (``time.sleep``, ``Lock.acquire``,
+        ``queue.get``) is interrupted at once, and ``kill -TERM`` ends the
+        process with status -15 without running Python cleanup.
         Pass True for JPype's script default, where the JVM handles SIGINT and
         ends the whole process at once with exit status 130, with no Python
         cleanup.
@@ -409,6 +410,21 @@ def start_jvm(
 
             # Explicit thread cap for reproducible benchmarks
             start_jvm(heap_size="8g", common_pool_parallelism=8)
+
+    aot (optional)
+        Opt in to the JDK AOT cache (Project Leyden): a per-user cache of loaded
+        and linked classes that makes later starts faster. ``None`` (the default)
+        follows ``ARCADEDB_AOT`` (``1`` = on), which is off when unset; ``True``
+        and ``False`` override it. The first process trains the cache and the JVM
+        writes it when that process exits normally. Any problem falls back to a
+        normal start. Ignored when the JVM is already started or when ``jvm_args``
+        carry their own ``-XX:AOT*`` or ``-Xshare`` flags. See the JVM guide.
+
+    ARCADEDB_AOT (optional)
+        ``1`` turns the AOT cache on (see ``aot``). ``ARCADEDB_AOT_CACHE=<file>``
+        names the cache file; default: a file keyed by package version, JRE and
+        jars in the per-user cache directory (Linux ``$XDG_CACHE_HOME/arcadedb/aot``
+        or ``~/.cache/arcadedb/aot``).
 
     ARCADEDB_LOG_DIR (optional)
         Directory for the engine log (arcadedb.log.*), the JVM crash log and the
@@ -489,6 +505,7 @@ def start_jvm(
         log_dir=log_dir,
     )
     _check_initial_heap(jvm_args)
+    aot_flags = _aot_flags(aot, jvm_args, classpath)
 
     try:
         # Always use bundled JRE
@@ -496,13 +513,30 @@ def start_jvm(
         # handles SIGINT and ends the process with status 130, bypassing Python's
         # signal handler, KeyboardInterrupt, `finally` and `atexit` (#118).
         _JVM_INTERRUPT = bool(interrupt)
-        jpype.startJVM(
-            jvm_path, *jvm_args, classpath=classpath, interrupt=_JVM_INTERRUPT
-        )
+        try:
+            jpype.startJVM(
+                jvm_path,
+                *jvm_args,
+                *aot_flags,
+                classpath=classpath,
+                interrupt=_JVM_INTERRUPT,
+            )
+        except Exception:
+            # A JVM cannot be created twice in one process (JPype cannot retry
+            # after a failed start), so there is no fallback here: free the
+            # training lock and report as usual. The flags are only added for a
+            # JRE that supports them, so this is not expected.
+            _aot.release_training(aot_flags)
+            raise
+        # AOT flags stay out of the recorded config: they differ per process
+        # (training file name) and must not make a later start_jvm() look changed.
         _JVM_CONFIG = tuple(jvm_args)
         _LOG_DIR_USED = log_dir
     except Exception as e:
         raise ArcadeDBError(f"Failed to start JVM: {e}") from e
+
+    if not _JVM_INTERRUPT:
+        _restore_python_signal_handlers()
 
     # Registered AFTER JPype's own atexit hook so it runs BEFORE it (atexit
     # is LIFO): close any Database left open. Engine >= 850ce7c37 (#5418)
@@ -523,6 +557,55 @@ def start_jvm(
         import faulthandler
 
         faulthandler.disable()
+
+
+def _restore_python_signal_handlers() -> None:
+    """Give SIGINT and SIGTERM back to Python after JPype took them (``interrupt=False``).
+
+    JPype installs ``sun.misc.Signal`` handlers for both signals while it starts the JVM, which
+    replaces the handlers Python had registered with the operating system. A SIGINT is then
+    delivered to the JVM, which tells Python from its signal-dispatcher thread
+    (``PyErr_SetInterruptEx``). That sets the "interrupt pending" flag but wakes nobody: the main
+    thread, blocked in a long ``time.sleep()``, ``Lock.acquire()``, ``queue.get()`` or
+    ``Thread.join()``, got EINTR before the flag was set, went back to sleep, and raises the
+    ``KeyboardInterrupt`` only when the call ends (observed: a process with an open transaction
+    that did not exit for the whole 30 s or 120 s of the sleep; 10 of 10 on the JVM wheel, never
+    on the native one). A SIGTERM with no Python handler crashed the process with exit status -6
+    (jpype-project/jpype#1497). The same JPype handler also interrupts the Java thread first,
+    which is the race of jpype-project/jpype#1496.
+
+    Registering the handler Python already has again puts the operating-system disposition back
+    (``signal.signal`` calls ``sigaction``), so SIGINT raises ``KeyboardInterrupt`` in the main
+    thread exactly as in a process without a JVM and SIGTERM ends the process with status -15.
+    A Java call in progress is then not interrupted by Ctrl-C: the ``KeyboardInterrupt`` arrives
+    when it returns. Only the main thread may do this; elsewhere it is skipped.
+    """
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        try:
+            current = signal.getsignal(signum)
+            if current is not None:  # None: set by C code, nothing Python can restore
+                signal.signal(signum, current)
+        except (ValueError, OSError):  # not the main thread / not settable
+            _LOGGER.debug("could not restore the Python handler for signal %s", signum)
+
+
+def _aot_flags(aot: Optional[bool], jvm_args: list, classpath: str) -> list:
+    """AOT cache flags for this start; empty when off, unsupported or on any error."""
+    if not _aot.enabled(aot):
+        return []
+    try:
+        from . import __version__
+
+        return _aot.jvm_flags_for(
+            jvm_args,
+            _extract_runtime_resource("jre"),
+            classpath,
+            __version__,
+            jar_fingerprint()["sha256"],
+        )
+    except Exception as exc:  # noqa: BLE001 - an optimisation must never fail a start
+        _LOGGER.debug("AOT cache skipped: %s: %s", type(exc).__name__, exc)
+        return []
 
 
 def _close_active_databases():

@@ -220,8 +220,10 @@ class VectorIndex:
            - Lower values indicate higher similarity (larger positive dot product).
 
     Quantization:
-        The index supports vector quantization to reduce memory usage and speed up search:
-        - **NONE** (Default): Full precision (float32).
+        The index supports vector quantization, which trades precision for smaller
+        stored vectors:
+        - **NONE**: Full precision (float32); the default of SQL ``CREATE INDEX``
+          (``Database.create_vector_index()`` passes INT8).
         - **INT8**: 8-bit integer quantization.
         - **BINARY**: 1-bit quantization (for high-dimensional binary vectors).
     """
@@ -386,10 +388,19 @@ class VectorIndex:
         if not allowed_rids:
             return None
 
+        from .graph import _graph_calls
+
+        values = list(allowed_rids)
+        calls = _graph_calls()
+        if calls is not None and all(type(v) is str for v in values):
+            # RIDs given as text: one crossing builds the whole set (a RID
+            # constructor and an add() call per RID took about 5 us each)
+            return calls.ridSet(jpype.JArray(jpype.JString)(values))
+
         HashSet = jpype.JClass("java.util.HashSet")
 
         allowed_rids_set = HashSet()
-        for rid_value in allowed_rids:
+        for rid_value in values:
             allowed_rids_set.add(self._database.to_java_rid(rid_value))
         return allowed_rids_set
 

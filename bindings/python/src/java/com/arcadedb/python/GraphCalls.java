@@ -19,7 +19,9 @@ import com.arcadedb.graph.Vertex;
 import com.arcadedb.utility.Pair;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 public final class GraphCalls {
 
@@ -46,6 +48,17 @@ public final class GraphCalls {
   /** The edges of {@code vertex.getEdges(Vertex.DIRECTION.BOTH, labels)}, in iteration order. */
   public static Edge[] bothEdges(final Vertex vertex, final String... labels) {
     return drain(vertex.getEdges(Vertex.DIRECTION.BOTH, labels));
+  }
+
+  /**
+   * A set of RIDs from their text, for the {@code allowed_rids} filter of a vector search: building it from Python took a RID
+   * constructor call and an {@code add} call per RID (about 5 microseconds each), here the strings cross as one array.
+   */
+  public static Set<RID> ridSet(final String[] rids) {
+    final Set<RID> set = new HashSet<>(Math.max(16, (int) (rids.length / 0.75f) + 1));
+    for (final String rid : rids)
+      set.add(new RID(rid));
+    return set;
   }
 
   /**

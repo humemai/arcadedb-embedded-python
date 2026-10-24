@@ -132,7 +132,7 @@ asserts, so the list below stops at the file.
 | `test_log_dir.py` | The engine log, the crash log and `logging.properties` go to a per-user directory and never the working directory (a child JVM started from an empty read-only directory), `ARCADEDB_LOG_DIR` and `jvm_args` overrides, the temp-directory fallback, and the directory per platform |
 | `test_xml_limits.py` | `disable_xml_limits` defaults to false, an import that hits a JDK entity limit names the option, and `import_documents(disable_xml_limits=True)` lifts the limits for that call only and restores them |
 | `test_jvm_payload.py` | A static check that no Python list crosses into the JVM |
-| `test_sigint.py` | Ctrl-C raises `KeyboardInterrupt` and runs cleanup once the JVM is started; `interrupt=True` keeps JPype's default (not collected on Windows) |
+| `test_sigint.py` | Ctrl-C raises `KeyboardInterrupt` and runs cleanup once the JVM is started, also out of one long `time.sleep()` with a transaction open; SIGTERM ends the process with -15; `interrupt=True` keeps JPype's default (not collected on Windows) |
 | `test_bridge_fixes.py` | Two fixes in the Java bridge: nested values read back as Python in the same transaction, and a date written as midnight UTC in any JVM time zone |
 | `test_java_package_shadowing.py` | A folder named `java/` or `com/` must not change what a query returns |
 | `test_runtime_cache.py` | The dev-mode runtime cache follows the wheel it was extracted from |
@@ -220,8 +220,8 @@ A skip that is truly unavoidable (a Windows limitation, a case that needs an eng
 still upstream) goes on the list in `scripts/check_test_skips.py` with the platform, the reason,
 and the upstream issue. For an engine bug prefer a strict `xfail`: it fails the suite as soon as
 the fix reaches the engine the suite runs on, which is the cue to convert it to a plain test.
-CI builds its wheel from upstream's current snapshot jars, so that can be days before a release
-carries the fix. The entry stays on the Known Engine Issues page until a release that carries the
+CI builds its wheel from this repository's engine source, so the cue comes when the fix is merged
+into that source (an upstream sync), which can be days before a release carries it. The entry stays on the Known Engine Issues page until a release that carries the
 fix ships.
 
 A passing run ends with a summary of the form `N passed`, with no failures, errors, or skips. One test is marked `xfail` at present, and only on a free-threaded CPython (`sys._is_gil_enabled()` is false): `test_registering_again_and_again_does_not_grow_the_python_heap`, see "Free-threaded Python" on [Known Engine Issues](../guide/known-issues.md). It is not strict, so it may pass there without failing the suite. With the GIL no test is marked `xfail`. An entry on [Known Engine Issues](../guide/known-issues.md) whose fix is in the engine the suite builds against but not in the 26.10.1 wheel has plain regression tests that fail on that wheel. Run with `-rs` to see why a test skipped locally.
