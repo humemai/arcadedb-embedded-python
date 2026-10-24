@@ -53,6 +53,14 @@ DB_RECEIVERS = {"db", "database", "_db", "jdb"}
 # out of the results.
 SETTERS = {"set"}
 
+# A site that is NOT a crossing into the JVM says so beside the code: a comment
+# containing this marker, on the flagged line or on the line directly above it.
+# The native backend has no JVM: `Database.insert_many` there serialises the rows
+# to JSON text, so a `.tolist()` feeding it is the correct conversion, not a
+# list marshalled element by element. Write the reason after the marker; the
+# selftest checks that a marked site is skipped and an unmarked twin is not.
+NOT_A_JVM_CROSSING = "jvm-payload: not-a-crossing"
+
 DEFAULT_PATHS = (
     "benchmarks/experiments",
     "bindings/python/src",
@@ -222,7 +230,15 @@ def check_file(path):
                 continue
             for ln in _hit_lines(node, tainted):
                 found.add((path, ln, why))
-    return sorted(found)
+    lines = src.splitlines()
+
+    def marked(ln):
+        return any(
+            0 <= i < len(lines) and NOT_A_JVM_CROSSING in lines[i]
+            for i in (ln - 1, ln - 2)
+        )
+
+    return sorted(f for f in found if not marked(f[1]))
 
 
 def _iter_py(paths):
@@ -259,6 +275,10 @@ def sparse(jpype, idxs):                             # l3_sparse shape
 
 def bulk(db, vecs):                                  # Database.insert_many
     db.insert_many("Article", [{"e": vecs[i].tolist()} for i in range(3)])
+
+def marker_names_no_reason(db, vecs):                # a bare word elsewhere is not the marker
+    # jvm-payload is mentioned, but this is not the marker
+    db.insert_many("Article", [{"e": vecs[i].tolist()} for i in range(3)])
 '''
 
 _MUST_NOT_FLAG = '''
@@ -284,13 +304,18 @@ def neo4j(s, vecs):
 def surreal_then_arcade(self, vecs, b):              # the scoping false positive
     rows = [{"id": i, "e": vecs[i].tolist()} for i in range(3)]
     self.db.insert("product", rows)
+
+def native_rows(db, cols):                           # the marked native site
+    # jvm-payload: not-a-crossing -- the native backend serialises rows to JSON
+    lists = [c.tolist() for c in cols]
+    db.insert_many("Article", [dict(zip("ab", r)) for r in zip(*lists)])
 '''
 
 
 def selftest():
     import tempfile
     ok = True
-    for label, src, expect in (("must flag", _MUST_FLAG, 5),
+    for label, src, expect in (("must flag", _MUST_FLAG, 6),
                                ("must not flag", _MUST_NOT_FLAG, 0)):
         with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as fh:
             fh.write(src)

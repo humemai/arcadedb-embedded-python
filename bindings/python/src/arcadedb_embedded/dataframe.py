@@ -469,6 +469,7 @@ def _insert_documents_native(
     (one crossing per 10,000 rows; the batch is one transaction, or joins the caller's).
     """
     lists = [
+        # jvm-payload: not-a-crossing -- no JVM here: insert_many serialises the rows to JSON text
         columns[name].tolist() if hasattr(columns[name], "tolist") else columns[name]
         for name in names
     ]

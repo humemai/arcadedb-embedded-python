@@ -1,37 +1,46 @@
 # Known Engine Issues
 
 This page lists the known bugs that can return a wrong answer, store a wrong value, change the
-wrong rows, or refuse a read or a write. The first entry is an engine bug. The other two, about
-Ctrl-C and about memory held by results, are not: they are in JPype, the library that connects
+wrong rows, or refuse a read or a write. The first entry is an engine bug that is fixed on
+upstream's main and not yet in a release. The other two, about
+Ctrl-C and about memory held by results, are not engine bugs: they are in JPype, the library that connects
 Python to the engine. Each entry names the versions it was measured on, what you see, a workaround that was
 checked on the same reproduction, and the release that fixes it once there is one. Entries leave
 this page when the fix ships in a release these bindings package.
-An entry with a `Tests:` line has a test of its workaround.
+An entry with a `Tests:` line has a test of its workaround. An entry for a bug that is fixed on upstream's main but not yet in a release says so, with the release that will carry the fix.
 
-## SQL `=` on a list or map misses a list written from Python
+## SQL `=` on a list or map misses a list written from Python (fixed in 26.11.1)
 
-ArcadeDB 26.10.2 (the wheel) and the 26.11.1 snapshot at 58e00054b1. Open, reported as
-[ArcadeData/arcadedb#10448](https://github.com/ArcadeData/arcadedb/issues/10448).
+ArcadeDB 26.10.2 (the wheel) and earlier. Reported as
+[ArcadeData/arcadedb#10448](https://github.com/ArcadeData/arcadedb/issues/10448), fixed by
+[#10457](https://github.com/ArcadeData/arcadedb/pull/10457) on upstream's main on 2026-10-20 and
+in 26.11.1, which is not released yet. On 26.11.1 (and on a snapshot built after that change) the
+query below is right and you need none of the workarounds; on 26.10.2 and earlier it is not.
 
 `Document.set`, `Vertex.set` and `GraphBatch.create_vertices` store a Python `int` as a Java
-`Long`. A SQL literal such as `[1, 2]` parses to `Integer` elements, and SQL `=` compares the
+`Long`. A SQL literal such as `[1, 2]` parses to `Integer` elements, and SQL `=` compared the
 elements of two lists, or the values of two maps, with Java `equals()`, which keeps a `Long` 1
-and an `Integer` 1 apart. So `SELECT FROM V WHERE li = [1, 2]` misses a vertex whose `li` was
-written from Python as `[1, 2]`, `li <> [1, 2]` returns it, and `mp = {"a": 1}` misses a map
+and an `Integer` 1 apart. So `SELECT FROM V WHERE li = [1, 2]` missed a vertex whose `li` was
+written from Python as `[1, 2]`, `li <> [1, 2]` returned it, and `mp = {"a": 1}` missed a map
 the same way. `insert_many` stores `Integer` elements (the engine reads its rows as JSON), so
-the literal matches a list written there and misses the same list written with `Document.set`.
-`CONTAINS`, `CONTAINSALL`, `GROUP BY` and openCypher's `=` treat the two lists as equal.
+the literal matched a list written there and missed the same list written with `Document.set`.
+`CONTAINS`, `CONTAINSALL`, `GROUP BY` and openCypher's `=` treated the two lists as equal.
+From 26.11.1, `=` and `<>` on a list or a map compare the elements numerically, as those do, and
+so do `IN` and `CONTAINS` with a list or map value. A `BY ITEM` index is no longer used to answer
+a whole-list `=`: the query scans, so the answer is right and no longer depends on the index.
 
-Use openCypher's `=` (`MATCH (n:V) WHERE n.li = [1, 2]`), or bind the list as a named SQL
-parameter, `db.query("sql", "SELECT FROM V WHERE li = :p", {"p": [1, 2]})`: it crosses with
-`Long` elements, so it matches lists written with `Document.set`, `Vertex.set` and `GraphBatch`
-(and misses lists written with `insert_many`). The parameter does not help when the list has a
-`BY ITEM` index: SQL `=` is then answered from the index and matches nothing, literal or
-parameter. openCypher's `=` matches with or without the index.
+On 26.10.2 and earlier, use openCypher's `=` (`MATCH (n:V) WHERE n.li = [1, 2]`), or bind the
+list as a named SQL parameter, `db.query("sql", "SELECT FROM V WHERE li = :p", {"p": [1, 2]})`:
+it crosses with `Long` elements, so it matches lists written with `Document.set`,
+`Vertex.set` and `GraphBatch` (and misses lists written with `insert_many`). The parameter does
+not help when the list has a `BY ITEM` index: SQL `=` is then answered from the index and
+matches nothing, literal or parameter. openCypher's `=` matches with or without the index.
 
-Tests: `tests/test_collection_equality_known_issues.py` covers both workarounds, with tripwires
-on the SQL literals and on the parameter through a `BY ITEM` index that fail the suite once the
-fix reaches the wheel.
+Tests: `tests/test_collection_equality_known_issues.py` asserts the fixed answer for the SQL
+literals, `<>` and the parameter through a `BY ITEM` index, and keeps the two workarounds
+passing on every engine. Upstream's snapshot image that CI builds the wheel from may still hold
+the engine from before the fix, with the same version string, so the test file probes the
+behavior and asserts the old answer on such an engine.
 
 ## Ctrl-C during an interruptible Java wait can raise `InterruptedException`, not `KeyboardInterrupt`
 

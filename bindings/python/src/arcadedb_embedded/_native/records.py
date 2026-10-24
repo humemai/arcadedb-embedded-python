@@ -157,7 +157,8 @@ class Vertex(_Mixin, _BaseVertex):
     def _edges(self, fn: str, labels) -> List["Edge"]:
         self._check_open()
         args = ", ".join("'" + label.replace("'", "\\'") + "'" for label in labels)
-        rows = self._db.query("sql", f"SELECT expand({fn}({args})) FROM {self._rid}")
+        edges_sql = f"SELECT expand({fn}({args})) FROM {self._rid}"  # nosec B608 - fn is a fixed function name, labels are escaped literals, _rid is the record's own id
+        rows = self._db.query("sql", edges_sql)
         return [_wrap(self._db, row) for row in rows]
 
     def get_out_edges(self, *labels: str) -> List["Edge"]:
@@ -174,7 +175,8 @@ class Edge(_Mixin, _BaseEdge):
 
     def _end(self, fn: str) -> "Vertex":
         self._check_open()
-        row = self._db.query("sql", f"SELECT expand({fn}()) FROM {self._rid}").first()
+        end_sql = f"SELECT expand({fn}()) FROM {self._rid}"  # nosec B608 - fn is a fixed function name, _rid is the record's own id
+        row = self._db.query("sql", end_sql).first()
         return _wrap(self._db, row)
 
     def get_in(self) -> Vertex:

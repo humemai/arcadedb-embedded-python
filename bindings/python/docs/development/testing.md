@@ -131,6 +131,7 @@ asserts, so the list below stops at the file.
 | `test_java_package_shadowing.py` | A folder named `java/` or `com/` must not change what a query returns |
 | `test_runtime_cache.py` | The dev-mode runtime cache follows the wheel it was extracted from |
 | `test_jar_provenance.py` | The wheel can say which engine it carries, not only which version it is |
+| `test_wheel_packages.py` | The wheel ships every subpackage the shared code imports (`_native` is imported by the JVM backend too) |
 | `test_wheel_platform_tag.py` | The wheel's manylinux platform tag, and `__version__` equals the installed distribution version |
 | `test_wheel_size.py` | The wheel size gate: a wheel at or over 100 decimal megabytes fails the build |
 | `test_check_test_skips.py` | The skip gate described below |
@@ -142,7 +143,7 @@ asserts, so the list below stops at the file.
 | `test_docs_examples.py` | Python blocks from the documentation run as code; see [Documentation example tests](#documentation-example-tests) |
 | `test_equivalence.py` | ArcadeDB answers like DuckDB (SQL), NetworkX (graph algorithms) and NumPy (vector recall), and like itself with indexes, a view and parameters; see [Equivalence checks](#equivalence-checks) |
 | `test_equivalence_ladybug.py` | ArcadeDB's Cypher answers like LadybugDB's over the same graph and queries (not collected on Windows; see [Equivalence checks](#equivalence-checks)) |
-| `test_collection_equality_known_issues.py` | The workarounds for SQL `=` on a list or map written from Python (ArcadeData/arcadedb#10448, open): openCypher `=` and a named SQL parameter, with strict `xfail` tripwires on the SQL list and map literals and on the parameter through a `BY ITEM` index |
+| `test_collection_equality_known_issues.py` | SQL `=` on a list or map written from Python (ArcadeData/arcadedb#10448, fixed on upstream's main and in 26.11.1, not in the 26.10.2 wheel): plain tests of the fixed answer for the SQL list and map literals, `<>`, and the parameter through a `BY ITEM` index, plus the openCypher `=` and named-parameter workarounds, which pass on every engine. CI's snapshot image can still hold the engine from before the fix under the same version string, so the file probes the behavior and asserts the old answer there |
 | `test_count_pushdown_known_issues.py` | Regression tests for the openCypher count push-down fixes and the `BYTE` aggregate fix that shipped in 26.10.2, with the workarounds that were documented for them (they fail on the 26.10.1 wheel) |
 | `test_light_edge_and_view_known_issues.py` | Regression tests for the two openCypher count fixes that shipped in 26.10.2 (a one-hop `count(*)` over `light_edges=True` edges in an edge type that is not `LIGHTWEIGHT`, and a pattern predicate over an edge type that a Graph Analytical View does not list): the refusal and the right counts, with the workarounds that were documented for them (they fail on the 26.10.1 wheel) |
 | `test_null_index_known_issues.py`, `test_declared_type_known_issues.py`, `test_dml_plan_cache_known_issues.py` | Plain regression tests for engine bugs that 26.10.1 fixed (null keys and index lookups, declared properties, positional parameters in a cached DML plan), with the workarounds that were documented for them |
