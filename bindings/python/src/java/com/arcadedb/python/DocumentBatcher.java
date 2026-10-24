@@ -11,7 +11,8 @@
  * the async executor's parallel bucket writers (insertManyJsonParallel; the
  * Python insert_many wrapper waits for completion itself, then reads the
  * failures the writers reported). insertColumns takes whole columns instead of
- * JSON (Database.insert_columns). The boxDoubles/boxLongs
+ * JSON (Database.insert_columns). Float vectors for ARRAY_OF_FLOATS properties cross as binary matrices (FloatVectors), beside
+ * the JSON or as a column. The boxDoubles/boxLongs
  * helpers below serve AsyncExecutor.append_samples' numpy fast path.
  *
  * JSON-representable property values only (str/int/float/bool/null and
@@ -37,10 +38,21 @@ public final class DocumentBatcher {
 
   public static long insertManyJson(final Database db, final String typeName, final String jsonRows,
       final int commitEvery, final boolean parallel) {
+    return insertManyJson(db, typeName, jsonRows, commitEvery, parallel, null, null);
+  }
+
+  /**
+   * As {@link #insertManyJson(Database, String, String, int, boolean)}, with float vectors that did not go through the JSON
+   * text: {@code vectorNames[c]} is set on row i to row i of {@code vectors[c]}, a {@link FloatVectors.Matrix} of exactly as
+   * many rows as the JSON has. Both are null when there are none.
+   */
+  public static long insertManyJson(final Database db, final String typeName, final String jsonRows,
+      final int commitEvery, final boolean parallel, final String[] vectorNames, final Object[] vectors) {
     final JSONArray rows = new JSONArray(jsonRows);
     final int n = rows.length();
+    FloatVectors.check(vectorNames, vectors, n);
     if (parallel) {
-      insertManyJsonParallel(db, typeName, rows);
+      insertManyJsonParallel(db, typeName, rows, vectorNames, vectors);
       return n;
     }
     // A caller's own transaction is the caller's to commit or roll back: batch
@@ -52,7 +64,7 @@ public final class DocumentBatcher {
     try {
       for (int i = 0; i < n; i++) {
         final MutableDocument doc = db.newDocument(typeName);
-        fill(doc, rows.getJSONObject(i));
+        fill(doc, rows.getJSONObject(i), i, vectorNames, vectors);
         doc.save();
         if (!wasActive && commitEvery > 0 && (i + 1) % commitEvery == 0) {
           db.commit();
@@ -150,9 +162,11 @@ public final class DocumentBatcher {
         len = a.length;
       else if (col instanceof Object[] a)
         len = a.length;
+      else if (col instanceof FloatVectors.Matrix m)
+        len = m.rows();
       else
         throw new IllegalArgumentException("column '" + names[c] + "' is a " + (col == null ? "null" : col.getClass().getName())
-            + ", not a long[], double[], boolean[] or Object[]");
+            + ", not a long[], double[], boolean[], Object[] or FloatVectors.Matrix");
       if (len != n)
         throw new IllegalArgumentException("column '" + names[c] + "' has " + len + " values for " + n + " rows");
     }
@@ -168,6 +182,8 @@ public final class DocumentBatcher {
         v = a[i];
       else if (col instanceof boolean[] a)
         v = a[i];
+      else if (col instanceof FloatVectors.Matrix m)
+        v = m.row(i);
       else
         v = ((Object[]) col)[i];
       doc.set(names[c], v);
@@ -201,16 +217,25 @@ public final class DocumentBatcher {
   }
 
   public static AsyncFailures insertManyJsonParallel(final Database db, final String typeName, final String jsonRows) {
-    return insertManyJsonParallel(db, typeName, new JSONArray(jsonRows));
+    return insertManyJsonParallel(db, typeName, jsonRows, null, null);
   }
 
-  private static AsyncFailures insertManyJsonParallel(final Database db, final String typeName, final JSONArray rows) {
+  /** The parallel twin of {@link #insertManyJson(Database, String, String, int, boolean, String[], Object[])}. */
+  public static AsyncFailures insertManyJsonParallel(final Database db, final String typeName, final String jsonRows,
+      final String[] vectorNames, final Object[] vectors) {
+    final JSONArray rows = new JSONArray(jsonRows);
+    FloatVectors.check(vectorNames, vectors, rows.length());
+    return insertManyJsonParallel(db, typeName, rows, vectorNames, vectors);
+  }
+
+  private static AsyncFailures insertManyJsonParallel(final Database db, final String typeName, final JSONArray rows,
+      final String[] vectorNames, final Object[] vectors) {
     final AsyncFailures failures = new AsyncFailures();
     final ErrorCallback onError = failures::record;
     final int n = rows.length();
     for (int i = 0; i < n; i++) {
       final MutableDocument doc = db.newDocument(typeName);
-      fill(doc, rows.getJSONObject(i));
+      fill(doc, rows.getJSONObject(i), i, vectorNames, vectors);
       db.async().createRecord(doc, null, onError);
     }
     return failures;
@@ -233,10 +258,14 @@ public final class DocumentBatcher {
     return out;
   }
 
-  private static void fill(final MutableDocument doc, final JSONObject row) {
+  private static void fill(final MutableDocument doc, final JSONObject row, final int i, final String[] vectorNames,
+      final Object[] vectors) {
     // toMap() turns nested objects and arrays into plain Map and List. Storing the parsed JSONArray itself reads back
     // as a JSONArray inside the transaction that wrote it, and only becomes a list once the record is serialized.
     for (final Map.Entry<String, Object> entry : row.toMap().entrySet())
       doc.set(entry.getKey(), entry.getValue());
+    if (vectorNames != null)
+      for (int c = 0; c < vectorNames.length; c++)
+        doc.set(vectorNames[c], ((FloatVectors.Matrix) vectors[c]).row(i));
   }
 }

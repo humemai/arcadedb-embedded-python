@@ -29,7 +29,12 @@ from .importer import import_documents as run_document_import
 from .jvm import start_jvm
 from .results import ResultSet
 from .transactions import TransactionContext
-from .type_conversion import _is_numpy_bool, convert_python_to_java, json_bulk_dumps
+from .type_conversion import (
+    _is_numpy_bool,
+    convert_python_to_java,
+    json_bulk_dumps,
+    split_float_vectors,
+)
 from .vector import to_java_float_array
 
 _LOGGER = get_logger(__name__)
@@ -184,7 +189,8 @@ def _column_to_java(name, values):
     and any other sequence convert per element into an ``Object[]`` (a ``str``
     reuses one Java String per distinct value, ``None`` is a null). A pandas
     ``Series`` is read through ``to_numpy``, with a nullable dtype's ``<NA>``
-    as ``None``. Kinds that do not cross natively raise ``TypeError`` rather
+    as ``None``. A 2-D ``float32`` array is a column of vectors: it crosses as
+    one ``float[]`` and each document gets one row of it. Kinds that do not cross natively raise ``TypeError`` rather
     than being stored as something else.
     """
     if hasattr(values, "to_numpy") and not isinstance(values, (list, tuple)):
@@ -194,9 +200,26 @@ def _column_to_java(name, values):
         else:  # a pandas extension dtype (Int64, string, boolean, category): its <NA> is a null
             values = values.to_numpy(dtype=object, na_value=None)
     if _np is not None and isinstance(values, _np.ndarray):
+        if values.ndim == 2 and values.dtype == _np.float32 and values.shape[1] > 0:
+            # a column of vectors: ONE float[] holds the whole matrix and the
+            # documents get a row each, Java-side (FloatVectors.Matrix)
+            return (
+                _java_class("com.arcadedb.python.FloatVectors$Matrix")(
+                    jpype.JArray(jpype.JFloat)(
+                        _np.ascontiguousarray(values).reshape(-1)
+                    ),
+                    int(values.shape[1]),
+                ),
+                int(values.shape[0]),
+            )
         if values.ndim != 1:
+            hint = (
+                "; a 2-D float32 matrix is accepted as a column of vectors"
+                if values.ndim == 2
+                else ""
+            )
             raise ValueError(
-                f"column {name!r} is {values.ndim}-dimensional; a column is one-dimensional"
+                f"column {name!r} is {values.ndim}-dimensional; a column is one-dimensional{hint}"
             )
         kind = values.dtype.kind
         if kind in "iu":
@@ -664,7 +687,13 @@ class Database:
         generator of any length can be loaded (#294). Values must be
         JSON-representable (str/int/float/bool/None and nested lists/dicts);
         a chunk containing other types (e.g. datetime, bytes) falls back
-        transparently to the per-row path.
+        transparently to the per-row path. A property declared
+        ``ARRAY_OF_FLOATS`` whose value in every row of a chunk is a list or a
+        numpy array of numbers of one length crosses as one binary float32
+        matrix beside the JSON instead of as text (``FloatVectors``); the stored
+        values are the list's, since the engine converts a list for such a
+        property to float. A vector that is ragged, missing or null in a row
+        stays in the JSON.
 
         Args:
             type_name: Target document type (must exist).
@@ -770,8 +799,11 @@ class Database:
 
     def _insert_many_chunk(self, type_name, chunk):
         """Insert one chunk of insert_many rows inside the open transaction."""
+        # Float vectors for ARRAY_OF_FLOATS properties cross as one binary matrix
+        # beside the JSON, not as text (see split_float_vectors).
+        split = split_float_vectors(self._java_db, type_name, chunk)
         try:
-            payload = json_bulk_dumps(chunk)
+            payload = json_bulk_dumps(split[0] if split else chunk)
         except (TypeError, ValueError):
             # Values the JSON text cannot carry unchanged (numpy integer
             # scalars, which json.dumps rejects; an integer beyond 64 bits,
@@ -787,9 +819,13 @@ class Database:
         try:
             # commitEvery 0 inside a transaction that is already open: the
             # helper only inserts, and the transaction stays with insert_many.
-            _java_class("com.arcadedb.python.DocumentBatcher").insertManyJson(
-                self._java_db, type_name, payload, 0, False
-            )
+            batcher = _java_class("com.arcadedb.python.DocumentBatcher")
+            if split:
+                batcher.insertManyJson(
+                    self._java_db, type_name, payload, 0, False, split[1], split[2]
+                )
+            else:
+                batcher.insertManyJson(self._java_db, type_name, payload, 0, False)
         except Exception as e:
             raise ArcadeDBError(f"Failed to bulk-insert into '{type_name}': {e}") from e
 
@@ -801,8 +837,9 @@ class Database:
         chunk = first
         try:
             while chunk:
+                split = split_float_vectors(self._java_db, type_name, chunk)
                 try:
-                    payload = json_bulk_dumps(chunk)
+                    payload = json_bulk_dumps(split[0] if split else chunk)
                 except (TypeError, ValueError):
                     payload = None
                 if payload is None:
@@ -827,9 +864,14 @@ class Database:
                         raise
                 else:
                     try:
-                        failures = batcher.insertManyJsonParallel(
-                            self._java_db, type_name, payload
-                        )
+                        if split:
+                            failures = batcher.insertManyJsonParallel(
+                                self._java_db, type_name, payload, split[1], split[2]
+                            )
+                        else:
+                            failures = batcher.insertManyJsonParallel(
+                                self._java_db, type_name, payload
+                            )
                     except Exception as e:
                         raise self._parallel_load_failed(type_name, e) from e
                     # The writers report a rejected record only through its
@@ -887,7 +929,10 @@ class Database:
         engine): 8.2 s against 18.4 s for ``insert_many`` (2.24x); every arm
         stored the same sums and count. Use it whenever the data already lives
         in columns (a pandas ``DataFrame``, a parquet batch, numpy arrays);
-        ``insert_many`` stays the path for a list of dicts.
+        ``insert_many`` stays the path for a list of dicts. A 2-D ``float32``
+        array is a column of vectors: the whole matrix crosses as one
+        ``float[]`` and each document gets one row of it (an ``ARRAY_OF_FLOATS``
+        property).
 
         Args:
             type_name: Target document type (must exist).

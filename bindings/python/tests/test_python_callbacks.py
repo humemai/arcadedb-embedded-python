@@ -182,10 +182,7 @@ def test_a_stale_interrupt_does_not_turn_a_later_error_into_one(db):
 
 
 def test_unconvertible_return_values_are_readable_errors(db):
-    import numpy as np
-
     for label, value in (
-        ("TypeError", np.array([1, 2])),
         ("OverflowError", 2**63),
         ("TypeError", object()),
     ):
@@ -197,6 +194,18 @@ def test_unconvertible_return_values_are_readable_errors(db):
         assert "PyExceptionProxy" not in str(error.value)
     db.register_function("bad", lambda x: 2**62, replace=True)
     assert db.query("sql", "SELECT bad(1) AS x").first().get("x") == 2**62
+
+
+def test_a_numpy_array_is_a_return_value(db):
+    """It raised TypeError until numpy arrays became property values (FloatVectors): a float32 vector is one float[], any other dtype the list it would have been."""
+    import numpy as np
+
+    db.register_function(
+        "vec", lambda x: np.array([1.5, 2.5], dtype=np.float32), replace=True
+    )
+    assert db.query("sql", "SELECT vec(1) AS x").first().get("x") == [1.5, 2.5]
+    db.register_function("ints", lambda x: np.array([1, 2]), replace=True)
+    assert db.query("sql", "SELECT ints(1) AS x").first().get("x") == [1, 2]
 
 
 @pytest.mark.xfail(
