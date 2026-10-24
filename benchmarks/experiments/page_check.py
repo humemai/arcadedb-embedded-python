@@ -889,6 +889,9 @@ NOT_PRINTED = [
      "pool (FAIRNESS F6, audited in FAIRNESS.md rather than printed as a "
      "column), memory limit, and query timeouts, which explain the cell "
      "rather than measure it"),
+    (r"^lancedb_(ef|nprobes|recall_target|calibration_(recall|queries|s))$",
+     "the composed embedded stack's LanceDB operating point (FAIRNESS F7, matched by effect): the ef chosen on held-out queries, the "
+     "recall target it was calibrated to and the recall it read, which explain the vector step's recall column rather than measure it"),
     (r"^ladybug_(threads|buffer_pool_mib)$",
      "the LadybugDB graph arm's thread pool (read back from the engine) and "
      "buffer pool, fitted to the cpuset and to the cgroup memory limit (FAIRNESS "

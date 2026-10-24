@@ -1956,6 +1956,18 @@ class ComposedEmbeddedE2:
     # ef_construction 100, searched at ef 100 and nprobes 10.
     LANCE_INDEX_TYPE = "IVF_HNSW_FLAT"
     LANCE_M, LANCE_EFC, LANCE_EF, LANCE_NPROBES = 16, 100, 100, 10
+    # THE RECALL OPERATING POINT (FAIRNESS F7, "matched by effect"). LanceDB's HNSW at the table's ef 100 answers below the other
+    # arms on this catalog (equal ef is not equal recall), so `ef` is calibrated inside the cell, after the index is built and
+    # before any timed call, on held-out queries the timed passes never see: the smallest ef on LANCE_EF_LADDER (never below the
+    # table's 100) whose recall@10 reaches the target. The target is ArcadeDB's own embedded arm's `recall_retrieval` at the same
+    # scale, the neutral choice F7 makes for ArangoDB's nProbe: a higher target slows the comparator and flatters us, a lower one
+    # speeds it and flatters it. The values are the laptop's dry run of 2026-10-25 (arcadedb_e2, wheel 26.10.2, one
+    # repetition per scale: 0.77 at 50k, 0.405 at 500k; Neo4j read 0.96 and 0.4035, Qdrant 1.0 and 0.651); replace them with the frozen 26.11.1 rows' medians when those exist, or override for a probe with
+    # BENCH_E2_RECALL_TARGET. Source and result are on the row.
+    RECALL_TARGETS = {"e2": 0.77, "e2_500k": 0.405}
+    RECALL_TARGET_SOURCE = "arcadedb_e2 recall_retrieval, laptop dry run 2026-10-25 (wheel 26.10.2, 1 rep)"
+    LANCE_EF_LADDER = (100, 125, 150, 200, 250, 300, 400, 600, 800, 1000)
+    CALIBRATION_QUERIES = 200
     FILTER_MODE = ("cross-store pre-filter: the candidate ids are read from LadybugDB "
                    "and pasted into LanceDB's `where` (prefilter), which ranks them")
     SQLITE_PATH = "/tmp/e2_composed_sqlite.db"
@@ -2060,8 +2072,37 @@ class ComposedEmbeddedE2:
             self.tbl.create_scalar_index("pid", index_type="BTREE")
             self.tbl.create_index(metric="l2", index_type=self.LANCE_INDEX_TYPE,
                                   m=self.LANCE_M, ef_construction=self.LANCE_EFC)
+            self._calibrate_ef(vecs)
         # Read back once the index exists; the lane's main copies `row_extra` onto the row after the build.
         self.row_extra = {**self.row_extra, **self._lance_index_readback()}
+
+    def _calibrate_ef(self, vecs):
+        """Pick `ef` (see RECALL_TARGETS) on held-out queries and record the choice. Ground truth is exact, by inner product (the
+        vectors and queries are unit, so it is L2 order); the held-out queries come from their own seed, not the lane's."""
+        t0 = time.perf_counter()
+        scale = "e2_500k" if len(vecs) >= SCALE_PRODUCTS["e2_500k"] else "e2"
+        env = os.environ.get("BENCH_E2_RECALL_TARGET")
+        target, source = ((float(env), "env BENCH_E2_RECALL_TARGET") if env
+                          else (self.RECALL_TARGETS[scale], self.RECALL_TARGET_SOURCE))
+        rng = np.random.default_rng(SEED + 11)
+        held = rng.standard_normal((self.CALIBRATION_QUERIES, DIM)).astype(np.float32)
+        held /= np.maximum(np.linalg.norm(held, axis=1, keepdims=True), 1e-12)
+        sims = vecs @ held.T
+        gt = np.argpartition(-sims, K, axis=0)[:K].T
+        del sims
+        chosen, got = None, None
+        for ef in self.LANCE_EF_LADDER:
+            self.LANCE_EF = ef
+            hit = sum(len(set(self._search(q, K)) & set(int(x) for x in g)) for q, g in zip(held, gt))
+            got = hit / float(K * len(held))
+            chosen = ef
+            if got >= target:
+                break
+        self.LANCE_EF = chosen
+        self.row_extra = {**self.row_extra, "lancedb_ef": chosen, "lancedb_nprobes": self.LANCE_NPROBES,
+                          "lancedb_recall_target": target, "lancedb_recall_target_source": source,
+                          "lancedb_calibration_recall": round(got, 4), "lancedb_calibration_queries": len(held),
+                          "lancedb_calibration_s": round(time.perf_counter() - t0, 2)}
 
     def _lance_index_readback(self):
         """The engine's own answer for the vector index (BUGS F164): its type
