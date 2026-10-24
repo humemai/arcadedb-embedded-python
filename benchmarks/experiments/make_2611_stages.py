@@ -14,6 +14,12 @@ of the image, the pinned wheel by sha256, the cap rule, the ALL-DONE trap. What 
     The stage list is DERIVED from STAGES and runner.LANES, filtered by engine and lane, and `--check` proves the filtered
     list runs exactly the cells the unfiltered one would for those engines and lanes. Every registered arm is either in the
     subset or named in OUTSIDE, so a newly registered arm forces a decision here.
+  * ENGINE TIERS (the user, 2026-10-24: "N=3 Tier 1 first, then Tier 2, then everything else later"). `--tiers` (default on; `--no-tiers`
+    for the plain rep-major chain) splits every stage by the tier of its arms (TIER_ENGINES, ARM_TIER) and runs the chain
+    Tier 1 pass 1..N, then Tier 2 pass 1..N. Inside a tier the order is what it was: rep-major, ENGINE_PRIORITY inside a lane, the
+    core block before the second list, large tiers after small ones, the biggest cells last; the cap rule holds. An arm with no tier
+    runs after Tier 2 (a third tier). `--check` proves no later tier precedes an earlier one. (An ENGINE tier is not a SIZE
+    tier: "small tier" and "large tier" in a stage title are scales.)
   * THE INSTRUMENT. Every stage exports BENCH_INSTRUMENT=2026-11 before its first python call and aborts if the tree
     does not select it. Rows go to `runs_page_<pin>_2611.jsonl` (and the overlay directories carry the same suffix), so one
     file never holds two instruments. This generator re-executes itself with the variable set; a different value in the
@@ -400,6 +406,38 @@ ENGINE_PRIORITY = ("arcadedb", "surrealdb", "arangodb", "postgresql", "mongodb",
                    "duckdb", "sqlite", "memgraph", "ladybug", "cratedb")
 
 
+# ENGINE TIERS (the user, 2026-10-24). Tier 1: ArcadeDB x4 (inserted by --arcadedb-release), SurrealDB (embedded and served),
+# ArangoDB, PostgreSQL + pgvector + AGE, MongoDB (+Search), the composed Qdrant + Neo4j stack, and the embedded references
+# SQLite (+sqlite-vec), LadybugDB, DuckDB (+VSS + DuckPGQ). Tier 2: Memgraph, Neo4j and Qdrant on their own, Redis 8, CrateDB,
+# TimescaleDB. An engine of ENGINES in neither is a decision this table forces (arm_problems); an arm that still has no tier
+# runs after Tier 2 (TIER_REST), "everything else later".
+TIER_ENGINES = {
+    1: ("arcadedb", "surrealdb", "arangodb", "postgresql", "mongodb", "qdrant-neo4j", "duckdb", "sqlite", "ladybug"),
+    2: ("memgraph", "neo4j", "qdrant", "redis", "cratedb"),
+}
+# An arm that sits in a different tier than its engine. TimescaleDB is an arm of the `postgresql` engine here (it completes
+# PostgreSQL + pgvector + AGE) but the user lists it in Tier 2, not with PostgreSQL + pgvector + AGE in Tier 1.
+ARM_TIER = {"timescaledb": 2}
+TIER_REST = 3
+
+
+def tier_of(backend):
+    """The engine tier an arm runs in: its ARM_TIER entry, else its engine's TIER_ENGINES entry, else TIER_REST."""
+    for prefix, t in ARM_TIER.items():
+        if backend.startswith(prefix):
+            return t
+    eng = engine_of(backend)
+    for t, engines in TIER_ENGINES.items():
+        if eng in engines:
+            return t
+    return TIER_REST
+
+
+def stage_tier(spec):
+    """The engine tier of a stage: its arms' latest tier. subset_specs(tiers=True) never mixes tiers in one stage."""
+    return max((tier_of(b) for b in stage_backends(spec)), default=1)
+
+
 def engine_rank(backend):
     """Sort key of an arm: its engine's place in ENGINE_PRIORITY (an engine outside the list sorts last)."""
     eng = engine_of(backend)
@@ -435,6 +473,20 @@ def arm_problems(arms=None):
             out.append(f"arm {b} is both in the subset ({eng}) and in OUTSIDE")
         elif not eng and not outside:
             out.append(f"arm {b} is neither in the subset nor in OUTSIDE: decide which")
+    return out
+
+
+def tier_table_problems():
+    """Every engine of ENGINES is in exactly one tier of TIER_ENGINES, and no tier names an engine that is not in ENGINES or
+    ENGINE_PRIORITY (Redis 8 and CrateDB are named before their adapters merge)."""
+    out = []
+    for eng in ENGINES:
+        n = sum(eng in engines for engines in TIER_ENGINES.values())
+        if n != 1:
+            out.append(f"engine {eng} is in {n} tiers of TIER_ENGINES, expected exactly 1")
+    known = set(ENGINES) | set(ENGINE_PRIORITY)
+    for t, engines in TIER_ENGINES.items():
+        out += [f"tier {t} names {e}, which is neither in ENGINES nor in ENGINE_PRIORITY" for e in engines if e not in known]
     return out
 
 
@@ -481,20 +533,25 @@ def _piece(s, title, backends, scales):
     return p
 
 
-def subset_specs(engines, lanes, order="biggest-last", skip=()):
+def subset_specs(engines, lanes, order="biggest-last", skip=(), tiers=False):
     """STAGES, unnumbered, restricted to the lanes and to the arms of these engines (minus `skip`). A stage
     left with no arm is dropped; the host-side, restart and decomposition stages are not in the subset's lists. Order
-    "paper" is the table order; "biggest-last" is described at BIGGEST."""
+    "paper" is the table order; "biggest-last" is described at BIGGEST. With `tiers`, a stage whose arms are of several engine
+    tiers is split into one piece per tier (the arms keep their ENGINE_PRIORITY order), and every piece of Tier 1 comes before
+    every piece of Tier 2, each tier in the order the other options give (nothing is dropped or doubled: stage_problems proves it)."""
     base = []
     for spec in STAGES:
         s = _spec10(spec)
         if s[2] not in lanes:
             continue
         bes = [b for b in stage_backends(spec) if engine_of(b) in engines and b not in skip]
-        if bes:
-            base.append(_piece(s, s[1], bes, s[4]))
+        if not bes:
+            continue
+        for t in (sorted({tier_of(b) for b in bes}) if tiers else [None]):
+            part = [b for b in bes if t is None or tier_of(b) == t]
+            base.append(_piece(s, s[1], part, s[4]))
     if order == "paper":
-        return base
+        return sorted(base, key=stage_tier) if tiers else base   # stable: the table order inside a tier
     pieces = []   # (block, tier, index, spec)
     for i, s in enumerate(base):
         block = 0 if s[2] in CORE_LANES else 1 + SECOND_ORDER.index(s[2])
@@ -519,7 +576,7 @@ def subset_specs(engines, lanes, order="biggest-last", skip=()):
                 pieces.append((block, tier, i, _piece(s, s[1] + suffix, bes, sc)))
             for bes, sc in last:
                 pieces.append((block, 2, i, _piece(s, s[1] + " (biggest cells, last)", bes, sc)))
-    pieces.sort(key=lambda t: (t[0] != 0, t[1] if t[0] == 0 else 0, t[0], t[2]))
+    pieces.sort(key=lambda t: (stage_tier(t[3]) if tiers else 0, t[0] != 0, t[1] if t[0] == 0 else 0, t[0], t[2]))
     return [t[3] for t in pieces]
 
 
@@ -645,11 +702,23 @@ def lint_drafts(directory, engines=None, status_file=None):
     if not files:
         return [f"{directory}: no stage scripts"]
     prev = None
+    prev_tier = None
+    # a chain made with --no-tiers mixes tiers inside a stage by design; the tier checks apply to a chain whose titles say "engine tier"
+    tiered = any("[engine tier" in open(f, encoding="utf-8").read() for f in files)
     first = True
     for f in files:
         name = os.path.basename(f)
         text = open(f, encoding="utf-8").read()
         out += lint_draft(text, name, engines)
+        m = _BACKENDS.search(text)
+        if m and tiered:
+            ts = {tier_of(b) for b in m.group(1).split()}
+            if len(ts) > 1:
+                out.append(f"{name}: mixes engine tiers {sorted(ts)} in a chain made with engine tiers")
+            if prev_tier is not None and min(ts) < prev_tier:
+                out.append(f"{name}: an engine tier {min(ts)} stage runs after an engine tier {prev_tier} stage "
+                           f"(Tier 2 must not precede Tier 1)")
+            prev_tier = max(ts) if prev_tier is None else max(prev_tier, max(ts))
         waits = re.findall(r'^while ! grep -qx "([^"]+?) ALL-DONE"', text, re.M)
         if prev is not None and waits != [prev]:
             out.append(f"{name}: waits for {waits or 'nothing'}, expected {prev}")
@@ -1229,14 +1298,14 @@ def stage_script(idx, total, spec, after, pins, params):
     return apply_cap_rule(body, lane, set(backends), set(workloads))
 
 
-def emit_all(out, stages, pins, first_after, reps):
+def emit_all(out, stages, pins, first_after, reps, tiers=False):
     """Write every stage script. `pins` holds ARCADEDB_WHEEL, ARCADEDB_SERVER_IMAGE and ARCADEDB_ENGINE_COMMIT, and may hold
     ARCADEDB_WHEEL_SHA256 for a release that is not on disk at generation (--arcadedb-release); otherwise the file's own
     sha256 is what the stages demand."""
     wheel = pins["ARCADEDB_WHEEL"]
     wheel_sha = pins.get("ARCADEDB_WHEEL_SHA256") or hashlib.sha256(open(wheel, "rb").read()).hexdigest()
     pins = dict(pins, wheel_name=os.path.basename(wheel), wheel_sha256=wheel_sha)
-    plan = pass_plan(stages, reps)
+    plan = pass_plan(stages, reps, tiers)
     for i, (spec, pass_no) in enumerate(plan):
         after = first_after if i == 0 else plan[i - 1][0][0]
         params = dict(stage_params(reps), pass_no=pass_no)
@@ -1256,18 +1325,65 @@ def stage_reps(spec, reps):
     return reps
 
 
-def pass_plan(stages, reps):
+def pass_plan(stages, reps, tiers=False):
     """REP-MAJOR. [(stage spec, pass)] in run order: pass 1 of every stage in `stages` (their own order), then pass 2 of the stages
     that run a second repetition, and so on up to `reps`. Ids are renumbered over the whole run, keeping the prefix of the first
-    stage's, so each stage still waits on the one before it in id order. A single pass keeps `stages` as numbered."""
-    if reps == 1 or not stages:
+    stage's, so each stage still waits on the one before it in id order. A single pass keeps `stages` as numbered.
+
+    With `tiers` the chain is REP-MAJOR INSIDE EACH ENGINE TIER: Tier 1 pass 1..reps, then Tier 2 pass 1..reps (then the arms with
+    no tier). Stage ids stay one run of consecutive numbers, so each stage still waits on the one before it, and a restart or
+    a stop after any pass of any tier needs no regeneration. With one tier in `stages` (ArcadeDB alone, or --engines naming one
+    tier) the plan, ids and titles are exactly those of tiers=False."""
+    if not stages:
+        return []
+    groups = [list(stages)]
+    if tiers:
+        groups = [[s for s in stages if stage_tier(s) == t] for t in sorted({stage_tier(s) for s in stages})]
+    many = len(groups) > 1
+    if reps == 1 and not many:
         return [(s, 1) for s in stages]
     prefix = re.match(r"^(\D+)", stages[0][0]).group(1)
-    runs = [(s, p) for p in range(1, reps + 1) for s in stages if stage_reps(s, reps) >= p]
+    runs = [(s, p, stage_tier(s)) for g in groups for p in range(1, reps + 1) for s in g if stage_reps(s, reps) >= p]
     out = []
-    for k, (s, p) in enumerate(runs):
-        title = f"{s[1]} [rep pass {p} of {reps}]"
+    for k, (s, p, t) in enumerate(runs):
+        tag = ", ".join(([f"engine tier {t}"] if many else []) + ([f"rep pass {p} of {reps}"] if reps > 1 else []))
+        title = f"{s[1]} [{tag}]"
         out.append((tuple([f"{prefix}{k + 1:02d}", title] + list(s[2:])), p))
+    return out
+
+
+def plan_problems(stages, reps, plan, tiers):
+    """What is wrong with the run order `plan` (pass_plan's output) of `stages`: a stage that mixes engine tiers, a later tier
+    that starts before an earlier one has run its last pass (no Tier 2 stage before the last Tier 1 stage), a pass number that goes
+    back inside a tier, an id that repeats or does not rise, and the exactly-once proof per pass: for every pass p the plan runs
+    exactly the cells of the stages that run a rep p, once each (so every subset arm is in one stage per workload per rep)."""
+    out = []
+    ids = [s[0] for s, _ in plan]
+    if len(set(ids)) != len(ids):
+        out.append("stage ids are not unique: " + ", ".join(sorted(i for i in set(ids) if ids.count(i) > 1)))
+    if ids != sorted(ids):
+        out.append("stage ids do not rise in run order")
+    if tiers:
+        last_of = {}
+        prev_t, prev_p = None, 0
+        for k, (s, p) in enumerate(plan):
+            mixed = {tier_of(b) for b in stage_backends(s)}
+            if len(mixed) > 1:
+                out.append(f"{s[0]}: mixes engine tiers {sorted(mixed)}")
+            t = stage_tier(s)
+            last_of[t] = k
+            if prev_t is not None and t < prev_t:
+                earlier = [x[0][0] for x in plan[:k] if stage_tier(x[0]) > t][:1]
+                out.append(f"{s[0]}: an engine tier {t} stage runs after the engine tier {prev_t} stage {earlier[0] if earlier else ''}")
+            if t == prev_t and p < prev_p:
+                out.append(f"{s[0]}: pass {p} runs after pass {prev_p} inside engine tier {t}")
+            prev_t, prev_p = t, p
+    want = collections.Counter((c, p) for p in range(1, reps + 1) for s in stages if stage_reps(s, reps) >= p for c in stage_cells(s))
+    have = collections.Counter((c, p) for s, p in plan for c in stage_cells(s))
+    for (c, p), n in sorted((have - want).items()):
+        out.append(f"cell {c.label} at pass {p} is scheduled {have[(c, p)]} times, expected {want[(c, p)]}")
+    for (c, p) in sorted(want - have):
+        out.append(f"cell {c.label} at pass {p} is in no stage")
     return out
 
 
@@ -1403,13 +1519,19 @@ def project_hours(stages, hours):
     return out
 
 
-def print_projection(stages, cells_tsv, reps):
+def print_projection(stages, cells_tsv, reps, tiers=False):
     cum = 0.0
     print(f"\nPROJECTION, not measured at this instrument: the per-cell table's time for {reps} repetitions, per drafted stage")
     for (sid, h, n, miss), st in zip(project_hours(stages, load_hours(cells_tsv, reps)), stages):
         cum += h
         print(f"  {sid}  {h:6.1f} h  cum {cum:6.1f}  ({n} cells priced" + (f", {miss} with no row" if miss else "") + f")  {st[1]}")
     print(f"  total {cum:.0f} h over {len(stages)} stages (the new instrument's longer query sets are not priced)")
+    if tiers:
+        by = collections.defaultdict(float)
+        for (_sid, h, _n, _miss), st in zip(project_hours(stages, load_hours(cells_tsv, reps)), stages):
+            by[stage_tier(st)] += h
+        for t in sorted(by):
+            print(f"  engine tier {t}: {by[t]:.1f} h at {reps} repetitions")
 
 
 # ------------------------------------------------------------------------------------------------------------ main
@@ -1434,7 +1556,11 @@ def main(argv=None) -> int:
     ap.add_argument("--reps", type=int, default=3, help="repetitions per cell, 1 to 5 (default 3)")
     ap.add_argument("--order", choices=("biggest-last", "paper"), default="biggest-last",
                     help="biggest-last (default): core block first, then lifecycle, sparse, time series; inside the core block "
-                         "large tiers after small ones and the biggest cells last; paper: the table order, no splits")
+                         "large tiers after small ones and the biggest cells last; paper: the table order, no splits. Both apply inside each "
+                         "engine tier (--tiers)")
+    ap.add_argument("--tiers", action=argparse.BooleanOptionalAction, default=True,
+                    help="engine tiers (default on): the chain is Tier 1 pass 1..N, then Tier 2 pass 1..N, each tier rep-major "
+                         "(TIER_ENGINES, ARM_TIER); --no-tiers is the plain rep-major chain over all engines")
     ap.add_argument("--without-timescaledb", action="store_true",
                     help="leave TimescaleDB out of the time-series lane (it is in by default: it completes the PostgreSQL "
                          "arm with pgvector and AGE)")
@@ -1470,14 +1596,22 @@ def main(argv=None) -> int:
     print(f"jpype pin: {bench_common.JPYPE_PIN}; instrument {INSTRUMENT}; mode {mode}; reps {a.reps}")
 
     skip = (TIMESCALEDB,) if a.without_timescaledb else ()
-    specs = subset_specs(engines, lanes, a.order, skip)
+    specs = subset_specs(engines, lanes, a.order, skip, a.tiers)
     pair_id = f"{a.id_prefix}00" if mode == "arcadedb" else None
     stages = number(specs, a.id_prefix)
-    problems = stage_problems(stages, engines, lanes, skip) + check_coverage()[0]
-    print(f"engines: {', '.join(engines)}\nlanes: {', '.join(lanes)}\n{len(stages)} stages, order {a.order}")
+    plan = pass_plan(stages, a.reps, a.tiers)
+    problems = (stage_problems(stages, engines, lanes, skip) + check_coverage()[0] + tier_table_problems()
+                + plan_problems(stages, a.reps, plan, a.tiers))
+    print(f"engines: {', '.join(engines)}\nlanes: {', '.join(lanes)}\n{len(stages)} stages, order {a.order}, "
+          f"engine tiers {'on' if a.tiers else 'off'}")
     for st in stages:
         bes = stage_backends(st)
-        print(f"  {st[0]}  {st[2]:9} {','.join(st[4]) or '-':26} {len(bes):2} arms  {st[1]}")
+        print(f"  {st[0]}  {st[2]:9} {','.join(st[4]) or '-':26} {len(bes):2} arms  tier {stage_tier(st)}  {st[1]}")
+    if a.tiers:
+        for t in sorted({stage_tier(s) for s in stages}):
+            runs = [(s, p) for s, p in plan if stage_tier(s) == t]
+            print(f"  engine tier {t}: {len({s[1].split(' [')[0] for s, _ in runs})} stages x passes = {len(runs)} runs, "
+                  f"{runs[0][0][0]}..{runs[-1][0][0]}")
     if a.check and a.drafts:
         problems += lint_drafts(a.drafts, set(engines), status_file)
     for p in problems:
@@ -1488,8 +1622,9 @@ def main(argv=None) -> int:
         print("  PROBLEM no stage: the engines and lanes asked for share no cell")
         return 1
     if a.project:
-        print_projection(stages, a.project, a.reps)
-    print("check: every subset arm of the lanes asked for is in exactly one stage per workload, none outside the subset")
+        print_projection(stages, a.project, a.reps, a.tiers)
+    print("check: every subset arm of the lanes asked for is in exactly one stage per workload, none outside the subset"
+          + ("; no engine tier starts before the one before it has run its last pass" if a.tiers else ""))
     if a.check:
         return 0
 
@@ -1513,7 +1648,7 @@ def main(argv=None) -> int:
     if pair_id:
         write_pair(a.out, pair_id, a, after)
         first_after = pair_id
-    emit_all(a.out, stages, pins, first_after, a.reps)
+    emit_all(a.out, stages, pins, first_after, a.reps, a.tiers)
     drafts = lint_drafts(a.out, set(engines))
     for p in drafts:
         print(f"  PROBLEM {p}")

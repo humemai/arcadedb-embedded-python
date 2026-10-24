@@ -305,14 +305,15 @@ def test_a_pre_start_abort_writes_the_marker_so_the_chain_goes_on(tmp_path):
 SHA_LIST = HERE / "stage_drafts_2611.sha256"
 GENERATIONS = {
     # case: (arguments, whether the comparator pair comes from the environment)
-    "comparators": (["--second-list", "--after", "qR20", "--status-file", "none"], True),
+    "comparators": (["--second-list", "--after", "qR20", "--status-file", "none"], True),   # engine tiers on, the default
+    "comparators-no-tiers": (["--no-tiers", "--second-list", "--after", "qR20", "--status-file", "none"], True),
     "comparators-paper-5reps": (["--second-list", "--order", "paper", "--reps", "5", "--after", "qR20", "--status-file", "none", "--id-prefix", "qU"], True),
     "arcadedb-release": (None, False),
 }
 
 
 def drafts_sha256(tmp_path):
-    """sha256 of every script three generations write: the comparators (default order, and paper order at 5 reps) and ArcadeDB
+    """sha256 of every script four generations write: the comparators (default order with engine tiers, the same without them, and paper order at 5 reps) and ArcadeDB
     alone on a release, all lanes and the second list. One line per script, `<sha256>  <case>/<name>`, sorted."""
     lines = []
     for case, (args, from_env) in GENERATIONS.items():
@@ -329,6 +330,192 @@ def test_the_drafts_are_the_ones_on_file(tmp_path):
     """A change to the template, the stage table, a pin the stages bake in or the cap rule moves a draft. That is allowed, but
     never silently: review the diff of the drafts, then `python3 test_stage_generator_2611.py --rewrite` and commit the list."""
     assert SHA_LIST.read_text().splitlines() == drafts_sha256(tmp_path)
+
+
+# ------------------------------------------------------------------------------------------------------ engine tiers
+# The user, 2026-10-24: "N=3 Tier 1 first, then Tier 2, then everything else later."
+TIER1 = ("arcadedb_embedded", "arcadedb_server", "surrealdb_graph", "surrealdb_graph_server", "surrealdb_tpc", "arangodb_graph",
+         "pgage_graph", "pgvector_dense", "pgvector_sparse", "postgres", "postgres_ts", "mongodb", "mongodb_dense",
+         "composed_qdrant_neo4j", "sqlite", "sqlite_vec_dense", "ladybug_dense", "duckdb", "duckdb_vss_dense", "duckpgq_graph")
+TIER2 = ("memgraph_graph", "memgraph_dense", "neo4j_graph", "neo4j_dense", "qdrant_dense", "qdrant_sparse", "redis_dense",
+         "cratedb_tpc", "timescaledb")
+
+
+def tiered_plan(reps=3, second=True, tiers=True, order="biggest-last", engines=None):
+    engines = G.parse_engines(engines, "comparators")
+    lanes = G.parse_lanes(None, second)
+    stages = G.number(G.subset_specs(engines, lanes, order, (), tiers), "qS")
+    return stages, G.pass_plan(stages, reps, tiers)
+
+
+def test_every_arm_has_the_tier_the_user_named_and_timescaledb_is_the_exception_in_its_engine():
+    assert G.tier_table_problems() == []
+    assert all(G.tier_of(b) == 1 for b in TIER1), [b for b in TIER1 if G.tier_of(b) != 1]
+    assert all(G.tier_of(b) == 2 for b in TIER2), [b for b in TIER2 if G.tier_of(b) != 2]
+    assert G.engine_of("timescaledb") == "postgresql" and G.tier_of("postgres") == 1   # an ARM_TIER entry, not a new engine
+    # no registered arm of the subset is left without a tier
+    assert all(G.tier_of(b) in (1, 2) for b in G.registered_arms() if not G.is_outside(b))
+
+
+def test_a_stage_never_mixes_tiers_and_the_whole_of_tier_1_runs_before_tier_2():
+    stages, plan = tiered_plan()
+    assert all(len({G.tier_of(b) for b in G.stage_backends(s)}) == 1 for s, _ in plan)
+    tiers = [G.stage_tier(s) for s, _ in plan]
+    assert tiers == sorted(tiers) and set(tiers) == {1, 2}
+    last1 = max(i for i, t in enumerate(tiers) if t == 1)
+    assert all(t == 2 for t in tiers[last1 + 1:]) and tiers.index(2) == last1 + 1
+    assert G.plan_problems(stages, 3, plan, True) == []
+
+
+def test_all_reps_of_tier_1_run_before_tier_2_starts_and_each_tier_is_rep_major():
+    stages, plan = tiered_plan()
+    for t in (1, 2):
+        passes = [p for s, p in plan if G.stage_tier(s) == t]
+        assert passes == sorted(passes) and set(passes) == {1, 2, 3}, t   # pass 1 of the tier, then 2, then 3
+        per_pass = [passes.count(p) for p in (1, 2, 3)]
+        assert per_pass[0] >= per_pass[1] >= per_pass[2]   # a stage declaring fewer reps drops out of later passes
+    first2 = next(i for i, (s, _) in enumerate(plan) if G.stage_tier(s) == 2)
+    assert {p for _, p in plan[:first2]} == {1, 2, 3}      # rep 3 of Tier 1 is done before Tier 2 rep 1
+
+
+def test_stage_ids_are_unique_consecutive_and_each_stage_waits_on_the_one_before(tmp_path):
+    stages, plan = tiered_plan()
+    ids = [s[0] for s, _ in plan]
+    assert ids == [f"qS{i:02d}" for i in range(1, len(plan) + 1)] and len(set(ids)) == len(ids)
+    assert all("[engine tier" in s[1] and "rep pass" in s[1] for s, _ in plan)
+    out = tmp_path / "o"
+    r = run(["--second-list", "--after", "none", "--status-file", "none", "--out", str(out)], tmp_path)
+    assert r.returncode == 0, r.stdout[-500:] + r.stderr[-500:]
+    files = sorted(out.glob("*.sh"))
+    assert [f.stem for f in files] == ids
+    for prev, cur in zip(files, files[1:]):
+        assert waits(cur) == [prev.stem]
+    assert "engine tier 1" in files[0].read_text() and "engine tier 2" in files[-1].read_text()
+
+
+def test_inside_a_tier_the_old_rules_hold_core_first_large_last_biggest_last_and_priority_in_a_lane():
+    stages, plan = tiered_plan()
+    for t in (1, 2):
+        one = [s for s, p in plan if G.stage_tier(s) == t and p == 1]
+        lanes = [s[2] for s in one]
+        core = [i for i, l in enumerate(lanes) if l in G.CORE_LANES]
+        assert core == list(range(len(core)))                      # the core block, then the second list
+        assert set(lanes[len(core):]) <= {"lifecycle", "l3s", "l4"}
+        titles = [s[1] for s in one[:len(core)]]
+        # a large-tier piece of a lane never comes before a small-tier piece of ANY lane; biggest cells come after the rest
+        large = [i for i, s in enumerate(one[:len(core)]) if any(x in G.LARGE_SCALES for x in s[4]) and "biggest" not in s[1]]
+        small = [i for i, s in enumerate(one[:len(core)]) if not any(x in G.LARGE_SCALES for x in s[4]) and "biggest" not in s[1]]
+        assert not large or not small or max(small) < min(large), titles
+        big = [i for i, s in enumerate(one[:len(core)]) if "biggest" in s[1]]
+        assert not big or min(big) > max(large + small)
+        for s in one:   # ENGINE_PRIORITY inside a stage's roster
+            ranks = [G.engine_rank(b) for b in G.stage_backends(s)]
+            assert ranks == sorted(ranks), (s[0], G.stage_backends(s))
+    # the biggest cells of the user's tiers: SurrealDB documents (Tier 1) and Memgraph deep10m (Tier 2) each last in their own tier
+    t1 = [s for s, p in plan if G.stage_tier(s) == 1 and p == 1]
+    t2 = [s for s, p in plan if G.stage_tier(s) == 2 and p == 1]
+    assert any("biggest" in s[1] and s[8][0].startswith("surrealdb_tpc") for s in t1)
+    assert any("biggest" in s[1] and s[8][0].startswith("memgraph_dense") for s in t2)
+
+
+def test_tiers_schedule_exactly_the_cells_the_tierless_list_does_in_every_pass():
+    engines, lanes = G.parse_engines(None, "comparators"), G.parse_lanes(None, True)
+    for order in ("biggest-last", "paper"):
+        stages = G.number(G.subset_specs(engines, lanes, order, (), True), "x")
+        assert G.stage_problems(stages, engines, lanes) == [], order
+        assert G.plan_problems(stages, 3, G.pass_plan(stages, 3, True), True) == [], order
+    flat = G.number(G.subset_specs(engines, lanes), "x")
+    tier = G.number(G.subset_specs(engines, lanes, tiers=True), "x")
+    cells = lambda ss: sorted(c for s in ss for c in G.stage_cells(s))   # noqa: E731
+    assert cells(flat) == cells(tier)
+
+
+def test_without_tiers_the_chain_is_the_plain_rep_major_one(tmp_path):
+    stages, plan = tiered_plan(tiers=False)
+    assert [p for _, p in plan] == sorted(p for _, p in plan)
+    assert all("engine tier" not in s[1] and s[1].endswith("of 3]") for s, _ in plan)
+    assert plan == G.pass_plan(stages, 3)                                        # the default is the old behaviour
+    assert any(len({G.tier_of(b) for b in G.stage_backends(s)}) > 1 for s, _ in plan)   # stages mix engines, as before
+    assert G.plan_problems(stages, 3, plan, False) == []
+    out = tmp_path / "o"
+    r = run(["--no-tiers", "--second-list", "--after", "none", "--status-file", "none", "--out", str(out)], tmp_path)
+    assert r.returncode == 0 and "engine tiers off" in r.stdout
+    assert all("engine tier" not in f.read_text() for f in out.glob("*.sh"))
+    assert G.lint_drafts(str(out)) == []   # the tier lint leaves a tier-less chain alone
+
+
+def test_one_tier_alone_gives_the_same_chain_with_or_without_tiers():
+    for engines in ("arangodb,duckdb", "neo4j,qdrant"):
+        a_stages, a = tiered_plan(engines=engines, tiers=True)
+        b_stages, b = tiered_plan(engines=engines, tiers=False)
+        assert [(s, p) for s, p in a] == [(s, p) for s, p in b], engines
+        assert all("engine tier" not in s[1] for s, _ in a)
+    # ArcadeDB alone (the --arcadedb-release pass) is Tier 1 only
+    specs = G.subset_specs(G.parse_engines(None, "arcadedb"), G.parse_lanes(None, True), tiers=True)
+    assert {G.stage_tier(s) for s in specs} == {1}
+
+
+def test_an_arm_with_no_tier_runs_after_tier_2(monkeypatch):
+    monkeypatch.setitem(G.TIER_ENGINES, 1, tuple(e for e in G.TIER_ENGINES[1] if e != "duckdb"))
+    assert G.tier_table_problems() != [] and G.tier_of("duckdb") == G.TIER_REST == 3
+    stages, plan = tiered_plan()
+    tiers = [G.stage_tier(s) for s, _ in plan]
+    assert tiers == sorted(tiers) and tiers[-1] == 3
+    assert all(G.tier_of(b) == 3 for s, _ in plan if G.stage_tier(s) == 3 for b in G.stage_backends(s))
+    assert G.plan_problems(stages, 3, plan, True) == []
+
+
+def test_the_check_catches_a_tier_2_stage_before_the_last_tier_1_stage_a_mixed_stage_and_a_repeated_id():
+    stages, plan = tiered_plan()
+    swapped = list(plan)
+    i = next(k for k, (s, _) in enumerate(plan) if G.stage_tier(s) == 2)
+    swapped[i - 1], swapped[i] = swapped[i], swapped[i - 1]
+    bad = G.plan_problems(stages, 3, swapped, True)
+    assert any("engine tier 1 stage" in p and "runs after the engine tier 2" in p for p in bad), bad
+    mixed = G.stage_backends(plan[0][0]) + [b for b in ("memgraph_graph",) if b not in G.stage_backends(plan[0][0])]
+    spec = list(plan[0][0])
+    spec[8] = mixed
+    assert any("mixes engine tiers" in p for p in G.plan_problems(stages, 3, [(tuple(spec), 1)] + plan[1:], True))
+    dup = [plan[0]] + [plan[0]] + plan[2:]
+    assert any("not unique" in p for p in G.plan_problems(stages, 3, dup, True))
+    lost = plan[:-1]
+    assert any("is in no stage" in p for p in G.plan_problems(stages, 3, lost, True))
+
+
+def test_check_on_the_default_selection_reports_the_tiers_and_lints_drafts_for_tier_order(drafts, tmp_path):
+    r = run(["--check", "--second-list"])
+    assert r.returncode == 0, r.stdout[-500:]
+    assert "engine tiers on" in r.stdout and "engine tier 1:" in r.stdout and "engine tier 2:" in r.stdout
+    assert "no engine tier starts before" in r.stdout
+    assert G.lint_drafts(str(drafts)) == []
+    # a draft folder whose first and last stages trade places: the tier lint says so
+    bad = tmp_path / "bad"
+    bad.mkdir()
+    files = sorted(drafts.glob("*.sh"))
+    for f in files:
+        (bad / f.name).write_text(f.read_text())
+    first, last = files[0].name, files[-1].name
+    (bad / first).write_text(files[-1].read_text())
+    (bad / last).write_text(files[0].read_text())
+    assert any("Tier 2 must not precede Tier 1" in p for p in G.lint_drafts(str(bad)))
+
+
+def test_the_projection_splits_the_hours_by_tier(tmp_path):
+    engines, lanes = G.parse_engines(None, "comparators"), ["l2"]
+    stages = G.number(G.subset_specs(engines, lanes, "paper", (), True), "x")
+    tsv = tmp_path / "cells.tsv"
+    rows = ["lane\tworkload\tscale\tbackend\tclass\th3\th5"]
+    for s in stages:
+        for c in G.stage_cells(s):
+            if c.kind == "lane" and not c.arm:
+                rows.append(f"{c.lane}\t{c.workload}\t{c.scale}\t{c.backend}\t{c.cls}\t{1.0 if G.tier_of(c.backend) == 1 else 2.0}\t0")
+    tsv.write_text("\n".join(rows) + "\n")
+    hours = G.project_hours(stages, G.load_hours(str(tsv), 3))
+    by = {t: sum(h for (sid, h, _, _), s in zip(hours, stages) if G.stage_tier(s) == t) for t in (1, 2)}
+    assert by[1] > 0 and by[2] > 0
+    r = run(["--check", "--lanes", "graph", "--project", str(tsv)])
+    assert r.returncode == 0, r.stdout[-500:]
+    assert f"engine tier 1: {by[1]:.1f} h" in r.stdout and f"engine tier 2: {by[2]:.1f} h" in r.stdout
 
 
 if __name__ == "__main__":
