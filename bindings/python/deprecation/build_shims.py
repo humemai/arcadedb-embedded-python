@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import os
 import shutil
 import subprocess  # nosec B404 - runs `uv build` with a fixed argument list
 import sys
@@ -63,8 +64,9 @@ def check_version(shim: str, check_pypi: bool) -> None:
 
 def build(shim: str, out_dir: Path) -> list[Path]:
     """Build one shim into out_dir and return the files it produced."""
-    uv = shutil.which("uv")
-    if uv is None:
+    # `uv run` exports its own path as UV; a uv-made test environment (Windows CI) may not have uv on PATH.
+    uv = os.environ.get("UV") or shutil.which("uv")
+    if not uv:
         raise SystemExit("uv is required (https://docs.astral.sh/uv/)")
     out_dir.mkdir(parents=True, exist_ok=True)
     before = set(out_dir.iterdir())
