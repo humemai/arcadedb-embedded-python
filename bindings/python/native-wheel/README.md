@@ -57,6 +57,7 @@ Each of these raises `NotOnNativeYet` (a `NotImplementedError`) instead of misbe
 - **Async `transaction()`** helpers that depend on Java threads.
 - Engine modules left out of the image: gRPC, MongoDB wire, Raft/HA, Gremlin (the in-process server, the
   HTTP API, Postgres, Redis and Bolt wire protocols are in).
+- **Polyglot scripting languages** (`js`, `python` as query languages, script triggers, polyglot functions): the image carries none, so the polyglot engine is switched off at start-up (`arcadedb.polyglotEngineEnabled=false`) and a first database open writes nothing at WARNING.
 - Free-threaded Python builds are untested.
 
 The parity suite (the bindings' own tests run against the installed wheel) passes with 0 failures; the remaining tests are the
