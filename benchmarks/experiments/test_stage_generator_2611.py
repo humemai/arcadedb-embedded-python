@@ -43,7 +43,7 @@ def waits(path):
 def drafts(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("g")
     out = tmp / "stages"
-    r = run(["--second-list", "--after", "qR20", "--status-file", "none", "--out", str(out)], tmp)
+    r = run(["--after", "qR20", "--status-file", "none", "--out", str(out)], tmp)   # the default profile: what ships
     assert r.returncode == 0, r.stdout[-600:] + r.stderr[-600:]
     return out
 
@@ -112,7 +112,7 @@ def test_timescaledb_is_in_the_time_series_stage_unless_opted_out():
     engines, lanes = G.parse_engines(None, "comparators"), ["l4"]
     assert "timescaledb" in G.subset_specs(engines, lanes)[0][8]
     assert "timescaledb" not in G.subset_specs(engines, lanes, skip=(G.TIMESCALEDB,))[0][8]
-    r = run(["--check", "--second-list", "--lanes", "timeseries", "--without-timescaledb"])
+    r = run(["--check", "--profile", "full", "--second-list", "--lanes", "timeseries", "--without-timescaledb"])
     assert r.returncode == 0 and "timescaledb" not in r.stdout.lower().replace("completes", "")
 
 
@@ -126,8 +126,9 @@ def test_the_new_engines_are_in_the_subset():
 
 # ------------------------------------------------------------------------------------------- --check refusals
 def test_check_passes_for_the_default_selection():
-    r = run(["--check", "--second-list"])
-    assert r.returncode == 0, r.stdout[-500:] + r.stderr[-500:]
+    for args in ([], ["--profile", "full", "--second-list"]):
+        r = run(["--check"] + args)
+        assert r.returncode == 0, r.stdout[-500:] + r.stderr[-500:]
 
 
 def test_check_refuses_an_engine_not_in_the_subset():
@@ -149,9 +150,11 @@ def test_check_refuses_another_instrument_in_the_environment():
     assert r.returncode != 0 and ("mix" in out or "measures only" in out), out[-400:]
 
 
-def test_second_list_lanes_need_the_flag():
-    r = run(["--check", "--lanes", "sparse"])
+def test_second_list_lanes_need_the_flag_and_the_full_profile():
+    r = run(["--check", "--profile", "full", "--lanes", "sparse"])
     assert r.returncode != 0 and "--second-list" in (r.stdout + r.stderr)
+    r = run(["--check", "--profile", "full", "--second-list", "--lanes", "sparse"])
+    assert r.returncode == 0, r.stdout[-500:] + r.stderr[-500:]
 
 
 def test_stage_problems_catch_an_arm_outside_the_subset():
@@ -344,21 +347,22 @@ def test_the_arcadedb_chain_runs_tier_1_passes_1_to_5_in_order(tmp_path):
 SHA_LIST = HERE / "stage_drafts_2611.sha256"
 GENERATIONS = {
     # case: (arguments, whether the comparator pair comes from the environment)
-    "comparators": (["--second-list", "--after", "qR20", "--status-file", "none"], True),   # engine tiers on, the default
-    "comparators-no-tiers": (["--no-tiers", "--second-list", "--after", "qR20", "--status-file", "none"], True),
-    "comparators-paper-5reps": (["--second-list", "--order", "paper", "--reps", "5", "--after", "qR20", "--status-file", "none", "--id-prefix", "qU"], True),
+    # the default profile (paper-2611) is what ships; --profile full is covered by the selection tests, not by a hash list
+    "comparators": (["--after", "qR20", "--status-file", "none"], True),   # engine tiers on, the default
+    "comparators-no-tiers": (["--no-tiers", "--after", "qR20", "--status-file", "none"], True),
+    "comparators-paper-5reps": (["--order", "paper", "--reps", "5", "--after", "qR20", "--status-file", "none", "--id-prefix", "qU"], True),
     "arcadedb-release": (None, False),
 }
 
 
 def drafts_sha256(tmp_path):
-    """sha256 of every script four generations write: the comparators (default order with engine tiers, the same without them, and paper order at 5 reps) and ArcadeDB
-    alone on a release, all lanes and the second list. One line per script, `<sha256>  <case>/<name>`, sorted."""
+    """sha256 of every script four generations write, under the default profile (paper-2611): the comparators (default order with engine tiers, the same without
+    them, and paper order at 5 reps) and ArcadeDB alone on a release, the core lanes. One line per script, `<sha256>  <case>/<name>`, sorted."""
     lines = []
     for case, (args, from_env) in GENERATIONS.items():
         out = tmp_path / case
         if args is None:
-            args = _release_args() + ["--second-list", "--after", "none", "--id-prefix", "qV"]
+            args = _release_args() + ["--after", "none", "--id-prefix", "qV"]
         r = run(args + ["--out", str(out)], tmp_path if from_env else None)
         assert r.returncode == 0, case + r.stdout[-600:] + r.stderr[-600:]
         lines += [f"{sha256(f.read_bytes()).hexdigest()}  {case}/{f.name}" for f in sorted(out.glob("*.sh"))]
@@ -459,7 +463,7 @@ def test_stage_ids_are_unique_consecutive_and_each_stage_waits_on_the_one_before
     assert ids == [f"qS{i:03d}" for i in range(1, len(plan) + 1)] and len(set(ids)) == len(ids)
     assert all("[engine tier" in s[1] and "rep pass" in s[1] for s, _ in plan)
     out = tmp_path / "o"
-    r = run(["--second-list", "--after", "none", "--status-file", "none", "--out", str(out)], tmp_path)
+    r = run(["--profile", "full", "--second-list", "--after", "none", "--status-file", "none", "--out", str(out)], tmp_path)   # the whole subset: past 99 stages
     assert r.returncode == 0, r.stdout[-500:] + r.stderr[-500:]
     files = sorted(out.glob("*.sh"))
     assert [f.stem for f in files] == ids and len(ids) > 99 and ids[0] == "qS001"   # three digits past 99: qS100 must not sort before qS11
@@ -508,13 +512,12 @@ def test_tiers_schedule_exactly_the_cells_the_tierless_list_does_in_every_pass()
 
 def test_without_tiers_the_chain_is_the_plain_rep_major_one(tmp_path):
     stages, plan = tiered_plan(tiers=False)
-    assert [p for _, p in plan] == sorted(p for _, p in plan)
     assert all("engine tier" not in s[1] and s[1].endswith("of 5]") for s, _ in plan)
     assert plan == G.pass_plan(stages, 5)                                        # the default is the old behaviour
     assert any(len({G.tier_of(b) for b in G.stage_backends(s)}) > 1 for s, _ in plan)   # stages mix engines, as before
     assert G.plan_problems(stages, 5, plan, False) == []
     out = tmp_path / "o"
-    r = run(["--no-tiers", "--second-list", "--after", "none", "--status-file", "none", "--out", str(out)], tmp_path)
+    r = run(["--no-tiers", "--after", "none", "--status-file", "none", "--out", str(out)], tmp_path)
     assert r.returncode == 0 and "engine tiers off" in r.stdout
     assert all("engine tier" not in f.read_text() for f in out.glob("*.sh"))
     assert G.lint_drafts(str(out)) == []   # the tier lint leaves a tier-less chain alone
@@ -571,7 +574,7 @@ def test_the_check_catches_a_wrong_order_a_skipped_pass_a_split_pass_a_mixed_sta
 
 
 def test_check_on_the_default_selection_reports_the_tiers_and_lints_drafts_for_tier_order(drafts, tmp_path):
-    r = run(["--check", "--second-list"])
+    r = run(["--check"])
     assert r.returncode == 0, r.stdout[-500:]
     assert "engine tiers on" in r.stdout and "engine tier 1:" in r.stdout and "engine tier 2:" in r.stdout
     assert "schedule: T1 p1, T1 p2, T1 p3, T2 p1, T2 p2, T2 p3, T1 p4, T2 p4, T1 p5, T2 p5" in r.stdout
@@ -605,6 +608,145 @@ def test_the_projection_splits_the_hours_by_tier(tmp_path):
     r = run(["--check", "--lanes", "graph", "--reps", "3", "--project", str(tsv)])
     assert r.returncode == 0, r.stdout[-500:]
     assert f"engine tier 1: {by[1]:.1f} h" in r.stdout and f"engine tier 2: {by[2]:.1f} h" in r.stdout
+
+
+# ------------------------------------------------------------------------------------------------- the paper-2611 profile
+# The owner, 2026-10-25: the paper's experiments must finish by 2026-11-10. Core lanes only; fp32 dense only; Neo4j and Memgraph keep graph
+# and cross-model but have no dense cell; the target is N=3 and the passes 4 and 5 stay after pass 3.
+DROPPED_SECOND_LIST_LANES = {"l3s", "l4", "lifecycle"}
+DROPPED_NEO4J_MEMGRAPH_DENSE = ["memgraph_dense", "memgraph_dense_int8", "neo4j_dense", "neo4j_dense_int8"]
+DROPPED_QUANTIZED_DENSE = ["arangodb_dense_int8", "arcadedb_dense_embedded_int8", "arcadedb_dense_server_int8", "mongodb_dense_int8",
+                           "qdrant_dense_int8", "sqlite_vec_dense_int8"]
+RELEASE_FLAGS = ("--arcadedb-release", "26.11.1", "--engine-commit", COMMIT, "--image-digest", DIGEST, "--wheel-name", REL_WHEEL,
+                 "--wheel-sha256", WSHA, "--wheel-url", "https://files.pythonhosted.org/packages/x/" + REL_WHEEL)
+
+
+def test_the_profile_lists_exactly_what_it_drops():
+    arms = G.dropped_arms("paper-2611")
+    assert set(arms) == set(G.DROP_ORDER)
+    assert arms[G.DROP_NEO4J_MEMGRAPH_DENSE] == DROPPED_NEO4J_MEMGRAPH_DENSE
+    assert arms[G.DROP_QUANTIZED_DENSE] == DROPPED_QUANTIZED_DENSE
+    cells = G.dropped_cells("paper-2611")
+    assert {c.lane for c in cells[G.DROP_SECOND_LIST]} == DROPPED_SECOND_LIST_LANES
+    assert {c.lane for c in cells[G.DROP_NEO4J_MEMGRAPH_DENSE] + cells[G.DROP_QUANTIZED_DENSE]} == {"l3d"}
+    # no cell is counted under two reasons, and the full profile drops nothing
+    seen = [c for why in G.DROP_ORDER for c in cells[why]]
+    assert len(seen) == len(set(seen)) and G.dropped_cells("full") == {} and G.profile_skip("full") == ()
+    assert set(G.profile_skip("paper-2611")) == set(DROPPED_NEO4J_MEMGRAPH_DENSE + DROPPED_QUANTIZED_DENSE)
+
+
+def test_every_registered_quantized_dense_arm_is_classified_as_quantized():
+    import runner
+    quant = [b for b in runner.LANES["l3d"][1] if re.search(r"int8|_pq$", b)]
+    assert quant and all(G.is_quantized_dense(b) for b in quant), [b for b in quant if not G.is_quantized_dense(b)]
+    assert not any(G.is_quantized_dense(b) for b in ("arcadedb_dense_embedded", "arcadedb_dense_server", "qdrant_dense", "pgvector_dense"))
+
+
+def test_the_default_profile_stages_the_core_lanes_fp32_dense_and_no_neo4j_or_memgraph_dense(drafts):
+    seen_dense = set()
+    for f in drafts.glob("*.sh"):
+        text = f.read_text()
+        lane = re.search(r"--lanes (\w+) ", text).group(1)
+        bes = re.findall(r'^BACKENDS="([^"]*)"', text, re.M)[0].split()
+        assert lane in G.CORE_LANES, (f.name, lane)
+        if lane == "l3d":
+            seen_dense |= set(bes)
+            assert not any(re.search(r"int8|uint8|_pq|neo4j|memgraph", b) for b in bes), (f.name, bes)
+    assert {"qdrant_dense", "pgvector_dense", "sqlite_vec_dense", "mongodb_dense", "arangodb_dense"} <= seen_dense
+
+
+def test_the_arcadedb_chain_keeps_its_fp32_dense_pair_and_nothing_else_in_the_dense_lane(tmp_path):
+    out = tmp_path / "rel"
+    r = run(list(RELEASE_FLAGS) + ["--after", "none", "--status-file", "none", "--id-prefix", "qT", "--out", str(out)])
+    assert r.returncode == 0, r.stdout[-500:] + r.stderr[-500:]
+    dense, lanes = set(), set()
+    for f in out.glob("qT0[1-9]*.sh"):
+        text = f.read_text()
+        lane = re.search(r"--lanes (\w+) ", text).group(1)
+        lanes.add(lane)
+        if lane == "l3d":
+            dense |= set(re.findall(r'^BACKENDS="([^"]*)"', text, re.M)[0].split())
+    assert dense == {"arcadedb_dense_embedded", "arcadedb_dense_server"} and lanes <= set(G.CORE_LANES)
+
+
+def test_the_second_list_is_refused_by_the_default_profile_and_kept_by_full():
+    r = run(["--check", "--second-list"])
+    assert r.returncode != 0 and "--profile full" in (r.stdout + r.stderr)
+    r = run(["--check", "--lanes", "lifecycle"])
+    assert r.returncode != 0 and "--profile full" in (r.stdout + r.stderr)
+    r = run(["--check", "--profile", "full", "--second-list"])
+    assert r.returncode == 0 and "nothing dropped" in r.stdout
+    full = G.number(G.subset_specs(G.parse_engines(None, "comparators"), G.parse_lanes(None, True, "full")), "x")
+    assert {s[2] for s in full} >= DROPPED_SECOND_LIST_LANES and G.profile_problems("full", full) == []
+
+
+def test_check_prints_what_the_default_profile_dropped_and_the_order_with_it():
+    r = run(["--check"])
+    assert r.returncode == 0, r.stdout[-500:] + r.stderr[-500:]
+    for needle in ("profile paper-2611", "dropped", "second-list", "neo4j-memgraph-dense", "quantized-dense", "arcadedb_dense_embedded_int8",
+                   "schedule: T1 p1, T1 p2, T1 p3, T2 p1, T2 p2, T2 p3, T1 p4, T2 p4, T1 p5, T2 p5"):
+        assert needle in r.stdout, needle
+    # the chain still runs passes 4 and 5, after pass 3: N=3 is the target, not the end of the chain
+    engines, lanes = G.parse_engines(None, "comparators"), G.parse_lanes(None, False, "paper-2611")
+    stages = G.number(G.subset_specs(engines, lanes, "biggest-last", G.profile_skip("paper-2611"), True), "qS")
+    plan = G.pass_plan(stages, G.DEFAULT_REPS, True)
+    assert G.plan_problems(stages, G.DEFAULT_REPS, plan, True) == [] and G.profile_problems("paper-2611", stages) == []
+    assert G.TARGET_REPS == 3 and G.PROFILES["paper-2611"]["target_reps"] == 3 and G.DEFAULT_REPS == 5
+    groups = groups_of(plan)
+    assert groups[:6] == [(1, 1), (1, 2), (1, 3), (2, 1), (2, 2), (2, 3)] and groups[6:] == [(1, 4), (2, 4), (1, 5), (2, 5)]
+
+
+def test_the_profile_proof_catches_a_dropped_lane_and_a_dropped_dense_arm():
+    engines = G.parse_engines(None, "comparators")
+    good = G.number(G.subset_specs(engines, G.parse_lanes(None, False, "paper-2611"), "biggest-last", G.profile_skip("paper-2611"), True), "x")
+    assert G.profile_problems("paper-2611", good) == []
+    dense = next(i for i, s in enumerate(good) if s[2] == "l3d")
+    for extra, needle in (("qdrant_dense_int8", "quantized"), ("neo4j_dense", "Neo4j/Memgraph"), ("memgraph_dense_int8", "Neo4j/Memgraph")):
+        bad = [list(s) for s in good]
+        bad[dense][8] = list(G.stage_backends(good[dense])) + [extra]
+        assert any(needle in p for p in G.profile_problems("paper-2611", bad)), extra
+    lane_stage = G.number(G.subset_specs(engines, ["l3s"], "biggest-last"), "y")
+    assert any("dropped by the paper-2611 profile" in p for p in G.profile_problems("paper-2611", lane_stage))
+    arcade = G.number(G.subset_specs(["arcadedb"], ["l3d"], "biggest-last"), "z")   # unfiltered: ArcadeDB's int8 pair rides along
+    assert any("fp32 pair" in p for p in G.profile_problems("paper-2611", arcade))
+
+
+def test_the_draft_lint_refuses_a_dropped_arm_under_the_profile(drafts, tmp_path):
+    bad = tmp_path / "bad"
+    bad.mkdir()
+    for f in drafts.glob("*.sh"):
+        (bad / f.name).write_text(f.read_text())
+    dense = next(f for f in sorted(bad.glob("*.sh")) if "--lanes l3d " in f.read_text())
+    dense.write_text(re.sub(r'^BACKENDS="', 'BACKENDS="qdrant_dense_int8 ', dense.read_text(), count=1, flags=re.M))
+    assert G.lint_drafts(str(drafts), None, None, "paper-2611") == []
+    assert any("qdrant_dense_int8" in p and "paper-2611" in p for p in G.lint_drafts(str(bad), None, None, "paper-2611"))
+    r = run(["--check", "--drafts", str(bad)])
+    assert r.returncode != 0 and "qdrant_dense_int8" in r.stdout
+
+
+def test_the_pq_arms_are_dropped_too_when_they_are_registered():
+    r = run(["--check"], env_extra={"BENCH_DENSE_PQ": "1"})
+    assert r.returncode == 0, r.stdout[-500:] + r.stderr[-500:]
+    assert "arcadedb_dense_embedded_pq" in r.stdout and "qdrant_dense_pq" in r.stdout   # listed as dropped, not staged
+    assert not any(re.search(r"_pq\b", ln) for ln in r.stdout.splitlines() if ln.startswith("  qS"))
+
+
+def test_the_projection_prices_the_target_repetitions_by_default(tmp_path):
+    engines, lanes = G.parse_engines(None, "comparators"), ["l2"]
+    stages = G.number(G.subset_specs(engines, lanes, "paper", (), True), "x")
+    tsv = tmp_path / "cells.tsv"
+    rows = ["lane\tworkload\tscale\tbackend\tclass\th3\th5"]
+    n = 0
+    for s in stages:
+        for c in G.stage_cells(s):
+            if c.kind == "lane" and not c.arm:
+                rows.append(f"{c.lane}\t{c.workload}\t{c.scale}\t{c.backend}\t{c.cls}\t1.0\t10.0")
+                n += 1
+    tsv.write_text("\n".join(rows) + "\n")
+    r = run(["--check", "--lanes", "graph", "--project", str(tsv)])
+    assert r.returncode == 0 and "time for 3 repetitions" in r.stdout and f"total {n} h" in r.stdout, r.stdout[-500:]
+    r = run(["--check", "--lanes", "graph", "--project", str(tsv), "--project-reps", "5"])
+    assert "time for 5 repetitions" in r.stdout and f"total {10 * n} h" in r.stdout, r.stdout[-500:]
 
 
 if __name__ == "__main__":

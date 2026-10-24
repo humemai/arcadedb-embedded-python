@@ -249,7 +249,7 @@ def stages(tmp_path_factory):
     r = subprocess.run([sys.executable, str(HERE / "make_2611_stages.py"), "--arcadedb-release", "26.11.1",
                         "--engine-commit", "1" * 40, "--image-digest", "sha256:" + "ab" * 32, "--wheel-name", wheel_name,
                         "--wheel-sha256", "cd" * 32, "--wheel-url", "https://files.pythonhosted.org/packages/x/" + wheel_name,
-                        "--second-list", "--out", str(out), "--after", "none", "--id-prefix", "qT"],
+                        "--profile", "full", "--second-list", "--out", str(out), "--after", "none", "--id-prefix", "qT"],
                        cwd=HERE, env=env, capture_output=True, text=True)
     assert r.returncode == 0, r.stdout[-400:] + r.stderr[-400:]
     for pair in out.glob("qT00.sh"):

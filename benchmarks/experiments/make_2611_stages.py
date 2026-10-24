@@ -10,7 +10,16 @@ of the image, the pinned wheel by sha256, the cap rule, the ALL-DONE trap. What 
   * THE SUBSET (PLAN-26111): ArcadeDB (embedded and served), SurrealDB (embedded and served), ArangoDB, Memgraph, PostgreSQL
     with pgvector and AGE (and plain PostgreSQL where a lane uses it), MongoDB (with MongoDB Search), DuckDB (with VSS and
     DuckPGQ), SQLite (with sqlite-vec), and the composed Qdrant plus Neo4j stack. Core lanes: graph (interactive and
-    analytics), cross-model, documents (TPC-C and TPC-H), dense. `--second-list` adds sparse, time series and lifecycle.
+    analytics), cross-model, documents (TPC-C and TPC-H), dense. The second list (sparse, time series, lifecycle) exists only
+    under `--profile full --second-list`.
+  * THE PROFILE (the owner, 2026-10-25: the paper's experiments must finish by 2026-11-10). `--profile paper-2611` is the default and
+    narrows the subset, in the open: (1) the CORE lanes only, so no sparse, time series or lifecycle cell, for the comparators and for
+    the ArcadeDB chain; (2) Neo4j and Memgraph stay in the graph lane (and cross-model where they are) but have no dense-lane cell;
+    (3) the dense lane is fp32 only, for every engine: no int8 or PQ arm (the comparators' and ArcadeDB's alike); ArcadeDB keeps its fp32
+    embedded and served arms; (4) the target is N=3 (TARGET_REPS): the passes 4 and 5 stay in the schedule, after pass 3, and run
+    only if time is left. PROFILES lists every drop and its reason, `--check` prints what was dropped and proves that nothing of it
+    is scheduled (profile_problems; `--check --drafts` the same on written scripts), and `--profile full` is the whole subset as
+    it was before the profile.
     The stage list is DERIVED from STAGES and runner.LANES, filtered by engine and lane, and `--check` proves the filtered
     list runs exactly the cells the unfiltered one would for those engines and lanes. Every registered arm is either in the
     subset or named in OUTSIDE, so a newly registered arm forces a decision here.
@@ -39,7 +48,7 @@ of the image, the pinned wheel by sha256, the cap rule, the ALL-DONE trap. What 
     `<prefix>00`, the pair install (official image by digest, wheel by sha256, build_matched_pair.sh, verify_pair_c25.sh),
     which the first lane stage waits for.
   * REPS. `--reps N` (default 5, at most 5) is baked in as `REPS=N`; a stage environment that declares fewer (the image
-    defaults arm) keeps its own.
+    defaults arm) keeps its own. The default stays 5 so that the chain holds the passes 4 and 5 after the target (TARGET_REPS = 3).
   * THE CHAIN. `--after <stage>` is the marker the first stage waits for (`grep -qx "<stage> ALL-DONE"`), or `none`. It is
     required: the previous chain's last stage is not a default anyone should inherit. It must be the LAST item of the
     queue already on the machine (2026-10-23: `qMA06 ALL-DONE` was already in mini's STATUS.txt because the study was
@@ -51,10 +60,10 @@ of the image, the pinned wheel by sha256, the cap rule, the ALL-DONE trap. What 
     hours table, scaled to N repetitions.
 
 Usage:
-  python3 make_2611_stages.py --check [--drafts DIR]       # selection, coverage and instrument proofs; lints DIR's scripts
+  python3 make_2611_stages.py --check [--drafts DIR]       # profile, selection, coverage and instrument proofs; lints DIR's scripts
   python3 make_2611_stages.py --project CELLS.tsv --check   # plus the projected hours per stage
   ARCADEDB_WHEEL=... ARCADEDB_SERVER_IMAGE=... ARCADEDB_ENGINE_COMMIT=<40 hex> \\
-      python3 make_2611_stages.py --after qR15 --status-file STATUS.txt --id-prefix qS --out DIR [--engines a,b] [--lanes graph,dense] [--second-list]
+      python3 make_2611_stages.py --after qR15 --status-file STATUS.txt --id-prefix qS --out DIR [--engines a,b] [--lanes graph,dense] [--profile paper-2611|full] [--second-list (full only)]
   python3 make_2611_stages.py --arcadedb-release 26.11.1 --engine-commit <40 hex> --image-digest sha256:<64 hex> \\
       --wheel-name arcadedb_embedded-26.11.1-<tags>.whl --wheel-sha256 <64 hex> --wheel-url <https url> \\
       --after <last comparator stage> --status-file STATUS.txt --id-prefix qT --out DIR
@@ -86,6 +95,8 @@ PRIOR_PIN = "d36b4ca3a"
 DEFAULT_PREFIX = "qS"
 MAX_REPS = 5
 DEFAULT_REPS = 5
+# THE TARGET (the owner, 2026-10-25): N=3. The chain still holds the passes 4 and 5 (DEFAULT_REPS), after pass 3, so they run only if time is left.
+TARGET_REPS = 3
 # THE SCHEDULE (the user, 2026-10-24): passes 1..FIRST_BLOCK of every tier in tier order, then each later pass over the tiers in order.
 FIRST_BLOCK = 3
 # The ArcadeDB chain waits for this file on the host, and its lane stages abort without it. Touch it when CURRENT_PIN is 26.11.1.
@@ -400,6 +411,134 @@ SECOND_LANES = ("l3s", "l4", "lifecycle")
 LANE_ALIASES = {"graph": "l2", "cross-model": "e2", "documents": "l1tpc", "dense": "l3d", "sparse": "l3s",
                 "timeseries": "l4", "time-series": "l4", "lifecycle": "lifecycle"}
 MODES = ("comparators", "arcadedb")
+
+
+# ------------------------------------------------------------------------------------------------------ the profile
+# THE PROFILE (the owner, 2026-10-25): the paper's experiments must finish by 2026-11-10, so the subset is narrowed in the open. A
+# dropped cell is LISTED (`--check` prints it, with its reason and count), never silently missing, and `--check` proves that none of
+# it is scheduled (profile_problems). `full` is the whole subset as it was before the profile. Each cell is dropped for the FIRST of
+# its reasons in DROP_ORDER, so the counts do not overlap.
+DROP_SECOND_LIST = "second-list"
+DROP_NEO4J_MEMGRAPH_DENSE = "neo4j-memgraph-dense"
+DROP_QUANTIZED_DENSE = "quantized-dense"
+DROP_ORDER = (DROP_SECOND_LIST, DROP_NEO4J_MEMGRAPH_DENSE, DROP_QUANTIZED_DENSE)
+DROP_WHY = {
+    DROP_SECOND_LIST: "sparse, time series and lifecycle are out of scope for the paper (the comparators and the ArcadeDB chain alike)",
+    DROP_NEO4J_MEMGRAPH_DENSE: "Neo4j and Memgraph stay in the graph lane (and cross-model where they are); their dense-lane cells are out",
+    DROP_QUANTIZED_DENSE: "the dense lane is fp32 only: quantized arms are not like-for-like across engines, and quantization is out of the "
+                          "paper's scope (ArcadeDB's own INT8 and BINARY are out by the owner's rule; jvector PQ, BQ and NVQ are studied after the paper)",
+}
+PROFILES = {
+    "paper-2611": {"drops": DROP_ORDER, "target_reps": TARGET_REPS,
+                   "doc": "core lanes only, fp32 dense only, no Neo4j or Memgraph dense cell, target N=3 (passes 4 and 5 only if time is left)"},
+    "full": {"drops": (), "target_reps": DEFAULT_REPS, "doc": "the whole subset: the second list with --second-list, every dense precision"},
+}
+DEFAULT_PROFILE = "paper-2611"
+# the arm families QUANTIZATION.md names: `<engine>_dense_int8` (scalar or int8) and `<engine>_dense_pq` (product quantization, only under
+# BENCH_DENSE_PQ=1). The plain `<engine>_dense` arm is the fp32 one (LanceDB, outside the subset, is the exception and is not staged).
+QUANTIZED_DENSE = re.compile(r"_dense(_embedded|_server)?_(int8|pq)$")
+# the arms ArcadeDB keeps in the dense lane under the profile: fp32, embedded and served
+ARCADEDB_FP32_DENSE = ("arcadedb_dense_embedded", "arcadedb_dense_server")
+
+
+def is_quantized_dense(backend):
+    return bool(QUANTIZED_DENSE.search(backend))
+
+
+def drop_reason(profile, lane, backend):
+    """Why `profile` drops this arm in this lane (one of DROP_ORDER), or None. Needs engine_of, defined below; called at run time."""
+    drops = PROFILES[profile]["drops"]
+    for why in DROP_ORDER:
+        if why not in drops:
+            continue
+        if why == DROP_SECOND_LIST and lane in SECOND_LANES:
+            return why
+        if lane == "l3d" and why == DROP_NEO4J_MEMGRAPH_DENSE and engine_of(backend) in ("neo4j", "memgraph"):
+            return why
+        if lane == "l3d" and why == DROP_QUANTIZED_DENSE and is_quantized_dense(backend):
+            return why
+    return None
+
+
+def profile_lanes(profile):
+    """The lanes a profile stages: every lane, less the second list when the profile drops it."""
+    return tuple(l for l in CORE_LANES + SECOND_LANES if drop_reason(profile, l, "") is None)
+
+
+def profile_skip(profile):
+    """The dense-lane arms (exact registered names) the profile drops, for subset_specs' and stage_problems' `skip`. Derived from
+    runner.LANES (subset engines only), so a newly registered int8 arm is dropped without anyone typing its name."""
+    return tuple(b for b in runner.LANES["l3d"][1] if engine_of(b) and drop_reason(profile, "l3d", b) is not None)
+
+
+def dropped_cells(profile):
+    """{reason: [Cell]}: the lane cells (no overlay, no extra arm; the unit subset_rerun_estimate prices) of the whole subset, both modes,
+    that `profile` does not schedule. One pass; each repetition runs them again."""
+    engines = list(ENGINES)
+    stages = number(subset_specs(engines, list(CORE_LANES + SECOND_LANES)), "x")
+    out = collections.defaultdict(list)
+    for st in stages:
+        for c in stage_cells(st):
+            if c.kind == "lane" and not c.arm:
+                why = drop_reason(profile, c.lane, c.backend)
+                if why:
+                    out[why].append(c)
+    return out
+
+
+def dropped_arms(profile):
+    """{reason: sorted arm names} behind dropped_cells."""
+    return {why: sorted({c.backend for c in cells}) for why, cells in dropped_cells(profile).items()}
+
+
+def profile_problems(profile, stages, label=""):
+    """What is wrong with a stage list under `profile`: a lane the profile drops, a dense arm it drops (Neo4j or Memgraph, any quantized
+    arm of any engine), ArcadeDB's dense lane not exactly its two fp32 arms, a drop that matches no registered arm (a stale rule), and a
+    dropped arm that is also registered in a lane the profile keeps (collateral damage of an arm-name skip). `stages` are numbered
+    specs; the proof reads the roster the stages carry, not the rule that filtered it."""
+    out, tag = [], (f"{label}: " if label else "")
+    if profile not in PROFILES:
+        return [f"{tag}unknown profile {profile}"]
+    drops = PROFILES[profile]["drops"]
+    lanes = profile_lanes(profile)
+    for st in stages:
+        lane = st[2]
+        if lane not in lanes:
+            out.append(f"{tag}{st[0]}: lane {lane} is dropped by the {profile} profile")
+        for b in stage_backends(st):
+            if lane == "l3d" and DROP_QUANTIZED_DENSE in drops and re.search(r"int8|uint8|_pq\b|quant", b):
+                out.append(f"{tag}{st[0]}: dense arm {b} is quantized; the {profile} profile is fp32 only")
+            if lane == "l3d" and DROP_NEO4J_MEMGRAPH_DENSE in drops and re.match(r"(neo4j|memgraph)", b):
+                out.append(f"{tag}{st[0]}: {b} is a Neo4j/Memgraph dense cell, dropped by the {profile} profile")
+    if DROP_QUANTIZED_DENSE in drops:
+        dense = {b for st in stages if st[2] == "l3d" for b in stage_backends(st) if engine_of(b) == "arcadedb"}
+        if dense and dense != set(ARCADEDB_FP32_DENSE):
+            out.append(f"{tag}ArcadeDB's dense arms are {sorted(dense)}, expected exactly its fp32 pair {sorted(ARCADEDB_FP32_DENSE)}")
+    for why in drops:
+        if why == DROP_SECOND_LIST:
+            continue
+        if not any(drop_reason(profile, "l3d", b) == why for b in runner.LANES["l3d"][1] if engine_of(b)):
+            out.append(f"{tag}the {why} drop matches no registered subset arm: the rule is stale")
+    for b in profile_skip(profile):
+        elsewhere = [l for l, spec in runner.LANES.items() if l != "l3d" and b in spec[1]]
+        if elsewhere:
+            out.append(f"{tag}{b} is dropped from the dense lane by name but is also registered in {elsewhere}, which the arm-name skip would drop too")
+    return out
+
+
+def profile_report(profile):
+    """Lines that list what the profile drops: reason, lane cells per pass, and the arms (dense) or lanes (second list)."""
+    cells = dropped_cells(profile)
+    out = []
+    for why in DROP_ORDER:
+        if why not in cells:
+            continue
+        cs = cells[why]
+        what = (", ".join(sorted({c.lane for c in cs})) + " lanes" if why == DROP_SECOND_LIST
+                else ", ".join(sorted({c.backend for c in cs})))
+        out.append(f"  dropped {len(cs):3} lane cells/pass  {why}: {what}")
+        out.append(f"      why: {DROP_WHY[why]}")
+    return out
 # ORDER (the default, "biggest-last"): the core block first, the second list after it (lifecycle, sparse, time series).
 # Inside the core block the large tiers (LARGE_SCALES) run after every small tier, and the cells that dominate the hours
 # (BIGGEST: Memgraph's deep10m dense cells, SurrealDB's documents at tpch1, the full SF1 network's analytics) run last of
@@ -520,7 +659,12 @@ def parse_engines(text, mode):
     return names
 
 
-def parse_lanes(text, second_list):
+def parse_lanes(text, second_list, profile=None):
+    """The lanes asked for. With a `profile`, one that drops the second list refuses it (and --second-list) by name, so a dropped lane is
+    never asked for by accident; without one (or with `full`) the second list needs --second-list."""
+    if profile and second_list and drop_reason(profile, SECOND_LANES[0], "") == DROP_SECOND_LIST:
+        raise SystemExit(f"REFUSING: --second-list: the {profile} profile drops the second list, {DROP_WHY[DROP_SECOND_LIST]}; "
+                         f"--profile full has it")
     if not text:
         return list(CORE_LANES + (SECOND_LANES if second_list else ()))
     out = []
@@ -529,6 +673,9 @@ def parse_lanes(text, second_list):
         if lane not in CORE_LANES + SECOND_LANES:
             raise SystemExit(f"REFUSING: lane {x} is not in the subset's lists (core: graph, cross-model, documents, dense; "
                              f"second list: sparse, timeseries, lifecycle)")
+        if profile and drop_reason(profile, lane, "") == DROP_SECOND_LIST:
+            raise SystemExit(f"REFUSING: lane {x}: the {profile} profile drops the second list, {DROP_WHY[DROP_SECOND_LIST]}; "
+                             f"--profile full --second-list has it")
         if lane in SECOND_LANES and not second_list:
             raise SystemExit(f"REFUSING: lane {x} is on the second list; add --second-list")
         out.append(lane)
@@ -646,10 +793,10 @@ def instrument_problems(env=None):
 _BACKENDS = re.compile(r'^BACKENDS="([^"]*)"', re.M)
 
 
-def lint_draft(text, name, engines=None):
+def lint_draft(text, name, engines=None, profile=None):
     """Problems in one emitted stage script: it must export the instrument, name no other, write the 2611 rows file and
-    run only subset arms (of `engines` when given). The pair-install script has no runner cells and is only checked for
-    the instrument not being named wrongly."""
+    run only subset arms (of `engines` when given), and, under a `profile`, no lane and no dense arm it drops. The pair-install
+    script has no runner cells and is only checked for the instrument not being named wrongly."""
     out = []
     pair = "build_matched_pair.sh" in text
     if pair and "go-arcadedb-2611" not in text:
@@ -684,12 +831,17 @@ def lint_draft(text, name, engines=None):
             out.append(f"{name}: runs an ArcadeDB arm but has no go-arcadedb-2611 gate")
         if not arcade and "go-arcadedb-2611" in text:
             out.append(f"{name}: runs no ArcadeDB arm but carries the ArcadeDB gate")
+        lane = re.search(r"--lanes (\w+) ", text)
         for b in m.group(1).split():
             eng = engine_of(b)
             if eng is None:
                 out.append(f"{name}: runs {b}, which is not in the subset")
             elif engines is not None and eng not in engines:
                 out.append(f"{name}: runs {b} ({eng}), which is not among the engines asked for")
+            if profile and lane:
+                why = drop_reason(profile, lane.group(1), b)
+                if why:
+                    out.append(f"{name}: runs {b} on lane {lane.group(1)}, which the {profile} profile drops ({why})")
     return out
 
 
@@ -716,7 +868,7 @@ def status_problems(marker, status_file):
 _TIER_TAG = re.compile(r"\[engine tier (\d+), rep pass (\d+) of (\d+)\]")
 
 
-def lint_drafts(directory, engines=None, status_file=None):
+def lint_drafts(directory, engines=None, status_file=None, profile=None):
     """Lint every script in a folder, and check the chain: each stage waits for the one before it in id order.
     With a STATUS file, the first stage's wait must not already be true there."""
     files = sorted(glob.glob(os.path.join(directory, "*.sh")))
@@ -731,7 +883,7 @@ def lint_drafts(directory, engines=None, status_file=None):
     for f in files:
         name = os.path.basename(f)
         text = open(f, encoding="utf-8").read()
-        out += lint_draft(text, name, engines)
+        out += lint_draft(text, name, engines, profile)
         m = _BACKENDS.search(text)
         if m and tiered:
             ts = {tier_of(b) for b in m.group(1).split()}
@@ -1635,8 +1787,12 @@ def main(argv=None) -> int:
     ap.add_argument("--engines", help=f"comma list of subset engines ({', '.join(ENGINES)}); default every engine of the mode")
     ap.add_argument("--lanes", help="comma list: graph, cross-model, documents, dense (core); sparse, timeseries, lifecycle "
                                     "(second list, needs --second-list); runner lane ids work too")
-    ap.add_argument("--second-list", action="store_true", help="add the second list: sparse, time series, lifecycle")
-    ap.add_argument("--reps", type=int, default=DEFAULT_REPS, help="repetitions per cell, 1 to 5 (default 5)")
+    ap.add_argument("--profile", choices=tuple(PROFILES), default=DEFAULT_PROFILE,
+                    help=f"which cells the subset keeps (default {DEFAULT_PROFILE}): " + "; ".join(f"{k}: {v['doc']}" for k, v in PROFILES.items())
+                         + ". Every dropped cell is listed by --check, with its reason")
+    ap.add_argument("--second-list", action="store_true", help="add the second list: sparse, time series, lifecycle (--profile full only)")
+    ap.add_argument("--reps", type=int, default=DEFAULT_REPS,
+                    help=f"repetitions per cell, 1 to 5 (default {DEFAULT_REPS}: the target is N={TARGET_REPS}, the passes after it run only if time is left)")
     ap.add_argument("--order", choices=("biggest-last", "paper"), default="biggest-last",
                     help="biggest-last (default): core block first, then lifecycle, sparse, time series; inside the core block "
                          "large tiers after small ones and the biggest cells last; paper: the table order, no splits. Both apply inside each "
@@ -1647,7 +1803,9 @@ def main(argv=None) -> int:
     ap.add_argument("--without-timescaledb", action="store_true",
                     help="leave TimescaleDB out of the time-series lane (it is in by default: it completes the PostgreSQL "
                          "arm with pgvector and AGE)")
-    ap.add_argument("--project", metavar="CELLS_TSV", help="print the projected hours per stage from a per-cell hours table (header: lane workload scale backend class h3 h5; reps 3 or 5)")
+    ap.add_argument("--project", metavar="CELLS_TSV", help="print the projected hours per stage from a per-cell hours table (header: lane workload scale backend class h3 h5), "
+                                                          "at the profile's target repetitions (3 for paper-2611, 5 for full) unless --project-reps says 3 or 5")
+    ap.add_argument("--project-reps", type=int, choices=(3, 5), help="with --project: price this many repetitions (default: the profile's target)")
     ap.add_argument("--check", action="store_true", help="selection, coverage and instrument proofs only; no pins needed")
     ap.add_argument("--drafts", metavar="DIR", help="with --check: also lint the scripts in DIR")
     ap.add_argument("--arcadedb-release", metavar="X.Y.Z", help="ArcadeDB alone on this release (needs the five pin arguments)")
@@ -1669,24 +1827,31 @@ def main(argv=None) -> int:
     mode = "arcadedb" if a.arcadedb_release else "comparators"
     pins = release_pins(a) if a.arcadedb_release else None
     engines = parse_engines(a.engines, mode)
-    lanes = parse_lanes(a.lanes, a.second_list)
+    lanes = parse_lanes(a.lanes, a.second_list, a.profile)
 
     jp = check_jpype_pin()
     for p in jp:
         print(f"  PROBLEM jpype pin: {p}")
     if jp:
         return 1
-    print(f"jpype pin: {bench_common.JPYPE_PIN}; instrument {INSTRUMENT}; mode {mode}; reps {a.reps}")
+    print(f"jpype pin: {bench_common.JPYPE_PIN}; instrument {INSTRUMENT}; mode {mode}; reps {a.reps}; profile {a.profile}")
 
-    skip = (TIMESCALEDB,) if a.without_timescaledb else ()
+    skip = tuple(profile_skip(a.profile)) + ((TIMESCALEDB,) if a.without_timescaledb else ())
     specs = subset_specs(engines, lanes, a.order, skip, a.tiers)
     pair_id = f"{a.id_prefix}00" if mode == "arcadedb" else None
     stages = number(specs, a.id_prefix)
     plan = pass_plan(stages, a.reps, a.tiers)
     problems = (stage_problems(stages, engines, lanes, skip) + check_coverage()[0] + tier_table_problems()
-                + plan_problems(stages, a.reps, plan, a.tiers))
+                + plan_problems(stages, a.reps, plan, a.tiers) + profile_problems(a.profile, stages))
+    # the proof covers BOTH chains whatever the arguments select: the comparators and ArcadeDB are generated by separate runs
+    for m_ in MODES:
+        both = number(subset_specs(parse_engines(None, m_), list(profile_lanes(a.profile)), a.order, skip, a.tiers), a.id_prefix)
+        problems += profile_problems(a.profile, both, f"{m_} chain")
     print(f"engines: {', '.join(engines)}\nlanes: {', '.join(lanes)}\n{len(stages)} stages, order {a.order}, "
           f"engine tiers {'on' if a.tiers else 'off'}")
+    print(f"profile {a.profile}: {PROFILES[a.profile]['doc']}")
+    for ln in profile_report(a.profile) or ["  nothing dropped (the whole subset)"]:
+        print(ln)
     for st in stages:
         bes = stage_backends(st)
         print(f"  {st[0]}  {st[2]:9} {','.join(st[4]) or '-':26} {len(bes):2} arms  tier {stage_tier(st)}  {st[1]}")
@@ -1696,7 +1861,7 @@ def main(argv=None) -> int:
             print(f"  engine tier {t}: {len({s[1].split(' [')[0] for s, _ in runs})} stages x passes = {len(runs)} runs")
         print("  schedule: " + ", ".join(f"T{t} p{p}" for t, p in schedule_order({stage_tier(s) for s in stages}, a.reps)))
     if a.check and a.drafts:
-        problems += lint_drafts(a.drafts, set(engines), status_file)
+        problems += lint_drafts(a.drafts, set(engines), status_file, a.profile)
     for p in problems:
         print(f"  PROBLEM {p}")
     if problems:
@@ -1705,7 +1870,7 @@ def main(argv=None) -> int:
         print("  PROBLEM no stage: the engines and lanes asked for share no cell")
         return 1
     if a.project:
-        print_projection(stages, a.project, a.reps, a.tiers)
+        print_projection(stages, a.project, a.project_reps or PROFILES[a.profile]["target_reps"], a.tiers)
     print("check: every subset arm of the lanes asked for is in exactly one stage per workload, none outside the subset"
           + ("; the chain follows the schedule (T1 passes 1-3, T2 passes 1-3, then T1 and T2 alternating from pass 4) and every prefix is a "
              "complete set of equal replicates" if a.tiers else ""))
@@ -1733,7 +1898,7 @@ def main(argv=None) -> int:
         write_pair(a.out, pair_id, a, after)
         first_after = pair_id
     emit_all(a.out, stages, pins, first_after, a.reps, a.tiers)
-    drafts = lint_drafts(a.out, set(engines))
+    drafts = lint_drafts(a.out, set(engines), None, a.profile)
     for p in drafts:
         print(f"  PROBLEM {p}")
     return 1 if drafts else 0
