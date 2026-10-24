@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import importlib.util
 import re
-import subprocess
+import shutil
+import subprocess  # nosec B404 - test-controlled child processes, no untrusted input
 import sys
 from pathlib import Path
 
@@ -180,7 +181,7 @@ def test_current_pyproject_version_is_syntactically_valid():
 
 
 def _run(*args, stdin=None):
-    return subprocess.run(
+    return subprocess.run(  # nosec B603 - fixed argv (sys.executable + repo script), no shell
         [sys.executable, str(SCRIPT_PATH), *args],
         input=stdin,
         capture_output=True,
@@ -216,9 +217,14 @@ def test_cli_fails_closed_when_a_source_cannot_be_read(tmp_path):
 
 def test_git_remote_source_strips_prefix_and_leaves_the_version_itself_out(tmp_path):
     remote = tmp_path / "remote"
-    subprocess.run(["git", "init", "-q", str(remote)], check=True)
+    git_bin = shutil.which("git")
+    if git_bin is None:
+        pytest.skip("git is not installed")
+    subprocess.run(
+        [git_bin, "init", "-q", str(remote)], check=True
+    )  # nosec B603 - fixed argv, no shell
     git = [
-        "git",
+        git_bin,
         "-C",
         str(remote),
         "-c",
@@ -226,9 +232,13 @@ def test_git_remote_source_strips_prefix_and_leaves_the_version_itself_out(tmp_p
         "-c",
         "user.email=t@example.com",
     ]
-    subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "x"], check=True)
+    subprocess.run(
+        [*git, "commit", "-q", "--allow-empty", "-m", "x"], check=True
+    )  # nosec B603 - fixed argv, no shell
     for tag in ("26.11.1.dev0", "26.11.1.dev1", "native-v26.11.1.dev0"):
-        subprocess.run([*git, "tag", tag], check=True)
+        subprocess.run(
+            [*git, "tag", tag], check=True
+        )  # nosec B603 - fixed argv, no shell
     # the tag being released is already pushed: it must not count as published
     assert _run("26.11.1.dev1", "--git-remote", str(remote)).returncode == 0
     assert _run("26.11.1.dev2", "--git-remote", str(remote)).returncode == 0
