@@ -1,5 +1,8 @@
 [build-system]
-requires = ["build>=0.7.0", "setuptools>=61.0", "wheel", "jpype1"]
+# setup.py imports only setuptools, so the build needs no JPype. A build-time jpype1 was compiled from
+# source on a Python without a JPype wheel (3.15, until JPype > 1.7.1) and failed there. `build` is a
+# frontend, not a backend requirement.
+requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 # This file defines the package metadata for arcadedb-embedded.
