@@ -92,6 +92,10 @@ Tags are the source of truth. Pushing `X.Y.Z`, `X.Y.Z.devN`, or `X.Y.Z.postN` tr
 PyPI + docs.
 
 ```bash
+# The version must follow the counting rule and be the next number (see "Version Numbering").
+# The release workflow runs the same check on the pushed tag and fails closed.
+python3 scripts/check_version.py X.Y.Z --git-remote origin --pypi arcadedb-embedded
+
 # No tag of this name may exist yet, here or on origin (upstream's tags share our names)
 test -z "$(git tag -l X.Y.Z)" && test -z "$(git ls-remote --tags origin X.Y.Z)" && echo "no tag yet"
 
@@ -279,7 +283,8 @@ Python bindings follow the ArcadeDB main project version from `pom.xml`:
 - **Release tag**: `X.Y.Z` (GitHub Release)
 - **PyPI version**: `X.Y.Z[.devN|.postN]` (extracted automatically, no `v` prefix)
 - **Docs version**: `X.Y.Z` (extracted from tag, no `v` prefix)
-- **Counting**: `devN` starts at 0 (`X.Y.Z.dev0`, `.dev1`, ...), `postN` at 1 (the release itself is the zeroth build). No `aN`, `bN` or `rcN`. A number is never reused: PyPI refuses a version it has seen, even after a delete. The release workflow rejects any other tag form.
+- **Counting**: the order for one base is `X.Y.Z.dev0`, `.dev1`, ..., then `X.Y.Z`, then `X.Y.Z.post1`, `.post2`, .... `devN` starts at 0, `postN` at 1 (the release itself is the zeroth build). No `aN`, `bN` or `rcN`, previews included. A number is never reused and never skipped: PyPI refuses a version it has seen, even after a delete, and the next number is one above the highest published one of that base. The native wheels use the same scheme (a native preview of 26.10.2 is `26.10.2.dev0`)
+- **Enforced by**: `scripts/check_version.py VERSION --git-remote origin --pypi arcadedb-embedded` (tests: `tests/test_check_version.py`). It exits 1 when `VERSION` is not the correct next version and 2 when a source cannot be read. Run it before tagging (step 4); the release workflow runs it on the pushed tag and fails closed, so a tag that breaks the rule publishes nothing
 
 **How version is determined:**
 
