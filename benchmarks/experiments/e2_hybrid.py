@@ -10,6 +10,10 @@ express it. Backends:
   composed_qdrant_neo4j  Qdrant server (vector) + Neo4j server (graph+doc)
                          in one container (dbbench:composed, DECISIONS #117)
                          with glue code -- NO cross-system txn
+  composed_embedded_sqlite_lance_ladybug
+                         SQLite (documents) + LanceDB (vectors) + LadybugDB
+                         (graph) in ONE Python process, the embedded trio an
+                         agent-memory builder starts from -- NO cross-store txn
 
 Workloads:
   hybrid     N warm ops, end-to-end latency percentiles (result-checked)
@@ -1894,8 +1898,268 @@ class ComposedE2:
         self.neo.close()
 
 
+class ComposedEmbeddedE2:
+    """SQLite (documents) + LanceDB (vectors) + LadybugDB (graph), three embedded
+    engines in ONE Python process, with glue code: the default trio of the
+    Cognee-style agent-memory builders and the embedded counterpart of the
+    served Qdrant + Neo4j stack above (the owner, 2026-10-25). Same operation,
+    same data, same answers; nothing spans the three stores.
+
+    WHO HOLDS WHAT. SQLite holds the documents: `product(pid INTEGER PRIMARY
+    KEY, views)`, the authoritative counter and the table the document
+    projection reads. LanceDB holds the vectors: `pid`, `views` and a
+    FLOAT[64] `vector`, under IVF_HNSW_FLAT (unquantized, fp32 only: the
+    paper's rule), a BTREE on `pid` for the candidate filter. LadybugDB holds
+    the graph: `Product(pid)` nodes, `RELATED` edges, and a `views` property
+    that is the graph store's copy of the counter (the Neo4j half carries it
+    on the served arm). SQLite's graph-by-tables (an edge table and a
+    recursive CTE) is not used: LadybugDB is the graph store, so the edges
+    are loaded once, into it.
+
+    THE WRITE PATH. One logical operation reads LanceDB (top-k), reads
+    LadybugDB (the hop), then writes TWO stores one after the other: the
+    SQLite counter in its own transaction, then the graph store's copy in its
+    own. Each write is atomic and durable on its own terms; nothing makes the
+    pair atomic, which is what the atomicity workload shows: the injected
+    failure lands between the two commits, and the SQLite increment stays.
+    LanceDB is read-only in the operation, and that is a decision, not a
+    shortcut (laptop, 2026-10-25; numbers in COMPARATORS.md): a LanceDB
+    `update` deletes the matched rows and re-appends them in a new fragment,
+    so a counter kept there piles up one fragment per operation and leaves the
+    updated rows outside the vector index until an `optimize`. A real
+    Cognee-style app keeps the counter in its relational store and its
+    graph's node properties, not in an append-only vector table, and this arm
+    does the same rather than measure LanceDB's maintenance.
+
+    WHAT THE ARM CAN AND CANNOT GUARANTEE (TXN_SCOPE "none", DECISIONS #118):
+    SQLite and LadybugDB are each ACID alone; LanceDB's reads see a table
+    version. There is no shared transaction, no shared log and no
+    cross-store recovery, so a crash between the two writes leaves the stores
+    disagreeing (the atomicity workload counts it), and the three engines'
+    durability is three different settings (SQLite follows the cell's class,
+    LadybugDB syncs at every commit with no knob, LanceDB never syncs).
+
+    PARALLELISM, as the other embedded arms: LadybugDB's threads from
+    `sched_getaffinity` and its buffer pool at 0.8 of the cgroup's cap, both
+    read back (FAIRNESS F6); SQLite is single-threaded per connection;
+    LanceDB's Rust runtime sizes itself from the process's available
+    parallelism and has no setting this lane touches (the dense lane's
+    LanceDB arms are the same). All three share the one process's cpuset and
+    the one cell cap."""
+    name = "composed_embedded_sqlite_lance_ladybug"
+    # WHAT THE TIMED TRANSACTION HOLDS (DECISIONS #118): nothing spans the
+    # three stores, which is what this arm exists to show.
+    TXN_SCOPE = "none"
+    VIEW_SUM_KEY = "sqlite_view_sum"
+    # The vector index, matched to the table's HNSW settings and to the dense
+    # lane's LanceDB fp32 arm (`lancedb_dense_fp32`): IVF_HNSW_FLAT, m 16,
+    # ef_construction 100, searched at ef 100 and nprobes 10.
+    LANCE_INDEX_TYPE = "IVF_HNSW_FLAT"
+    LANCE_M, LANCE_EFC, LANCE_EF, LANCE_NPROBES = 16, 100, 100, 10
+    FILTER_MODE = ("cross-store pre-filter: the candidate ids are read from LadybugDB "
+                   "and pasted into LanceDB's `where` (prefilter), which ranks them")
+    SQLITE_PATH = "/tmp/e2_composed_sqlite.db"
+    LANCE_PATH = "/tmp/e2_composed_lance"
+    LADYBUG_PATH = "/tmp/e2_composed_ladybug"
+
+    def __init__(self):
+        import importlib.metadata as md
+        import shutil
+        import sqlite3
+        import lancedb
+        import ladybug
+        from l2_graph import _ladybug_fit
+        # Fresh stores: a path may be a directory (LanceDB) or a file with
+        # sidecars (SQLite's -wal and -shm, LadybugDB's .wal), by version.
+        for base in (self.SQLITE_PATH, self.LANCE_PATH, self.LADYBUG_PATH):
+            for p in (base, base + "-wal", base + "-shm", base + ".wal", base + ".shadow"):
+                if os.path.isdir(p):
+                    shutil.rmtree(p, ignore_errors=True)
+                elif os.path.exists(p):
+                    os.remove(p)
+        # SQLite as the document arm runs it (l1_tpc.SqliteTPC): WAL, and
+        # synchronous NORMAL at the relaxed class, FULL at the strict one,
+        # read back from the engine (DECISIONS #70, #81, #90). Autocommit mode
+        # with explicit BEGIN, so a transaction is the statement text.
+        self.sq = sqlite3.connect(self.SQLITE_PATH, isolation_level=None)
+        self.sq.execute("PRAGMA journal_mode=WAL")
+        self.sq.execute(f"PRAGMA synchronous={bench_common.sqlite_synchronous()}")
+        sqlite_durability = bench_common.sqlite_durability_readback(self.sq)
+        self.lance = lancedb.connect(self.LANCE_PATH)
+        threads, pool = _ladybug_fit()
+        kw = {"max_num_threads": threads}
+        if pool:
+            kw["buffer_pool_size"] = pool
+        self.lb = ladybug.Database(self.LADYBUG_PATH, **kw)
+        self.lbc = ladybug.Connection(self.lb)
+        self._prepared = {}
+        got = self._lb('CALL current_setting("threads") RETURN *')[0][0]
+        lance_v = md.version("lancedb")
+        # ALL THREE, with versions (#156), as the served stack's row names both
+        # of its halves; the members are "+"-separated for the page.
+        self.version = f"sqlite:{sqlite3.sqlite_version}+lancedb:{lance_v}+ladybug:{md.version('ladybug')}"
+        # The write path's durability: SQLite's setting (the class's) and the
+        # graph store's commit, which has no setting; LanceDB is never written
+        # in an operation and never syncs. The SQLite half leads, because it
+        # is the half the cell's class changes.
+        self.durability = (sqlite_durability + "; LadybugDB graph copy committed in its own "
+                           "transaction, no setting; LanceDB read-only here, never syncs")
+        self.row_extra = {"ladybug_threads": int(got),
+                          "ladybug_buffer_pool_mib": (pool >> 20) if pool else None}
+
+    def _lb(self, text, params=None):
+        if not params:
+            res = self.lbc.execute(text)
+        else:
+            stmt = self._prepared.get(text)
+            if stmt is None:
+                stmt = self._prepared[text] = self.lbc.prepare(text)
+            res = self.lbc.execute(stmt, params)
+        out = []
+        while res.has_next():
+            out.append(res.get_next())
+        return out
+
+    def build(self, vecs, edges):
+        import csv as _csv
+        import pyarrow as pa
+        n = len(vecs)
+        # SQLite: the documents. `pid INTEGER PRIMARY KEY` is the rowid
+        # itself, the clustered index every point read and the update use.
+        self.sq.execute("CREATE TABLE product (pid INTEGER PRIMARY KEY, views INTEGER NOT NULL)")
+        for s in range(0, n, BATCH):
+            self.sq.execute("BEGIN")
+            self.sq.executemany("INSERT INTO product VALUES (?, 0)", ((i,) for i in range(s, min(s + BATCH, n))))
+            self.sq.execute("COMMIT")
+        # LadybugDB: the graph, by COPY from CSV (its bulk path, as the graph
+        # and cross-model arms load).
+        self._lb("CREATE NODE TABLE Product(pid INT64, views INT64, PRIMARY KEY(pid))")
+        self._lb("CREATE REL TABLE RELATED(FROM Product TO Product)")
+        pcsv, rcsv = "/tmp/e2_composed_products.csv", "/tmp/e2_composed_related.csv"
+        with open(pcsv, "w", newline="") as f:
+            w = _csv.writer(f)
+            for i in range(n):
+                w.writerow([i, 0])
+        with open(rcsv, "w", newline="") as f:
+            w = _csv.writer(f)
+            for a, b in edges:
+                w.writerow([a, b])
+        self._lb(f"COPY Product FROM '{pcsv}'")
+        self._lb(f"COPY RELATED FROM '{rcsv}'")
+        os.unlink(pcsv)
+        os.unlink(rcsv)
+        # LanceDB: the vectors, loaded from one Arrow table (the dense lane's
+        # path). The pid carries a BTREE for the candidate filter and the HNSW
+        # index follows, both inside the index timer, as the served stack
+        # times its Qdrant payload index and the wait for green.
+        flat = pa.array(vecs.astype("float32").reshape(-1), type=pa.float32())
+        self.tbl = self.lance.create_table("product", pa.table({
+            "pid": pa.array(range(n), type=pa.int64()),
+            "vector": pa.FixedSizeListArray.from_arrays(flat, DIM)}))
+        with bench_common.index_timer(self):
+            self.tbl.create_scalar_index("pid", index_type="BTREE")
+            self.tbl.create_index(metric="l2", index_type=self.LANCE_INDEX_TYPE,
+                                  m=self.LANCE_M, ef_construction=self.LANCE_EFC)
+        # Read back once the index exists; the lane's main copies `row_extra` onto the row after the build.
+        self.row_extra = {**self.row_extra, **self._lance_index_readback()}
+
+    def _lance_index_readback(self):
+        """The engine's own answer for the vector index (BUGS F164): its type
+        from index_stats, its details from list_indices, and a refusal when
+        the index built is not the one this arm declares."""
+        ix = [i for i in self.tbl.list_indices() if list(getattr(i, "columns", None) or []) == ["vector"]]
+        applied = self.tbl.index_stats(ix[0].name).index_type if ix else None
+        if applied != self.LANCE_INDEX_TYPE:
+            raise RuntimeError(f"lancedb vector index type read back {applied!r}, not {self.LANCE_INDEX_TYPE!r}: "
+                               "the row would record fp32 for a different index (BUGS F164)")
+        return {"lancedb_index_type": applied,
+                "lancedb_index_details": json.dumps(getattr(ix[0], "index_details", None), sort_keys=True, default=str)}
+
+    def _search(self, qvec, k, where=None):
+        q = self.tbl.search([float(x) for x in qvec]).metric("l2").select(["pid"]).limit(k)
+        q = q.ef(max(self.LANCE_EF, k)).nprobes(self.LANCE_NPROBES)
+        if where:
+            q = q.where(where, prefilter=True)
+        return [int(r["pid"]) for r in q.to_list()]
+
+    def hybrid_op(self, qvec, crash=False, mirror=False):
+        """Read LanceDB, read LadybugDB, write SQLite, write LadybugDB. The
+        crash lands between the two writes: SQLite has committed, the graph
+        store's copy has not. `mirror` changes nothing here (the served stack
+        needs an extra read to mirror the exact counter; this copy is an
+        increment in each store), so the timed and atomicity paths are the
+        same code."""
+        pids = self._search(qvec, K)
+        rel = self._lb("MATCH (p:Product)-[:RELATED]->(r:Product) WHERE p.pid = $p RETURN r.pid LIMIT 3",
+                       {"p": pids[0]})
+        touched = pids[:3] + [int(r[0]) for r in rel]
+        tp = sorted(set(touched))
+        marks = ",".join("?" * len(tp))
+        self.sq.execute("BEGIN IMMEDIATE")
+        try:
+            self.sq.execute(f"UPDATE product SET views = views + 1 WHERE pid IN ({marks})", tp)
+            self.sq.execute("COMMIT")
+        except BaseException:
+            self.sq.execute("ROLLBACK")
+            raise
+        if crash:
+            raise RuntimeError("injected-crash")   # SQLite committed, the graph store's copy skipped
+        self._lb("BEGIN TRANSACTION")
+        try:
+            self._lb("UNWIND $ps AS p MATCH (n:Product) WHERE n.pid = p SET n.views = n.views + 1", {"ps": tp})
+            self._lb("COMMIT")
+        except BaseException:
+            try:
+                self._lb("ROLLBACK")
+            except Exception:  # noqa: BLE001 - the original error is the one to raise
+                pass
+            raise
+        return len(touched)
+
+    def _vec_topk(self, qvec, k, ef=100):
+        return self._search(qvec, k)
+
+    def _hop(self, pids):
+        if not pids:
+            return []
+        return [int(r[0]) for r in self._lb(
+            "MATCH (p:Product)-[:RELATED]->(q:Product) WHERE p.pid IN $ps RETURN q.pid",
+            {"ps": [int(p) for p in pids]})]
+
+    def _docs(self, pids):
+        if not pids:
+            return []
+        pids = [int(p) for p in pids]
+        return [{"pid": int(r[0]), "views": int(r[1])} for r in self.sq.execute(
+            f"SELECT pid, views FROM product WHERE pid IN ({','.join('?' * len(pids))})", pids).fetchall()]
+
+    def _rank_candidates(self, qvec, cands, k):
+        if not cands:
+            return []
+        # PASTED BY THE API, not by choice (DECISIONS #116 item 2): LanceDB's
+        # `where` takes a predicate string. Integers only.
+        return self._search(qvec, k, where=f"pid IN ({','.join(str(int(p)) for p in cands)})")
+
+    def total_views(self):
+        """Both stores' view of the SAME counter, plus how many products they
+        disagree about: zero while they stay consistent, non-zero the moment
+        one took a write the other did not (the served stack's evidence)."""
+        sq = {int(p): int(v) for p, v in self.sq.execute("SELECT pid, views FROM product WHERE views > 0")}
+        lb = {int(r[0]): int(r[1]) for r in self._lb("MATCH (n:Product) WHERE n.views > 0 RETURN n.pid, n.views")}
+        disagree = [p for p in set(sq) | set(lb) if sq.get(p, 0) != lb.get(p, 0)]
+        return {"sqlite_view_sum": sum(sq.values()),
+                "ladybug_view_sum": sum(lb.values()),
+                "disagreeing_products": len(disagree)}
+
+    def close(self):
+        self.sq.close()
+        self.lbc.close()
+        self.lb.close()   # LanceDB exposes no close(): its tables are files written on commit
+
+
 BACKENDS = {c.name: c for c in (ArcadeE2, ArcadeE2Server, SurrealE2, SurrealServedE2, ArangoE2,
-                                MongoE2, PgAgeE2, Neo4jE2, MemgraphE2, LadybugE2, DuckE2, ComposedE2)}
+                                MongoE2, PgAgeE2, Neo4jE2, MemgraphE2, LadybugE2, DuckE2, ComposedE2,
+                                ComposedEmbeddedE2)}
 
 
 # DECISIONS #81, recorded on every row. PG+AGE reads the server's
@@ -1919,6 +2183,9 @@ DURABILITY = {
     # The composed stack's document and graph half is Neo4j, so the whole
     # operation waits for Neo4j's log; Qdrant's WAL runs at its own default.
     "composed_qdrant_neo4j": bench_common.DURABILITY_NEO4J + "; Qdrant WAL at its default",
+    # The embedded trio reads its SQLite setting back at connect (the adapter's
+    # answer wins); this is the relaxed string it is compared against.
+    "composed_embedded_sqlite_lance_ladybug": bench_common.DURABILITY_SQLITE,
 }
 
 
@@ -2125,7 +2392,7 @@ def main():
         # that as a clean rollback. An arm whose clean ops moved nothing cannot
         # demonstrate anything about rollback, so it fails loudly here instead.
         base = b.total_views()
-        moved = (base["neo4j_view_sum"] > 0 if isinstance(base, dict)
+        moved = (base[getattr(b, "VIEW_SUM_KEY", "neo4j_view_sum")] > 0 if isinstance(base, dict)
                  else base > 0)
         if not moved:
             raise RuntimeError(

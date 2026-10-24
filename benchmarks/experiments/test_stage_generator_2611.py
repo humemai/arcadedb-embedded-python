@@ -119,9 +119,31 @@ def test_timescaledb_is_in_the_time_series_stage_unless_opted_out():
 def test_the_new_engines_are_in_the_subset():
     for b, eng in (("neo4j_graph", "neo4j"), ("neo4j_dense_int8", "neo4j"), ("qdrant_dense", "qdrant"),
                    ("qdrant_sparse_uint8", "qdrant"), ("ladybug_graph", "ladybug"), ("ladybug_e2", "ladybug"),
-                   ("timescaledb", "postgresql"), ("composed_qdrant_neo4j", "qdrant-neo4j")):
+                   ("timescaledb", "postgresql"), ("composed_qdrant_neo4j", "qdrant-neo4j"),
+                   ("composed_embedded_sqlite_lance_ladybug", "composed-embedded")):
         assert G.engine_of(b) == eng, b
     assert G.engine_of("neo4j_e2") is None and G.is_outside("neo4j_e2")
+
+
+def test_the_composed_embedded_arm_runs_in_tier_1_cross_model_beside_the_served_composed_stack():
+    """The owner, 2026-10-25: SQLite + LanceDB + LadybugDB in one process joins the cross-model lanes (e2 and its atomicity workload)
+    in Tier 1, in every pass, right after the composed Qdrant + Neo4j stack, with the same cells as any arm that has a durability
+    setting: hybrid at both classes and atomicity at the relaxed one, at both sizes."""
+    arm = "composed_embedded_sqlite_lance_ladybug"
+    assert G.engine_of(arm) == "composed-embedded" and G.tier_of(arm) == 1 and not G.is_outside(arm)
+    assert [lane for lane, spec in G.runner.LANES.items() if arm in spec[1]] == ["e2"]   # cross-model only
+    assert G.runner.BACKENDS[arm]["topology"] == "embedded"
+    stages, plan = tiered_plan(reps=3, second=False)
+    e2 = [s for s in stages if s[2] == "e2" and G.stage_tier(s) == 1]
+    assert len(e2) == 1
+    names = G.stage_backends(e2[0])
+    assert names.index(arm) == names.index("composed_qdrant_neo4j") + 1
+    cells = {(c.workload, c.scale, c.cls) for c in G.stage_cells(e2[0]) if c.backend == arm}
+    assert cells == {(w, sc, cl) for sc in ("e2", "e2_500k")
+                     for w, cl in (("hybrid", "relaxed"), ("hybrid", "strict"), ("atomicity", "relaxed"))}
+    # in every pass of Tier 1, and in no stage of Tier 2
+    assert sorted(p for s, p in plan if arm in G.stage_backends(s)) == [1, 2, 3]
+    assert all(G.stage_tier(s) == 1 for s, _p in plan if arm in G.stage_backends(s))
 
 
 # ------------------------------------------------------------------------------------------- --check refusals
@@ -381,7 +403,8 @@ def test_the_drafts_are_the_ones_on_file(tmp_path):
 SCHEDULE_5 = [(1, 1), (1, 2), (1, 3), (2, 1), (2, 2), (2, 3), (1, 4), (2, 4), (1, 5), (2, 5)]
 TIER1 = ("arcadedb_embedded", "arcadedb_server", "surrealdb_graph", "surrealdb_graph_server", "surrealdb_tpc", "arangodb_graph",
          "pgage_graph", "pgvector_dense", "pgvector_sparse", "postgres", "postgres_ts", "mongodb", "mongodb_dense",
-         "composed_qdrant_neo4j", "sqlite", "sqlite_vec_dense", "ladybug_dense", "duckdb", "duckdb_vss_dense", "duckpgq_graph")
+         "composed_qdrant_neo4j", "composed_embedded_sqlite_lance_ladybug", "sqlite", "sqlite_vec_dense", "ladybug_dense", "duckdb",
+         "duckdb_vss_dense", "duckpgq_graph")
 TIER2 = ("memgraph_graph", "memgraph_dense", "neo4j_graph", "neo4j_dense", "qdrant_dense", "qdrant_sparse", "redis_dense",
          "cratedb_tpc", "timescaledb")
 

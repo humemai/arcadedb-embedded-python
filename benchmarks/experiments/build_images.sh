@@ -75,7 +75,10 @@ declare -A PKGS=(
   # carries #1074 (COPY linear for compressible columns) and #1075 (the pool
   # sized from the cgroup limit). 0.21.2 (2026-10-01) is the newest stable.
   [client]="requests==2.34.2 psycopg[binary]==3.3.6 $HARNESS_PKGS surrealdb==2.0.0 qdrant-client==1.20.0 pymilvus[bulk_writer]==3.0.2 minio==7.2.20 azure-storage-blob==12.31.0 ml-dtypes==0.6.0 elasticsearch==9.5.1 neo4j==6.4.1 ladybug==0.21.2 pymongo==4.18.1 python-arango==8.3.6 falkordb==1.7.1 redis==8.1.0 neo4j-rust-ext==6.4.1.0 pgvector==0.5.1 arcadedb-driver==0.2.0"
-  [dense]="chromadb==1.5.9 lancedb==0.39.0 sqlite-vec==0.1.9 duckdb==1.5.6 $HARNESS_PKGS"
+  # ladybug==0.21.2 is the SAME pin as the client line above, here for the composed embedded cross-model arm
+  # (composed_embedded_sqlite_lance_ladybug, 2026-10-25): SQLite + LanceDB + LadybugDB must import in ONE process, and
+  # lancedb lives in this image. No new version: the dense lane's arms import none of it.
+  [dense]="chromadb==1.5.9 lancedb==0.39.0 sqlite-vec==0.1.9 duckdb==1.5.6 ladybug==0.21.2 $HARNESS_PKGS"
 )
 # A GUARD, not a comment. The dev pin above survived because nothing checked
 # it. BENCH_ALLOW_DEV=1 is the deliberate escape hatch for engine debugging.

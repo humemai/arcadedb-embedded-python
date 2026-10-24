@@ -1034,6 +1034,11 @@ INDEX_DECISIONS = {
         # candidate filter reads a payload index on pid: 24.4 -> 3.15 ms, 7.7x
         # (laptop, 50k), and in local mode no index of any kind existed.
         "composed_qdrant_neo4j":  "Neo4j's index on :Product(pid); Qdrant payload index on pid (F133)",
+        # The embedded trio (2026-10-25): SQLite's pid is the rowid (INTEGER PRIMARY KEY), LadybugDB's is the node
+        # table's primary key (a hash index), and LanceDB's candidate filter reads a BTREE on pid, measured on the
+        # arm's own filtered path (laptop, 50k products, 100 filtered searches, p50, with the index against dropped).
+        "composed_embedded_sqlite_lance_ladybug": "SQLite product(pid) INTEGER PRIMARY KEY (the rowid); LadybugDB node primary key "
+                                                  "(a hash index); LanceDB BTREE on pid: 7.10 -> 5.35 ms, 1.3x",
     },
     "l4": {
         "arcadedb_ts_doc":            "(host, ts)",

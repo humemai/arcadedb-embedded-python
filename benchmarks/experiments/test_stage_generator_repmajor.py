@@ -80,8 +80,8 @@ def test_engines_run_in_priority_order_inside_every_stage(chain):
 def test_priority_names_every_subset_engine_and_arcadedb_leads():
     assert set(G.ENGINES) <= set(G.ENGINE_PRIORITY)
     assert G.ENGINE_PRIORITY[0] == "arcadedb"
-    assert list(G.ENGINE_PRIORITY[1:13]) == ["surrealdb", "arangodb", "postgresql", "mongodb", "redis", "qdrant-neo4j", "neo4j",
-                                              "qdrant", "duckdb", "sqlite", "memgraph", "ladybug"]
+    assert list(G.ENGINE_PRIORITY[1:14]) == ["surrealdb", "arangodb", "postgresql", "mongodb", "redis", "qdrant-neo4j", "composed-embedded",
+                                              "neo4j", "qdrant", "duckdb", "sqlite", "memgraph", "ladybug"]
     assert G.ENGINE_PRIORITY[-1] == "cratedb"
     # both comparator batches are merged: Redis with its dense arm, CrateDB (last in priority) with its three lanes
     assert "redis" in G.ENGINES and "cratedb" in G.ENGINES
