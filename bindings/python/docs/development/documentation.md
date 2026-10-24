@@ -162,7 +162,7 @@ Documentation versions **match PyPI package versions**:
 | Release Tag | Docs Version | PyPI Packages |
 |-------------|--------------|---------------|
 | `X.Y.Z` | `X.Y.Z` | `arcadedb-embedded==X.Y.Z` |
-| Example: `26.9.1` | `26.9.1` | `arcadedb-embedded==26.9.1` |
+| Example: `26.10.2` | `26.10.2` | `arcadedb-embedded==26.10.2` |
 
 This ensures users always see documentation matching their installed package version.
 
