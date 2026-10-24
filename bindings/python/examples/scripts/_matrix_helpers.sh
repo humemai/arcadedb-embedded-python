@@ -298,12 +298,11 @@ PY
     local wheel_name
     wheel_name="$(basename "$wheel_path")"
 
-    matrix_log "Installing local wheel with uv: $wheel_name"
-    if [[ -n "${VIRTUAL_ENV:-}" && -x "${VIRTUAL_ENV}/bin/python" ]]; then
-        uv pip install --python "${VIRTUAL_ENV}/bin/python" --force-reinstall "$wheel_path"
-    else
-        uv pip install --python "$(command -v python3)" --user --force-reinstall "$wheel_path"
-    fi
+    # The wheel is not installed into any environment. The example launcher runs
+    # under `uv run --with <wheel>`, which layers the wheel on top of the active
+    # environment for that process only.
+    MATRIX_PYTHON=(uv run --no-project --python "$(command -v python3)" --with "$wheel_path" python3)
+    matrix_log "Local wheel for the example launcher (uv run --with, nothing installed): $wheel_name"
 
     matrix_log "Keeping local wheel artifact for Docker-wrapped example runs: $wheel_name"
 
@@ -318,9 +317,19 @@ PY
 
     local wheel_version
     wheel_version="$(
-        python3 - << 'PY'
+        "${MATRIX_PYTHON[@]}" - << 'PY'
 import arcadedb_embedded
 print(getattr(arcadedb_embedded, '__version__', 'unknown'))
+PY
+    )"
+    matrix_log "Launcher environment: $(
+        "${MATRIX_PYTHON[@]}" - << 'PY'
+import importlib.metadata as m
+import platform
+print(
+    f"python=={platform.python_version()}",
+    *(f"{n}=={m.version(n)}" for n in ("arcadedb-embedded", "jpype1")),
+)
 PY
     )"
 

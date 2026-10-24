@@ -81,7 +81,7 @@ deep10m sits at 0.67 because a single fp32 dense build peaks well above the 18g 
 
 ```sh
 export ARCADEDB_WHEEL=<the pinned wheel> ARCADEDB_SERVER_IMAGE=arcadedb-c25:<pin>   # set together, or runner.py refuses
-BENCH_ALLOW_DEV=1 bash build_images.sh   # Phase A; without the flag it refuses a pre-release pin, which every commit-pinned wheel is (a stable release's wheel, the 26.10.1 measurement's, builds with BENCH_ALLOW_DEV=0). It installs jpype1==1.7.1 with the wheel (Dockerfile.bench, section 7 row 73); the repo venv needs `uv pip install --python .venv <wheel> jpype1==1.7.1` for the same reason
+BENCH_ALLOW_DEV=1 bash build_images.sh   # Phase A; without the flag it refuses a pre-release pin, which every commit-pinned wheel is (a stable release's wheel, the 26.10.1 measurement's, builds with BENCH_ALLOW_DEV=0). It installs jpype1==1.7.1 with the wheel (Dockerfile.bench, section 7 row 73); the repo venv needs `jpype1==1.7.1` for the same reason: `uv add jpype1==1.7.1` at the repo root pins it in `pyproject.toml` and `uv.lock`, and the wheel itself comes from `uv sync`
 export ARCADEDB_ENGINE_COMMIT=<pin> BENCH_HOST=mini   # a paper-tier run refuses to start without the host, and without the commit when it runs an ArcadeDB arm
 source campaign_env.sh               # the BENCH_* dataset switches for a hand run; no queue script sources it (the generator, `make_2611_stages.py`, and the September scripts export them inline, PROTOCOL section 6)
 campaign_env_check                   # asserts every corpus is present
