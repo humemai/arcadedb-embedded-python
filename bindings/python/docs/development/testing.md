@@ -131,6 +131,7 @@ asserts, so the list below stops at the file.
 | `test_java_package_shadowing.py` | A folder named `java/` or `com/` must not change what a query returns |
 | `test_runtime_cache.py` | The dev-mode runtime cache follows the wheel it was extracted from |
 | `test_jar_provenance.py` | The wheel can say which engine it carries, not only which version it is |
+| `test_wheel_packages.py` | The wheel ships every subpackage the shared code imports (`_native` is imported by the JVM backend too) |
 | `test_wheel_platform_tag.py` | The wheel's manylinux platform tag, and `__version__` equals the installed distribution version |
 | `test_wheel_size.py` | The wheel size gate: a wheel at or over 100 decimal megabytes fails the build |
 | `test_check_test_skips.py` | The skip gate described below |

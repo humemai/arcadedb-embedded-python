@@ -125,7 +125,7 @@ Repository = "https://github.com/humemai/arcadedb-embedded-python"
 "ArcadeDB Upstream" = "https://github.com/ArcadeData/arcadedb"
 
 [tool.setuptools]
-packages = ["arcadedb_embedded"]
+packages = ["arcadedb_embedded", "arcadedb_embedded._native"]
 package-dir = { "" = "src" }
 include-package-data = true
 
