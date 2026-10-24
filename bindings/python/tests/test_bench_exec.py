@@ -7,7 +7,7 @@ wrapper goes back to ``uv pip`` or a hand-made venv.
 """
 
 import re
-import subprocess
+import subprocess  # nosec B404 - test-controlled child process, no untrusted input
 import sys
 from pathlib import Path
 
@@ -20,7 +20,7 @@ def test_bench_exec_prints_environment_then_becomes_the_script(tmp_path):
     script.write_text(
         "import sys\nprint('PROBE', sys.executable, sys.stdout.write_through, sys.argv[1:])\n"
     )
-    result = subprocess.run(
+    result = subprocess.run(  # nosec B603 - fixed argv (sys.executable + repo script), no shell
         [sys.executable, str(EXAMPLES / "bench_exec.py"), str(script), "--a", "1"],
         capture_output=True,
         text=True,
