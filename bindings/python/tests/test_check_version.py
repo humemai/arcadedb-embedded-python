@@ -125,13 +125,27 @@ def test_post_increments_without_skipping():
         cv.check_next("26.10.2.post3", published)
 
 
-def test_native_preview_example():
-    # native-v26.10.2.dev0 was the first native preview of 26.10.2; the series has no 26.10.2 yet
-    assert str(cv.check_next("26.10.2.dev0", [])) == "26.10.2.dev0"
-    assert str(cv.check_next("26.10.2.dev1", ["26.10.2.dev0"])) == "26.10.2.dev1"
-    for form in ("26.10.2a1", "26.10.2rc1", "26.10.2b1"):
+def test_native_series_restarts_at_dev0_on_a_new_base():
+    # native 26.10.2.dev0 and dev1 are published under the old base (a naming mistake, they stay);
+    # the engine moved to 26.11.1-SNAPSHOT, so the next native preview is 26.11.1.dev0
+    old = ["26.10.2.dev0", "26.10.2.dev1"]
+    assert str(cv.check_next("26.11.1.dev0", old)) == "26.11.1.dev0"
+    with pytest.raises(cv.VersionError, match="dev0"):
+        cv.check_next("26.11.1.dev1", old)
+    with pytest.raises(cv.VersionError, match="dev0"):
+        cv.check_next("26.11.1.dev2", old)
+    for form in ("26.11.1a1", "26.11.1b1", "26.11.1rc1", "26.11.1.post0"):
         with pytest.raises(cv.VersionError):
-            cv.check_next(form, [])
+            cv.check_next(form, old)
+
+
+def test_full_sequence_of_a_base():
+    published = ["26.10.2.dev0", "26.10.2.dev1"]
+    for version in ("26.11.1.dev0", "26.11.1.dev1", "26.11.1", "26.11.1.post1"):
+        cv.check_next(version, published)
+        published.append(version)
+    with pytest.raises(cv.VersionError):
+        cv.check_next("26.11.1.post3", published)
 
 
 def test_foreign_published_entries_are_ignored():
