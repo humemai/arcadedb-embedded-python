@@ -499,14 +499,13 @@ public final class ArcadeNative {
       return out(reply);
     final byte[] b = (reply.substring(0, reply.length() - 1) + ",\"bin\":" + sink.n + "}").getBytes(StandardCharsets.UTF_8);
     final int off = (b.length + 1 + 3) & ~3;
-    final CCharPointer p = UnmanagedMemory.malloc(off + 4 * sink.n);
-    for (int i = 0; i < b.length; i++)
-      p.write(i, b[i]);
-    for (int i = b.length; i < off; i++)
-      p.write(i, (byte) 0);
-    final CFloatPointer fp = (CFloatPointer) ((org.graalvm.word.Pointer) p).add(off);
-    for (int i = 0; i < sink.n; i++)
-      fp.write(i, sink.a[i]);
+    final CCharPointer p = UnmanagedMemory.malloc(off + 4L * sink.n);
+    // bulk copies (Unsafe.copyMemory), not one p.write per byte: the text, the zero padding up to the 4-byte boundary, then the float32 tail in native order
+    final java.nio.ByteBuffer bb = CTypeConversion.asByteBuffer(p, (int) (off + 4L * sink.n));
+    bb.put(b, 0, b.length);
+    while (bb.position() < off)
+      bb.put((byte) 0);
+    bb.order(java.nio.ByteOrder.nativeOrder()).asFloatBuffer().put(sink.a, 0, sink.n);
     return p;
   }
 
@@ -683,9 +682,8 @@ public final class ArcadeNative {
   static CCharPointer out(final String s) {
     final byte[] b = s.getBytes(StandardCharsets.UTF_8);
     final CCharPointer p = UnmanagedMemory.malloc(b.length + 1);
-    for (int i = 0; i < b.length; i++)
-      p.write(i, b[i]);
-    p.write(b.length, (byte) 0);
+    // one bulk copy (Unsafe.copyMemory) and the terminating zero; this was a Java loop of p.write(i, b[i]), one byte per iteration
+    CTypeConversion.asByteBuffer(p, b.length + 1).put(b, 0, b.length).put((byte) 0);
     return p;
   }
 }
