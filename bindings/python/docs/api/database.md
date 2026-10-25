@@ -863,6 +863,13 @@ Lookup a record by an indexed key (index-based: O(1) for a hash index, O(log n) 
 - Python record wrapper (`Document`, `Vertex`, or `Edge`, matching the underlying
   record type) or `None` if not found
 
+**Raises:** `ArcadeDBError` when no `LSM_TREE` or `HASH` index covers exactly `keys`, in
+this order, on the type or a supertype (`No index has been created on type 'User'
+properties [email]`). The JVM wheel and the native wheel both refuse it: the call never
+scans the type. A `FULL_TEXT` index on the keys is refused with its own text (`No key
+index has been created ...`). An index dropped with `DROP INDEX` stops serving the call
+on the next call.
+
 **Example:**
 
 ```python

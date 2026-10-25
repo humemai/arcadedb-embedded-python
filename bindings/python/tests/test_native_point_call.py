@@ -5,6 +5,7 @@ for every kind of parameter and key; the first group runs on both backends, the 
 
 import json
 import os
+import re
 
 import pytest
 
@@ -28,6 +29,9 @@ def _docs(temp_db):
     temp_db.command("sql", "CREATE PROPERTY P.name STRING").close()
     temp_db.command("sql", "CREATE INDEX ON P (id) UNIQUE").close()
     temp_db.command("sql", "CREATE INDEX ON P (name) UNIQUE").close()
+    temp_db.command(
+        "sql", "CREATE INDEX ON P (id, name) UNIQUE"
+    ).close()  # the composite lookups
     rows = [{"id": i, "name": f"n{i}"} for i in INTS]
     rows += [{"id": 100 + k, "name": s or "empty"} for k, s in enumerate(STRINGS)]
     temp_db.insert_many("P", rows)
@@ -65,6 +69,128 @@ def test_lookup_by_key_returns_the_record_for_int_str_and_composite_keys(temp_db
         assert both is not None and both.get_rid() == by_id.get_rid()
     assert temp_db.lookup_by_key("P", ["id"], [424242]) is None
     assert temp_db.lookup_by_key("P", ["id", "name"], [INTS[0], "n1"]) is None
+
+
+def _no_index_error(type_name, keys):
+    """The text both wheels give for a lookup no index covers (Arrays.toString of the keys)."""
+    return (
+        rf"Failed to lookup by key in '{type_name}': .*No index has been created on type "
+        rf"'{type_name}' properties {re.escape('[' + ', '.join(keys) + ']')}"
+    )
+
+
+def test_lookup_by_key_without_an_index_on_exactly_those_keys_raises(temp_db):
+    """``lookup_by_key`` is an index lookup (docs/api/database.md): keys no index covers raise ArcadeDBError on the JVM wheel
+    (the engine's ``No index has been created``), and on the native wheel too, where the statement it runs would scan the type (P-04).
+    The refusal repeats and does not make the next call pass."""
+    from arcadedb_embedded.exceptions import ArcadeDBError
+
+    _docs(temp_db)
+    temp_db.command("sql", "CREATE PROPERTY P.extra STRING").close()
+    for keys, values in (
+        (["extra"], ["x"]),  # a property with no index
+        (
+            ["name", "id"],
+            ["n1", 1],
+        ),  # the composite index is (id, name): the order counts
+        (["id", "extra"], [1, "x"]),  # only a prefix of the keys is indexed
+        (["id", "name", "extra"], [1, "n1", "x"]),
+    ):
+        for _ in range(3):
+            with pytest.raises(ArcadeDBError, match=_no_index_error("P", keys)):
+                temp_db.lookup_by_key("P", keys, values)
+    # the keys an index covers still work after the refusals
+    assert temp_db.lookup_by_key("P", ["id"], [1]).get("name") == "n1"
+    assert temp_db.lookup_by_key("P", ["id", "name"], [1, "n1"]).get("id") == 1
+
+
+def test_lookup_by_key_on_a_type_that_does_not_exist_still_raises_the_schema_error(
+    temp_db,
+):
+    from arcadedb_embedded.exceptions import ArcadeDBError
+
+    with pytest.raises(ArcadeDBError, match=r"Failed to lookup by key in 'Nope'") as e:
+        temp_db.lookup_by_key("Nope", ["id"], [1])
+    assert "No index has been created" not in str(e.value)
+
+
+def test_lookup_by_key_follows_the_indexes_of_the_database_it_is_called_on(
+    temp_db, tmp_path
+):
+    """What one database answers must not be remembered for another with a type of the same name, nor after DROP INDEX."""
+    import arcadedb_embedded as arcadedb
+    from arcadedb_embedded.exceptions import ArcadeDBError
+
+    temp_db.command("sql", "CREATE DOCUMENT TYPE K").close()
+    temp_db.command("sql", "CREATE PROPERTY K.k LONG").close()
+    temp_db.command("sql", "CREATE INDEX ON K (k) NOTUNIQUE").close()
+    temp_db.insert_many("K", [{"k": 1}, {"k": 2}])
+    for _ in range(2):  # the second call is the remembered one
+        assert temp_db.lookup_by_key("K", ["k"], [2]).get("k") == 2
+
+    other = arcadedb.create_database(str(tmp_path / "other_db"))
+    try:
+        other.command("sql", "CREATE DOCUMENT TYPE K").close()
+        other.command("sql", "CREATE PROPERTY K.k LONG").close()
+        other.insert_many("K", [{"k": 1}, {"k": 2}])
+        with pytest.raises(ArcadeDBError, match=_no_index_error("K", ["k"])):
+            other.lookup_by_key("K", ["k"], [2])
+    finally:
+        other.close()
+    assert temp_db.lookup_by_key("K", ["k"], [1]).get("k") == 1
+
+    temp_db.command("sql", "DROP INDEX `K[k]`").close()
+    with pytest.raises(ArcadeDBError, match=_no_index_error("K", ["k"])):
+        temp_db.lookup_by_key("K", ["k"], [2])
+    temp_db.command("sql", "CREATE INDEX ON K (k) NOTUNIQUE").close()
+    assert temp_db.lookup_by_key("K", ["k"], [2]).get("k") == 2
+
+
+def test_lookup_by_key_uses_an_index_of_a_supertype_and_refuses_a_full_text_one(
+    temp_db,
+):
+    from arcadedb_embedded.exceptions import ArcadeDBError
+
+    for sql in (
+        "CREATE DOCUMENT TYPE Base",
+        "CREATE PROPERTY Base.id LONG",
+        "CREATE PROPERTY Base.body STRING",
+        "CREATE INDEX ON Base (id) UNIQUE",
+        "CREATE INDEX ON Base (body) FULL_TEXT",
+        "CREATE DOCUMENT TYPE Sub EXTENDS Base",
+    ):
+        temp_db.command("sql", sql).close()
+    temp_db.insert_many("Sub", [{"id": 5, "body": "hello world"}])
+    for _ in range(2):
+        found = temp_db.lookup_by_key("Sub", ["id"], [5])
+        assert found is not None and found.get("body") == "hello world"
+    for type_name in ("Base", "Sub"):
+        with pytest.raises(
+            ArcadeDBError,
+            match=rf"No key index has been created on type '{type_name}' properties \[body\]",
+        ):
+            temp_db.lookup_by_key(type_name, ["body"], ["hello"])
+
+
+@native_only
+def test_lookup_by_key_reads_the_schema_once_per_pair_not_once_per_call(temp_db):
+    """The index check costs one extra crossing the first time a (type, keys) pair is looked up on a handle and none after."""
+    _docs(temp_db)
+    real, seen = temp_db.query, []
+
+    def spy(language, command, *args):
+        seen.append(command)
+        return real(language, command, *args)
+
+    temp_db.query = spy
+    try:
+        for i in range(5):
+            assert temp_db.lookup_by_key("P", ["id"], [INTS[i]]) is not None
+            assert temp_db.lookup_by_key("P", ["id", "name"], [INTS[i], f"n{INTS[i]}"])
+    finally:
+        del temp_db.query
+    checks = [c for c in seen if "schema:" in c]
+    assert len(checks) == 2 and len(seen) == 2 * 5 + 2, seen
 
 
 def test_lookup_by_key_keeps_the_types_and_keys_of_each_call_apart(temp_db):

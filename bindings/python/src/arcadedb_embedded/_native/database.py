@@ -26,7 +26,21 @@ _EPOCH_DAY_ORDINAL = date(1970, 1, 1).toordinal()
 _NEXT_BATCH = 2048
 _KIND = {"v": "v", "e": "e", "d": "d"}
 _wrap_record = None
-_LOOKUP_SQL = {}  # (type name, key names) -> the statement text of lookup_by_key
+_LOOKUP_SQL = (
+    {}
+)  # (type name, key names) -> the statement text of lookup_by_key (the text only: it holds for every database)
+_EXACT_KEY_INDEX_TYPES = (
+    "LSM_TREE",
+    "HASH",
+)  # Schema.INDEX_TYPE.isExactKeyLookup(): the kinds that answer "value equals key"
+
+
+def _may_drop_index(language: str, command: str) -> bool:
+    """Whether a command can take an index away (DROP or ALTER in SQL, anything in a script), so lookup_by_key has to look again."""
+    lang = language.lower()
+    return lang == "sqlscript" or (
+        lang == "sql" and command.lstrip()[:5].upper() in ("DROP ", "ALTER")
+    )
 
 
 def _error(prefix: str, reply: dict) -> ArcadeDBError:
@@ -398,6 +412,9 @@ class NativeDatabase:
         self._vector_meta: dict = {}
         self._vector_dimensions: dict = {}
         self._vector_id_properties: dict = {}
+        # (type name, key names) -> the statement of lookup_by_key, for the pairs this database has an index for. Per handle, not
+        # module-wide like _LOOKUP_SQL: whether an index exists is a fact about one database (and DROP INDEX clears it: command()).
+        self._lookup_sql: dict = {}
 
     # -- lifecycle
 
@@ -545,6 +562,8 @@ class NativeDatabase:
 
     def command(self, language: str, command: str, *args) -> NativeResultSet:
         """Run a statement that may write."""
+        if self._lookup_sql and _may_drop_index(language, command):
+            self._lookup_sql.clear()  # the next lookup_by_key reads the schema again
         return self._exec(1, "Command failed", language, command, args)
 
     # -- transactions
@@ -661,16 +680,64 @@ class NativeDatabase:
     def lookup_by_key(self, type_name: str, keys: List[str], values: List[Any]):
         self._check_not_closed()
         try:
-            lookup_sql = _LOOKUP_SQL.get((type_name, tuple(keys)))
+            pair = (type_name, tuple(keys))
+            lookup_sql = self._lookup_sql.get(pair)
             if lookup_sql is None:
-                where = " AND ".join(f"`{k}` = ?" for k in keys)
-                lookup_sql = f"SELECT FROM `{type_name}` WHERE {where} LIMIT 1"  # nosec B608 - backtick-quoted identifiers; values go through ? parameters
-                if len(_LOOKUP_SQL) < 1024:
-                    _LOOKUP_SQL[(type_name, tuple(keys))] = lookup_sql
+                # the first lookup of this pair on this handle: the index check the JVM engine makes on every call (see _has_key_index)
+                has_index = self._has_key_index(type_name, pair[1])
+                lookup_sql = _LOOKUP_SQL.get(pair)
+                if lookup_sql is None:
+                    where = " AND ".join(f"`{k}` = ?" for k in keys)
+                    lookup_sql = f"SELECT FROM `{type_name}` WHERE {where} LIMIT 1"  # nosec B608 - backtick-quoted identifiers; values go through ? parameters
+                    if len(_LOOKUP_SQL) < 1024:
+                        _LOOKUP_SQL[pair] = lookup_sql
+                if has_index and len(self._lookup_sql) < 1024:
+                    self._lookup_sql[pair] = lookup_sql
             row = self.query("sql", lookup_sql, list(values)).first()
             return row.get_element() if row is not None else None
         except ArcadeDBError as e:
             raise ArcadeDBError(f"Failed to lookup by key in '{type_name}': {e}") from e
+
+    def _has_key_index(self, type_name: str, keys: tuple) -> bool:
+        """Whether an exact-key index (LSM_TREE or HASH) covers exactly ``keys``, in this order, on the type or one of its supertypes.
+
+        ``Database.lookupByKey`` of the engine refuses a lookup no index covers (``IllegalArgumentException: No index has been created
+        on type ... properties [...]``); the statement lookup_by_key runs here would scan the whole type instead, silently (P-04). One read of
+        ``schema:indexes`` per (type, keys) and handle, remembered by the caller. A subtype lists its own bucket indexes for the indexes
+        it inherits, so the type's own rows are enough. Returns False for a type that does not exist: the statement then fails with the
+        schema error, as before. Raises ArcadeDBError with the engine's wording when the type has no such index.
+        """
+        wanted = list(keys)
+        rows = self.query(
+            "sql", "SELECT FROM schema:indexes WHERE typeName = ?", type_name
+        ).to_list()
+        other = None  # an index on these properties of a kind that cannot look up by exact key (FULL_TEXT, vector, geospatial)
+        for r in rows:
+            props = r.get("properties") or []
+            if props and isinstance(props[0], list):
+                props = props[0]
+            if list(props) != wanted:
+                continue
+            if r.get("indexType") in _EXACT_KEY_INDEX_TYPES:
+                return True
+            if other is None or ("[" in r["name"] and "[" not in other["name"]):
+                other = r
+        if (
+            not rows
+            and not self.query(
+                "sql", "SELECT FROM schema:types WHERE name = ?", type_name
+            ).to_list()
+        ):
+            return False
+        shown = "[" + ", ".join(wanted) + "]"  # Arrays.toString
+        if other is not None:
+            raise ArcadeDBError(
+                f"java.lang.IllegalArgumentException: No key index has been created on type '{type_name}' properties {shown}: "
+                f"index '{other['name']}' is {other.get('indexType')} and cannot look up a record by exact key"
+            )
+        raise ArcadeDBError(
+            f"java.lang.IllegalArgumentException: No index has been created on type '{type_name}' properties {shown}"
+        )
 
     def insert_many(
         self, type_name: str, rows, commit_every: int = 10_000, parallel: bool = False
