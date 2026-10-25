@@ -9,6 +9,7 @@ import re
 from ..exceptions import ArcadeDBError
 from ..vector import VectorIndex as _BaseVectorIndex
 from . import not_yet
+from .codec import _np
 
 _PROPERTY = re.compile(r"name: (.+?), type: ([A-Z_]+)")
 
@@ -136,6 +137,28 @@ def _rid_text(value) -> str:
     return get_rid() if get_rid is not None else str(value)
 
 
+def _query_vector_param(query_vector):
+    """The query vector as the one parameter the library takes it in.
+
+    A numeric 1-d vector (an ndarray, or a list/tuple of numbers: numpy walks a list in C) becomes a float32 array, which
+    ``encode_params`` sends through the binary float32 side buffer: no ``_prep`` call and no float repr per element. The engine reads
+    the vector as float32 whatever it is given, so the rounding is the same. Anything else (text or None entries, a generator,
+    numpy missing) stays a list and reaches the engine as it was given; numpy would turn a None into nan.
+    """
+    if _np is not None:
+        try:
+            arr = _np.asarray(query_vector)
+        except (
+            Exception
+        ):  # nosec B110 - ragged or unconvertible input: the list path below reports it
+            arr = None
+        if arr is not None and arr.ndim == 1 and arr.dtype.kind in "fiu":
+            return arr.astype(_np.float32, copy=False)
+    return (
+        query_vector.tolist() if hasattr(query_vector, "tolist") else list(query_vector)
+    )
+
+
 class NativeVectorIndex(_BaseVectorIndex):
     """``VectorIndex`` over ``vectorNeighbors``: ``find_nearest`` returns ``[(record, distance)]`` like the JPype wrapper."""
 
@@ -154,11 +177,7 @@ class NativeVectorIndex(_BaseVectorIndex):
             not_yet("VectorIndex.find_nearest_approximate over PRODUCT quantization")
         from .records import _wrap_dict
 
-        vector = (
-            query_vector.tolist()
-            if hasattr(query_vector, "tolist")
-            else list(query_vector)
-        )
+        vector = _query_vector_param(query_vector)
         # the statement's own options: efSearch, and filter (the RIDs the search may return), as the JPype path passes them
         options = {}
         if ef_search is not None:

@@ -52,6 +52,9 @@ if os.environ.get(
     "ARCADEDB_BACKEND", "jpype"
 ).lower() == "native" and not os.environ.get("NATIVE_PARITY_ALL"):
     collect_ignore.extend(NATIVE_NOT_APPLICABLE)
+if os.environ.get("ARCADEDB_BACKEND", "jpype").lower() != "native":
+    # counts the native codec's per-element calls (codec._prep) for a vector search: the JPype wrapper has no such codec
+    collect_ignore.append("test_native_find_nearest_params.py")
 
 
 # Failure texts that mean the test is about the JPype bridge, not about database behaviour.
