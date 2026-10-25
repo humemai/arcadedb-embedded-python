@@ -19,6 +19,7 @@ import com.arcadedb.graph.Vertex;
 import com.arcadedb.utility.Pair;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -78,5 +79,39 @@ public final class GraphCalls {
     for (int i = 0; i < s.length; i++)
       s[i] = scores.get(i);
     return new Object[] { records.toArray(), s };
+  }
+
+  /**
+   * The best {@code k} hits across the result lists of several vector indexes (one list per bucket index): merge by score
+   * first, load only those. {@code hits} on each list costs one record lookup per hit, so a type with B buckets paid
+   * B * k lookups and kept k. Scores are distances (lower is better); the sort is stable, so ties keep the order the
+   * lists were given in, as the Python sort of the concatenated hits did. Returns
+   * {@code {Object[] records, double[] scores, Object[] rids}} for the kept hits in order; a record is null where the
+   * engine returned null, so the caller can name that hit by its RID.
+   */
+  public static Object[] topHits(final Database db, final Object[] pairLists, final int k) {
+    final List<Pair<?, ?>> all = new ArrayList<>();
+    for (final Object list : pairLists)
+      for (final Object item : (Iterable<?>) list)
+        all.add((Pair<?, ?>) item);
+    final int total = all.size();
+    final double[] score = new double[total];
+    final Integer[] order = new Integer[total];
+    for (int i = 0; i < total; i++) {
+      score[i] = ((Number) all.get(i).getSecond()).doubleValue() + 0.0; // + 0.0: -0.0 sorts equal to 0.0, as in Python
+      order[i] = i;
+    }
+    Arrays.sort(order, (a, b) -> Double.compare(score[a], score[b])); // stable for objects
+    final int n = Math.max(0, Math.min(k, total));
+    final Object[] records = new Object[n];
+    final double[] scores = new double[n];
+    final Object[] rids = new Object[n];
+    for (int i = 0; i < n; i++) {
+      final Pair<?, ?> pair = all.get(order[i]);
+      rids[i] = pair.getFirst();
+      records[i] = db.lookupByRID((RID) rids[i], true);
+      scores[i] = score[order[i]];
+    }
+    return new Object[] { records, scores, rids };
   }
 }

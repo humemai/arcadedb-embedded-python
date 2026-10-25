@@ -413,33 +413,42 @@ class VectorIndex:
             raise ArcadeDBError(f"Vector search returned missing RID: {rid}")
         return record
 
-    def _wrap_pair_results(self, pairs):
+    def _top_hits(self, pair_lists, k):
+        """The best ``k`` ``(record, score)`` over the hit lists of every bucket index.
+
+        The candidates are merged by score first and only the final ``k`` are
+        loaded and wrapped: a type with B buckets used to load and wrap B * k
+        records to keep k. The sort is stable, so equal scores keep the order of
+        the bucket indexes, as before.
+        """
         from .core import _wrap_java_record
         from .graph import _graph_calls
 
         calls = _graph_calls()
         if calls is not None:
-            # every hit's record and score in one crossing instead of
-            # getFirst, getSecond, and the record lookup each
-            hits = calls.hits(self._database._java_db, pairs)
-            records, scores = hits[0], hits[1]
+            # merge, cut to k, and load the k records and their scores in one crossing
+            hits = calls.topHits(self._database._java_db, pair_lists, k)
+            records, scores, rids = hits[0], hits[1], hits[2]
             wrapped = []
             for i, record in enumerate(records):
                 if record is None:
                     # name the hit exactly as the per-hit path does
-                    self._lookup_record_by_rid(list(pairs)[i].getFirst())
+                    self._lookup_record_by_rid(rids[i])
                 wrapped.append(
                     (_wrap_java_record(record, self._database), float(scores[i]))
                 )
             return wrapped
 
-        wrapped_results = []
-        for pair in pairs:
-            rid = pair.getFirst()
-            score = pair.getSecond()
-            wrapped_results.append((self._lookup_record_by_rid(rid), float(score)))
-
-        return wrapped_results
+        candidates = [
+            (float(pair.getSecond()), pair.getFirst())
+            for pairs in pair_lists
+            for pair in pairs
+        ]
+        # a distance sort (lower is better); stable, so ties keep the index order
+        candidates.sort(key=lambda item: item[0])
+        return [
+            (self._lookup_record_by_rid(rid), score) for score, rid in candidates[:k]
+        ]
 
     def _find_neighbor_pairs(
         self,
@@ -503,10 +512,8 @@ class VectorIndex:
         approximate,
         ef_search=None,
     ):
-        all_results = []
-
-        for idx in self._iter_lsm_indexes():
-            pairs = self._find_neighbor_pairs(
+        pair_lists = [
+            self._find_neighbor_pairs(
                 idx,
                 java_vector=java_vector,
                 k=k,
@@ -514,10 +521,9 @@ class VectorIndex:
                 approximate=approximate,
                 ef_search=ef_search,
             )
-
-            all_results.extend(self._wrap_pair_results(pairs))
-
-        return self._sort_results(all_results)[:k]
+            for idx in self._iter_lsm_indexes()
+        ]
+        return self._top_hits(pair_lists, k)
 
     def _run_search(
         self,

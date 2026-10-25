@@ -707,7 +707,7 @@ class TestLSMVectorIndex:
     def test_lsm_vector_search_looks_up_all_hits_in_one_bridge_call(
         self, test_db, monkeypatch
     ):
-        """Result materialization looks every hit up in one GraphCalls.hits call."""
+        """Result materialization merges the buckets and loads the k hits in one GraphCalls.topHits call."""
 
         test_db.command("sql", "CREATE VERTEX TYPE Doc")
         test_db.command("sql", "CREATE PROPERTY Doc.name STRING")
@@ -736,9 +736,9 @@ class TestLSMVectorIndex:
         hit_calls = {"count": 0}
 
         class CountingCalls:
-            def hits(self, java_db, pairs):
+            def topHits(self, java_db, pair_lists, k):
                 hit_calls["count"] += 1
-                return calls.hits(java_db, pairs)
+                return calls.topHits(java_db, pair_lists, k)
 
         monkeypatch.setattr(graph, "_GRAPH_CALLS", CountingCalls())
 
