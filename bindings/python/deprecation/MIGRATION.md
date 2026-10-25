@@ -11,8 +11,9 @@ The ArcadeDB Python bindings moved from `humemai/arcadedb-embedded-python` to [A
 | `pip install 'arcadedb-embedded[arrow,pandas]'` | `pip install 'arcadedb[arrow,pandas]'` |
 | `uv add arcadedb-embedded` | `uv add arcadedb` |
 | `import arcadedb_embedded` | `import arcadedb` |
+| `import arcadedb_native` (from `arcadedb-embedded-native`) | `import arcadedb` |
 | `from arcadedb_embedded import open_database` | `from arcadedb import open_database` |
-| `arcadedb_embedded.core`, `arcadedb_embedded.jvm`, ... | `arcadedb.core`, `arcadedb.jvm`, ... |
+| `arcadedb_embedded.core`, `arcadedb_embedded.jvm`, ... (and `arcadedb_native.core`, ...) | `arcadedb.core`, `arcadedb.jvm`, ... |
 
 Both new packages provide the module `arcadedb`, so an environment holds `arcadedb` or `arcadedb-native`, not both. Uninstall the old package first: `pip uninstall arcadedb-embedded`.
 
@@ -25,7 +26,7 @@ From 26.11.1 the package version is the ArcadeDB engine version, as before.
 | `arcadedb-embedded` (JVM, bundled JRE) | 26.10.2.post1 on PyPI, then the shim 26.11.1 | `arcadedb` 26.11.1 and later |
 | `arcadedb-embedded-native` (preview) | 26.10.2.dev1, then the shim 26.11.1 | `arcadedb-native` 26.11.1 and later |
 
-The 26.11.1 releases of the old names are shims and the last ones. Each installs the new package at exactly 26.11.1; importing `arcadedb_embedded` then emits one `FutureWarning` and re-exports `arcadedb`, submodules included, so unchanged code keeps running until you edit the import. A shim never upgrades: for newer versions install `arcadedb` or `arcadedb-native`. Older releases of the old names stay on PyPI for pinned installs.
+The 26.11.1 releases of the old names are shims and the last ones. Each installs the new package at exactly 26.11.1; importing `arcadedb_embedded` (or `arcadedb_native`, for the native shim) then emits one `FutureWarning` and re-exports `arcadedb`, submodules included, so unchanged code keeps running until you edit the import. A shim never upgrades: for newer versions install `arcadedb` or `arcadedb-native`. Older releases of the old names stay on PyPI for pinned installs.
 
 ## What stays the same
 

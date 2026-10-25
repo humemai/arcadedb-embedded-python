@@ -41,7 +41,7 @@ Issues = "https://github.com/ArcadeData/arcadedb-python/issues"
 "Replaced by" = "https://pypi.org/project/arcadedb-native/"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/arcadedb_embedded"]
+packages = ["src/arcadedb_embedded", "src/arcadedb_native"]
 
 [tool.hatch.build.targets.sdist]
 include = ["src", "README.md", "LICENSE", "pyproject.toml"]

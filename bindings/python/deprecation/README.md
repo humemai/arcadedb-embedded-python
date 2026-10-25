@@ -7,7 +7,7 @@ The Python bindings move to [ArcadeData/arcadedb-python](https://github.com/Arca
 | `arcadedb-embedded/` | `arcadedb-embedded` | `arcadedb==26.11.1` | 26.11.1 |
 | `arcadedb-embedded-native/` | `arcadedb-embedded-native` | `arcadedb-native==26.11.1` | 26.11.1 |
 
-The two `arcadedb_embedded/__init__.py` files differ only in their two constants; `tests/test_deprecation_shims.py` checks that the rest is identical. The real package in `bindings/python/src` is not changed and does not warn: the benchmark harness imports it until the split.
+The shim modules are `arcadedb_embedded` (in both shims) and `arcadedb_native` (in `arcadedb-embedded-native` only: the old native package imported as `arcadedb_native`). The three `__init__.py` files differ only in their docstring and two constants; `tests/test_deprecation_shims.py` checks that the rest is identical. The real package in `bindings/python/src` is not changed and does not warn: the benchmark harness imports it until the split.
 
 ## Build and test (never uploads)
 
@@ -24,7 +24,7 @@ taskset -c 0-3 uv run pytest bindings/python/tests/test_deprecation_shims.py   #
 2. Never push a `26.11.1` tag in this repository: `release-python-packages.yml` would build and publish the real wheels under `arcadedb-embedded`.
 3. Build and check: `python3 bindings/python/deprecation/build_shims.py --out dist --check-pypi && uvx twine check dist/*`.
 4. Publish both shims. Trusted publishing works only from a workflow, so either (a) register a trusted publisher on both PyPI projects (repository `humemai/arcadedb-embedded-python`, workflow `publish-deprecation-shims.yml`, environment `pypi`), add the workflow below to `.github/workflows/` (and to `FORK_GITHUB_ALLOWLIST` in `sync-upstream.sh` if another sync will still run), and dispatch it with `publish` on; or (b) upload from a laptop with `uvx twine upload dist/*` and a project-scoped API token.
-5. In a clean environment: `pip install arcadedb-embedded==26.11.1`, `python -W default -c "import arcadedb_embedded"` shows one FutureWarning; the same for `arcadedb-embedded-native`.
+5. In a clean environment: `pip install arcadedb-embedded==26.11.1`, `python -W default -c "import arcadedb_embedded"` shows one FutureWarning; for `arcadedb-embedded-native`, `python -W default -c "import arcadedb_native"` shows one FutureWarning too.
 
 ```yaml
 name: Publish deprecation shims
