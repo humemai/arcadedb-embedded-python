@@ -32,7 +32,12 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CANON = os.path.join(HERE, "results", "runs.jsonl")
+sys.path.insert(0, HERE)
+from publish_instrument import results_dir  # noqa: E402
+
+# The store moves with BENCH_RESULTS_DIR like every other reader of results/ (the freeze, the exporter, the gates), so a test
+# merges into a fixture directory and never into the working store. A publish never sets it.
+CANON = os.path.join(str(results_dir()), "runs.jsonl")
 
 
 def load(path):
@@ -211,7 +216,15 @@ def main():
     stamp = max((str(r.get("ts_utc")) for r in incoming if r.get("ts_utc")),
                 default="unknown")[:19].replace(":", "").replace("-", "")
     backup = f"{CANON}.before-merge-{stamp}"
-    shutil.copy2(CANON, backup)
+    # THE FIRST 2026-11 LANDING MEETS NO STORE. The October store was retired with its instrument and the freeze refuses its
+    # rows, so the first landing starts from nothing, and shutil.copy2 of a file that does not exist ended it with a
+    # traceback AFTER the pull and the filter. No store means nothing to roll back to: create it and say so.
+    if not os.path.exists(CANON):
+        os.makedirs(os.path.dirname(CANON), exist_ok=True)
+        print(f"no store at {CANON}: creating it (nothing to back up)")
+        backup = None
+    else:
+        shutil.copy2(CANON, backup)
     # One rollback step, not a museum. These are 6-7 MB each and every one is a
     # prefix of the next, so eleven of them had accumulated to 73 MB by
     # 2026-09-19, all fully contained in the canonical file. Keep the newest,
@@ -222,8 +235,8 @@ def main():
     # incoming rows' newest ts_utc, so merging an older campaign file produces a
     # backup whose NAME sorts early, and a name-sorted prune would delete the
     # only backup that can undo this merge.
-    _old = [f for f in glob.glob(f"{CANON}.before-merge-*")
-            if os.path.abspath(f) != os.path.abspath(backup)]
+    _old = [] if backup is None else [f for f in glob.glob(f"{CANON}.before-merge-*")
+                                      if os.path.abspath(f) != os.path.abspath(backup)]
     _old.sort(key=os.path.getmtime)
     for _stale in _old:
         os.remove(_stale)
@@ -232,7 +245,7 @@ def main():
     with open(CANON, "a") as f:
         for r in incoming:
             f.write(json.dumps(r) + "\n")
-    print(f"\nappended {len(incoming)} rows. backup at {os.path.basename(backup)}")
+    print(f"\nappended {len(incoming)} rows. " + (f"backup at {os.path.basename(backup)}" if backup else "no backup (new store)"))
 
 
 if __name__ == "__main__":
