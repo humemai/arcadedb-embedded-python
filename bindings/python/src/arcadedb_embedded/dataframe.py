@@ -315,14 +315,30 @@ def _scalars_to_tagged(kind: str, chunk):
     ]
 
 
-def _column_values(name: str, chunk, pa, native: bool = False):
+def _column_values(name: str, chunk, pa, native: bool = False, arrow: bool = False):
     """One Arrow array as what ``Database.insert_columns`` takes: a numpy array when the column crosses as one
     buffer (integers, floats and booleans without nulls), else a list of values (``None`` is a null).
+
+    ``arrow`` (the native backend's document load): a string column, and a numeric one with nulls, stay Arrow arrays, which
+    the columnar entry reads in place (the offsets, the bytes and the validity bitmap) instead of as Python values.
     """
     types = pa.types
     if types.is_dictionary(chunk.type):  # a pandas categorical or a Polars Categorical
         chunk = chunk.cast(chunk.type.value_type)
     kind = _kind(pa, chunk.type)
+    if arrow and (
+        (
+            kind == "string"
+            and (types.is_string(chunk.type) or types.is_large_string(chunk.type))
+        )
+        or (kind in ("integer", "floating", "bool") and chunk.null_count)
+    ):
+        if not (
+            kind == "integer"
+            and types.is_uint64(chunk.type)
+            and len(chunk) > chunk.null_count
+        ):  # uint64 keeps the range check below
+            return chunk
     if kind in ("integer", "floating", "bool"):
         if native and types.is_uint64(chunk.type) and len(chunk) > chunk.null_count:
             import pyarrow.compute as pc
@@ -407,7 +423,13 @@ def insert_table(
             if batch.num_rows == 0:
                 continue
             columns = {
-                name: _column_values(name, batch.column(i), pa, native)
+                name: _column_values(
+                    name,
+                    batch.column(i),
+                    pa,
+                    native,
+                    arrow=native and not is_vertex and not parallel,
+                )
                 for i, name in enumerate(names)
             }
             try:
@@ -417,7 +439,7 @@ def insert_table(
                     )
                 elif native:
                     _insert_documents_native(
-                        db, type_name, names, columns, batch_size, parallel
+                        db, type_name, names, columns, batch_size, parallel, declared
                     )
                 else:
                     db.insert_columns(
@@ -464,15 +486,38 @@ def _insert_documents_native(
     columns: Dict[str, Any],
     batch_size: int,
     parallel: bool,
+    declared: Optional[Dict[str, str]] = None,
 ):
-    """One batch of documents on the native backend: the columns as one dict per row, handed to ``insert_many``
-    (one crossing per 10,000 rows; the batch is one transaction, or joins the caller's).
+    """One batch of documents on the native backend. When every column can cross as memory (numbers, bools, strings, nulls,
+    float vectors for an ``ARRAY_OF_FLOATS`` property) the batch goes through the columnar entry, no Python values and no JSON
+    text; otherwise the columns become one dict per row and go to ``insert_many`` (one crossing per 10,000 rows). Either way
+    the batch is one transaction, or joins the caller's.
     """
-    lists = [
-        # jvm-payload: not-a-crossing -- no JVM here: insert_many serialises the rows to JSON text
-        columns[name].tolist() if hasattr(columns[name], "tolist") else columns[name]
-        for name in names
-    ]
+    if not parallel:
+        from ._native.bulk import insert_columns_fast
+
+        if (
+            insert_columns_fast(
+                db,
+                type_name,
+                columns,
+                batch_size,
+                declared={} if declared is None else declared,
+                prefix=f"Failed to bulk-insert into '{type_name}'",
+            )
+            is not None
+        ):
+            return
+    lists = []
+    for name in names:
+        col = columns[name]
+        if hasattr(
+            col, "to_pylist"
+        ):  # a column kept as an Arrow array for the columnar entry
+            lists.append(col.to_pylist())
+        else:
+            # jvm-payload: not-a-crossing -- no JVM here: insert_many serialises the rows to JSON text
+            lists.append(col.tolist() if hasattr(col, "tolist") else col)
     db.insert_many(
         type_name,
         [dict(zip(names, row)) for row in zip(*lists)],

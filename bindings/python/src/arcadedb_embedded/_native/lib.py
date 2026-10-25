@@ -158,6 +158,7 @@ def _load():
             "arcadedb_n_exec": [P, L, I, S, S, S, I],
             "arcadedb_n_exec_bin": [P, L, I, S, S, S, I, S, L],
             "arcadedb_n_insert_cols": [P, L, S, S, S, L],
+            "arcadedb_n_insert_colp": [P, L, S, S, P, I],
             "arcadedb_n_next": [P, L, I],
             "arcadedb_n_rs_close": [P, L],
             "arcadedb_n_cmd": [P, L, I, S, S, S, S, L, I],

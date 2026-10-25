@@ -13,6 +13,7 @@ from ..exceptions import ArcadeDBError
 from ..transactions import TransactionContext
 from ..type_conversion import json_bulk_dumps
 from . import lib, not_yet
+from .bulk import insert_rows_columnar
 from .codec import _default as codec_default
 from .codec import _prep as _prep_row
 from .codec import encode_params, json_native, loads
@@ -660,10 +661,12 @@ class NativeDatabase:
     def insert_many(
         self, type_name: str, rows, commit_every: int = 10_000, parallel: bool = False
     ) -> int:
-        """Bulk insert. Rows go in chunks of 10,000, one JSON text and one crossing per chunk (``arcadedb_n_insert_rows``: a
-        newDocument/set/save loop inside the image, as ``DocumentBatcher.insertManyJson`` on the JPype path); a chunk with a value the
-        JSON text cannot carry unchanged goes row by row through ``INSERT INTO t CONTENT :row``. Inside the caller's transaction nothing is
-        committed; otherwise every ``commit_every`` rows are one transaction (0: all rows in one).
+        """Bulk insert. Rows go in chunks of 10,000, one crossing per chunk. A chunk of rows with the same keys whose columns each hold one
+        value type (ints, floats, bools, strings, equal-length float lists for an ``ARRAY_OF_FLOATS`` property; None is a null) goes as
+        columns by address (``arcadedb_n_insert_colp``, no JSON text); any other chunk goes as one JSON text (``arcadedb_n_insert_rows``:
+        a newDocument/set/save loop inside the image, as ``DocumentBatcher.insertManyJson`` on the JPype path); a chunk with a value the
+        JSON text cannot carry unchanged goes through ``INSERT INTO t CONTENT :row`` for each row, in one crossing. Inside the caller's
+        transaction nothing is committed; otherwise every ``commit_every`` rows are one transaction (0: all rows in one).
         """
         self._check_not_closed()
         if parallel:
@@ -702,6 +705,8 @@ class NativeDatabase:
 
     def _insert_chunk(self, type_name: str, sql: str, chunk) -> None:
         if lib.INSERT_ROWS:
+            if insert_rows_columnar(self, type_name, chunk):
+                return
             try:
                 payload = json_bulk_dumps(chunk)
             except (TypeError, ValueError):
