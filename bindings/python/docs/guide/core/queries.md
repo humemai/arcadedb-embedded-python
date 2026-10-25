@@ -178,6 +178,20 @@ Positional values bind one per `?`, from the extra arguments or from one list or
 (`db.query("sql", q, ["Alice", 25])`). `None` binds as null in `query()`, `command()`,
 and `async_executor()`.
 
+More positional values than the statement has placeholders raise `TypeError` before the
+statement runs. A list or tuple on its own is the positional list, so it never binds as
+one parameter: `db.query("sql", "... WHERE @rid IN ?", [rid_a, rid_b])` is refused (the
+engine would bind `rid_a`, ignore `rid_b`, and return one row, with no error). Bind the
+list by name, or wrap it so it is the one positional value:
+
+```python
+db.query("sql", "SELECT FROM V WHERE @rid IN :ids", {"ids": [rid_a, rid_b]})
+db.query("sql", "SELECT FROM V WHERE @rid IN ?", [[rid_a, rid_b]])
+```
+
+The count is an upper bound (the `?`, `$` and `:` characters of the SQL text), so it
+never refuses a call that binds. Fewer values than placeholders are not checked.
+
 Parameters that are plain scalars (`int`, `float`, `str`, `bool`, `None`) or Java arrays
 (a vector from `to_java_float_array`) cross into the JVM in one call, named or positional.
 A collection, a `Decimal`, a date, or a numpy scalar is converted first and costs a few

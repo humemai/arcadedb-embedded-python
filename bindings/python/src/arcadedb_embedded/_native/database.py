@@ -9,6 +9,7 @@ from collections import deque
 from datetime import date, datetime
 from typing import Any, Dict, Iterator, List, Optional
 
+from .._params import refuse_surplus_positionals
 from ..exceptions import ArcadeDBError
 from ..transactions import TransactionContext
 from ..type_conversion import json_bulk_dumps
@@ -468,6 +469,10 @@ class NativeDatabase:
         self, flags: int, prefix: str, language: str, command: str, args
     ) -> NativeResultSet:
         self._check_not_closed()
+        if args:
+            refuse_surplus_positionals(
+                "command" if flags & 1 else "query", language, command, args
+            )
         if flags & 1 and _LAZY_COMMAND_ROWS and lib.CMD_PATH:
             # phase 8: the cursor id comes back as a long (no reply text to free and decode); the rows are read late or never
             text, buf, count = encode_params(args, binary=True)
