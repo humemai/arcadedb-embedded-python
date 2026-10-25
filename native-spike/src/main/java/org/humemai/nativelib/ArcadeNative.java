@@ -499,7 +499,7 @@ public final class ArcadeNative {
       return out(reply);
     final byte[] b = (reply.substring(0, reply.length() - 1) + ",\"bin\":" + sink.n + "}").getBytes(StandardCharsets.UTF_8);
     final int off = (b.length + 1 + 3) & ~3;
-    final CCharPointer p = UnmanagedMemory.malloc(off + 4L * sink.n);
+    final CCharPointer p = UnmanagedMemory.malloc(off + 4 * sink.n);
     // bulk copies (Unsafe.copyMemory), not one p.write per byte: the text, the zero padding up to the 4-byte boundary, then the float32 tail in native order
     final java.nio.ByteBuffer bb = CTypeConversion.asByteBuffer(p, (int) (off + 4L * sink.n));
     bb.put(b, 0, b.length);
