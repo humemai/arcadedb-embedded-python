@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Copyright © 2021-present Arcade Data Ltd (info@arcadedata.com)
 # SPDX-License-Identifier: Apache-2.0
-"""Build the two deprecation shims (``arcadedb-embedded``, ``arcadedb-embedded-native``) with ``uv build``.
+"""Build the deprecation shim of ``arcadedb-embedded`` with ``uv build``.
 
 This builds only. It never uploads: publishing is a separate, deliberate step (README.md here).
 
@@ -15,7 +15,7 @@ usage:
     build_shims.py [--out DIR] [--shim NAME ...] [--check-pypi]
 
     --out DIR      where the wheels and sdists go (default: dist/ next to this script, git-ignored)
-    --shim NAME    build only this shim (repeatable; default: both)
+    --shim NAME    build only this shim (repeatable; default: all of them, which is one)
     --check-pypi   also run check_version.py against the live PyPI project (needs the network, and
                    fails once that version has been published, as the counting rule says)
 """
@@ -35,7 +35,8 @@ from typing import NamedTuple
 
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[2]
-SHIMS = ("arcadedb-embedded", "arcadedb-embedded-native")
+# There is one shim. `arcadedb-embedded-native` (the native preview package) gets none: its PyPI project has no files and is archived.
+SHIMS = ("arcadedb-embedded",)
 
 
 class Target(NamedTuple):
@@ -45,18 +46,18 @@ class Target(NamedTuple):
     module: str  # the import name that distribution provides: what the shim re-exports
 
 
-# Where each old name points (the packaging layout decided on 2026-10-25, "layout v2" in ArcadeData/arcadedb-python .notes/MIGRATION.md):
-#   arcadedb-embedded        (the JVM package)    -> arcadedb-jvm, the same JVM build, so there is no silent change at run time
-#   arcadedb-embedded-native (the native package) -> arcadedb, the native build
-# ASSUMPTION: both new distributions provide the import name `arcadedb`. The layout says "import arcadedb for all" and that `arcadedb` and `arcadedb-jvm` refuse to import side by side because they share that module. Neither has a real release on PyPI yet (arcadedb 0.0.1 and arcadedb-jvm 0.0.1 are placeholders), so this cannot be checked here.
-# If a package gets another import name, change it here and in the `_NEW_MODULE` constant of that shim's `__init__.py` files; check_target() fails until both agree.
+# Where each old name points (the packaging layout decided on 2026-10-25, "layout v2" in ArcadeData/arcadedb-python .notes/MIGRATION.md,
+# and the decision of 2026-10-25 that the old JVM package moves to the native build):
+#   arcadedb-embedded (the old JVM package) -> arcadedb, the NATIVE build. The warning and the README say so in plain words and name
+#   `arcadedb-jvm` as the way to keep the JVM build. This shim therefore publishes only after the native `arcadedb` 26.11.1 FINAL exists.
+# ASSUMPTION: `arcadedb` provides the import name `arcadedb`. The layout says "import arcadedb for all". `arcadedb` has no real release on PyPI yet (0.0.1 is a placeholder), so this cannot be checked here.
+# If the package gets another import name, change it here and in the `_NEW_MODULE` constant of the shim's `__init__.py`; check_target() fails until both agree.
 IMPORT_NAME = "arcadedb"
 TARGETS = {
-    "arcadedb-embedded": Target(dist="arcadedb-jvm", module=IMPORT_NAME),
-    "arcadedb-embedded-native": Target(dist="arcadedb", module=IMPORT_NAME),
+    "arcadedb-embedded": Target(dist="arcadedb", module=IMPORT_NAME),
 }
-# the extras people installed from the old names, forwarded to the same extras of the target
-EXTRAS = ("vector", "arrow", "pandas", "polars")
+# the extras people installed from the old name -> the extra of the target they are forwarded to (the old `vector` extra was numpy; `arcadedb` has no `vector`)
+EXTRAS = {"vector": "numpy", "arrow": "arrow", "pandas": "pandas", "polars": "polars"}
 
 
 def _load_check_version():
@@ -86,7 +87,7 @@ def check_target(shim: str) -> None:
         "description": f"Deprecated: {shim} has moved to {target.dist} (import {target.module}). Last release, a thin shim.",
         "dependencies": [f"{target.dist}=={version}"],
         "optional-dependencies": {
-            extra: [f"{target.dist}[{extra}]=={version}"] for extra in EXTRAS
+            old: [f"{target.dist}[{new}]=={version}"] for old, new in EXTRAS.items()
         },
     }
     problems = [

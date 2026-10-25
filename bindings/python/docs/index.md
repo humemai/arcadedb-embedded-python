@@ -2,7 +2,7 @@
 
 !!! warning "Moved to ArcadeData/arcadedb-python"
 
-    These bindings move to [ArcadeData/arcadedb-python](https://github.com/ArcadeData/arcadedb-python) as the PyPI packages `arcadedb-jvm` (the JVM build, the successor of `arcadedb-embedded`) and `arcadedb` (the native build, the successor of `arcadedb-embedded-native`), both with the import name `arcadedb`, with docs at [docs.arcadedb.com/arcadedb-python](https://docs.arcadedb.com/arcadedb-python/). This repository will be archived. See the [migration guide](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/deprecation/MIGRATION.md).
+    These bindings move to [ArcadeData/arcadedb-python](https://github.com/ArcadeData/arcadedb-python) as the PyPI packages `arcadedb` (the native build, the successor of `arcadedb-embedded`) and `arcadedb-jvm` (the JVM build, for people who need it), both with the import name `arcadedb`, with docs at [docs.arcadedb.com/arcadedb-python](https://docs.arcadedb.com/arcadedb-python/). This repository will be archived. See the [migration guide](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/deprecation/MIGRATION.md).
 
 <div class="grid cards" markdown>
 
