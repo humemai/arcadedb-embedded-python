@@ -614,11 +614,15 @@ class NativeDatabase:
                         raise
                     duplicated_key_retried = True
                 if commits_at_start is not None:
+                    # #7916: the rollback above cannot take back what a BATCH boundary or a commit() inside the block already made
+                    # durable, and a replay would apply it twice. Only the READ of the witness may fail quietly (no witness: retry,
+                    # as before); the raise sits outside that try, or its own except would swallow it.
                     try:
-                        if self._transaction_commit_mark() != commits_at_start:
-                            raise
+                        commits_now = self._transaction_commit_mark()
                     except ArcadeDBError:
-                        pass
+                        commits_now = commits_at_start
+                    if commits_now != commits_at_start:
+                        raise
                 _time.sleep(
                     max(backoff_s * (attempt + 1), reply.get("retry_ms", 0) / 1000.0)
                 )

@@ -364,6 +364,8 @@ and `fn` is re-executed, with linear backoff. The `with db.transaction():` conte
 manager cannot retry (a `with` block can't be re-entered), so use this for contended
 multi-threaded writes.
 
+A block that already made part of its work durable is never re-run: a statement with a `BATCH n` boundary, or a `commit()` inside `fn`, publishes rows that the rollback cannot take back, so a replay would apply them twice. When such a block hits a retryable conflict, the conflict is raised as it is (the same `ArcadeDBError` the last attempt failed with), after the rollback of what was still open. The JVM and the native wheel behave the same.
+
 Any other way out of `fn` rolls back too, and then propagates: a plain bug
 (`TypeError`, `KeyError`) and `KeyboardInterrupt` / `SystemExit` included, matching the
 Java side's `catch (final Throwable e)`. Nothing leaves an open transaction behind for
