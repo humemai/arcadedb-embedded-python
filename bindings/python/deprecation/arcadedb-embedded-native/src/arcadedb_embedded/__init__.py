@@ -21,7 +21,7 @@ import warnings
 _MESSAGE = (
     f"The {_OLD_DIST!r} package has moved and this is its last release. "
     f"Install {_NEW_DIST!r} instead (`pip install {_NEW_DIST}`) and write "
-    "`import arcadedb` where you wrote `import arcadedb_embedded`. "
+    f"`import arcadedb` where you wrote `import {__name__}`. "
     "New home: https://github.com/ArcadeData/arcadedb-python, "
     "docs: https://docs.arcadedb.com/arcadedb-python/"
 )
@@ -59,6 +59,7 @@ class _AliasFinder(importlib.abc.MetaPathFinder):
     """Resolve ``arcadedb_embedded.x.y`` to ``arcadedb.x.y``, also for modules not yet imported."""
 
     alias_of = _NEW
+    old = _OLD
 
     def find_spec(self, fullname, path=None, target=None):
         if not fullname.startswith(_OLD + "."):
@@ -74,7 +75,10 @@ class _AliasFinder(importlib.abc.MetaPathFinder):
 
 
 # first in line, so a package alias is not also found on disk and loaded a second time
-if not any(getattr(f, "alias_of", None) == _NEW for f in sys.meta_path):
+if not any(
+    getattr(f, "alias_of", None) == _NEW and getattr(f, "old", None) == _OLD
+    for f in sys.meta_path
+):
     sys.meta_path.insert(0, _AliasFinder())
 
 # submodules the new package has already imported answer to the old name right away
