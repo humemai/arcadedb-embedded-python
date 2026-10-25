@@ -11,8 +11,10 @@ pull. One script, one order, refuses by default.
 Steps, in order:
   1. pull results/runs_page_<pin>_2611.jsonl from the bench host (and, with
      --overlay ARM, the dense multipass files mp_<ARM>_b*.json at both sizes);
-  2. drop rows of the backends still running (--exclude-backends), so a
-     stage in progress never reaches the freeze; also any row newer than
+  2. REFUSE the pulled file unless every row is stamped 2026-11 and sits at the
+     pin (screen_pulled_rows), before anything is merged; then drop rows of the
+     backends still running (--exclude-backends), so a stage in progress never
+     reaches the freeze; also any row newer than
      --exclude-since for those backends only; and the rows a repair stage
      replaced (--drop-unless BACKEND:LANE:WORKLOAD:FIELD=VALUE drops that
      cell's rows whose FIELD is not the repair's stamp);
@@ -37,10 +39,12 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
-SITE = REPO.parent / "humem.ai"
+# BENCH_LAND_SITE moves the site checkout, the way BENCH_LAND_HOST moves the bench host: a rehearsal on a scratch clone must not
+# write the real checkout's payload. Step 4 hands the same path to refresh_web_page (--site), so the two cannot disagree.
+SITE = Path(os.environ.get("BENCH_LAND_SITE") or REPO.parent / "humem.ai")
 sys.path.insert(0, str(HERE))
 from make_2611_stages import ROWS_SUFFIX  # noqa: E402  (the stage generator names what a stage writes; one place)
-from publish_instrument import PUBLISH_INSTRUMENT  # noqa: E402
+from publish_instrument import PUBLISH_INSTRUMENT, refuse_other_instruments  # noqa: E402
 
 
 def host_name(stem, pin, ext=""):
@@ -59,7 +63,9 @@ SITE_FILES = ["src/data/dbbench-benchmarks.json", SITE_PAGE_SOURCE]
 HOST = os.environ.get("BENCH_LAND_HOST", "mini")
 REMOTE = os.environ.get("BENCH_LAND_REMOTE",
                         "~/repos/humemai/arcadedb-embedded-python/benchmarks/experiments/results")
-PY = str(REPO / ".venv" / "bin" / "python")
+# BENCH_LAND_PY names the interpreter every step runs under, for a rehearsal in a worktree that has no .venv (the default
+# is the repository's own).
+PY = os.environ.get("BENCH_LAND_PY") or str(REPO / ".venv" / "bin" / "python")
 SCRATCH = Path(os.environ.get("BENCH_LAND_SCRATCH", "/tmp/claude-1000/land_stage"))
 TRAILER = ("\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n"
            "Claude-Session: https://claude.ai/code/session_01Ubz3m6QXHESerCkehC1qgi")
@@ -76,6 +82,30 @@ def sh(cmd, cwd=None, check=True, capture=False, env=None, quiet=False):
         print("  $ " + " ".join(str(c) for c in cmd), flush=True)
     return subprocess.run(cmd, cwd=cwd, check=check, text=True,
                           capture_output=capture or quiet, env=env)
+
+
+# THE PULLED FILE IS SCREENED BEFORE IT IS MERGED (2026-10-25, found preparing the first 2026-11 landing). The instrument gates
+# all sit DOWNSTREAM of the merge: the freeze refuses a row of another instrument, but by then merge_campaign has appended the
+# whole pulled file to results/runs.jsonl, and "the merge stands" is the message a refused landing prints. A retired 2026-10
+# file, or one that mixes instruments, would therefore leave its rows in the store and block every later landing at the freeze
+# until someone edited the store by hand. The host file is named by instrument AND pin (runs_page_<pin>_2611.jsonl), so a
+# stray stamp or a stray commit in it means a stage wrote to the wrong file: that is a refusal, not a row to drop.
+def screen_pulled_rows(rows, pin, where):
+    """SystemExit unless every pulled row is stamped PUBLISH_INSTRUMENT and, when it names an engine commit, names the pin's.
+
+    The commit test is the exporter's (prefix either way: one side may be truncated). A row with no commit is left alone:
+    overlay and host-side rows carry none, and the freeze's own pin gates read them by directory name."""
+    refuse_other_instruments(rows, where)
+    pin = (pin or "").strip().lower()
+    wrong: dict = {}
+    for r in rows:
+        c = str(r.get("engine_commit") or "").strip().lower()
+        if c and pin and not (c.startswith(pin) or pin.startswith(c)):
+            wrong[c] = wrong.get(c, 0) + 1
+    if wrong:
+        found = ", ".join(f"{k}: {v}" for k, v in sorted(wrong.items()))
+        raise SystemExit(f"REFUSING: {where} holds rows of another engine commit ({found}), not the pin {pin}. A stage wrote "
+                         f"another build's rows into this pin's file; nothing was merged.")
 
 
 # THE PYTHON-COST TABLE'S FILE (CAMPAIGN section 7 row 29). The stage is host-side, not runner
@@ -218,7 +248,7 @@ def _published_lanes(payload_path, pin=None):
     return out
 
 
-def _restore_this_runs_writes(dirty_before, site_files):
+def _restore_this_runs_writes(dirty_before, site_files, site_new=()):
     """Put back what a publish that is NOT going ahead regenerated, in both repos.
 
     The bindings side is exact: only results paths that became dirty during
@@ -239,17 +269,28 @@ def _restore_this_runs_writes(dirty_before, site_files):
     if tracked:
         sh(["git", "checkout", "--"] + tracked, cwd=SITE)
         print(f"  restored the site's generated file(s): {', '.join(tracked)}")
+    # THE FIRST LANDING CREATES THE PAYLOAD. src/data/dbbench-benchmarks.json is not in the site's tree until the first 2026-11
+    # landing (the site renders no number before it), so there is nothing to `git checkout` it back to: a rehearsal that
+    # stopped at the diff left an untracked payload in the real checkout. The paths that did not exist when the run began
+    # (`site_new`, taken at step 3) are removed.
+    gone = [f for f in site_new if f in written and (SITE / f).exists() and f not in tracked]
+    for f in gone:
+        (SITE / f).unlink()
+    if gone:
+        print(f"  removed the site's new generated file(s): {', '.join(gone)}")
 
 
 def _dirty_results():
-    """Tracked, modified paths under the results tree, as a set.
+    """Tracked, modified paths under the results tree (and PAGE-SPEC.md), as a set.
 
     Used to tell what a rehearsal wrote from what was already in flight, so
     the restore can be exact. Tracked only: the raw row files are deliberately
     untracked (a `git checkout` over them once reverted runs.jsonl mid-campaign
     and lost rows), and nothing here may touch them.
     """
-    out = sh(["git", "status", "--porcelain", "--", "benchmarks/experiments/results"],
+    # PAGE-SPEC.md rides along: refresh_web_page regenerates its "Published tables" block on every publish (before the gates),
+    # so a rehearsal or a refused landing rewrote a tracked file the restore never knew about.
+    out = sh(["git", "status", "--porcelain", "--", "benchmarks/experiments/results", "benchmarks/experiments/PAGE-SPEC.md"],
              cwd=REPO, check=False, capture=True, quiet=True)
     got = set()
     for line in (out.stdout or "").splitlines():
@@ -313,7 +354,7 @@ def main():
     # runs in-process, _published_lanes' import of export_web, needs that
     # environment's packages too (numpy, through e2_hybrid). Started with the
     # system python3 it silently lost the published lanes.
-    if Path(PY).exists() and Path(sys.prefix).resolve() != (REPO / ".venv").resolve():
+    if Path(PY).exists() and Path(sys.prefix).resolve() != Path(PY).parent.parent.resolve():
         print(f"(re-running under {PY})", flush=True)
         os.execv(PY, [PY, str(Path(__file__).resolve())] + sys.argv[1:])
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -449,6 +490,8 @@ def main():
     excl = {b.strip() for b in args.exclude_backends.split(",") if b.strip()}
     lanes = {l.strip() for l in args.only_lanes.split(",") if l.strip()}
     rows = [json.loads(l) for l in pulled.read_text().splitlines() if l.strip()]
+    # Before the --exclude filters and before any merge: the whole file is one instrument at one pin or it is not landed.
+    screen_pulled_rows(rows, args.pin, host_name("runs_page", args.pin, ".jsonl") + f" on {HOST}")
     unless = [parse_drop_unless(x) for x in args.drop_unless]
     keep, dropped, other_lane = [], [], []
     for r in rows:
@@ -471,10 +514,18 @@ def main():
     filtered = SCRATCH / "runs_page_filtered.jsonl"
     filtered.write_text("".join(json.dumps(r) + "\n" for r in keep))
     print(f"  {len(rows)} rows pulled, {len(dropped)} dropped ({sorted({r.get('backend') for r in dropped})})")
-    errs = [r for r in keep if r.get("error")]
+    # FAILED AND CENSORED CELLS LAND AS WHAT THEY ARE, and this says how many of each. A row with an error or rc != 0 is a
+    # failed cell: it merges as a failure and the freeze skips it (make_paper_tables keeps rc == 0 only), so no number is
+    # published for it. A row with a `*_censored` flag set is a cell that hit its budget: the flag travels to the page, which
+    # shows it as censored. Neither is rewritten here; the rows are merged exactly as the host wrote them.
+    errs = [r for r in keep if r.get("error") or r.get("rc") not in (0, None)]
     if errs:
-        print(f"  NOTE {len(errs)} rows carry an error and will merge as failures: "
-              f"{sorted({(r.get('lane'), r.get('backend')) for r in errs})}")
+        print(f"  NOTE {len(errs)} rows are failed cells (an error or rc != 0); they merge as failures and the freeze skips "
+              f"them: {sorted({(r.get('lane'), r.get('backend')) for r in errs})}")
+    cens = [r for r in keep if r not in errs and any(k.endswith("_censored") and r[k] is True for k in r)]
+    if cens:
+        print(f"  NOTE {len(cens)} rows carry a censored query (budget hit); they land with the flag and the page shows "
+              f"them as censored: {sorted({(r.get('lane'), r.get('backend')) for r in cens})}")
 
     if args.dry_run:
         # STOP BEFORE ANYTHING WRITES. Without --apply this script still runs
@@ -490,6 +541,7 @@ def main():
 
     step(3, "merge into results/runs.jsonl")
     before = SITE_PAYLOAD.read_text() if SITE_PAYLOAD.exists() else "{}"
+    _site_new = [f for f in site_files if not (SITE / f).exists()]   # what this run creates, so a dry run can remove it
     # WHAT WAS ALREADY DIRTY IN THE RESULTS TREE, so a rehearsal can put back
     # what IT wrote without touching what someone else was mid-way through.
     # Same rule as the site restore below and the same reason: this run
@@ -523,7 +575,7 @@ def main():
     step(4, "publish through the gates (page-only, no site build)")
     log = SCRATCH / "refresh.log"
     with open(log, "w") as fh:
-        rc = subprocess.run([PY, str(HERE / "refresh_web_page.py"), "--no-build"],
+        rc = subprocess.run([PY, str(HERE / "refresh_web_page.py"), "--no-build", "--site", str(SITE)],
                             cwd=REPO, env=env, stdout=fh, stderr=subprocess.STDOUT).returncode
     text = log.read_text()
     for line in text.splitlines():
@@ -544,7 +596,7 @@ def main():
         # already regenerated the payload, the freeze and the .tex tables from
         # the scoped rows. Leaving them means the file a reader opens to ask
         # what is published answers with a payload the gates just refused.
-        _restore_this_runs_writes(_dirty_before, site_files)
+        _restore_this_runs_writes(_dirty_before, site_files, _site_new)
         return 1
 
     step(5, "what changed on the page")
@@ -602,7 +654,7 @@ def main():
         print(f"\n  REFUSING: {len(gone)} table(s) on the page would disappear: "
               f"{gone}. A landing adds to the page; it does not replace it.",
               file=sys.stderr)
-        _restore_this_runs_writes(_dirty_before, site_files)
+        _restore_this_runs_writes(_dirty_before, site_files, _site_new)
         return 1
     if not changed and not page_level:
         print("  no table changed; the stage was not page material or its rows were excluded")
@@ -618,7 +670,7 @@ def main():
         # away uncommitted edits while printing "site payload restored". A dry
         # run must leave the tree as it found it, which cuts both ways: it may
         # not keep what it wrote, and it may not drop what it did not write.
-        _restore_this_runs_writes(_dirty_before, site_files)
+        _restore_this_runs_writes(_dirty_before, site_files, _site_new)
         print("\nDRY RUN: stopping before build and commit; site payload restored. Re-run with --apply to publish.")
         return 0
 

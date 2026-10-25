@@ -2434,7 +2434,13 @@ def _durability_note(entries, rows, table_lane=None):
 # _pinned_dir cannot be used here: it is defined below and this is module scope.
 # Resolved the same way: the pinned directory only, never a fallback to an older artifact.
 E4_DIR = RESULTS / f"e4decomp_{os.environ.get('BENCH_ENGINE_COMMIT', '').strip() or 'UNPINNED'}"
-if not E4_DIR.is_dir():
+# A LANDING SCOPED AWAY FROM e4 DOES NOT NEED e4's ARTIFACTS (2026-10-25, found rehearsing the first 2026-11 landing on qC01's
+# rows). The 2026-11 chain has no e4decomp stage, so this refusal fired on `land_stage --only-lanes l2` at the pin and no
+# staged landing could complete before e4 had run: the staged landing exists to publish what has run while the rest of the
+# chain runs. `_e4_table()` already returns None when the directory holds no repetitions, so the page simply has no e4 table,
+# the way a table with no rows never appears. Unscoped (a full landing) and scoped-with-e4 still refuse: e4 is pinned only.
+_E4_SCOPE = {x.strip() for x in os.environ.get("BENCH_ONLY_LANES", "").split(",") if x.strip()}
+if not E4_DIR.is_dir() and (not _E4_SCOPE or "e4" in _E4_SCOPE):
     raise SystemExit(f"{E4_DIR.name} missing; E4 is pinned only, run the e4 lane")
 
 # Named so the page can say what each step is rather than showing three opaque
