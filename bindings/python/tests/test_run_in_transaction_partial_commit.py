@@ -32,9 +32,8 @@ def db(temp_db_path):
 
 
 def _count(db, where="true"):
-    return (
-        db.query("sql", f"SELECT count(*) AS c FROM R WHERE {where}").first().get("c")
-    )
+    sql = f"SELECT count(*) AS c FROM R WHERE {where}"  # nosec B608 - test-owned predicate text, no user input
+    return db.query("sql", sql).first().get("c")
 
 
 def _commit_from_another_thread(db):
