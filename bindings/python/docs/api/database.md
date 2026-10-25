@@ -523,12 +523,19 @@ faster still (2.24x on the same rows).
 
 - `type_name` (str): Target document type (must exist)
 - `rows` (iterable of dict): One dict per document, read lazily one chunk at
-  a time; values must be JSON-representable (str/int/float/bool/None, nested
-  lists/dicts). A chunk with other types (e.g. `datetime`, `bytes`) falls back
-  transparently to the per-row path, and so do values the JSON text would change on the way
-  to the engine: an integer beyond 64 bits, NaN or Infinity, a dict key that
-  is not a `str`, and a string with a lone surrogate. The per-row path stores
-  such a value exactly or raises, as `Document.set` does.
+  a time. A value that sits directly in a row is JSON-representable
+  (str/int/float/bool/None, nested lists/dicts), or one of these, which cross
+  inside the JSON as tagged values and are stored as `Document.set` stores them:
+  `datetime` (naive: the UTC wall clock as it shows; aware: converted to UTC;
+  `pandas.Timestamp` too), `date`, `Decimal`, `bytes`/`bytearray`, a numpy
+  scalar (`np.int64`, `np.float32`, `np.bool_`, ...), `np.datetime64` (as a naive
+  `datetime`; `NaT` is null) and `pandas.NA`/`pandas.NaT` (null; `Document.set`
+  refuses these). A row with any other value goes down the per-row path, that row
+  only (the rows around it stay on the bulk path, and every row is inserted in the
+  order given): a `datetime` or `Decimal` inside a list or dict, an integer beyond
+  64 bits, NaN or Infinity, a dict key that is not a `str`, a string with a lone
+  surrogate, a `datetime.time`. The per-row path stores such a value exactly or
+  raises, as `Document.set` does.
 - `commit_every` (int): Transaction batch size in synchronous mode
   (0 = single transaction; ignored when a transaction is already open).
 - `parallel` (bool): Route rows through the async executor's parallel

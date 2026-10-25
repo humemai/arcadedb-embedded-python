@@ -6,7 +6,7 @@ sources live in `bindings/python/src/java/com/arcadedb/python/`:
 |---|---|
 | `RowBatcher` | Serializes up to N result rows into one JSON-array string per call (batched row transport) |
 | `ColumnBatcher` | Encodes up to N rows into one `byte[]` of typed little-endian column buffers plus null bitmaps (binary columnar transport) |
-| `DocumentBatcher` | Inserts a whole batch of documents from one JSON-rows string (transactional or async parallel writers), or from whole typed columns (`insertColumns`, one `long[]`, `double[]`, `boolean[]`, or `Object[]` per property); also boxes numpy numeric arrays for `append_samples`; a float vector of an `ARRAY_OF_FLOATS` property crosses as a binary `FloatVectors.Matrix` beside the JSON (`insertManyJson`) or as a whole 2-D `float32` column |
+| `DocumentBatcher` | Inserts a whole batch of documents from one JSON-rows string (transactional or async parallel writers; a date-time, date, Decimal or `byte[]` directly in a row arrives as a tagged value `{"\u0001": [kind, payload]}`, decoded by `untag`), or from whole typed columns (`insertColumns`, one `long[]`, `double[]`, `boolean[]`, or `Object[]` per property); also boxes numpy numeric arrays for `append_samples`; a float vector of an `ARRAY_OF_FLOATS` property crosses as a binary `FloatVectors.Matrix` beside the JSON (`insertManyJson`) or as a whole 2-D `float32` column |
 | `EdgeBatcher` | Buffers a whole batch of edges into `GraphBatch` from one call (RID strings, or JSON rows for edges with properties) |
 | `VertexBatcher` | Creates a whole batch of vertices from one JSON-rows string, returning all RIDs as one joined string |
 | `TimeSeriesBatcher` | Fills the engine's primitive `TimeSeriesBatch` one column per call, so numeric samples are never boxed |
@@ -86,7 +86,7 @@ source on every wheel build.
   `AsyncExecutor.append_samples()`, whose numpy-column path and `primitive=True`
   path load the bridge classes directly, `Database.insert_many()`, which loads
   `DocumentBatcher` for any JSON-serializable rows and raises `ArcadeDBError` if it
-  is missing (its per-row path runs only for rows `json.dumps` rejects), and
+  is missing (its per-row path runs only for the rows that `json_bulk_dumps_tagged` rejects, one row at a time), and
   `Database.insert_columns()`, which always loads `DocumentBatcher` and raises the same
   error. `Database.register_function()` and `Database.on()` also need the jar (`PythonFunctions`,
   `PythonRecordEvents`) and raise `ArcadeDBError` without it.

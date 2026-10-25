@@ -84,6 +84,7 @@ asserts, so the list below stops at the file.
 | `test_bulk_insert.py` | `Database.insert_many`, `AsyncExecutor.create_record`, vector columns, numpy `append_samples`, and what a failed call leaves behind |
 | `test_insert_columns.py` | `Database.insert_columns`: typed values, nulls, the parallel mode, the rollback contract, and bad input refused before anything is written |
 | `test_bulk_json_paths.py` | Values the JSON text of a bulk call cannot carry unchanged keep the call off the bulk path, so every entry point stores the same value or raises |
+| `test_insert_many_mixed_values.py` | `insert_many` keeps a chunk on the bulk path for date-times, dates, Decimals, bytes, numpy scalars, pandas NA and NaT, and None; the stored values equal the per-row path's; only a row with an uncarriable value goes per row |
 | `test_graph_batch.py` | `GraphBatch` buffering, flushing, failure handling, and the caller's transaction |
 | `test_graph.py` | `GraphBatch.new_edges` and `create_vertices` bulk paths |
 | `test_import_database.py` | SQL `IMPORT DATABASE` across CSV (documents, graphs, and time series), XML, Neo4j, Word2Vec, and RDF |

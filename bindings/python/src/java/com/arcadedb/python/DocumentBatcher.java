@@ -15,9 +15,11 @@
  * the JSON or as a column. The boxDoubles/boxLongs
  * helpers below serve AsyncExecutor.append_samples' numpy fast path.
  *
- * JSON-representable property values only (str/int/float/bool/null and
- * nested lists/maps thereof) — the Python side falls back to the per-row
- * new_document path for anything else (e.g. datetime, bytes).
+ * JSON-representable property values (str/int/float/bool/null and nested
+ * lists/maps thereof), plus a date-time, date, Decimal or byte[] sitting
+ * directly in a row, which cross as tagged values (see untag). The Python side
+ * sends a row with any other value (NaN, an integer beyond 64 bits, a date-time
+ * inside a list or map) down the per-row new_document path, that row only.
  */
 package com.arcadedb.python;
 
@@ -258,12 +260,35 @@ public final class DocumentBatcher {
     return out;
   }
 
+  /**
+   * A tagged value from the Python side, {"\u0001": [kind, payload]}: T LocalDateTime (UTC wall clock), D LocalDate, n BigDecimal,
+   * b byte[] (base64): the objects the per-row path (type_conversion.convert_python_to_java) builds. Anything else is returned unchanged.
+   */
+  private static Object untag(final Object v) {
+    if (v instanceof Map<?, ?> m && m.size() == 1 && m.get("\u0001") instanceof java.util.List<?> t && t.size() == 2
+        && t.get(0) instanceof String kind && t.get(1) instanceof String s) {
+      switch (kind) {
+      case "T":
+        return java.time.LocalDateTime.parse(s);
+      case "D":
+        return java.time.LocalDate.parse(s);
+      case "n":
+        return new java.math.BigDecimal(s);
+      case "b":
+        return java.util.Base64.getDecoder().decode(s);
+      default:
+        throw new IllegalArgumentException("unknown value tag " + kind);
+      }
+    }
+    return v;
+  }
+
   private static void fill(final MutableDocument doc, final JSONObject row, final int i, final String[] vectorNames,
       final Object[] vectors) {
     // toMap() turns nested objects and arrays into plain Map and List. Storing the parsed JSONArray itself reads back
     // as a JSONArray inside the transaction that wrote it, and only becomes a list once the record is serialized.
     for (final Map.Entry<String, Object> entry : row.toMap().entrySet())
-      doc.set(entry.getKey(), entry.getValue());
+      doc.set(entry.getKey(), untag(entry.getValue()));
     if (vectorNames != null)
       for (int c = 0; c < vectorNames.length; c++)
         doc.set(vectorNames[c], ((FloatVectors.Matrix) vectors[c]).row(i));

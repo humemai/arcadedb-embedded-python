@@ -31,8 +31,11 @@ from .results import ResultSet
 from .transactions import TransactionContext
 from .type_conversion import (
     _is_numpy_bool,
+    bulk_row_ok,
     convert_python_to_java,
+    declared_float_vectors,
     json_bulk_dumps,
+    json_bulk_dumps_tagged,
     split_float_vectors,
 )
 from .vector import to_java_float_array
@@ -684,10 +687,17 @@ class Database:
         to one JSON string and looped Java-side (``DocumentBatcher``),
         avoiding the per-row JNI cost that caps ``new_document``-loop ingest.
         Memory stays bounded by the chunk whatever the row count, so a
-        generator of any length can be loaded (#294). Values must be
-        JSON-representable (str/int/float/bool/None and nested lists/dicts);
-        a chunk containing other types (e.g. datetime, bytes) falls back
-        transparently to the per-row path. A property declared
+        generator of any length can be loaded (#294). A value that sits directly
+        in a row may be JSON-representable (str/int/float/bool/None, nested
+        lists/dicts), a ``datetime`` (also ``pandas.Timestamp`` and
+        ``numpy.datetime64``), ``date``, ``Decimal``, ``bytes``/``bytearray``,
+        a numpy scalar, or ``pandas.NA``/``pandas.NaT`` (stored as null); they
+        cross inside the JSON as tagged values and are stored as the per-row path
+        stores them. A row with any other value (a date-time or Decimal inside a
+        list or dict, an integer beyond 64 bits, NaN or Infinity, a non-str dict
+        key, a lone surrogate, a ``datetime.time``) goes down the per-row path,
+        that row only: the rows around it stay on the bulk path and every row is
+        inserted in the order given. A property declared
         ``ARRAY_OF_FLOATS`` whose value in every row of a chunk is a list or a
         numpy array of numbers of one length crosses as one binary float32
         matrix beside the JSON instead of as text (``FloatVectors``); the stored
@@ -798,24 +808,57 @@ class Database:
             raise
 
     def _insert_many_chunk(self, type_name, chunk):
-        """Insert one chunk of insert_many rows inside the open transaction."""
+        """Insert one chunk of insert_many rows inside the open transaction.
+
+        The chunk crosses as one JSON text. A value the text cannot carry unchanged (NaN or Infinity, an integer beyond 64 bits, a date-time
+        or Decimal inside a list or map, a lone surrogate, a non-str key) sends its own row down the per-row path; the rows around it
+        still go in bulk, and every row is inserted in the order given. Dates, date-times, Decimals, bytes, numpy scalars and
+        pandas NA and NaT sitting directly in a row cross inside the text as tagged values (see json_bulk_dumps_tagged).
+        """
         # Float vectors for ARRAY_OF_FLOATS properties cross as one binary matrix
         # beside the JSON, not as text (see split_float_vectors).
         split = split_float_vectors(self._java_db, type_name, chunk)
         try:
-            payload = json_bulk_dumps(split[0] if split else chunk)
+            payload = json_bulk_dumps_tagged(split[0] if split else chunk)
         except (TypeError, ValueError):
-            # Values the JSON text cannot carry unchanged (numpy integer
-            # scalars, which json.dumps rejects; an integer beyond 64 bits,
-            # NaN or Infinity, a non-str dict key, a lone surrogate, which the
-            # engine's JSON parser would store as a different value): this
-            # chunk goes row by row.
-            for row in chunk:
-                doc = self.new_document(type_name)
-                for k, v in row.items():
-                    doc.set(k, v)
-                doc.save()
+            self._insert_many_runs(type_name, chunk)
             return
+        self._insert_many_bulk(type_name, payload, split)
+
+    def _insert_many_runs(self, type_name, chunk):
+        """A chunk with a row the JSON text cannot carry: runs of carriable rows go in bulk, the other rows one by one, in order."""
+        skip = declared_float_vectors(self._java_db, type_name)
+        ok = [bulk_row_ok(row, skip) for row in chunk]
+        start = 0
+        n = len(chunk)
+        while start < n:
+            end = start
+            while end < n and ok[end] == ok[start]:
+                end += 1
+            run = chunk[start:end]
+            start = end
+            if not ok[end - 1]:
+                self._insert_many_per_row(type_name, run)
+                continue
+            split = split_float_vectors(self._java_db, type_name, run)
+            try:
+                payload = json_bulk_dumps_tagged(split[0] if split else run)
+            except (
+                TypeError,
+                ValueError,
+            ):  # a vector column the matrix did not take: this run only goes row by row
+                self._insert_many_per_row(type_name, run)
+                continue
+            self._insert_many_bulk(type_name, payload, split)
+
+    def _insert_many_per_row(self, type_name, rows):
+        for row in rows:
+            doc = self.new_document(type_name)
+            for k, v in row.items():
+                doc.set(k, v)
+            doc.save()
+
+    def _insert_many_bulk(self, type_name, payload, split):
         try:
             # commitEvery 0 inside a transaction that is already open: the
             # helper only inserts, and the transaction stays with insert_many.
@@ -837,32 +880,31 @@ class Database:
         chunk = first
         try:
             while chunk:
+                bad = []
                 split = split_float_vectors(self._java_db, type_name, chunk)
                 try:
-                    payload = json_bulk_dumps(split[0] if split else chunk)
+                    payload = json_bulk_dumps_tagged(split[0] if split else chunk)
                 except (TypeError, ValueError):
+                    # Only the rows the JSON text cannot carry unchanged leave the writers. The writers do not keep the
+                    # order of the rows, so the rows are split by kind, not by run.
+                    skip = declared_float_vectors(self._java_db, type_name)
+                    good = []
+                    for row in chunk:
+                        (good if bulk_row_ok(row, skip) else bad).append(row)
                     payload = None
-                if payload is None:
-                    # A chunk the JSON text cannot carry unchanged is written
-                    # synchronously, row by row, in its own transaction, after
-                    # the writers have drained, as the whole load used to be.
-                    self._java_db.async_().waitCompletion()
-                    was_active = self.is_transaction_active()
-                    try:
-                        if not was_active:
-                            self.begin()
-                        self._insert_many_chunk(type_name, chunk)
-                        if not was_active:
-                            self.commit()
-                    except BaseException:
-                        if not was_active:
-                            try:
-                                if self.is_transaction_active():
-                                    self.rollback()
-                            except Exception:  # nosec B110 - best-effort rollback
-                                pass
-                        raise
-                else:
+                    if good:
+                        split = split_float_vectors(self._java_db, type_name, good)
+                        try:
+                            payload = json_bulk_dumps_tagged(
+                                split[0] if split else good
+                            )
+                        except (
+                            TypeError,
+                            ValueError,
+                        ):  # a vector column the matrix did not take
+                            payload = None
+                            bad = chunk
+                if payload is not None:
                     try:
                         if split:
                             failures = batcher.insertManyJsonParallel(
@@ -880,6 +922,26 @@ class Database:
                     # assumed (ArcadeData/arcadedb#8478). Read after the final
                     # waitCompletion, when every writer is done.
                     chunk_failures.append(failures)
+                if bad:
+                    # Rows the JSON text cannot carry are written synchronously,
+                    # row by row, in their own transaction, after the writers
+                    # have drained.
+                    self._java_db.async_().waitCompletion()
+                    was_active = self.is_transaction_active()
+                    try:
+                        if not was_active:
+                            self.begin()
+                        self._insert_many_per_row(type_name, bad)
+                        if not was_active:
+                            self.commit()
+                    except BaseException:
+                        if not was_active:
+                            try:
+                                if self.is_transaction_active():
+                                    self.rollback()
+                            except Exception:  # nosec B110 - best-effort rollback
+                                pass
+                        raise
                 n += len(chunk)
                 chunk = list(itertools.islice(rows, _INSERT_MANY_CHUNK))
         except ArcadeDBError:
