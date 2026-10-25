@@ -1353,7 +1353,7 @@ class Database:
         Lookup a record by its RID.
 
         Args:
-            rid: Record ID string (e.g. "#10:5")
+            rid: Record ID string (e.g. "#10:5"), or the RID object a row holds
 
         Returns:
             Record object (Vertex, Document, or Edge)
