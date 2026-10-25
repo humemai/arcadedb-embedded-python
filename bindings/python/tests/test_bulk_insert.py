@@ -169,12 +169,13 @@ class TestInsertManyVertexType:
         with db.transaction():
             db.command(
                 "sql",
-                f"CREATE EDGE Knows FROM (SELECT FROM {name} WHERE id = 0) "
+                f"CREATE EDGE Knows FROM (SELECT FROM {name} WHERE id = 0) "  # nosec B608 - test-owned type name, no user input
                 f"TO (SELECT FROM {name} WHERE id = 1)",
             )
         assert _count(db, "Knows") == 1
         out = db.query(
-            "sql", f"SELECT out('Knows').size() AS n FROM {name} WHERE id = 0"
+            "sql",
+            f"SELECT out('Knows').size() AS n FROM {name} WHERE id = 0",  # nosec B608 - test-owned type name, no user input
         ).to_list()[0]["n"]
         assert out == 1
 
