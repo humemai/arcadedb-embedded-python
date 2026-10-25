@@ -1,12 +1,11 @@
-"""The deprecation shims for the old PyPI names (deprecation/): built here, checked against a stub.
+"""The deprecation shim for the old PyPI name (deprecation/): built here, checked against a stub.
 
-`arcadedb-embedded` and `arcadedb-embedded-native` get one last release, 26.11.1: a pure-Python shim that
-installs its replacement at the same version, warns once at import, and re-exports it. The old JVM package
-`arcadedb-embedded` points to `arcadedb-jvm` (the same JVM build), the old native package
-`arcadedb-embedded-native` to `arcadedb` (the native build); both replacements import as `arcadedb`. The old
-native package imported as `arcadedb_native`, so its shim ships that module as well as `arcadedb_embedded`. The
-tests build both shims with `uv build` (no upload), and check the wheel, the dependency pin, the warning, and
-attribute and submodule access against a stub `arcadedb` module: the real packages are not needed.
+`arcadedb-embedded` gets one last release, 26.11.1: a pure-Python shim that installs `arcadedb` (the native
+build, the new home of the bindings) at the same version, warns once at import, and re-exports it. The old JVM
+package therefore moves to the native build; the warning says so in plain words and names `arcadedb-jvm` for
+people who need the JVM build. `arcadedb-embedded-native` gets no shim: its PyPI project has no files and is
+archived. The tests build the shim with `uv build` (no upload), and check the wheel, the dependency pin, the
+warning, and attribute and submodule access against a stub `arcadedb` module: the real package is not needed.
 """
 
 from __future__ import annotations
@@ -26,24 +25,22 @@ BINDINGS = Path(__file__).resolve().parents[1]
 DEPRECATION = BINDINGS / "deprecation"
 VERSION = "26.11.1"
 # old distribution -> the package it points to (written out here on purpose, apart from TARGETS in build_shims.py,
-# so a wrong edit of that table fails a test)
-SHIMS = {"arcadedb-embedded": "arcadedb-jvm", "arcadedb-embedded-native": "arcadedb"}
-# the import name of both replacements (an assumption, see build_shims.IMPORT_NAME)
+# so a wrong edit of that table fails a test). The old JVM package points to the NATIVE build.
+SHIMS = {"arcadedb-embedded": "arcadedb"}
+# the import name of the replacement (an assumption, see build_shims.IMPORT_NAME)
 IMPORT_NAME = "arcadedb"
+WHICH_PACKAGE_URL = "https://docs.arcadedb.com/arcadedb-python/which-package.html"
 # What PyPI listed before the cutover (checked 2026-10-25): the counting rule is applied against this
 # snapshot, because once the shims are published the live list contains 26.11.1 itself.
 PUBLISHED_BEFORE_CUTOVER = {
     "arcadedb-embedded": ["26.9.1", "26.10.1", "26.10.2", "26.10.2.post1"],
-    "arcadedb-embedded-native": ["26.10.2.dev0", "26.10.2.dev1"],
 }
-# old distribution -> the import names its shim ships (the old native package imported as arcadedb_native)
-MODULES = {
-    "arcadedb-embedded": ["arcadedb_embedded"],
-    "arcadedb-embedded-native": ["arcadedb_embedded", "arcadedb_native"],
-}
+# old distribution -> the import names its shim ships
+MODULES = {"arcadedb-embedded": ["arcadedb_embedded"]}
 CASES = [(dist, module) for dist, modules in MODULES.items() for module in modules]
-BODY_MARKER = "# ---- shared body"
-EXTRAS = ["arrow", "pandas", "polars", "vector"]
+BODY_MARKER = "# ---- body"
+# the extras of the old package -> the extra of `arcadedb` they are forwarded to (`vector` was numpy; `arcadedb` has no `vector`)
+EXTRAS = {"arrow": "arrow", "pandas": "pandas", "polars": "polars", "vector": "numpy"}
 
 STUB_FILES = {
     "arcadedb/__init__.py": """
@@ -132,7 +129,7 @@ def _load_check_version():
 
 @pytest.fixture(scope="module")
 def wheels(tmp_path_factory):
-    """Build both shims once (`uv build`, no upload) and return {old distribution: wheel path}."""
+    """Build the shim once (`uv build`, no upload) and return {old distribution: wheel path}."""
     out = tmp_path_factory.mktemp("shim-dist")
     assert _load_build_shims().main(["--out", str(out)]) == 0
     built = {}
@@ -226,65 +223,55 @@ def test_dependency_pins_the_new_package_at_the_same_version(dist, wheels):
     ), requires
 
 
-def test_the_jvm_shim_requires_arcadedb_jvm_and_not_arcadedb(wheels):
-    """arcadedb-embedded was the JVM package: it must land on the JVM build, never silently on the native `arcadedb`."""
+def test_the_shim_requires_arcadedb_the_native_build_and_not_arcadedb_jvm(wheels):
+    """The decided layout: the old JVM package moves to `arcadedb`, which is the native build. It never pulls `arcadedb-jvm`."""
     metadata = _metadata(wheels["arcadedb-embedded"])
-    assert f"Requires-Dist: arcadedb-jvm=={VERSION}\n" in metadata
-    assert _required_names(metadata) == {"arcadedb-jvm"}
-    assert "arcadedb" not in _required_names(metadata)
-    assert "arcadedb-embedded-native" not in metadata
-    # the extras are forwarded to the same extras of arcadedb-jvm
-    assert (
-        sorted(re.findall(r"^Provides-Extra: (.+)$", metadata, flags=re.MULTILINE))
-        == EXTRAS
-    )
-    for extra in EXTRAS:
-        assert (
-            f"Requires-Dist: arcadedb-jvm[{extra}]=={VERSION}; extra == '{extra}'\n"
-            in metadata
-        )
-    assert (
-        "Project-URL: Replaced by, https://pypi.org/project/arcadedb-jvm/\n" in metadata
-    )
-    assert "has moved to arcadedb-jvm (import arcadedb)" in metadata
-
-
-def test_the_native_shim_requires_arcadedb_and_not_arcadedb_jvm(wheels):
-    """arcadedb-embedded-native was the native package: it lands on `arcadedb`, which is the native build."""
-    metadata = _metadata(wheels["arcadedb-embedded-native"])
     assert f"Requires-Dist: arcadedb=={VERSION}\n" in metadata
     assert _required_names(metadata) == {"arcadedb"}
     assert "arcadedb-jvm" not in _required_names(metadata)
     assert "arcadedb-native" not in _required_names(metadata)
-    assert (
-        sorted(re.findall(r"^Provides-Extra: (.+)$", metadata, flags=re.MULTILINE))
-        == EXTRAS
-    )
-    for extra in EXTRAS:
+    assert "arcadedb-embedded-native" not in metadata
+    # the extras of the old package are forwarded to the matching extras of arcadedb
+    assert sorted(
+        re.findall(r"^Provides-Extra: (.+)$", metadata, flags=re.MULTILINE)
+    ) == sorted(EXTRAS)
+    for old, new in EXTRAS.items():
         assert (
-            f"Requires-Dist: arcadedb[{extra}]=={VERSION}; extra == '{extra}'\n"
-            in metadata
+            f"Requires-Dist: arcadedb[{new}]=={VERSION}; extra == '{old}'\n" in metadata
         )
     assert "Project-URL: Replaced by, https://pypi.org/project/arcadedb/\n" in metadata
     assert "has moved to arcadedb (import arcadedb)" in metadata
 
 
-def test_the_pypi_readme_gives_the_right_install_line(wheels):
-    jvm = _metadata(wheels["arcadedb-embedded"])
-    assert "pip install arcadedb-jvm\n" in jvm
-    assert not re.search(r"pip install arcadedb(?![-\w])", jvm)
-    assert "pip uninstall arcadedb-embedded\n" in jvm
-    native = _metadata(wheels["arcadedb-embedded-native"])
-    assert "pip install arcadedb\n" in native
-    assert "pip install arcadedb-jvm" not in native
-    assert "pip uninstall arcadedb-embedded-native\n" in native
+def test_the_pypi_readme_says_arcadedb_is_the_native_build_and_names_the_jvm_package(
+    wheels,
+):
+    metadata = _metadata(wheels["arcadedb-embedded"])
+    assert "pip install arcadedb\n" in metadata
+    assert "pip uninstall arcadedb-embedded\n" in metadata
+    assert "native build" in metadata
+    # the JVM build is named as the other choice, with the install line, and the Which package? page is linked
+    assert "pip install arcadedb-jvm\n" in metadata
+    assert WHICH_PACKAGE_URL in metadata
+
+
+def test_there_is_no_shim_for_the_native_preview_package():
+    """`arcadedb-embedded-native` has no files on PyPI and is archived: nothing here builds, ships or mentions a shim for it."""
+    build_shims = _load_build_shims()
+    assert build_shims.SHIMS == ("arcadedb-embedded",)
+    assert sorted(build_shims.TARGETS) == ["arcadedb-embedded"]
+    folders = sorted(
+        p.name for p in DEPRECATION.iterdir() if p.is_dir() and p.name != "__pycache__"
+    )
+    assert folders == ["arcadedb-embedded"]
+    assert not list(DEPRECATION.glob("**/arcadedb_native"))
 
 
 def test_build_shims_has_one_table_with_the_decided_mapping():
     build_shims = _load_build_shims()
     assert {k: v.dist for k, v in build_shims.TARGETS.items()} == SHIMS
     assert {v.module for v in build_shims.TARGETS.values()} == {IMPORT_NAME}
-    assert sorted(build_shims.EXTRAS) == EXTRAS
+    assert dict(build_shims.EXTRAS) == EXTRAS
     for dist in SHIMS:
         build_shims.check_target(
             dist
@@ -295,7 +282,7 @@ def test_build_shims_has_one_table_with_the_decided_mapping():
 def test_build_shims_refuses_a_shim_that_points_elsewhere(dist, monkeypatch):
     """Changing the table without the shim files (or the other way round) must stop the build."""
     build_shims = _load_build_shims()
-    other = next(d for d in SHIMS.values() if d != SHIMS[dist])
+    other = "arcadedb-jvm"  # the other new package: the shim must not drift onto the JVM build unnoticed
     monkeypatch.setitem(
         build_shims.TARGETS, dist, build_shims.Target(dist=other, module=IMPORT_NAME)
     )
@@ -326,26 +313,14 @@ def test_version_follows_the_counting_rule(dist):
     build_shims.check_version(dist, check_pypi=False)
 
 
-def test_all_shim_modules_share_one_body():
-    bodies = []
-    for dist, module in CASES:
-        text = (DEPRECATION / dist / "src" / module / "__init__.py").read_text(
-            encoding="utf-8"
-        )
-        assert BODY_MARKER in text
-        bodies.append(text[text.index(BODY_MARKER) :])
-    assert len(bodies) == 3
-    assert all(body == bodies[0] for body in bodies)
-
-
-def test_the_native_shim_ships_the_old_native_import_name():
-    """The old arcadedb-embedded-native package imported as `arcadedb_native`; without this module an upgrader gets a bare ModuleNotFoundError."""
-    assert "arcadedb_native" in MODULES["arcadedb-embedded-native"]
-    assert "arcadedb_native" not in MODULES["arcadedb-embedded"]
-    shim = DEPRECATION / "arcadedb-embedded-native"
-    assert (shim / "src" / "arcadedb_native" / "__init__.py").is_file()
-    pyproject = (shim / "pyproject.toml").read_text(encoding="utf-8")
-    assert '"src/arcadedb_native"' in pyproject
+def test_the_shim_module_has_its_constants_and_the_body():
+    text = (
+        DEPRECATION / "arcadedb-embedded" / "src" / "arcadedb_embedded" / "__init__.py"
+    ).read_text(encoding="utf-8")
+    assert BODY_MARKER in text
+    assert '_OLD_DIST = "arcadedb-embedded"\n' in text
+    assert '_NEW_DIST = "arcadedb"\n' in text
+    assert '_NEW_MODULE = "arcadedb"\n' in text
 
 
 @pytest.mark.parametrize(("dist", "module"), CASES)
@@ -355,14 +330,15 @@ def test_warning_fires_once_and_is_visible_by_default(dist, module, sites):
     category, message, filename = result["warnings"][0]
     assert category == "FutureWarning"
     assert filename == "<string>"  # attributed to the importing code, not to the shim
-    new = SHIMS[dist]
-    assert f"Install {new!r} instead (`pip install {new}`)" in message
-    # `pip install arcadedb` must not appear in the JVM shim's text as the command to run (it is the native build)
-    assert (re.search(r"pip install arcadedb(?![-\w])", message) is not None) == (
-        new == "arcadedb"
+    # plain words: the package is now arcadedb, that is the native build, the JVM build is arcadedb-jvm
+    assert (
+        "The package is now 'arcadedb': install it with `pip install arcadedb`."
+        in message
     )
+    assert "`arcadedb` is the native build, which runs without a JVM." in message
+    assert "install `arcadedb-jvm` (`pip install arcadedb-jvm`)" in message
+    assert WHICH_PACKAGE_URL in message
     assert f"`import {IMPORT_NAME}` where you wrote `import {module}`" in message
-    assert ("same JVM build" in message) == (new == "arcadedb-jvm")
     assert "https://github.com/ArcadeData/arcadedb-python" in message
     assert "https://docs.arcadedb.com/arcadedb-python/" in message
 
@@ -401,42 +377,6 @@ def test_attributes_and_submodules_come_from_the_new_module(dist, module, sites)
     assert result["spec_kept"] == "arcadedb.extra"
     assert "no attribute 'missing_name'" in result["missing_attr"]
     assert result["missing_module"] is True
-
-
-BOTH = """
-import sys, warnings
-sys.path.insert(0, sys.argv[1])
-with warnings.catch_warnings(record=True) as caught:
-    warnings.simplefilter("always")
-    import arcadedb_embedded
-    import arcadedb_native
-import arcadedb
-# a lazily imported submodule must resolve under each old name, not only under the first one imported
-import arcadedb_embedded.extra
-import arcadedb_native.extra
-assert arcadedb_embedded.extra is arcadedb.extra, "arcadedb_embedded.extra"
-assert arcadedb_native.extra is arcadedb.extra, "arcadedb_native.extra"
-from arcadedb_native.sub import deep
-assert deep is arcadedb.sub.deep
-assert [w.category.__name__ for w in caught] == ["FutureWarning", "FutureWarning"], caught
-assert [str(w.message).rsplit("`", 2)[-2] for w in caught] == [
-    "import arcadedb_embedded",
-    "import arcadedb_native",
-]
-print("ok")
-"""
-
-
-def test_the_native_shim_serves_both_old_names_in_one_process(sites):
-    done = subprocess.run(  # nosec B603 - fixed argument list, no shell
-        [sys.executable, "-I", "-c", BOTH, str(sites["arcadedb-embedded-native"])],
-        capture_output=True,
-        text=True,
-        timeout=120,
-        check=False,
-    )
-    assert done.returncode == 0, done.stderr
-    assert done.stdout.strip() == "ok"
 
 
 def test_the_real_package_has_no_warning():

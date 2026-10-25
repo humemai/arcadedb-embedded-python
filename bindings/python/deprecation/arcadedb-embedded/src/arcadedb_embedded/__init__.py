@@ -1,16 +1,20 @@
 # Copyright © 2021-present Arcade Data Ltd (info@arcadedata.com)
 # SPDX-License-Identifier: Apache-2.0
-"""Deprecated: ``arcadedb-embedded`` has moved to ``arcadedb-jvm``.
+"""Deprecated: ``arcadedb-embedded`` has moved to ``arcadedb``, the native build.
 
-This is the last release of ``arcadedb-embedded``. It is a thin shim: it warns once at import, then hands every name and submodule over to ``arcadedb-jvm``, which provides the module ``arcadedb``.
+This is the last release of ``arcadedb-embedded``. It is a thin shim: it warns once at import, then hands every name and submodule over to ``arcadedb``, which provides the module ``arcadedb``. For the JVM build, install ``arcadedb-jvm``.
 """
 
-# ---- per-shim constants: the shims differ only in this block ----
+# ---- constants of this shim ----
 _OLD_DIST = "arcadedb-embedded"
-_NEW_DIST = "arcadedb-jvm"
+_NEW_DIST = "arcadedb"
 _NEW_MODULE = "arcadedb"
-_NOTE = "`arcadedb-jvm` is the same JVM build as this package, so nothing changes at run time (`arcadedb` is the native build, a different runtime)."
-# ---- shared body: identical in all shim modules (tests/test_deprecation_shims.py checks it) ----
+_NOTE = (
+    "`arcadedb` is the native build, which runs without a JVM. "
+    "If you need the JVM build, install `arcadedb-jvm` (`pip install arcadedb-jvm`). "
+    "Which package to pick: https://docs.arcadedb.com/arcadedb-python/which-package.html."
+)
+# ---- body (tests/test_deprecation_shims.py checks that it is there) ----
 
 import importlib
 import importlib.abc
@@ -21,7 +25,7 @@ import warnings
 
 _MESSAGE = (
     f"The {_OLD_DIST!r} package has moved and this is its last release. "
-    f"Install {_NEW_DIST!r} instead (`pip install {_NEW_DIST}`). {_NOTE} "
+    f"The package is now {_NEW_DIST!r}: install it with `pip install {_NEW_DIST}`. {_NOTE} "
     f"Write `import {_NEW_MODULE}` where you wrote `import {__name__}`. "
     "New home: https://github.com/ArcadeData/arcadedb-python, "
     "docs: https://docs.arcadedb.com/arcadedb-python/"
