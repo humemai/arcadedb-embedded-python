@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import os
+import re
 import shutil
 import subprocess  # nosec B404 - runs `uv build` with a fixed argument list
 import sys
@@ -46,17 +47,20 @@ class Target(NamedTuple):
     module: str  # the import name that distribution provides: what the shim re-exports
 
 
-# Where each old name points (the packaging layout decided on 2026-10-25, "layout v2" in ArcadeData/arcadedb-python .notes/MIGRATION.md,
-# and the decision of 2026-10-25 that the old JVM package moves to the native build):
-#   arcadedb-embedded (the old JVM package) -> arcadedb, the NATIVE build. The warning and the README say so in plain words and name
-#   `arcadedb-jvm` as the way to keep the JVM build. This shim therefore publishes only after the native `arcadedb` 26.11.1 FINAL exists.
-# ASSUMPTION: `arcadedb` provides the import name `arcadedb`. The layout says "import arcadedb for all". `arcadedb` has no real release on PyPI yet (0.0.1 is a placeholder), so this cannot be checked here.
+# Where each old name points (the packaging layout v3 decided on 2026-10-25, see ArcadeData/arcadedb-python .notes/MIGRATION.md).
+# arcadedb-embedded (the old JVM package) -> `arcadedb`, which is the NATIVE build. The runtime therefore changes for pip users of the old name, and the warning, the README and MIGRATION.md say so in plain words and name `arcadedb-jvm` as the way to keep the JVM build.
+# This shim publishes only after the native `arcadedb` 26.11.1 FINAL exists, because it pins `arcadedb==26.11.1` and a `26.11.1.devN` release does not satisfy that pin.
+# ASSUMPTION: `arcadedb` provides the import name `arcadedb`. The native wheel does (packages.find and package-data in native/wheel/pyproject.toml on the branch named below), and `arcadedb-jvm` imports as `arcadedb` too, but `arcadedb` has no final release on PyPI yet (0.0.1 is a placeholder), so the published wheel cannot be checked here.
 # If the package gets another import name, change it here and in the `_NEW_MODULE` constant of the shim's `__init__.py`; check_target() fails until both agree.
 IMPORT_NAME = "arcadedb"
 TARGETS = {
     "arcadedb-embedded": Target(dist="arcadedb", module=IMPORT_NAME),
 }
-# the extras people installed from the old name -> the extra of the target they are forwarded to (the old `vector` extra was numpy; `arcadedb` has no `vector`)
+# The JVM build the warning and the README name for people who need it (not a dependency of the shim).
+JVM_DIST = "arcadedb-jvm"
+# The extras of the real `arcadedb` (native) distribution, and nothing else may be forwarded to. Source: ArcadeData/arcadedb-python, branch native-two-dist (commit 56aab39), file native/wheel/pyproject.toml, [project.optional-dependencies]. The root pyproject.toml of that repo builds `arcadedb-jvm` instead (extras test, dev, vector, arrow, pandas, polars, examples) and is NOT the source.
+NATIVE_EXTRAS = frozenset({"numpy", "arrow", "pandas", "polars"})
+# The extras people installed from the old name -> the extra of `arcadedb` they are forwarded to (the old `vector` extra was numpy; `arcadedb` has no `vector`). The old test, dev and examples extras are not forwarded: `arcadedb` does not define them.
 EXTRAS = {"vector": "numpy", "arrow": "arrow", "pandas": "pandas", "polars": "polars"}
 
 
@@ -84,7 +88,7 @@ def check_target(shim: str) -> None:
         project = tomllib.load(handle)["project"]
     expected = {
         "name": shim,
-        "description": f"Deprecated: {shim} has moved to {target.dist} (import {target.module}). Last release, a thin shim.",
+        "description": f"Deprecated: {shim} has moved to {target.dist} (import {target.module}), now the native build, not the JVM build; for the JVM build use {JVM_DIST}. Last release, a thin shim.",
         "dependencies": [f"{target.dist}=={version}"],
         "optional-dependencies": {
             old: [f"{target.dist}[{new}]=={version}"] for old, new in EXTRAS.items()
@@ -95,6 +99,20 @@ def check_target(shim: str) -> None:
         for key, want in expected.items()
         if project.get(key) != want
     ]
+    forwarded = {
+        match.group(1)
+        for requirements in project.get("optional-dependencies", {}).values()
+        for requirement in requirements
+        if (
+            match := re.fullmatch(
+                rf"{re.escape(target.dist)}\[(\w+)\]==.+", requirement
+            )
+        )
+    }
+    if forwarded != NATIVE_EXTRAS or set(EXTRAS.values()) != NATIVE_EXTRAS:
+        problems.append(
+            f"the shim forwards the extras {sorted(forwarded)} (EXTRAS: {sorted(set(EXTRAS.values()))}), but {target.dist} defines {sorted(NATIVE_EXTRAS)} (NATIVE_EXTRAS)"
+        )
     replaced_by = project["urls"].get("Replaced by")
     if replaced_by != f"https://pypi.org/project/{target.dist}/":
         problems.append(f"project.urls['Replaced by'] is {replaced_by!r}")
@@ -107,6 +125,10 @@ def check_target(shim: str) -> None:
         ):
             if f'{name} = "{want}"\n' not in text:
                 problems.append(f'{path.relative_to(HERE)}: {name} is not "{want}"')
+        if f"`pip install {JVM_DIST}`" not in text:
+            problems.append(
+                f"{path.relative_to(HERE)}: the warning does not name `pip install {JVM_DIST}`"
+            )
     if problems:
         raise SystemExit(
             f"{shim} does not point at {target.dist}:\n  " + "\n  ".join(problems)

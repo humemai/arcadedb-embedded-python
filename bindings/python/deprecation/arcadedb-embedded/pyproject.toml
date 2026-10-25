@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 [project]
 name = "arcadedb-embedded"
 version = "26.11.1"
-description = "Deprecated: arcadedb-embedded has moved to arcadedb (import arcadedb). Last release, a thin shim."
+description = "Deprecated: arcadedb-embedded has moved to arcadedb (import arcadedb), now the native build, not the JVM build; for the JVM build use arcadedb-jvm. Last release, a thin shim."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
@@ -26,7 +26,7 @@ classifiers = [
 # The shim installs exactly the package it points to, at the same version.
 dependencies = ["arcadedb==26.11.1"]
 
-# The extras people installed from the old name, forwarded to the new one (the old `vector` extra was numpy; `arcadedb` has no `vector`).
+# The extras people installed from the old name, forwarded to the extras of `arcadedb` (the native wheel defines numpy, arrow, pandas and polars; the old `vector` extra was numpy). build_shims.py checks this block.
 [project.optional-dependencies]
 vector = ["arcadedb[numpy]==26.11.1"]
 arrow = ["arcadedb[arrow]==26.11.1"]
