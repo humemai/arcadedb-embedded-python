@@ -1308,17 +1308,30 @@ class Database:
         try:
             # Converted like every other parameter: a datetime or a date key
             # matched no Java type at all, and a numpy bool was read as a number.
-            keys_array = _string_array(keys)
-            values_array = _object_array([convert_python_to_java(v) for v in values])
-
             calls = _db_calls()
             if calls is not None:
-                # lookup, hasNext(), next(), and getRecord() in ONE crossing
-                java_record = calls.lookupFirst(
-                    self._java_db, type_name, keys_array, values_array
-                )
+                # lookup, hasNext(), next(), and getRecord() in ONE crossing, and no
+                # Java array built on this side: the names and values cross as scalars
+                # or as the varargs of one call
+                if len(keys) == 1 and len(values) == 1:
+                    java_record = calls.lookupFirstKey(
+                        self._java_db,
+                        type_name,
+                        keys[0],
+                        convert_python_to_java(values[0]),
+                    )
+                else:
+                    java_record = calls.lookupFirstKeys(
+                        self._java_db,
+                        type_name,
+                        len(keys),
+                        *keys,
+                        *[convert_python_to_java(v) for v in values],
+                    )
                 return None if java_record is None else Document.wrap(java_record, self)
 
+            keys_array = _string_array(keys)
+            values_array = _object_array([convert_python_to_java(v) for v in values])
             cursor = self._java_db.lookupByKey(type_name, keys_array, values_array)
 
             # Return first result wrapped, or None
