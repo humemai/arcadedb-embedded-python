@@ -14,6 +14,7 @@ from typing import Any, Callable, List, Optional
 import jpype
 
 from ._logging import get_logger
+from ._params import refuse_surplus_positionals
 from .callbacks import (
     EventHandle,
     FunctionRegistration,
@@ -399,9 +400,12 @@ class Database:
 
         Parameters bind positionally (``?``) from the extra arguments, or by
         name (``:name``, ``$name``) from a single dict. A single list or tuple
-        is the positional list itself; ``None`` binds as null.
+        is the positional list itself; ``None`` binds as null. More positional
+        values than the SQL statement has placeholders raise ``TypeError``.
         """
         self._check_not_closed()
+        if args:
+            refuse_surplus_positionals("query", language, command, args)
         clear_pending_interrupt()
         try:
             if args:
@@ -427,6 +431,8 @@ class Database:
         Parameters bind as in :meth:`query`.
         """
         self._check_not_closed()
+        if args:
+            refuse_surplus_positionals("command", language, command, args)
         clear_pending_interrupt()
         try:
             if args:
