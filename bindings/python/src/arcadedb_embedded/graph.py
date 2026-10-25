@@ -108,8 +108,9 @@ class Document:
     def get_raw(self, name: str) -> Any:
         """Get property value without Java-to-Python conversion."""
         self._check_open()
-        if not self._java_document.has(name):
-            return None
+        # One crossing and one scan of the record: get() answers null for a property the record
+        # does not have, as it does for one set to null, and None is what Python reads either way.
+        # (has() then get() was two crossings and two scans; has() still tells the two apart.)
         return self._java_document.get(name)
 
     def set(self, name: str, value: Any) -> "Document":
