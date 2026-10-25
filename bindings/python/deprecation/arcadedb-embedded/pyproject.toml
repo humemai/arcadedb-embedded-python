@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 [project]
 name = "arcadedb-embedded"
 version = "26.11.1"
-description = "Deprecated: arcadedb-embedded has moved to arcadedb (import arcadedb). Last release, a thin shim."
+description = "Deprecated: arcadedb-embedded has moved to arcadedb-jvm (import arcadedb). Last release, a thin shim."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
@@ -24,21 +24,21 @@ classifiers = [
     "Topic :: Database",
 ]
 # The shim installs exactly the package it points to, at the same version.
-dependencies = ["arcadedb==26.11.1"]
+dependencies = ["arcadedb-jvm==26.11.1"]
 
 # The extras people installed from the old name, forwarded to the new one.
 [project.optional-dependencies]
-vector = ["arcadedb[vector]==26.11.1"]
-arrow = ["arcadedb[arrow]==26.11.1"]
-pandas = ["arcadedb[pandas]==26.11.1"]
-polars = ["arcadedb[polars]==26.11.1"]
+vector = ["arcadedb-jvm[vector]==26.11.1"]
+arrow = ["arcadedb-jvm[arrow]==26.11.1"]
+pandas = ["arcadedb-jvm[pandas]==26.11.1"]
+polars = ["arcadedb-jvm[polars]==26.11.1"]
 
 [project.urls]
 Homepage = "https://github.com/ArcadeData/arcadedb-python"
 Documentation = "https://docs.arcadedb.com/arcadedb-python/"
 Source = "https://github.com/ArcadeData/arcadedb-python"
 Issues = "https://github.com/ArcadeData/arcadedb-python/issues"
-"Replaced by" = "https://pypi.org/project/arcadedb/"
+"Replaced by" = "https://pypi.org/project/arcadedb-jvm/"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/arcadedb_embedded"]

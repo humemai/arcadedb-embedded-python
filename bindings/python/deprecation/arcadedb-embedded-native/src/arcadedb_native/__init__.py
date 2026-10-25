@@ -1,15 +1,16 @@
 # Copyright © 2021-present Arcade Data Ltd (info@arcadedata.com)
 # SPDX-License-Identifier: Apache-2.0
-"""Deprecated: ``arcadedb-embedded-native`` has moved to ``arcadedb-native``.
+"""Deprecated: ``arcadedb-embedded-native`` has moved to ``arcadedb``.
 
-This is the last release of ``arcadedb-embedded-native``. It is a thin shim: it warns once at
-import, then hands every name and submodule over to the ``arcadedb`` module.
+This is the last release of ``arcadedb-embedded-native``. It is a thin shim: it warns once at import, then hands every name and submodule over to ``arcadedb``, which provides the module ``arcadedb``.
 """
 
-# ---- per-shim constants: the two shims differ only in this block ----
+# ---- per-shim constants: the shims differ only in this block ----
 _OLD_DIST = "arcadedb-embedded-native"
-_NEW_DIST = "arcadedb-native"
-# ---- shared body: identical in both shims (tests/test_deprecation_shims.py checks it) ----
+_NEW_DIST = "arcadedb"
+_NEW_MODULE = "arcadedb"
+_NOTE = "`arcadedb` is the native build, like this package."
+# ---- shared body: identical in all shim modules (tests/test_deprecation_shims.py checks it) ----
 
 import importlib
 import importlib.abc
@@ -20,22 +21,23 @@ import warnings
 
 _MESSAGE = (
     f"The {_OLD_DIST!r} package has moved and this is its last release. "
-    f"Install {_NEW_DIST!r} instead (`pip install {_NEW_DIST}`) and write "
-    f"`import arcadedb` where you wrote `import {__name__}`. "
+    f"Install {_NEW_DIST!r} instead (`pip install {_NEW_DIST}`). {_NOTE} "
+    f"Write `import {_NEW_MODULE}` where you wrote `import {__name__}`. "
     "New home: https://github.com/ArcadeData/arcadedb-python, "
     "docs: https://docs.arcadedb.com/arcadedb-python/"
 )
 # FutureWarning, not DeprecationWarning: Python shows it to end users by default.
 warnings.warn(_MESSAGE, FutureWarning, stacklevel=2)
 
-import arcadedb as _new  # noqa: E402
-from arcadedb import *  # noqa: E402,F401,F403
-
-_OLD = __name__
-_NEW = _new.__name__
+_new = importlib.import_module(_NEW_MODULE)
 __all__ = list(
     getattr(_new, "__all__", None) or [n for n in dir(_new) if not n.startswith("_")]
 )
+# the same names `from <module> import *` would bind
+globals().update({_n: getattr(_new, _n) for _n in __all__})
+
+_OLD = __name__
+_NEW = _new.__name__
 
 
 class _AliasLoader(importlib.abc.Loader):
