@@ -187,7 +187,7 @@ def test_a_repeating_engine_is_sent_the_vertex_exclusion_text_and_the_others_the
 def test_ladybugdb_counts_the_start_person_as_its_own_friend_of_a_friend_without_the_exclusion(tmp_path):
     """The engine's own behaviour, on four persons: 1-2, 2-3, 3-4, 2-4. The friends of friends of 1 are 3 and 4. LadybugDB's chain
     of relationships walks 1-2 and back along 1-2, so the standard text counts 1 as well (3); the exclusion text answers 2."""
-    lb = pytest.importorskip("ladybug", reason="add --with ladybug==0.21.2 to run the LadybugDB case")
+    lb = pytest.importorskip("ladybug", reason="add --with ladybug==0.22.0 to run the LadybugDB case")
     db = lb.Database(str(tmp_path / "g"))
     cx = lb.Connection(db)
     cx.execute("CREATE NODE TABLE Person(id INT64 PRIMARY KEY, name STRING, age INT64, city STRING)")

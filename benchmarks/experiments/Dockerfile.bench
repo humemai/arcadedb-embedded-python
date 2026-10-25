@@ -29,6 +29,14 @@ RUN set -e; \
     fi; \
     rm -rf /tmp/wheels
 
+# RUNTIME EXTENSIONS BAKED AT BUILD TIME, PINNED BY SHA256 (2026-10-25). build_images.sh passes `name=sha256` pairs for the
+# client image only; the step installs each LadybugDB extension now, refuses a binary whose sha256 differs or that `LOAD`
+# rejects, and leaves the file in ~/.lbdb so the cell's own `INSTALL` is a no-op. Empty (every other image): nothing runs.
+ARG LADYBUG_EXTENSIONS=""
+COPY bake_ladybug_extensions.py /tmp/bake_ladybug_extensions.py
+RUN if [ -n "${LADYBUG_EXTENSIONS}" ]; then python /tmp/bake_ladybug_extensions.py ${LADYBUG_EXTENSIONS}; fi; \
+    rm -f /tmp/bake_ladybug_extensions.py
+
 WORKDIR /work
 # Scripts are mounted at run time (-v) so we can iterate without rebuilding.
 CMD ["python", "--version"]

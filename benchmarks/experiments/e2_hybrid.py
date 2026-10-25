@@ -1467,7 +1467,7 @@ class MemgraphE2:
 
 
 class LadybugE2:
-    """LadybugDB 0.21.2 alone, embedded (DECISIONS #131 item 4, from the
+    """LadybugDB 0.22.0 alone, embedded (DECISIONS #131 item 4, from the
     26.10.1 measurement): a Product node table holding a FLOAT[64] embedding
     under the official `vector` extension's HNSW index, a RELATED rel table,
     the views counter on the node; the hit, the hop, and the update run in one
@@ -1475,10 +1475,12 @@ class LadybugE2:
     2026-10-02: a rollback leaves the counters untouched, a commit applies
     them).
 
-    THE EXTENSION IS DOWNLOADED AT CONNECT, as DuckPGQ's is on the graph
-    table: `INSTALL vector` fetches it from extension.ladybugdb.com for the
-    pinned package, so the cell needs the network the DuckPGQ cells already
-    use.
+    THE EXTENSION IS BAKED INTO THE CLIENT IMAGE AT BUILD TIME, pinned by
+    sha256 (build_images.sh LADYBUG_EXTENSIONS, bake_ladybug_extensions.py;
+    2026-10-25, after the vendor overwrote the v0.21.0 download that every
+    0.21.x client reads, LadybugDB/ladybug#1390). The `INSTALL vector` at
+    connect finds the file and does nothing, so the cell needs no network
+    for it. DuckPGQ's is still downloaded at connect on the graph table.
 
     THE INDEX IS MATCHED TO THE TABLE'S HNSW SETTINGS (m 16, ef_construction
     100, search breadth 100): `mu := 16` for the upper layers, `ml := 32` for
