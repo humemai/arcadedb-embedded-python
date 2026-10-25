@@ -44,6 +44,10 @@ def spy(monkeypatch):
     return Spy(monkeypatch)
 
 
+def _count_sql(name):
+    return f"SELECT count(*) AS n FROM {name}"  # nosec B608 - test-owned type name, no user input
+
+
 def _types(db, *names, extra="", unique=False):
     for name in names:
         db.command("sql", f"CREATE DOCUMENT TYPE {name}")
@@ -60,7 +64,8 @@ def _types(db, *names, extra="", unique=False):
 def _stored(db, name):
     """Every record of a type as (value, python type) pairs per property, ordered by id."""
     out = []
-    for row in db.query("sql", f"SELECT FROM {name} ORDER BY id").to_list():
+    sql = f"SELECT FROM {name} ORDER BY id"  # nosec B608 - test-owned type name, no user input
+    for row in db.query("sql", sql).to_list():
         out.append(
             {k: (v, type(v).__name__) for k, v in row.items() if not k.startswith("@")}
         )
@@ -370,7 +375,7 @@ def test_a_duplicate_key_fails_the_same_way_on_both_paths(temp_db, monkeypatch):
         )
     # the rows of the failed batch are rolled back, the batches before it stay
     assert [
-        temp_db.query("sql", f"SELECT count(*) AS n FROM {name}").to_list()[0]["n"]
+        temp_db.query("sql", _count_sql(name)).to_list()[0]["n"]
         for name in ("Ref", "Col")
     ] == [100, 100]
 
