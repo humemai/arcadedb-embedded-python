@@ -329,6 +329,11 @@ also the default. If you explicitly disable eager preparation, the first call to
 
 - `List[Tuple[record, float]]`: List of `(record, distance)` tuples
     - `record`: Matched ArcadeDB record object (Vertex, Document, or Edge)
+        - On the native wheel the record arrives without the indexed vector property and loads it, once, by RID, the first time the
+          vector is read (`get`, `has_property`) or the whole record is needed (`to_dict`, `get_property_names`, `modify`, `save`).
+          Values, property order and types are those of `lookup_by_rid`. A search whose hits never touch the vector does not ship
+          it, and a hit deleted since the search raises `ArcadeDBError` on that first read. A property of the record called `record`
+          or `distance` loads the same way (the search row's own columns hide them)
     - `distance`: Distance score (float), lower is better for all functions
         - Cosine: cosine distance, range [0, 2] (0 = identical)
         - Euclidean: squared Euclidean distance, range [0, ∞) (0 = identical)

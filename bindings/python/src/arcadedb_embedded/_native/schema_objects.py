@@ -132,6 +132,10 @@ class _IndexShim:
             ).close()
 
 
+def _quote_name(name: str) -> str:
+    return "`" + name.replace("`", "``") + "`"
+
+
 def _rid_text(value) -> str:
     get_rid = getattr(value, "get_rid", None)
     return get_rid() if get_rid is not None else str(value)
@@ -159,6 +163,13 @@ def _query_vector_param(query_vector):
     )
 
 
+# find_nearest: the engine's row of a hit is the record's properties plus the columns record, @rid, @type and distance
+# (ScoredRecordRow). `*` copies it, `!name` drops the indexed vector and the `record` column. A property of the record called
+# distance or record is hidden by those columns in the row, so a hit holds them back too (_LAZY_COLUMNS) and loads them with the vector.
+_LAZY_COLUMNS = ("record", "distance")
+_HITS_FROM = "FROM (SELECT expand(vectorNeighbors(?, ?, ?)))"
+
+
 class NativeVectorIndex(_BaseVectorIndex):
     """``VectorIndex`` over ``vectorNeighbors``: ``find_nearest`` returns ``[(record, distance)]`` like the JPype wrapper."""
 
@@ -175,7 +186,7 @@ class NativeVectorIndex(_BaseVectorIndex):
     ):
         if approximate:
             not_yet("VectorIndex.find_nearest_approximate over PRODUCT quantization")
-        from .records import _wrap_dict
+        from .records import _wrap_partial
 
         vector = _query_vector_param(query_vector)
         # the statement's own options: efSearch, and filter (the RIDs the search may return), as the JPype path passes them
@@ -184,34 +195,39 @@ class NativeVectorIndex(_BaseVectorIndex):
             options["efSearch"] = int(ef_search)
         if allowed_rids:
             options["filter"] = [_rid_text(r) for r in allowed_rids]
+        # The hits come back without the indexed vector: expand(vectorNeighbors(..)) alone sent every hit's vector twice, in the
+        # nested `record` column and again flattened into the row. _Mixin._fill loads it on first use.
+        prop = self._shim._prop
+        dropped = ", ".join(
+            "!" + _quote_name(name) for name in dict.fromkeys((prop, "record"))
+        )
+        sql = f"SELECT *, {dropped} {_HITS_FROM}"  # nosec B608 - dropped is backtick-quoted schema names, the values go through ? parameters
         if options:
+            sql = sql.replace("vectorNeighbors(?, ?, ?)", "vectorNeighbors(?, ?, ?, ?)")
             rows = self._database.query(
-                "sql",
-                "SELECT expand(vectorNeighbors(?, ?, ?, ?))",
-                self._shim._name,
-                vector,
-                int(k),
-                options,
+                "sql", sql, self._shim._name, vector, int(k), options
             )
         else:
-            rows = self._database.query(
-                "sql",
-                "SELECT expand(vectorNeighbors(?, ?, ?))",
-                self._shim._name,
-                vector,
-                int(k),
-            )
+            rows = self._database.query("sql", sql, self._shim._name, vector, int(k))
+        omitted = (prop, *_LAZY_COLUMNS)
         out = []
         for row in rows:
-            nested = row.get("record")
-            record = (
-                None
-                if nested is None
-                else _wrap_dict(
-                    self._database, nested, self._database._kind_of(nested.get("@type"))
+            props = row.to_dict()
+            rid = props.pop("@rid", None)
+            type_name = props.pop("@type", None)
+            distance = props.pop("distance")
+            if rid is None:
+                record = None
+            else:
+                record = _wrap_partial(
+                    self._database,
+                    _rid_text(rid),
+                    type_name,
+                    self._database._kind_of(type_name),
+                    props,
+                    omitted,
                 )
-            )
-            out.append((record, float(row.get("distance"))))
+            out.append((record, float(distance)))
         return self._sort_results(out)[:k]
 
     def find_nearest_approximate(self, query_vector, k=10, allowed_rids=None):
