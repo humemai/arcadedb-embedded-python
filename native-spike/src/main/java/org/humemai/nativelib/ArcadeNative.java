@@ -29,6 +29,7 @@ import org.graalvm.nativeimage.c.function.CEntryPoint;
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.nativeimage.c.type.CFloatPointer;
 import org.graalvm.nativeimage.c.type.CLongPointer;
+import org.graalvm.word.Pointer;
 import org.graalvm.word.WordFactory;
 import org.graalvm.nativeimage.c.type.CTypeConversion;
 
@@ -510,13 +511,33 @@ public final class ArcadeNative {
     return p;
   }
 
-  /** Columnar insert (see BulkOps): header JSON, one buffer holding the columns. Returns {"ok":true,"n":rows}. */
+  /** Columnar insert (see BulkOps): header JSON, one buffer holding the columns back to back. Returns {"ok":true,"n":rows}. */
   @CEntryPoint(name = "arcadedb_n_insert_cols")
   public static CCharPointer insertCols(final IsolateThread thread, final long h, final CCharPointer type, final CCharPointer header,
       final CCharPointer buf, final long bufBytes) {
     try {
-      final java.nio.ByteBuffer bb = CTypeConversion.asByteBuffer(buf, (int) bufBytes);
-      return out("{\"ok\":true,\"n\":" + BulkOps.insertColumns(db(h), str(type), str(header), bb) + "}");
+      return out("{\"ok\":true,\"n\":" + BulkOps.insertColumns(db(h), str(type), str(header), (Pointer) buf, bufBytes) + "}");
+    } catch (final Throwable t) {
+      return err(t);
+    }
+  }
+
+  /**
+   * Columnar insert by pointer: no copy of the columns into one buffer. spec points at 6 longs per column (data address and bytes, aux
+   * address and bytes, null-bitmap address and bytes, see BulkOps.insertColumns) and nspec is their count. Kinds q d b f as
+   * arcadedb_n_insert_cols, plus i (int32), e (float32) and s (Arrow UTF-8 string: int32 offsets and the bytes they index), and null bitmaps.
+   * The caller keeps every buffer alive and unchanged until the call returns. Returns {"ok":true,"n":rows}.
+   */
+  @CEntryPoint(name = "arcadedb_n_insert_colp")
+  public static CCharPointer insertColp(final IsolateThread thread, final long h, final CCharPointer type, final CCharPointer header,
+      final CCharPointer spec, final int nspec) {
+    try {
+      if (nspec < 0 || nspec % BulkOps.SLOTS != 0)
+        throw new IllegalArgumentException("address table of " + nspec + " entries is not a multiple of " + BulkOps.SLOTS);
+      final long[] table = new long[nspec];
+      for (int i = 0; i < nspec; i++)
+        table[i] = ((Pointer) spec).readLong(WordFactory.signed(8L * i));
+      return out("{\"ok\":true,\"n\":" + BulkOps.insertColumns(db(h), str(type), str(header), table) + "}");
     } catch (final Throwable t) {
       return err(t);
     }
