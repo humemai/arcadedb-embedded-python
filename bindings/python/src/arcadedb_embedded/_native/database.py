@@ -545,13 +545,21 @@ class NativeDatabase:
         return _call(prefix, "arcadedb_n_tx", self._h, op)
 
     def begin(self):
-        self._tx(0, "Failed to begin transaction")
+        self._begin_state()
+
+    def _begin_state(self) -> dict:
+        """begin(), and the state right after it: the reply of ``arcadedb_n_tx`` carries ``active``, ``depth`` and ``commits``."""
+        return self._tx(0, "Failed to begin transaction")
 
     def commit(self):
         self._tx(1, "Failed to commit transaction")
 
     def rollback(self):
-        self._tx(2, "Failed to rollback transaction")
+        self._rollback_state()
+
+    def _rollback_state(self) -> dict:
+        """rollback(), and the state right after it (the reply carries it, as begin's does): the unwind reads it instead of asking."""
+        return self._tx(2, "Failed to rollback transaction")
 
     def transaction(self) -> TransactionContext:
         return TransactionContext(self)
@@ -567,40 +575,60 @@ class NativeDatabase:
         """The commit count of the current transaction (the witness that a BATCH boundary published part of its work)."""
         return self._tx(3, "Failed to read the transaction state")["commits"]
 
-    def _end_transactions_opened_since(self, mark):
+    def _unwind_opened_since(self, mark):
+        """Roll back every level opened since ``mark``, and no other; returns ``(state, first_error)``.
+
+        ``state`` is the transaction state after the last crossing (every rollback reply carries it, so no read sits between two
+        steps), or None when that crossing failed. A level the caller held at the mark is theirs, as in the JPype ``Database``.
+        """
         was_active, depth_before = mark
         first_error = None
         state = self._tx(3, "Failed to read the transaction state")
         for _ in range(state["depth"] - depth_before):
-            if not self.is_transaction_active():
+            if state is None:
+                state = self._tx(3, "Failed to check transaction status")
+            if not state["active"]:
                 break
             try:
-                self.rollback()
+                state = self._rollback_state()
             except Exception as e:
+                state = None
                 first_error = first_error or e
-        if not was_active and self.is_transaction_active():
-            try:
-                self.rollback()
-            except Exception as e:
-                first_error = first_error or e
+        if not was_active:
+            if state is None:
+                state = self._tx(3, "Failed to check transaction status")
+            if state["active"]:
+                try:
+                    state = self._rollback_state()
+                except Exception as e:
+                    state = None
+                    first_error = first_error or e
+        return state, first_error
+
+    def _end_transactions_opened_since(self, mark):
+        _, first_error = self._unwind_opened_since(mark)
         if first_error is not None:
             raise first_error
 
     def run_in_transaction(self, fn, retries: int = 12, backoff_s: float = 0.005):
-        """``fn`` inside a transaction, retried on NeedRetry conflicts (see the JPype ``Database.run_in_transaction``)."""
+        """``fn`` inside a transaction, retried on NeedRetry conflicts (see the JPype ``Database.run_in_transaction``).
+
+        Three crossings on the happy path: the mark before begin (what this call owns), begin (its reply is the commit-count
+        witness) and commit. The mark must stay before begin: a mark read after it would count the level begin pushed as the caller's.
+        """
         duplicated_key_retried = False
         for attempt in range(retries + 1):
             mark = self._transaction_stack_mark()
             commits_at_start = None
             try:
-                self.begin()
-                commits_at_start = self._transaction_commit_mark()
+                commits_at_start = self._begin_state()["commits"]
                 result = fn()
                 self.commit()
                 return result
             except BaseException as e:
+                state = None
                 try:
-                    self._end_transactions_opened_since(mark)
+                    state, _ = self._unwind_opened_since(mark)
                 except Exception:  # nosec B110
                     pass
                 if attempt >= retries or not isinstance(e, Exception):
@@ -618,7 +646,11 @@ class NativeDatabase:
                     # durable, and a replay would apply it twice. Only the READ of the witness may fail quietly (no witness: retry,
                     # as before); the raise sits outside that try, or its own except would swallow it.
                     try:
-                        commits_now = self._transaction_commit_mark()
+                        commits_now = (
+                            state["commits"]
+                            if state is not None
+                            else self._transaction_commit_mark()
+                        )
                     except ArcadeDBError:
                         commits_now = commits_at_start
                     if commits_now != commits_at_start:
