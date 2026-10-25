@@ -92,8 +92,24 @@ def to_java_int_array(vector):
         vector: Array-like object containing integer values
 
     Returns:
-        Java int array
+        Java int array (a NumPy int32 array on the native backend, which has no JVM to build one in: like
+        :func:`to_java_float_array`, it binds as a SQL parameter in place of the Java array)
     """
+    if _native_enabled():
+        values = (
+            vector if isinstance(vector, _np.ndarray) else _np.asarray(list(vector))
+        )
+        if values.size == 0:
+            return values.astype(_np.int32)
+        if values.dtype.kind not in "iu":
+            raise TypeError("to_java_int_array takes integer values")
+        bounds = _np.iinfo(_np.int32)
+        if values.min() < bounds.min or values.max() > bounds.max:
+            raise OverflowError(
+                "Cannot convert value to Java int: an element does not fit in 32 bits"
+            )
+        return values.astype(_np.int32)
+
     if _np is not None and isinstance(vector, _np.ndarray):
         if vector.dtype.kind in "iu" and vector.size:
             bounds = _np.iinfo(_np.int32)
@@ -125,8 +141,29 @@ def to_java_byte_array(vector):
         vector: Array-like object containing byte values
 
     Returns:
-        Java byte array compatible with INT8-encoded ArcadeDB vector indexes
+        Java byte array compatible with INT8-encoded ArcadeDB vector indexes (a NumPy int8 array on the native
+        backend, which has no JVM to build one in)
     """
+    if _native_enabled():
+        if isinstance(vector, (bytes, bytearray, memoryview)):
+            return _np.frombuffer(bytes(vector), dtype=_np.int8).copy()
+        if (
+            isinstance(vector, _np.ndarray)
+            and vector.dtype.kind in "iu"
+            and vector.dtype.itemsize == 1
+        ):
+            return _np.ascontiguousarray(vector).view(_np.int8).copy()
+        native_bytes = []
+        for value in vector.tolist() if isinstance(vector, _np.ndarray) else vector:
+            byte_value = int(value)
+            if byte_value < -128 or byte_value > 255:
+                raise ArcadeDBError(
+                    "Byte vectors must contain values in the signed byte range "
+                    "[-128, 127] or unsigned byte range [0, 255]"
+                )
+            native_bytes.append(byte_value - 256 if byte_value > 127 else byte_value)
+        return _np.asarray(native_bytes, dtype=_np.int8)
+
     try:
         import numpy as np
 
