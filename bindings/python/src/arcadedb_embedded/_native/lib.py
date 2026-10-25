@@ -28,6 +28,8 @@ FAST_ENCODE = os.environ.get("ARCADEDB_NATIVE_FASTENC", "1") != "0"
 INSERT_ROWS = os.environ.get("ARCADEDB_NATIVE_INSERT_ROWS", "1") != "0"
 # ARCADEDB_NATIVE_EXEC_MANY: the rows of an insert_many chunk that JSON text cannot carry unchanged go in one crossing (arcadedb_n_exec_many), not one call each
 EXEC_MANY = os.environ.get("ARCADEDB_NATIVE_EXEC_MANY", "1") != "0"
+# ARCADEDB_NATIVE_NEXT_BIN: the batches after the first read through arcadedb_n_next_bin, float arrays of 8 or more elements in a float32 tail (as flag 4 of arcadedb_n_exec does for the first batch), not as number text
+NEXT_BIN = os.environ.get("ARCADEDB_NATIVE_NEXT_BIN", "1") != "0"
 
 _lock = threading.Lock()
 _lib = None
@@ -159,6 +161,7 @@ def _load():
             "arcadedb_n_exec_bin": [P, L, I, S, S, S, I, S, L],
             "arcadedb_n_insert_cols": [P, L, S, S, S, L],
             "arcadedb_n_next": [P, L, I],
+            "arcadedb_n_next_bin": [P, L, I],
             "arcadedb_n_rs_close": [P, L],
             "arcadedb_n_cmd": [P, L, I, S, S, S, S, L, I],
             "arcadedb_n_last_error": [P],
@@ -195,7 +198,7 @@ def _load():
                 )
                 else ctypes.c_longlong if name == "arcadedb_n_cmd" else ctypes.c_void_p
             )
-        global BINARY_PARAMS, CMD_PATH, CLOSE_BATCH, INSERT_ROWS, EXEC_MANY
+        global BINARY_PARAMS, CMD_PATH, CLOSE_BATCH, INSERT_ROWS, EXEC_MANY, NEXT_BIN
         if not hasattr(
             lib, "arcadedb_n_exec_bin"
         ):  # a library built before the binary path
@@ -208,6 +211,10 @@ def _load():
             INSERT_ROWS = False
         if not hasattr(lib, "arcadedb_n_exec_many"):
             EXEC_MANY = False
+        if not hasattr(
+            lib, "arcadedb_n_next_bin"
+        ):  # a library built before the binary tail of later batches
+            NEXT_BIN = False
         _isolate = isolate
         _creator = threading.get_ident()
         _local.thread = _Thread(thread, owned=False)

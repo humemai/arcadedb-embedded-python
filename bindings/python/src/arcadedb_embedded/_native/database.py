@@ -199,7 +199,12 @@ class NativeResultSet:
         if not self._more:
             return False
         try:
-            reply = loads(lib.call("arcadedb_n_next", self._rs, _NEXT_BATCH))
+            if lib.NEXT_BIN and _BINARY_REPLY:
+                reply = loads(
+                    *lib.call_bin("arcadedb_n_next_bin", self._rs, _NEXT_BATCH)
+                )
+            else:
+                reply = loads(lib.call("arcadedb_n_next", self._rs, _NEXT_BATCH))
         except ArcadeDBError:
             raise
         if not reply.get("ok"):

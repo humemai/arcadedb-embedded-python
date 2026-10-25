@@ -290,6 +290,27 @@ public final class ArcadeNative {
     }
   }
 
+  /**
+   * arcadedb_n_next with the float32 tail of arcadedb_n_exec flag 4: float[] values of 8 or more elements of the batch come back in a binary tail
+   * ({"\u0001":["B",offset,count]} in the rows, ,"bin":total at the end of the JSON, the floats after its NUL), not as number text. Offsets are
+   * per reply. A reply without such a value is the same text arcadedb_n_next returns.
+   */
+  @CEntryPoint(name = "arcadedb_n_next_bin")
+  public static CCharPointer nextBin(final IsolateThread thread, final long rsId, final int max) {
+    ResultSet rs = null;
+    try {
+      rs = RESULT_SETS.get(rsId);
+      if (rs == null)
+        throw new IllegalArgumentException("unknown result set " + rsId);
+      final ResultSet cursor = rs;
+      return withFloatTail(() -> batchOf(rsId, cursor, max));
+    } catch (final Throwable t) {
+      RESULT_SETS.remove(rsId);
+      closeQuietly(rs);
+      return err(t);
+    }
+  }
+
   @CEntryPoint(name = "arcadedb_n_rs_close")
   public static CCharPointer rsClose(final IsolateThread thread, final long rsId) {
     closeQuietly(RESULT_SETS.remove(rsId));
@@ -487,11 +508,19 @@ public final class ArcadeNative {
     }
     if ((flags & 4) == 0)
       return out(batch(rs, max));
+    return withFloatTail(() -> batch(rs, max));
+  }
+
+  /**
+   * Runs encode with the float32 sink set (float[] values of 8 or more elements go to the tail of the reply as {"\u0001":["B",off,n]}) and returns
+   * the reply: out(text) when no vector was met, else the text with ,"bin":total, a NUL, padding to 4 bytes and the floats.
+   */
+  private static CCharPointer withFloatTail(final java.util.function.Supplier<String> encode) {
     final NativeCodec.FloatSink sink = new NativeCodec.FloatSink();
     NativeCodec.SINK.set(sink);
     final String reply;
     try {
-      reply = batch(rs, max);
+      reply = encode.get();
     } finally {
       NativeCodec.SINK.remove();
     }
