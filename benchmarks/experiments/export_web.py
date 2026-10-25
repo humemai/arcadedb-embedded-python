@@ -1402,9 +1402,6 @@ def _agg(rows, field, across_scales=False):
     }
 
 
-_FROZEN_ROWS = []   # set by main() once the CSV is read; the switch reads it
-
-
 # THE COLUMNS EACH TABLE PRINTS (DECISIONS #89), one list per table: one warm median per query, a
 # ninety-ninth percentile for that table's headline query only, one cold column for the first query after the
 # database opens (where the lane has one -- a transactional cell declares in `cold_warm_na` that it does not),
