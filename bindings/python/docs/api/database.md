@@ -820,7 +820,9 @@ Lookup a record by its RID.
 
 **Parameters:**
 
-- `rid` (str): Record ID string (e.g. "#10:5")
+- `rid` (str): Record ID string (e.g. "#10:5"). On the native wheel the id goes to
+  the engine as a parameter, so every lookup shares one statement text
+  ([Parameters](../guide/core/queries.md#parameters))
 
 **Returns:**
 

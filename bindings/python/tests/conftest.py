@@ -29,6 +29,8 @@ if os.environ.get("ARCADEDB_BACKEND", "jpype").lower() != "native":
     collect_ignore.append("test_native_udf.py")
     # the native library's start-up output (#477) can only be checked with the native library loaded
     collect_ignore.append("test_native_startup_runtime.py")
+    # counts the statement texts the native backend hands to the engine (the JPype backend has no such layer)
+    collect_ignore.append("test_native_statement_texts.py")
 if not os.path.isdir(os.path.join(os.path.dirname(os.path.dirname(__file__)), "docs")):
     # the upstream pull request branch has no docs/ directory
     collect_ignore.append("test_docs_examples.py")

@@ -32,7 +32,10 @@ class _Mixin:
     """What the three native wrappers share (state in ``_db``, ``_type``, ``_rid``, ``_props``, ``_mutable``)."""
 
     _CREATE = "INSERT INTO {t} CONTENT :row"
-    _DELETE = "DELETE FROM {rid}"
+    # the record id goes over as a parameter (a RID, passed back it is a link), never in the text: the engine caches a parsed statement by its
+    # text and keeps a record id in a FROM target as part of it, so a pasted id would make one cache entry per record
+    _UPDATE = "UPDATE :rid MERGE :row"
+    _DELETE = "DELETE FROM :rid"
 
     def __init__(self, database, type_name, rid=None, props=None, mutable=False):
         self._java_document = _java_object()
@@ -105,7 +108,7 @@ class _Mixin:
             self._adopt(row)
         else:
             db.command(
-                "sql", f"UPDATE {self._rid} MERGE :row", {"row": self._props}
+                "sql", self._UPDATE, {"rid": RID(self._rid), "row": self._props}
             ).close()
         return self
 
@@ -120,7 +123,7 @@ class _Mixin:
     def delete(self):
         if self._rid is None:
             raise ArcadeDBError("Cannot delete a record that was never saved")
-        self._db.command("sql", self._DELETE.format(rid=self._rid)).close()
+        self._db.command("sql", self._DELETE, {"rid": RID(self._rid)}).close()
 
     def modify(self):
         self._check_open()
@@ -136,7 +139,6 @@ class Document(_Mixin, _BaseDocument):
 
 class Vertex(_Mixin, _BaseVertex):
     _CREATE = "CREATE VERTEX {t} CONTENT :row"
-    _DELETE = "DELETE FROM {rid}"
 
     def new_edge(self, label: str, target: "Vertex", **kwargs) -> "Edge":
         self._check_open()
@@ -144,12 +146,12 @@ class Vertex(_Mixin, _BaseVertex):
             raise ArcadeDBError(
                 "Both vertices of an edge must be saved before new_edge()"
             )
-        sql = f"CREATE EDGE {_q(label)} FROM {self._rid} TO {target._rid}"
+        sql = f"CREATE EDGE {_q(label)} FROM :src TO :dst"
+        params = {"src": RID(self._rid), "dst": RID(target._rid)}
         if kwargs:
             sql += " CONTENT :row"
-        row = self._db.command(
-            "sql", sql, *(({"row": kwargs},) if kwargs else ())
-        ).first()
+            params["row"] = kwargs
+        row = self._db.command("sql", sql, params).first()
         edge = Edge(self._db, label, mutable=False)
         edge._adopt(row)
         return edge
@@ -157,8 +159,8 @@ class Vertex(_Mixin, _BaseVertex):
     def _edges(self, fn: str, labels) -> List["Edge"]:
         self._check_open()
         args = ", ".join("'" + label.replace("'", "\\'") + "'" for label in labels)
-        edges_sql = f"SELECT expand({fn}({args})) FROM {self._rid}"  # nosec B608 - fn is a fixed function name, labels are escaped literals, _rid is the record's own id
-        rows = self._db.query("sql", edges_sql)
+        edges_sql = f"SELECT expand({fn}({args})) FROM :rid"  # nosec B608 - fn is a fixed function name, labels are escaped literals, the record id is a parameter
+        rows = self._db.query("sql", edges_sql, {"rid": RID(self._rid)})
         return [_wrap(self._db, row) for row in rows]
 
     def get_out_edges(self, *labels: str) -> List["Edge"]:
@@ -175,8 +177,8 @@ class Edge(_Mixin, _BaseEdge):
 
     def _end(self, fn: str) -> "Vertex":
         self._check_open()
-        end_sql = f"SELECT expand({fn}()) FROM {self._rid}"  # nosec B608 - fn is a fixed function name, _rid is the record's own id
-        row = self._db.query("sql", end_sql).first()
+        end_sql = f"SELECT expand({fn}()) FROM :rid"  # nosec B608 - fn is a fixed function name, the record id is a parameter
+        row = self._db.query("sql", end_sql, {"rid": RID(self._rid)}).first()
         return _wrap(self._db, row)
 
     def get_in(self) -> Vertex:

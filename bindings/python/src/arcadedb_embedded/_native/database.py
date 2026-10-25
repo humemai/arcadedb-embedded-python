@@ -13,6 +13,7 @@ from ..exceptions import ArcadeDBError
 from ..transactions import TransactionContext
 from ..type_conversion import json_bulk_dumps
 from . import lib, not_yet
+from .codec import RID
 from .codec import _default as codec_default
 from .codec import _prep as _prep_row
 from .codec import encode_params, json_native, loads
@@ -639,10 +640,13 @@ class NativeDatabase:
     def lookup_by_rid(self, rid: str):
         """The record at ``rid`` as a Document, Vertex or Edge wrapper."""
         self._check_not_closed()
-        if not _RID_RE.fullmatch(str(rid)):
+        text = str(rid)
+        if not _RID_RE.fullmatch(text):
             raise ArcadeDBError(f"Failed to lookup RID '{rid}': not a record id")
-        rid_sql = f"SELECT FROM {rid}"  # nosec B608 - rid matched _RID_RE above
-        row = self.query("sql", rid_sql).first()
+        # one statement text for every record id: the id is a parameter (see records.py, _UPDATE), not part of the text
+        row = self.query(
+            "sql", "SELECT FROM ?", RID(text if text[0] == "#" else "#" + text)
+        ).first()
         if row is None:
             raise ArcadeDBError(f"Failed to lookup RID '{rid}': record not found")
         return row.get_element()

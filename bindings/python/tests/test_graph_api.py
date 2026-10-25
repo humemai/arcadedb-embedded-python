@@ -5,6 +5,8 @@ Tests Document, Vertex, and Edge wrapper classes and their methods.
 """
 
 import arcadedb_embedded as arcadedb
+import pytest
+from arcadedb_embedded import ArcadeDBError
 from arcadedb_embedded.graph import Document, Edge, Vertex
 
 
@@ -538,3 +540,98 @@ def test_delete_via_wrapper_on_fresh_lookup(temp_db_path):
         # Verify deleted
         items_after = list(db.query("sql", "SELECT FROM `Item`"))
         assert len(items_after) == 0, "Item should be deleted via .delete()"
+
+
+def _chain(db, count):
+    """``count`` Person vertices linked a -> b -> c ... by Knows edges (``w`` = the position of the edge)."""
+    db.command("sql", "CREATE VERTEX TYPE Person")
+    db.command("sql", "CREATE EDGE TYPE Knows")
+    db.command("sql", "CREATE EDGE TYPE Likes")
+    with db.transaction():
+        people = [db.new_vertex("Person").set("n", i).save() for i in range(count)]
+        for i in range(count - 1):
+            people[i].new_edge("Knows", people[i + 1], w=i)
+        people[0].new_edge("Likes", people[-1])
+    return [p.get_rid() for p in people]
+
+
+def test_traversal_steps_over_many_records(temp_db_path):
+    """Edges and ends of every vertex of a chain: the RID of the record each step starts from must not matter."""
+    with arcadedb.create_database(temp_db_path) as db:
+        rids = _chain(db, 12)
+        for i, rid in enumerate(rids):
+            vertex = db.lookup_by_rid(rid)
+            assert isinstance(vertex, Vertex)
+            assert vertex.get("n") == i
+            out_edges = vertex.get_out_edges("Knows")
+            in_edges = vertex.get_in_edges("Knows")
+            assert len(out_edges) == (1 if i < 11 else 0)
+            assert len(in_edges) == (1 if i > 0 else 0)
+            for edge in out_edges:
+                assert isinstance(edge, Edge)
+                assert edge.get_out().get_rid() == rid
+                assert edge.get_in().get_rid() == rids[i + 1]
+                assert edge.get("w") == i
+            for edge in in_edges:
+                assert edge.get_in().get_rid() == rid
+                assert edge.get_out().get_rid() == rids[i - 1]
+            # every edge type, in both directions
+            expected_both = (1 if i < 11 else 0) + (1 if i > 0 else 0)
+            expected_both += (
+                1 if i in (0, 11) else 0
+            )  # the Likes edge joins the first and the last
+            assert len(vertex.get_both_edges()) == expected_both
+        assert len(db.lookup_by_rid(rids[0]).get_out_edges()) == 2
+        assert len(db.lookup_by_rid(rids[0]).get_out_edges("Knows", "Likes")) == 2
+        assert len(db.lookup_by_rid(rids[0]).get_out_edges("Likes")) == 1
+
+
+def test_save_and_delete_by_record_id_for_many_records(temp_db_path):
+    """modify().save() writes to the record the wrapper holds; delete() removes only that record."""
+    with arcadedb.create_database(temp_db_path) as db:
+        rids = _chain(db, 6)
+        with db.transaction():
+            for i, rid in enumerate(rids):
+                db.lookup_by_rid(rid).modify().set("n", 100 + i).save()
+        assert [db.lookup_by_rid(rid).get("n") for rid in rids] == [
+            100 + i for i in range(6)
+        ]
+        with db.transaction():
+            db.lookup_by_rid(rids[2]).delete()
+            db.lookup_by_rid(rids[4]).delete()
+        left = {r.get("n") for r in db.query("sql", "SELECT n FROM Person")}
+        assert left == {100, 101, 103, 105}
+
+
+def test_new_edge_without_and_with_properties_between_saved_vertices(temp_db_path):
+    with arcadedb.create_database(temp_db_path) as db:
+        rids = _chain(db, 3)
+        with db.transaction():
+            a, b = db.lookup_by_rid(rids[0]), db.lookup_by_rid(rids[1])
+            plain = a.new_edge("Likes", b)
+            rich = b.new_edge("Likes", a, since="2020", score=0.5)
+        assert (
+            plain.get_out().get_rid() == rids[0] and plain.get_in().get_rid() == rids[1]
+        )
+        assert (
+            rich.get_out().get_rid() == rids[1] and rich.get_in().get_rid() == rids[0]
+        )
+        assert rich.get("since") == "2020" and rich.get("score") == 0.5
+        assert plain.get("since") is None
+
+
+def test_lookup_by_rid_refusals_name_the_record_id(temp_db_path):
+    """A missing record, a missing bucket and a text that is no record id each raise ArcadeDBError naming the id."""
+    with arcadedb.create_database(temp_db_path) as db:
+        rids = _chain(db, 2)
+        for missing in ("#1:99", "#77:0"):
+            with pytest.raises(
+                ArcadeDBError, match=f"Failed to lookup RID '{missing}'"
+            ):
+                db.lookup_by_rid(missing)
+        for bad in ("bad", "", "#1:0 ", "#1:0; DROP TYPE Person"):
+            with pytest.raises(ArcadeDBError, match="Failed to lookup RID"):
+                db.lookup_by_rid(bad)
+        # the refused texts did nothing to the data
+        assert db.query("sql", "SELECT count(*) AS c FROM Person").first().get("c") == 2
+        assert db.lookup_by_rid(rids[0]).get_rid() == rids[0]

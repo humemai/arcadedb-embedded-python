@@ -150,6 +150,14 @@ values, raising `arcadedb.sqlStatementCache` and
 `arcadedb.opencypher.statementCache` keeps more texts parsed. Identifiers
 (type, property, bucket names) cannot be bound and belong in the text.
 
+A record id is a value too. The engine does not turn a record id written in a
+`FROM` target (`SELECT FROM #10:5`) into a parameter, so each record would be a
+new cached text. To read a record by its id, call `db.lookup_by_rid(rid)`: on
+the native wheel it sends the id as a parameter, so every lookup shares one
+statement text. The record wrappers do the same for their own statements
+(`get_out_edges()`, `get_in_edges()`, `get_both_edges()`, `new_edge()`,
+`Edge.get_in()`, `Edge.get_out()`, `save()` and `delete()`).
+
 ```python
 # Named parameters (recommended)
 result = db.query(
