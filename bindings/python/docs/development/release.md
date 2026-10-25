@@ -15,7 +15,7 @@ This fork does not set its own version. The wheel version is derived from the ro
 `./sync-upstream.sh` run.
 
 !!! warning "The upstream sync is retired (2026-10-25)"
-    ArcadeData/arcadedb deleted `bindings/python` in #10615 (2026-10-23), and by the user's decision of 2026-10-25 ("Stop syncing") `sync-upstream.sh` no longer runs ([Syncing Upstream](sync-upstream.md)). `pom.xml` therefore no longer advances on its own, and steps 1, 7 and 8 below, which were written around the sync, are retired. Do not cut a release by this checklist until the version source has been decided: ask first (see the root `AGENTS.md`).
+    ArcadeData/arcadedb deleted `bindings/python` in #10615 (2026-10-23), and by the user's decision of 2026-10-25 ("Stop syncing") `sync-upstream.sh` no longer runs ([Syncing Upstream](sync-upstream.md)). `pom.xml` therefore no longer advances on its own, and steps 1, 7 and 8 below, which were written around the sync, are retired. It does not need to advance: `pom.xml` stays at `26.11.1-SNAPSHOT`, and the only releases this repository still cuts match that base, the `26.11.1.devN` native previews and the final `26.11.1` warning shims for the old package names. From 26.11.1 on, `arcadedb` and `arcadedb-native` are released from ArcadeData/arcadedb-python, and this repository is archived. Any other release from here: ask first (see the root `AGENTS.md`).
 
 - Between releases, upstream's `main` reads `X.Y.Z-SNAPSHOT`, and the wheel builds as `X.Y.Z.dev0`.
 - Upstream cuts a release with a commit titled "Set release version to X.Y.Z", which
