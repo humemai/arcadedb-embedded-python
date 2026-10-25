@@ -824,7 +824,8 @@ Lookup a record by its RID.
 
 **Parameters:**
 
-- `rid` (str): Record ID string (e.g. "#10:5")
+- `rid` (str | RID): Record ID string (e.g. "#10:5"), or the RID object a row holds (see
+  [Record ids in rows](results.md#record-ids-in-rows))
 
 **Returns:**
 
