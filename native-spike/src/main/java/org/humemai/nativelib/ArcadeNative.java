@@ -218,14 +218,89 @@ public final class ArcadeNative {
   @CEntryPoint(name = "arcadedb_n_exec")
   public static CCharPointer exec(final IsolateThread thread, final long h, final int flags, final CCharPointer language,
       final CCharPointer text, final CCharPointer params, final int max) {
-    return execImpl(h, flags, language, text, params, max, WordFactory.nullPointer(), 0);
+    return execImpl(h, flags, language, text, params, max, WordFactory.nullPointer(), 0, null);
+  }
+
+  /**
+   * Phase 9: arcadedb_n_exec_bin with a columnar reply. outBuf/outCap: a buffer of the caller's (one per Python thread, reused) the reply is
+   * written into when it fits; otherwise a malloc'd block is returned and the caller releases it with arcadedb_free (the returned pointer
+   * says which). minRows: batches of fewer rows answer as JSON text. The reply is a columnar frame (see ColResult) or the JSON batch of
+   * arcadedb_n_exec (with the float32 tail when flag 4 is set); an error is the usual JSON error object, malloc'd.
+   */
+  @CEntryPoint(name = "arcadedb_n_exec_col")
+  public static CCharPointer execCol(final IsolateThread thread, final long h, final int flags, final CCharPointer language,
+      final CCharPointer text, final CCharPointer params, final int max, final CFloatPointer buf, final long bufFloats,
+      final CCharPointer outBuf, final long outCap, final long minRows) {
+    return execImpl(h, flags, language, text, params, max, buf, bufFloats, new ColOut(outBuf.rawValue(), outCap, (int) Math.min(minRows, Integer.MAX_VALUE)));
+  }
+
+  /** arcadedb_n_next with a columnar reply (see arcadedb_n_exec_col for outBuf, outCap and minRows). */
+  @CEntryPoint(name = "arcadedb_n_next_col")
+  public static CCharPointer nextCol(final IsolateThread thread, final long rsId, final int max, final CCharPointer outBuf, final long outCap,
+      final long minRows) {
+    ResultSet rs = null;
+    try {
+      rs = RESULT_SETS.get(rsId);
+      if (rs == null)
+        throw new IllegalArgumentException("unknown result set " + rsId);
+      return colBatch(rsId, rs, max, 4, new ColOut(outBuf.rawValue(), outCap, (int) Math.min(minRows, Integer.MAX_VALUE)));
+    } catch (final Throwable t) {
+      RESULT_SETS.remove(rsId);
+      closeQuietly(rs);
+      return err(t);
+    }
+  }
+
+  /** Where a columnar reply goes: the caller's buffer (address, capacity) and the smallest batch answered as columns. Addresses are longs: a Word cannot be a field of a heap object here. */
+  private static final class ColOut {
+    final long buf, cap;
+    final int minRows;
+
+    ColOut(final long buf, final long cap, final int minRows) {
+      this.buf = buf;
+      this.cap = cap;
+      this.minRows = minRows;
+    }
+  }
+
+  private static CCharPointer replyCol(final ResultSet rs, final int max, final int flags, final ColOut col) {
+    if ((flags & 2) != 0 && rs != null)
+      return replyOf(rs, max, flags); // a command whose rows are read late: the usual lazy cursor and its small JSON reply
+    if (rs == null)
+      return deliver(ColResult.jsonBytes("{\"ok\":true,\"rs\":0,\"rows\":[],\"meta\":[],\"drained\":true}", null), col);
+    final long id = IDS.getAndIncrement();
+    RESULT_SETS.put(id, rs);
+    return colBatch(id, rs, max, flags, col);
+  }
+
+  private static CCharPointer colBatch(final long id, final ResultSet rs, final int max, final int flags, final ColOut col) {
+    final ColResult.Reply reply = ColResult.read(id, rs, max, col.minRows, (flags & 4) != 0);
+    if (reply.drained) {
+      RESULT_SETS.remove(id);
+      closeQuietly(rs);
+    }
+    return deliver(reply, col);
+  }
+
+  private static CCharPointer deliver(final byte[] jsonText, final ColOut col) {
+    final ColResult.Reply reply = new ColResult.Reply();
+    reply.json = jsonText;
+    return deliver(reply, col);
+  }
+
+  /** Writes the reply into the caller's buffer when it fits, else into a malloc'd block (one bulk copy either way). */
+  private static CCharPointer deliver(final ColResult.Reply reply, final ColOut col) {
+    final int size = reply.size();
+    final CCharPointer p = col.buf != 0 && size <= col.cap ? WordFactory.pointer(col.buf) : UnmanagedMemory.malloc(size);
+    reply.writeTo(CTypeConversion.asByteBuffer(p, size));
+    return p;
   }
 
   /** Same as arcadedb_n_exec plus a float32 side buffer (pointer + count of floats) that params values {"\u0001":["B",offset,count]} read from. */
   @CEntryPoint(name = "arcadedb_n_exec_bin")
   public static CCharPointer execBin(final IsolateThread thread, final long h, final int flags, final CCharPointer language,
       final CCharPointer text, final CCharPointer params, final int max, final CFloatPointer buf, final long bufFloats) {
-    return execImpl(h, flags, language, text, params, max, buf, bufFloats);
+    return execImpl(h, flags, language, text, params, max, buf, bufFloats, null);
   }
 
   /** Timers (ns) of the exec path, read through arcadedb_n_diag: decode of the text arguments, JSON parse, engine call, reply encoding. */
@@ -233,7 +308,7 @@ public final class ArcadeNative {
 
   @SuppressWarnings("unchecked")
   private static CCharPointer execImpl(final long h, final int flags, final CCharPointer language, final CCharPointer text,
-      final CCharPointer params, final int max, final CFloatPointer buf, final long bufFloats) {
+      final CCharPointer params, final int max, final CFloatPointer buf, final long bufFloats, final ColOut col) {
     ResultSet rs = null;
     try {
       final long t0 = System.nanoTime();
@@ -261,7 +336,7 @@ public final class ArcadeNative {
       else
         rs = command ? db.command(lang, sql) : db.query(lang, sql);
       final long t3 = System.nanoTime();
-      final CCharPointer o = replyOf(rs, max, flags);
+      final CCharPointer o = col == null ? replyOf(rs, max, flags) : replyCol(rs, max, flags, col);
       final long t4 = System.nanoTime();
       T[0]++;
       T[1] += t1 - t0;

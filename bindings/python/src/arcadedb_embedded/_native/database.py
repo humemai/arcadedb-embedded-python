@@ -199,7 +199,9 @@ class NativeResultSet:
         if not self._more:
             return False
         try:
-            if lib.NEXT_BIN and _BINARY_REPLY:
+            if lib.COLRES and _BINARY_REPLY:
+                reply = lib.next_col(self._rs, _NEXT_BATCH)
+            elif lib.NEXT_BIN and _BINARY_REPLY:
                 reply = loads(
                     *lib.call_bin("arcadedb_n_next_bin", self._rs, _NEXT_BATCH)
                 )
@@ -473,6 +475,23 @@ class NativeDatabase:
         self, flags: int, prefix: str, language: str, command: str, args
     ) -> NativeResultSet:
         self._check_not_closed()
+        if not flags & 1 and lib.COLRES and _BINARY_REPLY:
+            # N-R2: the rows come back as columns (JSON for a batch of fewer than lib.COLRES_MIN rows or one that columns cannot carry), in the
+            # thread's reusable reply buffer; the vectors of a JSON batch still travel in the float32 tail (flag 4)
+            text, buf, count = encode_params(args, binary=True)
+            reply = lib.exec_col(
+                self._h,
+                flags | 4,
+                lib.bc(language),
+                lib.bc(command),
+                lib.b(text),
+                buf,
+                count,
+                _FIRST_BATCH,
+            )
+            if not reply.get("ok"):
+                raise _error(prefix, reply)
+            return NativeResultSet(self, reply)
         if flags & 1 and _LAZY_COMMAND_ROWS and lib.CMD_PATH:
             # phase 8: the cursor id comes back as a long (no reply text to free and decode); the rows are read late or never
             text, buf, count = encode_params(args, binary=True)

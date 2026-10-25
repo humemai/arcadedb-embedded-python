@@ -8,6 +8,8 @@ import threading
 from pathlib import Path
 
 from ..exceptions import ArcadeDBError
+from . import colres
+from .codec import loads
 
 _LIB_NAMES = {
     "linux": "libarcadedb.so",
@@ -30,6 +32,16 @@ INSERT_ROWS = os.environ.get("ARCADEDB_NATIVE_INSERT_ROWS", "1") != "0"
 EXEC_MANY = os.environ.get("ARCADEDB_NATIVE_EXEC_MANY", "1") != "0"
 # ARCADEDB_NATIVE_NEXT_BIN: the batches after the first read through arcadedb_n_next_bin, float arrays of 8 or more elements in a float32 tail (as flag 4 of arcadedb_n_exec does for the first batch), not as number text
 NEXT_BIN = os.environ.get("ARCADEDB_NATIVE_NEXT_BIN", "1") != "0"
+# ARCADEDB_NATIVE_COLRES: query results come back as columns (arcadedb_n_exec_col / arcadedb_n_next_col: one frame of per-column buffers, in a
+# buffer of the caller's that is reused, no arcadedb_free) when the library has them; 0 forces the JSON text of the paths above, in the same image.
+# ARCADEDB_NATIVE_COLRES_MIN: batches of fewer rows answer as JSON text (a point lookup gains nothing from columns); 1 = columns for every batch.
+COLRES = os.environ.get("ARCADEDB_NATIVE_COLRES", "1") != "0"
+COLRES_MIN = int(os.environ.get("ARCADEDB_NATIVE_COLRES_MIN", "16"))
+col_frames = 0  # replies that came back as columnar frames / as JSON through the columnar entry points (counters for tests and probes)
+col_json = 0
+_REPLY_CAP = (
+    1 << 19
+)  # per-thread reply buffer; a bigger reply comes in a block the image allocates and Python copies and frees
 
 _lock = threading.Lock()
 _lib = None
@@ -162,6 +174,8 @@ def _load():
             "arcadedb_n_insert_cols": [P, L, S, S, S, L],
             "arcadedb_n_next": [P, L, I],
             "arcadedb_n_next_bin": [P, L, I],
+            "arcadedb_n_exec_col": [P, L, I, S, S, S, I, S, L, P, L, L],
+            "arcadedb_n_next_col": [P, L, I, P, L, L],
             "arcadedb_n_rs_close": [P, L],
             "arcadedb_n_cmd": [P, L, I, S, S, S, S, L, I],
             "arcadedb_n_last_error": [P],
@@ -198,7 +212,7 @@ def _load():
                 )
                 else ctypes.c_longlong if name == "arcadedb_n_cmd" else ctypes.c_void_p
             )
-        global BINARY_PARAMS, CMD_PATH, CLOSE_BATCH, INSERT_ROWS, EXEC_MANY, NEXT_BIN
+        global BINARY_PARAMS, CMD_PATH, CLOSE_BATCH, INSERT_ROWS, EXEC_MANY, NEXT_BIN, COLRES
         if not hasattr(
             lib, "arcadedb_n_exec_bin"
         ):  # a library built before the binary path
@@ -215,6 +229,10 @@ def _load():
             lib, "arcadedb_n_next_bin"
         ):  # a library built before the binary tail of later batches
             NEXT_BIN = False
+        if not hasattr(lib, "arcadedb_n_exec_col") or not hasattr(
+            lib, "arcadedb_n_next_col"
+        ):  # a library built before columnar results
+            COLRES = False
         _isolate = isolate
         _creator = threading.get_ident()
         _local.thread = _Thread(thread, owned=False)
@@ -273,6 +291,98 @@ def call_bin(name: str, *args):
     finally:
         lib.arcadedb_free(th, ptr)
     return raw.decode("utf-8"), floats
+
+
+def _reply_buffer():
+    r = getattr(_local, "reply", None)
+    if r is None:
+        ba = bytearray(_REPLY_CAP)
+        r = _local.reply = (
+            ba,
+            ctypes.addressof(ctypes.c_char.from_buffer(ba)),
+            memoryview(ba),
+        )
+    return r
+
+
+def _json_tail(raw, floats_at):
+    """``(text, floats)`` of a JSON reply (``raw``: its bytes up to the NUL); ``floats_at(offset, count)`` reads the float32 tail behind the NUL."""
+    floats = None
+    if raw.endswith(b"}"):
+        i = raw.rfind(b',"bin":', max(0, len(raw) - 40))
+        if i >= 0:
+            import numpy as np
+
+            n = int(raw[i + 7 : -1])
+            floats = np.frombuffer(
+                floats_at((len(raw) + 1 + 3) & ~3, n), dtype=np.float32
+            )
+            raw = raw[:i] + b"}"
+    return raw.decode("utf-8"), floats
+
+
+def _col_reply(lib, th, ptr, addr, view):
+    """The decoded reply behind ``ptr``: a columnar frame or the JSON text (with the float32 tail) of ``call_bin``. ``ptr == addr`` is the
+    thread's own reply buffer (valid until the next call on the thread, nothing to free); anything else is a block the image allocated
+    (an oversize reply, or an error): copied out, then freed."""
+    global col_frames, col_json
+    if ptr == addr:
+        if view[0] == 0x41:
+            col_frames += 1
+            return colres.decode(view[: int.from_bytes(view[8:16], "little")])
+        col_json += 1
+        return loads(
+            *_json_tail(ctypes.string_at(ptr), lambda off, n: view[off : off + 4 * n])
+        )
+    frame = None
+    try:
+        if ctypes.string_at(ptr, 1) == b"A":
+            frame = ctypes.string_at(
+                ptr, int.from_bytes(ctypes.string_at(ptr + 8, 8), "little")
+            )
+        else:
+            text, floats = _json_tail(
+                ctypes.string_at(ptr), lambda off, n: ctypes.string_at(ptr + off, 4 * n)
+            )
+    finally:
+        lib.arcadedb_free(th, ptr)
+    if frame is not None:
+        col_frames += 1
+        return colres.decode(memoryview(frame))
+    col_json += 1
+    return loads(text, floats)
+
+
+def exec_col(handle, flags, language, command, params, buf, count, first) -> dict:
+    """``arcadedb_n_exec_col``: the decoded reply of the first batch (columns, or JSON for a small or too mixed batch). One crossing, the reply in
+    the thread's reusable buffer: no ``arcadedb_free`` for a reply that fits it."""
+    lib = _lib or _load()
+    th = _thread_handle()
+    _, addr, view = _reply_buffer()
+    ptr = lib.arcadedb_n_exec_col(
+        th,
+        handle,
+        flags,
+        language,
+        command,
+        params,
+        first,
+        buf,
+        count,
+        addr,
+        _REPLY_CAP,
+        COLRES_MIN,
+    )
+    return _col_reply(lib, th, ptr, addr, view)
+
+
+def next_col(rs_id, count) -> dict:
+    """``arcadedb_n_next_col``: the decoded next batch of a cursor."""
+    lib = _lib or _load()
+    th = _thread_handle()
+    _, addr, view = _reply_buffer()
+    ptr = lib.arcadedb_n_next_col(th, rs_id, count, addr, _REPLY_CAP, COLRES_MIN)
+    return _col_reply(lib, th, ptr, addr, view)
 
 
 def call_void(name: str, *args) -> None:

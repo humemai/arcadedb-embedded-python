@@ -92,7 +92,7 @@ final class NativeCodec {
     return drained;
   }
 
-  private static void appendRow(final StringBuilder sb, final StringBuilder meta, final Result row) {
+  static void appendRow(final StringBuilder sb, final StringBuilder meta, final Result row) {
     sb.append('{');
     boolean first = true;
     for (final String name : row.getPropertyNames()) {
