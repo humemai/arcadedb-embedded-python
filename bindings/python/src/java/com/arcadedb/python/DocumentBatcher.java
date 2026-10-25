@@ -18,12 +18,19 @@
  * JSON-representable property values only (str/int/float/bool/null and
  * nested lists/maps thereof) — the Python side falls back to the per-row
  * new_document path for anything else (e.g. datetime, bytes).
+ *
+ * Every entry point loads a document type or a vertex type: a vertex type gets
+ * real vertices (db.newVertex), as INSERT INTO does on the SQL path and on the
+ * native wheel; an edge type is refused, because an edge needs both endpoints.
  */
 package com.arcadedb.python;
 
 import com.arcadedb.database.Database;
 import com.arcadedb.database.MutableDocument;
 import com.arcadedb.database.async.ErrorCallback;
+import com.arcadedb.schema.DocumentType;
+import com.arcadedb.schema.EdgeType;
+import com.arcadedb.schema.VertexType;
 import com.arcadedb.serializer.json.JSONArray;
 import com.arcadedb.serializer.json.JSONObject;
 
@@ -58,12 +65,13 @@ public final class DocumentBatcher {
     // A caller's own transaction is the caller's to commit or roll back: batch
     // commits and the failure rollback apply only to the transactions opened
     // here, matching the Python per-row fallback (#7882).
+    final boolean vertex = n > 0 && isVertexType(db, typeName);
     final boolean wasActive = db.isTransactionActive();
     if (!wasActive)
       db.begin();
     try {
       for (int i = 0; i < n; i++) {
-        final MutableDocument doc = db.newDocument(typeName);
+        final MutableDocument doc = newRecord(db, typeName, vertex);
         fill(doc, rows.getJSONObject(i), i, vectorNames, vectors);
         doc.save();
         if (!wasActive && commitEvery > 0 && (i + 1) % commitEvery == 0) {
@@ -101,12 +109,13 @@ public final class DocumentBatcher {
   public static long insertColumns(final Database db, final String typeName, final String[] names, final Object[] columns,
       final int n, final int commitEvery) {
     checkColumns(names, columns, n);
+    final boolean vertex = n > 0 && isVertexType(db, typeName);
     final boolean wasActive = db.isTransactionActive();
     if (!wasActive)
       db.begin();
     try {
       for (int i = 0; i < n; i++) {
-        final MutableDocument doc = db.newDocument(typeName);
+        final MutableDocument doc = newRecord(db, typeName, vertex);
         fillRow(doc, names, columns, i);
         doc.save();
         if (!wasActive && commitEvery > 0 && (i + 1) % commitEvery == 0) {
@@ -139,12 +148,31 @@ public final class DocumentBatcher {
     checkColumns(names, columns, n);
     final AsyncFailures failures = new AsyncFailures();
     final ErrorCallback onError = failures::record;
+    final boolean vertex = n > 0 && isVertexType(db, typeName);
     for (int i = 0; i < n; i++) {
-      final MutableDocument doc = db.newDocument(typeName);
+      final MutableDocument doc = newRecord(db, typeName, vertex);
       fillRow(doc, names, columns, i);
       db.async().createRecord(doc, null, onError);
     }
     return failures;
+  }
+
+  /**
+   * Whether the bulk load into the type creates vertices (true) or documents (false). Resolved once per call, so a row costs no
+   * schema lookup. A type that does not exist raises the schema's own SchemaException, as newDocument did.
+   *
+   * @throws IllegalArgumentException for an edge type: an edge cannot be created without its two endpoints
+   */
+  private static boolean isVertexType(final Database db, final String typeName) {
+    final DocumentType type = db.getSchema().getType(typeName);
+    if (type instanceof EdgeType)
+      throw new IllegalArgumentException("Cannot bulk-insert into '" + typeName
+          + "' because it is an edge type; load the vertices, then create the edges (graph_batch().new_edges() or CREATE EDGE)");
+    return type instanceof VertexType;
+  }
+
+  private static MutableDocument newRecord(final Database db, final String typeName, final boolean vertex) {
+    return vertex ? db.newVertex(typeName) : db.newDocument(typeName);
   }
 
   private static void checkColumns(final String[] names, final Object[] columns, final int n) {
@@ -233,8 +261,9 @@ public final class DocumentBatcher {
     final AsyncFailures failures = new AsyncFailures();
     final ErrorCallback onError = failures::record;
     final int n = rows.length();
+    final boolean vertex = n > 0 && isVertexType(db, typeName);
     for (int i = 0; i < n; i++) {
-      final MutableDocument doc = db.newDocument(typeName);
+      final MutableDocument doc = newRecord(db, typeName, vertex);
       fill(doc, rows.getJSONObject(i), i, vectorNames, vectors);
       db.async().createRecord(doc, null, onError);
     }

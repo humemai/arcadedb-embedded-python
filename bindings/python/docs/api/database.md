@@ -521,7 +521,7 @@ faster still (2.24x on the same rows).
 
 **Parameters:**
 
-- `type_name` (str): Target document type (must exist)
+- `type_name` (str): Target type (must exist). A document type gets documents and a vertex type gets vertices (use `graph_batch()` when edges follow); an edge type raises `ArcadeDBError`, because an edge needs both endpoints
 - `rows` (iterable of dict): One dict per document, read lazily one chunk at
   a time; values must be JSON-representable (str/int/float/bool/None, nested
   lists/dicts). A chunk with other types (e.g. `datetime`, `bytes`) falls back
@@ -553,7 +553,7 @@ faster still (2.24x on the same rows).
 
 **Returns:**
 
-- `int`: Number of documents inserted
+- `int`: Number of records inserted
 
 **Raises:**
 
@@ -601,7 +601,7 @@ A column can also be a 2-D numpy `float32` array: a column of vectors. The whole
 
 **Parameters:**
 
-- `type_name` (str): Target document type (must exist)
+- `type_name` (str): Target type (must exist). A document type gets documents and a vertex type gets vertices (use `graph_batch()` when edges follow); an edge type raises `ArcadeDBError`, because an edge needs both endpoints
 - `columns` (mapping or `DataFrame`): `{property name: column}`, every column
   the same length. A numpy array of an integer, float, or bool kind crosses as
   one buffer copy; a string or object array and any other sequence convert per
@@ -624,7 +624,7 @@ A column can also be a 2-D numpy `float32` array: a column of vectors. The whole
 
 **Returns:**
 
-- `int`: Number of documents inserted
+- `int`: Number of records inserted
 
 **Raises:**
 
