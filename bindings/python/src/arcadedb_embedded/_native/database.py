@@ -11,7 +11,7 @@ from typing import Any, Dict, Iterator, List, Optional
 
 from ..exceptions import ArcadeDBError
 from ..transactions import TransactionContext
-from ..type_conversion import json_bulk_dumps
+from ..type_conversion import bulk_row_ok, json_bulk_dumps_tagged
 from . import lib, not_yet
 from .bulk import insert_rows_columnar
 from .codec import _default as codec_default
@@ -664,8 +664,13 @@ class NativeDatabase:
         """Bulk insert. Rows go in chunks of 10,000, one crossing per chunk. A chunk of rows with the same keys whose columns each hold one
         value type (ints, floats, bools, strings, equal-length float lists for an ``ARRAY_OF_FLOATS`` property; None is a null) goes as
         columns by address (``arcadedb_n_insert_colp``, no JSON text); any other chunk goes as one JSON text (``arcadedb_n_insert_rows``:
-        a newDocument/set/save loop inside the image, as ``DocumentBatcher.insertManyJson`` on the JPype path); a chunk with a value the
-        JSON text cannot carry unchanged goes through ``INSERT INTO t CONTENT :row`` for each row, in one crossing. Inside the caller's
+        a newDocument/set/save loop inside the image, as ``DocumentBatcher.insertManyJson`` on the JPype path). A ``datetime`` (also
+        ``pandas.Timestamp`` and ``numpy.datetime64``), ``date``, ``Decimal``, ``bytes``/``bytearray``, numpy scalar, ``pandas.NA`` or
+        ``pandas.NaT`` sitting directly in a row crosses in that text as a tagged value (``{"\\u0001": [kind, payload]}``, decoded by ``Json.java``),
+        so it does not move the chunk off this path; such a chunk loses the columnar entry. A row with a value the JSON text cannot carry
+        unchanged (NaN or Infinity, an integer beyond 64 bits, a date-time or decimal inside a list or dict, a non-str key, a lone
+        surrogate, a ``datetime.time``) goes through ``INSERT INTO t CONTENT :row`` on its own, in one crossing for a run of such rows; the
+        rows around it keep the bulk path and every row is inserted in the order given. Inside the caller's
         transaction nothing is committed; otherwise every ``commit_every`` rows are one transaction (0: all rows in one).
         """
         self._check_not_closed()
@@ -704,31 +709,59 @@ class NativeDatabase:
             raise
 
     def _insert_chunk(self, type_name: str, sql: str, chunk) -> None:
+        """One chunk of ``insert_many`` inside the open transaction; see :meth:`insert_many` for the paths.
+
+        A row with a value the JSON text cannot carry unchanged (NaN or Infinity, an integer beyond 64 bits, a date-time or decimal inside a
+        list or map, a lone surrogate) goes through ``INSERT INTO t CONTENT :row`` on its own; the rows around it still go in bulk, and every row
+        is inserted in the order given.
+        """
         if lib.INSERT_ROWS:
             if insert_rows_columnar(self, type_name, chunk):
                 return
             try:
-                payload = json_bulk_dumps(chunk)
+                payload = json_bulk_dumps_tagged(chunk)
             except (TypeError, ValueError):
-                payload = None
-            if payload is not None:
-                reply = json.loads(
-                    lib.call(
-                        "arcadedb_n_insert_rows",
-                        self._h,
-                        lib.b(type_name),
-                        lib.b(payload),
-                    )
-                )
-                if not reply.get("ok"):
-                    raise _error(f"Failed to bulk-insert into '{type_name}'", reply)
+                self._insert_chunk_runs(type_name, sql, chunk)
                 return
-        if lib.EXEC_MANY:
-            # values JSON text cannot carry unchanged (a date-time, a decimal, NaN, a big integer): the same statement per
-            # row, but all rows of the chunk in one crossing (arcadedb_n_exec_many), not one call per row
-            self._command_many("sql", sql, [{"row": row} for row in chunk])
+            self._insert_rows_json(type_name, payload)
             return
-        for row in chunk:
+        self._insert_chunk_per_row(sql, chunk)
+
+    def _insert_rows_json(self, type_name: str, payload: str) -> None:
+        reply = json.loads(
+            lib.call(
+                "arcadedb_n_insert_rows",
+                self._h,
+                lib.b(type_name),
+                lib.b(payload),
+            )
+        )
+        if not reply.get("ok"):
+            raise _error(f"Failed to bulk-insert into '{type_name}'", reply)
+
+    def _insert_chunk_runs(self, type_name: str, sql: str, chunk) -> None:
+        """A chunk with a row the JSON text cannot carry: runs of carriable rows go in bulk, the other rows one statement each, in order."""
+        ok = [bulk_row_ok(row) for row in chunk]
+        n = len(chunk)
+        start = 0
+        while start < n:
+            end = start
+            while end < n and ok[end] == ok[start]:
+                end += 1
+            run = chunk[start:end]
+            carriable = ok[start]
+            start = end
+            if not carriable:
+                self._insert_chunk_per_row(sql, run)
+            elif not insert_rows_columnar(self, type_name, run):
+                self._insert_rows_json(type_name, json_bulk_dumps_tagged(run))
+
+    def _insert_chunk_per_row(self, sql: str, rows) -> None:
+        if lib.EXEC_MANY:
+            # the same statement per row, but all rows in one crossing (arcadedb_n_exec_many), not one call per row
+            self._command_many("sql", sql, [{"row": row} for row in rows])
+            return
+        for row in rows:
             self.command("sql", sql, {"row": row}).close()
 
     def _command_many(self, language: str, command: str, rows) -> int:

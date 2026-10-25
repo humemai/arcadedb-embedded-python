@@ -13,6 +13,11 @@ from typing import Any, NamedTuple
 
 import jpype
 
+try:
+    import numpy as _np
+except ImportError:  # numpy is optional
+    _np = None
+
 
 class _JavaTimeTypes(NamedTuple):
     instant: Any
@@ -672,6 +677,10 @@ def _json_bulk_check(value: Any) -> None:
     elif isinstance(value, (list, tuple)):
         for item in value:
             _json_bulk_check(item)
+    else:
+        raise TypeError(
+            f"{type(value).__name__} cannot go through the JSON bulk path inside a list or map"
+        )
 
 
 def json_bulk_dumps(rows: Any) -> str:
@@ -707,3 +716,135 @@ def json_bulk_dumps(rows: Any) -> str:
                     value
                 )  # nested lists and dicts, and subclasses of the types above
     return json.dumps(rows, allow_nan=False)
+
+
+# ---------------------------------------------------------------------------
+# insert_many: values the plain JSON text cannot carry, as TAGGED values
+#
+# A date-time, date, Decimal, bytes, numpy scalar, pandas NA or NaT used to make json_bulk_dumps raise, and one such value sent the
+# whole 10,000-row chunk down the per-row path. Only DocumentBatcher.fill (insert_many, sync and parallel) decodes the tags, so only
+# insert_many uses json_bulk_dumps_tagged; the graph batches keep json_bulk_dumps. A tag is {"\u0001": [kind, payload]}: T LocalDateTime
+# (UTC wall clock), D LocalDate, n BigDecimal, b byte[] (base64): the objects convert_python_to_java builds for the per-row path.
+# Only a value that sits directly in a row is tagged; inside a list or map it still sends its row to the per-row path.
+
+_TAG = "\u0001"
+_TAGGED_KINDS = frozenset((datetime, date, Decimal, bytes, bytearray))
+_PANDAS_NULLS = frozenset(("NAType", "NaTType"))
+
+
+def _is_pandas_null(kind) -> bool:
+    return kind.__name__ in _PANDAS_NULLS and kind.__module__.startswith("pandas.")
+
+
+def _tag_datetime(value: datetime):
+    """The tagged form of a datetime, written as codec._default writes it (a pandas.Timestamp keeps its nanoseconds)."""
+    if value.utcoffset() is not None:
+        value = value.astimezone(timezone.utc).replace(tzinfo=None)
+    return {_TAG: ["T", value.isoformat()]}
+
+
+def bulk_tag_default(value: Any) -> Any:
+    """json.dumps hook of json_bulk_dumps_tagged: a value that sits directly in a row, as a tagged value or a plain number or null.
+
+    Raises TypeError for a value with no tagged form and ValueError for one the bulk path would change (a NaN, an infinity, a
+    non-finite Decimal, an integer beyond 64 bits), so the caller sends that row down the per-row path, which stores it exactly or raises.
+    """
+    kind = type(value)
+    if _is_pandas_null(kind):
+        return None
+    if isinstance(value, datetime):
+        return _tag_datetime(value)
+    if isinstance(value, date):
+        return {_TAG: ["D", value.isoformat()]}
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise ValueError(
+                "a non-finite Decimal cannot go through the JSON bulk path"
+            )
+        return {_TAG: ["n", str(value)]}
+    if isinstance(value, (bytes, bytearray)):
+        import base64
+
+        return {_TAG: ["b", base64.b64encode(bytes(value)).decode("ascii")]}
+    if _np is not None and isinstance(value, _np.generic):
+        if isinstance(value, _np.bool_):
+            return bool(value)
+        if isinstance(value, _np.integer):
+            number = int(value)
+            if not _INT64_MIN <= number <= _INT64_MAX:
+                raise ValueError(
+                    f"an integer beyond 64 bits cannot go through the JSON bulk path: {number}"
+                )
+            return number
+        if kind in (_np.float64, _np.float32, _np.float16):
+            number = float(value)
+            if not math.isfinite(number):
+                raise ValueError(
+                    "NaN and Infinity cannot go through the JSON bulk path"
+                )
+            return number
+        if isinstance(value, _np.datetime64):
+            if _np.isnat(value):
+                return None
+            moment = value.astype("datetime64[us]").item()
+            if isinstance(moment, datetime):
+                return _tag_datetime(moment)
+            raise ValueError(
+                "a datetime64 outside the datetime range cannot go through the JSON bulk path"
+            )
+    raise TypeError(f"{kind.__name__} cannot go through the JSON bulk path")
+
+
+def json_bulk_dumps_tagged(rows: Any) -> str:
+    """json_bulk_dumps for insert_many: also lets a date-time, date, Decimal, bytes, numpy scalar, pandas NA or NaT that sits directly in a row
+    through, written by bulk_tag_default. Raises TypeError or ValueError exactly where json_bulk_dumps does for every other value
+    (a datetime inside a list or map included), so the caller can send that row down the per-row path.
+    """
+    int_min, int_max = _INT64_MIN, _INT64_MAX
+    tagged = _TAGGED_KINDS
+    for row in rows:
+        for key in row:
+            if type(key) is not str:
+                raise ValueError("a non-str key cannot go through the JSON bulk path")
+        for value in row.values():
+            kind = type(value)
+            if kind is str:
+                if not value.isascii() and not _str_survives_json(value):
+                    raise ValueError(
+                        "a string with a lone surrogate cannot go through the JSON bulk path"
+                    )
+            elif kind is int:
+                if not int_min <= value <= int_max:
+                    raise ValueError(
+                        f"an integer beyond 64 bits cannot go through the JSON bulk path: {value}"
+                    )
+            elif kind is float or kind is bool or value is None:
+                continue
+            elif kind in tagged:
+                continue  # bulk_tag_default checks it as json.dumps writes it
+            elif kind is dict and _TAG in value:
+                raise ValueError(
+                    "a map keyed by the tag marker cannot go through the JSON bulk path"
+                )
+            elif (
+                isinstance(value, (datetime, date, Decimal, bytes, bytearray))
+                or (_np is not None and isinstance(value, _np.generic))
+                or _is_pandas_null(kind)
+            ):
+                continue  # a subclass (pandas.Timestamp), a numpy scalar, pandas NA or NaT
+            else:
+                _json_bulk_check(
+                    value
+                )  # nested lists and dicts, and subclasses of the types above
+    return json.dumps(rows, allow_nan=False, default=bulk_tag_default)
+
+
+def bulk_row_ok(row: Any, skip=()) -> bool:
+    """Whether one insert_many row can go through json_bulk_dumps_tagged; `skip` names properties that cross some other way (float vectors)."""
+    if skip:
+        row = {k: v for k, v in row.items() if k not in skip}
+    try:
+        json_bulk_dumps_tagged((row,))
+    except (TypeError, ValueError):
+        return False
+    return True

@@ -298,12 +298,24 @@ def test_rows_with_different_keys_fall_back_to_json(temp_db, spy, monkeypatch):
     _fallback_case(temp_db, spy, monkeypatch, rows, ROWS)
 
 
+def test_a_datetime_leaves_the_columnar_entry_but_stays_on_the_json_entry(
+    temp_db, spy, monkeypatch
+):
+    """columnar.pack refuses a date-time, so the chunk takes the JSON entry, which carries it as a tagged value
+    (test_native_mixed_chunk.py compares what it stores with INSERT ... CONTENT)."""
+    when = datetime.datetime(2024, 5, 6, 7, 8, 9)
+    rows = [{"id": i, "txt": "t%d" % i, "when": when} for i in range(10)]
+    _fallback_case(temp_db, spy, monkeypatch, rows, ROWS)
+    assert spy.count(MANY) == 0
+
+
 def test_values_json_cannot_carry_still_go_row_by_row_in_one_crossing(
     temp_db, spy, monkeypatch
 ):
     when = datetime.datetime(2024, 5, 6, 7, 8, 9)
-    rows = [{"id": i, "txt": "t%d" % i, "when": when} for i in range(10)]
+    rows = [{"id": i, "txt": "t%d" % i, "whens": [when]} for i in range(10)]
     _fallback_case(temp_db, spy, monkeypatch, rows, MANY)
+    assert spy.count(ROWS) == 0
 
 
 def test_an_integer_past_64_bits_is_refused_on_both_paths(temp_db, spy):

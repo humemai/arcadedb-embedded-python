@@ -29,6 +29,8 @@ if os.environ.get("ARCADEDB_BACKEND", "jpype").lower() != "native":
     collect_ignore.append("test_native_udf.py")
     # the columnar insert's stored records are compared between the JSON and the columnar entry points of the native library
     collect_ignore.append("test_native_columnar_insert.py")
+    # the rows of an insert_many chunk with date-times, Decimals, bytes and numpy scalars are told apart by the entry points they cross
+    collect_ignore.append("test_native_mixed_chunk.py")
     # the native library's start-up output (#477) can only be checked with the native library loaded
     collect_ignore.append("test_native_startup_runtime.py")
 if not os.path.isdir(os.path.join(os.path.dirname(os.path.dirname(__file__)), "docs")):
