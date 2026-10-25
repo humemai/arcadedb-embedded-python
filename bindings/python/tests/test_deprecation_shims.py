@@ -41,6 +41,8 @@ CASES = [(dist, module) for dist, modules in MODULES.items() for module in modul
 BODY_MARKER = "# ---- body"
 # the extras of the old package -> the extra of `arcadedb` they are forwarded to (`vector` was numpy; `arcadedb` has no `vector`)
 EXTRAS = {"arrow": "arrow", "pandas": "pandas", "polars": "polars", "vector": "numpy"}
+# the extras the native `arcadedb` wheel defines (ArcadeData/arcadedb-python, branch native-two-dist, native/wheel/pyproject.toml); written out here on purpose, apart from build_shims.NATIVE_EXTRAS
+NATIVE_EXTRAS = {"numpy", "arrow", "pandas", "polars"}
 
 STUB_FILES = {
     "arcadedb/__init__.py": """
@@ -230,7 +232,7 @@ def test_the_shim_requires_arcadedb_the_native_build_and_not_arcadedb_jvm(wheels
     assert _required_names(metadata) == {"arcadedb"}
     assert "arcadedb-jvm" not in _required_names(metadata)
     assert "arcadedb-native" not in _required_names(metadata)
-    assert "arcadedb-embedded-native" not in metadata
+    assert "arcadedb-embedded-native" not in _required_names(metadata)
     # the extras of the old package are forwarded to the matching extras of arcadedb
     assert sorted(
         re.findall(r"^Provides-Extra: (.+)$", metadata, flags=re.MULTILINE)
@@ -239,8 +241,14 @@ def test_the_shim_requires_arcadedb_the_native_build_and_not_arcadedb_jvm(wheels
         assert (
             f"Requires-Dist: arcadedb[{new}]=={VERSION}; extra == '{old}'\n" in metadata
         )
+    # only extras the native arcadedb defines are forwarded to: no vector, test, dev or examples
+    forwarded = set(
+        re.findall(r"^Requires-Dist: arcadedb\[(\w+)\]==", metadata, flags=re.MULTILINE)
+    )
+    assert forwarded == NATIVE_EXTRAS
     assert "Project-URL: Replaced by, https://pypi.org/project/arcadedb/\n" in metadata
-    assert "has moved to arcadedb (import arcadedb)" in metadata
+    assert "has moved to arcadedb (import arcadedb), now the native build" in metadata
+    assert "for the JVM build use arcadedb-jvm" in metadata
 
 
 def test_the_pypi_readme_says_arcadedb_is_the_native_build_and_names_the_jvm_package(
@@ -253,6 +261,18 @@ def test_the_pypi_readme_says_arcadedb_is_the_native_build_and_names_the_jvm_pac
     # the JVM build is named as the other choice, with the install line, and the Which package? page is linked
     assert "pip install arcadedb-jvm\n" in metadata
     assert WHICH_PACKAGE_URL in metadata
+    # the runtime change is said plainly, and the archived sibling is named with its import name
+    assert "The runtime changes for pip users of the old name." in metadata
+    assert "`arcadedb-embedded-native` (the native preview) is archived" in metadata
+    assert "not `arcadedb_native`" in metadata
+
+
+def test_the_migration_texts_say_arcadedb_embedded_native_is_archived():
+    for text in ("MIGRATION.md", "README.md"):
+        doc = (DEPRECATION / text).read_text(encoding="utf-8")
+        assert "`arcadedb-embedded-native`" in doc and "archived" in doc, text
+        assert "no further releases" in doc and "no shim" in doc, text
+        assert "not `arcadedb_native`" in doc, text
 
 
 def test_there_is_no_shim_for_the_native_preview_package():
@@ -272,6 +292,9 @@ def test_build_shims_has_one_table_with_the_decided_mapping():
     assert {k: v.dist for k, v in build_shims.TARGETS.items()} == SHIMS
     assert {v.module for v in build_shims.TARGETS.values()} == {IMPORT_NAME}
     assert dict(build_shims.EXTRAS) == EXTRAS
+    assert set(build_shims.NATIVE_EXTRAS) == NATIVE_EXTRAS
+    assert set(build_shims.EXTRAS.values()) == NATIVE_EXTRAS
+    assert build_shims.JVM_DIST == "arcadedb-jvm"
     for dist in SHIMS:
         build_shims.check_target(
             dist
@@ -299,6 +322,28 @@ def test_build_shims_refuses_a_shim_that_points_elsewhere(dist, monkeypatch):
     with pytest.raises(SystemExit) as refused:
         build_shims.check_target(dist)
     assert "_NEW_MODULE" in str(refused.value)
+
+
+@pytest.mark.parametrize("dist", SHIMS)
+def test_build_shims_refuses_extras_that_the_native_arcadedb_does_not_define(
+    dist, monkeypatch
+):
+    """The shim may forward only to extras of the native `arcadedb` wheel: a drift either way stops the build."""
+    build_shims = _load_build_shims()
+    # (a) the table forwards `vector` to an extra that `arcadedb` does not have
+    monkeypatch.setitem(build_shims.EXTRAS, "vector", "vector")
+    with pytest.raises(SystemExit) as refused:
+        build_shims.check_target(dist)
+    assert "NATIVE_EXTRAS" in str(refused.value)
+    monkeypatch.setitem(build_shims.EXTRAS, "vector", "numpy")
+    build_shims.check_target(dist)
+    # (b) the native wheel gains an extra that the shim does not forward yet
+    monkeypatch.setattr(
+        build_shims, "NATIVE_EXTRAS", frozenset(NATIVE_EXTRAS | {"parquet"})
+    )
+    with pytest.raises(SystemExit) as refused:
+        build_shims.check_target(dist)
+    assert "defines" in str(refused.value) and "parquet" in str(refused.value)
 
 
 @pytest.mark.parametrize("dist", SHIMS)
@@ -336,7 +381,8 @@ def test_warning_fires_once_and_is_visible_by_default(dist, module, sites):
         in message
     )
     assert "`arcadedb` is the native build, which runs without a JVM." in message
-    assert "install `arcadedb-jvm` (`pip install arcadedb-jvm`)" in message
+    assert "This package was the JVM build, so for you the runtime changes." in message
+    assert "install `arcadedb-jvm` (`pip install arcadedb-jvm`;" in message
     assert WHICH_PACKAGE_URL in message
     assert f"`import {IMPORT_NAME}` where you wrote `import {module}`" in message
     assert "https://github.com/ArcadeData/arcadedb-python" in message

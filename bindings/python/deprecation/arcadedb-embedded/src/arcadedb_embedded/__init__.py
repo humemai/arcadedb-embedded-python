@@ -11,7 +11,8 @@ _NEW_DIST = "arcadedb"
 _NEW_MODULE = "arcadedb"
 _NOTE = (
     "`arcadedb` is the native build, which runs without a JVM. "
-    "If you need the JVM build, install `arcadedb-jvm` (`pip install arcadedb-jvm`). "
+    "This package was the JVM build, so for you the runtime changes. "
+    "If you need the JVM build, install `arcadedb-jvm` (`pip install arcadedb-jvm`; it is also `import arcadedb`). "
     "Which package to pick: https://docs.arcadedb.com/arcadedb-python/which-package.html."
 )
 # ---- body (tests/test_deprecation_shims.py checks that it is there) ----
