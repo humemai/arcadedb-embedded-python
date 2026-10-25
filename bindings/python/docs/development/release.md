@@ -220,6 +220,7 @@ The native preview is a second package built from the `native-preview` branch: d
   | `windows-x64` | `windows-latest` (MSVC environment from `vcvars64.bat`) | on the runner | `win_amd64` | `libarcadedb.dll` |
 
 - **Which platforms gate a release**: the single list `REQUIRED_PLATFORMS` at the top of the workflow (now `linux-x86_64 linux-aarch64 macos-arm64`, each green in runs 10 and 11; `windows-x64` is not yet in it). The publish job fails without a passed parity run for each listed platform, and then uploads every wheel that passed, required or not. Add a platform to the list when it is green.
+- **Python versions**: the wheel is `py3-none`, so the `test` job runs the full suite on Python 3.12 only, and the `pyver` job installs the same linux-x86_64 wheel (no rebuild) into Python 3.11, 3.13, 3.14 and 3.14t (free-threaded) and runs a 13-file subset of the suite there (the ctypes layer, queries, parameters, types, transactions, async, threads, vectors, numpy, pandas, arrow; about 20 s of tests per version). `pyver` is informational: `publish` does not need it and it is not in `REQUIRED_PLATFORMS`. The 3.14t leg has no polars (no free-threaded wheel exists) and so skips `test_dataframe_ingest.py`; its job prints whether the GIL stayed off.
 - **Why its own PyPI name**: PyPI keeps one file per name, version and platform tag, so a native build cannot sit beside the JVM wheel under `arcadedb-embedded`. The name goes away when the bindings move to `arcadedb` on PyPI.
 
 ## Python Versioning Strategy
