@@ -83,7 +83,11 @@ class NativeResult:
         return self.get(name)
 
     def get_rid(self) -> Optional[str]:
-        return self._meta[0] if self._meta else None
+        if self._meta:
+            return self._meta[0]
+        # a projection of @rid (not an alias of it) is a row with that identity, as on the JVM wheel
+        rid = self._props.get("@rid")
+        return None if rid is None else str(rid)
 
     def _record(self, kinds):
         from .records import _wrap

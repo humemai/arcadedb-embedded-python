@@ -123,7 +123,13 @@ def _dump(obj, binary):
 
 
 class RID:
-    """A record id as the engine returns it in a row; passed back as a parameter it is a link, not a string."""
+    """A record id as the engine returns it in a row; passed back as a parameter it is a link, not a string.
+
+    The JVM wheel hands out the engine's own ``RID`` in the same places, so this class offers what user code written
+    against that one uses: ``str(rid)`` is the text (``"#10:5"``), two RIDs of one record are equal and hash alike,
+    RIDs sort by bucket then position, and ``getBucketId()``, ``getPosition()``, ``toString()``, ``isValid()``,
+    ``equals()`` and ``compareTo()`` answer like the Java methods. Unlike the Java RID, an RID here also equals its text.
+    """
 
     __slots__ = ("text",)
 
@@ -141,6 +147,63 @@ class RID:
 
     def __hash__(self):
         return hash(self.text)
+
+    def _numbers(self):
+        """(bucket id, position) from the text; (-1, -1) for a text that is not ``#bucket:position``."""
+        bucket, sep, position = self.text.lstrip("#").partition(":")
+        try:
+            return (int(bucket), int(position)) if sep else (-1, -1)
+        except ValueError:
+            return (-1, -1)
+
+    def __lt__(self, other):
+        return (
+            self._numbers() < other._numbers()
+            if isinstance(other, RID)
+            else NotImplemented
+        )
+
+    def __le__(self, other):
+        return (
+            self._numbers() <= other._numbers()
+            if isinstance(other, RID)
+            else NotImplemented
+        )
+
+    def __gt__(self, other):
+        return (
+            self._numbers() > other._numbers()
+            if isinstance(other, RID)
+            else NotImplemented
+        )
+
+    def __ge__(self, other):
+        return (
+            self._numbers() >= other._numbers()
+            if isinstance(other, RID)
+            else NotImplemented
+        )
+
+    # the Java RID's methods, by their Java names (the JVM wheel's RID is that object)
+    def getBucketId(self):
+        return self._numbers()[0]
+
+    def getPosition(self):
+        return self._numbers()[1]
+
+    def toString(self):
+        return self.text
+
+    def isValid(self):
+        bucket, position = self._numbers()
+        return bucket > -1 and position > -1
+
+    def equals(self, other):
+        return isinstance(other, RID) and self.text == other.text
+
+    def compareTo(self, other):
+        mine, theirs = self._numbers(), other._numbers()
+        return (mine > theirs) - (mine < theirs)
 
 
 def _restore_float(text):

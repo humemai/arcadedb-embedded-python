@@ -75,6 +75,7 @@ asserts, so the list below stops at the file.
 | --- | --- |
 | `test_resultset.py` | `Result` and `ResultSet` iteration, accessors, paging, and release of the engine cursor |
 | `test_resultset_arrow.py` | `ResultSet.to_arrow()` |
+| `test_record_id_values.py` | A record id inside a row (`SELECT @rid`, a LINK property, a list of links) behaves the same on both wheels: `str()`, equality, hashing, ordering, `getBucketId()` and friends, as a query parameter and to `lookup_by_rid()`; `get_rid()` is text for record, edge, `expand()` and `@rid` projection rows |
 | `test_dataframe_ingest.py` | `Database.insert_dataframe` and `insert_arrow` (every Arrow type of the mapping table written and read back, DATETIME precisions, nulls, declared-property conversion and refusal, pandas, Polars, and Arrow inputs, vertex types, a 100,000-row frame in batches, the failure contract) and `ResultSet.to_polars()` (round trip, the ImportError messages) |
 | `test_columnar_readers.py` | `to_columns`, `to_dataframe`, and `to_arrow` on schemaless and DECIMAL data, at several batch sizes |
 | `test_resultset_read_errors.py` | An engine error raised while a result set is read arrives as `ArcadeDBError` on every way of reading |
