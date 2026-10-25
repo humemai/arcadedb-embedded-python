@@ -159,7 +159,7 @@ Execute a query and return results. Queries are read-only and don't require a tr
 - `language` (str): Query language - `"sql"`, `"sqlscript"`, `"opencypher"` (or its alias `"cypher"`), `"graphql"`
 - `command` (str): Query string
 - `*args`: Optional positional parameters, or one mapping for named parameters
-  A single list or tuple on its own is the positional-parameter array, one element per `?`, so `query("sql", "... ?", [0.9, 0.1, 0.0])` binds `?` to `0.9`. To bind one list as one parameter (a query vector, say), pass a NumPy array or `to_java_float_array(...)`, use a named parameter, or wrap it: `[[0.9, 0.1, 0.0]]`.
+  A single list or tuple on its own is the positional-parameter array, one element per `?`, so `query("sql", "... = ? AND ... = ?", [0.9, 0.1])` binds `0.9` and `0.1` to two `?`. A call with more positional values than the SQL statement has placeholders raises `TypeError` (the engine would bind the first value and drop the rest without a word), so `query("sql", "... WHERE @rid IN ?", [rid_a, rid_b])` is refused instead of returning one row. To bind one list as one parameter (a query vector, say, or the list of an `IN`), pass a NumPy array or `to_java_float_array(...)`, use a named parameter (`"... IN :ids"` with `{"ids": [a, b]}`), or wrap it: `[[a, b]]`. The count is an upper bound taken from the `?`, `$` and `:` characters of the text, so a statement whose literals hold such characters is checked more loosely, and only SQL and SQLScript are checked.
 
 **Returns:**
 
@@ -222,7 +222,7 @@ one.
 - `language` (str): Command language (usually `"sql"` or `"opencypher"`)
 - `command` (str): Command string
 - `*args`: Optional positional parameters, or one mapping for named parameters
-  A single list or tuple on its own is the positional-parameter array, one element per `?`, so `query("sql", "... ?", [0.9, 0.1, 0.0])` binds `?` to `0.9`. To bind one list as one parameter (a query vector, say), pass a NumPy array or `to_java_float_array(...)`, use a named parameter, or wrap it: `[[0.9, 0.1, 0.0]]`.
+  A single list or tuple on its own is the positional-parameter array, one element per `?`, so `query("sql", "... = ? AND ... = ?", [0.9, 0.1])` binds `0.9` and `0.1` to two `?`. A call with more positional values than the SQL statement has placeholders raises `TypeError` (the engine would bind the first value and drop the rest without a word), so `query("sql", "... WHERE @rid IN ?", [rid_a, rid_b])` is refused instead of returning one row. To bind one list as one parameter (a query vector, say, or the list of an `IN`), pass a NumPy array or `to_java_float_array(...)`, use a named parameter (`"... IN :ids"` with `{"ids": [a, b]}`), or wrap it: `[[a, b]]`. The count is an upper bound taken from the `?`, `$` and `:` characters of the text, so a statement whose literals hold such characters is checked more loosely, and only SQL and SQLScript are checked.
 
 **Returns:**
 

@@ -55,6 +55,7 @@ asserts, so the list below stops at the file.
 | `test_python_function_interrupt.py` | A real SIGINT during a statement that calls a Python function always arrives as `KeyboardInterrupt` and leaves the database usable, including when JPype fails with `RuntimeError: Fatal error occurred` in its race with Ctrl-C (not collected on Windows) |
 | `test_cypher.py` | OpenCypher queries, path modes, and planner regressions |
 | `test_parameter_binding.py` | Positional and named parameters reach the statement on every entry point, including a lone `None` and the async executor, and scalars skip the conversion walk |
+| `test_positional_count.py` | More positional values than the SQL statement has placeholders is refused with `TypeError` before it runs (a lone list, a tuple, several arguments; `query()` and `command()`; nothing is changed), and the forms that bind keep binding: one value per `?`, a wrapped list, a named list, `$n`, SQLScript, other languages (P-07) |
 | `test_percall_calls.py` | The per-call paths of `query`, `command`, `first`, and `get` give the same bound values, overload choice, errors, and result-set state as the plain path (#280) |
 | `test_typed_rows.py` | `to_list()` and `iter_dicts()` read rows through the typed-row transport and return the same Python type and value for every property type as the row-by-row path (#285) |
 | `test_open_read_only.py` | `open_database(read_only=True)` and `DatabaseFactory.open(read_only=True)` read and refuse writes and schema changes; the default stays writable (#383) |

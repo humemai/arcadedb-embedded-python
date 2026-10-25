@@ -151,7 +151,9 @@ def test_each_parameter_shape_reaches_one_java_overload(temp_db):
         return value
 
     def received(method, *args):
-        getattr(db, method)("sql", "SELECT 1", *args)
+        getattr(db, method)(
+            "sql", "SELECT ?, ?", *args
+        )  # two ?: the check refuses surplus values
         (arg,) = seen.pop()
         if isinstance(arg, java_map):
             return ("Map", as_python(arg))
