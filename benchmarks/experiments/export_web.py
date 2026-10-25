@@ -3551,7 +3551,7 @@ def _multimodel_table(finished):
         "withheld": "withheld, the answer disagreed and the number was taken off the page",
         "unexpressible": "cannot express, the engine's own language cannot ask the query",
         "envelope": "out of memory, the cell reached the memory envelope every engine "
-                    "on that table had and was killed by the kernel",
+                    "on that table had and was killed by the kernel or stopped by the engine's own out-of-memory error",
         "failed": "failed, the cell reported an error inside its budget",
         "not comparable": "not comparable, a defect in the engine's own release decided "
                           "the result, and the note under that table names it",
@@ -5018,6 +5018,71 @@ def _server_hit_envelope(r):
     return bool(r.get("error")) and anon >= 0.99 * cap_mib
 
 
+# AN ENGINE'S OWN OUT-OF-MEMORY ERROR IS AN ENVELOPE FAILURE (DECISIONS #111, PAGE-SPEC "a dash means that and only that").
+# The kernel is not the only thing that stops a cell at its memory envelope: DuckDB stops itself at its default memory_limit (a
+# fraction of the cgroup's memory) with its own exception and the process exits 1, a JVM raises java.lang.OutOfMemoryError, PostgreSQL
+# refuses an allocation with SQLSTATE 53200. Each is the engine saying it did not fit the envelope every engine on the table had, which
+# is evidence for nothing about latency, so each prints `OOM` the way a kernel kill does. The list is ONE list for every engine; a
+# signature is a lower-case substring of the failed row's `error` text (or of its client log, `_row_engine_oom`), matched
+# case-insensitively. NEVER ADD A TEXT ONE HAS NOT SEEN: each entry names where it was read, a vendor document or a log of ours.
+# Not listed on purpose: Python's MemoryError (the HARNESS running out of memory is a harness failure, and a harness failure never gets
+# an engine mark) and the substring "memory limit" alone (DuckDB's advice text says "Increasing the memory limit" under any error).
+# Order matters where two entries overlap: the first match names the engine, so the specific text sits before the general one.
+ENGINE_OOM_SIGNATURES = (
+    ("DuckDB", "outofmemoryexception",
+     "mini, runs_page_e85469273_2611.jsonl, l2_duckpgq_graph_oltp_sf1_r1: '_duckdb.OutOfMemoryException: Out of Memory Error: failed "
+     "to allocate data of size 8.0 GiB' (cwida/duckpgq-extension#335)"),
+    ("DuckDB", "out of memory error",
+     "the same log: DuckDB's message prefix, also printed by its CLI and by the extensions that raise it"),
+    ("Java", "java.lang.outofmemoryerror",
+     "Java SE API documentation, java.lang.OutOfMemoryError: 'Thrown when the Java Virtual Machine cannot allocate an object because it "
+     "is out of memory'; a JPype or JNI engine (ArcadeDB, Neo4j, Elasticsearch) surfaces it under this class name"),
+    ("Neo4j", "neo.transienterror.general.outofmemoryerror",
+     "Neo4j status codes, Neo.TransientError.General.OutOfMemoryError: 'There is not enough memory to perform the current task'"),
+    ("Neo4j", "neo.transienterror.general.memorypooloutofmemoryerror",
+     "Neo4j status codes, Neo.TransientError.General.MemoryPoolOutOfMemoryError: 'The memory pool limit was exceeded'"),
+    ("Memgraph", "memory limit exceeded",
+     "memgraph/memgraph src/utils/memory_tracker.cpp: 'Memory limit exceeded! Attempting to allocate a chunk of ...' and 'User memory "
+     "limit exceeded!'; the Bolt wrapper is the one test_graph_server_limit.py already carries"),
+    ("PostgreSQL", "out of memory",
+     "PostgreSQL appendix A, SQLSTATE 53200 out_of_memory; postgres src/backend/utils/mmgr/mcxt.c errmsg('out of memory') with "
+     "errdetail('Failed on request of size ...')"),
+)
+
+
+def engine_reported_oom(text):
+    """The engine whose out-of-memory signature `text` carries, or None. See ENGINE_OOM_SIGNATURES."""
+    low = str(text or "").lower()
+    for engine, needle, _source in ENGINE_OOM_SIGNATURES:
+        if needle in low:
+            return engine
+    return None
+
+
+_CLIENT_LOG_TAIL_BYTES = 16384
+
+
+def _row_engine_oom(r):
+    """The engine that reported running out of memory on a failed row, or None.
+
+    The row's `error` is the last 800 characters of the client's output (runner.py), and a long Java trace puts the exception name
+    above that; the client log the runner writes beside the row is the last 4,000 lines, so its tail is read when the error text has no
+    signature. A log that is missing or unreadable changes nothing."""
+    hit = engine_reported_oom(r.get("error"))
+    if hit:
+        return hit
+    name = r.get("client_log")
+    if not name:
+        return None
+    try:
+        with open(RESULTS / "raw" / os.path.basename(str(name)), "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, fh.tell() - _CLIENT_LOG_TAIL_BYTES))
+            return engine_reported_oom(fh.read().decode("utf-8", "replace"))
+    except OSError:
+        return None
+
+
 def _run_log_rows():
     """The rows this publish's censored cells and declared outcomes are read
     from: the campaign's run log."""
@@ -5111,7 +5176,7 @@ def _censored_cells():
             _ph = _timeout_phase(r.get("timeout_phase_hint"))
             if _ph:
                 _CENSORED_PHASE[key] = _ph
-        elif r.get("oom_killed") or _server_hit_envelope(r):
+        elif r.get("oom_killed") or _server_hit_envelope(r) or _row_engine_oom(r):
             # AN ENVELOPE FAILURE IS NOT A TIMEOUT (DECISIONS #103g).
             # The cell was killed by the kernel at the memory cap; it
             # did not run out of TIME, and "failed inside its budget"
@@ -5126,7 +5191,11 @@ def _censored_cells():
             _peak = ((r.get("server_peak_mib") if _server_hit_envelope(r) else None)
                      or r.get("peak_mib_sum") or r.get("client_peak_mib")
                      or r.get("server_peak_mib"))
-            timeouts[key] = ("envelope", _cap, _peak)
+            # HOW IT ENDED is the last element: the kernel killed it, or the engine stopped itself with its own
+            # out-of-memory error (ENGINE_OOM_SIGNATURES). Both are the same outcome for the page -- the engine did not fit
+            # the envelope -- and the note must not say "killed by the kernel" about an engine that stopped itself.
+            _how = "kernel" if (r.get("oom_killed") or _server_hit_envelope(r)) else "engine"
+            timeouts[key] = ("envelope", _cap, _peak, _how)
         else:
             # A CELL THAT FAILED FOR ANOTHER REASON IS STILL A CENSORED
             # OBSERVATION.: the served SurrealDB cells at
@@ -5217,7 +5286,7 @@ def _cap_label(secs):
 # tuple of three kinds, and a fourth printed into the cells with nothing
 # explaining it (BUGS F76's sibling).
 _MARK_MEANINGS = {
-    "OOM": "killed at the cell's memory envelope rather than running out of time",
+    "OOM": "ran out of memory at the cell's memory envelope, killed by the kernel or stopped by the engine's own out-of-memory error, rather than running out of time",
     "lost": "the connection dropped mid-query",
     "err": "the cell failed inside its budget; the note says what it reported",
     # Not `err`: the cell finished. A defect in the engine's own release decided
@@ -5820,7 +5889,7 @@ def _censored_notes(table_id):
         # must not read as slowness.
         kind, _ = _outcome_kind(secs)
         if kind == "envelope":
-            _, _cap, _peak = secs
+            _, _cap, _peak, _how = secs
             _cap_txt = f"{_cap} memory envelope" if _cap else "cell's memory envelope"
             _peak_txt = f" (peak {_peak:,.0f} MiB)" if isinstance(_peak, (int, float)) else ""
             # EVERY DIGIT IN THE SENTENCE IS PINNED TO ITS SOURCE, including
@@ -5828,8 +5897,10 @@ def _censored_notes(table_id):
             # condition, and the peak comes off the row the same way the
             # envelope does -- passing one and not the other is how a real
             # number ends up looking typed.
+            _ended = ("and was killed by the kernel" if _how == "kernel"
+                      else "and the engine stopped it with its own out-of-memory error")
             tail = (f" at {scale_label(lane, scale)}: {_cell} reached "
-                    f"the {_cap_txt}{_peak_txt} and was killed by the kernel, the same envelope every "
+                    f"the {_cap_txt}{_peak_txt} {_ended}, the same envelope every "
                     f"engine on this table had; it did not run out of time, and there is no row.")
             # EVERY DIGIT IN THE SENTENCE IS PINNED TO ITS SOURCE, including
             # the peak. page_check refuses an unpinned number in a generated
