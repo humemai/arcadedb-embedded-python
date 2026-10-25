@@ -64,6 +64,28 @@ BATCH = 5_000
 # -1 means no cap.
 HTTP_LIMIT = -1
 
+# THE RECALL OPERATING POINT OF THE VECTOR STEP (2026-10-25, FAIRNESS F7; the measurements are in .notes/bench/repros/e2-recall-point-20261025).
+# `recall_retrieval` is the vector step ALONE: the top 10 of the whole catalog against the exact top 10 over every vector (no filter, no hop).
+# Build parameters are fixed (M 16, ef_construction 100; ArcadeDB's default maxConnections 32 is its 2 x M). The SEARCH breadth is the dial,
+# and equal breadth is not equal recall, so the rule is a recall target, not a number: RECALL_TARGET 0.95, the dense lane's headline target,
+# at both tiers. SEARCH_EF is the smallest breadth at which ArcadeDB's embedded arm (the F7 reference) reaches it on this catalog, read off an
+# untimed sweep of the 26.10.2 wheel: 0.962 and 0.966 at ef 300 on two 50k builds, 0.957 at ef 1200 on a 500k build (ef 100, the value
+# every arm used until now, reads 0.79 and 0.41; the engine's default beam, no fourth argument, reads 0.37 and 0.13). Every graph-index arm
+# searches at SEARCH_EF; ArangoDB's IVF and LanceDB's HNSW, which have no comparable breadth, are matched by effect to the same target inside
+# the cell. Each row records `vector_ef` and `recall_retrieval`; an arm below RECALL_TARGET - 0.02 on its row is not shown as matched.
+# BENCH_E2_SEARCH_EF overrides the breadth for a probe.
+RECALL_TARGET = 0.95
+SEARCH_EF = {"e2": 300, "e2_500k": 1200}
+PGVECTOR_EF_MAX = 1000   # pgvector's documented upper bound for hnsw.ef_search
+
+
+def search_ef():
+    """The search breadth of the active tier (see RECALL_TARGET)."""
+    env = os.environ.get("BENCH_E2_SEARCH_EF")
+    if env:
+        return int(env)
+    return SEARCH_EF["e2_500k" if PRODUCTS >= SCALE_PRODUCTS["e2_500k"] else "e2"]
+
 
 
 # ---------------------------------------------------------------------------
@@ -291,7 +313,7 @@ class ArcadeE2:
             rows = db.query(
                 "sql",
                 "SELECT pid FROM (SELECT expand(vectorNeighbors(?, ?, ?, ?)))",
-                "Product[embedding]", a.to_java_float_array(qvec), K, 100
+                "Product[embedding]", a.to_java_float_array(qvec), K, search_ef()
             ).to_list()
             pids = [int(r["pid"]) for r in rows]
             # BOUND (DECISIONS #116 item 2): every statement of the
@@ -343,7 +365,8 @@ class ArcadeE2:
     FILTER_MODE = ("pre-filter: the candidate set is restricted first and ranked by "
                    "vector.l2Distance, exact over the candidates")
 
-    def _vec_topk(self, qvec, k, ef=100):
+    def _vec_topk(self, qvec, k, ef=None):
+        ef = search_ef() if ef is None else ef
         rows = self.db.query(
             "sql", "SELECT pid FROM (SELECT expand(vectorNeighbors(?, ?, ?, ?)))",
             "Product[embedding]", self._a.to_java_float_array(qvec), k, max(ef, k)).to_list()
@@ -494,7 +517,7 @@ class ArcadeE2Server(ArcadeE2):
         sid = r.headers.get("arcadedb-session-id")
         try:
             rows = self._post("query", "SELECT pid FROM (SELECT expand(vectorNeighbors(:idx, :q, :k, :ef)))",
-                              {"idx": "Product[embedding]", "q": [float(x) for x in qvec], "k": K, "ef": 100}, sid=sid)
+                              {"idx": "Product[embedding]", "q": [float(x) for x in qvec], "k": K, "ef": search_ef()}, sid=sid)
             pids = [int(r["pid"]) for r in rows]
             rel = self._post("query", "SELECT expand(out('RELATED')) FROM Product WHERE pid = :p",
                              {"p": pids[0]}, sid=sid)
@@ -520,7 +543,8 @@ class ArcadeE2Server(ArcadeE2):
     # embedded arm stopped post-filtering applies here unchanged. FILTER_MODE
     # is inherited, so these two must agree -- an arm that claims a pre-filter
     # and runs a post-filter would be worse than either.
-    def _vec_topk(self, qvec, k, ef=100):
+    def _vec_topk(self, qvec, k, ef=None):
+        ef = search_ef() if ef is None else ef
         rows = self._post("query", "SELECT pid FROM (SELECT expand(vectorNeighbors(:idx, :q, :k, :ef)))",
                           {"idx": "Product[embedding]", "q": [float(x) for x in qvec],
                            "k": k, "ef": max(ef, k)})
@@ -634,7 +658,7 @@ class SurrealE2:
     def hybrid_op(self, qvec, crash=False, mirror=False):
         from surrealdb import RecordID
         q = self.db.query
-        res = q(f"SELECT pid FROM product WHERE embedding <|{K},100|> $q", {"q": [float(x) for x in qvec]})
+        res = q(f"SELECT pid FROM product WHERE embedding <|{K},{search_ef()}|> $q", {"q": [float(x) for x in qvec]})
         rows = _srows(res)
         pids = [r["pid"] for r in rows][:K]
         best = pids[0]
@@ -657,7 +681,8 @@ class SurrealE2:
                    "vector::distance::euclidean")
     FILTER_ACCESS = "record ids"   # F132: the candidates are read by record id, not scanned for
 
-    def _vec_topk(self, qvec, k, ef=100):
+    def _vec_topk(self, qvec, k, ef=None):
+        ef = search_ef() if ef is None else ef
         rows = _srows(self.db.query(f"SELECT pid FROM product WHERE embedding <|{int(k)},{int(max(ef, k))}|> $q",
                                     {"q": [float(x) for x in qvec]}))
         return [int(r["pid"]) for r in rows]
@@ -778,6 +803,28 @@ class ArangoE2:
             prod.add_index({"type": "persistent", "fields": ["pid"], "name": "pid_idx"})
         with bench_common.index_timer(self):
             self.ivf_nlists, self.ivf_nprobe = arango_common.vector_index(prod, "embedding", DIM, len(vecs))
+        self._calibrate_nprobe(vecs)
+
+    def _ivf_search(self, q, k, np_):
+        return [int(p) for p in self.db.aql.execute(
+            "FOR d IN product LET s = APPROX_NEAR_L2(d.embedding, @q, {nProbe: @np}) SORT s LIMIT @k RETURN d.pid",
+            bind_vars={"q": [float(x) for x in q], "np": int(np_), "k": k})]
+
+    def _calibrate_nprobe(self, vecs):
+        """nProbe by effect (FAIRNESS F7, the E2 recall rule at RECALL_TARGET): the smallest nProbe whose recall@10 on 200 held-out queries
+        (their own seed, never the timed ones) reaches the target, by the same binary search the dense lane uses. After the index build,
+        before any timed call; the result is on the row."""
+        t0 = time.perf_counter()
+        rng = np.random.default_rng(SEED + 11)
+        held = rng.standard_normal((200, DIM)).astype(np.float32)
+        held /= np.maximum(np.linalg.norm(held, axis=1, keepdims=True), 1e-12)
+        gt = np.argpartition(-(vecs @ held.T), K, axis=0)[:K].T
+        target = float(os.environ.get("BENCH_E2_RECALL_TARGET") or RECALL_TARGET)
+        self.ivf_nprobe, got = arango_common.calibrate_nprobe(self._ivf_search, held, gt, target, self.ivf_nlists, k=K)
+        self.row_extra = {**(getattr(self, "row_extra", None) or {}), "arangodb_ivf_nprobe_calibrated": int(self.ivf_nprobe),
+                          "arangodb_ivf_recall_target": target, "arangodb_ivf_calibration_recall": round(float(got), 4),
+                          "arangodb_ivf_calibration_queries": len(held),
+                          "arangodb_ivf_calibration_s": round(time.perf_counter() - t0, 2)}
 
     def hybrid_op(self, qvec, crash=False, mirror=False):
         aql = self.db.aql
@@ -951,7 +998,8 @@ class MongoE2:
                    "on an indexed field, with exact:true so the filtered set is scanned "
                    "rather than approximated")
 
-    def _vec_topk(self, qvec, k, ef=100):
+    def _vec_topk(self, qvec, k, ef=None):
+        ef = search_ef() if ef is None else ef
         return [int(d["pid"]) for d in self.prod.aggregate([
             {"$vectorSearch": {"index": mongo_common.VECTOR_INDEX, "path": "embedding",
                                "queryVector": [float(x) for x in qvec],
@@ -1069,7 +1117,7 @@ class PgAgeE2:
 
     def hybrid_op(self, qvec, crash=False, mirror=False):
         c = self._cur()
-        c.execute("SET LOCAL hnsw.ef_search = 100")
+        c.execute(f"SET LOCAL hnsw.ef_search = {min(search_ef(), PGVECTOR_EF_MAX)}")
         c.execute("SELECT pid FROM product ORDER BY embedding <-> %s::vector LIMIT %s",
                   ("[" + ",".join("%.9g" % float(x) for x in qvec) + "]", K))
         pids = [int(r[0]) for r in c.fetchall()]
@@ -1093,11 +1141,12 @@ class PgAgeE2:
     def _v(self, qvec):
         return "[" + ",".join("%.9g" % float(x) for x in qvec) + "]"
 
-    def _vec_topk(self, qvec, k, ef=100):
+    def _vec_topk(self, qvec, k, ef=None):
+        ef = search_ef() if ef is None else ef
         c = self._cur()
         # SET LOCAL takes no bound parameter ("syntax error at or near $1",
         # laptop 2026-09-14); the value is a literal, as it is in hybrid_op.
-        c.execute(f"SET LOCAL hnsw.ef_search = {int(max(ef, k))}")
+        c.execute(f"SET LOCAL hnsw.ef_search = {min(int(max(ef, k)), PGVECTOR_EF_MAX)}")
         c.execute("SELECT pid FROM product ORDER BY embedding <-> %s::vector LIMIT %s", (self._v(qvec), k))
         r = [int(x[0]) for x in c.fetchall()]
         self.cx.commit()
@@ -1211,7 +1260,7 @@ class Neo4jE2:
         with self.drv.session() as s:
             tx = s.begin_transaction()
             try:
-                hits = tx.run("CYPHER 25 MATCH (p:Product) SEARCH p IN (VECTOR INDEX prod_emb FOR $q LIMIT 100) "
+                hits = tx.run(f"CYPHER 25 MATCH (p:Product) SEARCH p IN (VECTOR INDEX prod_emb FOR $q LIMIT {search_ef()}) "
                               "SCORE AS sc RETURN p.pid AS pid ORDER BY sc DESC LIMIT $k",
                               q=[float(x) for x in qvec], k=K).data()
                 pids = [int(h["pid"]) for h in hits]
@@ -1229,7 +1278,8 @@ class Neo4jE2:
     FILTER_MODE = ("pre-filter: WHERE p.pid IN $ids then ORDER BY "
                    "vector.similarity.euclidean")
 
-    def _vec_topk(self, qvec, k, ef=100):
+    def _vec_topk(self, qvec, k, ef=None):
+        ef = search_ef() if ef is None else ef
         with self.drv.session() as s:
             hits = s.run("CYPHER 25 MATCH (p:Product) SEARCH p IN (VECTOR INDEX prod_emb FOR $q LIMIT $ef) "
                          "SCORE AS sc RETURN p.pid AS pid ORDER BY sc DESC LIMIT $k",
@@ -1353,7 +1403,7 @@ class MemgraphE2:
             try:
                 hits = tx.run("CALL vector_search.search('prod_emb', $ef, $q) YIELD node, distance "
                               "RETURN node.pid AS pid ORDER BY distance LIMIT $k",
-                              ef=100, k=K, q=[float(x) for x in qvec]).data()
+                              ef=search_ef(), k=K, q=[float(x) for x in qvec]).data()
                 pids = [int(h["pid"]) for h in hits]
                 rel = tx.run("MATCH (p:Product {pid: $p})-[:RELATED]->(q) RETURN q.pid AS pid LIMIT 3", p=pids[0]).data()
                 touched = pids[:3] + [int(r["pid"]) for r in rel]
@@ -1367,7 +1417,8 @@ class MemgraphE2:
                 tx.close()
         return len(touched)
 
-    def _vec_topk(self, qvec, k, ef=100):
+    def _vec_topk(self, qvec, k, ef=None):
+        ef = search_ef() if ef is None else ef
         # The breadth as the Neo4j arm sets it: ef candidates, the nearest k kept.
         with self.drv.session() as s:
             hits = s.run("CALL vector_search.search('prod_emb', $ef, $q) YIELD node, distance "
@@ -1494,13 +1545,13 @@ class LadybugE2:
             self._rows("CALL CREATE_VECTOR_INDEX('Product', 'prod_emb', 'embedding', "
                        "mu := 16, ml := 32, efc := 100, metric := 'l2')")
 
-    _TOPK = ("CALL QUERY_VECTOR_INDEX('Product', 'prod_emb', $q, $k, efs := 100) "
+    _TOPK = ("CALL QUERY_VECTOR_INDEX('Product', 'prod_emb', $q, $k, efs := __EFS__) "
              "RETURN node.pid AS pid ORDER BY distance")
 
     def hybrid_op(self, qvec, crash=False, mirror=False):
         self._rows("BEGIN TRANSACTION")
         try:
-            pids = [int(r[0]) for r in self._rows(self._TOPK, {"q": [float(x) for x in qvec], "k": K})]
+            pids = [int(r[0]) for r in self._rows(self._TOPK.replace("__EFS__", str(search_ef())), {"q": [float(x) for x in qvec], "k": K})]
             rel = self._rows("MATCH (p:Product)-[:RELATED]->(r:Product) WHERE p.pid = $p "
                              "RETURN r.pid LIMIT 3", {"p": pids[0]})
             touched = pids[:3] + [int(r[0]) for r in rel]
@@ -1521,10 +1572,10 @@ class LadybugE2:
             raise
         return len(touched)
 
-    def _vec_topk(self, qvec, k, ef=100):
-        # efs is fixed at 100 in the text, the table's search breadth; the
-        # harness asks at most k = 10.
-        return [int(r[0]) for r in self._rows(self._TOPK, {"q": [float(x) for x in qvec], "k": k})]
+    def _vec_topk(self, qvec, k, ef=None):
+        ef = search_ef() if ef is None else ef
+        # efs is the lane's search breadth (search_ef), put into the text; the harness asks at most k = 10.
+        return [int(r[0]) for r in self._rows(self._TOPK.replace("__EFS__", str(int(max(ef, k)))), {"q": [float(x) for x in qvec], "k": k})]
 
     def _hop(self, pids):
         if not pids:
@@ -1631,7 +1682,7 @@ class DuckE2:
         with bench_common.index_timer(self):
             self.cx.execute("CREATE INDEX prod_emb ON product USING HNSW (embedding) "
                             "WITH (metric = 'l2sq', M = 16, ef_construction = 100)")
-        self.cx.execute("SET hnsw_ef_search = 100")
+        self.cx.execute(f"SET hnsw_ef_search = {search_ef()}")
 
     _TOPK = f"SELECT pid FROM product ORDER BY array_distance(embedding, ?::FLOAT[{DIM}]) LIMIT ?"
 
@@ -1663,7 +1714,8 @@ class DuckE2:
             raise
         return len(touched)
 
-    def _vec_topk(self, qvec, k, ef=100):
+    def _vec_topk(self, qvec, k, ef=None):
+        ef = search_ef() if ef is None else ef
         self.cx.execute(f"SET hnsw_ef_search = {int(max(ef, k))}")
         return [int(r[0]) for r in self.cx.execute(self._TOPK, [[float(x) for x in qvec], k]).fetchall()]
 
@@ -1799,7 +1851,7 @@ class ComposedE2:
         write it always had, and only the atomicity path mirrors."""
         from qdrant_client import models as qm
         hits = self.qc.query_points("product", query=qvec.tolist(),
-                                    search_params=qm.SearchParams(hnsw_ef=100),
+                                    search_params=qm.SearchParams(hnsw_ef=search_ef()),
                                     limit=K).points
         pids = [int(h.payload["pid"]) for h in hits]
         with self.neo.session() as s:
@@ -1837,7 +1889,8 @@ class ComposedE2:
     FILTER_MODE = ("cross-system pre-filter: the candidate ids are read from Neo4j "
                    "and sent to Qdrant as a filter")
 
-    def _vec_topk(self, qvec, k, ef=100):
+    def _vec_topk(self, qvec, k, ef=None):
+        ef = search_ef() if ef is None else ef
         from qdrant_client import models as qm
         hits = self.qc.query_points("product", query=list(map(float, qvec)), limit=k,
                                     search_params=qm.SearchParams(hnsw_ef=max(ef, k))).points
@@ -1964,9 +2017,11 @@ class ComposedEmbeddedE2:
     # speeds it and flatters it. The values are the laptop's dry run of 2026-10-25 (arcadedb_e2, wheel 26.10.2, one
     # repetition per scale: 0.77 at 50k, 0.405 at 500k; Neo4j read 0.96 and 0.4035, Qdrant 1.0 and 0.651); replace them with the frozen 26.11.1 rows' medians when those exist, or override for a probe with
     # BENCH_E2_RECALL_TARGET. Source and result are on the row.
-    RECALL_TARGETS = {"e2": 0.77, "e2_500k": 0.405}
-    RECALL_TARGET_SOURCE = "arcadedb_e2 recall_retrieval, laptop dry run 2026-10-25 (wheel 26.10.2, 1 rep)"
-    LANCE_EF_LADDER = (100, 125, 150, 200, 250, 300, 400, 600, 800, 1000)
+    # SUPERSEDED 2026-10-25 (the E2 recall rule, RECALL_TARGET at the top of this file): the target is the dense lane's 0.95 at both tiers, not the
+    # dry run's 0.77 and 0.405, which were ArcadeDB at ef 100 and not an operating point anyone would run. The ladder reaches the 500k rung (1200).
+    RECALL_TARGETS = {"e2": RECALL_TARGET, "e2_500k": RECALL_TARGET}
+    RECALL_TARGET_SOURCE = "E2 recall rule 2026-10-25: recall@10 >= 0.95, the dense lane's headline target (FAIRNESS F7)"
+    LANCE_EF_LADDER = (100, 125, 150, 200, 250, 300, 400, 600, 800, 1000, 1200, 1600, 2400, 3200)
     CALIBRATION_QUERIES = 200
     FILTER_MODE = ("cross-store pre-filter: the candidate ids are read from LadybugDB "
                    "and pasted into LanceDB's `where` (prefilter), which ranks them")
@@ -2157,7 +2212,7 @@ class ComposedEmbeddedE2:
             raise
         return len(touched)
 
-    def _vec_topk(self, qvec, k, ef=100):
+    def _vec_topk(self, qvec, k, ef=None):
         return self._search(qvec, k)
 
     def _hop(self, pids):
@@ -2261,6 +2316,8 @@ def main():
         b = BACKENDS[args.backend]()
     out["engine_version"] = b.version
     out["instrument"] = bench_common.INSTRUMENT
+    out["vector_ef"] = search_ef()          # the lane's search breadth (graph-index arms); IVF and LanceDB calibrate by effect and say so
+    out["recall_target"] = RECALL_TARGET
     # What a served engine reported about itself at connect (Memgraph's pools,
     # LadybugDB's fitted threads): read from the engine, not restated from the
     # flags the runner sent.
