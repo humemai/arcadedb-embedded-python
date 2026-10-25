@@ -545,6 +545,16 @@ class Database:
         The pair is what _end_transactions_opened_since needs to tell the levels a
         begin() pushed from the ones the caller already held.
         """
+        calls = _db_calls()
+        if calls is not None:
+            # both numbers in ONE crossing: this runs before every begin() of
+            # ``with db.transaction()`` and of run_in_transaction
+            self._check_not_closed()
+            try:
+                packed = int(calls.stackMark(self._java_db))
+            except Exception as e:
+                raise ArcadeDBError(f"Failed to check transaction status: {e}") from e
+            return bool(packed & 1), packed >> 1
         return self.is_transaction_active(), self._java_db.getNestedTransactions()
 
     def _end_transactions_opened_since(self, mark):

@@ -90,4 +90,13 @@ public final class DbCalls {
     final IndexCursor cursor = db.lookupByKey(type, keys, values);
     return cursor.hasNext() ? cursor.next().getRecord() : null;
   }
+
+  /**
+   * The transaction stack of {@code db} as one number, {@code nestedTransactions * 2 + (active ? 1 : 0)}: the
+   * {@code isTransactionActive()} and {@code getNestedTransactions()} of the mark {@code run_in_transaction} and
+   * {@code with db.transaction()} take before {@code begin()} (#9970, #9813), in one crossing instead of two.
+   */
+  public static long stackMark(final Database db) {
+    return ((long) db.getNestedTransactions() << 1) | (db.isTransactionActive() ? 1L : 0L);
+  }
 }
