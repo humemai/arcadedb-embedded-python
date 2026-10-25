@@ -805,6 +805,10 @@ class ArangoE2:
             self.ivf_nlists, self.ivf_nprobe = arango_common.vector_index(prod, "embedding", DIM, len(vecs))
         self._calibrate_nprobe(vecs)
 
+    def applied_ef(self):
+        """None: FAISS IVF has no ef. Its breadth is nProbe, calibrated in the build (`arangodb_ivf_nprobe_calibrated`)."""
+        return None
+
     def _ivf_search(self, q, k, np_):
         return [int(p) for p in self.db.aql.execute(
             "FOR d IN product LET s = APPROX_NEAR_L2(d.embedding, @q, {nProbe: @np}) SORT s LIMIT @k RETURN d.pid",
@@ -1115,9 +1119,13 @@ class PgAgeE2:
         c.execute("ANALYZE")
         self.cx.commit()
 
+    def applied_ef(self):
+        """hnsw.ef_search as set: the lane's breadth, clamped to pgvector's documented maximum (PGVECTOR_EF_MAX)."""
+        return min(search_ef(), PGVECTOR_EF_MAX)
+
     def hybrid_op(self, qvec, crash=False, mirror=False):
         c = self._cur()
-        c.execute(f"SET LOCAL hnsw.ef_search = {min(search_ef(), PGVECTOR_EF_MAX)}")
+        c.execute(f"SET LOCAL hnsw.ef_search = {self.applied_ef()}")
         c.execute("SELECT pid FROM product ORDER BY embedding <-> %s::vector LIMIT %s",
                   ("[" + ",".join("%.9g" % float(x) for x in qvec) + "]", K))
         pids = [int(r[0]) for r in c.fetchall()]
@@ -2159,6 +2167,10 @@ class ComposedEmbeddedE2:
                           "lancedb_calibration_recall": round(got, 4), "lancedb_calibration_queries": len(held),
                           "lancedb_calibration_s": round(time.perf_counter() - t0, 2)}
 
+    def applied_ef(self):
+        """The ef the calibration chose (`lancedb_ef`); the lane's SEARCH_EF is not used by this arm."""
+        return self.LANCE_EF
+
     def _lance_index_readback(self):
         """The engine's own answer for the vector index (BUGS F164): its type
         from index_stats, its details from list_indices, and a refusal when
@@ -2316,7 +2328,10 @@ def main():
         b = BACKENDS[args.backend]()
     out["engine_version"] = b.version
     out["instrument"] = bench_common.INSTRUMENT
-    out["vector_ef"] = search_ef()          # the lane's search breadth (graph-index arms); IVF and LanceDB calibrate by effect and say so
+    # The lane's search breadth (graph-index arms); IVF and LanceDB calibrate by effect and say so. An engine with a lower maximum
+    # (pgvector, 1000) reports what it APPLIED in vector_ef and the lane's value in vector_ef_lane, so a clamp is never silent.
+    out["vector_ef_lane"] = search_ef()
+    out["vector_ef"] = b.applied_ef() if hasattr(b, "applied_ef") else search_ef()
     out["recall_target"] = RECALL_TARGET
     # What a served engine reported about itself at connect (Memgraph's pools,
     # LadybugDB's fitted threads): read from the engine, not restated from the
@@ -2331,6 +2346,8 @@ def main():
     # do the index kinds an ArcadeDB arm's engine reports (CAMPAIGN 7 row 68).
     if hasattr(b, "index_readback"):
         b.row_extra = {**(getattr(b, "row_extra", None) or {}), **b.index_readback()}
+    if hasattr(b, "applied_ef"):
+        out["vector_ef"] = b.applied_ef()   # an arm that calibrates its breadth in the build (LanceDB) or has none (IVF) says so here
     out.update(getattr(b, "row_extra", None) or {})
     # THE SPLIT (FAIRNESS F14). This lane builds the page's most expensive
     # indexes -- LSM_VECTOR, HNSW, FAISS IVF, a MongoDB vector search index --
