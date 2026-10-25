@@ -1,90 +1,44 @@
-# Syncing Upstream
+# Syncing Upstream (retired)
 
-This fork tracks `ArcadeData/arcadedb` through the local `upstream-main` branch.
+!!! danger "Retired on 2026-10-25. Do not run `sync-upstream.sh`."
+    ArcadeData/arcadedb deleted `bindings/python` in [#10615](https://github.com/ArcadeData/arcadedb/pull/10615) (commit `1e0507a522`, 2026-10-23, 143 files). A sync would merge that deletion into this fork. The decision was "Stop syncing" (2026-10-25). The script now exits with an error and a message that names the decision; only `./sync-upstream.sh --help` still prints (the old help, for the record).
 
-## Commands
+Nothing needs the engine tree synced any more:
 
-```bash
-./sync-upstream.sh --status              # how far main and upstream-main are behind
-./sync-upstream.sh --dry-run             # list what would be merged, change nothing
-./sync-upstream.sh                       # sync to upstream/main
-./sync-upstream.sh --until <commit>      # sync only up to a given upstream commit
-```
+- The wheels take their engine JARs from the `arcadedata/arcadedb:<version>` release image, not from the Java sources in this tree.
+- Pull requests to ArcadeData/arcadedb branch from upstream's `main` in the `tae898/arcadedb` fork, never from this repository ([Upstream Issues and Fixes](upstream-issues.md)).
+- The Python bindings continue in [ArcadeData/arcadedb-python](https://github.com/ArcadeData/arcadedb-python).
 
-`--until` also works with `--status` and `--dry-run`. It is how a release is cut: sync
-up to upstream's "Set release version to X.Y.Z" commit (see
-[Release Workflow](release.md)).
+The engine tree in this repository is therefore frozen at the last sync. Do not rely on it being current, and do not edit it ([AGENTS.md](https://github.com/humemai/arcadedb-embedded-python/blob/main/AGENTS.md)).
 
-## What it does
+## What replaces each use
 
-In order:
+| You wanted to | Do this instead |
+|---|---|
+| Get upstream's newer engine into the wheel | Nothing is synced: build the wheel against the release image's JARs (`build.sh` does this by default), or against JARs you built from any upstream commit (below). |
+| Test an upstream engine fix | Build the engine JARs of the upstream commit and pass their directory to `build.sh` (below). |
+| Send the bindings to ArcadeData/arcadedb | Retired too: [Sending the Bindings Upstream](upstream-bindings-pr.md). |
+| Cut a release | [Release Workflow](release.md) (read its note on the version source first). |
 
-1. Fetches `upstream` with `--no-tags` (upstream's release tags use the same numbers as ours) and shows the commits it would merge. `--status` and `--dry-run` stop here.
-2. Refuses to continue if tracked files have uncommitted changes.
-3. Asks `Continue with merge? [y/N]` and waits. There is no flag to skip it; from a non-interactive shell, pipe the answer (`printf y | ./sync-upstream.sh`), or the script exits silently at the prompt without merging.
-4. Resets `upstream-main` to the sync target (`upstream/main`, or the `--until` commit).
-5. Merges `upstream-main` into `main`.
-6. Keeps this fork's own copies of the paths listed in `FORK_OWNED_PATHS` in the script (the root `README.md`, `pyproject.toml`, `uv.lock`, and a few others), and keeps the paths in `FORK_EXCLUDED_PATHS` (such as `CLAUDE.md`) out of the fork.
-7. Treats `.github/` as an **allowlist**: after the merge it deletes every tracked file under `.github/` that is not named in `FORK_GITHUB_ALLOWLIST`, so no upstream workflow arrives. A list of files to delete could only name the ones that existed when it was written; the allowlist also stops the ones upstream adds later. Adding a workflow of our own therefore means adding it to that list in the same commit, or the next sync deletes it. A file that upstream also has at the same path and that we replace with our own (`.github/dependabot.yml`: ours updates the pinned GitHub Actions, upstream's is a Maven config) goes in both `FORK_GITHUB_ALLOWLIST` and `FORK_OWNED_PATHS`, so the prune keeps it and the sync never merges upstream's version into it.
+## Testing an engine fix without a sync
 
-The lists live in `sync-upstream.sh` and nowhere else on purpose.
-
-## When the merge stops on conflicts
-
-The script resolves conflicts on its own only for the paths in `FORK_OWNED_PATHS` and
-`FORK_EXCLUDED_PATHS`. Any other conflict makes it print the conflict steps and exit
-**before** steps 6 and 7, so the fork-owned restore and the `.github` prune do not run.
-The usual case is a modify/delete conflict on a `.github/` file that an earlier sync
-pruned and upstream has since changed. Finish by hand:
-
-```bash
-# 1. See what conflicts
-git diff --name-only --diff-filter=U
-
-# 2. A pruned .github file: resolve it as a deletion
-git rm --cached <path> && rm -f <path>
-
-# 3. Resolve anything else normally, then finish the merge
-GIT_EDITOR=true git merge --continue
-```
-
-Then do what the script skipped:
-
-- Delete every tracked file under `.github/` that is not in `FORK_GITHUB_ALLOWLIST`.
-- Check that the `FORK_OWNED_PATHS` files are unchanged against the pre-merge commit
-  (`git diff <pre-merge commit> -- README.md pyproject.toml uv.lock ...`), and restore
-  any that changed.
-- Check that the `FORK_EXCLUDED_PATHS` files (such as `CLAUDE.md`) are absent.
-- Commit, and run `./sync-upstream.sh --status`.
-
-## After sync
+Get the JARs of an upstream commit without building on your machine: run the `Build ArcadeDB engine jars` workflow on the commit's full 40-character SHA and download its `arcadedb-lib` artifact ([Upstream Issues and Fixes](upstream-issues.md#reporting-an-engine-bug) has the commands). Then:
 
 ```bash
 cd bindings/python
-./scripts/build.sh linux/amd64
+./scripts/build.sh linux/amd64 3.12 <jar dir>
 uv run pytest
-git push origin main
 ```
 
-The build takes its engine JARs from the `arcadedata/arcadedb:<version>` image, not
-from the Java sources you just synced. To test the synced engine code itself, build the
-engine JARs and pass their directory as `build.sh`'s third argument (`JAR_LIB_DIR`); see
-[Build Architecture](build-architecture.md#local-build).
-
-This is step one of the contribution routine. The whole order, through to regenerating the pull-request branch, is in [Sending the Bindings Upstream](upstream-bindings-pr.md); checking an upstream fix to one of our issues is in [Upstream Issues and Fixes](upstream-issues.md).
+The third argument is the JAR directory; an environment variable named `JAR_LIB_DIR` is ignored. See [Build Architecture](build-architecture.md#local-build).
 
 ## Verifying an upstream fix
 
-When an issue we filed is fixed upstream, the way to check it is to sync, build the
-wheel, and measure the thing the issue was about. Do this on a development machine,
-never on a machine that is in the middle of a benchmark run: a long measurement run
-should use one engine build from start to finish, and swapping in a freshly synced
-wheel partway through would split its results across two engines in a way that cannot
-be undone afterwards.
+When an issue we filed is fixed upstream, the way to check it is to build the wheel on the fix's engine and measure the thing the issue was about. Do this on a development machine, never on a machine that is in the middle of a benchmark run: a long measurement run should use one engine build from start to finish, and swapping in a freshly built wheel partway through would split its results across two engines in a way that cannot be undone afterwards.
 
 The verification routine:
 
-1. `./sync-upstream.sh`, then `./scripts/build.sh linux/amd64` in `bindings/python`. If the fix has not reached a published upstream image yet, pass the engine's JAR directory as `build.sh`'s third argument (`./scripts/build.sh linux/amd64 3.12 <jar dir>`); otherwise the wheel does not contain it. An environment variable named `JAR_LIB_DIR` is ignored.
+1. Build the engine JARs of the fix's merge commit (above), then `./scripts/build.sh linux/amd64 3.12 <jar dir>` in `bindings/python`. If the fix is already in a published upstream image, `build.sh` without the third argument is enough; otherwise the wheel does not contain the fix.
 2. Re-run the issue's own reproduction against the new build. A Java reproduction compiles against an image's `lib/*` and needs no wheel at all, which makes it the cheaper check where one exists.
 3. Compare against the same reproduction on the build the issue was filed against. A fix is "verified" when the repro that reproduced stops reproducing, on the same host, not when the issue is closed.
    **Mind the JVM.** Upstream's published images run **Java 21**; the wheel bundles a **Java 25** JRE, and the embedded JVM adds `-XX:+UseCompactObjectHeaders` unless the JVM arguments already set it, a flag Java 21 will not even start with. Verify on the image's own Java when replying upstream (that is what the issue was filed on), and, for any fix that affects the bindings, run the same repro again with that build's jars on Java 25 and the same flag. A fix confirmed on a JVM we do not ship is not yet confirmed for us.
@@ -92,3 +46,7 @@ The verification routine:
 5. Apply what the answer changes in practice across the package, the same day: `src/`, `tests/`, `examples/`, and `docs/`, not only the code that found the issue. A maintainer's answer often carries a recommendation (a setting, a statement, a pattern to avoid) beyond the fix itself. Install the rebuilt wheel first, so the new behavior can be tested locally; a test for a new feature should fail on the last release (`uv run --no-project --with arcadedb-embedded==<last release> python -m pytest ...`) and must not pass vacuously on the new one. The routine is not finished at the reply.
 
 A benchmark host moves to a new engine only between runs, as a deliberate step: re-measure what the engine affects, and re-run an untouched comparison as a control.
+
+## What the sync did (record)
+
+For the record, the script kept a local `upstream-main` mirror of `upstream/main`, merged it into `main`, restored the fork-owned paths (`README.md`, `pyproject.toml`, `uv.lock`, and a few others) and kept `CLAUDE.md` out, then deleted every tracked file under `.github/` that was not on an allowlist, so no upstream workflow arrived. The lists, and the reasons behind them, are in the script's comments and in its git history. The local `upstream-main` branch is no longer maintained.

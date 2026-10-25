@@ -1,4 +1,6 @@
 #!/bin/bash
+# RETIRED on 2026-10-25: this script refuses to run (see the guard below).
+#
 # Script to sync upstream changes while preserving fork-specific customizations
 #
 # This fork maintains two protected path categories during sync:
@@ -20,13 +22,41 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
+# RETIRED 2026-10-25 (user decision "Stop syncing"). Do not remove this guard.
+#
+# ArcadeData/arcadedb deleted bindings/python in #10615 (commit 1e0507a522,
+# 2026-10-23, 143 files). Running this script would merge that deletion into
+# this fork. Nothing needs the engine tree synced any more: the wheels take
+# their jars from the release image, and upstream engine PRs branch from
+# upstream/main. The Python bindings continue in ArcadeData/arcadedb-python.
+# The rest of this file is kept as the record of how the sync worked; it is
+# unreachable except for --help.
+retired() {
+    echo -e "${RED}RETIRED: sync-upstream.sh no longer runs.${NC}" >&2
+    echo "" >&2
+    echo "ArcadeData/arcadedb deleted bindings/python in #10615 (commit 1e0507a522," >&2
+    echo "2026-10-23, 143 files). A sync would merge that deletion into this fork." >&2
+    echo "Decision: \"Stop syncing\" (the user, 2026-10-25). Nothing needs the engine tree" >&2
+    echo "synced any more: wheels take their jars from the release image, and upstream" >&2
+    echo "engine PRs branch from upstream/main." >&2
+    echo "" >&2
+    echo "The Python bindings continue in https://github.com/ArcadeData/arcadedb-python" >&2
+    echo "See bindings/python/docs/development/sync-upstream.md. './sync-upstream.sh --help'" >&2
+    echo "still prints the old help." >&2
+    exit 1
+}
+case "${1:-}" in
+    --help|-h) ;;
+    *) retired ;;
+esac
+
 FORK_OWNED_PATHS=(
     "README.md"
     # Repo-root uv dev environment (fork-only; upstream has no root Python project)
     "pyproject.toml"
     "uv.lock"
     ".python-version"
-    # Fork tooling for the periodic upstream bindings PR
+    # Fork tooling for the periodic upstream bindings PR (retired 2026-10-25)
     "make-upstream-pr-branch.sh"
     ".github/dependabot.yml"   # ours since #378 (github-actions only); upstream has a maven one at the same path: never merge theirs
 )
@@ -218,6 +248,11 @@ print_list() {
 
 show_help() {
     cat << EOF
+RETIRED 2026-10-25: this script refuses to run. Only --help works.
+ArcadeData/arcadedb deleted bindings/python in #10615 (1e0507a522, 2026-10-23); a sync
+would merge that deletion into this fork. See bindings/python/docs/development/sync-upstream.md.
+The text below is the old help, kept as the record.
+
 ${BLUE}🔄 Upstream Sync Script${NC}
 
 Syncs this fork with upstream ArcadeData/arcadedb while keeping:
