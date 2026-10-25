@@ -1,10 +1,12 @@
 """The deprecation shims for the old PyPI names (deprecation/): built here, checked against a stub.
 
 `arcadedb-embedded` and `arcadedb-embedded-native` get one last release, 26.11.1: a pure-Python shim that
-installs the new package at the same version, warns once at import, and re-exports it. The old native package
-imported as `arcadedb_native`, so its shim ships that module as well as `arcadedb_embedded`. The tests build both
-shims with `uv build` (no upload), and check the wheel, the dependency pin, the warning, and attribute and
-submodule access against a stub `arcadedb` module: the real package is not needed.
+installs its replacement at the same version, warns once at import, and re-exports it. The old JVM package
+`arcadedb-embedded` points to `arcadedb-jvm` (the same JVM build), the old native package
+`arcadedb-embedded-native` to `arcadedb` (the native build); both replacements import as `arcadedb`. The old
+native package imported as `arcadedb_native`, so its shim ships that module as well as `arcadedb_embedded`. The
+tests build both shims with `uv build` (no upload), and check the wheel, the dependency pin, the warning, and
+attribute and submodule access against a stub `arcadedb` module: the real packages are not needed.
 """
 
 from __future__ import annotations
@@ -23,8 +25,11 @@ import pytest
 BINDINGS = Path(__file__).resolve().parents[1]
 DEPRECATION = BINDINGS / "deprecation"
 VERSION = "26.11.1"
-# old distribution -> the package it points to
-SHIMS = {"arcadedb-embedded": "arcadedb", "arcadedb-embedded-native": "arcadedb-native"}
+# old distribution -> the package it points to (written out here on purpose, apart from TARGETS in build_shims.py,
+# so a wrong edit of that table fails a test)
+SHIMS = {"arcadedb-embedded": "arcadedb-jvm", "arcadedb-embedded-native": "arcadedb"}
+# the import name of both replacements (an assumption, see build_shims.IMPORT_NAME)
+IMPORT_NAME = "arcadedb"
 # What PyPI listed before the cutover (checked 2026-10-25): the counting rule is applied against this
 # snapshot, because once the shims are published the live list contains 26.11.1 itself.
 PUBLISHED_BEFORE_CUTOVER = {
@@ -38,6 +43,7 @@ MODULES = {
 }
 CASES = [(dist, module) for dist, modules in MODULES.items() for module in modules]
 BODY_MARKER = "# ---- shared body"
+EXTRAS = ["arrow", "pandas", "polars", "vector"]
 
 STUB_FILES = {
     "arcadedb/__init__.py": """
@@ -159,6 +165,12 @@ def _metadata(wheel: Path) -> str:
         return archive.read(name).decode("utf-8")
 
 
+def _required_names(metadata: str) -> set[str]:
+    """The distribution names in the Requires-Dist lines, without extras, version or marker."""
+    requires = re.findall(r"^Requires-Dist: (.+)$", metadata, flags=re.MULTILINE)
+    return {re.match(r"[A-Za-z0-9][A-Za-z0-9._-]*", r).group(0) for r in requires}
+
+
 def _probe(site: Path, module: str = "arcadedb_embedded") -> dict:
     done = subprocess.run(  # nosec B603 - fixed argument list, no shell
         [
@@ -214,6 +226,94 @@ def test_dependency_pins_the_new_package_at_the_same_version(dist, wheels):
     ), requires
 
 
+def test_the_jvm_shim_requires_arcadedb_jvm_and_not_arcadedb(wheels):
+    """arcadedb-embedded was the JVM package: it must land on the JVM build, never silently on the native `arcadedb`."""
+    metadata = _metadata(wheels["arcadedb-embedded"])
+    assert f"Requires-Dist: arcadedb-jvm=={VERSION}\n" in metadata
+    assert _required_names(metadata) == {"arcadedb-jvm"}
+    assert "arcadedb" not in _required_names(metadata)
+    assert "arcadedb-embedded-native" not in metadata
+    # the extras are forwarded to the same extras of arcadedb-jvm
+    assert (
+        sorted(re.findall(r"^Provides-Extra: (.+)$", metadata, flags=re.MULTILINE))
+        == EXTRAS
+    )
+    for extra in EXTRAS:
+        assert (
+            f"Requires-Dist: arcadedb-jvm[{extra}]=={VERSION}; extra == '{extra}'\n"
+            in metadata
+        )
+    assert (
+        "Project-URL: Replaced by, https://pypi.org/project/arcadedb-jvm/\n" in metadata
+    )
+    assert "has moved to arcadedb-jvm (import arcadedb)" in metadata
+
+
+def test_the_native_shim_requires_arcadedb_and_not_arcadedb_jvm(wheels):
+    """arcadedb-embedded-native was the native package: it lands on `arcadedb`, which is the native build."""
+    metadata = _metadata(wheels["arcadedb-embedded-native"])
+    assert f"Requires-Dist: arcadedb=={VERSION}\n" in metadata
+    assert _required_names(metadata) == {"arcadedb"}
+    assert "arcadedb-jvm" not in _required_names(metadata)
+    assert "arcadedb-native" not in _required_names(metadata)
+    assert (
+        sorted(re.findall(r"^Provides-Extra: (.+)$", metadata, flags=re.MULTILINE))
+        == EXTRAS
+    )
+    for extra in EXTRAS:
+        assert (
+            f"Requires-Dist: arcadedb[{extra}]=={VERSION}; extra == '{extra}'\n"
+            in metadata
+        )
+    assert "Project-URL: Replaced by, https://pypi.org/project/arcadedb/\n" in metadata
+    assert "has moved to arcadedb (import arcadedb)" in metadata
+
+
+def test_the_pypi_readme_gives_the_right_install_line(wheels):
+    jvm = _metadata(wheels["arcadedb-embedded"])
+    assert "pip install arcadedb-jvm\n" in jvm
+    assert not re.search(r"pip install arcadedb(?![-\w])", jvm)
+    assert "pip uninstall arcadedb-embedded\n" in jvm
+    native = _metadata(wheels["arcadedb-embedded-native"])
+    assert "pip install arcadedb\n" in native
+    assert "pip install arcadedb-jvm" not in native
+    assert "pip uninstall arcadedb-embedded-native\n" in native
+
+
+def test_build_shims_has_one_table_with_the_decided_mapping():
+    build_shims = _load_build_shims()
+    assert {k: v.dist for k, v in build_shims.TARGETS.items()} == SHIMS
+    assert {v.module for v in build_shims.TARGETS.values()} == {IMPORT_NAME}
+    assert sorted(build_shims.EXTRAS) == EXTRAS
+    for dist in SHIMS:
+        build_shims.check_target(
+            dist
+        )  # the files under deprecation/ agree with the table
+
+
+@pytest.mark.parametrize("dist", SHIMS)
+def test_build_shims_refuses_a_shim_that_points_elsewhere(dist, monkeypatch):
+    """Changing the table without the shim files (or the other way round) must stop the build."""
+    build_shims = _load_build_shims()
+    other = next(d for d in SHIMS.values() if d != SHIMS[dist])
+    monkeypatch.setitem(
+        build_shims.TARGETS, dist, build_shims.Target(dist=other, module=IMPORT_NAME)
+    )
+    with pytest.raises(SystemExit) as refused:
+        build_shims.check_target(dist)
+    message = str(refused.value)
+    assert f"does not point at {other}" in message
+    assert "project.dependencies" in message and "_NEW_DIST" in message
+    monkeypatch.setitem(
+        build_shims.TARGETS,
+        dist,
+        build_shims.Target(dist=SHIMS[dist], module="arcadedb_other"),
+    )
+    with pytest.raises(SystemExit) as refused:
+        build_shims.check_target(dist)
+    assert "_NEW_MODULE" in str(refused.value)
+
+
 @pytest.mark.parametrize("dist", SHIMS)
 def test_version_follows_the_counting_rule(dist):
     cv = _load_check_version()
@@ -256,8 +356,13 @@ def test_warning_fires_once_and_is_visible_by_default(dist, module, sites):
     assert category == "FutureWarning"
     assert filename == "<string>"  # attributed to the importing code, not to the shim
     new = SHIMS[dist]
-    assert f"pip install {new}" in message
-    assert f"`import arcadedb` where you wrote `import {module}`" in message
+    assert f"Install {new!r} instead (`pip install {new}`)" in message
+    # `pip install arcadedb` must not appear in the JVM shim's text as the command to run (it is the native build)
+    assert (re.search(r"pip install arcadedb(?![-\w])", message) is not None) == (
+        new == "arcadedb"
+    )
+    assert f"`import {IMPORT_NAME}` where you wrote `import {module}`" in message
+    assert ("same JVM build" in message) == (new == "arcadedb-jvm")
     assert "https://github.com/ArcadeData/arcadedb-python" in message
     assert "https://docs.arcadedb.com/arcadedb-python/" in message
 

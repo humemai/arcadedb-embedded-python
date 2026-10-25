@@ -1,6 +1,6 @@
 # ArcadeDB Embedded for Python
 
-> **Moved.** The Python bindings now live at [ArcadeData/arcadedb-python](https://github.com/ArcadeData/arcadedb-python), published on PyPI as [`arcadedb`](https://pypi.org/project/arcadedb/) (import `arcadedb`) and `arcadedb-native`. This repository will be archived: new releases, issues and pull requests go there. `arcadedb-embedded` and `arcadedb-embedded-native` end with a 26.11.1 shim release. See the [migration guide](bindings/python/deprecation/MIGRATION.md).
+> **Moved.** The Python bindings now live at [ArcadeData/arcadedb-python](https://github.com/ArcadeData/arcadedb-python), published on PyPI as [`arcadedb-jvm`](https://pypi.org/project/arcadedb-jvm/) (the JVM build, the successor of `arcadedb-embedded`) and [`arcadedb`](https://pypi.org/project/arcadedb/) (the native build, the successor of `arcadedb-embedded-native`), both with the import name `arcadedb`. This repository will be archived: new releases, issues and pull requests go there. `arcadedb-embedded` and `arcadedb-embedded-native` end with a 26.11.1 shim release. See the [migration guide](bindings/python/deprecation/MIGRATION.md).
 
 Native Python bindings for ArcadeDB (forked from the official Java project).
 

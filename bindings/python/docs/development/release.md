@@ -377,7 +377,7 @@ uv run --project .. --group docs mike alias --update-aliases \
 
 ## The Last Releases: Deprecation Shims
 
-The bindings move to ArcadeData/arcadedb-python as `arcadedb` and `arcadedb-native`. The old names end with one shim release each, 26.11.1, from `bindings/python/deprecation/` (a pure-Python wheel that depends on the new package at the same version and warns once). They are not released with the steps above: never push a `26.11.1` tag in this repository, because the release workflow would build and publish the real wheels. The cutover order and the publish options are in `bindings/python/deprecation/README.md`.
+The bindings move to ArcadeData/arcadedb-python as `arcadedb-jvm` (the JVM build) and `arcadedb` (the native build). The old names end with one shim release each, 26.11.1, from `bindings/python/deprecation/` (a pure-Python wheel that warns once and depends on its replacement at the same version: `arcadedb-embedded` on `arcadedb-jvm`, `arcadedb-embedded-native` on `arcadedb`). They are not released with the steps above: never push a `26.11.1` tag in this repository, because the release workflow would build and publish the real wheels. The cutover order and the publish options are in `bindings/python/deprecation/README.md`.
 
 ## Troubleshooting
 

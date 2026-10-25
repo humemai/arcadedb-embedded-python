@@ -5,6 +5,8 @@
 
 This builds only. It never uploads: publishing is a separate, deliberate step (README.md here).
 
+Where each old name points is set in ``TARGETS`` below, and nowhere else. Before it builds, this script checks that each shim's ``pyproject.toml`` and ``__init__.py`` files agree with ``TARGETS``, so a changed target cannot ship half-changed.
+
 Each shim is copied to a scratch directory first, together with the repository's LICENSE, so the
 license file ships in the wheel and the sdist and the source tree stays clean. The version in the
 shim's pyproject.toml must pass ``scripts/check_version.py`` (syntax and counting rule).
@@ -29,10 +31,32 @@ import sys
 import tempfile
 import tomllib
 from pathlib import Path
+from typing import NamedTuple
 
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[2]
 SHIMS = ("arcadedb-embedded", "arcadedb-embedded-native")
+
+
+class Target(NamedTuple):
+    """The package an old name points to."""
+
+    dist: str  # the PyPI distribution the shim depends on and tells people to install
+    module: str  # the import name that distribution provides: what the shim re-exports
+
+
+# Where each old name points (the packaging layout decided on 2026-10-25, "layout v2" in ArcadeData/arcadedb-python .notes/MIGRATION.md):
+#   arcadedb-embedded        (the JVM package)    -> arcadedb-jvm, the same JVM build, so there is no silent change at run time
+#   arcadedb-embedded-native (the native package) -> arcadedb, the native build
+# ASSUMPTION: both new distributions provide the import name `arcadedb`. The layout says "import arcadedb for all" and that `arcadedb` and `arcadedb-jvm` refuse to import side by side because they share that module. Neither has a real release on PyPI yet (arcadedb 0.0.1 and arcadedb-jvm 0.0.1 are placeholders), so this cannot be checked here.
+# If a package gets another import name, change it here and in the `_NEW_MODULE` constant of that shim's `__init__.py` files; check_target() fails until both agree.
+IMPORT_NAME = "arcadedb"
+TARGETS = {
+    "arcadedb-embedded": Target(dist="arcadedb-jvm", module=IMPORT_NAME),
+    "arcadedb-embedded-native": Target(dist="arcadedb", module=IMPORT_NAME),
+}
+# the extras people installed from the old names, forwarded to the same extras of the target
+EXTRAS = ("vector", "arrow", "pandas", "polars")
 
 
 def _load_check_version():
@@ -49,6 +73,43 @@ def shim_version(shim: str) -> str:
     """The version in the shim's pyproject.toml."""
     with open(HERE / shim / "pyproject.toml", "rb") as handle:
         return tomllib.load(handle)["project"]["version"]
+
+
+def check_target(shim: str) -> None:
+    """Fail unless the shim's metadata and import constants all point at TARGETS[shim]."""
+    target = TARGETS[shim]
+    version = shim_version(shim)
+    with open(HERE / shim / "pyproject.toml", "rb") as handle:
+        project = tomllib.load(handle)["project"]
+    expected = {
+        "name": shim,
+        "description": f"Deprecated: {shim} has moved to {target.dist} (import {target.module}). Last release, a thin shim.",
+        "dependencies": [f"{target.dist}=={version}"],
+        "optional-dependencies": {
+            extra: [f"{target.dist}[{extra}]=={version}"] for extra in EXTRAS
+        },
+    }
+    problems = [
+        f"project.{key} is {project.get(key)!r}, expected {want!r}"
+        for key, want in expected.items()
+        if project.get(key) != want
+    ]
+    replaced_by = project["urls"].get("Replaced by")
+    if replaced_by != f"https://pypi.org/project/{target.dist}/":
+        problems.append(f"project.urls['Replaced by'] is {replaced_by!r}")
+    for path in sorted((HERE / shim / "src").glob("*/__init__.py")):
+        text = path.read_text(encoding="utf-8")
+        for name, want in (
+            ("_OLD_DIST", shim),
+            ("_NEW_DIST", target.dist),
+            ("_NEW_MODULE", target.module),
+        ):
+            if f'{name} = "{want}"\n' not in text:
+                problems.append(f'{path.relative_to(HERE)}: {name} is not "{want}"')
+    if problems:
+        raise SystemExit(
+            f"{shim} does not point at {target.dist}:\n  " + "\n  ".join(problems)
+        )
 
 
 def check_version(shim: str, check_pypi: bool) -> None:
@@ -92,6 +153,7 @@ def main(argv: list[str] | None = None) -> int:
 
     shims = args.shim or list(SHIMS)
     for shim in shims:
+        check_target(shim)
         check_version(shim, args.check_pypi)
     for shim in shims:
         for artifact in build(shim, args.out):
