@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# RETIRED on 2026-10-25: this script refuses to run (see the guard below).
+#
 # Regenerate the `python-bindings` branch for the periodic upstream PR
 # (ArcadeData/arcadedb). Encodes the rule proven on PR #5010:
 #
@@ -22,6 +24,22 @@
 set -euo pipefail
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
+
+# RETIRED 2026-10-25 (user decision "Stop syncing"). Do not remove this guard.
+#
+# ArcadeData/arcadedb deleted bindings/python in #10615 (commit 1e0507a522,
+# 2026-10-23, 143 files), so there is no upstream tree to send the bindings to:
+# the regenerated branch would add all of bindings/python back as a new tree.
+# The bindings continue in ArcadeData/arcadedb-python. The rest of this file is
+# kept as the record of how the periodic upstream PR was made; it is unreachable.
+echo -e "${RED}RETIRED: make-upstream-pr-branch.sh no longer runs.${NC}" >&2
+echo "" >&2
+echo "ArcadeData/arcadedb deleted bindings/python in #10615 (commit 1e0507a522," >&2
+echo "2026-10-23, 143 files), so the periodic bindings PR to it has no tree to update." >&2
+echo "Decision: \"Stop syncing\" (the user, 2026-10-25). The Python bindings continue in" >&2
+echo "https://github.com/ArcadeData/arcadedb-python" >&2
+echo "See bindings/python/docs/development/upstream-bindings-pr.md." >&2
+exit 1
 
 BRANCH="python-bindings"
 PUSH_REMOTE="${PUSH_REMOTE:-fork}"

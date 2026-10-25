@@ -1,72 +1,12 @@
-# Sending the Bindings Upstream
+# Sending the Bindings Upstream (retired)
 
-Changes made here reach ArcadeData/arcadedb through one branch, `python-bindings`, regenerated from `main` rather than edited. The order below matters: each step exists because skipping it has cost something.
+!!! danger "Retired on 2026-10-25. Do not run `make-upstream-pr-branch.sh`."
+    ArcadeData/arcadedb deleted `bindings/python` in [#10615](https://github.com/ArcadeData/arcadedb/pull/10615) (commit `1e0507a522`, 2026-10-23, 143 files). There is no upstream tree left to update, so the periodic pull request has nothing to carry, and the sync it was built on is retired too ([Syncing Upstream](sync-upstream.md)). The script now exits with an error and a message that names the decision ("Stop syncing", 2026-10-25).
 
-## 1. Sync upstream into main
+The Python bindings continue in [ArcadeData/arcadedb-python](https://github.com/ArcadeData/arcadedb-python). Send bindings changes there.
 
-```bash
-./sync-upstream.sh
-```
+Engine bugs and low-hanging engine fixes still go to ArcadeData/arcadedb, by a different route that does not touch this repository's tree: [Upstream Issues and Fixes](upstream-issues.md).
 
-Never hand-merge. The script owns the allowlist of what crosses and maintains the `upstream-main` mirror the pull-request branch is built on. See [Syncing Upstream](sync-upstream.md).
+## What the routine was (record)
 
-## 2. Reconcile the bindings with what arrived
-
-Upstream changes can move the Java surface the bindings wrap. Read what the sync brought and update the source, tests, examples, and documentation where it lands. A sync that compiles is not a sync that is correct: run the tests and the examples, not just the build.
-
-```bash
-cd bindings/python
-./scripts/build.sh linux/amd64
-uv run pytest
-```
-
-`build.sh` without a third argument packages the JARs of the published
-`arcadedata/arcadedb:<version>` image, which can lag the sources you just synced.
-To test the synced engine code, build its JARs and pass their directory as the third
-argument, `JAR_LIB_DIR` (see [Build Architecture](build-architecture.md#local-build)).
-
-## 3. Push and let CI prove it
-
-```bash
-git push origin main
-```
-
-Wait for the workflows to finish and read them. A run that reports success while a job skipped its real work is not a pass: the examples workflow skips a dataset-dependent example when its third-party host is unreachable. Check that the examples you care about actually ran.
-
-## 4. Regenerate the pull-request branch
-
-```bash
-./make-upstream-pr-branch.sh            # regenerate and force push
-./make-upstream-pr-branch.sh --no-push  # regenerate only
-```
-
-The branch is never edited directly. It is rebuilt from `main` on top of `upstream-main`, so `main` stays the single source of truth and the branch can always be thrown away.
-
-What crosses is the bare minimum: upstream's existing `bindings/python` tree with our file contents, plus whatever the wheel build, the tests, and the examples strictly need. Fork-only tooling, the benchmark harness, the notes, and result archives never cross.
-
-What the script does beyond that:
-
-- Besides `bindings/python`, it ships `.github/workflows/test-python-bindings.yml` and `.github/workflows/test-python-examples.yml`, so an edit to either workflow must also work in upstream's repository.
-- Our copies of those two workflows are never synced from upstream (they are on the sync allowlist as ours), so they can lag upstream's action pins: after regenerating, run `git diff upstream-main python-bindings -- .github/workflows`. A workflow change always crosses when it changes which engine jars the tests run against (the `engine-from-source` input, `JAR_LIB_DIR`) or what the new tests need to run (a package, an environment variable, a step), and the pull request says why. If the only differences are older pins or changes the new tests do not need, restore upstream's files on the branch (`git checkout upstream-main -- .github/workflows/test-python-bindings.yml .github/workflows/test-python-examples.yml`, then amend), so the pull request does not revert upstream's bumps. The 26.10.2 update did this (ArcadeData/arcadedb#10120).
-- It leaves out `examples/benchmark_results`, `examples/scripts`, `scripts/profile-python`, `scripts/fix_markdown.py`, `scripts/list_image_jars_by_size.sh`, and `scripts/build_and_install_locally.sh`.
-- It refuses to run while tracked files have uncommitted changes, and it warns when the branch has a top-level entry under `bindings/python` that upstream's tree lacks.
-- It ships only the tree: set the pull request's title and body by hand. The earlier ones
-  (ArcadeData/arcadedb#5807, #6889) open with "Periodic update of `bindings/python` from the
-  downstream packaging fork (humemai/arcadedb-embedded-python), rebased on current `main`.
-  No engine code.", say that the change has been shipping on PyPI as `arcadedb-embedded`,
-  most recently as which version, then explain each file that crosses outside
-  `bindings/python` and why, show the result of upstream's checks on the first push, and
-  state the scope. In a release cycle the pull request comes last, after the release and
-  the sync that follows it ([Release Workflow](release.md#8-open-the-upstream-pull-request-last)).
-
-## What upstream expects
-
-Their checks run on the pull request and some of them are stricter than ours, so run their pre-commit configuration locally before pushing the branch, over everything that crosses:
-
-```bash
-uvx pre-commit run --files $(git ls-files 'bindings/python/**' .github/workflows/test-python-bindings.yml .github/workflows/test-python-examples.yml)
-```
-
-Our own `pre-commit` job covers only `bindings/python`, and the two workflows cross too.
-
-Reporting an engine bug, and checking a fix to one of our issues, are in [Upstream Issues and Fixes](upstream-issues.md).
+Changes made here reached ArcadeData/arcadedb through one branch, `python-bindings`, regenerated from `main` on top of the `upstream-main` mirror by `make-upstream-pr-branch.sh`, after `sync-upstream.sh` and a reconcile of the bindings with whatever the sync brought. It carried upstream's existing `bindings/python` tree with our file contents, plus the two test workflows, and nothing else. The earlier pull requests were ArcadeData/arcadedb#5807, #6889 and #10120 (the 26.10.2 update). The script keeps the full rules in its comments and its git history.

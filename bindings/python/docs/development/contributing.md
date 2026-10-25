@@ -394,8 +394,8 @@ new page to the `nav` in `mkdocs.yml`.
 git clone https://github.com/YOUR_USERNAME/arcadedb-embedded-python.git
 cd arcadedb-embedded-python/bindings/python
 
-# Track this repository. Do not call the remote "upstream": this repository's own
-# scripts (sync-upstream.sh) use that name for ArcadeData/arcadedb.
+# Track this repository. Do not call the remote "upstream": in this repository's
+# checkout that name is ArcadeData/arcadedb (sync-upstream.sh, now retired, used it).
 git remote add humemai https://github.com/humemai/arcadedb-embedded-python.git
 ```
 

@@ -11,9 +11,11 @@ Complete workflow for releasing ArcadeDB Python bindings to PyPI with versioned 
 ## Where the Version Comes From
 
 This fork does not set its own version. The wheel version is derived from the root
-`pom.xml`, and `pom.xml` belongs to upstream ArcadeDB: it arrives with each
-`./sync-upstream.sh` run. Never edit it here; a local change would conflict with the
-next sync.
+`pom.xml`, and `pom.xml` belongs to upstream ArcadeDB: it used to arrive with each
+`./sync-upstream.sh` run.
+
+!!! warning "The upstream sync is retired (2026-10-25)"
+    ArcadeData/arcadedb deleted `bindings/python` in #10615 (2026-10-23), and by the user's decision of 2026-10-25 ("Stop syncing") `sync-upstream.sh` no longer runs ([Syncing Upstream](sync-upstream.md)). `pom.xml` therefore no longer advances on its own, and steps 1, 7 and 8 below, which were written around the sync, are retired. It does not need to advance: `pom.xml` stays at `26.11.1-SNAPSHOT`, and the only releases this repository still cuts match that base, the `26.11.1.devN` native previews and the final `26.11.1` warning shims for the old package names. From 26.11.1 on, `arcadedb` and `arcadedb-native` are released from ArcadeData/arcadedb-python, and this repository is archived. Any other release from here: ask first (see the root `AGENTS.md`).
 
 - Between releases, upstream's `main` reads `X.Y.Z-SNAPSHOT`, and the wheel builds as `X.Y.Z.dev0`.
 - Upstream cuts a release with a commit titled "Set release version to X.Y.Z", which
@@ -23,14 +25,16 @@ next sync.
 !!! warning "Upstream uses the same version numbers"
     ArcadeDB's release tags carry the same numbers as ours (`26.10.2` is both their
     engine release and our wheel release). Always fetch `upstream` with `--no-tags`
-    (`sync-upstream.sh` does). If their tag is ever fetched, `git tag -a X.Y.Z` fails
+    (the retired `sync-upstream.sh` did). If their tag is ever fetched, `git tag -a X.Y.Z` fails
     with "already exists", but `git push origin X.Y.Z` still succeeds and publishes
     upstream's commit. Check what a tag points to before pushing it (step 4 below).
     `git config remote.upstream.tagopt --no-tags` makes `git fetch upstream` skip tags for good.
 
 ## Release Checklist (stable `X.Y.Z`)
 
-### 1. Sync to Upstream's Release Commit
+### 1. Sync to Upstream's Release Commit (retired)
+
+This step no longer runs: `sync-upstream.sh` is retired. What follows is the record of how it worked.
 
 ```bash
 # Find upstream's release commit without fetching its tags
@@ -41,10 +45,8 @@ git log upstream/main --oneline --grep "Set release version to X.Y.Z"
 ./sync-upstream.sh --until <commit>
 ```
 
-If the merge stops on conflicts, resolve them as described in
-[Syncing Upstream](sync-upstream.md#when-the-merge-stops-on-conflicts), including the
-fork-owned restore and the `.github` prune the script skips in that case. Afterwards
-`pom.xml` reads `X.Y.Z`.
+If the merge stopped on conflicts, the fork-owned restore and the `.github` prune had to be done by hand (the earlier version of [Syncing Upstream](sync-upstream.md) in git history has the steps). Afterwards
+`pom.xml` read `X.Y.Z`.
 
 ### 2. Build and Test
 
@@ -185,7 +187,9 @@ Read the previous release at that page and keep its shape:
 - a Security section for upstream advisories that matter to embedded use;
 - what the bindings added, and a pointer to [Known Engine Issues](../guide/known-issues.md).
 
-### 7. After the Release
+### 7. After the Release (retired)
+
+This step no longer runs: `sync-upstream.sh` is retired. What follows is the record.
 
 Return `main` to upstream's development line with a normal sync. It brings the next
 `-SNAPSHOT` version; there is no version bump to make here.
@@ -194,7 +198,9 @@ Return `main` to upstream's development line with a normal sync. It brings the n
 ./sync-upstream.sh
 ```
 
-### 8. Open the Upstream Pull Request, Last
+### 8. Open the Upstream Pull Request, Last (retired)
+
+This step no longer runs: upstream deleted `bindings/python`, and the bindings continue in ArcadeData/arcadedb-python. What follows is the record.
 
 Only now regenerate the `python-bindings` branch and open the pull request to
 ArcadeData/arcadedb: it is built on the `upstream-main` mirror that this sync just
@@ -444,6 +450,6 @@ uv run --project .. --group docs mike alias --update-aliases \
 - [Documentation Development](documentation.md) - Working with MkDocs
 - [Testing Guide](testing.md) - Running test suite
 - [Contributing Guide](contributing.md) - Development workflow
-- [Syncing Upstream](sync-upstream.md) - How upstream changes arrive
+- [Syncing Upstream](sync-upstream.md) - Retired; why, and how to test an engine fix
 - [GitHub Actions Docs](https://docs.github.com/en/actions)
 - [PyPI Publishing Guide](https://packaging.python.org/en/latest/guides/publishing-package-distribution-releases-using-github-actions-ci-cd-workflows/)

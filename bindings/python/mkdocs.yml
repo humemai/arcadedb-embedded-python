@@ -219,8 +219,8 @@ nav:
   - CI/CD Setup: development/ci-setup.md
   - Contributing: development/contributing.md
   - Documentation: development/documentation.md
-  - Syncing Upstream: development/sync-upstream.md
-  - Sending the Bindings Upstream: development/upstream-bindings-pr.md
+  - Syncing Upstream (retired): development/sync-upstream.md
+  - Sending the Bindings Upstream (retired): development/upstream-bindings-pr.md
   - Upstream Issues and Fixes: development/upstream-issues.md
   - Testing: development/testing.md
   - Release Workflow: development/release.md
