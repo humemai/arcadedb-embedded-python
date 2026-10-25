@@ -495,6 +495,8 @@ jobs:
 
       # The tests of this checkout run with `arcadedb_embedded` aliased to the installed `arcadedb_native` (parity/alias), in a clean
       # environment that contains the wheel and the test dependencies, not the source tree. The same dependency set as the preview chain.
+      # setuptools is one of them: tests/test_wheel_packages.py runs `setup.py build_py`, and a Python 3.12 environment has no setuptools
+      # (the Ubuntu runners' system Python happens to have one; the macOS and Windows runners' Python does not, so both failed on it).
       - name: Run the parity suite
         run: |
           set -euo pipefail
@@ -503,7 +505,7 @@ jobs:
           cores="$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
           uv run --no-project --python 3.12 --with "$w" --with pytest --with numpy --with requests --with jpype1 --with pyarrow \
             --with polars --with pandas --with duckdb --with networkx --with "psycopg[binary]" --with adbc-driver-postgresql \
-            --with redis --with neo4j --with ladybug \
+            --with redis --with neo4j --with ladybug --with setuptools \
             python bindings/python/native-wheel/parity/parity_wheel.py --repo "$GITHUB_WORKSPACE" \
               --alias "$GITHUB_WORKSPACE/bindings/python/native-wheel/parity/alias" --backend native \
               --out "$T/parity/parity-wheel.tsv" --cores "0-$((cores - 1))" | tee "$T/parity/parity-wheel.run.log"

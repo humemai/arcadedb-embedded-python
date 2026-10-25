@@ -61,6 +61,9 @@ def test_backend_selection_imports_without_native_library(tmp_path):
     """A fresh interpreter, as the wheel's ``test_install.py`` runs: the JVM backend is the default."""
     root = _built_root(tmp_path)
     env = {"PATH": os.environ["PATH"]}
+    if "SYSTEMROOT" in os.environ:
+        # Windows: a child process without SYSTEMROOT cannot import socket (winsock does not initialise), and any dependency may.
+        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
     if root is not None:
         env["PYTHONPATH"] = str(root)
     code = (
