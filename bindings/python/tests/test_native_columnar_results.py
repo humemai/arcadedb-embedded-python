@@ -299,3 +299,52 @@ def test_a_cursor_read_row_by_row_matches(temp_db):
                 r.get("id") for r in db.query("sql", "SELECT id, s FROM T ORDER BY id")
             ]
             assert seen == list(range(600)), label
+
+
+def test_record_rows_of_several_batches(temp_db):
+    """Record rows (a meta table next to the columns) in batches of 256 and 2048 rows: the first N-R2 build wrote bitmaps for the meta columns
+    and failed from 65 rows on (found by the transport probe's SELECT FROM D, not by the 20-row cases).
+    """
+    db, rows = _db(temp_db, 5000)
+    got = _modes(db, "SELECT FROM T ORDER BY id")
+    assert [r["id"] for r in got] == list(range(5000))
+    with mode(True, 1):
+        rs = db.query("sql", "SELECT FROM T ORDER BY id")
+        first, count = next(iter(rs)), 1 + sum(1 for _ in rs)
+        assert count == 5000 and first.get_rid() is not None
+
+
+def test_the_probes_wide_table_in_every_mode(temp_db):
+    """The transport probe's table and queries (id, grp, val, cat, txt, vec of 32 floats; 3,000 rows), record rows and a projection."""
+    db = temp_db
+    db.command("sql", "CREATE DOCUMENT TYPE D")
+    for p, t in (
+        ("id", "INTEGER"),
+        ("grp", "INTEGER"),
+        ("val", "DOUBLE"),
+        ("cat", "STRING"),
+        ("txt", "STRING"),
+        ("vec", "ARRAY_OF_FLOATS"),
+    ):
+        db.command("sql", f"CREATE PROPERTY D.{p} {t}")
+    db.insert_many(
+        "D",
+        [
+            {
+                "id": i,
+                "grp": i % 10,
+                "val": i * 0.37,
+                "cat": f"category-{i % 20}",
+                "txt": "t" + "x" * (5 + i % 25),
+                "vec": [f32((i + j) / 7.0) for j in range(32)],
+            }
+            for i in range(3000)
+        ],
+    )
+    for sql in (
+        "SELECT FROM D LIMIT 3000",
+        "SELECT id, grp, val, cat, txt, vec FROM D LIMIT 3000",
+    ):
+        got = _modes(db, sql)
+        assert len(got) == 3000
+        assert all(len(r["vec"]) == 32 for r in got)

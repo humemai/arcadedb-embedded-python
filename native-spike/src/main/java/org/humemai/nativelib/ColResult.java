@@ -505,7 +505,7 @@ final class ColResult {
         metaType.off = new int[Math.max(16, r + 16) + 1];
         metaRid.blob = new byte[256];
         metaType.blob = new byte[256];
-        metaRid.pres = null;
+        metaRid.pres = metaType.pres = null; // the meta columns carry no bitmaps (Frame.layout reads this)
       }
       if (metaKind.length <= r)
         metaKind = Arrays.copyOf(metaKind, metaKind.length * 2);
