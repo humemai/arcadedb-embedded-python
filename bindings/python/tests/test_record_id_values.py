@@ -37,7 +37,8 @@ def graph_db(temp_db):
             db.command(
                 "sql",
                 "CREATE EDGE Knows FROM (SELECT FROM Person WHERE name = 'ann') "
-                f"TO (SELECT FROM Person WHERE name = '{target}')",  # nosec B608 - test-owned literals
+                "TO (SELECT FROM Person WHERE name = ?)",
+                target,
             ).close()
         db.command(
             "sql",
