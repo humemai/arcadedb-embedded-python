@@ -14,11 +14,17 @@ from ..graph import Vertex as _BaseVertex
 from . import not_yet
 from .codec import RID
 
+_JAVA_OBJECT = None
+
 
 def _java_object():
-    from .database import _JavaObject
+    """The one stand-in for the Java object of a record (it has no state: any use of it says so); made on first use, as database.py imports this module."""
+    global _JAVA_OBJECT
+    if _JAVA_OBJECT is None:
+        from .database import _JavaObject
 
-    return _JavaObject()
+        _JAVA_OBJECT = _JavaObject()
+    return _JAVA_OBJECT
 
 
 _UNSAVED = "#-1:-1"
@@ -186,14 +192,16 @@ class Edge(_Mixin, _BaseEdge):
         return self._end("outV")
 
 
+_CLASS_OF = {"v": Vertex, "e": Edge}
+
+
 def _wrap(database, row):
     """The wrapper for a result row that is a record (vertex, edge or document); None for a projection."""
     meta = row._meta
     if not meta:
         return None
     rid, type_name, kind = meta
-    cls = {"v": Vertex, "e": Edge}.get(kind, Document)
-    return cls(database, type_name, rid, row._props)
+    return _CLASS_OF.get(kind, Document)(database, type_name, rid, row._props)
 
 
 def _wrap_dict(database, record: dict, kind: str = "d"):

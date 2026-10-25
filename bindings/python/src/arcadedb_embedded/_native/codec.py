@@ -66,6 +66,8 @@ def _default(value, _bin=None):
 
 _PLAIN = frozenset((str, int, float, bool, type(None)))
 _dumps = json.dumps
+# the C function json.dumps writes a str with
+_enc_str = json.encoder.encode_basestring_ascii
 _fast = os.environ.get("ARCADEDB_NATIVE_FASTENC", "1") != "0"
 
 
@@ -95,6 +97,16 @@ def encode_params(args, binary=False):
         return ("", None, 0) if binary else ""
     values = args[0] if len(args) == 1 and isinstance(args[0], (list, tuple)) else args
     plain = _PLAIN
+    if _fast and len(values) == 1:
+        # one int or str parameter (the point read, WHERE id = ?): the text is written directly, the bytes json.dumps({"pos": [v]}) gives, without the set of types and the encoder call
+        v = values[0]
+        t = type(v)
+        if t is int:
+            text = '{"pos": [%d]}' % v
+            return (text, None, 0) if binary else text
+        if t is str:
+            text = '{"pos": [%s]}' % _enc_str(v)
+            return (text, None, 0) if binary else text
     if _fast and set(map(type, values)) <= plain:
         # all plain scalars (the per-row INSERT of a load): the cached default encoder, no default hook, no per-call encoder object
         text = _dumps({"pos": values if type(values) is list else list(values)})

@@ -268,6 +268,32 @@ def call_bin(name: str, *args):
     return raw.decode("utf-8"), floats
 
 
+def exec_query(handle, flags, language, command, params, count):
+    """``arcadedb_n_exec`` for a statement whose parameters need no float side buffer: the same ``(text, floats)`` as
+    :func:`call_bin` returns for it. The entry point is looked up once per library, not by name per call, the isolate thread is read
+    without a function call and no argument tuple is built; the reply is read as :func:`call_bin` reads it.
+    """
+    lib = _lib or _load()
+    t = _local.__dict__.get("thread")
+    th = t.handle if t is not None else _thread_handle()
+    ptr = lib.arcadedb_n_exec(th, handle, flags, language, command, params, count)
+    try:
+        raw = ctypes.string_at(ptr)
+        floats = None
+        # a negative start counts from the end and stops at 0 for a short reply
+        i = raw.rfind(b',"bin":', -40)
+        if i >= 0 and raw.endswith(b"}"):
+            n = int(raw[i + 7 : -1])
+            import numpy as np
+
+            off = (len(raw) + 1 + 3) & ~3
+            floats = np.frombuffer(ctypes.string_at(ptr + off, 4 * n), dtype=np.float32)
+            raw = raw[:i] + b"}"
+    finally:
+        lib.arcadedb_free(th, ptr)
+    return raw.decode("utf-8"), floats
+
+
 def call_void(name: str, *args) -> None:
     """Run an entry point that returns nothing (``arcadedb_n_set_upcall``)."""
     lib = _lib or _load()
