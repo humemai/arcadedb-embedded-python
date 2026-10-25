@@ -75,6 +75,11 @@ def db():
 
 
 def _assert_wraps_the_java_error(error):
+    if os.environ.get("ARCADEDB_BACKEND", "jpype").lower() == "native":
+        # no Java exception object to chain: the engine's error is named in the message, which is what the other backend's cause adds
+        assert str(error).startswith("Reading the result set failed: ")
+        assert "Exception: " in str(error), str(error)
+        return
     cause = error.__cause__
     assert isinstance(cause, jpype.JException), f"cause is {type(cause)!r}"
     assert isinstance(cause, jpype.JClass("java.lang.RuntimeException"))

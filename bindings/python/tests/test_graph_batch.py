@@ -1,9 +1,12 @@
 import contextlib
+import os
 from datetime import datetime
 
 import arcadedb_embedded as arcadedb
 import pytest
 from arcadedb_embedded.exceptions import ArcadeDBError
+
+_NATIVE = os.environ.get("ARCADEDB_BACKEND", "jpype").lower() == "native"
 
 
 def test_graph_batch_creates_vertices_and_edges(temp_db_path):
@@ -524,6 +527,11 @@ def test_graph_batch_create_vertices_keyboard_interrupt_rolls_back(
 # untouched transaction, so a change that commits quietly again, or one that stops refusing
 # without leaving the transaction alone, fails them.
 def _is_the_engines_refusal(error):
+    if _NATIVE:
+        # no Java exception object to chain: the engine's class is named in the message
+        return isinstance(error, ArcadeDBError) and "IllegalStateException" in str(
+            error
+        )
     import jpype
 
     return isinstance(error, ArcadeDBError) and isinstance(
@@ -717,11 +725,33 @@ def test_graph_batch_close_refused_in_the_callers_transaction_can_be_retried(
                 + batch.get_deferred_incoming_edge_count()
                 > 0
             )
+            if (
+                not _NATIVE
+            ):  # native: BACKLOG-bindings.md P-04, pinned by the test below
+                with pytest.raises(ArcadeDBError, match="already in progress"):
+                    db.graph_batch(parallel_flush=False)
+        finally:
+            batch.close()
+        assert db.count_type("E") == 2
+        db.graph_batch(parallel_flush=False).close()
+
+
+@pytest.mark.xfail(
+    _NATIVE,
+    strict=True,
+    reason="BACKLOG-bindings.md P-04: the native glue builds its batch with GraphBatch.builder(db), which takes no part in the engine's "
+    "single-batch guard (LocalDatabase.batchStarted); the JPype path goes through db.batch(). Two batches on one database lose edges.",
+)
+def test_a_second_graph_batch_is_refused_while_one_is_open(temp_db_path):
+    """#5666: two concurrent GraphBatch instances on one database silently lose edges, so the engine refuses the second."""
+    with arcadedb.create_database(temp_db_path) as db:
+        _vertex_edge_note_types(db)
+        batch = db.graph_batch(parallel_flush=False)
+        try:
             with pytest.raises(ArcadeDBError, match="already in progress"):
                 db.graph_batch(parallel_flush=False)
         finally:
             batch.close()
-        assert db.count_type("E") == 2
         db.graph_batch(parallel_flush=False).close()
 
 

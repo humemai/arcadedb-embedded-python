@@ -3,7 +3,6 @@ beam argument: three engine features the vector guide documents and the
 benchmark harness depends on (guide/vectors.md, 2026-09-07)."""
 
 import arcadedb_embedded as arcadedb
-import jpype.types as jtypes
 import pytest
 
 DIMS = 512
@@ -37,7 +36,7 @@ def _neighbours(db, toks, wts, k=5):
     rows = db.query(
         "sql",
         "SELECT id FROM (SELECT expand(`vector.sparseNeighbors`('SDoc[tokens,weights]', ?, ?, ?)))",
-        jtypes.JArray(jtypes.JInt)(toks),
+        arcadedb.to_java_int_array(toks),
         arcadedb.to_java_float_array(wts),
         k,
     ).to_list()
@@ -119,7 +118,7 @@ def _scores_against_exact(db, type_name, meta):
                 "sql",
                 f"INSERT INTO {type_name} SET id = ?, tokens = ?, weights = ?",
                 i,
-                jtypes.JArray(jtypes.JInt)(toks),
+                arcadedb.to_java_int_array(toks),
                 arcadedb.to_java_float_array(wts),
             )
     db.command("sql", f"COMPACT INDEX `{type_name}[tokens,weights]`")
@@ -128,7 +127,7 @@ def _scores_against_exact(db, type_name, meta):
         "sql",
         "SELECT id, score FROM (SELECT expand(`vector.sparseNeighbors`("
         f"'{type_name}[tokens,weights]', ?, ?, ?)))",  # nosec B608 - test type name
-        jtypes.JArray(jtypes.JInt)(list(query)),
+        arcadedb.to_java_int_array(list(query)),
         arcadedb.to_java_float_array(list(query.values())),
         5,
     ).to_list()
