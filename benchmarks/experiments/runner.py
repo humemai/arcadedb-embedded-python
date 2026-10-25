@@ -1028,7 +1028,7 @@ BACKENDS = {
     # LanceDB (vectors) + LadybugDB (graph) in ONE Python process, the embedded
     # counterpart of the composed Qdrant + Neo4j stack. It runs in the dense
     # image (chromadb, lancedb, sqlite-vec, duckdb, and since this arm
-    # ladybug==0.21.2, the pin the client image carries); SQLite is the stdlib's.
+    # ladybug==0.22.0, the pin the client image carries); SQLite is the stdlib's.
     "composed_embedded_sqlite_lance_ladybug": {
         "topology": "embedded",
         "image": "dbbench:dense",
