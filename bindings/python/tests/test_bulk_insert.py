@@ -2,6 +2,7 @@
 
 import datetime
 
+import arcadedb_embedded as arcadedb
 import pytest
 
 
@@ -144,6 +145,104 @@ class TestInsertMany:
         temp_db.insert_many("Tx", [{"k": 1}, {"k": 2}], commit_every=0)
         temp_db.commit()
         assert _count(temp_db, "Tx") == 2
+
+
+class TestInsertManyVertexType:
+    """insert_many and insert_columns into a VERTEX type store real vertices.
+
+    The JVM wheel raised "Cannot create a document of type ... because is not a
+    document type" (the Java helper called newDocument), while the native wheel
+    accepted the same call (found 2026-10-25 by a parity probe between the two
+    wheels). A record counts as a vertex when an edge can join it: CREATE EDGE
+    refuses a record that is not one.
+    """
+
+    ROWS = 25
+
+    def _vertex_db(self, db, name="Vtx", buckets=None):
+        suffix = f" BUCKETS {buckets}" if buckets else ""
+        db.command("sql", f"CREATE VERTEX TYPE {name}{suffix}")
+        db.command("sql", "CREATE EDGE TYPE Knows")
+
+    def _assert_vertices(self, db, name, expected):
+        assert _count(db, name) == expected
+        with db.transaction():
+            db.command(
+                "sql",
+                f"CREATE EDGE Knows FROM (SELECT FROM {name} WHERE id = 0) "  # nosec B608 - test-owned type name, no user input
+                f"TO (SELECT FROM {name} WHERE id = 1)",
+            )
+        assert _count(db, "Knows") == 1
+        out = db.query(
+            "sql",
+            f"SELECT out('Knows').size() AS n FROM {name} WHERE id = 0",  # nosec B608 - test-owned type name, no user input
+        ).to_list()[0]["n"]
+        assert out == 1
+
+    def test_insert_many(self, temp_db):
+        self._vertex_db(temp_db)
+        rows = [{"id": i, "name": f"v{i}", "tags": ["a"]} for i in range(self.ROWS)]
+        assert temp_db.insert_many("Vtx", rows, commit_every=10) == self.ROWS
+        self._assert_vertices(temp_db, "Vtx", self.ROWS)
+        got = temp_db.query("sql", "SELECT FROM Vtx WHERE id = 7").to_list()[0]
+        assert got["name"] == "v7"
+        assert list(got["tags"]) == ["a"]
+
+    def test_insert_many_parallel(self, temp_db):
+        self._vertex_db(temp_db, buckets=2)
+        rows = [{"id": i} for i in range(2000)]
+        assert temp_db.insert_many("Vtx", rows, parallel=True) == 2000
+        self._assert_vertices(temp_db, "Vtx", 2000)
+
+    def test_insert_many_non_json_fallback(self, temp_db):
+        self._vertex_db(temp_db)
+        rows = [
+            {"id": i, "when": datetime.datetime(2026, 7, 25, 12, 0, i)}
+            for i in range(3)
+        ]
+        assert temp_db.insert_many("Vtx", rows) == 3
+        self._assert_vertices(temp_db, "Vtx", 3)
+
+    def test_insert_many_inside_a_caller_transaction(self, temp_db):
+        self._vertex_db(temp_db)
+        with pytest.raises(RuntimeError):
+            with temp_db.transaction():
+                temp_db.insert_many("Vtx", [{"id": 0}, {"id": 1}], commit_every=1)
+                raise RuntimeError("roll back")
+        assert _count(temp_db, "Vtx") == 0
+        with temp_db.transaction():
+            temp_db.insert_many("Vtx", [{"id": 0}, {"id": 1}], commit_every=1)
+        self._assert_vertices(temp_db, "Vtx", 2)
+
+    def test_insert_columns(self, temp_db):
+        import numpy as np
+
+        self._vertex_db(temp_db)
+        assert temp_db.insert_columns("Vtx", {"id": np.arange(5, dtype="int64")}) == 5
+        self._assert_vertices(temp_db, "Vtx", 5)
+
+    def test_insert_columns_parallel(self, temp_db):
+        import numpy as np
+
+        self._vertex_db(temp_db, buckets=2)
+        n = 1000
+        assert (
+            temp_db.insert_columns(
+                "Vtx", {"id": np.arange(n, dtype="int64")}, parallel=True
+            )
+            == n
+        )
+        self._assert_vertices(temp_db, "Vtx", n)
+
+    def test_an_edge_type_is_refused(self, temp_db):
+        self._vertex_db(temp_db)
+        with pytest.raises(arcadedb.ArcadeDBError, match="Knows"):
+            temp_db.insert_many("Knows", [{"id": 1}])
+        assert _count(temp_db, "Knows") == 0
+
+    def test_a_missing_type_still_raises(self, temp_db):
+        with pytest.raises(arcadedb.ArcadeDBError, match="Nope"):
+            temp_db.insert_many("Nope", [{"id": 1}])
 
 
 class TestInsertManyParallelReportsFailures:

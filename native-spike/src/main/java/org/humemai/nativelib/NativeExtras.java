@@ -35,6 +35,9 @@ import com.arcadedb.integration.exporter.Exporter;
 import com.arcadedb.integration.importer.Importer;
 import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.query.sql.executor.ResultSet;
+import com.arcadedb.schema.DocumentType;
+import com.arcadedb.schema.EdgeType;
+import com.arcadedb.schema.VertexType;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.c.function.CEntryPoint;
 import org.graalvm.nativeimage.c.function.CFunctionPointer;
@@ -240,7 +243,9 @@ public final class NativeExtras {
     try {
       final Database db = ArcadeNative.db(dbh);
       final Map<String, Object> o = args(options);
-      GraphBatch.Builder b = GraphBatch.builder(db);
+      // db.batch(), as the JPype path: it hands the builder the engine's single-batch guard (LocalDatabase.batchStarted, taken by build() and
+      // released by close()), which GraphBatch.builder(db) bypasses; a second batch while one is open is refused instead of losing edges (P-04)
+      GraphBatch.Builder b = db.batch();
       for (final Map.Entry<String, Object> e : o.entrySet()) {
         final Object v = e.getValue();
         final int iv = intOf(v, 0);
@@ -383,6 +388,19 @@ public final class NativeExtras {
   @SuppressWarnings("unchecked")
   private static Object[] objects(final Object list) {
     return ((List<Object>) list).toArray();
+  }
+
+  /**
+   * Whether a bulk load into the type creates vertices (true) or documents (false).
+   *
+   * @throws IllegalArgumentException for an edge type: an edge cannot be created without its two endpoints
+   */
+  private static boolean isVertexType(final Database db, final String typeName) {
+    final DocumentType type = db.getSchema().getType(typeName);
+    if (type instanceof EdgeType)
+      throw new IllegalArgumentException("Cannot bulk-insert into '" + typeName
+          + "' because it is an edge type; load the vertices, then create the edges (graph_batch().new_edges() or CREATE EDGE)");
+    return type instanceof VertexType;
   }
 
   /**
@@ -539,8 +557,12 @@ public final class NativeExtras {
         };
         final String type = (String) a.get("type");
         try {
-          for (final Object row : (List<Object>) a.get("rows")) {
-            final MutableDocument doc = db.newDocument(type);
+          final List<Object> rows = (List<Object>) a.get("rows");
+          // the type is looked up once per call, as DocumentBatcher does on the JPype path (humemai #519): a vertex type gets vertices,
+          // a document type documents, an edge type is refused (an edge needs both endpoints); a missing type raises the schema's own error
+          final boolean vertex = !rows.isEmpty() && isVertexType(db, type);
+          for (final Object row : rows) {
+            final MutableDocument doc = vertex ? db.newVertex(type) : db.newDocument(type);
             for (final Map.Entry<String, Object> e : ((Map<String, Object>) row).entrySet())
               doc.set(e.getKey(), e.getValue());
             ex.createRecord(doc, null, onError);

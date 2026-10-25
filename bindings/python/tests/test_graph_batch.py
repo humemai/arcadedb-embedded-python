@@ -725,23 +725,14 @@ def test_graph_batch_close_refused_in_the_callers_transaction_can_be_retried(
                 + batch.get_deferred_incoming_edge_count()
                 > 0
             )
-            if (
-                not _NATIVE
-            ):  # native: BACKLOG-bindings.md P-04, pinned by the test below
-                with pytest.raises(ArcadeDBError, match="already in progress"):
-                    db.graph_batch(parallel_flush=False)
+            with pytest.raises(ArcadeDBError, match="already in progress"):
+                db.graph_batch(parallel_flush=False)
         finally:
             batch.close()
         assert db.count_type("E") == 2
         db.graph_batch(parallel_flush=False).close()
 
 
-@pytest.mark.xfail(
-    _NATIVE,
-    strict=True,
-    reason="BACKLOG-bindings.md P-04: the native glue builds its batch with GraphBatch.builder(db), which takes no part in the engine's "
-    "single-batch guard (LocalDatabase.batchStarted); the JPype path goes through db.batch(). Two batches on one database lose edges.",
-)
 def test_a_second_graph_batch_is_refused_while_one_is_open(temp_db_path):
     """#5666: two concurrent GraphBatch instances on one database silently lose edges, so the engine refuses the second."""
     with arcadedb.create_database(temp_db_path) as db:
@@ -753,6 +744,73 @@ def test_a_second_graph_batch_is_refused_while_one_is_open(temp_db_path):
         finally:
             batch.close()
         db.graph_batch(parallel_flush=False).close()
+
+
+def test_two_concurrent_batches_on_one_hub_lose_no_edge(temp_db_path):
+    """#5666 on both wheels: a batch that finds another open is refused, so two writers that
+    load edges onto the same hub vertex take turns and every edge lands (counts exact).
+
+    The first writer holds its batch open until the second has tried to open one. If that
+    attempt were not refused, both batches would be open at once and the loser's edges on the
+    hub would be orphaned at close (P-04 on the native wheel before the glue went through db.batch()).
+    """
+    import threading
+    import time
+
+    per_writer = 300
+    with arcadedb.create_database(temp_db_path) as db:
+        _vertex_edge_note_types(db)
+        with db.graph_batch(parallel_flush=False) as seed:
+            hub = seed.create_vertices("V", 1)[0]
+            spokes = [seed.create_vertices("V", per_writer) for _ in range(2)]
+        first_open = threading.Event()
+        second_tried = threading.Event()
+        refusals, errors = [], []
+
+        def writer(index):
+            try:
+                if index == 1:
+                    first_open.wait(30)
+                batch = None
+                while batch is None:
+                    try:
+                        batch = db.graph_batch(parallel_flush=False)
+                    except ArcadeDBError as e:
+                        assert "already in progress" in str(e), repr(e)
+                        refusals.append(index)
+                        time.sleep(0.01)
+                    if index == 1:
+                        second_tried.set()
+                if index == 0:
+                    first_open.set()
+                    assert second_tried.wait(
+                        30
+                    ), "the second writer never tried to open a batch"
+                try:
+                    for dst in spokes[index]:
+                        batch.new_edge(hub, "E", dst)
+                finally:
+                    batch.close()
+            except BaseException as e:  # reported by the main thread
+                errors.append(repr(e))
+                first_open.set()
+                second_tried.set()
+
+        threads = [threading.Thread(target=writer, args=(i,)) for i in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(120)
+        assert not any(t.is_alive() for t in threads)
+        assert errors == []
+        assert db.count_type("E") == 2 * per_writer
+        out = db.query(
+            "sql", f"SELECT out('E').size() AS n FROM {hub}"
+        ).to_list()  # nosec B608 - a RID from this test
+        assert out[0]["n"] == 2 * per_writer
+        assert (
+            1 in refusals
+        ), "the second batch was not refused while the first was open"
 
 
 def test_graph_batch_leaves_the_callers_wal_setting_alone(temp_db_path):
