@@ -80,6 +80,45 @@ public final class RowAccess {
   }
 
   /**
+   * The first two rows of a result set (fewer when it has fewer), and the result set is closed on every path: the
+   * {@code hasNext()}, {@code next()} calls of {@code ResultSet.one()} in one crossing instead of one per row. The array
+   * length tells the caller which case it has: 0 rows, exactly 1, or more than 1 (the second row is read, as before, so
+   * an error in it surfaces from here and is not mistaken for a result). An error in the statement surfaces from
+   * {@code hasNext()} or {@code next()}; a failing close is ignored, as the Python close() ignores it.
+   */
+  public static Result[] upToTwoAndClose(final ResultSet rs) {
+    try {
+      if (!rs.hasNext())
+        return new Result[0];
+      final Result first = rs.next();
+      if (!rs.hasNext())
+        return new Result[] { first };
+      return new Result[] { first, rs.next() };
+    } finally {
+      try {
+        rs.close();
+      } catch (final Exception ignored) {
+        // best-effort hygiene, like the Python close()
+      }
+    }
+  }
+
+  /**
+   * The number of rows left in a result set, which is then drained and closed (see {@link RowBatcher#closeDrained}):
+   * the {@code hasNext()}, {@code next()} pair per row of {@code ResultSet.count()} in one crossing. An error in the
+   * statement surfaces as before and leaves the result set as it was, for the caller to close.
+   */
+  public static long countAndClose(final ResultSet rs) {
+    long count = 0;
+    while (rs.hasNext()) {
+      rs.next();
+      count++;
+    }
+    RowBatcher.closeDrained(rs);
+    return count;
+  }
+
+  /**
    * {@code row.getProperty(name)} when {@code row.hasProperty(name)}, else null: the two calls of
    * {@code Result.get()} in one crossing.
    */
