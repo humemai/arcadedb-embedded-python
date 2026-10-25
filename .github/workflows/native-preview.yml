@@ -55,7 +55,7 @@ env:
   PYTHONUTF8: "1" # Windows defaults to cp1252; the notices contain non-ASCII author names
   # The platforms (matrix keys) whose parity run must pass before a tag publishes. Others publish too when they passed, and are only
   # informational otherwise. Promote a platform here once it is green.
-  REQUIRED_PLATFORMS: "linux-x86_64 linux-aarch64 macos-arm64"
+  REQUIRED_PLATFORMS: "linux-x86_64 linux-aarch64 macos-arm64 windows-x64"
 
 jobs:
   version:
