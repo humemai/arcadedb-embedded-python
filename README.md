@@ -1,5 +1,7 @@
 # ArcadeDB Embedded for Python
 
+> **Moved: the Python bindings now live in [ArcadeData/arcadedb-python](https://github.com/ArcadeData/arcadedb-python).** Install `arcadedb` (the native build, the default) or `arcadedb-jvm` (the JVM build); both use `import arcadedb`. [Which package?](https://github.com/ArcadeData/arcadedb-python/blob/main/docs/modules/ROOT/pages/which-package.adoc) explains the choice. The first releases of the new packages are 26.11.1, starting as pre-releases (`pip install --pre arcadedb`). `arcadedb-embedded` and `import arcadedb_embedded` are deprecated: `arcadedb-embedded` will get a last release that installs `arcadedb`. Report bindings issues and send bindings pull requests to the new repository. This repository will be archived; the benchmark tooling stays here for now.
+
 Native Python bindings for ArcadeDB (forked from the official Java project).
 
 [![PyPI](https://img.shields.io/pypi/v/arcadedb-embedded)](https://pypi.org/project/arcadedb-embedded/)
