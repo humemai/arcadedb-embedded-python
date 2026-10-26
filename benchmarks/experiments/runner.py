@@ -3146,6 +3146,26 @@ class CpuDmaLatencyHold:
         return row
 
 
+def precell_gate_stamp(row, environ=None):
+    """Write the stage's pre-cell temperature gate outcome into the row: `precell_gate_temp_c` (package temperature when the gate let
+    the cell go, absent when the sensor was unreadable), `precell_gate_wait_s`, `precell_gate_ok` (False: the 15 min cap passed with
+    the package still above the limit, or no sensor) and `precell_gate_max_c`. The stage (make_2611_stages.py temp_gate) passes them in
+    BENCH_PRECELL_GATE_*; a cell run without the gate (the variables unset) gets no fields. A malformed value is skipped, never fatal."""
+    env = os.environ if environ is None else environ
+    ok = env.get("BENCH_PRECELL_GATE_OK")
+    if ok not in ("true", "false"):
+        return row
+    row["precell_gate_ok"] = ok == "true"
+    for key, var, conv in (("precell_gate_temp_c", "BENCH_PRECELL_GATE_TEMP_C", float),
+                           ("precell_gate_wait_s", "BENCH_PRECELL_GATE_WAIT_S", int),
+                           ("precell_gate_max_c", "BENCH_PRECELL_GATE_MAX_C", int)):
+        try:
+            row[key] = conv(env[var])
+        except (KeyError, ValueError):
+            pass
+    return row
+
+
 def run_cell(job, rep, scale, cpuset, tier, net_name):
     job["_scale"] = scale
     """Run one cell (backend x workload x scale, one repeat). Returns row dict."""
@@ -4446,6 +4466,7 @@ def main():
                 with CpuDmaLatencyHold(cpu_dma_latency_target()) as _hold:
                     row = run_cell(job, rep, args.scale, shard, args.tier, net_name)
                     _hold.stamp(row)
+                    precell_gate_stamp(row)
             except Exception:
                 with cv:
                     raised.append(f"{job['lane']}_{job['backend']}_r{rep}")

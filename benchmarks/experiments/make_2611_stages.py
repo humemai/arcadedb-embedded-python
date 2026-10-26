@@ -1354,6 +1354,7 @@ say "$ID START: {title}, {nbe} engines, rep pass $PASS of $REPS, pin $PIN, instr
 
 {cap_rule_helpers}
 {rep_helpers}
+{temp_gate_helpers}
 run_overlay() {{  # <label> <scale> <cap> <be> <wl> <driver> <outdir> <rf> <reps> <env>
   local label=$1 scale=$2 cap=$3 be=$4 wl=$5 drv=$6 outdir=$7 orf=$8 oreps=$9 oenv=${{10}}
   # ONE RECORDED FAILURE PER ARM (BUGS F162, DECISIONS #127). Rep 1 first; the later passes run only when rep 1 left a clean row
@@ -1361,6 +1362,7 @@ run_overlay() {{  # <label> <scale> <cap> <be> <wl> <driver> <outdir> <rf> <reps
   cap_rule_skip "$label" "$be|$wl|" && return 0
   [ "$PASS" -le "$oreps" ] || return 0
   rep_gate "$label" || return 0
+  temp_gate "$label"
   local onlyreps=
   [ "$oreps" -lt 2 ] || onlyreps="--only-reps $PASS"
   if env $oenv python3 runner.py --lanes {lane} --scale "$scale" --backends "$be" \\
@@ -1385,6 +1387,7 @@ run_cell() {{   # run_cell <label> <scale> <cap> <backend> <workload> <env-or-em
   local dur=${{7:-}}
   cap_rule_skip "$label" "$be|$wl|$dur" && return 0
   rep_gate "$label" || return 0
+  temp_gate "$label"
   env $envset python3 runner.py --lanes {lane} --scale "$scale" --backends "$be" \\
     --workloads "$wl" --tier paper --workers 1 --timeout "$cap" $dur \\
     --only-reps "$PASS" --reps "$REPS" --results-file "$RF" >> "$S" 2>&1
@@ -1423,13 +1426,50 @@ rep_gate() {  # <label>: true when this pass may run the cell; says why when it 
 """.replace("@INSTRUMENT@", INSTRUMENT)
 
 
+TEMP_GATE_HELPERS = r"""
+# PRE-CELL TEMPERATURE GATE (the user, 2026-10-26; OPEN-ITEMS #28, DECISIONS #177 amendment). With one busy core the package throttles
+# continuously at 89 C (package_throttle_count +3,340 per CPU per 30 s), so a cell's speed depended on where the previous cell left the
+# box. Every timed cell therefore starts from the same state: wait until the package is at or below GATE_MAX_C, polling every GATE_POLL_S,
+# for at most GATE_WAIT_CAP_S; then start anyway. The outcome goes to STATUS ("TEMP GATE") and, through BENCH_PRECELL_GATE_*, into the
+# cell's row (runner.precell_gate_stamp): precell_gate_temp_c, precell_gate_wait_s, precell_gate_ok, precell_gate_max_c. The sensor is the
+# hwmon named coretemp (temp1_input, the package), found by name because the hwmon numbers move; the same one as runner._thermal().
+GATE_MAX_C=70
+GATE_WAIT_CAP_S=900
+GATE_POLL_S=10
+GATE_HWMON=${BENCH_GATE_HWMON:-/sys/class/hwmon}   # only the tests point this elsewhere
+pkg_temp_mc() {  # the package temperature in millidegrees C on stdout; fails when no hwmon is named coretemp
+  local h
+  for h in "$GATE_HWMON"/hwmon*; do
+    [ "$(cat "$h/name" 2>/dev/null)" = coretemp ] || continue
+    cat "$h/temp1_input" 2>/dev/null && return 0
+  done
+  return 1
+}
+temp_gate() {  # <label>: wait for GATE_MAX_C, then go on either way; says what happened and exports it for the runner's row
+  local label=$1 t0=$SECONDS m="" ok=false said=0 tc="" w
+  while :; do
+    m=$(pkg_temp_mc) || m=""
+    case $m in ''|*[!0-9]*) m=""; tc=""; break ;; esac
+    tc="$((m / 1000)).$(((m % 1000) / 100))"
+    if [ "$m" -le $((GATE_MAX_C * 1000)) ]; then ok=true; break; fi
+    [ "$said" = 1 ] || { say "$ID: $label TEMP GATE: package $tc C is above $GATE_MAX_C C, waiting (poll $GATE_POLL_S s, cap $GATE_WAIT_CAP_S s)"; said=1; }
+    [ $((SECONDS - t0)) -lt "$GATE_WAIT_CAP_S" ] || break
+    sleep "$GATE_POLL_S"
+  done
+  w=$((SECONDS - t0))
+  export BENCH_PRECELL_GATE_TEMP_C="$tc" BENCH_PRECELL_GATE_WAIT_S="$w" BENCH_PRECELL_GATE_OK="$ok" BENCH_PRECELL_GATE_MAX_C="$GATE_MAX_C"
+  say "$ID: $label TEMP GATE: start ${tc:-unknown} C, waited $w s, gate_ok=$ok (limit $GATE_MAX_C C, cap $GATE_WAIT_CAP_S s)"
+}
+"""
+
+
 def stage_params(reps):
     """What the template takes besides the stage and the pins: the instrument, REPS and the banner, the suffix of the rows
     files they write, the pin whose rows cell_cost_check scores a tier from until this pass has measured it, the JPype pin and
     the cap rule's bash."""
     return {"instrument": INSTRUMENT, "reps": reps, "banner": BANNER, "rows_suffix": ROWS_SUFFIX, "prior": PRIOR_PIN,
             "jpype_version": bench_common.JPYPE_PIN, "cap_rule_helpers": CAP_RULE_HELPERS.lstrip("\n"),
-            "rep_helpers": REP_HELPERS.lstrip("\n"), "pass_no": 1}
+            "rep_helpers": REP_HELPERS.lstrip("\n"), "temp_gate_helpers": TEMP_GATE_HELPERS.lstrip("\n"), "pass_no": 1}
 
 
 def _pair_part(text, pins, params):
