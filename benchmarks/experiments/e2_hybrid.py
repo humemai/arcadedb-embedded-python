@@ -10,6 +10,10 @@ express it. Backends:
   composed_qdrant_neo4j  Qdrant server (vector) + Neo4j server (graph+doc)
                          in one container (dbbench:composed, DECISIONS #117)
                          with glue code -- NO cross-system txn
+  composed_embedded_sqlite_lance_ladybug
+                         SQLite (documents) + LanceDB (vectors) + LadybugDB
+                         (graph) in ONE Python process, the embedded trio an
+                         agent-memory builder starts from -- NO cross-store txn
 
 Workloads:
   hybrid     N warm ops, end-to-end latency percentiles (result-checked)
@@ -59,6 +63,28 @@ BATCH = 5_000
 # today, which is precisely why it would have gone unnoticed the day one did.
 # -1 means no cap.
 HTTP_LIMIT = -1
+
+# THE RECALL OPERATING POINT OF THE VECTOR STEP (2026-10-25, FAIRNESS F7; the measurements are in .notes/bench/repros/e2-recall-point-20261025).
+# `recall_retrieval` is the vector step ALONE: the top 10 of the whole catalog against the exact top 10 over every vector (no filter, no hop).
+# Build parameters are fixed (M 16, ef_construction 100; ArcadeDB's default maxConnections 32 is its 2 x M). The SEARCH breadth is the dial,
+# and equal breadth is not equal recall, so the rule is a recall target, not a number: RECALL_TARGET 0.95, the dense lane's headline target,
+# at both tiers. SEARCH_EF is the smallest breadth at which ArcadeDB's embedded arm (the F7 reference) reaches it on this catalog, read off an
+# untimed sweep of the 26.10.2 wheel: 0.962 and 0.966 at ef 300 on two 50k builds, 0.957 at ef 1200 on a 500k build (ef 100, the value
+# every arm used until now, reads 0.79 and 0.41; the engine's default beam, no fourth argument, reads 0.37 and 0.13). Every graph-index arm
+# searches at SEARCH_EF; ArangoDB's IVF and LanceDB's HNSW, which have no comparable breadth, are matched by effect to the same target inside
+# the cell. Each row records `vector_ef` and `recall_retrieval`; an arm below RECALL_TARGET - 0.02 on its row is not shown as matched.
+# BENCH_E2_SEARCH_EF overrides the breadth for a probe.
+RECALL_TARGET = 0.95
+SEARCH_EF = {"e2": 300, "e2_500k": 1200}
+PGVECTOR_EF_MAX = 1000   # pgvector's documented upper bound for hnsw.ef_search
+
+
+def search_ef():
+    """The search breadth of the active tier (see RECALL_TARGET)."""
+    env = os.environ.get("BENCH_E2_SEARCH_EF")
+    if env:
+        return int(env)
+    return SEARCH_EF["e2_500k" if PRODUCTS >= SCALE_PRODUCTS["e2_500k"] else "e2"]
 
 
 
@@ -287,7 +313,7 @@ class ArcadeE2:
             rows = db.query(
                 "sql",
                 "SELECT pid FROM (SELECT expand(vectorNeighbors(?, ?, ?, ?)))",
-                "Product[embedding]", a.to_java_float_array(qvec), K, 100
+                "Product[embedding]", a.to_java_float_array(qvec), K, search_ef()
             ).to_list()
             pids = [int(r["pid"]) for r in rows]
             # BOUND (DECISIONS #116 item 2): every statement of the
@@ -339,7 +365,8 @@ class ArcadeE2:
     FILTER_MODE = ("pre-filter: the candidate set is restricted first and ranked by "
                    "vector.l2Distance, exact over the candidates")
 
-    def _vec_topk(self, qvec, k, ef=100):
+    def _vec_topk(self, qvec, k, ef=None):
+        ef = search_ef() if ef is None else ef
         rows = self.db.query(
             "sql", "SELECT pid FROM (SELECT expand(vectorNeighbors(?, ?, ?, ?)))",
             "Product[embedding]", self._a.to_java_float_array(qvec), k, max(ef, k)).to_list()
@@ -490,7 +517,7 @@ class ArcadeE2Server(ArcadeE2):
         sid = r.headers.get("arcadedb-session-id")
         try:
             rows = self._post("query", "SELECT pid FROM (SELECT expand(vectorNeighbors(:idx, :q, :k, :ef)))",
-                              {"idx": "Product[embedding]", "q": [float(x) for x in qvec], "k": K, "ef": 100}, sid=sid)
+                              {"idx": "Product[embedding]", "q": [float(x) for x in qvec], "k": K, "ef": search_ef()}, sid=sid)
             pids = [int(r["pid"]) for r in rows]
             rel = self._post("query", "SELECT expand(out('RELATED')) FROM Product WHERE pid = :p",
                              {"p": pids[0]}, sid=sid)
@@ -516,7 +543,8 @@ class ArcadeE2Server(ArcadeE2):
     # embedded arm stopped post-filtering applies here unchanged. FILTER_MODE
     # is inherited, so these two must agree -- an arm that claims a pre-filter
     # and runs a post-filter would be worse than either.
-    def _vec_topk(self, qvec, k, ef=100):
+    def _vec_topk(self, qvec, k, ef=None):
+        ef = search_ef() if ef is None else ef
         rows = self._post("query", "SELECT pid FROM (SELECT expand(vectorNeighbors(:idx, :q, :k, :ef)))",
                           {"idx": "Product[embedding]", "q": [float(x) for x in qvec],
                            "k": k, "ef": max(ef, k)})
@@ -630,7 +658,7 @@ class SurrealE2:
     def hybrid_op(self, qvec, crash=False, mirror=False):
         from surrealdb import RecordID
         q = self.db.query
-        res = q(f"SELECT pid FROM product WHERE embedding <|{K},100|> $q", {"q": [float(x) for x in qvec]})
+        res = q(f"SELECT pid FROM product WHERE embedding <|{K},{search_ef()}|> $q", {"q": [float(x) for x in qvec]})
         rows = _srows(res)
         pids = [r["pid"] for r in rows][:K]
         best = pids[0]
@@ -653,7 +681,8 @@ class SurrealE2:
                    "vector::distance::euclidean")
     FILTER_ACCESS = "record ids"   # F132: the candidates are read by record id, not scanned for
 
-    def _vec_topk(self, qvec, k, ef=100):
+    def _vec_topk(self, qvec, k, ef=None):
+        ef = search_ef() if ef is None else ef
         rows = _srows(self.db.query(f"SELECT pid FROM product WHERE embedding <|{int(k)},{int(max(ef, k))}|> $q",
                                     {"q": [float(x) for x in qvec]}))
         return [int(r["pid"]) for r in rows]
@@ -774,6 +803,32 @@ class ArangoE2:
             prod.add_index({"type": "persistent", "fields": ["pid"], "name": "pid_idx"})
         with bench_common.index_timer(self):
             self.ivf_nlists, self.ivf_nprobe = arango_common.vector_index(prod, "embedding", DIM, len(vecs))
+        self._calibrate_nprobe(vecs)
+
+    def applied_ef(self):
+        """None: FAISS IVF has no ef. Its breadth is nProbe, calibrated in the build (`arangodb_ivf_nprobe_calibrated`)."""
+        return None
+
+    def _ivf_search(self, q, k, np_):
+        return [int(p) for p in self.db.aql.execute(
+            "FOR d IN product LET s = APPROX_NEAR_L2(d.embedding, @q, {nProbe: @np}) SORT s LIMIT @k RETURN d.pid",
+            bind_vars={"q": [float(x) for x in q], "np": int(np_), "k": k})]
+
+    def _calibrate_nprobe(self, vecs):
+        """nProbe by effect (FAIRNESS F7, the E2 recall rule at RECALL_TARGET): the smallest nProbe whose recall@10 on 200 held-out queries
+        (their own seed, never the timed ones) reaches the target, by the same binary search the dense lane uses. After the index build,
+        before any timed call; the result is on the row."""
+        t0 = time.perf_counter()
+        rng = np.random.default_rng(SEED + 11)
+        held = rng.standard_normal((200, DIM)).astype(np.float32)
+        held /= np.maximum(np.linalg.norm(held, axis=1, keepdims=True), 1e-12)
+        gt = np.argpartition(-(vecs @ held.T), K, axis=0)[:K].T
+        target = float(os.environ.get("BENCH_E2_RECALL_TARGET") or RECALL_TARGET)
+        self.ivf_nprobe, got = arango_common.calibrate_nprobe(self._ivf_search, held, gt, target, self.ivf_nlists, k=K)
+        self.row_extra = {**(getattr(self, "row_extra", None) or {}), "arangodb_ivf_nprobe_calibrated": int(self.ivf_nprobe),
+                          "arangodb_ivf_recall_target": target, "arangodb_ivf_calibration_recall": round(float(got), 4),
+                          "arangodb_ivf_calibration_queries": len(held),
+                          "arangodb_ivf_calibration_s": round(time.perf_counter() - t0, 2)}
 
     def hybrid_op(self, qvec, crash=False, mirror=False):
         aql = self.db.aql
@@ -947,7 +1002,8 @@ class MongoE2:
                    "on an indexed field, with exact:true so the filtered set is scanned "
                    "rather than approximated")
 
-    def _vec_topk(self, qvec, k, ef=100):
+    def _vec_topk(self, qvec, k, ef=None):
+        ef = search_ef() if ef is None else ef
         return [int(d["pid"]) for d in self.prod.aggregate([
             {"$vectorSearch": {"index": mongo_common.VECTOR_INDEX, "path": "embedding",
                                "queryVector": [float(x) for x in qvec],
@@ -1063,9 +1119,13 @@ class PgAgeE2:
         c.execute("ANALYZE")
         self.cx.commit()
 
+    def applied_ef(self):
+        """hnsw.ef_search as set: the lane's breadth, clamped to pgvector's documented maximum (PGVECTOR_EF_MAX)."""
+        return min(search_ef(), PGVECTOR_EF_MAX)
+
     def hybrid_op(self, qvec, crash=False, mirror=False):
         c = self._cur()
-        c.execute("SET LOCAL hnsw.ef_search = 100")
+        c.execute(f"SET LOCAL hnsw.ef_search = {self.applied_ef()}")
         c.execute("SELECT pid FROM product ORDER BY embedding <-> %s::vector LIMIT %s",
                   ("[" + ",".join("%.9g" % float(x) for x in qvec) + "]", K))
         pids = [int(r[0]) for r in c.fetchall()]
@@ -1089,11 +1149,12 @@ class PgAgeE2:
     def _v(self, qvec):
         return "[" + ",".join("%.9g" % float(x) for x in qvec) + "]"
 
-    def _vec_topk(self, qvec, k, ef=100):
+    def _vec_topk(self, qvec, k, ef=None):
+        ef = search_ef() if ef is None else ef
         c = self._cur()
         # SET LOCAL takes no bound parameter ("syntax error at or near $1",
         # laptop 2026-09-14); the value is a literal, as it is in hybrid_op.
-        c.execute(f"SET LOCAL hnsw.ef_search = {int(max(ef, k))}")
+        c.execute(f"SET LOCAL hnsw.ef_search = {min(int(max(ef, k)), PGVECTOR_EF_MAX)}")
         c.execute("SELECT pid FROM product ORDER BY embedding <-> %s::vector LIMIT %s", (self._v(qvec), k))
         r = [int(x[0]) for x in c.fetchall()]
         self.cx.commit()
@@ -1207,7 +1268,7 @@ class Neo4jE2:
         with self.drv.session() as s:
             tx = s.begin_transaction()
             try:
-                hits = tx.run("CYPHER 25 MATCH (p:Product) SEARCH p IN (VECTOR INDEX prod_emb FOR $q LIMIT 100) "
+                hits = tx.run(f"CYPHER 25 MATCH (p:Product) SEARCH p IN (VECTOR INDEX prod_emb FOR $q LIMIT {search_ef()}) "
                               "SCORE AS sc RETURN p.pid AS pid ORDER BY sc DESC LIMIT $k",
                               q=[float(x) for x in qvec], k=K).data()
                 pids = [int(h["pid"]) for h in hits]
@@ -1225,7 +1286,8 @@ class Neo4jE2:
     FILTER_MODE = ("pre-filter: WHERE p.pid IN $ids then ORDER BY "
                    "vector.similarity.euclidean")
 
-    def _vec_topk(self, qvec, k, ef=100):
+    def _vec_topk(self, qvec, k, ef=None):
+        ef = search_ef() if ef is None else ef
         with self.drv.session() as s:
             hits = s.run("CYPHER 25 MATCH (p:Product) SEARCH p IN (VECTOR INDEX prod_emb FOR $q LIMIT $ef) "
                          "SCORE AS sc RETURN p.pid AS pid ORDER BY sc DESC LIMIT $k",
@@ -1349,7 +1411,7 @@ class MemgraphE2:
             try:
                 hits = tx.run("CALL vector_search.search('prod_emb', $ef, $q) YIELD node, distance "
                               "RETURN node.pid AS pid ORDER BY distance LIMIT $k",
-                              ef=100, k=K, q=[float(x) for x in qvec]).data()
+                              ef=search_ef(), k=K, q=[float(x) for x in qvec]).data()
                 pids = [int(h["pid"]) for h in hits]
                 rel = tx.run("MATCH (p:Product {pid: $p})-[:RELATED]->(q) RETURN q.pid AS pid LIMIT 3", p=pids[0]).data()
                 touched = pids[:3] + [int(r["pid"]) for r in rel]
@@ -1363,7 +1425,8 @@ class MemgraphE2:
                 tx.close()
         return len(touched)
 
-    def _vec_topk(self, qvec, k, ef=100):
+    def _vec_topk(self, qvec, k, ef=None):
+        ef = search_ef() if ef is None else ef
         # The breadth as the Neo4j arm sets it: ef candidates, the nearest k kept.
         with self.drv.session() as s:
             hits = s.run("CALL vector_search.search('prod_emb', $ef, $q) YIELD node, distance "
@@ -1404,7 +1467,7 @@ class MemgraphE2:
 
 
 class LadybugE2:
-    """LadybugDB 0.21.2 alone, embedded (DECISIONS #131 item 4, from the
+    """LadybugDB 0.22.0 alone, embedded (DECISIONS #131 item 4, from the
     26.10.1 measurement): a Product node table holding a FLOAT[64] embedding
     under the official `vector` extension's HNSW index, a RELATED rel table,
     the views counter on the node; the hit, the hop, and the update run in one
@@ -1412,10 +1475,12 @@ class LadybugE2:
     2026-10-02: a rollback leaves the counters untouched, a commit applies
     them).
 
-    THE EXTENSION IS DOWNLOADED AT CONNECT, as DuckPGQ's is on the graph
-    table: `INSTALL vector` fetches it from extension.ladybugdb.com for the
-    pinned package, so the cell needs the network the DuckPGQ cells already
-    use.
+    THE EXTENSION IS BAKED INTO THE CLIENT IMAGE AT BUILD TIME, pinned by
+    sha256 (build_images.sh LADYBUG_EXTENSIONS, bake_ladybug_extensions.py;
+    2026-10-25, after the vendor overwrote the v0.21.0 download that every
+    0.21.x client reads, LadybugDB/ladybug#1390). The `INSTALL vector` at
+    connect finds the file and does nothing, so the cell needs no network
+    for it. DuckPGQ's is still downloaded at connect on the graph table.
 
     THE INDEX IS MATCHED TO THE TABLE'S HNSW SETTINGS (m 16, ef_construction
     100, search breadth 100): `mu := 16` for the upper layers, `ml := 32` for
@@ -1490,13 +1555,13 @@ class LadybugE2:
             self._rows("CALL CREATE_VECTOR_INDEX('Product', 'prod_emb', 'embedding', "
                        "mu := 16, ml := 32, efc := 100, metric := 'l2')")
 
-    _TOPK = ("CALL QUERY_VECTOR_INDEX('Product', 'prod_emb', $q, $k, efs := 100) "
+    _TOPK = ("CALL QUERY_VECTOR_INDEX('Product', 'prod_emb', $q, $k, efs := __EFS__) "
              "RETURN node.pid AS pid ORDER BY distance")
 
     def hybrid_op(self, qvec, crash=False, mirror=False):
         self._rows("BEGIN TRANSACTION")
         try:
-            pids = [int(r[0]) for r in self._rows(self._TOPK, {"q": [float(x) for x in qvec], "k": K})]
+            pids = [int(r[0]) for r in self._rows(self._TOPK.replace("__EFS__", str(search_ef())), {"q": [float(x) for x in qvec], "k": K})]
             rel = self._rows("MATCH (p:Product)-[:RELATED]->(r:Product) WHERE p.pid = $p "
                              "RETURN r.pid LIMIT 3", {"p": pids[0]})
             touched = pids[:3] + [int(r[0]) for r in rel]
@@ -1517,10 +1582,10 @@ class LadybugE2:
             raise
         return len(touched)
 
-    def _vec_topk(self, qvec, k, ef=100):
-        # efs is fixed at 100 in the text, the table's search breadth; the
-        # harness asks at most k = 10.
-        return [int(r[0]) for r in self._rows(self._TOPK, {"q": [float(x) for x in qvec], "k": k})]
+    def _vec_topk(self, qvec, k, ef=None):
+        ef = search_ef() if ef is None else ef
+        # efs is the lane's search breadth (search_ef), put into the text; the harness asks at most k = 10.
+        return [int(r[0]) for r in self._rows(self._TOPK.replace("__EFS__", str(int(max(ef, k)))), {"q": [float(x) for x in qvec], "k": k})]
 
     def _hop(self, pids):
         if not pids:
@@ -1627,7 +1692,7 @@ class DuckE2:
         with bench_common.index_timer(self):
             self.cx.execute("CREATE INDEX prod_emb ON product USING HNSW (embedding) "
                             "WITH (metric = 'l2sq', M = 16, ef_construction = 100)")
-        self.cx.execute("SET hnsw_ef_search = 100")
+        self.cx.execute(f"SET hnsw_ef_search = {search_ef()}")
 
     _TOPK = f"SELECT pid FROM product ORDER BY array_distance(embedding, ?::FLOAT[{DIM}]) LIMIT ?"
 
@@ -1659,7 +1724,8 @@ class DuckE2:
             raise
         return len(touched)
 
-    def _vec_topk(self, qvec, k, ef=100):
+    def _vec_topk(self, qvec, k, ef=None):
+        ef = search_ef() if ef is None else ef
         self.cx.execute(f"SET hnsw_ef_search = {int(max(ef, k))}")
         return [int(r[0]) for r in self.cx.execute(self._TOPK, [[float(x) for x in qvec], k]).fetchall()]
 
@@ -1795,7 +1861,7 @@ class ComposedE2:
         write it always had, and only the atomicity path mirrors."""
         from qdrant_client import models as qm
         hits = self.qc.query_points("product", query=qvec.tolist(),
-                                    search_params=qm.SearchParams(hnsw_ef=100),
+                                    search_params=qm.SearchParams(hnsw_ef=search_ef()),
                                     limit=K).points
         pids = [int(h.payload["pid"]) for h in hits]
         with self.neo.session() as s:
@@ -1833,7 +1899,8 @@ class ComposedE2:
     FILTER_MODE = ("cross-system pre-filter: the candidate ids are read from Neo4j "
                    "and sent to Qdrant as a filter")
 
-    def _vec_topk(self, qvec, k, ef=100):
+    def _vec_topk(self, qvec, k, ef=None):
+        ef = search_ef() if ef is None else ef
         from qdrant_client import models as qm
         hits = self.qc.query_points("product", query=list(map(float, qvec)), limit=k,
                                     search_params=qm.SearchParams(hnsw_ef=max(ef, k))).points
@@ -1894,8 +1961,315 @@ class ComposedE2:
         self.neo.close()
 
 
+class ComposedEmbeddedE2:
+    """SQLite (documents) + LanceDB (vectors) + LadybugDB (graph), three embedded
+    engines in ONE Python process, with glue code: the default trio of the
+    Cognee-style agent-memory builders and the embedded counterpart of the
+    served Qdrant + Neo4j stack above (the owner, 2026-10-25). Same operation,
+    same data, same answers; nothing spans the three stores.
+
+    WHO HOLDS WHAT. SQLite holds the documents: `product(pid INTEGER PRIMARY
+    KEY, views)`, the authoritative counter and the table the document
+    projection reads. LanceDB holds the vectors: `pid`, `views` and a
+    FLOAT[64] `vector`, under IVF_HNSW_FLAT (unquantized, fp32 only: the
+    paper's rule), a BTREE on `pid` for the candidate filter. LadybugDB holds
+    the graph: `Product(pid)` nodes, `RELATED` edges, and a `views` property
+    that is the graph store's copy of the counter (the Neo4j half carries it
+    on the served arm). SQLite's graph-by-tables (an edge table and a
+    recursive CTE) is not used: LadybugDB is the graph store, so the edges
+    are loaded once, into it.
+
+    THE WRITE PATH. One logical operation reads LanceDB (top-k), reads
+    LadybugDB (the hop), then writes TWO stores one after the other: the
+    SQLite counter in its own transaction, then the graph store's copy in its
+    own. Each write is atomic and durable on its own terms; nothing makes the
+    pair atomic, which is what the atomicity workload shows: the injected
+    failure lands between the two commits, and the SQLite increment stays.
+    LanceDB is read-only in the operation, and that is a decision, not a
+    shortcut (laptop, 2026-10-25; numbers in COMPARATORS.md): a LanceDB
+    `update` deletes the matched rows and re-appends them in a new fragment,
+    so a counter kept there piles up one fragment per operation and leaves the
+    updated rows outside the vector index until an `optimize`. A real
+    Cognee-style app keeps the counter in its relational store and its
+    graph's node properties, not in an append-only vector table, and this arm
+    does the same rather than measure LanceDB's maintenance.
+
+    WHAT THE ARM CAN AND CANNOT GUARANTEE (TXN_SCOPE "none", DECISIONS #118):
+    SQLite and LadybugDB are each ACID alone; LanceDB's reads see a table
+    version. There is no shared transaction, no shared log and no
+    cross-store recovery, so a crash between the two writes leaves the stores
+    disagreeing (the atomicity workload counts it), and the three engines'
+    durability is three different settings (SQLite follows the cell's class,
+    LadybugDB syncs at every commit with no knob, LanceDB never syncs).
+
+    PARALLELISM, as the other embedded arms: LadybugDB's threads from
+    `sched_getaffinity` and its buffer pool at 0.8 of the cgroup's cap, both
+    read back (FAIRNESS F6); SQLite is single-threaded per connection;
+    LanceDB's Rust runtime sizes itself from the process's available
+    parallelism and has no setting this lane touches (the dense lane's
+    LanceDB arms are the same). All three share the one process's cpuset and
+    the one cell cap."""
+    name = "composed_embedded_sqlite_lance_ladybug"
+    # WHAT THE TIMED TRANSACTION HOLDS (DECISIONS #118): nothing spans the
+    # three stores, which is what this arm exists to show.
+    TXN_SCOPE = "none"
+    VIEW_SUM_KEY = "sqlite_view_sum"
+    # The vector index, matched to the table's HNSW settings and to the dense
+    # lane's LanceDB fp32 arm (`lancedb_dense_fp32`): IVF_HNSW_FLAT, m 16,
+    # ef_construction 100, searched at ef 100 and nprobes 10.
+    LANCE_INDEX_TYPE = "IVF_HNSW_FLAT"
+    LANCE_M, LANCE_EFC, LANCE_EF, LANCE_NPROBES = 16, 100, 100, 10
+    # THE RECALL OPERATING POINT (FAIRNESS F7, "matched by effect"). LanceDB's HNSW at the table's ef 100 answers below the other
+    # arms on this catalog (equal ef is not equal recall), so `ef` is calibrated inside the cell, after the index is built and
+    # before any timed call, on held-out queries the timed passes never see: the smallest ef on LANCE_EF_LADDER (never below the
+    # table's 100) whose recall@10 reaches the target. The target is ArcadeDB's own embedded arm's `recall_retrieval` at the same
+    # scale, the neutral choice F7 makes for ArangoDB's nProbe: a higher target slows the comparator and flatters us, a lower one
+    # speeds it and flatters it. The values are the laptop's dry run of 2026-10-25 (arcadedb_e2, wheel 26.10.2, one
+    # repetition per scale: 0.77 at 50k, 0.405 at 500k; Neo4j read 0.96 and 0.4035, Qdrant 1.0 and 0.651); replace them with the frozen 26.11.1 rows' medians when those exist, or override for a probe with
+    # BENCH_E2_RECALL_TARGET. Source and result are on the row.
+    # SUPERSEDED 2026-10-25 (the E2 recall rule, RECALL_TARGET at the top of this file): the target is the dense lane's 0.95 at both tiers, not the
+    # dry run's 0.77 and 0.405, which were ArcadeDB at ef 100 and not an operating point anyone would run. The ladder reaches the 500k rung (1200).
+    RECALL_TARGETS = {"e2": RECALL_TARGET, "e2_500k": RECALL_TARGET}
+    RECALL_TARGET_SOURCE = "E2 recall rule 2026-10-25: recall@10 >= 0.95, the dense lane's headline target (FAIRNESS F7)"
+    LANCE_EF_LADDER = (100, 125, 150, 200, 250, 300, 400, 600, 800, 1000, 1200, 1600, 2400, 3200)
+    CALIBRATION_QUERIES = 200
+    FILTER_MODE = ("cross-store pre-filter: the candidate ids are read from LadybugDB "
+                   "and pasted into LanceDB's `where` (prefilter), which ranks them")
+    SQLITE_PATH = "/tmp/e2_composed_sqlite.db"
+    LANCE_PATH = "/tmp/e2_composed_lance"
+    LADYBUG_PATH = "/tmp/e2_composed_ladybug"
+
+    def __init__(self):
+        import importlib.metadata as md
+        import shutil
+        import sqlite3
+        import lancedb
+        import ladybug
+        from l2_graph import _ladybug_fit
+        # Fresh stores: a path may be a directory (LanceDB) or a file with
+        # sidecars (SQLite's -wal and -shm, LadybugDB's .wal), by version.
+        for base in (self.SQLITE_PATH, self.LANCE_PATH, self.LADYBUG_PATH):
+            for p in (base, base + "-wal", base + "-shm", base + ".wal", base + ".shadow"):
+                if os.path.isdir(p):
+                    shutil.rmtree(p, ignore_errors=True)
+                elif os.path.exists(p):
+                    os.remove(p)
+        # SQLite as the document arm runs it (l1_tpc.SqliteTPC): WAL, and
+        # synchronous NORMAL at the relaxed class, FULL at the strict one,
+        # read back from the engine (DECISIONS #70, #81, #90). Autocommit mode
+        # with explicit BEGIN, so a transaction is the statement text.
+        self.sq = sqlite3.connect(self.SQLITE_PATH, isolation_level=None)
+        self.sq.execute("PRAGMA journal_mode=WAL")
+        self.sq.execute(f"PRAGMA synchronous={bench_common.sqlite_synchronous()}")
+        sqlite_durability = bench_common.sqlite_durability_readback(self.sq)
+        self.lance = lancedb.connect(self.LANCE_PATH)
+        threads, pool = _ladybug_fit()
+        kw = {"max_num_threads": threads}
+        if pool:
+            kw["buffer_pool_size"] = pool
+        self.lb = ladybug.Database(self.LADYBUG_PATH, **kw)
+        self.lbc = ladybug.Connection(self.lb)
+        self._prepared = {}
+        got = self._lb('CALL current_setting("threads") RETURN *')[0][0]
+        lance_v = md.version("lancedb")
+        # ALL THREE, with versions (#156), as the served stack's row names both
+        # of its halves; the members are "+"-separated for the page.
+        self.version = f"sqlite:{sqlite3.sqlite_version}+lancedb:{lance_v}+ladybug:{md.version('ladybug')}"
+        # The write path's durability: SQLite's setting (the class's) and the
+        # graph store's commit, which has no setting; LanceDB is never written
+        # in an operation and never syncs. The SQLite half leads, because it
+        # is the half the cell's class changes.
+        self.durability = (sqlite_durability + "; LadybugDB graph copy committed in its own "
+                           "transaction, no setting; LanceDB read-only here, never syncs")
+        self.row_extra = {"ladybug_threads": int(got),
+                          "ladybug_buffer_pool_mib": (pool >> 20) if pool else None}
+
+    def _lb(self, text, params=None):
+        if not params:
+            res = self.lbc.execute(text)
+        else:
+            stmt = self._prepared.get(text)
+            if stmt is None:
+                stmt = self._prepared[text] = self.lbc.prepare(text)
+            res = self.lbc.execute(stmt, params)
+        out = []
+        while res.has_next():
+            out.append(res.get_next())
+        return out
+
+    def build(self, vecs, edges):
+        import csv as _csv
+        import pyarrow as pa
+        n = len(vecs)
+        # SQLite: the documents. `pid INTEGER PRIMARY KEY` is the rowid
+        # itself, the clustered index every point read and the update use.
+        self.sq.execute("CREATE TABLE product (pid INTEGER PRIMARY KEY, views INTEGER NOT NULL)")
+        for s in range(0, n, BATCH):
+            self.sq.execute("BEGIN")
+            self.sq.executemany("INSERT INTO product VALUES (?, 0)", ((i,) for i in range(s, min(s + BATCH, n))))
+            self.sq.execute("COMMIT")
+        # LadybugDB: the graph, by COPY from CSV (its bulk path, as the graph
+        # and cross-model arms load).
+        self._lb("CREATE NODE TABLE Product(pid INT64, views INT64, PRIMARY KEY(pid))")
+        self._lb("CREATE REL TABLE RELATED(FROM Product TO Product)")
+        pcsv, rcsv = "/tmp/e2_composed_products.csv", "/tmp/e2_composed_related.csv"
+        with open(pcsv, "w", newline="") as f:
+            w = _csv.writer(f)
+            for i in range(n):
+                w.writerow([i, 0])
+        with open(rcsv, "w", newline="") as f:
+            w = _csv.writer(f)
+            for a, b in edges:
+                w.writerow([a, b])
+        self._lb(f"COPY Product FROM '{pcsv}'")
+        self._lb(f"COPY RELATED FROM '{rcsv}'")
+        os.unlink(pcsv)
+        os.unlink(rcsv)
+        # LanceDB: the vectors, loaded from one Arrow table (the dense lane's
+        # path). The pid carries a BTREE for the candidate filter and the HNSW
+        # index follows, both inside the index timer, as the served stack
+        # times its Qdrant payload index and the wait for green.
+        flat = pa.array(vecs.astype("float32").reshape(-1), type=pa.float32())
+        self.tbl = self.lance.create_table("product", pa.table({
+            "pid": pa.array(range(n), type=pa.int64()),
+            "vector": pa.FixedSizeListArray.from_arrays(flat, DIM)}))
+        with bench_common.index_timer(self):
+            self.tbl.create_scalar_index("pid", index_type="BTREE")
+            self.tbl.create_index(metric="l2", index_type=self.LANCE_INDEX_TYPE,
+                                  m=self.LANCE_M, ef_construction=self.LANCE_EFC)
+            self._calibrate_ef(vecs)
+        # Read back once the index exists; the lane's main copies `row_extra` onto the row after the build.
+        self.row_extra = {**self.row_extra, **self._lance_index_readback()}
+
+    def _calibrate_ef(self, vecs):
+        """Pick `ef` (see RECALL_TARGETS) on held-out queries and record the choice. Ground truth is exact, by inner product (the
+        vectors and queries are unit, so it is L2 order); the held-out queries come from their own seed, not the lane's."""
+        t0 = time.perf_counter()
+        scale = "e2_500k" if len(vecs) >= SCALE_PRODUCTS["e2_500k"] else "e2"
+        env = os.environ.get("BENCH_E2_RECALL_TARGET")
+        target, source = ((float(env), "env BENCH_E2_RECALL_TARGET") if env
+                          else (self.RECALL_TARGETS[scale], self.RECALL_TARGET_SOURCE))
+        rng = np.random.default_rng(SEED + 11)
+        held = rng.standard_normal((self.CALIBRATION_QUERIES, DIM)).astype(np.float32)
+        held /= np.maximum(np.linalg.norm(held, axis=1, keepdims=True), 1e-12)
+        sims = vecs @ held.T
+        gt = np.argpartition(-sims, K, axis=0)[:K].T
+        del sims
+        chosen, got = None, None
+        for ef in self.LANCE_EF_LADDER:
+            self.LANCE_EF = ef
+            hit = sum(len(set(self._search(q, K)) & set(int(x) for x in g)) for q, g in zip(held, gt))
+            got = hit / float(K * len(held))
+            chosen = ef
+            if got >= target:
+                break
+        self.LANCE_EF = chosen
+        self.row_extra = {**self.row_extra, "lancedb_ef": chosen, "lancedb_nprobes": self.LANCE_NPROBES,
+                          "lancedb_recall_target": target, "lancedb_recall_target_source": source,
+                          "lancedb_calibration_recall": round(got, 4), "lancedb_calibration_queries": len(held),
+                          "lancedb_calibration_s": round(time.perf_counter() - t0, 2)}
+
+    def applied_ef(self):
+        """The ef the calibration chose (`lancedb_ef`); the lane's SEARCH_EF is not used by this arm."""
+        return self.LANCE_EF
+
+    def _lance_index_readback(self):
+        """The engine's own answer for the vector index (BUGS F164): its type
+        from index_stats, its details from list_indices, and a refusal when
+        the index built is not the one this arm declares."""
+        ix = [i for i in self.tbl.list_indices() if list(getattr(i, "columns", None) or []) == ["vector"]]
+        applied = self.tbl.index_stats(ix[0].name).index_type if ix else None
+        if applied != self.LANCE_INDEX_TYPE:
+            raise RuntimeError(f"lancedb vector index type read back {applied!r}, not {self.LANCE_INDEX_TYPE!r}: "
+                               "the row would record fp32 for a different index (BUGS F164)")
+        return {"lancedb_index_type": applied,
+                "lancedb_index_details": json.dumps(getattr(ix[0], "index_details", None), sort_keys=True, default=str)}
+
+    def _search(self, qvec, k, where=None):
+        q = self.tbl.search([float(x) for x in qvec]).metric("l2").select(["pid"]).limit(k)
+        q = q.ef(max(self.LANCE_EF, k)).nprobes(self.LANCE_NPROBES)
+        if where:
+            q = q.where(where, prefilter=True)
+        return [int(r["pid"]) for r in q.to_list()]
+
+    def hybrid_op(self, qvec, crash=False, mirror=False):
+        """Read LanceDB, read LadybugDB, write SQLite, write LadybugDB. The
+        crash lands between the two writes: SQLite has committed, the graph
+        store's copy has not. `mirror` changes nothing here (the served stack
+        needs an extra read to mirror the exact counter; this copy is an
+        increment in each store), so the timed and atomicity paths are the
+        same code."""
+        pids = self._search(qvec, K)
+        rel = self._lb("MATCH (p:Product)-[:RELATED]->(r:Product) WHERE p.pid = $p RETURN r.pid LIMIT 3",
+                       {"p": pids[0]})
+        touched = pids[:3] + [int(r[0]) for r in rel]
+        tp = sorted(set(touched))
+        marks = ",".join("?" * len(tp))
+        self.sq.execute("BEGIN IMMEDIATE")
+        try:
+            self.sq.execute(f"UPDATE product SET views = views + 1 WHERE pid IN ({marks})", tp)
+            self.sq.execute("COMMIT")
+        except BaseException:
+            self.sq.execute("ROLLBACK")
+            raise
+        if crash:
+            raise RuntimeError("injected-crash")   # SQLite committed, the graph store's copy skipped
+        self._lb("BEGIN TRANSACTION")
+        try:
+            self._lb("UNWIND $ps AS p MATCH (n:Product) WHERE n.pid = p SET n.views = n.views + 1", {"ps": tp})
+            self._lb("COMMIT")
+        except BaseException:
+            try:
+                self._lb("ROLLBACK")
+            except Exception:  # noqa: BLE001 - the original error is the one to raise
+                pass
+            raise
+        return len(touched)
+
+    def _vec_topk(self, qvec, k, ef=None):
+        return self._search(qvec, k)
+
+    def _hop(self, pids):
+        if not pids:
+            return []
+        return [int(r[0]) for r in self._lb(
+            "MATCH (p:Product)-[:RELATED]->(q:Product) WHERE p.pid IN $ps RETURN q.pid",
+            {"ps": [int(p) for p in pids]})]
+
+    def _docs(self, pids):
+        if not pids:
+            return []
+        pids = [int(p) for p in pids]
+        return [{"pid": int(r[0]), "views": int(r[1])} for r in self.sq.execute(
+            f"SELECT pid, views FROM product WHERE pid IN ({','.join('?' * len(pids))})", pids).fetchall()]
+
+    def _rank_candidates(self, qvec, cands, k):
+        if not cands:
+            return []
+        # PASTED BY THE API, not by choice (DECISIONS #116 item 2): LanceDB's
+        # `where` takes a predicate string. Integers only.
+        return self._search(qvec, k, where=f"pid IN ({','.join(str(int(p)) for p in cands)})")
+
+    def total_views(self):
+        """Both stores' view of the SAME counter, plus how many products they
+        disagree about: zero while they stay consistent, non-zero the moment
+        one took a write the other did not (the served stack's evidence)."""
+        sq = {int(p): int(v) for p, v in self.sq.execute("SELECT pid, views FROM product WHERE views > 0")}
+        lb = {int(r[0]): int(r[1]) for r in self._lb("MATCH (n:Product) WHERE n.views > 0 RETURN n.pid, n.views")}
+        disagree = [p for p in set(sq) | set(lb) if sq.get(p, 0) != lb.get(p, 0)]
+        return {"sqlite_view_sum": sum(sq.values()),
+                "ladybug_view_sum": sum(lb.values()),
+                "disagreeing_products": len(disagree)}
+
+    def close(self):
+        self.sq.close()
+        self.lbc.close()
+        self.lb.close()   # LanceDB exposes no close(): its tables are files written on commit
+
+
 BACKENDS = {c.name: c for c in (ArcadeE2, ArcadeE2Server, SurrealE2, SurrealServedE2, ArangoE2,
-                                MongoE2, PgAgeE2, Neo4jE2, MemgraphE2, LadybugE2, DuckE2, ComposedE2)}
+                                MongoE2, PgAgeE2, Neo4jE2, MemgraphE2, LadybugE2, DuckE2, ComposedE2,
+                                ComposedEmbeddedE2)}
 
 
 # DECISIONS #81, recorded on every row. PG+AGE reads the server's
@@ -1919,6 +2293,9 @@ DURABILITY = {
     # The composed stack's document and graph half is Neo4j, so the whole
     # operation waits for Neo4j's log; Qdrant's WAL runs at its own default.
     "composed_qdrant_neo4j": bench_common.DURABILITY_NEO4J + "; Qdrant WAL at its default",
+    # The embedded trio reads its SQLite setting back at connect (the adapter's
+    # answer wins); this is the relaxed string it is compared against.
+    "composed_embedded_sqlite_lance_ladybug": bench_common.DURABILITY_SQLITE,
 }
 
 
@@ -1953,6 +2330,11 @@ def main():
         b = BACKENDS[args.backend]()
     out["engine_version"] = b.version
     out["instrument"] = bench_common.INSTRUMENT
+    # The lane's search breadth (graph-index arms); IVF and LanceDB calibrate by effect and say so. An engine with a lower maximum
+    # (pgvector, 1000) reports what it APPLIED in vector_ef and the lane's value in vector_ef_lane, so a clamp is never silent.
+    out["vector_ef_lane"] = search_ef()
+    out["vector_ef"] = b.applied_ef() if hasattr(b, "applied_ef") else search_ef()
+    out["recall_target"] = RECALL_TARGET
     # What a served engine reported about itself at connect (Memgraph's pools,
     # LadybugDB's fitted threads): read from the engine, not restated from the
     # flags the runner sent.
@@ -1966,6 +2348,8 @@ def main():
     # do the index kinds an ArcadeDB arm's engine reports (CAMPAIGN 7 row 68).
     if hasattr(b, "index_readback"):
         b.row_extra = {**(getattr(b, "row_extra", None) or {}), **b.index_readback()}
+    if hasattr(b, "applied_ef"):
+        out["vector_ef"] = b.applied_ef()   # an arm that calibrates its breadth in the build (LanceDB) or has none (IVF) says so here
     out.update(getattr(b, "row_extra", None) or {})
     # THE SPLIT (FAIRNESS F14). This lane builds the page's most expensive
     # indexes -- LSM_VECTOR, HNSW, FAISS IVF, a MongoDB vector search index --
@@ -2125,7 +2509,7 @@ def main():
         # that as a clean rollback. An arm whose clean ops moved nothing cannot
         # demonstrate anything about rollback, so it fails loudly here instead.
         base = b.total_views()
-        moved = (base["neo4j_view_sum"] > 0 if isinstance(base, dict)
+        moved = (base[getattr(b, "VIEW_SUM_KEY", "neo4j_view_sum")] > 0 if isinstance(base, dict)
                  else base > 0)
         if not moved:
             raise RuntimeError(

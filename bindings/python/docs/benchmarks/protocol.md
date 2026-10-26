@@ -65,7 +65,8 @@ choices are part of it, the same for every cell:
 
 - **A warm-up before the sparse search.** Every sparse engine runs 1,000 untimed searches on
   queries that are not in the timed set, so a query or result cache cannot flatter an engine.
-- **The CPU idle state is held for each timed cell**, at the lowest latency target, so a
+- **The CPU idle state is held for each timed cell**, at a target of 10 microseconds in the
+  2026-11 pass (C1E stays allowed, C6, C8 and C10 do not), so a
   single-client time under a millisecond does not include a core waking up. A cell that
   cannot take the hold still runs, and the row says so.
 - **The dense lane indexes the vector id** on every engine that would otherwise scan for the

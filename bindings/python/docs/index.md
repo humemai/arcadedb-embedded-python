@@ -2,7 +2,7 @@
 
 !!! warning "Moved to ArcadeData/arcadedb-python"
 
-    These bindings move to [ArcadeData/arcadedb-python](https://github.com/ArcadeData/arcadedb-python) as the PyPI packages `arcadedb` (the native build, the successor of `arcadedb-embedded`) and `arcadedb-jvm` (the JVM build, for people who need it), both with the import name `arcadedb`, with docs at [docs.arcadedb.com/arcadedb-python](https://docs.arcadedb.com/arcadedb-python/). This repository will be archived. See the [migration guide](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/deprecation/MIGRATION.md).
+    The Python bindings now live in [ArcadeData/arcadedb-python](https://github.com/ArcadeData/arcadedb-python). Install `arcadedb` (the native build, the default) or `arcadedb-jvm` (the JVM build); both use `import arcadedb`. [Which package?](https://github.com/ArcadeData/arcadedb-python/blob/main/docs/modules/ROOT/pages/which-package.adoc) explains the choice. The first releases of the new packages are 26.11.1, starting as pre-releases (`uv add --prerelease allow arcadedb`). `arcadedb-embedded` ends with a 26.11.1 shim release that installs `arcadedb`, which is the native build, so the runtime changes (JVM users install `arcadedb-jvm`); `arcadedb-embedded-native` is archived: no further releases, install `arcadedb`. See the [migration guide](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/deprecation/MIGRATION.md). Report bindings issues and send bindings pull requests to the new repository. This repository will be archived; the benchmark tooling stays here for now.
 
 <div class="grid cards" markdown>
 

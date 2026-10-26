@@ -80,8 +80,8 @@ def test_engines_run_in_priority_order_inside_every_stage(chain):
 def test_priority_names_every_subset_engine_and_arcadedb_leads():
     assert set(G.ENGINES) <= set(G.ENGINE_PRIORITY)
     assert G.ENGINE_PRIORITY[0] == "arcadedb"
-    assert list(G.ENGINE_PRIORITY[1:13]) == ["surrealdb", "arangodb", "postgresql", "mongodb", "redis", "qdrant-neo4j", "neo4j",
-                                              "qdrant", "duckdb", "sqlite", "memgraph", "ladybug"]
+    assert list(G.ENGINE_PRIORITY[1:14]) == ["surrealdb", "arangodb", "postgresql", "mongodb", "redis", "qdrant-neo4j", "composed-embedded",
+                                              "neo4j", "qdrant", "duckdb", "sqlite", "memgraph", "ladybug"]
     assert G.ENGINE_PRIORITY[-1] == "cratedb"
     # both comparator batches are merged: Redis with its dense arm, CrateDB (last in priority) with its three lanes
     assert "redis" in G.ENGINES and "cratedb" in G.ENGINES
@@ -126,7 +126,7 @@ def env(tmp_path, chain):
 
 def cell(env, pass_no, label, rc=0, reps=3):
     (env / "rc").write_text(str(rc))
-    e = dict(os.environ, T_CALLS=str(env / "calls"), T_RC=str(env / "rc"), REPS=str(reps))
+    e = dict(os.environ, T_CALLS=str(env / "calls"), T_RC=str(env / "rc"), REPS=str(reps), BENCH_GATE_HWMON=str(env / "no-hwmon"))   # no coretemp here: the temperature gate lets the stub cell go at once
     p = subprocess.run(["bash", "-c", HARNESS, "bash", str(env), str(pass_no), "run_cell", label, "tpch1", "600", "surrealdb_tpc",
                         "q1", ""], env=e, capture_output=True, text=True, timeout=60)
     assert p.returncode == 0, p.stderr

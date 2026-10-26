@@ -55,6 +55,7 @@ asserts, so the list below stops at the file.
 | `test_python_function_interrupt.py` | A real SIGINT during a statement that calls a Python function always arrives as `KeyboardInterrupt` and leaves the database usable, including when JPype fails with `RuntimeError: Fatal error occurred` in its race with Ctrl-C (not collected on Windows) |
 | `test_cypher.py` | OpenCypher queries, path modes, and planner regressions |
 | `test_parameter_binding.py` | Positional and named parameters reach the statement on every entry point, including a lone `None` and the async executor, and scalars skip the conversion walk |
+| `test_positional_count.py` | More positional values than the SQL statement has placeholders is refused with `TypeError` before it runs (a lone list, a tuple, several arguments; `query()` and `command()`; nothing is changed), and the forms that bind keep binding: one value per `?`, a wrapped list, a named list, `$n`, SQLScript, other languages (P-07) |
 | `test_percall_calls.py` | The per-call paths of `query`, `command`, `first`, and `get` give the same bound values, overload choice, errors, and result-set state as the plain path (#280) |
 | `test_typed_rows.py` | `to_list()` and `iter_dicts()` read rows through the typed-row transport and return the same Python type and value for every property type as the row-by-row path (#285) |
 | `test_open_read_only.py` | `open_database(read_only=True)` and `DatabaseFactory.open(read_only=True)` read and refuse writes and schema changes; the default stays writable (#383) |
@@ -78,6 +79,7 @@ asserts, so the list below stops at the file.
 | --- | --- |
 | `test_resultset.py` | `Result` and `ResultSet` iteration, accessors, paging, and release of the engine cursor |
 | `test_resultset_arrow.py` | `ResultSet.to_arrow()` |
+| `test_record_id_values.py` | A record id inside a row (`SELECT @rid`, a LINK property, a list of links) behaves the same on both wheels: `str()`, equality, hashing, ordering, `getBucketId()` and friends, as a query parameter and to `lookup_by_rid()`; `get_rid()` is text for record, edge, `expand()` and `@rid` projection rows |
 | `test_dataframe_ingest.py` | `Database.insert_dataframe` and `insert_arrow` (every Arrow type of the mapping table written and read back, DATETIME precisions, nulls, declared-property conversion and refusal, pandas, Polars, and Arrow inputs, vertex types, a 100,000-row frame in batches, the failure contract) and `ResultSet.to_polars()` (round trip, the ImportError messages) |
 | `test_columnar_readers.py` | `to_columns`, `to_dataframe`, and `to_arrow` on schemaless and DECIMAL data, at several batch sizes |
 | `test_resultset_read_errors.py` | An engine error raised while a result set is read arrives as `ArcadeDBError` on every way of reading |
@@ -225,7 +227,7 @@ CI builds its wheel from this repository's engine source, so the cue comes when 
 into that source (an upstream sync), which can be days before a release carries it. The entry stays on the Known Engine Issues page until a release that carries the
 fix ships.
 
-A passing run ends with a summary of the form `N passed`, with no failures, errors, or skips. One test is marked `xfail` at present, and only on a free-threaded CPython (`sys._is_gil_enabled()` is false): `test_registering_again_and_again_does_not_grow_the_python_heap`, see "Free-threaded Python" on [Known Engine Issues](../guide/known-issues.md). It is not strict, so it may pass there without failing the suite. With the GIL no test is marked `xfail`. An entry on [Known Engine Issues](../guide/known-issues.md) whose fix is in the engine the suite builds against but not in the 26.10.1 wheel has plain regression tests that fail on that wheel. Run with `-rs` to see why a test skipped locally.
+A passing run ends with a summary of the form `N passed`, with no failures, errors, or skips. One test is marked `xfail` at present, and only on a free-threaded CPython (`sys._is_gil_enabled()` is false): `test_registering_again_and_again_does_not_grow_the_python_heap`, see "Free-threaded Python" on [Known Engine Issues](../guide/known-issues.md). It is not strict, so it may pass there without failing the suite. With the GIL no test is marked `xfail`. An entry on [Known Engine Issues](../guide/known-issues.md) whose fix is in the engine the suite builds against but not in the 26.10.2 wheel has plain regression tests that fail on that wheel. Run with `-rs` to see why a test skipped locally.
 
 ## Documentation example tests
 

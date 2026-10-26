@@ -78,7 +78,8 @@ Convert all results to a list of dictionaries.
 
 Rows come over from the JVM in batches. Java writes each batch as JSON, tags the values
 JSON cannot carry exactly (`DECIMAL`, `DATE`, `DATETIME`, sets), and hands everything else
-(RIDs, embedded documents, `float[]` arrays, ...) over as the engine's own object, so each
+(RIDs, embedded documents, `float[]` arrays, ...) over as the engine's own object (a record id: see
+[Record ids in rows](#record-ids-in-rows)), so each
 value has the Python type it always had (`date`, `datetime`, `Decimal`, ...) and no value
 crosses the JVM boundary on its own. On a 10,000-row, nine-property scan that is 7.1x
 faster than it was and within a few percent of `to_json_list()` (261 ms to 37 ms, laptop,
@@ -615,12 +616,44 @@ Get the Record ID (RID) of the result, if available.
 
 - `str` (e.g. `"#10:5"`) or `None`
 
+A record row (`SELECT FROM T`, `expand(...)`) has an identity, and so has a projection of `@rid`
+that does not alias it (`SELECT @rid, name FROM T`). An aliased `@rid`, any other projection,
+and an aggregate have none and return `None`. The value is text on every wheel.
+
 **Example:**
 
 ```python
 result = db.query("sql", "SELECT FROM User LIMIT 1").first()
 print(result.get_rid())
 # #10:5
+```
+
+---
+
+### Record ids in rows
+
+A record id that sits in a row value (`SELECT @rid AS r`, a `LINK` property, a list of
+links such as `out('Knows').@rid`) comes back as an RID object, not as text, and it is the
+same kind of value on the JVM wheel and the native wheel:
+
+- `str(rid)` is the text (`"#10:5"`), and so is an f-string. Compare and store record ids
+  as `str(rid)` when you need text; `get_rid()` always returns text.
+- Two RIDs of the same record are equal and hash alike, so they work in sets and as dict
+  keys. RIDs sort by bucket, then position.
+- `getBucketId()`, `getPosition()`, `toString()` and `isValid()` work on it. On the JVM
+  wheel the object is the engine's own `RID`; the native wheel returns a Python class with
+  the same methods.
+- It goes back in as a query parameter (`WHERE @rid = ?`, or in a list passed by name) and to
+  `lookup_by_rid()`, as itself or as its text.
+- Do not compare an RID with a string (`rid == "#10:5"`): that is `False` on the JVM wheel
+  and `True` on the native wheel. Use `str(rid) == "#10:5"`.
+
+```python
+row = db.query("sql", "SELECT @rid AS r, name FROM User LIMIT 1").first()
+rid = row.get("r")
+print(str(rid))                       # #10:5
+print(rid.getBucketId(), rid.getPosition())   # 10 5
+same = db.lookup_by_rid(rid)          # or db.lookup_by_rid(str(rid))
 ```
 
 ---

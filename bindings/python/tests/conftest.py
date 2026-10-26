@@ -21,6 +21,10 @@ if sys.platform == "win32":
     # LadybugDB's compiled module does not load in this process on Windows (it falls back to a C-API library its
     # wheel does not ship), so the Cypher half of the equivalence checks runs on Linux and macOS (#347)
     collect_ignore.append("test_equivalence_ladybug.py")
+if sys.version_info >= (3, 15):
+    # REMOVE WHEN: ladybug publishes cp315 wheels (> 0.21.2). Until then it has no 3.15 install, and its sdist
+    # needs a C++ build the runner does not do; the workflow leaves it out of the 3.15 test requirements.
+    collect_ignore.append("test_equivalence_ladybug.py")
 if not os.path.isdir(os.path.join(os.path.dirname(os.path.dirname(__file__)), "docs")):
     # the upstream pull request branch has no docs/ directory
     collect_ignore.append("test_docs_examples.py")

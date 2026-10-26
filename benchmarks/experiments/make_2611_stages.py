@@ -9,7 +9,8 @@ of the image, the pinned wheel by sha256, the cap rule, the ALL-DONE trap. What 
 
   * THE SUBSET (PLAN-26111): ArcadeDB (embedded and served), SurrealDB (embedded and served), ArangoDB, Memgraph, PostgreSQL
     with pgvector and AGE (and plain PostgreSQL where a lane uses it), MongoDB (with MongoDB Search), DuckDB (with VSS and
-    DuckPGQ), SQLite (with sqlite-vec), and the composed Qdrant plus Neo4j stack. Core lanes: graph (interactive and
+    DuckPGQ), SQLite (with sqlite-vec), the composed Qdrant plus Neo4j stack, and the composed embedded SQLite, LanceDB and LadybugDB stack
+    (cross-model lane only, 2026-10-25). Core lanes: graph (interactive and
     analytics), cross-model, documents (TPC-C and TPC-H), dense. The second list (sparse, time series, lifecycle) exists only
     under `--profile full --second-list`.
   * THE PROFILE (the owner, 2026-10-25: the paper's experiments must finish by 2026-11-10). `--profile paper-2611` is the default and
@@ -390,6 +391,8 @@ ENGINES = collections.OrderedDict([
     ("duckdb", ("DuckDB with VSS and DuckPGQ", ("duckdb", "duckpgq"))),
     ("sqlite", ("SQLite with sqlite-vec", ("sqlite",))),
     ("qdrant-neo4j", ("the composed Qdrant plus Neo4j stack", ("composed_qdrant_neo4j",))),
+    ("composed-embedded", ("the composed embedded stack: SQLite, LanceDB and LadybugDB in one process (cross-model only)",
+                           ("composed_embedded",))),
     ("neo4j", ("Neo4j on its own: graph and dense", ("neo4j_graph", "neo4j_dense"))),
     ("qdrant", ("Qdrant on its own: dense, and sparse on the second list", ("qdrant_dense", "qdrant_sparse"))),
     ("redis", ("Redis 8: dense (Query Engine), documents (JSON + FT.AGGREGATE), time series (TimeSeries)", ("redis_",))),
@@ -404,7 +407,7 @@ OUTSIDE = ("neo4j_e2", "falkordb", "milvus", "elasticsearch", "chroma", "lancedb
 # Arms in the subset that no row exists for yet. The page gate (page_check._roster_arms) owes them no row and no declaration, so a
 # payload measured before they ran does not fail as "registered, no row". An arm that has a row anyway is still on the page and keyed.
 # REMOVE WHEN the arm has rows in the frozen results (CrateDB, Redis documents and time series: after their first full measurement).
-NOT_YET_MEASURED = ("cratedb_", "redis_tpc", "redis_ts")
+NOT_YET_MEASURED = ("cratedb_", "redis_tpc", "redis_ts", "composed_embedded")
 
 CORE_LANES = ("l2", "e2", "l1tpc", "l3d")
 SECOND_LANES = ("l3s", "l4", "lifecycle")
@@ -554,8 +557,8 @@ SECOND_ORDER = ("lifecycle", "l3s", "l4")
 # THE ORDER INSIDE A LANE (the user, 2026-10-23: "order the comparators in priority"), highest first: when a pass is cut short the
 # engines that matter most have their rep. ArcadeDB's four 26.11.1 arms (JVM/native x embedded/server) go on top when 26.11.1
 # ships. Redis 8 and CrateDB are named here before their adapters are merged: an engine that is not in ENGINES is skipped cleanly.
-ENGINE_PRIORITY = ("arcadedb", "surrealdb", "arangodb", "postgresql", "mongodb", "redis", "qdrant-neo4j", "neo4j", "qdrant",
-                   "duckdb", "sqlite", "memgraph", "ladybug", "cratedb")
+ENGINE_PRIORITY = ("arcadedb", "surrealdb", "arangodb", "postgresql", "mongodb", "redis", "qdrant-neo4j", "composed-embedded", "neo4j",
+                   "qdrant", "duckdb", "sqlite", "memgraph", "ladybug", "cratedb")
 
 
 # ENGINE TIERS (the user, 2026-10-24). Tier 1: ArcadeDB x4 (inserted by --arcadedb-release), SurrealDB (embedded and served),
@@ -564,7 +567,7 @@ ENGINE_PRIORITY = ("arcadedb", "surrealdb", "arangodb", "postgresql", "mongodb",
 # TimescaleDB. An engine of ENGINES in neither is a decision this table forces (arm_problems); an arm that still has no tier
 # runs after Tier 2 (TIER_REST), "everything else later".
 TIER_ENGINES = {
-    1: ("arcadedb", "surrealdb", "arangodb", "postgresql", "mongodb", "qdrant-neo4j", "duckdb", "sqlite", "ladybug"),
+    1: ("arcadedb", "surrealdb", "arangodb", "postgresql", "mongodb", "qdrant-neo4j", "composed-embedded", "duckdb", "sqlite", "ladybug"),
     2: ("memgraph", "neo4j", "qdrant", "redis", "cratedb"),
 }
 # An arm that sits in a different tier than its engine. TimescaleDB is an arm of the `postgresql` engine here (it completes
@@ -1351,6 +1354,7 @@ say "$ID START: {title}, {nbe} engines, rep pass $PASS of $REPS, pin $PIN, instr
 
 {cap_rule_helpers}
 {rep_helpers}
+{temp_gate_helpers}
 run_overlay() {{  # <label> <scale> <cap> <be> <wl> <driver> <outdir> <rf> <reps> <env>
   local label=$1 scale=$2 cap=$3 be=$4 wl=$5 drv=$6 outdir=$7 orf=$8 oreps=$9 oenv=${{10}}
   # ONE RECORDED FAILURE PER ARM (BUGS F162, DECISIONS #127). Rep 1 first; the later passes run only when rep 1 left a clean row
@@ -1358,6 +1362,7 @@ run_overlay() {{  # <label> <scale> <cap> <be> <wl> <driver> <outdir> <rf> <reps
   cap_rule_skip "$label" "$be|$wl|" && return 0
   [ "$PASS" -le "$oreps" ] || return 0
   rep_gate "$label" || return 0
+  temp_gate "$label"
   local onlyreps=
   [ "$oreps" -lt 2 ] || onlyreps="--only-reps $PASS"
   if env $oenv python3 runner.py --lanes {lane} --scale "$scale" --backends "$be" \\
@@ -1382,6 +1387,7 @@ run_cell() {{   # run_cell <label> <scale> <cap> <backend> <workload> <env-or-em
   local dur=${{7:-}}
   cap_rule_skip "$label" "$be|$wl|$dur" && return 0
   rep_gate "$label" || return 0
+  temp_gate "$label"
   env $envset python3 runner.py --lanes {lane} --scale "$scale" --backends "$be" \\
     --workloads "$wl" --tier paper --workers 1 --timeout "$cap" $dur \\
     --only-reps "$PASS" --reps "$REPS" --results-file "$RF" >> "$S" 2>&1
@@ -1420,13 +1426,50 @@ rep_gate() {  # <label>: true when this pass may run the cell; says why when it 
 """.replace("@INSTRUMENT@", INSTRUMENT)
 
 
+TEMP_GATE_HELPERS = r"""
+# PRE-CELL TEMPERATURE GATE (the user, 2026-10-26; OPEN-ITEMS #28, DECISIONS #177 amendment). With one busy core the package throttles
+# continuously at 89 C (package_throttle_count +3,340 per CPU per 30 s), so a cell's speed depended on where the previous cell left the
+# box. Every timed cell therefore starts from the same state: wait until the package is at or below GATE_MAX_C, polling every GATE_POLL_S,
+# for at most GATE_WAIT_CAP_S; then start anyway. The outcome goes to STATUS ("TEMP GATE") and, through BENCH_PRECELL_GATE_*, into the
+# cell's row (runner.precell_gate_stamp): precell_gate_temp_c, precell_gate_wait_s, precell_gate_ok, precell_gate_max_c. The sensor is the
+# hwmon named coretemp (temp1_input, the package), found by name because the hwmon numbers move; the same one as runner._thermal().
+GATE_MAX_C=70
+GATE_WAIT_CAP_S=900
+GATE_POLL_S=10
+GATE_HWMON=${BENCH_GATE_HWMON:-/sys/class/hwmon}   # only the tests point this elsewhere
+pkg_temp_mc() {  # the package temperature in millidegrees C on stdout; fails when no hwmon is named coretemp
+  local h
+  for h in "$GATE_HWMON"/hwmon*; do
+    [ "$(cat "$h/name" 2>/dev/null)" = coretemp ] || continue
+    cat "$h/temp1_input" 2>/dev/null && return 0
+  done
+  return 1
+}
+temp_gate() {  # <label>: wait for GATE_MAX_C, then go on either way; says what happened and exports it for the runner's row
+  local label=$1 t0=$SECONDS m="" ok=false said=0 tc="" w
+  while :; do
+    m=$(pkg_temp_mc) || m=""
+    case $m in ''|*[!0-9]*) m=""; tc=""; break ;; esac
+    tc="$((m / 1000)).$(((m % 1000) / 100))"
+    if [ "$m" -le $((GATE_MAX_C * 1000)) ]; then ok=true; break; fi
+    [ "$said" = 1 ] || { say "$ID: $label TEMP GATE: package $tc C is above $GATE_MAX_C C, waiting (poll $GATE_POLL_S s, cap $GATE_WAIT_CAP_S s)"; said=1; }
+    [ $((SECONDS - t0)) -lt "$GATE_WAIT_CAP_S" ] || break
+    sleep "$GATE_POLL_S"
+  done
+  w=$((SECONDS - t0))
+  export BENCH_PRECELL_GATE_TEMP_C="$tc" BENCH_PRECELL_GATE_WAIT_S="$w" BENCH_PRECELL_GATE_OK="$ok" BENCH_PRECELL_GATE_MAX_C="$GATE_MAX_C"
+  say "$ID: $label TEMP GATE: start ${tc:-unknown} C, waited $w s, gate_ok=$ok (limit $GATE_MAX_C C, cap $GATE_WAIT_CAP_S s)"
+}
+"""
+
+
 def stage_params(reps):
     """What the template takes besides the stage and the pins: the instrument, REPS and the banner, the suffix of the rows
     files they write, the pin whose rows cell_cost_check scores a tier from until this pass has measured it, the JPype pin and
     the cap rule's bash."""
     return {"instrument": INSTRUMENT, "reps": reps, "banner": BANNER, "rows_suffix": ROWS_SUFFIX, "prior": PRIOR_PIN,
             "jpype_version": bench_common.JPYPE_PIN, "cap_rule_helpers": CAP_RULE_HELPERS.lstrip("\n"),
-            "rep_helpers": REP_HELPERS.lstrip("\n"), "pass_no": 1}
+            "rep_helpers": REP_HELPERS.lstrip("\n"), "temp_gate_helpers": TEMP_GATE_HELPERS.lstrip("\n"), "pass_no": 1}
 
 
 def _pair_part(text, pins, params):

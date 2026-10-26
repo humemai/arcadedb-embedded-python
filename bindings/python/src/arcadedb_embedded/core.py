@@ -14,6 +14,7 @@ from typing import Any, Callable, List, Optional
 import jpype
 
 from ._logging import get_logger
+from ._params import refuse_surplus_positionals
 from .callbacks import (
     EventHandle,
     FunctionRegistration,
@@ -399,9 +400,12 @@ class Database:
 
         Parameters bind positionally (``?``) from the extra arguments, or by
         name (``:name``, ``$name``) from a single dict. A single list or tuple
-        is the positional list itself; ``None`` binds as null.
+        is the positional list itself; ``None`` binds as null. More positional
+        values than the SQL statement has placeholders raise ``TypeError``.
         """
         self._check_not_closed()
+        if args:
+            refuse_surplus_positionals("query", language, command, args)
         clear_pending_interrupt()
         try:
             if args:
@@ -427,6 +431,8 @@ class Database:
         Parameters bind as in :meth:`query`.
         """
         self._check_not_closed()
+        if args:
+            refuse_surplus_positionals("command", language, command, args)
         clear_pending_interrupt()
         try:
             if args:
@@ -696,7 +702,10 @@ class Database:
         stays in the JSON.
 
         Args:
-            type_name: Target document type (must exist).
+            type_name: Target type (must exist): a document type gets
+                documents, a vertex type gets vertices (use ``graph_batch()``
+                when edges follow), and an edge type raises ``ArcadeDBError``
+                because an edge needs both endpoints.
             rows: Iterable of dicts, one per document. Read lazily, one
                 chunk at a time.
             commit_every: Transaction batch size for the synchronous mode.
@@ -716,7 +725,7 @@ class Database:
                 10,240); ``commit_every`` does not apply to this mode.
 
         Returns:
-            Number of documents inserted.
+            Number of records inserted.
 
         Raises:
             Exception: An exception raised by ``rows`` itself propagates
@@ -797,6 +806,14 @@ class Database:
                     pass
             raise
 
+    def _is_vertex_type(self, type_name):
+        """True when ``type_name`` is an existing vertex type (a bulk load then creates vertices)."""
+        java_schema = self._java_db.getSchema()
+        return java_schema.existsType(type_name) and isinstance(
+            java_schema.getType(type_name),
+            _java_class("com.arcadedb.schema.VertexType"),
+        )
+
     def _insert_many_chunk(self, type_name, chunk):
         """Insert one chunk of insert_many rows inside the open transaction."""
         # Float vectors for ARRAY_OF_FLOATS properties cross as one binary matrix
@@ -809,9 +826,15 @@ class Database:
             # scalars, which json.dumps rejects; an integer beyond 64 bits,
             # NaN or Infinity, a non-str dict key, a lone surrogate, which the
             # engine's JSON parser would store as a different value): this
-            # chunk goes row by row.
+            # chunk goes row by row (vertices for a vertex type, as the Java
+            # helper does).
+            new_record = (
+                self.new_vertex
+                if self._is_vertex_type(type_name)
+                else self.new_document
+            )
             for row in chunk:
-                doc = self.new_document(type_name)
+                doc = new_record(type_name)
                 for k, v in row.items():
                     doc.set(k, v)
                 doc.save()
@@ -935,7 +958,9 @@ class Database:
         property).
 
         Args:
-            type_name: Target document type (must exist).
+            type_name: Target type (must exist): a document type gets
+                documents, a vertex type gets vertices, an edge type raises
+                ``ArcadeDBError``.
             columns: ``{property name: column}``, or a pandas ``DataFrame``.
                 Every column has the same length. A column is a numpy array
                 (integer kinds cross as ``long[]``, float kinds as ``double[]``,
@@ -955,7 +980,7 @@ class Database:
                 columns instead of one JSON text per batch.
 
         Returns:
-            Number of documents inserted.
+            Number of records inserted.
 
         Raises:
             ValueError: If ``columns`` is empty, a column has a different
@@ -1334,7 +1359,7 @@ class Database:
         Lookup a record by its RID.
 
         Args:
-            rid: Record ID string (e.g. "#10:5")
+            rid: Record ID string (e.g. "#10:5"), or the RID object a row holds
 
         Returns:
             Record object (Vertex, Document, or Edge)

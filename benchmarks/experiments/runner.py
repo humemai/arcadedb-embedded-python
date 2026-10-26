@@ -1024,6 +1024,15 @@ BACKENDS = {
         "topology": "embedded",
         "image": "dbbench:duckdb",
     },
+    # THE COMPOSED EMBEDDED TRIO (the owner, 2026-10-25): SQLite (documents) +
+    # LanceDB (vectors) + LadybugDB (graph) in ONE Python process, the embedded
+    # counterpart of the composed Qdrant + Neo4j stack. It runs in the dense
+    # image (chromadb, lancedb, sqlite-vec, duckdb, and since this arm
+    # ladybug==0.22.0, the pin the client image carries); SQLite is the stdlib's.
+    "composed_embedded_sqlite_lance_ladybug": {
+        "topology": "embedded",
+        "image": "dbbench:dense",
+    },
     "neo4j_e2": {
         "topology": "client_server",
         "image": "dbbench:client",
@@ -1951,7 +1960,7 @@ LANES = {
     "e2": ("e2_hybrid.py",
            ["arcadedb_e2", "arcadedb_e2_server", "surrealdb_e2", "surrealdb_e2_server",
             "arangodb_e2", "mongodb_e2", "pg_age_e2", "neo4j_e2", "memgraph_e2", "ladybug_e2",
-            "duckdb_e2", "composed_qdrant_neo4j"],
+            "duckdb_e2", "composed_qdrant_neo4j", "composed_embedded_sqlite_lance_ladybug"],
            ["hybrid", "atomicity"]),
     # L5 measures OPEN and CLOSE, which every embedded deployment does and no
     # benchmark measures. Situations ride the WORKLOAD axis, so each is its own
@@ -3135,6 +3144,26 @@ class CpuDmaLatencyHold:
         if self.error:
             row["cpu_dma_latency_error"] = self.error
         return row
+
+
+def precell_gate_stamp(row, environ=None):
+    """Write the stage's pre-cell temperature gate outcome into the row: `precell_gate_temp_c` (package temperature when the gate let
+    the cell go, absent when the sensor was unreadable), `precell_gate_wait_s`, `precell_gate_ok` (False: the 15 min cap passed with
+    the package still above the limit, or no sensor) and `precell_gate_max_c`. The stage (make_2611_stages.py temp_gate) passes them in
+    BENCH_PRECELL_GATE_*; a cell run without the gate (the variables unset) gets no fields. A malformed value is skipped, never fatal."""
+    env = os.environ if environ is None else environ
+    ok = env.get("BENCH_PRECELL_GATE_OK")
+    if ok not in ("true", "false"):
+        return row
+    row["precell_gate_ok"] = ok == "true"
+    for key, var, conv in (("precell_gate_temp_c", "BENCH_PRECELL_GATE_TEMP_C", float),
+                           ("precell_gate_wait_s", "BENCH_PRECELL_GATE_WAIT_S", int),
+                           ("precell_gate_max_c", "BENCH_PRECELL_GATE_MAX_C", int)):
+        try:
+            row[key] = conv(env[var])
+        except (KeyError, ValueError):
+            pass
+    return row
 
 
 def run_cell(job, rep, scale, cpuset, tier, net_name):
@@ -4437,6 +4466,7 @@ def main():
                 with CpuDmaLatencyHold(cpu_dma_latency_target()) as _hold:
                     row = run_cell(job, rep, args.scale, shard, args.tier, net_name)
                     _hold.stamp(row)
+                    precell_gate_stamp(row)
             except Exception:
                 with cv:
                     raised.append(f"{job['lane']}_{job['backend']}_r{rep}")

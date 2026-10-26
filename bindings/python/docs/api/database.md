@@ -159,7 +159,7 @@ Execute a query and return results. Queries are read-only and don't require a tr
 - `language` (str): Query language - `"sql"`, `"sqlscript"`, `"opencypher"` (or its alias `"cypher"`), `"graphql"`
 - `command` (str): Query string
 - `*args`: Optional positional parameters, or one mapping for named parameters
-  A single list or tuple on its own is the positional-parameter array, one element per `?`, so `query("sql", "... ?", [0.9, 0.1, 0.0])` binds `?` to `0.9`. To bind one list as one parameter (a query vector, say), pass a NumPy array or `to_java_float_array(...)`, use a named parameter, or wrap it: `[[0.9, 0.1, 0.0]]`.
+  A single list or tuple on its own is the positional-parameter array, one element per `?`, so `query("sql", "... = ? AND ... = ?", [0.9, 0.1])` binds `0.9` and `0.1` to two `?`. A call with more positional values than the SQL statement has placeholders raises `TypeError` (the engine would bind the first value and drop the rest without a word), so `query("sql", "... WHERE @rid IN ?", [rid_a, rid_b])` is refused instead of returning one row. To bind one list as one parameter (a query vector, say, or the list of an `IN`), pass a NumPy array or `to_java_float_array(...)`, use a named parameter (`"... IN :ids"` with `{"ids": [a, b]}`), or wrap it: `[[a, b]]`. The count is an upper bound taken from the `?`, `$` and `:` characters of the text, so a statement whose literals hold such characters is checked more loosely, and only SQL and SQLScript are checked.
 
 **Returns:**
 
@@ -222,7 +222,7 @@ one.
 - `language` (str): Command language (usually `"sql"` or `"opencypher"`)
 - `command` (str): Command string
 - `*args`: Optional positional parameters, or one mapping for named parameters
-  A single list or tuple on its own is the positional-parameter array, one element per `?`, so `query("sql", "... ?", [0.9, 0.1, 0.0])` binds `?` to `0.9`. To bind one list as one parameter (a query vector, say), pass a NumPy array or `to_java_float_array(...)`, use a named parameter, or wrap it: `[[0.9, 0.1, 0.0]]`.
+  A single list or tuple on its own is the positional-parameter array, one element per `?`, so `query("sql", "... = ? AND ... = ?", [0.9, 0.1])` binds `0.9` and `0.1` to two `?`. A call with more positional values than the SQL statement has placeholders raises `TypeError` (the engine would bind the first value and drop the rest without a word), so `query("sql", "... WHERE @rid IN ?", [rid_a, rid_b])` is refused instead of returning one row. To bind one list as one parameter (a query vector, say, or the list of an `IN`), pass a NumPy array or `to_java_float_array(...)`, use a named parameter (`"... IN :ids"` with `{"ids": [a, b]}`), or wrap it: `[[a, b]]`. The count is an upper bound taken from the `?`, `$` and `:` characters of the text, so a statement whose literals hold such characters is checked more loosely, and only SQL and SQLScript are checked.
 
 **Returns:**
 
@@ -521,7 +521,7 @@ faster still (2.24x on the same rows).
 
 **Parameters:**
 
-- `type_name` (str): Target document type (must exist)
+- `type_name` (str): Target type (must exist). A document type gets documents and a vertex type gets vertices (use `graph_batch()` when edges follow); an edge type raises `ArcadeDBError`, because an edge needs both endpoints
 - `rows` (iterable of dict): One dict per document, read lazily one chunk at
   a time; values must be JSON-representable (str/int/float/bool/None, nested
   lists/dicts). A chunk with other types (e.g. `datetime`, `bytes`) falls back
@@ -553,7 +553,7 @@ faster still (2.24x on the same rows).
 
 **Returns:**
 
-- `int`: Number of documents inserted
+- `int`: Number of records inserted
 
 **Raises:**
 
@@ -601,7 +601,7 @@ A column can also be a 2-D numpy `float32` array: a column of vectors. The whole
 
 **Parameters:**
 
-- `type_name` (str): Target document type (must exist)
+- `type_name` (str): Target type (must exist). A document type gets documents and a vertex type gets vertices (use `graph_batch()` when edges follow); an edge type raises `ArcadeDBError`, because an edge needs both endpoints
 - `columns` (mapping or `DataFrame`): `{property name: column}`, every column
   the same length. A numpy array of an integer, float, or bool kind crosses as
   one buffer copy; a string or object array and any other sequence convert per
@@ -624,7 +624,7 @@ A column can also be a 2-D numpy `float32` array: a column of vectors. The whole
 
 **Returns:**
 
-- `int`: Number of documents inserted
+- `int`: Number of records inserted
 
 **Raises:**
 
@@ -824,7 +824,8 @@ Lookup a record by its RID.
 
 **Parameters:**
 
-- `rid` (str): Record ID string (e.g. "#10:5")
+- `rid` (str | RID): Record ID string (e.g. "#10:5"), or the RID object a row holds (see
+  [Record ids in rows](results.md#record-ids-in-rows))
 
 **Returns:**
 

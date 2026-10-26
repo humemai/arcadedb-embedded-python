@@ -42,6 +42,11 @@ Available datasets:
     - msmarco-5m: 5M passage vectors
     - msmarco-10m: 10M passage vectors
 
+6. DBpedia entities with OpenAI embeddings (vector benchmark):
+    - dbpedia-openai3-1536-100k: first 100K entity vectors (3 of 26 parquet files)
+    - dbpedia-openai3-1536-1m: 1M entity vectors, 1536-D (all 26 parquet files,
+      9.55 GB download, sha256-verified against pinned values)
+
 
 Stack Exchange Data Note:
 - Pinned to 2024-06-30 quarterly dump for reproducibility
@@ -67,6 +72,8 @@ License:
 - MovieLens: Free for educational use (grouplens.org)
 - Stack Exchange: CC BY-SA (archive.org/details/stackexchange)
 - MSMARCO: See dataset card on Hugging Face
+- DBpedia OpenAI embeddings: MIT (dataset card of
+  Qdrant/dbpedia-entities-openai3-text-embedding-3-large-1536-1M on Hugging Face)
 - TPC-H: Generated with dbgen (local build or Docker); see TPC license terms
 - LDBC SNB: Generated locally via Docker (ldbc/datagen). See LDBC terms.
 
@@ -90,10 +97,13 @@ Usage:
     python download_data.py msmarco-1m
     python download_data.py msmarco-5m
     python download_data.py msmarco-10m
+    python download_data.py dbpedia-openai3-1536-100k
+    python download_data.py dbpedia-openai3-1536-1m
     python download_data.py stackoverflow-tiny --no-vectors  # Skip vector generation
 """
 
 import argparse
+import hashlib
 import html
 import json
 import os
@@ -2140,6 +2150,427 @@ def download_msmarco(count: int, data_dir: Path) -> Path:
     return out_dir
 
 
+DBPEDIA_OPENAI3_REPO = "Qdrant/dbpedia-entities-openai3-text-embedding-3-large-1536-1M"
+# Commit of the repository the sizes and hashes below were read from. Downloads
+# resolve against this commit, not against `main`.
+DBPEDIA_OPENAI3_REVISION = "4a9731217921bc476a0f03544f11f22ae4903fa5"
+DBPEDIA_OPENAI3_EMBEDDING_COLUMN = "text-embedding-3-large-1536-embedding"
+DBPEDIA_OPENAI3_DIM = 1536
+DBPEDIA_OPENAI3_SIZES = {"100k": 100_000, "1m": 1_000_000}
+
+# file name -> (size in bytes, sha256), from
+# https://huggingface.co/api/datasets/<repo>/tree/<revision>/data (fields `size`
+# and `lfs.oid`, the sha256 of the file content). They are pinned here instead of
+# read from the API at run time, so an upstream file that changes fails the
+# download loudly instead of being converted.
+DBPEDIA_OPENAI3_FILES = {
+    "train-00000-of-00026.parquet": (
+        367354366,
+        "27519d7104c8ac6d0f51ac18e8ac23b29d67cbab8465bc3302b458ca3dcbbb78",
+    ),
+    "train-00001-of-00026.parquet": (
+        367384973,
+        "26c2339d6318674a8e12cb95efc09bc7447fe87513f52dcd40155af74f6389a3",
+    ),
+    "train-00002-of-00026.parquet": (
+        367383864,
+        "16ff6f597d91ee684054b49397c3ada56e71b2acc9a37b8868531c9c500a76b6",
+    ),
+    "train-00003-of-00026.parquet": (
+        367376175,
+        "5f1cbe4a09d30a14751c01be7c194daa1110b1d0bd56e448d3a4bec54c03989c",
+    ),
+    "train-00004-of-00026.parquet": (
+        367393392,
+        "04f9dc0f796c4e1f46378c3ddb6b9074a0c5c02b6b031b052e53648064baad6f",
+    ),
+    "train-00005-of-00026.parquet": (
+        367366181,
+        "3da2f928fcb9f937d7f639d9ce30bdeb2637a4a0c1f3fa30243cbd7245a6b91c",
+    ),
+    "train-00006-of-00026.parquet": (
+        367396345,
+        "0e517fa2b51923a8239204a55d99a5d769a320e8b8bb599cb6e596d0f5aef10c",
+    ),
+    "train-00007-of-00026.parquet": (
+        367364674,
+        "17c90cb46fcc8ba50243669536bb3c77cdd03c7b50ebff270bbfd9abd9372689",
+    ),
+    "train-00008-of-00026.parquet": (
+        367411722,
+        "979928f18cf96e56e89bf6d8eb6925d6d4b68c926030f98fe834719756e6b42b",
+    ),
+    "train-00009-of-00026.parquet": (
+        367369699,
+        "b8a0b1d6cb6d5b0695fedcad92d084f38bbc34acfc2d05e682d37f8de713bfe0",
+    ),
+    "train-00010-of-00026.parquet": (
+        367398317,
+        "2895564d6ead394a645efe52a1def1f4dd2e2031dc95022a5175bd798bea180f",
+    ),
+    "train-00011-of-00026.parquet": (
+        367397493,
+        "49b8ab75cd51d24c47703524367e156797ffc611c9af66904c15d50d8924a577",
+    ),
+    "train-00012-of-00026.parquet": (
+        367385796,
+        "9e7029fd89aa73b5d1f313a021dd74b95d3d4147aad24fe7c9d67a1a4e6388c3",
+    ),
+    "train-00013-of-00026.parquet": (
+        367370402,
+        "9f5a07500685aaf132e671d567ef4f55a0683ea9f5eaacea264d989d199efc86",
+    ),
+    "train-00014-of-00026.parquet": (
+        367361441,
+        "25d6f7d53249f78684905447260d6b2b3dd9bf082894fe43573bb32a504acaff",
+    ),
+    "train-00015-of-00026.parquet": (
+        367387987,
+        "3fadbc6ad6305aff16680a78d16921e37d3d5c919b7b13fe5c3172cfa353816e",
+    ),
+    "train-00016-of-00026.parquet": (
+        367421243,
+        "2ae041eb77327e8e1df2d3b541f105a71448ccaa9b4c1f5c47f649fa8aa0e297",
+    ),
+    "train-00017-of-00026.parquet": (
+        367382445,
+        "b0603494c3738ba86f33bdf36b6fe7611ca26cd4705a24e08335b3a21532ea4d",
+    ),
+    "train-00018-of-00026.parquet": (
+        367381662,
+        "713df5db4f4681debede5e659d81887eab8d4aef5bc61f93c20134889f6a1fef",
+    ),
+    "train-00019-of-00026.parquet": (
+        367355079,
+        "39a7f069cb8f1cac22e2c94628ad8bac41c15f24c502a9e0e7bfe94e86f15c22",
+    ),
+    "train-00020-of-00026.parquet": (
+        367358017,
+        "261cab4224a30c71c35f891435af9e5f9fc864c6d2cb25c25b9abf714a3be2ad",
+    ),
+    "train-00021-of-00026.parquet": (
+        367345769,
+        "8f8abbf95bf3a81f1615209fa3b0b53661965a31ada34879ceb8358cdd115749",
+    ),
+    "train-00022-of-00026.parquet": (
+        367368624,
+        "75e26dc278da54611eb9cc21d5a90c46bd960ec5fc57ea0084849e96165c01f3",
+    ),
+    "train-00023-of-00026.parquet": (
+        367413914,
+        "3ea6b169252e342b3a2e2251fb111dad9dba4c569052f8647d93a735c311fbf3",
+    ),
+    "train-00024-of-00026.parquet": (
+        367383722,
+        "78faf63bc2cbef22052724cde4ec88afee7c59b9f570a0a65c914cad8ca154b5",
+    ),
+    "train-00025-of-00026.parquet": (
+        367349263,
+        "44b1b03eee0c918b60ad83306f6e0d4384114763dd796540f83a90bb80553fc3",
+    ),
+}
+
+
+def _sha256_of_file(path: Path, chunk_size: int = 8 * 1024 * 1024) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as fin:
+        while True:
+            chunk = fin.read(chunk_size)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _check_pinned_file(path: Path, expected_size: int, expected_sha256: str) -> None:
+    """Raise RuntimeError unless `path` has the pinned size and sha256."""
+    actual_size = path.stat().st_size
+    if actual_size != expected_size:
+        raise RuntimeError(
+            f"{path.name}: size {actual_size} does not match the pinned size "
+            f"{expected_size}"
+        )
+    actual_sha256 = _sha256_of_file(path)
+    if actual_sha256 != expected_sha256:
+        raise RuntimeError(
+            f"{path.name}: sha256 {actual_sha256} does not match the pinned "
+            f"sha256 {expected_sha256}"
+        )
+
+
+def fetch_dbpedia_openai3_file(name: str, local_dir: Path) -> Path:
+    """Return the verified local copy of one pinned parquet file.
+
+    A file that is already on disk and matches the pinned size and sha256 is
+    reused. Anything else is downloaded (partial files resume), then checked. A
+    file that fails the check is removed and the run stops.
+    """
+    expected_size, expected_sha256 = DBPEDIA_OPENAI3_FILES[name]
+    destination = local_dir / name
+
+    if destination.exists():
+        try:
+            _check_pinned_file(destination, expected_size, expected_sha256)
+            print(f"[OK] {name} already on disk, sha256 verified")
+            return destination
+        except RuntimeError:
+            print(f"[DOWNLOAD] {name} on disk is incomplete or differs; fetching")
+
+    url = _require_https(
+        f"https://huggingface.co/datasets/{DBPEDIA_OPENAI3_REPO}"
+        f"/resolve/{DBPEDIA_OPENAI3_REVISION}/data/{name}"
+    )
+    print(f"[DOWNLOAD] {name} ({_format_bytes(expected_size)})")
+    download_file(url, destination)
+    try:
+        _check_pinned_file(destination, expected_size, expected_sha256)
+    except RuntimeError:
+        destination.unlink(missing_ok=True)
+        raise
+    print(f"[OK] {name} sha256 verified")
+    return destination
+
+
+def _build_exact_gt(
+    *,
+    shards: list[dict],
+    out_dir: Path,
+    total_count: int,
+    dim: int,
+    gt_path: Path,
+    q_count: int,
+    topk: int,
+    chunk: int,
+    seed: int,
+) -> None:
+    """Write exact top-k neighbours (inner product) for sampled stored vectors.
+
+    Same file format as the MSMARCO and Stack Exchange `.gt.jsonl`. The query
+    rows are sampled with a fixed seed so the file can be rebuilt; the scan
+    keeps a running top-k per query with numpy instead of a Python heap.
+    """
+    import numpy as np
+
+    print(f"[GT] building exact GT for {q_count} queries, k={topk}")
+
+    q_count = min(q_count, total_count)
+    topk = min(topk, total_count)
+    rng = np.random.default_rng(seed)
+    q_indices = rng.choice(total_count, size=q_count, replace=False)
+
+    queries = np.empty((q_count, dim), dtype=np.float32)
+    for shard in shards:
+        start, count = int(shard["start"]), int(shard["count"])
+        in_shard = np.flatnonzero((q_indices >= start) & (q_indices < start + count))
+        if in_shard.size == 0:
+            continue
+        mm = np.memmap(
+            out_dir / str(shard["path"]), dtype=np.float32, mode="r", shape=(count, dim)
+        )
+        queries[in_shard] = mm[q_indices[in_shard] - start]
+        del mm
+
+    best_scores = np.full((q_count, topk), -np.inf, dtype=np.float32)
+    best_ids = np.full((q_count, topk), -1, dtype=np.int64)
+
+    for shard in shards:
+        start, count = int(shard["start"]), int(shard["count"])
+        print(f"[GT] scanning {shard['path']}")
+        mm = np.memmap(
+            out_dir / str(shard["path"]), dtype=np.float32, mode="r", shape=(count, dim)
+        )
+        for off in range(0, count, chunk):
+            block = np.asarray(mm[off : off + chunk])
+            sims = queries @ block.T
+            ids = np.arange(start + off, start + off + block.shape[0], dtype=np.int64)
+            ids = np.broadcast_to(ids, sims.shape)
+            all_scores = np.concatenate([best_scores, sims], axis=1)
+            all_ids = np.concatenate([best_ids, ids], axis=1)
+            keep = np.argpartition(all_scores, -topk, axis=1)[:, -topk:]
+            best_scores = np.take_along_axis(all_scores, keep, axis=1)
+            best_ids = np.take_along_axis(all_ids, keep, axis=1)
+        del mm
+
+    with open(gt_path, "w", encoding="utf-8") as f:
+        for qi in range(q_count):
+            order = np.lexsort((best_ids[qi], -best_scores[qi]))
+            json.dump(
+                {
+                    "query_id": int(q_indices[qi]),
+                    "topk": [
+                        {
+                            "doc_id": int(best_ids[qi][j]),
+                            "score": float(best_scores[qi][j]),
+                        }
+                        for j in order
+                    ],
+                },
+                f,
+            )
+            f.write("\n")
+
+    print(f"[GT] wrote {gt_path}")
+
+
+def convert_dbpedia_openai3_to_shards(
+    *,
+    parquet_files,
+    out_dir: Path,
+    count: int,
+    dim: int = DBPEDIA_OPENAI3_DIM,
+    shard_size: int = 100_000,
+    batch_rows: int = 4096,
+    progress_every: int = 100_000,
+    q_count: int = 1000,
+    topk: int = 50,
+    chunk: int = 4096,
+    seed: int = 42,
+) -> None:
+    """Convert DBpedia OpenAI parquet parts to shard files, ids, and GT.
+
+    `parquet_files` is any iterable of paths. It is advanced only while fewer
+    than `count` vectors are written, so a lazy iterable downloads only the
+    files a slice needs. Files are streamed in batches; memory stays bounded.
+    """
+    try:
+        import numpy as np
+        import pyarrow.parquet as pq
+    except ImportError as exc:
+        raise RuntimeError(
+            "Missing dependencies for DBpedia conversion. "
+            "Install with: pip install numpy pyarrow"
+        ) from exc
+
+    base_name = f"dbpedia-openai3-1536-{count}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ids_path = out_dir / f"{base_name}.ids.jsonl"
+    meta_path = out_dir / f"{base_name}.meta.json"
+    gt_path = out_dir / f"{base_name}.gt.jsonl"
+
+    writer = _VectorShardWriter(out_dir, base_name, shard_size)
+    written = 0
+    last_report = 0
+    t0 = time.time()
+
+    with open(ids_path, "w", encoding="utf-8") as ids_file:
+        for file_idx, parquet_file in enumerate(parquet_files):
+            print(f"[process] File {file_idx + 1}: {Path(parquet_file).name}")
+            pf = pq.ParquetFile(parquet_file)
+            for record_batch in pf.iter_batches(
+                columns=["_id", "title", DBPEDIA_OPENAI3_EMBEDDING_COLUMN],
+                batch_size=batch_rows,
+            ):
+                col = record_batch.column(DBPEDIA_OPENAI3_EMBEDDING_COLUMN)
+                if col.null_count or col.flatten().null_count:
+                    raise RuntimeError(f"Null embedding detected in {parquet_file}")
+                spans = np.diff(col.offsets.to_numpy())
+                if not np.all(spans == dim):
+                    raise RuntimeError(
+                        f"Embedding dimension is not {dim} in {parquet_file}"
+                    )
+
+                take = min(len(col), count - written)
+                values = col.flatten().to_numpy(zero_copy_only=False)
+                embs = np.asarray(values, dtype=np.float32).reshape(-1, dim)[:take]
+                embs = embs / (np.linalg.norm(embs, axis=1, keepdims=True) + 1e-12)
+                writer.write(np.ascontiguousarray(embs))
+
+                source_ids = record_batch.column("_id").to_pylist()[:take]
+                titles = record_batch.column("title").to_pylist()[:take]
+                for i, (source_id, title) in enumerate(zip(source_ids, titles)):
+                    ids_file.write(
+                        json.dumps(
+                            {"id": written + i, "dbpedia_id": source_id, "title": title}
+                        )
+                        + "\n"
+                    )
+                written += take
+
+                if written - last_report >= progress_every:
+                    rate = written / (time.time() - t0)
+                    print(f"[convert] {written:,}/{count:,} | {rate:,.0f} v/s")
+                    last_report = written
+                if written >= count:
+                    break
+            if written >= count:
+                break
+
+    writer.close()
+
+    if written != count:
+        raise RuntimeError(
+            f"Source files hold {written:,} vectors, fewer than the {count:,} "
+            "requested; refusing to write a short dataset"
+        )
+
+    print(f"[done] wrote {written:,} vectors across {len(writer.shards)} shards")
+
+    _build_exact_gt(
+        shards=writer.shards,
+        out_dir=out_dir,
+        total_count=written,
+        dim=dim,
+        gt_path=gt_path,
+        q_count=q_count,
+        topk=topk,
+        chunk=chunk,
+        seed=seed,
+    )
+
+    meta = {
+        "dataset": base_name,
+        "source": DBPEDIA_OPENAI3_REPO,
+        "revision": DBPEDIA_OPENAI3_REVISION,
+        "license": "mit",
+        "model": "text-embedding-3-large",
+        "dim": dim,
+        "dtype": "float32",
+        "normalized": True,
+        "count": written,
+        "shard_size": shard_size,
+        "shards": writer.shards,
+        "ids_file": ids_path.name,
+        "gt_file": gt_path.name,
+        "gt_queries": min(q_count, written),
+        "gt_topk": min(topk, written),
+        "gt_seed": seed,
+    }
+    # Written last: a run that stops earlier leaves no meta file, so
+    # --verify-only does not report it as a dataset.
+    meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+
+def _dbpedia_openai3_dir(count: int, data_dir: Path) -> Path:
+    size_label = "1M" if count >= 1_000_000 else f"{count // 1000}K"
+    return data_dir / f"DBPEDIA-OPENAI3-1536-{size_label}"
+
+
+def download_dbpedia_openai3(count: int, data_dir: Path) -> Path:
+    """Download pinned DBpedia OpenAI parquet parts and convert to shard files."""
+    out_dir = _dbpedia_openai3_dir(count, data_dir)
+    ensure_clean_dir(out_dir, f"DBpedia OpenAI {out_dir.name}")
+
+    hf_home = Path(os.environ.get("HF_HOME", str(data_dir / "hf_cache")))
+    local_dir = hf_home / "datasets" / DBPEDIA_OPENAI3_REPO.replace("/", "___") / "data"
+    local_dir.mkdir(parents=True, exist_ok=True)
+
+    def verified_parquet_files():
+        # Lazy: the converter stops asking once `count` vectors are written, so
+        # the 100k slice fetches 3 of the 26 files.
+        for name in DBPEDIA_OPENAI3_FILES:
+            yield fetch_dbpedia_openai3_file(name, local_dir)
+
+    print("[CONVERT] Converting DBpedia OpenAI parquet to shard files")
+    convert_dbpedia_openai3_to_shards(
+        parquet_files=verified_parquet_files(),
+        out_dir=out_dir,
+        count=count,
+    )
+
+    print(f"[OK] DBpedia OpenAI ready at: {out_dir}")
+    return out_dir
+
+
 def verify_csv_nulls(extract_dir, dataset_type="movielens", sample_size=None):
     """
     Verify NULL injection in CSV files.
@@ -2461,6 +2892,10 @@ MSMARCO v2.1 embeddings (vector benchmark):
     msmarco-5m  - 5M passage vectors
     msmarco-10m - 10M passage vectors
 
+DBpedia entities, OpenAI text-embedding-3-large at 1536 dimensions:
+    dbpedia-openai3-1536-100k - first 100K entity vectors (~1.1 GB download)
+    dbpedia-openai3-1536-1m   - 1M entity vectors (~9.55 GB download)
+
 Examples:
     python download_data.py movielens-small
     python download_data.py movielens-large
@@ -2475,6 +2910,8 @@ Examples:
     python download_data.py msmarco-1m
     python download_data.py msmarco-5m
     python download_data.py msmarco-10m
+    python download_data.py dbpedia-openai3-1536-100k
+    python download_data.py dbpedia-openai3-1536-1m
     python download_data.py tpch-sf1
     python download_data.py tpch-sf10
     python download_data.py tpch-sf100
@@ -2513,6 +2950,8 @@ Note: Verification uses smart sampling (100K rows) for fast performance.
             "msmarco-1m",
             "msmarco-5m",
             "msmarco-10m",
+            "dbpedia-openai3-1536-100k",
+            "dbpedia-openai3-1536-1m",
             "tpch-sf1",
             "tpch-sf10",
             "tpch-sf100",
@@ -2639,6 +3078,31 @@ Note: Verification uses smart sampling (100K rows) for fast performance.
 
         download_msmarco(count=count, data_dir=data_dir)
         return
+
+    if args.dataset.startswith("dbpedia-openai3-1536-"):
+        count = DBPEDIA_OPENAI3_SIZES[args.dataset.rsplit("-", 1)[1]]
+        out_dir = _dbpedia_openai3_dir(count, data_dir)
+        meta_path = out_dir / f"dbpedia-openai3-1536-{count}.meta.json"
+
+        if args.verify_only:
+            if not meta_path.exists():
+                print(f"[ERROR] DBpedia OpenAI dataset not found: {out_dir}")
+                return
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            expected = int(meta["count"]) * int(meta["dim"]) * 4
+            actual = sum((out_dir / s["path"]).stat().st_size for s in meta["shards"])
+            if actual == expected:
+                print(f"[OK] DBpedia OpenAI dataset exists at: {out_dir}")
+            else:
+                print(
+                    f"[ERROR] DBpedia OpenAI shards hold {actual} bytes, "
+                    f"meta expects {expected}: {out_dir}"
+                )
+            return
+
+        download_dbpedia_openai3(count=count, data_dir=data_dir)
+        return
+
     if args.dataset.startswith("movielens-"):
         size = args.dataset.replace("movielens-", "")
         dirname = f"movielens-{size}"

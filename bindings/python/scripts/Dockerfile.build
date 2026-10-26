@@ -208,7 +208,7 @@ COPY bindings/python/README.md ./
 COPY pom.xml /arcadedb/pom.xml
 
 # No separate install of build tools: `uv build` creates an isolated environment with the
-# `[build-system] requires` from pyproject.toml (build, setuptools, wheel, jpype1) for each build.
+# `[build-system] requires` from pyproject.toml (setuptools, wheel) for each build.
 
 # Re-declare build args for this stage (required after FROM)
 ARG PACKAGE_NAME

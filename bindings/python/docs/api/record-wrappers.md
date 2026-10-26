@@ -182,8 +182,9 @@ rid = doc.get_rid()
 
 #### `get_identity()`
 
-Get the record identity (the underlying Java RID object). For a string RID, use
-`get_rid()` or wrap with `str(...)`.
+Get the record identity as an RID object (the engine's own `RID` on the JVM wheel; see
+[Record ids in rows](results.md#record-ids-in-rows) for what it offers on both wheels).
+For a string RID, use `get_rid()` or wrap with `str(...)`.
 
 ```python
 identity = doc.get_identity()

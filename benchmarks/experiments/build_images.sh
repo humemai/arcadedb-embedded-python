@@ -70,13 +70,33 @@ declare -A PKGS=(
   # all pin here. The client and dense lines carry the OCTOBER RE-PIN of
   # 2026-09-19 (COMPARATORS.md, "The October re-pin").
   [duckdb]="duckdb==1.5.6 $HARNESS_PKGS"
-  # ladybug 0.21.2, not 0.20.4 (2026-10-02, #129): 0.20.4 crashes the dense
-  # arm's mutation phase after a deleted vector key is re-inserted, and 0.21.1
-  # carries #1074 (COPY linear for compressible columns) and #1075 (the pool
-  # sized from the cgroup limit). 0.21.2 (2026-10-01) is the newest stable.
-  [client]="requests==2.34.2 psycopg[binary]==3.3.6 $HARNESS_PKGS surrealdb==2.0.0 qdrant-client==1.20.0 pymilvus[bulk_writer]==3.0.2 minio==7.2.20 azure-storage-blob==12.31.0 ml-dtypes==0.6.0 elasticsearch==9.5.1 neo4j==6.4.1 ladybug==0.21.2 pymongo==4.18.1 python-arango==8.3.6 falkordb==1.7.1 redis==8.1.0 neo4j-rust-ext==6.4.1.0 pgvector==0.5.1 arcadedb-driver==0.2.0"
-  [dense]="chromadb==1.5.9 lancedb==0.39.0 sqlite-vec==0.1.9 duckdb==1.5.6 $HARNESS_PKGS"
+  # ladybug 0.22.0 (2026-10-25), from 0.21.2 (2026-10-02, #129, which had moved off 0.20.4). 0.20.4 crashes the dense
+  # arm's mutation phase after a deleted vector key is re-inserted (the process dies at `mutate-insert-start`; re-run
+  # untimed on the laptop 2026-10-25, micro, BENCH_DENSE_MUTATE=1: 0.20.4 dies there, 0.22.0 completes it, recall
+  # 0.9981 after the deletes and 0.9997 after the re-inserts, 0 deleted hits). 0.21.2 stopped working on 2026-10-25 04:28 UTC:
+  # the vendor overwrote the v0.21.0 `vector` extension, the path every 0.21.x client downloads from, with a build
+  # of the 0.22 sources, and `LOAD vector` fails with an undefined symbol (LadybugDB/ladybug#1390). The 0.21.x line has
+  # no way back to a working extension but the vendor restoring the file; 0.22.0 is the newest stable and its
+  # extension loads. The extension is baked into the client image below, pinned by sha256 (LADYBUG_EXTENSIONS).
+  [client]="requests==2.34.2 psycopg[binary]==3.3.6 $HARNESS_PKGS surrealdb==2.0.0 qdrant-client==1.20.0 pymilvus[bulk_writer]==3.0.2 minio==7.2.20 azure-storage-blob==12.31.0 ml-dtypes==0.6.0 elasticsearch==9.5.1 neo4j==6.4.1 ladybug==0.22.0 pymongo==4.18.1 python-arango==8.3.6 falkordb==1.7.1 redis==8.1.0 neo4j-rust-ext==6.4.1.0 pgvector==0.5.1 arcadedb-driver==0.2.0"
+  # ladybug==0.22.0 is the SAME pin as the client line above, here for the composed embedded cross-model arm
+  # (composed_embedded_sqlite_lance_ladybug, 2026-10-25): SQLite + LanceDB + LadybugDB must import in ONE process, and
+  # lancedb lives in this image. No new version: the dense lane's arms import none of it.
+  [dense]="chromadb==1.5.9 lancedb==0.39.0 sqlite-vec==0.1.9 duckdb==1.5.6 ladybug==0.22.0 $HARNESS_PKGS"
 )
+# RUNTIME EXTENSIONS ARE PINNED BY SHA256 AND INSTALLED AT IMAGE BUILD TIME (2026-10-25). The client image's LadybugDB arms
+# (ladybug_e2, ladybug_dense, ladybug_lifecycle) used to run `INSTALL vector` in every cell, which downloads the binary from
+# extension.ladybugdb.com at run time. On 2026-10-25 04:28 UTC the vendor overwrote the file that every 0.21.x client reads and a
+# pinned engine stopped loading (LadybugDB/ladybug#1390). `INSTALL` is a no-op when the file is already in ~/.lbdb (measured:
+# same sha256 and mtime after a second INSTALL, also with --network none), so baking the binary here pins it for every cell with no
+# change to any lane. The build FAILS when the downloaded file's sha256 is not the one below or when `LOAD` rejects it, so a vendor
+# overwrite stops the build instead of changing the engine under a pinned pass. Format: `name=sha256` for linux_amd64 (the images
+# are amd64-only); bake_ladybug_extensions.py does the work. Moving the ladybug pin means re-reading this sha:
+#   docker run --rm dbbench:client python -c "import ladybug,glob,hashlib; c=ladybug.Connection(ladybug.Database(':memory:')); c.execute('INSTALL vector'); print(hashlib.sha256(open(glob.glob('/root/.lbdb/extension/*/linux_amd64/vector/libvector.lbug_extension')[0],'rb').read()).hexdigest())"
+# v0.22.0/linux_amd64/vector/libvector.lbug_extension, Last-Modified Sun, 25 Oct 2026 04:29:24 GMT, 1164248 bytes.
+LADYBUG_EXTENSIONS="vector=23da57e805fed208f1eacb4b011cb0c2e917ae098fa6853763e44221211e71b0"
+# DuckDB's `INSTALL vss` and `INSTALL duckpgq FROM community` still run in the cell (it records the extension version on the
+# row); baking them the same way is the open follow-up in COMPARATORS.md, "Runtime extensions".
 # A GUARD, not a comment. The dev pin above survived because nothing checked
 # it. BENCH_ALLOW_DEV=1 is the deliberate escape hatch for engine debugging.
 #
@@ -176,7 +196,9 @@ for be in "${targets[@]}"; do
   _tag="dbbench:$be"
   [ "$be" = "arcadedb" ] && _tag="$ARCADEDB_TAG"
   echo "=== $_tag (${PKGS[$be]})"
+  _ext=""; [ "$be" = "client" ] && _ext="$LADYBUG_EXTENSIONS"
   docker build -q -t "$_tag" --build-arg PIP_PACKAGES="${PKGS[$be]}" \
     --build-arg JPYPE_VERSION="$JPYPE_VERSION" \
+    --build-arg LADYBUG_EXTENSIONS="$_ext" \
     -f Dockerfile.bench . >/dev/null && echo "  ok"
 done

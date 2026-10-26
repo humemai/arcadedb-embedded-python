@@ -10,7 +10,7 @@ Hands-on examples demonstrating ArcadeDB Python bindings in real-world scenarios
 ### 🏁 Getting Started
 
 **[Dataset Downloader](download_data.md)**
-Download and prepare datasets used by the examples (MovieLens, Stack Exchange, MSMARCO, TPC-H, and LDBC SNB).
+Download and prepare datasets used by the examples (MovieLens, Stack Exchange, MSMARCO, DBpedia OpenAI embeddings, TPC-H, and LDBC SNB).
 
 **[01 - Simple Document Store](01_simple_document_store.md)**
 Foundation example covering document types, CRUD operations, comprehensive data types (DATE, DATETIME, DECIMAL, FLOAT, INTEGER, STRING, BOOLEAN, and LIST), and NULL value handling (INSERT NULL, UPDATE to NULL, IS NULL queries).

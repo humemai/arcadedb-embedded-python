@@ -281,8 +281,11 @@ E2_SINGLE_ENGINE = ("arcadedb_e2", "arcadedb_e2_server", "surrealdb_e2",
                     "surrealdb_e2_server", "neo4j_e2", "pg_age_e2", "arangodb_e2",
                     "mongodb_e2", "memgraph_e2", "ladybug_e2", "duckdb_e2")
 # Optional until a campaign has measured them.
-E2_OPTIONAL = ("arangodb_e2", "mongodb_e2", "memgraph_e2", "ladybug_e2", "duckdb_e2")
-E2_BACKENDS = E2_SINGLE_ENGINE + ("composed_qdrant_neo4j",)
+# The two composed stacks tear by construction (nothing spans their stores), so they are not in E2_SINGLE_ENGINE; the embedded one
+# (2026-10-25) is optional until a campaign has measured it.
+E2_COMPOSED = ("composed_qdrant_neo4j", "composed_embedded_sqlite_lance_ladybug")
+E2_OPTIONAL = ("arangodb_e2", "mongodb_e2", "memgraph_e2", "ladybug_e2", "duckdb_e2", "composed_embedded_sqlite_lance_ladybug")
+E2_BACKENDS = E2_SINGLE_ENGINE + E2_COMPOSED
 
 
 def _check_page_atomicity(payload):
@@ -886,6 +889,9 @@ NOT_PRINTED = [
      "pool (FAIRNESS F6, audited in FAIRNESS.md rather than printed as a "
      "column), memory limit, and query timeouts, which explain the cell "
      "rather than measure it"),
+    (r"^lancedb_(ef|nprobes|recall_target|calibration_(recall|queries|s))$",
+     "the composed embedded stack's LanceDB operating point (FAIRNESS F7, matched by effect): the ef chosen on held-out queries, the "
+     "recall target it was calibrated to and the recall it read, which explain the vector step's recall column rather than measure it"),
     (r"^ladybug_(threads|buffer_pool_mib)$",
      "the LadybugDB graph arm's thread pool (read back from the engine) and "
      "buffer pool, fitted to the cpuset and to the cgroup memory limit (FAIRNESS "
