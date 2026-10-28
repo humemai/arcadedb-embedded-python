@@ -1477,11 +1477,13 @@ class Database:
                 below the corpus makes the build re-read vectors from the
                 documents. Set an absolute count only to bound a build on a
                 deliberately small heap.
-            mutations_before_rebuild: Per-index override for mutations threshold
-                before triggering a graph rebuild (maps to Java metadata key
-                "mutationsBeforeRebuild"; uses GlobalConfiguration default if None).
-                Typical ranges: 100–300 for freshness-heavy workloads; 300–800 for
-                write-heavy workloads and larger graphs.
+            mutations_before_rebuild: Floor of the graph rebuild threshold (Java
+                metadata key "mutationsBeforeRebuild"; the engine default 100 if
+                None). The engine rebuilds after max(floor, min(graph size x
+                rebuildGraphRatio, maxPendingMutations)) mutations, so above
+                floor / 0.2 vectors the ratio decides and a lower floor changes
+                nothing. To rebuild sooner, lower the database setting
+                arcadedb.vectorIndex.rebuildGraphRatio with ALTER DATABASE.
             pq_subspaces: Number of PQ subspaces (M). Requires quantization="PRODUCT".
             pq_clusters: Clusters per subspace (K). Requires quantization="PRODUCT".
                 In current ArcadeDB engine builds, this should not exceed the
