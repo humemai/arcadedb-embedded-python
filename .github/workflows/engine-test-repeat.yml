@@ -1,0 +1,119 @@
+name: Run an engine test N times
+
+# Runs a Maven -Dtest pattern of one module of a repository (ArcadeDB upstream by
+# default) at any commit, N times, on a chosen JDK, each run under a timeout, and
+# uploads every run's surefire reports with a summary. For verifying an upstream
+# fix whose evidence is a test: the merge commit against its parent, on JDK 21 and
+# 25, and many runs for a rare race (#547). A test failure never fails the job,
+# because a parent-commit control is expected to fail; read summary.txt.
+
+on:
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: "Repository to test (owner/name)"
+        required: false
+        default: "ArcadeData/arcadedb"
+        type: string
+      ref:
+        description: "Commit SHA, branch, or tag to test"
+        required: true
+        type: string
+      module:
+        description: "Maven module that holds the tests"
+        required: false
+        default: "engine"
+        type: string
+      tests:
+        description: "Surefire -Dtest pattern, e.g. Issue10657*,Issue6125SnapshotBarrierAndCapTest"
+        required: true
+        type: string
+      repeat:
+        description: "How many times to run the pattern"
+        required: false
+        default: "1"
+        type: string
+      java-version:
+        description: "JDK for the build and the runs (21 or 25)"
+        required: false
+        default: "21"
+        type: string
+      run-timeout-minutes:
+        description: "Timeout of one run of the pattern, in minutes (a hang counts as a timeout)"
+        required: false
+        default: "15"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: engine-test-repeat-${{ inputs.repository }}-${{ inputs.ref }}-${{ inputs.tests }}-${{ inputs.java-version }}
+  cancel-in-progress: false
+
+jobs:
+  repeat:
+    name: ${{ inputs.tests }} x${{ inputs.repeat }} on JDK ${{ inputs.java-version }} (${{ inputs.repository }} @ ${{ inputs.ref }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    steps:
+      - name: Checkout the source to test
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.repository }}
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - name: Set up the JDK
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.java-version }}
+          cache: maven
+
+      - name: Build the module and what it needs (test classes compiled, no test run)
+        shell: bash
+        env:
+          MODULE: ${{ inputs.module }}
+        run: ./mvnw -B -q -DskipTests -pl "$MODULE" -am install
+
+      - name: Run the pattern N times
+        shell: bash
+        env:
+          MODULE: ${{ inputs.module }}
+          TESTS: ${{ inputs.tests }}
+          REPEAT: ${{ inputs.repeat }}
+          RUN_TIMEOUT: ${{ inputs.run-timeout-minutes }}
+          REPO: ${{ inputs.repository }}
+        run: |
+          case "$REPEAT" in ''|*[!0-9]*) echo "::error::repeat must be a whole number, got '$REPEAT'"; exit 1;; esac
+          case "$RUN_TIMEOUT" in ''|*[!0-9]*) echo "::error::run-timeout-minutes must be a whole number, got '$RUN_TIMEOUT'"; exit 1;; esac
+          OUT="$RUNNER_TEMP/engine-test-repeat"; mkdir -p "$OUT"
+          pass=0; fail=0; timeout_n=0
+          for i in $(seq 1 "$REPEAT"); do
+            rm -rf "$MODULE/target/surefire-reports"
+            rc=0
+            timeout "${RUN_TIMEOUT}m" ./mvnw -B -pl "$MODULE" surefire:test -Dtest="$TESTS" -Dsurefire.failIfNoSpecifiedTests=false > "$OUT/run-$i.log" 2>&1 || rc=$?
+            if [ "$rc" = 0 ]; then pass=$((pass + 1)); state=pass
+            elif [ "$rc" = 124 ]; then timeout_n=$((timeout_n + 1)); state=timeout
+            else fail=$((fail + 1)); state=fail; fi
+            mkdir -p "$OUT/run-$i" && cp -r "$MODULE/target/surefire-reports" "$OUT/run-$i/" 2> /dev/null || true
+            echo "run $i: $state (rc $rc), $(grep -h -E 'Tests run: [0-9]+, Failures' "$OUT/run-$i.log" | tail -n 1)" | tee -a "$OUT/runs.txt"
+          done
+          {
+            echo "repository: $REPO"
+            echo "commit: $(git rev-parse HEAD)"
+            echo "jdk: $(java -version 2>&1 | head -n 1)"
+            echo "module: $MODULE"
+            echo "tests: $TESTS"
+            echo "runs: $REPEAT, pass: $pass, fail: $fail, timeout: $timeout_n (run timeout ${RUN_TIMEOUT} min)"
+          } | tee "$OUT/summary.txt" >> "$GITHUB_STEP_SUMMARY"
+          cat "$OUT/runs.txt" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: engine-test-repeat
+          path: ${{ runner.temp }}/engine-test-repeat/
+          retention-days: 14
