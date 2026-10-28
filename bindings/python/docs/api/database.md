@@ -1366,7 +1366,7 @@ specifically need that surface.
   value raises `ValueError`; the engine no longer accepts the setting because bounding
   the vector-location index drops vectors from searches rather than spilling to disk.
 - `graph_build_cache_size` (int | None): Override the number of vectors cached while the graph is built (default: `None`, the engine's automatic sizing; leave it unset, see [Build-time cache](../guide/vectors.md#build-time-cache-use-the-default)).
-- `mutations_before_rebuild` (int | None): Override rebuild threshold (default: `None`, uses engine default).
+- `mutations_before_rebuild` (int | None): Floor of the graph rebuild threshold (default: `None`, the engine default 100). The threshold is `max(floor, min(graph size × rebuildGraphRatio, maxPendingMutations))`, so above 500 vectors at the default ratio 0.2 a lower floor changes nothing; to rebuild sooner, lower `arcadedb.vectorIndex.rebuildGraphRatio` with `ALTER DATABASE` (see [Searches while the graph rebuilds](../guide/vectors.md#searches-while-the-graph-rebuilds)).
 - `store_vectors_in_graph` (bool): Persist vectors inline in graph file (faster reopen/search, larger graph).
 - `add_hierarchy` (bool | None): Force enabling/disabling HNSW hierarchy (default: `True`).
   The default is a deliberate choice of these bindings. The engine itself defaults to

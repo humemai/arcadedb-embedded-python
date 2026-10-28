@@ -186,9 +186,23 @@ of the vectors not yet in the graph (ArcadeDB
 [#7260](https://github.com/ArcadeData/arcadedb/issues/7260)). Upstream fixed it
 in [#9289](https://github.com/ArcadeData/arcadedb/pull/9289), merged on
 2026-10-06 and released in ArcadeDB 26.10.2; the 26.10.1 wheel still has it. On 26.10.1, a
-heap of about twice the graph, a lower `mutations_before_rebuild`, or rebuilding in a quiet window
-avoids it. Read-mostly use, and loading first and
-serving after, never meet it.
+heap of about twice the graph, or rebuilding in a quiet window, avoids it. Read-mostly use, and
+loading first and serving after, never meet it.
+
+The engine rebuilds the graph after
+`max(mutationsBeforeRebuild, min(graph size × rebuildGraphRatio, maxPendingMutations))`
+mutations, with defaults 100, 0.2 and 50,000 (the same formula in 26.10.1, 26.10.2 and later).
+`mutations_before_rebuild` is the floor of that threshold, not an override: above 500 vectors
+the ratio term is larger, so raising the floor delays rebuilds of a small index, and lowering it
+changes nothing on a large one. To rebuild a large index sooner, lower the ratio. It is a
+database setting, read when the threshold is computed:
+
+```python
+db.command("sql", "ALTER DATABASE `arcadedb.vectorIndex.rebuildGraphRatio` 0.05")
+```
+
+At 5,000 vectors this takes the threshold from 1,000 to 250 mutations (checked on ArcadeDB main
+`c3af6d9028`). `index.get_stats()["effectiveMutationsThreshold"]` reports the value in force.
 
 <!-- ab-table: rebuild-threshold -->
 <!-- /ab-table -->
