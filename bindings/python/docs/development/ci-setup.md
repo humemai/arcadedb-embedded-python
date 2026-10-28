@@ -94,6 +94,10 @@ Named `Docs Build`. Runs `mkdocs build --strict` (Python 3.12, pinned `mkdocs`, 
 
 Named `Build ArcadeDB engine jars`. A manual dispatch (inputs `repository`, default `ArcadeData/arcadedb`, `ref`, which is required, and `exclude-ha-raft-shaded`) or a `workflow_call` builds the full ArcadeDB distribution from source at any commit and uploads its `lib` directory as an artifact (`arcadedb-lib`, kept 7 days). Use it to check an upstream fix at its merge commit without building on your own machine; see [Upstream Issues](upstream-issues.md). The two test workflows build their engine jars themselves (and cache them, see above) and do not call this workflow.
 
+### `engine-test-repeat.yml`
+
+Named `Run an engine test N times`. A manual dispatch (inputs `repository`, default `ArcadeData/arcadedb`, `ref`, which is required, `module`, default `engine`, `tests`, a surefire `-Dtest` pattern, which is required, `repeat`, default 1, `java-version`, default 21, and `run-timeout-minutes`, default 15) builds the module with what it needs, runs the pattern `repeat` times, each run under the timeout, and uploads every run's surefire reports with `summary.txt` (passes, failures, timeouts) as the artifact `engine-test-repeat`, kept 14 days. A failing run never fails the job, because a parent-commit control is expected to fail: read the summary. Use it to verify an upstream fix whose evidence is a test (a regression test the fix adds, or a flaky test it should cure), at the merge commit and at its parent, on JDK 21 and 25, without running the engine build and tests on your machine.
+
 ### `release-python-packages.yml`
 
 - **Trigger**: a pushed tag matching `[0-9]+.[0-9]+.[0-9]+*` (`X.Y.Z`, `X.Y.Z.devN`, `X.Y.Z.postN`)
