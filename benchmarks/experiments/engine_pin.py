@@ -14,7 +14,9 @@ first cell, for every ArcadeDB arm in the batch, `runner.py` reads the version o
   served    the engine jar of the server image (`/home/arcadedb/lib/arcadedb-engine-<version>.jar`), which is the engine the server loads.
 Nothing is started to ask, so the check costs two short `docker run`s per image and measures nothing.
 
-NO FLOATING ENGINE TAGS. An image that carries ArcadeDB is tagged `dbbench:arcadedb-<version>` (build_images.sh writes it) and the runner refuses
+NO FLOATING ENGINE TAGS. An image that carries ArcadeDB is tagged `dbbench:arcadedb-<version>-native` or `-jvm` (build_images.sh writes it, the suffix
+is the build of the pinned wheel: backend_from_wheel; the older unsuffixed `dbbench:arcadedb-<version>` still reads, for the arcadedb_embedded wheels and
+the rows made on them, and is refused for a native or JVM wheel) and the runner refuses
 any other tag for it, `dbbench:arcadedb` included: a floating tag points at whatever was built last, which is how a retired version stayed
 reachable. `dbbench:arcadedb` survives only as the logical build target name in runner.BACKENDS; the runner swaps it for the versioned tag from the
 pin, and a batch with an ArcadeDB arm and no pin is refused. The comparator images (client, duckdb, dense, pg-age, mongo-search, composed) keep
@@ -63,27 +65,45 @@ def pin_from_wheel(path):
     return parts[1] if len(parts) > 2 and re.fullmatch(VERSION_RE, parts[1]) else ""
 
 
-def versioned_image(version):
-    return f"{LOGICAL_IMAGE}-{version}"
+def backend_from_wheel(path):
+    """"native" for arcadedb-<v>-*.whl, "jvm" for arcadedb_jvm-<v>-*.whl, "" for the older arcadedb_embedded wheel (or any other name).
+
+    The build is part of the image tag since 26.11.1: one release has a native and a JVM wheel, and one tag cannot hold both.
+    """
+    head = os.path.basename(path or "").split("-")[0].replace("_", "-")
+    return {"arcadedb": "native", "arcadedb-jvm": "jvm"}.get(head, "")
+
+
+def versioned_image(version, backend=""):
+    """dbbench:arcadedb-<version>-native / -jvm; the older unsuffixed dbbench:arcadedb-<version> when no build is named."""
+    return f"{LOGICAL_IMAGE}-{version}" + (f"-{backend}" if backend else "")
 
 
 def build_target(image):
     """The build_images.sh target an image name stands for: dbbench:arcadedb-26.10.2 -> arcadedb, dbbench:duckdb -> duckdb."""
     tag = image.split(":", 1)[1]
-    return TARGET if re.fullmatch(rf"{TARGET}(?:-{VERSION_RE})?", tag) else tag
+    return TARGET if re.fullmatch(rf"{TARGET}(?:-{VERSION_RE}(?:-(?:native|jvm))?)?", tag) else tag
 
 
-def check_image_tag(image, pin=None):
-    """None when `image` may run, else why it is refused. Only `dbbench:*` names are judged here (digest-pinned third-party images are not ours)."""
+def check_image_tag(image, pin=None, backend=""):
+    """None when `image` may run, else why it is refused. Only `dbbench:*` names are judged here (digest-pinned third-party images are not ours).
+
+    `backend` ("native"/"jvm", from backend_from_wheel) is the build the stage pinned: the tag must then end in it. An unsuffixed tag is the
+    pre-26.11.1 form and is accepted only when no build is named (`backend` empty), so an old image can never stand in for a native or JVM wheel.
+    """
     if not image.startswith("dbbench:"):
         return None
     tag = image.split(":", 1)[1]
     if tag.startswith(TARGET):
-        if not re.fullmatch(rf"{TARGET}-{VERSION_RE}", tag):
+        m = re.fullmatch(rf"{TARGET}-({VERSION_RE})(?:-(native|jvm))?", tag)
+        if not m:
             return (f"{image} is an ArcadeDB image tag without a version. A floating tag points at whatever was built last; "
-                    f"the tag must be {LOGICAL_IMAGE}-<version>")
-        if pin and tag != f"{TARGET}-{pin}":
-            return f"{image} names ArcadeDB {tag[len(TARGET) + 1:]}, the stage pins {pin}"
+                    f"the tag must be {LOGICAL_IMAGE}-<version>-native or -jvm")
+        if pin and m.group(1) != pin:
+            return f"{image} names ArcadeDB {m.group(1)}, the stage pins {pin}"
+        if backend and m.group(2) != backend:
+            return (f"{image} is the {m.group(2) or 'unsuffixed (pre-26.11.1)'} image, the stage pins the {backend} build "
+                    f"({versioned_image(pin or '<version>', backend)})")
         return None
     if tag not in FLOATING_OK:
         return f"{image} is not a known benchmark image ({', '.join(FLOATING_OK)}, or {LOGICAL_IMAGE}-<version>)"
@@ -137,13 +157,16 @@ def read_served(image, run=None):
     return {"engine_jar": _engine_jar_versions(out.split())}, None
 
 
-def verify(pin, embedded_images=(), served_images=(), run=None):
-    """(readback, problems): what each image reports, and one sentence per way it is not the pin. Empty `problems` means every image runs `pin`."""
+def verify(pin, embedded_images=(), served_images=(), run=None, backend=""):
+    """(readback, problems): what each image reports, and one sentence per way it is not the pin. Empty `problems` means every image runs `pin`.
+
+    With `backend` ("native"/"jvm") an embedded image must also carry that build's distribution (arcadedb / arcadedb-jvm), read out of the image.
+    """
     problems, readback = [], {}
     if not pin:
         return readback, ["no pinned version: ARCADEDB_WHEEL is unset or its file name carries no version"]
     for image in sorted(set(embedded_images)):
-        why = check_image_tag(image, pin)
+        why = check_image_tag(image, pin, backend)
         got, err = (None, why) if why else read_embedded(image, run)
         readback[image] = got
         if err:
@@ -151,6 +174,8 @@ def verify(pin, embedded_images=(), served_images=(), run=None):
             continue
         if got["wheel"] != pin:
             problems.append(f"{image} has {got['dist']} {got['wheel']}, the stage pins {pin}")
+        if backend and got["backend"] != backend:
+            problems.append(f"{image} carries {got['dist']} ({got['backend']} build), the stage pins the {backend} build")
         if got["engine_jar"] != [pin]:
             problems.append(f"{image} ships engine jar {','.join(got['engine_jar']) or '(none)'}, the stage pins {pin}")
     for image in sorted(set(served_images)):

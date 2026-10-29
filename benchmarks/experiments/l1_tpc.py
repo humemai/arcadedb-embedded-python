@@ -1070,7 +1070,7 @@ class ArcadeTPC:
                                                        "jvm_args": bench_common.arcade_jvm_args()})
         self.version = _arcadedb_import.dist_version()
         # ASKED, not asserted (#81's standard, doubled by #90's second class).
-        self.durability = bench_common.arcade_durability_readback()
+        self.durability = bench_common.arcade_durability_readback(db=self.db)
         qr = bench_common.arcade_query_ram_readback()      # {} unless the query heap budget override is on (DECISIONS #175)
         if qr:
             self.row_extra = {**(getattr(self, "row_extra", None) or {}), **qr}

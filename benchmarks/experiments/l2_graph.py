@@ -208,7 +208,7 @@ class ArcadeGraphEmbedded(Base):
             jvm_kwargs={"heap_size": heap,
                         "jvm_args": bench_common.arcade_jvm_args()})
         self.version = arcadedb.__version__
-        self.durability = bench_common.arcade_durability_readback()
+        self.durability = bench_common.arcade_durability_readback(db=self.db)
         for ddl in ["CREATE VERTEX TYPE Person",
                     "CREATE PROPERTY Person.id LONG",
                     "CREATE PROPERTY Person.name STRING",

@@ -779,6 +779,12 @@ NOT_PRINTED = [
      "which HTTP client an ArcadeDB served arm ran with (CAMPAIGN 7 row 72, lean_http.py): a condition of the served arms, read from "
      "the session that ran, never a column. The e4 decomposition's row lists the two clients it measured (`arcadedb_http_clients`); its table "
      "names the client in each HTTP column instead (export_web._e4_arms)"),
+    (r"^native_isolate_args$",
+     "the arguments the native engine's isolate was created with (heap -Xmx, -D settings), the native counterpart of the JVM arguments: a "
+     "condition of the cell read from the process (_arcadedb_import.effective_native_args), null on the JVM build, never a column"),
+    (r"^engine_backend$",
+     "which ArcadeDB build ran the cell, \"native\" or \"jvm\" (arcadedb.__backend__, bench_common.engine_backend): the identity of an arm beside "
+     "engine_version (arm_identity.py). export_web.select_build keeps one build per page and the cell's conditions name it, never a column"),
     (r"^jpype_version$",
      "which JPype the process that ran the cell had loaded (CAMPAIGN 7 row 73, bench_common.jpype_version): a condition of the embedded "
      "ArcadeDB arms, read from the process (`jpype.__version__`), empty for every arm that never imports it, never a column"),
@@ -846,7 +852,7 @@ NOT_PRINTED = [
      "as conditions under the table, never as columns"),
     (r"^(settle_s|settle_s_lane|settle_s_adapter|engine_settle_s|gt_load_s|"
      r"recall_calc_s|query_gen_s|search_wall_s|phases_accounted_s|connect_s|"
-     r"import_ms|build_close_ms|close_s|mutate_n|mutate_queries|mutate_ran|"
+     r"import_ms|engine_load_ms|build_close_ms|close_s|mutate_n|mutate_queries|mutate_ran|"
      r"corpus_release_s)$",
      "harness bookkeeping around a timed phase: settling, loading ground "
      "truth, computing recall, the phase accounting, and the time-series "

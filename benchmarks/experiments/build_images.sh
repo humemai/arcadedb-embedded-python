@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build the per-backend bench images. ARCADEDB_WHEEL=<path> bakes a wheel into the arcadedb image, which is tagged with
-# the wheel's version, dbbench:arcadedb-<version>, and never with a floating dbbench:arcadedb (engine_pin.py, 2026-10-22).
+# the wheel's version and build, dbbench:arcadedb-<version>-native or -jvm (the older arcadedb_embedded wheel: no suffix), and never with a floating dbbench:arcadedb (engine_pin.py, 2026-10-22).
 set -eu
 cd "$(dirname "$0")"
 
@@ -140,10 +140,18 @@ echo "arcadedb pin: $_pin"
 # NO FLOATING ENGINE TAG (2026-10-22, engine_pin.py). dbbench:arcadedb pointed at whichever wheel was built last, and on the laptop it still
 # pointed at 26.10.1 after October was retired. The image that carries ArcadeDB is named for the version it carries, and runner.py refuses
 # any other tag for it.
+# THE BUILD IS PART OF THE TAG (26.11.1, engine_pin.backend_from_wheel): one release ships a native wheel (arcadedb-<v>-...) and a JVM wheel
+# (arcadedb_jvm-<v>-...), and `dbbench:arcadedb-<v>` could hold only one. The tag is dbbench:arcadedb-<v>-native or -jvm; the older
+# arcadedb_embedded wheels keep the unsuffixed tag, so the images and rows of earlier releases still resolve.
+_bk=""
+case "$(basename "${ARCADEDB_WHEEL:-}" | cut -d- -f1)" in
+  arcadedb) _bk=native ;;
+  arcadedb_jvm) _bk=jvm ;;
+esac
 ARCADEDB_TAG=""
 if [ -n "$_pin" ]; then
   case "$_pin" in
-    [0-9]*.[0-9]*.[0-9]*) ARCADEDB_TAG="dbbench:arcadedb-$_pin" ;;
+    [0-9]*.[0-9]*.[0-9]*) ARCADEDB_TAG="dbbench:arcadedb-$_pin${_bk:+-$_bk}" ;;
     *) echo "REFUSING: the wheel name '$(basename "$ARCADEDB_WHEEL")' carries no x.y.z version, so the arcadedb image cannot be tagged" >&2; exit 1 ;;
   esac
 fi

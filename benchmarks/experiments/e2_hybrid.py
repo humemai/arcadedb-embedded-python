@@ -249,7 +249,7 @@ class ArcadeE2:
         # THE WHEEL'S version, not its name (#156). A row stamped
         # "arcadedb-embedded" cannot be re-measured by anyone including us.
         self.version = _arcadedb_import.dist_version()
-        self.durability = bench_common.arcade_durability_readback()
+        self.durability = bench_common.arcade_durability_readback(db=self.db)
 
     def build(self, vecs, edges):
         db, a = self.db, self._a

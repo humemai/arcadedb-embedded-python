@@ -34,6 +34,7 @@ What differs between the packages, and what this module hides:
 """
 import importlib
 import importlib.metadata
+import os
 
 # Import names, in order. The first one that is the real package wins.
 MODULES = ("arcadedb", "arcadedb_embedded")
@@ -41,6 +42,18 @@ MODULES = ("arcadedb", "arcadedb_embedded")
 DISTS = ("arcadedb", "arcadedb-jvm", "arcadedb-embedded")
 
 _loaded = None
+
+# THE NATIVE BUILD HAS NO JVM, SO NO `jvm_kwargs`: the native package ignores `heap_size` and `jvm_args` (with a warning) and reads its isolate
+# options from this environment variable when the isolate is created (arcadedb._native.lib). The lanes still pass the JVM spelling, because that
+# is the one code path for both packages, so on native `load()` wraps create_database/open_database and turns the same kwargs into isolate
+# arguments before the first call: heap_size -> -Xmx<heap>, and the -D<system property> and -Xms/-Xmx entries of jvm_args as they are
+# (the engine reads its settings, such as arcadedb.txWalFlush, from system properties; checked on the 26.10.2 native wheel: -Darcadedb.txWalFlush=1
+# in the isolate args shows value 1 in `SELECT settings FROM schema:database`). Other JVM flags (-XX:...) have no native meaning and are left out;
+# they are recorded in `native_dropped`. An argument already present in the variable wins, as it does inside the package.
+NATIVE_ENV = "ARCADEDB_NATIVE_ISOLATE_ARGS"
+_PASS_PREFIXES = ("-D", "-Xms", "-Xmx")
+native_dropped = []
+_isolate_created = False
 
 
 def _is_engine(mod):
@@ -65,6 +78,7 @@ def load():
             continue
         if _is_engine(mod):
             _loaded = mod
+            _wrap_native(mod)
             return mod
         errors.append(f"{name}: imported but is not the ArcadeDB package ({getattr(mod, '__file__', None)})")
     raise ImportError("no ArcadeDB Python package: install arcadedb or arcadedb-jvm (or the older arcadedb-embedded); "
@@ -110,3 +124,68 @@ def dist_version():
         except importlib.metadata.PackageNotFoundError as e:
             last = e
     raise last
+
+
+def _arg_key(tok):
+    """The part of an isolate argument that names the setting: `-Darcadedb.txWalFlush=1` -> `-Darcadedb.txWalFlush`, `-Xmx4g` -> `-Xmx`."""
+    if tok.startswith("-D"):
+        return tok.split("=", 1)[0]
+    return tok[:4] if tok[:4] in ("-Xms", "-Xmx") else tok
+
+
+def native_isolate_args(heap_size=None, jvm_args=None):
+    """The isolate arguments that mean what a JVM `heap_size` / `jvm_args` pair means; ([kept], [dropped]). Pure, no environment."""
+    toks = [f"-Xmx{heap_size}"] if heap_size else []
+    ja = jvm_args.split() if isinstance(jvm_args, str) else list(jvm_args or [])
+    dropped = [t for t in ja if not t.startswith(_PASS_PREFIXES)]
+    toks += [t for t in ja if t.startswith(_PASS_PREFIXES)]
+    return toks, dropped
+
+
+def apply_native(jvm_kwargs=None, environ=None):
+    """Put the isolate arguments for `jvm_kwargs` into ARCADEDB_NATIVE_ISOLATE_ARGS and return the effective string.
+
+    Merge rule: a setting already in the variable wins (the caller or the package's own default is not overridden), a new one is appended,
+    two entries for one setting in `jvm_kwargs` keep the first. Meaningful only before the isolate exists; see `_wrap_native`.
+    """
+    env = os.environ if environ is None else environ
+    kw = jvm_kwargs or {}
+    new, dropped = native_isolate_args(kw.get("heap_size"), kw.get("jvm_args"))
+    have = env.get(NATIVE_ENV, "").split()
+    keys = {_arg_key(t) for t in have}
+    for t in new:
+        if _arg_key(t) not in keys:
+            have.append(t)
+            keys.add(_arg_key(t))
+    for t in dropped:
+        if t not in native_dropped:
+            native_dropped.append(t)
+    env[NATIVE_ENV] = " ".join(have)
+    return env[NATIVE_ENV]
+
+
+def effective_native_args():
+    """The isolate arguments this process runs with ("" when none), or None when it is not a native process. What a row records."""
+    return os.environ.get(NATIVE_ENV, "") if _loaded is not None and backend() == "native" else None
+
+
+def _wrap_native(mod):
+    """On the native build, make `mod.create_database` / `mod.open_database` apply their `jvm_kwargs` as isolate arguments (see NATIVE_ENV)."""
+    if (getattr(mod, "__backend__", None) or getattr(mod, "_DISTRIBUTION_BACKEND", None) or "jvm") != "native":
+        return
+    for name in ("create_database", "open_database"):
+        fn = getattr(mod, name, None)
+        if fn is None or getattr(fn, "_bench_native_wrapped", False):
+            continue
+
+        def wrapped(*a, __fn=fn, **kw):
+            global _isolate_created
+            if not _isolate_created:     # the isolate takes its arguments once; a later call cannot change them (the JVM cannot restart either)
+                apply_native(kw.get("jvm_kwargs"))
+                _isolate_created = True
+            return __fn(*a, **kw)
+
+        wrapped._bench_native_wrapped = True
+        wrapped.__name__ = getattr(fn, "__name__", name)
+        wrapped.__doc__ = getattr(fn, "__doc__", None)
+        setattr(mod, name, wrapped)

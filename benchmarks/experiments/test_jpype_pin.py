@@ -315,8 +315,8 @@ def _run_snippet(tmp_path, preamble, snippet):
 @pytest.mark.parametrize("image_says,aborts", [(PIN, False), ("1.7.2", True), ("1.8.0.dev0", True), ("", True)])
 def test_a_runner_stage_aborts_when_the_image_runs_another_jpype(stages, tmp_path, image_says, aborts):
     text = (stages / f"{_stage_ids(stages)[0]}.sh").read_text()
-    snippet = _snippet(text, "IJ=$(docker run", "ABORT: dbbench:arcadedb runs JPype")
-    r, status = _run_snippet(tmp_path, f"WV=26.10.2; docker() {{ printf '%s\\n' '{image_says}'; }}", snippet)
+    snippet = _snippet(text, "  IJ=$(docker run", "ABORT: dbbench:arcadedb runs JPype")
+    r, status = _run_snippet(tmp_path, f"WV=26.10.2; WB=-jvm; docker() {{ printf '%s\\n' '{image_says}'; }}", snippet)
     if not aborts:
         assert r.returncode == 0 and "PASSED" in r.stdout and status == ""
         return
@@ -324,6 +324,15 @@ def test_a_runner_stage_aborts_when_the_image_runs_another_jpype(stages, tmp_pat
     # the message names the stage, the image, the version found, the pin, and what to do
     assert f"qRX ABORT: dbbench:arcadedb runs JPype '{image_says}', the pin is {PIN} " in status
     assert "Dockerfile.bench" in status and "rebuild dbbench:arcadedb" in status
+
+
+def test_a_native_stage_has_no_jpype_to_pin(stages, tmp_path):
+    """The native image has no JVM and no JPype: its stage says so and does not abort on the empty answer a native image gives."""
+    text = (stages / f"{_stage_ids(stages)[0]}.sh").read_text()
+    a = text.index('if [ "$WB" = "-native" ]; then')
+    snippet = text[a:text.index("\nfi\n", a) + 4]
+    r, status = _run_snippet(tmp_path, "WV=26.11.1; WB=-native; docker() { printf '%s\\n' ''; }", snippet)
+    assert r.returncode == 0 and "PASSED" in r.stdout and "native build: no JVM, no JPype to pin" in status
 
 
 def test_the_stages_carry_the_pin_the_generator_holds_not_a_literal_of_their_own(stages, monkeypatch, tmp_path):

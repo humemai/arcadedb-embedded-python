@@ -32,7 +32,11 @@ docker image inspect "$IMG" >/dev/null 2>&1 || fail "no image $IMG"
 
 W=$(ls -t "$REPO"/bindings/python/dist/*.whl 2>/dev/null | head -1)
 [ -n "$W" ] || fail "no wheel in bindings/python/dist"
-[ -n "$EMBEDDED_IMAGE" ] || EMBEDDED_IMAGE="dbbench:arcadedb-$(basename "$W" | cut -d- -f2)"
+# The build is the tag's suffix: arcadedb-<v>-*.whl (native) -> dbbench:arcadedb-<v>-native, arcadedb_jvm-<v>-*.whl -> -jvm, the older arcadedb_embedded wheel -> none.
+WV=$(basename "$W" | cut -d- -f2)
+WB=""
+case "$(basename "$W" | cut -d- -f1)" in arcadedb) WB=native ;; arcadedb_jvm) WB=jvm ;; esac
+[ -n "$EMBEDDED_IMAGE" ] || EMBEDDED_IMAGE="dbbench:arcadedb-$(basename "$W" | cut -d- -f2)${WB:+-$WB}"
 
 # 1. the image's jars
 ISHA=$(docker run --rm --entrypoint sh "$IMG" -c 'cat /home/arcadedb/lib/arcadedb-engine-*.jar' \
@@ -43,7 +47,16 @@ p=z.read('com/arcadedb/arcadedb.properties').decode()
 print(next(l.split('=',1)[1].strip() for l in p.splitlines() if l.strip().startswith('buildNumber')))" 2>/dev/null)
 [ "$ISHA" = "$SHA" ] || fail "image jars are ${ISHA:0:9}, expected $SHORT"
 
+# THE NATIVE BUILD HAS NO JARS, NO JVM AND NO JPYPE: checks 2, 3 and 5 are about those and are skipped for it, said out loud (NOT CHECKED), and check 4 reads
+# the engine the image's native package compiled in (`_build_info.ENGINE_VERSION`) instead of a jar's buildNumber. The engine COMMIT of a native wheel is not
+# readable from the package, so for it the pair rests on the image's jars (check 1) and the version read here and by engine_pin.verify at the first cell.
+IJ=n/a; HAVE_J=n/a
+if [ "$WB" = native ]; then
+  echo "NOT CHECKED (native build): wheel jars (2), JVM major (3), JPype pin (5); the wheel carries no jars, no JVM and no JPype"
+fi
+
 # 2. the wheel's jars
+[ "$WB" = native ] || {
 WSHA=$(python3 -c "
 import sys, zipfile, io
 z=zipfile.ZipFile('$W')
@@ -52,8 +65,10 @@ e=zipfile.ZipFile(io.BytesIO(z.read(n)))
 p=e.read('com/arcadedb/arcadedb.properties').decode()
 print(next(l.split('=',1)[1].strip() for l in p.splitlines() if l.strip().startswith('buildNumber')))" 2>/dev/null)
 [ "$WSHA" = "$SHA" ] || fail "wheel jars are ${WSHA:0:9}, expected $SHORT"
+}
 
 # 3. THE JVMs. Same major on both sides or the deployment axis is not transport.
+[ "$WB" = native ] || {
 IJ=$(docker run --rm --entrypoint sh "$IMG" -c 'java -version 2>&1' | head -1 | grep -oE '"[0-9]+' | tr -d '"')
 # The venv's JRE when this checkout has one (the bench host does); otherwise the JRE inside the
 # embedded image, which is the JVM the embedded arm actually runs (a worktree has no .venv).
@@ -72,6 +87,7 @@ print(subprocess.run([str(d / 'jre' / 'bin' / 'java'), '-version'], capture_outp
 fi
 [ -n "$IJ" ] && [ -n "$EJ" ] || fail "could not read a JVM version (image='$IJ' embedded='$EJ')"
 [ "$IJ" = "$EJ" ] || fail "JVM major differs: image=$IJ embedded=$EJ"
+}
 
 # 4. THE WHEEL THE EMBEDDED ARM ACTUALLY RUNS, which is baked into
 # dbbench:arcadedb at build time and is NOT the wheel file checked above.
@@ -81,7 +97,10 @@ fi
 # served arm ran 26.9.1-SNAPSHOT, and the whole l4 table compared two
 # ArcadeDB versions with this script reporting PAIR VERIFIED. A wheel FILE on
 # disk is not the engine a cell ran; the image is.
-if docker image inspect "$EMBEDDED_IMAGE" >/dev/null 2>&1; then
+if [ "$WB" = native ] && docker image inspect "$EMBEDDED_IMAGE" >/dev/null 2>&1; then
+  NV=$(docker run --rm --entrypoint python3 "$EMBEDDED_IMAGE" -c "from arcadedb._build_info import ENGINE_VERSION as v; print(v)" 2>/dev/null | tr -dc '0-9a-zA-Z.-')
+  [ "${NV%.dev*}" = "${WV%.dev*}" ] || fail "$EMBEDDED_IMAGE's native engine is '$NV', the wheel is $WV (rebuild it with ARCADEDB_WHEEL set)"
+elif docker image inspect "$EMBEDDED_IMAGE" >/dev/null 2>&1; then
   BSHA=$(docker run --rm --entrypoint python3 "$EMBEDDED_IMAGE" -c "
 import importlib.metadata as m, pathlib, zipfile, io, sys
 d = next(pathlib.Path(m.distribution(n).locate_file(p)) for n, p in (('arcadedb-jvm', 'arcadedb'), ('arcadedb', 'arcadedb'), ('arcadedb-embedded', 'arcadedb_embedded')) if any(m.distributions(name=n)))
@@ -100,9 +119,11 @@ fi
 # is Dockerfile.bench's ARG default, read from this script's own directory like REPO above, never from
 # the environment.
 HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+[ "$WB" = native ] || {
 WANT_J=$(sed -n 's/^ARG JPYPE_VERSION=//p' "$HERE/Dockerfile.bench")
 [ -n "$WANT_J" ] || fail "no 'ARG JPYPE_VERSION=<x.y.z>' default in $HERE/Dockerfile.bench"
 HAVE_J=$(docker run --rm --entrypoint python3 "$EMBEDDED_IMAGE" -c 'import jpype; print(jpype.__version__)' 2>/dev/null | tr -dc '0-9a-zA-Z.-')
 [ "$HAVE_J" = "$WANT_J" ] || fail "$EMBEDDED_IMAGE runs JPype '$HAVE_J', the pin is $WANT_J (rebuild it: ./build_images.sh arcadedb)"
+}
 
 echo "PAIR VERIFIED $SHORT  jars=image+wheel+embedded-image  jvm=$IJ  jpype=$HAVE_J  image=$IMG  embedded=$EMBEDDED_IMAGE  repo=$REPO  wheel=$W"

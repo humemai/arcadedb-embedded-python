@@ -88,6 +88,7 @@ def _commit_matches(row_commit):
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 import publish_instrument as _PI
+import arm_identity as _AI
 RESULTS = str(_PI.results_dir())
 
 # Every published cell is N=5. A row outside 1..5 is a probe, not a repetition;
@@ -539,7 +540,11 @@ def load_canonical(apply_corpus=True, include_twins=False):
         # without the role the later of the two would replace the other on ts_utc.
         k = (r["lane"], r["scale"], r.get("n_docs"), r.get("workload"),
              r["backend"], r.get("gav") is not False, r["rep"],
-             r.get("durability_class") or "relaxed", r.get("arcadedb_http_client_role") == "sensitivity")
+             r.get("durability_class") or "relaxed", r.get("arcadedb_http_client_role") == "sensitivity",
+             # THE BUILD IS PART OF THE KEY (26.11.1): `arcadedb` (native) and `arcadedb-jvm` of one release stamp the same
+             # engine_version and the same backend name, so without it the later build would replace the other on ts_utc.
+             # Rows before the field are the JVM build; served arms and comparators carry None (arm_identity.build_of).
+             _AI.build_of(r))
         if k not in best or r["ts_utc"] > best[k]["ts_utc"]:
             best[k] = r
     _write_withheld_recall()
@@ -549,7 +554,9 @@ def load_canonical(apply_corpus=True, include_twins=False):
     # The paper tables, the gates and the claims read the headline rows. The twin rows go to the freeze (include_twins) so
     # the exporter can show them beside the headline, labelled, and are never pooled into a headline median.
     out = [r for r in best.values() if include_twins or r.get("arcadedb_http_client_role") != "sensitivity"]
-    return out
+    # ONE BUILD PER FREEZE: BENCH_ENGINE_BACKEND=native|jvm picks the build whose in-process ArcadeDB rows the tables, the exporter
+    # and the gates see; a cell that holds both builds with no choice made is refused here, never pooled downstream.
+    return _AI.select_build(out)
 
 
 def cells(rows, key):
@@ -793,13 +800,21 @@ def _pinned_sparse_rows(arm="arcadedb_sparse_embedded"):
     # partial or mixed, and still refuses.
     if not out:
         return {}
+    # Both builds of one release at one pin: the freeze names the one it publishes (arm_identity.select_build), the other stays in the log.
+    _builds = {_AI.build_of(r) for t in out for r in out[t]}
+    if len(_builds) > 1:
+        _want = _AI.wanted_build()
+        if not _want:
+            sys.stderr.write(f"pinned sparse rows hold both builds {sorted(map(str, _builds))}; set {_AI.ENV}\n")
+            return None
+        out = {t: [r for r in rs if _AI.build_of(r) == _want] for t, rs in out.items()}
     if any(len(out.get(t, [])) < 5 for t in tiers):
         missing = [t for t in tiers if len(out.get(t, [])) < 5]
         sys.stderr.write(f"pinned sparse rows incomplete at {missing}\n")
         return None
-    versions = {str(r.get("engine_version")) for t in tiers for r in out[t]}
+    versions = {_AI.arm_identity(r) for t in tiers for r in out[t]}   # (engine_version, build): one engine, one build
     if len(versions) != 1:
-        sys.stderr.write(f"pinned sparse rows span {sorted(versions)}\n")
+        sys.stderr.write(f"pinned sparse rows span {sorted(versions, key=str)}\n")
         return None
     return out
 

@@ -46,6 +46,7 @@ RESULTS = _PI.results_dir()
 
 from runner import BACKENDS, MEM_BY_SCALE, HEAP_BY_SCALE  # noqa: E402  (path set above)
 import bench_common  # noqa: E402
+import arm_identity as _AI  # noqa: E402
 
 # THE PQ ARMS CAN HAVE ROWS EVEN WHEN THEY ARE NOT MEASURING. runner registers them only under BENCH_DENSE_PQ=1 (a stage
 # must not start a PQ cell by accident), but a freeze that holds their rows is read here without that variable, and their
@@ -281,6 +282,7 @@ def _one_version(rs, where):
     is indistinguishable from a correct row to every other gate -- the payload
     carries one string either way, so version_consistency_check sees nothing.
     """
+    _AI.refuse_pooled_builds(rs, where)   # (engine_version, build) is the arm: native and jvm rows of one release are two arms
     seen = {str(r.get("engine_version")) for r in rs if r.get("engine_version")}
     if len(seen) > 1:
         raise SystemExit(
@@ -2934,7 +2936,11 @@ def _lifecycle_table(all_rows, twin_rows=()):
         by.setdefault((r.get("workload"), r.get("scale"), _srv, _engine_of(r)), []).append(r)
 
     entries = []
-    _lc_columns = (["JVM start ms", "first open ms", "cold process ms"]
+    # The engine's own start step: start_jvm() on the JVM build (`jvm_start_ms`), which the native build has no counterpart of (null);
+    # there the same step is `engine_load_ms` (library load and isolate creation). A page is one build (select_build), so one column.
+    _start_field, _start_label = (("engine_load_ms", "engine load ms")
+                                  if any(_AI.build_of(r) == "native" for r in rows) else ("jvm_start_ms", "JVM start ms"))
+    _lc_columns = ([_start_label, "first open ms", "cold process ms"]
                    + [LIFECYCLE_SCENARIO_LABELS[k] for k in LIFECYCLE_PAGE_SCENARIOS])
     for (situation, scale, _srv, engine), rs in sorted(by.items()):
         if situation in LIFECYCLE_WITHHELD:
@@ -2963,7 +2969,7 @@ def _lifecycle_table(all_rows, twin_rows=()):
         # session number: a 5 ms open inside a process that took half a second to
         # reach its first database call is not a 5 ms cost to anyone launching a
         # CLI.
-        for field, label in (("jvm_start_ms", "JVM start ms"),
+        for field, label in ((_start_field, _start_label),
                              ("first_open_ms", "first open ms"),
                              ("cold_process_ms", "cold process ms")):
             got = _agg(rs, field)
@@ -2990,7 +2996,7 @@ def _lifecycle_table(all_rows, twin_rows=()):
         _trs = twin_by.get((situation, scale, _srv, engine))
         if _trs and entry["metrics"]:
             twin_metrics = {}
-            for field, label in (("jvm_start_ms", "JVM start ms"), ("first_open_ms", "first open ms"),
+            for field, label in ((_start_field, _start_label), ("first_open_ms", "first open ms"),
                                  ("cold_process_ms", "cold process ms"),
                                  *[(f"{k}_session_ms", LIFECYCLE_SCENARIO_LABELS[k]) for k in LIFECYCLE_PAGE_SCENARIOS],
                                  (MEM_PEAK_FIELD, "peak memory GiB")):
@@ -7118,6 +7124,9 @@ def main() -> int:
             print(f"  cap rule: {len(_cut)} rows of {len(_over)} over-the-cap arm-cells withheld, shown censored instead")
             _gone = {id(r) for r in _cut}
             rows = [r for r in rows if id(r) not in _gone]
+    # ONE ARCADEDB BUILD PER PAGE (26.11.1): native and jvm rows of a release share engine_version and arm names, so a table cell
+    # holding both would print one median over two engines. BENCH_ENGINE_BACKEND picks the build; both with no pick is refused.
+    rows = _AI.select_build(rows)
     global _FROZEN_ROWS
     _FROZEN_ROWS = rows
     # WITHHELD: ArcadeDB rows whose engine_version identifies no build.

@@ -322,5 +322,5 @@ def test_the_stage_generator_builds_the_arcadedb_target_whatever_the_images_name
 def test_the_stage_generators_checks_read_the_versioned_image():
     text = (HERE / "make_2611_stages.py").read_text()
     assert "--entrypoint python3 dbbench:arcadedb " not in text
-    assert text.count('"dbbench:arcadedb-$WV"') == 2
+    assert text.count('"dbbench:arcadedb-$WV$WB"') == 2   # the wheel's build is the tag's suffix (26.11.1)
     assert 'dbbench:arcadedb-$(basename "$ARCADEDB_WHEEL"' in text

@@ -21,6 +21,10 @@ of the image, the pinned wheel by sha256, the cap rule, the ALL-DONE trap. What 
     only if time is left. PROFILES lists every drop and its reason, `--check` prints what was dropped and proves that nothing of it
     is scheduled (profile_problems; `--check --drafts` the same on written scripts), and `--profile full` is the whole subset as
     it was before the profile.
+    ONE CHAIN PER WHEEL. A release measured on both ArcadeDB builds is two generator runs, one per wheel (arcadedb-<v> native, arcadedb_jvm-<v> JVM),
+    each with its own --id-prefix and draft folder; the stage scripts derive the image tag suffix (-native / -jvm) from the wheel they are pinned to,
+    and a freeze names one build (BENCH_ENGINE_BACKEND=native|jvm, arm_identity.py).
+
     The stage list is DERIVED from STAGES and runner.LANES, filtered by engine and lane, and `--check` proves the filtered
     list runs exactly the cells the unfiltered one would for those engines and lanes. Every registered arm is either in the
     subset or named in OUTSIDE, so a newly registered arm forces a decision here.
@@ -1110,6 +1114,11 @@ export ARCADEDB_WHEEL="$W" ARCADEDB_SERVER_IMAGE="{server_image}"
 
 ARCADE_PRE_TAIL = '''docker image inspect "$ARCADEDB_SERVER_IMAGE" >/dev/null 2>&1 || {{ say "$ID ABORT: no server image $ARCADEDB_SERVER_IMAGE"; exit 1; }}
 WV=$(basename "$W" | cut -d- -f2)
+# THE BUILD THE WHEEL IS, and so the image tag's suffix (engine_pin.backend_from_wheel): arcadedb-<v>-*.whl is the native build,
+# arcadedb_jvm-<v>-*.whl the JVM one, and the image is dbbench:arcadedb-<v>-native / -jvm. One chain is generated per wheel, so a release
+# measured on both builds is two chains (two generator runs, two --id-prefix values, two draft folders) and never one stage with two engines.
+WB=""
+case "$(basename "$W" | cut -d- -f1)" in arcadedb) WB=-native ;; arcadedb_jvm) WB=-jvm ;; esac
 '''
 
 ARCADE_PRE_BUILD = ARCADE_WHEEL_HEAD + ARCADE_WHEEL_COUNT + ARCADE_WHEEL_SHA_EXPORT + ARCADE_PRE_TAIL
@@ -1119,15 +1128,19 @@ ARCADE_POST_CHECKS = '''# VERIFY THE ARM, NOT THE FILE: read the version out of 
 # The pair check below is the REPO copy, not ~/verify_pair_c25.sh: that
 # one is a stale copy from 2026-08-30 and would miss its own fourth
 # check. A script pulled with the tree cannot drift from it.
-IV=$(docker run --rm --entrypoint python3 "dbbench:arcadedb-$WV" -c      'import importlib.metadata as m
+IV=$(docker run --rm --entrypoint python3 "dbbench:arcadedb-$WV$WB" -c      'import importlib.metadata as m
 for n in ("arcadedb", "arcadedb-jvm", "arcadedb-embedded"):
     try: print(m.version(n)); break
     except m.PackageNotFoundError: pass' 2>/dev/null | tr -dc "0-9a-zA-Z.-")
 [ "$IV" = "$WV" ] || {{ say "$ID ABORT: dbbench:arcadedb carries wheel $IV, dist has $WV"; exit 1; }}
 say "$ID: dbbench:arcadedb carries wheel $IV, matching dist"
-IJ=$(docker run --rm --entrypoint python3 "dbbench:arcadedb-$WV" -c 'import jpype; print(jpype.__version__)' 2>/dev/null | tr -dc "0-9a-zA-Z.-")
-[ "$IJ" = "{jpype_version}" ] || {{ say "$ID ABORT: dbbench:arcadedb runs JPype '$IJ', the pin is {jpype_version} (Dockerfile.bench, ARG JPYPE_VERSION); rebuild dbbench:arcadedb, which installs the pin"; exit 1; }}
-say "$ID: dbbench:arcadedb runs JPype $IJ, the pin"
+if [ "$WB" = "-native" ]; then
+  say "$ID: dbbench:arcadedb$WB is the native build: no JVM, no JPype to pin"
+else
+  IJ=$(docker run --rm --entrypoint python3 "dbbench:arcadedb-$WV$WB" -c 'import jpype; print(jpype.__version__)' 2>/dev/null | tr -dc "0-9a-zA-Z.-")
+  [ "$IJ" = "{jpype_version}" ] || {{ say "$ID ABORT: dbbench:arcadedb runs JPype '$IJ', the pin is {jpype_version} (Dockerfile.bench, ARG JPYPE_VERSION); rebuild dbbench:arcadedb, which installs the pin"; exit 1; }}
+  say "$ID: dbbench:arcadedb$WB runs JPype $IJ, the pin"
+fi
 PAIR_IMAGE="$ARCADEDB_SERVER_IMAGE" ./verify_pair_c25.sh "$SHA" >> "$S" 2>&1 || {{ say "$ID ABORT: pair unverified at the pin"; exit 1; }}
 '''
 
@@ -1318,7 +1331,7 @@ BENCH_ALLOW_DEV=0 ./build_images.sh {images} >> "$S" 2>&1 || {{ say "$ID ABORT: 
 # server_not_ready. Check here, where the message can name the cause.
 for _img in {images}; do
   # the arcadedb image is tagged with the pinned version, never floating (engine_pin.py)
-  _tag="dbbench:$_img"; [ "$_img" = "arcadedb" ] && _tag="dbbench:arcadedb-$(basename "$ARCADEDB_WHEEL" | cut -d- -f2)"
+  _tag="dbbench:$_img"; [ "$_img" = "arcadedb" ] && _tag="dbbench:arcadedb-$(basename "$ARCADEDB_WHEEL" | cut -d- -f2)$(case "$(basename "$ARCADEDB_WHEEL" | cut -d- -f1)" in arcadedb) echo -native ;; arcadedb_jvm) echo -jvm ;; esac)"
   docker image inspect "$_tag" >/dev/null 2>&1 || {{ say "$ID ABORT: $_tag missing after build"; exit 1; }}
 done
 say "$ID: images present: {images}"

@@ -1803,6 +1803,8 @@ _LOCAL_ENGINE_COMMIT = os.environ.get("ARCADEDB_ENGINE_COMMIT", "").strip() or N
 # logical build target; the image a cell runs is `dbbench:arcadedb-<version>`, swapped in below, so no cell can start on a floating tag.
 import engine_pin  # noqa: E402
 _ENGINE_PIN = engine_pin.pin_from_wheel(_LOCAL_WHEEL)
+# The build the wheel is ("native" / "jvm", "" for the older arcadedb_embedded wheel): part of the image tag and read back from the image.
+_ENGINE_BACKEND = engine_pin.backend_from_wheel(_LOCAL_WHEEL)
 
 
 def _require_engine_commit(tier, backends):
@@ -1888,7 +1890,7 @@ if _LOCAL_SERVER_IMAGE:
 if _ENGINE_PIN:
     for _cfg in BACKENDS.values():
         if _cfg.get("image") == engine_pin.LOGICAL_IMAGE:
-            _cfg["image"] = engine_pin.versioned_image(_ENGINE_PIN)
+            _cfg["image"] = engine_pin.versioned_image(_ENGINE_PIN, _ENGINE_BACKEND)
 
 
 # Which backends run on a JVM, and therefore have a heap worth recording and
@@ -2218,7 +2220,7 @@ def build_manifest(ts, args, workers, shards, jobs):
 
 
 # The image the embedded ArcadeDB arms run in (BACKENDS "image"): the only bench image whose wheel pulls JPype in.
-ARCADEDB_BENCH_IMAGE = engine_pin.versioned_image(_ENGINE_PIN) if _ENGINE_PIN else engine_pin.LOGICAL_IMAGE
+ARCADEDB_BENCH_IMAGE = engine_pin.versioned_image(_ENGINE_PIN, _ENGINE_BACKEND) if _ENGINE_PIN else engine_pin.LOGICAL_IMAGE
 
 
 def jpype_version_in_image(image, timeout=180):
@@ -2269,10 +2271,10 @@ def _require_engine_pin(jobs):
                          "(engine_pin.py).")
     for img in sorted(emb | {i for j in jobs for i in [BACKENDS[j["backend"]].get("image"), BACKENDS[j["backend"]].get("server_image")]
                              if i and i.startswith("dbbench:")}):
-        why = engine_pin.check_image_tag(img, _ENGINE_PIN)
+        why = engine_pin.check_image_tag(img, _ENGINE_PIN, _ENGINE_BACKEND)
         if why:
             raise SystemExit(f"REFUSING: {why}.\n  Rebuild with ARCADEDB_WHEEL=<the pinned wheel> ./build_images.sh arcadedb.")
-    readback, problems = engine_pin.verify(_ENGINE_PIN, emb, srv)
+    readback, problems = engine_pin.verify(_ENGINE_PIN, emb, srv, backend=_ENGINE_BACKEND)
     if problems:
         raise SystemExit("REFUSING: an ArcadeDB arm would not run the stage's pinned version (engine_pin.py).\n  "
                          + "\n  ".join(problems)

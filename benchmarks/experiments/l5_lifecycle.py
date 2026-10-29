@@ -226,6 +226,10 @@ def build(situation, n, heap):
     # created the structure, and it is where a close-time rebuild doubles the
     # cost of building (#6489). A reopen cannot show it: by then the structure
     # is already on disk and clean.
+    # The engine's own settings, asked in SQL while the database is open (the same path on both builds; bench_common.arcade_durability_readback
+    # reads this snapshot when it stamps the row, long after this session closed). Not inside the timed close below.
+    import bench_common
+    bench_common.remember_engine_settings(db)
     _bt = time.perf_counter()
     db.close()
     return (time.perf_counter() - _bt) * 1000
