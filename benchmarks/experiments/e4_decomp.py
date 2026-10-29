@@ -117,6 +117,7 @@ def main():
     # of every gate, so the gate that would have caught this never saw them.
     # The lane runs one engine at its default class; the readback says which.
     import bench_common
+    # Asked in SQL (arcade_durability_readback, one path for both builds): the probe took the in-process server's database settings while it was open.
     payload["durability"] = bench_common.arcade_durability_readback()
     payload["durability_class"] = bench_common.DURABILITY_CLASS
     stamp_clients(payload)

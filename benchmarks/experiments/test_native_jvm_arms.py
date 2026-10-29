@@ -249,3 +249,51 @@ def test_the_exporter_refuses_an_entry_that_pools_two_builds():
         X._one_version([row("native"), row("jvm")], "sparse/tiny")
     assert "different builds" in str(e.value)
     assert X._one_version([row("jvm"), row("jvm", rep=2)], "x")[0]["engine_version"] == V if isinstance(X._one_version([row("jvm")], "x"), list) else True
+
+
+# ------------------------------------------------------------------ the engine commit, asked in SQL
+SHA = "e854692736b48971f92dff78a1e727bc570bb6a2"
+ANSWER = f"26.10.2 (build {SHA}/1792085686249/main)"
+
+
+def test_the_commit_is_read_out_of_select_version():
+    assert E.build_sha(ANSWER) == SHA and E.build_sha("26.10.2") == "" and E.build_sha(None) == ""
+    assert E.commit_matches(SHA, SHA[:9]) and E.commit_matches(SHA[:9], SHA) and not E.commit_matches(SHA, "0" * 9)
+    assert not E.commit_matches(SHA[:4], SHA[:4])        # four characters name nothing
+
+
+def _fake(answer, dist="arcadedb"):
+    def run(cmd, **kw):
+        if "SELECT version()" in " ".join(cmd):
+            return types.SimpleNamespace(returncode=0, stdout=answer + "\n", stderr="")
+        return types.SimpleNamespace(returncode=0, stdout=f"{V}\n{dist}\narcadedb-engine-{V.replace('.dev0', '-SNAPSHOT')}.jar\n", stderr="")
+    return run
+
+
+def test_verify_checks_the_engine_commit_of_a_native_image():
+    img = E.versioned_image(V, "native")
+    rb, problems = E.verify(V, [img], [], run=_fake(ANSWER.replace("26.10.2", V)), backend="native", commit=SHA)
+    assert problems == [] and rb[img]["engine_commit"] == SHA
+    _rb, problems = E.verify(V, [img], [], run=_fake(ANSWER.replace(SHA, "1" * 40)), backend="native", commit=SHA)
+    assert any("engine commit 111111111" in p for p in problems)
+    _rb, problems = E.verify(V, [img], [], run=_fake("26.11.1.dev0"), backend="native", commit=SHA)
+    assert any("names no build" in p for p in problems)
+    _rb, problems = E.verify(V, [img], [], run=_fake(ANSWER), backend="native")        # no commit pinned: not asked
+    assert problems == []
+
+
+def test_the_pair_script_extracts_the_native_commit_with_the_same_answer_shape():
+    """The sed in verify_pair_c25.sh run on a real answer."""
+    text = (HERE / "verify_pair_c25.sh").read_text()
+    line = next(l for l in text.splitlines() if "sed -n 's/.*(build" in l)
+    sed_expr = line[line.index("sed -n"):].rstrip(")")
+    out = subprocess.run(["bash", "-c", f"printf '%s\\n' '{ANSWER}' | {sed_expr}"], capture_output=True, text=True)
+    assert out.stdout.strip() == SHA, (sed_expr, out)
+    assert "4b. THE COMMIT THE NATIVE ENGINE REPORTS" in text and "NOT CHECKED (native build)" in text
+
+
+def test_e4_reads_durability_through_the_sql_snapshot_and_the_probe_starts_native_without_a_jvm():
+    probe = (HERE / "deployment_decomp_probe.py").read_text()
+    assert "bench_common.remember_engine_settings(db)" in probe and 'backend() == "native"' in probe
+    e4 = (HERE / "e4_decomp.py").read_text()
+    assert "arcade_durability_readback()" in e4 and "jpype" not in e4.lower()

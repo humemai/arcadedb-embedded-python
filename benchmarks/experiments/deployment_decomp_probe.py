@@ -355,8 +355,12 @@ def main() -> int:
     # has to be pinned on the JVM before the server exists. Same -Xms=-Xmx
     # policy as every other lane: fixed heap for latency parity, with the
     # working set reported separately from cgroup anon.
-    start_jvm = _arcadedb_import.jvm_module().start_jvm
-    start_jvm(heap_size=args.heap, jvm_args=[f"-Xms{args.heap}"])
+    if _arcadedb_import.backend() == "native":
+        # no JVM to start: the same heap policy goes to the isolate before the first engine call (_arcadedb_import.apply_native)
+        _arcadedb_import.apply_native({"heap_size": args.heap, "jvm_args": [f"-Xms{args.heap}"]})
+    else:
+        start_jvm = _arcadedb_import.jvm_module().start_jvm
+        start_jvm(heap_size=args.heap, jvm_args=[f"-Xms{args.heap}"])
 
     # Arms 1 and 2 share this process, so they share the JVM, heap, GC, engine
     # instance and page cache. That sharing IS the control.
@@ -366,6 +370,9 @@ def main() -> int:
         config={"host": "127.0.0.1", "http_port": 2489, "mode": "development"},
     ) as server:
         db = server.create_database(DB_NAME)
+        # the engine's own durability setting, asked in SQL while the database is open (e4_decomp stamps it on the row)
+        import bench_common
+        bench_common.remember_engine_settings(db)
         load_embedded(db, ROWS)
         print(f"loaded {ROWS:,} rows into the server-managed database", flush=True)
 

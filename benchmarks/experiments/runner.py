@@ -2274,7 +2274,7 @@ def _require_engine_pin(jobs):
         why = engine_pin.check_image_tag(img, _ENGINE_PIN, _ENGINE_BACKEND)
         if why:
             raise SystemExit(f"REFUSING: {why}.\n  Rebuild with ARCADEDB_WHEEL=<the pinned wheel> ./build_images.sh arcadedb.")
-    readback, problems = engine_pin.verify(_ENGINE_PIN, emb, srv, backend=_ENGINE_BACKEND)
+    readback, problems = engine_pin.verify(_ENGINE_PIN, emb, srv, backend=_ENGINE_BACKEND, commit=_LOCAL_ENGINE_COMMIT or "")
     if problems:
         raise SystemExit("REFUSING: an ArcadeDB arm would not run the stage's pinned version (engine_pin.py).\n  "
                          + "\n  ".join(problems)

@@ -54,6 +54,18 @@ else:
     from importlib import import_module
     print('arcadedb-engine-' + import_module(os.path.basename(pkg) + '._build_info').ENGINE_VERSION + '.jar')
 """
+# THE ENGINE'S OWN BUILD STAMP, asked in SQL so it is one path for the native and the JVM package: `SELECT version() AS v` returns
+# "<version> (build <sha>/<timestamp>/<branch>)" (checked on the 26.10.2 native wheel: full 40-character sha). The commit of a native wheel is
+# not readable from its files (no jars), so this is how it is verified rather than inferred.
+_BUILD_PROBE = """
+import importlib, importlib.util, os, tempfile
+mod = importlib.import_module(next(n for n in ('arcadedb', 'arcadedb_embedded') if importlib.util.find_spec(n)))
+d = tempfile.mkdtemp()
+db = mod.create_database(os.path.join(d, 'p'))
+print(db.query('sql', 'SELECT version() AS v').first().get('v'))
+db.close()
+"""
+BUILD_RE = re.compile(r"\(build ([0-9a-f]{7,40})/")
 # The native distribution is `arcadedb`, the JVM one `arcadedb-jvm`; the old `arcadedb-embedded` is a JVM build.
 BACKEND_OF = {"arcadedb": "native", "arcadedb-jvm": "jvm", "arcadedb-embedded": "jvm"}
 
@@ -149,6 +161,27 @@ def read_embedded(image, run=None):
             "engine_jar": _engine_jar_versions(lines[2].split())}, None
 
 
+def build_sha(version_string):
+    """The commit in a `SELECT version()` answer ("26.10.2 (build <sha>/<ts>/<branch>)"), or "" when it names none."""
+    m = BUILD_RE.search(str(version_string or ""))
+    return m.group(1) if m else ""
+
+
+def commit_matches(reported, pinned):
+    """Prefix comparison at the shorter length (the engine prints 40 characters, a stage may pin 9), never under 7."""
+    n = min(len(reported or ""), len(pinned or ""), 40)
+    return n >= 7 and reported[:n].lower() == pinned[:n].lower()
+
+
+def read_embedded_build(image, run=None):
+    """(sha, None) the engine inside a bench image reports for itself (a short-lived database, `SELECT version()`), or ("", why)."""
+    out, err = _docker(["--entrypoint", "python3", image, "-c", _BUILD_PROBE], run)
+    if err:
+        return "", err
+    sha = build_sha(out.strip().splitlines()[-1] if out.strip() else "")
+    return (sha, None) if sha else ("", f"the engine in {image} answered version() with {out.strip()[-120:]!r}, which names no build")
+
+
 def read_served(image, run=None):
     """({"engine_jar": [...]}, None): the engine jar(s) a server image loads, or (None, why)."""
     out, err = _docker(["--entrypoint", "sh", image, "-c", f"ls {SERVER_LIB}"], run)
@@ -157,10 +190,11 @@ def read_served(image, run=None):
     return {"engine_jar": _engine_jar_versions(out.split())}, None
 
 
-def verify(pin, embedded_images=(), served_images=(), run=None, backend=""):
+def verify(pin, embedded_images=(), served_images=(), run=None, backend="", commit=""):
     """(readback, problems): what each image reports, and one sentence per way it is not the pin. Empty `problems` means every image runs `pin`.
 
     With `backend` ("native"/"jvm") an embedded image must also carry that build's distribution (arcadedb / arcadedb-jvm), read out of the image.
+    With `commit` (the stage's ARCADEDB_ENGINE_COMMIT) the engine inside each embedded image must also report that build commit, read in SQL.
     """
     problems, readback = [], {}
     if not pin:
@@ -174,6 +208,13 @@ def verify(pin, embedded_images=(), served_images=(), run=None, backend=""):
             continue
         if got["wheel"] != pin:
             problems.append(f"{image} has {got['dist']} {got['wheel']}, the stage pins {pin}")
+        if commit:
+            sha, berr = read_embedded_build(image, run)
+            if berr:
+                problems.append(f"{image}: {berr}")
+            elif not commit_matches(sha, commit):
+                problems.append(f"{image} runs engine commit {sha[:9]}, the stage pins {commit[:9]}")
+            readback[image]["engine_commit"] = sha
         if backend and got["backend"] != backend:
             problems.append(f"{image} carries {got['dist']} ({got['backend']} build), the stage pins the {backend} build")
         if got["engine_jar"] != [pin]:

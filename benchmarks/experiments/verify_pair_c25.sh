@@ -48,11 +48,11 @@ print(next(l.split('=',1)[1].strip() for l in p.splitlines() if l.strip().starts
 [ "$ISHA" = "$SHA" ] || fail "image jars are ${ISHA:0:9}, expected $SHORT"
 
 # THE NATIVE BUILD HAS NO JARS, NO JVM AND NO JPYPE: checks 2, 3 and 5 are about those and are skipped for it, said out loud (NOT CHECKED), and check 4 reads
-# the engine the image's native package compiled in (`_build_info.ENGINE_VERSION`) instead of a jar's buildNumber. The engine COMMIT of a native wheel is not
-# readable from the package, so for it the pair rests on the image's jars (check 1) and the version read here and by engine_pin.verify at the first cell.
+# the engine the image's native package compiled in (`_build_info.ENGINE_VERSION`) instead of a jar's buildNumber. The engine COMMIT of a native wheel is
+# not in a file, but the engine reports it: check 4b runs `SELECT version()` inside the embedded image ("<v> (build <sha>/...)") and compares the sha with $SHA.
 IJ=n/a; HAVE_J=n/a
 if [ "$WB" = native ]; then
-  echo "NOT CHECKED (native build): wheel jars (2), JVM major (3), JPype pin (5); the wheel carries no jars, no JVM and no JPype"
+  echo "NOT CHECKED (native build): wheel jars (2), JVM major (3), JPype pin (5); the wheel carries no jars, no JVM and no JPype. Its engine commit IS checked (4b)"
 fi
 
 # 2. the wheel's jars
@@ -100,6 +100,14 @@ fi
 if [ "$WB" = native ] && docker image inspect "$EMBEDDED_IMAGE" >/dev/null 2>&1; then
   NV=$(docker run --rm --entrypoint python3 "$EMBEDDED_IMAGE" -c "from arcadedb._build_info import ENGINE_VERSION as v; print(v)" 2>/dev/null | tr -dc '0-9a-zA-Z.-')
   [ "${NV%.dev*}" = "${WV%.dev*}" ] || fail "$EMBEDDED_IMAGE's native engine is '$NV', the wheel is $WV (rebuild it with ARCADEDB_WHEEL set)"
+  # 4b. THE COMMIT THE NATIVE ENGINE REPORTS, asked in SQL inside the image that will run the cells.
+  NSHA=$(docker run --rm --entrypoint python3 "$EMBEDDED_IMAGE" -c "
+import os, tempfile, arcadedb
+db = arcadedb.create_database(os.path.join(tempfile.mkdtemp(), 'p'))
+print(db.query('sql', 'SELECT version() AS v').first().get('v'))
+db.close()" 2>/dev/null | tail -1 | sed -n 's/.*(build \([0-9a-f]\{7,40\}\)\/.*/\1/p')
+  [ -n "$NSHA" ] || fail "$EMBEDDED_IMAGE's native engine did not answer SELECT version() with a build commit"
+  [ "${NSHA:0:9}" = "$SHORT" ] || fail "$EMBEDDED_IMAGE's native engine reports commit ${NSHA:0:9}, expected $SHORT"
 elif docker image inspect "$EMBEDDED_IMAGE" >/dev/null 2>&1; then
   BSHA=$(docker run --rm --entrypoint python3 "$EMBEDDED_IMAGE" -c "
 import importlib.metadata as m, pathlib, zipfile, io, sys
