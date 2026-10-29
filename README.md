@@ -7,7 +7,7 @@ Native Python bindings for ArcadeDB (forked from the official Java project).
 [![PyPI](https://img.shields.io/pypi/v/arcadedb-embedded)](https://pypi.org/project/arcadedb-embedded/)
 [![PyPI - Python
 Version](https://img.shields.io/pypi/pyversions/arcadedb-embedded)](https://pypi.org/project/arcadedb-embedded/)
-[![Docs](https://img.shields.io/badge/docs-humem.ai-892122)](https://docs.humem.ai/arcadedb/latest/)
+[![Docs](https://img.shields.io/badge/docs-arcadedb.com-892122)](https://docs.arcadedb.com/arcadedb-python/)
 [![Test Python
 Bindings](https://github.com/humemai/arcadedb-embedded-python/actions/workflows/test-python-bindings.yml/badge.svg)](https://github.com/humemai/arcadedb-embedded-python/actions/workflows/test-python-bindings.yml)
 [![Test Python
@@ -30,7 +30,7 @@ remains the source of the core database.
 ## 🧱 What’s inside
 
 - bindings/python: Python package source, build scripts, tests, and examples.
-- docs site: [https://docs.humem.ai/arcadedb/](https://docs.humem.ai/arcadedb/)
+- docs site: [https://docs.arcadedb.com/arcadedb-python/](https://docs.arcadedb.com/arcadedb-python/)
 - CI: Build/test workflows for bindings and examples (badges above).
 
 ## ✅ Typical use cases
