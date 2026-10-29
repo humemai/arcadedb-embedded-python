@@ -34,7 +34,7 @@ fi
 _want_arcadedb=1
 if [ $# -gt 0 ]; then _want_arcadedb=0; for _t in "$@"; do [ "$_t" = "arcadedb" ] && _want_arcadedb=1; done; fi
 if [ "$_want_arcadedb" = 1 ] && [ -z "${ARCADEDB_WHEEL:-}" ]; then
-  echo "REFUSING: the arcadedb image needs ARCADEDB_WHEEL=<path to the pinned arcadedb_embedded wheel>; there is no PyPI fallback." >&2
+  echo "REFUSING: the arcadedb image needs ARCADEDB_WHEEL=<path to the pinned arcadedb (native) or arcadedb-jvm wheel>; there is no PyPI fallback." >&2
   echo "          Name the targets (e.g. './build_images.sh duckdb client dense') to build the images that take no wheel." >&2
   exit 1
 fi
@@ -108,7 +108,8 @@ LADYBUG_EXTENSIONS="vector=23da57e805fed208f1eacb4b011cb0c2e917ae098fa6853763e44
 # test only that. Same for the wheel path, whose basename carries the version.
 _pin=""
 if [ -n "${ARCADEDB_WHEEL:-}" ]; then
-  # arcadedb_embedded-26.8.1.dev20-py3-none-linux_x86_64.whl -> 26.8.1.dev20
+  # arcadedb-26.11.1.dev0-py3-none-manylinux_2_28_x86_64.whl, arcadedb_jvm-26.11.1.dev0-... and the older
+  # arcadedb_embedded-26.8.1.dev20-py3-none-linux_x86_64.whl all carry the version in the second field -> 26.8.1.dev20
   _pin=$(basename "$ARCADEDB_WHEEL" | cut -d- -f2)
 fi
 case "$_pin" in

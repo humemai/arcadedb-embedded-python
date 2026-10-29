@@ -786,6 +786,15 @@ def _host_identity():
     return name or "unknown"
 
 
+def engine_backend():
+    """"native" or "jvm" when this process loaded the ArcadeDB package, else None. Lanes that set engine_version by hand stamp it too."""
+    try:
+        import _arcadedb_import
+        return _arcadedb_import.loaded_backend()
+    except Exception:
+        return None
+
+
 def run_conditions(**extra):
     """The conditions this process is actually running under, read not asserted.
 
@@ -914,6 +923,10 @@ def run_conditions(**extra):
         out["engine_version"] = f"unknown ({e.__class__.__name__})"
     # THE JPYPE THIS PROCESS RAN (CAMPAIGN 7 row 73): empty unless the process imported it.
     out.update(jpype_fields())
+    # WHICH ENGINE BUILD THIS PROCESS RAN, "native" or "jvm" (arcadedb.__backend__). engine_version is the same string for the
+    # `arcadedb` and `arcadedb-jvm` wheels of one release, so the version alone cannot tell the two arms apart. NOT named `backend`:
+    # that field is already the arm name (`arcadedb_sparse_embedded`, ...).
+    out["engine_backend"] = engine_backend()
     out.update(extra)
     return out
 

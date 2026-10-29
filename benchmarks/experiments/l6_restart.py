@@ -794,6 +794,7 @@ def main():
         _rx.update(_ad.readbacks())     # the dense adapters' hook, after their build timer
     out.update({k: v for k, v in _rx.items() if k in _ov.STAMP_FIELDS})
     out["engine_version"] = eng.version
+    out["engine_backend"] = bench_common.engine_backend()
     bench_common.stamp_durability(out, eng.durability)
     out["instrument"] = bench_common.INSTRUMENT
     out["restart_ping"] = eng.ping_desc

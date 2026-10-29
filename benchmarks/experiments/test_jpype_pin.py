@@ -153,6 +153,19 @@ def test_wheel_guard_accepts_a_chunked_wheel_and_refuses_the_whole_input_one(tmp
     assert r.returncode == 1 and "cannot be opened" in r.stderr
 
 
+def test_wheel_guard_reads_the_new_package_name(tmp_path):
+    """arcadedb (native) and arcadedb-jvm (26.11.1+) carry arcadedb/core.py, not arcadedb_embedded/core.py."""
+    import zipfile
+    guard = [sys.executable, str(HERE / "wheel_guard.py")]
+    for name, marker, rc in (("arcadedb-26.11.1.dev0-py3-none-x.whl", "_INSERT_MANY_CHUNK = 1000\n", 0),
+                             ("arcadedb_jvm-26.11.1.dev0-py3-none-x.whl", "_INSERT_MANY_CHUNK = 10000\n", 0),
+                             ("arcadedb_jvm-26.10.1-py3-none-x.whl", "def insert_many(rows): ...\n", 1)):
+        p = tmp_path / name
+        with zipfile.ZipFile(p, "w") as z:
+            z.writestr("arcadedb/core.py", marker)
+        assert subprocess.run(guard + [str(p)], capture_output=True, text=True).returncode == rc, name
+
+
 def test_build_images_refuses_a_wheel_without_the_chunked_insert_many(tmp_path):
     old = _fake_wheel(tmp_path / "arcadedb_embedded-26.10.1-cp312-cp312-manylinux_2_34_x86_64.whl", chunked=False)
     for args in (["arcadedb"], ["duckdb"]):          # the generic images carry the wheel too

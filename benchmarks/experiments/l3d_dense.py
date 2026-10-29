@@ -3261,6 +3261,7 @@ def main():
         b.connect()
     out["connect_s"] = round(time.perf_counter() - t0, 3)
     out["engine_version"] = b.version
+    out["engine_backend"] = bench_common.engine_backend()
 
     t0 = time.perf_counter()
     with _beat.phase("build", n=len(train)):

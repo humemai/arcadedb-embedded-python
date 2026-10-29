@@ -8,7 +8,9 @@ image they had just built. Nothing stopped `runner.py` itself from starting a ce
 
 THE RULE. The stage pins one ArcadeDB version by exporting `ARCADEDB_WHEEL` (the pinned wheel file, whose name carries the version). Before the
 first cell, for every ArcadeDB arm in the batch, `runner.py` reads the version out of what will run and refuses to start unless it is the pin:
-  embedded  the image's installed `arcadedb-embedded` version AND the engine jar the wheel ships (`arcadedb-engine-<version>.jar`);
+  embedded  the image's installed ArcadeDB distribution version AND the engine the wheel ships: `arcadedb-jvm` (JVM build) or the older
+            `arcadedb-embedded` carry `arcadedb-engine-<version>.jar`; `arcadedb` (the native build, no JVM, no jars) carries the engine
+            inside libarcadedb.so and names its version in `_build_info.ENGINE_VERSION`, read here as the same jar name;
   served    the engine jar of the server image (`/home/arcadedb/lib/arcadedb-engine-<version>.jar`), which is the engine the server loads.
 Nothing is started to ask, so the check costs two short `docker run`s per image and measures nothing.
 
@@ -29,16 +31,34 @@ VERSION_RE = r"\d+\.\d+\.\d+(?:\.(?:dev|post)\d+)?"
 FLOATING_OK = ("client", "duckdb", "dense", "pg-age", "mongo-search", "composed")
 SERVER_LIB = "/home/arcadedb/lib"
 _JAR_RE = re.compile(r"^arcadedb-engine-(.+)\.jar$")
-_EMBEDDED_PROBE = (
-    "import importlib.metadata as m, importlib.util as u, os; "
-    "s = u.find_spec('arcadedb_embedded'); "
-    "print(m.version('arcadedb-embedded')); "
-    "print(' '.join(sorted(os.listdir(os.path.join(os.path.dirname(s.origin), 'jars')))))"
-)
+_EMBEDDED_PROBE = """
+import importlib.metadata as m, importlib.util as u, os
+s = next((x for x in (u.find_spec(n) for n in ('arcadedb', 'arcadedb_embedded')) if x and x.origin), None)
+dist = None
+for n in ('arcadedb', 'arcadedb-jvm', 'arcadedb-embedded'):
+    try:
+        v = m.version(n)
+        dist = n
+        break
+    except m.PackageNotFoundError:
+        pass
+print(v)
+print(dist)
+pkg = os.path.dirname(s.origin)
+jars = os.path.join(pkg, 'jars')
+if os.path.isdir(jars):
+    print(' '.join(sorted(os.listdir(jars))))
+else:
+    from importlib import import_module
+    print('arcadedb-engine-' + import_module(os.path.basename(pkg) + '._build_info').ENGINE_VERSION + '.jar')
+"""
+# The native distribution is `arcadedb`, the JVM one `arcadedb-jvm`; the old `arcadedb-embedded` is a JVM build.
+BACKEND_OF = {"arcadedb": "native", "arcadedb-jvm": "jvm", "arcadedb-embedded": "jvm"}
 
 
 def pin_from_wheel(path):
-    """The version a wheel file name carries (arcadedb_embedded-26.10.2-cp312-...whl -> 26.10.2), or "" when it carries none."""
+    """The version a wheel file name carries (arcadedb_embedded-26.10.2-cp312-...whl, arcadedb_jvm-26.11.1.dev0-py3-...whl or
+    arcadedb-26.11.1.dev0-py3-...whl -> the version), or "" when it carries none."""
     parts = os.path.basename(path or "").split("-")
     return parts[1] if len(parts) > 2 and re.fullmatch(VERSION_RE, parts[1]) else ""
 
@@ -91,14 +111,22 @@ def _engine_jar_versions(names):
 
 
 def read_embedded(image, run=None):
-    """({"wheel": ..., "engine_jar": [...]}, None) read out of a bench image by running python in it, or (None, why)."""
+    """({"wheel": ..., "dist": ..., "backend": ..., "engine_jar": [...]}, None) read out of a bench image by running python in it, or (None, why).
+
+    Three lines from the probe (version, distribution name, engine jar names). Two lines (version, jars) are still read, for a probe
+    or a test double that predates the new package names: the distribution is then the old `arcadedb-embedded`.
+    """
     out, err = _docker(["--entrypoint", "python3", image, "-c", _EMBEDDED_PROBE], run)
     if err:
         return None, err
     lines = out.strip().splitlines()
-    if len(lines) < 2:
-        return None, f"the probe in {image} printed {out.strip()!r}, not a wheel version and a jar list"
-    return {"wheel": lines[0].strip(), "engine_jar": _engine_jar_versions(lines[1].split())}, None
+    if len(lines) == 2:
+        lines = [lines[0], "arcadedb-embedded", lines[1]]
+    if len(lines) < 3:
+        return None, f"the probe in {image} printed {out.strip()!r}, not a wheel version, a distribution name and a jar list"
+    dist = lines[1].strip()
+    return {"wheel": lines[0].strip(), "dist": dist, "backend": BACKEND_OF.get(dist),
+            "engine_jar": _engine_jar_versions(lines[2].split())}, None
 
 
 def read_served(image, run=None):
@@ -122,7 +150,7 @@ def verify(pin, embedded_images=(), served_images=(), run=None):
             problems.append(f"{image}: {err}")
             continue
         if got["wheel"] != pin:
-            problems.append(f"{image} has arcadedb-embedded {got['wheel']}, the stage pins {pin}")
+            problems.append(f"{image} has {got['dist']} {got['wheel']}, the stage pins {pin}")
         if got["engine_jar"] != [pin]:
             problems.append(f"{image} ships engine jar {','.join(got['engine_jar']) or '(none)'}, the stage pins {pin}")
     for image in sorted(set(served_images)):

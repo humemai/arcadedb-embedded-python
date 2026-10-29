@@ -76,6 +76,8 @@ def verify():
         out["engine_version"] = _ai.dist_version()
     except Exception as e:
         out["engine_version"] = f"unknown ({e.__class__.__name__})"
+    import bench_common
+    out["engine_backend"] = bench_common.engine_backend()
     outp = os.environ.get("PROBE_OUT", "")
     if outp:
         with open(outp, "w") as f:

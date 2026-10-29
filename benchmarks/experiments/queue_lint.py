@@ -128,7 +128,9 @@ def wheel_is_prerelease(body):
     build_images.sh line and rejected all fourteen stages of the 26.10.1 chain
     the first time they were linted against the official wheel.
     """
-    m = re.search(r"arcadedb_embedded-([^-\s\"']+)-", body)
+    # arcadedb_embedded-<v>- (old), arcadedb_jvm-<v>- and arcadedb-<v>- (26.11.1+); the version starts with a digit, so
+    # `arcadedb-engine-` in a jar name is not a wheel.
+    m = re.search(r"arcadedb(?:_embedded|_jvm)?-([0-9][^-\s\"']*)-", body)
     if not m:
         return None
     return bool(_PRE_TOKENS.search(m.group(1)))

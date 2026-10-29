@@ -52,6 +52,14 @@ def test_falls_back_to_the_old_package(reset):
     assert AI.jvm_module() is old.jvm
 
 
+def test_loaded_backend_reads_none_until_the_package_is_loaded(reset):
+    native = _fake("arcadedb", __backend__="native")
+    reset(arcadedb=native)
+    assert AI.loaded_backend() is None                 # nothing imported by this harness yet: an explicit None on the row
+    AI.load()
+    assert AI.loaded_backend() == "native"
+
+
 def test_a_namespace_directory_called_arcadedb_is_not_the_engine(reset):
     empty = types.ModuleType("arcadedb")               # what an empty `arcadedb/` directory on sys.path imports as
     empty.jvm = types.ModuleType("arcadedb.jvm")

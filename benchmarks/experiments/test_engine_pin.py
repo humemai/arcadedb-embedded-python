@@ -40,6 +40,9 @@ def fake_docker(images):
         if spec[0] == "embedded":
             assert "python3" in cmd
             return SimpleNamespace(returncode=0, stdout=f"{spec[1]}\n{' '.join(spec[2])}\n", stderr="")
+        if spec[0] == "embedded3":     # the probe's three lines: version, distribution, jars (26.11.1+ names)
+            assert "python3" in cmd
+            return SimpleNamespace(returncode=0, stdout=f"{spec[1]}\n{spec[2]}\n{' '.join(spec[3])}\n", stderr="")
         assert "sh" in cmd
         return SimpleNamespace(returncode=0, stdout="\n".join(spec[1]) + "\n", stderr="")
 
@@ -95,8 +98,36 @@ def test_matching_images_pass_and_the_readback_names_what_was_read():
     run = fake_docker({EMB: GOOD_EMB, SRV: GOOD_SRV})
     readback, problems = E.verify(PIN, [EMB], [SRV], run=run)
     assert problems == []
-    assert readback[EMB] == {"wheel": PIN, "engine_jar": [PIN]} and readback[SRV] == {"engine_jar": [PIN]}
+    # a two-line probe answer is the old `arcadedb-embedded`, a JVM build
+    assert readback[EMB] == {"wheel": PIN, "dist": "arcadedb-embedded", "backend": "jvm", "engine_jar": [PIN]}
+    assert readback[SRV] == {"engine_jar": [PIN]}
     assert len(run.calls) == 2
+
+
+def test_the_new_distributions_are_read_back_as_native_or_jvm():
+    pin = "26.11.1.dev0"
+    native = ("embedded3", pin, "arcadedb", ["arcadedb-engine-26.11.1-SNAPSHOT.jar"])   # no jars dir: _build_info.ENGINE_VERSION
+    jvm = ("embedded3", pin, "arcadedb-jvm", ["arcadedb-engine-26.11.1-SNAPSHOT.jar", "arcadedb-network-26.11.1-SNAPSHOT.jar", "x.jar"])
+    n_img, j_img = f"dbbench:arcadedb-{pin}", "dbbench:arcadedb-jvm-img"
+    run = fake_docker({n_img: native, j_img: jvm})
+    readback, problems = E.verify(pin, [n_img], [], run=run)
+    assert problems == [] and readback[n_img]["backend"] == "native" and readback[n_img]["dist"] == "arcadedb"
+    # the other image's tag is not a versioned ArcadeDB tag, so the check_image_tag refusal is what is read here; the probe itself:
+    got, err = E.read_embedded(j_img, run)
+    assert err is None and got["backend"] == "jvm" and got["engine_jar"] == [pin]
+    # a native image whose engine is another version is refused with the distribution named
+    stale = ("embedded3", pin, "arcadedb", ["arcadedb-engine-26.11.0.jar"])
+    _, problems = E.verify(pin, [n_img], [], run=fake_docker({n_img: stale}))
+    assert any("engine jar 26.11.0" in p for p in problems)
+
+
+def test_the_probe_in_the_image_resolves_the_new_names_first():
+    # not run here (it runs in the image): pin the order the probe reads, the same as _arcadedb_import.py
+    assert "('arcadedb', 'arcadedb_embedded')" in E._EMBEDDED_PROBE
+    assert "('arcadedb', 'arcadedb-jvm', 'arcadedb-embedded')" in E._EMBEDDED_PROBE
+    compile(E._EMBEDDED_PROBE, "probe", "exec")
+    assert E.pin_from_wheel("/x/arcadedb_jvm-26.11.1.dev0-py3-none-manylinux_2_28_x86_64.whl") == "26.11.1.dev0"
+    assert E.pin_from_wheel("/x/arcadedb-26.11.1.dev0-py3-none-manylinux_2_28_x86_64.whl") == "26.11.1.dev0"
 
 
 def test_the_incident_an_image_that_carries_the_retired_version_is_refused():

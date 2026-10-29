@@ -1955,6 +1955,7 @@ def main():
     with _beat.phase("connect", backend=args.backend):
         b.connect()
     out["engine_version"] = b.version
+    out["engine_backend"] = bench_common.engine_backend()
     t0 = time.perf_counter()
     with _beat.phase("build", n=len(li)):
         b.build(li, part)

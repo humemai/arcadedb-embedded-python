@@ -1,6 +1,6 @@
 # Generic benchmark image. Pin the package set via build ARG so each backend
 # (arcadedb, duckdb, ladybug, chroma, faiss, ...) gets its own pinned image later.
-# arcadedb-embedded bundles its own JRE, so no Java install is needed.
+# arcadedb-jvm (and the older arcadedb-embedded) bundle their own JRE, so no Java install is needed; the native `arcadedb` wheel has no JVM.
 FROM python:3.12-slim
 
 ARG PIP_PACKAGES=""
@@ -12,16 +12,21 @@ ARG PIP_PACKAGES=""
 # default is bench_common.JPYPE_PIN; `make_2611_stages.py --check` refuses a
 # default that differs, and every stage reads the version back out of the image.
 ARG JPYPE_VERSION=1.7.1
-# Local wheels (e.g. a not-yet-released arcadedb-embedded) placed in
+# NO JPYPE IN A NATIVE IMAGE (26.11.1): the `arcadedb` wheel is the native build, no JVM and no JPype, and its rows must say so
+# (bench_common.jpype_fields reads the JPype the process imported). JPype is installed with `arcadedb-jvm`, `arcadedb_jvm-*.whl`,
+# `arcadedb-embedded` and `arcadedb_embedded-*.whl`; a wheel named `arcadedb-<digit>...` (the native one) gets none.
+# Local wheels (e.g. a not-yet-released arcadedb-jvm) placed in
 # docker/wheels/ are installed first; the dir ships empty (.gitkeep).
 COPY docker-wheels/ /tmp/wheels/
 RUN set -e; \
     if ls /tmp/wheels/*.whl >/dev/null 2>&1; then \
-      pip install --no-cache-dir /tmp/wheels/*.whl "jpype1==${JPYPE_VERSION}"; \
+      _jp=""; \
+      for _w in /tmp/wheels/*.whl; do case "$(basename "$_w")" in arcadedb-[0-9]*) ;; *) _jp="jpype1==${JPYPE_VERSION}";; esac; done; \
+      pip install --no-cache-dir /tmp/wheels/*.whl ${_jp}; \
     fi; \
     if [ -n "${PIP_PACKAGES}" ]; then \
       _jp=""; \
-      case " ${PIP_PACKAGES} " in *" arcadedb-embedded"*) _jp="jpype1==${JPYPE_VERSION}";; esac; \
+      case " ${PIP_PACKAGES} " in *" arcadedb-embedded"*|*" arcadedb-jvm"*) _jp="jpype1==${JPYPE_VERSION}";; esac; \
       pip install --no-cache-dir ${PIP_PACKAGES} ${_jp}; \
     fi; \
     if python -c "import jpype" 2>/dev/null; then \

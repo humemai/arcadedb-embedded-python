@@ -57,13 +57,16 @@ print(next(l.split('=',1)[1].strip() for l in p.splitlines() if l.strip().starts
 IJ=$(docker run --rm --entrypoint sh "$IMG" -c 'java -version 2>&1' | head -1 | grep -oE '"[0-9]+' | tr -d '"')
 # The venv's JRE when this checkout has one (the bench host does); otherwise the JRE inside the
 # embedded image, which is the JVM the embedded arm actually runs (a worktree has no .venv).
-VENV_JAVA="$REPO/.venv/lib/python3.12/site-packages/arcadedb_embedded/jre/bin/java"
-if [ -x "$VENV_JAVA" ]; then
+VENV_JAVA=""
+for _p in arcadedb arcadedb_embedded; do   # arcadedb-jvm (26.11.1+) installs `arcadedb`; the older wheel `arcadedb_embedded`
+  [ -x "$REPO/.venv/lib/python3.12/site-packages/$_p/jre/bin/java" ] && VENV_JAVA="$REPO/.venv/lib/python3.12/site-packages/$_p/jre/bin/java"
+done
+if [ -n "$VENV_JAVA" ]; then
   EJ=$("$VENV_JAVA" -version 2>&1 | head -1 | grep -oE '"[0-9]+' | tr -d '"')
 else
   EJ=$(docker run --rm --entrypoint python3 "$EMBEDDED_IMAGE" -c "
 import importlib.metadata as m, pathlib, subprocess
-d = pathlib.Path(m.distribution('arcadedb-embedded').locate_file('arcadedb_embedded'))
+d = next(pathlib.Path(m.distribution(n).locate_file(p)) for n, p in (('arcadedb-jvm', 'arcadedb'), ('arcadedb', 'arcadedb'), ('arcadedb-embedded', 'arcadedb_embedded')) if any(m.distributions(name=n)))
 print(subprocess.run([str(d / 'jre' / 'bin' / 'java'), '-version'], capture_output=True, text=True).stderr.splitlines()[0])" \
         2>/dev/null | grep -oE '"[0-9]+' | tr -d '"')
 fi
@@ -81,7 +84,7 @@ fi
 if docker image inspect "$EMBEDDED_IMAGE" >/dev/null 2>&1; then
   BSHA=$(docker run --rm --entrypoint python3 "$EMBEDDED_IMAGE" -c "
 import importlib.metadata as m, pathlib, zipfile, io, sys
-d = pathlib.Path(m.distribution('arcadedb-embedded').locate_file('arcadedb_embedded'))
+d = next(pathlib.Path(m.distribution(n).locate_file(p)) for n, p in (('arcadedb-jvm', 'arcadedb'), ('arcadedb', 'arcadedb'), ('arcadedb-embedded', 'arcadedb_embedded')) if any(m.distributions(name=n)))
 j = next(x for x in (d / 'jars').glob('arcadedb-engine-*.jar'))
 z = zipfile.ZipFile(j)
 p = z.read('com/arcadedb/arcadedb.properties').decode()

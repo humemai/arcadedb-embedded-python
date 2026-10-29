@@ -3504,6 +3504,7 @@ def main():
         ad.connect()
     out["connect_s"] = round(time.perf_counter() - t0, 3)
     out["engine_version"] = ad.version
+    out["engine_backend"] = bench_common.engine_backend()
     # What a served engine reported about itself at connect: client library
     # version, thread pool, memory limit, timeouts, persistence settings
     # (Memgraph, FalkorDB, DuckPGQ). Read from the server, not restated from

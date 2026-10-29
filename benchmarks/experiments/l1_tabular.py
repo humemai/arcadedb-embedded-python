@@ -706,6 +706,8 @@ def main():
     b.connect()
     out["connect_s"] = round(time.perf_counter() - t0, 3)
     out["engine_version"] = getattr(b, "version", "?")
+    import bench_common as _bc
+    out["engine_backend"] = _bc.engine_backend()
     out.update(getattr(b, "row_extra", None) or {})
     # F6 provenance: what the engine's pool was actually sized to, and what the
     # cpuset allowed. A cell where these differ is oversubscribed; recording it

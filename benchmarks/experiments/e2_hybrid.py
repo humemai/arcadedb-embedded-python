@@ -2329,6 +2329,7 @@ def main():
     with _beat.phase("connect", backend=args.backend):
         b = BACKENDS[args.backend]()
     out["engine_version"] = b.version
+    out["engine_backend"] = bench_common.engine_backend()
     out["instrument"] = bench_common.INSTRUMENT
     # The lane's search breadth (graph-index arms); IVF and LanceDB calibrate by effect and say so. An engine with a lower maximum
     # (pgvector, 1000) reports what it APPLIED in vector_ef and the lane's value in vector_ef_lane, so a clamp is never silent.

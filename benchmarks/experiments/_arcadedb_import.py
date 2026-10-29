@@ -25,11 +25,12 @@ What differs between the packages, and what this module hides:
     attribute and is always "jvm" (backend()).
   * `<module>.jvm`: importable in both new wheels, but the native wheel ships no JARs, so
     `start_jvm()` raises ArcadeDBError ("No JAR files found") there (jvm_module()). The cold-start
-    subprocess in l5_lifecycle.py calls it, so its `jvm_start_ms` / `import_ms` / `first_open_ms`
-    columns are null on the native build (checked 2026-10-29 with arcadedb 26.11.1.dev0).
+    subprocess in l5_lifecycle.py therefore starts the native library instead (see its docstring).
   * JVM-only APIs (`get_java_database`, `jpype`, Java arrays): they exist only on the JVM build and
-    the native build has no JPype (l3_sparse's embedded arm imports it and fails there). A lane arm
-    that needs one must check backend() first; this module does not paper over it.
+    the native build has no JPype. No lane uses them any more (l3_sparse's embedded arm went through
+    insert_many, plain Python lists and SQL COMPACT INDEX); a new arm that needs one must check
+    backend() first, and this module does not paper over it.
+  * loaded_backend(): backend() once load() has run, else None; it is what the `engine_backend` row field reads.
 """
 import importlib
 import importlib.metadata
@@ -79,6 +80,15 @@ def backend():
     """"native" or "jvm": the engine this process runs. The old `arcadedb_embedded` package is always "jvm"."""
     mod = load()
     return getattr(mod, "__backend__", None) or getattr(mod, "_DISTRIBUTION_BACKEND", None) or "jvm"
+
+
+def loaded_backend():
+    """`backend()` when this process has loaded the package, else None (a comparator arm, a served arm's driver).
+
+    Never imports the engine. This is what the row stamp `engine_backend` reads, so a row of a process that never touched ArcadeDB
+    carries an explicit None, not a guess.
+    """
+    return backend() if _loaded is not None else None
 
 
 def jvm_module():

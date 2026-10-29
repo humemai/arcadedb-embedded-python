@@ -66,7 +66,7 @@ Usage:
   ARCADEDB_WHEEL=... ARCADEDB_SERVER_IMAGE=... ARCADEDB_ENGINE_COMMIT=<40 hex> \\
       python3 make_2611_stages.py --after qR15 --status-file STATUS.txt --id-prefix qS --out DIR [--engines a,b] [--lanes graph,dense] [--profile paper-2611|full] [--second-list (full only)]
   python3 make_2611_stages.py --arcadedb-release 26.11.1 --engine-commit <40 hex> --image-digest sha256:<64 hex> \\
-      --wheel-name arcadedb_embedded-26.11.1-<tags>.whl --wheel-sha256 <64 hex> --wheel-url <https url> \\
+      --wheel-name arcadedb_jvm-26.11.1-<tags>.whl --wheel-sha256 <64 hex> --wheel-url <https url> \\
       --after <last comparator stage> --status-file STATUS.txt --id-prefix qT --out DIR
   python3 make_2611_stages.py --check --drafts DIR [--status-file STATUS.txt]   # also: the drafts' first wait is not already in STATUS.txt
 """
@@ -1119,7 +1119,10 @@ ARCADE_POST_CHECKS = '''# VERIFY THE ARM, NOT THE FILE: read the version out of 
 # The pair check below is the REPO copy, not ~/verify_pair_c25.sh: that
 # one is a stale copy from 2026-08-30 and would miss its own fourth
 # check. A script pulled with the tree cannot drift from it.
-IV=$(docker run --rm --entrypoint python3 "dbbench:arcadedb-$WV" -c      'import importlib.metadata as m; print(m.version("arcadedb-embedded"))' 2>/dev/null | tr -dc "0-9a-zA-Z.-")
+IV=$(docker run --rm --entrypoint python3 "dbbench:arcadedb-$WV" -c      'import importlib.metadata as m
+for n in ("arcadedb", "arcadedb-jvm", "arcadedb-embedded"):
+    try: print(m.version(n)); break
+    except m.PackageNotFoundError: pass' 2>/dev/null | tr -dc "0-9a-zA-Z.-")
 [ "$IV" = "$WV" ] || {{ say "$ID ABORT: dbbench:arcadedb carries wheel $IV, dist has $WV"; exit 1; }}
 say "$ID: dbbench:arcadedb carries wheel $IV, matching dist"
 IJ=$(docker run --rm --entrypoint python3 "dbbench:arcadedb-$WV" -c 'import jpype; print(jpype.__version__)' 2>/dev/null | tr -dc "0-9a-zA-Z.-")
@@ -1726,9 +1729,9 @@ def release_pins(a):
         raise SystemExit("REFUSING: --image-digest must be sha256:<64 hex>, the official image by digest")
     if not re.fullmatch(r"[0-9a-f]{64}", a.wheel_sha256):
         raise SystemExit("REFUSING: --wheel-sha256 must be 64 hex characters")
-    if not re.fullmatch(rf"arcadedb_embedded-{re.escape(a.arcadedb_release)}-[A-Za-z0-9_.]+-[A-Za-z0-9_.]+-[A-Za-z0-9_.]+\.whl",
+    if not re.fullmatch(rf"arcadedb(?:_embedded|_jvm)?-{re.escape(a.arcadedb_release)}-[A-Za-z0-9_.]+-[A-Za-z0-9_.]+-[A-Za-z0-9_.]+\.whl",
                         a.wheel_name):
-        raise SystemExit(f"REFUSING: --wheel-name {a.wheel_name} is not a {a.arcadedb_release} arcadedb_embedded wheel")
+        raise SystemExit(f"REFUSING: --wheel-name {a.wheel_name} is not a {a.arcadedb_release} arcadedb, arcadedb_jvm or arcadedb_embedded wheel")
     if not a.wheel_url.startswith("https://") or not a.wheel_url.endswith(a.wheel_name):
         raise SystemExit("REFUSING: --wheel-url must be an https URL ending in the wheel's file name")
     return {"ARCADEDB_WHEEL": os.path.join("bindings", "python", "dist", a.wheel_name),

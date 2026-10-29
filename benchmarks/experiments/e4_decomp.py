@@ -109,6 +109,7 @@ def main():
     # expects; the full artifact stays in the file.
     import _arcadedb_import
     payload["engine_version"] = _arcadedb_import.dist_version()
+    payload["engine_backend"] = _arcadedb_import.loaded_backend()
     # THE DURABILITY THE ARM RAN AT, read out of the engine rather than
     # asserted (#81, #90). Every 2026-10 row must record it -- F10 fails a row
     # that does not -- and this lane recorded nothing, which nobody noticed

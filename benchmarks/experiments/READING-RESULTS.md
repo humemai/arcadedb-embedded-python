@@ -26,6 +26,8 @@ The single rule, from which most of the rest follows:
 
 **`engine_version` is deliberately null for non-ArcadeDB rows in L4.** Use `backend_version`. `run_conditions()` stamps `engine_version` from the installed wheel, which is right for the ArcadeDB row and wrong for DuckDB and QuestDB, so `l4_tsbs.py` asks each backend for its own version instead. A wrong version that passes a provenance audit is worse than none.
 
+**`engine_backend` says which ArcadeDB build produced a row: `native` (the `arcadedb` wheel) or `jvm` (`arcadedb-jvm`, the older `arcadedb_embedded`).** `engine_version` is the same string for both wheels of one release, and `backend` is the arm name, so neither can tell them apart. It is read from `arcadedb.__backend__` by `bench_common.engine_backend()` and is null where the process never loaded ArcadeDB (every comparator, and a served ArcadeDB arm, whose engine runs in a container).
+
 **Arms are selected by flag, not by filename.** `claims_check.ts_arm()` takes `primitive=` and `numpy_cols=` because the published row is one specific arm. Assert the flags rather than globbing the directory.
 
 **A comparator row's version and digest are read from the row** (`server_image`, `engine_version`); `runner.BACKENDS` describes future rows only (BUGS.md F32).
