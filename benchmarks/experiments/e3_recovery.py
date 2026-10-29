@@ -20,7 +20,9 @@ import os
 import sys
 import time
 
-import arcadedb_embedded as arcadedb
+import _arcadedb_import
+
+arcadedb = _arcadedb_import.load()
 
 DB = "/data-local/e3_arcade"
 ROWS_PER_TX = 10
@@ -70,8 +72,8 @@ def verify():
     # numbers are right, but nothing can re-derive them. Fixed here so the
     # freeze re-run leaves evidence.
     try:
-        from importlib.metadata import version as _pkgver
-        out["engine_version"] = _pkgver("arcadedb-embedded")
+        import _arcadedb_import as _ai
+        out["engine_version"] = _ai.dist_version()
     except Exception as e:
         out["engine_version"] = f"unknown ({e.__class__.__name__})"
     outp = os.environ.get("PROBE_OUT", "")

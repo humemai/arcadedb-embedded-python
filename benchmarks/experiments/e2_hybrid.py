@@ -236,7 +236,8 @@ class ArcadeE2:
     TXN_SCOPE = "whole"
 
     def __init__(self):
-        import arcadedb_embedded as arcadedb
+        import _arcadedb_import
+        arcadedb = _arcadedb_import.load()
         self._a = arcadedb
         heap = os.environ.get("ARCADEDB_HEAP", "4g")
         self.db = arcadedb.create_database(
@@ -247,8 +248,7 @@ class ArcadeE2:
                         "jvm_args": bench_common.arcade_jvm_args()})
         # THE WHEEL'S version, not its name (#156). A row stamped
         # "arcadedb-embedded" cannot be re-measured by anyone including us.
-        from importlib.metadata import version as _v
-        self.version = _v("arcadedb-embedded")
+        self.version = _arcadedb_import.dist_version()
         self.durability = bench_common.arcade_durability_readback()
 
     def build(self, vecs, edges):

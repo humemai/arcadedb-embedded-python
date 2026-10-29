@@ -116,7 +116,8 @@ def build(situation, n, heap):
 
     Returns the build session's close time in ms.
     """
-    import arcadedb_embedded as arcadedb
+    import _arcadedb_import
+    arcadedb = _arcadedb_import.load()
     _rm(DB)
     db = arcadedb.create_database(
         DB, jvm_kwargs={"heap_size": heap, "jvm_args": None})
@@ -474,7 +475,8 @@ def _drop(db, situation):
 
 def cycle(situation, mode, cold=False):
     """One open/close cycle. Returns (open_ms, close_ms)."""
-    import arcadedb_embedded as arcadedb
+    import _arcadedb_import
+    arcadedb = _arcadedb_import.load()
     if cold:
         # Verified eviction: evict() raises if pages survive, so a cold number
         # cannot be reported for a database that was still cached.
@@ -640,11 +642,15 @@ def main():
     #
     # What a cold caller actually pays is the whole process: interpreter start, import, JPype's JVM
     # boot, then the open. That is what this subprocess times, from its own first line.
+    # The import name is resolved HERE, outside the timed window (@MOD@ below), so the two import lines
+    # are the same statements as before (`arcadedb_embedded` on the old wheels, `arcadedb` on the new
+    # ones) and import_ms still times nothing else.
+    import _arcadedb_import
     _boot = subprocess.run(
-        [sys.executable, "-c",
+        [sys.executable, "-c", (
          "import time; _t0 = time.perf_counter()\n"
-         "from arcadedb_embedded.jvm import start_jvm\n"
-         "import arcadedb_embedded as a\n"
+         "from @MOD@.jvm import start_jvm\n"
+         "import @MOD@ as a\n"
          "_ti = time.perf_counter()\n"
          "start_jvm()\n"
          "_tj = time.perf_counter()\n"
@@ -653,7 +659,7 @@ def main():
          "db.close()\n"
          "print('%%.3f %%.3f %%.3f %%.3f' %% ((_ti-_t0)*1000, (_tj-_ti)*1000, (_to-_tj)*1000, "
          "(time.perf_counter()-_t0)*1000))"
-         % DB],
+         % DB).replace("@MOD@", _arcadedb_import.module_name())],
         capture_output=True, text=True, timeout=900)
     if _boot.returncode == 0 and _boot.stdout.strip():
         import_ms, jvm_start_ms, first_open_ms, cold_proc_ms = (

@@ -908,8 +908,8 @@ def run_conditions(**extra):
         "ts_utc": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
     }
     try:
-        from importlib.metadata import version as _v
-        out["engine_version"] = _v("arcadedb-embedded")
+        import _arcadedb_import
+        out["engine_version"] = _arcadedb_import.dist_version()
     except Exception as e:
         out["engine_version"] = f"unknown ({e.__class__.__name__})"
     # THE JPYPE THIS PROCESS RAN (CAMPAIGN 7 row 73): empty unless the process imported it.

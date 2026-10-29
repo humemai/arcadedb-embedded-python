@@ -175,7 +175,8 @@ class ArcadeEmbedded(Base):
         return _json.dumps(meta)
 
     def connect(self):
-        import arcadedb_embedded as arcadedb
+        import _arcadedb_import
+        arcadedb = _arcadedb_import.load()
         heap = os.environ.get("ARCADEDB_HEAP", "4g")
         # -Xms is left unset; heap_size sets -Xmx from the cell's memory budget (the bindings' documented practice, PROTOCOL section 7).
         jvm_args = ""
@@ -190,8 +191,7 @@ class ArcadeEmbedded(Base):
         self.db = arcadedb.create_database(
             "/tmp/l3_arcade",
             jvm_kwargs={"heap_size": heap, "jvm_args": jvm_args or None})
-        from importlib.metadata import version as _pv
-        self.version = _pv("arcadedb-embedded")
+        self.version = _arcadedb_import.dist_version()
         self.db.command("sql", "CREATE DOCUMENT TYPE Doc")
         self.db.command("sql", "CREATE PROPERTY Doc.id LONG")
         self.db.command("sql", "CREATE PROPERTY Doc.tokens ARRAY_OF_INTEGERS")
@@ -212,7 +212,8 @@ class ArcadeEmbedded(Base):
         the point, since it is charged to every JVM engine and to none of the
         others.
         """
-        import arcadedb_embedded as arcadedb
+        import _arcadedb_import
+        arcadedb = _arcadedb_import.load()
         heap = os.environ.get("ARCADEDB_HEAP", "4g")
         self.db = arcadedb.open_database(
             "/tmp/l3_arcade",

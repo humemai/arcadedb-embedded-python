@@ -324,7 +324,8 @@ def main() -> int:
     args = ap.parse_args()
 
     import requests
-    import arcadedb_embedded as arcadedb
+    import _arcadedb_import
+    arcadedb = _arcadedb_import.load()
 
     results: dict[str, dict] = {}
     meta = {
@@ -354,7 +355,7 @@ def main() -> int:
     # has to be pinned on the JVM before the server exists. Same -Xms=-Xmx
     # policy as every other lane: fixed heap for latency parity, with the
     # working set reported separately from cgroup anon.
-    from arcadedb_embedded.jvm import start_jvm
+    start_jvm = _arcadedb_import.jvm_module().start_jvm
     start_jvm(heap_size=args.heap, jvm_args=[f"-Xms{args.heap}"])
 
     # Arms 1 and 2 share this process, so they share the JVM, heap, GC, engine
