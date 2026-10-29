@@ -29,7 +29,7 @@ authors:
   - name: The ArcadeDB contributors
     website: "https://github.com/ArcadeData/arcadedb/graphs/contributors"
 repository-code: "https://github.com/humemai/arcadedb-embedded-python"
-url: "https://docs.humem.ai/arcadedb/latest/"
+url: "https://docs.arcadedb.com/arcadedb-python/"
 abstract: Embedded ArcadeDB Python bindings with a bundled JRE, enabling in-process multi-model database access (graph, document, key/value, vector, time series) via SQL, OpenCypher, and MongoDB query languages.
 license: Apache-2.0
 identifiers:
