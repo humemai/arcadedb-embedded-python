@@ -800,14 +800,19 @@ def _pinned_sparse_rows(arm="arcadedb_sparse_embedded"):
     # partial or mixed, and still refuses.
     if not out:
         return {}
-    # Both builds of one release at one pin: this overlay path holds ONE build (arm_identity.select_build when the freeze names one);
-    # it is not yet build-aware, so with both and no choice it still stops here.
+    # Both builds of one release at one pin: the page shows both (export_web reads the frozen rows itself); this path feeds the paper's
+    # LaTeX table, which is one build, so it validates each build and returns the chosen one (below).
     _builds = {_AI.build_of(r) for t in out for r in out[t]}
     if len(_builds) > 1:
-        _want = _AI.wanted_build()
-        if not _want:
-            sys.stderr.write(f"pinned sparse rows hold both builds {sorted(map(str, _builds))}; set {_AI.ENV}\n")
-            return None
+        # Both builds measured: each is validated on its own below (five reps at every tier, one identity). The paper's LaTeX table is
+        # ONE build, so with no choice made it takes the JVM build, the build every earlier row is; BENCH_ENGINE_BACKEND picks the other.
+        # The page reads the frozen rows through export_web and shows both builds.
+        _want = _AI.wanted_build() or "jvm"
+        for _b in sorted(_builds - {_want}):
+            _other = {t: [r for r in rs if _AI.build_of(r) == _b] for t, rs in out.items()}
+            if any(len(_other.get(t, [])) < 5 for t in tiers) or len({_AI.arm_identity(r) for t in tiers for r in _other[t]}) != 1:
+                sys.stderr.write(f"pinned sparse rows of the {_b} build are incomplete or span two identities\n")
+                return None
         out = {t: [r for r in rs if _AI.build_of(r) == _want] for t, rs in out.items()}
     if any(len(out.get(t, [])) < 5 for t in tiers):
         missing = [t for t in tiers if len(out.get(t, [])) < 5]
@@ -939,6 +944,20 @@ def mp_arms_present(small=False):
     return base + _optional_arms_present(cand, os.path.basename(cand), optional)
 
 
+# The in-process ArcadeDB arms of the dense overlay (the others are served or comparators, which have no native build).
+MP_INPROCESS_ARMS = ("fp32", "int8")
+
+
+def _refuse_partial_native(cand, label, arms=MP_INPROCESS_ARMS, prefix="mp"):
+    """The native build's overlay files (mp_<arm>_native_b<k>.json) are all there or none: a partial native run is a run in progress,
+    and publishing it beside a complete JVM overlay would print a native arm built from fewer builds than its twin."""
+    have = {a: [b for b in range(1, MP_BUILDS + 1) if os.path.isfile(os.path.join(cand, f"{prefix}_{a}_native_b{b}.json"))]
+            for a in arms}
+    if any(have.values()) and any(len(v) != MP_BUILDS for v in have.values()):
+        part = {a: len(v) for a, v in have.items() if len(v) != MP_BUILDS}
+        raise SystemExit(f"{label}: the native build's overlay is partial {part} of {MP_BUILDS} builds per arm; no fallback, re-run the arm")
+
+
 def dense_mp_dir():
     """results/dense_mp5_<pin>: complete, or absent, or refuse. PINNED ONLY: a
     fallback to an older overlay would publish an older engine's numbers
@@ -969,6 +988,7 @@ def dense_mp_dir():
     if missing:
         raise SystemExit(f"dense_mp5_{pin}: {len(missing)} of {len(MP_ARMS) * MP_BUILDS} files missing "
                          f"(e.g. {missing[0]}); no fallback, re-run the arm")
+    _refuse_partial_native(cand, f"dense_mp5_{pin}")
     return cand
 
 
@@ -1020,6 +1040,7 @@ def _dense_multipass():
     # could not decide whether an 85% cold-latency move between two engine
     # builds was a regression or noise. It is now five, one per build.
     stats = {}
+    _both_builds = bool(glob.glob(os.path.join(dense_mp_dir(), "mp_*_native_b*.json"))) and not _AI.wanted_build()
     for fp in sorted(glob.glob(os.path.join(dense_mp_dir(), "mp_*_b*.json"))):
         try:
             passes = json.load(open(fp))
@@ -1029,6 +1050,10 @@ def _dense_multipass():
             continue
         p0 = passes[0]
         be = p0.get("backend")
+        _ob = _AI.build_of(p0)
+        _want = _AI.wanted_build()
+        if _want and _ob not in (None, _want):
+            continue                      # a one-build freeze reads that build's overlay files only
         label = NAMES.get(be, be)
         if be == "arcadedb_dense_embedded":
             q = str(p0.get("quantization", "")).lower()
@@ -1040,6 +1065,8 @@ def _dense_multipass():
             # this; the server arm was the one row still asserting.
             q = str(p0.get("quantization", "")).lower()
             label = "ArcadeDB (srv, int8)" if "int8" in q else "ArcadeDB (srv, fp32)"
+        if _ob and _both_builds:
+            label = f"{label} [{_ob}]"    # both builds in the directory: two arms, never one pooled label
         s = stats.setdefault(label, {"build": [], "cold": [], "warm": [],
                                      "cold99": [], "recall": []})
         # One value per BUILD for anything that is a property of the build.

@@ -1802,6 +1802,7 @@ _LOCAL_ENGINE_COMMIT = os.environ.get("ARCADEDB_ENGINE_COMMIT", "").strip() or N
 # THE STAGE'S PINNED ARCADEDB VERSION, and the image tag that names it (engine_pin.py, 2026-10-22). BACKENDS says `dbbench:arcadedb`, the
 # logical build target; the image a cell runs is `dbbench:arcadedb-<version>`, swapped in below, so no cell can start on a floating tag.
 import engine_pin  # noqa: E402
+import arm_identity as _AI  # noqa: E402
 _ENGINE_PIN = engine_pin.pin_from_wheel(_LOCAL_WHEEL)
 # The build the wheel is ("native" / "jvm", "" for the older arcadedb_embedded wheel): part of the image tag and read back from the image.
 _ENGINE_BACKEND = engine_pin.backend_from_wheel(_LOCAL_WHEEL)
@@ -4480,6 +4481,7 @@ def main():
                     active_backends.discard(job["backend"])
                     cv.notify_all()
             row["manifest"] = ts
+            _AI.stamp_build(row, _ENGINE_BACKEND)   # a killed cell's row names the build its wheel is, not the JVM default
             # `or` rather than a dict default: an EMPTY error string is what
             # made thirty OOM kills look like blank successes.
             status = (row.get("error")

@@ -165,6 +165,27 @@ def _with_native(results, keep=lambda r: True, commit=None):
         w.writerows(rows + twins)
 
 
+def _native_overlays(results):
+    """The native chain's overlay files: a native copy of each in-process arm's files, every pass stamped engine_backend=native."""
+    n = 0
+    for d in results.glob("dense_mp5_*"):
+        for arm in ("fp32", "int8"):
+            for fp in sorted(d.glob(f"mp_{arm}_b*.json")):
+                passes = json.loads(fp.read_text())
+                (d / fp.name.replace(f"mp_{arm}_b", f"mp_{arm}_native_b")).write_text(
+                    json.dumps([dict(p, engine_backend="native") for p in passes]))
+                n += 1
+    for d in results.glob("sparse_mp_*"):
+        for arm in ("arc_fp32", "arc_int8"):
+            for fp in sorted(d.glob(f"sp_{arm}_*.json")):
+                tier = fp.stem.rsplit("_", 1)[1]
+                passes = json.loads(fp.read_text())
+                (d / f"sp_{arm}_native_{tier}.json").write_text(json.dumps([dict(p, engine_backend="native") for p in passes]))
+                n += 1
+    assert n
+    return n
+
+
 @pytest.fixture(scope="module")
 def pages(tmp_path_factory):
     """(payload of the old freeze, payload with native twins everywhere, payload with native twins in every lane but l2, the dir)."""
@@ -174,15 +195,18 @@ def pages(tmp_path_factory):
     base = _stage(root / "base")
     assert _run("make_paper_tables.py", base).returncode == 0
     out = []
-    for name, keep in (("old", None), ("both", lambda r: True), ("partial", lambda r: r.get("lane") != "l2")):
+    for name, keep in (("old", None), ("both", lambda r: True), ("partial", lambda r: r.get("lane") != "l2"), ("bare", lambda r: True)):
         d = root / name
         shutil.copytree(base, d)
         if keep:
             _with_native(d, keep)
+        if name != "bare":                 # "bare": native rows but no native overlay files (the overlay is unstamped, so the JVM build)
+            if keep:
+                _native_overlays(d)
         done = _run("export_web.py", d)
         assert done.returncode == 0, done.stderr[-2000:]
         out.append(json.loads((d / "web_benchmarks.json").read_text()))
-    return (*out, root)
+    return (out[0], out[1], out[2], root, out[3])
 
 
 def _t(p, tid):
@@ -228,11 +252,129 @@ def test_the_served_arm_stays_one_row_and_both_builds_name_one_engine(pages):
     assert PC._check_build_pair({"tables": [t for t in both["tables"] if t["id"] != "l3d"]}, rows) == 0
 
 
-def test_the_dense_overlay_arms_name_no_build_and_the_gate_says_so(pages):
-    """OPEN: the dense multipass overlay (files, not frozen rows) carries no engine_backend, so its fp32 and int8 arms print without a
-    build. On a page that names builds the gate refuses that, which is the loud behaviour wanted until the overlay says its build."""
+def test_a_stamped_overlay_stands_per_build_and_the_gate_passes_the_dense_table(pages):
+    """An overlay belongs to the build that produced it: the native files (engine_backend=native on every pass) and the JVM files
+    (no field: the JVM build) give each in-process dense arm two entries, and l3d no longer fails the build gate."""
     both = pages[1]
-    assert PC._check_build_pair({"tables": [_t(both, "l3d")]}, []) > 0
+    emb = [e["backend"] for e in _t(both, "l3d")["entries"] if e.get("is_arcadedb") and e.get("deployment") == "embedded"]
+    for prec in ("fp32", "int8"):
+        assert f"ArcadeDB (embedded, {prec}, native build)" in emb and f"ArcadeDB (embedded, {prec}, JVM build)" in emb, emb
+    assert PC._check_build_pair({"tables": [_t(both, "l3d")]}, []) == 0
+    assert PC._check_build_pair(both, list(csv.DictReader((pages[3] / "both" / "runs_paper.csv").open()))) == 0
+
+
+def test_an_unstamped_overlay_is_the_jvm_build_and_the_native_build_is_declared_not_measured(pages):
+    """The default, chosen on purpose: an overlay file with no engine_backend is the JVM build (what every earlier overlay was). With
+    native rows on the page and no native overlay, the dense embedded arms read JVM build, and the native twin is a declared absence."""
+    bare = pages[4]
+    t = _t(bare, "l3d")
+    emb = [e for e in t["entries"] if e.get("is_arcadedb") and e.get("deployment") == "embedded" and e.get("precision") in ("fp32", "int8")]
+    assert emb and {e["build"] for e in emb} == {"jvm"}                      # (the PQ arm comes from frozen rows, which have native twins)
+    assert any("native build" in a["backend"] and a["kind"] == "not measured" and ("fp32" in a["backend"] or "int8" in a["backend"])
+               for a in t["declared_absences"])
+    assert PC._check_build_pair({"tables": [t]}, []) == 0
+
+
+def test_the_sparse_second_pass_table_is_per_build_too(pages, monkeypatch):
+    """The second-pass table reads sp_<arm>_<tier>.json (JVM, or unstamped) and sp_<arm>_native_<tier>.json (native), per build."""
+    pytest.importorskip("numpy")
+    pytest.importorskip("pandas")
+    import export_web as X
+    d = pages[3] / "both"
+    monkeypatch.setattr(X, "RESULTS", d)
+    monkeypatch.setenv("BENCH_ENGINE_COMMIT", PIN)
+    monkeypatch.setattr(X, "_SPLIT", True)
+    t = X._sparse_multipass_table()
+    assert t is not None
+    emb = [e for e in t["entries"] if e.get("is_arcadedb") and e.get("deployment") == "embedded"]
+    assert {e["build"] for e in emb} == {"native", "jvm"}
+    assert all(AI.build_in_label(e["backend"]) == e["build"] for e in emb)
+    monkeypatch.setattr(X, "_SPLIT", False)
+    plain = X._sparse_multipass_table()
+    assert {e["build"] for e in plain["entries"]} == {None}                              # an unsplit page reads the plain files only
+
+
+def test_the_rows_behind_an_entry_are_that_builds_rows():
+    """Notes that read the frozen rows behind an entry (heap, memory) read one build's rows for one build's entry."""
+    pytest.importorskip("numpy")
+    pytest.importorskip("pandas")
+    import export_web as X
+    rows = [row("native", workload="oltp", heap_size="4g"), row("jvm", workload="oltp", heap_size="24g"),
+            row(None, backend="arcadedb_graph_server", workload="oltp")]
+    old = (X._FROZEN_ROWS, X._SPLIT)
+    try:
+        X._FROZEN_ROWS, X._SPLIT = rows, True
+        nat = X._entry_rows({"backend": "ArcadeDB (embedded, native build)", "build": "native", "scale": "sf1"}, "l2", "oltp")
+        jvm = X._entry_rows({"backend": "ArcadeDB (embedded, JVM build)", "build": "jvm", "scale": "sf1"}, "l2", "oltp")
+        assert [r["heap_size"] for r in nat] == ["4g"] and [r["heap_size"] for r in jvm] == ["24g"]
+    finally:
+        X._FROZEN_ROWS, X._SPLIT = old
+
+
+def test_a_native_cap_or_oom_never_censors_the_jvm_entry(monkeypatch):
+    """Censored cells are keyed arm + build + size on a split page; an old run without a build is the JVM build."""
+    pytest.importorskip("numpy")
+    pytest.importorskip("pandas")
+    import export_web as X
+    base = {"lane": "l2", "scale": "sf1", "workload": "oltp", "backend": "arcadedb_graph_embedded", "engine_commit": "abc123def"}
+    log = [dict(base, engine_backend="native", error="timeout_after_900s"),
+           dict(base, engine_backend="jvm", error=None, rc=0),
+           dict(base, scale="sf10", error="timeout_after_900s"),                       # an old row: no field
+           dict(base, scale="sf10", engine_backend="native", error=None, rc=0)]
+    monkeypatch.delenv("BENCH_ENGINE_COMMIT", raising=False)                             # no pin: every row is in scope
+    monkeypatch.setattr(X, "_run_log_rows", lambda: log)
+    monkeypatch.setattr(X, "_rule_censored", lambda taken, clean: {})
+    monkeypatch.setattr(X, "_CENSORED_CACHE", None)
+    monkeypatch.setattr(X, "_SPLIT", True)
+    keys = X._censored_cells()
+    assert ("l2", "sf1", "arcadedb_graph_embedded@native", "oltp") in keys
+    assert ("l2", "sf1", "arcadedb_graph_embedded@jvm", "oltp") not in keys              # the JVM twin ran clean
+    assert ("l2", "sf10", "arcadedb_graph_embedded@jvm", "oltp") in keys                 # unstamped old row: the JVM build
+    assert ("l2", "sf10", "arcadedb_graph_embedded@native", "oltp") not in keys
+    monkeypatch.setattr(X, "_CENSORED_CACHE", None)
+    monkeypatch.setattr(X, "_SPLIT", False)
+    assert all("@" not in k[2] for k in X._censored_cells())                             # an unsplit page keys as it always did
+
+
+def test_a_killed_cell_row_names_the_build_of_its_wheel():
+    killed = {"lane": "l2", "backend": "arcadedb_graph_embedded", "error": "timeout_after_900s"}
+    assert AI.stamp_build(dict(killed), "native")["engine_backend"] == "native"
+    assert AI.build_of(AI.stamp_build(dict(killed), "native")) == "native"
+    assert AI.build_of(killed) == "jvm"                                                  # unstamped: the default
+    served = dict(killed, backend="arcadedb_graph_server")
+    assert "engine_backend" not in AI.stamp_build(served, "native")                      # a served arm has no build
+    assert AI.stamp_build(dict(killed, engine_backend="jvm"), "native")["engine_backend"] == "jvm"
+
+
+def test_a_partial_native_overlay_is_refused_and_a_complete_or_absent_one_is_not(tmp_path):
+    import make_paper_tables as M
+    M._refuse_partial_native(str(tmp_path), "x")                                          # none: nothing to refuse
+    for arm in M.MP_INPROCESS_ARMS:
+        for b in range(1, M.MP_BUILDS + 1):
+            (tmp_path / f"mp_{arm}_native_b{b}.json").write_text("[]")
+    M._refuse_partial_native(str(tmp_path), "x")                                          # all of them
+    (tmp_path / "mp_int8_native_b2.json").unlink()
+    with pytest.raises(SystemExit) as e:
+        M._refuse_partial_native(str(tmp_path), "dense_mp5_x")
+    assert "partial" in str(e.value)
+
+
+def test_the_pinned_sparse_path_validates_each_build_and_takes_the_jvm_one_unless_told(monkeypatch):
+    import make_paper_tables as M
+
+    def rows(build, n=5):
+        return [dict(row(build, backend="arcadedb_sparse_embedded", lane="l3s", scale=t, rep=i), engine_commit="abc123def0")
+                for t in ("tiny", "small", "medium") for i in range(n)]
+    monkeypatch.setenv("BENCH_ENGINE_COMMIT", "abc123def0")
+    monkeypatch.delenv(AI.ENV, raising=False)
+    monkeypatch.setattr(M, "load_canonical", lambda *a, **k: rows("native") + rows("jvm"))
+    got = M._pinned_sparse_rows()
+    assert got and {AI.build_of(r) for rs in got.values() for r in rs} == {"jvm"}
+    monkeypatch.setenv(AI.ENV, "native")
+    assert {AI.build_of(r) for rs in M._pinned_sparse_rows().values() for r in rs} == {"native"}
+    monkeypatch.delenv(AI.ENV)
+    monkeypatch.setattr(M, "load_canonical", lambda *a, **k: rows("native", 3) + rows("jvm"))
+    assert M._pinned_sparse_rows() is None                                                # a short native build is not published beside a full JVM one
 
 
 def test_neither_build_is_a_median_over_both(pages):
@@ -261,3 +403,22 @@ def test_a_freeze_whose_builds_name_two_commits_is_not_exported(pages):
     _with_native(d, commit="fffffffff")
     done = _run("export_web.py", d)
     assert done.returncode != 0 and "engine_commit" in (done.stderr + done.stdout)
+
+
+def test_a_censored_native_cell_becomes_a_native_row_and_leaves_the_jvm_entry(monkeypatch):
+    pytest.importorskip("numpy")
+    pytest.importorskip("pandas")
+    import export_web as X
+    base = {"lane": "l2", "scale": "sf1", "workload": "oltp", "backend": "arcadedb_graph_embedded", "engine_commit": "abc123def"}
+    log = [dict(base, engine_backend="native", error="timeout_after_900s"), dict(base, engine_backend="jvm", error=None, rc=0)]
+    monkeypatch.delenv("BENCH_ENGINE_COMMIT", raising=False)
+    monkeypatch.setattr(X, "_run_log_rows", lambda: log)
+    monkeypatch.setattr(X, "_rule_censored", lambda taken, clean: {})
+    monkeypatch.setattr(X, "_CENSORED_CACHE", None)
+    monkeypatch.setattr(X, "_SPLIT", True)
+    measured = {"backend": "ArcadeDB (embedded, JVM build)", "build": "jvm", "backend_key": "arcadedb_graph_embedded", "scale": "sf1",
+                "is_arcadedb": True, "metrics": {"point p50 ms": {"median": 1.0}}}
+    table = {"id": "l2", "entries": [measured], "columns": ["point p50 ms"]}
+    marked, _marks = X._censored_entries(table)
+    assert [(m["backend"], m["build"]) for m in marked] == [("ArcadeDB (embedded, native build)", "native")]
+    assert table["entries"] == [measured]                                                 # the JVM entry is untouched

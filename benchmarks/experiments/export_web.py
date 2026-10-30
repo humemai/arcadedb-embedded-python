@@ -1090,6 +1090,24 @@ DENSE_10M_ARMS = [
 ]
 
 
+def _overlay_files_by_build(root, stem, tail, backend_key):
+    """[(build, files)] for one overlay arm: "" for a comparator or a served arm and for a page that names no build, else "native" and
+    "jvm" read from the first pass of each file (arm_identity.build_of; an unstamped ArcadeDB file is the JVM build). The native
+    files carry `_native` after the stem; a glob on the plain stem never matches them."""
+    names = sorted(root.glob(f"{stem}{tail}")) + sorted(root.glob(f"{stem}_native{tail}"))
+    if not (_SPLIT and _AI.in_process({"backend": backend_key})):
+        return [("", sorted(root.glob(f"{stem}{tail}")))] if names else []
+    got = {}
+    for fp in names:
+        try:
+            passes = json.loads(fp.read_text(encoding="utf-8"))
+        except ValueError:
+            continue
+        if passes:
+            got.setdefault(_AI.build_of(dict(passes[0], backend=backend_key)), []).append(fp)
+    return [(b, got[b]) for b in ("native", "jvm") if b in got]
+
+
 def _dense_overlay_entries(scale="deep10m"):
     """The DEEP-10M tier, every engine, both passes.
 
@@ -1127,10 +1145,14 @@ def _dense_overlay_entries(scale="deep10m"):
     if not root.is_dir():
         return []
     out = []
+    # THE OVERLAY BELONGS TO THE BUILD THAT PRODUCED IT. The driver stamps engine_backend on every pass it writes (run_conditions); a
+    # native run's files are mp_<arm>_native_b<k>.json beside the JVM build's mp_<arm>_b<k>.json, and the build is read from the
+    # file's own content. A file without the field is the JVM build, like an old row (arm_identity.build_of).
+    _units = []
     for arm, backend_key, label, ours in arms:
-        hits = sorted(root.glob(f"mp_{arm}_b*.json"))
-        if not hits:
-            continue
+        for _ob, hits in _overlay_files_by_build(root, f"mp_{arm}", "_b*.json", backend_key):
+            _units.append((arm, backend_key, _with_build(label, _ob), ours, hits, _ob))
+    for arm, backend_key, label, ours, hits, _ob in _units:
         cold, warm, recall, build, peak, ver = [], [], [], [], [], set()
         for h in hits:
             passes = json.loads(h.read_text(encoding="utf-8"))
@@ -1203,10 +1225,10 @@ def _dense_overlay_entries(scale="deep10m"):
         # served arm's multipass file sees only the client container (3.6 GiB
         # against the pair's 28), and no file carries disk. Same build, same
         # envelope; the overlay's own peak is the fallback.
-        _pk = _campaign_stat(_cb, scale, MEM_PEAK_FIELD) or _agg(peak, MEM_PEAK_FIELD)
+        _pk = _campaign_stat(_cb, scale, MEM_PEAK_FIELD, build=_ob) or _agg(peak, MEM_PEAK_FIELD)
         if _pk is not None:
             metrics["peak memory GiB"] = _pk
-        _dk = _campaign_stat(_cb, scale, "disk_data_mb")
+        _dk = _campaign_stat(_cb, scale, "disk_data_mb", build=_ob)
         if _dk is not None:
             metrics["disk GiB"] = _dk
         # Only OUR arms carry a version string; the comparator containers do
@@ -1220,6 +1242,7 @@ def _dense_overlay_entries(scale="deep10m"):
             v = _campaign_engine_string(_cb)
         out.append({
             "backend": label,
+            "build": _ob or None,
             "backend_key": _cb,
             "is_arcadedb": ours,
             # NOT `arm == "int8"`. arm is a FILENAME token, and only ArcadeDB's
@@ -1272,7 +1295,7 @@ def _peak_mem(r):
     return v if v is not None else _num(r.get(MEM_PEAK_FALLBACK))
 
 
-def _campaign_stat(backend, scale, field, lanes=("l3d", "l3s")):
+def _campaign_stat(backend, scale, field, lanes=("l3d", "l3s"), build=""):
     """_agg of one field over the newest campaign row per rep for (backend,
     scale): the overlay files (multipass) carry no disk reading, but the
     campaign cell of the same arm in the same envelope does, and the on-disk
@@ -1286,6 +1309,8 @@ def _campaign_stat(backend, scale, field, lanes=("l3d", "l3s")):
                 except Exception:
                     continue
                 if r.get("backend") != backend or r.get("scale") != scale or r.get("error"):
+                    continue
+                if build and _arm_build(r) != build:      # one build's cell, never the other's
                     continue
                 # PAGE-SPEC 4a rule 3: settled=False blocks publication of
                 # the DISK reading. This path feeds the dense and sparse disk
@@ -2790,10 +2815,11 @@ def _sparse_multipass_table():
     # optional so the table renders before they land, and the sparse
     # condition says whether 100k has a second pass by looking, not by text.
     for tier in ("medium", "small", "tiny"):
+        _sp_units = []
         for arm, backend, label in SPARSE_MP_ARMS + SPARSE_MP_OPTIONAL_ARMS:
-            fp = root / f"sp_{arm}_{tier}.json"
-            if not fp.is_file():
-                continue
+            for _ob, _fps in _overlay_files_by_build(root, f"sp_{arm}", f"_{tier}.json", backend):
+                _sp_units += [(arm, backend, _with_build(label, _ob), _ob, _fps[0])]
+        for arm, backend, label, _ob, fp in _sp_units:
             passes = json.loads(fp.read_text(encoding="utf-8"))
             cold = [r for r in passes if r.get("rep") == 0]
             warm = [r for r in passes if r.get("rep", 0) >= 1]
@@ -2806,6 +2832,7 @@ def _sparse_multipass_table():
             w99 = statistics.median(r["query_p99_ms"] for r in warm if r.get("query_p99_ms") is not None) if any(r.get("query_p99_ms") is not None for r in warm) else None
             entries.append({
                 "backend": label,
+                "build": _ob or None,
                 "backend_key": backend,
                 "is_arcadedb": "arcade" in backend,
                 "precision": SPARSE_PRECISION.get(backend),
@@ -4464,8 +4491,9 @@ def _entry_rows(e, lane, wl, exact_only=False):
         # ArcadeDB ones that were.
         return "(" not in dn and str(_eb).startswith(dn + " (")
 
+    # one build's rows behind one build's entry (an entry that names no build reads every row of its arm)
     _match = lambda r: (r.get("lane") == lane and (not wl or r.get("workload") == wl)
-                        and _same_arm(r))
+                        and _same_arm(r) and (not e.get("build") or _arm_build(r) == e["build"]))
     rs = [r for r in _FROZEN_ROWS if _match(r) and str(r.get("scale")) == str(e.get("scale"))]
     if not rs and not exact_only:
         rs = [r for r in _FROZEN_ROWS if _match(r)]
@@ -4498,6 +4526,7 @@ def _heap_not_pinned(e, lane, wl):
     rs = [r for r in _FROZEN_ROWS
           if r.get("lane") == lane and (not wl or r.get("workload") == wl)
           and display_name(str(r.get("backend"))) == e.get("backend")
+          and (not e.get("build") or _arm_build(r) == e["build"])
           and str(r.get("scale")) == str(e.get("scale"))]
     if not rs:
         return False
@@ -5238,7 +5267,11 @@ def _censored_cells():
     for r in rows:
         if not _same_pin(r):
             continue
-        key = (r.get("lane"), str(r.get("scale")), r.get("backend"), r.get("workload"))
+        # In-process ArcadeDB arms are censored per build (arm + build + size): a native out-of-memory or cap decision never takes
+        # the JVM entry off the page, and the other way round. The build rides on the backend element as "backend@build" and
+        # the consumers split it again; an old row with no build is the JVM build (arm_identity.build_of).
+        _b = _arm_build(r)
+        key = (r.get("lane"), str(r.get("scale")), f"{r.get('backend')}@{_b}" if _b else r.get("backend"), r.get("workload"))
         err = str(r.get("error") or "")
         if not err:
             clean.add(key)
@@ -5445,6 +5478,7 @@ def _censored_entries(table):
                        if not e.get("outcome")}
     out, marks = [], set()
     for (l, scale, backend, w), secs in sorted(_censored_cells().items(), key=str):
+        backend, _, build = str(backend).partition("@")
         if l != lane or (wl and w != wl):
             continue
         if scales and str(scale) not in scales:
@@ -5461,7 +5495,8 @@ def _censored_entries(table):
         # "SurrealDB (embedded)" twice, one for documents with ten indexes and
         # one for the graph, and a reader could not tell which was which.
         _lc = lane == "lifecycle"
-        out.append({"backend": _lifecycle_row_label(backend, w) if _lc else display_name(backend),
+        out.append({"backend": _with_build(_lifecycle_row_label(backend, w) if _lc else display_name(backend), build),
+                    "build": build or None,
                     **({"engine": _lifecycle_engine(backend)} if _lc else {}),
                     "backend_key": backend,
                     "is_arcadedb": "arcadedb" in str(backend).lower(),
@@ -5950,7 +5985,8 @@ def _censored_notes(table_id):
     notes = []
     merged = {}
     scales = _table_scales(table_id)
-    for (l, scale, backend, w), secs in sorted(_censored_cells().items(), key=str):
+    for (l, scale, _qbackend, w), secs in sorted(_censored_cells().items(), key=str):
+        backend, _, _build = str(_qbackend).partition("@")
         if l != lane or (wl and w != wl):
             continue
         if scales and str(scale) not in scales:
@@ -6002,7 +6038,7 @@ def _censored_notes(table_id):
                 pins = [scale_label(lane, scale), scale_label(lane, secs.at)]
             else:
                 budget = f"{secs / 3600:g} hour" if secs else "its"
-                _phase = _CENSORED_PHASE.get((lane, str(scale), backend, w))
+                _phase = _CENSORED_PHASE.get((lane, str(scale), _qbackend, w))
                 _in = f" It was still in {_phase} when the budget ran out." if _phase else ""
                 tail = (f" at {scale_label(lane, scale)}: {_cell} exceeded "
                         f"its {budget} budget, the same budget every engine on this table had, on its first "
@@ -6013,7 +6049,7 @@ def _censored_notes(table_id):
                     f"inside its budget and was not retried, so there is no row. What it reported: "
                     f"{secs}")
             pins = [scale_label(lane, scale), str(secs)]
-        merged.setdefault((kind, tail, tuple(pins)), []).append(display_name(backend))
+        merged.setdefault((kind, tail, tuple(pins)), []).append(_with_build(display_name(backend), _build))
 
     # ONE SENTENCE FOR THE ENGINES THAT HAVE THE SAME THING TO SAY. Three
     # engines were censored at TPC-H SF10 and the page printed three sentences
@@ -6890,7 +6926,7 @@ def _finish_table(table: dict) -> dict:
     _per_situation = table.get("id") == "lifecycle"
 
     def _cell_of(m):
-        return (str(m.get("backend_key")), str(m.get("scale")), str(m.get("backend")) if _per_situation else "")
+        return (str(m.get("backend_key")), str(m.get("scale")), str(m.get("backend")) if _per_situation else "", m.get("build") or "")
     _cens = {_cell_of(m) for m in _marked}
     table["entries"] = [e for e in table["entries"] if e.get("outcome") or _cell_of(e) not in _cens]
     entries = table["entries"] + _marked

@@ -124,6 +124,20 @@ SCALE_ENV = {
 # The sparse overlay names its files per scale; the dense one uses the runner's default mp_{label}_b{rep}.json, which is what
 # the dense resolver looks for.
 OVERLAY_ENV = {"l3s": 'BENCH_DRIVER_OUT_FMT=sp_{label}_{scale}.json'}
+# THE NATIVE CHAIN'S OVERLAY FILES carry the build in their name (and every pass carries engine_backend), so the two builds of one pin
+# share one directory without one chain overwriting the other: mp_fp32_native_b1.json beside mp_fp32_b1.json (arm_identity.py, export_web).
+OVERLAY_ENV_NATIVE = {"l3s": 'BENCH_DRIVER_OUT_FMT=sp_{label}_native_{scale}.json',
+                      "l3d": 'BENCH_DRIVER_OUT_FMT=mp_{label}_native_b{rep}.json'}
+CHAIN_BUILD = ""   # "native" while generating the native chain (set by main from the pinned wheel), else ""
+
+
+def overlay_env(lane):
+    return (OVERLAY_ENV_NATIVE if CHAIN_BUILD == "native" else OVERLAY_ENV).get(lane, "")
+
+
+def served_arcadedb_arms():
+    """The served ArcadeDB arms (a client_server topology): the same Java server image whichever wheel is installed, so ONE chain runs them."""
+    return sorted(b for b in runner.BACKENDS if engine_of(b) == "arcadedb" and runner.BACKENDS[b].get("topology") == "client_server")
 
 # THE OVERLAY LANES. The dense and sparse TABLES do not read the lane's own search rows: they read a multipass overlay
 # produced by a bespoke driver run through `runner.py --driver`, which builds once and then times five passes, so cold and
@@ -519,8 +533,10 @@ def profile_problems(profile, stages, label=""):
                 out.append(f"{tag}{st[0]}: {b} is a Neo4j/Memgraph dense cell, dropped by the {profile} profile")
     if DROP_QUANTIZED_DENSE in drops:
         dense = {b for st in stages if st[2] == "l3d" for b in stage_backends(st) if engine_of(b) == "arcadedb"}
-        if dense and dense != set(ARCADEDB_FP32_DENSE):
-            out.append(f"{tag}ArcadeDB's dense arms are {sorted(dense)}, expected exactly its fp32 pair {sorted(ARCADEDB_FP32_DENSE)}")
+        # the native chain runs the embedded half of the pair only: the served arm is the JVM chain's (served_arcadedb_arms)
+        want = set(ARCADEDB_FP32_DENSE) - (set(served_arcadedb_arms()) if CHAIN_BUILD == "native" else set())
+        if dense and dense != want:
+            out.append(f"{tag}ArcadeDB's dense arms are {sorted(dense)}, expected exactly its fp32 {'arm' if len(want) == 1 else 'pair'} {sorted(want)}")
     for why in drops:
         if why == DROP_SECOND_LIST:
             continue
@@ -800,6 +816,31 @@ def instrument_problems(env=None):
 _BACKENDS = re.compile(r'^BACKENDS="([^"]*)"', re.M)
 
 
+_NATIVE_WHEEL = re.compile(r"dist/arcadedb-\d")
+
+
+def served_arcadedb_in(text):
+    """The served ArcadeDB arms a stage script runs."""
+    m = _BACKENDS.search(text)
+    served = set(served_arcadedb_arms())
+    return sorted(b for b in (m.group(1).split() if m else []) if b in served)
+
+
+def chain_overlap_problems(*dirs):
+    """A served ArcadeDB arm may be in ONE chain only. Given the draft folders of the chains of one release (native and JVM), a served
+    arm that appears in more than one would run its cells twice against the same server image. Also: a native chain runs none."""
+    out, seen = [], {}
+    for d in dirs:
+        for f in sorted(glob.glob(os.path.join(d, "*.sh"))):
+            text = open(f, encoding="utf-8").read()
+            for b in served_arcadedb_in(text):
+                seen.setdefault(b, set()).add(d)
+    for b, where in sorted(seen.items()):
+        if len(where) > 1:
+            out.append(f"served ArcadeDB arm {b} is in {len(where)} chains ({', '.join(sorted(where))}); the server is one image, so one chain runs it")
+    return out
+
+
 def lint_draft(text, name, engines=None, profile=None):
     """Problems in one emitted stage script: it must export the instrument, name no other, write the 2611 rows file and
     run only subset arms (of `engines` when given), and, under a `profile`, no lane and no dense arm it drops. The pair-install
@@ -824,6 +865,9 @@ def lint_draft(text, name, engines=None, profile=None):
         out.append(f"{name}: no BACKENDS line")
     else:
         arcade = has_arcadedb_arm(m.group(1).split())
+        if _NATIVE_WHEEL.search(text) and served_arcadedb_in(text):
+            out.append(f"{name}: a native-build chain runs served ArcadeDB arms {served_arcadedb_in(text)}; the server is one image and "
+                       f"the JVM chain runs it")
         # every stage builds images with the pinned wheel baked in, so every stage guards the wheel's sha256
         if "is not the wheel this chain was generated for" not in text:
             out.append(f"{name}: no guard for the pinned wheel's sha256, which the image build bakes into every image")
@@ -1532,7 +1576,7 @@ def stage_script(idx, total, spec, after, pins, params):
             if lane in OVERLAY:
                 drv, oreps, dirs = OVERLAY[lane]
                 outdir, orf = (rows_name(x) for x in dirs[scale])
-                oenv = " ".join(x for x in [senv, OVERLAY_ENV.get(lane, "")] if x)
+                oenv = " ".join(x for x in [senv, overlay_env(lane)] if x)
                 body += (f'  run_overlay "{lane}/{scale}/$BE/{wl} multipass" {scale} {cap} '
                          f'"$BE" {wl} {drv} "{outdir}" "{orf}" {oreps} "{oenv}"\n')
         body += 'done\n'
@@ -1867,6 +1911,9 @@ def main(argv=None) -> int:
     ap.add_argument("--project-reps", type=int, choices=(3, 5), help="with --project: price this many repetitions (default: the profile's target)")
     ap.add_argument("--check", action="store_true", help="selection, coverage and instrument proofs only; no pins needed")
     ap.add_argument("--drafts", metavar="DIR", help="with --check: also lint the scripts in DIR")
+    ap.add_argument("--also-drafts", metavar="DIR", action="append", default=[],
+                    help="with --check --drafts: the other chain of the same release (the native chain beside the JVM one); fails when a "
+                         "served ArcadeDB arm is in both")
     ap.add_argument("--arcadedb-release", metavar="X.Y.Z", help="ArcadeDB alone on this release (needs the five pin arguments)")
     ap.add_argument("--engine-commit")
     ap.add_argument("--image-digest")
@@ -1895,7 +1942,12 @@ def main(argv=None) -> int:
         return 1
     print(f"jpype pin: {bench_common.JPYPE_PIN}; instrument {INSTRUMENT}; mode {mode}; reps {a.reps}; profile {a.profile}")
 
-    skip = tuple(profile_skip(a.profile)) + ((TIMESCALEDB,) if a.without_timescaledb else ())
+    # ONE CHAIN RUNS THE SERVED ARCADEDB CELLS. The server is the ARCADEDB_SERVER_IMAGE container, the same Java server whichever wheel
+    # is installed, so the JVM chain runs them and the native chain does not (a second run would double the cells under one key).
+    global CHAIN_BUILD
+    CHAIN_BUILD = engine_pin.backend_from_wheel(a.wheel_name) if mode == "arcadedb" else ""
+    skip = (tuple(profile_skip(a.profile)) + ((TIMESCALEDB,) if a.without_timescaledb else ())
+            + (tuple(served_arcadedb_arms()) if CHAIN_BUILD == "native" else ()))
     specs = subset_specs(engines, lanes, a.order, skip, a.tiers)
     pair_id = f"{a.id_prefix}00" if mode == "arcadedb" else None
     stages = number(specs, a.id_prefix)
@@ -1921,6 +1973,8 @@ def main(argv=None) -> int:
         print("  schedule: " + ", ".join(f"T{t} p{p}" for t, p in schedule_order({stage_tier(s) for s in stages}, a.reps)))
     if a.check and a.drafts:
         problems += lint_drafts(a.drafts, set(engines), status_file, a.profile)
+        if a.also_drafts:
+            problems += chain_overlap_problems(a.drafts, *a.also_drafts)
     for p in problems:
         print(f"  PROBLEM {p}")
     if problems:

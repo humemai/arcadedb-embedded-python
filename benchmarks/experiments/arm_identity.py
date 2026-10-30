@@ -80,6 +80,18 @@ def select_build(rows, want=None):
     return rows
 
 
+def stamp_build(row, wheel_build):
+    """Give an in-process ArcadeDB row the build of the wheel its runner was pinned to, when the row names none.
+
+    A cell killed by its cap or by the kernel writes a row from the runner, not from the engine process, so the row has no
+    engine_backend of its own; without this a native timeout would read as the JVM build (the default for an unstamped row).
+    Returns the row.
+    """
+    if wheel_build in BUILDS and in_process(row) and not row.get("engine_backend"):
+        row["engine_backend"] = wheel_build
+    return row
+
+
 def builds_in(rows):
     """The builds the in-process ArcadeDB rows of `rows` ran on, as a set of "native" / "jvm"."""
     return {build_of(r) for r in rows if in_process(r)} - {None}
