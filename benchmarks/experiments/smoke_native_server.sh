@@ -47,12 +47,17 @@ import arm_identity as AI
 rows = [json.loads(l) for l in open(os.environ["RESULTS_FILE"]) if l.strip()]
 bad = []
 want = {"l2": "arcadedb_graph_server", "l1": "arcadedb_server"}
+# every served ArcadeDB arm runs twice: the headline client (the official arcadedb-driver) and its sensitivity twin (lean_http)
+checks = []
 for lane, arm in want.items():
     got = [r for r in rows if r.get("lane") == lane and r.get("backend") == arm]
-    if len(got) != 1:
-        bad.append(f"{lane}/{arm}: {len(got)} rows, expected 1")
+    roles = sorted(str(r.get("arcadedb_http_client_role")) for r in got)
+    if roles != ["headline", "sensitivity"]:
+        bad.append(f"{lane}/{arm}: client roles {roles}, expected one headline and one sensitivity row")
         continue
-    r = got[0]
+    checks += [(lane, arm, r) for r in got]
+for lane, arm, r in checks:
+    arm = f"{arm}[{r.get('arcadedb_http_client_role')}]"
     def need(cond, msg):
         if not cond:
             bad.append(f"{lane}/{arm}: {msg}")
@@ -68,7 +73,11 @@ for lane, arm in want.items():
     need(str(r.get("server_engine_commit") or "").startswith(os.environ["EXPECT_COMMIT"][:7]), f"server_engine_commit={r.get('server_engine_commit')!r}")
     need("UseCompactObjectHeaders" in str(r.get("native_dropped_flags")), f"native_dropped_flags={r.get('native_dropped_flags')!r}")
     need(r.get("server_mode") == "development", f"server_mode={r.get('server_mode')!r} from the start line")
-    need(r.get("server_cpus") == int(os.environ["EXPECT_CPUS"]), f"server_cpus={r.get('server_cpus')!r}, the cpuset has {os.environ['EXPECT_CPUS']}")
+    def ncpu(cs):  # '4-5' or '4,5' or '4-4' -> number of CPUs
+        return sum(int(p.split("-")[-1]) - int(p.split("-")[0]) + 1 for p in str(cs).split(",") if p)
+    # the runner shards the smoke's cpuset across its workers, so a cell's server gets its own shard (server_cpuset), not the whole set
+    need(r.get("server_cpuset") and r.get("server_cpus") == ncpu(r.get("server_cpuset")), f"server_cpus={r.get('server_cpus')!r}, server_cpuset={r.get('server_cpuset')!r}")
+    need(ncpu(r.get("server_cpuset") or "") <= int(os.environ["EXPECT_CPUS"]), f"server_cpuset={r.get('server_cpuset')!r} is wider than the smoke's {os.environ['EXPECT_CPUS']} CPUs")
     hb = r.get("server_max_heap_bytes")
     need(isinstance(hb, (int, float)) and abs(hb - int(os.environ["EXPECT_HEAP_BYTES"])) <= 0.05 * int(os.environ["EXPECT_HEAP_BYTES"]),
          f"server_max_heap={r.get('server_max_heap')!r} ({hb!r} bytes), -Xmx2g asked for {os.environ['EXPECT_HEAP_BYTES']}")
