@@ -129,24 +129,64 @@ SETTINGS = {"arcadedb.server.mode": "development", "arcadedb.server.httpIncoming
             "arcadedb.server.httpIncomingPort": "2480", "arcadedb.txWalFlush": "0"}
 
 
+LOG = {"server_mode": "development", "server_cpus": 4, "server_max_heap_bytes": 2 << 30}
+
+
 def test_the_pair_gate_refuses_servers_whose_settings_differ_and_a_native_row_with_no_read_back():
-    a, b = row("native", server_settings=dict(SETTINGS)), row("jvm", server_settings=dict(SETTINGS))
+    a, b = row("native", server_settings=dict(SETTINGS), **LOG), row("jvm", server_settings=dict(SETTINGS), **LOG)
     assert AI.pair_problems([a, b]) == []
     b["server_settings"] = dict(SETTINGS, **{"arcadedb.txWalFlush": "1"})
     assert any("arcadedb.txWalFlush" in p and "native server" in p for p in AI.pair_problems([a, b]))
     assert any("no server_settings" in p for p in AI.pair_problems([row("native"), row("jvm", server_settings=dict(SETTINGS))]))
     # the rows read back from the CSV hold the dict as JSON text
-    assert AI.pair_problems([row("native", server_settings=json.dumps(SETTINGS)), row("jvm", server_settings=json.dumps(SETTINGS))]) == []
+    assert AI.pair_problems([row("native", server_settings=json.dumps(SETTINGS), **LOG), row("jvm", server_settings=json.dumps(SETTINGS))]) == []
     # different durability classes are different cells
     c = row("jvm", server_settings=dict(SETTINGS, **{"arcadedb.txWalFlush": "1"}), durability_class="strict")
     assert AI.pair_problems([a, c]) == []
 
 
 def test_the_pair_gate_covers_the_servers_engine_commit():
-    a, b = row("native", server_settings=SETTINGS), row("jvm", server_settings=SETTINGS, engine_commit="f" * 40)
+    a, b = row("native", server_settings=SETTINGS, **LOG), row("jvm", server_settings=SETTINGS, engine_commit="f" * 40)
     assert any("engine_commit" in p for p in AI.pair_problems([a, b]))
 
 
 def test_a_one_build_freeze_drops_the_other_builds_server_rows():
     rows = [row("native"), row("jvm"), row(backend="duckdb")]
     assert [AI.build_of(r) for r in AI.select_build(rows, "native")] == ["native", None]
+
+
+# ---------------------------------------------------------------- the server's own start line (mode, CPUs, MAXRAM)
+LINE = "2026-10-30 10:00:00.123 INFO  ArcadeDB Server started in 'development' mode (CPUs=4 MAXRAM=2.00GB) [ArcadeDBServer]"
+
+
+def test_the_start_line_is_parsed_from_the_log_and_the_last_one_wins():
+    got = R.parse_server_started("noise\n" + LINE + "\n" + LINE.replace("CPUs=4", "CPUs=6").replace("2.00GB", "512MB"))
+    assert got == {"server_mode": "development", "server_cpus": 6, "server_max_heap": "512MB", "server_max_heap_bytes": 512 << 20}
+    assert R.parse_server_started(LINE)["server_max_heap_bytes"] == 2 << 30
+    assert R.parse_server_started("no such line") == {}
+    assert R.size_to_bytes("1.5 GiB") == 3 << 29 and R.size_to_bytes("garbage") is None
+
+
+def test_the_cell_fails_when_maxram_cpus_or_mode_differ_from_the_request():
+    ok = R.parse_server_started(LINE)
+    assert R.server_log_problems(ok, 2 << 30, 4, "development") == []
+    assert R.server_log_problems(dict(ok, server_max_heap_bytes=int((2 << 30) * 0.97)), 2 << 30, 4) == []        # rounding is allowed
+    assert any("MAXRAM" in p for p in R.server_log_problems(dict(ok, server_max_heap_bytes=1 << 30), 2 << 30, 4))   # a -Xmx that did not take
+    assert any("CPUs" in p for p in R.server_log_problems(ok, 2 << 30, 2))
+    assert any("mode" in p for p in R.server_log_problems(ok, 2 << 30, 4, "production"))
+    assert R.server_log_problems(ok, None, 4) == []                          # the image-defaults arm names no -Xmx
+    assert R.server_log_problems({}, 2 << 30, 4)                             # no start line is a failure
+
+
+def test_the_pair_gate_compares_the_start_line_and_the_page_cache():
+    a, b = row("native", server_settings=dict(SETTINGS), **LOG), row("jvm", server_settings=dict(SETTINGS), **LOG)
+    assert AI.pair_problems([a, b]) == []
+    assert AI.pair_problems([a, dict(b, server_max_heap_bytes=int((2 << 30) * 0.98))]) == []
+    assert any("MAXRAM" in p for p in AI.pair_problems([a, dict(b, server_max_heap_bytes=1 << 30)]))
+    assert any("server_cpus" in p for p in AI.pair_problems([a, dict(b, server_cpus=8)]))
+    assert any("server_mode" in p for p in AI.pair_problems([a, dict(b, server_mode="production")]))
+    assert any("start-line" in p for p in AI.pair_problems([row("native", server_settings=dict(SETTINGS)), b]))
+    page_a = dict(SETTINGS, **{"arcadedb.maxPageRAM": "4096"})
+    page_b = dict(SETTINGS, **{"arcadedb.maxPageRAM": "1024"})
+    assert any("arcadedb.maxPageRAM" in p for p in AI.pair_problems([dict(a, server_settings=page_a), dict(b, server_settings=page_b)]))
+    assert AI.pair_problems([dict(a, server_settings=page_a), dict(b, server_settings=page_a)]) == []

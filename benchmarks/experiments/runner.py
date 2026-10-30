@@ -3001,6 +3001,58 @@ def engine_commit_problems(got, pinned):
     return [] if (got.startswith(pinned[:7]) or pinned.startswith(got[:7])) else [f"the server runs engine commit {got[:9]}, the pin is {pinned[:9]}"]
 
 
+# THE SERVER'S OWN START LINE, on both builds (ArcadeDBServer.java): `ArcadeDB Server started in 'development' mode (CPUs=4 MAXRAM=2.00GB)`, with
+# Runtime.availableProcessors() and Runtime.maxMemory(). It is the witness that the requested -Xmx and the container's cpuset reached the engine.
+_STARTED_RE = re.compile(r"ArcadeDB Server started in '([^']*)' mode \(CPUs=(\d+) MAXRAM=([^)]*)\)")
+_SIZE_RE = re.compile(r"\s*([\d.,]+)\s*([KMGT]?)i?B?\s*", re.I)
+HEAP_TOLERANCE = 0.05     # the size string is rounded and a collector may reserve a little of -Xmx
+
+
+def size_to_bytes(text):
+    """'2.00GB' / '512MB' / '1.5 GiB' -> bytes (base 1024), None when it is not a size."""
+    m = _SIZE_RE.fullmatch(str(text or ""))
+    if not m:
+        return None
+    return int(float(m.group(1).replace(",", "")) * 1024 ** (" KMGT".index(m.group(2).upper() or " ")))
+
+
+def parse_server_started(log):
+    """{server_mode, server_cpus, server_max_heap, server_max_heap_bytes} from the LAST start line of a server log, or {}."""
+    hits = _STARTED_RE.findall(log or "")
+    if not hits:
+        return {}
+    mode, cpus, maxram = hits[-1]
+    return {"server_mode": mode, "server_cpus": int(cpus), "server_max_heap": maxram.strip(), "server_max_heap_bytes": size_to_bytes(maxram)}
+
+
+def server_log_problems(got, want_heap_bytes, want_cpus, want_mode=None):
+    """The start line against what was asked: the heap within HEAP_TOLERANCE of the requested -Xmx (when one was requested), the CPUs equal to the
+    cpuset's size, the mode equal to the requested one. A missing line is a problem: the witness must exist."""
+    if not got:
+        return ["the server's start line (CPUs, MAXRAM) is not in its log"]
+    out = []
+    mb = got.get("server_max_heap_bytes")
+    if want_heap_bytes:
+        if not mb or abs(mb - want_heap_bytes) > HEAP_TOLERANCE * want_heap_bytes:
+            out.append(f"the server reports MAXRAM {got.get('server_max_heap')} and -Xmx asked for {want_heap_bytes} bytes")
+    if want_cpus and got.get("server_cpus") != want_cpus:
+        out.append(f"the server sees {got.get('server_cpus')} CPUs and the container's cpuset has {want_cpus}")
+    if want_mode and got.get("server_mode") != want_mode:
+        out.append(f"the server runs in '{got.get('server_mode')}' mode and '{want_mode}' was requested")
+    return out
+
+
+def arcadedb_server_log_readback(cid, tries=15):
+    """parse_server_started over the container's log, waiting a few seconds for the line (it follows the HTTP ready line)."""
+    got = {}
+    for _ in range(tries):
+        got = parse_server_started(docker_logs(cid))
+        if got:
+            break
+        time.sleep(1)
+    return got
+
+
 def arcadedb_settings_readback(cid, text):
     """What a served ArcadeDB (either build) runs with, asked of the engine over HTTP, before the client starts and outside every timer:
     `GET /api/v1/server?mode=default` (server-scoped settings with the value in force), `SELECT FROM schema:database` (database-scoped ones,
@@ -3562,6 +3614,10 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                 row.update(_rb)
                 _bad = settings_problems(_rb.get("server_settings"), _rb.get("server_settings_requested"))
                 _bad += engine_commit_problems(_rb.get("server_engine_commit"), _LOCAL_ENGINE_COMMIT)
+                _lg = arcadedb_server_log_readback(server_cid)
+                row.update(_lg)
+                _bad += server_log_problems(_lg, None if be.get("jvm_defaults") else mem_bytes(heap), _cpuset_size(cpuset),
+                                            (_rb.get("server_settings_requested") or {}).get("arcadedb.server.mode"))
                 if _bad:
                     row["error"] = "; ".join(_bad) + "; the cell is not the one we specified"
                     return row

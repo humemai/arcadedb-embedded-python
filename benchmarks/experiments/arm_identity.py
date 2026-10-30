@@ -200,7 +200,11 @@ def pair_problems(rows):
 # the same explicit settings and the runner reads each back from the engine at start (`server_settings`, key -> value in force). The keys
 # below must be present on every served ArcadeDB row and equal between the two builds of one cell (same arm, scale, durability class);
 # other keys the runner requested (the HTTP body limit, the query cap) are compared when both builds list them.
-SERVER_SETTING_KEYS = ("arcadedb.server.mode", "arcadedb.server.httpIncomingHost", "arcadedb.server.httpIncomingPort", "arcadedb.txWalFlush")
+SERVER_SETTING_KEYS = ("arcadedb.server.mode", "arcadedb.server.httpIncomingHost", "arcadedb.server.httpIncomingPort", "arcadedb.txWalFlush",
+                       "arcadedb.maxPageRAM")     # the page cache stays at the engine default on both servers; a different effective value refuses the page
+# What each server's own start line reports (ArcadeDBServer.java: mode, CPUs, MAXRAM); a native row must carry all three, and the builds must agree.
+SERVER_LOG_FIELDS = ("server_mode", "server_cpus", "server_max_heap_bytes")
+MAX_HEAP_TOLERANCE = 0.05
 
 
 def server_settings_problems(rows):
@@ -223,15 +227,24 @@ def server_settings_problems(rows):
         sc, pin = str(r.get("server_engine_commit") or ""), str(r.get("engine_commit") or "")
         if sc and pin and not (sc.startswith(pin[:7]) or pin.startswith(sc[:7])):
             out.append(f"{r.get('backend')}: the {build_of(r)} server reports engine commit {sc[:9]} and the row names {pin[:9]}")
+        if build_of(r) == "native" and any(r.get(f) in (None, "") for f in SERVER_LOG_FIELDS):
+            out.append(f"{r.get('backend')}: a native server row has no start-line read-back ({', '.join(SERVER_LOG_FIELDS)})")
         if isinstance(got, dict):
             key = (r.get("backend"), str(r.get("scale")), str(r.get("durability_class") or ""))
-            cells.setdefault(key, {}).setdefault(build_of(r), []).append(got)
+            cells.setdefault(key, {}).setdefault(build_of(r), []).append(dict(got, **{f: r.get(f) for f in SERVER_LOG_FIELDS if r.get(f) not in (None, "")}))
     for (arm, scale, cls), by in sorted(cells.items(), key=str):
         if len(by) < 2:
             continue
         a, b = (by[x][0] for x in BUILDS)
         keys = set(SERVER_SETTING_KEYS) | (set(a) & set(b))
+        for f in SERVER_LOG_FIELDS:                 # only when both builds report it (an old JVM row has none)
+            if a.get(f) is not None and b.get(f) is not None:
+                keys.add(f)
         for k in sorted(keys):
+            if k == "server_max_heap_bytes" and a.get(k) is not None and b.get(k) is not None:
+                if abs(float(a[k]) - float(b[k])) > MAX_HEAP_TOLERANCE * max(float(a[k]), float(b[k])):
+                    out.append(f"{arm} at {scale} ({cls or 'any class'}): the native server reports MAXRAM {a[k]} bytes and the JVM server {b[k]}")
+                continue
             if str(a.get(k)) != str(b.get(k)):
                 out.append(f"{arm} at {scale} ({cls or 'any class'}): server setting {k} is {a.get(k)!r} on the native server and "
                            f"{b.get(k)!r} on the JVM server")

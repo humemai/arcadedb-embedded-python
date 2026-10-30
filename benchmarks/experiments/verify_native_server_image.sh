@@ -35,7 +35,7 @@ for _ in $(seq 1 90); do
 done
 [ "$up" = 1 ] || fail "the server did not answer /api/v1/ready in 90 s"
 V=$(curl -sf -u "root:$PW" -H 'Content-Type: application/json' -d '{"language":"sql","command":"SELECT version() AS v"}' \
-  "http://127.0.0.1:$PORT/api/v1/query/bench" | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"][0]["v"])') || fail "SELECT version() failed"
+  "http://127.0.0.1:$PORT/api/v1/query/bench" | uv run --no-project python -c 'import sys,json; print(json.load(sys.stdin)["result"][0]["v"])') || fail "SELECT version() failed"
 GOT=$(printf '%s' "$V" | sed -n 's/.*(build \([0-9a-f]\{7,40\}\)\/.*/\1/p')
 [ -n "$GOT" ] || fail "no build sha in '$V'"
 echo "NATIVE_SERVER_VERSION=$V"

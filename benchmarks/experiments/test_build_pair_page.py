@@ -152,13 +152,14 @@ def _run(script, results):
 def _with_native(results, keep=lambda r: True, commit=None):
     """Rewrite the freeze: every in-process ArcadeDB row gains a native twin (for the rows `keep` accepts)."""
     rows = list(csv.DictReader((results / "runs_paper.csv").open()))
-    fields = list(rows[0]) + [f for f in ("engine_backend", "server_settings", "cpu_baseline") if f not in rows[0]]
+    fields = list(rows[0]) + [f for f in ("engine_backend", "server_settings", "cpu_baseline", *AI.SERVER_LOG_FIELDS) if f not in rows[0]]
     twins = []
     for r in rows:
         if AI.built(r) and keep(r):
             t = dict(r, engine_backend="native", cpu_baseline=AI.cpu_baseline("native", AI.served(r)))
             if AI.served(r):    # a native server row carries the settings its engine reported at start, equal to the JVM server's
                 t["server_settings"] = json.dumps({k: "x" for k in AI.SERVER_SETTING_KEYS})
+                t.update(server_mode="development", server_cpus=4, server_max_heap_bytes=2 << 30)
             if commit:
                 t["engine_commit"] = commit
             twins.append(t)
