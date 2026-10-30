@@ -3501,15 +3501,24 @@ def main():
     #
     # The arm RECORDS that it skipped, because a cell that silently omits a phase
     # is not comparable with one that does not.
-    if os.environ.get("BENCH_SKIP_CLOSE") == "1":
-        out["close_s"] = None
-        out["close_skipped"] = True
-        out["close_skip_reason"] = ("diagnostic: isolating build cost from the "
-                                    "#6489 redundant graph rebuild")
-    else:
-        _t = time.perf_counter()
-        b.close()
-        out["close_s"] = round(time.perf_counter() - _t, 3)
+    #
+    # THE CLOSE PHASE (instrument 2026-11 memory probe, 2026-10-30 audit of the 12 dense rows of the
+    # 2026-11 pass: `mem_probe_phases` was load,index_build,warmup only). memory_probe derives the
+    # `queries` and `idle` readings, and the JVM working set after GC, from the `close-start` mark, and
+    # this lane never emitted one while l1, l2, e2, l3s and l4 do. The mark comes after every timed
+    # operation (search, beam sweep, mutation) and `_t` starts INSIDE it: the probe sleeps IDLE_S and
+    # forces a GC on `close-start`, and a `_t` taken before the `with` would price that into `close_s`.
+    # Without BENCH_MEMPROBE_DIR the mark only prints a PHASE line, so a pre-2026-11 row is unchanged.
+    with _beat.phase("close"):
+        if os.environ.get("BENCH_SKIP_CLOSE") == "1":
+            out["close_s"] = None
+            out["close_skipped"] = True
+            out["close_skip_reason"] = ("diagnostic: isolating build cost from the "
+                                        "#6489 redundant graph rebuild")
+        else:
+            _t = time.perf_counter()
+            b.close()
+            out["close_s"] = round(time.perf_counter() - _t, 3)
     # `reconnects` on every SurrealDB row, zero when nothing happened
     # (DECISIONS #91): a dropped connection has to be visible as a number on
     # the row, not as a traceback in a log nobody reads until a cell dies.

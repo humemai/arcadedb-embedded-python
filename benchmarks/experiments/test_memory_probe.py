@@ -284,3 +284,42 @@ def test_lane_without_a_jvm_records_no_gc_phases(tmp_path):
     host.start([("client", FakeSampler("c"))], lambda cid: cg)
     row = _drive(host, ["build-done", "close-start"])
     assert "jvm_forced_gc_phases" not in row
+
+
+# ---------------------------------------------------------------------------
+# the dense lane's own phase sequence (2026-10-30 audit: 12 dense rows had mem_probe_phases=load,index_build,warmup)
+
+def _lane_marks_from_source(filename):
+    """The PHASE markers a lane's main() emits, in source order, read from its source: `_beat.mark(x)` is `x`;
+    `with _beat.phase(x)` is `x-start` at the `with` and `x-done` at its last line. Conditional marks are kept."""
+    import ast
+    with open(os.path.join(HERE, filename)) as fh:
+        tree = ast.parse(fh.read())
+    ev = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "mark" \
+                and isinstance(node.func.value, ast.Name) and node.func.value.id == "_beat" \
+                and node.args and isinstance(node.args[0], ast.Constant):
+            ev.append((node.lineno, node.col_offset, node.args[0].value))
+        if isinstance(node, ast.With):
+            for item in node.items:
+                c = item.context_expr
+                if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute) and c.func.attr == "phase" \
+                        and isinstance(c.func.value, ast.Name) and c.func.value.id == "_beat" \
+                        and c.args and isinstance(c.args[0], ast.Constant):
+                    ev.append((node.lineno, node.col_offset, c.args[0].value + "-start"))
+                    ev.append((node.end_lineno, 10 ** 6, c.args[0].value + "-done"))
+    return [m for _, _, m in sorted(ev)]
+
+
+def test_dense_lane_emits_the_close_mark_after_every_timed_mark():
+    marks = _lane_marks_from_source("l3d_dense.py")
+    got = [ph for m in marks for ph in mp.phases_for_mark(m)]
+    assert got.count("queries") == 1 and got.count("idle") == 1, (marks, got)
+    assert got[-2:] == ["queries", "idle"], got
+    i = marks.index("close-start")
+    assert marks.count("close-start") == 1
+    # everything timed (cold queries, beam sweep, mutation) is over before the probe sleeps and forces a GC
+    for timed in ("queries-start", "queries-done", "beam-sweep-done", "mutate-insert-done"):
+        assert timed in marks and marks.index(timed) < i, (timed, marks)
+    assert not any(m.endswith("-start") and m != "close-start" for m in marks[i + 1:]), marks[i:]
