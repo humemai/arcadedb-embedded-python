@@ -1095,7 +1095,7 @@ def _overlay_files_by_build(root, stem, tail, backend_key):
     "jvm" read from the first pass of each file (arm_identity.build_of; an unstamped ArcadeDB file is the JVM build). The native
     files carry `_native` after the stem; a glob on the plain stem never matches them."""
     names = sorted(root.glob(f"{stem}{tail}")) + sorted(root.glob(f"{stem}_native{tail}"))
-    if not (_SPLIT and _AI.in_process({"backend": backend_key})):
+    if not (_SPLIT and _AI.built({"backend": backend_key})):
         return [("", sorted(root.glob(f"{stem}{tail}")))] if names else []
     got = {}
     for fp in names:
@@ -1444,7 +1444,7 @@ _SPLIT = False
 
 def _arm_build(r):
     """"native" or "jvm" for an in-process ArcadeDB row of a split page, else "" (served arms, comparators, an unsplit page)."""
-    return (_AI.build_of(r) or "") if (_SPLIT and _AI.in_process(r)) else ""
+    return (_AI.build_of(r) or "") if (_SPLIT and _AI.built(r)) else ""
 
 
 def _with_build(label, build):
@@ -1873,6 +1873,28 @@ def _declare_missing_builds(tables):
             note = _gen(f"The {_AI.BUILD_NAMES[b]} was not measured for {_join_and(parts)}, so those rows are absent.", *vals)
             if note not in t["conditions"]:
                 t["conditions"].append(note)
+
+
+def _disclose_server_builds(tables):
+    """Under every table that holds a native-build server arm: both server arms are upstream's official images (the JVM server image and the
+    native-image server), run with the same server settings that each server reports back at start, and the one disclosed difference is the
+    CPU baseline each artifact was compiled for (read from the rows' `cpu_baseline`, never typed here)."""
+    if not _SPLIT or _AI.wanted_build():
+        return
+    nat = next((r.get("cpu_baseline") for r in _FROZEN_ROWS if _AI.served(r) and _AI.build_of(r) == "native" and r.get("cpu_baseline")), None)
+    wheel = next((r.get("cpu_baseline") for r in _FROZEN_ROWS if _AI.in_process(r) and _AI.build_of(r) == "native" and r.get("cpu_baseline")), None)
+    if not nat:
+        return
+    wheel_part = f" and the native wheel (the embedded arm) as {wheel}" if wheel else ""
+    for t in tables:
+        if not any(e.get("build") == "native" and "server" in str(e.get("backend")) for e in t.get("entries", [])):
+            continue
+        note = _gen(f"Both server arms are the official ArcadeDB server images, one built for the JVM and one compiled to a native executable, "
+                    f"started with the same server settings, which each server reports back when it starts. The CPU baselines differ: "
+                    f"the native server image is {nat}{wheel_part}, and the JVM server compiles for the CPU it runs on.", nat, *([wheel] if wheel else []))
+        t.setdefault("conditions", [])
+        if note not in t["conditions"]:
+            t["conditions"].append(note)
 
 
 def _withhold_cells(tables):
@@ -7726,6 +7748,7 @@ def main() -> int:
             if _note not in _t["conditions"]:
                 _t["conditions"].append(_note)
     _declare_missing_builds(tables)
+    _disclose_server_builds(tables)
     # THE OVERRIDES A READER MEETS (CAMPAIGN section 7 row 21). PROTOCOL.md
     # section 7 lists every default this benchmark overrides, and the rows its
     # last column marked NOWHERE were named in no sentence under any table. One

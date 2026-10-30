@@ -824,12 +824,14 @@ def _host_identity():
 
 
 def engine_backend():
-    """"native" or "jvm" when this process loaded the ArcadeDB package, else None. Lanes that set engine_version by hand stamp it too."""
+    """"native" or "jvm": the package this process loaded, else the build of the ArcadeDB server it talks to (BENCH_ARCADEDB_SERVER_BUILD, set by the runner on a served ArcadeDB arm's client), else None. Lanes that set engine_version by hand stamp it too."""
     try:
         import _arcadedb_import
-        return _arcadedb_import.loaded_backend()
+        got = _arcadedb_import.loaded_backend()
     except Exception:
-        return None
+        got = None
+    # A served ArcadeDB arm's client container never imports the package: the runner names the build of the SERVER it started (#222).
+    return got or os.environ.get("BENCH_ARCADEDB_SERVER_BUILD", "").strip() or None
 
 
 def run_conditions(**extra):

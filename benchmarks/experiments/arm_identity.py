@@ -9,8 +9,10 @@ definition of `build`:
   * `engine_backend` is "native" or "jvm": that value.
   * a row of an ArcadeDB in-process arm WITHOUT the field, or with it empty (every row before 26.11.1, and those rows read back from the
     frozen CSV): "jvm", because that is what it ran.
-  * a served arm, the HTTP client container and every comparator: None. The served engine is a JVM server whichever Python package
-    drives it, and the field is null there on purpose, so it never selects or splits them.
+  * a served ArcadeDB arm (`arcadedb_server`, `arcadedb_graph_server`, ...) carries the build of the SERVER it talked to since
+    #222: "jvm" for the official Docker server image, "native" for the native wheel's in-process server (native_server_launcher.py).
+    A served row without the field (every row before it) is "jvm", the only server there was. The image-defaults sensitivity arm
+    (`arcadedb_imgdefaults_server`), the HTTP client container and every comparator carry None: they have no native counterpart.
 
 `select_build(rows, want)` is the one place a freeze picks a build: with BENCH_ENGINE_BACKEND=native|jvm the other build's in-process
 ArcadeDB rows leave the freeze (they stay in runs.jsonl); without it BOTH builds stay, and the page shows them side by side as two arms
@@ -36,13 +38,24 @@ def in_process(r):
     return b.startswith("arcadedb") and not any(t in b for t in _NOT_IN_PROCESS)
 
 
+def served(r):
+    """True for a served ArcadeDB arm that stands once per build: the HTTP server arms, not the image-defaults sensitivity arm."""
+    b = str(r.get("backend") or "")
+    return b.startswith("arcadedb") and "server" in b and not any(t in b for t in ("http_client", "imgdefaults"))
+
+
+def built(r):
+    """True for an ArcadeDB arm that stands once per build: an in-process arm or a served one (#222)."""
+    return in_process(r) or served(r)
+
+
 def build_of(r):
     """"native", "jvm" or None for the row (see the module docstring)."""
     eb = r.get("engine_backend")
     if eb in BUILDS:
         return eb
     # No usable field: an old row, or a row read back from the frozen CSV, where a row from before 26.11.1 has the column empty.
-    if in_process(r) and not eb:
+    if built(r) and not eb:
         return "jvm"
     return None
 
@@ -54,7 +67,7 @@ def arm_identity(r):
 
 def identities(rows):
     """The set of (engine_version, build) over the in-process ArcadeDB rows."""
-    return {arm_identity(r) for r in rows if in_process(r)}
+    return {arm_identity(r) for r in rows if built(r)}
 
 
 def wanted_build(env=None):
@@ -76,25 +89,51 @@ def select_build(rows, want=None):
     """
     want = wanted_build() if want is None else want
     if want:
-        return [r for r in rows if not (in_process(r) and build_of(r) not in (None, want))]
+        return [r for r in rows if not (built(r) and build_of(r) not in (None, want))]
     return rows
 
 
 def stamp_build(row, wheel_build):
-    """Give an in-process ArcadeDB row the build of the wheel its runner was pinned to, when the row names none.
+    """Give an ArcadeDB row (in-process or served) its build when the row names none: the build of the wheel its runner was pinned to, or,
+    for a served row, the server's own (`server_build`, written by the runner at launch).
 
     A cell killed by its cap or by the kernel writes a row from the runner, not from the engine process, so the row has no
     engine_backend of its own; without this a native timeout would read as the JVM build (the default for an unstamped row).
     Returns the row.
     """
-    if wheel_build in BUILDS and in_process(row) and not row.get("engine_backend"):
-        row["engine_backend"] = wheel_build
+    if built(row) and not row.get("engine_backend"):
+        if served(row) and row.get("server_build") in BUILDS:
+            row["engine_backend"] = row["server_build"]
+        elif in_process(row) and wheel_build in BUILDS:
+            row["engine_backend"] = wheel_build
+    if built(row) and row.get("engine_backend") in BUILDS and not row.get("cpu_baseline"):
+        row["cpu_baseline"] = cpu_baseline(row["engine_backend"], served(row))
     return row
+
+
+# THE CPU BASELINE OF EACH ARTIFACT, disclosed on the page and left as built. The native wheel is compiled with `-march=compatibility`
+# (runs on any x86-64 CPU); upstream's official native server image is compiled for `native.march` (native/pom.xml: x86-64-v3 on amd64, i.e.
+# AVX2/BMI2/FMA, set by ArcadeData/arcadedb#10581; override with ARCADEDB_NATIVE_SERVER_MARCH if a different image is pinned); the JVM
+# server and the JVM wheel compile at run time for the CPU they run on.
+NATIVE_WHEEL_MARCH = "compatibility"
+NATIVE_SERVER_MARCH_DEFAULT = "x86-64-v3"
+
+
+def native_server_march(env=None):
+    return ((os.environ if env is None else env).get("ARCADEDB_NATIVE_SERVER_MARCH", "").strip() or NATIVE_SERVER_MARCH_DEFAULT)
+
+
+def cpu_baseline(build, is_server, env=None):
+    """The CPU baseline sentence stamped on a row of `build` ("native" / "jvm")."""
+    if build == "native":
+        return (f"native server image: -march={native_server_march(env)}" if is_server
+                else f"native wheel: -march={NATIVE_WHEEL_MARCH}")
+    return "JVM: compiled at run time for the host CPU"
 
 
 def builds_in(rows):
     """The builds the in-process ArcadeDB rows of `rows` ran on, as a set of "native" / "jvm"."""
-    return {build_of(r) for r in rows if in_process(r)} - {None}
+    return {build_of(r) for r in rows if built(r)} - {None}
 
 
 def splits_page(rows):
@@ -142,15 +181,60 @@ def pair_problems(rows):
     out = []
     by = {}
     for r in rows:
-        if in_process(r) and build_of(r):
+        if built(r) and build_of(r):
             by.setdefault(build_of(r), []).append(r)
     if len(by) < 2:
         return out
     for field in ("engine_version", "engine_commit"):
-        seen = {b: sorted({str(r.get(field) or "") for r in rs} - {""}) for b, rs in by.items()}
+        # engine_version of a served row is the server's own build string ("server:<v> (build ...)"), not the wheel's: compare the wheels' versions
+        # on the in-process rows; the commit is one value for every ArcadeDB row, served ones included.
+        seen = {b: sorted({str(r.get(field) or "") for r in rs if field != "engine_version" or in_process(r)} - {""}) for b, rs in by.items()}
         flat = {v for vs in seen.values() for v in vs}
         if len(flat) > 1:
             out.append(f"the two ArcadeDB builds name different {field} values {seen}; one release is built from one engine commit")
+    out += server_settings_problems(rows)
+    return out
+
+
+# THE SETTINGS A SERVER ARM IS HELD TO (#222 (3)). Both servers (the Docker JVM image, the native wheel's in-process server) are launched with
+# the same explicit settings and the runner reads each back from the engine at start (`server_settings`, key -> value in force). The keys
+# below must be present on every served ArcadeDB row and equal between the two builds of one cell (same arm, scale, durability class);
+# other keys the runner requested (the HTTP body limit, the query cap) are compared when both builds list them.
+SERVER_SETTING_KEYS = ("arcadedb.server.mode", "arcadedb.server.httpIncomingHost", "arcadedb.server.httpIncomingPort", "arcadedb.txWalFlush")
+
+
+def server_settings_problems(rows):
+    """Sentences for a served-arm settings mismatch between the builds (empty: fine). A native server row with no read-back is a problem
+    too: a setting written is not a setting in force."""
+    out, cells = [], {}
+    for r in rows:
+        if not served(r) or build_of(r) not in BUILDS:
+            continue
+        got = r.get("server_settings")
+        if isinstance(got, str):
+            try:
+                import json
+                got = json.loads(got)
+            except ValueError:
+                got = None
+        if build_of(r) == "native" and not isinstance(got, dict):
+            out.append(f"{r.get('backend')}: a native server row has no server_settings read-back")
+            continue
+        sc, pin = str(r.get("server_engine_commit") or ""), str(r.get("engine_commit") or "")
+        if sc and pin and not (sc.startswith(pin[:7]) or pin.startswith(sc[:7])):
+            out.append(f"{r.get('backend')}: the {build_of(r)} server reports engine commit {sc[:9]} and the row names {pin[:9]}")
+        if isinstance(got, dict):
+            key = (r.get("backend"), str(r.get("scale")), str(r.get("durability_class") or ""))
+            cells.setdefault(key, {}).setdefault(build_of(r), []).append(got)
+    for (arm, scale, cls), by in sorted(cells.items(), key=str):
+        if len(by) < 2:
+            continue
+        a, b = (by[x][0] for x in BUILDS)
+        keys = set(SERVER_SETTING_KEYS) | (set(a) & set(b))
+        for k in sorted(keys):
+            if str(a.get(k)) != str(b.get(k)):
+                out.append(f"{arm} at {scale} ({cls or 'any class'}): server setting {k} is {a.get(k)!r} on the native server and "
+                           f"{b.get(k)!r} on the JVM server")
     return out
 
 

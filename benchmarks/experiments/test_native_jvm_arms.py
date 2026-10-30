@@ -30,13 +30,15 @@ def row(build="__absent__", backend="arcadedb_sparse_embedded", rep=1, ts="2026-
 
 
 # ------------------------------------------------------------------ arm_identity
-def test_build_of_old_rows_are_the_jvm_build_and_served_arms_and_comparators_have_none():
+def test_build_of_old_rows_are_the_jvm_build_for_in_process_and_served_arms_and_comparators_have_none():
     assert AI.build_of(row()) == "jvm"                                   # before the field existed
     assert AI.build_of(row("native")) == "native" and AI.build_of(row("jvm")) == "jvm"
-    assert AI.build_of(row(None, backend="arcadedb_sparse_server")) is None     # served: null on purpose
-    assert AI.build_of(row(backend="arcadedb_sparse_server")) is None           # an older served row is not "jvm" either
+    assert AI.build_of(row(None, backend="arcadedb_sparse_server")) == "jvm"    # served rows carry the server's build since #222; old ones = JVM
+    assert AI.build_of(row(backend="arcadedb_sparse_server")) == "jvm"          # an older served row is the JVM server, the only one there was
+    assert AI.build_of(row("native", backend="arcadedb_sparse_server")) == "native"
     assert AI.build_of(row(None, backend="qdrant_sparse")) is None
     assert AI.build_of(row(backend="arcadedb_http_client")) is None
+    assert AI.build_of(row(backend="arcadedb_imgdefaults_server")) is None      # the JVM image-defaults arm has no native counterpart
 
 
 def test_the_same_release_on_two_builds_is_two_identities():
@@ -51,7 +53,7 @@ def test_both_builds_stay_unless_one_is_chosen():
     assert AI.select_build(rows, None) == rows
     nat = AI.select_build(rows, "native")
     assert [AI.build_of(r) for r in nat if AI.in_process(r)] == ["native"]
-    assert len(nat) == 3                                                 # comparators and served arms stay
+    assert len(nat) == 2                                                 # comparators stay; the served arm of the other build leaves with it
     assert [r["backend"] for r in AI.select_build(rows, "jvm")].count("arcadedb_sparse_embedded") == 1
 
 

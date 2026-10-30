@@ -86,6 +86,7 @@ import os
 import re
 import sys
 
+import arm_identity as _AI
 import bench_common
 import cap_rule
 import runner
@@ -136,8 +137,14 @@ def overlay_env(lane):
 
 
 def served_arcadedb_arms():
-    """The served ArcadeDB arms (a client_server topology): the same Java server image whichever wheel is installed, so ONE chain runs them."""
+    """The served ArcadeDB arms (a client_server topology). Both chains run them (#222): the JVM chain on the Docker JVM server image, the
+    native chain on upstream's native server image, each arm once per chain."""
     return sorted(b for b in runner.BACKENDS if engine_of(b) == "arcadedb" and runner.BACKENDS[b].get("topology") == "client_server")
+
+
+def build_less_served_arms():
+    """The served ArcadeDB arms with no native counterpart (the JVM image-defaults sensitivity arm): the JVM chain runs them, the native one does not."""
+    return [b for b in served_arcadedb_arms() if not _AI.served({"backend": b})]
 
 # THE OVERLAY LANES. The dense and sparse TABLES do not read the lane's own search rows: they read a multipass overlay
 # produced by a bespoke driver run through `runner.py --driver`, which builds once and then times five passes, so cold and
@@ -534,7 +541,7 @@ def profile_problems(profile, stages, label=""):
     if DROP_QUANTIZED_DENSE in drops:
         dense = {b for st in stages if st[2] == "l3d" for b in stage_backends(st) if engine_of(b) == "arcadedb"}
         # the native chain runs the embedded half of the pair only: the served arm is the JVM chain's (served_arcadedb_arms)
-        want = set(ARCADEDB_FP32_DENSE) - (set(served_arcadedb_arms()) if CHAIN_BUILD == "native" else set())
+        want = set(ARCADEDB_FP32_DENSE) - (set(build_less_served_arms()) if CHAIN_BUILD == "native" else set())
         if dense and dense != want:
             out.append(f"{tag}ArcadeDB's dense arms are {sorted(dense)}, expected exactly its fp32 {'arm' if len(want) == 1 else 'pair'} {sorted(want)}")
     for why in drops:
@@ -826,18 +833,38 @@ def served_arcadedb_in(text):
     return sorted(b for b in (m.group(1).split() if m else []) if b in served)
 
 
-def chain_overlap_problems(*dirs):
-    """A served ArcadeDB arm may be in ONE chain only. Given the draft folders of the chains of one release (native and JVM), a served
-    arm that appears in more than one would run its cells twice against the same server image. Also: a native chain runs none."""
-    out, seen = [], {}
+def _chain_of(text):
+    """"native" for a stage script of a native-wheel chain, else "jvm"."""
+    return "native" if _NATIVE_WHEEL.search(text) else "jvm"
+
+
+def chain_served_problems(*dirs):
+    """Each chain runs exactly the served ArcadeDB arms of its own build, each once (#222 (5)). Given the draft folders of the chains of one
+    release (native and JVM): one folder per build, and every served arm runs in the same lanes in both. A folder that runs the other
+    build's server (a script exporting the other build) fails in lint_draft."""
+    out, per = [], {}
     for d in dirs:
+        counts = collections.Counter()
+        builds = set()
         for f in sorted(glob.glob(os.path.join(d, "*.sh"))):
             text = open(f, encoding="utf-8").read()
+            if _BACKENDS.search(text):
+                builds.add(_chain_of(text))
+            lane = re.search(r"--lanes (\w+) ", text)
             for b in served_arcadedb_in(text):
-                seen.setdefault(b, set()).add(d)
-    for b, where in sorted(seen.items()):
-        if len(where) > 1:
-            out.append(f"served ArcadeDB arm {b} is in {len(where)} chains ({', '.join(sorted(where))}); the server is one image, so one chain runs it")
+                if b not in build_less_served_arms():       # the JVM-only arms (image defaults, e4) belong to the JVM chain alone
+                    counts[(b, lane.group(1) if lane else "?")] += 1
+        if len(builds) > 1:
+            out.append(f"{d} mixes native and JVM stage scripts: one chain, one build")
+        per[d] = (next(iter(builds), ""), counts)
+    if len({b for b, _c in per.values()}) < len(per):
+        out.append("two chains of the same build were given: one release is a native chain and a JVM chain")
+    base = next(iter(per.values()), ("", {}))[1]
+    for d, (_b, counts) in per.items():
+        for key in sorted(set(counts) | set(base)):
+            if counts.get(key, 0) != base.get(key, 0):
+                out.append(f"served ArcadeDB arm {key[0]} (lane {key[1]}) runs {counts.get(key, 0)}x in {d} and {base.get(key, 0)}x in the other "
+                           f"chain; each chain runs it once")
     return out
 
 
@@ -865,9 +892,19 @@ def lint_draft(text, name, engines=None, profile=None):
         out.append(f"{name}: no BACKENDS line")
     else:
         arcade = has_arcadedb_arm(m.group(1).split())
-        if _NATIVE_WHEEL.search(text) and served_arcadedb_in(text):
-            out.append(f"{name}: a native-build chain runs served ArcadeDB arms {served_arcadedb_in(text)}; the server is one image and "
-                       f"the JVM chain runs it")
+        # THE SERVED ARM IS THE SERVER OF THE CHAIN'S OWN BUILD (#222 (5)): a native-wheel chain runs the native server image, a JVM chain the
+        # Docker JVM image; the runner refuses a BENCH_SERVER_BUILD that is not the wheel's build, and this lint refuses a script that names the other.
+        if has_arcadedb_arm(m.group(1).split()):
+            native_chain = _chain_of(text) == "native"
+            want_build = f'BENCH_SERVER_BUILD="{"native" if native_chain else "jvm"}"'
+            other = "jvm" if native_chain else "native"
+            if f'BENCH_SERVER_BUILD="{other}"' in text or (not native_chain and "ARCADEDB_NATIVE_SERVER_IMAGE" in text):
+                out.append(f"{name}: a {'native' if native_chain else 'JVM'}-build chain runs the {other} build's server arm")
+            if native_chain and served_arcadedb_in(text):
+                for needle, what in ((want_build, "BENCH_SERVER_BUILD for its own build"), ("export ARCADEDB_NATIVE_SERVER_IMAGE=", "the native server image pin"),
+                                     ("ABORT: native server image", "the native server's engine-commit check")):
+                    if needle not in text:
+                        out.append(f"{name}: a native-build chain runs served ArcadeDB arms but has no {what}")
         # every stage builds images with the pinned wheel baked in, so every stage guards the wheel's sha256
         if "is not the wheel this chain was generated for" not in text:
             out.append(f"{name}: no guard for the pinned wheel's sha256, which the image build bakes into every image")
@@ -1532,9 +1569,28 @@ def stage_params(reps):
             "rep_helpers": REP_HELPERS.lstrip("\n"), "temp_gate_helpers": TEMP_GATE_HELPERS.lstrip("\n"), "pass_no": 1}
 
 
+NATIVE_EXPORT = ('export ARCADEDB_NATIVE_SERVER_IMAGE="{img}" BENCH_SERVER_BUILD="native"\n'
+                 'docker image inspect "$ARCADEDB_NATIVE_SERVER_IMAGE" >/dev/null 2>&1 || {{ say "$ID ABORT: no native server image $ARCADEDB_NATIVE_SERVER_IMAGE"; exit 1; }}\n')
+NATIVE_VERIFY = ('bash ./verify_native_server_image.sh "$ARCADEDB_NATIVE_SERVER_IMAGE" "$SHA" >> "$S" 2>&1 || {{ say "$ID ABORT: native server image is not at the pin"; exit 1; }}\n')
+
+
 def _pair_part(text, pins, params):
-    return text.format(wheel_name=pins["wheel_name"], wheel_sha256=pins["wheel_sha256"],
-                       server_image=pins["ARCADEDB_SERVER_IMAGE"], jpype_version=params["jpype_version"])
+    out = text.format(wheel_name=pins["wheel_name"], wheel_sha256=pins["wheel_sha256"],
+                      server_image=pins["ARCADEDB_SERVER_IMAGE"], jpype_version=params["jpype_version"])
+    # A native-wheel chain also pins upstream's native server image, and says which build its server arms are (#222). Only that chain's text
+    # changes: the JVM chain, and a chain of an old wheel, are emitted byte for byte as before.
+    if CHAIN_BUILD == "native":
+        img = pins.get("ARCADEDB_NATIVE_SERVER_IMAGE")
+        if not img:
+            raise SystemExit("REFUSING: a native-wheel chain needs the native server image (--native-image-digest with --arcadedb-release, or "
+                             "ARCADEDB_NATIVE_SERVER_IMAGE): wheel, JVM server image and native server image are one engine commit (F5)")
+        anchor = f'ARCADEDB_SERVER_IMAGE="{pins["ARCADEDB_SERVER_IMAGE"]}"\n'
+        if anchor in out:
+            out = out.replace(anchor, anchor + NATIVE_EXPORT.format(img=img).replace("{{", "{").replace("}}", "}"), 1)
+        tail = 'ABORT: pair unverified at the pin"; exit 1; }\n'
+        if tail in out:
+            out = out.replace(tail, tail + NATIVE_VERIFY.replace("{{", "{").replace("}}", "}"), 1)
+    return out
 
 
 def stage_script(idx, total, spec, after, pins, params):
@@ -1791,15 +1847,22 @@ def release_pins(a):
         raise SystemExit(f"REFUSING: --wheel-name {a.wheel_name} is not a {a.arcadedb_release} arcadedb, arcadedb_jvm or arcadedb_embedded wheel")
     if not a.wheel_url.startswith("https://") or not a.wheel_url.endswith(a.wheel_name):
         raise SystemExit("REFUSING: --wheel-url must be an https URL ending in the wheel's file name")
+    nd = getattr(a, "native_image_digest", None)
+    if nd and not re.fullmatch(r"sha256:[0-9a-f]{64}", nd):
+        raise SystemExit("REFUSING: --native-image-digest must be sha256:<64 hex>, upstream's <release>-native image by digest")
     return {"ARCADEDB_WHEEL": os.path.join("bindings", "python", "dist", a.wheel_name),
             "ARCADEDB_WHEEL_SHA256": a.wheel_sha256,
             "ARCADEDB_SERVER_IMAGE": f"arcadedb-c25:{a.engine_commit[:9]}",
+            # upstream's published native server image: by digest when given, else its release tag
+            "ARCADEDB_NATIVE_SERVER_IMAGE": (f"arcadedata/arcadedb@{nd}" if nd else f"arcadedata/arcadedb:{a.arcadedb_release}-native"),
             "ARCADEDB_ENGINE_COMMIT": a.engine_commit}
 
 
 def installed_pins():
     """The comparator mode's pins: the release pair already installed, from the environment."""
     pins = {k: os.environ.get(k, "").strip() for k in ("ARCADEDB_WHEEL", "ARCADEDB_SERVER_IMAGE", "ARCADEDB_ENGINE_COMMIT")}
+    if os.environ.get("ARCADEDB_NATIVE_SERVER_IMAGE", "").strip():
+        pins["ARCADEDB_NATIVE_SERVER_IMAGE"] = os.environ["ARCADEDB_NATIVE_SERVER_IMAGE"].strip()
     missing = [k for k, v in pins.items() if not v]
     if missing:
         raise SystemExit(f"REFUSING to emit: {', '.join(missing)} unset. The stages are generated for one release pair: "
@@ -1913,8 +1976,10 @@ def main(argv=None) -> int:
     ap.add_argument("--drafts", metavar="DIR", help="with --check: also lint the scripts in DIR")
     ap.add_argument("--also-drafts", metavar="DIR", action="append", default=[],
                     help="with --check --drafts: the other chain of the same release (the native chain beside the JVM one); fails when a "
-                         "served ArcadeDB arm is in both")
+                         "served ArcadeDB arm does not run once in each")
     ap.add_argument("--arcadedb-release", metavar="X.Y.Z", help="ArcadeDB alone on this release (needs the five pin arguments)")
+    ap.add_argument("--native-image-digest", help="the digest of upstream's arcadedata/arcadedb:<release>-native image (the native chain's server); "
+                                                  "without it the release tag is pinned")
     ap.add_argument("--engine-commit")
     ap.add_argument("--image-digest")
     ap.add_argument("--wheel-name")
@@ -1942,12 +2007,13 @@ def main(argv=None) -> int:
         return 1
     print(f"jpype pin: {bench_common.JPYPE_PIN}; instrument {INSTRUMENT}; mode {mode}; reps {a.reps}; profile {a.profile}")
 
-    # ONE CHAIN RUNS THE SERVED ARCADEDB CELLS. The server is the ARCADEDB_SERVER_IMAGE container, the same Java server whichever wheel
-    # is installed, so the JVM chain runs them and the native chain does not (a second run would double the cells under one key).
+    # EACH CHAIN RUNS THE SERVED ARCADEDB CELLS OF ITS OWN BUILD (#222): the JVM chain on the Docker JVM server image, the native chain on
+    # upstream's native server image (ARCADEDB_NATIVE_SERVER_IMAGE). Only the image-defaults sensitivity arm, which is a JVM-image arm, stays out of
+    # the native chain.
     global CHAIN_BUILD
     CHAIN_BUILD = engine_pin.backend_from_wheel(a.wheel_name) if mode == "arcadedb" else ""
     skip = (tuple(profile_skip(a.profile)) + ((TIMESCALEDB,) if a.without_timescaledb else ())
-            + (tuple(served_arcadedb_arms()) if CHAIN_BUILD == "native" else ()))
+            + (tuple(build_less_served_arms()) if CHAIN_BUILD == "native" else ()))
     specs = subset_specs(engines, lanes, a.order, skip, a.tiers)
     pair_id = f"{a.id_prefix}00" if mode == "arcadedb" else None
     stages = number(specs, a.id_prefix)
@@ -1974,7 +2040,7 @@ def main(argv=None) -> int:
     if a.check and a.drafts:
         problems += lint_drafts(a.drafts, set(engines), status_file, a.profile)
         if a.also_drafts:
-            problems += chain_overlap_problems(a.drafts, *a.also_drafts)
+            problems += chain_served_problems(a.drafts, *a.also_drafts)
     for p in problems:
         print(f"  PROBLEM {p}")
     if problems:

@@ -1356,7 +1356,7 @@ def _check_build_pair(payload, rows):
         arms = collections.defaultdict(dict)
         absent = {str(a.get("backend")) for a in (t.get("declared_absences") or []) if not a.get("column")}
         for e in t.get("entries", []):
-            if not (e.get("is_arcadedb") and _AI.in_process({"backend": e.get("backend_key") or ""})):
+            if not (e.get("is_arcadedb") and _AI.built({"backend": e.get("backend_key") or ""})):
                 continue
             b = e.get("build")
             if b not in _AI.BUILDS:
@@ -1446,7 +1446,7 @@ def _check_lane_roster(payload):
                 continue
             # TWO BUILDS, TWO ARMS: on a split page an in-process ArcadeDB arm is owed one row per build, and a build with none is a
             # declared absence like any other ("not measured"), under the arm's label with the build.
-            if _page_split(payload) and _AI.in_process({"backend": key}) and key in keyed:
+            if _page_split(payload) and _AI.built({"backend": key}) and key in keyed:
                 have = {e.get("build") for e in keyed[key]}
                 for b in _AI.BUILDS:
                     checked += 1

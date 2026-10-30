@@ -685,10 +685,24 @@ def write(name, body):
     print("wrote", name)
 
 
+def _builds_of_rows(rows):
+    """The builds present in `rows`, native first."""
+    got = {_AI.build_of(r) for r in rows} - {None}
+    return [b for b in ("native", "jvm") if b in got]
+
+
+def _build_name(label, build, split):
+    """The arm's label with its build when the table names builds ("ArcadeDB (srv)" -> "ArcadeDB (srv, native build)")."""
+    return _AI.build_label(label, build) if (build and split) else label
+
+
 def tabular_table(rows):
     l1 = [r for r in rows if r["lane"] == "l1"]
     tpc = [r for r in rows if r["lane"] == "l1tpc"]
-    order = ["arcadedb_embedded", "arcadedb_server", "duckdb", "postgres"]
+    # Both ArcadeDB builds, embedded and server, stand as their own rows (#222 (4)); a freeze of old rows has no native row and renders as before.
+    split = _AI.splits_page(rows)
+    order = [(be, b) for be in ("arcadedb_embedded", "arcadedb_server")
+             for b in (("native", "jvm") if split else (None,))] + [("duckdb", None), ("postgres", None)]
     # Peak memory (owned: anonymous plus shared, issue #353) from the OLTP
     # rows only. This lane runs OLTP and OLAP over one corpus, and memory is
     # recorded for BOTH, so pooling them would report a median straddling two
@@ -698,9 +712,9 @@ def tabular_table(rows):
     lines = [r"\begin{tabular}{lrrrrr}", r"\toprule",
              r"System & OLTP (ops/s) & Ins.\ p99 (ms) & "
              r"Q1 (ms) & Q6 (ms) & Peak memory (GiB) \\", r"\midrule"]
-    for be in order:
-        oltp = [r for r in l1 if r["backend"] == be and r["workload"] == "oltp"]
-        tq = [r for r in tpc if r["backend"] == be and r["workload"] == "olap"]
+    for be, bld in order:
+        oltp = [r for r in l1 if r["backend"] == be and r["workload"] == "oltp" and (bld is None or _AI.build_of(r) == bld)]
+        tq = [r for r in tpc if r["backend"] == be and r["workload"] == "olap" and (bld is None or _AI.build_of(r) == bld)]
         # MEDIAN ONLY for Q1/Q6, ranges kept for OLTP and insert p99.
         #
         # Not a space-saving dodge: it puts dispersion where dispersion is
@@ -713,7 +727,7 @@ def tabular_table(rows):
         # as it took last time. The caption states the bound they now carry
         # implicitly, and the artifact has every repetition.
         lines.append(" & ".join([
-            NAMES[be],
+            _build_name(NAMES[be], bld, split),
             mmm(oltp, "oltp_ops_per_s"), mmm(oltp, "insert_p99_ms"),
             fmt(st.median([r["q1_ms"] for r in tq
                            if isinstance(r.get("q1_ms"), (int, float))]))
@@ -769,7 +783,7 @@ def graph_table(rows):
 # would keep the failure mode alive, since the next missing directory would
 # re-arm it. _sparse_2681_rows below refuses instead of falling back.
 
-def _pinned_sparse_rows(arm="arcadedb_sparse_embedded"):
+def _pinned_sparse_rows(arm="arcadedb_sparse_embedded", build=None):
     """T4's ArcadeDB rows from the PINNED campaign, when it is complete.
 
     The paper corpus rows (8,841,823 x 30,109; load_canonical's PAPER_CORPUS
@@ -805,30 +819,34 @@ def _pinned_sparse_rows(arm="arcadedb_sparse_embedded"):
     _builds = {_AI.build_of(r) for t in out for r in out[t]}
     if len(_builds) > 1:
         # Both builds measured: each is validated on its own below (five reps at every tier, one identity). The paper's LaTeX table is
-        # ONE build, so with no choice made it takes the JVM build, the build every earlier row is; BENCH_ENGINE_BACKEND picks the other.
-        # The page reads the frozen rows through export_web and shows both builds.
-        _want = _AI.wanted_build() or "jvm"
-        for _b in sorted(_builds - {_want}):
+        # ONE build per call and NO DEFAULT (#222 (4)): the caller names the build (or "all" for every build, each validated), and
+        # BENCH_ENGINE_BACKEND names it for a one-build freeze. The tables loop over the builds and print both.
+        _want = build or _AI.wanted_build()
+        if _want is None:
+            sys.stderr.write("pinned sparse rows hold both builds: name the build (there is no single-build default)\n")
+            return None
+        for _b in sorted(_builds - ({_want} if _want != "all" else set())):
             _other = {t: [r for r in rs if _AI.build_of(r) == _b] for t, rs in out.items()}
             if any(len(_other.get(t, [])) < 5 for t in tiers) or len({_AI.arm_identity(r) for t in tiers for r in _other[t]}) != 1:
                 sys.stderr.write(f"pinned sparse rows of the {_b} build are incomplete or span two identities\n")
                 return None
-        out = {t: [r for r in rs if _AI.build_of(r) == _want] for t, rs in out.items()}
+        if _want != "all":
+            out = {t: [r for r in rs if _AI.build_of(r) == _want] for t, rs in out.items()}
     if any(len(out.get(t, [])) < 5 for t in tiers):
         missing = [t for t in tiers if len(out.get(t, [])) < 5]
         sys.stderr.write(f"pinned sparse rows incomplete at {missing}\n")
         return None
     versions = {_AI.arm_identity(r) for t in tiers for r in out[t]}   # (engine_version, build): one engine, one build
-    if len(versions) != 1:
+    if len(versions) != (len(_builds) if build == "all" else 1):
         sys.stderr.write(f"pinned sparse rows span {sorted(versions, key=str)}\n")
         return None
     return out
 
 
-def _sparse_2681_rows(arm="arcadedb_sparse_embedded"):
+def _sparse_2681_rows(arm="arcadedb_sparse_embedded", build=None):
     """The pinned sparse rows, or refuse. There is no overlay fallback:
     incomplete or mixed pinned rows stop the generation."""
-    pinned = _pinned_sparse_rows(arm)
+    pinned = _pinned_sparse_rows(arm, build)
     if pinned is None:
         raise SystemExit(f"pinned sparse rows for {arm} incomplete or mixed (see stderr); no fallback")
     return pinned   # {} when the arm has not run at this pin (absent, not partial)
@@ -840,7 +858,9 @@ def sparse_table(rows):
     # runs.jsonl and are untouched: they are not ArcadeDB runs, their own
     # versions did not change, and the F9 control re-runs one of them to
     # license keeping the other two.
-    arc = _sparse_2681_rows()
+    arc_all = _sparse_2681_rows(build="all")
+    arc_builds = _builds_of_rows([r for rs in arc_all.values() for r in rs])
+    arc_by_build = {b: {t: [r for r in rs if _AI.build_of(r) == b] for t, rs in arc_all.items()} for b in arc_builds}
     order = ["arcadedb_sparse_embedded", "qdrant_sparse", "milvus_sparse",
              "elasticsearch_sparse"]
     tiers = (("tiny", "100k"), ("small", "1M"), ("medium", "8.84M"))
@@ -860,7 +880,8 @@ def sparse_table(rows):
     # which is the side of the trade the sparse narrative uses less.
     lines = [r"\begin{tabular}{llrrr}", r"\toprule",
              r"System & Tier & p50 (ms) & p99 (ms) & R@10 \\", r"\midrule"]
-    for i, be in enumerate(order):
+    blocks = [(be, b) for be in order for b in (arc_builds if be == "arcadedb_sparse_embedded" and arc_builds else [None])]
+    for i, (be, bld) in enumerate(blocks):
         if i:
             lines.append(r"\addlinespace")
         for j, (sc, lab) in enumerate(tiers):
@@ -875,10 +896,10 @@ def sparse_table(rows):
                 # has not run at this pin, and the `if not g` branch four
                 # lines down already renders that as "--". Indexing raised
                 # KeyError instead and took the whole publish with it.
-                g = arc.get(sc) or []
+                g = arc_by_build.get(bld, {}).get(sc) or []
             # The system name labels its block once; repeating it down three
             # rows is noise the eye has to subtract.
-            head = NAMES[be] if j == 0 else ""
+            head = _build_name(NAMES[be], bld, len(arc_builds) > 1 or "native" in arc_builds) if j == 0 else ""
             if not g:
                 lines.append(" & ".join([head, lab, "--", "--", "--"]) + r" \\")
                 continue

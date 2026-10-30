@@ -40,12 +40,13 @@ def test_a_freeze_of_old_rows_is_not_split_and_a_native_row_splits_it():
     assert AI.builds_in(old) == {"jvm"}
     assert AI.splits_page(old + [row("native")]) and AI.builds_in(old + [row("native")]) == {"native", "jvm"}
     assert AI.splits_page([row("native")])                              # native only: an unlabelled arm would read as the JVM build
-    assert not AI.splits_page([row("native", backend="arcadedb_graph_server"), row(backend="qdrant_dense")])
+    assert AI.splits_page([row("native", backend="arcadedb_graph_server"), row(backend="qdrant_dense")])   # a native server row splits it too
+    assert not AI.splits_page([row(backend="arcadedb_graph_server"), row(backend="qdrant_dense")])
 
 
-def test_an_empty_engine_backend_from_the_csv_is_the_jvm_build_for_in_process_arms_only():
+def test_an_empty_engine_backend_from_the_csv_is_the_jvm_build_for_in_process_and_served_arms_only():
     assert AI.build_of(row("")) == "jvm" and AI.build_of(row(None)) == "jvm"
-    assert AI.build_of(row("", backend="arcadedb_graph_server")) is None
+    assert AI.build_of(row("", backend="arcadedb_graph_server")) == "jvm"
     assert AI.build_of(row("", backend="qdrant_dense")) is None
 
 
@@ -129,7 +130,8 @@ def test_the_gate_fails_an_in_process_arm_that_names_no_build_on_a_page_that_doe
     assert PC._check_build_pair(payload([NATIVE, JVM, entry("ArcadeDB (embedded, fp32)", None)]), []) == 1
     assert "NOBUILD" in capsys.readouterr().out
     served = entry("ArcadeDB (server)", None, key="arcadedb_graph_server")
-    assert PC._check_build_pair(payload([NATIVE, JVM, served]), []) == 0                                      # one served arm, no build
+    assert PC._check_build_pair(payload([NATIVE, JVM, dict(served, backend="ArcadeDB (server, native build)", build="native"),
+                                         dict(served, backend="ArcadeDB (server, JVM build)", build="jvm")]), []) == 0   # server arms stand per build too
 
 
 # ------------------------------------------------------------------ the exporter, on the publish fixture
@@ -150,11 +152,13 @@ def _run(script, results):
 def _with_native(results, keep=lambda r: True, commit=None):
     """Rewrite the freeze: every in-process ArcadeDB row gains a native twin (for the rows `keep` accepts)."""
     rows = list(csv.DictReader((results / "runs_paper.csv").open()))
-    fields = list(rows[0]) + (["engine_backend"] if "engine_backend" not in rows[0] else [])
+    fields = list(rows[0]) + [f for f in ("engine_backend", "server_settings", "cpu_baseline") if f not in rows[0]]
     twins = []
     for r in rows:
-        if AI.in_process(r) and keep(r):
-            t = dict(r, engine_backend="native")
+        if AI.built(r) and keep(r):
+            t = dict(r, engine_backend="native", cpu_baseline=AI.cpu_baseline("native", AI.served(r)))
+            if AI.served(r):    # a native server row carries the settings its engine reported at start, equal to the JVM server's
+                t["server_settings"] = json.dumps({k: "x" for k in AI.SERVER_SETTING_KEYS})
             if commit:
                 t["engine_commit"] = commit
             twins.append(t)
@@ -240,16 +244,28 @@ def test_every_in_process_arm_of_a_lane_table_stands_twice_native_first(pages):
         "ArcadeDB (embedded, native build)", "ArcadeDB (embedded, JVM build)"]
 
 
-def test_the_served_arm_stays_one_row_and_both_builds_name_one_engine(pages):
+def test_the_served_arm_stands_once_per_build_and_both_builds_name_one_engine(pages):
     both = pages[1]
     for tid in ("docs_oltp", "l2"):
         t = _t(both, tid)
-        served = [e for e in t["entries"] if e.get("is_arcadedb") and e.get("deployment") == "server"]
-        assert served and all(e["build"] is None and "build" not in e["backend"] for e in served)
+        served = [e for e in t["entries"] if e.get("is_arcadedb") and e.get("deployment") == "server" and "imgdefaults" not in e["backend_key"]]
+        assert {e["backend"] for e in served} >= {"ArcadeDB (server, native build)", "ArcadeDB (server, JVM build)"}
+        assert {e["build"] for e in served} == {"native", "jvm"}
+        assert all(e["build"] is None for e in t["entries"] if "imgdefaults" in e.get("backend_key", ""))
         names = {e["version_name"] for e in _inproc(t)}
         assert len(names) == 1, names
     rows = list(csv.DictReader((pages[3] / "both" / "runs_paper.csv").open()))
     assert PC._check_build_pair({"tables": [t for t in both["tables"] if t["id"] != "l3d"]}, rows) == 0
+
+
+def test_the_server_tables_disclose_the_cpu_baselines_read_from_the_rows(pages):
+    both = pages[1]
+    t = _t(both, "docs_oltp")
+    note = [c for c in t["conditions"] if "official ArcadeDB server images" in c]
+    assert len(note) == 1 and "native server image: -march=x86-64-v3" in note[0] and "native wheel: -march=compatibility" in note[0]
+    assert "launcher" not in note[0] and "\u2014" not in note[0]
+    old = _t(pages[0], "docs_oltp")
+    assert not [c for c in old.get("conditions", []) if "official ArcadeDB server images" in c]     # a freeze of old rows says nothing new
 
 
 def test_a_stamped_overlay_stands_per_build_and_the_gate_passes_the_dense_table(pages):
@@ -359,7 +375,7 @@ def test_a_partial_native_overlay_is_refused_and_a_complete_or_absent_one_is_not
     assert "partial" in str(e.value)
 
 
-def test_the_pinned_sparse_path_validates_each_build_and_takes_the_jvm_one_unless_told(monkeypatch):
+def test_the_pinned_sparse_path_validates_each_build_and_has_no_single_build_default(monkeypatch):
     import make_paper_tables as M
 
     def rows(build, n=5):
@@ -368,13 +384,16 @@ def test_the_pinned_sparse_path_validates_each_build_and_takes_the_jvm_one_unles
     monkeypatch.setenv("BENCH_ENGINE_COMMIT", "abc123def0")
     monkeypatch.delenv(AI.ENV, raising=False)
     monkeypatch.setattr(M, "load_canonical", lambda *a, **k: rows("native") + rows("jvm"))
-    got = M._pinned_sparse_rows()
+    assert M._pinned_sparse_rows() is None                                                 # no default build: the caller names one
+    got = M._pinned_sparse_rows(build="jvm")
     assert got and {AI.build_of(r) for rs in got.values() for r in rs} == {"jvm"}
+    both = M._pinned_sparse_rows(build="all")
+    assert {AI.build_of(r) for rs in both.values() for r in rs} == {"native", "jvm"}
     monkeypatch.setenv(AI.ENV, "native")
     assert {AI.build_of(r) for rs in M._pinned_sparse_rows().values() for r in rs} == {"native"}
     monkeypatch.delenv(AI.ENV)
     monkeypatch.setattr(M, "load_canonical", lambda *a, **k: rows("native", 3) + rows("jvm"))
-    assert M._pinned_sparse_rows() is None                                                # a short native build is not published beside a full JVM one
+    assert M._pinned_sparse_rows(build="all") is None                                     # a short native build is not published beside a full JVM one
 
 
 def test_neither_build_is_a_median_over_both(pages):
