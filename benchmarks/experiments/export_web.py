@@ -1412,6 +1412,24 @@ def _agg(rows, field, across_scales=False):
 #
 # The headline query is the FIRST one in each list, so the p99 belongs to the query the section leads with.
 _FROZEN_ROWS = []   # set by main() once the CSV is read; the column switches read it
+# TWO BUILDS, TWO ARMS (26.11.1). True when some in-process ArcadeDB row ran on the native build: every such arm then names its build and
+# the two builds sit side by side (arm_identity.splits_page). False for a freeze of old rows, which render as they always did.
+_SPLIT = False
+
+
+def _arm_build(r):
+    """"native" or "jvm" for an in-process ArcadeDB row of a split page, else "" (served arms, comparators, an unsplit page)."""
+    return (_AI.build_of(r) or "") if (_SPLIT and _AI.in_process(r)) else ""
+
+
+def _with_build(label, build):
+    """The arm label with its build ("ArcadeDB (embedded, native build)"), or the label as it is when the arm has no build."""
+    return _AI.build_label(label, build) if build else label
+
+
+def _strip_build(label):
+    """The label without its build suffix: the key the lane's own tables (order lists, deployments) are written in."""
+    return _AI.strip_build(label)
 OCT_TABLE_METRICS = {
     # Both document tables come from this one lane spec and are split by
     # _restructure_tables; the union of their columns lives here.
@@ -1793,6 +1811,43 @@ def _declare_absence(table_id, backend, column, kind, why):
     rec = {"backend": backend, "column": column, "kind": kind, "why": why}
     if rec not in _DECLARED_ABSENCES[table_id]:
         _DECLARED_ABSENCES[table_id].append(rec)
+
+
+def _declare_missing_builds(tables):
+    """A build with no row where the other build has one is printed as not measured, never left out.
+
+    On a split page (arm_identity.splits_page) every in-process ArcadeDB arm should stand twice, once per build. Where one build has
+    entries at a size and the other has none, the missing arm is declared (kind "not measured", whole row) and one sentence per table
+    and build names the arms and sizes. A deliberate one-build freeze (BENCH_ENGINE_BACKEND) declares nothing: the other build was
+    left out on purpose, and the arm labels still say which build the page is.
+    """
+    if not _SPLIT or _AI.wanted_build():
+        return
+    for t in tables:
+        have = collections.defaultdict(set)      # (label without build, size) -> builds present
+        for e in t.get("entries", []):
+            if e.get("build") in _AI.BUILDS:
+                have[(_strip_build(str(e["backend"])), str(e.get("scale_label") or e.get("scale")))].add(e["build"])
+        missing = collections.defaultdict(lambda: collections.defaultdict(list))   # build -> arm -> sizes
+        for (label, size), builds in sorted(have.items()):
+            for b in _AI.BUILDS:
+                if b not in builds:
+                    missing[b][label].append(size)
+        for b in _AI.BUILDS:
+            arms = missing.get(b)
+            if not arms:
+                continue
+            parts, vals = [], []
+            for label, sizes in sorted(arms.items()):
+                arm = _with_build(label, b)
+                _declare_absence(t["id"], arm, None, "not measured",
+                                 f"{arm} was not measured at {_join_and(sizes)}.")
+                parts.append(f"{arm} at {_join_and(sizes)}")
+                vals += [arm, *sizes]
+            t.setdefault("conditions", [])
+            note = _gen(f"The {_AI.BUILD_NAMES[b]} was not measured for {_join_and(parts)}, so those rows are absent.", *vals)
+            if note not in t["conditions"]:
+                t["conditions"].append(note)
 
 
 def _withhold_cells(tables):
@@ -2689,7 +2744,8 @@ def _l4_canonical(all_rows):
             # KEYED ON THE TIER TOO: grouped by display label alone, a table with
             # two tiers (ts100, ts1000) would publish every cell as a median across
             # BOTH corpora, a number belonging to neither (BUGS F110).
-            grouped[(label, str(r.get("scale")))].append(r)
+            # A split page keys the two builds apart (the label carries the build), so no l4 median pools them.
+            grouped[(_with_build(label, _arm_build(r)), str(r.get("scale")))].append(r)
     return grouped or None
 
 
@@ -2933,22 +2989,29 @@ def _lifecycle_table(all_rows, twin_rows=()):
             # registered as an absence the coverage gate reads.
             declared.append(r)
             continue
-        by.setdefault((r.get("workload"), r.get("scale"), _srv, _engine_of(r)), []).append(r)
+        by.setdefault((r.get("workload"), r.get("scale"), _srv, _engine_of(r), _arm_build(r)), []).append(r)
 
     entries = []
     # The engine's own start step: start_jvm() on the JVM build (`jvm_start_ms`), which the native build has no counterpart of (null);
-    # there the same step is `engine_load_ms` (library load and isolate creation). A page is one build (select_build), so one column.
+    # there the same step is `engine_load_ms` (library load and isolate creation). A page holding both builds names the column for both (below).
     _start_field, _start_label = (("engine_load_ms", "engine load ms")
                                   if any(_AI.build_of(r) == "native" for r in rows) else ("jvm_start_ms", "JVM start ms"))
+    # BOTH BUILDS ON ONE TABLE: the step is start_jvm() on the JVM build and library load plus isolate creation on the native one, so
+    # the column is named for what both are, and each arm reads its own field (the sentence under the table says which is which).
+    _both_builds = {"native", "jvm"} <= _AI.builds_in(rows)
+    if _both_builds:
+        _start_label = "engine start ms"
     _lc_columns = ([_start_label, "first open ms", "cold process ms"]
                    + [LIFECYCLE_SCENARIO_LABELS[k] for k in LIFECYCLE_PAGE_SCENARIOS])
-    for (situation, scale, _srv, engine), rs in sorted(by.items()):
+    for (situation, scale, _srv, engine, build), rs in sorted(by.items()):
         if situation in LIFECYCLE_WITHHELD:
             continue
+        _start_field = ("engine_load_ms" if build == "native" else "jvm_start_ms") if _both_builds else _start_field
         _ours = engine == "ArcadeDB"
         _mode = "server" if _srv else "embedded"
         entry = {
-            "backend": _lifecycle_row_label(rs[0].get("backend"), situation),
+            "backend": _with_build(_lifecycle_row_label(rs[0].get("backend"), situation), build),
+            "build": build or None,
             "backend_key": str(rs[0].get("backend")),
             "is_arcadedb": _ours,
             "engine": engine,
@@ -2993,7 +3056,7 @@ def _lifecycle_table(all_rows, twin_rows=()):
             got = _agg(rs, field)
             if got is not None:
                 entry["metrics"][label] = got
-        _trs = twin_by.get((situation, scale, _srv, engine))
+        _trs = twin_by.get((situation, scale, _srv, engine)) if not build else None
         if _trs and entry["metrics"]:
             twin_metrics = {}
             for field, label in ((_start_field, _start_label), ("first_open_ms", "first open ms"),
@@ -3047,6 +3110,7 @@ def _lifecycle_table(all_rows, twin_rows=()):
         "title": "Session cost, open to close",
         "dataset": "synthetic, one structure per row",
         "conditions": [_R("lifecycle", k) for k in ("session", "cold_start", "clean_close", "server_rows")]
+                      + ([_R("lifecycle", "engine_start")] if _both_builds else [])
                       + [_gen(f"{LIFECYCLE_SITUATION_LABELS.get(k, k)} is withheld: {v}", v) for k, v in sorted(LIFECYCLE_WITHHELD.items())]
                       + declared_notes,
         "columns": _lc_columns,
@@ -3240,10 +3304,10 @@ def _durability_table(all_rows):
             # out of this one for the same reason.
             if str(r.get("backend")) in OFF_PAGE_ARMS:
                 continue
-            by.setdefault((str(r.get("backend")), str(r.get("scale")) if per_scale else None),
+            by.setdefault((str(r.get("backend")), str(r.get("scale")) if per_scale else None, _arm_build(r)),
                           []).append(r)
-        for (backend, sc), rs in sorted(by.items(), key=lambda kv: (_durability_scale_rank(lane, kv[0][1]),
-                                                                     kv[0][0])):
+        for (backend, sc, build), rs in sorted(by.items(), key=lambda kv: (_durability_scale_rank(lane, kv[0][1]),
+                                                                            kv[0][0], kv[0][2])):
             if sc is not None:
                 # ONE ROW PER CORPUS SIZE for an operation whose cost grows with
                 # the corpus, named in the Size column beside the operation.
@@ -3261,7 +3325,8 @@ def _durability_table(all_rows):
             no_setting = any(str(r.get("durability_no_setting")).lower() in ("true", "1")
                              for r in rs)
             entry = {
-                "backend": display_name(backend),
+                "backend": _with_build(display_name(backend), build),
+                "build": build or None,
                 "is_arcadedb": "arcadedb" in backend,
                 "scale": op_key_s,
                 "scale_label": op_label_s,
@@ -3431,7 +3496,7 @@ def multimodel_engine(name):
     """The capability table's row for an engine name (MULTIMODEL_ALIASES)."""
     return MULTIMODEL_ALIASES.get(name, name)
 MULTIMODEL_CELLS = {"measured": "measured", "declared": "declared", "none": "no arm"}
-MULTIMODEL_KINDS = {"censored": "censored", "withheld": "withheld",
+MULTIMODEL_KINDS = {"censored": "censored", "withheld": "withheld", "not measured": "not measured",
                     "unexpressible": "cannot express", "envelope": "out of memory",
                     "failed": "failed",
                     # A row a defect in the engine's own release decided
@@ -3644,8 +3709,8 @@ def _l4_table(all_rows, twin_rows=()):
     # does rather than interleaving two corpora under one heading.
     _tier_rank = {"ts100": 0, "ts1000": 1}
     for key in sorted(grouped, key=lambda k: (_tier_rank.get(k[1], 99),
-                                              order.index(k[0]) if k[0] in order else 99,
-                                              k[0])):
+                                              order.index(_strip_build(k[0])) if _strip_build(k[0]) in order else 99,
+                                              _strip_build(k[0]), {"native": 0, "jvm": 1}.get(_AI.build_in_label(k[0]), 2))):
         label, _scale = key
         rs = grouped[key]
         entry = {
@@ -3660,7 +3725,8 @@ def _l4_table(all_rows, twin_rows=()):
             "scale_label": f"{_l4_points(_scale)} points",
             "workload": L4_SHAPE["workload"],
             "n_docs": str(rs[0].get("n_points")),
-            "deployment": L4_DEPLOYMENT[label],
+            "deployment": L4_DEPLOYMENT[_strip_build(label)],
+            "build": _AI.build_in_label(label),
             "image": None,
             # One engine name plus one version. The two ArcadeDB arms recorded
             # this differently ("26.8.1" from one adapter, "arcadedb 26.8.1"
@@ -4197,6 +4263,7 @@ OCT_PROSE = {
     },
     "lifecycle": {
         "session": ("The SESSION is open + action + close. Reporting open and close alone hides work triggered between them.", []),
+        "engine_start": ("Engine start ms is the start_jvm() call on the JVM build, and the library load with the creation of the isolate on the native build; the two steps are the engine's own start, which is why they share a column.", []),
         "cold_start": ("Cold start is measured in a fresh subprocess and reported beside every session number, because a millisecond open inside a process that takes half a second to reach its first database call is not a millisecond to whoever launched it.", []),
         "clean_close": ("A clean close should be O(what was written), not O(what is stored): write nothing and closing should cost the same at 10k documents and 10M.", []),
         "server_rows": ("Server rows have no JVM start, first open, or cold process: the server is already running when the probe connects, so those three columns describe the embedded process only. The session columns are measured for both.", []),
@@ -4594,8 +4661,14 @@ def _pg_memory_note(table):
 def _gav_pair_note(table):
     """Only when the table carries both arms of the ablation: the sentence must not describe a pair that is not there."""
     names = {str(e["backend"]) for e in table.get("entries", [])}
-    pairs = [(a, a[:-1] + ", GAV)") for a in sorted(names)
-             if a.startswith("ArcadeDB (") and "GAV" not in a and (a[:-1] + ", GAV)") in names]
+    def _gav_twin(a):
+        # the view goes before the build: "ArcadeDB (embedded, native build)" -> "ArcadeDB (embedded, GAV, native build)"
+        b = _AI.build_in_label(a)
+        if not b:
+            return a[:-1] + ", GAV)"
+        return _strip_build(a)[:-1] + f", GAV, {_AI.BUILD_NAMES[b]})"
+    pairs = [(a, _gav_twin(a)) for a in sorted(names)
+             if a.startswith("ArcadeDB (") and "GAV" not in a and _gav_twin(a) in names]
     if not pairs:
         return None
     listed = "; ".join(f"{a} and {b}" for a, b in pairs)
@@ -6835,7 +6908,9 @@ def _finish_table(table: dict) -> dict:
         base = re.sub(r"\s*\(.*$", "", str(e["backend"])).lower()
         return (scale_rank(e), 0 if e.get("is_arcadedb") else 1, base,
                 DEPLOYMENT_ORDER.get(e.get("deployment"), 2),
-                PRECISION_ORDER.get(e.get("precision"), 2))
+                PRECISION_ORDER.get(e.get("precision"), 2),
+                # the native build (the default install) first, its JVM twin right after it
+                {"native": 0, "jvm": 1}.get(e.get("build"), 2))
     table["entries"] = sorted(entries, key=key)
     # THE HEAP BESIDE THE PEAK (DECISIONS #116 item 7, decided: the
     # memory column stays the peak an operator has to provision, with the heap
@@ -7124,11 +7199,16 @@ def main() -> int:
             print(f"  cap rule: {len(_cut)} rows of {len(_over)} over-the-cap arm-cells withheld, shown censored instead")
             _gone = {id(r) for r in _cut}
             rows = [r for r in rows if id(r) not in _gone]
-    # ONE ARCADEDB BUILD PER PAGE (26.11.1): native and jvm rows of a release share engine_version and arm names, so a table cell
-    # holding both would print one median over two engines. BENCH_ENGINE_BACKEND picks the build; both with no pick is refused.
+    # TWO ARCADEDB BUILDS, TWO ARMS (26.11.1): native and jvm rows of a release share engine_version and arm names, so the tables
+    # group on the build (_arm_build) and label it; no cell is a median over both. BENCH_ENGINE_BACKEND freezes one build on purpose.
     rows = _AI.select_build(rows)
-    global _FROZEN_ROWS
+    # ONE ENGINE COMMIT FOR BOTH BUILDS: a freeze whose native and JVM rows name two engines is refused, not printed side by side.
+    _bad = _AI.pair_problems(rows)
+    if _bad:
+        raise SystemExit("REFUSING: " + "; ".join(_bad))
+    global _FROZEN_ROWS, _SPLIT
     _FROZEN_ROWS = rows
+    _SPLIT = _AI.splits_page(rows)
     # WITHHELD: ArcadeDB rows whose engine_version identifies no build.
     #
     # Not rendered, and said out loud rather than dropped quietly. A number we
@@ -7200,11 +7280,11 @@ def main() -> int:
         # rather than a wrong number, and the l2olap table below is what would
         # have sprung it.
         grouped[(r["lane"], r["scale"], r["backend"], wl,
-                 r.get("gav") or "")].append(r)
+                 r.get("gav") or "", _arm_build(r))].append(r)
     twin_grouped = defaultdict(list)
     for r in _twin_rows:
         wl = "" if r["lane"] in MERGED_WORKLOAD_LANES else r.get("workload", "")
-        twin_grouped[(r["lane"], r["scale"], r["backend"], wl, r.get("gav") or "")].append(r)
+        twin_grouped[(r["lane"], r["scale"], r["backend"], wl, r.get("gav") or "", "")].append(r)
 
     tables = []
     for lane, spec in LANES.items():
@@ -7213,7 +7293,7 @@ def main() -> int:
         # graph lane's rows, so the spec may name the lane it reads.
         src_lane = spec.get("lane_source", lane)
         only_scales = spec.get("only_scales")
-        for (ln, scale, backend, workload, gav), rs in sorted(grouped.items()):
+        for (ln, scale, backend, workload, gav, build), rs in sorted(grouped.items()):
             if ln != src_lane:
                 continue
             if only_scales and scale not in only_scales:
@@ -7221,7 +7301,7 @@ def main() -> int:
             # Row-level, not group-level: merged lanes (l1, l1tpc) group both
             # workloads under one key with a blank label, so a group-level
             # test never matched and the per-query OLAP table was empty (BUGS F30).
-            _trs = twin_grouped.get((ln, scale, backend, workload, gav), [])
+            _trs = twin_grouped.get((ln, scale, backend, workload, gav, ""), [])
             if spec.get("only_workload"):
                 rs = [r for r in rs if r.get("workload") == spec["only_workload"]]
                 if not rs:
@@ -7289,8 +7369,11 @@ def main() -> int:
             if lane == "l2olap" and gav != "False" and "arcade" in backend:
                 label = (f"{label[:-1]}, GAV)" if label.endswith(")")
                          else f"{label} (GAV)")
+            # The build goes last, after the precision and the view, so the two builds of one arm differ only in that suffix.
+            label = _with_build(label, build)
             entry = {
                 "backend": label,
+                "build": build or None,
                 # The runner's own key for the arm, so a gate can hold the
                 # table against runner.LANES without parsing the label
                 # (page_check._check_lane_roster).
@@ -7606,6 +7689,7 @@ def main() -> int:
             _t.setdefault("conditions", [])
             if _note not in _t["conditions"]:
                 _t["conditions"].append(_note)
+    _declare_missing_builds(tables)
     # THE OVERRIDES A READER MEETS (CAMPAIGN section 7 row 21). PROTOCOL.md
     # section 7 lists every default this benchmark overrides, and the rows its
     # last column marked NOWHERE were named in no sentence under any table. One

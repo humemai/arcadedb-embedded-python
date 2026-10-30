@@ -45,11 +45,10 @@ def test_the_same_release_on_two_builds_is_two_identities():
     assert AI.arm_identity(row()) == AI.arm_identity(row("jvm"))        # an old row and a new JVM row are one arm
 
 
-def test_a_cell_with_both_builds_is_refused_unless_one_is_chosen():
+def test_both_builds_stay_unless_one_is_chosen():
+    """Both builds are two arms of one page (test_build_pair_page.py), so a freeze no longer refuses a cell that holds both."""
     rows = [row("native"), row("jvm"), row("native", backend="qdrant_sparse"), row(None, backend="arcadedb_sparse_server")]
-    with pytest.raises(SystemExit) as e:
-        AI.select_build(rows, None)
-    assert "BENCH_ENGINE_BACKEND" in str(e.value)
+    assert AI.select_build(rows, None) == rows
     nat = AI.select_build(rows, "native")
     assert [AI.build_of(r) for r in nat if AI.in_process(r)] == ["native"]
     assert len(nat) == 3                                                 # comparators and served arms stay

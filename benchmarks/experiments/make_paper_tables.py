@@ -554,8 +554,8 @@ def load_canonical(apply_corpus=True, include_twins=False):
     # The paper tables, the gates and the claims read the headline rows. The twin rows go to the freeze (include_twins) so
     # the exporter can show them beside the headline, labelled, and are never pooled into a headline median.
     out = [r for r in best.values() if include_twins or r.get("arcadedb_http_client_role") != "sensitivity"]
-    # ONE BUILD PER FREEZE: BENCH_ENGINE_BACKEND=native|jvm picks the build whose in-process ArcadeDB rows the tables, the exporter
-    # and the gates see; a cell that holds both builds with no choice made is refused here, never pooled downstream.
+    # BOTH BUILDS BY DEFAULT: the freeze keeps the native and the JVM rows (the key above carries the build, so neither replaces the
+    # other) and the exporter shows them as two arms. BENCH_ENGINE_BACKEND=native|jvm freezes one build on purpose.
     return _AI.select_build(out)
 
 
@@ -800,7 +800,8 @@ def _pinned_sparse_rows(arm="arcadedb_sparse_embedded"):
     # partial or mixed, and still refuses.
     if not out:
         return {}
-    # Both builds of one release at one pin: the freeze names the one it publishes (arm_identity.select_build), the other stays in the log.
+    # Both builds of one release at one pin: this overlay path holds ONE build (arm_identity.select_build when the freeze names one);
+    # it is not yet build-aware, so with both and no choice it still stops here.
     _builds = {_AI.build_of(r) for t in out for r in out[t]}
     if len(_builds) > 1:
         _want = _AI.wanted_build()

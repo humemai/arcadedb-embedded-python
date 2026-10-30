@@ -7,12 +7,15 @@ overwrite the two builds, so the identity of an in-process ArcadeDB arm is (engi
 definition of `build`:
 
   * `engine_backend` is "native" or "jvm": that value.
-  * a row of an ArcadeDB in-process arm WITHOUT the field (every row before 26.11.1): "jvm", because that is what it ran.
+  * a row of an ArcadeDB in-process arm WITHOUT the field, or with it empty (every row before 26.11.1, and those rows read back from the
+    frozen CSV): "jvm", because that is what it ran.
   * a served arm, the HTTP client container and every comparator: None. The served engine is a JVM server whichever Python package
     drives it, and the field is null there on purpose, so it never selects or splits them.
 
 `select_build(rows, want)` is the one place a freeze picks a build: with BENCH_ENGINE_BACKEND=native|jvm the other build's in-process
-ArcadeDB rows leave the freeze (they stay in runs.jsonl); without it, a cell that holds BOTH builds is refused by name, not pooled.
+ArcadeDB rows leave the freeze (they stay in runs.jsonl); without it BOTH builds stay, and the page shows them side by side as two arms
+(`splits_page`, `build_label`: "ArcadeDB (embedded, native build)" next to "ArcadeDB (embedded, JVM build)"). A table entry still never
+pools the two (`refuse_pooled_builds`). `pair_problems(rows)` is the gate over a two-build freeze: one engine commit, one engine_version.
 No import of ArcadeDB, no I/O: safe in every consumer, including the ones that read old rows.
 """
 import os
@@ -38,7 +41,8 @@ def build_of(r):
     eb = r.get("engine_backend")
     if eb in BUILDS:
         return eb
-    if in_process(r) and "engine_backend" not in r:
+    # No usable field: an old row, or a row read back from the frozen CSV, where a row from before 26.11.1 has the column empty.
+    if in_process(r) and not eb:
         return "jvm"
     return None
 
@@ -63,31 +67,79 @@ def wanted_build(env=None):
     return v
 
 
-def mixed_cells(rows):
-    """{(lane, scale, n_docs, backend): builds} for the cells whose in-process ArcadeDB rows come from more than one build."""
-    seen = {}
-    for r in rows:
-        if in_process(r) and build_of(r):
-            seen.setdefault((r.get("lane"), r.get("scale"), r.get("n_docs"), r.get("backend")), set()).add(build_of(r))
-    return {k: sorted(v) for k, v in seen.items() if len(v) > 1}
-
-
 def select_build(rows, want=None):
-    """The rows a freeze may publish: one build of the in-process ArcadeDB arms, or a refusal that says why not.
+    """The rows a freeze may publish.
 
     `want` None reads BENCH_ENGINE_BACKEND. With a build, rows of the other build are dropped (served arms and comparators carry no
-    build and stay). Without one, any cell holding both builds stops the freeze: a median over native and JVM rows names neither.
+    build and stay): a deliberate one-build freeze. Without one every row stays, and the page shows the two builds as two arms
+    (`splits_page`); the exporter groups on the build, so no median is taken over native and JVM rows together.
     """
     want = wanted_build() if want is None else want
     if want:
         return [r for r in rows if not (in_process(r) and build_of(r) not in (None, want))]
-    mixed = mixed_cells(rows)
-    if mixed:
-        sample = ", ".join("/".join(str(x) for x in k) for k in sorted(mixed, key=str)[:3])
-        raise SystemExit(
-            f"REFUSING: {len(mixed)} cell(s) hold rows of both ArcadeDB builds (native and jvm), e.g. {sample}. A table cell is one "
-            f"build; set {ENV}=native or {ENV}=jvm to freeze that build (the other build's rows stay in the log).")
     return rows
+
+
+def builds_in(rows):
+    """The builds the in-process ArcadeDB rows of `rows` ran on, as a set of "native" / "jvm"."""
+    return {build_of(r) for r in rows if in_process(r)} - {None}
+
+
+def splits_page(rows):
+    """True when the page must name the build on every in-process ArcadeDB arm: some row ran on the native build.
+
+    Rows from before the field are all "jvm", so a freeze of old rows is never split and renders exactly as it did. A freeze that holds
+    only native rows is split too: an unlabelled arm would read as the JVM build.
+    """
+    return "native" in builds_in(rows)
+
+
+BUILD_NAMES = {"native": "native build", "jvm": "JVM build"}
+
+
+def build_label(label, build):
+    """"ArcadeDB (embedded)" -> "ArcadeDB (embedded, native build)"; a label with no parenthesis gets one."""
+    name = BUILD_NAMES[build]
+    return f"{label[:-1]}, {name})" if label.endswith(")") else f"{label} ({name})"
+
+
+def build_in_label(label):
+    """The build a label names ("native" / "jvm"), or None."""
+    for b, name in BUILD_NAMES.items():
+        if str(label).endswith(f", {name})") or str(label).endswith(f"({name})"):
+            return b
+    return None
+
+
+def strip_build(label):
+    """The label without its build: "ArcadeDB (embedded, native build)" -> "ArcadeDB (embedded)"; a label with no build is returned as is."""
+    b = build_in_label(label)
+    if not b:
+        return label
+    name = BUILD_NAMES[b]
+    label = str(label)
+    return label[:-len(f", {name})")] + ")" if label.endswith(f", {name})") else label[:-len(f" ({name})")]
+
+
+def pair_problems(rows):
+    """What stops a two-build freeze from being published, as a list of sentences (empty: fine).
+
+    The two builds of one release are built from ONE engine commit. A freeze whose native and JVM rows name different engine_versions
+    or different engine commits compares two engines, not two builds of one, so the page must not print them side by side.
+    """
+    out = []
+    by = {}
+    for r in rows:
+        if in_process(r) and build_of(r):
+            by.setdefault(build_of(r), []).append(r)
+    if len(by) < 2:
+        return out
+    for field in ("engine_version", "engine_commit"):
+        seen = {b: sorted({str(r.get(field) or "") for r in rs} - {""}) for b, rs in by.items()}
+        flat = {v for vs in seen.values() for v in vs}
+        if len(flat) > 1:
+            out.append(f"the two ArcadeDB builds name different {field} values {seen}; one release is built from one engine commit")
+    return out
 
 
 def refuse_pooled_builds(rs, where):
