@@ -25,7 +25,7 @@ COMMIT=$(sed -n 's/^NATIVE_SERVER_COMMIT=//p' "$OUT/verify.txt")
 echo "native server commit (reported, not asserted): $COMMIT"
 # ARCADEDB_SERVER_IMAGE is the JVM image the F5 rule wants set beside the wheel; the native chain never starts it, so a name is enough here.
 export ARCADEDB_WHEEL="$WHEEL" ARCADEDB_SERVER_IMAGE="arcadedb-c25:${COMMIT:0:9}" ARCADEDB_NATIVE_SERVER_IMAGE="$IMG" BENCH_SERVER_BUILD=native
-export BENCH_CPUSET="${BENCH_CPUSET:-4,5}" BENCH_INSTRUMENT=2026-11
+export BENCH_CPUSET="${BENCH_CPUSET:-4-5}" BENCH_INSTRUMENT=2026-11  # a range: runner.split_cpuset parses a-b only
 # SMALL ON PURPOSE: the runner's own diagnostic overrides, --mem (the server's cap) and --heap (-Xmx), at 3g and 2g, so the smoke fits a 4 GB
 # queue slot and the MAXRAM read-back below checks the -Xmx path at 2g. Rows go to their own results file, never into runs.jsonl.
 SMOKE_MEM=3g; SMOKE_HEAP=2g
