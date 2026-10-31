@@ -381,6 +381,10 @@ uv run --project .. --group docs mike alias --update-aliases \
 3. Check "Set as a pre-release"
 4. Or delete the release entirely
 
+## The Last Releases: Deprecation Shims
+
+The bindings move to ArcadeData/arcadedb-python as `arcadedb` (the native build) and `arcadedb-jvm` (the JVM build). The old name `arcadedb-embedded` ends with one shim release, 26.11.1, from `bindings/python/deprecation/` (a pure-Python wheel that warns once and depends on `arcadedb`, the native build, at the same version; the warning names `arcadedb-jvm` for the JVM build). It publishes only after the native `arcadedb` 26.11.1 FINAL exists. `arcadedb-embedded-native` is archived: no further releases and no shim, and its PyPI project has no files. They are not released with the steps above: never push a `26.11.1` tag in this repository, because the release workflow would build and publish the real wheels. The cutover order and the publish options are in `bindings/python/deprecation/README.md`.
+
 ## Troubleshooting
 
 ### PyPI upload fails

@@ -28,6 +28,11 @@ if sys.version_info >= (3, 15):
 if not os.path.isdir(os.path.join(os.path.dirname(os.path.dirname(__file__)), "docs")):
     # the upstream pull request branch has no docs/ directory
     collect_ignore.append("test_docs_examples.py")
+if not os.path.isdir(
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), "deprecation")
+):
+    # the upstream pull request branch has no deprecation/ directory (the shims for the old PyPI names)
+    collect_ignore.append("test_deprecation_shims.py")
 
 
 @pytest.hookimpl(trylast=True)

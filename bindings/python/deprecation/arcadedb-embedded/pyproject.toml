@@ -1,0 +1,47 @@
+# Deprecation shim for arcadedb-embedded (the last release). Built by ../build_shims.py; see ../README.md.
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "arcadedb-embedded"
+version = "26.11.1"
+description = "Deprecated: arcadedb-embedded has moved to arcadedb (import arcadedb), now the native build, not the JVM build; for the JVM build use arcadedb-jvm. Last release, a thin shim."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Taewoon Kim", email = "taewoon@humem.ai" }]
+keywords = ["arcadedb", "deprecated", "moved", "database"]
+classifiers = [
+    "Development Status :: 7 - Inactive",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Database",
+]
+# The shim installs exactly the package it points to, at the same version.
+dependencies = ["arcadedb==26.11.1"]
+
+# The extras people installed from the old name, forwarded to the extras of `arcadedb` (the native wheel defines numpy, arrow, pandas and polars; the old `vector` extra was numpy). build_shims.py checks this block.
+[project.optional-dependencies]
+vector = ["arcadedb[numpy]==26.11.1"]
+arrow = ["arcadedb[arrow]==26.11.1"]
+pandas = ["arcadedb[pandas]==26.11.1"]
+polars = ["arcadedb[polars]==26.11.1"]
+
+[project.urls]
+Homepage = "https://github.com/ArcadeData/arcadedb-python"
+Documentation = "https://docs.arcadedb.com/arcadedb-python/"
+Source = "https://github.com/ArcadeData/arcadedb-python"
+Issues = "https://github.com/ArcadeData/arcadedb-python/issues"
+"Replaced by" = "https://pypi.org/project/arcadedb/"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/arcadedb_embedded"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "README.md", "LICENSE", "pyproject.toml"]
