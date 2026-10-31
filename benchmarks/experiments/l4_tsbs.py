@@ -274,7 +274,8 @@ class ArcadeTS(BulkRead):
     name = "arcadedb_ts_doc"
 
     def connect(self):
-        import arcadedb_embedded as arcadedb
+        import _arcadedb_import
+        arcadedb = _arcadedb_import.load()
         self._arcadedb = arcadedb
         heap = os.environ.get("ARCADEDB_HEAP", "6g")
         self.db = arcadedb.create_database("/tmp/l4_arcade",

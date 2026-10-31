@@ -1056,7 +1056,8 @@ class ArcadeTPC:
     durability = bench_common.DURABILITY_ARCADEDB
 
     def connect(self):
-        import arcadedb_embedded as arcadedb
+        import _arcadedb_import
+        arcadedb = _arcadedb_import.load()
         self._a = arcadedb
         heap = os.environ.get("ARCADEDB_HEAP", "4g")
         self.db = arcadedb.create_database("/tmp/tpc_arcade",
@@ -1067,10 +1068,9 @@ class ArcadeTPC:
                                            # than a default someone remembered.
                                            jvm_kwargs={"heap_size": heap,
                                                        "jvm_args": bench_common.arcade_jvm_args()})
-        from importlib.metadata import version as _pv
-        self.version = _pv("arcadedb-embedded")
+        self.version = _arcadedb_import.dist_version()
         # ASKED, not asserted (#81's standard, doubled by #90's second class).
-        self.durability = bench_common.arcade_durability_readback()
+        self.durability = bench_common.arcade_durability_readback(db=self.db)
         qr = bench_common.arcade_query_ram_readback()      # {} unless the query heap budget override is on (DECISIONS #175)
         if qr:
             self.row_extra = {**(getattr(self, "row_extra", None) or {}), **qr}
@@ -1955,6 +1955,7 @@ def main():
     with _beat.phase("connect", backend=args.backend):
         b.connect()
     out["engine_version"] = b.version
+    out["engine_backend"] = bench_common.engine_backend()
     t0 = time.perf_counter()
     with _beat.phase("build", n=len(li)):
         b.build(li, part)

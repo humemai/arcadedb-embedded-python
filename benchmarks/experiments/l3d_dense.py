@@ -584,7 +584,8 @@ class ArcadeEmbedded(Base):
         return canonical_quant_label(os.environ.get("BENCH_DENSE_QUANT", ""))
 
     def connect(self):
-        import arcadedb_embedded as arcadedb
+        import _arcadedb_import
+        arcadedb = _arcadedb_import.load()
         self._a = arcadedb
         heap = os.environ.get("ARCADEDB_HEAP", "4g")
         # ARCADEDB_EXTRA_JVM_ARGS: space-separated extras (e.g. an
@@ -649,8 +650,7 @@ class ArcadeEmbedded(Base):
             "/tmp/l3d_arcade",
             jvm_kwargs={"heap_size": heap,
                         "jvm_args": extra.strip() or None})
-        from importlib.metadata import version as _pv
-        self.version = _pv("arcadedb-embedded")
+        self.version = _arcadedb_import.dist_version()
 
     def build(self, vecs):
         db = self.db
@@ -3261,6 +3261,7 @@ def main():
         b.connect()
     out["connect_s"] = round(time.perf_counter() - t0, 3)
     out["engine_version"] = b.version
+    out["engine_backend"] = bench_common.engine_backend()
 
     t0 = time.perf_counter()
     with _beat.phase("build", n=len(train)):

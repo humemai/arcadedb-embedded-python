@@ -494,6 +494,11 @@ def arcade_query_ram_readback():
         return {"arcadedb_query_max_heap_ram_mb": got,
                 "arcadedb_query_max_heap_ram_source": "read from the engine (GlobalConfiguration.QUERY_MAX_HEAP_RAM)"}
     except Exception as e:  # noqa: BLE001
+        if engine_backend() == "native":
+            # arcadedb.queryMaxHeapRAM is SCOPE.JVM: schema:database does not list it, and the native build has no JPype to ask with.
+            return {"arcadedb_query_max_heap_ram_mb": n,
+                    "arcadedb_query_max_heap_ram_source": "requested as the isolate argument -Darcadedb.queryMaxHeapRAM (a JVM-scope setting: "
+                                                          "SELECT settings FROM schema:database does not list it, so the engine cannot be asked)"}
         return {"arcadedb_query_max_heap_ram_mb": n,
                 "arcadedb_query_max_heap_ram_source": f"requested via the JVM argument (the engine could not be asked, {e.__class__.__name__})"}
 
@@ -518,7 +523,30 @@ ARCADE_SERVER_DURABILITY_NOTE = (" (set on the server's JAVA_OPTS by runner.py a
                                  "durability_server_flags; the server exposes no read-back)")
 
 
-def arcade_durability_readback(fallback_cls=None):
+_ENGINE_SETTINGS = {}
+
+
+def engine_database_settings(db):
+    """{key: value} of the database-scoped settings the ENGINE reports for an open database, asked in SQL so it is one code path on both
+    builds (the native package has no JPype): `SELECT settings FROM schema:database` lists every GlobalConfiguration entry of SCOPE.DATABASE
+    with the value in force for that database (checked at engine e353330c5c, FetchFromSchemaDatabaseStep, and on the native wheel).
+    JVM-scoped settings (arcadedb.queryMaxHeapRAM) are not in the list.
+    """
+    row = db.query("sql", "SELECT settings FROM schema:database").first()
+    return {s["key"]: s["value"] for s in (row.get("settings") or [])}
+
+
+def remember_engine_settings(db):
+    """Read the settings now and keep them, for a lane that closes its database before the row is stamped. Returns the dict; {} when it cannot be read."""
+    try:
+        _ENGINE_SETTINGS.clear()
+        _ENGINE_SETTINGS.update(engine_database_settings(db))
+    except Exception:  # noqa: BLE001
+        _ENGINE_SETTINGS.clear()
+    return dict(_ENGINE_SETTINGS)
+
+
+def arcade_durability_readback(fallback_cls=None, db=None):
     """ASK THE ENGINE what txWalFlush it is running at, do not assert it.
 
     #81's standard for every durability string on a row is that it was read out
@@ -530,12 +558,21 @@ def arcade_durability_readback(fallback_cls=None):
 
     Returns the string for the value the engine reports, or the asserted string
     with a note when the engine cannot be asked -- never silence.
+
+    HOW IT ASKS (26.11.1, one path for both packages). txWalFlush is a SCOPE.DATABASE setting, so the engine answers in SQL
+    (`SELECT settings FROM schema:database`) on the JVM and on the native build alike: from `db` when the caller has the open database, else from
+    the snapshot `remember_engine_settings(db)` took, else, on the JVM build only, from GlobalConfiguration through JPype as before. The native
+    build has no JPype and so can only be asked through a database; a native caller that passes none gets the asserted string and its reason.
     """
     want = at_class(DURABILITY_ARCADEDB, fallback_cls)
     try:
-        import jpype
-        gc = jpype.JClass("com.arcadedb.GlobalConfiguration")
-        value = int(gc.TX_WAL_FLUSH.getValue())
+        settings = engine_database_settings(db) if db is not None else dict(_ENGINE_SETTINGS)
+        if "arcadedb.txWalFlush" in settings:
+            value = int(settings["arcadedb.txWalFlush"])
+        else:
+            import jpype
+            gc = jpype.JClass("com.arcadedb.GlobalConfiguration")
+            value = int(gc.TX_WAL_FLUSH.getValue())
     except Exception as e:  # noqa: BLE001
         return want + f" (asserted: the engine could not be asked, {e.__class__.__name__})"
     if value == 0:
@@ -786,6 +823,17 @@ def _host_identity():
     return name or "unknown"
 
 
+def engine_backend():
+    """"native" or "jvm": the package this process loaded, else the build of the ArcadeDB server it talks to (BENCH_ARCADEDB_SERVER_BUILD, set by the runner on a served ArcadeDB arm's client), else None. Lanes that set engine_version by hand stamp it too."""
+    try:
+        import _arcadedb_import
+        got = _arcadedb_import.loaded_backend()
+    except Exception:
+        got = None
+    # A served ArcadeDB arm's client container never imports the package: the runner names the build of the SERVER it started (#222).
+    return got or os.environ.get("BENCH_ARCADEDB_SERVER_BUILD", "").strip() or None
+
+
 def run_conditions(**extra):
     """The conditions this process is actually running under, read not asserted.
 
@@ -908,12 +956,23 @@ def run_conditions(**extra):
         "ts_utc": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
     }
     try:
-        from importlib.metadata import version as _v
-        out["engine_version"] = _v("arcadedb-embedded")
+        import _arcadedb_import
+        out["engine_version"] = _arcadedb_import.dist_version()
     except Exception as e:
         out["engine_version"] = f"unknown ({e.__class__.__name__})"
     # THE JPYPE THIS PROCESS RAN (CAMPAIGN 7 row 73): empty unless the process imported it.
     out.update(jpype_fields())
+    # WHICH ENGINE BUILD THIS PROCESS RAN, "native" or "jvm" (arcadedb.__backend__). engine_version is the same string for the
+    # `arcadedb` and `arcadedb-jvm` wheels of one release, so the version alone cannot tell the two arms apart. NOT named `backend`:
+    # that field is already the arm name (`arcadedb_sparse_embedded`, ...).
+    out["engine_backend"] = engine_backend()
+    # THE NATIVE HEAP AND SETTINGS, as the isolate received them (ARCADEDB_NATIVE_ISOLATE_ARGS, e.g. "-Xmx4g -Darcadedb.txWalFlush=0"): the
+    # native counterpart of the JVM's -Xmx/-D arguments, which the native package ignores. None on the JVM build and for every other arm.
+    try:
+        import _arcadedb_import
+        out["native_isolate_args"] = _arcadedb_import.effective_native_args()
+    except Exception:
+        out["native_isolate_args"] = None
     out.update(extra)
     return out
 

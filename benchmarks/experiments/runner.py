@@ -1714,6 +1714,41 @@ for _be in BATCH_ENDPOINT_BACKENDS:
     BACKENDS[_be] = _with_http_body_limit(BACKENDS[_be])
 
 
+# THE SERVER SETTINGS BOTH SERVER ARMS RUN WITH, EXPLICIT (#222 (3)). The JVM server image left four of them to its own defaults: the server
+# mode (development), the HTTP bind host (0.0.0.0), the HTTP port (2480) and, at the relaxed durability class, txWalFlush (0). The native
+# server image takes its settings as the same -D tokens on its command line, so the defaults of two different builds would have been the
+# only thing keeping the servers equal. They are written out here for every served ArcadeDB arm, the strict class replaces the txWalFlush
+# token (durability_server_patch), and the runner reads each one back from the running engine (arcadedb_settings_readback) and refuses a cell
+# whose engine answers otherwise. NOT made explicit: arcadedb.maxPageRAM (the page cache). Neither build is given a value, because no arm
+# of the campaign sets one; it is read back and stamped on both servers, so a difference is visible (a gate in arm_identity compares it).
+EXPLICIT_SERVER_SETTINGS = ("arcadedb.server.mode=development", "arcadedb.server.httpIncomingHost=0.0.0.0",
+                            "arcadedb.server.httpIncomingPort=2480", "arcadedb.txWalFlush=0")
+PAGE_CACHE_KEY = "arcadedb.maxPageRAM"
+STAMPED_SETTING_KEYS = tuple(k.split("=")[0] for k in EXPLICIT_SERVER_SETTINGS) + (PAGE_CACHE_KEY,)
+
+
+def _with_explicit_settings(cfg):
+    """A copy of a served ArcadeDB arm's launch configuration whose JAVA_OPTS also carries each EXPLICIT_SERVER_SETTINGS entry it lacks."""
+    out = dict(cfg)
+    env, hits = list(cfg["server_env"]), 0
+    for i, e in enumerate(env):
+        if isinstance(e, str) and e.startswith("JAVA_OPTS="):
+            for tok in EXPLICIT_SERVER_SETTINGS:
+                if f"-D{tok.split('=')[0]}=" not in e:
+                    e = e + f" -D{tok}"
+            env[i] = e
+            hits += 1
+    if hits != 1:
+        raise SystemExit(f"a served ArcadeDB arm must carry exactly one JAVA_OPTS entry (found {hits})")
+    out["server_env"] = env
+    return out
+
+
+for _be, _cfg in list(BACKENDS.items()):
+    if "arcadedb" in _be and _cfg.get("topology") == "client_server" and str(_cfg.get("server_image", "")).startswith("arcadedata/arcadedb"):
+        BACKENDS[_be] = _with_explicit_settings(_cfg)
+
+
 # THE QUERY HEAP BUDGET OVERRIDE (DECISIONS #175; bench_common.QUERY_RAM_ENV): OFF unless the launching environment sets the variable. The
 # repair stage for the l1tpc tpch10 olap cells sets it, and then the served documents arm is launched with the flag; with the variable unset
 # BACKENDS is exactly what it was, so the running chain is unchanged by construction (test_overrides holds that).
@@ -1802,7 +1837,10 @@ _LOCAL_ENGINE_COMMIT = os.environ.get("ARCADEDB_ENGINE_COMMIT", "").strip() or N
 # THE STAGE'S PINNED ARCADEDB VERSION, and the image tag that names it (engine_pin.py, 2026-10-22). BACKENDS says `dbbench:arcadedb`, the
 # logical build target; the image a cell runs is `dbbench:arcadedb-<version>`, swapped in below, so no cell can start on a floating tag.
 import engine_pin  # noqa: E402
+import arm_identity as _AI  # noqa: E402
 _ENGINE_PIN = engine_pin.pin_from_wheel(_LOCAL_WHEEL)
+# The build the wheel is ("native" / "jvm", "" for the older arcadedb_embedded wheel): part of the image tag and read back from the image.
+_ENGINE_BACKEND = engine_pin.backend_from_wheel(_LOCAL_WHEEL)
 
 
 def _require_engine_commit(tier, backends):
@@ -1885,10 +1923,68 @@ if _LOCAL_SERVER_IMAGE:
           f"server={_LOCAL_SERVER_IMAGE} ({_swapped} server arms swapped)")
 
 
+# THE NATIVE SERVER ARM (#222). Upstream publishes an official native-image server, arcadedata/arcadedb:<version>-native (built by its
+# native-image.yml from native/pom.xml). It is addressed exactly like the JVM Docker server: same client code, cpuset, memory cap and split,
+# same explicit settings. It differs in how it is configured: the entrypoint is the native executable and takes `-D<setting>=<value>` and
+# `-Xmx<heap>` as command-line arguments (there is no shell, no JAVA_OPTS, no server.sh). native_server_arm derives that command line FROM the
+# JVM arm's own JAVA_OPTS, so the two servers are configured from one list by construction. A chain whose wheel is the native build runs
+# the native server image for every served ArcadeDB arm; the JVM chain runs the Docker JVM image. Same engine commit for all four arms.
+_LOCAL_NATIVE_SERVER_IMAGE = os.environ.get("ARCADEDB_NATIVE_SERVER_IMAGE", "").strip()
+
+
+_SERVER_BUILD_ENV = os.environ.get("BENCH_SERVER_BUILD", "").strip()
+if _SERVER_BUILD_ENV and _SERVER_BUILD_ENV != (_ENGINE_BACKEND or "jvm"):
+    raise SystemExit(f"REFUSING: BENCH_SERVER_BUILD={_SERVER_BUILD_ENV} but the pinned wheel is the {_ENGINE_BACKEND or 'jvm'} build. A chain runs the "
+                     "served ArcadeDB arm of its own build: the native wheel with the native server image, the JVM wheel with the Docker JVM server.")
+
+
+def native_server_arm(cfg, image):
+    """A copy of a served ArcadeDB arm's launch configuration that starts upstream's native server image: the arm's `-D` tokens (from its
+    JAVA_OPTS) and `-Xmx{heap}` (from ARCADEDB_OPTS_MEMORY) as the container command, no environment. JVM-only flags (-XX:...) have no native
+    meaning and are dropped; they are recorded in `native_dropped_flags`, which lands on the row."""
+    out = dict(cfg)
+    toks, dropped, heap = [], [], None
+    for i, e in enumerate(cfg["server_env"]):
+        if not (isinstance(e, str) and e not in ("-e",)):
+            continue
+        if e.startswith("ARCADEDB_OPTS_MEMORY="):
+            m = re.findall(r"-Xmx\S+", e)
+            heap = m[-1] if m else None
+        elif e.startswith("JAVA_OPTS="):
+            for t in e.split("=", 1)[1].split():
+                (toks if t.startswith("-D") else dropped).append(t)
+    if not toks or not heap:
+        raise SystemExit("native_server_arm: the JVM arm has no -D settings or no -Xmx to carry over")
+    seen, uniq = set(), []
+    for t in reversed(toks):                 # the JVM takes the last of two tokens for one setting; the native image the first
+        if t.split("=", 1)[0] not in seen:
+            seen.add(t.split("=", 1)[0])
+            uniq.append(t)
+    out["server_env"] = []
+    out["server_cmd"] = list(cfg.get("server_cmd", [])) + [heap] + list(reversed(uniq))
+    out["server_image"] = image
+    out["server_build"] = "native"
+    out["native_dropped_flags"] = dropped
+    return out
+
+
+if _ENGINE_BACKEND == "native":
+    if not _LOCAL_NATIVE_SERVER_IMAGE:
+        raise SystemExit("REFUSING: the pinned wheel is the native build, so the served ArcadeDB arms run upstream's native server image, and\n"
+                         "ARCADEDB_NATIVE_SERVER_IMAGE is unset (F5: wheel, JVM server image and native server image are ONE engine commit).")
+    _n_native = 0
+    for _name, _cfg in list(BACKENDS.items()):
+        if (_AI.served({"backend": _name}) and _cfg.get("topology") == "client_server"
+                and _cfg.get("server_image") == _LOCAL_SERVER_IMAGE and not _cfg.get("jvm_defaults")):
+            BACKENDS[_name] = native_server_arm(_cfg, _LOCAL_NATIVE_SERVER_IMAGE)
+            _n_native += 1
+    print(f"[engine] native chain: served ArcadeDB arms on {_LOCAL_NATIVE_SERVER_IMAGE} ({_n_native} arms)")
+
+
 if _ENGINE_PIN:
     for _cfg in BACKENDS.values():
         if _cfg.get("image") == engine_pin.LOGICAL_IMAGE:
-            _cfg["image"] = engine_pin.versioned_image(_ENGINE_PIN)
+            _cfg["image"] = engine_pin.versioned_image(_ENGINE_PIN, _ENGINE_BACKEND)
 
 
 # Which backends run on a JVM, and therefore have a heap worth recording and
@@ -2094,6 +2190,14 @@ def _cpuset_size(cpuset):
     return n
 
 
+def _set_tx_wal_flush(text, value):
+    """`text` with its -Darcadedb.txWalFlush=<n> token set to `value` (replaced where present, appended otherwise): one token, never two,
+    because the JVM takes the last and the native image the first."""
+    if re.search(r"-Darcadedb\.txWalFlush=\S+", text):
+        return re.sub(r"-Darcadedb\.txWalFlush=\S+", f"-Darcadedb.txWalFlush={value}", text)
+    return text + f" -Darcadedb.txWalFlush={value}"
+
+
 def durability_server_patch(cfg, cls):
     """The SERVED half of the durability axis (DECISIONS #90).
 
@@ -2122,8 +2226,12 @@ def durability_server_patch(cfg, cls):
     # own JVM, appended to JAVA_OPTS.
     for i, e in enumerate(env):
         if isinstance(e, str) and e.startswith("JAVA_OPTS="):
-            env[i] = e + f" -Darcadedb.txWalFlush={bench_common.ARCADE_STRICT_TX_WAL_FLUSH}"
+            env[i] = _set_tx_wal_flush(e, bench_common.ARCADE_STRICT_TX_WAL_FLUSH)
             notes.append(f"txWalFlush={bench_common.ARCADE_STRICT_TX_WAL_FLUSH}")
+    # ArcadeDB served from the native image: the same token, on the command line.
+    if any(isinstance(c, str) and c.startswith("-Darcadedb.txWalFlush=") for c in cmd):
+        cmd = [_set_tx_wal_flush(c, bench_common.ARCADE_STRICT_TX_WAL_FLUSH) if isinstance(c, str) else c for c in cmd]
+        notes.append(f"txWalFlush={bench_common.ARCADE_STRICT_TX_WAL_FLUSH}")
     # QuestDB: its commit mode is a server setting.
     if "questdb" in str(cfg.get("server_image", "")):
         env += ["-e", "QDB_CAIRO_COMMIT_MODE=sync"]
@@ -2218,7 +2326,7 @@ def build_manifest(ts, args, workers, shards, jobs):
 
 
 # The image the embedded ArcadeDB arms run in (BACKENDS "image"): the only bench image whose wheel pulls JPype in.
-ARCADEDB_BENCH_IMAGE = engine_pin.versioned_image(_ENGINE_PIN) if _ENGINE_PIN else engine_pin.LOGICAL_IMAGE
+ARCADEDB_BENCH_IMAGE = engine_pin.versioned_image(_ENGINE_PIN, _ENGINE_BACKEND) if _ENGINE_PIN else engine_pin.LOGICAL_IMAGE
 
 
 def jpype_version_in_image(image, timeout=180):
@@ -2251,6 +2359,8 @@ def _arcadedb_images(jobs):
         if str(cfg.get("image") or "").startswith(engine_pin.LOGICAL_IMAGE):
             emb.add(cfg["image"])
         img = str(cfg.get("server_image") or "")
+        if _LOCAL_NATIVE_SERVER_IMAGE and img == _LOCAL_NATIVE_SERVER_IMAGE:
+            continue   # a scratch image: no jars and no shell to read; its engine commit is read from SELECT version() at every cell start
         if img.startswith("arcadedata/arcadedb") or (_LOCAL_SERVER_IMAGE and img == _LOCAL_SERVER_IMAGE):
             srv.add(img)
     return emb, srv
@@ -2269,10 +2379,10 @@ def _require_engine_pin(jobs):
                          "(engine_pin.py).")
     for img in sorted(emb | {i for j in jobs for i in [BACKENDS[j["backend"]].get("image"), BACKENDS[j["backend"]].get("server_image")]
                              if i and i.startswith("dbbench:")}):
-        why = engine_pin.check_image_tag(img, _ENGINE_PIN)
+        why = engine_pin.check_image_tag(img, _ENGINE_PIN, _ENGINE_BACKEND)
         if why:
             raise SystemExit(f"REFUSING: {why}.\n  Rebuild with ARCADEDB_WHEEL=<the pinned wheel> ./build_images.sh arcadedb.")
-    readback, problems = engine_pin.verify(_ENGINE_PIN, emb, srv)
+    readback, problems = engine_pin.verify(_ENGINE_PIN, emb, srv, backend=_ENGINE_BACKEND, commit=_LOCAL_ENGINE_COMMIT or "")
     if problems:
         raise SystemExit("REFUSING: an ArcadeDB arm would not run the stage's pinned version (engine_pin.py).\n  "
                          + "\n  ".join(problems)
@@ -2759,6 +2869,11 @@ def observe_server(cid):
         envs = " ".join(json.loads(env))
     except Exception:
         envs = ""
+    # the native server image takes its settings and heap as the container's command, not its environment
+    try:
+        envs += " " + " ".join(json.loads(sh(["docker", "inspect", "-f", "{{json .Config.Cmd}}", cid]) or "null") or [])
+    except Exception:  # noqa: BLE001
+        pass
     # TWO SPELLINGS, because -Xmx is not how every JVM image takes its heap.
     # This used to match -Xmx only, so ArcadeDB and Elasticsearch (ES_JAVA_OPTS
     # carries -Xmx) had a witness and NEO4J DID NOT: it takes
@@ -2854,6 +2969,130 @@ def server_jvm_readback(cid):
     except Exception as e:  # noqa: BLE001 - recorded, never swallowed
         out["server_jvm_readback_error"] = f"{type(e).__name__}: {e}"
     return out
+
+
+_REQ_RE = re.compile(r"-D(arcadedb\.[A-Za-z0-9_.]+)=(\S+)")
+
+
+def requested_settings(text):
+    """{key: value} of the `-Darcadedb.*` tokens in a launch text (environment and command); the last of two for one key wins. No password."""
+    got = {k: v for k, v in _REQ_RE.findall(text or "")}
+    got.pop("arcadedb.server.rootPassword", None)
+    return got
+
+
+def settings_problems(got, requested):
+    """Requested settings the engine LISTS and reports with another value (empty: fine). A key the engine does not list is not a problem here:
+    `server_settings_unlisted` names it on the row."""
+    out = []
+    for k, want in sorted((requested or {}).items()):
+        have = (got or {}).get(k)
+        if have is not None and str(have) != str(want):
+            out.append(f"setting {k} was requested as {want} and the engine runs {have}")
+    return out
+
+
+def engine_commit_problems(got, pinned):
+    """The server's `SELECT version()` commit against the pin (ARCADEDB_ENGINE_COMMIT); [] when no pin is claimed."""
+    if not pinned:
+        return []
+    if not got:
+        return ["the server's engine commit could not be read from SELECT version()"]
+    return [] if (got.startswith(pinned[:7]) or pinned.startswith(got[:7])) else [f"the server runs engine commit {got[:9]}, the pin is {pinned[:9]}"]
+
+
+# THE SERVER'S OWN START LINE, on both builds (ArcadeDBServer.java): `ArcadeDB Server started in 'development' mode (CPUs=4 MAXRAM=2.00GB)`, with
+# Runtime.availableProcessors() and Runtime.maxMemory(). It is the witness that the requested -Xmx and the container's cpuset reached the engine.
+_STARTED_RE = re.compile(r"ArcadeDB Server started in '([^']*)' mode \(CPUs=(\d+) MAXRAM=([^)]*)\)")
+_SIZE_RE = re.compile(r"\s*([\d.,]+)\s*([KMGT]?)i?B?\s*", re.I)
+HEAP_TOLERANCE = 0.05     # the size string is rounded and a collector may reserve a little of -Xmx
+
+
+def size_to_bytes(text):
+    """'2.00GB' / '512MB' / '1.5 GiB' -> bytes (base 1024), None when it is not a size."""
+    m = _SIZE_RE.fullmatch(str(text or ""))
+    if not m:
+        return None
+    return int(float(m.group(1).replace(",", "")) * 1024 ** (" KMGT".index(m.group(2).upper() or " ")))
+
+
+def parse_server_started(log):
+    """{server_mode, server_cpus, server_max_heap, server_max_heap_bytes} from the LAST start line of a server log, or {}."""
+    hits = _STARTED_RE.findall(log or "")
+    if not hits:
+        return {}
+    mode, cpus, maxram = hits[-1]
+    return {"server_mode": mode, "server_cpus": int(cpus), "server_max_heap": maxram.strip(), "server_max_heap_bytes": size_to_bytes(maxram)}
+
+
+def server_log_problems(got, want_heap_bytes, want_cpus, want_mode=None):
+    """The start line against what was asked: the heap within HEAP_TOLERANCE of the requested -Xmx (when one was requested), the CPUs equal to the
+    cpuset's size, the mode equal to the requested one. A missing line is a problem: the witness must exist."""
+    if not got:
+        return ["the server's start line (CPUs, MAXRAM) is not in its log"]
+    out = []
+    mb = got.get("server_max_heap_bytes")
+    if want_heap_bytes:
+        if not mb or abs(mb - want_heap_bytes) > HEAP_TOLERANCE * want_heap_bytes:
+            out.append(f"the server reports MAXRAM {got.get('server_max_heap')} and -Xmx asked for {want_heap_bytes} bytes")
+    if want_cpus and got.get("server_cpus") != want_cpus:
+        out.append(f"the server sees {got.get('server_cpus')} CPUs and the container's cpuset has {want_cpus}")
+    if want_mode and got.get("server_mode") != want_mode:
+        out.append(f"the server runs in '{got.get('server_mode')}' mode and '{want_mode}' was requested")
+    return out
+
+
+def arcadedb_server_log_readback(cid, tries=15):
+    """parse_server_started over the container's log, waiting a few seconds for the line (it follows the HTTP ready line)."""
+    got = {}
+    for _ in range(tries):
+        got = parse_server_started(docker_logs(cid))
+        if got:
+            break
+        time.sleep(1)
+    return got
+
+
+def arcadedb_settings_readback(cid, text):
+    """What a served ArcadeDB (either build) runs with, asked of the engine over HTTP, before the client starts and outside every timer:
+    `GET /api/v1/server?mode=default` (server-scoped settings with the value in force), `SELECT FROM schema:database` (database-scoped ones,
+    txWalFlush among them) and `SELECT version()` (the engine's own build stamp, so the commit is evidence). Returns server_settings (the
+    requested keys plus STAMPED_SETTING_KEYS), server_settings_requested, server_settings_unlisted, server_engine_version and
+    server_engine_commit. Never ends a cell; what it could not read is named in server_settings_source."""
+    requested = requested_settings(text)
+    pw = re.search(r"-Darcadedb\.server\.rootPassword=(\S+)", text)
+    db = re.search(r"-Darcadedb\.server\.defaultDatabases=(\w+)", text)
+    auth = {"Authorization": "Basic " + base64.b64encode(f"root:{pw.group(1) if pw else 'dbbenchpass'}".encode()).decode()}
+    ips = (sh(["docker", "inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}", cid]) or "").split()
+    listed, source, version = {}, "the engine could not be asked from the host", None
+    for ip in ips[:1]:
+        base = f"http://{ip}:2480/api/v1"
+        for attempt in range(3):
+            try:
+                req = urllib.request.Request(base + "/server?mode=default", headers=auth)
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    listed.update({x["key"]: x["value"] for x in json.load(resp)["settings"]})
+                for cmd in ("SELECT FROM schema:database", "SELECT version() AS v"):
+                    req = urllib.request.Request(f"{base}/query/{db.group(1) if db else 'bench'}", headers={**auth, "Content-Type": "application/json"},
+                                                 data=json.dumps({"language": "sql", "command": cmd}).encode())
+                    with urllib.request.urlopen(req, timeout=15) as resp:
+                        res = json.load(resp)["result"][0]
+                    if "settings" in res:
+                        listed.update({x["key"]: x["value"] for x in res["settings"]})
+                    elif "v" in res:
+                        version = res["v"]
+                source = "read from the engine over HTTP (server?mode=default, schema:database, SELECT version())"
+                break
+            except Exception:  # noqa: BLE001 - recorded in the source field
+                time.sleep(1)
+    keys = sorted(set(requested) | set(STAMPED_SETTING_KEYS))
+    m = engine_pin.BUILD_RE.search(str(version or ""))
+    return {"server_settings": {k: listed.get(k) for k in keys},
+            "server_settings_requested": requested,
+            "server_settings_unlisted": [k for k in keys if k not in listed],
+            "server_settings_source": source,
+            "server_engine_version": version,
+            "server_engine_commit": m.group(1) if m else None}
 
 
 def image_defaults_findings(row, server_mem):
@@ -3298,7 +3537,7 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             if os.environ.get("BENCH_PG_FIT", "").lower() == "off":
                 # PostgreSQL's own defaults, for a same-run A/B only (PG_FIT_CMD).
                 _fit.update(pg_workers=2, pg_par=8, pg_procs=8, pg_work_mem="4MB")
-            server_cmd = [c.format(sb=f"{max(1, srv_gb // 4)}GB",
+            server_cmd = [c.format(heap=heap, sb=f"{max(1, srv_gb // 4)}GB",
                                    ecs=f"{max(1, srv_gb * 3 // 4)}GB",
                                    mwm=f"{max(1, srv_gb // 2)}GB", **_fit)
                           for c in be.get("server_cmd", [])]
@@ -3331,6 +3570,10 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             if be.get("sidecars"):
                 row["sidecars"] = {_s["name"]: {"image": _s["image"], "mem": _s["mem"]} for _s in be["sidecars"]}
             row.update(be.get("stamp", {}))
+            if "arcadedb" in job["backend"]:
+                row["server_build"] = be.get("server_build", "jvm")      # the build of the SERVER this cell talks to (#222)
+                if be.get("native_dropped_flags") is not None:
+                    row["native_dropped_flags"] = " ".join(be["native_dropped_flags"])
             server_cid = sh(["docker", "run", "-d", "--network", net_name,
                              *RUNNER_LABELS,
                              "--name", f"srv-{run_id}",
@@ -3362,8 +3605,22 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             # THE JVM FLAGS THE SERVED ARCADEDB RUNS, read from the process (CAMPAIGN 7
             # row 69): on every served ArcadeDB arm, so the main arms' G1 and half-memory -Xmx
             # are evidence beside the image-defaults arm's ZGC and 75%.
-            if "arcadedb" in job["backend"]:
+            if "arcadedb" in job["backend"] and be.get("server_build") != "native":
                 row.update(server_jvm_readback(server_cid))
+            if "arcadedb" in job["backend"]:
+                # THE SETTINGS IN FORCE, asked of the engine on both servers; a setting written is not a setting in force (#222 (3)).
+                _rb = arcadedb_settings_readback(server_cid, " ".join(
+                    [str(x) for x in be.get("server_env", [])] + [str(x) for x in server_cmd]))
+                row.update(_rb)
+                _bad = settings_problems(_rb.get("server_settings"), _rb.get("server_settings_requested"))
+                _bad += engine_commit_problems(_rb.get("server_engine_commit"), _LOCAL_ENGINE_COMMIT)
+                _lg = arcadedb_server_log_readback(server_cid)
+                row.update(_lg)
+                _bad += server_log_problems(_lg, None if be.get("jvm_defaults") else mem_bytes(heap), _cpuset_size(cpuset),
+                                            (_rb.get("server_settings_requested") or {}).get("arcadedb.server.mode"))
+                if _bad:
+                    row["error"] = "; ".join(_bad) + "; the cell is not the one we specified"
+                    return row
             if be.get("jvm_defaults"):
                 row["server_jvm_defaults"] = True
                 _bad = image_defaults_findings(row, server_mem)
@@ -3417,6 +3674,8 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             client_caps = ["--memory", str(client_mem), "--memory-swap", str(client_mem)]
             bench_env = ["-e", f"BENCH_SERVER_HOST=srv-{run_id}",
                          "-e", f"BENCH_SERVER_PORT={be['server_port']}"]
+            if "arcadedb" in job["backend"]:
+                bench_env += ["-e", f"BENCH_ARCADEDB_SERVER_BUILD={row['server_build']}"]
             # where the client reaches a sidecar (Milvus bulk import uploads its files to MinIO)
             bench_env += [x for _n, _h in _sc.items() for x in ("-e", f"BENCH_SIDECAR_{_n.upper()}={_h}")]
         else:
@@ -4478,6 +4737,7 @@ def main():
                     active_backends.discard(job["backend"])
                     cv.notify_all()
             row["manifest"] = ts
+            _AI.stamp_build(row, _ENGINE_BACKEND)   # a killed cell's row names the build its wheel is, not the JVM default
             # `or` rather than a dict default: an EMPTY error string is what
             # made thirty OOM kills look like blank successes.
             status = (row.get("error")

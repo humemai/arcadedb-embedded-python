@@ -504,7 +504,8 @@ class ArcadeEmbedded(Base):
             lambda: self.db.query("sql", "SELECT FROM schema:indexes").to_list())
 
     def connect(self):
-        import arcadedb_embedded as arcadedb
+        import _arcadedb_import
+        arcadedb = _arcadedb_import.load()
         import bench_common      # this retired lane imports nothing else from it
         heap = os.environ.get("ARCADEDB_HEAP", "4g")
         # -Xms is left unset; heap_size sets -Xmx from the cell's memory budget (the bindings' documented practice, PROTOCOL section 7).
@@ -538,7 +539,8 @@ class ArcadeEmbedded(Base):
         that reopened without it would be a different operating point wearing
         the same label.
         """
-        import arcadedb_embedded as arcadedb
+        import _arcadedb_import
+        arcadedb = _arcadedb_import.load()
         import bench_common      # this retired lane imports nothing else from it
         heap = os.environ.get("ARCADEDB_HEAP", "4g")
         self.db = arcadedb.open_database(
@@ -704,6 +706,8 @@ def main():
     b.connect()
     out["connect_s"] = round(time.perf_counter() - t0, 3)
     out["engine_version"] = getattr(b, "version", "?")
+    import bench_common as _bc
+    out["engine_backend"] = _bc.engine_backend()
     out.update(getattr(b, "row_extra", None) or {})
     # F6 provenance: what the engine's pool was actually sized to, and what the
     # cpuset allowed. A cell where these differ is oversubscribed; recording it

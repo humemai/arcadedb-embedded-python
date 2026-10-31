@@ -156,6 +156,13 @@ def test_allow_dev_follows_the_baked_wheel():
     _check("pre-release wheel with BENCH_ALLOW_DEV=0 is flagged",
            len(probs(dev, "BENCH_ALLOW_DEV=0 ./build_images.sh client")), 1)
     _check("pre-release wheel with no assignment is flagged", len(probs(dev, "./build_images.sh client")), 1)
+    # the 26.11.1 package names: arcadedb (native) and arcadedb_jvm, a version that starts with a digit
+    for who in ("arcadedb", "arcadedb_jvm"):
+        dev2 = f'W=dist/{who}-26.11.1.dev0-py3-none-manylinux_2_28_x86_64.whl\n'
+        stable2 = f'W=dist/{who}-26.11.1-py3-none-manylinux_2_28_x86_64.whl\n'
+        _check(f"{who} pre-release wheel with BENCH_ALLOW_DEV=0 is flagged", len(probs(dev2, "BENCH_ALLOW_DEV=0 ./build_images.sh client")), 1)
+        _check(f"{who} stable wheel with BENCH_ALLOW_DEV=0 holds", probs(stable2, "BENCH_ALLOW_DEV=0 ./build_images.sh client"), [])
+    _check("a jar name is not a wheel", queue_lint.wheel_is_prerelease("ls arcadedb-engine-26.11.1-SNAPSHOT.jar"), None)
     _check("no wheel named: only 1 holds",
            (len(probs("", "BENCH_ALLOW_DEV=0 ./build_images.sh client")),
             len(probs("", "BENCH_ALLOW_DEV=1 ./build_images.sh client"))), (1, 0))
