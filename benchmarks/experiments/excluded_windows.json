@@ -1,0 +1,11 @@
+{
+  "comment": "Rows whose ts_utc falls in [from, to) are never landed (land_stage.py step 2, issue #557). Add a window only with its reason and a reference.",
+  "windows": [
+    {
+      "from": "2026-10-31T16:33:00+00:00",
+      "to": "2026-11-01T05:25:00+00:00",
+      "reason": "mini: intel_pstate/no_turbo went back to 0 during stage qC14 (dense, large tier, rep 2); its rows ran 0.40 to 0.75x rep 1 build time while turbo-off stages matched rep 1; qC14 is re-run with turbo off",
+      "ref": "humemai/arcadedb-embedded-python#557"
+    }
+  ]
+}
