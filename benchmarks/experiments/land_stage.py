@@ -35,6 +35,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -55,6 +56,8 @@ def host_name(stem, pin, ext=""):
 # BENCH_RESULTS_DIR (which exists for tests).
 RESULTS = HERE / "results"
 PAYLOAD = RESULTS / "web_benchmarks.json"
+# Time windows whose rows are never landed (#557): a known-bad condition on the bench host, such as turbo on during a stage.
+EXCLUDED_WINDOWS = HERE / "excluded_windows.json"
 # The site's copy of the payload, and the lane page source that names the tables. The landing commits both on the
 # site; only the payload is a generated file (a dry run restores it, never the hand-written page source).
 SITE_PAYLOAD = SITE / "src" / "data" / "dbbench-benchmarks.json"
@@ -341,6 +344,36 @@ def parse_drop_unless(spec):
     return backend, lane, workload, field, value
 
 
+def _utc(ts):
+    """An ISO timestamp as an aware datetime ('Z' or an offset); None when it is missing or unreadable."""
+    try:
+        return datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def load_windows(path=EXCLUDED_WINDOWS):
+    """[(start, end, reason)] from excluded_windows.json, start inclusive and end exclusive. A window that does not parse ends the
+    run: a landing that silently kept a bad window's rows would publish them."""
+    if not Path(path).exists():
+        return []
+    out = []
+    for w in json.loads(Path(path).read_text(encoding="utf-8")).get("windows", []):
+        a, b = _utc(w.get("from")), _utc(w.get("to"))
+        if a is None or b is None or a.tzinfo is None or b.tzinfo is None or not a < b:
+            raise SystemExit(f"{path}: window {w!r} needs timezone-aware 'from' < 'to'")
+        out.append((a, b, str(w.get("reason") or "")))
+    return out
+
+
+def excluded_by_window(row, windows):
+    """The reason of the first window that holds the row's ts_utc, else None (a row without a readable ts_utc is never excluded)."""
+    t = _utc(row.get("ts_utc")) if row.get("ts_utc") else None
+    if t is None or t.tzinfo is None:
+        return None
+    return next((why for a, b, why in windows if a <= t < b), None)
+
+
 def replaced_by_repair(row, u):
     """True when the row is BACKEND on LANE and WORKLOAD and its FIELD is not VALUE (absent counts as not VALUE)."""
     backend, lane, workload, field, value = u
@@ -493,8 +526,12 @@ def main():
     # Before the --exclude filters and before any merge: the whole file is one instrument at one pin or it is not landed.
     screen_pulled_rows(rows, args.pin, host_name("runs_page", args.pin, ".jsonl") + f" on {HOST}")
     unless = [parse_drop_unless(x) for x in args.drop_unless]
-    keep, dropped, other_lane = [], [], []
+    windows = load_windows()
+    keep, dropped, other_lane, in_window = [], [], [], []
     for r in rows:
+        if excluded_by_window(r, windows):
+            in_window.append(r)
+            continue
         if lanes and str(r.get("lane") or "") not in lanes:
             other_lane.append(r)
             continue
@@ -514,6 +551,9 @@ def main():
     filtered = SCRATCH / "runs_page_filtered.jsonl"
     filtered.write_text("".join(json.dumps(r) + "\n" for r in keep))
     print(f"  {len(rows)} rows pulled, {len(dropped)} dropped ({sorted({r.get('backend') for r in dropped})})")
+    if in_window:
+        print(f"  {len(in_window)} row(s) in excluded time windows never landed ({EXCLUDED_WINDOWS.name}; "
+              f"{sorted({str(r.get('lane')) + '/' + str(r.get('backend')) for r in in_window})})")
     # FAILED AND CENSORED CELLS LAND AS WHAT THEY ARE, and this says how many of each. A row with an error or rc != 0 is a
     # failed cell: it merges as a failure and the freeze skips it (make_paper_tables keeps rc == 0 only), so no number is
     # published for it. A row with a `*_censored` flag set is a cell that hit its budget: the flag travels to the page, which
