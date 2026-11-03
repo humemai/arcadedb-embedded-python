@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# bench-cgroup-grant: give the user who ran `sudo` write access to ONE container's cgroup file memory.peak. Nothing else.
+#
+# WHAT. Called as root through sudo with one argument, the full 64-hex id of a running container. It finds that container's
+# cgroup directory, checks that <dir>/memory.peak is a plain file at exactly that path, and runs `chown $SUDO_UID` on it.
+# It touches no other file, changes no mode, loops over nothing, and reads nothing but the one argument and SUDO_UID.
+#
+# WHY. Since Linux 6.12 a write to memory.peak resets the peak, but the reset and the watermark belong to the open file
+# descriptor: only the descriptor that resets sees the per-phase peak. So the benchmark runner itself must open memory.peak
+# read-write, and a root helper that resets on its own descriptor would not help. Docker creates the file owned by root, mode
+# 0644, so a runner that is not root cannot open it for writing. Handing the file to the runner's user, for the one container
+# under measurement, is the narrowest thing that works. The harness (instrument 2026-12, memory_probe.v12_grant) calls this
+# once per measured container; when it is absent or refuses, the harness falls back to the cumulative-rise rule and the row
+# says so (`mem_probe_grant`).
+#
+# INSTALL (done by the host's owner, never by the harness): see host/README.md. In short, copy it to
+# /usr/local/sbin/bench-cgroup-grant owned by root, mode 0755, and allow exactly that path in a sudoers drop-in for the runner's user.
+#
+# EXIT CODES (one line on stderr each):
+#   0 granted   64 usage   65 bad container id   66 SUDO_UID unset, zero or not a number
+#   67 no cgroup directory, or more than one, for that id   68 memory.peak is not a plain file at the expected path
+#   69 chown failed
+set -euo pipefail
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+die() { printf 'bench-cgroup-grant: %s\n' "$2" >&2; exit "$1"; }
+
+[ "$#" -eq 1 ] || die 64 "usage: bench-cgroup-grant <64-hex container id>"
+id=$1
+[[ $id =~ ^[0-9a-f]{64}$ ]] || die 65 "argument is not a full 64-hex container id"
+
+[ -n "${SUDO_UID:-}" ] || die 66 "SUDO_UID is unset (run through sudo)"
+[[ $SUDO_UID =~ ^[0-9]+$ ]] || die 66 "SUDO_UID is not a number"
+[ "$SUDO_UID" -ne 0 ] || die 66 "SUDO_UID is 0 (refusing to grant to root)"
+owner=$SUDO_UID
+
+found=()
+for d in "/sys/fs/cgroup/system.slice/docker-${id}.scope" "/sys/fs/cgroup/docker/${id}"; do
+  if [ -d "$d" ] && [ ! -L "$d" ]; then
+    found+=("$d")
+  fi
+done
+[ "${#found[@]}" -eq 1 ] || die 67 "expected exactly one cgroup directory for that container, found ${#found[@]}"
+
+target="${found[0]}/memory.peak"
+[ -f "$target" ] && [ ! -L "$target" ] || die 68 "memory.peak is not a regular file at $target"
+[ "$(realpath -e -- "$target" 2>/dev/null)" = "$target" ] || die 68 "memory.peak does not resolve to its own path (symlink in the way)"
+
+chown -h -- "$owner" "$target" 2>/dev/null || die 69 "chown of $target failed"

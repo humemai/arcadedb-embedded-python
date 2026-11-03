@@ -54,12 +54,33 @@ V12_ACK_TIMEOUT_S = 900.0     # a settled disk reading can take about a minute p
 V12_DISK_TRIES = 20           # per-phase disk readings: up to this many samples ...
 V12_DISK_SETTLE_S = 3.0       # ... this many seconds apart (2026-11: one sample); two consecutive readings within 1% settle it
 V12_SAMPLE_S = 0.25           # the breakdown sampler's interval, the runner's own
+GRANT_PATH = "/usr/local/sbin/bench-cgroup-grant"   # installed by the host's owner (host/README.md); absent on most hosts
+GRANT_TIMEOUT_S = 5.0
 
 
 def v12():
     """True when the instrument being measured is 2026-12 or later."""
     import bench_common
     return bench_common.instrument_at_least(V12)
+
+
+def v12_grant(cid):
+    """2026-12: ask the host's grant helper (host/bench-cgroup-grant, installed by the host's owner) to give this process write
+    access to the container's memory.peak, so that the per-descriptor reset works for a runner that is not root. Returns
+    `ok`, `absent` (no helper installed: nothing is run) or `refused: <message>`. Any answer but `ok` leaves the cumulative-rise
+    fallback in force; this function never raises."""
+    if not os.path.exists(GRANT_PATH):
+        return "absent"
+    if not re.fullmatch(r"[0-9a-f]{64}", cid or ""):
+        return "refused: not a full 64-hex container id"
+    try:
+        r = subprocess.run(["sudo", "-n", GRANT_PATH, cid], capture_output=True, text=True, timeout=GRANT_TIMEOUT_S)
+    except Exception as e:  # noqa: BLE001
+        return f"refused: {type(e).__name__}: {e}"[:200]
+    if r.returncode == 0:
+        return "ok"
+    lines = ((r.stderr or "") + (r.stdout or "")).strip().splitlines()
+    return f"refused: rc={r.returncode}: {lines[-1] if lines else 'no message'}"[:200]
 
 
 def _ack_timeout_s():
@@ -426,6 +447,7 @@ class HostProbe:
         self.cum_base = {}                      # 2026-12: name -> memory.peak after the previous boundary (no-reset mode)
         self.v12_recs = {}                      # 2026-12: phase -> its 2026-12 reading
         self.psamplers = {}                     # 2026-12: name -> PhaseSampler
+        self.grants = {}                        # 2026-12: name -> answer of v12_grant
         self._disk_s = 0.0
 
     @classmethod
@@ -506,6 +528,8 @@ class HostProbe:
             cg = self.cgroup_dir(sampler.cid) if self.cgroup_dir else None
             if not cg:
                 return None
+            if self.v12:
+                self.grants[name] = v12_grant(sampler.cid)      # before PeakFile opens memory.peak read-write
             self.cgs[name] = (cg, PeakFile(cg))
         return self.cgs[name]
 
@@ -702,6 +726,10 @@ class HostProbe:
             self.thread.join(timeout=5)
         out = fields_from(self.records, self.errors, self.spent_s,
                           any(pf.can_reset for _c, pf in self.cgs.values()), row, self.engine_side)
+        if self.v12 and self.grants:
+            vals = set(self.grants.values())
+            out["mem_probe_grant"] = (next(iter(vals)) if len(vals) == 1
+                                      else ",".join(f"{n}={v}" for n, v in self.grants.items()))
         for _c, pf in self.cgs.values():
             pf.close()
         if self.dir:

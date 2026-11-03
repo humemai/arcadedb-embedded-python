@@ -21,7 +21,7 @@ _PH = "(?:" + "|".join(mp.PHASES) + ")"
 _V12_FIELD = re.compile(
     rf"^(?:mem_{_PH}_(?:peak_kind|peak_unavailable_reason|peak_upper_mib|peak_sampled_mib|peak_owned_sampled_mib|peak_anon_sampled_mib"
     rf"|peak_shmem_sampled_mib|peak_file_sampled_mib|peak_samples|peak_server_mib|peak_client_mib)"
-    rf"|disk_{_PH}_(?:settled|settle_s|note)|phase_{_PH}_probe_s|mem_probe_peak_reset_error)$")
+    rf"|disk_{_PH}_(?:settled|settle_s|note)|phase_{_PH}_probe_s|mem_probe_peak_reset_error|mem_probe_grant)$")
 
 
 def _is_v12_field(k):
@@ -75,7 +75,7 @@ def test_2611_row_schema_is_pinned():
     assert not [k for k in row if _is_v12_field(k)]
 
 
-def test_2611_runs_no_2612_machinery(tmp_path):
+def test_2611_runs_no_2612_machinery(tmp_path, monkeypatch):
     assert bench_common.INSTRUMENT == "2026-11"          # the suite runs on the default instrument
     assert mp.v12() is False
     assert mp._ack_timeout_s() == mp.ACK_TIMEOUT_S
@@ -86,16 +86,21 @@ def test_2611_runs_no_2612_machinery(tmp_path):
         seen.append(kw)
         return {"disk_mb": 1.0}
 
+    helper = tmp_path / "helper"
+    helper.write_text("#!/bin/sh\n")
+    monkeypatch.setattr(mp, "GRANT_PATH", str(helper))             # present, and still never asked
+    monkeypatch.setattr(mp.subprocess, "run", lambda *a, **k: pytest.fail("2026-11 must not run sudo or anything else"))
     host = mp.HostProbe("r11", str(tmp_path / "raw"), exec_fn=lambda cid, argv, timeout=60: (0, ""))
     host.settle_disk_fn = fake_settle
     host.docker_args()
     host.start([("client", FakeSampler("c", [(0, 100), (0.25, 7340032)]))], lambda cid: cg, lambda cid: {"disk_mb": 7.0})
-    assert host.v12 is False and host.psamplers == {} and host.disk_fn(None) == {"disk_mb": 7.0}
+    assert host.v12 is False and host.psamplers == {} and host.grants == {} and host.disk_fn(None) == {"disk_mb": 7.0}
     row = _drive(host, ["build-done", "post-build-done", "close-start"])
     assert seen == []
     assert not [k for k in row if _is_v12_field(k)], [k for k in row if _is_v12_field(k)]
     assert row["mem_load_peak_mib"] == 9.0
     assert row["disk_load_mib"] == 7.0 and "disk_load_settled" not in row
+    assert "mem_probe_grant" not in row
     assert host.records["load"].get("v12") is None
     assert "settle_s" not in host.records["load"]["disk"]
 
@@ -235,3 +240,104 @@ def test_2612_settle_window_can_be_set_from_the_environment(v12, monkeypatch, tm
     host.settle_disk_fn = lambda cid, settle_s, tries: calls.append((settle_s, tries)) or {"disk_mb": 1.0, "disk_settled": True}
     host._v12_disk("c")
     assert calls == [(1.5, 7)]
+
+
+# ---------------------------------------------------------------------------
+# the grant helper (host/bench-cgroup-grant), subprocess mocked
+
+CID = "ab" * 32
+
+
+class _Done:
+    def __init__(self, rc=0, err="", out=""):
+        self.returncode, self.stderr, self.stdout = rc, err, out
+
+
+@pytest.fixture
+def helper(monkeypatch, tmp_path):
+    """A helper file that exists, and a recorder for the one subprocess call."""
+    h = tmp_path / "bench-cgroup-grant"
+    h.write_text("#!/bin/sh\n")
+    monkeypatch.setattr(mp, "GRANT_PATH", str(h))
+    calls = []
+    answer = {"v": _Done()}
+
+    def fake_run(argv, **kw):
+        calls.append((argv, kw))
+        if isinstance(answer["v"], BaseException):
+            raise answer["v"]
+        return answer["v"]
+
+    monkeypatch.setattr(mp.subprocess, "run", fake_run)
+    return calls, answer
+
+
+def test_grant_absent_runs_nothing(monkeypatch, tmp_path):
+    monkeypatch.setattr(mp, "GRANT_PATH", str(tmp_path / "nope"))
+    monkeypatch.setattr(mp.subprocess, "run", lambda *a, **k: pytest.fail("no helper, no call"))
+    assert mp.v12_grant(CID) == "absent"
+
+
+def test_grant_ok_calls_sudo_once_with_the_full_id_and_a_timeout(helper):
+    calls, _ = helper
+    assert mp.v12_grant(CID) == "ok"
+    assert len(calls) == 1
+    argv, kw = calls[0]
+    assert argv == ["sudo", "-n", mp.GRANT_PATH, CID] and kw["timeout"] == mp.GRANT_TIMEOUT_S
+
+
+def test_grant_refused_keeps_the_helpers_last_line(helper):
+    _, answer = helper
+    answer["v"] = _Done(67, "bench-cgroup-grant: expected exactly one cgroup directory for that container, found 0\n")
+    assert mp.v12_grant(CID) == ("refused: rc=67: bench-cgroup-grant: expected exactly one cgroup directory "
+                                 "for that container, found 0")
+    answer["v"] = _Done(1, "sudo: a password is required\n")
+    assert mp.v12_grant(CID).startswith("refused: rc=1: sudo: a password")
+    answer["v"] = subprocess.TimeoutExpired(["sudo"], 5)
+    assert mp.v12_grant(CID).startswith("refused: TimeoutExpired")
+    answer["v"] = FileNotFoundError("sudo")
+    assert mp.v12_grant(CID).startswith("refused: FileNotFoundError")
+
+
+def test_grant_refuses_a_short_id_without_running_anything(helper):
+    calls, _ = helper
+    assert mp.v12_grant("abc123").startswith("refused: not a full 64-hex")
+    assert mp.v12_grant(None).startswith("refused: not a full 64-hex")
+    assert calls == []
+
+
+def test_the_row_records_the_grant_and_it_comes_before_the_descriptor_is_opened(v12, helper, monkeypatch, tmp_path):
+    calls, _ = helper
+    cg = _cgroup(tmp_path, "cli")
+    order = []
+    real_peakfile = mp.PeakFile
+    monkeypatch.setattr(mp, "PeakFile", lambda path: order.append(("open", len(calls))) or real_peakfile(path))
+    host = mp.HostProbe("r31", str(tmp_path / "raw"))
+    host.docker_args()
+    host.start([("client", FakeSampler(CID))], lambda cid: cg)
+    assert host.grants == {"client": "ok"} and order == [("open", 1)]      # one sudo call had run when memory.peak was opened
+    row = _drive(host, ["build-done"])
+    assert row["mem_probe_grant"] == "ok" and row["mem_load_peak_kind"] == "kernel-reset"
+
+
+def test_two_containers_with_different_answers_are_both_named(v12, helper, monkeypatch, tmp_path):
+    srv, cli = _cgroup(tmp_path, "srv"), _cgroup(tmp_path, "cli")
+    answers = iter([_Done(0), _Done(68, "bench-cgroup-grant: memory.peak is not a regular file at x\n")])
+    monkeypatch.setattr(mp.subprocess, "run", lambda argv, **kw: next(answers))
+    host = mp.HostProbe("r32", str(tmp_path / "raw"), exec_fn=lambda cid, argv, timeout=60: (0, ""))
+    host.docker_args()
+    host.start([("server", FakeSampler("ab" * 32)), ("client", FakeSampler("cd" * 32))],
+               lambda cid: {"ab" * 32: srv, "cd" * 32: cli}[cid])
+    row = _drive(host, ["build-done"])
+    assert row["mem_probe_grant"] == "server=ok,client=refused: rc=68: bench-cgroup-grant: memory.peak is not a regular file at x"
+
+
+def test_a_refused_grant_keeps_the_cumulative_rise_fallback(v12, helper, tmp_path):
+    _, answer = helper
+    answer["v"] = _Done(66, "bench-cgroup-grant: SUDO_UID is unset (run through sudo)\n")
+    cg = _cgroup(tmp_path, "cli")
+    host = mp.HostProbe("r33", str(tmp_path / "raw"))
+    host.docker_args()
+    host.start([("client", FakeSampler(CID))], lambda cid: cg)
+    row = _drive(host, ["build-done"])
+    assert row["mem_probe_grant"].startswith("refused: rc=66") and row["mem_load_peak_kind"] in ("kernel-reset", "kernel-cumulative-rise")
