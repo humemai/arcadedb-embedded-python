@@ -297,6 +297,17 @@ def test_a_headline_that_disagrees_with_itself_leaves_that_query_unchecked():
     assert res["status"] == "ok" and res["queries_checked"] == 1 and "q1" in res["unchecked"][0]
 
 
+def test_a_recall_lane_is_compared_by_recall_within_a_tolerance_and_says_so():
+    head = [dict(_row(), lane="l3d", recall_at_10=r) for r in (0.95, 0.96, 0.97)]
+    twin = dict(_row(True), lane="l3d")
+    assert gate.check(dict(twin, recall_at_10=0.955), head)["status"] == "ok"
+    bad = gate.check(dict(twin, recall_at_10=0.5), head)
+    assert bad["status"] == "failed" and "0.5000" in bad["reasons"][0]
+    assert gate.check(twin, head)["status"] == "unchecked"
+    assert "not by digest" in gate.check(dict(twin, recall_at_10=0.96), head)["unchecked"][0]
+    assert gate.check(dict(_row(True), recall_at_10=0.9), [_row()])["status"] == "unchecked"       # a lane with neither (l1) is never a pass
+
+
 def test_a_declared_absence_is_not_a_digest():
     assert gate.digests({"res_q_digest": "unexpressible: no such operator", "res_r_digest": "abcd"}) == {"r": "abcd"}
 

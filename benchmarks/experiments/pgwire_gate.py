@@ -26,6 +26,12 @@ import sys
 
 DIGEST_RE = re.compile(r"^res_(.+)_digest$")
 WIRE = "pgwire"
+# THE LANES THAT RECORD NO DIGEST. l3s and l3d answer an approximate top-k and are checked against exact ground truth, row by row (`recall_at_10`,
+# computed outside the timer from the ids the timed call returned); a wire that returned other ids would show as another recall. Two builds of one
+# index need not be identical, so the gate compares the twin's recall with the headline's median within RECALL_TOLERANCE and says so (it is not
+# a digest). l1 (the synthetic orders lane) records neither, so its wire row stays `unchecked`.
+RECALL_FIELD = "recall_at_10"
+RECALL_TOLERANCE = 0.01
 CELL_KEY = ("lane", "scale", "workload", "backend", "durability_class", "server_build")
 
 
@@ -61,6 +67,8 @@ def check(twin, headline_rows):
             seen.setdefault(q, set()).add(d)
     mine = digests(twin)
     reasons, unchecked, checked = [], [], 0
+    if heads and not seen:
+        return _check_recall(twin, heads)
     if not heads or not seen:
         return {"status": "unchecked", "queries_checked": 0, "reasons": [], "unchecked": ["no headline row with digests for this cell"]}
     for q in sorted(seen):
@@ -76,6 +84,22 @@ def check(twin, headline_rows):
             checked += 1
     unchecked += [f"{q}: only the pg-wire row recorded it" for q in sorted(set(mine) - set(seen))]
     return {"status": "failed" if reasons else "ok" if checked else "unchecked", "queries_checked": checked, "reasons": reasons, "unchecked": unchecked}
+
+
+def _check_recall(twin, heads):
+    """The gate for a lane with no digests: the twin's recall against the headline's median (RECALL_FIELD), or `unchecked` when either side has none."""
+    ref = sorted(float(h[RECALL_FIELD]) for h in heads if h.get(RECALL_FIELD) not in (None, ""))
+    mine = twin.get(RECALL_FIELD)
+    if not ref or mine in (None, ""):
+        return {"status": "unchecked", "queries_checked": 0, "reasons": [],
+                "unchecked": ["the lane records no per-query digest and no recall for this cell, so the wire's answers were not compared"]}
+    med = ref[len(ref) // 2] if len(ref) % 2 else (ref[len(ref) // 2 - 1] + ref[len(ref) // 2]) / 2
+    off = abs(float(mine) - med)
+    note = f"{RECALL_FIELD}: compared within {RECALL_TOLERANCE} of the headline median, not by digest"
+    if off > RECALL_TOLERANCE:
+        return {"status": "failed", "queries_checked": 0, "unchecked": [],
+                "reasons": [f"{RECALL_FIELD}: the pg-wire row has {float(mine):.4f}, the headline median is {med:.4f} (more than {RECALL_TOLERANCE} apart)"]}
+    return {"status": "ok", "queries_checked": 1, "reasons": [], "unchecked": [note]}
 
 
 def stamp(row, headline_rows):
