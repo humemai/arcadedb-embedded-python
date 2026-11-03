@@ -47,21 +47,29 @@ import arm_identity as AI
 rows = [json.loads(l) for l in open(os.environ["RESULTS_FILE"]) if l.strip()]
 bad = []
 want = {"l2": "arcadedb_graph_server", "l1": "arcadedb_server"}
-# every served ArcadeDB arm runs twice: the headline client (the official arcadedb-driver) and its sensitivity twin (lean_http)
+# every served ArcadeDB arm runs twice: the headline client (the official arcadedb-driver) and its sensitivity twin (lean_http); a served SQL cell
+# (l1 here) a third time, over the PostgreSQL wire (runner.PGWIRE_SQL_ARMS), which is a second sensitivity row marked arcadedb_client_wire=pgwire
 checks = []
 for lane, arm in want.items():
     got = [r for r in rows if r.get("lane") == lane and r.get("backend") == arm]
     roles = sorted(str(r.get("arcadedb_http_client_role")) for r in got)
-    if roles != ["headline", "sensitivity"]:
-        bad.append(f"{lane}/{arm}: client roles {roles}, expected one headline and one sensitivity row")
+    wired = [r for r in got if r.get("arcadedb_client_wire") == "pgwire"]
+    want_roles = ["headline", "sensitivity"] + (["sensitivity"] if lane == "l1" else [])
+    if roles != want_roles or len(wired) != (1 if lane == "l1" else 0):
+        bad.append(f"{lane}/{arm}: client roles {roles} with {len(wired)} wire rows, expected {want_roles} with {1 if lane == 'l1' else 0}")
         continue
     checks += [(lane, arm, r) for r in got]
 for lane, arm, r in checks:
-    arm = f"{arm}[{r.get('arcadedb_http_client_role')}]"
+    arm = f"{arm}[{r.get('arcadedb_http_client_role')}{'/pgwire' if r.get('arcadedb_client_wire') == 'pgwire' else ''}]"
     def need(cond, msg):
         if not cond:
             bad.append(f"{lane}/{arm}: {msg}")
     need(not r.get("error") and r.get("rc") == 0, f"error={r.get('error')!r} rc={r.get('rc')!r}")
+    if r.get("arcadedb_client_wire") == "pgwire":
+        g = r.get("arcadedb_pgwire_gate") or {}
+        need(r.get("arcadedb_pgwire_port_open") is True and (r.get("arcadedb_pgwire_calls") or 0) > 0, f"no statement went over the wire: port_open={r.get('arcadedb_pgwire_port_open')!r} calls={r.get('arcadedb_pgwire_calls')!r}")
+        need(g.get("status") in ("ok", "unchecked"), f"answers gate: {g!r}")        # l1 records no digest, so its wire row is `unchecked`; l1tpc is `ok`
+        need(str((r.get("server_settings") or {}).get("arcadedb.postgres.port")) == "5432", f"postgres port not read back: {r.get('server_settings')!r}")
     need(r.get("engine_backend") == "native" and r.get("server_build") == "native", f"engine_backend={r.get('engine_backend')!r} server_build={r.get('server_build')!r}")
     need(AI.build_of(r) == "native" and AI.served(r), "arm_identity does not read it as a native served row")
     need(r.get("cpu_baseline", "").startswith("native server image: -march="), f"cpu_baseline={r.get('cpu_baseline')!r}")

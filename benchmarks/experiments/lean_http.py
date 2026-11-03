@@ -47,25 +47,32 @@ import re
 import select
 import socket
 import ssl
+import threading
+import time
 import urllib.parse
 import zlib
 
 CLIENT_ENV = "BENCH_ARCADEDB_HTTP_CLIENT"
 LEAN = "lean"
 OFFICIAL = "official"
+PGWIRE = "pgwire"            # the PostgreSQL-wire twin of the served SQL arms (DECISIONS #166, #171, #237): SQL reads over psycopg, all else over lean HTTP
+PG_PORT_ENV = "BENCH_ARCADEDB_PG_PORT"
+PG_DEFAULT_PORT = 5432
+PGWIRE_SCOPE = ("read and query statements only: `POST /query` SQL goes over the PostgreSQL wire; every write, DDL, transaction, bulk load, probe and "
+                "Cypher statement stays on lean HTTP (DECISIONS #171 (c), #162)")
 OFFICIAL_PIN = "0.2.0"       # the arcadedb-driver release the 2026-11 headline measures; recorded per row from the installed package
 LEAN_NAME = "lean_http (http.client, keep-alive)"
 
 
 def client_choice():
-    """'official' (the headline, the default) or 'lean' (the sensitivity twin), from BENCH_ARCADEDB_HTTP_CLIENT, which the runner
-    sets for the twin cell; anything else is refused rather than guessed."""
+    """'official' (the headline, the default), 'lean' or 'pgwire' (the two sensitivity twins), from BENCH_ARCADEDB_HTTP_CLIENT, which the
+    runner sets for a twin cell; anything else is refused rather than guessed."""
     v = (os.environ.get(CLIENT_ENV) or "").strip().lower()
     if v in ("", OFFICIAL):
         return OFFICIAL
-    if v == LEAN:
-        return LEAN
-    raise ValueError(f"{CLIENT_ENV} must be 'official' or 'lean', got {v!r}")
+    if v in (LEAN, PGWIRE):
+        return v
+    raise ValueError(f"{CLIENT_ENV} must be 'official', 'lean' or 'pgwire', got {v!r}")
 
 
 # ------------------------------------------------------------------------------------------------------ exceptions
@@ -438,6 +445,201 @@ class OfficialSession:
         self._fallback.close()
 
 
+# ------------------------------------------------------------------------------------------------------- the PostgreSQL wire
+# THE PG-WIRE TWIN (DECISIONS #166, #171, #237; CAMPAIGN section 7 row 6, PROTOCOL.md "ArcadeDB SERVED arms"). The same served SQL cell run again with
+# its read statements on ArcadeDB's PostgreSQL-wire plugin through psycopg, as a labelled sensitivity row beside the headline (the official HTTP driver)
+# and the lean HTTP twin. It flatters ArcadeDB most (the lightest client of the three, #166 addendum 2), so it is never a headline.
+# SCOPE. Only `POST /query/<db>` with language `sql` goes to the wire. Every `/command` (writes, DDL, `sqlscript` transactions), `/batch` (bulk
+# loads, #171 (c)), `/server` probe, any other language (Cypher stays on HTTP, #162), a session id, a statement whose params the wire cannot carry
+# (a dict) and an NDJSON stream the lane did not ask the wire for, go to a `LeanSession`; each is counted by reason in `fallback_reasons`.
+# NEVER PREPARED (`prepare_threshold=None`): psycopg's default prepares a statement at its 5th execution, and the plugin's prepared path sends rows of
+# a schemaless type under one row description (upstream ArcadeData/arcadedb#9009), so every execution is an unnamed Parse/Bind/Execute.
+_SQL_NAMED = re.compile(r":([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def pg_translate(sql, params):
+    """(psycopg SQL, params) for an ArcadeDB statement with `:name` placeholders (the HTTP form every lane writes): each becomes `%(name)s`, a bound
+    parameter on the wire; text inside quotes and backticks is left alone; with params, a literal `%` is doubled for psycopg. Returns None when a
+    placeholder has no entry in `params` (the HTTP path then reports the error in the server's own words)."""
+    params = params or {}
+    out, i, n, used = [], 0, len(sql), []
+    while i < n:
+        c = sql[i]
+        if c in "'\"`":
+            j = i + 1
+            while j < n:
+                if sql[j] == "\\":
+                    j += 2
+                    continue
+                if sql[j] == c:
+                    break
+                j += 1
+            seg = sql[i:j + 1]
+            out.append(seg.replace("%", "%%") if params else seg)
+            i = j + 1
+            continue
+        m = _SQL_NAMED.match(sql, i) if c == ":" and not (i and (sql[i - 1].isalnum() or sql[i - 1] in "_:")) else None
+        if m:
+            if m.group(1) not in params:
+                return None
+            out.append(f"%({m.group(1)})s")
+            used.append(m.group(1))
+            i = m.end()
+            continue
+        out.append("%%" if c == "%" and params else c)
+        i += 1
+    return "".join(out), {k: params[k] for k in used}
+
+
+def pg_param_ok(v):
+    """Can this value travel as a bound PostgreSQL parameter: None, a bool, int, float, str, or a flat list or tuple of them."""
+    if v is None or isinstance(v, (bool, int, float, str)):
+        return True
+    return isinstance(v, (list, tuple)) and all(x is None or isinstance(x, (bool, int, float, str)) for x in v)
+
+
+class PgSession:
+    """The part of `requests.Session` the lanes use, with a served SQL read sent over the PostgreSQL wire (see the block above); the rest goes through
+    a `LeanSession`. `pg_calls`, `fallback_calls` and `fallback_reasons` count the two; `summary()` is what the cell's log carries."""
+
+    client_name = None
+
+    def __init__(self):
+        import psycopg
+        from psycopg.rows import dict_row
+        self._psycopg, self._dict_row = psycopg, dict_row
+        self.version = getattr(psycopg, "__version__", "unknown")
+        impl = getattr(getattr(psycopg, "pq", None), "__impl__", "unknown")
+        self.client_name = f"psycopg {self.version} (PostgreSQL wire, {impl}, unnamed statements)"
+        self.auth = None
+        self._conns = {}
+        self._fallback = LeanSession()
+        self.pg_calls = 0
+        self.fallback_calls = 0
+        self.fallback_reasons = {}
+
+    def _port(self):
+        return int(os.environ.get(PG_PORT_ENV) or PG_DEFAULT_PORT)
+
+    def _conn(self, host, db, auth):
+        key = (host, db, tuple(auth))
+        cx = self._conns.get(key)
+        if cx is None or cx.closed:
+            cx = self._psycopg.connect(host=host, port=self._port(), dbname=db, user=auth[0], password=auth[1], autocommit=True,
+                                       prepare_threshold=None, row_factory=self._dict_row, connect_timeout=30)
+            self._conns[key] = cx
+            if not getattr(self, "_beat", None):
+                # a lane may exit without closing (os._exit), so the counters reach the cell's log on a clock too
+                self._beat = threading.Thread(target=self._heartbeat, daemon=True)
+                self._beat.start()
+        return cx
+
+    def _heartbeat(self, every=10):
+        last = None
+        while True:
+            time.sleep(every)
+            cur = self.summary()
+            if cur != last:
+                print("PGWIRE_SUMMARY " + _json.dumps(cur, sort_keys=True), flush=True)
+                last = cur
+
+    def _fall(self, reason):
+        self.fallback_calls += 1
+        if reason not in self.fallback_reasons:
+            print(f"PGWIRE_FALLBACK {reason}", flush=True)       # the first sight of each reason, so the cell's log names it even if the lane exits hard
+        self.fallback_reasons[reason] = self.fallback_reasons.get(reason, 0) + 1
+
+    def summary(self):
+        return {"pg_calls": self.pg_calls, "fallback_calls": self.fallback_calls, "fallback_reasons": dict(sorted(self.fallback_reasons.items()))}
+
+    def _route(self, url, json, data, headers, kw):
+        """(match, reason): the data-plane match when this call goes to the wire, else None and why not."""
+        m = _DATA_URL.match(url)
+        if not m:
+            return None, "other-endpoint"
+        if m["kind"] != "query":
+            return None, "command"
+        if not (isinstance(json, dict) and data is None and not kw and not headers):
+            return None, "headers-or-raw-body"
+        if not (set(json) <= {"language", "command", "params", "limit"} and "language" in json and "command" in json):
+            return None, "body-fields"
+        if str(json["language"]).lower() != "sql":
+            return None, f"language-{str(json['language']).lower()}"
+        if not all(pg_param_ok(v) for v in (json.get("params") or {}).values()):
+            return None, "param-type"
+        return m, None
+
+    def _run(self, m, json, auth):
+        """Run one routed statement on the wire; returns (rows, truncated). The rows are dicts, the shape the HTTP answers have."""
+        t = pg_translate(json["command"], json.get("params"))
+        if t is None:
+            raise _Unroutable("param-missing")
+        sql, args = t
+        host = m["root"].split("://", 1)[1].rsplit(":", 1)[0]
+        cur = self._conn(host, m["db"], auth).execute(sql, args or None)
+        rows = cur.fetchall() if cur.description is not None else []
+        limit = json.get("limit")
+        truncated = False
+        if limit and limit > 0 and len(rows) > limit:
+            rows, truncated = rows[:limit], True
+        return rows, truncated
+
+    def get(self, url, **kw):
+        kw.setdefault("auth", self.auth)
+        self._fall("get")
+        return self._fallback.get(url, **kw)
+
+    def post(self, url, json=None, data=None, auth=None, headers=None, timeout=None, **kw):
+        auth = auth or self.auth
+        m, why = self._route(url, json, data, headers, kw) if auth else (None, "no-auth")
+        if m is not None:
+            try:
+                rows, truncated = self._run(m, json, tuple(auth))
+            except _Unroutable as e:
+                why = str(e)
+            except self._psycopg.Error as e:
+                self.pg_calls += 1
+                return _OfficialResponse(500, {"error": str(e).splitlines()[0] if str(e) else type(e).__name__, "detail": str(e),
+                                               "exception": type(e).__name__}, url, type(e).__name__)
+            else:
+                self.pg_calls += 1
+                if self.pg_calls == 1:
+                    print("PGWIRE_SUMMARY " + _json.dumps(self.summary(), sort_keys=True), flush=True)      # the first call proves the wire in the log
+                return _OfficialResponse(200, {"result": rows, "limit": json.get("limit", -1), "returned": len(rows), "truncated": truncated}, url, "OK")
+        self._fall(why or "other")
+        return self._fallback.post(url, json=json, data=data, auth=auth or self.auth, headers=headers, timeout=timeout, **kw)
+
+    def ndjson_rows(self, url, json):
+        """The rows of a query a lane asked to stream as NDJSON, read over the wire instead (the wire has no NDJSON): a list, or None when this
+        statement does not go to the wire and the caller streams it over HTTP."""
+        auth = self.auth
+        m, why = self._route(url, json, None, None, {}) if auth else (None, "no-auth")
+        if m is None:
+            return None
+        try:
+            rows, _ = self._run(m, json, tuple(auth))
+        except _Unroutable:
+            return None
+        except self._psycopg.Error as e:
+            raise HTTPError(f"500 Server Error: {type(e).__name__} for url: {url}") from e
+        self.pg_calls += 1
+        return rows
+
+    def close(self):
+        print("PGWIRE_SUMMARY " + _json.dumps(self.summary(), sort_keys=True), flush=True)
+        for cx in self._conns.values():
+            try:
+                cx.close()
+            except Exception:  # noqa: BLE001 - closing must not fail a cell
+                pass
+        self._conns.clear()
+        self._fallback.close()
+
+
+class _Unroutable(Exception):
+    """A statement the wire cannot take after all (a placeholder with no value): it goes over HTTP."""
+
+
 def _driver_version():
     try:
         from importlib.metadata import version
@@ -448,8 +650,9 @@ def _driver_version():
 
 # ------------------------------------------------------------------------------------------------------ the factory
 def Session():  # noqa: N802 - requests' own spelling, so a lane changes by one import
-    """The ArcadeDB served arms' session: the official driver (the headline), or `LeanSession` when BENCH_ARCADEDB_HTTP_CLIENT=lean."""
-    return OfficialSession() if client_choice() == OFFICIAL else LeanSession()
+    """The ArcadeDB served arms' session: the official driver (the headline), `LeanSession` when BENCH_ARCADEDB_HTTP_CLIENT=lean, `PgSession` when it is pgwire."""
+    choice = client_choice()
+    return OfficialSession() if choice == OFFICIAL else PgSession() if choice == PGWIRE else LeanSession()
 
 
 def row_fields(session):
@@ -459,6 +662,13 @@ def row_fields(session):
         out["arcadedb_http_client_role"] = "headline"
     elif os.environ.get("BENCH_ARCADEDB_CLIENT_ROLE"):
         out["arcadedb_http_client_role"] = os.environ["BENCH_ARCADEDB_CLIENT_ROLE"]
+    if isinstance(session, PgSession):
+        # the role stays `sensitivity` (every filter that keeps twins out of a headline keys on it); the wire is the second stamp that tells the
+        # two twins apart (make_paper_tables' key, export_web's split)
+        out["arcadedb_client_wire"] = PGWIRE
+        out["arcadedb_pgwire_client"] = {"psycopg": session.version, "prepare_threshold": None, "autocommit": True, "result_format": "text",
+                                         "port": session._port()}
+        out["arcadedb_pgwire_scope"] = PGWIRE_SCOPE
     return out
 
 
@@ -501,7 +711,11 @@ _MISSING = object()
 
 
 def post_ndjson(session, url, json, timeout=None):
-    """POST a query asking for NDJSON, raise on an HTTP error, and return its rows (`ndjson_records`)."""
+    """POST a query asking for NDJSON, raise on an HTTP error, and return its rows (`ndjson_records`). On the PG-wire twin a SQL query is read over the wire."""
+    if isinstance(session, PgSession):
+        rows = session.ndjson_rows(url, json)
+        if rows is not None:
+            return rows
     r = session.post(url, json=json, headers={"Accept": NDJSON_ACCEPT}, timeout=timeout)
     r.raise_for_status()
     return ndjson_records(r.content)

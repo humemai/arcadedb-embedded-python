@@ -4986,6 +4986,9 @@ def _twin_client(rs):
     return named.most_common(1)[0][0] or None if named else None
 
 
+_PG_TWIN_ROWS = []
+
+
 def _arcadedb_client_note(table):
     """What the served ArcadeDB rows ran through, from the rows: the official driver is the headline and the lean
     HTTP client's twin is printed beside it as a labelled sensitivity (`client_twin` on the entry), never pooled
@@ -5003,6 +5006,10 @@ def _arcadedb_client_note(table):
     if twins:
         text += (f" The same cells also ran through the benchmark's own lean HTTP client ({_join_and(twins)}); "
                  f"each is printed on its row as a labelled sensitivity and is not part of the headline median.")
+    if any(str(r.get("backend")) in {str(e.get("backend_key")) for e in table.get("entries") or []} for r in _PG_TWIN_ROWS):
+        text += (" The served SQL cells also ran with their read statements on ArcadeDB's PostgreSQL wire through psycopg, answers checked identical to the "
+                 "headline's; those rows are a labelled sensitivity kept out of every table and every headline median, and only the read statements "
+                 "are on the wire (writes, bulk loads and transactions stay on HTTP).")
     return _gen(text, *heads, *twins)
 
 
@@ -7243,6 +7250,12 @@ def main() -> int:
     if _twin_rows:
         _twin_ids = {id(r) for r in _twin_rows}
         rows = [r for r in rows if id(r) not in _twin_ids]
+    # THE POSTGRESQL-WIRE TWIN IS A SECOND SENSITIVITY, NEVER POOLED WITH THE FIRST (DECISIONS #166, #237). Its rows carry the same role, so the filters above
+    # already keep them out of every headline; the wire stamp splits them off here so the lean twin's `client_twin` columns never take a wire row. They are
+    # only mentioned, in the client sentence of the tables whose served SQL cells ran on the wire.
+    global _PG_TWIN_ROWS
+    _PG_TWIN_ROWS = [r for r in _twin_rows if str(r.get("arcadedb_client_wire") or "") == "pgwire" and not str(r.get("error") or "").strip()]
+    _twin_rows = [r for r in _twin_rows if str(r.get("arcadedb_client_wire") or "") != "pgwire"]
     # THE CAP RULE, AT REPORT TIME (DECISIONS #188): an arm-cell whose pass-1 median is over its rule cap is shown censored
     # (_censored_cells) and its numbers are not shown, so its rows leave the tables here. Strict-class rows are the
     # durability table's and stay.

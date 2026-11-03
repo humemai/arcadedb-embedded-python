@@ -574,7 +574,7 @@ def profile_report(profile):
 # (BIGGEST: Memgraph's deep10m dense cells, SurrealDB's documents at tpch1, the full SF1 network's analytics) run last of
 # all, in stages of their own, where they are easiest to drop if time runs short. Splitting changes the stage boundaries
 # only: stage_problems proves the cells are the same.
-LARGE_SCALES = ("deep10m", "tpch10", "sf1full")
+LARGE_SCALES = runner.LARGE_SCALES      # one definition: runner.build_jobs reads it too (the PostgreSQL-wire twin runs at the small tier only)
 BIGGEST = (("l3d", ("memgraph_dense",), ("deep10m",)),
            ("l1tpc", ("surrealdb_tpc",), ("tpch1",)),
            ("l2", None, ("sf1full",)))
