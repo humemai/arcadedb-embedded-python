@@ -2981,13 +2981,21 @@ def requested_settings(text):
     return got
 
 
+def setting_matches(key, have, want):
+    """Is the value the engine reports the one asked for. The plugin list is the one setting the server rewrites at start (ArcadeDBServer.init puts
+    "AutoBackupSchedulerPlugin," in front of whatever was configured), so there the requested entries must be the tail of what is reported."""
+    if str(have) == str(want):
+        return True
+    return key == "arcadedb.server.plugins" and str(have).endswith("," + str(want))
+
+
 def settings_problems(got, requested):
     """Requested settings the engine LISTS and reports with another value (empty: fine). A key the engine does not list is not a problem here:
     `server_settings_unlisted` names it on the row."""
     out = []
     for k, want in sorted((requested or {}).items()):
         have = (got or {}).get(k)
-        if have is not None and str(have) != str(want):
+        if have is not None and not setting_matches(k, have, want):
             out.append(f"setting {k} was requested as {want} and the engine runs {have}")
     return out
 
@@ -3216,6 +3224,92 @@ def arcadedb_query_ram_readback(cid, envs, from_env):
             "arcadedb_query_max_heap_ram_source": "requested via the container's JAVA_OPTS (the engine could not be asked from the host)"}
 
 
+def pgwire_server_patch(cfg):
+    """A copy of a served ArcadeDB arm's launch configuration that also starts the PostgreSQL-wire plugin with PGWIRE_SERVER_SETTINGS: as -D tokens
+    in JAVA_OPTS on the JVM image (exactly one entry), on the command line on the native image. Refuses an arm that already sets one of them."""
+    out = dict(cfg)
+    env, cmd, hits = list(cfg.get("server_env", [])), list(cfg.get("server_cmd", [])), 0
+    keys = [t.split("=", 1)[0] for t in PGWIRE_SERVER_SETTINGS]
+    for i, e in enumerate(env):
+        if isinstance(e, str) and e.startswith("JAVA_OPTS="):
+            if any(f"-D{k}=" in e for k in keys):
+                raise SystemExit("pgwire_server_patch: the arm already sets a PostgreSQL-wire setting")
+            env[i] = e + "".join(f" -D{t}" for t in PGWIRE_SERVER_SETTINGS)
+            hits += 1
+    if cfg.get("server_build") == "native":
+        if any(isinstance(c, str) and c.startswith(tuple(f"-D{k}=" for k in keys)) for c in cmd):
+            raise SystemExit("pgwire_server_patch: the arm already sets a PostgreSQL-wire setting")
+        cmd += [f"-D{t}" for t in PGWIRE_SERVER_SETTINGS]
+    elif hits != 1:
+        raise SystemExit(f"pgwire_server_patch: a served JVM ArcadeDB arm must carry exactly one JAVA_OPTS entry (found {hits})")
+    out["server_env"], out["server_cmd"] = env, cmd
+    return out
+
+
+def pgwire_settings_problems(server_settings):
+    """The PostgreSQL-wire settings the engine did not list or reports with another value than PGWIRE_SERVER_SETTINGS wrote ([] when all are in force).
+    settings_problems alone passes a key the engine does not list; for the twin that is a failure, because a setting not read back is not evidence."""
+    out = []
+    for tok in PGWIRE_SERVER_SETTINGS:
+        k, want = tok.split("=", 1)
+        have = (server_settings or {}).get(k)
+        if have is None:
+            out.append(f"the engine did not list {k}, so it is not read back")
+        elif not setting_matches(k, have, want):
+            out.append(f"{k} was written as {want} and the engine runs {have}")
+    return out
+
+
+def pgwire_probe(cid):
+    """Does the PostgreSQL-wire port of a served ArcadeDB container accept a TCP connection, within 20 s. {arcadedb_pgwire_port_open, arcadedb_pgwire_host}."""
+    import socket
+    ips = (sh(["docker", "inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}", cid]) or "").split()
+    for _ in range(20):
+        for ip in ips[:1]:
+            try:
+                with socket.create_connection((ip, PGWIRE_PORT), timeout=3):
+                    return {"arcadedb_pgwire_port_open": True, "arcadedb_pgwire_host": ip}
+            except OSError:
+                pass
+        time.sleep(1)
+    return {"arcadedb_pgwire_port_open": False, "arcadedb_pgwire_host": ips[0] if ips else None}
+
+
+_PGWIRE_SUMMARY_RE = re.compile(r"^PGWIRE_SUMMARY (\{.*\})\s*$", re.M)
+_PGWIRE_FALLBACK_RE = re.compile(r"^PGWIRE_FALLBACK (\S+)\s*$", re.M)
+
+
+def pgwire_log_fields(log):
+    """What the twin's client says about the statements it sent, from the LAST PGWIRE_SUMMARY line of its log (printed on the first wire call, every
+    10 s while counters move, and at close) and every PGWIRE_FALLBACK line (the first sight of each reason): the calls on the wire, the calls and reasons
+    that went over HTTP. Empty-handed when the log has none (the row then carries no call count and the cell is failed above)."""
+    out = {}
+    hits = _PGWIRE_SUMMARY_RE.findall(log or "")
+    if hits:
+        try:
+            got = json.loads(hits[-1])
+            out["arcadedb_pgwire_calls"] = got.get("pg_calls")
+            out["arcadedb_pgwire_fallback_calls"] = got.get("fallback_calls")
+            out["arcadedb_pgwire_fallback_reasons"] = got.get("fallback_reasons")
+        except ValueError:
+            pass
+    seen = sorted(set(_PGWIRE_FALLBACK_RE.findall(log or "")))
+    if seen and "arcadedb_pgwire_fallback_reasons" not in out:
+        out["arcadedb_pgwire_fallback_reasons"] = {r: None for r in seen}
+    return out
+
+
+def pgwire_gate_stamp(row, results_path):
+    """The answers-identical gate (pgwire_gate.py) against the headline rows already in the results file: stamps `arcadedb_pgwire_gate` and, on a
+    mismatch, sets `error` (the row stays, marked failed). Never raises; an unreadable file leaves the gate `unchecked`."""
+    import pgwire_gate
+    try:
+        heads = [r for r in pgwire_gate.load(results_path) if not pgwire_gate.is_twin(r)] if os.path.exists(results_path) else []
+    except OSError:
+        heads = []
+    pgwire_gate.stamp(row, heads)
+
+
 def arcadedb_body_limit_readback(cid, envs, from_env):
     """The HTTP request-body limit a served ArcadeDB runs with, asked of the engine.
 
@@ -3419,6 +3513,8 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
     # GAV-ablation shadowing this file already documents twice.
     _dcls = os.environ.get("BENCH_DURABILITY", "relaxed")
     be, _dnote = durability_server_patch(be, _dcls)
+    if job.get("http_client") == PGWIRE_CLIENT:
+        be = pgwire_server_patch(be)          # the plugin and its settings, on this twin's server only
     _dsuffix = "" if _dcls == "relaxed" else f"_d{_dcls}"
     run_id = f"{job['run_id']}_{scale}_r{rep}{_dsuffix}"
     stale = os.path.join(RAW, f"{run_id}.json")
@@ -3441,6 +3537,7 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
            "bench_host": os.environ.get("BENCH_HOST"),
            "instrument": bench_common.INSTRUMENT,
            **({"arcadedb_http_client_role": "sensitivity"} if job.get("http_client") else {}),
+           **({"arcadedb_client_wire": PGWIRE_CLIENT} if job.get("http_client") == PGWIRE_CLIENT else {}),
            # The class the cell ASKED for. The lane also stamps it, from the
            # same variable, beside the string the engine itself reports; both
            # are here so a row missing the lane's stamp (an old artifact, a
@@ -3614,6 +3711,12 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                 row.update(_rb)
                 _bad = settings_problems(_rb.get("server_settings"), _rb.get("server_settings_requested"))
                 _bad += engine_commit_problems(_rb.get("server_engine_commit"), _LOCAL_ENGINE_COMMIT)
+                if job.get("http_client") == PGWIRE_CLIENT:
+                    # THE PLUGIN IS UP AND ITS SETTINGS ARE THE ONES WRITTEN: read back from the engine, then the port answered (outside every timer)
+                    _bad += pgwire_settings_problems(_rb.get("server_settings"))
+                    row.update(pgwire_probe(server_cid))
+                    if not row.get("arcadedb_pgwire_port_open"):
+                        _bad.append(f"the PostgreSQL wire does not answer on port {PGWIRE_PORT}")
                 _lg = arcadedb_server_log_readback(server_cid)
                 row.update(_lg)
                 _bad += server_log_problems(_lg, None if be.get("jvm_defaults") else mem_bytes(heap), _cpuset_size(cpuset),
@@ -3823,6 +3926,8 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
         if job.get("http_client"):
             bench_env += ["-e", f"BENCH_ARCADEDB_HTTP_CLIENT={job['http_client']}",
                           "-e", "BENCH_ARCADEDB_CLIENT_ROLE=sensitivity"]
+            if job["http_client"] == PGWIRE_CLIENT:
+                bench_env += ["-e", f"BENCH_ARCADEDB_PG_PORT={PGWIRE_PORT}"]
 
         # TELL THE CONTAINER WHAT IT IS RUNNING. Only this process knows the
         # backend's image and pinned server digest; inside the container that
@@ -3947,6 +4052,10 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
         docker_rm(cli_cid)
         row["rc"] = rc
         row["oom_killed"] = (oom == "true")
+        if job.get("http_client") == PGWIRE_CLIENT:
+            row.update(pgwire_log_fields((logs.stdout or "") + "\n" + (logs.stderr or "")))
+            if rc == 0 and "error" not in row and not row.get("arcadedb_pgwire_calls"):
+                row["error"] = "no statement went over the PostgreSQL wire (the cell's log has no PGWIRE_SUMMARY with calls); the twin did not measure the wire"
         if rc != 0 and "error" not in row:
             detail = (logs.stderr or logs.stdout)[-800:].strip()
             if not detail:
@@ -4410,11 +4519,38 @@ def restricted_arms(lane):
 # THE SERVED ARCADEDB ARMS' CLIENT SENSITIVITY (CAMPAIGN section 7 row 72). The headline client of a served
 # ArcadeDB arm is the vendor's `arcadedb-driver` (lean_http.OfficialSession). Every such arm also runs
 # the same cell on the lean HTTP client, as a twin job whose rows carry `arcadedb_http_client_role` = "sensitivity" and whose run_id ends
-# in `_clientlean`. The PostgreSQL wire has no adapter in this harness, so it is not among the twins.
+# in `_clientlean`. The served SQL cells also run on the PostgreSQL wire (PGWIRE_SQL_ARMS, run_id ending `_clientpgwire`).
 ARCADEDB_HTTP_ARMS = ("arcadedb_server", "arcadedb_graph_server", "arcadedb_e2_server", "arcadedb_sparse_server",
                       "arcadedb_sparse_server_fp32", "arcadedb_dense_server", "arcadedb_dense_server_int8",
                       "arcadedb_ts_doc_server", "arcadedb_ts_native_server")
 SENSITIVITY_CLIENT = "lean"
+
+# THE POSTGRESQL-WIRE TWIN (DECISIONS #166, #171, #237; CAMPAIGN section 7 row 6). The served SQL cells below run a third time, as a twin job whose
+# read statements go over ArcadeDB's PostgreSQL-wire plugin through psycopg (lean_http.PgSession) and whose rows carry `arcadedb_http_client_role` =
+# "sensitivity" (every filter that keeps a twin out of a headline keys on it) and `arcadedb_client_wire` = "pgwire"; the run_id ends in `_clientpgwire`.
+# WHICH CELLS: a served ArcadeDB arm whose lane sends its timed reads as SQL. NOT covered, and why: l2 (Cypher stays on HTTP, #162), e2 (SQL and Cypher
+# in one cell, and transactions over a session id), lifecycle and restart (their timed quantity is open, close and restart, not a statement), e4 (it
+# measures the client axis itself), arcadedb_imgdefaults_server (a JVM-defaults arm with no twin of its own). Within a covered cell only `/query` SQL
+# goes over the wire; writes, DDL, transactions and bulk loads stay on HTTP (#171 (c)).
+PGWIRE_CLIENT = "pgwire"
+PGWIRE_SQL_ARMS = {"l1": ("arcadedb_server",), "l1tpc": ("arcadedb_server",),
+                   "l3s": ("arcadedb_sparse_server", "arcadedb_sparse_server_fp32"),
+                   "l3d": ("arcadedb_dense_server", "arcadedb_dense_server_int8"),
+                   "l4": ("arcadedb_ts_doc_server", "arcadedb_ts_native_server")}
+# THE PLUGIN'S SETTINGS, EXPLICIT (the way EXPLICIT_SERVER_SETTINGS are): the plugin is opt-in (arcadedb.server.plugins is empty by default), so it is
+# named; every other value is the engine's own default, written out so the row records them and a changed default is visible. Only the twin's server
+# gets them (the headline and lean-twin servers run exactly what they ran), and the runner reads each back from the engine and refuses a cell whose
+# engine does not list or report it as written (`pgwire_settings_problems`).
+PGWIRE_PLUGIN_SETTING = "arcadedb.server.plugins=Postgres:com.arcadedb.postgres.PostgresProtocolPlugin"
+PGWIRE_SERVER_SETTINGS = (PGWIRE_PLUGIN_SETTING, "arcadedb.postgres.host=0.0.0.0", "arcadedb.postgres.port=5432", "arcadedb.postgres.ssl=DISABLED",
+                          "arcadedb.postgres.debug=false", "arcadedb.postgres.quotedIdentifiers=true", "arcadedb.postgres.queryMaxRows=1000000")
+PGWIRE_PORT = 5432
+
+
+def _client_of_run_id(run_id):
+    """'lean', 'pgwire' or '' (the headline): the client a row's run_id names (`..._clientlean_tiny_r1`). A twin cell is not done because its headline is."""
+    m = re.search(r"_client(lean|pgwire)_", str(run_id or ""))
+    return m.group(1) if m else ""
 
 
 def build_jobs(lanes, workloads_arg):
@@ -4448,8 +4584,12 @@ def build_jobs(lanes, workloads_arg):
                              "script": script,
                              "run_id": f"{lane}_{be}_{wl}"})
                 if be in ARCADEDB_HTTP_ARMS:
-                    jobs.append({**jobs[-1], "http_client": SENSITIVITY_CLIENT,
+                    head = jobs[-1]
+                    jobs.append({**head, "http_client": SENSITIVITY_CLIENT,
                                  "run_id": f"{lane}_{be}_{wl}_client{SENSITIVITY_CLIENT}"})
+                    if be in PGWIRE_SQL_ARMS.get(lane, ()):
+                        jobs.append({**head, "http_client": PGWIRE_CLIENT,
+                                     "run_id": f"{lane}_{be}_{wl}_client{PGWIRE_CLIENT}"})
     if want:
         missing = want - {j["workload"] for j in jobs}
         if missing:
@@ -4673,13 +4813,13 @@ def main():
                 if _r.get("error") or _r.get("scale") != args.scale:
                     continue
                 if str(_r.get("ts_utc", "")) >= _since:
-                    _done.add((_r.get("backend"), _r.get("rep")))
+                    _done.add((_r.get("backend"), _r.get("rep"), _client_of_run_id(_r.get("run_id"))))
         _before = len(cells)
-        cells = [(j, r) for (j, r) in cells if (j["backend"], r) not in _done]
+        cells = [(j, r) for (j, r) in cells if (j["backend"], r, j.get("http_client") or "") not in _done]
         print(f"resume: {_before - len(cells)} of {_before} cells already clean "
               f"since {args.skip_done_since}; {len(cells)} to run")
-        for _b, _r in sorted(_done, key=lambda x: (str(x[0]), x[1] or 0)):
-            print(f"    skip {_b} rep{_r}")
+        for _b, _r, _c in sorted(_done, key=lambda x: (str(x[0]), x[1] or 0, x[2])):
+            print(f"    skip {_b} rep{_r}" + (f" ({_c} twin)" if _c else ""))
 
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     manifest = build_manifest(ts, args, workers, shards, jobs)
@@ -4738,6 +4878,8 @@ def main():
                     cv.notify_all()
             row["manifest"] = ts
             _AI.stamp_build(row, _ENGINE_BACKEND)   # a killed cell's row names the build its wheel is, not the JVM default
+            if job.get("http_client") == PGWIRE_CLIENT and not row.get("error"):
+                pgwire_gate_stamp(row, os.path.join(RESULTS, args.results_file))
             # `or` rather than a dict default: an EMPTY error string is what
             # made thirty OOM kills look like blank successes.
             status = (row.get("error")

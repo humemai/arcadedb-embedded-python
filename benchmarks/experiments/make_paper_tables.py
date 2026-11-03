@@ -541,6 +541,8 @@ def load_canonical(apply_corpus=True, include_twins=False):
         k = (r["lane"], r["scale"], r.get("n_docs"), r.get("workload"),
              r["backend"], r.get("gav") is not False, r["rep"],
              r.get("durability_class") or "relaxed", r.get("arcadedb_http_client_role") == "sensitivity",
+             # the wire tells the two twins apart (lean HTTP or the PostgreSQL wire): both are role `sensitivity`, and one cell runs on each
+             r.get("arcadedb_client_wire") or "",
              # THE BUILD IS PART OF THE KEY (26.11.1): `arcadedb` (native) and `arcadedb-jvm` of one release stamp the same
              # engine_version and the same backend name, so without it the later build would replace the other on ts_utc.
              # Rows before the field are the JVM build; served arms and comparators carry None (arm_identity.build_of).
