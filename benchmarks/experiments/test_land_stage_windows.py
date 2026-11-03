@@ -71,4 +71,9 @@ def test_the_committed_window_drops_qc14_and_keeps_its_neighbours():
     assert L.excluded_by_window({"ts_utc": "2026-10-31T15:08:26+00:00"}, w) is None
     assert L.excluded_by_window({"ts_utc": "2026-10-31T17:23:02+00:00"}, w)
     assert L.excluded_by_window({"ts_utc": "2026-11-01T03:01:44+00:00"}, w)
-    assert L.excluded_by_window({"ts_utc": "2026-11-01T05:26:21+00:00"}, w) is None
+    # qC15's first row after the relaunch is outside the qC14 turbo window but inside the 0 us idle-hold window (#560)
+    why = L.excluded_by_window({"ts_utc": "2026-11-01T05:26:21+00:00"}, w)
+    assert why and "0 us" in why and "qC14 (dense" not in why
+    # the idle-hold window ends where qC24 starts with the hold back at 10 us: a qC23 row is dropped, qC24's first is kept
+    assert L.excluded_by_window({"ts_utc": "2026-11-03T13:23:47+00:00"}, w)
+    assert L.excluded_by_window({"ts_utc": "2026-11-03T14:38:17+00:00"}, w) is None
