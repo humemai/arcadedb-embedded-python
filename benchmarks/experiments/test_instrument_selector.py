@@ -49,4 +49,4 @@ def test_unknown_version_in_code_is_an_error():
 def test_the_runner_stamps_the_instrument_on_the_row_and_the_stamp_is_the_selector_value():
     sys.path.insert(0, HERE)
     b = importlib.import_module("bench_common")
-    assert b.INSTRUMENTS == ("2026-11",) and b.INSTRUMENT == "2026-11"
+    assert b.INSTRUMENTS == ("2026-11", "2026-12") and b.INSTRUMENT == "2026-11"   # unset stays 2026-11

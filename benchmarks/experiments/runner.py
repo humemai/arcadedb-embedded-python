@@ -3618,6 +3618,8 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
         s_cli = CgroupSampler(cli_cid)
         s_cli.start()
         samplers.append(("client", s_cli))
+        if _mp and bench_common.instrument_at_least("2026-12"):
+            _mp.settle_disk_fn = container_disk      # per-phase disk readings settle (memory_probe._v12_disk)
         if _mp:
             _mp.start(samplers, cgroup_dir, lambda c: container_disk(c, tries=1))
 
