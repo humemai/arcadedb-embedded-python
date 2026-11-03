@@ -28,8 +28,8 @@ EXPECTED = {("l1", "arcadedb_server"), ("l1tpc", "arcadedb_server"),
 
 
 # ------------------------------------------------------------------------------------------------------ which cells get the twin
-def test_the_twin_is_emitted_for_exactly_the_served_sql_cells():
-    jobs = runner.build_jobs(list(runner.LANES), [])
+def test_the_twin_is_emitted_for_exactly_the_served_sql_cells_at_the_small_tier():
+    jobs = runner.build_jobs(list(runner.LANES), [], scale="tpch1")
     pg = [j for j in jobs if j.get("http_client") == "pgwire"]
     assert {(j["lane"], j["backend"]) for j in pg} == EXPECTED
     heads = {(j["lane"], j["backend"], j["workload"]) for j in jobs if not j.get("http_client")}
@@ -37,6 +37,19 @@ def test_the_twin_is_emitted_for_exactly_the_served_sql_cells():
     assert {(j["lane"], j["backend"], j["workload"]) for j in pg} == {h for h in heads if h[:2] in EXPECTED}
     assert all(j["run_id"].endswith("_clientpgwire") for j in pg)
     assert len({j["run_id"] for j in jobs}) == len(jobs)
+
+
+@pytest.mark.parametrize("scale", ["deep10m", "tpch10", "sf1full"])
+def test_the_large_tier_scales_get_no_wire_twin_and_keep_their_lean_twin(scale):
+    """The twin re-runs the whole cell (load, index build, queries), so the large tier (the generator's LARGE_SCALES) would add hours for a sensitivity row."""
+    jobs = runner.build_jobs(list(runner.LANES), [], scale=scale)
+    assert not [j for j in jobs if j.get("http_client") == "pgwire"]
+    assert [j for j in jobs if j.get("http_client") == "lean"]
+
+
+def test_the_large_tier_is_the_generators_own_definition():
+    import make_2611_stages as G
+    assert runner.LARGE_SCALES == G.LARGE_SCALES and set(runner.LARGE_SCALES) == {"deep10m", "tpch10", "sf1full"}
 
 
 def test_cypher_mixed_and_lifecycle_cells_have_no_pgwire_twin():
@@ -57,14 +70,22 @@ def test_the_stage_generator_schedules_the_twin_for_exactly_the_served_sql_cells
     specs = G.number(G.subset_specs(engines, G.parse_lanes(None, False, "paper-2611"), "biggest-last", G.profile_skip("paper-2611"), True), "qT")
     cells = {(c.lane, c.backend, c.workload) for spec in specs for c in G.stage_cells(spec)}
     assert cells
+    scales = {(c.lane, c.backend, c.workload): set() for spec in specs for c in G.stage_cells(spec)}
+    for spec in specs:
+        for c in G.stage_cells(spec):
+            scales[(c.lane, c.backend, c.workload)].add(c.scale)
     served = {c for c in cells if c[1] in runner.ARCADEDB_HTTP_ARMS}
-    got = set()
+    got, wired_scales = set(), set()
     for lane, be, wl in served:
-        for j in runner.build_jobs([lane], [wl]):
-            if j["backend"] == be and j.get("http_client") == "pgwire":
-                got.add((lane, be, wl))
+        for sc in scales[(lane, be, wl)]:
+            for j in runner.build_jobs([lane], [wl], scale=sc):
+                if j["backend"] == be and j.get("http_client") == "pgwire":
+                    got.add((lane, be, wl))
+                    wired_scales.add(sc)
     assert {(l, b) for l, b, _ in got} <= EXPECTED and got
-    assert all(c in got for c in served if c[:2] in EXPECTED)
+    # small-tier cells of the covered arms get it, large-tier ones (tpch10, deep10m) do not
+    assert wired_scales == {"tpch1", "small"}
+    assert all(c in got for c in served if c[:2] in EXPECTED and scales[c] - set(G.LARGE_SCALES))
     assert not [c for c in got if c[0] in ("l2", "e2")]
 
 

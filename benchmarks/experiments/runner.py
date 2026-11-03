@@ -4533,6 +4533,10 @@ SENSITIVITY_CLIENT = "lean"
 # measures the client axis itself), arcadedb_imgdefaults_server (a JVM-defaults arm with no twin of its own). Within a covered cell only `/query` SQL
 # goes over the wire; writes, DDL, transactions and bulk loads stay on HTTP (#171 (c)).
 PGWIRE_CLIENT = "pgwire"
+# THE WIRE TWIN RUNS AT THE SMALL TIER ONLY. It re-runs the whole cell (load, index build, queries) for a sensitivity row, so at the large tier it would add
+# hours to a pass; DECISIONS #166 sized the A/B as "a third of the hours". The large tier is the stage generator's own size definition (make_2611_stages
+# titles its stages "(small tier)" and "(large tier)"; an ENGINE tier is another thing); it lives here so the generator and build_jobs read one tuple.
+LARGE_SCALES = ("deep10m", "tpch10", "sf1full")
 PGWIRE_SQL_ARMS = {"l1": ("arcadedb_server",), "l1tpc": ("arcadedb_server",),
                    "l3s": ("arcadedb_sparse_server", "arcadedb_sparse_server_fp32"),
                    "l3d": ("arcadedb_dense_server", "arcadedb_dense_server_int8"),
@@ -4553,8 +4557,9 @@ def _client_of_run_id(run_id):
     return m.group(1) if m else ""
 
 
-def build_jobs(lanes, workloads_arg):
-    """Jobs for these lanes, optionally narrowed to some workloads.
+def build_jobs(lanes, workloads_arg, scale=None):
+    """Jobs for these lanes, optionally narrowed to some workloads. `scale` is the scale the invocation runs: a PostgreSQL-wire twin is built only
+    when it is not a large-tier scale (LARGE_SCALES); None (no scale named) builds it.
 
     THE ARGUMENT USED TO BE IGNORED. The parameter was spelled
     `_workloads_arg` and the loop iterated the LANE's workload list instead, so
@@ -4587,7 +4592,7 @@ def build_jobs(lanes, workloads_arg):
                     head = jobs[-1]
                     jobs.append({**head, "http_client": SENSITIVITY_CLIENT,
                                  "run_id": f"{lane}_{be}_{wl}_client{SENSITIVITY_CLIENT}"})
-                    if be in PGWIRE_SQL_ARMS.get(lane, ()):
+                    if be in PGWIRE_SQL_ARMS.get(lane, ()) and scale not in LARGE_SCALES:
                         jobs.append({**head, "http_client": PGWIRE_CLIENT,
                                      "run_id": f"{lane}_{be}_{wl}_client{PGWIRE_CLIENT}"})
     if want:
@@ -4736,7 +4741,7 @@ def main():
                  + "). Lane paths resolve INSIDE the container, so pointing a"
                    " lane at a host path instead of fixing the mount cannot work.")
 
-    jobs = build_jobs(lanes, workloads)
+    jobs = build_jobs(lanes, workloads, scale=args.scale)
     if args.backends:
         keep = set(args.backends.split(","))
         jobs = [j for j in jobs if j["backend"] in keep]
