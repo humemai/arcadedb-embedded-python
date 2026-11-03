@@ -1925,7 +1925,7 @@ def _withhold_cells(tables):
 # stale list. A tier with no message half covers Person and KNOWS only and is not concerned.
 _GAV_TYPES_FIELD = "gav_types"
 _GAV_SUPERTYPE = "Message"
-_GAV_SUPERTYPE_LISTED_FROM = (26, 11, 1)
+_GAV_SUPERTYPE_LISTED_FROM = bench_common.GAV_SUPERTYPE_LISTED_FROM   # one release for the lane that builds the view and this refusal
 
 
 def _gav_message_rows(rows):

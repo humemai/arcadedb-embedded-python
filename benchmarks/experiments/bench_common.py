@@ -41,6 +41,24 @@ def instrument_at_least(version):
     return INSTRUMENT >= version
 
 
+# THE GRAPH ANALYTICAL VIEW MUST LIST THE `Message` SUPERTYPE FROM THIS RELEASE (upstream ArcadeData/arcadedb PR 9320, issue 9301).
+# Since that change `GraphTraversalProviderRegistry.findProvider` hands a view to a walk only when the view covers EVERY vertex type of
+# the schema (`coversVertexType(null)`, which also counts an abstract supertype such as Message), so a view that leaves Message out is
+# silently not used for walks. One place holds the release so the lane that builds the view (l2_graph._gav_types) and the exporter that
+# refuses a stale row (export_web._refuse_gav_without_supertype) cannot disagree.
+GAV_SUPERTYPE_LISTED_FROM = (26, 11, 1)
+
+
+def engine_release(version):
+    """(major, minor, patch) of an engine version string the harness records, or None when it carries none.
+
+    Reads the string a row already stamps as `engine_version` ("26.11.1", "server:26.11.1", "26.11.1-SNAPSHOT (build ...)"); never a wheel file
+    name. A SNAPSHOT of release X counts as X, as the exporter does."""
+    import re
+    m = re.search(r"(\d+)\.(\d+)\.(\d+)", str(version or ""))
+    return tuple(int(x) for x in m.groups()) if m else None
+
+
 # WHAT THE INSTRUMENT MEASURES (CAMPAIGN section 7 rows 72, 81, 82, 84 and the note under that table). These are the method,
 # not switches: an untimed sparse warm-up on queries disjoint from the timed set, the CPU idle-state hold at the lowest latency
 # target, an index on the dense lane's vector id, the embedded ArcadeDB JVM's initial heap left unset, large l4 results read on

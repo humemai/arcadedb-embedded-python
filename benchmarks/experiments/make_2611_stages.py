@@ -1507,7 +1507,7 @@ REP_HELPERS = r"""
 # line per finished repetition (<label> TAB <rep> TAB ok|fail); the runner's own rows (rep numbered in the row, appended to $RF) are
 # the data, this file only drives the order. Stopping after any pass leaves a valid n; a later pass picks up from it with no
 # regeneration, and a restarted stage skips what is already clean. Delete REPSTATE to start the chain over.
-REPSTATE=$HOME/rep-state-@INSTRUMENT@-$PIN.tsv
+REPSTATE=$HOME/rep-state-@INSTRUMENT@-$PIN@BUILD@.tsv
 rep_done() {  # <label> <rep>: true when that repetition of the cell finished CLEAN (a fail is retried by a restart)
   grep -qxF -- "$1"$'\t'"$2"$'\t'ok "$REPSTATE" 2>/dev/null
 }
@@ -1521,6 +1521,15 @@ rep_gate() {  # <label>: true when this pass may run the cell; says why when it 
   return 0
 }
 """.replace("@INSTRUMENT@", INSTRUMENT)
+
+
+# THE REP-STATE FILE IS PER BUILD in an ArcadeDB release chain (rep-state-<instrument>-<pin>-jvm.tsv, ...-native.tsv): the JVM and the native
+# chain label their cells identically, so one shared file would show the chain that runs second every cell as already clean and it would run
+# none. The comment lives here, not in the template, so every other stage stays byte for byte what it was.
+def rep_helpers():
+    """REP_HELPERS for the chain being generated: the rep-state file carries the build ("-jvm", "-native") in an ArcadeDB release chain
+    and is the plain one (no suffix, byte for byte what the comparators always had) when CHAIN_BUILD is empty."""
+    return REP_HELPERS.replace("@BUILD@", f"-{CHAIN_BUILD}" if CHAIN_BUILD else "")
 
 
 TEMP_GATE_HELPERS = r"""
@@ -1566,7 +1575,7 @@ def stage_params(reps):
     the cap rule's bash."""
     return {"instrument": INSTRUMENT, "reps": reps, "banner": BANNER, "rows_suffix": ROWS_SUFFIX, "prior": PRIOR_PIN,
             "jpype_version": bench_common.JPYPE_PIN, "cap_rule_helpers": CAP_RULE_HELPERS.lstrip("\n"),
-            "rep_helpers": REP_HELPERS.lstrip("\n"), "temp_gate_helpers": TEMP_GATE_HELPERS.lstrip("\n"), "pass_no": 1}
+            "rep_helpers": rep_helpers().lstrip("\n"), "temp_gate_helpers": TEMP_GATE_HELPERS.lstrip("\n"), "pass_no": 1}
 
 
 NATIVE_EXPORT = ('export ARCADEDB_NATIVE_SERVER_IMAGE="{img}" BENCH_SERVER_BUILD="native"\n'

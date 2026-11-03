@@ -2,6 +2,7 @@
 chain on the Docker JVM server (#222). Run with `python -m pytest test_chain_served_arms.py -q` from this directory. Nothing is run: only drafts are written.
 """
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -124,3 +125,50 @@ def test_the_native_chain_names_its_overlay_files_by_build(chains):
     text = lambda d: "".join(f.read_text() for f in d.glob("*.sh"))  # noqa: E731
     assert "mp_{label}_native_b{rep}.json" in text(native)
     assert "mp_{label}_native_b{rep}.json" not in text(jvm)
+
+
+# ------------------------------------------------------------------------------------ rep state per chain
+# Both chains label their cells identically (`l1tpc/tpch1/arcadedb_embedded/oltp`). One shared REPSTATE file would show the chain that runs second
+# every cell as "already clean", and it would skip the whole pass.
+def _repstate_lines(directory):
+    found = {}
+    for f in sorted(Path(directory).glob("*.sh")):
+        found[f.name] = re.findall(r"^REPSTATE=(.*)$", f.read_text(), re.M)
+    return found
+
+
+def test_each_build_has_its_own_rep_state_file_and_the_comparators_keep_theirs(chains, tmp_path):
+    native, jvm, old = chains
+    lanes = lambda d: {n: v for n, v in _repstate_lines(d).items() if v}  # noqa: E731    the pair stage does not run cells
+    n_state, j_state, o_state = lanes(native), lanes(jvm), lanes(old)
+    assert n_state and j_state and o_state
+    assert {v[0] for v in n_state.values()} == {"$HOME/rep-state-2026-11-$PIN-native.tsv"}
+    assert {v[0] for v in j_state.values()} == {"$HOME/rep-state-2026-11-$PIN-jvm.tsv"}
+    assert {v[0] for v in o_state.values()} == {"$HOME/rep-state-2026-11-$PIN.tsv"}          # an old wheel names no build: the plain file
+    # the comparators' chain is the plain file too, byte for byte what it was
+    r = T.run(["--after", "qR20", "--status-file", "none", "--out", str(tmp_path / "cmp")], tmp_path)
+    assert r.returncode == 0, r.stdout[-500:] + r.stderr[-500:]
+    assert {v[0] for v in lanes(tmp_path / "cmp").values()} == {"$HOME/rep-state-2026-11-$PIN.tsv"}
+    assert G.CHAIN_BUILD in ("", "native", "jvm")
+
+
+def test_a_clean_cell_of_one_chain_is_not_clean_in_the_other(chains, tmp_path):
+    """Run the stages' own rep helpers in bash: the JVM chain notes a cell clean; the native chain must still run it, the JVM chain must skip it."""
+    native, jvm, _old = chains
+
+    def helpers(directory):
+        t = next(f.read_text() for f in sorted(directory.glob("*.sh")) if "\nREPSTATE=" in f.read_text())
+        m = re.search(r"^REPSTATE=.*?^rep_gate\(\) \{.*?^\}\n", t, re.M | re.S)
+        assert m, "the rep helpers are not in the stage"
+        return m.group(0)
+
+    def sh(directory, body):
+        script = ('set -u\nHOME="$1"; PIN=abc123def; PASS=1; REPS=3; ID=qX01\nsay() { :; }\n' + helpers(directory) + body)
+        r = subprocess.run(["bash", "-c", script, "bash", str(tmp_path)], capture_output=True, text=True)
+        return r.returncode, r.stderr
+
+    label = "l1tpc/tpch1/arcadedb_embedded/oltp"
+    assert sh(jvm, f'rep_note "{label}" 1 ok\nrep_gate "{label}"')[0] == 1         # the JVM chain skips its own clean cell
+    assert sh(native, f'rep_gate "{label}"')[0] == 0                                  # the native chain still runs it
+    assert sh(native, f'rep_note "{label}" 1 ok\nrep_gate "{label}"')[0] == 1
+    assert sorted(p.name for p in tmp_path.glob("rep-state-*")) == ["rep-state-2026-11-abc123def-jvm.tsv", "rep-state-2026-11-abc123def-native.tsv"]

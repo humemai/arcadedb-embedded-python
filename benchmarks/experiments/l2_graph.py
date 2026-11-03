@@ -279,17 +279,29 @@ class ArcadeGraphEmbedded(Base):
     # Person and KNOWS, so no LSQB query could use it. At a tier with no message half the lists are what is loaded
     # (Person, KNOWS: the view the five projection questions always had); at the full network they are Person plus
     # ldbc_snb.MSG_VERTEX_LABELS and KNOWS plus MSG_EDGE_TYPES (Message is the abstract supertype of Post and Comment
-    # and holds no record of its own, so it is not listed, as upstream's runner does not list it). The properties are
+    # and holds no record of its own, so it is not listed before ArcadeDB 26.11.1, where upstream PR 9320 makes the registry hand a view out only
+    # when it covers every vertex type, abstract ones included: from there `_gav_types` adds it). The properties are
     # the five questions' own. An ArcadeDB-only setting, the user's call; the no-view arm (BENCH_GAV=0, backend_arm
     # nogav) stays on the table as the like-for-like row, and the build time of the larger view is priced on the row.
     GAV_PROPERTIES = "PROPERTIES (id, name, age, city) EDGE PROPERTIES (since)"
 
     def _gav_types(self):
-        """(vertex types, edge types) the view is created over."""
+        """(vertex types, edge types) the view is created over.
+
+        From ArcadeDB 26.11.1 (upstream PR 9320) the registry hands a view to a walk only when it covers every vertex type of the schema, the
+        abstract `Message` supertype included, so the list carries `Message` there and not on the releases before (bench_common.
+        GAV_SUPERTYPE_LISTED_FROM). The release is the engine version this adapter already records on its row (`self.version`, set at
+        connect); one the harness cannot read is refused rather than guessed, since the wrong list is a wrong measurement."""
         if not getattr(self, "_load_messages", False):
             return ["Person"], ["KNOWS"]
         import ldbc_snb as _ldbc
-        return ["Person"] + list(_ldbc.MSG_VERTEX_LABELS), ["KNOWS"] + list(self.MSG_EDGE_TYPES)
+        release = bench_common.engine_release(self.version)
+        if release is None:
+            raise RuntimeError(f"cannot choose the view's vertex types: the engine version {self.version!r} carries no release number")
+        vertices = ["Person"] + list(_ldbc.MSG_VERTEX_LABELS)
+        if release >= bench_common.GAV_SUPERTYPE_LISTED_FROM:
+            vertices.insert(1, "Message")
+        return vertices, ["KNOWS"] + list(self.MSG_EDGE_TYPES)
 
     def _gav_ddl(self):
         v, e = self._gav_types()
