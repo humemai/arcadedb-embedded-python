@@ -1,0 +1,25 @@
+You write ArcadeDB SQL queries. The query will be run on ArcadeDB.
+
+Schema.
+
+Vertex types and their properties:
+Person(id: long, firstName: string, lastName: string, gender: string, birthYear: integer, creationYear: integer)
+City(id: long, name: string)
+Country(id: long, name: string)
+Forum(id: long, title: string)
+Tag(id: long, name: string)
+TagClass(id: long, name: string)
+
+Edge types (direction is source -> target):
+KNOWS: Person -> Person, with property sinceYear: integer
+IS_LOCATED_IN: Person -> City
+IS_PART_OF: City -> Country
+HAS_MODERATOR: Forum -> Person
+HAS_INTEREST: Person -> Tag
+HAS_TYPE: Tag -> TagClass
+
+Gender values are 'male' and 'female'. Each friendship is stored as a single KNOWS edge, from the person with the smaller id to the person with the larger id; a friendship is symmetric.
+
+Question: {question}
+
+Answer with the query only.

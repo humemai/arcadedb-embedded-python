@@ -1,0 +1,594 @@
+# 40 questions over the LDBC SNB sf1 subset (see README.md and prompts/ for the schema text the models see).
+# Frozen before the first generation. A change after that is a new run (README, reporting rule).
+#
+# Gold queries by arm:
+#   sql           ANSI SQL, executed on DuckDB (the stand-in for an ANSI SQL core)
+#   cypher        openCypher, executed on ArcadeDB
+#   pgq           SQL/PGQ (GRAPH_TABLE ... MATCH), executed on DuckDB + DuckPGQ, graph `g`
+#   arcadedb_sql  ArcadeDB SQL (no JOIN: traversal functions, MATCH, subqueries), executed on ArcadeDB
+# A null gold needs a null_reasons entry. kind: language = the author believes the language cannot express it;
+# kind: author = the author could not write a gold with confidence (NOT a claim about the language).
+#
+# Provenance: the pgq triangle query (D04) and the 2-hop shape (D02) follow the campaign's DuckpgqGraph arm
+# (benchmarks/experiments/l2_graph.py, OLAP "triangles", READS "hop2"); the Cypher triangle follows the same
+# lane's graph_common.py OLAP_QUERIES. Everything else is new (the campaign loads a persons+KNOWS projection
+# and the LSQB message half, which carry no names or tags).
+#
+# Semantics the gold relies on (stated in every arm's schema text): KNOWS/Knows is stored once per friendship,
+# from the person with the smaller id to the person with the larger id; a friendship is symmetric.
+# Cypher: separate MATCH clauses where one edge may legitimately be used twice (relationship isomorphism
+# applies inside one MATCH only).
+
+tolerance:
+  float_abs: 0.01
+  float_rel: 1.0e-6
+
+questions:
+  # ---------------- single type: filter / aggregate ----------------
+  - id: A01
+    category: single
+    ordered: false
+    text: "How many persons are there? Return one column: the count."
+    gold:
+      sql: |-
+        SELECT count(*) AS n FROM Person
+      cypher: |-
+        MATCH (p:Person) RETURN count(p) AS n
+      pgq: |-
+        SELECT count(*) AS n FROM GRAPH_TABLE (g MATCH (p:Person) COLUMNS (p.id AS id))
+      arcadedb_sql: |-
+        SELECT count(*) AS n FROM Person
+
+  - id: A02
+    category: single
+    ordered: true
+    text: "How many persons are there of each gender? Return two columns: gender and the count, ordered by gender ascending."
+    gold:
+      sql: |-
+        SELECT gender, count(*) AS n FROM Person GROUP BY gender ORDER BY gender
+      cypher: |-
+        MATCH (p:Person) RETURN p.gender AS gender, count(*) AS n ORDER BY gender
+      pgq: |-
+        SELECT gender, count(*) AS n FROM GRAPH_TABLE (g MATCH (p:Person) COLUMNS (p.gender AS gender)) GROUP BY gender ORDER BY gender
+      arcadedb_sql: |-
+        SELECT gender, count(*) AS n FROM Person GROUP BY gender ORDER BY gender
+
+  - id: A03
+    category: single
+    ordered: false
+    text: "How many female persons were born in 1985 or later? Return one column: the count."
+    gold:
+      sql: |-
+        SELECT count(*) AS n FROM Person WHERE gender = 'female' AND birth_year >= 1985
+      cypher: |-
+        MATCH (p:Person) WHERE p.gender = 'female' AND p.birthYear >= 1985 RETURN count(p) AS n
+      pgq: |-
+        SELECT count(*) AS n FROM GRAPH_TABLE (g MATCH (p:Person WHERE p.gender = 'female' AND p.birth_year >= 1985) COLUMNS (p.id AS id))
+      arcadedb_sql: |-
+        SELECT count(*) AS n FROM Person WHERE gender = 'female' AND birthYear >= 1985
+
+  - id: A04
+    category: single
+    ordered: false
+    text: "What is the average birth year of the male persons? Return one column, unrounded."
+    gold:
+      sql: |-
+        SELECT avg(birth_year) AS avg_birth_year FROM Person WHERE gender = 'male'
+      cypher: |-
+        MATCH (p:Person) WHERE p.gender = 'male' RETURN avg(p.birthYear) AS avg_birth_year
+      pgq: |-
+        SELECT avg(byear) AS avg_birth_year FROM GRAPH_TABLE (g MATCH (p:Person WHERE p.gender = 'male') COLUMNS (p.birth_year AS byear))
+      arcadedb_sql: |-
+        SELECT avg(birthYear) AS avg_birth_year FROM Person WHERE gender = 'male'
+
+  - id: A05
+    category: single
+    ordered: true
+    text: "What are the 5 most common first names? Return two columns: first name and the number of persons with it, ordered by the number descending, then by first name ascending."
+    gold:
+      sql: |-
+        SELECT first_name, count(*) AS n FROM Person GROUP BY first_name ORDER BY n DESC, first_name ASC LIMIT 5
+      cypher: |-
+        MATCH (p:Person) RETURN p.firstName AS first_name, count(*) AS n ORDER BY n DESC, first_name ASC LIMIT 5
+      pgq: |-
+        SELECT fn, count(*) AS n FROM GRAPH_TABLE (g MATCH (p:Person) COLUMNS (p.first_name AS fn)) GROUP BY fn ORDER BY n DESC, fn ASC LIMIT 5
+      arcadedb_sql: |-
+        SELECT firstName, count(*) AS n FROM Person GROUP BY firstName ORDER BY n DESC, firstName ASC LIMIT 5
+
+  - id: A06
+    category: single
+    ordered: true
+    text: "For each year, how many friendships were created in that year? Return two columns: the year and the count, ordered by year ascending. Count each friendship once."
+    gold:
+      sql: |-
+        SELECT since_year AS yr, count(*) AS n FROM Knows GROUP BY since_year ORDER BY yr
+      cypher: |-
+        MATCH (a:Person)-[k:KNOWS]->(b:Person) RETURN k.sinceYear AS yr, count(*) AS n ORDER BY yr
+      pgq: |-
+        SELECT yr, count(*) AS n FROM GRAPH_TABLE (g MATCH (a:Person)-[k:Knows]->(b:Person) COLUMNS (k.since_year AS yr)) GROUP BY yr ORDER BY yr
+      arcadedb_sql: |-
+        SELECT sinceYear AS yr, count(*) AS n FROM KNOWS GROUP BY sinceYear ORDER BY yr
+
+  - id: A07
+    category: single
+    ordered: false
+    text: "How many persons have a first name that starts with the letter A? Return one column: the count."
+    gold:
+      sql: |-
+        SELECT count(*) AS n FROM Person WHERE first_name LIKE 'A%'
+      cypher: |-
+        MATCH (p:Person) WHERE p.firstName STARTS WITH 'A' RETURN count(p) AS n
+      pgq: |-
+        SELECT count(*) AS n FROM GRAPH_TABLE (g MATCH (p:Person) COLUMNS (p.first_name AS fn)) WHERE fn LIKE 'A%'
+      arcadedb_sql: |-
+        SELECT count(*) AS n FROM Person WHERE firstName LIKE 'A%'
+
+  - id: A08
+    category: single
+    ordered: false
+    text: "In which years did the first and the last person join the network? Return two columns: the smallest and the largest creation year of any person."
+    gold:
+      sql: |-
+        SELECT min(creation_year) AS first_year, max(creation_year) AS last_year FROM Person
+      cypher: |-
+        MATCH (p:Person) RETURN min(p.creationYear) AS first_year, max(p.creationYear) AS last_year
+      pgq: |-
+        SELECT min(cy) AS first_year, max(cy) AS last_year FROM GRAPH_TABLE (g MATCH (p:Person) COLUMNS (p.creation_year AS cy))
+      arcadedb_sql: |-
+        SELECT min(creationYear) AS first_year, max(creationYear) AS last_year FROM Person
+
+  - id: A09
+    category: single
+    ordered: false
+    text: "How many forums have a title that starts with 'Album'? Return one column: the count."
+    gold:
+      sql: |-
+        SELECT count(*) AS n FROM Forum WHERE title LIKE 'Album%'
+      cypher: |-
+        MATCH (f:Forum) WHERE f.title STARTS WITH 'Album' RETURN count(f) AS n
+      pgq: |-
+        SELECT count(*) AS n FROM GRAPH_TABLE (g MATCH (f:Forum) COLUMNS (f.title AS title)) WHERE title LIKE 'Album%'
+      arcadedb_sql: |-
+        SELECT count(*) AS n FROM Forum WHERE title LIKE 'Album%'
+
+  - id: A10
+    category: single
+    ordered: false
+    text: "How many tags have a name that contains the text 'The'? Return one column: the count."
+    gold:
+      sql: |-
+        SELECT count(*) AS n FROM Tag WHERE name LIKE '%The%'
+      cypher: |-
+        MATCH (t:Tag) WHERE t.name CONTAINS 'The' RETURN count(t) AS n
+      pgq: |-
+        SELECT count(*) AS n FROM GRAPH_TABLE (g MATCH (t:Tag) COLUMNS (t.name AS name)) WHERE name LIKE '%The%'
+      arcadedb_sql: |-
+        SELECT count(*) AS n FROM Tag WHERE name LIKE '%The%'
+
+  # ---------------- one join ----------------
+  - id: B01
+    category: join
+    ordered: true
+    text: "Which city has the most persons living in it? Return two columns: the city name and the number of persons. If cities are tied, take the one with the alphabetically first name."
+    gold:
+      sql: |-
+        SELECT c.name AS city, count(*) AS n FROM Person p JOIN City c ON p.city_id = c.id GROUP BY c.name ORDER BY n DESC, city ASC LIMIT 1
+      cypher: |-
+        MATCH (p:Person)-[:IS_LOCATED_IN]->(c:City) RETURN c.name AS city, count(*) AS n ORDER BY n DESC, city ASC LIMIT 1
+      pgq: |-
+        SELECT city, count(*) AS n FROM GRAPH_TABLE (g MATCH (p:Person)-[l:LocatedIn]->(c:City) COLUMNS (c.name AS city)) GROUP BY city ORDER BY n DESC, city ASC LIMIT 1
+      arcadedb_sql: |-
+        SELECT name AS city, in('IS_LOCATED_IN').size() AS n FROM City ORDER BY n DESC, city ASC LIMIT 1
+
+  - id: B02
+    category: join
+    ordered: true
+    text: "Which 5 countries have the most cities? Return two columns: the country name and the number of cities, ordered by the number descending, then by country name ascending."
+    gold:
+      sql: |-
+        SELECT co.name AS country, count(*) AS n FROM City c JOIN Country co ON c.country_id = co.id GROUP BY co.name ORDER BY n DESC, country ASC LIMIT 5
+      cypher: |-
+        MATCH (c:City)-[:IS_PART_OF]->(co:Country) RETURN co.name AS country, count(*) AS n ORDER BY n DESC, country ASC LIMIT 5
+      pgq: |-
+        SELECT country, count(*) AS n FROM GRAPH_TABLE (g MATCH (c:City)-[o:PartOf]->(co:Country) COLUMNS (co.name AS country)) GROUP BY country ORDER BY n DESC, country ASC LIMIT 5
+      arcadedb_sql: |-
+        SELECT name AS country, in('IS_PART_OF').size() AS n FROM Country ORDER BY n DESC, country ASC LIMIT 5
+
+  - id: B03
+    category: join
+    ordered: false
+    text: "How many forums are moderated by persons whose first name is 'Mahinda'? Return one column: the count."
+    gold:
+      sql: |-
+        SELECT count(*) AS n FROM Forum f JOIN Person p ON f.moderator_id = p.id WHERE p.first_name = 'Mahinda'
+      cypher: |-
+        MATCH (f:Forum)-[:HAS_MODERATOR]->(p:Person) WHERE p.firstName = 'Mahinda' RETURN count(f) AS n
+      pgq: |-
+        SELECT count(*) AS n FROM GRAPH_TABLE (g MATCH (f:Forum)-[m:HasModerator]->(p:Person WHERE p.first_name = 'Mahinda') COLUMNS (f.id AS fid))
+      arcadedb_sql: |-
+        SELECT count(*) AS n FROM (SELECT expand(in('HAS_MODERATOR')) FROM Person WHERE firstName = 'Mahinda')
+
+  - id: B04
+    category: join
+    ordered: true
+    text: "Which person moderates the most forums? Return three columns: first name, last name and the number of forums moderated. If persons are tied, take the one with the smaller id."
+    gold:
+      sql: |-
+        SELECT p.first_name, p.last_name, count(*) AS n FROM Forum f JOIN Person p ON f.moderator_id = p.id GROUP BY p.id, p.first_name, p.last_name ORDER BY n DESC, p.id ASC LIMIT 1
+      cypher: |-
+        MATCH (f:Forum)-[:HAS_MODERATOR]->(p:Person) WITH p, count(f) AS n RETURN p.firstName AS first_name, p.lastName AS last_name, n ORDER BY n DESC, p.id ASC LIMIT 1
+      pgq: |-
+        SELECT fn, ln, count(*) AS n FROM GRAPH_TABLE (g MATCH (f:Forum)-[m:HasModerator]->(p:Person) COLUMNS (p.id AS pid, p.first_name AS fn, p.last_name AS ln)) GROUP BY pid, fn, ln ORDER BY n DESC, pid ASC LIMIT 1
+      arcadedb_sql: |-
+        SELECT firstName, lastName, in('HAS_MODERATOR').size() AS n FROM Person ORDER BY n DESC, id ASC LIMIT 1
+
+  - id: B05
+    category: join
+    ordered: true
+    text: "Which 5 tags have the most persons interested in them? Return two columns: the tag name and the number of interested persons, ordered by the number descending, then by tag name ascending."
+    gold:
+      sql: |-
+        SELECT t.name AS tag, count(*) AS n FROM HasInterest hi JOIN Tag t ON hi.tag_id = t.id GROUP BY t.name ORDER BY n DESC, tag ASC LIMIT 5
+      cypher: |-
+        MATCH (p:Person)-[:HAS_INTEREST]->(t:Tag) RETURN t.name AS tag, count(*) AS n ORDER BY n DESC, tag ASC LIMIT 5
+      pgq: |-
+        SELECT tag, count(*) AS n FROM GRAPH_TABLE (g MATCH (p:Person)-[i:HasInterest]->(t:Tag) COLUMNS (t.name AS tag)) GROUP BY tag ORDER BY n DESC, tag ASC LIMIT 5
+      arcadedb_sql: |-
+        SELECT name AS tag, in('HAS_INTEREST').size() AS n FROM Tag ORDER BY n DESC, tag ASC LIMIT 5
+
+  - id: B06
+    category: join
+    ordered: false
+    text: "How many tags have the tag class named 'OfficeHolder' as their direct class? Return one column: the count."
+    gold:
+      sql: |-
+        SELECT count(*) AS n FROM Tag t JOIN TagClass tc ON t.tagclass_id = tc.id WHERE tc.name = 'OfficeHolder'
+      cypher: |-
+        MATCH (t:Tag)-[:HAS_TYPE]->(tc:TagClass) WHERE tc.name = 'OfficeHolder' RETURN count(t) AS n
+      pgq: |-
+        SELECT count(*) AS n FROM GRAPH_TABLE (g MATCH (t:Tag)-[h:HasType]->(tc:TagClass WHERE tc.name = 'OfficeHolder') COLUMNS (t.id AS tid))
+      arcadedb_sql: |-
+        SELECT count(*) AS n FROM (SELECT expand(in('HAS_TYPE')) FROM TagClass WHERE name = 'OfficeHolder')
+
+  - id: B07
+    category: join
+    ordered: false
+    text: "How many persons have at least one friend? Return one column: the count."
+    gold:
+      sql: |-
+        SELECT count(*) AS n FROM Person p WHERE EXISTS (SELECT 1 FROM Knows k WHERE k.person1_id = p.id OR k.person2_id = p.id)
+      cypher: |-
+        MATCH (p:Person)-[:KNOWS]-(:Person) RETURN count(DISTINCT p) AS n
+      pgq: |-
+        SELECT count(DISTINCT pid) AS n FROM GRAPH_TABLE (g MATCH (p:Person)-[k:Knows]-(f:Person) COLUMNS (p.id AS pid))
+      arcadedb_sql: |-
+        SELECT count(*) AS n FROM Person WHERE both('KNOWS').size() > 0
+
+  - id: B08
+    category: join
+    ordered: true
+    text: "Which 3 persons have the most friends? Return three columns: first name, last name and the number of friends, ordered by the number descending, then by person id ascending."
+    gold:
+      sql: |-
+        WITH sym AS (SELECT person1_id AS a, person2_id AS b FROM Knows UNION ALL SELECT person2_id, person1_id FROM Knows) SELECT p.first_name, p.last_name, count(*) AS n FROM sym s JOIN Person p ON p.id = s.a GROUP BY p.id, p.first_name, p.last_name ORDER BY n DESC, p.id ASC LIMIT 3
+      cypher: |-
+        MATCH (p:Person)-[:KNOWS]-(f:Person) WITH p, count(f) AS n RETURN p.firstName AS first_name, p.lastName AS last_name, n ORDER BY n DESC, p.id ASC LIMIT 3
+      pgq: |-
+        SELECT fn, ln, count(*) AS n FROM GRAPH_TABLE (g MATCH (p:Person)-[k:Knows]-(f:Person) COLUMNS (p.id AS pid, p.first_name AS fn, p.last_name AS ln)) GROUP BY pid, fn, ln ORDER BY n DESC, pid ASC LIMIT 3
+      arcadedb_sql: |-
+        SELECT firstName, lastName, both('KNOWS').size() AS n FROM Person ORDER BY n DESC, id ASC LIMIT 3
+
+  - id: B09
+    category: join
+    ordered: false
+    text: "How many persons live in a city whose name starts with the letter B? Return one column: the count."
+    gold:
+      sql: |-
+        SELECT count(*) AS n FROM Person p JOIN City c ON p.city_id = c.id WHERE c.name LIKE 'B%'
+      cypher: |-
+        MATCH (p:Person)-[:IS_LOCATED_IN]->(c:City) WHERE c.name STARTS WITH 'B' RETURN count(p) AS n
+      pgq: |-
+        SELECT count(*) AS n FROM GRAPH_TABLE (g MATCH (p:Person)-[l:LocatedIn]->(c:City) COLUMNS (c.name AS cname)) WHERE cname LIKE 'B%'
+      arcadedb_sql: |-
+        SELECT count(*) AS n FROM (SELECT expand(in('IS_LOCATED_IN')) FROM City WHERE name LIKE 'B%')
+
+  - id: B10
+    category: join
+    ordered: true
+    text: "Which are the first 5 tags, in alphabetical order of name, that the person with id 933 is interested in? Return one column: the tag name."
+    gold:
+      sql: |-
+        SELECT t.name AS name FROM HasInterest hi JOIN Tag t ON hi.tag_id = t.id WHERE hi.person_id = 933 ORDER BY t.name LIMIT 5
+      cypher: |-
+        MATCH (p:Person {id: 933})-[:HAS_INTEREST]->(t:Tag) RETURN t.name AS name ORDER BY name LIMIT 5
+      pgq: |-
+        SELECT name FROM GRAPH_TABLE (g MATCH (p:Person WHERE p.id = 933)-[i:HasInterest]->(t:Tag) COLUMNS (t.name AS name)) ORDER BY name LIMIT 5
+      arcadedb_sql: |-
+        SELECT name FROM (SELECT expand(out('HAS_INTEREST')) FROM Person WHERE id = 933) ORDER BY name LIMIT 5
+
+  # ---------------- multi join (two or more joins) ----------------
+  - id: C01
+    category: multi_join
+    ordered: true
+    text: "Which 5 countries have the most persons living in them? Return two columns: the country name and the number of persons, ordered by the number descending, then by country name ascending."
+    gold:
+      sql: |-
+        SELECT co.name AS country, count(*) AS n FROM Person p JOIN City c ON p.city_id = c.id JOIN Country co ON c.country_id = co.id GROUP BY co.name ORDER BY n DESC, country ASC LIMIT 5
+      cypher: |-
+        MATCH (p:Person)-[:IS_LOCATED_IN]->(:City)-[:IS_PART_OF]->(co:Country) RETURN co.name AS country, count(*) AS n ORDER BY n DESC, country ASC LIMIT 5
+      pgq: |-
+        SELECT country, count(*) AS n FROM GRAPH_TABLE (g MATCH (p:Person)-[l:LocatedIn]->(c:City)-[o:PartOf]->(co:Country) COLUMNS (co.name AS country)) GROUP BY country ORDER BY n DESC, country ASC LIMIT 5
+      arcadedb_sql: |-
+        SELECT name AS country, in('IS_PART_OF').in('IS_LOCATED_IN').size() AS n FROM Country ORDER BY n DESC, country ASC LIMIT 5
+
+  - id: C02
+    category: multi_join
+    ordered: false
+    text: "How many female persons live in India? Return one column: the count."
+    gold:
+      sql: |-
+        SELECT count(*) AS n FROM Person p JOIN City c ON p.city_id = c.id JOIN Country co ON c.country_id = co.id WHERE co.name = 'India' AND p.gender = 'female'
+      cypher: |-
+        MATCH (p:Person)-[:IS_LOCATED_IN]->(:City)-[:IS_PART_OF]->(co:Country) WHERE co.name = 'India' AND p.gender = 'female' RETURN count(p) AS n
+      pgq: |-
+        SELECT count(*) AS n FROM GRAPH_TABLE (g MATCH (p:Person WHERE p.gender = 'female')-[l:LocatedIn]->(c:City)-[o:PartOf]->(co:Country WHERE co.name = 'India') COLUMNS (p.id AS pid))
+      arcadedb_sql: |-
+        SELECT count(*) AS n FROM (SELECT expand(in('IS_LOCATED_IN')) FROM (SELECT expand(in('IS_PART_OF')) FROM Country WHERE name = 'India')) WHERE gender = 'female'
+
+  - id: C03
+    category: multi_join
+    ordered: false
+    text: "How many friendships connect two persons who live in the same city? Count each friendship once. Return one column: the count."
+    gold:
+      sql: |-
+        SELECT count(*) AS n FROM Knows k JOIN Person a ON a.id = k.person1_id JOIN Person b ON b.id = k.person2_id WHERE a.city_id = b.city_id
+      cypher: |-
+        MATCH (a:Person)-[:KNOWS]->(b:Person) MATCH (a)-[:IS_LOCATED_IN]->(c:City)<-[:IS_LOCATED_IN]-(b) RETURN count(*) AS n
+      pgq: |-
+        SELECT count(*) AS n FROM GRAPH_TABLE (g MATCH (a:Person)-[k:Knows]->(b:Person)-[l2:LocatedIn]->(c:City)<-[l1:LocatedIn]-(a:Person) COLUMNS (a.id AS aid))
+      arcadedb_sql: null
+    null_reasons:
+      arcadedb_sql: {kind: author, why: "needs the same City reached from both ends of a KNOWS edge; the author did not write a MATCH with a cross-alias condition with confidence"}
+
+  - id: C04
+    category: multi_join
+    ordered: true
+    text: "For each country, how many forums are moderated by a person who lives in that country? Return the 5 countries with the most such forums, as two columns: country name and the number of forums, ordered by the number descending, then by country name ascending."
+    gold:
+      sql: |-
+        SELECT co.name AS country, count(*) AS n FROM Forum f JOIN Person p ON p.id = f.moderator_id JOIN City c ON c.id = p.city_id JOIN Country co ON co.id = c.country_id GROUP BY co.name ORDER BY n DESC, country ASC LIMIT 5
+      cypher: |-
+        MATCH (f:Forum)-[:HAS_MODERATOR]->(p:Person)-[:IS_LOCATED_IN]->(:City)-[:IS_PART_OF]->(co:Country) RETURN co.name AS country, count(f) AS n ORDER BY n DESC, country ASC LIMIT 5
+      pgq: |-
+        SELECT country, count(*) AS n FROM GRAPH_TABLE (g MATCH (f:Forum)-[m:HasModerator]->(p:Person)-[l:LocatedIn]->(c:City)-[o:PartOf]->(co:Country) COLUMNS (co.name AS country)) GROUP BY country ORDER BY n DESC, country ASC LIMIT 5
+      arcadedb_sql: |-
+        SELECT name AS country, in('IS_PART_OF').in('IS_LOCATED_IN').in('HAS_MODERATOR').size() AS n FROM Country ORDER BY n DESC, country ASC LIMIT 5
+
+  - id: C05
+    category: multi_join
+    ordered: true
+    text: "Among the persons who live in India, which 5 tags are the most common interests? Return two columns: the tag name and the number of Indian persons interested in it, ordered by the number descending, then by tag name ascending."
+    gold:
+      sql: |-
+        SELECT t.name AS tag, count(*) AS n FROM Country co JOIN City c ON c.country_id = co.id JOIN Person p ON p.city_id = c.id JOIN HasInterest hi ON hi.person_id = p.id JOIN Tag t ON t.id = hi.tag_id WHERE co.name = 'India' GROUP BY t.name ORDER BY n DESC, tag ASC LIMIT 5
+      cypher: |-
+        MATCH (co:Country {name: 'India'})<-[:IS_PART_OF]-(:City)<-[:IS_LOCATED_IN]-(p:Person)-[:HAS_INTEREST]->(t:Tag) RETURN t.name AS tag, count(*) AS n ORDER BY n DESC, tag ASC LIMIT 5
+      pgq: |-
+        SELECT tag, count(*) AS n FROM GRAPH_TABLE (g MATCH (co:Country WHERE co.name = 'India')<-[o:PartOf]-(c:City)<-[l:LocatedIn]-(p:Person)-[i:HasInterest]->(t:Tag) COLUMNS (t.name AS tag)) GROUP BY tag ORDER BY n DESC, tag ASC LIMIT 5
+      arcadedb_sql: |-
+        SELECT name AS tag, count(*) AS n FROM (SELECT expand(out('HAS_INTEREST')) FROM (SELECT expand(in('IS_LOCATED_IN')) FROM (SELECT expand(in('IS_PART_OF')) FROM Country WHERE name = 'India'))) GROUP BY name ORDER BY n DESC, tag ASC LIMIT 5
+
+  - id: C06
+    category: multi_join
+    ordered: false
+    text: "How many persons are interested in at least one tag whose direct tag class is named 'OfficeHolder'? Return one column: the count."
+    gold:
+      sql: |-
+        SELECT count(DISTINCT hi.person_id) AS n FROM HasInterest hi JOIN Tag t ON t.id = hi.tag_id JOIN TagClass tc ON tc.id = t.tagclass_id WHERE tc.name = 'OfficeHolder'
+      cypher: |-
+        MATCH (p:Person)-[:HAS_INTEREST]->(:Tag)-[:HAS_TYPE]->(tc:TagClass) WHERE tc.name = 'OfficeHolder' RETURN count(DISTINCT p) AS n
+      pgq: |-
+        SELECT count(DISTINCT pid) AS n FROM GRAPH_TABLE (g MATCH (p:Person)-[i:HasInterest]->(t:Tag)-[h:HasType]->(tc:TagClass WHERE tc.name = 'OfficeHolder') COLUMNS (p.id AS pid))
+      arcadedb_sql: |-
+        SELECT count(*) AS n FROM (SELECT id FROM (SELECT expand(in('HAS_INTEREST')) FROM (SELECT expand(in('HAS_TYPE')) FROM TagClass WHERE name = 'OfficeHolder')) GROUP BY id)
+
+  - id: C07
+    category: multi_join
+    ordered: false
+    text: "How many friendships are there between a male and a female person? Count each friendship once. Return one column: the count."
+    gold:
+      sql: |-
+        SELECT count(*) AS n FROM Knows k JOIN Person a ON a.id = k.person1_id JOIN Person b ON b.id = k.person2_id WHERE a.gender <> b.gender
+      cypher: |-
+        MATCH (a:Person)-[:KNOWS]-(b:Person) WHERE a.gender = 'male' AND b.gender = 'female' RETURN count(*) AS n
+      pgq: |-
+        SELECT count(*) AS n FROM GRAPH_TABLE (g MATCH (a:Person WHERE a.gender = 'male')-[k:Knows]-(b:Person WHERE b.gender = 'female') COLUMNS (a.id AS aid))
+      arcadedb_sql: |-
+        SELECT count(*) AS n FROM (SELECT expand(both('KNOWS')) FROM Person WHERE gender = 'male') WHERE gender = 'female'
+
+  - id: C08
+    category: multi_join
+    ordered: false
+    text: "How many friendships are there between two persons who both live in India? Count each friendship once. Return one column: the count."
+    gold:
+      sql: |-
+        SELECT count(*) AS n FROM Knows k JOIN Person a ON a.id = k.person1_id JOIN City ca ON ca.id = a.city_id JOIN Country coa ON coa.id = ca.country_id JOIN Person b ON b.id = k.person2_id JOIN City cb ON cb.id = b.city_id JOIN Country cob ON cob.id = cb.country_id WHERE coa.name = 'India' AND cob.name = 'India'
+      cypher: |-
+        MATCH (a:Person)-[:KNOWS]->(b:Person) MATCH (a)-[:IS_LOCATED_IN]->(:City)-[:IS_PART_OF]->(:Country {name: 'India'}) MATCH (b)-[:IS_LOCATED_IN]->(:City)-[:IS_PART_OF]->(:Country {name: 'India'}) RETURN count(*) AS n
+      pgq: |-
+        SELECT count(*) AS n FROM GRAPH_TABLE (g MATCH (co1:Country WHERE co1.name = 'India')<-[o1:PartOf]-(c1:City)<-[l1:LocatedIn]-(a:Person)-[k:Knows]->(b:Person)-[l2:LocatedIn]->(c2:City)-[o2:PartOf]->(co2:Country WHERE co2.name = 'India') COLUMNS (a.id AS aid))
+      arcadedb_sql: null
+    null_reasons:
+      arcadedb_sql: {kind: author, why: "needs a filter on the far end of a KNOWS edge combined with a two-step path from both ends; the author did not write it with confidence"}
+
+  - id: C09
+    category: multi_join
+    ordered: true
+    text: "Among the friends of the person with id 933, which 5 tags are the most common interests? Return two columns: the tag name and the number of friends of person 933 interested in it, ordered by the number descending, then by tag name ascending."
+    gold:
+      sql: |-
+        WITH sym AS (SELECT person1_id AS a, person2_id AS b FROM Knows UNION ALL SELECT person2_id, person1_id FROM Knows) SELECT t.name AS tag, count(DISTINCT hi.person_id) AS n FROM sym s JOIN HasInterest hi ON hi.person_id = s.b JOIN Tag t ON t.id = hi.tag_id WHERE s.a = 933 GROUP BY t.name ORDER BY n DESC, tag ASC LIMIT 5
+      cypher: |-
+        MATCH (:Person {id: 933})-[:KNOWS]-(f:Person)-[:HAS_INTEREST]->(t:Tag) RETURN t.name AS tag, count(DISTINCT f) AS n ORDER BY n DESC, tag ASC LIMIT 5
+      pgq: |-
+        SELECT tag, count(DISTINCT fid) AS n FROM GRAPH_TABLE (g MATCH (p:Person WHERE p.id = 933)-[k:Knows]-(f:Person)-[i:HasInterest]->(t:Tag) COLUMNS (t.name AS tag, f.id AS fid)) GROUP BY tag ORDER BY n DESC, tag ASC LIMIT 5
+      arcadedb_sql: |-
+        SELECT name AS tag, count(*) AS n FROM (SELECT expand(out('HAS_INTEREST')) FROM (SELECT expand(both('KNOWS')) FROM Person WHERE id = 933)) GROUP BY name ORDER BY n DESC, tag ASC LIMIT 5
+
+  - id: C10
+    category: multi_join
+    ordered: false
+    text: "How many other persons live in the same city as the person with id 933? Return one column: the count."
+    gold:
+      sql: |-
+        SELECT count(*) AS n FROM Person p JOIN City c ON c.id = p.city_id JOIN Person q ON q.city_id = c.id WHERE p.id = 933 AND q.id <> 933
+      cypher: |-
+        MATCH (p:Person {id: 933})-[:IS_LOCATED_IN]->(c:City)<-[:IS_LOCATED_IN]-(q:Person) WHERE q.id <> 933 RETURN count(q) AS n
+      pgq: |-
+        SELECT count(*) AS n FROM GRAPH_TABLE (g MATCH (p:Person WHERE p.id = 933)-[l1:LocatedIn]->(c:City)<-[l2:LocatedIn]-(q:Person) WHERE q.id <> p.id COLUMNS (q.id AS qid))
+      arcadedb_sql: |-
+        SELECT count(*) AS n FROM (SELECT expand(in('IS_LOCATED_IN')) FROM (SELECT expand(out('IS_LOCATED_IN')) FROM Person WHERE id = 933)) WHERE id <> 933
+
+  # ---------------- graph pattern / traversal ----------------
+  - id: D01
+    category: graph
+    ordered: false
+    text: "How many friends does the person with id 933 have? Return one column: the count."
+    gold:
+      sql: |-
+        SELECT count(*) AS n FROM (SELECT person2_id AS f FROM Knows WHERE person1_id = 933 UNION ALL SELECT person1_id FROM Knows WHERE person2_id = 933)
+      cypher: |-
+        MATCH (:Person {id: 933})-[:KNOWS]-(f:Person) RETURN count(f) AS n
+      pgq: |-
+        SELECT count(*) AS n FROM GRAPH_TABLE (g MATCH (p:Person WHERE p.id = 933)-[k:Knows]-(f:Person) COLUMNS (f.id AS fid))
+      arcadedb_sql: |-
+        SELECT both('KNOWS').size() AS n FROM Person WHERE id = 933
+
+  - id: D02
+    category: graph
+    ordered: false
+    text: "How many distinct persons are friends of friends of the person with id 933, not counting person 933 himself? A person who is also a direct friend counts if reachable in two steps. Return one column: the count."
+    gold:
+      sql: |-
+        WITH sym AS (SELECT person1_id AS a, person2_id AS b FROM Knows UNION ALL SELECT person2_id, person1_id FROM Knows) SELECT count(DISTINCT s2.b) AS n FROM sym s1 JOIN sym s2 ON s1.b = s2.a WHERE s1.a = 933 AND s2.b <> 933
+      cypher: |-
+        MATCH (:Person {id: 933})-[:KNOWS]-(:Person)-[:KNOWS]-(x:Person) WHERE x.id <> 933 RETURN count(DISTINCT x) AS n
+      pgq: |-
+        SELECT count(DISTINCT xid) AS n FROM GRAPH_TABLE (g MATCH (p:Person WHERE p.id = 933)-[k1:Knows]-(m:Person)-[k2:Knows]-(x:Person) WHERE x.id <> p.id COLUMNS (x.id AS xid))
+      arcadedb_sql: |-
+        SELECT count(*) AS n FROM (SELECT id FROM (SELECT expand(both('KNOWS')) FROM (SELECT expand(both('KNOWS')) FROM Person WHERE id = 933)) WHERE id <> 933 GROUP BY id)
+
+  - id: D03
+    category: graph
+    ordered: false
+    text: "How many distinct persons are friends of friends of the person with id 933 but are neither friends of person 933 nor person 933 himself? Return one column: the count."
+    gold:
+      sql: |-
+        WITH sym AS (SELECT person1_id AS a, person2_id AS b FROM Knows UNION ALL SELECT person2_id, person1_id FROM Knows) SELECT count(DISTINCT s2.b) AS n FROM sym s1 JOIN sym s2 ON s1.b = s2.a WHERE s1.a = 933 AND s2.b <> 933 AND s2.b NOT IN (SELECT b FROM sym WHERE a = 933)
+      cypher: |-
+        MATCH (p:Person {id: 933})-[:KNOWS]-(:Person)-[:KNOWS]-(x:Person) WHERE x.id <> 933 AND NOT (p)-[:KNOWS]-(x) RETURN count(DISTINCT x) AS n
+      pgq: |-
+        SELECT count(DISTINCT xid) AS n FROM GRAPH_TABLE (g MATCH (p:Person WHERE p.id = 933)-[k1:Knows]-(m:Person)-[k2:Knows]-(x:Person) WHERE x.id <> p.id COLUMNS (x.id AS xid)) WHERE xid NOT IN (SELECT fid FROM GRAPH_TABLE (g MATCH (p2:Person WHERE p2.id = 933)-[k3:Knows]-(f2:Person) COLUMNS (f2.id AS fid)))
+      arcadedb_sql: |-
+        SELECT count(*) AS n FROM (SELECT id FROM (SELECT expand(both('KNOWS')) FROM (SELECT expand(both('KNOWS')) FROM Person WHERE id = 933)) WHERE id <> 933 AND id NOT IN (SELECT id FROM (SELECT expand(both('KNOWS')) FROM Person WHERE id = 933)) GROUP BY id)
+
+  - id: D04
+    category: graph
+    ordered: false
+    text: "How many triangles of mutual friends exist, that is, sets of three persons who all know each other? Count each set once. Return one column: the count."
+    gold:
+      sql: |-
+        SELECT count(*) AS n FROM Knows k1 JOIN Knows k2 ON k1.person2_id = k2.person1_id JOIN Knows k3 ON k3.person1_id = k1.person1_id AND k3.person2_id = k2.person2_id
+      cypher: |-
+        MATCH (a:Person)-[:KNOWS]-(b:Person)-[:KNOWS]-(c:Person)-[:KNOWS]-(a) WHERE a.id < b.id AND b.id < c.id RETURN count(*) AS n
+      pgq: |-
+        SELECT count(*) AS n FROM GRAPH_TABLE (g MATCH (a:Person)-[k1:Knows]-(b:Person)-[k2:Knows]-(c:Person)-[k3:Knows]-(a:Person) WHERE a.id < b.id AND b.id < c.id COLUMNS (a.id AS aid, b.id AS bid, c.id AS cid))
+      arcadedb_sql: null
+    null_reasons:
+      arcadedb_sql: {kind: author, why: "a closed three-cycle with id ordering across three aliases; the author did not write a MATCH with $matched conditions with confidence"}
+
+  - id: D05
+    category: graph
+    ordered: false
+    text: "How many friends of the person with id 933 live in the same country as person 933? Return one column: the count."
+    gold:
+      sql: |-
+        WITH sym AS (SELECT person1_id AS a, person2_id AS b FROM Knows UNION ALL SELECT person2_id, person1_id FROM Knows) SELECT count(*) AS n FROM sym s JOIN Person p ON p.id = s.a JOIN City cp ON cp.id = p.city_id JOIN Person f ON f.id = s.b JOIN City cf ON cf.id = f.city_id WHERE s.a = 933 AND cf.country_id = cp.country_id
+      cypher: |-
+        MATCH (p:Person {id: 933})-[:KNOWS]-(f:Person) MATCH (p)-[:IS_LOCATED_IN]->(:City)-[:IS_PART_OF]->(co:Country) MATCH (f)-[:IS_LOCATED_IN]->(:City)-[:IS_PART_OF]->(co) RETURN count(f) AS n
+      pgq: |-
+        SELECT count(*) AS n FROM GRAPH_TABLE (g MATCH (f:Person)-[k:Knows]-(p:Person WHERE p.id = 933)-[l1:LocatedIn]->(c1:City)-[o1:PartOf]->(co:Country)<-[o2:PartOf]-(c2:City)<-[l2:LocatedIn]-(f:Person) COLUMNS (f.id AS fid))
+      arcadedb_sql: null
+    null_reasons:
+      arcadedb_sql: {kind: author, why: "compares the country reached from person 933 with the country reached from each friend; the author did not write it with confidence"}
+
+  - id: D06
+    category: graph
+    ordered: false
+    text: "How many persons have more than 50 friends? Return one column: the count."
+    gold:
+      sql: |-
+        WITH sym AS (SELECT person1_id AS a, person2_id AS b FROM Knows UNION ALL SELECT person2_id, person1_id FROM Knows) SELECT count(*) AS n FROM (SELECT a FROM sym GROUP BY a HAVING count(*) > 50)
+      cypher: |-
+        MATCH (p:Person)-[:KNOWS]-() WITH p, count(*) AS d WHERE d > 50 RETURN count(p) AS n
+      pgq: |-
+        SELECT count(*) AS n FROM (SELECT pid FROM GRAPH_TABLE (g MATCH (p:Person)-[k:Knows]-(f:Person) COLUMNS (p.id AS pid)) GROUP BY pid HAVING count(*) > 50)
+      arcadedb_sql: |-
+        SELECT count(*) AS n FROM Person WHERE both('KNOWS').size() > 50
+
+  - id: D07
+    category: graph
+    ordered: false
+    text: "How many friends do the persons with id 933 and id 4139 have in common? Return one column: the count."
+    gold:
+      sql: |-
+        WITH sym AS (SELECT person1_id AS a, person2_id AS b FROM Knows UNION ALL SELECT person2_id, person1_id FROM Knows) SELECT count(DISTINCT s1.b) AS n FROM sym s1 JOIN sym s2 ON s1.b = s2.b WHERE s1.a = 933 AND s2.a = 4139
+      cypher: |-
+        MATCH (:Person {id: 933})-[:KNOWS]-(m:Person)-[:KNOWS]-(:Person {id: 4139}) RETURN count(DISTINCT m) AS n
+      pgq: |-
+        SELECT count(DISTINCT mid) AS n FROM GRAPH_TABLE (g MATCH (a:Person WHERE a.id = 933)-[k1:Knows]-(m:Person)-[k2:Knows]-(b:Person WHERE b.id = 4139) COLUMNS (m.id AS mid))
+      arcadedb_sql: |-
+        SELECT count(*) AS n FROM (SELECT expand(both('KNOWS')) FROM Person WHERE id = 933) WHERE id IN (SELECT id FROM (SELECT expand(both('KNOWS')) FROM Person WHERE id = 4139))
+
+  - id: D08
+    category: graph
+    ordered: false
+    text: "How many friendships connect two persons who share at least one interest tag? Count each friendship once. Return one column: the count."
+    gold:
+      sql: |-
+        SELECT count(*) AS n FROM (SELECT DISTINCT k.person1_id, k.person2_id FROM Knows k JOIN HasInterest h1 ON h1.person_id = k.person1_id JOIN HasInterest h2 ON h2.person_id = k.person2_id AND h2.tag_id = h1.tag_id)
+      cypher: |-
+        MATCH (a:Person)-[:KNOWS]->(b:Person) MATCH (a)-[:HAS_INTEREST]->(:Tag)<-[:HAS_INTEREST]-(b) WITH DISTINCT a, b RETURN count(*) AS n
+      pgq: |-
+        SELECT count(*) AS n FROM (SELECT DISTINCT aid, bid FROM GRAPH_TABLE (g MATCH (a:Person)-[k:Knows]->(b:Person)-[i2:HasInterest]->(t:Tag)<-[i1:HasInterest]-(a:Person) COLUMNS (a.id AS aid, b.id AS bid)))
+      arcadedb_sql: null
+    null_reasons:
+      arcadedb_sql: {kind: author, why: "needs an existence test on the intersection of two neighbour sets per edge; the author did not write it with confidence"}
+
+  - id: D09
+    category: graph
+    ordered: true
+    text: "Among the friends of the person with id 933, which 3 have the most friends themselves? Return three columns: first name, last name and the friend's number of friends, ordered by the number descending, then by person id ascending."
+    gold:
+      sql: |-
+        WITH sym AS (SELECT person1_id AS a, person2_id AS b FROM Knows UNION ALL SELECT person2_id, person1_id FROM Knows), deg AS (SELECT a, count(*) AS d FROM sym GROUP BY a) SELECT p.first_name, p.last_name, deg.d AS d FROM sym s JOIN Person p ON p.id = s.b JOIN deg ON deg.a = p.id WHERE s.a = 933 ORDER BY d DESC, p.id ASC LIMIT 3
+      cypher: |-
+        MATCH (:Person {id: 933})-[:KNOWS]-(f:Person) MATCH (f)-[:KNOWS]-(g:Person) WITH f, count(g) AS d RETURN f.firstName AS first_name, f.lastName AS last_name, d ORDER BY d DESC, f.id ASC LIMIT 3
+      pgq: |-
+        SELECT fn, ln, count(*) AS d FROM GRAPH_TABLE (g MATCH (p:Person WHERE p.id = 933)-[k1:Knows]-(f:Person)-[k2:Knows]-(h:Person) COLUMNS (f.id AS fid, f.first_name AS fn, f.last_name AS ln)) GROUP BY fid, fn, ln ORDER BY d DESC, fid ASC LIMIT 3
+      arcadedb_sql: |-
+        SELECT firstName, lastName, both('KNOWS').size() AS d FROM (SELECT expand(both('KNOWS')) FROM Person WHERE id = 933) ORDER BY d DESC, id ASC LIMIT 3
+
+  - id: D10
+    category: graph
+    ordered: true
+    text: "Who is the oldest friend, that is the one with the smallest birth year, of the person with id 933? If friends are tied, take the one with the smaller id. Return three columns: first name, last name and birth year."
+    gold:
+      sql: |-
+        WITH sym AS (SELECT person1_id AS a, person2_id AS b FROM Knows UNION ALL SELECT person2_id, person1_id FROM Knows) SELECT p.first_name, p.last_name, p.birth_year FROM sym s JOIN Person p ON p.id = s.b WHERE s.a = 933 ORDER BY p.birth_year ASC, p.id ASC LIMIT 1
+      cypher: |-
+        MATCH (:Person {id: 933})-[:KNOWS]-(f:Person) WITH f ORDER BY f.birthYear ASC, f.id ASC LIMIT 1 RETURN f.firstName AS first_name, f.lastName AS last_name, f.birthYear AS birth_year
+      pgq: |-
+        SELECT fn, ln, byear FROM GRAPH_TABLE (g MATCH (p:Person WHERE p.id = 933)-[k:Knows]-(f:Person) COLUMNS (f.id AS fid, f.first_name AS fn, f.last_name AS ln, f.birth_year AS byear)) ORDER BY byear ASC, fid ASC LIMIT 1
+      arcadedb_sql: |-
+        SELECT firstName, lastName, birthYear FROM (SELECT expand(both('KNOWS')) FROM Person WHERE id = 933) ORDER BY birthYear ASC, id ASC LIMIT 1

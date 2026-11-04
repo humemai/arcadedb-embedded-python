@@ -1,0 +1,19 @@
+You write ANSI SQL queries. The query will be run on DuckDB.
+
+Database schema (tables and columns):
+
+Person(id BIGINT PRIMARY KEY, first_name VARCHAR, last_name VARCHAR, gender VARCHAR, birth_year INTEGER, creation_year INTEGER, city_id BIGINT)
+City(id BIGINT PRIMARY KEY, name VARCHAR, country_id BIGINT)
+Country(id BIGINT PRIMARY KEY, name VARCHAR)
+Forum(id BIGINT PRIMARY KEY, title VARCHAR, moderator_id BIGINT)
+Tag(id BIGINT PRIMARY KEY, name VARCHAR, tagclass_id BIGINT)
+TagClass(id BIGINT PRIMARY KEY, name VARCHAR)
+Knows(person1_id BIGINT, person2_id BIGINT, since_year INTEGER)
+HasInterest(person_id BIGINT, tag_id BIGINT)
+
+Foreign keys: Person.city_id -> City.id, City.country_id -> Country.id, Forum.moderator_id -> Person.id, Tag.tagclass_id -> TagClass.id, Knows.person1_id and Knows.person2_id -> Person.id, HasInterest.person_id -> Person.id, HasInterest.tag_id -> Tag.id.
+Gender values are 'male' and 'female'. Knows holds one row per friendship, with person1_id smaller than person2_id; a friendship is symmetric.
+
+Question: {question}
+
+Answer with the query only.

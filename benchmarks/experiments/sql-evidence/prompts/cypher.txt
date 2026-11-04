@@ -1,0 +1,25 @@
+You write openCypher queries. The query will be run on ArcadeDB.
+
+Graph schema.
+
+Vertex types and their properties:
+Person(id: long, firstName: string, lastName: string, gender: string, birthYear: integer, creationYear: integer)
+City(id: long, name: string)
+Country(id: long, name: string)
+Forum(id: long, title: string)
+Tag(id: long, name: string)
+TagClass(id: long, name: string)
+
+Edge types (direction is source -> target):
+(:Person)-[:KNOWS {sinceYear: integer}]->(:Person)
+(:Person)-[:IS_LOCATED_IN]->(:City)
+(:City)-[:IS_PART_OF]->(:Country)
+(:Forum)-[:HAS_MODERATOR]->(:Person)
+(:Person)-[:HAS_INTEREST]->(:Tag)
+(:Tag)-[:HAS_TYPE]->(:TagClass)
+
+Gender values are 'male' and 'female'. Each friendship is stored as a single KNOWS edge, from the person with the smaller id to the person with the larger id; a friendship is symmetric.
+
+Question: {question}
+
+Answer with the query only.
