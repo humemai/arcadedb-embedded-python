@@ -151,7 +151,7 @@ def main():
     duck_by_key = {r["key"]: r for r in duck["results"]}
     extra = portable.run_extra_engines(data, jobs, a.out, a.timeout, a.cpuset, a.pg_mem, tag="port")
     loaded = portable.check_loaded(data, duck_by_key, extra)
-    versions = {"duckdb": {k: duck[k] for k in ("engine_version", "image", "image_id")},
+    versions = {"duckdb": {k: duck[k] for k in ("engine_version", "engine_versions", "image", "image_id", "restarts", "engine_killed")},
                 "sqlite": {"engine_version": extra["sqlite"]["version"]},
                 "postgres": {k: extra["postgres"][k] for k in ("version", "image", "image_id", "image_digest", "settings", "session")}}
     json.dump({"person_limit": a.person_limit, "counts": loaded["counts"], "fingerprints": loaded["fingerprints"],

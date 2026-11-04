@@ -6,6 +6,9 @@ Reference result per question: the ANSI SQL gold (DuckDB). Every other non-null 
 comparison rule in resultcmp.py (positional columns, order-insensitive unless `ordered`, float tolerance from
 questions.yaml). Writes DIR/gold_report.json, DIR/gold_report.md and DIR/gold_rows.json (the reference rows plus the
 per-arm verdict; score.py reads this file). Exit status 1 when any non-null gold errors or disagrees.
+A gold whose engine container is killed while it runs (DuckPGQ out of memory, DuckDB 2.0.0, or any OOM kill) is an ERROR with
+reason `engine_killed`, like any gold that errors; dockerrun.py restarts the engine and the remaining golds still run. The
+restart count and the killed keys are written to `engines` in gold_report.json.
 Also flags questions whose reference result is empty or a single zero (a weak question), without failing.
 
   --portability (needs `--with 'psycopg[binary]==3.3.7'`): also runs the `sql` golds on SQLite and PostgreSQL (portable.py)
@@ -116,7 +119,8 @@ def main():
             jobs += portable.duck_fingerprint_jobs()
         out = dockerrun.run_engine(engine, jobs, a.data, a.out, f"gold-{engine}", a.person_limit, a.timeout,
                                    a.cpuset, a.mem)
-        versions[engine] = {k: out[k] for k in ("engine_version", "image", "image_id", "load_s", "counts")}
+        versions[engine] = {k: out[k] for k in ("engine_version", "engine_versions", "image", "image_id", "load_s", "counts",
+                                                "restarts", "engine_killed")}
         for r in out["results"]:
             results[r["key"]] = r
 
@@ -134,7 +138,7 @@ def main():
                 continue
             r = results[f"{q['id']}::{arm}"]
             if not r["exec_ok"]:
-                st = {"status": "ERROR", "error": r["error"]}
+                st = {"status": "ERROR", "error": r["error"], "reason": r.get("reason")}
             elif not ref["exec_ok"]:
                 st = {"status": "NO_REFERENCE"}
             elif resultcmp.rows_equal(ref["rows"], r["rows"], q["ordered"], tol["float_abs"], tol["float_rel"], r["truncated"]):
@@ -160,6 +164,8 @@ def main():
         lines.append(f"| {e['id']} | {e['category']} | " + " | ".join(cells) + f" | {e['ref_rows']} | {'; '.join(e['warnings'])} |")
     n_null = {arm: sum(1 for e in report if e["arms"][arm]["status"] == "NULL") for arm in resultcmp.ARMS}
     lines += ["", f"engines: {json.dumps({k: v['engine_version'] for k, v in versions.items()})}",
+              f"engine restarts: {json.dumps({k: v['restarts'] for k, v in versions.items()})}; "
+              f"golds recorded as engine_killed: {json.dumps({k: v['engine_killed'] for k, v in versions.items()})}",
               f"person_limit: {a.person_limit}; null golds per arm: {json.dumps(n_null)}; non-OK non-null golds: {bad}"]
     open(os.path.join(a.out, "gold_report.md"), "w").write("\n".join(lines) + "\n")
     print("\n".join(lines))

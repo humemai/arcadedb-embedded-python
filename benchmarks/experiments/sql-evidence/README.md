@@ -4,7 +4,7 @@ Status: pre-registration. Written before anything ran. Nothing in this directory
 
 Purpose: ArcadeData may be asked to add an ANSI SQL core (JOINs, `information_schema`) next to Cypher. This experiment collects the numbers such a proposal needs. Evidence for and against counts equally, and every arm below is reported whatever it shows. The results are posted when collected, as input for a future plan. No release gate applies.
 
-ArcadeDB version: the latest stable release, 26.10.2 (released 2026-10-15; the official `arcadedata/arcadedb:26.10.2` image for part B, `dbbench:arcadedb-26.10.2`, the campaign's embedded image of that release, for part C). Client images are the latest releases on 2026-11-04. `ARCADEDB_VERSION` selects the tag and every output records the engine version it read from the running engine.
+ArcadeDB version: the latest stable release, 26.10.2 (released 2026-10-15; the official `arcadedata/arcadedb:26.10.2` image for part B, `dbbench:arcadedb-26.10.2`, the campaign's embedded image of that release, for part C). DuckDB version: the latest release, 2.0.0 (released 2026-10-21), in this experiment's own image `sqlev:duckdb-2.0.0` (`docker/duckdb.Dockerfile`; the campaign's `dbbench:duckdb` stays at 1.5.6 and is not used here), with the DuckPGQ community extension installed at image build time and checked there (`LOAD duckpgq`, `CREATE PROPERTY GRAPH`, one `GRAPH_TABLE` match). Every output records the DuckDB version and the DuckPGQ extension version read from the running engine. Client images are the latest releases on 2026-11-04. `ARCADEDB_VERSION` selects the tag and every output records the engine version it read from the running engine.
 
 ## Questions
 
@@ -42,9 +42,9 @@ Every engine loads the same rows. ArcadeDB gets vertex types per entity and six 
 
 | arm | language | engine |
 |---|---|---|
-| `sql` | ANSI SQL | DuckDB 1.5.6 (`dbbench:duckdb`), a stand-in for an ANSI SQL core |
+| `sql` | ANSI SQL | DuckDB 2.0.0 (`sqlev:duckdb-2.0.0`), a stand-in for an ANSI SQL core |
 | `cypher` | openCypher | ArcadeDB 26.10.2 embedded |
-| `pgq` | SQL/PGQ, `GRAPH_TABLE ... MATCH` | DuckDB 1.5.6 + DuckPGQ community extension (DECISIONS #103) |
+| `pgq` | SQL/PGQ, `GRAPH_TABLE ... MATCH` | DuckDB 2.0.0 + DuckPGQ community extension (version read at runtime, DECISIONS #103) |
 | `arcadedb_sql` | ArcadeDB SQL | ArcadeDB 26.10.2 embedded |
 | `arcadedb_sql_docs` | ArcadeDB SQL, prompt with a reference card | ArcadeDB 26.10.2 embedded (same engine, same reference rows as `arcadedb_sql`) |
 
@@ -93,7 +93,10 @@ Extraction (pre-registered, nothing else is done to the text): take the text blo
 - `exec_ok`: the query ran to completion;
 - `correct`: `exec_ok` and the result equals the reference rows under the comparison rule above. Columns are compared by position, so a model that returns the columns in another order than the question states is wrong.
 
-A failed generation (not succeeded, `refusal`, `max_tokens`, empty text) has all three false. A question enters the scored set only when every non-null gold of that question verified in `gold_check`; the others are listed as unscored.
+A failed generation (not succeeded, `refusal`, `max_tokens`, empty text) has all three false.
+
+Engine restarts. An engine container can exit before every query of a run has reported: DuckPGQ has a known out-of-memory bug (cwida/duckpgq-extension#335, fixed in DuckDB 2.0.1), which is why this rule exists, and any engine can be OOM-killed. `dockerrun.py` reads one flushed result line per query, records the query that was running when the container exited as failed with reason `engine_killed` (exit code and last stderr lines kept), starts a fresh container and runs the queries after it, so later queries are executed and scored normally. A killed query counts as a failed generation (its query is the cause: `parse_ok`, `exec_ok` and `correct` false); a killed gold is an `ERROR` like any gold that errors. At most 5 restarts per run (`SQLEV_MAX_RESTARTS`); past that the run stops instead of scoring queries that never ran. Restart counts and killed keys are written next to the engine versions in `gold_report.json` and `table.json`, and the number of `engine_killed` generations is printed under `table.md`.
+ A question enters the scored set only when every non-null gold of that question verified in `gold_check`; the others are listed as unscored.
 
 Report: per model, per arm, per category and overall: `n`, parse rate, execution rate and correct rate with a 95% Wilson interval. The three samples of one question are not independent, so the table also gives pass@3 (a question counts when any sample is correct) with its own Wilson interval over questions. The first table shows every arm for both models, including arms that did badly.
 
@@ -125,7 +128,7 @@ Every arm and both models are reported. Prompts and questions are frozen before 
 ### Threats to validity
 
 - The author wrote all four golds for each question; a gold error that all engines share would pass the cross-check. The differential catches disagreement, not shared misreading.
-- The `sql` arm runs on DuckDB. DuckPGQ is a research-grade extension and its parser limits (for example no parameters, DECISIONS #103) bound what the `pgq` arm can be asked.
+- The `sql` arm runs on DuckDB. DuckPGQ is a research-grade extension with a known out-of-memory bug (fixed in DuckDB 2.0.1, which this experiment does not use); a query that triggers it is scored as failed through the restart rule above, which can count a DuckPGQ defect against a generation and its parser limits (for example no parameters, DECISIONS #103) bound what the `pgq` arm can be asked.
 - Schema text and naming differ by paradigm (column names, edge-table names in the PGQ arm), so an arm difference mixes language and schema presentation.
 - Zero-shot only; no retrieval, no repair loop, no examples. Questions are English paraphrases of the gold, written by the same author.
 - A model that has seen LDBC SNB queries in training is helped on every arm, probably unevenly.
@@ -137,7 +140,8 @@ Every arm and both models are reported. Prompts and questions are frozen before 
 |---|---|
 | `questions.yaml` | the 40 questions and their golds (frozen) |
 | `prompts/*.txt` | one template per arm, including `arcadedb_sql_docs.txt` (frozen) |
-| `ldbc_subset.py`, `engine_runner.py`, `dockerrun.py` | loader, in-container runner for DuckDB and ArcadeDB, container launcher |
+| `ldbc_subset.py`, `engine_runner.py`, `dockerrun.py` | loader, in-container runner for DuckDB and ArcadeDB, container launcher with the restart rule |
+| `docker/duckdb.Dockerfile`, `docker/build_check.py` | the `sqlev:duckdb-2.0.0` image: DuckDB 2.0.0 and DuckPGQ installed and checked at build time |
 | `resultcmp.py` | comparison rule, extraction rule, Wilson interval, frozen hashes |
 | `gold_check.py` | runs every gold, compares across languages, writes `gold_report.*` and `gold_rows.json`; with `--portability` also runs the `sql` golds on SQLite and PostgreSQL (`gold_portability.*`) |
 | `card_examples.yaml`, `card_check.py` | every query on the `arcadedb_sql_docs` card with its toy dataset and expected outcome; the checker runs them on the pinned engine and fails when the card and the examples differ |
@@ -145,6 +149,6 @@ Every arm and both models are reported. Prompts and questions are frozen before 
 | `score.py` | executes and scores the generations, writes `scored.jsonl`, `table.json`, `table.md` |
 | `portable.py`, `score_portability.py` | SQLite and PostgreSQL engines; executes and scores the `sql` generations on DuckDB, SQLite and PostgreSQL, writes `portability.md`, `portability.json`, `scored_portability.jsonl`, `divergences.jsonl`, `loaded_counts.json` |
 | `tool_matrix.sh`, `pgsteps.py`, `seed_pgwire.py`, `probe_*.py`, `PgJdbcProbe.java`, `matrix_table.py` | part B |
-| `MEASURE-LINES.txt` | queue lines for the first runs: gold smoke (card check, then gold check with `--portability`), gold check with `--portability`, tool matrix, portability scoring |
+| `MEASURE-LINES.txt` | queue lines for the first runs: the DuckDB image build, gold smoke (card check, then gold check with `--portability`), gold check with `--portability`, tool matrix, portability scoring |
 
 Outputs go under `/home/tk/build-scratch/sql-evidence/`. The scripts do not write elsewhere.

@@ -1,13 +1,17 @@
 """Load the LDBC subset into one engine and run a list of queries against it. Runs INSIDE a container
-(gold_check.py and score.py start it): the duckdb engine in the campaign's `dbbench:duckdb` image, the arcadedb
-engine in `dbbench:arcadedb-<version>`. Standard library plus the engine's own package only.
+(gold_check.py, score.py and score_portability.py start it through dockerrun.py): the duckdb engine in the harness's
+`sqlev:duckdb-2.0.0` image (docker/duckdb.Dockerfile), the arcadedb engine in the campaign's `dbbench:arcadedb-<version>`.
+Standard library plus the engine's own package only.
 
   python engine_runner.py --engine duckdb|arcadedb --data DIR --jobs jobs.json --out out.json
-                          [--person-limit N] [--timeout S] [--heap 2g]
+                          [--person-limit N] [--timeout S] [--heap 2g] [--partial part.jsonl]
 
 jobs.json: {"jobs": [{"key": str, "arm": "sql"|"pgq"|"cypher"|"arcadedb_sql", "query": str}, ...]}
-out.json:  {"engine": ..., "engine_version": ..., "load_s": ..., "counts": {...},
-            "results": [{"key", "arm", "parse_ok", "exec_ok", "error", "rows", "n_rows", "truncated", "ms"}]}
+out.json:  {"engine": ..., "engine_version": ..., "engine_versions": {"duckdb": ..., "duckpgq": ...}, "load_s": ...,
+            "counts": {...}, "results": [{"key", "arm", "parse_ok", "exec_ok", "error", "rows", "n_rows", "truncated", "ms"}]}
+--partial: JSON lines flushed to disk as the run goes, a header line ({"header": {...the out.json fields but results}})
+           after the load and one result line per job. dockerrun.py reads it after the container exits, so a container
+           that is killed (OOM, signal) mid-run still tells which jobs reported and which one was in flight.
 
 Definitions (README "Scoring"):
   parse_ok  false when the engine's error text names a parse/syntax failure, or the query is rejected before
@@ -116,21 +120,44 @@ class DuckEngine:
     def __init__(self, data, need_pgq, timeout):
         import duckdb
         self.timeout = timeout
-        self.version = f"duckdb {duckdb.__version__}"
         self.cx = {}
         self.cx["sql"] = self._build(duckdb, data, pgq=False)
         if need_pgq:
             self.cx["pgq"] = self._build(duckdb, data, pgq=True)
-            ext = self.cx["pgq"].execute(
-                "SELECT extension_version FROM duckdb_extensions() WHERE extension_name = 'duckpgq'").fetchall()
-            self.version += f" + duckpgq {ext[0][0] if ext else '?'}"
+            pgq_version = self._pgq_version(self.cx["pgq"])
+        else:
+            # The versions are recorded in every output, also when no pgq job runs: read them from a throwaway connection.
+            try:
+                pgq_version = self._pgq_version(self._connect(duckdb, pgq=True))
+            except Exception as e:  # noqa: BLE001
+                pgq_version = f"unavailable ({type(e).__name__})"
+        self.versions = {"duckdb": duckdb.__version__, "duckpgq": pgq_version}
+        self.version = f"duckdb {duckdb.__version__} + duckpgq {pgq_version}"
+
+    @staticmethod
+    def _pgq_version(cx):
+        """The extension version the running engine reports (not a number written down in a document)."""
+        ext = cx.execute("SELECT extension_version FROM duckdb_extensions() "
+                         "WHERE extension_name = 'duckpgq' AND loaded").fetchall()
+        return ext[0][0] if ext else "?"
+
+    def _connect(self, duckdb, pgq):
+        cx = duckdb.connect(":memory:")
+        if pgq:
+            ext_dir = os.environ.get("SQLEV_DUCKDB_EXT_DIR")
+            if ext_dir:
+                # sqlev:duckdb-2.0.0 has DuckPGQ baked in at image build time (docker/duckdb.Dockerfile): LOAD only, so a
+                # missing or wrong extension fails loudly and nothing is downloaded in the cell.
+                cx.execute(f"SET extension_directory='{ext_dir}'")
+                cx.execute("LOAD duckpgq")
+            else:
+                cx.execute("INSTALL duckpgq FROM community; LOAD duckpgq;")
+        return cx
 
     def _build(self, duckdb, data, pgq):
-        cx = duckdb.connect(":memory:")
+        cx = self._connect(duckdb, pgq)
         cx.execute(f"PRAGMA threads={len(os.sched_getaffinity(0))}")
         cx.execute("SET memory_limit='3GB'")
-        if pgq:
-            cx.execute("INSTALL duckpgq FROM community; LOAD duckpgq;")
         with tempfile.TemporaryDirectory() as td:
             for table, cols in DUCK_DDL.items():
                 cx.execute(f"CREATE TABLE {table}({cols})")
@@ -185,6 +212,7 @@ class ArcadeEngine:
         self.db = arcadedb.create_database(os.path.join(tempfile.mkdtemp(prefix="sqlev_arcade_"), "db"),
                                            jvm_kwargs={"heap_size": heap})
         self.version = f"arcadedb {arcadedb.__version__}"
+        self.versions = {"arcadedb": arcadedb.__version__}
         for t, props in self.VERTS.items():
             self.db.command("sql", f"CREATE VERTEX TYPE {t}")
             for p, ty in props:
@@ -266,6 +294,7 @@ def main():
     ap.add_argument("--person-limit", type=int, default=0)
     ap.add_argument("--timeout", type=float, default=60.0)
     ap.add_argument("--heap", default="2g")
+    ap.add_argument("--partial", default=None)
     a = ap.parse_args()
 
     jobs = json.load(open(a.jobs))["jobs"]
@@ -280,12 +309,22 @@ def main():
     else:
         eng = ArcadeEngine(data, a.timeout, a.heap)
     load_s = round(time.time() - t0, 1)
-    out = {"engine": a.engine, "engine_version": eng.version, "load_s": load_s,
+    out = {"engine": a.engine, "engine_version": eng.version, "engine_versions": eng.versions, "load_s": load_s,
            "person_limit": a.person_limit, "counts": ldbc_subset.counts(data), "results": []}
+    part = open(a.partial, "w") if a.partial else None
+
+    def emit(obj):
+        if part:
+            part.write(json.dumps(obj) + "\n")
+            part.flush()
+            os.fsync(part.fileno())
+
+    emit({"header": {k: v for k, v in out.items() if k != "results"}})
     for j in jobs:
         r = eng.run(j["arm"], j["query"])
         r.update(key=j["key"], arm=j["arm"])
         out["results"].append(r)
+        emit(r)
         print(f"{j['key']} parse={r['parse_ok']} exec={r['exec_ok']} rows={r['n_rows']} ms={r['ms']}", flush=True)
     with open(a.out, "w") as f:
         json.dump(out, f)

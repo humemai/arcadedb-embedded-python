@@ -7,6 +7,9 @@ generate.py collect) and DIR/manifest.json, and GOLD_DIR/gold_rows.json (gold_ch
 (questions.yaml, prompts/*.txt) no longer matches the hashes in the manifest: a change after the first generation is a new run.
 Arms are resultcmp.GEN_ARMS: arcadedb_sql_docs runs on the ArcadeDB engine as an arcadedb_sql statement and is scored against
 the same reference rows (no gold of its own).
+A query whose engine container is killed while it runs (see dockerrun.py: DuckPGQ out of memory on DuckDB 2.0.0, or any OOM kill) is
+recorded with reason `engine_killed` and counts as a failed generation (its query is the cause: parse, exec and correct false);
+the engine is restarted and every other query is scored normally. Restart counts and killed keys go to table.json `engines`.
 Per generation: the extraction rule (resultcmp.extract_query), then parse_ok / exec_ok / correct. A generation that did not
 succeed (result_type not succeeded, stop_reason refusal or max_tokens, empty text) is a failed generation: parse, exec and
 correct all false. A question is scored only when every non-null gold of that question verified in gold_check; the rest are
@@ -62,7 +65,7 @@ def main():
         r = {"key": key, "model": g["model"], "arm": g["arm"], "question_id": g["question_id"], "sample": g["sample"],
              "category": gq[g["question_id"]]["category"], "scored": g["question_id"] in scorable,
              "stop_reason": g["stop_reason"], "query": resultcmp.extract_query(g["query"]),
-             "parse_ok": False, "exec_ok": False, "correct": False, "error": None}
+             "parse_ok": False, "exec_ok": False, "correct": False, "error": None, "reason": None}
         if g["result_type"] != "succeeded" or g["stop_reason"] in ("refusal", "max_tokens") or not r["query"]:
             r["error"] = f"failed generation: result_type={g['result_type']} stop_reason={g['stop_reason']}"
         elif r["scored"]:
@@ -74,11 +77,13 @@ def main():
         if not js:
             continue
         out = dockerrun.run_engine(engine, js, a.data, a.out, f"score-{engine}", a.person_limit, a.timeout, a.cpuset, a.mem)
-        versions[engine] = {k: out[k] for k in ("engine_version", "image", "image_id")}
+        versions[engine] = {k: out[k] for k in ("engine_version", "engine_versions", "image", "image_id", "restarts",
+                                                "engine_killed")}
         for res in out["results"]:
             r = by_key[res["key"]]
             g = gq[r["question_id"]]
             r["parse_ok"], r["exec_ok"], r["error"] = res["parse_ok"], res["exec_ok"], res["error"]
+            r["reason"] = res.get("reason")
             r["correct"] = bool(res["exec_ok"] and resultcmp.rows_equal(
                 g["rows"], res["rows"], g["ordered"], tol["float_abs"], tol["float_rel"], res["truncated"]))
     with open(os.path.join(a.out, "scored.jsonl"), "w") as f:
@@ -120,7 +125,9 @@ def main():
         lines.append(f"| {model} | {arm} | {cat} | {c['n']} | {pct(c['parse_ok'], c['n'])} | {pct(c['exec_ok'], c['n'])} | "
                      f"{c['correct']}/{c['n']} = {100 * c['correct'] / c['n']:.1f}% [{100 * c['correct_lo']:.1f}, {100 * c['correct_hi']:.1f}] | "
                      f"{c['questions']} | {c['pass3']}/{c['questions']} [{100 * c['pass3_lo']:.1f}, {100 * c['pass3_hi']:.1f}] |")
-    lines += ["", f"unscored questions (a gold did not verify): {unscored}", f"engines: {json.dumps(versions)}"]
+    n_killed = sum(1 for r in recs if r["reason"] == "engine_killed")
+    lines += ["", f"unscored questions (a gold did not verify): {unscored}", f"engines: {json.dumps(versions)}",
+              f"generations recorded as engine_killed (failed generations): {n_killed}"]
     open(os.path.join(a.out, "table.md"), "w").write("\n".join(lines) + "\n")
     print("\n".join(lines))
 

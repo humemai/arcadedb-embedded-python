@@ -6,10 +6,11 @@ Host side: loads card_examples.yaml, checks that the card (prompts/arcadedb_sql_
 (every example query appears verbatim in the card, and the card's indented lines, the code lines, are exactly the example
 queries: nothing on the card is unchecked, nothing checked is missing), then runs this same file inside the campaign image
 `dbbench:arcadedb-${ARCADEDB_VERSION:-26.10.2}` (the image gold_check uses, started the way dockerrun.py starts it) with
-`--inside`. Inside, it creates the toy schema and data of card_examples.yaml in ArcadeDB embedded, verifies the record counts,
+`--inside`. A container that dies mid-run is recovered as in dockerrun.py (the example in flight is recorded as a failed
+example with reason `engine_killed`, a fresh container runs the rest). Inside, it creates the toy schema and data of card_examples.yaml in ArcadeDB embedded, verifies the record counts,
 runs each example and compares the result with the expected outcome (resultcmp rules).
 
-Writes one JSON line per example, {id, ok_parse, ok_exec, rows_match, error}, to --out. Exit status 1 when the card and the
+Writes one JSON line per example, {id, ok_parse, ok_exec, rows_match, error, reason}, to --out (reason is null, or `engine_killed`). Exit status 1 when the card and the
 examples drifted, or when any example fails to parse, execute or match. A failing example is fixed in the card, not waved
 through (README); the failure detail is printed to the log.
 """
@@ -63,35 +64,50 @@ def host(a):
     out_path = os.path.abspath(a.out)
     work = os.path.splitext(out_path)[0] + "-work"
     os.makedirs(os.path.join(work, "home"), exist_ok=True)
-    with open(os.path.join(work, "examples.json"), "w") as f:
-        json.dump(doc, f)
-    res_path = os.path.join(work, "result.json")
-    if os.path.exists(res_path):
-        os.remove(res_path)
     image = dockerrun.DEFAULT_IMAGES["arcadedb"]
     iid = dockerrun.image_id(image)
-    name = f"sqlev-cardcheck-{os.getpid()}-{int(time.time())}"
-    cmd = ["docker", "run", "--rm", "--name", name, "-m", a.mem, "--memory-swap", a.mem, "--cpuset-cpus", a.cpuset,
-           "--user", f"{os.getuid()}:{os.getgid()}", "-e", "HOME=/work/home",
-           "-v", f"{HERE}:/s:ro", "-v", f"{work}:/work",
-           image, "python", "/s/card_check.py", "--inside", "--examples", "/work/examples.json",
-           "--out", "/work/result.json", "--timeout", str(a.timeout), "--heap", a.heap]
-    log_path = os.path.join(work, "container.log")
-    with open(log_path, "w") as log:
-        rc = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT).returncode
-    if rc != 0 or not os.path.exists(res_path):
-        sys.exit(f"card check run failed (rc={rc}); see {log_path}\n" + "".join(open(log_path).readlines()[-15:]))
-    res = json.load(open(res_path))
+    by_id = {e["id"]: e for e in examples}
+
+    def launch(attempt, remaining):
+        sfx = "" if attempt == 0 else f".r{attempt}"
+        part_path = os.path.join(work, f"part{sfx}.jsonl")
+        if os.path.exists(part_path):
+            os.remove(part_path)
+        with open(os.path.join(work, f"examples{sfx}.json"), "w") as f:
+            json.dump(dict(doc, examples=[by_id[j["key"]] for j in remaining]), f)
+        name = f"sqlev-cardcheck-{os.getpid()}-{int(time.time())}-{attempt}"
+        cmd = ["docker", "run", "--rm", "--name", name, "-m", a.mem, "--memory-swap", a.mem, "--cpuset-cpus", a.cpuset,
+               "--user", f"{os.getuid()}:{os.getgid()}", "-e", "HOME=/work/home",
+               "-v", f"{HERE}:/s:ro", "-v", f"{work}:/work",
+               image, "python", "/s/card_check.py", "--inside", "--examples", f"/work/examples{sfx}.json",
+               "--out", f"/work/result{sfx}.json", "--partial", f"/work/part{sfx}.jsonl",
+               "--timeout", str(a.timeout), "--heap", a.heap]
+        log_path = os.path.join(work, f"container{sfx}.log")
+        err_path = os.path.join(work, f"container{sfx}.err")
+        with open(log_path, "w") as log, open(err_path, "w") as err:
+            rc = subprocess.run(cmd, stdout=log, stderr=err).returncode
+        return rc, dockerrun.tail_lines(err_path) or dockerrun.tail_lines(log_path), part_path
+
+    def killed(job, rc, tail):
+        k = dockerrun.killed_job_result(job, rc, tail)
+        e = by_id[job["key"]]
+        return {"key": e["id"], "id": e["id"], "query": e["query"], "ok_parse": False, "ok_exec": False, "rows_match": False,
+                "error": k["error"], "expected": e["expect"], "got": None, "reason": "engine_killed"}
+
+    header, results, stats = dockerrun.supervise([{"key": e["id"]} for e in examples], launch, "card check", killed)
+    res = {"engine_version": header["engine_version"], "results": results}
     bad = 0
     with open(out_path, "w") as f:
         for r in res["results"]:
             line = {k: r[k] for k in ("id", "ok_parse", "ok_exec", "rows_match", "error")}
+            line["reason"] = r.get("reason")
             f.write(json.dumps(line) + "\n")
             if not (r["ok_parse"] and r["ok_exec"] and r["rows_match"]):
                 bad += 1
                 print(f"FAIL {r['id']}: parse={r['ok_parse']} exec={r['ok_exec']} match={r['rows_match']} "
                       f"error={r['error']}\n  query: {r['query']}\n  expected: {r['expected']}\n  got: {r['got']}")
-    print(f"engine {res['engine_version']} image {image} {iid}: {len(res['results'])} examples, {bad} failed; wrote {out_path}")
+    print(f"engine {res['engine_version']} image {image} {iid}: {len(res['results'])} examples, {bad} failed, "
+          f"{stats['restarts']} container restarts, {len(stats['engine_killed'])} killed; wrote {out_path}")
     sys.exit(1 if bad else 0)
 
 
@@ -126,8 +142,21 @@ def inside(a):
         return db.query("sql", q).to_json_list()
 
     results = []
+    part = open(a.partial, "w") if a.partial else None
+
+    def emit(obj):
+        if part:
+            part.write(json.dumps(obj) + "\n")
+            part.flush()
+            os.fsync(part.fileno())
+
+    def record(r):
+        results.append(r)
+        emit(r)
+
+    emit({"header": {"engine_version": version}})
     for e in doc["examples"]:
-        r = {"id": e["id"], "query": e["query"], "ok_parse": False, "ok_exec": False, "rows_match": False, "error": None,
+        r = {"id": e["id"], "key": e["id"], "query": e["query"], "ok_parse": False, "ok_exec": False, "rows_match": False, "error": None,
              "expected": e["expect"], "got": None}
         ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         fut = ex.submit(run, e)
@@ -136,13 +165,13 @@ def inside(a):
         except concurrent.futures.TimeoutError:
             r["ok_parse"], r["error"] = True, f"timeout after {a.timeout}s"
             ex.shutdown(wait=False)
-            results.append(r)
+            record(r)
             continue
         except Exception as exc:  # noqa: BLE001
             r["error"] = f"{type(exc).__name__}: {exc}"[:600]
             r["ok_parse"] = not engine_runner.PARSE_RE.search(r["error"])
             ex.shutdown(wait=False)
-            results.append(r)
+            record(r)
             continue
         ex.shutdown(wait=False)
         r["ok_parse"] = r["ok_exec"] = True
@@ -164,7 +193,7 @@ def inside(a):
             r["got"] = [v[0] for v in vals]
             r["rows_match"] = len(vals) == len(recs) and resultcmp.rows_equal(
                 [[v] for v in ex_["values"]], vals, ex_.get("ordered", False))
-        results.append(r)
+        record(r)
     with open(a.out, "w") as f:
         json.dump({"engine_version": version, "results": results}, f)
     sys.stdout.flush()
@@ -180,6 +209,7 @@ def main():
     ap.add_argument("--heap", default="1g")
     ap.add_argument("--inside", action="store_true")
     ap.add_argument("--examples")
+    ap.add_argument("--partial", default=None)
     a = ap.parse_args()
     if a.inside:
         inside(a)
