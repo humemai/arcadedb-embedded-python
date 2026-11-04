@@ -5,6 +5,8 @@
 Reads DIR/generations.jsonl ({model, arm, question_id, sample, query, stop_reason, usage, result_type, error}, written by
 generate.py collect) and DIR/manifest.json, and GOLD_DIR/gold_rows.json (gold_check.py). Refuses to run when a frozen file
 (questions.yaml, prompts/*.txt) no longer matches the hashes in the manifest: a change after the first generation is a new run.
+Arms are resultcmp.GEN_ARMS: arcadedb_sql_docs runs on the ArcadeDB engine as an arcadedb_sql statement and is scored against
+the same reference rows (no gold of its own).
 Per generation: the extraction rule (resultcmp.extract_query), then parse_ok / exec_ok / correct. A generation that did not
 succeed (result_type not succeeded, stop_reason refusal or max_tokens, empty text) is a failed generation: parse, exec and
 correct all false. A question is scored only when every non-null gold of that question verified in gold_check; the rest are
@@ -64,7 +66,7 @@ def main():
         if g["result_type"] != "succeeded" or g["stop_reason"] in ("refusal", "max_tokens") or not r["query"]:
             r["error"] = f"failed generation: result_type={g['result_type']} stop_reason={g['stop_reason']}"
         elif r["scored"]:
-            jobs[resultcmp.ENGINE_OF_ARM[g["arm"]]].append({"key": key, "arm": g["arm"], "query": r["query"]})
+            jobs[resultcmp.ENGINE_OF_ARM[g["arm"]]].append({"key": key, "arm": resultcmp.GOLD_ARM[g["arm"]], "query": r["query"]})
         recs.append(r)
     by_key = {r["key"]: r for r in recs}
     versions = {}
@@ -97,7 +99,7 @@ def main():
 
     table = {}
     for model in manifest["models"]:
-        for arm in resultcmp.ARMS:
+        for arm in resultcmp.GEN_ARMS:
             rows = [r for r in recs if r["model"] == model and r["arm"] == arm and r["scored"]]
             table[f"{model}|{arm}|all"] = cell(rows)
             for cat in CAT_ORDER:

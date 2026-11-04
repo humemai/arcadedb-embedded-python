@@ -13,8 +13,12 @@ import os
 import re
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ARMS = ("sql", "cypher", "pgq", "arcadedb_sql")
-ENGINE_OF_ARM = {"sql": "duckdb", "pgq": "duckdb", "cypher": "arcadedb", "arcadedb_sql": "arcadedb"}
+ARMS = ("sql", "cypher", "pgq", "arcadedb_sql")  # arms that have a gold query in questions.yaml
+# Generation arms: ARMS plus arcadedb_sql_docs (the arcadedb_sql prompt plus a reference card). It has no gold of its own:
+# it runs on the arcadedb_sql engine path and is scored against the same reference rows as arcadedb_sql.
+GEN_ARMS = ARMS + ("arcadedb_sql_docs",)
+GOLD_ARM = {"sql": "sql", "cypher": "cypher", "pgq": "pgq", "arcadedb_sql": "arcadedb_sql", "arcadedb_sql_docs": "arcadedb_sql"}
+ENGINE_OF_ARM = {"sql": "duckdb", "pgq": "duckdb", "cypher": "arcadedb", "arcadedb_sql": "arcadedb", "arcadedb_sql_docs": "arcadedb"}
 
 
 def _canon(v):

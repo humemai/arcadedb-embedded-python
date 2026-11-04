@@ -9,7 +9,7 @@ ArcadeDB version: the latest stable release, 26.10.2 (released 2026-10-15; the o
 ## Questions
 
 - B. Which Postgres-wire clients and tools work against ArcadeDB's Postgres plugin, step by step: connect, list tables, list columns, simple SELECT, parameterized WHERE, JOIN, GROUP BY?
-- C1. How often does an LLM, given the schema and one question, write a query that returns the correct result, in four languages: ANSI SQL, openCypher (ArcadeDB), SQL/PGQ (DuckDB with DuckPGQ) and ArcadeDB SQL?
+- C1. How often does an LLM, given the schema and one question, write a query that returns the correct result, in four languages: ANSI SQL, openCypher (ArcadeDB), SQL/PGQ (DuckDB with DuckPGQ) and ArcadeDB SQL? And does a short reference card for ArcadeDB SQL in the prompt change the ArcadeDB SQL rate (the fifth arm)?
 - C2. How does that rate move with question category (single type, one join, multi join, graph pattern)?
 
 ## Part B: Postgres-wire tool matrix (`tool_matrix.sh`)
@@ -45,6 +45,9 @@ Every engine loads the same rows. ArcadeDB gets vertex types per entity and six 
 | `cypher` | openCypher | ArcadeDB 26.10.2 embedded |
 | `pgq` | SQL/PGQ, `GRAPH_TABLE ... MATCH` | DuckDB 1.5.6 + DuckPGQ community extension (DECISIONS #103) |
 | `arcadedb_sql` | ArcadeDB SQL | ArcadeDB 26.10.2 embedded |
+| `arcadedb_sql_docs` | ArcadeDB SQL, prompt with a reference card | ArcadeDB 26.10.2 embedded (same engine, same reference rows as `arcadedb_sql`) |
+
+The `arcadedb_sql_docs` arm exists because of the obvious objection that agents can simply read the docs. It uses the same questions, models, samples and request parameters as `arcadedb_sql`; only its prompt differs, by one added section: a reference card of about 900 words (`prompts/arcadedb_sql_docs.txt`, the `arcadedb_sql` text with the card placed before the question). The card is written in original wording on a toy schema (employees, departments, projects) that shares no names with the study's schema, and covers general syntax only: SELECT, WHERE, GROUP BY, ORDER BY, LIMIT, aggregates, parameters, `LET` and subqueries, the traversal functions (`out()`, `in()`, `both()`, `outE()`, `inE()`, `expand()`), `MATCH` with `as:`, `where:` and `while:`, `TRAVERSE`, and the absence of `JOIN` with its usual substitutes. No example mirrors a question in `questions.yaml`. It is a fair cheat sheet, not an answer key, and it is still a single prompt: no retrieval, no tool use, no repair loop, so it measures what a card in context buys, not what an agent with live access to the docs would do. This arm has no gold of its own: `score.py` runs its generations on the ArcadeDB engine as ArcadeDB SQL statements and scores them against the same reference rows as `arcadedb_sql`. It is reported next to `arcadedb_sql`, whatever it shows, including no difference or a worse rate.
 
 The `sql` arm measures how well a model writes ANSI SQL, not what ArcadeDB would do with it. That is the point of the proposal's question, and also its limit: DuckDB's dialect is not the dialect an ArcadeDB SQL core would implement.
 
@@ -58,11 +61,11 @@ Known semantic traps, handled in the golds and stated in every schema text: KNOW
 
 ### Prompts
 
-`prompts/<arm>.txt`: one zero-shot template per arm, schema description plus the question, ending with "Answer with the query only." No examples, no syntax hints beyond what the schema text states (the graph name `g` and the edge labels for SQL/PGQ). `{question}` is the only placeholder. The frozen set is `questions.yaml` and every file in `prompts/`; `generate.py` records their sha256 in the run manifest and `score.py` refuses a run whose files no longer match.
+`prompts/<arm>.txt`: one zero-shot template per arm, schema description plus the question, ending with "Answer with the query only." No examples, no syntax hints beyond what the schema text states (the graph name `g` and the edge labels for SQL/PGQ). The one exception is `arcadedb_sql_docs`, which adds the reference card described under Arms. `{question}` is the only placeholder. The frozen set is `questions.yaml` and every file in `prompts/` (`sql.txt`, `cypher.txt`, `pgq.txt`, `arcadedb_sql.txt`, `arcadedb_sql_docs.txt`); `generate.py` records their sha256 in the run manifest and `score.py` refuses a run whose files no longer match.
 
 ### Models and sampling
 
-Claude Sonnet 5.5 (`claude-sonnet-5-5`) and Claude Haiku 5.5 (`claude-haiku-5-5`), exact model IDs. 40 questions x 4 arms x 3 samples = 480 requests per model, 960 in all, sent as one Message Batch by `generate.py submit`. Pre-registered request parameters, identical for both models:
+Claude Sonnet 5.5 (`claude-sonnet-5-5`) and Claude Haiku 5.5 (`claude-haiku-5-5`), exact model IDs. 40 questions x 5 arms x 3 samples = 600 requests per model, 1,200 in all, sent as one Message Batch by `generate.py submit`. Pre-registered request parameters, identical for both models:
 
 - `max_tokens=16000`
 - `output_config={"effort": "medium"}`
@@ -71,9 +74,9 @@ Claude Sonnet 5.5 (`claude-sonnet-5-5`) and Claude Haiku 5.5 (`claude-haiku-5-5`
 - thinking left at the model default (adaptive)
 - no server-side fallbacks: a fallback would answer with a different model and contaminate the measurement. A `stop_reason` of `refusal` or `max_tokens` is recorded and scored as a failed generation.
 
-Auth is `anthropic.Anthropic()` reading `ANTHROPIC_API_KEY` from the environment only; set `ANTHROPIC_API_KEY` before `submit`. `generate.py collect <batch_id>` prints the status and exits when the batch has not ended, so it is run again later; results are keyed by `custom_id` (`r0000` to `r0959`, mapped to model, arm, question and sample in the manifest), never by position.
+Auth is `anthropic.Anthropic()` reading `ANTHROPIC_API_KEY` from the environment only; set `ANTHROPIC_API_KEY` before `submit`. `generate.py collect <batch_id>` prints the status and exits when the batch has not ended, so it is run again later; results are keyed by `custom_id` (`r0000` to `r1199`, mapped to model, arm, question and sample in the manifest), never by position.
 
-Cost estimate (not a measurement): about 450 input tokens per request and 1,500 to 3,000 output tokens including adaptive thinking, at list prices of 2 and 10 USD per million tokens for Sonnet 5.5 and 0.10 and 0.50 for Haiku 5.5, both halved by the Batches API: roughly 4 USD (1,500 output tokens) to 8 USD (3,000). `collect` prints the actual cost from the returned usage.
+Cost estimate (not a measurement): about 450 input tokens per request (about 1,700 for the `arcadedb_sql_docs` arm, whose card adds roughly 1,300) and 1,500 to 3,000 output tokens including adaptive thinking, at list prices of 2 and 10 USD per million tokens for Sonnet 5.5 and 0.10 and 0.50 for Haiku 5.5, both halved by the Batches API: roughly 5 USD (1,500 output tokens) to 10 USD (3,000), the same method as before applied to 600 requests per model. The card adds about 0.2 USD. `collect` prints the actual cost from the returned usage.
 
 Generations format, one JSON object per line in `generations.jsonl`: `{model, arm, question_id, sample, query, stop_reason, usage, result_type, error}`. `query` is the concatenated text blocks exactly as returned.
 
@@ -109,7 +112,7 @@ Every arm and both models are reported. Prompts and questions are frozen before 
 | file | role |
 |---|---|
 | `questions.yaml` | the 40 questions and their golds (frozen) |
-| `prompts/*.txt` | one template per arm (frozen) |
+| `prompts/*.txt` | one template per arm, including `arcadedb_sql_docs.txt` (frozen) |
 | `ldbc_subset.py`, `engine_runner.py`, `dockerrun.py` | loader, in-container runner for DuckDB and ArcadeDB, container launcher |
 | `resultcmp.py` | comparison rule, extraction rule, Wilson interval, frozen hashes |
 | `gold_check.py` | runs every gold, compares across languages, writes `gold_report.*` and `gold_rows.json` |

@@ -4,7 +4,7 @@
   ANTHROPIC_API_KEY=... uv run --no-project --with anthropic python generate.py collect BATCH_ID [--run-dir DIR]
 
 submit   builds every request from the frozen prompts/<arm>.txt templates and questions.yaml and sends them as ONE
-         batch: 2 models x 4 arms x 40 questions x 3 samples = 960 requests. Writes DIR/manifest.json (batch id,
+         batch: 2 models x 5 arms x 40 questions x 3 samples = 1,200 requests. Writes DIR/manifest.json (batch id,
          sha256 of every frozen file, models, request parameters, the custom_id map) and DIR/requests.jsonl (the
          exact prompts). --dry-run builds and writes both without calling the API (no key needed).
 collect  retrieves the batch; if processing has not ended it prints the status and exits 0 (run it again later, there
@@ -16,7 +16,7 @@ collect  retrieves the batch; if processing has not ended it prints the status a
 Request parameters (pre-registered, README "Models and sampling"): max_tokens 16000, output_config effort medium for
 both models, no temperature/top_p/top_k, no prefill, thinking at the model default, no fallbacks. The key is read by
 anthropic.Anthropic() from ANTHROPIC_API_KEY only; this script never prints, logs or writes it.
-custom_id is `r0000`..`r0959` because the API restricts the characters of a custom_id; the map is in the manifest.
+custom_id is `r0000`..`r1199` because the API restricts the characters of a custom_id; the map is in the manifest.
 """
 import argparse
 import datetime
@@ -39,10 +39,10 @@ DEFAULT_RUN_ROOT = "/home/tk/build-scratch/sql-evidence"
 
 def build_requests():
     qs = yaml.safe_load(open(os.path.join(HERE, "questions.yaml")))["questions"]
-    templates = {arm: open(os.path.join(HERE, "prompts", f"{arm}.txt")).read() for arm in resultcmp.ARMS}
+    templates = {arm: open(os.path.join(HERE, "prompts", f"{arm}.txt")).read() for arm in resultcmp.GEN_ARMS}
     reqs = []
     for model in MODELS:
-        for arm in resultcmp.ARMS:
+        for arm in resultcmp.GEN_ARMS:
             for q in qs:
                 prompt = templates[arm].replace("{question}", q["text"])
                 for s in range(1, SAMPLES + 1):
