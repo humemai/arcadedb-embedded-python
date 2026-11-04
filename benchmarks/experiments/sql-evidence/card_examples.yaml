@@ -308,6 +308,7 @@ examples:
     - - Ann
     - - Carla
     - - Dawson
+    - - Bob
     ordered: false
 - id: match-maxdepth-alias
   query: 'MATCH {type: Employee, as: s, where: (badge = 7)}.out(''MANAGES''){as: sub, maxDepth: 2, depthAlias: lvl, where: ($depth > 0)} RETURN sub.name AS name, lvl'

@@ -71,7 +71,7 @@ Inside where: you can read $matched.alias.property (the aliases matched so far) 
     MATCH {type: Employee, as: e}.out('MANAGES'){as: m, where: (salary > $matched.e.salary)} RETURN e.name AS boss, m.name AS report
 RETURN accepts aliases, properties of aliases, expressions, DISTINCT, GROUP BY, ORDER BY, SKIP and LIMIT. MATCH returns one row per way the pattern matches. To count the rows, or to apply SQL clauses to them, wrap the pattern.
     SELECT count(*) FROM (MATCH {type: Employee, as: e}.out('ASSIGNED'){as: p} RETURN e, p)
-Variable depth: add while: to an edge block to repeat that hop. A node matched at depth zero (the start) is included unless you add where: ($depth > 0). Here while: ($depth < 3) keeps depths 0, 1 and 2.
+Variable depth: add while: to an edge block to repeat that hop. A node matched at depth zero (the start) is included unless you add where: ($depth > 0). while: decides whether to keep expanding from a node, not whether to return it: while: ($depth < 3) expands from depths 0, 1 and 2, so it returns nodes down to depth 3.
     MATCH {type: Employee, as: s, where: (badge = 7)}.out('MANAGES'){as: sub, while: ($depth < 3), where: ($depth > 0)} RETURN sub.name AS name
 maxDepth: is a hard bound, and depthAlias: stores the depth so RETURN can read it.
     MATCH {type: Employee, as: s, where: (badge = 7)}.out('MANAGES'){as: sub, maxDepth: 2, depthAlias: lvl, where: ($depth > 0)} RETURN sub.name AS name, lvl
