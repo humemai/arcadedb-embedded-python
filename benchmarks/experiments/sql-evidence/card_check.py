@@ -1,6 +1,6 @@
 """Execute every query on the arcadedb_sql_docs reference card on the pinned ArcadeDB engine.
 
-  uv run --no-project --with pyyaml==6.0.2 python card_check.py --out DIR/card-check.jsonl [--timeout S] [--cpuset 14,15] [--mem 3g]
+  uv run --no-project --with pyyaml==6.0.3 python card_check.py --out DIR/card-check.jsonl [--timeout S] [--cpuset 14,15] [--mem 3g]
 
 Host side: loads card_examples.yaml, checks that the card (prompts/arcadedb_sql_docs.txt) and the examples cannot drift
 (every example query appears verbatim in the card, and the card's indented lines, the code lines, are exactly the example

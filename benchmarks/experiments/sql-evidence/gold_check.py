@@ -1,6 +1,6 @@
 """Run every gold query on its engine and compare the result sets across languages.
 
-  uv run --no-project --with pyyaml==6.0.2 python gold_check.py --data ~/bench-data/ldbc/sf1 --out DIR [--person-limit N]
+  uv run --no-project --with pyyaml==6.0.3 python gold_check.py --data ~/bench-data/ldbc/sf1 --out DIR [--person-limit N]
 
 Reference result per question: the ANSI SQL gold (DuckDB). Every other non-null gold must equal it under the
 comparison rule in resultcmp.py (positional columns, order-insensitive unless `ordered`, float tolerance from
@@ -8,7 +8,7 @@ questions.yaml). Writes DIR/gold_report.json, DIR/gold_report.md and DIR/gold_ro
 per-arm verdict; score.py reads this file). Exit status 1 when any non-null gold errors or disagrees.
 Also flags questions whose reference result is empty or a single zero (a weak question), without failing.
 
-  --portability (needs `--with 'psycopg[binary]==3.2.9'`): also runs the `sql` golds on SQLite and PostgreSQL (portable.py)
+  --portability (needs `--with 'psycopg[binary]==3.3.7'`): also runs the `sql` golds on SQLite and PostgreSQL (portable.py)
   over the same loaded rows (fingerprints must match DuckDB's, else exit) and writes DIR/gold_portability.json and .md.
   A gold that errors or differs there is a finding for GOLD-LOG.md, never silently edited: it does not change the exit
   status or `arm_verified`; score_portability.py reads gold_portability.json for its sensitivity table.

@@ -20,8 +20,8 @@ One ArcadeDB server with the Postgres plugin (`-Darcadedb.server.plugins=Postgre
 | client | how | pin |
 |---|---|---|
 | psql | `postgres` image, scripts on stdin; `\dt` and `\d` are the list steps, `\bind` the parameter step | `postgres:18.6` |
-| psycopg 3 | `uv run --with` | `psycopg[binary]==3.2.9` |
-| SQLAlchemy 2 | Inspector reflection, Core select, bound parameter, join, group by | `sqlalchemy==2.0.41` (on psycopg 3) |
+| psycopg 3 | `uv run --with` | `psycopg[binary]==3.3.7` |
+| SQLAlchemy 2 | Inspector reflection, Core select, bound parameter, join, group by | `sqlalchemy==2.1.8` (on psycopg 3) |
 | pgJDBC | `DatabaseMetaData.getTables` and `getColumns`, then statements, in a JDK container | `postgresql-42.7.14.jar` on `eclipse-temurin:25-jdk`, jar sha256 recorded |
 | Grafana | provisioned Postgres datasource, `/api/datasources/uid/<uid>/health`, then `/api/ds/query` | `grafana/grafana:13.3.0` |
 | Metabase | setup API, add database, `sync_schema`, native queries through `/api/dataset` | `metabase/metabase:v0.65.2` |

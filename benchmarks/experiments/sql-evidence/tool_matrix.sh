@@ -74,7 +74,7 @@ run_probe() {  # run_probe <name> <command...>: a failed probe is recorded and t
 }
 
 run_probe psql uv run --no-project python probe_psql.py "$NET" "$PSQL_IMAGE" "$SRV" 5432 root "$PGPW"
-run_probe python uv run --no-project --with 'psycopg[binary]==3.2.9' --with 'sqlalchemy==2.0.41' python probe_python.py 127.0.0.1 "$PG_PORT" root "$PGPW"
+run_probe python uv run --no-project --with 'psycopg[binary]==3.3.7' --with 'sqlalchemy==2.1.8' python probe_python.py 127.0.0.1 "$PG_PORT" root "$PGPW"
 run_probe pgjdbc docker run --rm --network "$NET" --cpuset-cpus "$CPUSET" -m 1g -v "$OUT/work:/w:ro" "$JDK_IMAGE" \
   java -cp /w/postgresql.jar /w/PgJdbcProbe.java "$SRV" 5432 root "$PGPW"
 

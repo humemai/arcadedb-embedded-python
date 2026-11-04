@@ -1,6 +1,6 @@
 """Portability of the `sql` arm: run the SAME generated ANSI SQL on DuckDB, SQLite and PostgreSQL and score each.
 
-  uv run --no-project --with 'psycopg[binary]==3.2.9' python score_portability.py --run-dir DIR|auto --gold GOLD_DIR \
+  uv run --no-project --with 'psycopg[binary]==3.3.7' python score_portability.py --run-dir DIR|auto --gold GOLD_DIR \
       --data ~/bench-data/ldbc/sf1 --out OUT_DIR [--duckdb-scored SCORED.jsonl]
 
 No new model calls: it reads DIR/generations.jsonl (generate.py collect) and DIR/manifest.json, takes only the `sql` arm,

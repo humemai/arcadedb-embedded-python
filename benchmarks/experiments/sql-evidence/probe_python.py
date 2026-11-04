@@ -1,4 +1,4 @@
-"""psycopg 3 and SQLAlchemy 2 steps (run with `uv run --with psycopg[binary]==3.2.9 --with sqlalchemy==2.0.41`).
+"""psycopg 3 and SQLAlchemy 2 steps (run with `uv run --with psycopg[binary]==3.3.7 --with sqlalchemy==2.1.8`).
 
   python probe_python.py HOST PORT USER PASSWORD
 psycopg: connection, information_schema queries, server-side bound parameter, join, group by.

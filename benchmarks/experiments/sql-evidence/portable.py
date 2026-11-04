@@ -3,7 +3,7 @@
 Shared by score_portability.py (the `sql` arm's generations) and gold_check.py --portability (the `sql` golds). Host side:
 SQLite is the standard library `sqlite3` (a file under the run directory), PostgreSQL is the official image
 (`postgres:18.6` by default, one container with a unique name on a random free loopback port, `--rm`, removed on every
-exit path) reached with psycopg 3 (`uv run --with 'psycopg[binary]==3.2.9'`). Nothing here builds or pulls anything except
+exit path) reached with psycopg 3 (`uv run --with 'psycopg[binary]==3.3.7'`). Nothing here builds or pulls anything except
 that one pinned official image when it is missing.
 
 Same rows: the eight tables of engine_runner.DUCK_DDL are created with the same DDL text on both engines and filled from the
