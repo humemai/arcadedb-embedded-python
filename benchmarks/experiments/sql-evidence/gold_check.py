@@ -7,6 +7,11 @@ comparison rule in resultcmp.py (positional columns, order-insensitive unless `o
 questions.yaml). Writes DIR/gold_report.json, DIR/gold_report.md and DIR/gold_rows.json (the reference rows plus the
 per-arm verdict; score.py reads this file). Exit status 1 when any non-null gold errors or disagrees.
 Also flags questions whose reference result is empty or a single zero (a weak question), without failing.
+
+  --portability (needs `--with 'psycopg[binary]==3.2.9'`): also runs the `sql` golds on SQLite and PostgreSQL (portable.py)
+  over the same loaded rows (fingerprints must match DuckDB's, else exit) and writes DIR/gold_portability.json and .md.
+  A gold that errors or differs there is a finding for GOLD-LOG.md, never silently edited: it does not change the exit
+  status or `arm_verified`; score_portability.py reads gold_portability.json for its sensitivity table.
 """
 import argparse
 import json
@@ -16,6 +21,7 @@ import sys
 import yaml
 
 import dockerrun
+import ldbc_subset
 import resultcmp
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -48,6 +54,41 @@ def load_questions():
     return doc
 
 
+def portability_gold(a, qs, tol, results):
+    """Run the sql golds on SQLite and PostgreSQL; compare with the DuckDB sql gold rows (results)."""
+    import portable
+    portable.pin_cpus(a.cpuset)
+    data = ldbc_subset.load(a.data, a.person_limit)
+    jobs = [{"key": f"{q['id']}::sql", "arm": "sql", "query": q["gold"]["sql"]} for q in qs]
+    extra = portable.run_extra_engines(data, jobs, a.out, a.timeout, a.cpuset, a.pg_mem, tag="gold")
+    loaded = portable.check_loaded(data, results, extra)
+    out, diverging = {}, []
+    for q in qs:
+        ref = results[f"{q['id']}::sql"]
+        out[q["id"]] = {}
+        for eng in ("sqlite", "postgres"):
+            r = {x["key"]: x for x in extra[eng]["results"]}[f"{q['id']}::sql"]
+            if not r["exec_ok"]:
+                st = {"status": "ERROR", "error": r["error"]}
+            elif resultcmp.rows_equal(ref["rows"], r["rows"], q["ordered"], tol["float_abs"], tol["float_rel"], r["truncated"]):
+                st = {"status": "OK"}
+            else:
+                st = {"status": "MISMATCH", "got": r["rows"][:5], "expected": ref["rows"][:5]}
+            out[q["id"]][eng] = st
+            if st["status"] != "OK":
+                diverging.append(f"{q['id']} on {eng}: {st['status']}")
+    versions = {"sqlite": extra["sqlite"]["version"], "postgres": extra["postgres"]["version"],
+                "postgres_image": extra["postgres"]["image"], "postgres_image_digest": extra["postgres"]["image_digest"]}
+    json.dump({"engines": versions, "counts": loaded["counts"], "person_limit": a.person_limit, "questions": out},
+              open(os.path.join(a.out, "gold_portability.json"), "w"), indent=1)
+    lines = ["| id | sqlite | postgres |", "|---|---|---|"]
+    lines += [f"| {qid} | {v['sqlite']['status']} | {v['postgres']['status']} |" for qid, v in out.items()]
+    lines += ["", f"engines: {json.dumps(versions)}", f"loaded rows equal on duckdb, sqlite, postgres: {json.dumps(loaded['counts'])}",
+              f"sql golds that do not reproduce (log each in GOLD-LOG.md, do not edit silently): {diverging or 'none'}"]
+    open(os.path.join(a.out, "gold_portability.md"), "w").write("\n".join(lines) + "\n")
+    print("\n".join(lines))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", required=True)
@@ -56,6 +97,8 @@ def main():
     ap.add_argument("--timeout", type=int, default=120)
     ap.add_argument("--cpuset", default="14,15")
     ap.add_argument("--mem", default="4g")
+    ap.add_argument("--portability", action="store_true")
+    ap.add_argument("--pg-mem", default="2g")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
 
@@ -68,6 +111,9 @@ def main():
         jobs = [{"key": f"{q['id']}::{arm}", "arm": arm, "query": q["gold"][arm]}
                 for q in qs for arm in resultcmp.ARMS
                 if resultcmp.ENGINE_OF_ARM[arm] == engine and q["gold"][arm] is not None]
+        if a.portability and engine == "duckdb":
+            import portable
+            jobs += portable.duck_fingerprint_jobs()
         out = dockerrun.run_engine(engine, jobs, a.data, a.out, f"gold-{engine}", a.person_limit, a.timeout,
                                    a.cpuset, a.mem)
         versions[engine] = {k: out[k] for k in ("engine_version", "image", "image_id", "load_s", "counts")}
@@ -117,6 +163,8 @@ def main():
               f"person_limit: {a.person_limit}; null golds per arm: {json.dumps(n_null)}; non-OK non-null golds: {bad}"]
     open(os.path.join(a.out, "gold_report.md"), "w").write("\n".join(lines) + "\n")
     print("\n".join(lines))
+    if a.portability:
+        portability_gold(a, qs, tol, results)
     sys.exit(1 if bad else 0)
 
 
