@@ -4,7 +4,7 @@ Status: pre-registration. Written before anything ran. Nothing in this directory
 
 Purpose: ArcadeData may be asked to add an ANSI SQL core (JOINs, `information_schema`) next to Cypher. This experiment collects the numbers such a proposal needs. Evidence for and against counts equally, and every arm below is reported whatever it shows. The results are posted when collected, as input for a future plan. No release gate applies.
 
-ArcadeDB version: the latest stable release the campaign pins, 26.10.1 (the official `arcadedata/arcadedb:26.10.1` image for part B, jar commit `d36b4ca3a`; `dbbench:arcadedb-26.10.1`, the campaign's embedded image with the same jars, for part C). See `benchmarks/experiments/CAMPAIGN.md`, section 7 row 9. `ARCADEDB_VERSION` selects the tag and every output records the engine version it read from the running engine.
+ArcadeDB version: the latest stable release, 26.10.2 (released 2026-10-15; the official `arcadedata/arcadedb:26.10.2` image for part B, `dbbench:arcadedb-26.10.2`, the campaign's embedded image of that release, for part C). Client images are the latest releases on 2026-11-04. `ARCADEDB_VERSION` selects the tag and every output records the engine version it read from the running engine.
 
 ## Questions
 
@@ -18,12 +18,12 @@ One ArcadeDB server with the Postgres plugin (`-Darcadedb.server.plugins=Postgre
 
 | client | how | pin |
 |---|---|---|
-| psql | `postgres` image, scripts on stdin; `\dt` and `\d` are the list steps, `\bind` the parameter step | `postgres:17.2` |
+| psql | `postgres` image, scripts on stdin; `\dt` and `\d` are the list steps, `\bind` the parameter step | `postgres:18.6` |
 | psycopg 3 | `uv run --with` | `psycopg[binary]==3.2.9` |
 | SQLAlchemy 2 | Inspector reflection, Core select, bound parameter, join, group by | `sqlalchemy==2.0.41` (on psycopg 3) |
-| pgJDBC | `DatabaseMetaData.getTables` and `getColumns`, then statements, in a JDK container | `postgresql-42.7.4.jar` on `eclipse-temurin:21.0.5_11-jdk`, jar sha256 recorded |
-| Grafana | provisioned Postgres datasource, `/api/datasources/uid/<uid>/health`, then `/api/ds/query` | `grafana/grafana:11.4.0` |
-| Metabase | setup API, add database, `sync_schema`, native queries through `/api/dataset` | `metabase/metabase:v0.51.4` |
+| pgJDBC | `DatabaseMetaData.getTables` and `getColumns`, then statements, in a JDK container | `postgresql-42.7.14.jar` on `eclipse-temurin:25-jdk`, jar sha256 recorded |
+| Grafana | provisioned Postgres datasource, `/api/datasources/uid/<uid>/health`, then `/api/ds/query` | `grafana/grafana:13.3.0` |
+| Metabase | setup API, add database, `sync_schema`, native queries through `/api/dataset` | `metabase/metabase:v0.65.2` |
 
 Output: one JSON line per step, `{client, client_version, step, ok, error}` (an optional `note` marks a step that cannot use a server-side parameter, which is Grafana's parameter step). A step is `ok` only when it returns the expected content: the table list must contain `Person`, every query must return at least one row. A failing step does not stop the matrix; the error text is recorded as the evidence. The tag defaults were chosen as versions known to exist and are not claimed to be the newest; a bump is a new run reported next to this one.
 
@@ -42,9 +42,9 @@ Every engine loads the same rows. ArcadeDB gets vertex types per entity and six 
 | arm | language | engine |
 |---|---|---|
 | `sql` | ANSI SQL | DuckDB 1.5.6 (`dbbench:duckdb`), a stand-in for an ANSI SQL core |
-| `cypher` | openCypher | ArcadeDB 26.10.1 embedded |
+| `cypher` | openCypher | ArcadeDB 26.10.2 embedded |
 | `pgq` | SQL/PGQ, `GRAPH_TABLE ... MATCH` | DuckDB 1.5.6 + DuckPGQ community extension (DECISIONS #103) |
-| `arcadedb_sql` | ArcadeDB SQL | ArcadeDB 26.10.1 embedded |
+| `arcadedb_sql` | ArcadeDB SQL | ArcadeDB 26.10.2 embedded |
 
 The `sql` arm measures how well a model writes ANSI SQL, not what ArcadeDB would do with it. That is the point of the proposal's question, and also its limit: DuckDB's dialect is not the dialect an ArcadeDB SQL core would implement.
 

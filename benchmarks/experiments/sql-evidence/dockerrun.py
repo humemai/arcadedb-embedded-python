@@ -11,7 +11,7 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ARCADEDB_VERSION = os.environ.get("ARCADEDB_VERSION", "26.10.1")
+ARCADEDB_VERSION = os.environ.get("ARCADEDB_VERSION", "26.10.2")
 DEFAULT_IMAGES = {"duckdb": os.environ.get("SQLEV_DUCKDB_IMAGE", "dbbench:duckdb"),
                   "arcadedb": os.environ.get("SQLEV_ARCADEDB_IMAGE", f"dbbench:arcadedb-{ARCADEDB_VERSION}")}
 
