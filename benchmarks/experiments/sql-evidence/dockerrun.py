@@ -29,6 +29,25 @@ MAX_RESTARTS = int(os.environ.get("SQLEV_MAX_RESTARTS", "5"))
 TAIL_LINES = 20
 
 
+FALLBACK_DUCKDB_IMAGE = "dbbench:duckdb"  # the campaign image, DuckDB 1.5.6 (build_images.sh hold of 2026-10-23: DuckPGQ on 2.0.0 did not parse)
+
+
+def default_image(engine):
+    """The image for an engine. DuckDB: SQLEV_DUCKDB_IMAGE if set, else this harness's 2.0.0 image if it was built (its build
+    fails unless DuckPGQ parses CREATE PROPERTY GRAPH and GRAPH_TABLE on 2.0.0), else the campaign's 1.5.6 image, so both DuckDB
+    arms always share one DuckDB version; the version actually used is read at runtime and recorded in every output."""
+    if engine != "duckdb" or "SQLEV_DUCKDB_IMAGE" in os.environ:
+        return DEFAULT_IMAGES[engine]
+    want = DEFAULT_IMAGES["duckdb"]
+    r = subprocess.run(["docker", "image", "inspect", "--format", "{{.Id}}", want], capture_output=True, text=True)
+    if r.returncode == 0:
+        return want
+    print(f"note: {want} is not built (its DuckPGQ parse gate failed, or sqlev-image-duckdb did not run); "
+          f"both DuckDB arms use {FALLBACK_DUCKDB_IMAGE} (DuckDB 1.5.6, the campaign's hold until a DuckPGQ build for 2.x parses)",
+          file=sys.stderr)
+    return FALLBACK_DUCKDB_IMAGE
+
+
 def image_id(image):
     r = subprocess.run(["docker", "image", "inspect", "--format", "{{.Id}}", image], capture_output=True, text=True)
     if r.returncode != 0:
@@ -123,7 +142,7 @@ def run_engine(engine, jobs, data_dir, work_dir, tag, person_limit=0, timeout=60
                heap="2g", image=None):
     """Run `jobs` (list of {key, arm, query}) on `engine`; return an out.json-shaped dict (header fields, `results` in job
     order, `restarts`, `engine_killed`, `exit_codes`, `image`, `image_id`). A killed container is recovered as described above."""
-    image = image or DEFAULT_IMAGES[engine]
+    image = image or default_image(engine)
     iid = image_id(image)
     os.makedirs(os.path.join(work_dir, "home"), exist_ok=True)
 
