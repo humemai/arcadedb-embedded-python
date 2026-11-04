@@ -1,0 +1,342 @@
+# Every query on the reference card in prompts/arcadedb_sql_docs.txt, with the toy dataset it runs on and the outcome
+# expected on that dataset. card_check.py executes them on the pinned ArcadeDB engine before the freeze and asserts that the
+# card's indented query lines and the queries below are the same set, character for character.
+# Expectation kinds: n_rows (row count); rows (positional, ordered only when `ordered`); field + values (one property of
+# each returned record, for queries that return records). Floats compare within 0.01 (resultcmp rules).
+schema:
+- CREATE VERTEX TYPE Employee
+- CREATE PROPERTY Employee.badge INTEGER
+- CREATE PROPERTY Employee.name STRING
+- CREATE PROPERTY Employee.salary INTEGER
+- CREATE PROPERTY Employee.hiredYear INTEGER
+- CREATE VERTEX TYPE Dept
+- CREATE PROPERTY Dept.title STRING
+- CREATE VERTEX TYPE Project
+- CREATE PROPERTY Project.code STRING
+- CREATE EDGE TYPE WORKS_IN
+- CREATE EDGE TYPE MANAGES
+- CREATE EDGE TYPE ASSIGNED
+- CREATE PROPERTY ASSIGNED.hours INTEGER
+data:
+- CREATE VERTEX Employee SET badge = 1, name = 'Ann', salary = 70000, hiredYear = 2008
+- CREATE VERTEX Employee SET badge = 2, name = 'Bob', salary = 45000, hiredYear = 2012
+- CREATE VERTEX Employee SET badge = 3, name = 'Carla', salary = 52000, hiredYear = 2012
+- CREATE VERTEX Employee SET badge = 4, name = 'Dawson', salary = 61000, hiredYear = 2010
+- CREATE VERTEX Employee SET badge = 5, name = 'Eve', salary = 38000, hiredYear = 2019
+- CREATE VERTEX Employee SET badge = 6, name = 'Frank', salary = 80000, hiredYear = 2005
+- CREATE VERTEX Employee SET badge = 7, name = 'Grace', salary = 90000, hiredYear = 2003
+- CREATE VERTEX Employee SET badge = 8, name = 'Hugo', salary = 41000, hiredYear = 2012
+- CREATE VERTEX Employee SET badge = 9, name = 'Ines', salary = 55000, hiredYear = 2010
+- CREATE VERTEX Employee SET badge = 10, name = 'Jon', hiredYear = 2018
+- CREATE VERTEX Dept SET title = 'Sales'
+- CREATE VERTEX Dept SET title = 'Engineering'
+- CREATE VERTEX Dept SET title = 'Support'
+- CREATE VERTEX Project SET code = 'A-100'
+- CREATE VERTEX Project SET code = 'B-200'
+- CREATE VERTEX Project SET code = 'C-300'
+- CREATE EDGE WORKS_IN FROM (SELECT FROM Employee WHERE badge = 1) TO (SELECT FROM Dept WHERE title = 'Engineering')
+- CREATE EDGE WORKS_IN FROM (SELECT FROM Employee WHERE badge = 2) TO (SELECT FROM Dept WHERE title = 'Sales')
+- CREATE EDGE WORKS_IN FROM (SELECT FROM Employee WHERE badge = 3) TO (SELECT FROM Dept WHERE title = 'Engineering')
+- CREATE EDGE WORKS_IN FROM (SELECT FROM Employee WHERE badge = 4) TO (SELECT FROM Dept WHERE title = 'Sales')
+- CREATE EDGE WORKS_IN FROM (SELECT FROM Employee WHERE badge = 5) TO (SELECT FROM Dept WHERE title = 'Support')
+- CREATE EDGE WORKS_IN FROM (SELECT FROM Employee WHERE badge = 6) TO (SELECT FROM Dept WHERE title = 'Engineering')
+- CREATE EDGE WORKS_IN FROM (SELECT FROM Employee WHERE badge = 7) TO (SELECT FROM Dept WHERE title = 'Engineering')
+- CREATE EDGE WORKS_IN FROM (SELECT FROM Employee WHERE badge = 8) TO (SELECT FROM Dept WHERE title = 'Support')
+- CREATE EDGE WORKS_IN FROM (SELECT FROM Employee WHERE badge = 9) TO (SELECT FROM Dept WHERE title = 'Sales')
+- CREATE EDGE WORKS_IN FROM (SELECT FROM Employee WHERE badge = 10) TO (SELECT FROM Dept WHERE title = 'Support')
+- CREATE EDGE MANAGES FROM (SELECT FROM Employee WHERE badge = 7) TO (SELECT FROM Employee WHERE badge = 6)
+- CREATE EDGE MANAGES FROM (SELECT FROM Employee WHERE badge = 7) TO (SELECT FROM Employee WHERE badge = 9)
+- CREATE EDGE MANAGES FROM (SELECT FROM Employee WHERE badge = 6) TO (SELECT FROM Employee WHERE badge = 1)
+- CREATE EDGE MANAGES FROM (SELECT FROM Employee WHERE badge = 6) TO (SELECT FROM Employee WHERE badge = 3)
+- CREATE EDGE MANAGES FROM (SELECT FROM Employee WHERE badge = 9) TO (SELECT FROM Employee WHERE badge = 4)
+- CREATE EDGE MANAGES FROM (SELECT FROM Employee WHERE badge = 1) TO (SELECT FROM Employee WHERE badge = 2)
+- CREATE EDGE ASSIGNED FROM (SELECT FROM Employee WHERE badge = 1) TO (SELECT FROM Project WHERE code = 'A-100') SET hours = 12
+- CREATE EDGE ASSIGNED FROM (SELECT FROM Employee WHERE badge = 1) TO (SELECT FROM Project WHERE code = 'B-200') SET hours = 5
+- CREATE EDGE ASSIGNED FROM (SELECT FROM Employee WHERE badge = 7) TO (SELECT FROM Project WHERE code = 'A-100') SET hours = 20
+- CREATE EDGE ASSIGNED FROM (SELECT FROM Employee WHERE badge = 7) TO (SELECT FROM Project WHERE code = 'C-300') SET hours = 8
+- CREATE EDGE ASSIGNED FROM (SELECT FROM Employee WHERE badge = 2) TO (SELECT FROM Project WHERE code = 'B-200') SET hours = 15
+- CREATE EDGE ASSIGNED FROM (SELECT FROM Employee WHERE badge = 4) TO (SELECT FROM Project WHERE code = 'C-300') SET hours = 3
+setup_counts:
+  Employee: 10
+  Dept: 3
+  Project: 3
+  WORKS_IN: 10
+  MANAGES: 6
+  ASSIGNED: 6
+examples:
+- id: basics-filter-order
+  query: SELECT FROM Employee WHERE salary > 50000 ORDER BY name DESC LIMIT 10
+  expect:
+    field: name
+    values:
+    - Ines
+    - Grace
+    - Frank
+    - Dawson
+    - Carla
+    - Ann
+    ordered: true
+- id: basics-projection
+  query: SELECT name, salary FROM Employee
+  expect:
+    n_rows: 10
+- id: basics-group-order
+  query: SELECT hiredYear, count(*) FROM Employee GROUP BY hiredYear ORDER BY count(*) DESC LIMIT 2
+  expect:
+    rows:
+    - - 2012
+      - 3
+    - - 2010
+      - 2
+    ordered: true
+- id: basics-aggregates
+  query: SELECT sum(salary) AS total, avg(salary) AS mean, min(salary) AS lo, max(salary) AS hi FROM Employee
+  expect:
+    rows:
+    - - 532000
+      - 59111.1111
+      - 38000
+      - 90000
+    ordered: false
+- id: basics-distinct-keyword
+  query: SELECT DISTINCT hiredYear FROM Employee
+  expect:
+    n_rows: 7
+- id: basics-distinct-function
+  query: SELECT distinct(hiredYear) FROM Employee
+  expect:
+    n_rows: 7
+- id: basics-skip-limit
+  query: SELECT name FROM Employee ORDER BY name SKIP 2 LIMIT 3
+  expect:
+    field: name
+    values:
+    - Carla
+    - Dawson
+    - Eve
+    ordered: true
+- id: conditions-mixed
+  query: SELECT name FROM Employee WHERE name LIKE '%son' AND hiredYear BETWEEN 2005 AND 2012 AND salary IS NOT NULL AND name IN ['Dawson', 'Eve']
+  expect:
+    rows:
+    - - Dawson
+    ordered: false
+- id: methods-chain
+  query: SELECT name.toLowerCase() AS lower, name.left(3) AS first3, name.size() AS len FROM Employee WHERE badge = 4
+  expect:
+    rows:
+    - - dawson
+      - Daw
+      - 6
+    ordered: false
+- id: methods-ifnull
+  query: SELECT name, ifnull(salary, 0) AS pay FROM Employee WHERE badge = 10
+  expect:
+    rows:
+    - - Jon
+      - 0
+    ordered: false
+- id: params-positional
+  query: SELECT name FROM Employee WHERE hiredYear = ? AND salary > ?
+  params:
+  - 2012
+  - 40000
+  expect:
+    field: name
+    values:
+    - Bob
+    - Carla
+    - Hugo
+    ordered: false
+- id: params-named
+  query: SELECT name FROM Employee WHERE hiredYear = :year
+  params:
+    year: 2010
+  expect:
+    field: name
+    values:
+    - Dawson
+    - Ines
+    ordered: false
+- id: traverse-projection
+  query: SELECT name, out('WORKS_IN').title AS dept FROM Employee
+  expect:
+    n_rows: 10
+- id: traverse-filter-contains
+  query: SELECT FROM Employee WHERE out('WORKS_IN').title CONTAINS 'Sales'
+  expect:
+    field: name
+    values:
+    - Bob
+    - Dawson
+    - Ines
+    ordered: false
+- id: traverse-size
+  query: SELECT name, out('ASSIGNED').size() AS projects FROM Employee
+  expect:
+    rows:
+    - - Ann
+      - 2
+    - - Bob
+      - 1
+    - - Carla
+      - 0
+    - - Dawson
+      - 1
+    - - Eve
+      - 0
+    - - Frank
+      - 0
+    - - Grace
+      - 2
+    - - Hugo
+      - 0
+    - - Ines
+      - 0
+    - - Jon
+      - 0
+    ordered: false
+- id: expand-one-hop
+  query: SELECT expand(out('MANAGES')) FROM Employee WHERE badge = 7
+  expect:
+    field: name
+    values:
+    - Frank
+    - Ines
+    ordered: false
+- id: expand-two-hops
+  query: SELECT expand(out('WORKS_IN').in('WORKS_IN')) FROM Employee WHERE badge = 7
+  expect:
+    field: name
+    values:
+    - Ann
+    - Carla
+    - Frank
+    - Grace
+    ordered: false
+- id: edge-property-list
+  query: SELECT outE('ASSIGNED').hours AS hoursList FROM Employee WHERE badge = 2
+  expect:
+    rows:
+    - - - 15
+    ordered: false
+- id: expand-count
+  query: SELECT count(*) FROM (SELECT expand(out('MANAGES')) FROM Employee WHERE badge = 7)
+  expect:
+    rows:
+    - - 2
+    ordered: false
+- id: subquery-from
+  query: SELECT name FROM (SELECT FROM Employee WHERE salary > 50000) WHERE hiredYear < 2010
+  expect:
+    field: name
+    values:
+    - Ann
+    - Frank
+    - Grace
+    ordered: false
+- id: let-path
+  query: SELECT name FROM Employee LET $d = out('WORKS_IN') WHERE $d.title CONTAINS 'Sales' AND $d.size() > 0
+  expect:
+    field: name
+    values:
+    - Bob
+    - Dawson
+    - Ines
+    ordered: false
+- id: match-basic
+  query: 'MATCH {type: Employee, as: e, where: (hiredYear > 2010)}.out(''WORKS_IN''){as: d} RETURN e.name AS employee, d.title AS dept'
+  expect:
+    rows:
+    - - Bob
+      - Sales
+    - - Carla
+      - Engineering
+    - - Eve
+      - Support
+    - - Hugo
+      - Support
+    - - Jon
+      - Support
+    ordered: false
+- id: match-arrow
+  query: 'MATCH {type: Employee, as: e}-WORKS_IN->{as: d} RETURN e.name AS employee, d.title AS dept'
+  expect:
+    n_rows: 10
+- id: match-shared-alias
+  query: 'MATCH {type: Employee, as: e}.out(''WORKS_IN''){as: d}, {as: e}.out(''ASSIGNED''){as: p} RETURN e.name AS employee, d.title AS dept, p.code AS project'
+  expect:
+    rows:
+    - - Ann
+      - Engineering
+      - A-100
+    - - Ann
+      - Engineering
+      - B-200
+    - - Bob
+      - Sales
+      - B-200
+    - - Dawson
+      - Sales
+      - C-300
+    - - Grace
+      - Engineering
+      - A-100
+    - - Grace
+      - Engineering
+      - C-300
+    ordered: false
+- id: match-matched-context
+  query: 'MATCH {type: Employee, as: e}.out(''MANAGES''){as: m, where: (salary > $matched.e.salary)} RETURN e.name AS boss, m.name AS report'
+  expect:
+    rows:
+    - - Ines
+      - Dawson
+    ordered: false
+- id: match-count-wrap
+  query: 'SELECT count(*) FROM (MATCH {type: Employee, as: e}.out(''ASSIGNED''){as: p} RETURN e, p)'
+  expect:
+    rows:
+    - - 6
+    ordered: false
+- id: match-while
+  query: 'MATCH {type: Employee, as: s, where: (badge = 7)}.out(''MANAGES''){as: sub, while: ($depth < 3), where: ($depth > 0)} RETURN sub.name AS name'
+  expect:
+    rows:
+    - - Frank
+    - - Ines
+    - - Ann
+    - - Carla
+    - - Dawson
+    ordered: false
+- id: match-maxdepth-alias
+  query: 'MATCH {type: Employee, as: s, where: (badge = 7)}.out(''MANAGES''){as: sub, maxDepth: 2, depthAlias: lvl, where: ($depth > 0)} RETURN sub.name AS name, lvl'
+  expect:
+    rows:
+    - - Frank
+      - 1
+    - - Ines
+      - 1
+    - - Ann
+      - 2
+    - - Carla
+      - 2
+    - - Dawson
+      - 2
+    ordered: false
+- id: traverse-maxdepth
+  query: TRAVERSE out('MANAGES') FROM (SELECT FROM Employee WHERE badge = 7) MAXDEPTH 3
+  expect:
+    n_rows: 7
+- id: traverse-breadth-first
+  query: SELECT FROM (TRAVERSE out('MANAGES') FROM (SELECT FROM Employee WHERE badge = 7) MAXDEPTH 3 STRATEGY BREADTH_FIRST) WHERE $depth > 0
+  expect:
+    field: name
+    values:
+    - Frank
+    - Ines
+    - Ann
+    - Carla
+    - Dawson
+    - Bob
+    ordered: false

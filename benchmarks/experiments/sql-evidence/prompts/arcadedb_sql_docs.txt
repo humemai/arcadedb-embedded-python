@@ -24,30 +24,61 @@ Reference card: ArcadeDB SQL (general syntax, shown on an unrelated toy schema)
 
 Toy schema for the examples only: vertex types Employee(badge, name, salary, hiredYear), Dept(title), Project(code); edge types WORKS_IN (Employee -> Dept), MANAGES (Employee -> Employee), ASSIGNED (Employee -> Project, with property hours).
 
-Basics. A query starts at a type: SELECT FROM Employee WHERE salary > 50000 ORDER BY name DESC LIMIT 10. Without a projection the whole record comes back. With one, list the columns: SELECT name, salary FROM Employee. Rename with AS. Use count(*), sum(), avg(), min(), max(); count(DISTINCT x) counts unique values. GROUP BY takes the grouping expression: SELECT hiredYear, count(*) FROM Employee GROUP BY hiredYear. The ORDER BY field should be part of the projection, and an aggregate may be used in ORDER BY with GROUP BY: ORDER BY count(*) DESC. Repeat the expression in WHERE, GROUP BY and ORDER BY rather than relying on a column alias. Use SKIP n and LIMIT n for paging, and add a second ORDER BY key when ties must be broken. Text tests: LIKE with % as the wildcard, CONTAINS, IN ['a','b'], BETWEEN x AND y, IS NULL. Methods chain on values: name.toLowerCase(), name.left(3), name.size(). Wrap a possibly null value with ifnull(x, 0).
+Basics. A query starts at a type. Without a projection the whole record comes back; with one, list the columns. Rename a column with AS.
+    SELECT FROM Employee WHERE salary > 50000 ORDER BY name DESC LIMIT 10
+    SELECT name, salary FROM Employee
+Aggregates are count(*), sum(), avg(), min() and max(); count(DISTINCT x) counts unique values. GROUP BY takes the grouping expression. An aggregate may be used in ORDER BY together with GROUP BY. Repeat the expression in WHERE, GROUP BY and ORDER BY rather than relying on a column alias.
+    SELECT hiredYear, count(*) FROM Employee GROUP BY hiredYear ORDER BY count(*) DESC LIMIT 2
+    SELECT sum(salary) AS total, avg(salary) AS mean, min(salary) AS lo, max(salary) AS hi FROM Employee
+DISTINCT works as a keyword or as a function that is the only projection. SKIP and LIMIT page the result; add a second ORDER BY key when ties must be broken.
+    SELECT DISTINCT hiredYear FROM Employee
+    SELECT distinct(hiredYear) FROM Employee
+    SELECT name FROM Employee ORDER BY name SKIP 2 LIMIT 3
+Conditions use LIKE with % as the wildcard, IN [...], BETWEEN x AND y, IS NULL and IS NOT NULL. CONTAINS tests whether a list value holds an element. Methods chain on values, and ifnull(x, 0) replaces a null.
+    SELECT name FROM Employee WHERE name LIKE '%son' AND hiredYear BETWEEN 2005 AND 2012 AND salary IS NOT NULL AND name IN ['Dawson', 'Eve']
+    SELECT name.toLowerCase() AS lower, name.left(3) AS first3, name.size() AS len FROM Employee WHERE badge = 4
+    SELECT name, ifnull(salary, 0) AS pay FROM Employee WHERE badge = 10
 
-Parameters. Write ? for a positional parameter or :name for a named one, and let the driver bind the value. A literal value written inline works too.
+Parameters. Write ? for a positional parameter or :name for a named one, and let the driver bind the value.
+    SELECT name FROM Employee WHERE hiredYear = ? AND salary > ?
+    SELECT name FROM Employee WHERE hiredYear = :year
 
-No JOIN. ArcadeDB SQL has no JOIN keyword, and records are connected by edges or by link properties, not by foreign-key columns. The usual substitutes are traversal functions, MATCH, and subqueries.
+No JOIN. ArcadeDB SQL has no JOIN keyword, and records are connected by edges, not by foreign-key columns. The usual substitutes are traversal functions, MATCH, and subqueries.
 
-Traversal functions. They run per record and take optional edge type names. out('E') returns the vertices reached over outgoing E edges, in('E') the vertices on incoming E edges, both('E') either direction. outE('E'), inE('E') and bothE('E') return the edges themselves, and the edge methods outV(), inV() and bothV() return the vertex at an end. A call without a name follows every edge type. Edge direction is source to target, as the schema states it.
-- Follow one hop in the projection: SELECT name, out('WORKS_IN').title AS dept FROM Employee. The result is a list, one entry per edge.
-- Filter on a neighbour: SELECT FROM Employee WHERE out('WORKS_IN').title CONTAINS 'Sales'.
-- Count neighbours: SELECT name, out('ASSIGNED').size() AS projects FROM Employee.
-- Turn the neighbours into rows: SELECT expand(out('MANAGES')) FROM Employee WHERE badge = 7. expand() must be the only projection. Chain hops inside it: expand(out('WORKS_IN').in('WORKS_IN')).
-- Edge properties live on the edge: SELECT outE('ASSIGNED').hours AS hoursList FROM Employee WHERE badge = 7 returns them as a list.
-- distinct(x) works as the only projection, and SELECT DISTINCT x also works. To count rows that came from expand(), wrap it: SELECT count(*) FROM (SELECT expand(out('MANAGES')) FROM Employee WHERE badge = 7).
+Traversal functions. They run per record and take optional edge type names. out('E') returns the vertices reached over outgoing E edges, in('E') the vertices on incoming E edges, both('E') either direction. outE('E'), inE('E') and bothE('E') return the edges themselves, and the edge methods outV(), inV() and bothV() return the vertex at an end. A call without a name follows every edge type.
+One hop in the projection gives a list, one entry per edge. Filter on a neighbour, or count neighbours:
+    SELECT name, out('WORKS_IN').title AS dept FROM Employee
+    SELECT FROM Employee WHERE out('WORKS_IN').title CONTAINS 'Sales'
+    SELECT name, out('ASSIGNED').size() AS projects FROM Employee
+expand() turns the neighbours into rows and must be the only projection. Hops chain inside it. Edge properties live on the edge, and come back as a list.
+    SELECT expand(out('MANAGES')) FROM Employee WHERE badge = 7
+    SELECT expand(out('WORKS_IN').in('WORKS_IN')) FROM Employee WHERE badge = 7
+    SELECT outE('ASSIGNED').hours AS hoursList FROM Employee WHERE badge = 2
+To count rows that came from expand(), wrap it in another query.
+    SELECT count(*) FROM (SELECT expand(out('MANAGES')) FROM Employee WHERE badge = 7)
 
-Subqueries and LET. A subquery in the FROM clause works as a table: SELECT name FROM (SELECT FROM Employee WHERE salary > 50000) WHERE hiredYear < 2015. LET binds a variable that is evaluated per record and may hold a subquery or a path: SELECT name FROM Employee LET $d = out('WORKS_IN') WHERE $d.title CONTAINS 'Sales' AND $d.size() > 0. Variables start with $.
+Subqueries and LET. A subquery in the FROM clause works as a table. LET binds a variable, starting with $, that is evaluated per record and may hold a subquery or a path.
+    SELECT name FROM (SELECT FROM Employee WHERE salary > 50000) WHERE hiredYear < 2010
+    SELECT name FROM Employee LET $d = out('WORKS_IN') WHERE $d.title CONTAINS 'Sales' AND $d.size() > 0
 
 MATCH. MATCH describes a pattern of nodes and the edges between them. Each node is a brace block with optional type:, as: (an alias), and where: (a filter written like a WHERE condition, in parentheses). Edges are written between blocks as method calls or as arrows.
-MATCH {type: Employee, as: e, where: (hiredYear > 2010)}.out('WORKS_IN'){as: d} RETURN e.name AS employee, d.title AS dept
-The arrow form is equivalent: {type: Employee, as: e}-WORKS_IN->{as: d}. Use <-E- for an incoming edge and -E- for either direction. Braces are required on both sides of an arrow. Separate several path expressions with commas; blocks that share an alias must bind the same record, which is how a pattern is closed or joined. Inside where: you can read $matched.alias.property (aliases matched so far) and $currentMatch (the node being tested). To keep a node from matching an earlier alias, write where: ($matched.a != $currentMatch). RETURN accepts aliases, properties of aliases, expressions, DISTINCT, GROUP BY, ORDER BY, SKIP and LIMIT. MATCH returns one row per way the pattern matches. To count the rows, or to apply SQL clauses to them, wrap the pattern: SELECT count(*) FROM (MATCH {type: Employee, as: e}.out('ASSIGNED'){as: p} RETURN e, p).
-Variable depth: add while: ($depth < 4) to an edge block to repeat that hop. The while: condition decides whether to keep going, and a node matched at depth zero (the start) is included unless you add where: ($depth > 0). maxDepth: 3 is a hard bound, and depthAlias: d stores the depth so RETURN can read it.
+    MATCH {type: Employee, as: e, where: (hiredYear > 2010)}.out('WORKS_IN'){as: d} RETURN e.name AS employee, d.title AS dept
+The arrow form is equivalent. Use <-E- for an incoming edge and -E- for either direction. Braces are required on both sides of an arrow.
+    MATCH {type: Employee, as: e}-WORKS_IN->{as: d} RETURN e.name AS employee, d.title AS dept
+Separate several path expressions with commas. Blocks that share an alias must bind the same record, which is how a pattern is closed or joined.
+    MATCH {type: Employee, as: e}.out('WORKS_IN'){as: d}, {as: e}.out('ASSIGNED'){as: p} RETURN e.name AS employee, d.title AS dept, p.code AS project
+Inside where: you can read $matched.alias.property (the aliases matched so far) and $currentMatch (the node being tested).
+    MATCH {type: Employee, as: e}.out('MANAGES'){as: m, where: (salary > $matched.e.salary)} RETURN e.name AS boss, m.name AS report
+RETURN accepts aliases, properties of aliases, expressions, DISTINCT, GROUP BY, ORDER BY, SKIP and LIMIT. MATCH returns one row per way the pattern matches. To count the rows, or to apply SQL clauses to them, wrap the pattern.
+    SELECT count(*) FROM (MATCH {type: Employee, as: e}.out('ASSIGNED'){as: p} RETURN e, p)
+Variable depth: add while: to an edge block to repeat that hop. A node matched at depth zero (the start) is included unless you add where: ($depth > 0). Here while: ($depth < 3) keeps depths 0, 1 and 2.
+    MATCH {type: Employee, as: s, where: (badge = 7)}.out('MANAGES'){as: sub, while: ($depth < 3), where: ($depth > 0)} RETURN sub.name AS name
+maxDepth: is a hard bound, and depthAlias: stores the depth so RETURN can read it.
+    MATCH {type: Employee, as: s, where: (badge = 7)}.out('MANAGES'){as: sub, maxDepth: 2, depthAlias: lvl, where: ($depth > 0)} RETURN sub.name AS name, lvl
 
-TRAVERSE. TRAVERSE out('MANAGES') FROM #12:5 MAXDEPTH 3 walks from a start record or subquery and returns every reachable record once, the start included at $depth 0. There is no WHERE: filter with an outer SELECT. SELECT FROM (TRAVERSE out('MANAGES') FROM (SELECT FROM Employee WHERE badge = 7) MAXDEPTH 3 STRATEGY BREADTH_FIRST) WHERE $depth > 0. With BREADTH_FIRST, $depth is the shortest distance from the start. TRAVERSE needs a function or field list: out(), in() or both(), and * is not accepted.
-
-Starting points. Pick a start record with a subquery on a property, FROM (SELECT FROM Employee WHERE badge = 7), or with a literal record id such as #12:5.
+TRAVERSE. TRAVERSE walks from a start record or subquery and returns every reachable record once, the start included at $depth 0. There is no WHERE: filter with an outer SELECT. With STRATEGY BREADTH_FIRST, $depth is the shortest distance from the start. TRAVERSE needs a function such as out(), in() or both(); * is not accepted.
+    TRAVERSE out('MANAGES') FROM (SELECT FROM Employee WHERE badge = 7) MAXDEPTH 3
+    SELECT FROM (TRAVERSE out('MANAGES') FROM (SELECT FROM Employee WHERE badge = 7) MAXDEPTH 3 STRATEGY BREADTH_FIRST) WHERE $depth > 0
 
 Question: {question}
 
