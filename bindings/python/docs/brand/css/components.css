@@ -1,0 +1,52 @@
+/* HumemAI components that more than one page uses. Load tokens.css first.
+   A component here takes every colour, size and space from the tokens. */
+
+/* Card grid: a row of link cards that wrap, as the docs hub and the site's
+   project lists use. Every row is as tall as the tallest card in the grid.
+   Without grid-auto-rows a row is only as tall as its own cards, so a last
+   row holding one short card came out shorter than the rows above it
+   (docs.humem.ai, 2026-11-06). Inside a card the middle row takes the spare
+   height, so the last line (a link) sits on the same baseline in every card. */
+.hm-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16.25rem, 1fr));
+  grid-auto-rows: 1fr;
+  gap: var(--hm-space-5);
+}
+
+.hm-card {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  gap: var(--hm-space-2);
+  align-content: start;
+  padding: var(--hm-space-6);
+  background: var(--hm-surface-muted);
+  border: 1px solid var(--hm-border);
+  border-radius: var(--hm-radius-lg);
+  color: inherit;
+  text-decoration: none;
+  transition: border-color 160ms ease, transform 160ms ease;
+}
+
+.hm-card:hover,
+.hm-card:focus-visible {
+  border-color: var(--hm-brand);
+  transform: translateY(-2px);
+}
+
+.hm-card:focus-visible {
+  outline: 2px solid var(--hm-focus);
+  outline-offset: 2px;
+}
+
+.hm-card > span {
+  margin-top: var(--hm-space-2);
+  color: var(--hm-link);
+  font-weight: var(--hm-weight-semibold);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hm-card {
+    transition: none;
+  }
+}
