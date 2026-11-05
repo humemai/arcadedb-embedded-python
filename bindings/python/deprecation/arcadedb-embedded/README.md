@@ -2,7 +2,7 @@
 
 **This package is deprecated. 26.11.1 is its last release.** The ArcadeDB Python bindings now live in the ArcadeData organization, under a new package name. The package is now [`arcadedb`](https://pypi.org/project/arcadedb/), which is the **native build**: the engine runs as a native library, without a JVM. If you need the JVM build, install [`arcadedb-jvm`](https://pypi.org/project/arcadedb-jvm/) instead.
 
-**The runtime changes for pip users of the old name.** `arcadedb-embedded` was the JVM build; `pip install arcadedb` gives the native build. Both new packages are imported as `arcadedb`.
+**The runtime changes for users of the old name.** `arcadedb-embedded` was the JVM build; `arcadedb` is the native build. Both new packages are imported as `arcadedb`.
 
 | | Old | New |
 |---|---|---|
@@ -14,8 +14,8 @@
 ## What to do
 
 ```bash
-pip uninstall arcadedb-embedded
-pip install arcadedb
+uv remove arcadedb-embedded
+uv add arcadedb
 ```
 
 Then change `import arcadedb_embedded` to `import arcadedb` (and `from arcadedb_embedded import X` to `from arcadedb import X`).
@@ -23,8 +23,8 @@ Then change `import arcadedb_embedded` to `import arcadedb` (and `from arcadedb_
 `arcadedb-embedded` was the JVM build, so `arcadedb` is a different runtime. If your code needs the JVM build, for example because it uses Java classes through JPype or a long-running load that suits the JVM, install it instead:
 
 ```bash
-pip uninstall arcadedb-embedded
-pip install arcadedb-jvm
+uv remove arcadedb-embedded
+uv add arcadedb-jvm
 ```
 
 [Which package?](https://docs.arcadedb.com/arcadedb-python/which-package.html) explains the difference. `arcadedb` and `arcadedb-jvm` both provide the module `arcadedb`: install one of them in an environment, not both.

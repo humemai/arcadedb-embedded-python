@@ -10,7 +10,7 @@ The Python bindings move to [ArcadeData/arcadedb-python](https://github.com/Arca
 
 The shim module is `arcadedb_embedded`. The mapping above lives in one place, `TARGETS` in `build_shims.py`, together with the one assumption behind it: `arcadedb` provides the import name `arcadedb` (the layout says so, but it has no real release yet). `EXTRAS` there maps the extras of the old package to the extras of `arcadedb` (`vector`, the numpy extra, becomes `numpy`; `arcadedb` has no `vector`), and `NATIVE_EXTRAS` is the set the native `arcadedb` wheel defines (`numpy`, `arrow`, `pandas`, `polars`; source: ArcadeData/arcadedb-python, branch `native-two-dist`, `native/wheel/pyproject.toml`). `build_shims.py` fails when the shim forwards anything else, so re-read that file when the native wheel's extras change. `build_shims.py` refuses to build when the shim's `pyproject.toml` (name, description, dependencies, extras, `Replaced by` URL) or its `_NEW_DIST` and `_NEW_MODULE` constants disagree with `TARGETS`. The real package in `bindings/python/src` is not changed and does not warn: the benchmark harness imports it until the split.
 
-**This shim publishes only after the native `arcadedb` 26.11.1 FINAL exists.** It pins `arcadedb==26.11.1`, and a `26.11.1.devN` release does not satisfy that pin. Until the final release is out, do not publish this shim: `pip install arcadedb-embedded` would fail to resolve.
+**This shim publishes only after the native `arcadedb` 26.11.1 FINAL exists.** It pins `arcadedb==26.11.1`, and a `26.11.1.devN` release does not satisfy that pin. Until the final release is out, do not publish this shim: `uv add arcadedb-embedded` would fail to resolve.
 
 ## Build and test (never uploads)
 
@@ -23,11 +23,11 @@ taskset -c 0-3 uv run pytest bindings/python/tests/test_deprecation_shims.py   #
 
 ## Cutover day
 
-1. Release the native `arcadedb` 26.11.1 FINAL from ArcadeData/arcadedb-python first (and `arcadedb-jvm` 26.11.1, which the warning names). Check `pip download --no-deps arcadedb==26.11.1` works: the shim pins this exact version. If the first final `arcadedb` is not out (only `26.11.1.devN`), do not publish the shim.
+1. Release the native `arcadedb` 26.11.1 FINAL from ArcadeData/arcadedb-python first (and `arcadedb-jvm` 26.11.1, which the warning names). Check that PyPI serves it (`curl -sf https://pypi.org/pypi/arcadedb/26.11.1/json` succeeds): the shim pins this exact version. If the first final `arcadedb` is not out (only `26.11.1.devN`), do not publish the shim.
 2. Never push a `26.11.1` tag in this repository: `release-python-packages.yml` would build and publish the real wheels under `arcadedb-embedded`.
 3. Build and check: `python3 bindings/python/deprecation/build_shims.py --out dist --check-pypi && uvx twine check dist/*`.
 4. Publish the shim. Trusted publishing works only from a workflow, so either (a) register a trusted publisher on the PyPI project `arcadedb-embedded` (repository `humemai/arcadedb-embedded-python`, workflow `publish-deprecation-shims.yml`, environment `pypi`), add the workflow below to `.github/workflows/` (and to `FORK_GITHUB_ALLOWLIST` in `sync-upstream.sh` if another sync will still run), and dispatch it with `publish` on; or (b) upload from a laptop with `uvx twine upload dist/*` and a project-scoped API token.
-5. In a clean environment: `pip install arcadedb-embedded==26.11.1` installs `arcadedb` (the native build, not `arcadedb-jvm`: check `pip list`), and `python -W default -c "import arcadedb_embedded"` shows one FutureWarning that names `arcadedb-jvm` for the JVM build.
+5. In a clean environment, `uv run --no-project --with arcadedb-embedded==26.11.1 python -W default -c "import arcadedb_embedded, importlib.metadata as m; print(m.version('arcadedb'))"` installs `arcadedb` (the native build, not `arcadedb-jvm`: it prints `26.11.1`) and shows one FutureWarning that names `arcadedb-jvm` for the JVM build.
 
 ```yaml
 name: Publish deprecation shims

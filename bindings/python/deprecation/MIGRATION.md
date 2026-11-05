@@ -8,8 +8,8 @@ The ArcadeDB Python bindings moved from `humemai/arcadedb-embedded-python` to [A
 
 | Before | After (native build) | After (JVM build) |
 |---|---|---|
-| `pip install arcadedb-embedded` | `pip install arcadedb` | `pip install arcadedb-jvm` |
-| `pip install 'arcadedb-embedded[arrow,pandas]'` | `pip install 'arcadedb[arrow,pandas]'` | `pip install 'arcadedb-jvm[arrow,pandas]'` |
+| `uv add arcadedb-embedded` | `uv add arcadedb` | `uv add arcadedb-jvm` |
+| `uv add 'arcadedb-embedded[arrow,pandas]'` | `uv add 'arcadedb[arrow,pandas]'` | `uv add 'arcadedb-jvm[arrow,pandas]'` |
 | `uv add arcadedb-embedded` | `uv add arcadedb` | `uv add arcadedb-jvm` |
 | `import arcadedb_embedded` | `import arcadedb` | `import arcadedb` |
 | `from arcadedb_embedded import open_database` | `from arcadedb import open_database` | `from arcadedb import open_database` |
@@ -17,7 +17,7 @@ The ArcadeDB Python bindings moved from `humemai/arcadedb-embedded-python` to [A
 
 The package for `arcadedb-embedded` users is now `arcadedb`, which is the native build: the engine runs as a native library, without a JVM. It is a different runtime from the one you had. If your code needs the JVM build, for example because it uses Java classes through JPype, install `arcadedb-jvm`: it is the same JVM build as `arcadedb-embedded`, so nothing changes at run time. The extra `vector` of `arcadedb-embedded` (numpy) is the extra `numpy` of `arcadedb`; `arrow`, `pandas` and `polars` keep their names. `arcadedb` defines no other extras: the old `test`, `dev` and `examples` do not exist there.
 
-Both new packages provide the module `arcadedb`, so an environment holds `arcadedb` or `arcadedb-jvm`, not both. Uninstall the old package first: `pip uninstall arcadedb-embedded`.
+Both new packages provide the module `arcadedb`, so an environment holds `arcadedb` or `arcadedb-jvm`, not both. Remove the old package first: `uv remove arcadedb-embedded`.
 
 ## Version mapping
 
@@ -40,6 +40,6 @@ The 26.11.1 release of `arcadedb-embedded` is a shim and the last one. It instal
 ## What changes
 
 - The distribution and import names, as above.
-- The default runtime: `pip install arcadedb` is the native build, not the JVM build.
+- The default runtime: `uv add arcadedb` installs the native build, not the JVM build.
 - Issues and pull requests go to [ArcadeData/arcadedb-python](https://github.com/ArcadeData/arcadedb-python/issues). Benchmarks stay with HumemAI, in [humemai/dbbench](https://github.com/humemai/dbbench).
 - Engine changes between 26.10.2 and 26.11.1: read the 26.11.1 release notes, as for any upgrade.

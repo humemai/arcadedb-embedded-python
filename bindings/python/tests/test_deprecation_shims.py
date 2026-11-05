@@ -255,14 +255,14 @@ def test_the_pypi_readme_says_arcadedb_is_the_native_build_and_names_the_jvm_pac
     wheels,
 ):
     metadata = _metadata(wheels["arcadedb-embedded"])
-    assert "pip install arcadedb\n" in metadata
-    assert "pip uninstall arcadedb-embedded\n" in metadata
+    assert "uv add arcadedb\n" in metadata
+    assert "uv remove arcadedb-embedded\n" in metadata
     assert "native build" in metadata
     # the JVM build is named as the other choice, with the install line, and the Which package? page is linked
-    assert "pip install arcadedb-jvm\n" in metadata
+    assert "uv add arcadedb-jvm\n" in metadata
     assert WHICH_PACKAGE_URL in metadata
     # the runtime change is said plainly, and the archived sibling is named with its import name
-    assert "The runtime changes for pip users of the old name." in metadata
+    assert "The runtime changes for users of the old name." in metadata
     assert "`arcadedb-embedded-native` (the native preview) is archived" in metadata
     assert "not `arcadedb_native`" in metadata
 
@@ -377,12 +377,11 @@ def test_warning_fires_once_and_is_visible_by_default(dist, module, sites):
     assert filename == "<string>"  # attributed to the importing code, not to the shim
     # plain words: the package is now arcadedb, that is the native build, the JVM build is arcadedb-jvm
     assert (
-        "The package is now 'arcadedb': install it with `pip install arcadedb`."
-        in message
+        "The package is now 'arcadedb': install it with `uv add arcadedb`." in message
     )
     assert "`arcadedb` is the native build, which runs without a JVM." in message
     assert "This package was the JVM build, so for you the runtime changes." in message
-    assert "install `arcadedb-jvm` (`pip install arcadedb-jvm`;" in message
+    assert "install `arcadedb-jvm` (`uv add arcadedb-jvm`;" in message
     assert WHICH_PACKAGE_URL in message
     assert f"`import {IMPORT_NAME}` where you wrote `import {module}`" in message
     assert "https://github.com/ArcadeData/arcadedb-python" in message

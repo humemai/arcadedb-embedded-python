@@ -48,7 +48,7 @@ class Target(NamedTuple):
 
 
 # Where each old name points (the packaging layout v3 decided on 2026-10-25, see ArcadeData/arcadedb-python .notes/MIGRATION.md).
-# arcadedb-embedded (the old JVM package) -> `arcadedb`, which is the NATIVE build. The runtime therefore changes for pip users of the old name, and the warning, the README and MIGRATION.md say so in plain words and name `arcadedb-jvm` as the way to keep the JVM build.
+# arcadedb-embedded (the old JVM package) -> `arcadedb`, which is the NATIVE build. The runtime therefore changes for users of the old name, and the warning, the README and MIGRATION.md say so in plain words and name `arcadedb-jvm` as the way to keep the JVM build.
 # This shim publishes only after the native `arcadedb` 26.11.1 FINAL exists, because it pins `arcadedb==26.11.1` and a `26.11.1.devN` release does not satisfy that pin.
 # ASSUMPTION: `arcadedb` provides the import name `arcadedb`. The native wheel does (packages.find and package-data in native/wheel/pyproject.toml on the branch named below), and `arcadedb-jvm` imports as `arcadedb` too, but `arcadedb` has no final release on PyPI yet (0.0.1 is a placeholder), so the published wheel cannot be checked here.
 # If the package gets another import name, change it here and in the `_NEW_MODULE` constant of the shim's `__init__.py`; check_target() fails until both agree.
@@ -125,9 +125,9 @@ def check_target(shim: str) -> None:
         ):
             if f'{name} = "{want}"\n' not in text:
                 problems.append(f'{path.relative_to(HERE)}: {name} is not "{want}"')
-        if f"`pip install {JVM_DIST}`" not in text:
+        if f"`uv add {JVM_DIST}`" not in text:
             problems.append(
-                f"{path.relative_to(HERE)}: the warning does not name `pip install {JVM_DIST}`"
+                f"{path.relative_to(HERE)}: the warning does not name `uv add {JVM_DIST}`"
             )
     if problems:
         raise SystemExit(

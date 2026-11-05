@@ -12,7 +12,7 @@ _NEW_MODULE = "arcadedb"
 _NOTE = (
     "`arcadedb` is the native build, which runs without a JVM. "
     "This package was the JVM build, so for you the runtime changes. "
-    "If you need the JVM build, install `arcadedb-jvm` (`pip install arcadedb-jvm`; it is also `import arcadedb`). "
+    "If you need the JVM build, install `arcadedb-jvm` (`uv add arcadedb-jvm`; it is also `import arcadedb`). "
     "Which package to pick: https://docs.arcadedb.com/arcadedb-python/which-package.html."
 )
 # ---- body (tests/test_deprecation_shims.py checks that it is there) ----
@@ -26,7 +26,7 @@ import warnings
 
 _MESSAGE = (
     f"The {_OLD_DIST!r} package has moved and this is its last release. "
-    f"The package is now {_NEW_DIST!r}: install it with `pip install {_NEW_DIST}`. {_NOTE} "
+    f"The package is now {_NEW_DIST!r}: install it with `uv add {_NEW_DIST}`. {_NOTE} "
     f"Write `import {_NEW_MODULE}` where you wrote `import {__name__}`. "
     "New home: https://github.com/ArcadeData/arcadedb-python, "
     "docs: https://docs.arcadedb.com/arcadedb-python/"
