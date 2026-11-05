@@ -401,7 +401,7 @@ DataFrames and Arrow tables loaded straight into a type, and a result back out a
   column refused before a row is written
 - `to_polars()` on the result
 - synthetic data; flags: `--rows` (default 100,000) and `--db-path`
-- requires `pip install 'arcadedb-embedded[pandas,polars]'`
+- requires `uv add 'arcadedb[pandas,polars]'`
 
 **Learn:** How a DataFrame becomes documents or vertices without a row loop, and what each
 Arrow type is stored as

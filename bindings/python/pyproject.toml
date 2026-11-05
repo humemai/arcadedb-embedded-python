@@ -114,7 +114,7 @@ pandas = [
 ]
 # Optional: ResultSet.to_polars() and insert_dataframe() with a Polars frame. Both go
 # through Arrow, so pyarrow comes with it. insert_dataframe() with a pandas frame needs
-# `pip install 'arcadedb-embedded[arrow,pandas]'` (the pandas extra alone has no pyarrow,
+# `uv add 'arcadedb[arrow,pandas]'` (the pandas extra alone has no pyarrow,
 # because to_dataframe() does not need it).
 polars = [
     "polars>=1.0",

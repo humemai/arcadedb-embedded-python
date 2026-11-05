@@ -14,7 +14,7 @@ An entry with a `Tests:` line has a test of its workaround. An entry for a bug t
 ArcadeDB 26.10.2 (the wheel) and earlier. Reported as
 [ArcadeData/arcadedb#10448](https://github.com/ArcadeData/arcadedb/issues/10448), fixed by
 [#10457](https://github.com/ArcadeData/arcadedb/pull/10457) on upstream's main on 2026-10-20 and
-in 26.11.1, which is not released yet. On 26.11.1 (and on a snapshot built after that change) the
+in ArcadeDB 26.11.1 (released 2026-11-04). On 26.11.1 (and on a snapshot built after that change) the
 query below is right and you need none of the workarounds; on 26.10.2 and earlier it is not.
 
 `Document.set`, `Vertex.set` and `GraphBatch.create_vertices` store a Python `int` as a Java
@@ -105,7 +105,7 @@ Tests: `tests/test_free_threading.py` covers the two fixes, the start race and t
 
 ## Fixed in 26.10.2
 
-These entries left the page when 26.10.2 shipped. On 26.10.1, upgrade: `pip install -U arcadedb-embedded`.
+These entries left the page when 26.10.2 shipped. On 26.10.1, upgrade: `uv lock --upgrade-package arcadedb-embedded`.
 
 - An openCypher one-hop `count(*)` answered 0 for edges loaded with `light_edges=True` into a type that is not `LIGHTWEIGHT`: [#9378](https://github.com/ArcadeData/arcadedb/issues/9378), fixed by [#9383](https://github.com/ArcadeData/arcadedb/pull/9383). The batch now refuses that load.
 - An openCypher count with a pattern predicate over an edge type that a Graph Analytical View does not list was wrong: [#9377](https://github.com/ArcadeData/arcadedb/issues/9377), fixed by [#9383](https://github.com/ArcadeData/arcadedb/pull/9383).

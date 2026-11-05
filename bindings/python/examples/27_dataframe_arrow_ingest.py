@@ -17,7 +17,7 @@ Workflow covered:
 
 Requirements:
 - pandas, polars and pyarrow
-  (pip install 'arcadedb-embedded[pandas,polars]')
+  (uv add 'arcadedb-embedded[pandas,polars]')
 """
 
 from __future__ import annotations

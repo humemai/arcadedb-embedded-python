@@ -5,8 +5,11 @@
 The `arcadedb-embedded` package is **self-contained** with a bundled JRE - **no Java installation required!**
 
 ```bash
-pip install arcadedb-embedded
+uv add arcadedb
 ```
+
+!!! note "New package name"
+    `arcadedb` is the new package (native build; `arcadedb-jvm` is the JVM build). Its module is `import arcadedb`, so where the snippets on this page write `import arcadedb_embedded as arcadedb`, write `import arcadedb`. The old name `arcadedb-embedded` is deprecated.
 
 **Requirements:**
 
@@ -123,7 +126,7 @@ arcadedb_embedded-X.Y.Z-cp312-cp312-manylinux_2_34_x86_64.whl
 Install locally:
 
 ```bash
-pip install dist/arcadedb_embedded-*.whl
+uv add dist/arcadedb_embedded-*.whl
 ```
 
 ## JVM Configuration

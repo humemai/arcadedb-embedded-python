@@ -37,7 +37,7 @@ ArcadeDB documents. You'll learn production-ready patterns for:
 **1. Install ArcadeDB Python bindings:**
 
 ```bash
-pip install arcadedb-embedded
+uv add arcadedb
 ```
 
 **2. Dataset download (automatic):**

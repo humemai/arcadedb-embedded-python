@@ -7,8 +7,11 @@ Get up and running with ArcadeDB Python bindings in 5 minutes!
 Install the self-contained package with bundled JRE:
 
 ```bash
-pip install arcadedb-embedded
+uv add arcadedb
 ```
+
+!!! note "New package name"
+    `arcadedb` is the new package (native build; `arcadedb-jvm` is the JVM build). Its module is `import arcadedb`, so where the snippets on this page write `import arcadedb_embedded as arcadedb`, write `import arcadedb`. The old name `arcadedb-embedded` is deprecated.
 
 !!! note "No Java Installation Required"
     The package includes a bundled platform-specific JRE. You don't need to install Java separately!
