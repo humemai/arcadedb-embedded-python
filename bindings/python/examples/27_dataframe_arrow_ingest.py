@@ -17,7 +17,7 @@ Workflow covered:
 
 Requirements:
 - pandas, polars and pyarrow
-  (uv add 'arcadedb[pandas,polars]')
+  (uv add 'arcadedb-embedded[pandas,polars]')
 """
 
 from __future__ import annotations

@@ -22,7 +22,7 @@ Workflow covered:
 Requirements:
 - numpy (uv add numpy)
 - pyarrow, optional, only for the to_arrow section
-  (uv add 'arcadedb[arrow]')
+  (uv add 'arcadedb-embedded[arrow]')
 """
 
 from __future__ import annotations
@@ -164,7 +164,9 @@ def nulls_to_arrow(db, n_rows: int) -> None:
 
     table = db.query("sql", q).to_arrow()
     if table is None:
-        print("to_arrow   : pyarrow not installed, skipping (uv add 'arcadedb[arrow]')")
+        print(
+            "to_arrow   : pyarrow not installed, skipping (uv add 'arcadedb-embedded[arrow]')"
+        )
         return
 
     print(

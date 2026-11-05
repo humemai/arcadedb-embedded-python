@@ -2280,7 +2280,7 @@ def main() -> None:
     arcadedb = get_arcadedb_module()
     if arcadedb is None:
         print("Missing dependency: arcadedb-embedded")
-        print("Install with: uv add arcadedb")
+        print("Install with: uv add arcadedb-embedded")
         sys.exit(1)
 
     SentenceTransformer = get_sentence_transformer_class()
