@@ -543,7 +543,7 @@ The Python binding is distributed as a **single, self-contained package** (`arca
 - **Zero Configuration**: No external Java installation required.
 
 ```python
-# pip install arcadedb-embedded
+# uv add arcadedb
 import arcadedb_embedded as arcadedb
 
 db = arcadedb.create_database("./mydb")

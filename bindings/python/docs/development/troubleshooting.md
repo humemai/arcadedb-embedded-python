@@ -12,14 +12,13 @@ Common issues, solutions, and debugging techniques for ArcadeDB Python bindings.
 
 1. **Verify Installation**:
     ```bash
-    pip show arcadedb-embedded
-    pip list | grep arcadedb
+    uv tree | grep arcadedb
     ```
 
 2. **Reinstall Package**:
     ```bash
-    pip uninstall arcadedb-embedded
-    pip install arcadedb-embedded
+    uv remove arcadedb
+    uv add arcadedb
     ```
 
 3. **Reinstall if wheel looks corrupted**:
@@ -27,8 +26,8 @@ Common issues, solutions, and debugging techniques for ArcadeDB Python bindings.
     (no external Java install is needed):
 
     ```bash
-    pip uninstall arcadedb-embedded
-    pip install --no-cache-dir arcadedb-embedded
+    uv cache clean arcadedb
+    uv sync --reinstall-package arcadedb
     ```
 
 4. **Check Python Path**:

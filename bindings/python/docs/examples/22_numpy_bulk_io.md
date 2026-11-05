@@ -29,7 +29,7 @@ It covers:
   keeps the validity bitmap. A nullable `INTEGER` stays `int64` instead of
   widening to `float64` with NaN holes, and a nullable `BOOLEAN` stays
   `bool` instead of degrading to a Python list. That section needs pyarrow
-  (`pip install 'arcadedb-embedded[arrow]'`) and skips itself without it.
+  (`uv add 'arcadedb[arrow]'`) and skips itself without it.
 
 ## Run
 

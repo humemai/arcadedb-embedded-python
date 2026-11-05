@@ -6,7 +6,7 @@ recommended SQL-first way to build and query vector indexes (JVector) in embedde
 ## Quick Start (Embedded, Minimal)
 
 ```bash
-pip install arcadedb-embedded numpy
+uv add arcadedb numpy
 ```
 
 ```python

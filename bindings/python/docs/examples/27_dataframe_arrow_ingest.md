@@ -22,7 +22,7 @@ It covers:
   [`insert_arrow`](../api/database.md#insert_arrow)
 - the result back out with `ResultSet.to_polars()`, which reads through `to_arrow()`
 
-Needs pandas, polars and pyarrow (`pip install 'arcadedb-embedded[pandas,polars]'`).
+Needs pandas, polars and pyarrow (`uv add 'arcadedb[pandas,polars]'`).
 
 ## Run
 

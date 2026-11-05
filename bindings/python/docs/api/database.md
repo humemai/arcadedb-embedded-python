@@ -694,7 +694,7 @@ vertices and no column convention for them is fixed here.
 
 **Raises:**
 
-- `ImportError`: pyarrow is not installed (`pip install 'arcadedb-embedded[arrow]'`)
+- `ImportError`: pyarrow is not installed (`uv add 'arcadedb[arrow]'`)
 - `ValueError`: no columns, duplicate or non-string column names, a `batch_size` that is
   not a positive integer, or `parallel` with a vertex type
 - `TypeError`: a column type with no mapping (time of day, duration, map), a type that

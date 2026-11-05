@@ -35,7 +35,7 @@ for:
 **1. Install ArcadeDB Python bindings:**
 
 ```bash
-pip install arcadedb-embedded
+uv add arcadedb
 ```
 
 **2. Source database from Example 04:**

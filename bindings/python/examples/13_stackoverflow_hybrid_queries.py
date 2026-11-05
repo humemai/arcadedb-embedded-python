@@ -39,7 +39,7 @@ try:
     from lxml import etree
 except ImportError:
     print("Missing dependency: lxml")
-    print("Install with: pip install lxml")
+    print("Install with: uv add lxml")
     sys.exit(1)
 
 EXPECTED_DATASETS = {
@@ -2280,13 +2280,13 @@ def main() -> None:
     arcadedb = get_arcadedb_module()
     if arcadedb is None:
         print("Missing dependency: arcadedb-embedded")
-        print("Install with: pip install arcadedb-embedded")
+        print("Install with: uv add arcadedb")
         sys.exit(1)
 
     SentenceTransformer = get_sentence_transformer_class()
     if SentenceTransformer is None:
         print("Missing dependency: sentence-transformers")
-        print("Install with: pip install sentence-transformers")
+        print("Install with: uv add sentence-transformers")
         sys.exit(1)
 
     data_dir = Path(__file__).parent / "data" / args.dataset

@@ -243,8 +243,8 @@ back = db.query("sql", "SELECT FROM Trip").to_polars()  # and out again
   says how many rows were committed. Inside your own transaction the load joins it, the
   error says the rows were written in your transaction, not committed, and a rollback
   removes them.
-- Needs pyarrow (`pip install 'arcadedb-embedded[arrow]'`), plus pandas or
-  `pip install 'arcadedb-embedded[polars]'`. See Example 27.
+- Needs pyarrow (`uv add 'arcadedb[arrow]'`), plus pandas or
+  `uv add 'arcadedb[polars]'`. See Example 27.
 
 ## Choosing the Right Import Mode
 
