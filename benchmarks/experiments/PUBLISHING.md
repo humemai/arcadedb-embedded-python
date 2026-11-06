@@ -117,7 +117,7 @@ The allowlist says WHICH files are tracked; this says why, and what to re-run to
 | `runs_paper.csv` | `make_paper_tables.py` (the freeze) | every gate, the exporter, the release asset |
 | `web_benchmarks.json` | `export_web.py` | `page_check`, `version_consistency_check`, `refresh_web_page` |
 | `generated/tables/*`, `withheld_recall.json` | `make_paper_tables.py` | `page_check`, `provenance_check`, the exporter's withheld-cell notes |
-| `generated/io_stat_correction.json` | `make_paper_tables.py` (the freeze, via `io_stat_correction.py`) | nothing reads it; it records which frozen rows had their io figures halved (the mini's stacked block devices counted twice before #555) and their raw values. The cutoff is `io_stat_fix.json` (`fixed_from_manifest`, null until the fixed harness has run on the host) |
+| `generated/io_stat_correction.json` | `make_paper_tables.py` (the freeze, via `io_stat_correction.py`) | nothing reads it; it records which frozen rows had their io figures halved (the mini's stacked block devices counted twice before #555) and their raw values. A row is corrected unless it carries `io_stat_dedup: 1`, which the fixed runner stamps; the hosts are in `io_stat_fix.json` |
 | `generated/memo_bottlenecks.html` | `memo_bottlenecks.py` | the maintainers' memo, not the page |
 | `sparse_cliff.jsonl` | `sparse_cliff_probe.py`, one shot | `make_paper_figures.f3_sparse_perquery`; f3 is not built (PAGE-SPEC.md section 3) |
 | `e3_q17/*.json`, `ingest_ab/ab_r*.json`, `tentag/tentag_ab.json` | `e3_recovery.py`, `async_ingest_probe.py`, `ts_stride_probe.py`, one shot each | `claims_check.py` (the recovery table is planned, not built) |

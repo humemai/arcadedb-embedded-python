@@ -237,8 +237,8 @@ def _write_io_stat_correction(report):
     with open(out, "w") as fh:
         json.dump(report, fh, indent=1)
         fh.write("\n")   # the end-of-file hook wants it; see _write_withheld_recall
-    print(f"io.stat correction: {report['rows_corrected']} of {report['rows_frozen']} frozen rows halved "
-          f"(fixed_from_manifest={report['fixed_from_manifest']})")
+    print(f"io.stat correction: {report['rows_corrected']} of {report['rows_frozen']} frozen rows halved, "
+          f"{report['rows_stamped_untouched']} stamped io_stat_dedup=1 and left as recorded")
 
 
 def _assert_lanes_registered():

@@ -1,6 +1,4 @@
 {
  "issue": "humemai/arcadedb-embedded-python#555",
- "hosts": ["mini"],
- "fix_commits": [],
- "fixed_from_manifest": null
+ "hosts": ["mini"]
 }

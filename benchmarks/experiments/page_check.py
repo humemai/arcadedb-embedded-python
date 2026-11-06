@@ -779,6 +779,10 @@ NOT_PRINTED = [
      "which HTTP client an ArcadeDB served arm ran with (CAMPAIGN 7 row 72, lean_http.py): a condition of the served arms, read from "
      "the session that ran, never a column. The e4 decomposition's row lists the two clients it measured (`arcadedb_http_clients`); its table "
      "names the client in each HTTP column instead (export_web._e4_arms)"),
+    (r"^io_stat_dedup$",
+     "provenance of the io figures (#555): 1 when the harness that wrote the row counted a stacked block device once, \"halved\" "
+     "when the freeze halved the recorded io figures of a row that predates the fix (io_stat_correction.py, raw values in "
+     "generated/io_stat_correction.json), blank otherwise; never a column"),
     (r"^jpype_version$",
      "which JPype the process that ran the cell had loaded (CAMPAIGN 7 row 73, bench_common.jpype_version): a condition of the embedded "
      "ArcadeDB arms, read from the process (`jpype.__version__`), empty for every arm that never imports it, never a column"),
