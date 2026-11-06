@@ -55,10 +55,100 @@ def test_parsers():
     assert mp.parse_nmt_other("Native memory tracking is not enabled") is None
 
 
-def test_io_stat_is_summed_over_devices():
-    assert mp.parse_io_stat("8:0 rbytes=1024 wbytes=2048 rios=1 wios=2\n259:0 rbytes=1 wbytes=2 dbytes=0\n") == {
+# The real io.stat of a cell container on the mini (2026-11-06): 259:0 is the NVMe, 252:0 the device-mapper device stacked on it,
+# both charged the same 8691597312 written bytes, and 8:0 a small unrelated disk.
+MINI_IO_STAT = """8:0 rbytes=0 wbytes=0 rios=0 wios=5 dbytes=0 dios=0
+259:0 rbytes=0 wbytes=8691597312 rios=0 wios=82042 dbytes=0 dios=0
+252:0 rbytes=0 wbytes=8691597312 rios=0 wios=22387 dbytes=0 dios=0
+"""
+
+
+def _block(sysfs, mm, name, slaves=(), partition_of=None):
+    """One block device in a synthetic sysfs: class/block/<name> (a symlink like the real one) and dev/block/<mm>."""
+    base = sysfs / "devices" / "block"
+    d = base / name if partition_of is None else base / partition_of / name
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "dev").write_text(mm + "\n")
+    if partition_of is not None:
+        (d / "partition").write_text("3\n")
+    (sysfs / "class" / "block").mkdir(parents=True, exist_ok=True)
+    (sysfs / "class" / "block" / name).symlink_to(d)
+    (sysfs / "dev" / "block").mkdir(parents=True, exist_ok=True)
+    (sysfs / "dev" / "block" / mm).symlink_to(d)
+    for sl in slaves:
+        (d / "slaves").mkdir(exist_ok=True)
+        (d / "slaves" / sl).symlink_to(sysfs / "class" / "block" / sl)
+
+
+def _mini_sysfs(tmp_path):
+    """nvme0n1 (259:0) with partition nvme0n1p3 (259:3); dm-0 (252:0) on that partition; sda (8:0) alone."""
+    sysfs = tmp_path / "sys"
+    _block(sysfs, "259:0", "nvme0n1")
+    _block(sysfs, "259:3", "nvme0n1p3", partition_of="nvme0n1")
+    _block(sysfs, "252:0", "dm-0", slaves=["nvme0n1p3"])
+    _block(sysfs, "8:0", "sda")
+    return str(sysfs)
+
+
+def test_io_stat_is_summed_over_unrelated_devices(tmp_path):
+    empty = str(tmp_path / "no-sysfs")                 # no relation info at all: every listed device is counted
+    assert mp.parse_io_stat("8:0 rbytes=1024 wbytes=2048 rios=1 wios=2\n259:0 rbytes=1 wbytes=2 dbytes=0\n", empty) == {
         "rbytes": 1025, "wbytes": 2050}
-    assert mp.parse_io_stat("") == {"rbytes": 0, "wbytes": 0}
+    assert mp.parse_io_stat("", empty) == {"rbytes": 0, "wbytes": 0}
+    assert mp.parse_io_stat("\n\n", empty) == {"rbytes": 0, "wbytes": 0}
+
+
+def test_io_stat_counts_a_stacked_pair_once(tmp_path):
+    sysfs = _mini_sysfs(tmp_path)
+    # the real mini lines: dm-0 on top of the NVMe is one write, not two; the unrelated 8:0 adds its 0
+    assert mp.parse_io_stat(MINI_IO_STAT, sysfs) == {"rbytes": 0, "wbytes": 8691597312}
+    # only the dm device listed, or only the disk listed: nothing to dedupe, the same single count
+    assert mp.parse_io_stat("252:0 rbytes=7 wbytes=9\n", sysfs) == {"rbytes": 7, "wbytes": 9}
+    assert mp.parse_io_stat("259:0 rbytes=7 wbytes=9\n", sysfs) == {"rbytes": 7, "wbytes": 9}
+    # the lower device's own bytes differ from the top's (it also served other IO): the top is kept, the lower one dropped
+    two = "259:0 rbytes=100 wbytes=500\n252:0 rbytes=40 wbytes=300\n"
+    assert mp.parse_io_stat(two, sysfs) == {"rbytes": 40, "wbytes": 300}
+
+
+def test_io_stat_unrelated_third_device_is_still_counted(tmp_path):
+    sysfs = _mini_sysfs(tmp_path)
+    text = MINI_IO_STAT.replace("8:0 rbytes=0 wbytes=0", "8:0 rbytes=4096 wbytes=1024")
+    assert mp.parse_io_stat(text, sysfs) == {"rbytes": 4096, "wbytes": 8691597312 + 1024}
+
+
+def test_io_stat_two_layer_stack(tmp_path):
+    sysfs = tmp_path / "sys2"
+    _block(sysfs, "259:0", "nvme0n1")
+    _block(sysfs, "252:0", "dm-0", slaves=["nvme0n1"])
+    _block(sysfs, "252:1", "dm-1", slaves=["dm-0"])       # LUKS on LVM on the disk
+    text = "259:0 rbytes=1 wbytes=1\n252:0 rbytes=1 wbytes=1\n252:1 rbytes=1 wbytes=1\n"
+    assert mp.parse_io_stat(text, str(sysfs)) == {"rbytes": 1, "wbytes": 1}
+
+
+def test_io_stat_without_sysfs_info_counts_every_device(tmp_path):
+    # the old behaviour, and the documented fallback: with nothing known about the devices, no bytes are dropped
+    assert mp.parse_io_stat(MINI_IO_STAT, str(tmp_path / "missing")) == {"rbytes": 0, "wbytes": 2 * 8691597312}
+    partial = tmp_path / "partial"                        # sysfs knows the NVMe only: 252:0 has no entry, so no relation is found
+    _block(partial, "259:0", "nvme0n1")
+    assert mp.parse_io_stat(MINI_IO_STAT, str(partial)) == {"rbytes": 0, "wbytes": 2 * 8691597312}
+
+
+def test_io_stat_tolerates_bad_input(tmp_path):
+    sysfs = _mini_sysfs(tmp_path)
+    assert mp.parse_io_stat(None, sysfs) == {"rbytes": 0, "wbytes": 0}
+    assert mp.parse_io_stat("8:0 rbytes=oops wbytes=5\n", sysfs) == {"rbytes": 0, "wbytes": 5}
+
+
+def test_runner_read_io_stat_uses_the_stacked_rule(tmp_path):
+    import runner as RN
+    sysfs = _mini_sysfs(tmp_path)
+    cg = tmp_path / "cg"
+    cg.mkdir()
+    assert RN.read_io_stat(str(cg), sysfs) == {}                     # no io.stat: empty, as before
+    (cg / "io.stat").write_text(MINI_IO_STAT)
+    assert RN.read_io_stat(str(cg), sysfs) == {"rbytes": 0, "wbytes": 8691597312}
+    (cg / "io.stat").write_text("")
+    assert RN.read_io_stat(str(cg), sysfs) == {"rbytes": 0, "wbytes": 0}
 
 
 def test_phase_marks():
@@ -235,6 +325,14 @@ def test_runner_hooks_are_gated():
     # the name is bound before the try whose finally reads it: a cell that returns early (a server that never became ready)
     # must not raise UnboundLocalError there
     assert src.index("    _mp = None") < src.index("memory_probe.HostProbe.maybe(")
+
+
+def test_runner_stamps_io_stat_dedup_where_it_builds_the_row():
+    src = open(os.path.join(HERE, "runner.py")).read()
+    assert src.count('"io_stat_dedup": 1,') == 1
+    # in the one row literal that also writes the instrument, before any io_* field is assigned to it
+    row_start = src.index('row = {"run_id": run_id, "engine_commit"')
+    assert row_start < src.index('"io_stat_dedup": 1,') < src.index('row[f"{name}_io_read_mib"]')
 
 
 def test_export_web_prints_the_per_phase_memory_column():

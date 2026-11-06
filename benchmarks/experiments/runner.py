@@ -2374,9 +2374,11 @@ def read_cpu_stat(cg):
     return out
 
 
-def read_io_stat(cg):
-    """Bytes actually read from and written to disk by a container, summed
-    over devices, from cgroup v2 io.stat.
+def read_io_stat(cg, sysfs=memory_probe.SYSFS):
+    """Bytes actually read from and written to disk by a container, from cgroup v2 io.stat.
+
+    Stacked devices are counted once (the dm device on top, not also the NVMe under it): the rule and its fallback are in
+    memory_probe.parse_io_stat. Before 2026-11-06 every device line was summed, which doubled the IO on a stacked disk (the mini).
 
     Pairs with the writable-layer size: that says how big the data ENDED UP,
     this says how much IO it took to get there. The gap between them is write
@@ -2385,16 +2387,12 @@ def read_io_stat(cg):
 
     Free to collect: two reads of one file per cell.
     """
-    out = {"rbytes": 0, "wbytes": 0}
     try:
-        for line in open(os.path.join(cg, "io.stat")):
-            for tok in line.split()[1:]:
-                k, _, v = tok.partition("=")
-                if k in out:
-                    out[k] += int(v)
-    except (OSError, ValueError):
+        with open(os.path.join(cg, "io.stat")) as fh:
+            text = fh.read()
+    except OSError:
         return {}
-    return out
+    return memory_probe.parse_io_stat(text, sysfs)
 
 
 def read_memory_stat(cg):
@@ -3201,6 +3199,10 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
            # cell ran under; make_paper_tables refuses to mix two in a table.
            "bench_host": os.environ.get("BENCH_HOST"),
            "instrument": bench_common.INSTRUMENT,
+           # THE IO FIGURES OF THIS ROW COUNT A STACKED BLOCK DEVICE ONCE (#555, memory_probe.parse_io_stat). Rows written before
+           # the fix lack this key, and the freeze halves their io figures on a stacked-device host (io_stat_correction.py);
+           # a row carrying it is never halved. Every io_* field of a row is written by this runner, so the stamp lives here.
+           "io_stat_dedup": 1,
            **({"arcadedb_http_client_role": "sensitivity"} if job.get("http_client") else {}),
            # The class the cell ASKED for. The lane also stamps it, from the
            # same variable, beside the string the engine itself reports; both
