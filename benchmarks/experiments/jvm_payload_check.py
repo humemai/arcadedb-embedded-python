@@ -182,7 +182,7 @@ def check_file(path):
     # where a list legitimately becomes a Java array -- flagging it is circular,
     # and its one internal `vector.tolist()` feeds a normalisation loop rather
     # than the JVM directly.
-    if os.path.basename(path) == "vector.py" and "arcadedb_embedded" in path:
+    if os.path.basename(path) == "vector.py" and ("arcadedb_embedded" in path or os.sep + "arcadedb" + os.sep in path):
         return []
     try:
         src = open(path, encoding="utf-8").read()

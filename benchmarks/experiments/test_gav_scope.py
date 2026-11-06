@@ -22,10 +22,11 @@ import l2_graph as L  # noqa: E402
 import ldbc_snb  # noqa: E402
 
 
-def _emb(loaded):
+def _emb(loaded, version="26.10.2"):
     a = object.__new__(L.ArcadeGraphEmbedded)
     a._load_messages = loaded
     a._scale = "sf1full"
+    a.version = version                       # the engine version connect() records, which picks the view's type list
     return a
 
 
@@ -49,6 +50,49 @@ def test_the_full_network_view_covers_every_type_the_adapter_creates():
     assert ddl.endswith("PROPERTIES (id, name, age, city) EDGE PROPERTIES (since) UPDATE MODE OFF")
     for name in vertices | edges:
         assert re.search(rf"\b{name}\b", ddl), name
+
+
+@pytest.mark.parametrize("version", ["26.11.1", "26.11.1-SNAPSHOT (build abc/1790000000000/main)", "26.12.0"])
+def test_from_26_11_1_the_view_lists_the_message_supertype(version):
+    """Upstream PR 9320: a view is handed to a walk only when it covers every vertex type, the abstract Message included."""
+    a = _emb(True, version)
+    created = ["CREATE VERTEX TYPE Person"] + a._msg_schema_ddl()
+    every_vertex_type = {m.group(1) for d in created if (m := re.match(r"CREATE VERTEX TYPE (\w+)", d))}
+    v, e = a._gav_types()
+    assert "Message" in v and set(v) == every_vertex_type and len(v) == 9 and v.index("Message") == 1
+    assert len(e) == 11
+    assert re.search(r"VERTEX TYPES \(Person, Message, ", a._gav_ddl())
+
+
+@pytest.mark.parametrize("version", ["26.10.1", "26.10.2", "26.9.1"])
+def test_before_26_11_1_the_view_does_not_list_it(version):
+    v, e = _emb(True, version)._gav_types()
+    assert "Message" not in v and len(v) == 8 and len(e) == 11
+    assert "Message" not in _emb(True, version)._gav_ddl().split("EDGE TYPES")[0]
+
+
+def test_the_served_arm_picks_the_list_from_the_version_the_server_reported():
+    """The served arm records `server:<version>`; the release is read from that string, not from a wheel name."""
+    for version, listed in (("server:26.11.1", True), ("server:26.10.2", False)):
+        a = object.__new__(L.ArcadeGraphServer)
+        a._load_messages, a._scale, a.version = True, "sf1full", version
+        assert ("Message" in a._gav_types()[0]) is listed, version
+
+
+def test_a_tier_with_no_message_half_never_lists_it_whatever_the_version():
+    assert _emb(False, "26.11.1")._gav_types() == (["Person"], ["KNOWS"])
+
+
+@pytest.mark.parametrize("version", ["?", "server:unknown", "", None])
+def test_a_version_the_harness_cannot_read_is_refused_not_guessed(version):
+    with pytest.raises(RuntimeError, match="carries no release number"):
+        _emb(True, version)._gav_types()
+
+
+def test_the_lane_and_the_exporter_share_one_release():
+    import bench_common
+    assert bench_common.GAV_SUPERTYPE_LISTED_FROM == (26, 11, 1)
+    assert "_GAV_SUPERTYPE_LISTED_FROM = bench_common.GAV_SUPERTYPE_LISTED_FROM" in (HERE / "export_web.py").read_text()
 
 
 def test_the_view_refuses_to_pass_when_the_engine_reports_a_narrower_cover():
@@ -104,7 +148,7 @@ def test_the_embedded_arm_creates_the_view_over_every_type_and_records_what_it_c
 def test_the_served_arm_does_the_same_over_http(loaded, monkeypatch):
     monkeypatch.delenv("BENCH_GAV", raising=False)
     a = object.__new__(L.ArcadeGraphServer)
-    a._load_messages, a._scale = loaded, "sf1full"
+    a._load_messages, a._scale, a.version = loaded, "sf1full", "server:26.10.2"
     sent, types = [], {}
 
     def _http(kind, language, text, params=None):

@@ -35,6 +35,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 from publish_instrument import PUBLISH_INSTRUMENT, results_dir
+import arm_identity as _AI
 
 DEFAULT_JSON = results_dir() / "web_benchmarks.json"
 
@@ -541,6 +542,11 @@ def _check_instrument(payload):
     return bad
 
 
+def _rows_for_pairs(args):
+    rows_path = Path(args.rows) if args.rows else _frozen_path()
+    return list(csv.DictReader(rows_path.open())) if rows_path.exists() else []
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", default=str(DEFAULT_JSON))
@@ -592,6 +598,9 @@ def main() -> int:
     r_checked, r_bad = _check_lane_roster(payload)
     print(f"\n{r_checked} lane registration(s) held against the tables, "
           f"{r_bad} roster finding(s)")
+    print("\ntwo ArcadeDB builds: one engine commit, a row per build or a declared absence")
+    b_bad = _check_build_pair(payload, _rows_for_pairs(args))
+    print(f"  {b_bad} build-pair finding(s)")
     print("\nmulti-model coverage table, cell for cell against the tables it is derived from")
     m_checked, m_bad = _check_multimodel(payload)
     print(f"\n{m_checked} coverage cell(s) re-derived, {m_bad} disagree")
@@ -630,7 +639,7 @@ def main() -> int:
     j_bad = _check_jvm_defaults_disclosure(payload)
     print(f"  {j_bad} table(s) missing the sentence")
     return 1 if (i_bad or d_bad or a_bad or l_bad or c_bad
-                 or r_bad or m_bad or not u_ok or k_bad or o_bad or n_bad or iv_bad or ov_bad or j_bad or l_notice_bad) else 0
+                 or r_bad or b_bad or m_bad or not u_ok or k_bad or o_bad or n_bad or iv_bad or ov_bad or j_bad or l_notice_bad) else 0
 
 
 # --------------------------------------------------------------------------
@@ -779,6 +788,12 @@ NOT_PRINTED = [
      "which HTTP client an ArcadeDB served arm ran with (CAMPAIGN 7 row 72, lean_http.py): a condition of the served arms, read from "
      "the session that ran, never a column. The e4 decomposition's row lists the two clients it measured (`arcadedb_http_clients`); its table "
      "names the client in each HTTP column instead (export_web._e4_arms)"),
+    (r"^native_isolate_args$",
+     "the arguments the native engine's isolate was created with (heap -Xmx, -D settings), the native counterpart of the JVM arguments: a "
+     "condition of the cell read from the process (_arcadedb_import.effective_native_args), null on the JVM build, never a column"),
+    (r"^engine_backend$",
+     "which ArcadeDB build ran the cell, \"native\" or \"jvm\" (arcadedb.__backend__, bench_common.engine_backend): the identity of an arm beside "
+     "engine_version (arm_identity.py). the page prints the build in the arm's label (export_web groups on it), never as a column"),
     (r"^jpype_version$",
      "which JPype the process that ran the cell had loaded (CAMPAIGN 7 row 73, bench_common.jpype_version): a condition of the embedded "
      "ArcadeDB arms, read from the process (`jpype.__version__`), empty for every arm that never imports it, never a column"),
@@ -846,7 +861,7 @@ NOT_PRINTED = [
      "as conditions under the table, never as columns"),
     (r"^(settle_s|settle_s_lane|settle_s_adapter|engine_settle_s|gt_load_s|"
      r"recall_calc_s|query_gen_s|search_wall_s|phases_accounted_s|connect_s|"
-     r"import_ms|build_close_ms|close_s|mutate_n|mutate_queries|mutate_ran|"
+     r"import_ms|engine_load_ms|build_close_ms|close_s|mutate_n|mutate_queries|mutate_ran|"
      r"corpus_release_s)$",
      "harness bookkeeping around a timed phase: settling, loading ground "
      "truth, computing recall, the phase accounting, and the time-series "
@@ -1314,6 +1329,67 @@ def _roster_arms(lane, RN, table):
     return registered, owed
 
 
+def _page_split(payload):
+    """True when the payload shows the two ArcadeDB builds as two arms (an entry names its build)."""
+    return any(e.get("build") in _AI.BUILDS for t in payload.get("tables", []) for e in t.get("entries", []))
+
+
+def _declared_stripped(blabel, absent):
+    """A declaration names the arm by its label with the build, or by the label alone when it covers both builds."""
+    return _AI.build_in_label(blabel) is not None and _AI.strip_build(blabel) in absent
+
+
+def _check_build_pair(payload, rows):
+    """TWO BUILDS, ONE RELEASE: the native and JVM arms of a split page come from one engine commit, and neither goes missing silently.
+
+    Fails when (1) an in-process ArcadeDB entry of a split page names no build, (2) the two builds of one arm and size carry different
+    version_name values (one release is built from one engine commit, so the commit-bearing name must be equal), (3) one build has a
+    row at a size and the other has neither a row nor a declared absence ("not measured") for it, or (4) the frozen rows of the two
+    builds name different engine_version or engine_commit values. A page of one build only (a deliberate BENCH_ENGINE_BACKEND freeze,
+    or rows from before 26.11.1) passes with nothing to compare. Returns the number of findings.
+    """
+    bad = 0
+    if not _page_split(payload):
+        print("  (no table names a build: nothing to pair)")
+        return 0
+    for t in payload.get("tables", []):
+        arms = collections.defaultdict(dict)
+        absent = {str(a.get("backend")) for a in (t.get("declared_absences") or []) if not a.get("column")}
+        for e in t.get("entries", []):
+            if not (e.get("is_arcadedb") and _AI.built({"backend": e.get("backend_key") or ""})):
+                continue
+            b = e.get("build")
+            if b not in _AI.BUILDS:
+                print(f"  NOBUILD {t['id']}: {e.get('backend')!r} is an in-process ArcadeDB arm on a page that names builds, and names none")
+                bad += 1
+                continue
+            bare = _AI.strip_build(str(e["backend"]))
+            arms[(bare, str(e.get("scale")))][b] = e
+        for (bare, size), got in sorted(arms.items()):
+            if len(got) == 2:
+                names = {got[b].get("version_name") for b in _AI.BUILDS}
+                if len(names) > 1:
+                    print(f"  VERSION {t['id']}: {bare} at {size}: the builds name different engines {sorted(map(str, names))}")
+                    bad += 1
+                continue
+            (have,) = got
+            miss = [b for b in _AI.BUILDS if b != have][0]
+            mlabel = _AI.build_label(bare, miss)
+            if mlabel in absent or bare in absent or EW_family(bare) in absent:
+                print(f"  declared {mlabel} on {t['id']} at {size}: not measured")
+                continue
+            print(f"  ONEBUILD {t['id']}: {bare} at {size} has a {_AI.BUILD_NAMES[have]} row and no {_AI.BUILD_NAMES[miss]} row or declaration")
+            bad += 1
+    for problem in _AI.pair_problems(rows):
+        print(f"  COMMIT  {problem}")
+        bad += 1
+    return bad
+
+
+def EW_family(label):
+    return re.sub(r"\s*\(.*$", "", str(label)).strip()
+
+
 def _check_lane_roster(payload):
     """A3, the roster: every backend runner.LANES registers for a lane is on
     each table the lane feeds, as a row or a declared absence.
@@ -1367,6 +1443,21 @@ def _check_lane_roster(payload):
             # An arm that runs one workload of its lane only (runner.ARM_RUNS) is not owed
             # on the other workload's table: not a row, not a declared absence.
             if not RN.arm_runs(lane, _wl, key):
+                continue
+            # TWO BUILDS, TWO ARMS: on a split page an in-process ArcadeDB arm is owed one row per build, and a build with none is a
+            # declared absence like any other ("not measured"), under the arm's label with the build.
+            if _page_split(payload) and _AI.built({"backend": key}) and key in keyed:
+                have = {e.get("build") for e in keyed[key]}
+                for b in _AI.BUILDS:
+                    checked += 1
+                    if b in have:
+                        continue
+                    blabel = _AI.build_label(EW.display_name(key), b)
+                    if blabel in absent or EW.engine_family(blabel) in absent or _declared_stripped(blabel, absent):
+                        print(f"  declared {blabel} [{key}] on {tid}: no row, absence declared")
+                        continue
+                    print(f"  MISSING {blabel} [{key}] on {tid}: the other build has a row, this one has none and no declaration")
+                    bad += 1
                 continue
             checked += 1
             label = EW.display_name(key)

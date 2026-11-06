@@ -34,6 +34,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from publish_instrument import results_dir  # noqa: E402
+import arm_identity as _AI  # noqa: E402
 
 # The store moves with BENCH_RESULTS_DIR like every other reader of results/ (the freeze, the exporter, the gates), so a test
 # merges into a fixture directory and never into the working store. A publish never sets it.
@@ -77,7 +78,7 @@ def key(r):
     against the real one below.
     """
     return (r.get("lane"), r.get("scale"), r.get("n_docs"), r.get("workload"),
-            r.get("backend"), r.get("gav") is not False, r.get("rep"))
+            r.get("backend"), r.get("gav") is not False, r.get("rep"), _AI.build_of(r))
 
 
 def _assert_key_matches_tables():
@@ -95,7 +96,7 @@ def _assert_key_matches_tables():
              "workload": "search", "backend": "qdrant_sparse", "gav": None,
              "rep": 1}
     src = inspect.getsource(_M.load_canonical)
-    for field in ("n_docs", "scale", "workload", "backend", "rep"):
+    for field in ("n_docs", "scale", "workload", "backend", "rep", "build_of"):
         if field not in src:
             raise SystemExit(
                 f"merge_campaign.key() includes {field!r} but "
@@ -116,7 +117,10 @@ def canonicalise(rows):
 
 
 def version_of(r):
-    return str(r.get("engine_version") or r.get("wheel_version") or "?")
+    """The version a cell ran, with the build when it is not the JVM one ("26.11.1 native"): a release measured on both builds is two arms."""
+    v = str(r.get("engine_version") or r.get("wheel_version") or "?")
+    b = _AI.build_of(r)
+    return f"{v} {b}" if b == "native" else v
 
 
 # The (lane, scale) pairs the paper actually prints. Everything else is an

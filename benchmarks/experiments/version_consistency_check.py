@@ -231,6 +231,8 @@ def check(path: str) -> list[str]:
         # this check exists to catch is two DIFFERENT builds of one engine
         # compared against each other, so it compares the part before the
         # first "+" and lets the tail differ.
+        # NATIVE AND JVM ARE ONE VERSION (26.11.1): a trailing "(native)" / "(jvm)" names the build of one release, not a second release.
+        values = {re.sub(r"\s*\((?:native|jvm)\)\s*$", "", v) for v in values}
         bases = {v.split("+")[0].strip() for v in values}
         if len(bases) == 1 and len(values) > 1:
             continue

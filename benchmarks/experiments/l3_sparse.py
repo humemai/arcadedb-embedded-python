@@ -96,6 +96,8 @@ def recall_at_k(result_ids, gt_row):
 # the same ids in the same order as the whole-record form (50 of 50 queries, the pin and main, laptop).
 SPARSE_RESULT = "id"
 ARCADE_SPARSE_SEARCH_SQL = "SELECT id, score FROM (SELECT expand(`vector.sparseNeighbors`({a})))"
+# The settle step, one statement for every ArcadeDB arm (embedded on either package, served): engine #5144.
+COMPACT_SQL = "COMPACT INDEX `Doc[tokens,weights]`"
 
 
 class Base:
@@ -175,7 +177,8 @@ class ArcadeEmbedded(Base):
         return _json.dumps(meta)
 
     def connect(self):
-        import arcadedb_embedded as arcadedb
+        import _arcadedb_import
+        arcadedb = _arcadedb_import.load()
         heap = os.environ.get("ARCADEDB_HEAP", "4g")
         # -Xms is left unset; heap_size sets -Xmx from the cell's memory budget (the bindings' documented practice, PROTOCOL section 7).
         jvm_args = ""
@@ -190,8 +193,7 @@ class ArcadeEmbedded(Base):
         self.db = arcadedb.create_database(
             "/tmp/l3_arcade",
             jvm_kwargs={"heap_size": heap, "jvm_args": jvm_args or None})
-        from importlib.metadata import version as _pv
-        self.version = _pv("arcadedb-embedded")
+        self.version = _arcadedb_import.dist_version()
         self.db.command("sql", "CREATE DOCUMENT TYPE Doc")
         self.db.command("sql", "CREATE PROPERTY Doc.id LONG")
         self.db.command("sql", "CREATE PROPERTY Doc.tokens ARRAY_OF_INTEGERS")
@@ -212,7 +214,8 @@ class ArcadeEmbedded(Base):
         the point, since it is charged to every JVM engine and to none of the
         others.
         """
-        import arcadedb_embedded as arcadedb
+        import _arcadedb_import
+        arcadedb = _arcadedb_import.load()
         heap = os.environ.get("ARCADEDB_HEAP", "4g")
         self.db = arcadedb.open_database(
             "/tmp/l3_arcade",
@@ -220,44 +223,31 @@ class ArcadeEmbedded(Base):
         self.idx_name = "Doc[tokens,weights]"
 
     def build(self, n_docs):
-        # Native document API with primitive arrays — the embedded analog of
-        # Qdrant/Milvus binary clients (1.8x faster than SQL INSERT batches;
-        # the server adapter keeps SQL-over-HTTP, its native remote surface).
-        import jpype
-        JInt, JFloat = jpype.JArray(jpype.JInt), jpype.JArray(jpype.JFloat)
-        jdb = self.db.get_java_database()
-        jdb.begin()
-        open_n = 0
-        for i, idx, vals in gen_docs(n_docs):
-            d = jdb.newDocument("Doc")
-            d.set("id", i)
-            d.set("tokens", JInt(idx))
-            d.set("weights", JFloat(vals))
-            d.save()
-            open_n += 1
-            if open_n == INGEST_BATCH:
-                jdb.commit()
-                jdb.begin()
-                open_n = 0
-        jdb.commit()
+        # ONE PATH FOR BOTH PACKAGES (the native `arcadedb` build has no JVM, no JPype and no get_java_database(), so the
+        # old jdb.newDocument + JArray ingest could not run there). The documents go through the Python API's bulk insert,
+        # `Database.insert_many`: one batch per commit (INGEST_BATCH), the token and weight lists as the generators yield
+        # them (Python lists of int and float). The declared property types turn them into ARRAY_OF_INTEGERS and
+        # ARRAY_OF_FLOATS (the smoke reads the stored types back); the weights are stored as float32 either way, so the
+        # ingested values equal the ground truth's, as in the Java-array path this replaced.
+        self.db.insert_many(
+            "Doc",
+            ({"id": i, "tokens": idx, "weights": vals} for i, idx, vals in gen_docs(n_docs)),
+            commit_every=INGEST_BATCH)
 
     def post_build(self):
-        # ArcadeDB's settle step (fairness parity with ES forcemerge / Milvus
-        # flush+load / Qdrant green-wait): blocking LSM segment compaction via
-        # the Java API — embedded-only, no SQL/HTTP trigger exists. Measured at
-        # 1M docs: ~2s, query p50 9.5ms -> 7.0ms (control run: no change).
-        jdb = self.db.get_java_database()
-        for idx in jdb.getSchema().getIndexes():
-            if "SparseVector" in str(idx.getClass().getSimpleName()):
-                idx.compact()
+        # ArcadeDB's settle step (fairness parity with ES forcemerge / Milvus flush+load / Qdrant green-wait): blocking LSM
+        # segment compaction, the SQL statement the served arm already runs (engine #5144), so embedded, native and server
+        # settle the same way. Measured at 1M docs with the old Java call (idx.compact()): ~2s, query p50 9.5ms -> 7.0ms
+        # (control run: no change).
+        self.db.command("sql", COMPACT_SQL)
 
     def search(self, idx, vals, k):
-        import jpype
-        ji = jpype.JArray(jpype.JInt)(idx)
-        jv = jpype.JArray(jpype.JFloat)(vals)
+        # Python lists, as the generators yield them: both packages convert a list to the int[] / float[] the function
+        # reads. NOT numpy arrays: the JVM build's argument conversion turns every ndarray into float[], which the
+        # indices argument refuses (measured on 26.11.1.dev0: "Array must be int[], long[], Integer[]...").
         rows = self.db.query(
             "sql", ARCADE_SPARSE_SEARCH_SQL.format(a="?, ?, ?, ?"),
-            self.idx_name, ji, jv, k).to_json_list()
+            self.idx_name, idx, vals, k).to_json_list()
         return [int(r["id"]) for r in rows]   # ids, as every comparator returns them
 
     def resolve(self, ids):
@@ -278,13 +268,11 @@ class ArcadeEmbeddedFP32(ArcadeEmbedded):
 
 
 class ArcadeEmbeddedNoCompact(ArcadeEmbedded):
-    """Settle-step ablation; de-confounds the deployment axis.
+    """Settle-step ablation: the embedded arm without COMPACT INDEX.
 
-    The server cannot trigger compaction (no SQL/HTTP path, engine #5144), so
-    "embedded (compacted) vs server (as-shipped)" mixes transport cost with
-    settle-step cost. Skipping compaction here gives the decomposition:
-        embedded            vs embedded_nocompact -> settle-step cost
-        embedded_nocompact  vs server             -> pure transport cost
+    The served arm now runs the same COMPACT INDEX, so embedded vs server is the
+    transport cost and embedded vs embedded_nocompact is the settle-step cost
+    (time spent compacting, and the query latency it buys).
     """
     name = "arcadedb_sparse_embedded_nocompact"
 
@@ -322,10 +310,10 @@ class ArcadeServer(ArcadeEmbedded):
 
     def post_build(self):
         # Settle step, now client-reachable over HTTP/SQL via COMPACT INDEX
-        # (engine #5144, in 26.8.x). This gives the server the same settle the
-        # embedded adapter gets via idx.compact(), so the deployment axis
-        # isolates transport, not the settle asymmetry. Synchronous.
-        self._cmd("sql", "COMPACT INDEX `Doc[tokens,weights]`")
+        # (engine #5144, in 26.8.x), the same statement the embedded adapter runs,
+        # so the deployment axis isolates transport, not the settle asymmetry.
+        # Synchronous.
+        self._cmd("sql", COMPACT_SQL)
 
     def _cmd(self, language, command, params=None):
         payload = {"language": language, "command": command}

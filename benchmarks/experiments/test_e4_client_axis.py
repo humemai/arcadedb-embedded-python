@@ -234,6 +234,10 @@ def run_probe(monkeypatch, tmp_path, probe):
     fake.jvm = jvm
     monkeypatch.setitem(sys.modules, "arcadedb_embedded", fake)
     monkeypatch.setitem(sys.modules, "arcadedb_embedded.jvm", jvm)
+    # the probe resolves the package through _arcadedb_import, which prefers `arcadedb` when a new wheel is installed:
+    # pin the stub there so the test never reaches a real engine
+    import _arcadedb_import
+    monkeypatch.setattr(_arcadedb_import, "_loaded", fake)
     monkeypatch.setattr(probe, "SIZES", [1, 10, 100])
     monkeypatch.setattr(probe, "ROWS", 300)
     monkeypatch.setattr(probe, "REPS", 4)

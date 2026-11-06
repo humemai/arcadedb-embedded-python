@@ -114,7 +114,7 @@ def test_served_client_selector_takes_official_or_lean_only():
 
 JOBS = ("import runner as m\n"
         "j = m.build_jobs(list(m.LANES), [])\n"
-        "tw = [x for x in j if x.get('http_client')]\n"
+        "tw = [x for x in j if x.get('http_client') == 'lean']\n"
         "print(len(tw), sorted({x['backend'] for x in tw}) == sorted({x['backend'] for x in j if x['backend'] in m.ARCADEDB_HTTP_ARMS}),\n"
         "      all(x['run_id'].endswith('_clientlean') for x in tw), len({x['run_id'] for x in j}) == len(j))")
 
