@@ -1,6 +1,6 @@
 # ArcadeDB Python Bindings
 
-> **Moved: the Python bindings now live in [ArcadeData/arcadedb-python](https://github.com/ArcadeData/arcadedb-python).** Install `arcadedb` (the native build, the default) or `arcadedb-jvm` (the JVM build); both use `import arcadedb`. [Which package?](https://github.com/ArcadeData/arcadedb-python/blob/main/docs/modules/ROOT/pages/which-package.adoc) explains the choice. The first releases of the new packages are 26.11.1, starting as pre-releases (`uv add --pre arcadedb`). `arcadedb-embedded` and `import arcadedb_embedded` are deprecated: `arcadedb-embedded` will get a last release that installs `arcadedb`. Report bindings issues and send bindings pull requests to the new repository. This repository will be archived; the benchmark tooling stays here for now.
+> **Moved: the Python bindings now live in [ArcadeData/arcadedb-python](https://github.com/ArcadeData/arcadedb-python).** Install `arcadedb` (the native build, the default) or `arcadedb-jvm` (the JVM build); both use `import arcadedb`. [Which package?](https://github.com/ArcadeData/arcadedb-python/blob/main/docs/modules/ROOT/pages/which-package.adoc) explains the choice. Both packages are released as 26.11.1 (`uv add arcadedb`). `arcadedb-embedded` and `import arcadedb_embedded` are deprecated: the last release of `arcadedb-embedded`, 26.11.1, installs `arcadedb`. Report bindings issues and send bindings pull requests to the new repository. This repository will be archived once the benchmark tooling moves to [humemai/dbbench](https://github.com/humemai/dbbench) (planned for mid-November 2026, after the last measuring pass); until then the tooling stays here.
 
 Native Python bindings for ArcadeDB - the multi-model database that supports Graph, Document, Key/Value, Search Engine, Time Series, and Vector models.
 
@@ -19,7 +19,7 @@ Native Python bindings for ArcadeDB - the multi-model database that supports Gra
 ### Installation
 
 ```bash
-uv add arcadedb-embedded   # deprecated; new projects use: uv add --pre arcadedb
+uv add arcadedb-embedded   # deprecated; new projects use: uv add arcadedb
 ```
 
 **Requirements:**
