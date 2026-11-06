@@ -114,7 +114,7 @@ def stubs(tmp_path):
         esac
         ''')
     # `uv run --no-project python -c CODE`: run CODE with the interpreter that runs this test (no network, no resolver)
-    put("uv", f'shift 4\nexec {sys.executable} "$@"\n')
+    put("uv", f'shift 3\nexec {sys.executable} "$@"\n')
     return bin_
 
 
