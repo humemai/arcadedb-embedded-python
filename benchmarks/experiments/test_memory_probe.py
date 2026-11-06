@@ -327,6 +327,14 @@ def test_runner_hooks_are_gated():
     assert src.index("    _mp = None") < src.index("memory_probe.HostProbe.maybe(")
 
 
+def test_runner_stamps_io_stat_dedup_where_it_builds_the_row():
+    src = open(os.path.join(HERE, "runner.py")).read()
+    assert src.count('"io_stat_dedup": 1,') == 1
+    # in the one row literal that also writes the instrument, before any io_* field is assigned to it
+    row_start = src.index('row = {"run_id": run_id, "engine_commit"')
+    assert row_start < src.index('"io_stat_dedup": 1,') < src.index('row[f"{name}_io_read_mib"]')
+
+
 def test_export_web_prints_the_per_phase_memory_column():
     pytest.importorskip("numpy")
     import export_web as ew
