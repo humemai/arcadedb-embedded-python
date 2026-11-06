@@ -137,17 +137,93 @@ def parse_heap_info(text):
     return {"used": used, "committed": committed} if found else {}
 
 
-def parse_io_stat(text):
-    """cgroup v2 io.stat -> {"rbytes": n, "wbytes": n}, summed over devices. Cumulative since the cgroup was created."""
-    out = {"rbytes": 0, "wbytes": 0}
+SYSFS = "/sys"
+
+
+def _sysfs_read(path):
+    try:
+        with open(path) as fh:
+            return fh.read().strip()
+    except OSError:
+        return None
+
+
+def _whole_disk(sysfs, name):
+    """(maj:min, sysfs dir) of block device `name`, resolved to its whole disk when it is a partition.
+
+    cgroup v2 io.stat lists whole disks and device-mapper/md devices, never partitions: IO to a partition is charged to its disk.
+    """
+    d = os.path.realpath(os.path.join(sysfs, "class", "block", name))
+    if os.path.exists(os.path.join(d, "partition")):
+        d = os.path.dirname(d)
+    mm = _sysfs_read(os.path.join(d, "dev"))
+    return (mm, d) if mm else (None, d)
+
+
+def _stacked_below(sysfs, mm):
+    """Every maj:min that device `mm` is built on (its slaves, their slaves, ...), partitions resolved to whole disks.
+
+    None when sysfs has no entry for `mm` at all (the relation is unknown, not empty).
+    """
+    start = os.path.join(sysfs, "dev", "block", mm)
+    if not os.path.isdir(start):
+        return None
+    below, seen, todo = set(), set(), [start]
+    while todo:
+        d = todo.pop()
+        try:
+            names = os.listdir(os.path.join(d, "slaves"))
+        except OSError:
+            continue
+        for name in names:
+            smm, sdir = _whole_disk(sysfs, name)
+            if smm is None or smm in seen:
+                continue
+            seen.add(smm)
+            below.add(smm)
+            todo.append(sdir)
+    return below
+
+
+def parse_io_stat(text, sysfs=SYSFS):
+    """cgroup v2 io.stat -> {"rbytes": n, "wbytes": n}, cumulative since the cgroup was created.
+
+    io.stat has one line per block device the cgroup touched, and a stacked device is charged twice: a write to a device-mapper
+    device (LVM, dm-crypt) is counted on it AND on the disk under it, with identical bytes (the mini: `259:0` NVMe and `252:0` dm,
+    both wbytes=8691597312). Summing every line, as this function once did, doubles the IO of any container on such a stack.
+
+    Rule: a listed device is skipped when it is built on (is a slave of, directly or through further layers, partitions resolved to
+    their whole disk) another device that is also listed, per `<sysfs>/dev/block/<maj:min>/slaves`. The TOP of a stack is kept, so
+    the total is what the container wrote once. Unrelated devices (two independent disks) are still summed, so no real IO is lost.
+
+    When sysfs has no entry for a listed device (not readable, a different host's file, a device that has gone), nothing can be said
+    about it and it is counted, which is the old behaviour. That errs high by at most the stacked duplicate and never loses bytes;
+    the maximum single device was rejected as the fallback because it undercounts a container that really writes to two disks.
+
+    `sysfs` is injectable for tests; production reads the real `/sys`.
+    """
+    per = {}
     for line in (text or "").splitlines():
-        for tok in line.split()[1:]:
+        parts = line.split()
+        if not parts:
+            continue
+        acc = per.setdefault(parts[0], {"rbytes": 0, "wbytes": 0})
+        for tok in parts[1:]:
             k, _, v = tok.partition("=")
-            if k in out:
+            if k in acc:
                 try:
-                    out[k] += int(v)
+                    acc[k] += int(v)
                 except ValueError:
                     pass
+    below = set()
+    for mm in per:
+        below |= _stacked_below(sysfs, mm) or set()
+    out = {"rbytes": 0, "wbytes": 0}
+    for mm, v in per.items():
+        if mm in below:
+            continue
+        for k in out:
+            out[k] += v[k]
     return out
 
 
