@@ -18,9 +18,11 @@ definition of `build`:
 ArcadeDB rows leave the freeze (they stay in runs.jsonl); without it BOTH builds stay, and the page shows them side by side as two arms
 (`splits_page`, `build_label`: "ArcadeDB (embedded, native build)" next to "ArcadeDB (embedded, JVM build)"). A table entry still never
 pools the two (`refuse_pooled_builds`). `pair_problems(rows)` is the gate over a two-build freeze: one engine commit, one engine_version.
-No import of ArcadeDB, no I/O: safe in every consumer, including the ones that read old rows.
+No import of ArcadeDB, no I/O beyond reading engine_commit_equiv.json (through engine_pin): safe in every consumer, including the ones that read old rows.
 """
 import os
+
+import engine_pin
 
 BUILDS = ("native", "jvm")
 ENV = "BENCH_ENGINE_BACKEND"
@@ -225,7 +227,8 @@ def server_settings_problems(rows):
             out.append(f"{r.get('backend')}: a native server row has no server_settings read-back")
             continue
         sc, pin = str(r.get("server_engine_commit") or ""), str(r.get("engine_commit") or "")
-        if sc and pin and not (sc.startswith(pin[:7]) or pin.startswith(sc[:7])):
+        if sc and pin and not (sc.startswith(pin[:7]) or pin.startswith(sc[:7])) and not (
+                build_of(r) == "native" and engine_pin.native_server_equivalent(sc, pin)):   # ENGINE-COMMIT-EQUIV: release pair, native server only
             out.append(f"{r.get('backend')}: the {build_of(r)} server reports engine commit {sc[:9]} and the row names {pin[:9]}")
         if build_of(r) == "native" and any(r.get(f) in (None, "") for f in SERVER_LOG_FIELDS):
             out.append(f"{r.get('backend')}: a native server row has no start-line read-back ({', '.join(SERVER_LOG_FIELDS)})")

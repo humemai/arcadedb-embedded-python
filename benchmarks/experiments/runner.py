@@ -1834,6 +1834,8 @@ if bool(_LOCAL_WHEEL) != bool(_LOCAL_SERVER_IMAGE):
         "package/src/main/docker/Dockerfile over package/target/arcadedb-*.dir for the server."
     )
 _LOCAL_ENGINE_COMMIT = os.environ.get("ARCADEDB_ENGINE_COMMIT", "").strip() or None
+# the release-pair equivalence of the native server image (ENGINE-COMMIT-EQUIV, engine_pin.native_server_equivalent): opt-in, from the pins
+_NATIVE_SERVER_EQUIV = tuple(x for x in os.environ.get("NATIVE_SERVER_EQUIV_SHAS", "").replace(",", " ").split() if re.fullmatch(r"[0-9a-f]{7,40}", x))
 # THE STAGE'S PINNED ARCADEDB VERSION, and the image tag that names it (engine_pin.py, 2026-10-22). BACKENDS says `dbbench:arcadedb`, the
 # logical build target; the image a cell runs is `dbbench:arcadedb-<version>`, swapped in below, so no cell can start on a floating tag.
 import engine_pin  # noqa: E402
@@ -2998,13 +3000,21 @@ def settings_problems(got, requested):
     return out
 
 
-def engine_commit_problems(got, pinned):
-    """The server's `SELECT version()` commit against the pin (ARCADEDB_ENGINE_COMMIT); [] when no pin is claimed."""
+def engine_commit_problems(got, pinned, native_equiv=()):
+    """The server's `SELECT version()` commit against the pin (ARCADEDB_ENGINE_COMMIT); [] when no pin is claimed.
+
+    `native_equiv` (a NATIVE server only: the caller passes () for the JVM server) is the operator's NATIVE_SERVER_EQUIV_SHAS from the pins. A
+    differing commit passes only when it is listed there AND engine_commit_equiv.json (the git-diff evidence, release pairs only) names it as
+    an equivalent of this pin; the caller stamps the row `server_engine_commit_equiv` then."""
     if not pinned:
         return []
     if not got:
         return ["the server's engine commit could not be read from SELECT version()"]
-    return [] if (got.startswith(pinned[:7]) or pinned.startswith(got[:7])) else [f"the server runs engine commit {got[:9]}, the pin is {pinned[:9]}"]
+    if got.startswith(pinned[:7]) or pinned.startswith(got[:7]):
+        return []
+    if any(engine_pin.commit_matches(got, e) for e in native_equiv) and engine_pin.native_server_equivalent(got, pinned):
+        return []
+    return [f"the server runs engine commit {got[:9]}, the pin is {pinned[:9]}"]
 
 
 # THE SERVER'S OWN START LINE, on both builds (ArcadeDBServer.java): `ArcadeDB Server started in 'development' mode (CPUs=4 MAXRAM=2.00GB)`, with
@@ -3708,7 +3718,11 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                     [str(x) for x in be.get("server_env", [])] + [str(x) for x in server_cmd]))
                 row.update(_rb)
                 _bad = settings_problems(_rb.get("server_settings"), _rb.get("server_settings_requested"))
-                _bad += engine_commit_problems(_rb.get("server_engine_commit"), _LOCAL_ENGINE_COMMIT)
+                _eq = _NATIVE_SERVER_EQUIV if be.get("server_build") == "native" else ()
+                _bad += engine_commit_problems(_rb.get("server_engine_commit"), _LOCAL_ENGINE_COMMIT, _eq)
+                _sc = _rb.get("server_engine_commit") or ""
+                if _eq and _LOCAL_ENGINE_COMMIT and _sc and not (_sc.startswith(_LOCAL_ENGINE_COMMIT[:7]) or _LOCAL_ENGINE_COMMIT.startswith(_sc[:7])):
+                    row["server_engine_commit_equiv"] = _sc   # the equivalence was used for this row (ENGINE-COMMIT-EQUIV)
                 if job.get("http_client") == PGWIRE_CLIENT:
                     # THE PLUGIN IS UP AND ITS SETTINGS ARE THE ONES WRITTEN: read back from the engine, then the port answered (outside every timer)
                     _bad += pgwire_settings_problems(_rb.get("server_settings"))

@@ -23,6 +23,7 @@ pin, and a batch with an ArcadeDB arm and no pin is refused. The comparator imag
 their `dbbench:<target>` names: their engines are pinned by `==` in build_images.sh or by digest in the Dockerfiles and are read back out of the
 images by version_pin_check.py --runtime; they do not move with the ArcadeDB release.
 """
+import json
 import os
 import re
 import subprocess
@@ -171,6 +172,31 @@ def commit_matches(reported, pinned):
     """Prefix comparison at the shorter length (the engine prints 40 characters, a stage may pin 9), never under 7."""
     n = min(len(reported or ""), len(pinned or ""), 40)
     return n >= 7 and reported[:n].lower() == pinned[:n].lower()
+
+
+EQUIV_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "engine_commit_equiv.json")
+
+
+def _equiv_registry():
+    try:
+        with open(EQUIV_FILE) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def native_server_equivalent(reported, pinned, registry=None):
+    """The release whose registry entry (engine_commit_equiv.json, written by make_engine_commit_equiv.py from the git diff) says the NATIVE
+    SERVER image's commit `reported` is the same engine as the pin, else "". 26.11.1: the native-image.yml build at the release tag is one
+    version-string commit after the commit of the JVM image, the jars and both wheels. Release entries only (A.B.C keys); the pin must be the
+    entry's pin and the reported commit one of its equivalents, both compared as prefixes of at least 7 characters. Applies to the native server
+    only: callers pass nothing else here, and the embedded and JVM arms still have to equal the pin."""
+    for release, e in (_equiv_registry() if registry is None else registry).items():
+        if not re.fullmatch(r"\d+\.\d+\.\d+", release):
+            continue
+        if commit_matches(pinned, e.get("pin", "")) and any(commit_matches(reported, x) for x in e.get("equivalent", [])):
+            return release
+    return ""
 
 
 def read_embedded_build(image, run=None):
