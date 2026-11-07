@@ -31,7 +31,8 @@ import subprocess
 LOGICAL_IMAGE = "dbbench:arcadedb"
 TARGET = "arcadedb"
 VERSION_RE = r"\d+\.\d+\.\d+(?:\.(?:dev|post)\d+)?"
-FLOATING_OK = ("client", "duckdb", "dense", "pg-age", "mongo-search", "composed")
+# client-arcadedb: dbbench:client plus the official arcadedb-driver at lean_http.OFFICIAL_PIN (Dockerfile.client-arcadedb); the served ArcadeDB client image.
+FLOATING_OK = ("client", "client-arcadedb", "duckdb", "dense", "pg-age", "mongo-search", "composed")
 SERVER_LIB = "/home/arcadedb/lib"
 _JAR_RE = re.compile(r"^arcadedb-engine-(.+)\.jar$")
 _EMBEDDED_PROBE = """

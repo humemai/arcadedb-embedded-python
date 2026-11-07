@@ -60,7 +60,8 @@ PG_PORT_ENV = "BENCH_ARCADEDB_PG_PORT"
 PG_DEFAULT_PORT = 5432
 PGWIRE_SCOPE = ("read and query statements only: `POST /query` SQL goes over the PostgreSQL wire; every write, DDL, transaction, bulk load, probe and "
                 "Cypher statement stays on lean HTTP (DECISIONS #171 (c), #162)")
-OFFICIAL_PIN = "0.2.0"       # the arcadedb-driver release the 2026-11 headline measures; recorded per row from the installed package
+OFFICIAL_PIN = "0.4.0"       # the arcadedb-driver release the 2026-11 headline measures (DECISIONS #258, #259); recorded per row from the installed package,
+                             # and OfficialSession refuses to start on any other version, so a stale image cannot stamp 0.4.0 or run 0.2.0 unnoticed
 LEAN_NAME = "lean_http (http.client, keep-alive)"
 
 
@@ -379,11 +380,19 @@ class OfficialSession:
     """The official `arcadedb-driver` (sync, httpx) behind the part of `requests.Session` the lanes use, so a lane changes by no line.
 
     Every `POST /api/v1/query/<db>` and `/command/<db>` whose body is `{language, command, params?, limit?}` goes through
-    `ArcadeDBServer(...).db(<db>).query(...)` or `.command(...)`, which is what the vendor documents for a Python client. Everything
+    `ArcadeDBServer(...).db(<db>).query(...)` or `.command(...)`, which is what the vendor documents for a Python client (0.4.0: both take
+    `limit`; `db()` handles are kept per (root, auth, timeout, database) so the driver's per-database URL cache, PR #168, is used). Everything
     else goes through a `LeanSession`: the `GET /server` probe, the bulk `/batch` load, transactions (`begin`/`commit`/`rollback` and any
     call carrying a session id), NDJSON streams, raw text bodies, and a body with a field the driver has no argument for. Bulk loads stay
     on HTTP `batch` and `command` as the protocol-audit decision says; the driver's `batch_load` is a different request shape and is not
     used. `official_calls` and `fallback_calls` count the two (a test reads them).
+
+    PER-CALL TIMEOUT. The driver has no per-call timeout; its only one is the `httpx.Timeout` given to `ArcadeDBServer(timeout=...)`, and its
+    default is None, which is NO timeout. So the call's `timeout=` (seconds or None, as for `LeanSession`, where it is a per-operation socket
+    timeout) becomes `httpx.Timeout(seconds)` (connect, read, write and pool each, the same per-operation meaning) on a server object of its own:
+    one server, with its own connection pool, per distinct (root, auth, timeout). The lanes use a handful of values (30, 60, 300, 600), so a lane
+    holds a few pools, not one per call. A timeout surfaces as this module's `Timeout` and any other transport failure as `ConnectionError`,
+    as for `LeanSession`. A timeout that is not None or a number goes to the lean session.
     """
 
     client_name = None   # set per instance from the installed package
@@ -395,19 +404,36 @@ class OfficialSession:
         self.version = getattr(arcadedb_driver, "__version__", None) or _driver_version()
         self.client_name = f"arcadedb-driver {self.version} (sync, httpx)"
         self.auth = None
+        import httpx
+        self._httpx = httpx
+        # the pin is enforced, not just stamped: the headline is one driver release for the whole pass (DECISIONS #259 (1))
+        if self.version != OFFICIAL_PIN:
+            raise RuntimeError(f"arcadedb-driver {self.version} is installed, the harness pins {OFFICIAL_PIN} (lean_http.OFFICIAL_PIN): the served "
+                               f"ArcadeDB client cells run in the image built by build_images.sh target client-arcadedb, not in dbbench:client")
         self._servers = {}
+        self._dbs = {}
         self._fallback = LeanSession()
         self.official_calls = 0
         self.fallback_calls = 0
 
-    def _server(self, root, auth):
-        key = (root, auth)
+    def _server(self, root, auth, timeout=None):
+        key = (root, auth, timeout)
         srv = self._servers.get(key)
         if srv is None:
             user, password = auth
-            srv = self._driver.ArcadeDBServer(base_url=root, auth=self._basic_auth(user, password))
+            srv = self._driver.ArcadeDBServer(base_url=root, auth=self._basic_auth(user, password),
+                                              timeout=self._httpx.Timeout(timeout))   # Timeout(None) = no timeout, as the driver's own default
             self._servers[key] = srv
         return srv
+
+    def _db(self, root, auth, timeout, name):
+        """The driver's database handle, built once per (root, auth, timeout, database): `ArcadeDBServer.db()` makes a new handle with a new
+        per-database URL cache every time, which is what the driver's fast path (arcadedb-drivers PR #168) lives in."""
+        key = (root, auth, timeout, name)
+        db = self._dbs.get(key)
+        if db is None:
+            db = self._dbs[key] = self._server(root, auth, timeout).db(name)
+        return db
 
     def get(self, url, **kw):
         kw.setdefault("auth", self.auth)
@@ -420,17 +446,19 @@ class OfficialSession:
         if (m and auth and isinstance(json, dict) and data is None and not headers and not kw
                 and set(json) <= {"language", "command", "params", "limit"}
                 and "language" in json and "command" in json
-                and not (m["kind"] == "command" and "limit" in json)):
-            srv = self._server(m["root"], tuple(auth))
-            db = srv.db(m["db"])
+                and (timeout is None or (isinstance(timeout, (int, float)) and not isinstance(timeout, bool)))):
+            timeout = None if timeout is None else float(timeout)
+            db = self._db(m["root"], tuple(auth), timeout, m["db"])
             self.official_calls += 1
+            run = db.query if m["kind"] == "query" else db.command
             try:
-                if m["kind"] == "query":
-                    env = db.query(language=json["language"], command=json["command"], params=json.get("params"), limit=json.get("limit"))
-                else:
-                    env = db.command(language=json["language"], command=json["command"], params=json.get("params"))
+                env = run(language=json["language"], command=json["command"], params=json.get("params"), limit=json.get("limit"))
             except self._driver.ArcadeDBError as e:
                 return _OfficialResponse(e.status, {"error": e.error, "detail": e.detail, "exception": e.exception}, url, e.error or "")
+            except self._httpx.TimeoutException as e:
+                raise Timeout(f"POST {url} timed out after {timeout} s") from e
+            except self._httpx.TransportError as e:
+                raise ConnectionError(f"POST {url}: {e}") from e
             return _OfficialResponse(200, {"result": env.result, "limit": env.limit, "returned": env.returned, "truncated": env.truncated}, url, "OK")
         self.fallback_calls += 1
         return self._fallback.post(url, json=json, data=data, auth=auth or self.auth, headers=headers, timeout=timeout, **kw)
@@ -442,6 +470,7 @@ class OfficialSession:
             except Exception:  # noqa: BLE001 - closing must not fail a cell
                 pass
         self._servers.clear()
+        self._dbs.clear()
         self._fallback.close()
 
 

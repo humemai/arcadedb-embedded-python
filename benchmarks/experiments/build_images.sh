@@ -79,6 +79,9 @@ declare -A PKGS=(
   # no way back to a working extension but the vendor restoring the file; 0.22.0 is the newest stable and its
   # extension loads. The extension is baked into the client image below, pinned by sha256 (LADYBUG_EXTENSIONS).
   [client]="requests==2.34.2 psycopg[binary]==3.3.6 $HARNESS_PKGS surrealdb==2.0.0 qdrant-client==1.20.0 pymilvus[bulk_writer]==3.0.2 minio==7.2.20 azure-storage-blob==12.31.0 ml-dtypes==0.6.0 elasticsearch==9.5.1 neo4j==6.4.1 ladybug==0.22.0 pymongo==4.18.1 python-arango==8.3.6 falkordb==1.7.1 redis==8.1.0 neo4j-rust-ext==6.4.1.0 pgvector==0.5.1 arcadedb-driver==0.2.0"
+  # arcadedb-driver==0.2.0 on the client line stays 0.2.0 ON PURPOSE (DECISIONS #259 (2)): this line is the build arg of dbbench:client, the
+  # image every comparator's measured rows ran on, and any edit to it rebuilds that image under a new digest. The served ArcadeDB arms run on
+  # the `client-arcadedb` layer below (ARCADEDB_DRIVER_PKGS, lean_http.OFFICIAL_PIN = 0.4.0), not on this driver.
   # ladybug==0.22.0 is the SAME pin as the client line above, here for the composed embedded cross-model arm
   # (composed_embedded_sqlite_lance_ladybug, 2026-10-25): SQLite + LanceDB + LadybugDB must import in ONE process, and
   # lancedb lives in this image. No new version: the dense lane's arms import none of it.
@@ -170,8 +173,23 @@ case "$JPYPE_VERSION" in
 esac
 echo "jpype pin: $JPYPE_VERSION"
 
-targets=("$@"); [ ${#targets[@]} -eq 0 ] && targets=(arcadedb duckdb client dense pg-age mongo-search composed)
+# THE OFFICIAL DRIVER'S ENVIRONMENT, PINNED (2026-11-07, DECISIONS #259; PyPI latest of that day, COMPARATORS.md "Client holds"). arcadedb-driver 0.4.0
+# requires attrs>=23.2, httpx>=0.27, typing-extensions>=4.10 and websockets>=14; httpx pulls httpcore, h11, anyio, idna and certifi. All are pinned
+# here so the driver environment of every served ArcadeDB client cell is the same on every host and every build day. Installed as a layer over
+# dbbench:client (Dockerfile.client-arcadedb), which stays byte-identical. The driver version is checked against lean_http.OFFICIAL_PIN by
+# test_instrument_method.py; OfficialSession refuses to start on any other version.
+ARCADEDB_DRIVER_PKGS="arcadedb-driver==0.4.0 httpx==0.28.1 httpcore==1.0.9 h11==0.16.0 anyio==4.16.0 idna==3.20 certifi==2026.10.23 attrs==26.1.0 typing-extensions==4.16.0 websockets==17.4"
+
+targets=("$@"); [ ${#targets[@]} -eq 0 ] && targets=(arcadedb duckdb client client-arcadedb dense pg-age mongo-search composed)
 for be in "${targets[@]}"; do
+  if [ "$be" = "client-arcadedb" ]; then
+    # The served ArcadeDB client image: dbbench:client + the official driver (Dockerfile.client-arcadedb). It is built FROM the local dbbench:client,
+    # so `client` is built first (the default target list and the stage scripts' sorted list both put it first), and never touches that image.
+    docker image inspect dbbench:client >/dev/null 2>&1 || { echo "REFUSING: dbbench:client-arcadedb is built on dbbench:client, which is not built here; build 'client' first" >&2; exit 1; }
+    echo "=== dbbench:client-arcadedb ($ARCADEDB_DRIVER_PKGS)"
+    docker build -q -t dbbench:client-arcadedb --build-arg DRIVER_PACKAGES="$ARCADEDB_DRIVER_PKGS" -f Dockerfile.client-arcadedb . >/dev/null && echo "  ok"
+    continue
+  fi
   if [ "$be" = "composed" ]; then
     # Neo4j + Qdrant in one container (Dockerfile.composed), the composed
     # cross-model stack's server (BUGS F133, DECISIONS #117). Both halves

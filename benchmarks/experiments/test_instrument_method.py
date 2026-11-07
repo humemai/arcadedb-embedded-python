@@ -131,7 +131,7 @@ def test_runner_always_forwards_the_instrument_and_the_twin_selects_the_lean_cli
     assert 'f"BENCH_ARCADEDB_HTTP_CLIENT={job[\'http_client\']}"' in src
 
 
-def _fake_driver(monkeypatch, calls):
+def _fake_driver(monkeypatch, calls, version="0.4.0"):
     class ArcadeDBError(Exception):
         def __init__(self, status):
             super().__init__(f"status {status}")
@@ -139,12 +139,30 @@ def _fake_driver(monkeypatch, calls):
 
     env = types.SimpleNamespace(result=[{"a": 1}], limit=-1, returned=1, truncated=False)
 
+    class HttpxTimeoutException(Exception):
+        pass
+
+    class HttpxTransportError(Exception):
+        pass
+
+    class Timeout:
+        def __init__(self, v):
+            self.v = v
+
+    httpx = types.ModuleType("httpx")
+    httpx.Timeout, httpx.TimeoutException, httpx.TransportError = Timeout, HttpxTimeoutException, HttpxTransportError
+    monkeypatch.setitem(sys.modules, "httpx", httpx)
+
     class DB:
-        def __init__(self, name):
-            self.name = name
+        def __init__(self, name, timeout=None):
+            self.name, self.timeout = name, timeout
 
         def query(self, **kw):
             calls.append(("query", self.name, kw))
+            if kw["command"] == "SLOW":
+                raise HttpxTimeoutException("read timed out")
+            if kw["command"] == "DOWN":
+                raise HttpxTransportError("connection refused")
             return env
 
         def command(self, **kw):
@@ -154,17 +172,23 @@ def _fake_driver(monkeypatch, calls):
             return env
 
     class Server:
-        def __init__(self, base_url, auth):
-            self.base_url, self.auth = base_url, auth
+        made = []          # every server built, so a test can count them
+
+        def __init__(self, base_url, auth, timeout=None):
+            self.base_url, self.auth, self.timeout = base_url, auth, timeout
+            Server.made.append(self)
+            self.db_calls = 0
 
         def db(self, name):
-            return DB(name)
+            self.db_calls += 1
+            return DB(name, self.timeout)
 
         def close(self):
             pass
 
     mod = types.ModuleType("arcadedb_driver")
-    mod.ArcadeDBServer, mod.ArcadeDBError, mod.__version__ = Server, ArcadeDBError, "0.2.0"
+    mod.ArcadeDBServer, mod.ArcadeDBError, mod.__version__ = Server, ArcadeDBError, version
+    mod.Server = Server
     auth = types.ModuleType("arcadedb_driver.auth")
     auth.basic_auth = lambda u, p: {"Authorization": f"{u}:{p}"}
     monkeypatch.setitem(sys.modules, "arcadedb_driver", mod)
@@ -191,15 +215,78 @@ def test_official_session_sends_query_and_command_through_the_driver_and_the_res
     assert s.post(f"{base}/batch/bench?wal=true", data=b"x") == "lean-post"                 # bulk load stays on HTTP batch
     assert s.post(f"{base}/begin/bench") == "lean-post"                                     # transactions are not the driver's data plane here
     assert s.post(f"{base}/query/bench", json={"language": "sql", "command": "x"}, headers={"arcadedb-session-id": "1"}) == "lean-post"
-    assert s.post(f"{base}/command/bench", json={"language": "sql", "command": "x", "limit": 3}) == "lean-post"   # the driver's command() has no limit
+    assert s.post(f"{base}/command/bench", json={"language": "sql", "command": "x", "limit": 3}).status_code == 200   # 0.3.0 gave command() a limit
+    assert calls[-1] == ("command", "bench", {"language": "sql", "command": "x", "params": None, "limit": 3})
+    assert s.post(f"{base}/command/bench", json={"language": "sql", "command": "x", "other": 1}) == "lean-post"   # a field the driver has no argument for
     assert s.get(f"{base}/server?mode=basic") == "lean-get"
-    assert (s.official_calls, s.fallback_calls) == (2, 5)
+    assert (s.official_calls, s.fallback_calls) == (3, 5)
     bad = s.post(f"{base}/command/bench", json={"language": "sql", "command": "FAIL"})
     assert bad.status_code == 500 and not bad.ok
     with pytest.raises(lean_http.HTTPError):
         bad.raise_for_status()
-    assert lean_http.row_fields(s) == {"arcadedb_http_client": "arcadedb-driver 0.2.0 (sync, httpx)",
+    assert lean_http.row_fields(s) == {"arcadedb_http_client": "arcadedb-driver 0.4.0 (sync, httpx)",
                                        "arcadedb_http_client_role": "headline"}
+
+
+def _official(monkeypatch):
+    sys.path.insert(0, HERE)
+    import lean_http
+    calls = []
+    _fake_driver(monkeypatch, calls)
+    s = lean_http.OfficialSession()
+    s.auth = ("root", "pw")
+    return lean_http, s, calls, sys.modules["arcadedb_driver"].Server
+
+
+def test_official_session_builds_one_db_handle_per_root_auth_timeout_and_database(monkeypatch):
+    lean_http, s, calls, Server = _official(monkeypatch)
+    base = "http://h:2480/api/v1"
+    for _ in range(5):
+        s.post(f"{base}/query/bench", json={"language": "sql", "command": "SELECT 1"})
+        s.post(f"{base}/command/bench", json={"language": "sql", "command": "INSERT"})
+    assert len(Server.made) == 1 and Server.made[0].db_calls == 1                  # ten calls, one server, one db() (the URL cache survives)
+    s.post(f"{base}/query/other", json={"language": "sql", "command": "SELECT 1"})
+    assert len(Server.made) == 1 and Server.made[0].db_calls == 2                  # another database: another handle, same server
+    s.post("http://h2:2480/api/v1/query/bench", json={"language": "sql", "command": "SELECT 1"})
+    s.post(f"{base}/query/bench", json={"language": "sql", "command": "SELECT 1"}, auth=("u", "p"))
+    assert len(Server.made) == 3                                                    # another root, another login: another server
+    s.close()
+    assert not s._servers and not s._dbs
+
+
+def test_official_session_forwards_the_call_timeout_to_the_driver_as_an_httpx_timeout(monkeypatch):
+    lean_http, s, calls, Server = _official(monkeypatch)
+    base = "http://h:2480/api/v1"
+    s.post(f"{base}/query/bench", json={"language": "sql", "command": "SELECT 1"})                       # no timeout: the driver's own None
+    s.post(f"{base}/query/bench", json={"language": "sql", "command": "SELECT 1"}, timeout=600)
+    s.post(f"{base}/query/bench", json={"language": "sql", "command": "SELECT 1"}, timeout=600.0)       # the same value: the same server
+    s.post(f"{base}/query/bench", json={"language": "sql", "command": "SELECT 1"}, timeout=30)
+    assert [x.timeout.v for x in Server.made] == [None, 600.0, 30.0]
+    assert s.official_calls == 4 and s.fallback_calls == 0
+    s._fallback = types.SimpleNamespace(post=lambda url, **kw: ("lean", kw["timeout"]), get=None, close=lambda: None)
+    assert s.post(f"{base}/query/bench", json={"language": "sql", "command": "SELECT 1"}, timeout=(3, 9)) == ("lean", (3, 9))   # not a number: lean
+    assert s.post(f"{base}/query/bench", json={"language": "sql", "command": "SELECT 1"}, timeout=True) == ("lean", True)
+
+
+def test_official_session_raises_this_modules_errors_for_a_timeout_and_a_dead_connection(monkeypatch):
+    lean_http, s, calls, Server = _official(monkeypatch)
+    base = "http://h:2480/api/v1"
+    with pytest.raises(lean_http.Timeout) as e:
+        s.post(f"{base}/query/bench", json={"language": "sql", "command": "SLOW"}, timeout=5)
+    assert isinstance(e.value, TimeoutError) and "5.0 s" in str(e.value)
+    with pytest.raises(lean_http.ConnectionError):
+        s.post(f"{base}/query/bench", json={"language": "sql", "command": "DOWN"})
+
+
+def test_the_pin_is_0_4_0_and_a_driver_of_another_release_is_refused(monkeypatch):
+    sys.path.insert(0, HERE)
+    import lean_http
+    assert lean_http.OFFICIAL_PIN == "0.4.0"
+    _fake_driver(monkeypatch, [], version="0.2.0")
+    with pytest.raises(RuntimeError, match="0.2.0.*pins 0.4.0.*client-arcadedb"):
+        lean_http.OfficialSession()
+    _fake_driver(monkeypatch, [], version=lean_http.OFFICIAL_PIN)
+    assert lean_http.OfficialSession().client_name == f"arcadedb-driver {lean_http.OFFICIAL_PIN} (sync, httpx)"
 
 
 def test_a_lean_row_carries_no_role_unless_the_runner_made_it_a_twin(monkeypatch):

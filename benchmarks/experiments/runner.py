@@ -1983,6 +1983,16 @@ if _ENGINE_BACKEND == "native":
     print(f"[engine] native chain: served ArcadeDB arms on {_LOCAL_NATIVE_SERVER_IMAGE} ({_n_native} arms)")
 
 
+# THE SERVED ARCADEDB CLIENT IMAGE (DECISIONS #259). Every served ArcadeDB arm (client_server, name starting `arcadedb`) ran in the shared
+# `dbbench:client`, whose arcadedb-driver is 0.2.0 and must stay byte-identical (every comparator's measured rows were made on it). The official
+# driver at lean_http.OFFICIAL_PIN comes in a layer of its own (Dockerfile.client-arcadedb, build_images.sh target `client-arcadedb`), and these
+# arms run there. The arms in `dbbench:arcadedb` (the embedded ones, and e4, which mixes the wheel with a served server) are not touched.
+ARCADEDB_CLIENT_IMAGE = "dbbench:client-arcadedb"
+for _name, _cfg in BACKENDS.items():
+    if _name.startswith("arcadedb") and _cfg.get("topology") == "client_server" and _cfg.get("image") == "dbbench:client":
+        _cfg["image"] = ARCADEDB_CLIENT_IMAGE
+
+
 if _ENGINE_PIN:
     for _cfg in BACKENDS.values():
         if _cfg.get("image") == engine_pin.LOGICAL_IMAGE:

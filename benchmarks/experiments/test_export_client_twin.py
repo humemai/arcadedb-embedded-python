@@ -88,7 +88,7 @@ def test_the_twin_rides_on_the_headline_entry_over_the_same_labels(payloads):
 def test_the_page_names_the_official_driver_and_the_labelled_sensitivity(payloads):
     _plain, p = payloads
     text = " ".join(_table(p, "docs_oltp")["conditions"])
-    assert "arcadedb-driver 0.2.0 (sync, httpx)" in text and "labelled sensitivity" in text and "lean (requests)" in text
+    assert "arcadedb-driver 0.4.0 (sync, httpx)" in text and "labelled sensitivity" in text and "lean (requests)" in text
     assert not any("client" in c and "labelled sensitivity" in c for c in _table(p, "durability")["conditions"])
 
 

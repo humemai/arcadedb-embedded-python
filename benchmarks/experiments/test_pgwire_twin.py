@@ -383,7 +383,7 @@ def test_the_freeze_keeps_one_row_per_twin_and_the_export_leaves_wire_rows_out_o
 def test_the_export_sentence_names_the_wire_twin_only_for_clean_rows_of_the_tables_backends():
     import export_web as E
     table = {"entries": [{"backend_key": "arcadedb_server"}]}
-    E._FROZEN_ROWS[:] = [{"backend": "arcadedb_server", "arcadedb_http_client": "arcadedb-driver 0.2.0 (sync, httpx)"}]
+    E._FROZEN_ROWS[:] = [{"backend": "arcadedb_server", "arcadedb_http_client": "arcadedb-driver 0.4.0 (sync, httpx)"}]
     try:
         E._PG_TWIN_ROWS[:] = []
         assert "PostgreSQL wire" not in (E._arcadedb_client_note(table) or "")

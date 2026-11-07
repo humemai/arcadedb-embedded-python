@@ -97,7 +97,7 @@ def _add_2611_fields(rows):
                     r[f"{q}_plain_digest_match"] = True
             r["read_path"] = "arrow" if be != "sqlite" else "fetchall"
         if be.startswith("arcadedb") and "server" in be:
-            r["arcadedb_http_client"] = "arcadedb-driver 0.2.0 (sync, httpx)"
+            r["arcadedb_http_client"] = "arcadedb-driver 0.4.0 (sync, httpx)"
             r["arcadedb_http_client_role"] = "headline"
         out.append(r)
     # the labelled lean twin of every served ArcadeDB cell: faster by a fixed factor, so a test can tell it from the headline
