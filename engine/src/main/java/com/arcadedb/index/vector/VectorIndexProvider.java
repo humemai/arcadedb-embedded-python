@@ -23,6 +23,7 @@ import com.arcadedb.query.sql.executor.WorkGuard;
 import com.arcadedb.utility.Pair;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -46,8 +47,10 @@ public interface VectorIndexProvider {
   /** Name of the provider every index has unless its metadata says otherwise. */
   String DEFAULT_NAME = "jvector";
 
-  /** Marker for the per-transaction replay journal the host hands to the write hooks; a provider that does not need it ignores it. */
+  /** The per-transaction replay journal the host hands to the write hooks; null when no transaction could still abort. */
   interface ReplayJournal {
+    /** CONTRACT LATER (MU5): the provider's own state for this transaction, created on first use and handed to publishStaged. */
+    <T> T stagedBatch(java.util.function.Supplier<T> factory);
   }
 
   /** REQUIRED NOW: the key the {@code provider} metadata entry is matched against. */
@@ -83,4 +86,55 @@ public interface VectorIndexProvider {
    * graph to MUTABLE, exactly as {@code remove()} did.
    */
   void onVectorsRemoved(List<Integer> vectorIds, RID rid, ReplayJournal journal);
+
+  // ---- CONTRACT LATER: default methods. The provider that needs one overrides it; the default provider is unaffected.
+
+  /**
+   * CONTRACT LATER (RS): whether the host builds, loads, persists and rebuilds its jvector graph for this index. False means the
+   * provider owns all of that, and the host keeps its graph machinery (inactivity timer, async rebuild, graph build at flush) off.
+   */
+  default boolean usesHostGraph() {
+    return true;
+  }
+
+  /** CONTRACT LATER (SE9, CP1): features this provider cannot serve; the host should refuse such an index at CREATE. Not wired yet. */
+  default Set<String> unsupportedFeatures() {
+    return Set.of();
+  }
+
+  /** CONTRACT LATER (MU5): apply what the write hooks staged in the replay journal; called when the transaction's changes stand. */
+  default void publishStaged(Object stagedBatch) {
+  }
+
+  /** CONTRACT LATER (LC9): the index renumbered every vector id; everything derived is in a dead id space. Under the write lock. */
+  default void onRenumber() {
+  }
+
+  /** CONTRACT LATER (LC4): make the provider's state durable; called where the index flushes. */
+  default void flush() {
+  }
+
+  /** CONTRACT LATER (LC5): release background work and resources; called from releaseBackgroundResources. Idempotent. */
+  default void close() {
+  }
+
+  /** CONTRACT LATER (LC6): remove everything the provider wrote; called from drop. Idempotent. */
+  default void drop() {
+  }
+
+  /** CONTRACT LATER (LC7): bulk-load hold-off, mirrors suspendBackgroundMaintenance and resumeBackgroundMaintenance. */
+  default void suspendMaintenance() {
+  }
+
+  default void resumeMaintenance() {
+  }
+
+  /** CONTRACT LATER (LC8): problems found by a structural check, empty when none. Not wired to checkIntegrity yet. */
+  default List<String> verify() {
+    return List.of();
+  }
+
+  /** CONTRACT LATER (MT1): adds the provider's counters to the map getStats() returns. */
+  default void addStats(Map<String, Long> stats) {
+  }
 }

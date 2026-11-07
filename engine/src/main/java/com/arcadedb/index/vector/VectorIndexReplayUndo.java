@@ -178,6 +178,24 @@ class VectorIndexReplayUndo implements IndexReplayConclusion, VectorIndexProvide
       graphStateFlippedFrom = previous;
   }
 
+  // CONTRACT LATER (MU5): what a deferred provider staged during the replay; applied at publish, dropped with the journal on undo.
+  private Object stagedBatch;
+
+  @Override
+  @SuppressWarnings("unchecked")
+  public <T> T stagedBatch(final java.util.function.Supplier<T> factory) {
+    if (stagedBatch == null)
+      stagedBatch = factory.get();
+    return (T) stagedBatch;
+  }
+
+  @Override
+  public void publishIndexReplay() {
+    final Object staged = stagedBatch;
+    if (staged != null && !undone)
+      index.publishStaged(staged);
+  }
+
   @Override
   public void undoIndexReplay() {
     if (undone)

@@ -958,5 +958,12 @@
             </modules>
         </profile>
 
+        <profile>
+            <id>tiervec</id>
+            <!-- Opt-in: builds the tiervec vector index provider module. Needs ai.humem:tiervec:0.1.0-SNAPSHOT in the local repository. -->
+            <modules>
+                <module>tiervec-provider</module>
+            </modules>
+        </profile>
     </profiles>
 </project>

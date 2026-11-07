@@ -21,9 +21,11 @@ package com.arcadedb.index.vector;
 import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.index.IndexException;
 
+import java.util.ServiceLoader;
+
 /**
  * Picks the {@link VectorIndexProvider} of one index from the {@code provider} entry of its metadata, or from
- * {@link GlobalConfiguration#VECTOR_INDEX_PROVIDER} when the metadata names none. Only the default exists in this change.
+ * {@link GlobalConfiguration#VECTOR_INDEX_PROVIDER} when the metadata names none. The default is built in; others are found with ServiceLoader.
  */
 final class VectorIndexProviders {
   private VectorIndexProviders() {
@@ -35,6 +37,10 @@ final class VectorIndexProviders {
         requested;
     if (VectorIndexProvider.DEFAULT_NAME.equals(name))
       return new JVectorProvider(owner);
+    // A provider that lives in another artifact: found only when the index asks for it, so the default never loads a service.
+    for (final VectorIndexProviderFactory factory : ServiceLoader.load(VectorIndexProviderFactory.class))
+      if (factory.name().equalsIgnoreCase(name))
+        return factory.create(new LSMVectorIndexHost(owner));
     throw new IndexException("Unknown vector index provider '" + name + "' for index '" + owner.getName() + "'");
   }
 }

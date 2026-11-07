@@ -87,6 +87,7 @@ public final class NodeLocalFiles {
         || fileName.equals(DATABASE_LOCK_FILE_NAME)
         || fileName.equals(TransactionManager.LAST_TX_ID_FILE_NAME)
         || isVectorGraphFileName(fileName)
+        || isTierVecFileName(fileName)
         || (fileName.startsWith(GAV_CSR_FILE_PREFIX)
         && (fileName.endsWith(GAV_CSR_FILE_EXTENSION) || fileName.endsWith(CCH_ORDER_FILE_EXTENSION)));
   }
@@ -102,6 +103,16 @@ public final class NodeLocalFiles {
         || endsWithExtension(fileName, LSMVectorIndexGraphManifest.FILE_EXT)
         || endsWithExtension(fileName, LSMVectorIndexOrdinalMapFile.FILE_EXT)
         || endsWithExtension(fileName, LSMVectorIndexPQFile.FILE_EXT);
+  }
+
+  /**
+   * True when {@code fileName} is a file of the tiervec vector index provider, built node-locally from the index pages like the
+   * graph above: segments {@code .tvs}, tombstone files {@code .tvd}, manifests {@code .tvm}, and the {@code .tvlock} and
+   * {@code .tvdirty} markers. None is a registered component, so a backup or a snapshot never reaches them.
+   */
+  public static boolean isTierVecFileName(final String fileName) {
+    return endsWithExtension(fileName, "tvs") || endsWithExtension(fileName, "tvd") || endsWithExtension(fileName, "tvm")
+        || endsWithExtension(fileName, "tvlock") || endsWithExtension(fileName, "tvdirty");
   }
 
   /**

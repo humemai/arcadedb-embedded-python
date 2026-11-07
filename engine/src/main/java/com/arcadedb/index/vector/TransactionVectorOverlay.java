@@ -86,7 +86,7 @@ import java.util.TreeMap;
  *
  * @author Luca Garulli (l.garulli@arcadedata.com)
  */
-final class TransactionVectorOverlay {
+final class TransactionVectorOverlay implements VectorIndexHost.OverlayView {
   /**
    * The {@code vectorId} of a pending entry. A vector id is minted by {@code allocateVectorId()} during commit
    * replay, so a row that has not been replayed yet has none, and nothing that keys off a vector id - the tombstone
@@ -299,7 +299,8 @@ final class TransactionVectorOverlay {
    * Whether the committed index's own entries for {@code rid} are superseded by this transaction - because it
    * removed the row, or because it rewrote the vector and the pending version is the one that must be ranked.
    */
-  boolean supersedes(final RID rid) {
+  @Override
+  public boolean supersedes(final RID rid) {
     return superseded.contains(rid);
   }
 
@@ -309,8 +310,25 @@ final class TransactionVectorOverlay {
   }
 
   /** How many rows this transaction contributes, for the callers that size an allocation on the candidate count. */
-  int pendingCount() {
+  @Override
+  public int pendingCount() {
     return pending.size();
+  }
+
+  /**
+   * The rows this transaction added, as plain float arrays, for a provider that scans them itself. A row whose payload the heap
+   * budget declined is not supported here (CONTRACT LATER): it would have to be read back from its record.
+   */
+  @Override
+  public void forEachPending(final VectorIndexHost.PendingConsumer consumer) {
+    for (final LSMVectorIndex.DeltaVectorEntry entry : pending) {
+      if (entry.vector == null)
+        throw new UnsupportedOperationException("pending vector payload declined by the heap budget");
+      final float[] copy = new float[entry.vector.length()];
+      for (int i = 0; i < copy.length; i++)
+        copy[i] = entry.vector.get(i);
+      consumer.accept(entry.rid, copy);
+    }
   }
 
   /**

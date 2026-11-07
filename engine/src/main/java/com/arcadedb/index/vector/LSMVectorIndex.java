@@ -920,6 +920,9 @@ public class LSMVectorIndex implements Index, IndexInternal {
         // longer live (deleted, or superseded by a newer vector of its record) has no new one: its ordinal answers -1, which
         // every reader of the map treats as a vector that is gone. The write lock is held.
         renumberResidentIds(oldVectorIds);
+        final VectorIndexProvider renumberedProvider = provider;
+        if (renumberedProvider != null)
+          renumberedProvider.onRenumber();
 
         // The rename and the schema re-keying are ONE step and must stay adjacent: `indexName` is volatile and read
         // without this lock (getName(), which is what TransactionIndexContext keys a lane by), so between these two
@@ -2018,6 +2021,9 @@ public class LSMVectorIndex implements Index, IndexInternal {
    * or runs out of time stops waiting instead of sitting out a build of the whole corpus (issue #9896).
    */
   void ensureGraphAvailable(final WorkGuard guard) {
+    if (!usesHostGraph())
+      return;
+
     if (!graphNotYetMaterialised())
       return; // Graph already available or being built
 
@@ -5728,6 +5734,9 @@ public class LSMVectorIndex implements Index, IndexInternal {
    * @see <a href="https://github.com/ArcadeData/arcadedb/issues/3679">Issue #3679</a>
    */
   private void rebuildGraphBeforeSearch(final WorkGuard guard) {
+    if (!usesHostGraph())
+      return;
+
     if (graphState != GraphState.MUTABLE || mutationsSinceSerialize.get() <= 0)
       return;
 
@@ -5876,6 +5885,9 @@ public class LSMVectorIndex implements Index, IndexInternal {
    * when multiple indexes trigger rebuilds simultaneously (issue #3868).
    */
   private synchronized void startAsyncGraphRebuild() {
+    if (!usesHostGraph())
+      return;
+
     if (asyncRebuildInProgress)
       return; // Another rebuild is already running
 
@@ -9439,6 +9451,32 @@ public class LSMVectorIndex implements Index, IndexInternal {
     return graphIndex != null;
   }
 
+  // Accessors for the provider host (LSMVectorIndexHost), and the switch that keeps the host's jvector machinery off for a provider
+  // that owns its own structure.
+  VectorLocationIndex locationsForProvider() {
+    return vectorIndex();
+  }
+
+  RID boundRidForProvider(final RID rid) {
+    return bindRid(rid);
+  }
+
+  File directoryForProvider() {
+    return mutable == null ? null : mutable.getOSFile().getParentFile();
+  }
+
+  static Semaphore rebuildPermit() {
+    return REBUILD_SEMAPHORE;
+  }
+
+  void publishStaged(final Object staged) {
+    provider().publishStaged(staged);
+  }
+
+  private boolean usesHostGraph() {
+    return provider().usesHostGraph();
+  }
+
   private List<Pair<RID, Float>> searchNeighbors(final float[] queryVector, final int k, final int efSearch,
       final Set<RID> allowedRIDs, final WorkGuard guard) {
     return provider().search(queryVector, k, efSearch, allowedRIDs, guard);
@@ -11228,7 +11266,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
    * The calling transaction's uncommitted writes to this index, or {@code null} when there are none to resolve
    * (issue #7378). See {@link TransactionVectorOverlay} for what it contributes and why.
    */
-  private TransactionVectorOverlay transactionOverlay() {
+  TransactionVectorOverlay transactionOverlay() {
     // The same budget the committed buffer's own payloads answer to (issue #7967): what is at stake is the same
     // heap, and a pending row is one more resident `dimensions * 4` byte copy exactly like a buffered one. Whole,
     // not halved: the two populations are charged separately and an overlay is bounded by the transaction's write
@@ -12599,6 +12637,10 @@ public class LSMVectorIndex implements Index, IndexInternal {
   public void flush() {
     if (status.compareAndSet(INDEX_STATUS.AVAILABLE, INDEX_STATUS.UNAVAILABLE)) {
 
+      final VectorIndexProvider flushedProvider = provider;
+      if (flushedProvider != null)
+        flushedProvider.flush();
+
       // Build and persist graph if it hasn't been built yet. This ensures the graph is available on next
       // database open (fast restart). See needsGraphBuild() for exactly which states count as "needs one".
       final LSMVectorIndexGraphFile gf = graphFile;
@@ -12688,6 +12730,9 @@ public class LSMVectorIndex implements Index, IndexInternal {
    * {@code initializeGraphIndex()} already draws exactly this distinction with the same predicate.
    */
   private boolean needsGraphBuild(final LSMVectorIndexGraphFile gf) {
+    if (!usesHostGraph())
+      return false;
+
     final boolean graphAlreadyOnDisk = gf != null && gf.hasPersistedGraph();
     return hasAnyVectors() && (graphState == GraphState.MUTABLE
         || (graphState == GraphState.LOADING && !graphAlreadyOnDisk));
@@ -12777,6 +12822,10 @@ public class LSMVectorIndex implements Index, IndexInternal {
    */
   @Override
   public void releaseBackgroundResources() {
+    final VectorIndexProvider closingProvider = provider;
+    if (closingProvider != null)
+      closingProvider.close();
+
     // Invalidate first so a concurrent timer thread that wins the monitor after
     // cancelInactivityRebuildTimer() nulls inactivityTimer cannot bypass the isValid()
     // guard and resurrect a fresh Timer.
@@ -12918,6 +12967,10 @@ public class LSMVectorIndex implements Index, IndexInternal {
   public void drop() {
     lock.writeLock().lock();
     try {
+      final VectorIndexProvider droppedProvider = provider;
+      if (droppedProvider != null)
+        droppedProvider.drop();
+
       // Clear all vector locations. Raw, and it also closes the deferral (issue #6722): the files this index was
       // going to parse are about to go away, so a materialisation triggered after this point would read a dropped
       // file rather than produce anything useful.
@@ -13018,6 +13071,9 @@ public class LSMVectorIndex implements Index, IndexInternal {
     stats.put("graphState", (long) graphState.ordinal()); // LOADING=0, IMMUTABLE=1, MUTABLE=2
     stats.put("graphNodeCount", graphIndex != null ? (long) graphIndex.getIdUpperBound() : 0L);
     stats.put("mutationsSinceRebuild", (long) mutationsSinceSerialize.get());
+    final VectorIndexProvider statsProvider = provider;
+    if (statsProvider != null)
+      statsProvider.addStats(stats);
     stats.put("asyncRebuildInProgress", asyncRebuildInProgress ? 1L : 0L);
     stats.put("rebuildSnapshotGeneration", rebuildSnapshotGeneration);
 
@@ -14898,6 +14954,9 @@ public class LSMVectorIndex implements Index, IndexInternal {
   @Override
   public void suspendBackgroundMaintenance() {
     backgroundMaintenanceSuspensions.incrementAndGet();
+    final VectorIndexProvider suspendedProvider = provider;
+    if (suspendedProvider != null)
+      suspendedProvider.suspendMaintenance();
   }
 
   /**
@@ -14909,6 +14968,9 @@ public class LSMVectorIndex implements Index, IndexInternal {
   @Override
   public void resumeBackgroundMaintenance() {
     final int before = backgroundMaintenanceSuspensions.getAndUpdate(current -> current > 0 ? current - 1 : 0);
+    final VectorIndexProvider resumedProvider = provider;
+    if (resumedProvider != null)
+      resumedProvider.resumeMaintenance();
 
     // Only the call that lifts the LAST suspension arms anything. The two other cases return without touching the
     // timer, and the first of them is why this reads the count BEFORE the decrement rather than after (PR #7360
@@ -14938,6 +15000,9 @@ public class LSMVectorIndex implements Index, IndexInternal {
    * see that method for why the two cases are treated differently.
    */
   private void scheduleInactivityRebuild() {
+    if (!usesHostGraph())
+      return;
+
     lastMutationNanos = System.nanoTime();
     if (inactivityRebuildTask == null)
       armInactivityRebuild(getInactivityRebuildTimeoutMs());
