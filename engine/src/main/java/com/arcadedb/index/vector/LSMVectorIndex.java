@@ -275,6 +275,10 @@ public class LSMVectorIndex implements Index, IndexInternal {
   private volatile boolean                       persistedGraphUnresolved = true;
   private volatile ImmutableGraphIndex           graphIndex;        // Current graph (OnHeap or OnDisk)
   private volatile int[]                         ordinalToVectorId; // Maps graph ordinals to vector IDs
+  // The strategy behind search, warm-up and the per-write buffer bookkeeping (see VectorIndexProvider). Resolved on first use:
+  // an index re-created on load only learns its metadata, and so its provider, after the constructor has run.
+  private final Object                           providerLock = new Object();
+  private volatile VectorIndexProvider           provider;
   // The lookups of the ordinal maps a renumbering compaction translated while the old graph was resident: such a map holds -1 for
   // the ordinals whose vector is gone, so it is not sorted and a lookup by vector id cannot binary search it (issue #9241). Keyed
   // by the identity of the map, so a query holding a map always finds the lookup that belongs to it, and the entry goes with the map.
@@ -1988,7 +1992,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
    */
   @Override
   public void warmUp() {
-    ensureGraphAvailable(WorkGuard.forCommandDeadline(null));
+    provider().awaitReady(WorkGuard.forCommandDeadline(null));
   }
 
   /**
@@ -1999,7 +2003,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
    */
   @Override
   public boolean isWarm() {
-    return graphIndex != null;
+    return provider().isReady();
   }
 
   /**
@@ -2013,7 +2017,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
    * off - checks {@code guard} between two slices of {@link #GUARDED_WAIT_SLICE_MS}, so a statement that is terminated
    * or runs out of time stops waiting instead of sitting out a build of the whole corpus (issue #9896).
    */
-  private void ensureGraphAvailable(final WorkGuard guard) {
+  void ensureGraphAvailable(final WorkGuard guard) {
     if (!graphNotYetMaterialised())
       return; // Graph already available or being built
 
@@ -9418,7 +9422,97 @@ public class LSMVectorIndex implements Index, IndexInternal {
     return new DefaultSearchScoreProvider(walk, reranker);
   }
 
-  private List<Pair<RID, Float>> searchNeighbors(final float[] queryVector, int k, final int efSearch,
+  /** The provider of this index, created on first use from the {@code provider} metadata entry. */
+  private VectorIndexProvider provider() {
+    VectorIndexProvider current = provider;
+    if (current == null)
+      synchronized (providerLock) {
+        current = provider;
+        if (current == null)
+          provider = current = VectorIndexProviders.create(this, metadata.provider);
+      }
+    return current;
+  }
+
+  /** Whether a jvector graph is resident: the former body of {@code isWarm()}. */
+  boolean hasResidentGraph() {
+    return graphIndex != null;
+  }
+
+  private List<Pair<RID, Float>> searchNeighbors(final float[] queryVector, final int k, final int efSearch,
+      final Set<RID> allowedRIDs, final WorkGuard guard) {
+    return provider().search(queryVector, k, efSearch, allowedRIDs, guard);
+  }
+
+  /**
+   * The delta-buffer half of {@link #put} for the default provider, moved verbatim out of put(): the vector joins the delta
+   * buffer, the graph is flipped to MUTABLE and the mutation counter is charged. Called with the write lock held.
+   */
+  void jvectorOnAdded(final int id, final RID rid, final float[] vector, final VectorIndexReplayUndo undo) {
+    final VectorFloat<?> vf = vts.createFloatVector(vector);
+
+    // Add to delta buffer so the vector is visible in search via mergeWithDeltaScan.
+    // Skipping expensive O(log n) HNSW graph inserts during commit replay (issue #3864):
+    // the inactivity rebuild timer will incorporate delta vectors into the graph.
+    // The already-converted VectorFloat is reused so the search path never re-converts (issue #5391).
+    queueDeltaEntry(new DeltaVectorEntry(id, rid, vf));
+
+    if (graphState == GraphState.IMMUTABLE || graphState == GraphState.LOADING) {
+      if (undo != null)
+        undo.recordGraphFlip(graphState);
+      this.graphState = GraphState.MUTABLE;
+    }
+
+    // Increment mutation counter (used for periodic graph persistence)
+    mutationsSinceSerialize.incrementAndGet();
+    if (undo != null)
+      ++undo.mutationsCharged;
+  }
+
+  /**
+   * The delta-buffer half of {@link #remove} for the default provider, moved verbatim out of remove(): the delta entries of
+   * the record are swept, the graph is flipped to MUTABLE and the mutation counter is charged. Called with the write lock held.
+   */
+  void jvectorOnRemoved(final List<Integer> deletedIds, final RID rid, final VectorIndexReplayUndo undo) {
+    // Remove matching entries from delta buffer
+    if (!deltaVectors.isEmpty()) {
+      // The payloads those entries held are gone with them, so the heap accounting has to give them back:
+      // leaving it high would keep declining payloads for writes the buffer now has room for (issue #7357).
+      // Counted inside the predicate rather than by a recount afterwards, because this runs on every delete
+      // and not only during a bulk load, and a recount walks the whole buffer a second time right after
+      // removeIf() has already walked it (PR #7360 review). The holder array is what a lambda needs to
+      // accumulate; the write lock is held throughout, so nothing else is reading the counter meanwhile.
+      final int[] releasedPayloads = new int[1];
+      deltaVectors.removeIf(entry -> {
+        if (!entry.rid.equals(rid))
+          return false;
+        if (entry.vector != null)
+          releasedPayloads[0]++;
+        if (undo != null)
+          undo.recordDroppedDelta(entry);
+        return true;
+      });
+      if (releasedPayloads[0] > 0)
+        deltaResidentPayloads.addAndGet(-releasedPayloads[0]);
+    }
+
+    // Phase 5+: Periodic rebuild strategy (amortizes cost over many operations)
+    if (graphState == GraphState.IMMUTABLE || graphState == GraphState.LOADING) {
+      if (undo != null)
+        undo.recordGraphFlip(graphState);
+      // Transition to MUTABLE state to track ongoing mutations
+      this.graphState = GraphState.MUTABLE;
+    }
+
+    // Increment mutation counter (count number of deletions)
+    mutationsSinceSerialize.addAndGet(deletedIds.size());
+
+    if (undo != null)
+      undo.mutationsCharged += deletedIds.size();
+  }
+
+  /** The jvector graph plus delta buffer search: the former {@code searchNeighbors}, renamed and otherwise untouched. */
+  List<Pair<RID, Float>> searchNeighborsJVector(final float[] queryVector, int k, final int efSearch,
       final Set<RID> allowedRIDs, final WorkGuard guard) {
     // Track search metrics
     final long startTime = System.currentTimeMillis();
@@ -11308,24 +11402,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
           // Persist vector to page (will be added to vectorIndex inside persistVectorWithLocation)
           persistVectorWithLocation(id, rid, vector);
 
-          final VectorFloat<?> vf = vts.createFloatVector(vector);
-
-          // Add to delta buffer so the vector is visible in search via mergeWithDeltaScan.
-          // Skipping expensive O(log n) HNSW graph inserts during commit replay (issue #3864):
-          // the inactivity rebuild timer will incorporate delta vectors into the graph.
-          // The already-converted VectorFloat is reused so the search path never re-converts (issue #5391).
-          queueDeltaEntry(new DeltaVectorEntry(id, rid, vf));
-
-          if (graphState == GraphState.IMMUTABLE || graphState == GraphState.LOADING) {
-            if (undo != null)
-              undo.recordGraphFlip(graphState);
-            this.graphState = GraphState.MUTABLE;
-          }
-
-          // Increment mutation counter (used for periodic graph persistence)
-          mutationsSinceSerialize.incrementAndGet();
-          if (undo != null)
-            ++undo.mutationsCharged;
+          provider().onVectorAdded(id, rid, vector, undo);
         } finally {
           lock.writeLock().unlock();
         }
@@ -11972,41 +12049,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
         if (!deletedIds.isEmpty()) {
           persistDeletionTombstones(deletedIds, rid);
 
-          // Remove matching entries from delta buffer
-          if (!deltaVectors.isEmpty()) {
-            // The payloads those entries held are gone with them, so the heap accounting has to give them back:
-            // leaving it high would keep declining payloads for writes the buffer now has room for (issue #7357).
-            // Counted inside the predicate rather than by a recount afterwards, because this runs on every delete
-            // and not only during a bulk load, and a recount walks the whole buffer a second time right after
-            // removeIf() has already walked it (PR #7360 review). The holder array is what a lambda needs to
-            // accumulate; the write lock is held throughout, so nothing else is reading the counter meanwhile.
-            final int[] releasedPayloads = new int[1];
-            deltaVectors.removeIf(entry -> {
-              if (!entry.rid.equals(rid))
-                return false;
-              if (entry.vector != null)
-                releasedPayloads[0]++;
-              if (undo != null)
-                undo.recordDroppedDelta(entry);
-              return true;
-            });
-            if (releasedPayloads[0] > 0)
-              deltaResidentPayloads.addAndGet(-releasedPayloads[0]);
-          }
-
-          // Phase 5+: Periodic rebuild strategy (amortizes cost over many operations)
-          if (graphState == GraphState.IMMUTABLE || graphState == GraphState.LOADING) {
-            if (undo != null)
-              undo.recordGraphFlip(graphState);
-            // Transition to MUTABLE state to track ongoing mutations
-            this.graphState = GraphState.MUTABLE;
-          }
-
-          // Increment mutation counter (count number of deletions)
-          mutationsSinceSerialize.addAndGet(deletedIds.size());
-
-          if (undo != null)
-            undo.mutationsCharged += deletedIds.size();
+          provider().onVectorsRemoved(deletedIds, rid, undo);
 
           // Schedule inactivity rebuild timer (issue #3737)
           scheduleInactivityRebuild();
@@ -12485,6 +12528,8 @@ public class LSMVectorIndex implements Index, IndexInternal {
       json.put("encoding", metadata.encoding.name());
     json.put("maxConnections", metadata.maxConnections);
     json.put("beamWidth", metadata.beamWidth);
+    if (metadata.provider != null)
+      json.put("provider", metadata.provider);
     // Every remaining knob is written too, so the persisted definition is complete: a setting that only lives until
     // the next restart is barely better than one that was dropped at creation (issue #5639). LSMVectorIndexMetadata
     // reads each of these back, and a value equal to its default round-trips as itself.

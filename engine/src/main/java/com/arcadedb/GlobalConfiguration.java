@@ -1606,6 +1606,12 @@ public enum GlobalConfiguration {
       Set to 1 to serialize all rebuilds (safest for memory). Higher values trade memory for throughput.""",
       Integer.class, 1),
 
+  VECTOR_INDEX_PROVIDER("arcadedb.vectorIndex.provider", SCOPE.DATABASE,
+      """
+      Name of the vector index provider used by LSM_VECTOR indexes whose metadata does not name one. "jvector" is the \
+      built-in jvector graph plus delta buffer; any other value needs a provider on the class path.""",
+      String.class, "jvector"),
+
   VECTOR_INDEX_NATIVE_VECTORIZATION("arcadedb.vectorIndex.nativeVectorization", SCOPE.JVM,
       """
       Lets jvector (4.0.2 and later) run its distance math in its native Highway library, called through the Java \

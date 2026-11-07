@@ -50,7 +50,7 @@ public class LSMVectorIndexMetadata extends IndexMetadata {
       "maxConnections", "beamWidth", "efSearch", "neighborOverflowFactor", "alphaDiversityRelaxation", "idPropertyName",
       "locationCacheSize", "graphBuildCacheSize", "mutationsBeforeRebuild", "inactivityRebuildTimeoutMs",
       "storeVectorsInGraph", "addHierarchy", "pqSubspaces", "pqClusters", "pqCenterGlobally", "pqTrainingLimit", "fusedPQ",
-      "rerankOversample", "sizeOnFirstVector");
+      "rerankOversample", "sizeOnFirstVector", "provider");
 
   /**
    * Number of components of the indexed vectors; 0 while {@link #sizeOnFirstVector} is waiting for the first vector. Volatile:
@@ -107,6 +107,7 @@ public class LSMVectorIndexMetadata extends IndexMetadata {
   public boolean                  storeVectorsInGraph      = false; // Phase 2: Store vectors inline in graph file
   public boolean                  addHierarchy             = false;
   public String                   buildState               = "READY"; // BUILDING, READY, or INVALID
+  public String                   provider                 = null;  // null = arcadedb.vectorIndex.provider; see VectorIndexProvider
 
   // Product Quantization (PQ) configuration - used when quantizationType=PRODUCT
   public int                      pqSubspaces              = -1;    // Number of subspaces (M), -1 = auto (dimensions/4, capped at 512)
@@ -160,6 +161,7 @@ public class LSMVectorIndexMetadata extends IndexMetadata {
     copy.pqClusters = pqClusters;
     copy.pqCenterGlobally = pqCenterGlobally;
     copy.pqTrainingLimit = pqTrainingLimit;
+    copy.provider = provider;
     copy.fusedPQ = fusedPQ;
     copy.rerankOversample = rerankOversample;
     return copy;
@@ -245,6 +247,9 @@ public class LSMVectorIndexMetadata extends IndexMetadata {
 
     if (json.has("rerankOversample"))
       setRerankOversample(metadataInt(json, "rerankOversample"));
+
+    if (json.has("provider"))
+      setProvider(json.getString("provider"));
   }
 
   /**
@@ -284,8 +289,19 @@ public class LSMVectorIndexMetadata extends IndexMetadata {
       case "pqTrainingLimit" -> pqTrainingLimit;
       case "fusedPQ" -> fusedPQ;
       case "rerankOversample" -> rerankOversample;
+      case "provider" -> provider;
       default -> null;
     };
+  }
+
+  /**
+   * Names the vector index provider of this index ({@code jvector} is the built-in one). Lower-cased and checked for shape only:
+   * whether a provider of that name is available is decided when the index opens (see {@code VectorIndexProviders}).
+   */
+  public void setProvider(final String provider) {
+    if (provider == null || !provider.matches("[A-Za-z][A-Za-z0-9_-]{0,31}"))
+      throw new IndexException("Invalid vector index provider: " + provider + ". Expected a short name such as 'jvector'");
+    this.provider = provider.toLowerCase(Locale.ROOT);
   }
 
   /**
@@ -519,5 +535,8 @@ public class LSMVectorIndexMetadata extends IndexMetadata {
     // database, not on the first search of every door that reads the index default
     if (metadata.has("rerankOversample"))
       setRerankOversample(metadata.getInt("rerankOversample"));
+
+    if (metadata.has("provider"))
+      setProvider(metadata.getString("provider"));
   }
 }

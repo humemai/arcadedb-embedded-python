@@ -64,7 +64,7 @@ import java.util.List;
  *
  * @author Luca Garulli (l.garulli@arcadedata.com)
  */
-class VectorIndexReplayUndo implements IndexReplayConclusion {
+class VectorIndexReplayUndo implements IndexReplayConclusion, VectorIndexProvider.ReplayJournal {
   private final LSMVectorIndex index;
 
   // Primitive arrays rather than lists of boxes: a bulk load replays thousands of operations per transaction, and
