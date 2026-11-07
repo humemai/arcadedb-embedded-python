@@ -267,6 +267,30 @@ def test_a_setting_the_engine_does_not_list_or_reports_otherwise_fails_the_twin(
     assert runner.pgwire_settings_problems(dict(listed, **{"arcadedb.server.plugins": "Other:x.Y"}))
 
 
+def test_a_boolean_the_engine_reports_as_a_json_boolean_is_the_value_written():
+    """GET /api/v1/server?mode=default sends a Boolean setting as a JSON boolean (GlobalConfiguration.publishableValue returns the Object), so json.load
+    gives Python True/False, whose str() is 'True'/'False', not the 'true'/'false' of the -D token. The first mini pass failed every twin cell on it."""
+    listed = {t.split("=", 1)[0]: t.split("=", 1)[1] for t in runner.PGWIRE_SERVER_SETTINGS}
+    listed.update({"arcadedb.postgres.debug": False, "arcadedb.postgres.quotedIdentifiers": True,
+                   "arcadedb.postgres.queryMaxRows": 1000000, "arcadedb.postgres.port": "5432"})
+    assert runner.pgwire_settings_problems(listed) == []
+    asked = {"arcadedb.postgres.debug": "false", "arcadedb.postgres.quotedIdentifiers": "true"}
+    assert runner.settings_problems(listed, asked) == []
+    # a real difference still fails, in both directions and through both callers
+    assert runner.pgwire_settings_problems(dict(listed, **{"arcadedb.postgres.debug": True}))
+    assert runner.pgwire_settings_problems(dict(listed, **{"arcadedb.postgres.quotedIdentifiers": False}))
+    assert runner.settings_problems(dict(listed, **{"arcadedb.postgres.quotedIdentifiers": False}), asked)
+    assert runner.settings_problems({"arcadedb.postgres.debug": False}, {"arcadedb.postgres.debug": "true"})
+    assert not runner.setting_matches("arcadedb.postgres.debug", False, "true")
+    # numeric and string settings are unchanged
+    assert runner.setting_matches("arcadedb.postgres.queryMaxRows", 1000000, "1000000")
+    assert not runner.setting_matches("arcadedb.postgres.queryMaxRows", 1000000, "1000001")
+    assert runner.setting_matches("arcadedb.postgres.port", "5432", "5432")
+    assert not runner.setting_matches("arcadedb.postgres.port", "5433", "5432")
+    assert runner.setting_matches("arcadedb.txWalFlush", 0, "0") and not runner.setting_matches("arcadedb.txWalFlush", 1, "0")
+    assert not runner.setting_matches("arcadedb.postgres.debug", "False", "false")      # a string is still compared as written
+
+
 def test_the_cells_log_gives_the_calls_and_the_reasons():
     log = ('noise\nPGWIRE_SUMMARY {"fallback_calls": 9, "fallback_reasons": {"command": 9}, "pg_calls": 1}\nPGWIRE_FALLBACK command\n'
            'PGWIRE_SUMMARY {"fallback_calls": 30, "fallback_reasons": {"command": 20, "get": 10}, "pg_calls": 4000}\n')

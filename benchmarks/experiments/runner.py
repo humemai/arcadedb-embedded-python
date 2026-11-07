@@ -2994,6 +2994,8 @@ def requested_settings(text):
 def setting_matches(key, have, want):
     """Is the value the engine reports the one asked for. The plugin list is the one setting the server rewrites at start (ArcadeDBServer.init puts
     "AutoBackupSchedulerPlugin," in front of whatever was configured), so there the requested entries must be the tail of what is reported."""
+    if isinstance(have, bool):   # the HTTP reply carries a Boolean setting as a JSON boolean (json.load: True), the -D token says "true"
+        have = "true" if have else "false"
     if str(have) == str(want):
         return True
     return key == "arcadedb.server.plugins" and str(have).endswith("," + str(want))
