@@ -19,14 +19,17 @@ import time
 # THE INSTRUMENT VERSION. Rows measured under different query sets, timers, or
 # durability settings cannot share a table, so every row names the instrument
 # it was measured with and make_paper_tables refuses to mix them within a
-# table (DECISIONS #84). The harness measures one instrument, "2026-11"; rows
+# table (DECISIONS #84). The default instrument is "2026-11"; "2026-12" (exact peak,
+# settled disk and the sampled breakdown per phase, #352) is measured only when
+# BENCH_INSTRUMENT=2026-12 is exported, and every line of it is gated with
+# `instrument_at_least("2026-12")`. Rows
 # stamped "2026-10" (and the September rows without the field) belong to the
 # retired instruments and are never produced again (DECISIONS #196). The stamp and
 # the selector stay, so a later instrument is added to INSTRUMENTS and gated with
 # `instrument_at_least`, never with the env. A BENCH_INSTRUMENT other than a member
 # of INSTRUMENTS is refused, so a launcher that still exports an old value fails
 # at import instead of measuring something else under the new stamp.
-INSTRUMENTS = ("2026-11",)
+INSTRUMENTS = ("2026-11", "2026-12")
 INSTRUMENT = os.environ.get("BENCH_INSTRUMENT", "2026-11")
 if INSTRUMENT not in INSTRUMENTS:
     raise SystemExit(
