@@ -3730,9 +3730,9 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                 _bad = settings_problems(_rb.get("server_settings"), _rb.get("server_settings_requested"))
                 _eq = _NATIVE_SERVER_EQUIV if be.get("server_build") == "native" else ()
                 _bad += engine_commit_problems(_rb.get("server_engine_commit"), _LOCAL_ENGINE_COMMIT, _eq)
-                _sc = _rb.get("server_engine_commit") or ""
-                if _eq and _LOCAL_ENGINE_COMMIT and _sc and not (_sc.startswith(_LOCAL_ENGINE_COMMIT[:7]) or _LOCAL_ENGINE_COMMIT.startswith(_sc[:7])):
-                    row["server_engine_commit_equiv"] = _sc   # the equivalence was used for this row (ENGINE-COMMIT-EQUIV)
+                _srv_commit = _rb.get("server_engine_commit") or ""   # not `_sc`: that is the sidecar map of this function (bench_env below reads it)
+                if _eq and _LOCAL_ENGINE_COMMIT and _srv_commit and not (_srv_commit.startswith(_LOCAL_ENGINE_COMMIT[:7]) or _LOCAL_ENGINE_COMMIT.startswith(_srv_commit[:7])):
+                    row["server_engine_commit_equiv"] = _srv_commit   # the equivalence was used for this row (ENGINE-COMMIT-EQUIV)
                 if job.get("http_client") == PGWIRE_CLIENT:
                     # THE PLUGIN IS UP AND ITS SETTINGS ARE THE ONES WRITTEN: read back from the engine, then the port answered (outside every timer)
                     _bad += pgwire_settings_problems(_rb.get("server_settings"))

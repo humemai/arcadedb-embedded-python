@@ -155,3 +155,12 @@ def test_verify_refuses_an_unlisted_commit_a_missing_pin_and_a_malformed_entry(s
     assert r.returncode == 1
     r = _verify(stubs, EQ, PIN, equiv="")                                       # empty variable = no variable
     assert r.returncode == 1 and "NATIVE_SERVER_EQUIV=" not in r.stdout
+
+
+def test_runner_does_not_rebind_the_sidecar_map():
+    """First mini pass 2026-11-07: the equivalence code reused `_sc` (the sidecar map of run_cell) for the server commit string, so every served cell died at
+    `_sc.items()` ('str' object has no attribute 'items') and recorded nothing. The map is bound once, by the tuple at the top of the served branch."""
+    import ast
+    tree = ast.parse((HERE / "runner.py").read_text())
+    rebinds = [n.lineno for n in ast.walk(tree) if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "_sc" for t in n.targets)]
+    assert rebinds == [], f"runner.py rebinds _sc on line(s) {rebinds}"
