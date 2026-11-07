@@ -47,6 +47,7 @@ RESULTS = _PI.results_dir()
 from runner import BACKENDS, MEM_BY_SCALE, HEAP_BY_SCALE  # noqa: E402  (path set above)
 import bench_common  # noqa: E402
 import arm_identity as _AI  # noqa: E402
+import engine_pin as _EP  # noqa: E402
 
 # THE PQ ARMS CAN HAVE ROWS EVEN WHEN THEY ARE NOT MEASURING. runner registers them only under BENCH_DENSE_PQ=1 (a stage
 # must not start a PQ cell by accident), but a freeze that holds their rows is read here without that variable, and their
@@ -2443,11 +2444,46 @@ def _cpu_idle_note(rows):
     return text
 
 
+def _native_server_equiv_note(tables, rows=None):
+    """The sentences that disclose the native server image's engine commit (one per release pair a row used), [] when no row used it.
+
+    The release has two engine commits (DECISIONS #256): the JVM image, the jars and both wheels are built at the pin, and the official native
+    server image is built one commit later, which changes version strings only. A served native row stamps `server_engine_commit_equiv` (the
+    commit the server reported) only when the runner accepted that pair, so the sentence is written when a row printed in some table carries the
+    field, and from engine_commit_equiv.json (the registry the runner, arm_identity and provenance_check also read) for the release and the
+    commits. A row that claims the equivalence with no registry entry behind it is refused, not printed."""
+    rows = _FROZEN_ROWS if rows is None else rows
+    shown = {e.get("backend_key") for t in tables for e in t.get("entries") or []}
+    used = {(str(r.get("engine_commit") or ""), str(r.get("server_engine_commit_equiv") or ""))
+            for r in rows if str(r.get("server_engine_commit_equiv") or "").strip() and r.get("backend") in shown}
+    out = []
+    for pin, reported in sorted(used):
+        release = _EP.native_server_equivalent(reported, pin)
+        entry = _EP._equiv_registry().get(release) if release else None
+        if not entry:
+            raise SystemExit(f"REFUSING: a row stamps server_engine_commit_equiv={reported[:9]!r} against engine_commit {pin[:9]!r} and "
+                             f"engine_commit_equiv.json has no release pair for it")
+        # the registry's spelling of both commits, whatever length the row or the stage pin wrote (9 or 40 characters)
+        short_pin = entry["pin"][:10]
+        short_eq = next(x for x in entry["equivalent"] if _EP.commit_matches(reported, x))[:10]
+        files, lines = entry.get("files_changed"), entry.get("version_string_lines")
+        if not (isinstance(files, int) and isinstance(lines, int) and entry.get("non_version_lines") == 0):
+            raise SystemExit(f"REFUSING: the engine_commit_equiv.json entry for {release} does not state a version-strings-only difference")
+        text = (f"The ArcadeDB {release} native server image reports engine commit {short_eq}, and every other ArcadeDB build on the page (the JVM image, "
+                f"the jars, and both Python wheels) is commit {short_pin}: upstream builds the native server image at the release tag, one commit after "
+                f"{short_pin}. The difference between the two commits is {files:,} files and {lines:,} changed lines, every one "
+                f"a version string and none of them source, so the rows keep {short_pin} as their engine commit.")
+        if text not in out:          # the same pair written with a 9-character and a 40-character pin is one sentence
+            out.append(_gen(text, release, short_pin, short_eq, f"{files:,}", f"{lines:,}"))
+    return out
+
+
 def _global_conditions(tables):
     reps = _reps_note(tables)
     out = [_R("GLOBAL", "docker"), _R("GLOBAL", "memory")]
     if reps:
         out.append(reps)
+    out += _native_server_equiv_note(tables)
     out += [_R("GLOBAL", "defaults"), _R("GLOBAL", "digest"),
             _R("GLOBAL", "index_order"), _R("GLOBAL", "jvm_heap")]
     return out
@@ -4989,6 +5025,12 @@ def _twin_client(rs):
 _PG_TWIN_ROWS = []
 
 
+# What a headline served row still sends over the benchmark's own lean HTTP client (lean_http.OfficialSession: everything the driver has no
+# call for), stated once so the sentence under a table cannot say the driver timed "every call" (DECISIONS #259 (4)).
+_SERVED_LEAN_SCOPE = ("Bulk loads, the server probe, transactions, and streamed results go through the benchmark's own lean HTTP client in "
+                      "the headline rows too.")
+
+
 def _arcadedb_client_note(table):
     """What the served ArcadeDB rows ran through, from the rows: the official driver is the headline and the lean
     HTTP client's twin is printed beside it as a labelled sensitivity (`client_twin` on the entry), never pooled
@@ -5001,8 +5043,8 @@ def _arcadedb_client_note(table):
                     if (e.get("client_twin") or {}).get("client")})
     if not heads:
         return None
-    text = (f"ArcadeDB's served rows time every call through {_join_and(heads)}, the vendor's official Python client, "
-            f"the same kind of client the other engines are measured through.")
+    text = (f"ArcadeDB's served rows are the headline: their query and command statements go through {_join_and(heads)}, the vendor's "
+            f"official Python client, the same kind of client the other engines are measured through. {_SERVED_LEAN_SCOPE}")
     if twins:
         text += (f" The same cells also ran through the benchmark's own lean HTTP client ({_join_and(twins)}); "
                  f"each is printed on its row as a labelled sensitivity and is not part of the headline median.")
