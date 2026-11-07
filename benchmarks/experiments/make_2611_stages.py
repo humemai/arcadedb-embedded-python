@@ -1464,7 +1464,7 @@ run_overlay() {{  # <label> <scale> <cap> <be> <wl> <driver> <outdir> <rf> <reps
   [ "$oreps" -lt 2 ] || onlyreps="--only-reps $PASS"
   if env $oenv python3 runner.py --lanes {lane} --scale "$scale" --backends "$be" \\
     --workloads "$wl" --tier paper --workers 1 --timeout "$cap" $onlyreps --reps "$oreps" --driver "$drv" \\
-    --driver-out-dir "$outdir" --results-file "$orf" >> "$S" 2>&1; then
+    --driver-out-dir "$outdir" --results-file "$orf" $CLIENTS_ARG >> "$S" 2>&1; then
     rep_note "$label" "$PASS" ok
   else
     rep_note "$label" "$PASS" fail
@@ -1487,7 +1487,7 @@ run_cell() {{   # run_cell <label> <scale> <cap> <backend> <workload> <env-or-em
   temp_gate "$label"
   env $envset python3 runner.py --lanes {lane} --scale "$scale" --backends "$be" \\
     --workloads "$wl" --tier paper --workers 1 --timeout "$cap" $dur \\
-    --only-reps "$PASS" --reps "$REPS" --results-file "$RF" >> "$S" 2>&1
+    --only-reps "$PASS" --reps "$REPS" --results-file "$RF" $CLIENTS_ARG >> "$S" 2>&1
   if [ $? -ne 0 ]; then
     rep_note "$label" "$PASS" fail
     # only a TIMEOUT of rep 1 censors the larger sizes; a later pass fails on its own
@@ -1508,6 +1508,14 @@ REP_HELPERS = r"""
 # the data, this file only drives the order. Stopping after any pass leaves a valid n; a later pass picks up from it with no
 # regeneration, and a restarted stage skips what is already clean. Delete REPSTATE to start the chain over.
 REPSTATE=$HOME/rep-state-@INSTRUMENT@-$PIN@BUILD@.tsv
+# TWIN-ONLY CATCH-UP (DECISIONS #263). FOURARM_CLIENTS=pgwire, set by the caller and unset in every normal pass (then CLIENTS_ARG is empty and nothing changes), hands
+# `--clients pgwire` to every runner call of this stage, so only the PostgreSQL-wire sensitivity twins run, and moves REPSTATE to its own file: the headline's
+# "rep already clean" gate would skip the twin, and the headline's rep-state is not this run's to write.
+case "${FOURARM_CLIENTS:-}" in
+  "") CLIENTS_ARG="" ;;
+  pgwire) CLIENTS_ARG="--clients pgwire"; REPSTATE=${REPSTATE%.tsv}-pgwire.tsv ;;
+  *) say "$ID ABORT: FOURARM_CLIENTS=${FOURARM_CLIENTS} (only pgwire)"; exit 1 ;;
+esac
 rep_done() {  # <label> <rep>: true when that repetition of the cell finished CLEAN (a fail is retried by a restart)
   grep -qxF -- "$1"$'\t'"$2"$'\t'ok "$REPSTATE" 2>/dev/null
 }

@@ -4632,6 +4632,16 @@ def build_jobs(lanes, workloads_arg, scale=None):
     return jobs
 
 
+CLIENT_CHOICES = ("all", PGWIRE_CLIENT)
+
+
+def keep_clients(jobs, clients):
+    """`--clients`: "all" (the default) keeps every job, as before. "pgwire" keeps only the PostgreSQL-wire sensitivity twins (`http_client == PGWIRE_CLIENT`,
+    run_id ending `_clientpgwire`), for a twin-only catch-up of a pass whose twin cells never ran (DECISIONS #263). It filters what build_jobs built, so it
+    adds nothing: no twin at a large-tier scale, none for a backend outside PGWIRE_SQL_ARMS."""
+    return list(jobs) if clients == "all" else [j for j in jobs if j.get("http_client") == clients]
+
+
 def main():
     cpu_dma_latency_target()      # a malformed BENCH_CPU_DMA_LATENCY_US ends the run here, not inside a worker thread
     ap = argparse.ArgumentParser()
@@ -4642,6 +4652,9 @@ def main():
                     help="comma list; empty (default) runs every workload the "
                          "lane defines, which is the only safe default since "
                          "lanes disagree on workload names")
+    ap.add_argument("--clients", default="all", choices=list(CLIENT_CHOICES),
+                    help="all (default) runs every job; pgwire runs only the PostgreSQL-wire sensitivity twins "
+                         "(a twin-only catch-up, DECISIONS #263). A selection with no such twin runs nothing and exits 0.")
     ap.add_argument("--scale", default="tiny", choices=list(MEM_BY_SCALE))
     ap.add_argument("--reps", type=int, default=5)
     ap.add_argument("--only-reps", default="",
@@ -4773,6 +4786,11 @@ def main():
     if args.backends:
         keep = set(args.backends.split(","))
         jobs = [j for j in jobs if j["backend"] in keep]
+    jobs = keep_clients(jobs, args.clients)
+    if args.clients != "all" and not jobs:
+        print(f"[clients] --clients {args.clients}: no {args.clients} twin in lanes {lanes} at scale {args.scale}"
+              f"{' for backends ' + args.backends if args.backends else ''}: nothing to run")
+        sys.exit(0)
     # After filtering, so the check sees the backends that will actually run.
     if bool(args.driver) != bool(args.driver_out_dir):
         sys.exit("--driver and --driver-out-dir go together")
