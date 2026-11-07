@@ -291,6 +291,46 @@ def test_a_boolean_the_engine_reports_as_a_json_boolean_is_the_value_written():
     assert not runner.setting_matches("arcadedb.postgres.debug", "False", "false")      # a string is still compared as written
 
 
+# ------------------------------------------------------------------------------------------------------ --clients pgwire: the twin-only catch-up
+def test_clients_pgwire_keeps_only_the_wire_twins_and_all_keeps_every_job():
+    """DECISIONS #263: the first four-arm pass failed every twin cell on the settings check, so a later catch-up must run the twins and nothing else."""
+    jobs = runner.build_jobs(list(runner.LANES), [], scale="tpch1")
+    assert runner.keep_clients(jobs, "all") == jobs
+    kept = runner.keep_clients(jobs, "pgwire")
+    assert kept and all(j.get("http_client") == "pgwire" and j["run_id"].endswith("_clientpgwire") for j in kept)
+    assert {(j["lane"], j["backend"]) for j in kept} == EXPECTED
+    assert kept == [j for j in jobs if j.get("http_client") == "pgwire"]                # every twin build_jobs built, in its order, and nothing added
+    assert len(kept) < len(jobs) and {j.get("http_client") for j in jobs} >= {None, "lean", "pgwire"}     # the headline and the lean twin are dropped
+    one = [j for j in jobs if j["backend"] == "arcadedb_server"]                        # --backends narrows first: the arm keeps its own twins
+    assert {j["run_id"] for j in runner.keep_clients(one, "pgwire")} == {j["run_id"] for j in one if j["run_id"].endswith("_clientpgwire")}
+
+
+@pytest.mark.parametrize("scale", sorted(runner.LARGE_SCALES))
+def test_clients_pgwire_at_a_large_tier_scale_selects_nothing(scale):
+    jobs = runner.build_jobs(list(runner.LANES), [], scale=scale)
+    assert jobs and runner.keep_clients(jobs, "pgwire") == []
+
+
+def test_the_runner_takes_clients_all_or_pgwire_and_refuses_the_rest(monkeypatch, capsys):
+    monkeypatch.setattr(runner, "cpu_dma_latency_target", lambda: None)
+    monkeypatch.setattr(sys, "argv", ["runner.py", "--clients", "lean"])
+    with pytest.raises(SystemExit) as stop:
+        runner.main()
+    assert stop.value.code == 2
+    assert "invalid choice: 'lean'" in capsys.readouterr().err                        # parsed and refused, not an unrecognized argument
+
+
+def test_the_stage_template_hands_clients_to_every_runner_call_and_keeps_the_catch_up_state_apart():
+    import re
+    import make_2611_stages as G
+    calls = G.HEAD.split("python3 runner.py")[1:]
+    assert len(calls) == 2 and all("$CLIENTS_ARG >> " in c.split("2>&1")[0] for c in calls)      # run_overlay and run_cell
+    helpers = G.rep_helpers()
+    assert re.search(r"^REPSTATE=\$HOME/rep-state-2026-11-\$PIN(-jvm|-native)?\.tsv$", helpers, re.M)   # the headline's file is as it was
+    assert 'case "${FOURARM_CLIENTS:-}" in' in helpers and 'CLIENTS_ARG="--clients pgwire"' in helpers and "${REPSTATE%.tsv}-pgwire.tsv" in helpers
+    assert "only pgwire" in helpers                                                      # any other value ends the stage
+
+
 def test_the_cells_log_gives_the_calls_and_the_reasons():
     log = ('noise\nPGWIRE_SUMMARY {"fallback_calls": 9, "fallback_reasons": {"command": 9}, "pg_calls": 1}\nPGWIRE_FALLBACK command\n'
            'PGWIRE_SUMMARY {"fallback_calls": 30, "fallback_reasons": {"command": 20, "get": 10}, "pg_calls": 4000}\n')
