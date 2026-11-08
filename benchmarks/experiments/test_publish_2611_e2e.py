@@ -137,26 +137,31 @@ def test_the_pq_arms_are_their_own_precision_row_beside_fp32(published):
     assert emb["backend"] == fp32["backend"] == "ArcadeDB (embedded)" or emb["backend"].startswith("ArcadeDB (embedded")
 
 
-def test_the_served_arcadedb_twin_row_is_not_in_the_headline(published):
-    # every served ArcadeDB cell has a lean twin (role "sensitivity", 30 percent faster); the headline cell is the median of
-    # the official-client rows alone
+def test_the_served_arcadedb_headline_is_the_lean_client_alone(published):
+    # every served ArcadeDB cell has a vendor-driver row and a lean row (30 percent faster); the headline cell is the median
+    # of the lean rows alone, and the freeze holds no vendor-driver row
     t = _table(published["payload"], "docs_oltp")
     rows = [r for r in _fixture_rows() if r["lane"] == "l1tpc" and r["backend"].startswith("arcadedb") and "server" in r["backend"]
             and r.get("workload") == "oltp" and r.get("durability_class") == "relaxed"]
     assert rows and {r["arcadedb_http_client_role"] for r in rows} == {"headline", "sensitivity"}
-    head = [r for r in rows if r["arcadedb_http_client_role"] == "headline"]
-    key = next(k for k in head[0] if k.endswith("_p50_ms") and isinstance(head[0][k], (int, float)))
-    entry = next(e for e in t["entries"] if e["backend_key"] == head[0]["backend"])
+    lean = [r for r in rows if r["arcadedb_http_client_role"] == "sensitivity" and r["backend"] == "arcadedb_server"]
+    other = [r for r in rows if r["arcadedb_http_client_role"] == "headline" and r["backend"] == "arcadedb_server"]
+    assert lean and other
+    key = next(k for k in lean[0] if k.endswith("_p50_ms") and isinstance(lean[0][k], (int, float)))
+    entry = next(e for e in t["entries"] if e["backend_key"] == "arcadedb_server")
     got = [m["median"] for m in entry["metrics"].values() if isinstance(m, dict) and "median" in m]
-    want = statistics.median(r[key] for r in head if r.get("scale") == entry["scale"])
+    want = statistics.median(r[key] for r in lean if r.get("scale") == entry["scale"])
     assert any(g == pytest.approx(want, rel=1e-3) for g in got), (key, want, got[:8])
-    # the freeze keeps the twin rows and the exporter attaches them, labelled, to the headline entry
+    other_median = statistics.median(r[key] for r in other if r.get("scale") == entry["scale"])
+    assert not any(g == pytest.approx(other_median, rel=1e-3) for g in got), "the vendor-driver median must not be a cell"
     frozen = list(csv.DictReader((published["results"] / "runs_paper.csv").open()))
-    assert any(r.get("arcadedb_http_client_role") == "sensitivity" for r in frozen)
-    twin = entry["client_twin"]
-    assert "lean" in twin["client"] and twin["metrics"]
-    label = next(k for k, m in entry["metrics"].items() if isinstance(m, dict) and m.get("median") == pytest.approx(want, rel=1e-3))
-    assert twin["metrics"][label]["median"] == pytest.approx(want * 0.7, rel=1e-2)
+    assert not any("arcadedb-driver" in (r.get("arcadedb_http_client") or "") for r in frozen)
+    assert not any(r.get("arcadedb_http_client_role") == "headline" for r in frozen)
+    assert "client_twin" not in entry
+    # the arm with no lean row (the image-defaults arm) has vendor-driver rows only, so it has no frozen row and no cell
+    assert any(r["backend"] == "arcadedb_imgdefaults_server" for r in _fixture_rows())
+    assert not any(r["backend"] == "arcadedb_imgdefaults_server" for r in frozen)
+    assert not any(e["backend_key"] == "arcadedb_imgdefaults_server" for e in t["entries"])
 
 
 def test_the_paper_tables_are_written_beside_the_freeze(published):

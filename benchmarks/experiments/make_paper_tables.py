@@ -208,6 +208,7 @@ WITHHELD_RECALL = []
 # Rows dropped for an unsettled disk reading.
 UNSETTLED_DISK = []
 _OTHERS_SAID = []
+_OFFICIAL_SAID = []
 
 
 def _write_withheld_recall():
@@ -269,8 +270,24 @@ def _assert_lanes_registered():
             f"export_web.SCALE_LABELS, then fairness_check.LANE_SCRIPT.")
 
 
-def load_canonical(apply_corpus=True, include_twins=False):
+# THE SERVED ARCADEDB HEADLINE IS THE BENCHMARK'S OWN HTTP CLIENT (DECISIONS #268, #285). The harness still measures a served
+# cell through the vendor's driver as well (role `headline`, client name `arcadedb-driver ...`) and through lean_http (role
+# `sensitivity`, the name the freeze keeps for it); the rows of the first are measured and not published, so the freeze
+# sets them aside here, before any dedupe, table, gate or claim sees them. An arm with no lean row therefore has no cell.
+# REMOVE WHEN: upstream ships the transport fix (ArcadeData/arcadedb-drivers #188 merged and released) and the owner decides
+# to publish that client; flip this test, not the rows.
+OFFICIAL_CLIENT_SET_ASIDE = collections.Counter()
+
+
+def is_official_client_row(r):
+    """True for a row measured through the vendor's own Python driver, by its role stamp or its recorded client name."""
+    return (r.get("arcadedb_http_client_role") == "headline"
+            or "arcadedb-driver" in str(r.get("arcadedb_http_client") or ""))
+
+
+def load_canonical(apply_corpus=True):
     _assert_lanes_registered()
+    OFFICIAL_CLIENT_SET_ASIDE.clear()
     del WITHHELD_RECALL[:]   # per call, or the sidecar counts every earlier call's rows again
     del UNSETTLED_DISK[:]
     CORPUS_EXCLUDED.clear()
@@ -305,6 +322,9 @@ def load_canonical(apply_corpus=True, include_twins=False):
         if r.get("rc") != 0:
             continue
         if r["scale"] not in PAPER_SCALES.get(r["lane"], []):
+            continue
+        if is_official_client_row(r):
+            OFFICIAL_CLIENT_SET_ASIDE[r.get("backend")] += 1
             continue
         # A PARTIAL LANDING FREEZES ONLY ITS OWN LANES. `land_stage --only-lanes`
         # filtered what was PULLED and nothing downstream, so the freeze still
@@ -546,22 +566,20 @@ def load_canonical(apply_corpus=True, include_twins=False):
         # sweep row and a GAV-ablation row could once have shadowed a published
         # cell. Rows before #90 carry no class and default to relaxed, which is
         # what they were.
-        # THE CLIENT ROLE IS PART OF THE KEY. A served ArcadeDB cell runs twice: on the headline client and, as a twin job, on
-        # the lean HTTP client (`arcadedb_http_client_role` = sensitivity). Same lane, scale, workload, backend and rep, so
-        # without the role the later of the two would replace the other on ts_utc.
         k = (r["lane"], r["scale"], r.get("n_docs"), r.get("workload"),
              r["backend"], r.get("gav") is not False, r["rep"],
-             r.get("durability_class") or "relaxed", r.get("arcadedb_http_client_role") == "sensitivity")
+             r.get("durability_class") or "relaxed")
         if k not in best or r["ts_utc"] > best[k]["ts_utc"]:
             best[k] = r
     _write_withheld_recall()
     if UNSETTLED_DISK:
         print(f"  blanked the disk reading of {len(UNSETTLED_DISK)} row(s): it had not settled; "
               f"their other measurements stand")
-    # The paper tables, the gates and the claims read the headline rows. The twin rows go to the freeze (include_twins) so
-    # the exporter can show them beside the headline, labelled, and are never pooled into a headline median.
-    out = [r for r in best.values() if include_twins or r.get("arcadedb_http_client_role") != "sensitivity"]
-    return out
+    if OFFICIAL_CLIENT_SET_ASIDE and not _OFFICIAL_SAID:
+        _OFFICIAL_SAID.append(1)
+        print(f"  set aside {sum(OFFICIAL_CLIENT_SET_ASIDE.values())} row(s) not measured through the benchmark's own HTTP client: "
+              + ", ".join(f"{b} {n}" for b, n in sorted(OFFICIAL_CLIENT_SET_ASIDE.items(), key=str)))
+    return list(best.values())
 
 
 def cells(rows, key):
@@ -1025,6 +1043,10 @@ def _dense_multipass():
             continue
         p0 = passes[0]
         be = p0.get("backend")
+        if is_official_client_row(p0):
+            # the same rule as load_canonical: a served ArcadeDB overlay measured through the other client is not published
+            print(f"  set aside {os.path.basename(fp)}: not measured through the benchmark's own HTTP client")
+            continue
         label = NAMES.get(be, be)
         if be == "arcadedb_dense_embedded":
             q = str(p0.get("quantization", "")).lower()
@@ -1381,7 +1403,7 @@ def main(freeze=True):
     rows = load_canonical()
     print(f"{len(rows)} canonical rows")
     if freeze:
-        freeze_paper_rows(load_canonical(include_twins=True))
+        freeze_paper_rows(rows)
     tabular_table(rows)
     graph_table(rows)
     sparse_table(rows)
