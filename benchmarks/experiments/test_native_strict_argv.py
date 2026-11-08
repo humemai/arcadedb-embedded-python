@@ -20,14 +20,16 @@ import runner as R  # noqa: E402
 
 IMAGE = "arcadedata/arcadedb:26.11.1-native"
 FLUSH = "-Darcadedb.txWalFlush="
-SERVED = sorted(n for n, c in R.BACKENDS.items()
+# Copied at import: other test modules rebuild R.BACKENDS (the gated pq arms come and go), so a name looked up later may be gone.
+CFG = {n: dict(c) for n, c in R.BACKENDS.items()}
+SERVED = sorted(n for n, c in CFG.items()
                 if "arcadedb" in n and c.get("topology") == "client_server"
                 and str(c.get("server_image", "")).startswith("arcadedata/arcadedb") and not c.get("jvm_defaults"))
 
 
 def native_argv(name, cls, heap="4g"):
     """The argument list the runner passes after the image name for a native cell of this arm and class (the runner formats `{heap}`)."""
-    cfg, _ = R.durability_server_patch(R.native_server_arm(R.BACKENDS[name], IMAGE), cls)
+    cfg, _ = R.durability_server_patch(R.native_server_arm(CFG[name], IMAGE), cls)
     return [c.format(heap=heap) for c in cfg["server_cmd"]]
 
 
@@ -54,7 +56,7 @@ def test_strict_changes_only_the_flush_item_of_the_native_command(name):
 
 @pytest.mark.parametrize("name", SERVED)
 def test_the_jvm_arm_still_takes_the_strict_flag_as_one_token_in_java_opts(name):
-    base = R.BACKENDS[name]
+    base = CFG[name]
     cfg, note = R.durability_server_patch(base, "strict")
     opts = [e for e in cfg["server_env"] if isinstance(e, str) and e.startswith("JAVA_OPTS=")]
     assert len(opts) == 1 and opts[0].count(FLUSH) == 1 and FLUSH + "1" in opts[0].split() and "txWalFlush=1" in note
