@@ -2242,7 +2242,11 @@ def durability_server_patch(cfg, cls):
             notes.append(f"txWalFlush={bench_common.ARCADE_STRICT_TX_WAL_FLUSH}")
     # ArcadeDB served from the native image: the same token, on the command line.
     if any(isinstance(c, str) and c.startswith("-Darcadedb.txWalFlush=") for c in cmd):
-        cmd = [_set_tx_wal_flush(c, bench_common.ARCADE_STRICT_TX_WAL_FLUSH) if isinstance(c, str) else c for c in cmd]
+        # Replace only the item that IS the token. _set_tx_wal_flush appends the token to a string that lacks one, and every item of a
+        # native command is one argv entry, so mapping it over all items glued " -Darcadedb.txWalFlush=1" onto -Xmx and every other
+        # -D item (the native runtime then read "4g -Darcadedb.txWalFlush=1" as the heap size and the server never started).
+        cmd = [f"-Darcadedb.txWalFlush={bench_common.ARCADE_STRICT_TX_WAL_FLUSH}"
+               if isinstance(c, str) and c.startswith("-Darcadedb.txWalFlush=") else c for c in cmd]
         notes.append(f"txWalFlush={bench_common.ARCADE_STRICT_TX_WAL_FLUSH}")
     # QuestDB: its commit mode is a server setting.
     if "questdb" in str(cfg.get("server_image", "")):
