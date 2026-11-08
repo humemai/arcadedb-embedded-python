@@ -249,8 +249,7 @@ and the advice below agrees with it and adds what we measured.
    convenient but adds client time on every call.
 3. **The official Python clients** are `arcadedb-driver` (HTTP, built on `httpx`) and
    `arcadedb-driver-grpc`. They run every statement shown in this guide and are the
-   easiest way to get typed errors and transactions, but they add client work to
-   every call. `arcadedb-driver-grpc` needs the gRPC plugin, which this wheel does
+   easiest way to get typed errors and transactions. `arcadedb-driver-grpc` needs the gRPC plugin, which this wheel does
    not bundle (see [Not bundled](#not-bundled)), so it talks to the official server
    distribution only.
 4. **Bolt through the `neo4j` driver** is for tooling that already speaks Bolt. On
@@ -267,13 +266,11 @@ latency:
 | HTTP, one persistent connection (`http.client`) | 1x | 1x | 1x |
 | `arcadedb-driver-grpc` | 1.2x | 1.3x | 1.8x / 2.2x |
 | `neo4j` driver over Bolt | Cypher only | 1.6x | 7.1x on Cypher |
-| `arcadedb-driver` (HTTP) | 3.2x | 3.4x | 2.0x / 2.3x |
 | `requests.Session` | 4.0x | 4.1x | 2.1x / 2.3x |
 
 Most of the difference is client code, not the server. A one-row call through
-`arcadedb-driver` runs about 2,000 Python calls, against about 500 for a plain
-`http.client` request, and the `neo4j` driver spends about 80 percent of its time in the
-client process. The gRPC rows were measured against a JDK 25 server; on JDK 21 the same
+the `neo4j` driver spends about 80 percent of its time in the client process, against a plain
+`http.client` request. The gRPC rows were measured against a JDK 25 server; on JDK 21 the same
 one-row read was about 1.65x. Treat a difference under about 1.3x as a tie, and measure
 your own workload before you change a client for these numbers.
 
