@@ -3037,7 +3037,7 @@ def _lc_short_reason(text):
 LIFECYCLE_WITHHELD = {"graph_gav": "its query grew from a bounded set of seeds to an unbounded 2-hop, so it stays off this table until the query is bounded again."}   # PAGE-SPEC rule 7
 
 
-def _lifecycle_table(all_rows, twin_rows=()):
+def _lifecycle_table(all_rows):
     """Built from the FROZEN CSV, like every other table in this file.
 
     The first version called load_canonical(), which is make_paper_tables' name
@@ -3049,12 +3049,6 @@ def _lifecycle_table(all_rows, twin_rows=()):
     rows = [r for r in all_rows if r.get("lane") == "lifecycle"]
     if not rows:
         return None
-    twin_by = {}
-    for r in twin_rows:
-        if r.get("lane") == "lifecycle" and not r.get("lifecycle_situation_unexpressible"):
-            twin_by.setdefault((r.get("workload"), r.get("scale"), str(r.get("backend", "")).endswith("_server"),
-                                _lifecycle_engine(r.get("backend", ""))), []).append(r)
-
     # Rows fold by situation, size, deployment, and ENGINE. An ArcadeDB
     # label names only the situation; the comparator arms (DECISIONS #95a) share the table, so a
     # comparator row names its engine inside the parentheses and carries an
@@ -3141,17 +3135,6 @@ def _lifecycle_table(all_rows, twin_rows=()):
             got = _agg(rs, field)
             if got is not None:
                 entry["metrics"][label] = got
-        _trs = twin_by.get((situation, scale, _srv, engine)) if not build else None
-        if _trs and entry["metrics"]:
-            twin_metrics = {}
-            for field, label in ((_start_field, _start_label), ("first_open_ms", "first open ms"),
-                                 ("cold_process_ms", "cold process ms"),
-                                 *[(f"{k}_session_ms", LIFECYCLE_SCENARIO_LABELS[k]) for k in LIFECYCLE_PAGE_SCENARIOS],
-                                 (MEM_PEAK_FIELD, "peak memory GiB")):
-                got = _agg(_trs, field)
-                if got is not None:
-                    twin_metrics[label] = got
-            _attach_twin(entry, twin_metrics, _trs)
         if entry["metrics"]:
             entries.append(entry)
 
@@ -3754,7 +3737,7 @@ def _multimodel_table(finished):
     }
 
 
-def _l4_table(all_rows, twin_rows=()):
+def _l4_table(all_rows):
     grouped = _l4_canonical(all_rows)
     if not grouped:
         # A LANE SCOPED OUT IS NOT A MISSING ARTIFACT, the third place today
@@ -3787,7 +3770,6 @@ def _l4_table(all_rows, twin_rows=()):
     # Five queries, one p99, one cold column, in the order the section reads
     # (OCT_TABLE_METRICS), resolved once so the column list and the cells agree.
     _l4_cols = OCT_TABLE_METRICS["l4"] + [MEM_PHASE_COLUMN]
-    twin_grouped = _l4_canonical(twin_rows) or {}
     entries = []
     # Tier first, then the engine order the section reads, so the table shows
     # each corpus as its own row group the way every other multi-tier lane
@@ -3829,16 +3811,6 @@ def _l4_table(all_rows, twin_rows=()):
                 if got is not None:
                     entry["metrics"][lab] = got
                     break
-        _trs = twin_grouped.get(key)
-        if _trs and entry["metrics"]:
-            twin_metrics = {}
-            for field, lab in _l4_cols:
-                for candidate in ((field,) if isinstance(field, str) else field):
-                    got = _agg(_trs, candidate)
-                    if got is not None:
-                        twin_metrics[lab] = got
-                        break
-            _attach_twin(entry, twin_metrics, _trs)
         if entry["metrics"]:
             entries.append(entry)
 
@@ -5009,17 +4981,59 @@ def _arango_ivf_note(table, rows):
     return _gen(" ".join(parts), *dict.fromkeys(values))
 
 
-def _attach_twin(entry, twin_metrics, twin_rows):
-    """Put the twin beside the headline entry, over the labels the headline cell has (the same metric labels, no more)."""
-    kept = {k: v for k, v in twin_metrics.items() if k in entry["metrics"]}
-    if kept:
-        entry["client_twin"] = {"client": _twin_client(twin_rows), "metrics": kept}
+# THE ONE CLIENT THE SERVED ARCADEDB HEADLINE RUNS THROUGH (DECISIONS #268, #285). The row's `arcadedb_http_client` is
+# read from the session that ran; a row that names any other client does not belong in a printed table.
+# REMOVE WHEN: upstream ships the transport fix (ArcadeData/arcadedb-drivers #188 merged and released) and the decision
+# to publish that client is made; until then the page names the benchmark's own client only.
+_SERVED_CLIENT_SOURCE = "benchmarks/experiments/lean_http.py"
+_OTHER_CLIENT = re.compile(r"arcadedb[-_ ]?driver", re.I)
 
 
-def _twin_client(rs):
-    """The client a twin cell's rows name (one name in a clean freeze), or None."""
-    named = collections.Counter(str(r.get("arcadedb_http_client") or "") for r in rs)
-    return named.most_common(1)[0][0] or None if named else None
+def _lean_client_name():
+    import lean_http
+    return lean_http.LEAN_NAME
+
+
+def _is_served_arcadedb(backend):
+    b = str(backend or "")
+    return b.startswith("arcadedb") and b.endswith("_server")
+
+
+_OTHER_CLIENT_STAMP = re.compile(r'"arcadedb_http_client"\s*:\s*"[^"]*arcadedb[-_ ]?driver', re.I)
+
+
+def _refuse_other_client_overlays():
+    """The multipass overlays (dense_mp5, sparse_mp) are read by the page without the freeze, so the rule is held here: an
+    overlay file whose rows name another client refuses the page. A served arm's twin job writes the same file name as the
+    other client's job, so the second job to finish wins; this catches the case where it was not the benchmark's own."""
+    pin = os.environ.get("BENCH_ENGINE_COMMIT", "").strip()
+    bad = []
+    for d in sorted(RESULTS.glob(f"*_{pin}")) if pin else []:
+        for fp in sorted(d.glob("*.json")) if d.is_dir() else []:
+            if _OTHER_CLIENT_STAMP.search(fp.read_text(encoding="utf-8", errors="replace")):
+                bad.append(f"{d.name}/{fp.name}")
+    if bad:
+        raise SystemExit(f"REFUSING to print: {len(bad)} overlay file(s) were not measured through the benchmark's own HTTP "
+                         f"client ({', '.join(bad[:4])}{' ...' if len(bad) > 4 else ''}); re-run the arm's lean job")
+
+
+def _refuse_other_client_rows(rows):
+    """Refuse a frozen row of a served ArcadeDB arm that names a client other than the benchmark's own."""
+    _refuse_other_client_overlays()
+    bad = collections.Counter(
+        (str(r.get("backend")), str(r.get("arcadedb_http_client")))
+        for r in rows if _OTHER_CLIENT.search(str(r.get("arcadedb_http_client") or "")))
+    if bad:
+        for (be, client), n in sorted(bad.items()):
+            print(f"  {n} row(s) of {be} name the client {client!r}")
+        raise SystemExit(
+            "REFUSING to print: the frozen rows hold a served ArcadeDB row that was not measured through the benchmark's "
+            "own HTTP client. make_paper_tables.load_canonical sets those rows aside; re-freeze before the page is built.")
+
+
+def _served_client_table(table):
+    """True when the table prints a served ArcadeDB entry."""
+    return any(_is_served_arcadedb(e.get("backend_key")) for e in table.get("entries") or [])
 
 
 _PG_TWIN_ROWS = []
@@ -5032,27 +5046,38 @@ _SERVED_LEAN_SCOPE = ("Bulk loads, the server probe, transactions, and streamed 
 
 
 def _arcadedb_client_note(table):
-    """What the served ArcadeDB rows ran through, from the rows: the official driver is the headline and the lean
-    HTTP client's twin is printed beside it as a labelled sensitivity (`client_twin` on the entry), never pooled
-    into the headline median. None for a table with no served ArcadeDB row."""
-    heads = sorted({str(r.get("arcadedb_http_client")) for r in _FROZEN_ROWS
-                    if str(r.get("backend") or "").startswith("arcadedb") and str(r.get("backend")).endswith("_server")
-                    and str(r.get("arcadedb_http_client") or "").strip() not in ("", "None")
-                    and any(e.get("backend_key") == r.get("backend") for e in table.get("entries") or [])})
-    twins = sorted({str((e.get("client_twin") or {}).get("client")) for e in table.get("entries") or []
-                    if (e.get("client_twin") or {}).get("client")})
+    """What the served ArcadeDB rows ran through: the benchmark's own minimal HTTP client, named from the rows. None
+    for a table with no served ArcadeDB row. A row naming another client, or two clients under one table, refuses."""
+    heads = {str(r.get("arcadedb_http_client")) for r in _FROZEN_ROWS
+             if _is_served_arcadedb(r.get("backend"))
+             and str(r.get("arcadedb_http_client") or "").strip() not in ("", "None")
+             and any(e.get("backend_key") == r.get("backend") for e in table.get("entries") or [])}
     if not heads:
         return None
-    text = (f"ArcadeDB's served rows are the headline: their query and command statements go through {_join_and(heads)}, the vendor's "
-            f"official Python client, the same kind of client the other engines are measured through. {_SERVED_LEAN_SCOPE}")
-    if twins:
-        text += (f" The same cells also ran through the benchmark's own lean HTTP client ({_join_and(twins)}); "
-                 f"each is printed on its row as a labelled sensitivity and is not part of the headline median.")
-    if any(str(r.get("backend")) in {str(e.get("backend_key")) for e in table.get("entries") or []} for r in _PG_TWIN_ROWS):
-        text += (" The served SQL cells also ran with their read statements on ArcadeDB's PostgreSQL wire through psycopg, answers checked identical to the "
-                 "headline's; those rows are a labelled sensitivity kept out of every table and every headline median, and only the read statements "
-                 "are on the wire (writes, bulk loads and transactions stay on HTTP).")
-    return _gen(text, *heads, *twins)
+    lean = _lean_client_name()
+    if heads != {lean}:
+        raise SystemExit(f"REFUSING to print table {table.get('id')!r}: its served ArcadeDB rows name {sorted(heads)}, "
+                         f"and the one client the page may name is {lean!r}")
+    text = (f"ArcadeDB's served rows time every call through the benchmark's own minimal HTTP client, {lean} "
+            f"(source: {_SERVED_CLIENT_SOURCE}), which keeps one persistent http.client connection per host. "
+            f"The other engines are measured through their vendors' own Python clients, so client weight differs "
+            f"between the served engines.")
+    return _gen(text, lean, _SERVED_CLIENT_SOURCE)
+
+
+def _imgdefaults_not_measured_note(table):
+    """The image-defaults ArcadeDB arm has rows only from a client other than the benchmark's own, so its cell is not
+    printed and the table says why (the arm is a declared absence). None on every other table, and where it is printed.
+    REMOVE WHEN: a lean-client job exists for this arm (runner.ARCADEDB_HTTP_ARMS) and its rows are frozen."""
+    if table.get("id") not in ARM_TABLES.get(JVM_DEFAULTS_ARM, ()) or not _served_client_table(table):
+        return None
+    if any(e.get("backend_key") == JVM_DEFAULTS_ARM for e in table.get("entries") or []):
+        return None
+    label = display_name(JVM_DEFAULTS_ARM)
+    text = (f"{label} is not printed: it was not measured through the benchmark's own HTTP client, which every "
+            f"served ArcadeDB row on this table uses.")
+    _declare_absence(table["id"], label, None, "withheld", text)
+    return _gen(text, label)
 
 
 def _oct_conditions(table):
@@ -5132,6 +5157,9 @@ def _oct_conditions(table):
     _client = _arcadedb_client_note(table)
     if _client:
         tail.append(_client)
+    _imgnote = _imgdefaults_not_measured_note(table)
+    if _imgnote:
+        tail.append(_imgnote)
     jvm = _jvm_memory_note(table)
     if jvm:
         tail.append(jvm)
@@ -7181,11 +7209,10 @@ def _restructure_tables(tables, rows):
         mp = {(e["backend"], e["scale"]): e for e in by["l3smp"]["entries"]}
         for e in by["l3s"]["entries"]:
             m = e["metrics"]
-            for mm in (m, (e.get("client_twin") or {}).get("metrics") or {}):
-                if "p50 ms" in mm:
-                    mm["cold p50 ms"] = mm.pop("p50 ms")
-                if "p99 ms" in mm:
-                    mm["cold p99 ms"] = mm.pop("p99 ms")
+            if "p50 ms" in m:
+                m["cold p50 ms"] = m.pop("p50 ms")
+            if "p99 ms" in m:
+                m["cold p99 ms"] = m.pop("p99 ms")
             src = mp.get((e["backend"], e["scale"]))
             if src:
                 for k in ("warm p50 ms", "warm p99 ms", "gain"):
@@ -7209,11 +7236,11 @@ def _restructure_tables(tables, rows):
         # pass to show.
         t = by["l3s"]
         for e in t["entries"]:
-            for mm in (e["metrics"], (e.get("client_twin") or {}).get("metrics") or {}):
-                if "p50 ms" in mm:
-                    mm["cold p50 ms"] = mm.pop("p50 ms")
-                if "p99 ms" in mm:
-                    mm["cold p99 ms"] = mm.pop("p99 ms")
+            mm = e["metrics"]
+            if "p50 ms" in mm:
+                mm["cold p50 ms"] = mm.pop("p50 ms")
+            if "p99 ms" in mm:
+                mm["cold p99 ms"] = mm.pop("p99 ms")
         t["columns"] = [{"p50 ms": "cold p50 ms", "p99 ms": "cold p99 ms"}.get(c, c) for c in t["columns"]]
     if "l1tpc" in by:
         # THE PAGE SHOWS THE STANDARD DOCUMENT BENCHMARKS ONLY: TPC-C is the
@@ -7223,9 +7250,6 @@ def _restructure_tables(tables, rows):
         def clone(e, keep):
             n = dict(e)
             n["metrics"] = {k: v for k, v in e["metrics"].items() if k in keep}
-            if e.get("client_twin"):
-                n["client_twin"] = dict(e["client_twin"], metrics={k: v for k, v in e["client_twin"]["metrics"].items()
-                                                                    if k in keep})
             return n
         # Six transactional operations (#82a) and five analytical queries (#82),
         # each a warm median, with a ninety-ninth percentile on the headline
@@ -7284,20 +7308,9 @@ def main() -> int:
     rows = list(csv.DictReader(FROZEN.open()))
     _PI.refuse_other_instruments(rows, FROZEN_NAME)
     _refuse_gav_without_supertype(rows)
-    # THE SERVED ARCADEDB CLIENT TWIN IS NOT THE HEADLINE. Every served ArcadeDB cell runs twice: through the official
-    # driver (role `headline`) and through the benchmark's lean HTTP client (role `sensitivity`). The twin's rows are kept
-    # apart from every table's rows, so they are never pooled into a headline median, and are printed beside the
-    # headline cell as `client_twin`.
-    _twin_rows = [r for r in rows if str(r.get("arcadedb_http_client_role") or "") == "sensitivity"]
-    if _twin_rows:
-        _twin_ids = {id(r) for r in _twin_rows}
-        rows = [r for r in rows if id(r) not in _twin_ids]
-    # THE POSTGRESQL-WIRE TWIN IS A SECOND SENSITIVITY, NEVER POOLED WITH THE FIRST (DECISIONS #166, #237). Its rows carry the same role, so the filters above
-    # already keep them out of every headline; the wire stamp splits them off here so the lean twin's `client_twin` columns never take a wire row. They are
-    # only mentioned, in the client sentence of the tables whose served SQL cells ran on the wire.
-    global _PG_TWIN_ROWS
-    _PG_TWIN_ROWS = [r for r in _twin_rows if str(r.get("arcadedb_client_wire") or "") == "pgwire" and not str(r.get("error") or "").strip()]
-    _twin_rows = [r for r in _twin_rows if str(r.get("arcadedb_client_wire") or "") != "pgwire"]
+    # EVERY SERVED ARCADEDB HEADLINE CELL COMES FROM THE BENCHMARK'S OWN HTTP CLIENT (DECISIONS #268, #285). The freeze
+    # (make_paper_tables.load_canonical) sets the other client's rows aside, so none is here; one that is refuses the page.
+    _refuse_other_client_rows(rows)
     # THE CAP RULE, AT REPORT TIME (DECISIONS #188): an arm-cell whose pass-1 median is over its rule cap is shown censored
     # (_censored_cells) and its numbers are not shown, so its rows leave the tables here. Strict-class rows are the
     # durability table's and stay.
@@ -7355,9 +7368,6 @@ def main() -> int:
     if _dropped:
         print(f"  one setting per table: {len(_dropped)} strict rows set aside for the durability table only")
         rows = [r for r in rows if r not in _dropped]
-    # The twin rows get the same one-setting rule: a strict row is the durability table's, never a twin cell's.
-    _twin_rows = [r for r in _twin_rows if not (str(r.get("durability_class")) == "strict" and (
-        r.get("lane"), r.get("workload"), r.get("backend"), str(r.get("scale"))) in _has_relaxed)]
     names = _image_version_names()
 
     # The tabular lanes run OLTP and OLAP as separate workloads over ONE corpus
@@ -7394,10 +7404,6 @@ def main() -> int:
         # have sprung it.
         grouped[(r["lane"], r["scale"], r["backend"], wl,
                  r.get("gav") or "", _arm_build(r))].append(r)
-    twin_grouped = defaultdict(list)
-    for r in _twin_rows:
-        wl = "" if r["lane"] in MERGED_WORKLOAD_LANES else r.get("workload", "")
-        twin_grouped[(r["lane"], r["scale"], r["backend"], wl, r.get("gav") or "", "")].append(r)
 
     tables = []
     for lane, spec in LANES.items():
@@ -7414,12 +7420,10 @@ def main() -> int:
             # Row-level, not group-level: merged lanes (l1, l1tpc) group both
             # workloads under one key with a blank label, so a group-level
             # test never matched and the per-query OLAP table was empty (BUGS F30).
-            _trs = twin_grouped.get((ln, scale, backend, workload, gav, ""), [])
             if spec.get("only_workload"):
                 rs = [r for r in rs if r.get("workload") == spec["only_workload"]]
                 if not rs:
                     continue
-                _trs = [r for r in _trs if r.get("workload") == spec["only_workload"]]
             # The no-settle ablation is MEASURED but not PUBLISHED, and the
             # page was the only place it appeared. Neither paper reports it:
             # T4 is a clean head-to-head, one ArcadeDB row against three
@@ -7545,24 +7549,17 @@ def main() -> int:
                 "host": rs[0].get("host") or None,
                 "metrics": {},
             }
-            twin_metrics = {}
             for field, label in _metrics_for(lane, spec, src_lane):
-                src, tsrc = rs, _trs
+                src = rs
                 if field in MEM_FIELDS and src_lane in MERGED_WORKLOAD_LANES:
                     # See MEM_FIELDS above: this lane's rows were merged across
                     # workloads, which is right for a metric that only one
                     # workload produces and wrong for one both produce. Report
                     # the transactional run rather than a median straddling two.
                     src = [r for r in rs if r.get("workload") == "oltp"] or rs
-                    tsrc = [r for r in _trs if r.get("workload") == "oltp"] or _trs
                 got = _agg(src, field)
                 if got is not None:
                     entry["metrics"][label] = got
-                if tsrc:
-                    tgot = _agg(tsrc, field)
-                    if tgot is not None:
-                        twin_metrics[label] = tgot
-            _attach_twin(entry, twin_metrics, _trs)
             if lane == "l3d":
                 _beam_extras(entry, rs)
             if entry["metrics"]:
@@ -7703,7 +7700,7 @@ def main() -> int:
     # Python-cost table are built from artifacts of the campaign, not from the
     # frozen rows; the durability table sits beside the session-cost table
     # (DECISIONS #90) and is built from the same rows the write tables are.
-    _extras = [_sparse_multipass_table(), _l4_table(rows, _twin_rows), _lifecycle_table(rows, _twin_rows), _durability_table(_all_rows),
+    _extras = [_sparse_multipass_table(), _l4_table(rows), _lifecycle_table(rows), _durability_table(_all_rows),
                _e4_table(), _python_cost_table()]
     for extra in _extras:
         if extra and extra["entries"]:
@@ -7922,6 +7919,8 @@ def main() -> int:
     for table in tables:
         rel = SOURCES.get(table["id"])
         paths = [rel] if isinstance(rel, str) else list(rel or [])
+        if _served_client_table(table) and _SERVED_CLIENT_SOURCE not in paths:
+            paths.append(_SERVED_CLIENT_SOURCE)
         table["source_paths"] = paths
         table["source_urls"] = [f"{REPO}/{p}" for p in paths]
         # Kept so an older page build still renders something true: the first

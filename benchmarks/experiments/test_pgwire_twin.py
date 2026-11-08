@@ -396,25 +396,11 @@ def test_the_file_gate_exits_1_on_a_failure_and_reads_every_headline_row(tmp_pat
 
 
 # ------------------------------------------------------------------------------------------------------ landing and export keep the headline
-def test_the_freeze_keeps_one_row_per_twin_and_the_export_leaves_wire_rows_out_of_the_lean_twin():
-    tables = (HERE / "make_paper_tables.py").read_text()
-    assert 'r.get("arcadedb_client_wire") or "",' in tables
-    export = (HERE / "export_web.py").read_text()
-    assert '_twin_rows = [r for r in _twin_rows if str(r.get("arcadedb_client_wire") or "") != "pgwire"]' in export
-    assert "_PG_TWIN_ROWS" in export
-
-
-def test_the_export_sentence_names_the_wire_twin_only_for_clean_rows_of_the_tables_backends():
-    import export_web as E
-    table = {"entries": [{"backend_key": "arcadedb_server"}]}
-    E._FROZEN_ROWS[:] = [{"backend": "arcadedb_server", "arcadedb_http_client": "arcadedb-driver 0.4.0 (sync, httpx)"}]
-    try:
-        E._PG_TWIN_ROWS[:] = []
-        assert "PostgreSQL wire" not in (E._arcadedb_client_note(table) or "")
-        E._PG_TWIN_ROWS[:] = [{"backend": "arcadedb_server"}]
-        note = E._arcadedb_client_note(table)
-        assert "PostgreSQL wire" in note and "sensitivity" in note and "stay on HTTP" in note and "—" not in note
-        E._PG_TWIN_ROWS[:] = [{"backend": "arcadedb_graph_server"}]
-        assert "PostgreSQL wire" not in E._arcadedb_client_note(table)
-    finally:
-        E._PG_TWIN_ROWS[:] = []
+def test_the_freeze_sets_the_wire_twin_aside_and_the_export_has_no_wire_sentence():
+    """The wire twin is measured and not published (DECISIONS #285): the freeze sets its rows aside with the vendor driver's, so no table,
+    claim or page sentence sees them."""
+    import make_paper_tables as M
+    wire = {"arcadedb_http_client_role": "sensitivity", "arcadedb_client_wire": "pgwire", "arcadedb_http_client": "psycopg 3.2 (PostgreSQL wire)"}
+    lean = {"arcadedb_http_client_role": "sensitivity", "arcadedb_http_client": "lean_http (http.client, keep-alive)"}
+    assert M.is_official_client_row(wire) and not M.is_official_client_row(lean)
+    assert "_PG_TWIN_ROWS" not in (HERE / "export_web.py").read_text()

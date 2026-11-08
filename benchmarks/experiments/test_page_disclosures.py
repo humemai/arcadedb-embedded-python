@@ -2,8 +2,8 @@
 
 (1) The native server image of a release reports the commit one version-strings-only commit after the pin: a sentence is written when a row
 printed in a table carries `server_engine_commit_equiv`, from engine_commit_equiv.json for the release and the commits, and not otherwise.
-(2) The client sentence under a table follows the row labels: the official driver the headline rows name, the lean twin and the PostgreSQL
-wire only when their rows are there, and the statements that stay on the lean client in the headline rows too.
+(2) The client sentence under a table names the benchmark's own HTTP client the rows carry, refuses a row that names another client, and never
+names the vendor's driver, a twin or the PostgreSQL wire (DECISIONS #268, #285).
 
 In-process: nothing is started and nothing is read from results/ except the one fixture build at the end.
 Run with `python -m pytest test_page_disclosures.py -q` from this directory (needs numpy and pandas, as the exporter does).
@@ -93,37 +93,23 @@ def test_the_global_conditions_carry_it_only_with_the_field(monkeypatch):
 
 
 # ------------------------------------------------------------------------------------------------ (2) which client each served row used
-def _client_note(monkeypatch, *, twin=None, pgwire=False, client=DRIVER):
-    entry = {"backend_key": "arcadedb_server", **({"client_twin": {"client": twin, "metrics": {}}} if twin else {})}
+def _client_note(monkeypatch, *, client=LEAN):
+    entry = {"backend_key": "arcadedb_server"}
     monkeypatch.setattr(E, "_FROZEN_ROWS", [{"backend": "arcadedb_server", "arcadedb_http_client": client,
-                                             "arcadedb_http_client_role": "headline"}])
-    monkeypatch.setattr(E, "_PG_TWIN_ROWS", [{"backend": "arcadedb_server"}] if pgwire else [])
+                                             "arcadedb_http_client_role": "sensitivity"}])
     return E._arcadedb_client_note({"entries": [entry]})
 
 
-def test_the_client_sentence_names_the_driver_the_rows_carry_as_the_headline(monkeypatch):
+def test_the_client_sentence_names_the_benchmarks_own_client_and_no_other(monkeypatch):
     note = _client_note(monkeypatch)
-    assert DRIVER in note and "official Python client" in note and "headline" in note
-    assert "labelled sensitivity" not in note and "PostgreSQL wire" not in note      # no twin rows, no twin sentence
-    other = _client_note(monkeypatch, client="arcadedb-driver 9.9.9 (sync, httpx)")
-    assert "arcadedb-driver 9.9.9 (sync, httpx)" in other and DRIVER not in other     # the version is the rows', not a constant
+    assert LEAN in note and "vendors' own Python clients" in note and E._SERVED_CLIENT_SOURCE in note
+    assert PC._check_banned_terms({"conditions": [note]}) == 0       # the banned-term gate of DECISIONS #285
+    assert "PostgreSQL wire" not in note and "sensitivity" not in note
 
 
-def test_the_client_sentence_says_what_stays_on_the_lean_client_in_the_headline_rows(monkeypatch):
-    note = _client_note(monkeypatch)
-    assert E._SERVED_LEAN_SCOPE in note
-    for word in ("Bulk loads", "transactions", "streamed results", "server probe"):
-        assert word in E._SERVED_LEAN_SCOPE
-
-
-def test_the_lean_twin_and_the_wire_twin_follow_their_rows(monkeypatch):
-    lean = _client_note(monkeypatch, twin=LEAN)
-    assert "labelled sensitivity" in lean and LEAN in lean and "PostgreSQL wire" not in lean
-    wire = _client_note(monkeypatch, pgwire=True)
-    assert "PostgreSQL wire" in wire and "sensitivity" in wire and "labelled sensitivity" not in wire.split("PostgreSQL wire")[0]
-    both = _client_note(monkeypatch, twin=LEAN, pgwire=True)
-    assert "labelled sensitivity" in both and "PostgreSQL wire" in both
-    assert "—" not in both and "–" not in both
+def test_a_row_naming_the_vendor_driver_refuses_the_sentence(monkeypatch):
+    with pytest.raises(SystemExit):
+        _client_note(monkeypatch, client=DRIVER)
 
 
 def test_the_client_sentence_is_for_tables_with_a_served_row_only(monkeypatch):
@@ -132,7 +118,7 @@ def test_the_client_sentence_is_for_tables_with_a_served_row_only(monkeypatch):
 
 
 def test_no_number_in_the_client_sentence_is_unsourced(monkeypatch, capsys):
-    note = _client_note(monkeypatch, twin=LEAN, pgwire=True)
+    note = _client_note(monkeypatch)
     assert _unsourced_numbers([note]) == 0, capsys.readouterr().out
 
 
@@ -148,4 +134,4 @@ def test_the_fixture_build_has_no_equivalence_sentence_and_still_names_the_clien
     every = list(payload["conditions"]) + [c for t in payload["tables"] for c in t.get("conditions") or []]
     assert not [c for c in every if "native server image reports" in c]
     served = " ".join(next(t for t in payload["tables"] if t["id"] == "docs_oltp")["conditions"])
-    assert DRIVER in served and E._SERVED_LEAN_SCOPE in served
+    assert LEAN in served and E._SERVED_CLIENT_SOURCE in served and DRIVER not in served
