@@ -33,6 +33,7 @@ own output and a tracked copy breaks its pull.
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -434,7 +435,17 @@ def main():
         env["BENCH_ONLY_LANES"] = ",".join(sorted(_lanes))
     step(1, f"pull {host_name('runs_page', args.pin, '.jsonl')} from {HOST}")
     pulled = SCRATCH / "runs_page_host.jsonl"
-    sh(["scp", "-q", f"{HOST}:{REMOTE}/{host_name('runs_page', args.pin, '.jsonl')}", str(pulled)])
+    # BENCH_LAND_PULLED_FILE: the rows were pulled and merged outside this script (the four-arm chains write into several
+    # results directories, so no single scp has them all). Set and present: copy it in place of the scp. Set and absent:
+    # stop, never fall back to the host. Unset: the scp below, unchanged.
+    _pulled_file = os.environ.get("BENCH_LAND_PULLED_FILE")
+    if _pulled_file:
+        if not Path(_pulled_file).is_file():
+            sys.exit(f"BENCH_LAND_PULLED_FILE is set to {_pulled_file}, which is not a file; refusing to fall back "
+                     f"to pulling from {HOST}. Unset it to pull from the host.")
+        shutil.copyfile(_pulled_file, pulled)
+    else:
+        sh(["scp", "-q", f"{HOST}:{REMOTE}/{host_name('runs_page', args.pin, '.jsonl')}", str(pulled)])
     for arm in args.overlay:
         for d in (f"dense_mp5_{args.pin}", f"dense_mp5_small_{args.pin}"):
             (RESULTS / d).mkdir(exist_ok=True)
