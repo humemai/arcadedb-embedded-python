@@ -3,7 +3,7 @@
 
 The publish tests (test_publish_2611_e2e.py) run make_paper_tables and export_web on `fixtures/publish_2611/results`:
 a few real rows per lane, restamped `instrument: 2026-11`, plus the row fields the 2026-11 instrument adds (per-phase memory,
-the dense search-beam sweep and matched-recall headline, product-quantization arms, the served-client headline and lean twin,
+the dense search-beam sweep and matched-recall headline, product-quantization arms, the served ArcadeDB rows of both clients,
 l4 plain reads, the switch stamps). The numbers are real 2026-10 measurements; the stamps and added fields are synthetic, so
 the fixture proves structure and arithmetic, never a published value. Only a developer with a populated results/ needs this
 script; the committed output is the fixture.
@@ -27,6 +27,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1]))
 import dense_beam  # noqa: E402
+import lean_http  # noqa: E402
 
 PIN_OLD, PIN_NEW = "417314c18", "261100fix"
 KEEP = {"e2": {"e2"}, "e4": {"e2"}, "l1tpc": {"tpch1"}, "l2": {"sf1"}, "l3d": {"small"}, "l3s": {"tiny", "small", "medium"},
@@ -100,18 +101,9 @@ def _add_2611_fields(rows):
             r["arcadedb_http_client"] = "arcadedb-driver 0.2.0 (sync, httpx)"
             r["arcadedb_http_client_role"] = "headline"
         out.append(r)
-    # the labelled lean twin of every served ArcadeDB cell: faster by a fixed factor, so a test can tell it from the headline
-    twins = []
-    for r in out:
-        if r.get("arcadedb_http_client_role") == "headline":
-            t = dict(r)
-            t["arcadedb_http_client"] = "lean (requests)"
-            t["arcadedb_http_client_role"] = "sensitivity"
-            t["run_id"] = f"{r.get('run_id', 'x')}_clientlean"
-            for k, v in list(t.items()):
-                if k.endswith("_ms") and isinstance(v, (int, float)) and not isinstance(v, bool):
-                    t[k] = round(v * 0.7, 4)
-            twins.append(t)
+    # the lean-client row of every served ArcadeDB cell, the headline since DECISIONS #285: faster by a fixed factor, so a
+    # test can tell it from the vendor-driver row, which the freeze sets aside
+    twins = [_lean_twin(r) for r in out if r.get("arcadedb_http_client_role") == "headline"]
     # the product-quantization arms (#419) beside the fp32 arm each is derived from: synthetic, there are no real PQ rows. The
     # stamps are the ones l3d_dense writes (quantization PRODUCT for ArcadeDB, pq_subspaces, pq_clusters, pq_rerank, the
     # read-back fields); the numbers are the fp32 arm's, slower queries and a lower recall, as PQ trades them.
@@ -267,11 +259,48 @@ def _patch_overlays():
                 f.write_text(new)
 
 
+def _lean_twin(r):
+    """The benchmark's own client's row of a served ArcadeDB cell whose vendor-driver row is `r` (30 percent faster)."""
+    t = dict(r)
+    t["arcadedb_http_client"] = lean_http.LEAN_NAME
+    t["arcadedb_http_client_role"] = "sensitivity"
+    t["run_id"] = f"{r.get('run_id', 'x')}_clientlean"
+    for k, v in list(t.items()):
+        if k.endswith("_ms") and isinstance(v, (int, float)) and not isinstance(v, bool):
+            t[k] = round(v * 0.7, 4)
+    return t
+
+
+# The served arms the harness runs on both clients (runner.ARCADEDB_HTTP_ARMS) have a lean row per cell; the image-defaults arm
+# does not (vendor-driver rows only, so its cell is not published), and the PQ server arm does not either, so the fixture gives
+# that one a lean row to keep the PQ table's coverage.
+NO_LEAN_TWIN = ("arcadedb_imgdefaults_server",)
+LEAN_TWIN_ADDED = ("arcadedb_dense_server_pq",)
+
+
+def _lean_client(rows):
+    """Idempotent: the lean rows carry the client's real name, the arm without a lean twin has none, the PQ server arm has one."""
+    out = []
+    for r in rows:
+        if r.get("arcadedb_http_client_role") == "sensitivity":
+            if r["backend"] in NO_LEAN_TWIN:
+                continue
+            r = dict(r, arcadedb_http_client=lean_http.LEAN_NAME)
+        out.append(r)
+    have = {(r["lane"], r["backend"], r["scale"], r.get("workload"), r["rep"], r.get("durability_class"))
+            for r in out if r.get("arcadedb_http_client_role") == "sensitivity"}
+    for r in list(out):
+        if (r["backend"] in LEAN_TWIN_ADDED and r.get("arcadedb_http_client_role") == "headline"
+                and (r["lane"], r["backend"], r["scale"], r.get("workload"), r["rep"], r.get("durability_class")) not in have):
+            out.append(_lean_twin(r))
+    return out
+
+
 def realistic_2611(rows, deep10m=True):
     import bench_common
     import fairness_check as FC
     import override_registry as OR
-    rows = _agreeing_answers(_roster_fill([_pin_and_versions(r) for r in rows]))
+    rows = _lean_client(_agreeing_answers(_roster_fill([_pin_and_versions(r) for r in rows])))
     relaxed = next(r["durability"] for r in rows if r["backend"] == "arcadedb_embedded" and r.get("durability_class") == "relaxed")
     cap, body = OR.runner_cap(), OR.runner_body_limit()
     hash_lanes = {lane: (wl, pairs) for lane, wl, pairs in FC.ARCADEDB_HASH_ID_INDEXES}
@@ -327,7 +356,7 @@ def _deep10m_envelope_rows(rows):
     out = []
     for r in rows:
         if (r["lane"] != "l3d" or r["scale"] != "small" or r["backend"] not in overlay or r["backend"] in have
-                or int(r.get("rep") or 0) != 1):
+                or int(r.get("rep") or 0) != 1 or r.get("arcadedb_http_client_role") == "headline"):
             continue
         have.add(r["backend"])
         d = dict(r)

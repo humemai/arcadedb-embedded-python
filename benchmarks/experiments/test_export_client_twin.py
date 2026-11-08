@@ -1,6 +1,7 @@
-"""What the exporter adds for 2026-11 rows, on the publish fixture: the served ArcadeDB client twin kept out of every headline
-median and attached to the headline entry, the l4 plain-read columns, and the sentences that say what the rows stamp (the idle
-hold, the sparse warm-up, the official driver).
+"""What the exporter adds for 2026-11 rows, on the publish fixture: every served ArcadeDB headline cell comes from the
+benchmark's own HTTP client (DECISIONS #268, #285), the vendor's driver is neither printed nor named, the cell of the arm with
+no lean row is dropped and said so, the l4 plain-read columns, and the sentences that say what the rows stamp (the idle hold,
+the sparse warm-up).
 
 Run with `python -m pytest test_export_client_twin.py -q` from this directory (needs numpy and pandas, as the exporter does).
 """
@@ -18,6 +19,7 @@ import pytest
 HERE = Path(__file__).resolve().parent
 FIXTURE = HERE / "fixtures" / "publish_2611" / "results"
 PIN = "261100fix"
+LEAN = "lean_http (http.client, keep-alive)"   # lean_http.LEAN_NAME
 
 
 def _run(script, results, **extra):
@@ -35,61 +37,104 @@ def _stage(dest):
 
 
 @pytest.fixture(scope="module")
-def payloads(tmp_path_factory):
-    """(payload exported from the freeze, payload exported from the same freeze plus the twin's rows)."""
-    results = _stage(tmp_path_factory.mktemp("twin") / "results")
-    assert _run("make_paper_tables.py", results).returncode == 0
+def built(tmp_path_factory):
+    """(results dir, the paper-table run's stdout, the payload exported from the freeze)."""
+    results = _stage(tmp_path_factory.mktemp("lean") / "results")
+    proc = _run("make_paper_tables.py", results)
+    assert proc.returncode == 0, proc.stderr[-2000:]
     assert _run("export_web.py", results).returncode == 0
-    plain = json.loads((results / "web_benchmarks.json").read_text())
-    rows = list(csv.DictReader((results / "runs_paper.csv").open()))
-    fields = list(rows[0])
-    twins = [json.loads(l) for l in (results / "runs.jsonl").open() if l.strip()]
-    twins = [r for r in twins if r.get("arcadedb_http_client_role") == "sensitivity" and not r.get("error")]
-    assert twins, "the fixture carries the lean twin's rows"
-    with (results / "runs_paper.csv").open("w", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=fields)
-        w.writeheader()
-        w.writerows(rows)
-        for r in twins:
-            w.writerow({k: ("" if r.get(k) is None else r.get(k)) for k in fields})
-    assert _run("export_web.py", results).returncode == 0
-    return plain, json.loads((results / "web_benchmarks.json").read_text())
+    return results, proc.stdout, json.loads((results / "web_benchmarks.json").read_text())
+
+
+@pytest.fixture(scope="module")
+def payloads(built):
+    """(payload, payload): the old two-payload fixture's shape, for the tests below that read the plain one."""
+    return built[2], built[2]
 
 
 def _table(p, tid):
     return next(t for t in p["tables"] if t["id"] == tid)
 
 
-def test_the_twin_never_moves_a_headline_cell(payloads):
-    plain, twinned = payloads
-    for t in twinned["tables"]:
-        want = {(e["backend"], e.get("scale")): e["metrics"] for e in _table(plain, t["id"])["entries"]}
-        for e in t["entries"]:
-            assert e["metrics"] == want[(e["backend"], e.get("scale"))], (t["id"], e["backend"])
+def _raw_rows(results):
+    return [json.loads(l) for l in (results / "runs.jsonl").open() if l.strip()]
 
 
-def test_the_twin_rides_on_the_headline_entry_over_the_same_labels(payloads):
-    _plain, p = payloads
-    seen = set()
-    for t in p["tables"]:
-        for e in t["entries"]:
-            twin = e.get("client_twin")
-            if not twin:
-                continue
-            seen.add(t["id"])
-            assert twin["client"] == "lean (requests)" and e["deployment"] in ("server", "all three") or t["id"] == "lifecycle"
-            assert twin["metrics"] and set(twin["metrics"]) <= set(e["metrics"]), (t["id"], set(twin["metrics"]) - set(e["metrics"]))
-            for stat in twin["metrics"].values():
-                assert set(stat) == {"median", "min", "max", "n"}
-    assert {"docs_oltp", "docs_olap", "l2", "l3s", "l4", "lifecycle"} <= seen
-    assert not [e for t in p["tables"] for e in t["entries"] if "client_twin" in e and not e["is_arcadedb"]]
+def test_the_fixture_holds_both_clients_and_the_freeze_keeps_only_the_lean_rows(built):
+    results, out, _p = built
+    raw = [r for r in _raw_rows(results) if r.get("arcadedb_http_client")]
+    assert {r["arcadedb_http_client_role"] for r in raw} == {"headline", "sensitivity"}
+    assert any("arcadedb-driver" in r["arcadedb_http_client"] for r in raw)
+    frozen = [r for r in csv.DictReader((results / "runs_paper.csv").open()) if r.get("arcadedb_http_client")]
+    assert frozen and {r["arcadedb_http_client"] for r in frozen} == {LEAN}
+    # the arm with no lean row has no frozen row at all, and the freeze says what it set aside
+    assert not [r for r in csv.DictReader((results / "runs_paper.csv").open()) if r["backend"] == "arcadedb_imgdefaults_server"]
+    assert "not measured through the benchmark's own HTTP client" in out and "arcadedb_imgdefaults_server" in out
 
 
-def test_the_page_names_the_official_driver_and_the_labelled_sensitivity(payloads):
-    _plain, p = payloads
-    text = " ".join(_table(p, "docs_oltp")["conditions"])
-    assert "arcadedb-driver 0.2.0 (sync, httpx)" in text and "labelled sensitivity" in text and "lean (requests)" in text
-    assert not any("client" in c and "labelled sensitivity" in c for c in _table(p, "durability")["conditions"])
+def test_no_twin_and_no_vendor_driver_anywhere_on_the_page(built):
+    _results, _out, p = built
+    text = json.dumps(p)
+    assert "client_twin" not in text
+    for banned in ("arcadedb-driver", "official driver", "official Python client", "sensitivity", "httpx"):
+        assert banned not in text, banned
+    import page_check
+    assert page_check._check_banned_terms(p) == 0
+
+
+def test_the_page_names_the_benchmarks_own_client_and_says_the_others_differ(built):
+    _results, _out, p = built
+    for tid in ("docs_oltp", "docs_olap", "l2", "l3s", "l4", "lifecycle"):
+        text = " ".join(_table(p, tid)["conditions"])
+        assert LEAN in text and "benchmarks/experiments/lean_http.py" in text, tid
+        assert "vendors' own Python clients" in text and "client weight differs between the served engines" in text, tid
+        assert "lean_http.py" in " ".join(_table(p, tid)["source_urls"]), tid
+
+
+def test_the_arm_without_a_lean_row_is_not_printed_and_the_table_says_so(built):
+    _results, _out, p = built
+    t = _table(p, "docs_oltp")
+    assert not [e for e in t["entries"] if e["backend_key"] == "arcadedb_imgdefaults_server"]
+    label = "ArcadeDB (server, image JVM defaults)"
+    text = " ".join(t["conditions"])
+    assert f"{label} is not printed: it was not measured through the benchmark's own HTTP client" in text
+    assert any(a["backend"] == label and a["kind"] == "withheld" for a in t["declared_absences"])
+    assert "image's own JVM settings" not in text
+
+
+def test_the_exporter_refuses_a_frozen_row_of_the_other_client(built, tmp_path):
+    results, _out, _p = built
+    bad = tmp_path / "results"
+    shutil.copytree(results, bad)
+    rows = list(csv.DictReader((bad / "runs_paper.csv").open()))
+    served = next(r for r in rows if r["backend"] == "arcadedb_server" and r.get("arcadedb_http_client"))
+    served["arcadedb_http_client"] = "arcadedb-driver 0.2.0 (sync, httpx)"
+    with (bad / "runs_paper.csv").open("w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=list(rows[0]))
+        w.writeheader()
+        w.writerows(rows)
+    proc = _run("export_web.py", bad)
+    assert proc.returncode != 0 and "not measured through the benchmark's own HTTP client" in proc.stderr
+
+
+def test_the_exporter_refuses_an_overlay_of_the_other_client(built, tmp_path):
+    results, _out, _p = built
+    bad = tmp_path / "results"
+    shutil.copytree(results, bad)
+    fp = bad / f"dense_mp5_{PIN}" / "mp_arcsrv_b1.json"
+    passes = json.loads(fp.read_text())
+    for r in passes:
+        r["arcadedb_http_client"] = "arcadedb-driver 0.2.0 (sync, httpx)"
+    fp.write_text(json.dumps(passes))
+    proc = _run("export_web.py", bad)
+    assert proc.returncode != 0 and "overlay file(s) were not measured through the benchmark's own HTTP client" in proc.stderr
+
+
+def test_the_banned_term_gate_flags_the_driver_and_nothing_else():
+    import page_check
+    assert page_check._check_banned_terms({"conditions": ["through the official ArcadeDB Python driver"]}) == 1
+    assert page_check._check_banned_terms({"tables": [{"conditions": ["arcadedb-driver 0.2.0"]}]}) == 1
+    assert page_check._check_banned_terms({"conditions": ["through the benchmark's own minimal HTTP client"]}) == 0
 
 
 def test_l4_prints_the_plain_read_beside_the_bulk_read(payloads):

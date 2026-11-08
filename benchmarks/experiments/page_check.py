@@ -629,8 +629,12 @@ def main() -> int:
           "(CAMPAIGN section 7 row 69)")
     j_bad = _check_jvm_defaults_disclosure(payload)
     print(f"  {j_bad} table(s) missing the sentence")
+    print("\nno page text names the vendor's Python driver for ArcadeDB (DECISIONS #285)")
+    b_bad = _check_banned_terms(payload)
+    print(f"  {b_bad} banned term(s) in page text")
     return 1 if (i_bad or d_bad or a_bad or l_bad or c_bad
-                 or r_bad or m_bad or not u_ok or k_bad or o_bad or n_bad or iv_bad or ov_bad or j_bad or l_notice_bad) else 0
+                 or r_bad or m_bad or not u_ok or k_bad or o_bad or n_bad or iv_bad or ov_bad or j_bad or l_notice_bad
+                 or b_bad) else 0
 
 
 # --------------------------------------------------------------------------
@@ -1609,6 +1613,37 @@ def _check_jvm_defaults_disclosure(payload):
             print(f"    MISSING {t['id']}: prints the image-defaults ArcadeDB row and no sentence says what it runs")
             bad += 1
     return bad
+
+
+# THE VENDOR'S DRIVER IS NOT NAMED ON THE PAGE (DECISIONS #268, #285). The served ArcadeDB headline is the benchmark's own
+# HTTP client and the page says so; the vendor's driver is measured by the harness and is neither printed nor named as a
+# comparison. Any string in the payload (a condition, a label, a cell note, a source) that names it fails the gate.
+# REMOVE WHEN: upstream ships the transport fix (ArcadeData/arcadedb-drivers #188 merged and released) and the owner decides
+# to publish that client; then replace this pattern with the disclosure that client needs.
+BANNED_TERMS = re.compile(r"arcadedb[-_ ]?driver|official\s+(?:\w+\s+){0,3}?(?:driver|client)", re.I)
+
+
+def _check_banned_terms(payload):
+    """Walk every string of the payload for BANNED_TERMS. Returns bad count."""
+    bad = []
+
+    def walk(node, path=""):
+        if isinstance(node, str):
+            m = BANNED_TERMS.search(node)
+            if m:
+                bad.append((path, m.group(0), node[:100]))
+        elif isinstance(node, dict):
+            for k, v in node.items():
+                walk(k, f"{path}.<key>")
+                walk(v, f"{path}.{k}" if path else str(k))
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                walk(v, f"{path}[{i}]")
+
+    walk(payload)
+    for path, term, ctx in bad[:12]:
+        print(f"    BANNED {path}: {term!r} in {ctx!r}")
+    return len(bad)
 
 
 def _check_one_list_not_comparable(payload):

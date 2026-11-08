@@ -5,9 +5,9 @@ trip, and about three quarters of that round trip was the Python client, not the
 read costs 468 to 628 us through `requests.Session`, 119 to 150 us through a persistent `http.client` connection (3.9x), the server being
 the same. The comparators are driven by their vendors' own clients, which differ in weight: the Postgres and Mongo wire clients are light, but
 python-arango is `requests`, qdrant-client over REST is httpx plus pydantic, and elasticsearch-py is urllib3, so `requests` was heavier than most
-and the served ArcadeDB column measured the client library as much as the engine. This client is lighter than the official `arcadedb-driver`
-(httpx, published 2026-10-06), which measured 3.2x slower on a one-row read (protocol audit round 3); the 26.11.1 re-measure headlines the
-official driver and keeps this client as a disclosed sensitivity row. This module is the
+and the served ArcadeDB column measured the client library as much as the engine. This client is the headline client of the served ArcadeDB
+rows: the page and the paper name it as the benchmark's own minimal HTTP client, and say that the other engines are measured through their
+vendors' own Python clients, so client weight differs between the served engines (DECISIONS #268, #285). This module is the
 one place the lanes get their ArcadeDB HTTP session from; a lane changes by one import.
 
 The interface is the part of `requests.Session` the lanes use: `.auth` (a (user, password) tuple, sent as Basic), `.get(url, auth=, headers=, timeout=)`,
@@ -33,9 +33,9 @@ says why (ArcadeDB 26.10.1's 100 MiB request-body limit looked like `[Errno 32] 
 
 A session is for one thread. `row_fields(session)` is what a row records.
 
-THE CLIENT (CAMPAIGN section 7 rows 72 and 82): the headline is `official`, the vendor's own `arcadedb-driver` (sync, httpx) for every
-`/query` and `/command` call, and this client is the labelled sensitivity row (the runner schedules it as a twin cell and sets
-`BENCH_ARCADEDB_HTTP_CLIENT=lean` for it). Bulk loads, the server probe, transactions and NDJSON streams stay on this client.
+THE CLIENT (CAMPAIGN section 7 rows 72 and 82): the published cell of a served ArcadeDB arm is the one measured through this client
+(the runner schedules the cell as a second job and sets `BENCH_ARCADEDB_HTTP_CLIENT=lean` for it; the freeze keeps those rows and sets
+the other client's rows aside). Bulk loads, the server probe, transactions and NDJSON streams use this client in every job.
 """
 import base64
 import gzip
@@ -53,13 +53,14 @@ import zlib
 CLIENT_ENV = "BENCH_ARCADEDB_HTTP_CLIENT"
 LEAN = "lean"
 OFFICIAL = "official"
-OFFICIAL_PIN = "0.2.0"       # the arcadedb-driver release the 2026-11 headline measures; recorded per row from the installed package
+OFFICIAL_PIN = "0.2.0"       # the vendor package release the default session measures; recorded per row from the installed package
 LEAN_NAME = "lean_http (http.client, keep-alive)"
 
 
 def client_choice():
-    """'official' (the headline, the default) or 'lean' (the sensitivity twin), from BENCH_ARCADEDB_HTTP_CLIENT, which the runner
-    sets for the twin cell; anything else is refused rather than guessed."""
+    """'official' (the default while the pass runs: a mid-run change would split rows) or 'lean' (the client whose rows are
+    published), from BENCH_ARCADEDB_HTTP_CLIENT, which the runner sets for the second job of each cell; anything else is refused
+    rather than guessed."""
     v = (os.environ.get(CLIENT_ENV) or "").strip().lower()
     if v in ("", OFFICIAL):
         return OFFICIAL
@@ -448,7 +449,7 @@ def _driver_version():
 
 # ------------------------------------------------------------------------------------------------------ the factory
 def Session():  # noqa: N802 - requests' own spelling, so a lane changes by one import
-    """The ArcadeDB served arms' session: the official driver (the headline), or `LeanSession` when BENCH_ARCADEDB_HTTP_CLIENT=lean."""
+    """The ArcadeDB served arms' session: the default session, or `LeanSession` (the published client) when BENCH_ARCADEDB_HTTP_CLIENT=lean."""
     return OfficialSession() if client_choice() == OFFICIAL else LeanSession()
 
 
