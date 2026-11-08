@@ -31,7 +31,7 @@ Direct JVM method calls via JPype for embedded/local runtime access.
 - **Transport**: Direct JVM method calls (no network)
 - **Performance**: Fastest (no serialization/network overhead)
 - **Use Cases**: Single-process applications, high-performance scenarios
-- **Setup**: Nothing beyond `pip install arcadedb-embedded`: no server, no Java installation
+- **Setup**: Nothing beyond `uv add arcadedb`: no server, no Java installation
 
 ### Example
 

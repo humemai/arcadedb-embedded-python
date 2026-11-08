@@ -3560,6 +3560,10 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
            # cell ran under; make_paper_tables refuses to mix two in a table.
            "bench_host": os.environ.get("BENCH_HOST"),
            "instrument": bench_common.INSTRUMENT,
+           # THE IO FIGURES OF THIS ROW COUNT A STACKED BLOCK DEVICE ONCE (#555, memory_probe.parse_io_stat). Rows written before
+           # the fix lack this key, and the freeze halves their io figures on a stacked-device host (io_stat_correction.py);
+           # a row carrying it is never halved. Every io_* field of a row is written by this runner, so the stamp lives here.
+           "io_stat_dedup": 1,
            **({"arcadedb_http_client_role": "sensitivity"} if job.get("http_client") else {}),
            **({"arcadedb_client_wire": PGWIRE_CLIENT} if job.get("http_client") == PGWIRE_CLIENT else {}),
            # The class the cell ASKED for. The lane also stamps it, from the

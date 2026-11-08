@@ -5,7 +5,7 @@ scripts, every adapter, the image pins, the corpus recipes, and the gates. This 
 one lane end to end and says what to expect if you run it somewhere other than the bench
 host.
 
-!!! warning "This is not a `pip install` benchmark"
+!!! warning "This is not an install-and-run benchmark"
     The harness drives Docker directly. It starts a client container and, for a served
     engine, a sibling server container on a cell network, gives both the same CPU set,
     reads their cgroups back, and sizes their disks from the daemon. It needs Docker, a

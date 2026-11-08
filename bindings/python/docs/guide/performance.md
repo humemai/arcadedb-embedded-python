@@ -88,7 +88,7 @@ one choice it does not weigh is `to_arrow()` against `to_columns()`:
 
 `to_arrow()` reads the same columnar buffer as `to_columns()` into a
 `pyarrow.Table` instead of numpy. It requires the `arrow` extra
-(`pip install "arcadedb-embedded[arrow]"`) and returns `None` if pyarrow is
+(`uv add "arcadedb[arrow]"`) and returns `None` if pyarrow is
 absent, so callers can fall back. There are two reasons to prefer it, only one
 of which is speed:
 

@@ -153,12 +153,12 @@ The tag push starts the release workflow, which builds and publishes the wheels.
   deploys its docs as `latest`. If the release failed, move `latest` back (see
   [Rolling Back a Release](#rolling-back-a-release)).
 
-Only when this check passes (the publish job succeeded and PyPI shows all 16 files) go on to step 6. If it does not pass, fix that first: a GitHub release whose `pip install` line fails is worse than a late release.
+Only when this check passes (the publish job succeeded and PyPI shows all 16 files) go on to step 6. If it does not pass, fix that first: a GitHub release whose install line fails is worse than a late release.
 
 ### 6. Create the GitHub Release, After PyPI Has Every Wheel
 
 Creating the release only after the wheels are on PyPI is the right order. The release page tells
-people to `pip install arcadedb-embedded==X.Y.Z`, so it is created only once that command works for
+people to `uv add arcadedb-embedded==X.Y.Z`, so it is created only once that command works for
 every platform.
 
 ```bash
@@ -180,7 +180,7 @@ Read the previous release at that page and keep its shape:
 
 - one line saying the wheel bundles the ArcadeDB engine of that version, synced to
   upstream's release commit, with a link to the commit by its full SHA;
-- the `pip install` lines, including the optional extras;
+- the `uv add` lines, including the optional extras;
 - "Read this before upgrading": behaviour changes a working program may depend on,
   grouped under SQL, openCypher, and Through the bindings, each deliberate upstream and
   linked to its issue;
@@ -380,6 +380,10 @@ uv run --project .. --group docs mike alias --update-aliases \
 2. Edit the release
 3. Check "Set as a pre-release"
 4. Or delete the release entirely
+
+## The Last Releases: Deprecation Shims
+
+The bindings move to ArcadeData/arcadedb-python as `arcadedb` (the native build) and `arcadedb-jvm` (the JVM build). The old name `arcadedb-embedded` ends with one shim release, 26.11.1, from `bindings/python/deprecation/` (a pure-Python wheel that warns once and depends on `arcadedb`, the native build, at the same version; the warning names `arcadedb-jvm` for the JVM build). It publishes only after the native `arcadedb` 26.11.1 FINAL exists. `arcadedb-embedded-native` is archived: no further releases and no shim, and its PyPI project has no files. They are not released with the steps above: never push a `26.11.1` tag in this repository, because the release workflow would build and publish the real wheels. The cutover order and the publish options are in `bindings/python/deprecation/README.md`.
 
 ## Troubleshooting
 

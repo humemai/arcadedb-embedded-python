@@ -691,7 +691,10 @@ def check_schema_homogeneity(rows):
                      # logged, captured only once the capture worked (BUGS F1-F4).
                      # A family split on these is a split in
                      # instrumentation history, not in what was measured.
-                     "graph_build_cache", "graph_build_access", "driver_")
+                     "graph_build_cache", "graph_build_access", "driver_",
+                     # PROVENANCE, not a measurement: the harness that wrote the row counted a stacked device once (#555),
+                     # so a cell whose reps straddle the fix legitimately splits on it.
+                     "io_stat_dedup")
     def measured(r):
         return {k for k, v in r.items()
                 if isinstance(v, (int, float))

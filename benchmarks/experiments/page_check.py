@@ -794,6 +794,10 @@ NOT_PRINTED = [
     (r"^engine_backend$",
      "which ArcadeDB build ran the cell, \"native\" or \"jvm\" (arcadedb.__backend__, bench_common.engine_backend): the identity of an arm beside "
      "engine_version (arm_identity.py). the page prints the build in the arm's label (export_web groups on it), never as a column"),
+    (r"^io_stat_dedup$",
+     "provenance of the io figures (#555): 1 when the harness that wrote the row counted a stacked block device once, \"halved\" "
+     "when the freeze halved the recorded io figures of a row that predates the fix (io_stat_correction.py, raw values in "
+     "generated/io_stat_correction.json), blank otherwise; never a column"),
     (r"^jpype_version$",
      "which JPype the process that ran the cell had loaded (CAMPAIGN 7 row 73, bench_common.jpype_version): a condition of the embedded "
      "ArcadeDB arms, read from the process (`jpype.__version__`), empty for every arm that never imports it, never a column"),

@@ -487,7 +487,7 @@ class TestInputsAndErrors:
     ):
         temp_db.command("sql", "CREATE DOCUMENT TYPE NoArrow")
         monkeypatch.setitem(sys.modules, "pyarrow", None)
-        with pytest.raises(ImportError, match=r"pip install pyarrow"):
+        with pytest.raises(ImportError, match=r"uv add pyarrow"):
             temp_db.insert_dataframe("NoArrow", pd.DataFrame({"a": [1]}))
 
     def test_closed_database_is_refused(self, temp_db):

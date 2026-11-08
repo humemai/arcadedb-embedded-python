@@ -1,92 +1,46 @@
 # ArcadeDB Embedded for Python
 
-> **Moved: the Python bindings now live in [ArcadeData/arcadedb-python](https://github.com/ArcadeData/arcadedb-python).** Install `arcadedb` (the native build, the default) or `arcadedb-jvm` (the JVM build); both use `import arcadedb`. [Which package?](https://github.com/ArcadeData/arcadedb-python/blob/main/docs/modules/ROOT/pages/which-package.adoc) explains the choice. The first releases of the new packages are 26.11.1, starting as pre-releases (`pip install --pre arcadedb`). `arcadedb-embedded` and `import arcadedb_embedded` are deprecated: `arcadedb-embedded` will get a last release that installs `arcadedb`. Report bindings issues and send bindings pull requests to the new repository. This repository will be archived; the benchmark tooling stays here for now.
+> **Moved: the Python bindings now live in [ArcadeData/arcadedb-python](https://github.com/ArcadeData/arcadedb-python).** Install `arcadedb` (the native build, the default) or `arcadedb-jvm` (the JVM build); both use `import arcadedb`. [Which package?](https://github.com/ArcadeData/arcadedb-python/blob/main/docs/modules/ROOT/pages/which-package.adoc) explains the choice. Both packages are released as 26.11.1 (`uv add arcadedb`). `arcadedb-embedded` and `import arcadedb_embedded` are deprecated: the last release of `arcadedb-embedded`, 26.11.1, installs `arcadedb`. Report bindings issues and send bindings pull requests to the new repository. This repository will be archived once the benchmark tooling moves to [humemai/dbbench](https://github.com/humemai/dbbench) (planned for mid-November 2026, after the last measuring pass); until then the tooling stays here.
 
-Native Python bindings for ArcadeDB (forked from the official Java project).
-
-[![PyPI](https://img.shields.io/pypi/v/arcadedb-embedded)](https://pypi.org/project/arcadedb-embedded/)
-[![PyPI - Python
-Version](https://img.shields.io/pypi/pyversions/arcadedb-embedded)](https://pypi.org/project/arcadedb-embedded/)
+[![PyPI](https://img.shields.io/pypi/v/arcadedb)](https://pypi.org/project/arcadedb/)
 [![Docs](https://img.shields.io/badge/docs-arcadedb.com-892122)](https://docs.arcadedb.com/arcadedb-python/)
-[![Test Python
-Bindings](https://github.com/humemai/arcadedb-embedded-python/actions/workflows/test-python-bindings.yml/badge.svg)](https://github.com/humemai/arcadedb-embedded-python/actions/workflows/test-python-bindings.yml)
-[![Test Python
-Examples](https://github.com/humemai/arcadedb-embedded-python/actions/workflows/test-python-examples.yml/badge.svg)](https://github.com/humemai/arcadedb-embedded-python/actions/workflows/test-python-examples.yml)
-[![Release to
-PyPI](https://github.com/humemai/arcadedb-embedded-python/actions/workflows/release-python-packages.yml/badge.svg)](https://github.com/humemai/arcadedb-embedded-python/actions/workflows/release-python-packages.yml)
 
 ---
 
-## ✨ What this repo provides
+## What is in this repository
 
-- Native Python bindings for ArcadeDB with a bundled JRE (no local Java required).
-- **Wheels for 4 platforms: Linux x86_64, Linux ARM64, macOS Apple Silicon, and Windows x86_64.**
-- Embedded usage (in-process) with optional in-process server mode (HTTP API; Studio is not bundled, see [ArcadeData/arcadedb#10579](https://github.com/ArcadeData/arcadedb/issues/10579)).
-- Tests and examples validated in CI across supported platforms.
+- `benchmarks/`: the benchmark harness for ArcadeDB and its comparators, and the published results. Start with [benchmarks/README.md](benchmarks/README.md).
+- `bindings/python/`: the source of the `arcadedb-embedded` releases up to 26.10.2.post1. It is kept for history and for the benchmark harness, and new work on the bindings goes to [ArcadeData/arcadedb-python](https://github.com/ArcadeData/arcadedb-python).
+- The rest is a fork of the ArcadeDB Java project, which this repository does not change.
 
-The Python bindings and packaging live under bindings/python. The upstream Java project
-remains the source of the core database.
+## Use the Python bindings
 
-## 🧱 What’s inside
-
-- bindings/python: Python package source, build scripts, tests, and examples.
-- docs site: [https://docs.arcadedb.com/arcadedb-python/](https://docs.arcadedb.com/arcadedb-python/)
-- CI: Build/test workflows for bindings and examples (badges above).
-
-## ✅ Typical use cases
-
-- Local embedded analytics without a separate server process.
-- Vector search and graph workloads from Python.
-- Running ArcadeDB in-process for testing or tooling.
-
-## 🧠 ArcadeDB at a glance
-
-- Multi-model database built for performance.
-- Document + Graph + Key/Value + Vector + Time Series in one engine.
-- Supports SQL and OpenCypher query languages.
-
-## 📦 What the wheel includes
-
-- Approximate size: ~65 MiB download, ~86 MiB installed.
-- Lightweight Java 25 runtime (jlink) bundled per platform.
-- ArcadeDB JARs required for the embedded engine.
-- Python bindings and source modules.
-
-## ✨ ArcadeDB capabilities (via Python)
-
-- Multi-model: Graph, Document, Key/Value, Vector, Time Series.
-- Query languages: SQL, OpenCypher.
-- ACID transactions and high performance.
-
-## 🚀 Quick start (Python)
+Install the package and read the documentation from the new repository:
 
 ```bash
-uv add arcadedb-embedded   # or: pip install arcadedb-embedded
+uv add arcadedb   # native build, the default
+uv add arcadedb-jvm   # JVM build, only if you need it
 ```
 
-## 🔗 Quick Links
+- Documentation: [https://docs.arcadedb.com/arcadedb-python/](https://docs.arcadedb.com/arcadedb-python/)
+- Repository, issues and pull requests: [ArcadeData/arcadedb-python](https://github.com/ArcadeData/arcadedb-python)
+- PyPI: [arcadedb](https://pypi.org/project/arcadedb/) and [arcadedb-jvm](https://pypi.org/project/arcadedb-jvm/)
 
-- Python README: [bindings/python/README.md](bindings/python/README.md)
-- PyPI:
-  [https://pypi.org/project/arcadedb-embedded/](https://pypi.org/project/arcadedb-embedded/)
+## Upstream ArcadeDB (Java)
 
-## 🧭 Upstream ArcadeDB (Java)
+This repository is a fork of ArcadeDB Java. For the server, the Java API, and the core database documentation:
 
-This repo is a fork of ArcadeDB Java. For the server, Java API, and core database docs:
-
-- Upstream repo:
-  [https://github.com/ArcadeData/arcadedb](https://github.com/ArcadeData/arcadedb)
-- Docs: [https://docs.arcadedb.com](https://docs.arcadedb.com)
-
-## 💬 Support & community
-
-- Issues (Python bindings):
-  [https://github.com/humemai/arcadedb-embedded-python/issues](https://github.com/humemai/arcadedb-embedded-python/issues)
+- Upstream repository: [https://github.com/ArcadeData/arcadedb](https://github.com/ArcadeData/arcadedb)
+- Documentation: [https://docs.arcadedb.com](https://docs.arcadedb.com)
 - ArcadeDB Discord: [https://discord.gg/w2Npx2B7hZ](https://discord.gg/w2Npx2B7hZ)
 
-## 📄 License
+## Support
 
-Both upstream ArcadeDB (Java) and this ArcadeDB Embedded Python project are licensed
+- Benchmark issues: [https://github.com/humemai/arcadedb-embedded-python/issues](https://github.com/humemai/arcadedb-embedded-python/issues)
+- Bindings issues: [https://github.com/ArcadeData/arcadedb-python/issues](https://github.com/ArcadeData/arcadedb-python/issues)
 
-Arcade Data, the company behind ArcadeDB, has [committed in writing](https://arcadedb.com/blog/open-source-forever-why-arcadedb-will-never-change-its-license/) to keeping the engine Apache 2.0, and HumemAI, the company behind this package, makes the same commitment for the Python bindings.
-under Apache 2.0, fully open and free for everyone, including commercial use.
+## License
+
+Both upstream ArcadeDB (Java) and the Python bindings are licensed under Apache 2.0, fully open and free for everyone, including commercial use.
+
+Arcade Data, the company behind ArcadeDB, has [committed in writing](https://arcadedb.com/blog/open-source-forever-why-arcadedb-will-never-change-its-license/) to keeping the engine Apache 2.0, and HumemAI makes the same commitment for the Python bindings.

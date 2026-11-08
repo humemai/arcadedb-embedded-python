@@ -1,0 +1,17 @@
+{
+  "comment": "Rows whose ts_utc falls in [from, to) are never landed (land_stage.py step 2, issue #557). Add a window only with its reason and a reference.",
+  "windows": [
+    {
+      "from": "2026-10-31T16:33:00+00:00",
+      "to": "2026-11-01T05:25:00+00:00",
+      "reason": "mini: intel_pstate/no_turbo went back to 0 during stage qC14 (dense, large tier, rep 2); its rows ran 0.40 to 0.75x rep 1 build time while turbo-off stages matched rep 1; qC14 is re-run with turbo off",
+      "ref": "humemai/arcadedb-embedded-python#557"
+    },
+    {
+      "from": "2026-11-01T05:26:21+00:00",
+      "to": "2026-11-03T14:37:57+00:00",
+      "reason": "mini: the 2026-11-01 sequential relaunch started stages qC15..qC23 directly instead of through launch.sh, so BENCH_CPU_DMA_LATENCY_US was unset and the runner held the CPU idle state at 0 us instead of the pass's 10 us (rows carry cpu_dma_latency_us 0); non-dense builds ran about 1.3x their rep 1; restored from qC24 (its manifests carry 10), qC14 and qC15..qC23 are re-run at 10 us; the window also covers the 65 s turbo flip in qC22 on 2026-11-03",
+      "ref": "humemai/arcadedb-embedded-python#560"
+    }
+  ]
+}

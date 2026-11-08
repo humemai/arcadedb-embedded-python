@@ -259,7 +259,7 @@ sims = emb @ query_vector      # immediately usable
 ### `to_polars(batch_size: int = 25_000, columns: Optional[Sequence[str]] = None)`
 
 Bulk-materialize all rows as a `polars.DataFrame`, through `to_arrow()`. Requires polars
-and pyarrow (`pip install 'arcadedb-embedded[polars]'`). Everything said for `to_arrow()`
+and pyarrow (`uv add 'arcadedb[polars]'`). Everything said for `to_arrow()`
 holds: nulls keep their column type, a `DECIMAL` column is a Polars `Decimal`, and a
 `DATE` or `DATETIME` column is `Datetime("ms")`, the precision the columnar bridge
 carries.

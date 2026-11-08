@@ -28,7 +28,7 @@ try:
     from lxml import etree
 except ImportError:
     print("Missing dependency: lxml")
-    print("Install with: pip install lxml")
+    print("Install with: uv add lxml")
     sys.exit(1)
 
 

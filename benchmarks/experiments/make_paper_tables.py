@@ -89,6 +89,7 @@ def _commit_matches(row_commit):
 HERE = os.path.dirname(os.path.abspath(__file__))
 import publish_instrument as _PI
 import arm_identity as _AI
+import io_stat_correction as _IOC
 RESULTS = str(_PI.results_dir())
 
 # Every published cell is N=5. A row outside 1..5 is a probe, not a repetition;
@@ -228,6 +229,17 @@ def _write_withheld_recall():
         # script, which is an outage, so the generator emits what the hook
         # wants rather than fighting it once a day.
         fh.write("\n")
+
+
+def _write_io_stat_correction(report):
+    """Sidecar beside the freeze: which rows had their io figures halved, with the raw values (io_stat_correction.py)."""
+    out = os.path.join(GENERATED, "io_stat_correction.json")
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    with open(out, "w") as fh:
+        json.dump(report, fh, indent=1)
+        fh.write("\n")   # the end-of-file hook wants it; see _write_withheld_recall
+    print(f"io.stat correction: {report['rows_corrected']} of {report['rows_frozen']} frozen rows halved, "
+          f"{report['rows_stamped_untouched']} stamped io_stat_dedup=1 and left as recorded")
 
 
 def _assert_lanes_registered():
@@ -1391,6 +1403,10 @@ def freeze_paper_rows(rows):
     recompute every T2/T3 cell from this file alone.
     """
     import csv as _csv
+    # THE IO.STAT DOUBLE COUNT (#555): rows of a host that stacks block devices, written before the fixed harness, carry io figures at
+    # twice their value. They are halved in the FROZEN copy only; runs.jsonl keeps the raw rows and the sidecar the raw values.
+    rows, io_report = _IOC.correct_rows(rows)
+    _write_io_stat_correction(io_report)
     cols = []
     for r in rows:
         for k in r:
