@@ -413,6 +413,9 @@ def main():
                     help="dense multipass arm token to pull at both sizes (e.g. neo4jvec, pgvector)")
     ap.add_argument("--message", required=True, help="one-line commit subject for both repos")
     ap.add_argument("--apply", action="store_true", help="build, commit and push; default stops after the diff")
+    ap.add_argument("--post1-reps", type=int, default=0, metavar="N",
+                    help="also pull runs_page_<pin>_2611_post1.jsonl (the wheels-only rerun) and land, per cell, the rows of ONE wheel "
+                         "(post1_rows.resolve at N repetitions); exits nonzero on a cell that would mix wheels or is short of repetitions. Off by default")
     ap.add_argument("--dry-run", action="store_true",
                     help="pull and filter, then STOP before the merge. Without this, "
                          "a run with no --apply still merges: --apply governs the "
@@ -523,6 +526,22 @@ def main():
     excl = {b.strip() for b in args.exclude_backends.split(",") if b.strip()}
     lanes = {l.strip() for l in args.only_lanes.split(",") if l.strip()}
     rows = [json.loads(l) for l in pulled.read_text().splitlines() if l.strip()]
+    if args.post1_reps:
+        import post1_rows
+        _p1 = SCRATCH / "runs_page_host_post1.jsonl"
+        sh(["scp", "-q", f"{HOST}:{REMOTE}/{host_name('runs_page', args.pin, '_post1.jsonl')}", str(_p1)])
+        rows, _dec, _prob = post1_rows.resolve(rows + post1_rows.load_jsonl(str(_p1)), args.post1_reps)
+        for _d in _dec:
+            print("  post1: " + _d)
+        if _prob:
+            sys.exit("REFUSING: the post1 rows do not resolve to one wheel per cell, nothing was merged:\n  " + "\n  ".join(_prob))
+        pulled = SCRATCH / "runs_page_host_resolved.jsonl"
+        pulled.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    # A BUILD-ONLY ROW IS NOT A CELL (post1_rows.py): it has no timed figure, and the canonical rule (newest ts_utc per key) would let it
+    # shadow a full row. It reaches the freeze only merged into a full row by --post1-reps; any other way is refused.
+    _bo = [r for r in rows if r.get("row_kind") == "build_only"]
+    if _bo:
+        sys.exit(f"REFUSING: {len(_bo)} build-only row(s) in the pulled rows; land them with --post1-reps N (post1_rows.py), never as cells")
     # Before the --exclude filters and before any merge: the whole file is one instrument at one pin or it is not landed.
     screen_pulled_rows(rows, args.pin, host_name("runs_page", args.pin, ".jsonl") + f" on {HOST}")
     unless = [parse_drop_unless(x) for x in args.drop_unless]
