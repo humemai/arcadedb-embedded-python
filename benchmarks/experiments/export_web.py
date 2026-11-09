@@ -5036,9 +5036,6 @@ def _served_client_table(table):
     return any(_is_served_arcadedb(e.get("backend_key")) for e in table.get("entries") or [])
 
 
-_PG_TWIN_ROWS = []
-
-
 # What a headline served row still sends over the benchmark's own lean HTTP client (lean_http.OfficialSession: everything the driver has no
 # call for), stated once so the sentence under a table cannot say the driver timed "every call" (DECISIONS #259 (4)).
 _SERVED_LEAN_SCOPE = ("Bulk loads, the server probe, transactions, and streamed results go through the benchmark's own lean HTTP client in "
