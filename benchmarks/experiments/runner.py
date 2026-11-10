@@ -46,6 +46,7 @@ sys.path.insert(0, HERE)
 import bench_common  # noqa: E402  (INSTRUMENT, stamped on every row)
 import memory_probe  # noqa: E402  (memory per phase, instrument 2026-11 only)
 import vendor_memory  # noqa: E402  (Neo4j's and Elasticsearch's own memory rules, DECISIONS #202)
+import post1_rows  # noqa: E402  (build-only mode and the wheel label of a wheels-only rerun; inert unless the stage opts in)
 DATA = os.path.abspath(os.environ.get("BENCH_DATA", os.path.join(HERE, "data")))
 RESULTS = os.path.join(HERE, "results")
 RAW = os.path.join(RESULTS, "raw")
@@ -3936,7 +3937,9 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                    # the sparse lane's warm-up count (row 81, DECISIONS #177); the lane reads it in the container
                    "BENCH_SPARSE_WARMUP",
                    # the served ArcadeDB time-series arms read query answers as NDJSON, OFF unless set (row 85)
-                   "BENCH_ARCADEDB_TS_NDJSON"):
+                   "BENCH_ARCADEDB_TS_NDJSON",
+                   # build-only mode (post1_rows.py): the lane stops after build(); forwarded only when the launcher set it
+                   "BENCH_BUILD_ONLY"):
             if os.environ.get(_k):
                 bench_env += ["-e", f"{_k}={os.environ[_k]}"]
 
@@ -4688,9 +4691,20 @@ def main():
                          "rep), so an N=1 smoke at a paper scale silently "
                          "supersedes rep 1 of a finished cell and the table "
                          "then prints one smoke row beside four real ones.")
+    ap.add_argument("--build-only", action="store_true",
+                    help="stop each cell after build() and record only the load and index figures, with row_kind=build_only (post1_rows.py). "
+                         "Needs a results file named like runs_page_<pin>_2611_post<N>.jsonl: a build-only row is not a cell and must never "
+                         "sit in the pass's own rows file")
     args = ap.parse_args()
     if os.sep in args.results_file or args.results_file.startswith("."):
         ap.error("--results-file is a bare filename under results/")
+    if args.build_only:
+        if args.driver:
+            ap.error("--build-only and --driver exclude each other: an overlay driver times queries, there is nothing to stop after")
+        if not re.search(r"_post\d+\.jsonl$", args.results_file) and os.environ.get("BENCH_ALLOW_BUILD_ONLY_ANY_FILE") != "1":
+            ap.error("--build-only writes build-only rows, which are not cells: the results file must end in _post<N>.jsonl "
+                     "(runs_page_<pin>_2611_post1.jsonl), never the pass's own rows file")
+        os.environ["BENCH_BUILD_ONLY"] = "1"
 
     if args.mem:
         # Paired with --heap: raising the heap without raising the cap puts the
@@ -4893,6 +4907,7 @@ def main():
                     row = run_cell(job, rep, args.scale, shard, args.tier, net_name)
                     _hold.stamp(row)
                     precell_gate_stamp(row)
+                    post1_rows.stamp_row(row)   # adds nothing unless BENCH_WHEEL_LABEL / BENCH_BUILD_ONLY is set (post1_rows.py)
             except Exception:
                 with cv:
                     raised.append(f"{job['lane']}_{job['backend']}_r{rep}")
