@@ -65,3 +65,31 @@ def test_the_wheel_script_takes_its_work_directory_from_the_environment():
     # the matched-pair builder deletes its work directory: it must refuse an empty or root one
     pair = (HERE / "build_matched_pair.sh").read_text()
     assert 'rm -rf "$WORK"' in pair and '[ "$WORK" != / ]' in pair
+
+
+# A wheels-only X.Y.Z.postN carries the engine of X.Y.Z (DECISIONS #297): the native package's _build_info.ENGINE_VERSION says X.Y.Z while the wheel
+# is X.Y.Z.postN, and the pair check refused it ("PAIR UNVERIFIED ... native engine is '26.11.1', the wheel is 26.11.1.post2") on the 2026-11-11 smoke.
+@pytest.mark.parametrize("engine,wheel,ok", [
+    ("26.11.1", "26.11.1.post2", True),          # the post2 native wheel: engine of its base version
+    ("26.11.1", "26.11.1.post1", True),
+    ("26.11.1", "26.11.1", True),
+    ("26.11.1.dev0", "26.11.1.dev0", True),      # unchanged: .devN on both sides
+    ("26.11.1", "26.11.1.dev0", True),           # unchanged: a snapshot jar reports the bare version
+    ("26.11.2", "26.11.1.post2", False),         # a different base version must still fail
+    ("26.11.1", "26.11.2.post2", False),
+    ("26.11.1.post2", "26.11.1.post2", False),   # only the wheel side is stripped: an engine that says .postN is not the engine of 26.11.1
+    ("26.11.1", "26.11.1.postx", False),         # .postN needs digits
+    ("", "26.11.1.post2", False),                # the image did not answer
+])
+def test_the_pair_check_compares_the_engine_with_the_wheels_base_version(engine, wheel, ok):
+    out = subprocess.run(["bash", str(HERE / "verify_pair_c25.sh"), "dummy-argument"], capture_output=True, text=True,
+                         env={**os.environ, "BENCH_PAIR_VERSION_CHECK": f"{engine} {wheel}".strip()})
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip() == ("MATCH" if ok else "MISMATCH"), (engine, wheel, out)
+
+
+def test_the_native_engine_check_calls_that_comparison():
+    """The tested function is the one the check runs, and the old .devN-only comparison is gone."""
+    text = (HERE / "verify_pair_c25.sh").read_text()
+    assert 'engine_matches "$NV" "$WV" || fail' in text
+    assert '[ "${NV%.dev*}" = "${WV%.dev*}" ]' not in text

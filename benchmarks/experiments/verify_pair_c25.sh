@@ -23,6 +23,19 @@ IMG="${PAIR_IMAGE:-arcadedb-c25:${SHORT}}"
 # tree and exits (test_pair_scripts.py holds this).
 REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../.." && pwd)"
 [ -z "${BENCH_PRINT_REPO:-}" ] || { echo "REPO=$REPO"; exit 0; }
+# engine_matches <the engine version the image reports> <the wheel's version>.
+# A .devN wheel reports its own .devN (or the bare X.Y.Z of a snapshot jar), so .devN is dropped on both sides, as it always was.
+# A wheels-only X.Y.Z.postN ships the engine of X.Y.Z (DECISIONS #297; engine_pin.jar_pin says the same for the jars), and the native
+# package's `_build_info.ENGINE_VERSION` says X.Y.Z, so .postN is dropped on the WHEEL side only, after the .devN step (a .devN of a post
+# version does not exist). Anything else must be equal: 26.11.2 against 26.11.1.post2 fails, and so does an engine that says .postN.
+# BENCH_PAIR_VERSION_CHECK="<engine> <wheel>" prints MATCH or MISMATCH and exits, with no docker (test_pair_scripts.py).
+engine_matches() {
+  local e=${1-} w=${2-}
+  e=${e%.dev*}; w=${w%.dev*}
+  [[ $w =~ ^(.+)\.post[0-9]+$ ]] && w=${BASH_REMATCH[1]}
+  [ "$e" = "$w" ]
+}
+[ -z "${BENCH_PAIR_VERSION_CHECK:-}" ] || { set -- ${BENCH_PAIR_VERSION_CHECK}; if engine_matches "${1-}" "${2-}"; then echo MATCH; else echo MISMATCH; fi; exit 0; }
 # The image the embedded arm runs: dbbench:arcadedb-<version> (build_images.sh tags it with the wheel's version; there is no floating tag).
 EMBEDDED_IMAGE="${EMBEDDED_IMAGE:-}"
 fail() { echo "PAIR UNVERIFIED: $*"; exit 1; }
@@ -99,7 +112,7 @@ fi
 # disk is not the engine a cell ran; the image is.
 if [ "$WB" = native ] && docker image inspect "$EMBEDDED_IMAGE" >/dev/null 2>&1; then
   NV=$(docker run --rm --entrypoint python3 "$EMBEDDED_IMAGE" -c "from arcadedb._build_info import ENGINE_VERSION as v; print(v)" 2>/dev/null | tr -dc '0-9a-zA-Z.-')
-  [ "${NV%.dev*}" = "${WV%.dev*}" ] || fail "$EMBEDDED_IMAGE's native engine is '$NV', the wheel is $WV (rebuild it with ARCADEDB_WHEEL set)"
+  engine_matches "$NV" "$WV" || fail "$EMBEDDED_IMAGE's native engine is '$NV', the wheel is $WV (rebuild it with ARCADEDB_WHEEL set)"
   # 4b. THE COMMIT THE NATIVE ENGINE REPORTS, asked in SQL inside the image that will run the cells.
   NSHA=$(docker run --rm --entrypoint python3 "$EMBEDDED_IMAGE" -c "
 import os, tempfile, arcadedb
