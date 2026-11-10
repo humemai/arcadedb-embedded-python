@@ -33,6 +33,7 @@ own output and a tracked copy breaks its pull.
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -380,6 +381,7 @@ def main():
                     help="dense multipass arm token to pull at both sizes (e.g. neo4jvec, pgvector)")
     ap.add_argument("--message", required=True, help="one-line commit subject for both repos")
     ap.add_argument("--apply", action="store_true", help="build, commit and push; default stops after the diff")
+    ap.add_argument("--post-tag", default="post1", metavar="postN", help="the rerun whose rows file --post1-reps pulls: runs_page_<pin>_2611_<postN>.jsonl (default post1)")
     ap.add_argument("--post1-reps", type=int, default=0, metavar="N",
                     help="also pull runs_page_<pin>_2611_post1.jsonl (the wheels-only rerun) and land, per cell, the rows of ONE wheel "
                          "(post1_rows.resolve at N repetitions); exits nonzero on a cell that would mix wheels or is short of repetitions. Off by default")
@@ -495,8 +497,10 @@ def main():
     rows = [json.loads(l) for l in pulled.read_text().splitlines() if l.strip()]
     if args.post1_reps:
         import post1_rows
-        _p1 = SCRATCH / "runs_page_host_post1.jsonl"
-        sh(["scp", "-q", f"{HOST}:{REMOTE}/{host_name('runs_page', args.pin, '_post1.jsonl')}", str(_p1)])
+        if not re.fullmatch(r"post\d+", args.post_tag):
+            sys.exit(f"REFUSING: --post-tag {args.post_tag!r} must look like post2")
+        _p1 = SCRATCH / f"runs_page_host_{args.post_tag}.jsonl"
+        sh(["scp", "-q", f"{HOST}:{REMOTE}/{host_name('runs_page', args.pin, '_' + args.post_tag + '.jsonl')}", str(_p1)])
         rows, _dec, _prob = post1_rows.resolve(rows + post1_rows.load_jsonl(str(_p1)), args.post1_reps)
         for _d in _dec:
             print("  post1: " + _d)
