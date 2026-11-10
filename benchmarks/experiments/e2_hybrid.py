@@ -2378,6 +2378,11 @@ def main():
     # strong claim while demonstrating the weak one. Declared per adapter;
     # "not declared" is honest about the ones that have not been asked yet.
     out["txn_scope"] = getattr(b, "TXN_SCOPE", "not declared")
+    # BUILD-ONLY MODE (post1_rows.py, runner.py --build-only): stop here, after build() and before any timed work, and write the row
+    # marked row_kind=build_only. Unset by default, so nothing below changes for any run that does not ask for it.
+    if os.environ.get("BENCH_BUILD_ONLY") == "1":
+        import post1_rows
+        post1_rows.finish_build_only(out, args.out, b)
 
     if args.workload == "hybrid":
         # ------------------------------------------------------------------

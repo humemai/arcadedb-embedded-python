@@ -1999,6 +1999,11 @@ def main():
     # from one place (DECISIONS #90).
     bench_common.stamp_durability(out, getattr(b, "durability", None))
     out["instrument"] = bench_common.INSTRUMENT
+    # BUILD-ONLY MODE (post1_rows.py, runner.py --build-only): stop here, after build() and before any timed work, and write the row
+    # marked row_kind=build_only. Unset by default, so nothing below changes for any run that does not ask for it.
+    if os.environ.get("BENCH_BUILD_ONLY") == "1":
+        import post1_rows
+        post1_rows.finish_build_only(out, args.out, b)
     if args.workload == "olap":
         out["olap_iters"] = OLAP_ITER
         # THE Q1 THIS ROW RAN (row 57, BUGS F170): all ten of TPC-H Q1's output columns. The page's

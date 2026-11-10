@@ -124,6 +124,12 @@ def check_image_tag(image, pin=None, backend=""):
     return None
 
 
+def jar_pin(pin):
+    """The engine jar version a pin stands for: a wheels-only X.Y.Z.postN carries the engine jars of X.Y.Z (DECISIONS #297; the byte-identity
+    of the jars is checked at the release), so its jar is named X.Y.Z. Every other pin is its own jar version (post1_rows.py, the post1 rerun)."""
+    return re.sub(r"\.post\d+$", "", pin or "")
+
+
 def normalize_jar_version(v):
     """The jar of a snapshot build says 26.11.1-SNAPSHOT where its wheel says 26.11.1.dev0."""
     return re.sub(r"-SNAPSHOT$", ".dev0", v)
@@ -244,13 +250,13 @@ def verify(pin, embedded_images=(), served_images=(), run=None, backend="", comm
             readback[image]["engine_commit"] = sha
         if backend and got["backend"] != backend:
             problems.append(f"{image} carries {got['dist']} ({got['backend']} build), the stage pins the {backend} build")
-        if got["engine_jar"] != [pin]:
+        if got["engine_jar"] != [jar_pin(pin)]:
             problems.append(f"{image} ships engine jar {','.join(got['engine_jar']) or '(none)'}, the stage pins {pin}")
     for image in sorted(set(served_images)):
         got, err = read_served(image, run)
         readback[image] = got
         if err:
             problems.append(f"{image}: {err}")
-        elif got["engine_jar"] != [pin]:
+        elif got["engine_jar"] != [jar_pin(pin)]:
             problems.append(f"{image} loads engine jar {','.join(got['engine_jar']) or '(none)'}, the stage pins {pin}")
     return readback, problems
