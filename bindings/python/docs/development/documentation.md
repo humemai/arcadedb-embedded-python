@@ -322,7 +322,7 @@ The Material theme is mobile-responsive by default. Test by:
 
 ## Continuous Integration
 
-The `Docs Build` workflow (`docs-build.yml`) runs `mkdocs build --strict` on every pull request
+The `Docs Build` workflow (`docs-build.yml`) first runs `brand/verify.sh`, which fails when the vendored design system in `docs/brand/` was edited by hand, then runs `mkdocs build --strict` on every pull request
 and every push to `main` that changes `bindings/python/docs/**`, `bindings/python/mkdocs.yml` or the workflow.
 `deploy-python-docs.yml` runs only on a version tag or a manual dispatch, and it runs
 `mike deploy`, not a strict build. Run the strict build locally before you push a docs

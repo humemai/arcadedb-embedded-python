@@ -88,7 +88,7 @@ A newer push to a pull request cancels the older run of this workflow; runs on `
 
 ### `docs-build.yml`
 
-Named `Docs Build`. Runs `mkdocs build --strict` (Python 3.12, pinned `mkdocs`, `mkdocs-material` and plugin versions, run with `uvx`; `deploy-python-docs.yml` runs `mike` with the same versions) on pull requests and pushes to `main` that change `bindings/python/docs/**`, `bindings/python/mkdocs.yml` or the workflow, and on manual dispatch. It does not run the code blocks in the pages. See [Documentation](documentation.md#build-documentation).
+Named `Docs Build`. First checks that the vendored design system in `bindings/python/docs/brand/` still matches the hash in its `VERSION.md` (`brand/verify.sh`), so a hand edit of the copy fails. Then runs `mkdocs build --strict` (Python 3.12, pinned `mkdocs`, `mkdocs-material` and plugin versions, run with `uvx`; `deploy-python-docs.yml` runs `mike` with the same versions) on pull requests and pushes to `main` that change `bindings/python/docs/**`, `bindings/python/mkdocs.yml` or the workflow, and on manual dispatch. It does not run the code blocks in the pages. See [Documentation](documentation.md#build-documentation).
 
 ### `build-engine-jars.yml`
 
