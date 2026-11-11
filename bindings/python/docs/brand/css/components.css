@@ -49,4 +49,230 @@
   .hm-card {
     transition: none;
   }
+
+  .hm-card:hover,
+  .hm-card:focus-visible {
+    transform: none;
+  }
+}
+
+/* Hint: a term's short explanation. A small ? beside the word, opened by hover
+   with a mouse and by click, tap or Enter everywhere (humemai/design-system #12,
+   mirrored from Stateloop's .stl-hint of 2026-11-06). A native title="" tooltip
+   never shows on a touch screen and a keyboard cannot reach it. The button is a
+   circle, the one round shape here: a help mark is an icon people recognise by
+   that shape, not a container. It is --hm-tap-min (24px, the WCAG 2.5.8 floor)
+   on both sides, and its minimum sizes are set too, because an app's own
+   button { min-height } would otherwise stretch the circle into an oval. At
+   999px and narrower it keeps its 24px mark and grows a 44px hit area (the
+   ::after), not its layout. The border is --hm-border-control, 3:1 on every page
+   surface; hover, focus and the open state turn the border and the mark to the
+   brand colour, and a keyboard gets the focus ring. The bubble is a popover in
+   the top layer, so a scrolling table or a sheet cannot clip it; js/hint.js
+   places it under its button (above it near the bottom) and keeps it on screen,
+   and it stays hidden until placed so it never flashes in a corner. The hint
+   sits beside its term, often inside an all-caps, letter-spaced column head, so
+   the button and the bubble reset every inherited text style: the definition
+   must read as body text. Only for a word a person cannot act without knowing;
+   anything needed to act stays visible. */
+.hm-hint {
+  box-sizing: border-box;
+  display: inline-grid;
+  place-items: center;
+  inline-size: var(--hm-tap-min);
+  block-size: var(--hm-tap-min);
+  min-inline-size: var(--hm-tap-min);
+  min-block-size: var(--hm-tap-min);
+  margin-inline-start: var(--hm-space-1);
+  padding: 0;
+  border: 1px solid var(--hm-border-control);
+  border-radius: var(--hm-radius-pill);
+  background: transparent;
+  color: var(--hm-text-muted);
+  font-family: var(--hm-font-text);
+  font-size: var(--hm-text-xs);
+  font-style: normal;
+  font-weight: var(--hm-weight-semibold);
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  vertical-align: middle;
+  cursor: help;
+}
+
+.hm-hint:hover,
+.hm-hint:focus-visible,
+.hm-hint[aria-expanded="true"] {
+  border-color: var(--hm-brand);
+  color: var(--hm-brand);
+}
+
+.hm-hint:focus-visible {
+  outline: 2px solid var(--hm-focus);
+  outline-offset: 2px;
+}
+
+.hm-hint__bubble {
+  box-sizing: border-box;
+  inset: auto;
+  margin: 0;
+  max-inline-size: min(calc(var(--hm-measure) / 2), calc(100vw - 2 * var(--hm-space-4)));
+  padding: var(--hm-space-2) var(--hm-space-3);
+  border: 1px solid var(--hm-border-strong);
+  border-radius: var(--hm-radius-md);
+  background: var(--hm-surface-raised);
+  color: var(--hm-text);
+  font-family: var(--hm-font-text);
+  font-size: var(--hm-text-sm);
+  font-style: normal;
+  font-weight: var(--hm-weight-regular);
+  line-height: 1.45;
+  text-align: start;
+  text-indent: 0;
+  text-transform: none;
+  letter-spacing: normal;
+  word-spacing: normal;
+  white-space: normal;
+  box-shadow: var(--hm-shadow-md);
+}
+
+.hm-hint__bubble:not([data-placed]) {
+  visibility: hidden;
+}
+
+.hm-hint__bubble a {
+  color: var(--hm-link);
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+.hm-hint__bubble a:hover {
+  color: var(--hm-link-hover);
+}
+
+@media (max-width: 999px) {
+  .hm-hint {
+    position: relative;
+  }
+
+  .hm-hint::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: var(--hm-tap-comfort);
+    height: var(--hm-tap-comfort);
+    transform: translate(-50%, -50%);
+  }
+}
+
+/* Table: a data table inside a scroller that a keyboard can reach. Mirrored
+   from the Humem Tower's tables (humemai/design-system#14); Stateloop's .stl-table
+   has no scroller, but its rule holds here too: a scroller has a name and a way
+   in from the keyboard. Wrap the table in .hm-table-scroll and give the wrapper
+   role="region", tabindex="0" and an aria-label naming the table; without them
+   a keyboard cannot scroll a wide table (the benchmark scroller on humem.ai
+   lacked all three). Only the wrapper scrolls, so the page never does. The
+   table is border-collapse: separate with no spacing, not collapse, because a
+   collapsed table drops the borders of a sticky header cell when it scrolls.
+   Text is --hm-text-sm (14px), the system's table size. Column widths are the
+   page's own: the Tower sets them by column role, the website by layout, and
+   neither belongs here. */
+.hm-table-scroll {
+  margin: 0 0 var(--hm-space-4);
+  overflow-x: auto;
+  background: var(--hm-surface);
+  border: 1px solid var(--hm-border);
+  border-radius: var(--hm-radius-md);
+}
+
+.hm-table {
+  inline-size: 100%;
+  margin: 0;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: var(--hm-text-sm);
+  line-height: 1.4;
+}
+
+.hm-table th,
+.hm-table td {
+  padding: var(--hm-space-1) var(--hm-space-2);
+  border-bottom: 1px solid var(--hm-border);
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: break-word;
+}
+
+.hm-table th {
+  background: var(--hm-surface-sunken);
+  border-bottom: 2px solid var(--hm-border-strong);
+  font-weight: var(--hm-weight-semibold);
+}
+
+.hm-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+/* Optional: the header row stays in view while the table scrolls down. It
+   sticks to the wrapper, so the wrapper needs a height of its own, for example
+   max-block-size: 70vh; a wrapper as tall as its table has nothing to scroll. */
+.hm-table--sticky-head thead th {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 1;
+}
+
+/* A numeric column: against the right edge, so units and decimal points line
+   up, and in DM Mono. Schibsted Grotesk's default figures are proportional (the
+   Tower measured "1" at 5.8px and "0" at 10.4px at 17px), and its tabular
+   figures also widen the punctuation ("1 . 6 h"), so no tabular-nums here: the
+   cell takes the mono face. The header cell aligns right and keeps its own face. */
+.hm-table .hm-num {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.hm-table td.hm-num {
+  font-family: var(--hm-font-mono);
+}
+
+/* Badge: a state or a label as a pill. The word is always there; the fill and a
+   symbol are a second cue, never colour alone. Three variants, because the brand
+   has one voice and one warning: brand (filled, the active or running thing),
+   danger (the failed or overdue thing), tint (the held, paused or stale thing).
+   With no variant it is a quiet outline. The pairings (text on its own fill,
+   border on the page) are in scripts/check.py. A symbol is the consumer's: put it
+   in a ::before with an empty alt, content: "\25B6\FE0E" / "", so a screen reader
+   reads the word, not the shape (the Tower maps its nine states this way). */
+.hm-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--hm-space-1);
+  padding: 0 var(--hm-space-2);
+  background: var(--hm-surface);
+  border: 1px solid var(--hm-border-control);
+  border-radius: var(--hm-radius-pill);
+  color: var(--hm-text-muted);
+  font-size: var(--hm-text-sm);
+  font-weight: var(--hm-weight-semibold);
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.hm-badge--brand {
+  background: var(--hm-brand);
+  border-color: var(--hm-brand);
+  color: var(--hm-on-brand);
+}
+
+.hm-badge--danger {
+  border-color: var(--hm-danger);
+  color: var(--hm-danger);
+}
+
+.hm-badge--tint {
+  background: var(--hm-tint);
+  border-color: var(--hm-tint-text);
+  color: var(--hm-tint-text);
 }

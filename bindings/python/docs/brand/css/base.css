@@ -1,0 +1,71 @@
+/* HumemAI base rules every page wants and none should write twice. Opt-in:
+   load it after tokens.css; nothing here sets a colour, a font or a margin on
+   an element of its own. The focus ring was written twice (the Humem Tower's
+   stylesheet and the website's globals.css), and the Tower's skip link and its
+   motion rule had no counterpart on the site (humemai/design-system#14). The
+   structure follows Stateloop's base and motion files; the skip link is a
+   HumemAI original, since Stateloop's design system has none. */
+
+/* The focus ring: 2px in --hm-focus, which is 3:1 on every page surface
+   (scripts/check.py), pulled 2px off the edge so it never covers a border. */
+:focus-visible {
+  outline: 2px solid var(--hm-focus);
+  outline-offset: 2px;
+}
+
+/* A page with a sticky header sets --hm-sticky-offset on :root to the header's
+   height, so a jump to #main or any anchor lands below the header and a focused
+   control is not scrolled under it (WCAG 2.4.11). */
+html {
+  scroll-padding-block-start: var(--hm-sticky-offset, 0px);
+}
+
+/* Skip link: the first focusable thing on the page, <a class="hm-skip"
+   href="#main">Skip to content</a>, and the target needs id="main". Hidden
+   until a keyboard focuses it, so it never shows to a mouse. Focused, it is
+   fixed to the top left corner with a high z-index, which puts it above a sticky
+   header (the website's is 40) instead of beneath it, in link ink on the
+   surface with a focus-colour border. */
+.hm-skip:not(:focus) {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  clip-path: inset(50%);
+}
+
+.hm-skip:focus {
+  position: fixed;
+  inset-block-start: var(--hm-space-2);
+  inset-inline-start: var(--hm-space-2);
+  z-index: 100;
+  padding: var(--hm-space-2) var(--hm-space-4);
+  background: var(--hm-surface);
+  border: 2px solid var(--hm-focus);
+  border-radius: var(--hm-radius-sm);
+  color: var(--hm-link);
+  font-weight: var(--hm-weight-semibold);
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+/* Reduced motion: a reader who asked for less gets no transition and no
+   animation, whoever wrote them. A duration of 0.01ms and not 0s, so an
+   animation still ends in its last frame and its animationend still fires.
+   Hover lifts that a component writes as a transform are zeroed beside the
+   component (.hm-card, in components.css). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0s !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0s !important;
+    scroll-behavior: auto !important;
+  }
+}

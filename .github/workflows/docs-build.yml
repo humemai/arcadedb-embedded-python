@@ -41,6 +41,10 @@ jobs:
         with:
           fetch-depth: 0 # the git-revision-date plugin reads each page's history
 
+      # The design system in bindings/python/docs/brand is vendored, never edited here: it must still match the hash in its VERSION.md.
+      - name: Check the vendored design system copy
+        run: bash bindings/python/docs/brand/verify.sh
+
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
