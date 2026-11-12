@@ -102,6 +102,19 @@
      A control sets min-height: var(--hm-control-h) and pads the rest. */
   --hm-control-h: var(--hm-tap-comfort);
 
+  /* Layout (README, "Layout across screen sizes"). Four size classes of the
+     window, in rem so they follow the reader's default font size: under 600px
+     (37.5rem), 600 to 999 (under 62.5rem), 1000 to 1599 (under 100rem), and
+     1600 and up. A custom property cannot be read in a media query, so the
+     numbers stay in the rules: (width >= 37.5rem), (width >= 62.5rem) and
+     (width >= 100rem). */
+  --hm-page-max: 73.75rem;              /* 1180: the content of a page; the gutter sits outside it. humem.ai's frame */
+  --hm-page-max-wide: 97rem;            /* 1552: the same for a page that is mostly tables; with the 1.5rem gutters, the Tower's 100rem frame */
+  --hm-page-gutter: var(--hm-space-4);  /* 16 under 600px, 24 from 600px (the block below) */
+  --hm-col-min: 16.25rem;               /* 260: the narrowest column of .hm-cols and .hm-card-grid */
+  --hm-split-label-max: 34rem;          /* 544: the label column of .hm-split */
+  --hm-split-body-max: 30rem;           /* 480: the content column of .hm-split, never wider than --hm-measure */
+
   --hm-radius-sm: 0.375rem;
   --hm-radius-md: 0.625rem;
   --hm-radius-lg: 1rem;
@@ -132,7 +145,16 @@
   --hm-shadow-md: 0 3px 10px color-mix(in srgb, var(--hm-neutral-900) 16%, transparent);
 }
 
-@media (min-width: 1000px) {
+/* The size classes are written as rem ranges (62.5rem is 1000px at the default
+   font size): a px query ignores the reader's default font size, and the range
+   syntax leaves no gap at 999.5px that min-width and max-width pairs do. */
+@media (width >= 37.5rem) {
+  :root {
+    --hm-page-gutter: var(--hm-space-6); /* 24 */
+  }
+}
+
+@media (width >= 62.5rem) {
   :root {
     --hm-text-base: 1.0625rem; /* 17 */
     --hm-control-h: 2.25rem;   /* 36 */
