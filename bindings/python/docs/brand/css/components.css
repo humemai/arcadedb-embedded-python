@@ -6,10 +6,12 @@
    Without grid-auto-rows a row is only as tall as its own cards, so a last
    row holding one short card came out shorter than the rows above it
    (docs.humem.ai, 2026-11-06). Inside a card the middle row takes the spare
-   height, so the last line (a link) sits on the same baseline in every card. */
+   height, so the last line (a link) sits on the same baseline in every card.
+   The column minimum is min(100%, --hm-col-min): a bare minmax(16.25rem, 1fr)
+   overflowed a 320px window at a 200% root font size (552px against 320). */
 .hm-card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(16.25rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--hm-col-min)), 1fr));
   grid-auto-rows: 1fr;
   gap: var(--hm-space-5);
 }
@@ -150,7 +152,7 @@
   color: var(--hm-link-hover);
 }
 
-@media (max-width: 999px) {
+@media (width < 62.5rem) {
   .hm-hint {
     position: relative;
   }

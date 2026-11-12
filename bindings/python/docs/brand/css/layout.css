@@ -1,0 +1,118 @@
+/* HumemAI layout: how a page holds its content at every screen size. Opt-in:
+   load it after tokens.css. The rules are in the README ("Layout across screen
+   sizes") and the reasons in docs/decisions.md (2026-11-12). Every size comes
+   from a token; the size classes are rem ranges, because a px query ignores the
+   reader's default font size. The classes here never set a colour or a font. */
+
+/* Page container: a block that is as wide as its content needs up to
+   --hm-page-max (1180px), centred, with --hm-page-gutter on each side (16px
+   under 600px, 24px from 600px). On a wide screen the extra width is margin.
+   The gutter sits outside the cap, so the content is exactly 1180px wide at
+   1440 and at 2560, which is what humem.ai shows. */
+.hm-container {
+  box-sizing: border-box;
+  inline-size: 100%;
+  max-inline-size: calc(var(--hm-page-max) + 2 * var(--hm-page-gutter));
+  margin-inline: auto;
+  padding-inline: var(--hm-page-gutter);
+}
+
+/* The wide variant, for a page that is mostly tables: the content is
+   --hm-page-max-wide (1552px) at most, and the frame grows to 90% of the
+   screen beyond that, because a data table is limited by the screen and not
+   by the frame (docs/decisions.md, "Wide content"). Prose does not grow:
+   give it .hm-measure. */
+.hm-container--wide {
+  max-inline-size: max(calc(var(--hm-page-max-wide) + 2 * var(--hm-page-gutter)), 90%);
+}
+
+/* The prose measure: one column of about 80 characters in the body face
+   (--hm-measure is 68ch). Prose stays one column at every size. */
+.hm-measure {
+  max-inline-size: var(--hm-measure);
+}
+
+/* Columns for independent items: as many columns as fit, none narrower than
+   --hm-col-min, and one column when the box is narrower than that. The
+   min(100%, ...) is required: a bare minmax(16.25rem, 1fr) overflows a 320px
+   window at a 200% root font size. Rows are as tall as their own items; for
+   cards that share one height use .hm-card-grid. */
+.hm-cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--hm-col-min)), 1fr));
+  gap: var(--hm-space-5);
+  align-items: start;
+}
+
+.hm-cols > * {
+  min-inline-size: 0;
+}
+
+/* Split: a label or title in one column and its content in the other, from
+   1000px wide; stacked below that, label first. The label column takes the
+   rest; the content column is 18rem to --hm-split-body-max (30rem) and never
+   wider than the measure. These are the proportions of the "Why memory"
+   sections of humem.ai. Put the label first, the content second:
+
+   <section class="hm-split">
+     <div class="hm-split__label">...</div>
+     <div class="hm-split__body">...</div>
+   </section> */
+.hm-split {
+  display: grid;
+  gap: var(--hm-space-4);
+  align-items: start;
+}
+
+.hm-split > * {
+  min-inline-size: 0;
+}
+
+.hm-split__label {
+  max-inline-size: var(--hm-split-label-max);
+}
+
+.hm-split__body {
+  max-inline-size: var(--hm-measure);
+}
+
+@media (width >= 62.5rem) {
+  .hm-split {
+    grid-template-columns: minmax(0, 1fr) minmax(18rem, min(var(--hm-split-body-max), var(--hm-measure)));
+  }
+
+  .hm-split__body {
+    max-inline-size: none;
+  }
+}
+
+/* Fit: a card or a note lays itself out from the width its parent gives it, not
+   from the window, so the same markup works in a narrow aside and in a wide
+   page. .hm-fit is the container: a BLOCK wrapper with a definite width. Never
+   put it on a flex item, an inline-block or a float: inline-size containment
+   gives such a box a width of 0. The container cannot style itself, so the card
+   or note sits inside it, and its parts sit in .hm-fit__pair. The base is one
+   column; a browser without container queries keeps it.
+
+   <div class="hm-fit">
+     <div class="hm-fit__pair">...two parts...</div>
+   </div> */
+.hm-fit {
+  container: hm-fit / inline-size;
+}
+
+.hm-fit__pair {
+  display: grid;
+  gap: var(--hm-space-4);
+}
+
+.hm-fit__pair > * {
+  min-inline-size: 0;
+}
+
+@container hm-fit (width >= 40rem) {
+  .hm-fit__pair {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--hm-space-6);
+  }
+}
