@@ -725,6 +725,11 @@ NOT_MEASURED_BY_ENGINE = {
 # reason), and the reason is the thing being asserted -- a family added here
 # without one is the same miss this gate exists to catch.
 NOT_PRINTED = [
+    (r"^hop3_visited_(budget_s|censored|server_limit)$",
+     "the time budget of the untimed three-hop visited probe and whether it was spent (PG+AGE, mmdbbench#24): the probe is the number of "
+     "persons a three-hop read touches, a diagnostic of how local the read is, never a column. `budget_s` is its share of the hop3f "
+     "read budget, `censored` says the probe stopped before it had asked every start person (its answer is then a declared censored "
+     "answer, not a digest), `server_limit` names how the server enforced it (statement_timeout)"),
     # AND IT HAPPENED AGAIN, one decision later. The paragraph below was written
     # about `_budget_source` (DECISIONS #106), which is now a correct tuple; the
     # entry it warns about was then reintroduced verbatim by DECISIONS #107 as a

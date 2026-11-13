@@ -181,6 +181,14 @@ class Base:
     SERVER_LIMIT_STAMP = None    # the sentence stamped on the row as olap_server_limit
     olap_limit_s = None
 
+    # A TIME BUDGET FOR THE UNTIMED VISITED PROBE (mmdbbench#24). False means the probe runs as before, unbudgeted. An adapter that
+    # sets it True is handed the seconds LEFT of the probe's budget in `visited_limit_s` before each `run_visited` (None outside the
+    # probe) and raises graph_common.QueryKilled when the server cuts the query at that limit; the lane also stops between probes
+    # once the budget is spent, and records a censored answer instead of a digest of the answered part.
+    VISITED_PROBE_LIMIT = False
+    VISITED_LIMIT_STAMP = None   # the sentence stamped on the row as hop3_visited_server_limit
+    visited_limit_s = None
+
     def close(self):
         pass
 
@@ -1973,6 +1981,48 @@ class PgAgeGraph(Base):
         sql, _ = self._wrapped(text, bool(params))
         self.cx.execute(sql, (json.dumps(params),) if params else None)
 
+    # THE SERVER ENFORCES THE BUDGETS HERE (DECISIONS #179, mmdbbench#24). Two PG+AGE cells at SF1 were lost in the untimed visited
+    # probe, which had no budget at all (20 queries after the timed reads had already been censored at their 540 s budgets, until
+    # the 3600 s cell cap), and one at SF1-full analytics ran single iterations of 739.5 s to 847.0 s against 60 to 300 s budgets,
+    # because the budget is checked only between iterations. PostgreSQL's own `statement_timeout` is the server-side limit: SET to
+    # the query's budget before the statement and RESET after it, SQLSTATE 57014 with the text "statement timeout" raised as
+    # QueryKilled. The session is autocommit and every lane text is ONE statement (run_cypher issues exactly one execute), so the
+    # limit covers the whole query, nothing is left in an aborted transaction, and the connection is usable after a kill. Whether AGE
+    # honors the limit inside a long operator is the engine's behaviour, shown only by a real cell.
+    SERVER_SIDE_LIMIT = True
+    SERVER_LIMIT_NAME = "statement_timeout"
+    SERVER_LIMIT_STAMP = ("PostgreSQL statement_timeout = the query's budget_s, set with SET before and RESET after each analytics "
+                          "statement, on the cold pass and every timed iteration (two extra statements inside the timed call); every "
+                          "lane text is one cypher() statement, so the limit covers the whole query")
+    VISITED_PROBE_LIMIT = True
+    VISITED_LIMIT_STAMP = ("PostgreSQL statement_timeout = the seconds left of the probe's budget (graph_common.READ_WARMUP_BUDGET_SHARE "
+                           "of the hop3f read budget), set with SET before and RESET after each probe query; the probe stops between "
+                           "queries once the budget is spent")
+
+    def _under_timeout(self, seconds, what, call):
+        """`call()` with statement_timeout set to `seconds`, reset after it, a server cut raised as QueryKilled."""
+        self.cx.execute(f"SET statement_timeout = {max(1, int(round(seconds * 1000)))}")
+        try:
+            return call()
+        except Exception as e:  # noqa: BLE001
+            if graph_common.is_pg_statement_timeout(e):
+                raise graph_common.QueryKilled(f"pgage killed {what} at its {seconds:g} s statement_timeout: {e}") from e
+            raise
+        finally:
+            self.cx.execute("RESET statement_timeout")
+
+    def run_olap(self, qname):
+        limit = self.olap_limit_s
+        if not limit or limit <= 0:
+            return Base.run_olap(self, qname)
+        return self._under_timeout(limit, qname, lambda: Base.run_olap(self, qname))
+
+    def run_visited(self, pid):
+        limit = self.visited_limit_s
+        if not limit or limit <= 0:
+            return Base.run_visited(self, pid)
+        return self._under_timeout(limit, "the visited probe", lambda: Base.run_visited(self, pid))
+
     def close(self):
         self.cx.close()
 
@@ -3716,19 +3766,48 @@ def main():
         # "stays local" against a number.
         _beat.mark("visited-probe-start", n=min(VISITED_SAMPLE, len(ids)))
         visited = []
-        for pid in ids[:VISITED_SAMPLE]:
+        # THE PROBE HAS A BUDGET FOR AN ADAPTER THAT ASKS FOR ONE (mmdbbench#24): READ_WARMUP_BUDGET_SHARE of the hop3f read budget,
+        # the share the untimed read warm-up gets. Each query is handed what is left (the server cuts it there, as the analytics
+        # budget is, DECISIONS #179) and the loop stops between queries once nothing is left. Two PG+AGE cells at SF1 ran this probe
+        # with no budget until the 3600 s cell cap. Every other adapter asks for none and runs exactly as before.
+        _probe_ids = ids[:VISITED_SAMPLE]
+        _probe_limited = bool(getattr(ad, "VISITED_PROBE_LIMIT", False)) and read_budget["hop3f"][0] > 0
+        _probe_budget = read_budget["hop3f"][0] * READ_WARMUP_BUDGET_SHARE if _probe_limited else None
+        _probe_stop = None          # None, or why the probe stopped before every start was asked
+        _probe_t0 = time.perf_counter()
+        for pid in _probe_ids:
+            if _probe_limited:
+                _left = _probe_budget - (time.perf_counter() - _probe_t0)
+                if _left <= 0:
+                    _probe_stop = f"stopped at its {_probe_budget:g} s probe budget"
+                    break
+                ad.visited_limit_s = _left
             try:
                 visited.append((pid, first_value(ad.run_visited(pid))))
             except Exception as e:  # noqa: BLE001
                 out["hop3_visited_error"] = f"{e.__class__.__name__}: {e}"
+                _probe_stop = (f"killed by the server at its {_probe_budget:g} s probe budget"
+                               if isinstance(e, graph_common.QueryKilled) else f"stopped by {e.__class__.__name__}")
                 break
+        if _probe_limited:
+            ad.visited_limit_s = None       # the limit does not leak past the probe
+            out["hop3_visited_budget_s"] = _probe_budget
+            if getattr(ad, "VISITED_LIMIT_STAMP", None):
+                out["hop3_visited_server_limit"] = ad.VISITED_LIMIT_STAMP
         vals = sorted(v for _p, v in visited if isinstance(v, (int, float)))
         if vals:
             out["hop3_visited_p50"] = vals[len(vals) // 2]
             out["hop3_visited_max"] = vals[-1]
             out["hop3_visited_n_ids"] = len(vals)
             out["hop3_visited_share"] = round(vals[len(vals) // 2] / float(n_persons), 6)
-            bench_common.record_result(out, "hop3_visited", visited, **VISITED_DIGEST)
+            if not _probe_stop:
+                bench_common.record_result(out, "hop3_visited", visited, **VISITED_DIGEST)
+        if _probe_stop:
+            # A PROBE CUT SHORT IS DECLARED, NOT DIGESTED, as a read cut at its budget is (DECISIONS #120): the answered part is
+            # fewer starts than every other engine's and a digest of it could only disagree with them.
+            out["hop3_visited_censored"] = True
+            bench_common.record_censored_answer(
+                out, "hop3_visited", f"{_probe_stop} after {len(visited)} of {len(_probe_ids)} starts")
         _beat.mark("visited-probe-done", p50=out.get("hop3_visited_p50"))
         # Writes stay single-pass on purpose. A second write pass is not a
         # warm repeat, it is a different workload against a larger graph.
