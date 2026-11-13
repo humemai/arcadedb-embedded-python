@@ -1034,6 +1034,12 @@ class PhaseBeat:
                 bits.append(f"data={dir_size_mb(self.data_dir)}MB")
             except Exception:  # noqa: BLE001
                 pass
+        # A WALL CLOCK ON EVERY LINE, OFF UNLESS BENCH_PHASE_TS=1 (mmdbbench#24). A cell that hit its cap printed `t=` seconds in the
+        # current phase and nothing that dates the phases against each other, so SurrealDB's SF1-full analytics cell, 7200 s with
+        # one phase marker per query, could not say where the time went. The stamp is the LAST field, so a reader that looks at the
+        # line's start is untouched; with the variable unset the line is byte for byte the old one.
+        if os.environ.get("BENCH_PHASE_TS") == "1":
+            bits.append("ts=" + _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
         return (" " + " ".join(bits)) if bits else ""
 
     def mark(self, name, **fields):

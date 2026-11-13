@@ -442,6 +442,17 @@ def is_bolt_tx_timeout(exc) -> bool:
     return code.startswith("Memgraph.TransientError") and "transaction timeout" in str(exc).lower()
 
 
+def is_pg_statement_timeout(exc) -> bool:
+    """True when `exc` is PostgreSQL saying a statement ran past the `statement_timeout` it was given (PG+AGE, mmdbbench#24).
+
+    SQLSTATE 57014 (psycopg's QueryCanceled, its `sqlstate`) is "query canceled" for every cause: the server's message tells the
+    causes apart, "canceling statement due to statement timeout" against "canceling statement due to user request" (a
+    pg_cancel_backend from somebody else), and only the first is the limit the harness set. Duck-typed, so a fake can raise it
+    and this module needs no psycopg import.
+    """
+    return getattr(exc, "sqlstate", None) == "57014" and "statement timeout" in str(exc).lower()
+
+
 # ---------------------------------------------------------------------------
 # WHAT EACH ANSWER LOOKS LIKE (DECISIONS #88). Declared once per query, never
 # per engine; the alternatives inside a tuple are the names the four dialects

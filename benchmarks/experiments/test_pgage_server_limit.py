@@ -448,7 +448,7 @@ def test_every_other_adapters_probe_and_analytics_methods_are_the_ones_it_had():
             continue
         if "run_visited" not in vars(cls) and cls.__mro__[1] in (L.Base, L.Neo4jGraph, L.ArcadeGraphEmbedded):
             assert cls.run_visited is L.Base.run_visited, cls.__name__
-    assert L.Neo4jGraph.run_olap is L.Base.run_olap and L.FalkorGraph.REPEATS_RELATIONSHIPS is True
+    assert L.Neo4jGraph.run_olap is L.Base.run_olap and L.ArcadeGraphEmbedded.run_olap is L.Base.run_olap
 
 
 # ---- the PHASE line: a clock only when BENCH_PHASE_TS=1 ---------------------------------------------------------------
