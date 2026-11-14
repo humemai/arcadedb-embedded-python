@@ -5611,6 +5611,16 @@ def _censored_entries(table):
     return out, marks
 
 
+def _override_backend_keys(table):
+    """The backend keys a table prints: its measured entries and the rows of marks _finish_table will add for cells that did not finish.
+
+    The override sentences (override_registry.notes_for_table) are generated before _finish_table runs, so an arm the table prints only as
+    a censored row (DuckPGQ at the graph OLTP cells) had no sentence and page_check refused the table."""
+    keys = [e.get("backend_key") for e in table.get("entries") or []]
+    keys += [e.get("backend_key") for e in _censored_entries(table)[0]]
+    return keys
+
+
 def _delete_settle_notes(table):
     """An engine whose timed delete includes a cleanup step of its own, said
     under the table (DECISIONS #135). Memgraph 3.13.1 keeps deleted points in
@@ -7818,7 +7828,7 @@ def main() -> int:
         _lane = (_TABLE_LANE.get(_t.get("id")) or (None,))[0]
         for _text, _vals in _OV.notes_for_table(
                 _t.get("id"), _lane,
-                [e.get("backend_key") for e in _t.get("entries") or []], rows):
+                _override_backend_keys(_t), rows):
             _note = _gen(_text, *_vals)
             _t.setdefault("conditions", [])
             if _note not in _t["conditions"]:
