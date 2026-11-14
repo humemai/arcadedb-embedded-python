@@ -20,6 +20,7 @@ of the cell, read at the end of the phase. Every engine has it, in every runtime
 """
 from __future__ import annotations
 
+import errno
 import json
 import os
 import re
@@ -43,6 +44,51 @@ def enabled():
     """True when the instrument being measured is 2026-11 or later."""
     import bench_common
     return bench_common.instrument_at_least("2026-11")
+
+
+# INSTRUMENT 2026-12 (humemai/arcadedb-embedded-python#352 items 1, 3 and 4, #555). Everything below that is new is behind
+# `v12()`; with BENCH_INSTRUMENT unset or "2026-11" none of it runs, writes a file, starts a thread or adds a row field, and the
+# 2026-11 statements around it are the ones that were there before (PROTOCOL "Instrument 2026-12" lists every changed line).
+V12 = "2026-12"
+V12_ACK_TIMEOUT_S = 900.0     # a settled disk reading can take about a minute per container, so the lane waits longer for the host
+V12_DISK_TRIES = 20           # per-phase disk readings: up to this many samples ...
+V12_DISK_SETTLE_S = 3.0       # ... this many seconds apart (2026-11: one sample); two consecutive readings within 1% settle it
+V12_SAMPLE_S = 0.25           # the breakdown sampler's interval, the runner's own
+GRANT_PATH = "/usr/local/sbin/bench-cgroup-grant"   # installed by the host's owner (host/README.md); absent on most hosts
+GRANT_TIMEOUT_S = 5.0
+
+
+def v12():
+    """True when the instrument being measured is 2026-12 or later."""
+    import bench_common
+    return bench_common.instrument_at_least(V12)
+
+
+def v12_grant(cid):
+    """2026-12: ask the host's grant helper (host/bench-cgroup-grant, installed by the host's owner) to give this process write
+    access to the container's memory.peak, so that the per-descriptor reset works for a runner that is not root. Returns
+    `ok`, `absent` (no helper installed: nothing is run) or `refused: <message>`. Any answer but `ok` leaves the cumulative-rise
+    fallback in force; this function never raises."""
+    if not os.path.exists(GRANT_PATH):
+        return "absent"
+    if not re.fullmatch(r"[0-9a-f]{64}", cid or ""):
+        return "refused: not a full 64-hex container id"
+    try:
+        r = subprocess.run(["sudo", "-n", GRANT_PATH, cid], capture_output=True, text=True, timeout=GRANT_TIMEOUT_S)
+    except Exception as e:  # noqa: BLE001
+        return f"refused: {type(e).__name__}: {e}"[:200]
+    if r.returncode == 0:
+        return "ok"
+    lines = ((r.stderr or "") + (r.stdout or "")).strip().splitlines()
+    return f"refused: rc={r.returncode}: {lines[-1] if lines else 'no message'}"[:200]
+
+
+def _ack_timeout_s():
+    return max(ACK_TIMEOUT_S, V12_ACK_TIMEOUT_S) if v12() else ACK_TIMEOUT_S
+
+
+def _errname(e):
+    return f"{errno.errorcode.get(e.errno, e.errno)} {e.strerror}"
 
 
 # WHERE A FULL GC MAY RUN. Never right before a timed phase: a collection at the end of a warm-up would hand a JVM engine a freshly
@@ -306,7 +352,7 @@ class LaneProbe:
             json.dump(body, fh)
         os.rename(tmp, os.path.join(self.dir, f"req.{self.seq:03d}.json"))
         ack = os.path.join(self.dir, f"ack.{self.seq:03d}.json")
-        deadline = time.time() + ACK_TIMEOUT_S
+        deadline = time.time() + _ack_timeout_s()
         while not os.path.exists(ack):
             if time.time() > deadline:
                 self.dead = True      # the host is gone; stop asking, the cell goes on
@@ -363,10 +409,12 @@ class PeakFile:
         self.path = os.path.join(cg, "memory.peak")
         self.fd = None
         self.can_reset = False
+        self.reset_error = None     # why a reset is not possible (read by instrument 2026-12 only)
         try:
             self.fd = os.open(self.path, os.O_RDWR)
             self.can_reset = True
-        except OSError:
+        except OSError as e:
+            self.reset_error = f"open for write: {_errname(e)}"
             try:
                 self.fd = os.open(self.path, os.O_RDONLY)
             except OSError:
@@ -386,7 +434,8 @@ class PeakFile:
         try:
             os.write(self.fd, b"reset")
             return True
-        except OSError:
+        except OSError as e:
+            self.reset_error = f"write: {_errname(e)}"
             self.can_reset = False
             return False
 
@@ -394,6 +443,58 @@ class PeakFile:
         if self.fd is not None:
             os.close(self.fd)
             self.fd = None
+
+
+class PhaseSampler(threading.Thread):
+    """Instrument 2026-12 only. One cgroup's memory.current and memory.stat (anon, shmem, file) every V12_SAMPLE_S, kept so the
+    sampled breakdown of a phase can be taken at its boundary. Runs on the runner's side, beside the runner's own sampler."""
+
+    def __init__(self, cg, interval=V12_SAMPLE_S):
+        super().__init__(daemon=True)
+        self.cg, self.interval = cg, interval
+        self.stop_evt = threading.Event()
+        self.samples = []            # (anon, shmem, file, current) bytes
+        self.mark = 0                # index of the first sample of the open phase
+
+    def sample_once(self):
+        st = parse_memory_stat(_read(os.path.join(self.cg, "memory.stat")))
+        try:
+            cur = int((_read(os.path.join(self.cg, "memory.current")) or "").strip())
+        except ValueError:
+            cur = 0
+        self.samples.append((st.get("anon", 0), st.get("shmem", 0), st.get("file", 0), cur))
+
+    def run(self):
+        while not self.stop_evt.wait(self.interval):
+            self.sample_once()
+
+    def window(self):
+        """Maxima of the open phase's samples, and the index that ends it. A last sample is taken now, so the boundary instant
+        is in the window; samples taken after the returned index are the probe's own work and belong to no phase."""
+        self.sample_once()
+        end = len(self.samples)
+        w = self.samples[self.mark:end]
+        return {"anon": max(x[0] for x in w), "shmem": max(x[1] for x in w), "file": max(x[2] for x in w),
+                "owned": max(x[0] + x[1] for x in w), "current": max(x[3] for x in w), "n": len(w)}, end
+
+
+def _v12_merge(prev, new):
+    """A phase read twice (several warm-ups end in `warmup`): the peak is the larger of two exact ones, unavailable when either
+    is; the sampled maxima are the larger; the disk reading and the rest are the later one's."""
+    if prev is None:
+        return new
+    out = dict(new)
+    if prev["peak_kind"] == "unavailable" or new["peak_kind"] == "unavailable":
+        out["peak_kind"] = "unavailable"
+        out["peak_bytes"] = None
+        out["peak_by_side"] = {}
+        out["peak_reason"] = new.get("peak_reason") or prev.get("peak_reason")
+    else:
+        out["peak_bytes"] = max(prev["peak_bytes"], new["peak_bytes"])
+        out["peak_by_side"] = {n: max(prev["peak_by_side"].get(n, 0), v) for n, v in new["peak_by_side"].items()}
+    for k in ("anon", "shmem", "file", "owned", "current", "n"):
+        out["sampled"][k] = max(prev["sampled"][k], new["sampled"][k]) if k != "n" else prev["sampled"][k] + new["sampled"][k]
+    return out
 
 
 class HostProbe:
@@ -417,6 +518,13 @@ class HostProbe:
         self.io_last = {}
         self.disk_fn = None
         self.engine_side = "client"
+        self.v12 = v12()                        # instrument 2026-12: the fields and steps below that say so
+        self.settle_disk_fn = None              # 2026-12: the runner's container_disk, called with a settle window
+        self.cum_base = {}                      # 2026-12: name -> memory.peak after the previous boundary (no-reset mode)
+        self.v12_recs = {}                      # 2026-12: phase -> its 2026-12 reading
+        self.psamplers = {}                     # 2026-12: name -> PhaseSampler
+        self.grants = {}                        # 2026-12: name -> answer of v12_grant
+        self._disk_s = 0.0
 
     @classmethod
     def maybe(cls, run_id, parent_dir):
@@ -438,6 +546,14 @@ class HostProbe:
             c = self._cg(name, smp)
             if c is not None:
                 self.io_last[name] = parse_io_stat(_read(os.path.join(c[0], "io.stat")))
+        if self.v12:
+            if self.settle_disk_fn is not None:
+                self.disk_fn = self._v12_disk
+            for name, smp in sampler_pairs:
+                c = self._cg(name, smp)
+                if c is not None:
+                    self.psamplers[name] = PhaseSampler(c[0])
+                    self.psamplers[name].start()
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
 
@@ -488,6 +604,8 @@ class HostProbe:
             cg = self.cgroup_dir(sampler.cid) if self.cgroup_dir else None
             if not cg:
                 return None
+            if self.v12:
+                self.grants[name] = v12_grant(sampler.cid)      # before PeakFile opens memory.peak read-write
             self.cgs[name] = (cg, PeakFile(cg))
         return self.cgs[name]
 
@@ -507,6 +625,8 @@ class HostProbe:
         out = {}
         try:
             d = self.disk_fn(pair[1].cid)
+            if self.v12:
+                out.update(settled=d.get("disk_settled"), note=d.get("disk_note"), settle_s=round(self._disk_s, 1))
             if d.get("disk_mb") is not None:
                 out["mib"] = d["disk_mb"]
             else:
@@ -518,10 +638,65 @@ class HostProbe:
             self.errors.append(f"disk {phase}: {type(e).__name__}: {e}"[:120])
         return out
 
+    def _v12_disk(self, cid):
+        """2026-12: the runner's container_disk with a settle window (BENCH_DISK_SETTLE_TRIES / _S override it), timed."""
+        t0 = time.perf_counter()
+        d = self.settle_disk_fn(cid, settle_s=float(os.environ.get("BENCH_DISK_SETTLE_S", V12_DISK_SETTLE_S)),
+                                tries=int(os.environ.get("BENCH_DISK_SETTLE_TRIES", V12_DISK_TRIES)))
+        self._disk_s = time.perf_counter() - t0
+        return d
+
+    def _v12_peak(self, name, pf):
+        """2026-12: the exact peak of one cgroup in the phase that just ended, or why there is none. Read before any GC or disk
+        work of ours. Never a sample, never a guess.
+
+        - the descriptor can reset (opened read-write, no refused write so far): memory.peak is the watermark since the last
+          reset (since the container started, for the first phase), exact.
+        - it cannot: memory.peak is the cell's peak so far and only grows. When it rose since the end of the previous boundary
+          (our own helper processes included, see _v12_after), the new value is the maximum of this phase, exact. When it did
+          not, the phase peak is only known to lie between the sampled maximum and the cell peak so far: unavailable."""
+        raw = pf.read()
+        if raw is None:
+            return {"kind": "unavailable", "reason": "memory.peak is not readable"}
+        if pf.can_reset:
+            return {"kind": "kernel-reset", "bytes": raw}
+        if raw > self.cum_base.get(name, 0):
+            return {"kind": "kernel-cumulative-rise", "bytes": raw}
+        return {"kind": "unavailable", "upper": raw,
+                "reason": f"memory.peak cannot be reset ({pf.reset_error}) and the cell peak did not rise in this phase"}
+
+    def _v12_after(self, phase, v12peak, windows, rec):
+        """2026-12, after the cgroups' peaks were reset: the no-reset baselines, the phase's 2026-12 reading, merged into the
+        phase's earlier one when the phase is read twice. Sets the exact peak on `rec` (None when unavailable)."""
+        for name, (cg, pf) in self.cgs.items():
+            if not pf.can_reset:
+                self.cum_base[name] = pf.read() or 0
+        exact = bool(v12peak) and all(p["kind"] != "unavailable" for p in v12peak.values())
+        kinds = {p["kind"] for p in v12peak.values()}
+        sampled = {k: sum(w[k] for w in windows.values()) for k in ("anon", "shmem", "file", "owned", "current", "n")}
+        sampled["n"] = max((w["n"] for w in windows.values()), default=0)
+        v = {"peak_kind": ("unavailable" if not exact else (next(iter(kinds)) if len(kinds) == 1 else "mixed")),
+             "peak_bytes": sum(p["bytes"] for p in v12peak.values()) if exact else None,
+             "peak_by_side": {n: p["bytes"] for n, p in v12peak.items() if p["kind"] != "unavailable"},
+             "peak_reason": "; ".join(f"{n}: {p['reason']}" for n, p in v12peak.items() if p["kind"] == "unavailable") or None,
+             "peak_upper": (sum(p["upper"] for p in v12peak.values()) if not exact and all("upper" in p for p in v12peak.values())
+                            else None),
+             "sampled": sampled,
+             "reset_error": next((pf.reset_error for _c, pf in self.cgs.values() if pf.reset_error), None),
+             "disk": {k: rec["disk"][k] for k in ("settled", "note", "settle_s") if rec["disk"].get(k) is not None}
+                     if rec.get("disk") else {}}
+        v = _v12_merge(self.v12_recs.get(phase), v)
+        self.v12_recs[phase] = v
+        rec["v12"] = v
+        rec["peak"] = v["peak_bytes"]          # exact or absent: 2026-11's sampled stand-in is not written in 2026-12
+        rec["peak_kind"] = v["peak_kind"]
+
     def handle(self, req):
         t0 = time.perf_counter()
         rec = {"gc_ms": 0.0}
         sides, peaks = {}, {}
+        if self.v12:
+            v12peak, windows = {}, {}
         # 1. the phase's peak, before any GC of ours can touch it
         for name, s in self.pairs:
             c = self._cg(name, s)
@@ -535,6 +710,10 @@ class HostProbe:
                 rec["peak_kind"] = "kernel-reset"
             else:
                 rec.setdefault("peak_kind", "sampled-0.25s")
+            if self.v12:
+                v12peak[name] = self._v12_peak(name, pf)
+                if name in self.psamplers:
+                    windows[name] = self.psamplers[name].window()[0]
         # 2. a full GC where the engine is a JVM
         jvm = dict(req.get("jvm") or {})
         server = next(((n, s) for n, s in self.pairs if n == "server"), None)
@@ -578,6 +757,11 @@ class HostProbe:
         if not self.served:
             rec["proc"] = req.get("proc") or {}
         rec["gc_ms"] = (jvm.get("gc_ms") or 0.0)
+        if self.v12:
+            self._v12_after(req["phase"], v12peak, windows, rec)
+            rec["v12"]["probe_s"] = round(time.perf_counter() - t0, 3)
+            for ps in self.psamplers.values():       # the probe's own helper processes land in no phase's window
+                ps.mark = len(ps.samples)
         self.records[req["phase"]] = rec
         self.spent_s += time.perf_counter() - t0
 
@@ -612,10 +796,16 @@ class HostProbe:
         """Stop the thread, return the row fields, remove the directory. `row` is the cell's row, read for the disk
         baselines and the after-close disk reading the runner took."""
         self.stop_evt.set()
+        for ps in self.psamplers.values():
+            ps.stop_evt.set()
         if self.thread:
             self.thread.join(timeout=5)
         out = fields_from(self.records, self.errors, self.spent_s,
                           any(pf.can_reset for _c, pf in self.cgs.values()), row, self.engine_side)
+        if self.v12 and self.grants:
+            vals = set(self.grants.values())
+            out["mem_probe_grant"] = (next(iter(vals)) if len(vals) == 1
+                                      else ",".join(f"{n}={v}" for n, v in self.grants.items()))
         for _c, pf in self.cgs.values():
             pf.close()
         if self.dir:
@@ -652,6 +842,8 @@ def fields_from(records, errors, spent_s, peak_reset, row=None, engine_side="cli
         if io:
             out[f"io_{ph}_read_mib"] = _mib(sum(v["rbytes"] for v in io.values()))
             out[f"io_{ph}_write_mib"] = _mib(sum(v["wbytes"] for v in io.values()))
+        if r.get("v12"):
+            _v12_phase_fields(out, ph, r["v12"])
         j = r.get("jvm") or {}
         if j.get("used") is not None:
             # named for what it is: a heap read after a forced GC is the working set; one read without is garbage included
@@ -674,6 +866,8 @@ def fields_from(records, errors, spent_s, peak_reset, row=None, engine_side="cli
         srcs = {(r.get("jvm") or {}).get("source") for r in records.values()} - {None}
         if srcs:
             out["jvm_probe_source"] = ",".join(sorted(srcs))
+    if any(r.get("v12") for r in records.values()):
+        _v12_cell_fields(out, records)
     # after close: the runner's own reading, taken once the lane has exited and the database is closed
     end = (row or {}).get(f"{engine_side}_disk_mb")
     if records and end is not None:
@@ -686,3 +880,41 @@ def fields_from(records, errors, spent_s, peak_reset, row=None, engine_side="cli
     if errors:
         out["phase_probe_error"] = "; ".join(dict.fromkeys(errors))[:300]
     return out
+
+
+def _v12_phase_fields(out, ph, v):
+    """Instrument 2026-12: one phase's added fields (PROTOCOL "Instrument 2026-12"). `mem_<phase>_peak_mib` itself is written by
+    the 2026-11 code above, and only when the peak is exact."""
+    p = f"mem_{ph}_"
+    out[p + "peak_kind"] = v["peak_kind"]
+    if v["peak_kind"] == "unavailable":
+        out[p + "peak_unavailable_reason"] = v["peak_reason"]
+        if v.get("peak_upper") is not None:
+            out[p + "peak_upper_mib"] = _mib(v["peak_upper"])
+    for side, b in (v.get("peak_by_side") or {}).items():
+        out[f"{p}peak_{side}_mib"] = _mib(b)
+    sm = v["sampled"]
+    out[p + "peak_sampled_mib"] = _mib(sm["current"])
+    out[p + "peak_owned_sampled_mib"] = _mib(sm["owned"])
+    out[p + "peak_anon_sampled_mib"] = _mib(sm["anon"])
+    out[p + "peak_shmem_sampled_mib"] = _mib(sm["shmem"])
+    out[p + "peak_file_sampled_mib"] = _mib(sm["file"])
+    out[p + "peak_samples"] = sm["n"]
+    dk = v.get("disk") or {}
+    if "settled" in dk:
+        out[f"disk_{ph}_settled"] = dk["settled"]
+    if "settle_s" in dk:
+        out[f"disk_{ph}_settle_s"] = dk["settle_s"]
+    if dk.get("note"):
+        out[f"disk_{ph}_note"] = dk["note"]
+    out[f"phase_{ph}_probe_s"] = v.get("probe_s")
+
+
+def _v12_cell_fields(out, records):
+    """Instrument 2026-12: the cell-level peak kind, replacing 2026-11's two-valued one, and the reason a reset was refused."""
+    vs = [r["v12"] for r in records.values() if r.get("v12")]
+    kinds = {v["peak_kind"] for v in vs}
+    out["mem_probe_peak_kind"] = next(iter(kinds)) if len(kinds) == 1 else "mixed"
+    errs = [v["reset_error"] for v in vs if v.get("reset_error")]
+    if errs:
+        out["mem_probe_peak_reset_error"] = errs[-1]
