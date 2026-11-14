@@ -1904,6 +1904,35 @@ def _declare_arm_runs_absences(tables):
                 _declare_absence(t["id"], e["backend"], col, "not measured", why)
 
 
+def _declare_excluded_at_tier_absences(tables):
+    """A query the protocol does not run at the table's size (graph_common.TIER_EXCLUDED) is declared for every engine the table prints, and said once.
+
+    Every row at that size records `<query>_excluded_at_tier`; the table prints no column for a query nobody ran, so the declaration (kind
+    'not measured', one per engine and column) is what page_check A1 reads, and the sentence is what a reader reads."""
+    for t in tables:
+        spec = _QUERY_BUDGET_TABLES.get(t.get("id"))
+        lane_wl = _TABLE_LANE.get(t.get("id"))
+        if not spec or not lane_wl:
+            continue
+        lane, wl = lane_wl
+        scales = _table_scales(t.get("id"))
+        stems = sorted({k[:-len("_excluded_at_tier")] for r in _FROZEN_ROWS
+                        if r.get("lane") == lane and (not wl or r.get("workload") == wl)
+                        and (not scales or str(r.get("scale")) in scales)
+                        for k, v in r.items() if k.endswith("_excluded_at_tier") and v not in (None, "")})
+        labels = [spec[2][s] for s in stems if s in spec[2]]
+        if not labels:
+            continue
+        for e in t.get("entries", []):
+            for lab in labels:
+                _declare_absence(t["id"], e["backend"], f"{lab} p50 ms", "not measured",
+                                 f"{lab} was not run at this size, for any engine.")
+        t.setdefault("conditions", [])
+        note = _gen(f"{_join_and(labels)} {'was' if len(labels) == 1 else 'were'} not run at this size, for any engine.", *labels)
+        if note not in t["conditions"]:
+            t["conditions"].append(note)
+
+
 def _disclose_server_builds(tables):
     """Under every table that holds a native-build server arm: both server arms are upstream's official images (the JVM server image and the
     native-image server), run with the same server settings that each server reports back at start, and the one disclosed difference is the
@@ -7844,6 +7873,7 @@ def main() -> int:
                 _t["conditions"].append(_note)
     _declare_missing_builds(tables)
     _declare_arm_runs_absences(tables)
+    _declare_excluded_at_tier_absences(tables)
     _disclose_server_builds(tables)
     # THE OVERRIDES A READER MEETS (CAMPAIGN section 7 row 21). PROTOCOL.md
     # section 7 lists every default this benchmark overrides, and the rows its

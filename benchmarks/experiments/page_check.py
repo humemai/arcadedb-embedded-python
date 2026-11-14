@@ -1211,13 +1211,11 @@ def _check_multimodel(payload):
     return checked, bad
 
 
-def _check_coverage(payload):
-    """A1 the manifest, A2 the fields. Returns (bad, summary line)."""
-    import csv as _csv
-    tables = {t["id"]: t for t in payload.get("tables", [])}
+def _coverage_a1(tables):
+    """A1: every operation of the query set is a column of its table, with every engine answering or declared.
+    Returns (expected, present, declared, undeclared, bad)."""
     expected = present = declared = undeclared = 0
     bad = 0
-
     print("\ncoverage A1: every operation in the query set is a column, with "
           "every engine answering or declared")
     for tid, operations in sorted(OPERATION_MANIFEST.items()):
@@ -1243,6 +1241,11 @@ def _check_coverage(payload):
         for op in operations:
             expected += len(engines)
             if op not in (t.get("columns") or []):
+                # A QUERY THE PROTOCOL DOES NOT RUN AT THIS SIZE (graph_common.TIER_EXCLUDED) has no column, and the table declares it for every
+                # engine it prints: a declared absence per engine, or a whole-row absence for an engine that has no cell at all.
+                if engines and all(e in whole_row or (e, op) in per_cell for e in engines):
+                    declared += len(engines)
+                    continue
                 print(f"  MISS   {tid}: the query set says this table carries "
                       f"{op!r} and it is not a column")
                 bad += 1
@@ -1271,6 +1274,22 @@ def _check_coverage(payload):
                           f"declares why")
                     undeclared += 1
                     bad += 1
+    return expected, present, declared, undeclared, bad
+
+
+def _check_coverage(payload):
+    """A1 the manifest, A2 the fields. Returns (bad, summary line)."""
+    import csv as _csv
+    tables = {t["id"]: t for t in payload.get("tables", [])}
+    expected = present = declared = undeclared = 0
+    bad = 0
+
+    _e, _p, _d, _u, _b = _coverage_a1(tables)
+    expected += _e
+    present += _p
+    declared += _d
+    undeclared += _u
+    bad += _b
 
     print("\ncoverage A2: every measured field is printed or declared "
           "not-printed, with a reason")
