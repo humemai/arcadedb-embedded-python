@@ -3570,6 +3570,16 @@ def main():
     # adapter that read its value out of its own engine wins over the map.
     bench_common.stamp_durability(out, getattr(ad, "durability", None)
                                   or DURABILITY.get(args.backend))
+    # BUILD-ONLY MODE (post1_rows.py, runner.py --build-only): stop here, after build() and before any timed work, and write the row
+    # marked row_kind=build_only. Unset by default, so nothing below changes for any run that does not ask for it.
+    if os.environ.get("BENCH_BUILD_ONLY") == "1":
+        # the GAV twin keeps its own canonical key on a build-only row too (see the stamp at the end of the olap branch)
+        if args.workload == "olap":
+            out["gav"] = os.environ.get("BENCH_GAV", "1") != "0"
+            if not out["gav"]:
+                out["backend_arm"] = "nogav"
+        import post1_rows
+        post1_rows.finish_build_only(out, args.out, ad)
 
     if args.workload == "oltp":
         ids = pick_query_ids(n_persons, n_q)
