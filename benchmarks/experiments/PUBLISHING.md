@@ -94,7 +94,7 @@ A `runs_*_<pin>.jsonl` is the only copy of its data until it is merged. Archivin
 3. `export_web.py`: into `web_benchmarks.json`
 4. only then archive the campaign files, and only after confirming their rows are in `runs.jsonl` by `engine_commit`
 
-`land_stage.py` performs steps 1 to 3 in one run (see "Landing a finished queue stage"); archive only after it reports LANDED. A campaign file that shows "no reader" when you grep the publishing scripts is a file whose step 1 has not run yet, not a dead file.
+`land_stage.py` performs steps 1 to 3 in one run (see "Landing a finished queue stage"); archive only after its pull requests are merged (it ends at PUSHED: `--apply` needs `--branch NAME`, pushes that branch of the bindings repo and of the site, never `main`, and prints the branch to open the pull requests from). A campaign file that shows "no reader" when you grep the publishing scripts is a file whose step 1 has not run yet, not a dead file.
 
 The canonical store keys on `(lane, scale, n_docs, workload, backend, gav, rep, durability_class)` with the latest `ts_utc` winning, so a re-measured row supersedes the old one on merge. **Do not hand-edit the frozen CSV**; re-freeze after the campaign.
 
