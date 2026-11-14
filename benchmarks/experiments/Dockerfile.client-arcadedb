@@ -1,0 +1,13 @@
+# The image the served ArcadeDB client cells run in: the shared `dbbench:client` image plus the official `arcadedb-driver` at the release the
+# harness pins (lean_http.OFFICIAL_PIN, DECISIONS #258, #259) and the driver's own dependencies, each pinned.
+#
+# WHY A LAYER AND NOT A NEW PIN IN `client`. dbbench:client carries every comparator's client library, and rows made on it are already
+# measured. Changing the arcadedb-driver pin in PKGS[client] (a build arg) would rebuild that image under a new digest and split those rows.
+# A layer on top leaves dbbench:client byte-identical; only the served ArcadeDB arms (runner.py: ARCADEDB_CLIENT_IMAGE) run here.
+# `pip install ==` of the whole list in one command leaves the resolver no room to move any of them (httpx is unpinned in the driver's
+# own requirements, websockets>=14).
+FROM dbbench:client
+ARG DRIVER_PACKAGES=""
+RUN set -e; [ -n "${DRIVER_PACKAGES}" ] || { echo "DRIVER_PACKAGES is empty" >&2; exit 1; }; \
+    pip install --no-cache-dir ${DRIVER_PACKAGES}; \
+    python -c "import importlib.metadata as m, sys; bad = [p for p in sys.argv[1:] if m.version(p.split('==')[0]) != p.split('==')[1]]; sys.exit('not at the pin: ' + ', '.join(bad) if bad else 0)" ${DRIVER_PACKAGES}

@@ -107,8 +107,9 @@ def main():
     meta = payload.get("meta", {})
     # The runner's row: what the lane measured, in fields a reader of runs.jsonl
     # expects; the full artifact stays in the file.
-    from importlib.metadata import version as _v
-    payload["engine_version"] = _v("arcadedb-embedded")
+    import _arcadedb_import
+    payload["engine_version"] = _arcadedb_import.dist_version()
+    payload["engine_backend"] = _arcadedb_import.loaded_backend()
     # THE DURABILITY THE ARM RAN AT, read out of the engine rather than
     # asserted (#81, #90). Every 2026-10 row must record it -- F10 fails a row
     # that does not -- and this lane recorded nothing, which nobody noticed
@@ -116,6 +117,7 @@ def main():
     # of every gate, so the gate that would have caught this never saw them.
     # The lane runs one engine at its default class; the readback says which.
     import bench_common
+    # Asked in SQL (arcade_durability_readback, one path for both builds): the probe took the in-process server's database settings while it was open.
     payload["durability"] = bench_common.arcade_durability_readback()
     payload["durability_class"] = bench_common.DURABILITY_CLASS
     stamp_clients(payload)

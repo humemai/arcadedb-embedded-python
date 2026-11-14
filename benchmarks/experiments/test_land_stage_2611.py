@@ -176,6 +176,31 @@ def test_a_clean_file_passes_the_screen_and_the_dry_run_writes_nothing(landing, 
     assert not (landing["results"] / "runs.jsonl").exists()
 
 
+def test_a_pulled_file_replaces_the_scp_and_is_screened_like_a_pulled_one(landing, capsys):
+    """BENCH_LAND_PULLED_FILE: the four-arm rows come from several results directories, merged into one file outside the script."""
+    rows = _fixture_rows()[:20]
+    pulled = _write(landing["tmp"] / "merged_fourarm.jsonl", rows)
+    assert not (landing["host"].root / HOST_FILE).exists()      # the host has nothing: the old code's scp fails here
+    landing["mp"].setenv("BENCH_LAND_PULLED_FILE", str(pulled))
+    assert _land(landing, "--dry-run") == 0
+    assert "20 rows pulled" in capsys.readouterr().out
+    assert not (landing["results"] / "runs.jsonl").exists()
+    bad = _write(landing["tmp"] / "mixed_fourarm.jsonl", _restamp(rows, "2026-10"))
+    landing["mp"].setenv("BENCH_LAND_PULLED_FILE", str(bad))
+    with pytest.raises(SystemExit) as exc:
+        _land(landing, "--dry-run")
+    assert "2026-11 rows only" in str(exc.value)
+
+
+def test_a_missing_pulled_file_stops_and_never_falls_back_to_the_host(landing):
+    landing["host"].put_rows(_fixture_rows()[:20])               # the host has rows; they must not be used
+    landing["mp"].setenv("BENCH_LAND_PULLED_FILE", str(landing["tmp"] / "no_such_file.jsonl"))
+    with pytest.raises(SystemExit) as exc:
+        _land(landing, "--dry-run")
+    assert "BENCH_LAND_PULLED_FILE" in str(exc.value) and "no_such_file.jsonl" in str(exc.value)
+    assert not (landing["results"] / "runs.jsonl").exists()
+
+
 # ---------------------------------------------------------------------------------------------------- the merge
 def _merge(store_dir, incoming, monkeypatch):
     """merge_campaign.main() into `store_dir`, the way land_stage step 3 calls it."""

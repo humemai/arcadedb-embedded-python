@@ -43,6 +43,7 @@ from collections import Counter
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import publish_instrument  # noqa: E402
+import engine_pin  # noqa: E402
 RESULTS = str(publish_instrument.results_dir())
 
 # The keys the harness has used for "which engine produced this row". Kept as a
@@ -821,7 +822,8 @@ def check_engine_commit_matches_build(rows):
         # differ but it is probably fine" is how that returns.
         stamped_stamp = _stamp_for(stamped)
         n = min(len(stamped_stamp), len(reported), 40)
-        if stamped_stamp[:n] != reported[:n]:
+        if stamped_stamp[:n] != reported[:n] and not (
+                (r.get("server_build") == "native" or r.get("engine_backend") == "native") and engine_pin.native_server_equivalent(reported, stamped)):
             print(f"  BAD: {r.get('lane')}/{r.get('scale')}/{r.get('backend')} "
                   f"rep {r.get('rep')} stamped {stamped[:9]} but the engine "
                   f"reports {reported[:9]}")

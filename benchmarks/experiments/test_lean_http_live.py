@@ -403,7 +403,11 @@ def test_l5_lifecycle_server_read_identical(env, workload, tmp_path):
 def test_e4_decomposition_measures_both_clients_and_every_path_returns_the_same_rows(legacy, tmp_path):
     """The e4 lane (e4_decomp.py, with a real in-process engine and a real server) at a small corpus, once with requests importable and once
     with it blocked, which is the e4 cell's own condition (its image has none, so the probe's client is the urllib shim)."""
-    pytest.importorskip("arcadedb_embedded")
+    import _arcadedb_import
+    try:
+        _arcadedb_import.load()
+    except ImportError:
+        pytest.skip("no ArcadeDB Python package (arcadedb or arcadedb_embedded)")
     host, port = _host_port()
     _admin("drop database deploy_decomp", ok_missing=True)
     out = tmp_path / f"e4-{legacy}.json"

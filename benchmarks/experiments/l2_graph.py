@@ -198,7 +198,8 @@ class ArcadeGraphEmbedded(Base):
             lambda: self.db.query("sql", "SELECT FROM schema:indexes").to_list())
 
     def connect(self):
-        import arcadedb_embedded as arcadedb
+        import _arcadedb_import
+        arcadedb = _arcadedb_import.load()
         heap = os.environ.get("ARCADEDB_HEAP", "4g")
         # -Xms is left unset; heap_size sets -Xmx from the cell's memory budget (the bindings' documented practice, PROTOCOL section 7).
         self.db = arcadedb.create_database(
@@ -207,7 +208,7 @@ class ArcadeGraphEmbedded(Base):
             jvm_kwargs={"heap_size": heap,
                         "jvm_args": bench_common.arcade_jvm_args()})
         self.version = arcadedb.__version__
-        self.durability = bench_common.arcade_durability_readback()
+        self.durability = bench_common.arcade_durability_readback(db=self.db)
         for ddl in ["CREATE VERTEX TYPE Person",
                     "CREATE PROPERTY Person.id LONG",
                     "CREATE PROPERTY Person.name STRING",
@@ -228,7 +229,8 @@ class ArcadeGraphEmbedded(Base):
         JVM engine and on none of the others, so it has to be measured
         separately rather than folded in.
         """
-        import arcadedb_embedded as arcadedb
+        import _arcadedb_import
+        arcadedb = _arcadedb_import.load()
         heap = os.environ.get("ARCADEDB_HEAP", "4g")
         self.db = arcadedb.open_database(
             "/tmp/l2_arcade",
@@ -277,17 +279,29 @@ class ArcadeGraphEmbedded(Base):
     # Person and KNOWS, so no LSQB query could use it. At a tier with no message half the lists are what is loaded
     # (Person, KNOWS: the view the five projection questions always had); at the full network they are Person plus
     # ldbc_snb.MSG_VERTEX_LABELS and KNOWS plus MSG_EDGE_TYPES (Message is the abstract supertype of Post and Comment
-    # and holds no record of its own, so it is not listed, as upstream's runner does not list it). The properties are
+    # and holds no record of its own, so it is not listed before ArcadeDB 26.11.1, where upstream PR 9320 makes the registry hand a view out only
+    # when it covers every vertex type, abstract ones included: from there `_gav_types` adds it). The properties are
     # the five questions' own. An ArcadeDB-only setting, the user's call; the no-view arm (BENCH_GAV=0, backend_arm
     # nogav) stays on the table as the like-for-like row, and the build time of the larger view is priced on the row.
     GAV_PROPERTIES = "PROPERTIES (id, name, age, city) EDGE PROPERTIES (since)"
 
     def _gav_types(self):
-        """(vertex types, edge types) the view is created over."""
+        """(vertex types, edge types) the view is created over.
+
+        From ArcadeDB 26.11.1 (upstream PR 9320) the registry hands a view to a walk only when it covers every vertex type of the schema, the
+        abstract `Message` supertype included, so the list carries `Message` there and not on the releases before (bench_common.
+        GAV_SUPERTYPE_LISTED_FROM). The release is the engine version this adapter already records on its row (`self.version`, set at
+        connect); one the harness cannot read is refused rather than guessed, since the wrong list is a wrong measurement."""
         if not getattr(self, "_load_messages", False):
             return ["Person"], ["KNOWS"]
         import ldbc_snb as _ldbc
-        return ["Person"] + list(_ldbc.MSG_VERTEX_LABELS), ["KNOWS"] + list(self.MSG_EDGE_TYPES)
+        release = bench_common.engine_release(self.version)
+        if release is None:
+            raise RuntimeError(f"cannot choose the view's vertex types: the engine version {self.version!r} carries no release number")
+        vertices = ["Person"] + list(_ldbc.MSG_VERTEX_LABELS)
+        if release >= bench_common.GAV_SUPERTYPE_LISTED_FROM:
+            vertices.insert(1, "Message")
+        return vertices, ["KNOWS"] + list(self.MSG_EDGE_TYPES)
 
     def _gav_ddl(self):
         v, e = self._gav_types()
@@ -3502,6 +3516,7 @@ def main():
         ad.connect()
     out["connect_s"] = round(time.perf_counter() - t0, 3)
     out["engine_version"] = ad.version
+    out["engine_backend"] = bench_common.engine_backend()
     # What a served engine reported about itself at connect: client library
     # version, thread pool, memory limit, timeouts, persistence settings
     # (Memgraph, FalkorDB, DuckPGQ). Read from the server, not restated from

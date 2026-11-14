@@ -1,0 +1,13 @@
+{
+  "26.11.1": {
+    "pin": "a3a5d124572608412aa187f9c4b290e071699473",
+    "equivalent": [
+      "0f3bb2238c3cfc79c4a1c2cf2d8c5e36489652c0"
+    ],
+    "files_changed": 32,
+    "version_string_lines": 68,
+    "non_version_lines": 0,
+    "evidence": "ENGINE-COMMIT-EQUIV-26.11.1.md (notes: mini-ab-prep/fourarm-2611)",
+    "scope": "the native server image only; release pair only"
+  }
+}

@@ -36,6 +36,24 @@ matrix measured open-then-close WITHOUT EVER QUERYING and inflated the vector
 rows by up to 617x, because a session that never touches the index leaves it in
 a state close then has to resolve. That is not a neutral protocol, it is one
 specific case (#5747), so all three are measured and reported separately.
+
+THE COLD ROW ON BOTH BUILDS (26.11.1: `arcadedb-jvm` runs on a JVM through JPype, `arcadedb` is the native image with no
+JVM). The cold-start columns come from two fresh subprocesses (_cold_start_code, _cold_query_code), against a warm page cache
+(cold_process_cache_state), and mean the same on both builds:
+
+    import_ms              interpreter start + `import arcadedb`
+    engine_load_ms         the build's own start step: start_jvm() on the JVM build, the engine library load + isolate creation
+                           (arcadedb._native.lib._load(), what the first database call triggers) on native
+    jvm_start_ms           = engine_load_ms on the JVM build, null on native (there is no JVM; kept for the old rows)
+    first_open_ms          the first open_database, with the engine already started
+    cold_process_ms        the whole process through close(): what a CLI that opens and closes waits for
+    cold_first_query_ms    the situation's first read (the `read` mode's _read) in a fresh process after the first open;
+                           null for `empty`, which has no read
+    cold_query_process_ms  process start through the end of that read: open, engine start and one question
+    engine_backend         "native" or "jvm", on every ArcadeDB row (arcadedb.__backend__)
+
+Library load = import_ms + engine_load_ms on either build. cold_open_ms / cold_close_ms (a verified page-cache eviction, then a
+cycle in the lane's own process) are measured identically on both builds and are the only cold-cache numbers.
 """
 import argparse
 import json
@@ -48,7 +66,8 @@ import time
 import bench_common
 import pagecache
 
-DB = "/lcdb/lc"          # a HOST directory bind-mounted here; see _assert_fs
+# a HOST directory bind-mounted here; see _assert_fs. BENCH_LC_DB moves it for a laptop smoke (the default is the runner's mount, unchanged).
+DB = os.environ.get("BENCH_LC_DB", "/lcdb/lc")
 DIM = 64
 ITERS = int(os.environ.get("BENCH_LC_ITERS", "3"))
 # Which scenarios to run. At very large scales the write modes trigger a full
@@ -116,7 +135,8 @@ def build(situation, n, heap):
 
     Returns the build session's close time in ms.
     """
-    import arcadedb_embedded as arcadedb
+    import _arcadedb_import
+    arcadedb = _arcadedb_import.load()
     _rm(DB)
     db = arcadedb.create_database(
         DB, jvm_kwargs={"heap_size": heap, "jvm_args": None})
@@ -206,6 +226,10 @@ def build(situation, n, heap):
     # created the structure, and it is where a close-time rebuild doubles the
     # cost of building (#6489). A reopen cannot show it: by then the structure
     # is already on disk and clean.
+    # The engine's own settings, asked in SQL while the database is open (the same path on both builds; bench_common.arcade_durability_readback
+    # reads this snapshot when it stamps the row, long after this session closed). Not inside the timed close below.
+    import bench_common
+    bench_common.remember_engine_settings(db)
     _bt = time.perf_counter()
     db.close()
     return (time.perf_counter() - _bt) * 1000
@@ -474,7 +498,8 @@ def _drop(db, situation):
 
 def cycle(situation, mode, cold=False):
     """One open/close cycle. Returns (open_ms, close_ms)."""
-    import arcadedb_embedded as arcadedb
+    import _arcadedb_import
+    arcadedb = _arcadedb_import.load()
     if cold:
         # Verified eviction: evict() raises if pages survive, so a cold number
         # cannot be reported for a database that was still cached.
@@ -583,6 +608,66 @@ def measure_stale(situation, mode):
     return st.median(o), st.median(c), st.median(w)
 
 
+def _cold_start_code(native, db):
+    """The source of the cold-start subprocess: process start, import, engine load, first open, close. Prints four numbers (ms).
+
+    JVM build (and the old arcadedb_embedded wheel), byte for byte what this lane has always timed:
+        import_ms       interpreter start + `import @MOD@` (the JPype module included)
+        engine_load_ms  start_jvm() alone, no database       (also written as jvm_start_ms)
+        first_open_ms   first open_database, JVM already up
+        cold_process_ms the whole process through close()
+    Native build (`arcadedb`, no JVM, no JPype). The same four steps, each where it means the same thing:
+        import_ms       interpreter start + `import arcadedb` (a ctypes module; the engine library is not loaded yet)
+        engine_load_ms  the engine library load + isolate creation (`arcadedb._native.lib._load()`, the step the first database
+                        call triggers); the native counterpart of start_jvm(), so jvm_start_ms is null
+        first_open_ms   first open_database, library already loaded (the same meaning as on the JVM)
+        cold_process_ms the whole process through close() (the same meaning)
+    "Library load" in the cold row is therefore import_ms + engine_load_ms on native and import_ms + jvm_start_ms on the JVM build.
+    """
+    if native:
+        head = ("import time; _t0 = time.perf_counter()\n"
+                "import @MOD@ as a\n"
+                "_ti = time.perf_counter()\n"
+                "from @MOD@._native import lib as _lib; _lib._load()\n")
+    else:
+        head = ("import time; _t0 = time.perf_counter()\n"
+                "from @MOD@.jvm import start_jvm\n"
+                "import @MOD@ as a\n"
+                "_ti = time.perf_counter()\n"
+                "start_jvm()\n")
+    return head + (
+        "_tj = time.perf_counter()\n"
+        "db = a.open_database(%r)\n"
+        "_to = time.perf_counter()\n"
+        "db.close()\n"
+        "print('%%.3f %%.3f %%.3f %%.3f' %% ((_ti-_t0)*1000, (_tj-_ti)*1000, (_to-_tj)*1000, "
+        "(time.perf_counter()-_t0)*1000))" % db)
+
+
+def _cold_query_code(situation, db, here):
+    """The source of the cold-query subprocess: the first query of `situation` in a fresh process. Prints two numbers (ms).
+
+    Same on both builds. A fresh process opens the built database (page cache warm, as for cold_process_ms) and runs the
+    situation's read exactly as the `read` mode does (`_read`: the vector search, the sparse search, the counts ...), once:
+        cold_first_query_ms    that one read, after the first open (null for `empty`, which has no read)
+        cold_query_process_ms  process start (after this lane's own stdlib helper imports) through the end of that read:
+                               what a script that opens a database and asks one question waits for
+    The open and the engine start are inside cold_query_process_ms (they are not separate columns here; the cold-start process
+    reports them), and the close is not: a close after a query is the `read` mode's number.
+    """
+    return (
+        "import sys; sys.path.insert(0, %r)\n"
+        "import l5_lifecycle as _L\n"
+        "import time; _t0 = time.perf_counter()\n"
+        "import @MOD@ as a\n"
+        "db = a.open_database(%r)\n"
+        "_tq = time.perf_counter()\n"
+        "_L._read(db, %r)\n"
+        "_te = time.perf_counter()\n"
+        "db.close()\n"
+        "print('%%.3f %%.3f' %% ((_te-_tq)*1000, (_te-_t0)*1000))" % (here, db, situation))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--backend", required=True)
@@ -640,23 +725,17 @@ def main():
     #
     # What a cold caller actually pays is the whole process: interpreter start, import, JPype's JVM
     # boot, then the open. That is what this subprocess times, from its own first line.
+    # The import name is resolved HERE, outside the timed window (@MOD@ below), so the two import lines
+    # are the same statements as before (`arcadedb_embedded` on the old wheels, `arcadedb` on the new
+    # ones) and import_ms still times nothing else.
+    import _arcadedb_import
+    _native = _arcadedb_import.backend() == "native"
     _boot = subprocess.run(
-        [sys.executable, "-c",
-         "import time; _t0 = time.perf_counter()\n"
-         "from arcadedb_embedded.jvm import start_jvm\n"
-         "import arcadedb_embedded as a\n"
-         "_ti = time.perf_counter()\n"
-         "start_jvm()\n"
-         "_tj = time.perf_counter()\n"
-         "db = a.open_database(%r)\n"
-         "_to = time.perf_counter()\n"
-         "db.close()\n"
-         "print('%%.3f %%.3f %%.3f %%.3f' %% ((_ti-_t0)*1000, (_tj-_ti)*1000, (_to-_tj)*1000, "
-         "(time.perf_counter()-_t0)*1000))"
-         % DB],
+        [sys.executable, "-c", _cold_start_code(_native, DB)
+         .replace("@MOD@", _arcadedb_import.module_name())],
         capture_output=True, text=True, timeout=900)
     if _boot.returncode == 0 and _boot.stdout.strip():
-        import_ms, jvm_start_ms, first_open_ms, cold_proc_ms = (
+        import_ms, engine_load_ms, first_open_ms, cold_proc_ms = (
             float(x) for x in _boot.stdout.strip().split()[-4:])
     else:
         # NOT -1.0. A sentinel that is a float goes into a median, a mean and a
@@ -667,7 +746,25 @@ def main():
         sys.stderr.write(
             "cold-start subprocess failed (rc=%s); cold columns will be null\n%s\n"
             % (_boot.returncode, (_boot.stderr or "")[-2000:]))
-        import_ms = jvm_start_ms = first_open_ms = cold_proc_ms = None
+        import_ms = engine_load_ms = first_open_ms = cold_proc_ms = None
+    # jvm_start_ms keeps its meaning (start_jvm() alone) and exists only where there is a JVM. The native build has none, so the
+    # column is null there and engine_load_ms (below) carries the build's own start step.
+    jvm_start_ms = None if _native else engine_load_ms
+    # The first query in a FRESH process (see _cold_query_code), a second subprocess so the one above keeps measuring
+    # open-then-close without a query, as it always did.
+    _q = subprocess.run(
+        [sys.executable, "-c", _cold_query_code(args.workload, DB, os.path.dirname(os.path.abspath(__file__)))
+         .replace("@MOD@", _arcadedb_import.module_name())],
+        capture_output=True, text=True, timeout=900)
+    if _q.returncode == 0 and _q.stdout.strip():
+        cold_first_query_ms, cold_query_process_ms = (float(x) for x in _q.stdout.strip().split()[-2:])
+    else:
+        sys.stderr.write(
+            "cold-query subprocess failed (rc=%s); its columns will be null\n%s\n"
+            % (_q.returncode, (_q.stderr or "")[-2000:]))
+        cold_first_query_ms = cold_query_process_ms = None
+    if args.workload == "empty":
+        cold_first_query_ms = None       # the situation has no read to time (_read returns at once)
 
     out = bench_common.run_conditions(
         lane="lifecycle", backend=args.backend, workload=args.workload,
@@ -699,7 +796,10 @@ def main():
     # and first_open_ms is ArcadeDB's own initialisation with the JVM already up.
     _r3 = lambda x: None if x is None else round(x, 3)
     out["import_ms"] = _r3(import_ms)                    # interpreter + module import
-    out["jvm_start_ms"] = _r3(jvm_start_ms)              # start_jvm() alone, no database
+    out["jvm_start_ms"] = _r3(jvm_start_ms)              # start_jvm() alone, no database; null on the native build
+    out["engine_load_ms"] = _r3(engine_load_ms)          # the build's own start step: start_jvm() (jvm) or library load + isolate (native)
+    out["cold_first_query_ms"] = _r3(cold_first_query_ms)          # first query of the situation, fresh process, after the first open
+    out["cold_query_process_ms"] = _r3(cold_query_process_ms)      # that process: start through the end of the first query
     out["first_open_ms"] = _r3(first_open_ms)            # first open, JVM already up
     out["cold_process_ms"] = _r3(cold_proc_ms)           # what a CLI actually waits for
     # WHICH CACHE STATE THESE FOUR DESCRIBE. cold_open_ms above is measured after

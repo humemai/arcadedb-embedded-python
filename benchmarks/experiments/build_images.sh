@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build the per-backend bench images. ARCADEDB_WHEEL=<path> bakes a wheel into the arcadedb image, which is tagged with
-# the wheel's version, dbbench:arcadedb-<version>, and never with a floating dbbench:arcadedb (engine_pin.py, 2026-10-22).
+# the wheel's version and build, dbbench:arcadedb-<version>-native or -jvm (the older arcadedb_embedded wheel: no suffix), and never with a floating dbbench:arcadedb (engine_pin.py, 2026-10-22).
 set -eu
 cd "$(dirname "$0")"
 
@@ -34,7 +34,7 @@ fi
 _want_arcadedb=1
 if [ $# -gt 0 ]; then _want_arcadedb=0; for _t in "$@"; do [ "$_t" = "arcadedb" ] && _want_arcadedb=1; done; fi
 if [ "$_want_arcadedb" = 1 ] && [ -z "${ARCADEDB_WHEEL:-}" ]; then
-  echo "REFUSING: the arcadedb image needs ARCADEDB_WHEEL=<path to the pinned arcadedb_embedded wheel>; there is no PyPI fallback." >&2
+  echo "REFUSING: the arcadedb image needs ARCADEDB_WHEEL=<path to the pinned arcadedb (native) or arcadedb-jvm wheel>; there is no PyPI fallback." >&2
   echo "          Name the targets (e.g. './build_images.sh duckdb client dense') to build the images that take no wheel." >&2
   exit 1
 fi
@@ -79,6 +79,9 @@ declare -A PKGS=(
   # no way back to a working extension but the vendor restoring the file; 0.22.0 is the newest stable and its
   # extension loads. The extension is baked into the client image below, pinned by sha256 (LADYBUG_EXTENSIONS).
   [client]="requests==2.34.2 psycopg[binary]==3.3.6 $HARNESS_PKGS surrealdb==2.0.0 qdrant-client==1.20.0 pymilvus[bulk_writer]==3.0.2 minio==7.2.20 azure-storage-blob==12.31.0 ml-dtypes==0.6.0 elasticsearch==9.5.1 neo4j==6.4.1 ladybug==0.22.0 pymongo==4.18.1 python-arango==8.3.6 falkordb==1.7.1 redis==8.1.0 neo4j-rust-ext==6.4.1.0 pgvector==0.5.1 arcadedb-driver==0.2.0"
+  # arcadedb-driver==0.2.0 on the client line stays 0.2.0 ON PURPOSE (DECISIONS #259 (2)): this line is the build arg of dbbench:client, the
+  # image every comparator's measured rows ran on, and any edit to it rebuilds that image under a new digest. The served ArcadeDB arms run on
+  # the `client-arcadedb` layer below (ARCADEDB_DRIVER_PKGS, lean_http.OFFICIAL_PIN = 0.4.0), not on this driver.
   # ladybug==0.22.0 is the SAME pin as the client line above, here for the composed embedded cross-model arm
   # (composed_embedded_sqlite_lance_ladybug, 2026-10-25): SQLite + LanceDB + LadybugDB must import in ONE process, and
   # lancedb lives in this image. No new version: the dense lane's arms import none of it.
@@ -108,7 +111,8 @@ LADYBUG_EXTENSIONS="vector=23da57e805fed208f1eacb4b011cb0c2e917ae098fa6853763e44
 # test only that. Same for the wheel path, whose basename carries the version.
 _pin=""
 if [ -n "${ARCADEDB_WHEEL:-}" ]; then
-  # arcadedb_embedded-26.8.1.dev20-py3-none-linux_x86_64.whl -> 26.8.1.dev20
+  # arcadedb-26.11.1.dev0-py3-none-manylinux_2_28_x86_64.whl, arcadedb_jvm-26.11.1.dev0-... and the older
+  # arcadedb_embedded-26.8.1.dev20-py3-none-linux_x86_64.whl all carry the version in the second field -> 26.8.1.dev20
   _pin=$(basename "$ARCADEDB_WHEEL" | cut -d- -f2)
 fi
 case "$_pin" in
@@ -139,10 +143,18 @@ echo "arcadedb pin: $_pin"
 # NO FLOATING ENGINE TAG (2026-10-22, engine_pin.py). dbbench:arcadedb pointed at whichever wheel was built last, and on the laptop it still
 # pointed at 26.10.1 after October was retired. The image that carries ArcadeDB is named for the version it carries, and runner.py refuses
 # any other tag for it.
+# THE BUILD IS PART OF THE TAG (26.11.1, engine_pin.backend_from_wheel): one release ships a native wheel (arcadedb-<v>-...) and a JVM wheel
+# (arcadedb_jvm-<v>-...), and `dbbench:arcadedb-<v>` could hold only one. The tag is dbbench:arcadedb-<v>-native or -jvm; the older
+# arcadedb_embedded wheels keep the unsuffixed tag, so the images and rows of earlier releases still resolve.
+_bk=""
+case "$(basename "${ARCADEDB_WHEEL:-}" | cut -d- -f1)" in
+  arcadedb) _bk=native ;;
+  arcadedb_jvm) _bk=jvm ;;
+esac
 ARCADEDB_TAG=""
 if [ -n "$_pin" ]; then
   case "$_pin" in
-    [0-9]*.[0-9]*.[0-9]*) ARCADEDB_TAG="dbbench:arcadedb-$_pin" ;;
+    [0-9]*.[0-9]*.[0-9]*) ARCADEDB_TAG="dbbench:arcadedb-$_pin${_bk:+-$_bk}" ;;
     *) echo "REFUSING: the wheel name '$(basename "$ARCADEDB_WHEEL")' carries no x.y.z version, so the arcadedb image cannot be tagged" >&2; exit 1 ;;
   esac
 fi
@@ -161,8 +173,23 @@ case "$JPYPE_VERSION" in
 esac
 echo "jpype pin: $JPYPE_VERSION"
 
-targets=("$@"); [ ${#targets[@]} -eq 0 ] && targets=(arcadedb duckdb client dense pg-age mongo-search composed)
+# THE OFFICIAL DRIVER'S ENVIRONMENT, PINNED (2026-11-07, DECISIONS #259; PyPI latest of that day, COMPARATORS.md "Client holds"). arcadedb-driver 0.4.0
+# requires attrs>=23.2, httpx>=0.27, typing-extensions>=4.10 and websockets>=14; httpx pulls httpcore, h11, anyio, idna and certifi. All are pinned
+# here so the driver environment of every served ArcadeDB client cell is the same on every host and every build day. Installed as a layer over
+# dbbench:client (Dockerfile.client-arcadedb), which stays byte-identical. The driver version is checked against lean_http.OFFICIAL_PIN by
+# test_instrument_method.py; OfficialSession refuses to start on any other version.
+ARCADEDB_DRIVER_PKGS="arcadedb-driver==0.4.0 httpx==0.28.1 httpcore==1.0.9 h11==0.16.0 anyio==4.16.0 idna==3.20 certifi==2026.10.23 attrs==26.1.0 typing-extensions==4.16.0 websockets==17.4"
+
+targets=("$@"); [ ${#targets[@]} -eq 0 ] && targets=(arcadedb duckdb client client-arcadedb dense pg-age mongo-search composed)
 for be in "${targets[@]}"; do
+  if [ "$be" = "client-arcadedb" ]; then
+    # The served ArcadeDB client image: dbbench:client + the official driver (Dockerfile.client-arcadedb). It is built FROM the local dbbench:client,
+    # so `client` is built first (the default target list and the stage scripts' sorted list both put it first), and never touches that image.
+    docker image inspect dbbench:client >/dev/null 2>&1 || { echo "REFUSING: dbbench:client-arcadedb is built on dbbench:client, which is not built here; build 'client' first" >&2; exit 1; }
+    echo "=== dbbench:client-arcadedb ($ARCADEDB_DRIVER_PKGS)"
+    docker build -q -t dbbench:client-arcadedb --build-arg DRIVER_PACKAGES="$ARCADEDB_DRIVER_PKGS" -f Dockerfile.client-arcadedb . >/dev/null && echo "  ok"
+    continue
+  fi
   if [ "$be" = "composed" ]; then
     # Neo4j + Qdrant in one container (Dockerfile.composed), the composed
     # cross-model stack's server (BUGS F133, DECISIONS #117). Both halves
