@@ -12590,7 +12590,7 @@
         "Each repetition runs 1,000 new-order transactions and 1,000 payments, then 1,000 each of the single-record insert, read, update, and delete; the p50 and p99 are over those, and OLTP ops/s is the rate of the two transactions together.",
         "ArcadeDB's indexes on `Part.p_partkey`, `OrderNew.okey`, and `Crud.ckey` are hash indexes (`UNIQUE_HASH`), because the benchmark never ranges over or orders by those ids. A hash index keeps no key order: an equality lookup goes straight to its bucket instead of walking a sorted tree, and building it can cost more than building a sorted index when the ids arrive in ascending order, which is the order this loader sends them. Any such cost is in ArcadeDB's ingest and index times on this table.",
         "`ingest total s` is the whole of building this corpus. `ingest s` and `index s` are the two phases timed inside it -- writing the data, then building whatever index the engine was given -- and they are not a division of it: each engine's ingest clock starts after the setup it does first, creating a schema or a collection, which neither phase counts. How much is left over depends on the engine: nothing on some of the ones here, up to about 1 per cent on others. Read the two as what each phase cost, and the total as what the whole of it cost.",
-        "cratedb tpc, SurrealDB (embedded), and SurrealDB (server) define their index before the first row is loaded, so the index s printed for them times only the definition and the work of building the index is inside ingest s.",
+        "CrateDB, SurrealDB (embedded), and SurrealDB (server) define their index before the first row is loaded, so the index s printed for them times only the definition and the work of building the index is inside ingest s.",
         "SurrealDB (server) at TPC-H SF10 (60.0M line items): the transaction cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row. It was still in the index build when the budget ran out.",
         "SurrealDB (embedded) at TPC-H SF10 (60.0M line items): the transaction cell reached the 32g memory envelope (peak 32,768 MiB) and was killed by the kernel, the same envelope every engine on this table had; it did not run out of time, and there is no row.",
         "In the cells: `>2h` means the cell ran past its tier's cap and was not retried. `OOM` means ran out of memory at the cell's memory envelope, killed by the kernel or stopped by the engine's own out-of-memory error, rather than running out of time. A dash is an operation the engine cannot express, never a slow one.",
@@ -13163,7 +13163,7 @@
           }
         },
         {
-          "backend": "cratedb tpc",
+          "backend": "CrateDB",
           "build": null,
           "backend_key": "cratedb_tpc",
           "is_arcadedb": false,
@@ -14518,7 +14518,7 @@
           }
         },
         {
-          "backend": "cratedb tpc",
+          "backend": "CrateDB",
           "build": null,
           "backend_key": "cratedb_tpc",
           "is_arcadedb": false,
@@ -15161,52 +15161,52 @@
       },
       "declared_absences": [
         {
-          "backend": "cratedb tpc",
+          "backend": "CrateDB",
           "column": "new-order p50 ms",
           "kind": "not measured",
-          "why": "cratedb tpc was not run on the transaction workload: it runs the analytics workload of this lane only."
+          "why": "CrateDB was not run on the transaction workload: it runs the analytics workload of this lane only."
         },
         {
-          "backend": "cratedb tpc",
+          "backend": "CrateDB",
           "column": "new-order p99 ms",
           "kind": "not measured",
-          "why": "cratedb tpc was not run on the transaction workload: it runs the analytics workload of this lane only."
+          "why": "CrateDB was not run on the transaction workload: it runs the analytics workload of this lane only."
         },
         {
-          "backend": "cratedb tpc",
+          "backend": "CrateDB",
           "column": "payment p50 ms",
           "kind": "not measured",
-          "why": "cratedb tpc was not run on the transaction workload: it runs the analytics workload of this lane only."
+          "why": "CrateDB was not run on the transaction workload: it runs the analytics workload of this lane only."
         },
         {
-          "backend": "cratedb tpc",
+          "backend": "CrateDB",
           "column": "insert p50 ms",
           "kind": "not measured",
-          "why": "cratedb tpc was not run on the transaction workload: it runs the analytics workload of this lane only."
+          "why": "CrateDB was not run on the transaction workload: it runs the analytics workload of this lane only."
         },
         {
-          "backend": "cratedb tpc",
+          "backend": "CrateDB",
           "column": "read p50 ms",
           "kind": "not measured",
-          "why": "cratedb tpc was not run on the transaction workload: it runs the analytics workload of this lane only."
+          "why": "CrateDB was not run on the transaction workload: it runs the analytics workload of this lane only."
         },
         {
-          "backend": "cratedb tpc",
+          "backend": "CrateDB",
           "column": "update p50 ms",
           "kind": "not measured",
-          "why": "cratedb tpc was not run on the transaction workload: it runs the analytics workload of this lane only."
+          "why": "CrateDB was not run on the transaction workload: it runs the analytics workload of this lane only."
         },
         {
-          "backend": "cratedb tpc",
+          "backend": "CrateDB",
           "column": "delete p50 ms",
           "kind": "not measured",
-          "why": "cratedb tpc was not run on the transaction workload: it runs the analytics workload of this lane only."
+          "why": "CrateDB was not run on the transaction workload: it runs the analytics workload of this lane only."
         },
         {
-          "backend": "cratedb tpc",
+          "backend": "CrateDB",
           "column": "OLTP ops/s",
           "kind": "not measured",
-          "why": "cratedb tpc was not run on the transaction workload: it runs the analytics workload of this lane only."
+          "why": "CrateDB was not run on the transaction workload: it runs the analytics workload of this lane only."
         },
         {
           "backend": "ArcadeDB (server, image JVM defaults)",
@@ -15246,10 +15246,10 @@
         "ArcadeDB's served rows time every call through the benchmark's own minimal HTTP client, lean_http (http.client, keep-alive) (source: benchmarks/experiments/lean_http.py), which keeps one persistent http.client connection per host. The other engines are measured through their vendors' own Python clients, so client weight differs between the served engines.",
         "ArcadeDB (server, JVM build) and ArcadeDB (server, native build) run on a JVM, and for them this column is close to the heap they were given rather than the memory the work needed: ArcadeDB (server, JVM build)'s 3.27 GiB here is about 41 per cent of its 8g heap. Every engine on a table gets the same memory envelope; how much of it a JVM takes is a property of the runtime, so read these cells against each other rather than against an engine that manages its own memory. ArcadeDB (embedded, JVM build) and ArcadeDB (embedded, native build) run on a JVM too, but they start with no initial heap size, so their column follows what the work needed and not the heap the JVM was allowed to grow into.",
         "Each repetition runs every query 100 times; the p50 and p99 are over those runs.",
-        "Indexes on this table are matched by effect rather than by rule: ArcadeDB (embedded), ArcadeDB (server), MongoDB, PostgreSQL, Redis, SurrealDB (embedded), SurrealDB (server), and cratedb tpc build one; ArangoDB, DuckDB, and SQLite build none, because measuring it showed the index costs them or changes nothing. Where building one was a choice, the engine was timed with it and without it and the faster configuration kept; where an engine reaches these queries through its own primary key or record id, that is its equivalent. The time an index took to build is the index column. DuckDB's index cell is not zero because it times a different index: the order-key index of the table new orders are written into, which the transactional workload needs and which is built while that table is still empty.",
+        "Indexes on this table are matched by effect rather than by rule: ArcadeDB (embedded), ArcadeDB (server), CrateDB, MongoDB, PostgreSQL, Redis, SurrealDB (embedded), and SurrealDB (server) build one; ArangoDB, DuckDB, and SQLite build none, because measuring it showed the index costs them or changes nothing. Where building one was a choice, the engine was timed with it and without it and the faster configuration kept; where an engine reaches these queries through its own primary key or record id, that is its equivalent. The time an index took to build is the index column. DuckDB's index cell is not zero because it times a different index: the order-key index of the table new orders are written into, which the transactional workload needs and which is built while that table is still empty.",
         "ArcadeDB's indexes on `Part.p_partkey`, `OrderNew.okey`, and `Crud.ckey` are hash indexes (`UNIQUE_HASH`), because the benchmark never ranges over or orders by those ids. A hash index keeps no key order: an equality lookup goes straight to its bucket instead of walking a sorted tree, and building it can cost more than building a sorted index when the ids arrive in ascending order, which is the order this loader sends them. Any such cost is in ArcadeDB's ingest and index times on this table.",
         "`ingest total s` is the whole of building this corpus. `ingest s` and `index s` are the two phases timed inside it -- writing the data, then building whatever index the engine was given -- and they are not a division of it: each engine's ingest clock starts after the setup it does first, creating a schema or a collection, which neither phase counts. How much is left over depends on the engine: nothing on some of the ones here, up to about 1 per cent on others. Read the two as what each phase cost, and the total as what the whole of it cost.",
-        "cratedb tpc, SurrealDB (embedded), and SurrealDB (server) define their index before the first row is loaded, so the index s printed for them times only the definition and the work of building the index is inside ingest s.",
+        "CrateDB, SurrealDB (embedded), and SurrealDB (server) define their index before the first row is loaded, so the index s printed for them times only the definition and the work of building the index is inside ingest s.",
         "SurrealDB (embedded) and SurrealDB (server) at TPC-H SF1 (6.0M line items): the analytics cell exceeded its 2.035 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
         "SurrealDB (server) at TPC-H SF10 (60.0M line items): the analytics cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row. It was still in the index build when the budget ran out.",
         "MongoDB at TPC-H SF10 (60.0M line items): the analytics cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
@@ -15259,10 +15259,10 @@
         "ArcadeDB (embedded) at TPC-H SF10 (60.0M line items): Q1 (15 to 39 of 100 iterations, reaching 872 to 943 s), Q6 (30 to 86, reaching 865 to 885 s), by month (25 to 70, reaching 864 to 965 s), ship mode (49 to 77, reaching 873 to 899 s), and top parts (25 to 65, reaching 868 to 946 s).",
         "ArcadeDB (server) at TPC-H SF1 (6.0M line items): Q6 (87 of 100 iterations, reaching 271 s).",
         "ArcadeDB (server) at TPC-H SF10 (60.0M line items): Q1 (8 to 41 of 100 iterations, reaching 864 to 959 s), Q6 (23 to 95, reaching 865 to 889 s), by month (26 to 68, reaching 865 to 879 s), ship mode (40 to 48, reaching 869 to 924 s), and top parts (14 to 66, reaching 864 to 997 s).",
+        "CrateDB at TPC-H SF10 (60.0M line items): Q1 (60 to 69 of 100 iterations, reaching 866 to 872 s) and top parts (27 to 36, reaching 864 to 912 s).",
         "MongoDB at TPC-H SF1 (6.0M line items): Q6 (84 to 98 of 100 iterations, reaching 271 to 271 s).",
         "PostgreSQL at TPC-H SF10 (60.0M line items): Q1 (96 of 100 iterations, reaching 865 s), by month (78, reaching 870 s), and top parts (35 to 69, reaching 864 to 883 s).",
         "SQLite at TPC-H SF10 (60.0M line items): Q1 (10 to 11 of 100 iterations, reaching 878 to 921 s), by month (14 to 17, reaching 866 to 909 s), ship mode (22 to 26, reaching 868 to 887 s), and top parts (15 to 17, reaching 882 to 905 s).",
-        "cratedb tpc at TPC-H SF10 (60.0M line items): Q1 (60 to 69 of 100 iterations, reaching 866 to 872 s) and top parts (27 to 36, reaching 864 to 912 s).",
         "In the cells: `>2h` and `>122m` mean the cell ran past its tier's cap and was not retried; each tier has its own cap, the same for every engine on it. A dash is an operation the engine cannot express, never a slow one.",
         "Ingest paths: DuckDB and ArcadeDB embedded load whole frames, DuckDB with CREATE TABLE AS SELECT from in-memory frames and ArcadeDB embedded through the Python package's insert_columns, which hands each batch of the file to the engine as whole columns and builds the documents in Java; ArcadeDB served binds 2,000-row INSERT ... CONTENT batches over HTTP; PostgreSQL COPY FROM STDIN, SQLite executemany, MongoDB insert_many, ArangoDB import_bulk, and SurrealDB's Python SDK are fed row by row."
       ],
@@ -15802,7 +15802,7 @@
           }
         },
         {
-          "backend": "cratedb tpc",
+          "backend": "CrateDB",
           "build": null,
           "backend_key": "cratedb_tpc",
           "is_arcadedb": false,
@@ -17045,7 +17045,7 @@
           }
         },
         {
-          "backend": "cratedb tpc",
+          "backend": "CrateDB",
           "build": null,
           "backend_key": "cratedb_tpc",
           "is_arcadedb": false,
@@ -18463,9 +18463,9 @@
         ]
       },
       {
-        "text": "cratedb tpc, SurrealDB (embedded), and SurrealDB (server) define their index before the first row is loaded, so the index s printed for them times only the definition and the work of building the index is inside ingest s.",
+        "text": "CrateDB, SurrealDB (embedded), and SurrealDB (server) define their index before the first row is loaded, so the index s printed for them times only the definition and the work of building the index is inside ingest s.",
         "values": [
-          "cratedb tpc",
+          "CrateDB",
           "SurrealDB (embedded)",
           "SurrealDB (server)"
         ]
@@ -18493,16 +18493,16 @@
         "values": []
       },
       {
-        "text": "Indexes on this table are matched by effect rather than by rule: ArcadeDB (embedded), ArcadeDB (server), MongoDB, PostgreSQL, Redis, SurrealDB (embedded), SurrealDB (server), and cratedb tpc build one; ArangoDB, DuckDB, and SQLite build none, because measuring it showed the index costs them or changes nothing. Where building one was a choice, the engine was timed with it and without it and the faster configuration kept; where an engine reaches these queries through its own primary key or record id, that is its equivalent. The time an index took to build is the index column. DuckDB's index cell is not zero because it times a different index: the order-key index of the table new orders are written into, which the transactional workload needs and which is built while that table is still empty.",
+        "text": "Indexes on this table are matched by effect rather than by rule: ArcadeDB (embedded), ArcadeDB (server), CrateDB, MongoDB, PostgreSQL, Redis, SurrealDB (embedded), and SurrealDB (server) build one; ArangoDB, DuckDB, and SQLite build none, because measuring it showed the index costs them or changes nothing. Where building one was a choice, the engine was timed with it and without it and the faster configuration kept; where an engine reaches these queries through its own primary key or record id, that is its equivalent. The time an index took to build is the index column. DuckDB's index cell is not zero because it times a different index: the order-key index of the table new orders are written into, which the transactional workload needs and which is built while that table is still empty.",
         "values": [
           "ArcadeDB (embedded)",
           "ArcadeDB (server)",
+          "CrateDB",
           "MongoDB",
           "PostgreSQL",
           "Redis",
           "SurrealDB (embedded)",
           "SurrealDB (server)",
-          "cratedb tpc",
           "ArangoDB",
           "DuckDB",
           "SQLite"
@@ -18581,6 +18581,14 @@
         ]
       },
       {
+        "text": "CrateDB at TPC-H SF10 (60.0M line items): Q1 (60 to 69 of 100 iterations, reaching 866 to 872 s) and top parts (27 to 36, reaching 864 to 912 s).",
+        "values": [
+          "CrateDB",
+          "TPC-H SF10 (60.0M line items)",
+          "Q1 (60 to 69 of 100 iterations, reaching 866 to 872 s) and top parts (27 to 36, reaching 864 to 912 s)"
+        ]
+      },
+      {
         "text": "MongoDB at TPC-H SF1 (6.0M line items): Q6 (84 to 98 of 100 iterations, reaching 271 to 271 s).",
         "values": [
           "MongoDB",
@@ -18602,14 +18610,6 @@
           "SQLite",
           "TPC-H SF10 (60.0M line items)",
           "Q1 (10 to 11 of 100 iterations, reaching 878 to 921 s), by month (14 to 17, reaching 866 to 909 s), ship mode (22 to 26, reaching 868 to 887 s), and top parts (15 to 17, reaching 882 to 905 s)"
-        ]
-      },
-      {
-        "text": "cratedb tpc at TPC-H SF10 (60.0M line items): Q1 (60 to 69 of 100 iterations, reaching 866 to 872 s) and top parts (27 to 36, reaching 864 to 912 s).",
-        "values": [
-          "cratedb tpc",
-          "TPC-H SF10 (60.0M line items)",
-          "Q1 (60 to 69 of 100 iterations, reaching 866 to 872 s) and top parts (27 to 36, reaching 864 to 912 s)"
         ]
       },
       {
