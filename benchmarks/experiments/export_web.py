@@ -6261,6 +6261,8 @@ def _query_budget_notes(table_id):
             continue
         if scales and str(r.get("scale")) not in scales:
             continue
+        if str(r.get("backend")) in OFF_PAGE_ARMS:     # an ablation the page does not print gets no sentence either
+            continue
         for q, col in labels.items():
             if str(r.get(f"{q}_censored") or "").strip().lower() != "true":
                 continue
