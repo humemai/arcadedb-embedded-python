@@ -337,6 +337,25 @@ def current_pin(payload_path=None):
     return str(pins[0]) if len(pins) == 1 else None
 
 
+def drop_reps_above(rows, max_rep):
+    """(kept, {rep: count dropped}): the rows of repetitions 1..max_rep, and how many rows of each later repetition were left out.
+
+    The page is n=3 while the comparator passes 4 and 5 append rep 4 and rep 5 rows to the same rows file on the bench host, so a
+    landing at n=3 caps the repetitions it takes. A row whose `rep` is not an integer cannot be placed under a cap: the run ends
+    instead of keeping or dropping it unseen."""
+    kept, dropped = [], {}
+    for r in rows:
+        rep = r.get("rep")
+        if not isinstance(rep, int) or isinstance(rep, bool):
+            raise SystemExit(f"REFUSING --max-rep {max_rep}: a row has rep={rep!r}, not an integer ({r.get('run_id') or r.get('backend')}); "
+                             f"nothing was merged.")
+        if rep > max_rep:
+            dropped[rep] = dropped.get(rep, 0) + 1
+        else:
+            kept.append(r)
+    return kept, dropped
+
+
 def parse_drop_unless(spec):
     """BACKEND:LANE:WORKLOAD:FIELD=VALUE -> (backend, lane, workload, field, value). A malformed spec ends the run:
     a landing that silently dropped nothing would publish the rows the repair replaced."""
@@ -469,6 +488,10 @@ def main():
                     help="dense multipass arm token to pull at both sizes (e.g. neo4jvec, pgvector)")
     ap.add_argument("--message", required=True, help="one-line commit subject for both repos")
     ap.add_argument("--apply", action="store_true", help="build, commit and push; default stops after the diff")
+    ap.add_argument("--max-rep", type=int, default=0, metavar="N",
+                    help="land repetitions 1..N only: rows of a later repetition are left out before the screen, the filters and the "
+                         "merge, and the count per dropped repetition is printed (the page is n=3 while the comparator passes 4 and 5 "
+                         "append to the same rows file; they land when the page moves to n=5). Off by default")
     ap.add_argument("--post-tag", default="post1", metavar="postN", help="the rerun whose rows file --post1-reps pulls: runs_page_<pin>_2611_<postN>.jsonl (default post1)")
     ap.add_argument("--post1-reps", type=int, default=0, metavar="N",
                     help="also pull runs_page_<pin>_2611_post1.jsonl (the wheels-only rerun) and land, per cell, the rows of ONE wheel "
@@ -604,6 +627,10 @@ def main():
     excl = {b.strip() for b in args.exclude_backends.split(",") if b.strip()}
     lanes = {l.strip() for l in args.only_lanes.split(",") if l.strip()}
     rows = [json.loads(l) for l in pulled.read_text().splitlines() if l.strip()]
+    if args.max_rep:
+        rows, _late = drop_reps_above(rows, args.max_rep)
+        print(f"  --max-rep {args.max_rep}: {sum(_late.values())} row(s) of later repetitions left out "
+              f"({', '.join(f'rep {k}: {v}' for k, v in sorted(_late.items())) or 'none'}); {len(rows)} kept")
     if args.post1_reps:
         import post1_rows
         if not re.fullmatch(r"post\d+", args.post_tag):

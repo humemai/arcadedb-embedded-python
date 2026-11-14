@@ -189,6 +189,8 @@ It pulls `runs_page_<pin>_2611.jsonl` (and, with `--overlay`, an arm's dense mul
 
 **`BENCH_LAND_PULLED_FILE` lands rows that were pulled elsewhere.** The four-arm chains write their rows into several results directories on the bench host, so no single `scp` has them all. Set the variable to a merged rows file and step 1 copies it in place of the `scp`; the screen, the filters, the merge and the gates then run on it as on any pulled file. A path that is not a file ends the run, it never falls back to the host. Unset, the landing pulls from the host as before.
 
+**`--max-rep N` lands repetitions 1..N only.** The comparator passes 4 and 5 append rep 4 and rep 5 rows to the same `runs_page_<pin>_2611.jsonl` while the page is n=3, so a landing at n=3 passes `--max-rep 3`: rows of a later repetition are left out before the screen, the filters and the merge, and the count per dropped repetition is printed. A row whose `rep` is not an integer ends the run. Off by default (`test_land_stage_max_rep.py`).
+
 **`--pin` defaults to `BENCH_ENGINE_COMMIT`.** Step 1 pulls the stage's rows file by exact name, so a wrong pin fetches the wrong rows and fails much later, with the merge already done; pass `--pin <commit>` or set `BENCH_ENGINE_COMMIT` on every landing.
 
 Never `git add` a raw directory under `results/` (see the first note of the results section above).
