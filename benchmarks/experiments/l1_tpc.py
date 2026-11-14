@@ -331,6 +331,12 @@ STOCK_DIGEST = dict(columns=("p_partkey", "stock"))
 # marked the order paid and silently skipped its insert left every other digest agreeing.
 PAYMENTS_DIGEST = dict(columns=("n",))
 CRUD_READ_DIGEST = dict(columns=(("ckey", "_id"), "pkey", "qty"))
+# THE TRANSACTION HALF OF THE OLTP TABLE, FOR AN ENGINE THAT CANNOT WRITE IT (CrateDB, 2026-11-14; DECISIONS #88 and #92).
+# An adapter whose class carries `UNEXPRESSIBLE` (digest name -> reason, set by its `preflight`) must name exactly these four
+# digests: new-order, the stock it decrements, payment, and the payments it inserts. The lane then runs no new-order and no
+# payment (not in the warm-up, not timed), writes each reason onto the row through bench_common.record_unexpressible (the
+# `res_<name>_digest` fields the equivalence gate lists as declared absences), and runs the single-record operations alone.
+TXN_DIGESTS = ("neworder", "stock", "payment", "payments")
 
 
 def li_columns(df):
@@ -1447,23 +1453,36 @@ class PostgresTunedTPC(PostgresTPC):
 
 
 class CrateTPC:
-    """CrateDB 6.4.6 over the PostgreSQL wire (2026-10-23, the multi-model comparator batch): the ANALYTICS table only.
+    """CrateDB 6.4.6 over the PostgreSQL wire (2026-10-23, the multi-model comparator batch; the single-record operations since 2026-11-14).
 
     CrateDB has no multi-statement transaction (a statement is its unit), so new-order and payment cannot be written as one
-    ACID transaction and the arm is registered for the `olap` workload alone (runner.ARM_RUNS; COMPARATORS.md "Not added, and
-    why"). The lineitem and part tables are loaded exactly as the PostgreSQL arm loads them (same columns, same batches, same
-    types: DOUBLE for the money columns, a TIMESTAMP for the ship date); the five queries are the DuckDB texts, which CrateDB's
-    SQL runs unchanged. The load is `INSERT ... SELECT * FROM unnest(<one array per column>)`, one statement per streamed
-    batch, because the PostgreSQL wire has no COPY (cratedb_common.py).
+    ACID transaction: the row DECLARES them absent (UNEXPRESSIBLE, DECISIONS #88; the evidence DECISIONS #92 asks for is an untimed
+    probe of the engine on the same row, `preflight`). What the arm DOES run is everything one statement expresses: the five
+    analytics queries and the four single-record operations (insert, read, update, delete: 1,000 each), exactly the operations,
+    sizes, keys and timers the other SQL engines run (`crud` below is the PostgreSQL arm's table). runner.ARM_RUNS registers
+    the arm for both workloads, at tpch1 and tpch10. The lineitem and part tables are loaded exactly as the PostgreSQL arm
+    loads them (same columns, same batches, same types: DOUBLE for the money columns, a TIMESTAMP for the ship date) in the
+    oltp cells too, so the database the operations run against is the same size as the other engines'; the five queries are the
+    DuckDB texts, which CrateDB's SQL runs unchanged. The load is `INSERT ... SELECT * FROM unnest(<one array per column>)`, one
+    statement per streamed batch, because the PostgreSQL wire has no COPY (cratedb_common.py).
 
     SETTINGS, each with its vendor source in COMPARATORS.md and read back onto the row (cratedb_common.readback): one shard per
-    CPU of the cell, no replica, the translog durability of the cell's class, the engine's default refresh followed by one
-    explicit REFRESH TABLE inside the build timer. INDEXES: CrateDB indexes every column automatically (the engine default), so there is no index step to time
-    (`index_before_load`); the decision, and the measurement it still owes, are in fairness_check.INDEX_DECISIONS. The engine's own ANALYZE (table statistics for its planner) is the counterpart of the
-    PostgreSQL arm's ANALYZE and is in the build timer too.
+    CPU of the cell for the scan table, ONE for the small primary-key tables (`part`, `crud`), no replica, the translog
+    durability of the cell's class on every table (ASYNC relaxed, REQUEST strict), the engine's default refresh followed by one
+    explicit REFRESH TABLE inside the build timer. READ-YOUR-WRITES: the four operations address one row by its primary key,
+    which CrateDB resolves as a real-time get (no refresh wait), so no REFRESH sits inside any operation's timer; the one
+    untimed full read-back per phase (`crud_scan`, the digest) refreshes first. INDEXES: CrateDB indexes every column
+    automatically (the engine default), so there is no index step to time (`index_before_load`); the decision, and the
+    measurement it still owes, are in fairness_check.INDEX_DECISIONS. The engine's own ANALYZE (table statistics for its planner)
+    is the counterpart of the PostgreSQL arm's ANALYZE and is in the build timer too.
     """
     name = "cratedb_tpc"
     index_before_load = True
+    # Set by `preflight` once the probe has run (digest name -> reason); empty until then, so an olap cell declares nothing.
+    UNEXPRESSIBLE = {}
+    TXN_REASON = ("CrateDB has no multi-statement transaction (a statement is its unit; COMPARATORS.md 'CrateDB', "
+                  "https://cratedb.com/docs/crate/reference/en/latest/sql/statements/begin.html), so TPC-C's new-order and payment, "
+                  "each one ACID transaction over three statements, cannot be written for it")
 
     def connect(self):
         self.row_extra = {**(getattr(self, "row_extra", None) or {}), "pg_client_path": "unnest_insert"}
@@ -1502,17 +1521,88 @@ class CrateTPC:
             ch = part.iloc[i:i + BATCH]
             self._unnest(cur, "part", ["p_partkey", "p_retailprice"], ["bigint", "double precision"],
                          [ch["p_partkey"].tolist(), ch["p_retailprice"].tolist()])
+        # the single-record operations' table (the PostgreSQL arm's `crud`): a primary key, so every operation is a real-time get
+        cur.execute("CREATE TABLE crud (ckey BIGINT PRIMARY KEY, pkey BIGINT, qty INT, price DOUBLE PRECISION) "
+                    + self.cc.with_clause(1))
         # the vendor's settle step: every row visible, then the planner's statistics (the PostgreSQL arm's ANALYZE)
         self.cc.refresh(self.cx, "lineitem")
         self.cc.refresh(self.cx, "part")
         cur.execute("ANALYZE")
         # READ BACK, after the load and before any timed query: the table's own shards, replicas, translog settings
         _v, extra, self.durability = self.cc.readback(self.cx, "lineitem", self._shards)
+        _cv, cextra, cdur = self.cc.readback(self.cx, "crud", 1)
+        if cdur != self.durability:
+            raise RuntimeError(f"cratedb: lineitem reads back {self.durability!r} but crud reads back {cdur!r}: one cell, one class")
+        extra.update({"cratedb_crud_shards": cextra["cratedb_shards"],
+                      "cratedb_crud_translog_durability": cextra["cratedb_translog_durability"],
+                      "cratedb_crud_refresh_interval_ms": cextra["cratedb_refresh_interval_ms"]})
         self.row_extra = {**self.row_extra, **extra}
+
+    def preflight(self, workload):
+        """After the build, before the first operation, untimed, in the oltp cells: what the engine itself says about a transaction.
+
+        DECISIONS #92: a query is declared unexpressible only with the evidence of what was tried. The probe sends BEGIN, an INSERT
+        and ROLLBACK as three statements on a scratch table, then reads the table back after a REFRESH. A row that is still there
+        means the ROLLBACK undid nothing, so a transaction cannot be written. An error from any of the three is the evidence too.
+        A row that is NOT there means CrateDB did roll back, the declaration is wrong, and the cell stops (the lane's own rule for
+        a probe that contradicts the declaration, l5_lifecycle_surreal). Also read back, not asserted: the plan of the read, so
+        the row says whether the primary-key read was a get."""
+        if workload != "oltp":
+            return {}
+        extra = {}
+        try:
+            with self.cx.cursor() as c:
+                c.execute("EXPLAIN SELECT ckey, pkey, qty FROM crud WHERE ckey = 1")
+                extra["cratedb_crud_read_plan"] = " | ".join(str(r[0]) for r in c.fetchall())[:300]
+        except Exception as e:  # noqa: BLE001 - recorded, never swallowed, never ends a cell
+            extra["cratedb_readback_error"] = f"{type(e).__name__}: {e}"
+        steps = [("CREATE TABLE txn_probe (k BIGINT PRIMARY KEY) " + self.cc.with_clause(1)), "BEGIN",
+                 "INSERT INTO txn_probe (k) VALUES (1)", "ROLLBACK", "REFRESH TABLE txn_probe"]
+        evidence = None
+        try:
+            with self.cx.cursor() as c:
+                for s in steps:
+                    c.execute(s)
+                c.execute("SELECT count(*) FROM txn_probe")
+                n = int(c.fetchone()[0])
+        except Exception as e:  # noqa: BLE001 - the engine's own error is the evidence
+            evidence = f"the probe statement raised {type(e).__name__}: {e}"
+        else:
+            if n == 0:
+                raise SystemExit("cratedb: ROLLBACK undid the probe's INSERT, so CrateDB has a transaction after all: the "
+                                 "declaration of new-order and payment as unexpressible is wrong and must be re-read (#92)")
+            evidence = (f"on this row BEGIN, INSERT and ROLLBACK were all accepted and the rolled-back row was still there "
+                        f"(count {n} after REFRESH TABLE)")
+        extra["cratedb_txn_probe"] = evidence
+        reason = f"{self.TXN_REASON}; {evidence}"
+        self.UNEXPRESSIBLE = {k: reason for k in TXN_DIGESTS}
+        return extra
 
     def olap(self, which):
         cur = self.cx.cursor()
         cur.execute(CRATE_OLAP[which])
+        return cur.fetchall()
+
+    # The four single-record operations (#82a), each one statement on its own (autocommit), each by primary key.
+    def crud_insert(self, i, pkey):
+        self.cx.cursor().execute("INSERT INTO crud (ckey, pkey, qty, price) VALUES (%s, %s, 1, 9.99)", (i, pkey))
+
+    def crud_read(self, i):
+        cur = self.cx.cursor()
+        cur.execute("SELECT ckey, pkey, qty FROM crud WHERE ckey = %s", (i,))
+        return cur.fetchall()
+
+    def crud_update(self, i):
+        self.cx.cursor().execute("UPDATE crud SET qty = 2 WHERE ckey = %s", (i,))
+
+    def crud_delete(self, i):
+        self.cx.cursor().execute("DELETE FROM crud WHERE ckey = %s", (i,))
+
+    def crud_scan(self):
+        """The untimed read-back the digest takes after each phase. A scan is not a primary-key read, so it needs the refresh."""
+        self.cc.refresh(self.cx, "crud")
+        cur = self.cx.cursor()
+        cur.execute("SELECT ckey, pkey, qty FROM crud")
         return cur.fetchall()
 
     def close(self):
@@ -2086,21 +2176,39 @@ def main():
         # distribution as the timed ones, from their own seeded stream so the timed stream is the one it was.
         # The first operation of the session is the one timed here, as the cell's cold number (#89 as amended);
         # the timed new-order i == 0 below no longer is it.
+        # An arm may declare the transaction half absent after an untimed look at its engine (CrateDB: `preflight`).
+        if getattr(b, "preflight", None):
+            out.update(b.preflight(args.workload))
+        txn_unexpressible = dict(getattr(b, "UNEXPRESSIBLE", None) or {})
+        if txn_unexpressible and set(txn_unexpressible) != set(TXN_DIGESTS):
+            raise SystemExit(f"{args.backend}: UNEXPRESSIBLE names {sorted(txn_unexpressible)}, the lane needs exactly "
+                             f"{sorted(TXN_DIGESTS)}: a half-declared transaction would publish a number for the other half")
         W = OLTP_WARMUP
         ORDER_BASE = CRUD_BASE = W
         if W:
             _wrng = random.Random(SEED + 1)
             _w0 = time.perf_counter()
             _beat.mark("oltp-warmup-start", n=W)
+            if txn_unexpressible:
+                # the draws the two skipped loops would have taken, so the inserts below get the keys every other engine gets
+                for _ in range(W):
+                    _wrng.randrange(len(keys))
+                for _ in range(W):
+                    _wrng.randrange(W)
+            else:
+                for i in range(W):
+                    _t = time.perf_counter()
+                    b.new_order(i, int(keys[_wrng.randrange(len(keys))]))
+                    if i == 0:
+                        bench_common.record_first_query(out, "new_order", (time.perf_counter() - _t) * 1000)
+                for _ in range(W):
+                    b.payment(_wrng.randrange(W))
             for i in range(W):
                 _t = time.perf_counter()
-                b.new_order(i, int(keys[_wrng.randrange(len(keys))]))
-                if i == 0:
-                    bench_common.record_first_query(out, "new_order", (time.perf_counter() - _t) * 1000)
-            for _ in range(W):
-                b.payment(_wrng.randrange(W))
-            for i in range(W):
                 b.crud_insert(i, int(keys[_wrng.randrange(len(keys))]))
+                if i == 0 and txn_unexpressible:
+                    # no new-order ran, so the first operation of the session is the first single-record insert
+                    bench_common.record_first_query(out, "crud_insert", (time.perf_counter() - _t) * 1000)
             for i in range(W):
                 b.crud_read(i)
             for i in range(W):
@@ -2110,58 +2218,72 @@ def main():
             out["oltp_warmup"] = W
             out["oltp_warmup_s"] = round(time.perf_counter() - _w0, 2)
             _beat.mark("oltp-warmup-done", t=f"{out['oltp_warmup_s']}s")
-        lat = []
-        _beat.mark("new-order-start", n=OLTP_OPS)
-        for i in range(OLTP_OPS):
-            k = keys[rng.randrange(len(keys))]
-            t = time.perf_counter()
-            b.new_order(ORDER_BASE + i, int(k))
-            _dt = (time.perf_counter() - t) * 1000
-            if i == 0:
-                # The first timed operation of the cell is this lane's cold number under #89 as amended
-                # when nothing ran before it (OLTP_WARMUP=0); setdefault, so the warm-up's first one wins.
-                bench_common.record_first_query(out, "new_order", _dt)
-            if i >= 20:
-                surreal_common.keep(b, lat, _dt)
-        lat.sort()
-        out["neworder_p50_ms"] = round(statistics.median(lat), 3)
-        out["neworder_p99_ms"] = round(lat[int(len(lat) * 0.99)], 3)
-        _beat.mark("new-order-done", n=OLTP_OPS, p50=out["neworder_p50_ms"])
-        # WHAT THE TRANSACTION LEFT BEHIND (#88). A transaction returns nothing
-        # to digest, so what is digested is the state it wrote: every order the
-        # loop placed, read back untimed. A new-order that silently inserted
-        # nothing now fails the gate instead of printing the best number on the
-        # table. Taken BEFORE the payment loop, which changes `paid`.
-        bench_common.record_result(out, "neworder", b.oltp_scan(), **OLTP_STATE_DIGEST)
-        # ...and the stock it decremented (row 58): the same transaction's other write.
-        bench_common.record_result(out, "stock", b.stock_scan(), **STOCK_DIGEST)
-        # PAYMENT (2026-10, DECISIONS #82): the same count, against the orders
-        # new-order just placed, each chosen at random so the read is not a
-        # scan of the newest page. Read the order, mark it paid, insert the
-        # payment, one transaction.
-        plat = []
-        _beat.mark("payment-start", n=OLTP_OPS)
-        for j in range(OLTP_OPS):
-            okey = ORDER_BASE + rng.randrange(OLTP_OPS)
-            t = time.perf_counter()
-            b.payment(okey)
-            if j >= 20:
-                surreal_common.keep(b, plat, (time.perf_counter() - t) * 1000)
-        plat.sort()
-        out["payment_p50_ms"] = round(statistics.median(plat), 3)
-        out["payment_p99_ms"] = round(plat[int(len(plat) * 0.99)], 3)
-        _beat.mark("payment-done", n=OLTP_OPS, p50=out["payment_p50_ms"])
-        # ops/s over BOTH transaction types since 2026-10; the September rows
-        # (new-order alone) carry the same field under the old instrument, and
-        # make_paper_tables keeps the two instruments out of one table.
-        out["oltp_ops_per_s"] = round((len(lat) + len(plat)) / ((sum(lat) + sum(plat)) / 1000), 1)
-        out["oltp_ops"] = len(lat) + len(plat)
-        # The same orders after the payments: the rows the loop marked paid are
-        # decided by the seeded rng, so the post-state is deterministic and the
-        # engines must agree on it.
-        bench_common.record_result(out, "payment", b.oltp_scan(), **OLTP_STATE_DIGEST)
-        out["payments_n"] = b.payments_n()
-        bench_common.record_result(out, "payments", [(out["payments_n"],)], **PAYMENTS_DIGEST)
+        if txn_unexpressible:
+            # THE KEY STREAM STAYS THE SAME. The single-record keys below are drawn from `rng` after the two transaction loops,
+            # so the draws those loops take are taken here, unused: the engine's crud rows then carry the same part keys as
+            # every other engine's, which the crud_insert digest compares (it reads `pkey`).
+            for _ in range(OLTP_OPS):
+                rng.randrange(len(keys))
+            for _ in range(OLTP_OPS):
+                rng.randrange(OLTP_OPS)
+            # The row says why, in the fields the equivalence gate lists as declared absences (DECISIONS #88). No field here
+            # ends in `_unexpressible`: resource_check reads that as "the row ran nothing" and would skip this row.
+            for _name, _why in txn_unexpressible.items():
+                bench_common.record_unexpressible(out, _name, _why)
+            _beat.mark("transactions-unexpressible", n=len(txn_unexpressible))
+        else:
+            lat = []
+            _beat.mark("new-order-start", n=OLTP_OPS)
+            for i in range(OLTP_OPS):
+                k = keys[rng.randrange(len(keys))]
+                t = time.perf_counter()
+                b.new_order(ORDER_BASE + i, int(k))
+                _dt = (time.perf_counter() - t) * 1000
+                if i == 0:
+                    # The first timed operation of the cell is this lane's cold number under #89 as amended
+                    # when nothing ran before it (OLTP_WARMUP=0); setdefault, so the warm-up's first one wins.
+                    bench_common.record_first_query(out, "new_order", _dt)
+                if i >= 20:
+                    surreal_common.keep(b, lat, _dt)
+            lat.sort()
+            out["neworder_p50_ms"] = round(statistics.median(lat), 3)
+            out["neworder_p99_ms"] = round(lat[int(len(lat) * 0.99)], 3)
+            _beat.mark("new-order-done", n=OLTP_OPS, p50=out["neworder_p50_ms"])
+            # WHAT THE TRANSACTION LEFT BEHIND (#88). A transaction returns nothing
+            # to digest, so what is digested is the state it wrote: every order the
+            # loop placed, read back untimed. A new-order that silently inserted
+            # nothing now fails the gate instead of printing the best number on the
+            # table. Taken BEFORE the payment loop, which changes `paid`.
+            bench_common.record_result(out, "neworder", b.oltp_scan(), **OLTP_STATE_DIGEST)
+            # ...and the stock it decremented (row 58): the same transaction's other write.
+            bench_common.record_result(out, "stock", b.stock_scan(), **STOCK_DIGEST)
+            # PAYMENT (2026-10, DECISIONS #82): the same count, against the orders
+            # new-order just placed, each chosen at random so the read is not a
+            # scan of the newest page. Read the order, mark it paid, insert the
+            # payment, one transaction.
+            plat = []
+            _beat.mark("payment-start", n=OLTP_OPS)
+            for j in range(OLTP_OPS):
+                okey = ORDER_BASE + rng.randrange(OLTP_OPS)
+                t = time.perf_counter()
+                b.payment(okey)
+                if j >= 20:
+                    surreal_common.keep(b, plat, (time.perf_counter() - t) * 1000)
+            plat.sort()
+            out["payment_p50_ms"] = round(statistics.median(plat), 3)
+            out["payment_p99_ms"] = round(plat[int(len(plat) * 0.99)], 3)
+            _beat.mark("payment-done", n=OLTP_OPS, p50=out["payment_p50_ms"])
+            # ops/s over BOTH transaction types since 2026-10; the September rows
+            # (new-order alone) carry the same field under the old instrument, and
+            # make_paper_tables keeps the two instruments out of one table.
+            out["oltp_ops_per_s"] = round((len(lat) + len(plat)) / ((sum(lat) + sum(plat)) / 1000), 1)
+            out["oltp_ops"] = len(lat) + len(plat)
+            # The same orders after the payments: the rows the loop marked paid are
+            # decided by the seeded rng, so the post-state is deterministic and the
+            # engines must agree on it.
+            bench_common.record_result(out, "payment", b.oltp_scan(), **OLTP_STATE_DIGEST)
+            out["payments_n"] = b.payments_n()
+            bench_common.record_result(out, "payments", [(out["payments_n"],)], **PAYMENTS_DIGEST)
 
         # ------------------------------------------------------------------
         # THE FOUR SINGLE-RECORD OPERATIONS (2026-10, DECISIONS #82a), 1,000 of

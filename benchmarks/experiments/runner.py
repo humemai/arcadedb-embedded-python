@@ -1952,7 +1952,7 @@ LANES = {
     "l1tpc": ("l1_tpc.py",
               ["arcadedb_embedded", "arcadedb_server", "arcadedb_imgdefaults_server", "duckdb", "sqlite", "mongodb",
                "surrealdb_tpc", "surrealdb_tpc_server", "arangodb_tpc", "postgres", "postgres_tuned",
-               # the multi-model comparator batch (2026-10-23): analytics only (ARM_RUNS)
+               # the multi-model comparator batch (2026-10-23): analytics, and since 2026-11-14 the single-record operations (ARM_RUNS)
                "cratedb_tpc",
                # Redis JSON + FT.AGGREGATE
                "redis_tpc"],
@@ -4120,10 +4120,13 @@ def split_cpuset(cpuset, n):
 # make its other workloads. An arm absent from the map runs the whole lane, as before.
 ARM_RUNS = {
     # CrateDB has no multi-statement transaction (its documentation: one statement is the unit), so the new-order and payment
-    # transactions of the OLTP table are not expressible on it; the analytics table is (COMPARATORS.md "Not added, and why").
+    # transactions of the OLTP table are not expressible on it: its OLTP cells run the four single-record operations and the row
+    # declares the two transactions absent (l1_tpc.CrateTPC.UNEXPRESSIBLE, DECISIONS #88). The analytics table is whole.
+    # (Until 2026-11-14 this entry was `olap` only and the single-record operations were not run alone.)
     "cratedb_tpc": {
-        "l1tpc": {"workloads": ("olap",), "scales": ("tpch1", "tpch10"),
-                  "title": "documents analytics, CrateDB (no multi-statement transaction, so no OLTP table)"},
+        "l1tpc": {"workloads": ("oltp", "olap"), "scales": ("tpch1", "tpch10"),
+                  "title": "documents, CrateDB (single-statement operations only: no multi-statement transaction, "
+                           "so no new-order or payment)"},
     },
     # Redis keeps the data in memory under noeviction: the SF0.1 smoke put the server at 681 MiB for 600,572 line items (1.19 KB a
     # row with the JSON document and the SORTABLE index), so SF1 needs about 7 GB (fits the 14.4 GB maxmemory of the 16g cap) and
