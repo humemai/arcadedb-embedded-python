@@ -5354,11 +5354,16 @@ def _censored_cells():
     # ones keeping a censored cell distinguishable from an unmeasured one.
     # Prefixes, because a row may hold the full 40 characters and the pin is
     # published truncated.
+    # BENCH_COMPARATOR_PIN (comma list, optional): the 2026-11 rows land as two files at two pins, the ArcadeDB arms at the page's pin and the
+    # comparators at the pin their chain was launched with (humemai/mmdbbench#28). Without it every failed or censored comparator cell was
+    # dropped here and its declared absence with it (page_check A1 BLANK, A3 MISSING).
+    _pins = [pin] + [p.strip() for p in os.environ.get("BENCH_COMPARATOR_PIN", "").split(",") if p.strip()]
+
     def _same_pin(r):
         if not pin:
             return True
         got = str(r.get("engine_commit") or "")
-        return bool(got) and (got.startswith(pin) or pin.startswith(got))
+        return bool(got) and any(got.startswith(p) or p.startswith(got) for p in _pins)
 
     for r in rows:
         if not _same_pin(r):
