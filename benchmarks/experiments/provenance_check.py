@@ -664,6 +664,33 @@ def _versions_in(subdir):
     return vals, keys, n, missing
 
 
+# A QUERY THAT DID NOT FINISH IN ONE REP IS AN OUTCOME, NOT A SECOND INSTRUMENT (2026-11-14, the n=3 rows). A rep whose query hit its budget
+# records the cold figure and a declaration (`<q>_censored`, `<q>_warm_missing`) instead of the warm figures and the result count, while
+# the siblings that finished carry them. Four cells of the first landing split this way with identical code and budget rules in every rep
+# (hop3f at l2/sf10 on the native wheel; LSQB q1 on PostgreSQL + AGE, q5 on MongoDB, q8 on DuckPGQ). A field a row lacks is excused only
+# when that same row declares the query it belongs to; a field missing with no declaration is still a split. The declaration flags are not
+# measurements, so they are not compared themselves.
+DECLARATION_SUFFIXES = ("_censored", "_warm_missing")
+
+
+def _declared_stems(r):
+    """The queries a row declares as censored or without a warm pass: `lsqb_q1_warm_missing` -> `lsqb_q1`, `warm_hop3f_censored` -> `hop3f`."""
+    stems = set()
+    for k, v in r.items():
+        if v is True:
+            for s in DECLARATION_SUFFIXES:
+                if k.endswith(s):
+                    stem = k[:-len(s)]
+                    stems.add(stem[len("warm_"):] if stem.startswith("warm_") else stem)
+    return stems
+
+
+def _field_of_declared_query(field, stems):
+    """True when `field` belongs to one of `stems` as whole name tokens (q1 does not match q10)."""
+    padded = f"_{field}_"
+    return any(f"_{s}_" in padded for s in stems)
+
+
 def check_schema_homogeneity(rows):
     """Every row of a (lane, scale) must carry the same measured fields.
 
@@ -698,7 +725,8 @@ def check_schema_homogeneity(rows):
     def measured(r):
         return {k for k, v in r.items()
                 if isinstance(v, (int, float))
-                and not k.startswith(IGNORE_PREFIX)}
+                and not k.startswith(IGNORE_PREFIX)
+                and not k.endswith(DECLARATION_SUFFIXES)}
 
     # KEYED ON WORKLOAD TOO. Without it an oltp row (insert_p50_ms) is
     # compared against an olap row (olap_*_ms) from the same backend, and the
@@ -742,7 +770,8 @@ def check_schema_homogeneity(rows):
             # rep (one SF1 rep per SurrealDB graph arm); a null
             # beside four numbers is a sampler miss, not a lane measuring a
             # different thing, and the cell's median stands on the rest.
-            diff = {f for f in (union - inter) if "disk" not in f}
+            diff = {f for f in (union - inter) if "disk" not in f
+                    and not all(_field_of_declared_query(f, _declared_stems(r)) for r, s in zip(brs, sets) if f not in s)}
             if diff:
                 bad += 1
                 print(f"  SPLIT SCHEMA {key[0]}/{key[1]}/{key[2]}/{be}: "
