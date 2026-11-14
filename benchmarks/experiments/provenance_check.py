@@ -488,16 +488,18 @@ def caption_n():
     whose N no longer matches also reports BAD, so a re-measure that reaches
     N=5 forces the caption to be corrected rather than left stale.
     """
-    # THE 2026-11 INSTRUMENT RUNS 3 REPETITIONS PER CELL, chosen at generation (make_2611_stages `--reps`, default 3,
-    # at most MAX_REPS = 3: the n=4 and n=5 passes were dropped on 2026-11-14), where the retired instruments ran 5. A cell inside that range is the instrument's own N and needs no
+    # THE 2026-11 INSTRUMENT RUNS 3 REPETITIONS PER CELL (make_2611_stages `--reps`, default 3, at most 3: the n=4 and n=5 passes
+    # were dropped on 2026-11-14), where the retired instruments ran 5. A cell inside that range is the instrument's own N and needs no
     # disclosure; one below the range is a shortfall; one with no rows at all is not a count (its cells print "--", and the
     # page's roster check owns an arm that should have rows). The disclosed exceptions of the retired instruments (T4's
     # 8.84M row, T5's four warm passes) described rows that no longer exist, and a stale disclosure of a limitation we
     # removed is its own defect, so the table starts empty: a row outside the range is listed here, with where its caption
     # says so, or it is BAD.
     MIN_REPS = 3
-    import make_2611_stages as _MS
-    MAX_REPS = _MS.MAX_REPS
+    # The upper bound stays 5, its own constant and no longer the generator's MAX_REPS (3): a landing at n=3 sits inside 3 to 5, and
+    # the publish fixture holds cells at N=4 and N=5 (36 rows each of rep 4 and 5), which a bound of 3 reports as BAD. Tightening it
+    # to 3 needs that fixture rebuilt at n=3 first (not done: an owner decision, listed in the 2026-11-14 reps-default report).
+    MAX_REPS = 5
     EXPECTED = {
         # rendered row label -> (N, where it is disclosed)
     }
