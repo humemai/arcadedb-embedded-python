@@ -323,19 +323,27 @@ def _check_page_atomicity(payload):
             if k not in newest or str(r.get("ts_utc", "")) > str(newest[k].get("ts_utc", "")):
                 newest[k] = r
     per_rep = collections.defaultdict(list)
+    per_rep_scale = collections.defaultdict(list)
     for r in newest.values():
         per_rep[r["backend"]].append((int(r.get("trials") or 0), int(r.get("torn_count") or 0)))
+        per_rep_scale[(r["backend"], str(r.get("scale")))].append((int(r.get("trials") or 0), int(r.get("torn_count") or 0)))
 
     table = next((t for t in payload.get("tables", []) if t.get("id") == "e2atom"), None)
     if table is None:
         print("  (no e2atom table in the payload; nothing to hold against the artifact)")
         return 0, 0
     import statistics as _st
-    cells = {str(e.get("backend_key")): e.get("metrics") or {} for e in table.get("entries", [])}
+    # THE TABLE PRINTS AN ARM ONCE PER SCALE, so the page is read per (arm, scale) and held against the artifact rows of the same scale. An arm
+    # whose 500k cell did not finish keeps its e2 row and gets an empty entry at e2_500k plus a whole-arm absence; keyed by arm alone the empty
+    # entry overwrote the real one (page=None artifact=40, 2026-11-14).
+    entries_of = collections.defaultdict(list)
+    for e in table.get("entries", []):
+        entries_of[str(e.get("backend_key"))].append(e)
+    declared_whole = {str(a.get("backend")) for a in table.get("declared_absences") or [] if not a.get("column")}
     checked = bad = 0
     for be in E2_BACKENDS:
         reps = per_rep.get(be)
-        m = cells.get(be)
+        m = {} if entries_of.get(be) else None
         if m is None:
             if reps is None and be in E2_OPTIONAL:
                 print(f"  skip    page.e2.{be}: not yet on the table")
@@ -350,15 +358,32 @@ def _check_page_atomicity(payload):
             print(f"  NODATA  page.e2.{be}: the table prints the arm and the artifact has no fixed-harness rows")
             bad += 1
             continue
-        for col, idx in (("trials", 0), ("torn results", 1)):
-            want = _st.median(x[idx] for x in reps)
-            got = (m.get(col) or {}).get("median")
-            checked += 1
-            if got is None or abs(float(got) - want) > 1e-9:
-                print(f"  DISAGREE page.e2.{be} {col}: page={got} artifact={want}")
-                bad += 1
-            else:
-                print(f"  ok      page.e2.{be:<24} {col}={got:g}")
+        for e in entries_of[be]:
+            scale = str(e.get("scale"))
+            em = e.get("metrics") or {}
+            sreps = per_rep_scale.get((be, scale))
+            if sreps is None:
+                # A printed cell with no artifact rows at its scale is a cell that did not finish: it must carry no count and the table must
+                # declare the arm's absence; a count with no rows behind it, or an empty cell nothing explains, fails.
+                checked += 1
+                if any((em.get(c) or {}).get("median") is not None for c in ("trials", "torn results")):
+                    print(f"  DISAGREE page.e2.{be} @{scale}: the page prints a count and the artifact has no rows at this scale")
+                    bad += 1
+                elif str(e.get("backend")) not in declared_whole:
+                    print(f"  DISAGREE page.e2.{be} @{scale}: an empty cell and the table declares no absence for the arm")
+                    bad += 1
+                else:
+                    print(f"  ok      page.e2.{be:<24} @{scale}: not finishing within the cap, absence declared")
+                continue
+            for col, idx in (("trials", 0), ("torn results", 1)):
+                want = _st.median(x[idx] for x in sreps)
+                got = (em.get(col) or {}).get("median")
+                checked += 1
+                if got is None or abs(float(got) - want) > 1e-9:
+                    print(f"  DISAGREE page.e2.{be} @{scale} {col}: page={got} artifact={want}")
+                    bad += 1
+                else:
+                    print(f"  ok      page.e2.{be:<24} @{scale} {col}={got:g}")
         # The single-engine arms must be ZERO torn, and zero is the one value
         # a broken read also produces, so the trial count is asserted beside it.
         if be in E2_SINGLE_ENGINE:
