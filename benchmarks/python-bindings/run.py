@@ -12,7 +12,7 @@ Lanes:
 
 Outputs: results/runs.csv, results/mem/<run>.csv, results/manifest.json, results/ENV.md.
 Validate on laptop:  python run.py --datasets tiny --reps 2
-Official run:        python run.py --datasets tiny,small,medium --reps 5
+Official run:        python run.py --datasets tiny,small,medium --reps 3
 """
 import argparse
 import csv
@@ -226,7 +226,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--datasets", default="tiny")
     ap.add_argument("--lanes", default="vector,tabular,graph")
-    ap.add_argument("--reps", type=int, default=5)
+    ap.add_argument("--reps", type=int, default=3)   # the target n (the owner, 2026-11-14: n=4 and n=5 are dropped)
     ap.add_argument("--backends", default="",
                     help="comma-separated backend filter (default: all)")
     args = ap.parse_args()

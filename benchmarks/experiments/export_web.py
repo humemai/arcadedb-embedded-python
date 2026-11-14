@@ -2992,7 +2992,7 @@ def _sparse_multipass_table():
             "so a warm number cannot be explained by the engine having already "
             "answered that exact query. Both halves are drawn from the same "
             "1,000 dev queries in the same order.",
-            "One build per engine here, against five in the table above, which "
+            "One build per engine here, against one per repetition in the table above, which "
             "is why these are a separate table rather than two more columns on "
             "it. Reading a warm number from this protocol beside a cold number "
             "from that one would compare two different protocols.",
@@ -4197,7 +4197,7 @@ def _milvus_seal_proportion():
 
 
 L3S_SECOND_PASS = (
-    "Cold p50 and p99 are the first timed pass after the build, median of five builds. "
+    "Cold p50 and p99 are the first timed pass after the build, median over the builds of this table. "
     "Warm and gain come from a separate run of the same arms: one build per engine, then "
     "five more passes over a different half of the query set, so a warm number cannot be "
     "explained by the engine having already answered that exact query; gain is that run's "

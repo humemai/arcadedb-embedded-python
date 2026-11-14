@@ -517,8 +517,8 @@ def main(argv=None):
         print(f"wrote {a.write_cells}")
         return 0
     a.chains = [c for c in a.chains.split(",") if c]
-    if any(c not in CHAINS for c in a.chains) or not 1 <= a.reps <= 5:
-        raise SystemExit("--chains is jvm and/or native; --reps is 1 to 5")
+    if any(c not in CHAINS for c in a.chains) or not 1 <= a.reps <= 3:
+        raise SystemExit("--chains is jvm and/or native; --reps is 1 to 3 (the n=4 and n=5 passes are dropped, 2026-11-14)")
     modes = read_cells(a.cells) if a.cells else {tuple(cell_row(c, "x")[:7]): m for c, m in default_cells()}
     hours = load_hours(a.hours) if a.hours else None
     if a.dry_run:
