@@ -102,7 +102,7 @@ Things an engine does that are not wrong and are not a performance property, but
   | `l_shipdate > '1993-12-31' AND l_shipdate < '1995-01-01'` | 92,040 | 909,455 |
   | `l_shipdate.substring(0, 4) = '1994'` (no index can serve it) | 92,040 | 909,455 |
 
-  Deterministic: ten repeats inside one build and two independent builds all returned 92,037. The two rewrites, which denote the same set, both return the truth, so it is the `>=` bound on the index scan and not the data. It is NOT registered as a known disagreement: at SF1 the extra Q6 predicates happen to exclude every lost row and the answer is right to 1e-14, so registering it would suppress a gate that is correctly failing at the size where the loss lands on a qualifying row. `arcadedb_literal_precision_probe.py` is the sibling finding on the insert path; this one was filed upstream as #7611 (BUGS F46) and is fixed in the October pin.
+  Deterministic: ten repeats inside one build and two independent builds all returned 92,037. The two rewrites, which denote the same set, both return the truth, so it is the `>=` bound on the index scan and not the data. It is NOT registered as a known disagreement: at SF1 the extra Q6 predicates happen to exclude every lost row and the answer is right to 1e-14, so registering it would suppress a gate that is correctly failing at the size where the loss lands on a qualifying row. [`arcadedb_literal_precision_probe.py`](https://github.com/humemai/mmdbbench/blob/cab7f8456a758f30b48300a3d9c53bac3adc3381/experiments/arcadedb_literal_precision_probe.py) is the sibling finding on the insert path; this one was filed upstream as #7611 (BUGS F46) and is fixed in the October pin.
 
 
 ## Retired pins
