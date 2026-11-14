@@ -145,6 +145,29 @@ def test_the_pair_gate_refuses_servers_whose_settings_differ_and_a_native_row_wi
     assert AI.pair_problems([a, c]) == []
 
 
+def test_the_pair_gate_reads_server_settings_the_way_the_freeze_writes_them():
+    """The freeze (csv.DictWriter) writes the dict as its Python repr, single quotes and all; the rehearsal landing of 2026-11-14 refused all
+    51 native server rows because the gate only parsed JSON. The cell is made by the writer itself, not typed in."""
+    import csv
+    import io
+
+    def frozen(r):
+        buf = io.StringIO()
+        w = csv.DictWriter(buf, fieldnames=list(r))
+        w.writeheader()
+        w.writerow(r)
+        return next(csv.DictReader(io.StringIO(buf.getvalue())))
+
+    a, b = frozen(row("native", server_settings=dict(SETTINGS), **LOG)), frozen(row("jvm", server_settings=dict(SETTINGS), **LOG))
+    assert a["server_settings"].startswith("{'arcadedb."), "the writer's own output is a repr, not JSON"
+    assert AI.pair_problems([a, b]) == []
+    other = dict(b, server_settings=repr(dict(SETTINGS, **{"arcadedb.txWalFlush": "1"})))
+    assert any("arcadedb.txWalFlush" in p for p in AI.pair_problems([a, other])), "a repr cell is compared, not skipped"
+    # a cell that is neither JSON nor a repr of a dict is still no read-back
+    for junk in ("not a dict", "[1, 2]", "{'a': ", ""):
+        assert any("no server_settings" in p for p in AI.pair_problems([dict(a, server_settings=junk), b])), junk
+
+
 def test_the_pair_gate_covers_the_servers_engine_commit():
     a, b = row("native", server_settings=SETTINGS, **LOG), row("jvm", server_settings=SETTINGS, engine_commit="f" * 40)
     assert any("engine_commit" in p for p in AI.pair_problems([a, b]))

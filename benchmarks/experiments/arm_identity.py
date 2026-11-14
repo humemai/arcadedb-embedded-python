@@ -209,6 +209,25 @@ SERVER_LOG_FIELDS = ("server_mode", "server_cpus", "server_max_heap_bytes")
 MAX_HEAP_TOLERANCE = 0.05
 
 
+def _settings_from_cell(text):
+    """The `server_settings` dict out of a frozen CSV cell, or None when it is not one.
+
+    THE FREEZE WRITES A DICT AS ITS PYTHON REPR, NOT JSON (`runs_paper.csv` goes through csv.DictWriter, which calls str() on every value:
+    {'arcadedb.maxPageRAM': 1536, ...}, single quotes), so json.loads alone refused all 51 native server rows of the rehearsal landing as
+    "no server_settings read-back". JSON text (an older freeze, a hand-built file) still parses first; the repr falls through to literal_eval.
+    The writer is not changed to JSON: it writes every dict column this way and export_web._stats_int and degenerate_check read that repr.
+    """
+    import ast
+    import json
+    for parse in (json.loads, ast.literal_eval):
+        try:
+            got = parse(text)
+        except (ValueError, SyntaxError):
+            continue
+        return got if isinstance(got, dict) else None
+    return None
+
+
 def server_settings_problems(rows):
     """Sentences for a served-arm settings mismatch between the builds (empty: fine). A native server row with no read-back is a problem
     too: a setting written is not a setting in force."""
@@ -218,11 +237,7 @@ def server_settings_problems(rows):
             continue
         got = r.get("server_settings")
         if isinstance(got, str):
-            try:
-                import json
-                got = json.loads(got)
-            except ValueError:
-                got = None
+            got = _settings_from_cell(got)
         if build_of(r) == "native" and not isinstance(got, dict):
             out.append(f"{r.get('backend')}: a native server row has no server_settings read-back")
             continue
