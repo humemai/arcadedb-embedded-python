@@ -6144,7 +6144,8 @@ def _censored_notes(table_id):
                 tail = (f" at {scale_label(lane, scale)}: {_cell} exceeded "
                         f"its {budget} budget, the same budget every engine on this table had, on its first "
                         f"attempt and was not retried; there is no row.{_in}")
-                pins = [scale_label(lane, scale), budget]
+                # THE PHASE IS A GENERATED VALUE TOO ("query lsqb_q1" carries a digit that came off the row's timeout_phase_hint).
+                pins = [scale_label(lane, scale), budget] + ([_phase] if _phase else [])
         else:
             tail = (f" at {scale_label(lane, scale)}: {_cell} failed "
                     f"inside its budget and was not retried, so there is no row. What it reported: "
