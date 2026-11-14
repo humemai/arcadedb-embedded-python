@@ -492,6 +492,10 @@ def main():
                     help="land repetitions 1..N only: rows of a later repetition are left out before the screen, the filters and the "
                          "merge, and the count per dropped repetition is printed (the page is n=3 while the comparator passes 4 and 5 "
                          "append to the same rows file; they land when the page moves to n=5). Off by default")
+    ap.add_argument("--post1-orphans", choices=("refuse", "leave-out"), default="refuse",
+                    help="what --post1-reps does with a complete set of build-only rows that has NO older wheel to merge into (a cell the "
+                         "older chain never measured, e.g. the GAV default arm at l2/sf1full): refuse (default, nothing lands) or leave-out "
+                         "(the rows are left out and each cell is printed as LEFT OUT)")
     ap.add_argument("--post-tag", default="post1", metavar="postN", help="the rerun whose rows file --post1-reps pulls: runs_page_<pin>_2611_<postN>.jsonl (default post1)")
     ap.add_argument("--post1-reps", type=int, default=0, metavar="N",
                     help="also pull runs_page_<pin>_2611_post1.jsonl (the wheels-only rerun) and land, per cell, the rows of ONE wheel "
@@ -637,7 +641,7 @@ def main():
             sys.exit(f"REFUSING: --post-tag {args.post_tag!r} must look like post2")
         _p1 = SCRATCH / f"runs_page_host_{args.post_tag}.jsonl"
         sh(["scp", "-q", f"{HOST}:{REMOTE}/{host_name('runs_page', args.pin, '_' + args.post_tag + '.jsonl')}", str(_p1)])
-        rows, _dec, _prob = post1_rows.resolve(rows + post1_rows.load_jsonl(str(_p1)), args.post1_reps)
+        rows, _dec, _prob = post1_rows.resolve(rows + post1_rows.load_jsonl(str(_p1)), args.post1_reps, orphans=args.post1_orphans)
         for _d in _dec:
             print("  post1: " + _d)
         if _prob:

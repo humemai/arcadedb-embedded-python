@@ -194,14 +194,20 @@ def merge_build_only(base, bo, label_bo):
     return out
 
 
-def resolve(rows, reps=3):
+def resolve(rows, reps=3, orphans="refuse"):
     """(resolved rows, decisions, problems).
+
+    `orphans` says what a complete build-only set with NO older wheel at all becomes (a cell the older chain never measured: nothing to merge the
+    build figures into). "refuse" (default): a problem, nothing lands. "leave-out": the rows are left out and the decision line names the cell
+    ("LEFT OUT"), because a build-only row has no timed figure and is not a cell; a short set, or a set whose base cell is short, stays a problem.
 
     Per in-process ArcadeDB cell: collect the CLEAN rows by wheel label and kind. The newest label that has any row for the cell must be
     complete at `reps` repetitions (1..reps), else it is a problem. A full-cell set of a newer wheel replaces the older wheel's rows whole;
     a build-only set of a newer wheel replaces the build figures of the older wheel's complete full set, repetition by repetition; a build-only
     set with no complete full set underneath is a problem, because it has no cell to belong to. Rows of anything else (comparators, served arms,
     failed cells) pass through untouched, and a build-only row never passes through on its own."""
+    if orphans not in ("refuse", "leave-out"):
+        raise ValueError(f"orphans must be 'refuse' or 'leave-out', not {orphans!r}")
     problems, decisions, out = [], [], []
     groups = {}
     for r in rows:
@@ -247,7 +253,11 @@ def resolve(rows, reps=3):
                 problems.append(f"{tag}: wheel {newest} build-only rows have reps {sorted(bo_new)} of the {reps} required")
                 continue
             if not older:
-                problems.append(f"{tag}: build-only rows of {newest} and no full cell of an older wheel to put them into")
+                if orphans == "leave-out":
+                    decisions.append(f"{tag}: LEFT OUT, build-only rows of {newest} ({len(have_bo)} rep(s), {sum(len(v) for v in by.values())} row(s)) "
+                                     f"and no full cell of an older wheel to put them into")
+                else:
+                    problems.append(f"{tag}: build-only rows of {newest} and no full cell of an older wheel to put them into")
                 continue
             base_label = older[-1]
             base = _newest_by_rep(by.get((base_label, KIND_CELL), []))

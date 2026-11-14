@@ -52,11 +52,12 @@ def test_main_dry_run_with_max_rep_filters_the_pulled_file():
         pulled.write_text("".join(json.dumps(r) + "\n" for r in rows))
         scratch = root / "scratch"
         scratch.mkdir()
+        (root / "results").mkdir()
         argv = ["land_stage.py", "--pin", "abc123def", "--max-rep", "3", "--dry-run", "--message", "m"]
         out = io.StringIO()
         env = {**__import__("os").environ, "BENCH_LAND_PULLED_FILE": str(pulled)}
         with mock.patch.object(sys, "argv", argv), mock.patch.object(L, "SCRATCH", scratch), mock.patch.object(L.os, "environ", env), \
-                mock.patch.object(L, "sh", lambda *a, **k: None), mock.patch.object(L.os, "execv", lambda *a, **k: None), \
+                mock.patch.object(L, "RESULTS", root / "results"), mock.patch.object(L, "sh", lambda *a, **k: None), mock.patch.object(L.os, "execv", lambda *a, **k: None), \
                 mock.patch.object(L, "pull_pycost", lambda *a, **k: None), contextlib.redirect_stdout(out):
             rc = L.main()
         assert rc == 0, out.getvalue()
