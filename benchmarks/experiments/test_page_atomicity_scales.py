@@ -50,10 +50,10 @@ def _check(entries, rows, absences):
     return got, out.getvalue()
 
 
-def _full_page_rows():
+def _full_page_rows(without=()):
     rows, entries = [], []
     for be in PC.E2_BACKENDS:
-        if be in PC.E2_OPTIONAL:
+        if be in PC.E2_OPTIONAL or be in without:
             continue
         for sc in ("e2", "e2_500k"):
             if be.startswith("surrealdb") and sc == "e2_500k":
@@ -78,6 +78,15 @@ def test_an_empty_cell_without_a_declared_absence_is_still_a_failure():
     entries.append(_entry("surrealdb_e2", "e2_500k", None))
     (checked, bad), out = _check(entries, rows, [])
     assert bad >= 1 and "surrealdb_e2" in out, out
+
+
+def test_an_arm_outside_the_2026_11_subset_is_owed_no_atomicity_rows():
+    # neo4j_e2 is in make_2611_stages.OUTSIDE: no chain runs it, so no rows and no page cell is the expected state, not NODATA
+    import make_2611_stages as MS
+    assert "neo4j_e2" in MS.OUTSIDE
+    rows, entries = _full_page_rows(without=("neo4j_e2",))
+    (checked, bad), out = _check(entries, rows, [])
+    assert bad == 0 and "neo4j_e2" in out and "outside" in out, out
 
 
 def test_a_wrong_count_at_one_scale_fails():

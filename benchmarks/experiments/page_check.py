@@ -289,6 +289,12 @@ E2_OPTIONAL = ("arangodb_e2", "mongodb_e2", "memgraph_e2", "ladybug_e2", "duckdb
 E2_BACKENDS = E2_SINGLE_ENGINE + E2_COMPOSED
 
 
+def _outside_2611():
+    """The arms no 2026-11 chain runs (make_2611_stages.OUTSIDE): owed no rows, no page cell and no declaration."""
+    import make_2611_stages as MS
+    return set(MS.OUTSIDE)
+
+
 def _check_page_atomicity(payload):
     """The e2atom table's trial and torn counts, against the artifact.
 
@@ -347,6 +353,8 @@ def _check_page_atomicity(payload):
         if m is None:
             if reps is None and be in E2_OPTIONAL:
                 print(f"  skip    page.e2.{be}: not yet on the table")
+            elif reps is None and be in _outside_2611():
+                print(f"  skip    page.e2.{be}: outside the 2026-11 subset (make_2611_stages.OUTSIDE), owed no rows")
             elif reps is None:
                 print(f"  NODATA  page.e2.{be}: no fixed-harness rows"); bad += 1
             elif be in E2_OPTIONAL:
