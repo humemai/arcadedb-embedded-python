@@ -61,7 +61,7 @@ def test_every_stage_exports_the_instrument_and_writes_its_own_rows_file(drafts)
         assert re.search(r"^export BENCH_INSTRUMENT=2026-11$", t, re.M), f.name
         assert "instrument 2026-10" not in t
         assert 'runs_page_${PIN}_2611.jsonl' in t and 'runs_page_${PIN}.jsonl' not in t
-        assert re.search(r"^REPS=5 ", t, re.M)
+        assert re.search(r"^REPS=3 ", t, re.M)   # the default is the target: n=4 and n=5 are dropped (2026-11-14)
         # the export comes before the first python call
         assert t.index("export BENCH_INSTRUMENT=2026-11") < t.index("python3 ")
     assert G.lint_drafts(str(drafts)) == []
@@ -357,12 +357,20 @@ def test_the_comparator_chain_carries_no_arcadedb_gate(drafts):
     assert all("go-arcadedb-2611" not in f.read_text() for f in drafts.glob("*.sh"))
 
 
-def test_the_arcadedb_chain_runs_tier_1_passes_1_to_5_in_order(tmp_path):
+def test_the_arcadedb_chain_runs_tier_1_passes_1_to_3_in_order(tmp_path):
     out = tmp_path / "rel"
     r = run(_release_args() + ["--after", "none", "--status-file", "none", "--id-prefix", "qT", "--lanes", "graph", "--out", str(out)])
     assert r.returncode == 0, r.stdout[-500:] + r.stderr[-500:]
     passes = [int(m) for f in sorted(out.glob("qT0[1-9]*.sh")) for m in re.findall(r"^PASS=(\d+)", f.read_text(), re.M)]
-    assert passes == sorted(passes) and set(passes) == {1, 2, 3, 4, 5}
+    assert passes == sorted(passes) and set(passes) == {1, 2, 3}
+
+
+def test_the_repetitions_default_to_the_target_and_more_than_it_are_refused(tmp_path):
+    """The owner, 2026-11-14: n=3 is the only plan; the n=4 and n=5 passes are dropped, so no generation asks for them."""
+    assert G.DEFAULT_REPS == G.TARGET_REPS == G.MAX_REPS == 3
+    for n in ("4", "5"):
+        r = run(["--after", "none", "--status-file", "none", "--reps", n, "--lanes", "graph", "--out", str(tmp_path / ("r" + n))])
+        assert r.returncode != 0 and "--reps must be 1 to 3" in (r.stdout + r.stderr), (n, r.stdout[-300:], r.stderr[-300:])
 
 
 # ------------------------------------------------------------------------------------ the drafts, byte for byte
@@ -372,14 +380,14 @@ GENERATIONS = {
     # the default profile (paper-2611) is what ships; --profile full is covered by the selection tests, not by a hash list
     "comparators": (["--after", "qR20", "--status-file", "none"], True),   # engine tiers on, the default
     "comparators-no-tiers": (["--no-tiers", "--after", "qR20", "--status-file", "none"], True),
-    "comparators-paper-5reps": (["--order", "paper", "--reps", "5", "--after", "qR20", "--status-file", "none", "--id-prefix", "qU"], True),
+    "comparators-paper-3reps": (["--order", "paper", "--reps", "3", "--after", "qR20", "--status-file", "none", "--id-prefix", "qU"], True),
     "arcadedb-release": (None, False),
 }
 
 
 def drafts_sha256(tmp_path):
     """sha256 of every script four generations write, under the default profile (paper-2611): the comparators (default order with engine tiers, the same without
-    them, and paper order at 5 reps) and ArcadeDB alone on a release, the core lanes. One line per script, `<sha256>  <case>/<name>`, sorted."""
+    them, and paper order at 3 reps) and ArcadeDB alone on a release, the core lanes. One line per script, `<sha256>  <case>/<name>`, sorted."""
     lines = []
     for case, (args, from_env) in GENERATIONS.items():
         out = tmp_path / case
@@ -481,15 +489,19 @@ def test_all_reps_of_tier_1_up_to_3_run_before_tier_2_starts_and_each_tier_is_re
 
 
 def test_stage_ids_are_unique_consecutive_and_each_stage_waits_on_the_one_before(tmp_path):
-    stages, plan = tiered_plan()
+    stages, plan = tiered_plan(reps=G.DEFAULT_REPS)
     ids = [s[0] for s, _ in plan]
-    assert ids == [f"qS{i:03d}" for i in range(1, len(plan) + 1)] and len(set(ids)) == len(ids)
+    w = 3 if len(plan) > 99 else 2   # the id is as wide as the chain needs: qS01 below 100 stages, qS001 from 100
+    assert ids == [f"qS{i:0{w}d}" for i in range(1, len(plan) + 1)] and len(set(ids)) == len(ids)
+    _, plan5 = tiered_plan(reps=5)   # the planner still numbers any chain: at five passes it is 110 stages, three digits, and qS100 sorts after qS11
+    ids5 = [s[0] for s, _ in plan5]
+    assert len(ids5) > 99 and ids5[0] == "qS001" and ids5 == sorted(ids5) and len(set(ids5)) == len(ids5)
     assert all("[engine tier" in s[1] and "rep pass" in s[1] for s, _ in plan)
     out = tmp_path / "o"
-    r = run(["--profile", "full", "--second-list", "--after", "none", "--status-file", "none", "--out", str(out)], tmp_path)   # the whole subset: past 99 stages
+    r = run(["--profile", "full", "--second-list", "--after", "none", "--status-file", "none", "--out", str(out)], tmp_path)   # the whole subset at the default n
     assert r.returncode == 0, r.stdout[-500:] + r.stderr[-500:]
     files = sorted(out.glob("*.sh"))
-    assert [f.stem for f in files] == ids and len(ids) > 99 and ids[0] == "qS001"   # three digits past 99: qS100 must not sort before qS11
+    assert [f.stem for f in files] == ids and len(ids) > 60 and ids[0] == "qS01"
     for prev, cur in zip(files, files[1:]):
         assert waits(cur) == [prev.stem]
     assert "engine tier 1" in files[0].read_text() and "engine tier 2" in files[-1].read_text()
@@ -600,7 +612,7 @@ def test_check_on_the_default_selection_reports_the_tiers_and_lints_drafts_for_t
     r = run(["--check"])
     assert r.returncode == 0, r.stdout[-500:]
     assert "engine tiers on" in r.stdout and "engine tier 1:" in r.stdout and "engine tier 2:" in r.stdout
-    assert "schedule: T1 p1, T1 p2, T1 p3, T2 p1, T2 p2, T2 p3, T1 p4, T2 p4, T1 p5, T2 p5" in r.stdout
+    assert "schedule: T1 p1, T1 p2, T1 p3, T2 p1, T2 p2, T2 p3" in r.stdout and "T1 p4" not in r.stdout
     assert "the chain follows the schedule" in r.stdout
     assert G.lint_drafts(str(drafts)) == []
     # a draft folder whose first and last stages trade places: the tier lint says so
@@ -707,16 +719,16 @@ def test_check_prints_what_the_default_profile_dropped_and_the_order_with_it():
     r = run(["--check"])
     assert r.returncode == 0, r.stdout[-500:] + r.stderr[-500:]
     for needle in ("profile paper-2611", "dropped", "second-list", "neo4j-memgraph-dense", "quantized-dense", "arcadedb_dense_embedded_int8",
-                   "schedule: T1 p1, T1 p2, T1 p3, T2 p1, T2 p2, T2 p3, T1 p4, T2 p4, T1 p5, T2 p5"):
+                   "schedule: T1 p1, T1 p2, T1 p3, T2 p1, T2 p2, T2 p3"):
         assert needle in r.stdout, needle
-    # the chain still runs passes 4 and 5, after pass 3: N=3 is the target, not the end of the chain
+    # N=3 is the target and the end of the chain: the passes 4 and 5 are dropped (2026-11-14)
     engines, lanes = G.parse_engines(None, "comparators"), G.parse_lanes(None, False, "paper-2611")
     stages = G.number(G.subset_specs(engines, lanes, "biggest-last", G.profile_skip("paper-2611"), True), "qS")
     plan = G.pass_plan(stages, G.DEFAULT_REPS, True)
     assert G.plan_problems(stages, G.DEFAULT_REPS, plan, True) == [] and G.profile_problems("paper-2611", stages) == []
-    assert G.TARGET_REPS == 3 and G.PROFILES["paper-2611"]["target_reps"] == 3 and G.DEFAULT_REPS == 5
+    assert G.TARGET_REPS == 3 and G.PROFILES["paper-2611"]["target_reps"] == 3 and G.DEFAULT_REPS == 3
     groups = groups_of(plan)
-    assert groups[:6] == [(1, 1), (1, 2), (1, 3), (2, 1), (2, 2), (2, 3)] and groups[6:] == [(1, 4), (2, 4), (1, 5), (2, 5)]
+    assert groups[:6] == [(1, 1), (1, 2), (1, 3), (2, 1), (2, 2), (2, 3)] and groups[6:] == []   # no pass after the third
 
 
 def test_the_profile_proof_catches_a_dropped_lane_and_a_dropped_dense_arm():

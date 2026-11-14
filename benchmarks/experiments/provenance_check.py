@@ -488,8 +488,8 @@ def caption_n():
     whose N no longer matches also reports BAD, so a re-measure that reaches
     N=5 forces the caption to be corrected rather than left stale.
     """
-    # THE 2026-11 INSTRUMENT RUNS 3 TO 5 REPETITIONS PER CELL, chosen at generation (make_2611_stages `--reps`, default 3,
-    # at most MAX_REPS), where the retired instruments ran 5. A cell inside that range is the instrument's own N and needs no
+    # THE 2026-11 INSTRUMENT RUNS 3 REPETITIONS PER CELL, chosen at generation (make_2611_stages `--reps`, default 3,
+    # at most MAX_REPS = 3: the n=4 and n=5 passes were dropped on 2026-11-14), where the retired instruments ran 5. A cell inside that range is the instrument's own N and needs no
     # disclosure; one below the range is a shortfall; one with no rows at all is not a count (its cells print "--", and the
     # page's roster check owns an arm that should have rows). The disclosed exceptions of the retired instruments (T4's
     # 8.84M row, T5's four warm passes) described rows that no longer exist, and a stale disclosure of a limitation we

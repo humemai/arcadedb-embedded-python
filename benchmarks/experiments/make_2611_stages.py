@@ -17,8 +17,8 @@ of the image, the pinned wheel by sha256, the cap rule, the ALL-DONE trap. What 
     narrows the subset, in the open: (1) the CORE lanes only, so no sparse, time series or lifecycle cell, for the comparators and for
     the ArcadeDB chain; (2) Neo4j and Memgraph stay in the graph lane (and cross-model where they are) but have no dense-lane cell;
     (3) the dense lane is fp32 only, for every engine: no int8 or PQ arm (the comparators' and ArcadeDB's alike); ArcadeDB keeps its fp32
-    embedded and served arms; (4) the target is N=3 (TARGET_REPS): the passes 4 and 5 stay in the schedule, after pass 3, and run
-    only if time is left. PROFILES lists every drop and its reason, `--check` prints what was dropped and proves that nothing of it
+    embedded and served arms; (4) the target is N=3 (TARGET_REPS) and the whole chain: the n=4 and n=5 passes are dropped (the owner,
+    2026-11-14), so no pass follows pass 3. PROFILES lists every drop and its reason, `--check` prints what was dropped and proves that nothing of it
     is scheduled (profile_problems; `--check --drafts` the same on written scripts), and `--profile full` is the whole subset as
     it was before the profile.
     ONE CHAIN PER WHEEL. A release measured on both ArcadeDB builds is two generator runs, one per wheel (arcadedb-<v> native, arcadedb_jvm-<v> JVM),
@@ -52,8 +52,8 @@ of the image, the pinned wheel by sha256, the cap rule, the ALL-DONE trap. What 
     are given on the command line, because the release may not exist when the drafts are made. That mode also writes
     `<prefix>00`, the pair install (official image by digest, wheel by sha256, build_matched_pair.sh, verify_pair_c25.sh),
     which the first lane stage waits for.
-  * REPS. `--reps N` (default 5, at most 5) is baked in as `REPS=N`; a stage environment that declares fewer (the image
-    defaults arm) keeps its own. The default stays 5 so that the chain holds the passes 4 and 5 after the target (TARGET_REPS = 3).
+  * REPS. `--reps N` (default 3, at most 3) is baked in as `REPS=N`; a stage environment that declares fewer (the image
+    defaults arm) keeps its own. The default is the target (TARGET_REPS = 3): the n=4 and n=5 passes are dropped (the owner, 2026-11-14).
   * THE CHAIN. `--after <stage>` is the marker the first stage waits for (`grep -qx "<stage> ALL-DONE"`), or `none`. It is
     required: the previous chain's last stage is not a default anyone should inherit. It must be the LAST item of the
     queue already on the machine (2026-10-23: `qMA06 ALL-DONE` was already in mini's STATUS.txt because the study was
@@ -99,10 +99,11 @@ ROWS_SUFFIX = "_2611"
 # cell_cost_check's prior for a tier this pass has not measured: the 2026-10 pass-1 rows, the comparators' measured cells
 PRIOR_PIN = "d36b4ca3a"
 DEFAULT_PREFIX = "qS"
-MAX_REPS = 5
-DEFAULT_REPS = 5
-# THE TARGET (the owner, 2026-10-25): N=3. The chain still holds the passes 4 and 5 (DEFAULT_REPS), after pass 3, so they run only if time is left.
+# THE TARGET (the owner, 2026-10-25): N=3, and since 2026-11-14 the only plan: the n=4 and n=5 passes are dropped (DECISIONS #335, #336), so the
+# default and the most a generation may ask for are both the target. (They were 5, with the passes 4 and 5 after pass 3 "if time is left".)
 TARGET_REPS = 3
+MAX_REPS = TARGET_REPS
+DEFAULT_REPS = TARGET_REPS
 # THE SCHEDULE (the user, 2026-10-24): passes 1..FIRST_BLOCK of every tier in tier order, then each later pass over the tiers in order.
 FIRST_BLOCK = 3
 # The ArcadeDB chain waits for this file on the host, and its lane stages abort without it. Touch it when CURRENT_PIN is 26.11.1.
@@ -458,7 +459,7 @@ DROP_WHY = {
 }
 PROFILES = {
     "paper-2611": {"drops": DROP_ORDER, "target_reps": TARGET_REPS,
-                   "doc": "core lanes only, fp32 dense only, no Neo4j or Memgraph dense cell, target N=3 (passes 4 and 5 only if time is left)"},
+                   "doc": "core lanes only, fp32 dense only, no Neo4j or Memgraph dense cell, target N=3 (the n=4 and n=5 passes are dropped)"},
     "full": {"drops": (), "target_reps": DEFAULT_REPS, "doc": "the whole subset: the second list with --second-list, every dense precision"},
 }
 DEFAULT_PROFILE = "paper-2611"
@@ -1967,7 +1968,7 @@ def main(argv=None) -> int:
                          + ". Every dropped cell is listed by --check, with its reason")
     ap.add_argument("--second-list", action="store_true", help="add the second list: sparse, time series, lifecycle (--profile full only)")
     ap.add_argument("--reps", type=int, default=DEFAULT_REPS,
-                    help=f"repetitions per cell, 1 to 5 (default {DEFAULT_REPS}: the target is N={TARGET_REPS}, the passes after it run only if time is left)")
+                    help=f"repetitions per cell, 1 to {MAX_REPS} (default {DEFAULT_REPS}: the target is N={TARGET_REPS}; the n=4 and n=5 passes are dropped)")
     ap.add_argument("--order", choices=("biggest-last", "paper"), default="biggest-last",
                     help="biggest-last (default): core block first, then lifecycle, sparse, time series; inside the core block "
                          "large tiers after small ones and the biggest cells last; paper: the table order, no splits. Both apply inside each "
@@ -1979,7 +1980,7 @@ def main(argv=None) -> int:
                     help="leave TimescaleDB out of the time-series lane (it is in by default: it completes the PostgreSQL "
                          "arm with pgvector and AGE)")
     ap.add_argument("--project", metavar="CELLS_TSV", help="print the projected hours per stage from a per-cell hours table (header: lane workload scale backend class h3 h5), "
-                                                          "at the profile's target repetitions (3 for paper-2611, 5 for full) unless --project-reps says 3 or 5")
+                                                          "at the profile's target repetitions (3 for both profiles) unless --project-reps says 3 or 5 (5 prices the dropped n=5 pass, for reference only)")
     ap.add_argument("--project-reps", type=int, choices=(3, 5), help="with --project: price this many repetitions (default: the profile's target)")
     ap.add_argument("--check", action="store_true", help="selection, coverage and instrument proofs only; no pins needed")
     ap.add_argument("--drafts", metavar="DIR", help="with --check: also lint the scripts in DIR")
