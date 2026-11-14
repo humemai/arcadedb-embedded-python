@@ -177,6 +177,7 @@
         "The cold column is the very first query of a session, the point lookup, timed once on a database that has just been opened; every other latency column is the warm median of the iterations that follow it. It answers what the first query of a session costs against the hundredth, which is a different question from the steady-state one and is the one an application that opens a database per request actually asks.",
         "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Each row records what it ran as `durability`, and every engine's setting was read out of the engine rather than assumed. The exceptions on this table are LadybugDB and Neo4j, which have no setting to relax and wait for the disk at every commit; their write and transaction cells are paying for that.",
         "Both server arms are the official ArcadeDB server images, one built for the JVM and one compiled to a native executable, started with the same server settings, which each server reports back when it starts. The CPU baselines differ: the native server image is native server image: -march=x86-64-v3 and the native wheel (the embedded arm) as native wheel: -march=compatibility, and the JVM server compiles for the CPU it runs on.",
+        "DuckDB is given one thread for each CPU the run may use; left alone it sizes its pool from the machine's cores and not from the CPUs the run was given.",
         "Neo4j's page cache is sized from the memory the run was given, what is left after its heap and a fixed reserve, where its image would set one small fixed size whatever the container holds.",
         "Neo4j checkpoints its store every 5 seconds, where its default is every 15 minutes, so that the disk reading taken after a run finds the data on disk.",
         "The ArcadeDB server is started with the limit on the records or groups that one sorting, grouping, or distinct query may hold in memory fixed at 5,000,000, while the embedded package leaves that limit at the engine's default, which grows with the heap, so the two deployments can run different limits.",
@@ -2749,6 +2750,7 @@
         "Every deterministic answer on this table is hashed and compared across the engines before anything is published, and a publish is refused when two of them disagree. What that comparison could not cover, declared rather than skipped: ArangoDB's LSQB Q1 answer is not compared, because it killed by the server at its 300 s budget (maxRuntime) before the cold pass answered; ArangoDB's LSQB Q2 answer is not compared, because it killed by the server at its 300 s budget (maxRuntime) before the cold pass answered; ArangoDB's LSQB Q3 answer is not compared, because it killed by the server at its 300 s budget (maxRuntime) before the cold pass answered; ArangoDB's LSQB Q5 answer is not compared, because it killed by the server at its 300 s budget (maxRuntime) before the cold pass answered; ArangoDB's LSQB Q8 answer is not compared, because it killed by the server at its 300 s budget (maxRuntime) before the cold pass answered; ArangoDB's triangle count answer is not compared, because it killed by the server at its 300 s budget (maxRuntime) before the cold pass answered; Memgraph's LSQB Q2 answer is not compared, because it killed by the server at its 300 s budget (tx_timeout) before the cold pass answered; Memgraph's LSQB Q3 answer is not compared, because it killed by the server at its 300 s budget (tx_timeout) before the cold pass answered; MongoDB's LSQB Q1 answer is not compared, because it killed by the server at its 300 s budget (maxTimeMS) before the cold pass answered; MongoDB's LSQB Q2 answer is not compared, because it killed by the server at its 300 s budget (maxTimeMS) before the cold pass answered; MongoDB's LSQB Q3 answer is not compared, because it killed by the server at its 300 s budget (maxTimeMS) before the cold pass answered; MongoDB's LSQB Q4 answer is not compared, because it killed by the server at its 300 s budget (maxTimeMS) before the cold pass answered; MongoDB's LSQB Q5 answer is not compared, because it killed by the server at its 300 s budget (maxTimeMS) before the cold pass answered; MongoDB's LSQB Q7 answer is not compared, because it killed by the server at its 300 s budget (maxTimeMS) before the cold pass answered; MongoDB's LSQB Q8 answer is not compared, because it killed by the server at its 300 s budget (maxTimeMS) before the cold pass answered; PostgreSQL + AGE's LSQB Q3 answer is not compared, because it killed by the server at its 300 s budget (statement_timeout) before the cold pass answered; PostgreSQL + AGE's average friend age answer is not compared, because it killed by the server at its 60 s budget (statement_timeout) before the cold pass answered; PostgreSQL + AGE's degree distribution answer is not compared, because it killed by the server at its 300 s budget (statement_timeout) before the cold pass answered; PostgreSQL + AGE's most friends answer is not compared, because it killed by the server at its 60 s budget (statement_timeout) before the cold pass answered; PostgreSQL + AGE's triangle count answer is not compared, because it killed by the server at its 300 s budget (statement_timeout) before the cold pass answered.",
         "The cold column is the very first query of a session, most friends, timed once on a database that has just been opened; every other latency column is the warm median of the iterations that follow it. It answers what the first query of a session costs against the hundredth, which is a different question from the steady-state one and is the one an application that opens a database per request actually asks.",
         "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Each row records what it ran as `durability`, and every engine's setting was read out of the engine rather than assumed. The exceptions on this table are DuckPGQ, LadybugDB, and Neo4j, which have no setting to relax and wait for the disk at every commit; their write and transaction cells are paying for that.",
+        "LSQB Q6 and LSQB Q9 were not run at this size, for any engine.",
         "Both server arms are the official ArcadeDB server images, one built for the JVM and one compiled to a native executable, started with the same server settings, which each server reports back when it starts. The CPU baselines differ: the native server image is native server image: -march=x86-64-v3 and the native wheel (the embedded arm) as native wheel: -march=compatibility, and the JVM server compiles for the CPU it runs on.",
         "DuckDB is given one thread for each CPU the run may use; left alone it sizes its pool from the machine's cores and not from the CPUs the run was given.",
         "Neo4j's page cache is sized from the memory the run was given, what is left after its heap and a fixed reserve, where its image would set one small fixed size whatever the container holds.",
@@ -4450,6 +4452,138 @@
         "disk GiB": "down"
       },
       "declared_absences": [
+        {
+          "backend": "ArangoDB",
+          "column": "LSQB Q6 p50 ms",
+          "kind": "not measured",
+          "why": "LSQB Q6 was not run at this size, for any engine."
+        },
+        {
+          "backend": "ArangoDB",
+          "column": "LSQB Q9 p50 ms",
+          "kind": "not measured",
+          "why": "LSQB Q9 was not run at this size, for any engine."
+        },
+        {
+          "backend": "ArcadeDB (embedded, JVM build)",
+          "column": "LSQB Q6 p50 ms",
+          "kind": "not measured",
+          "why": "LSQB Q6 was not run at this size, for any engine."
+        },
+        {
+          "backend": "ArcadeDB (embedded, JVM build)",
+          "column": "LSQB Q9 p50 ms",
+          "kind": "not measured",
+          "why": "LSQB Q9 was not run at this size, for any engine."
+        },
+        {
+          "backend": "ArcadeDB (embedded, native build)",
+          "column": "LSQB Q6 p50 ms",
+          "kind": "not measured",
+          "why": "LSQB Q6 was not run at this size, for any engine."
+        },
+        {
+          "backend": "ArcadeDB (embedded, native build)",
+          "column": "LSQB Q9 p50 ms",
+          "kind": "not measured",
+          "why": "LSQB Q9 was not run at this size, for any engine."
+        },
+        {
+          "backend": "ArcadeDB (server, JVM build)",
+          "column": "LSQB Q6 p50 ms",
+          "kind": "not measured",
+          "why": "LSQB Q6 was not run at this size, for any engine."
+        },
+        {
+          "backend": "ArcadeDB (server, JVM build)",
+          "column": "LSQB Q9 p50 ms",
+          "kind": "not measured",
+          "why": "LSQB Q9 was not run at this size, for any engine."
+        },
+        {
+          "backend": "ArcadeDB (server, native build)",
+          "column": "LSQB Q6 p50 ms",
+          "kind": "not measured",
+          "why": "LSQB Q6 was not run at this size, for any engine."
+        },
+        {
+          "backend": "ArcadeDB (server, native build)",
+          "column": "LSQB Q9 p50 ms",
+          "kind": "not measured",
+          "why": "LSQB Q9 was not run at this size, for any engine."
+        },
+        {
+          "backend": "DuckPGQ",
+          "column": "LSQB Q6 p50 ms",
+          "kind": "not measured",
+          "why": "LSQB Q6 was not run at this size, for any engine."
+        },
+        {
+          "backend": "DuckPGQ",
+          "column": "LSQB Q9 p50 ms",
+          "kind": "not measured",
+          "why": "LSQB Q9 was not run at this size, for any engine."
+        },
+        {
+          "backend": "LadybugDB",
+          "column": "LSQB Q6 p50 ms",
+          "kind": "not measured",
+          "why": "LSQB Q6 was not run at this size, for any engine."
+        },
+        {
+          "backend": "LadybugDB",
+          "column": "LSQB Q9 p50 ms",
+          "kind": "not measured",
+          "why": "LSQB Q9 was not run at this size, for any engine."
+        },
+        {
+          "backend": "Memgraph",
+          "column": "LSQB Q6 p50 ms",
+          "kind": "not measured",
+          "why": "LSQB Q6 was not run at this size, for any engine."
+        },
+        {
+          "backend": "Memgraph",
+          "column": "LSQB Q9 p50 ms",
+          "kind": "not measured",
+          "why": "LSQB Q9 was not run at this size, for any engine."
+        },
+        {
+          "backend": "MongoDB",
+          "column": "LSQB Q6 p50 ms",
+          "kind": "not measured",
+          "why": "LSQB Q6 was not run at this size, for any engine."
+        },
+        {
+          "backend": "MongoDB",
+          "column": "LSQB Q9 p50 ms",
+          "kind": "not measured",
+          "why": "LSQB Q9 was not run at this size, for any engine."
+        },
+        {
+          "backend": "Neo4j",
+          "column": "LSQB Q6 p50 ms",
+          "kind": "not measured",
+          "why": "LSQB Q6 was not run at this size, for any engine."
+        },
+        {
+          "backend": "Neo4j",
+          "column": "LSQB Q9 p50 ms",
+          "kind": "not measured",
+          "why": "LSQB Q9 was not run at this size, for any engine."
+        },
+        {
+          "backend": "PostgreSQL + AGE",
+          "column": "LSQB Q6 p50 ms",
+          "kind": "not measured",
+          "why": "LSQB Q6 was not run at this size, for any engine."
+        },
+        {
+          "backend": "PostgreSQL + AGE",
+          "column": "LSQB Q9 p50 ms",
+          "kind": "not measured",
+          "why": "LSQB Q9 was not run at this size, for any engine."
+        },
         {
           "backend": "SurrealDB (server)",
           "column": null,
@@ -8472,7 +8606,7 @@
           }
         },
         {
-          "backend": "redis tpc",
+          "backend": "Redis",
           "build": null,
           "is_arcadedb": false,
           "scale": "doc_neworder",
@@ -8481,7 +8615,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": null,
-          "version_name": "redis tpc 8.10.2",
+          "version_name": "redis 8.10.2",
           "host": null,
           "metrics": {
             "no wait ms": {
@@ -8856,7 +8990,7 @@
           }
         },
         {
-          "backend": "redis tpc",
+          "backend": "Redis",
           "build": null,
           "is_arcadedb": false,
           "scale": "doc_payment",
@@ -8865,7 +8999,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": null,
-          "version_name": "redis tpc 8.10.2",
+          "version_name": "redis 8.10.2",
           "host": null,
           "metrics": {
             "no wait ms": {
@@ -9240,7 +9374,7 @@
           }
         },
         {
-          "backend": "redis tpc",
+          "backend": "Redis",
           "build": null,
           "is_arcadedb": false,
           "scale": "doc_insert",
@@ -9249,7 +9383,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": null,
-          "version_name": "redis tpc 8.10.2",
+          "version_name": "redis 8.10.2",
           "host": null,
           "metrics": {
             "no wait ms": {
@@ -9624,7 +9758,7 @@
           }
         },
         {
-          "backend": "redis tpc",
+          "backend": "Redis",
           "build": null,
           "is_arcadedb": false,
           "scale": "doc_update",
@@ -9633,7 +9767,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": null,
-          "version_name": "redis tpc 8.10.2",
+          "version_name": "redis 8.10.2",
           "host": null,
           "metrics": {
             "no wait ms": {
@@ -10008,7 +10142,7 @@
           }
         },
         {
-          "backend": "redis tpc",
+          "backend": "Redis",
           "build": null,
           "is_arcadedb": false,
           "scale": "doc_delete",
@@ -10017,7 +10151,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": null,
-          "version_name": "redis tpc 8.10.2",
+          "version_name": "redis 8.10.2",
           "host": null,
           "metrics": {
             "no wait ms": {
@@ -10392,7 +10526,7 @@
           }
         },
         {
-          "backend": "redis tpc",
+          "backend": "Redis",
           "build": null,
           "is_arcadedb": false,
           "scale": "doc_read",
@@ -10401,7 +10535,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": null,
-          "version_name": "redis tpc 8.10.2",
+          "version_name": "redis 8.10.2",
           "host": null,
           "metrics": {
             "no wait ms": {
@@ -13409,7 +13543,7 @@
           }
         },
         {
-          "backend": "redis tpc",
+          "backend": "Redis",
           "build": null,
           "backend_key": "redis_tpc",
           "is_arcadedb": false,
@@ -15027,6 +15161,54 @@
       },
       "declared_absences": [
         {
+          "backend": "cratedb tpc",
+          "column": "new-order p50 ms",
+          "kind": "not measured",
+          "why": "cratedb tpc was not run on the transaction workload: it runs the analytics workload of this lane only."
+        },
+        {
+          "backend": "cratedb tpc",
+          "column": "new-order p99 ms",
+          "kind": "not measured",
+          "why": "cratedb tpc was not run on the transaction workload: it runs the analytics workload of this lane only."
+        },
+        {
+          "backend": "cratedb tpc",
+          "column": "payment p50 ms",
+          "kind": "not measured",
+          "why": "cratedb tpc was not run on the transaction workload: it runs the analytics workload of this lane only."
+        },
+        {
+          "backend": "cratedb tpc",
+          "column": "insert p50 ms",
+          "kind": "not measured",
+          "why": "cratedb tpc was not run on the transaction workload: it runs the analytics workload of this lane only."
+        },
+        {
+          "backend": "cratedb tpc",
+          "column": "read p50 ms",
+          "kind": "not measured",
+          "why": "cratedb tpc was not run on the transaction workload: it runs the analytics workload of this lane only."
+        },
+        {
+          "backend": "cratedb tpc",
+          "column": "update p50 ms",
+          "kind": "not measured",
+          "why": "cratedb tpc was not run on the transaction workload: it runs the analytics workload of this lane only."
+        },
+        {
+          "backend": "cratedb tpc",
+          "column": "delete p50 ms",
+          "kind": "not measured",
+          "why": "cratedb tpc was not run on the transaction workload: it runs the analytics workload of this lane only."
+        },
+        {
+          "backend": "cratedb tpc",
+          "column": "OLTP ops/s",
+          "kind": "not measured",
+          "why": "cratedb tpc was not run on the transaction workload: it runs the analytics workload of this lane only."
+        },
+        {
           "backend": "ArcadeDB (server, image JVM defaults)",
           "column": null,
           "kind": "withheld",
@@ -15064,21 +15246,20 @@
         "ArcadeDB's served rows time every call through the benchmark's own minimal HTTP client, lean_http (http.client, keep-alive) (source: benchmarks/experiments/lean_http.py), which keeps one persistent http.client connection per host. The other engines are measured through their vendors' own Python clients, so client weight differs between the served engines.",
         "ArcadeDB (server, JVM build) and ArcadeDB (server, native build) run on a JVM, and for them this column is close to the heap they were given rather than the memory the work needed: ArcadeDB (server, JVM build)'s 3.27 GiB here is about 41 per cent of its 8g heap. Every engine on a table gets the same memory envelope; how much of it a JVM takes is a property of the runtime, so read these cells against each other rather than against an engine that manages its own memory. ArcadeDB (embedded, JVM build) and ArcadeDB (embedded, native build) run on a JVM too, but they start with no initial heap size, so their column follows what the work needed and not the heap the JVM was allowed to grow into.",
         "Each repetition runs every query 100 times; the p50 and p99 are over those runs.",
-        "Indexes on this table are matched by effect rather than by rule: ArcadeDB (embedded), ArcadeDB (server), MongoDB, PostgreSQL, SurrealDB (embedded), SurrealDB (server), cratedb tpc, and redis tpc build one; ArangoDB, DuckDB, and SQLite build none, because measuring it showed the index costs them or changes nothing. Where building one was a choice, the engine was timed with it and without it and the faster configuration kept; where an engine reaches these queries through its own primary key or record id, that is its equivalent. The time an index took to build is the index column. DuckDB's index cell is not zero because it times a different index: the order-key index of the table new orders are written into, which the transactional workload needs and which is built while that table is still empty.",
+        "Indexes on this table are matched by effect rather than by rule: ArcadeDB (embedded), ArcadeDB (server), MongoDB, PostgreSQL, Redis, SurrealDB (embedded), SurrealDB (server), and cratedb tpc build one; ArangoDB, DuckDB, and SQLite build none, because measuring it showed the index costs them or changes nothing. Where building one was a choice, the engine was timed with it and without it and the faster configuration kept; where an engine reaches these queries through its own primary key or record id, that is its equivalent. The time an index took to build is the index column. DuckDB's index cell is not zero because it times a different index: the order-key index of the table new orders are written into, which the transactional workload needs and which is built while that table is still empty.",
         "ArcadeDB's indexes on `Part.p_partkey`, `OrderNew.okey`, and `Crud.ckey` are hash indexes (`UNIQUE_HASH`), because the benchmark never ranges over or orders by those ids. A hash index keeps no key order: an equality lookup goes straight to its bucket instead of walking a sorted tree, and building it can cost more than building a sorted index when the ids arrive in ascending order, which is the order this loader sends them. Any such cost is in ArcadeDB's ingest and index times on this table.",
         "`ingest total s` is the whole of building this corpus. `ingest s` and `index s` are the two phases timed inside it -- writing the data, then building whatever index the engine was given -- and they are not a division of it: each engine's ingest clock starts after the setup it does first, creating a schema or a collection, which neither phase counts. How much is left over depends on the engine: nothing on some of the ones here, up to about 1 per cent on others. Read the two as what each phase cost, and the total as what the whole of it cost.",
         "cratedb tpc, SurrealDB (embedded), and SurrealDB (server) define their index before the first row is loaded, so the index s printed for them times only the definition and the work of building the index is inside ingest s.",
         "SurrealDB (embedded) and SurrealDB (server) at TPC-H SF1 (6.0M line items): the analytics cell exceeded its 2.035 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
         "SurrealDB (server) at TPC-H SF10 (60.0M line items): the analytics cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row. It was still in the index build when the budget ran out.",
         "MongoDB at TPC-H SF10 (60.0M line items): the analytics cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
-        "29 query cells on this table stopped at their per-query budget, the same for every engine here; each one's p50 and p99 are over those iterations, the first of which is the cold pass, and every other query in those cells keeps its numbers.",
+        "27 query cells on this table stopped at their per-query budget, the same for every engine here; each one's p50 and p99 are over those iterations, the first of which is the cold pass, and every other query in those cells keeps its numbers.",
         "ArangoDB at TPC-H SF1 (6.0M line items): Q6 (84 to 86 of 100 iterations, reaching 271 to 283 s).",
         "ArangoDB at TPC-H SF10 (60.0M line items): Q1 (14 to 22 of 100 iterations, reaching 868 to 966 s), Q6 (27 to 36, reaching 871 to 895 s), by month (24 to 37, reaching 869 to 879 s), ship mode (43 to 66, reaching 866 to 882 s), and top parts (16 to 22, reaching 867 to 878 s).",
         "ArcadeDB (embedded) at TPC-H SF10 (60.0M line items): Q1 (15 to 39 of 100 iterations, reaching 872 to 943 s), Q6 (30 to 86, reaching 865 to 885 s), by month (25 to 70, reaching 864 to 965 s), ship mode (49 to 77, reaching 873 to 899 s), and top parts (25 to 65, reaching 868 to 946 s).",
         "ArcadeDB (server) at TPC-H SF1 (6.0M line items): Q6 (87 of 100 iterations, reaching 271 s).",
         "ArcadeDB (server) at TPC-H SF10 (60.0M line items): Q1 (8 to 41 of 100 iterations, reaching 864 to 959 s), Q6 (23 to 95, reaching 865 to 889 s), by month (26 to 68, reaching 865 to 879 s), ship mode (40 to 48, reaching 869 to 924 s), and top parts (14 to 66, reaching 864 to 997 s).",
         "MongoDB at TPC-H SF1 (6.0M line items): Q6 (84 to 98 of 100 iterations, reaching 271 to 271 s).",
-        "PostgreSQL (tuned) at TPC-H SF10 (60.0M line items): by month (95 of 100 iterations, reaching 868 s) and top parts (29 to 39, reaching 870 to 883 s).",
         "PostgreSQL at TPC-H SF10 (60.0M line items): Q1 (96 of 100 iterations, reaching 865 s), by month (78, reaching 870 s), and top parts (35 to 69, reaching 864 to 883 s).",
         "SQLite at TPC-H SF10 (60.0M line items): Q1 (10 to 11 of 100 iterations, reaching 878 to 921 s), by month (14 to 17, reaching 866 to 909 s), ship mode (22 to 26, reaching 868 to 887 s), and top parts (15 to 17, reaching 882 to 905 s).",
         "cratedb tpc at TPC-H SF10 (60.0M line items): Q1 (60 to 69 of 100 iterations, reaching 866 to 872 s) and top parts (27 to 36, reaching 864 to 912 s).",
@@ -16025,7 +16206,7 @@
           }
         },
         {
-          "backend": "redis tpc",
+          "backend": "Redis",
           "build": null,
           "backend_key": "redis_tpc",
           "is_arcadedb": false,
@@ -17781,11 +17962,22 @@
         ]
       },
       {
+        "text": "LSQB Q6 and LSQB Q9 were not run at this size, for any engine.",
+        "values": [
+          "LSQB Q6",
+          "LSQB Q9"
+        ]
+      },
+      {
         "text": "Both server arms are the official ArcadeDB server images, one built for the JVM and one compiled to a native executable, started with the same server settings, which each server reports back when it starts. The CPU baselines differ: the native server image is native server image: -march=x86-64-v3 and the native wheel (the embedded arm) as native wheel: -march=compatibility, and the JVM server compiles for the CPU it runs on.",
         "values": [
           "native server image: -march=x86-64-v3",
           "native wheel: -march=compatibility"
         ]
+      },
+      {
+        "text": "DuckDB is given one thread for each CPU the run may use; left alone it sizes its pool from the machine's cores and not from the CPUs the run was given.",
+        "values": []
       },
       {
         "text": "Neo4j's page cache is sized from the memory the run was given, what is left after its heap and a fixed reserve, where its image would set one small fixed size whatever the container holds.",
@@ -17810,10 +18002,6 @@
           "64",
           "100"
         ]
-      },
-      {
-        "text": "DuckDB is given one thread for each CPU the run may use; left alone it sizes its pool from the machine's cores and not from the CPUs the run was given.",
-        "values": []
       },
       {
         "text": "DuckDB's vector rows keep their HNSW index in the database through a persistence feature that its vector extension still labels experimental and that has to be switched on for the index to be stored at all.",
@@ -18017,7 +18205,8 @@
         "values": [
           "SurrealDB (server)",
           "SF1FULL (10k people, 181k friendships)",
-          "2 hour"
+          "2 hour",
+          "query lsqb_q1"
         ]
       },
       {
@@ -18120,7 +18309,8 @@
         "values": [
           "SurrealDB (embedded) and SurrealDB (server)",
           "500k products",
-          "0.5 hour"
+          "0.5 hour",
+          "the index build"
         ]
       },
       {
@@ -18212,7 +18402,8 @@
         "values": [
           "SurrealDB (embedded) and SurrealDB (server)",
           "500k products",
-          "0.5 hour"
+          "0.5 hour",
+          "the index build"
         ]
       },
       {
@@ -18284,7 +18475,8 @@
         "values": [
           "SurrealDB (server)",
           "TPC-H SF10 (60.0M line items)",
-          "2 hour"
+          "2 hour",
+          "the index build"
         ]
       },
       {
@@ -18301,16 +18493,16 @@
         "values": []
       },
       {
-        "text": "Indexes on this table are matched by effect rather than by rule: ArcadeDB (embedded), ArcadeDB (server), MongoDB, PostgreSQL, SurrealDB (embedded), SurrealDB (server), cratedb tpc, and redis tpc build one; ArangoDB, DuckDB, and SQLite build none, because measuring it showed the index costs them or changes nothing. Where building one was a choice, the engine was timed with it and without it and the faster configuration kept; where an engine reaches these queries through its own primary key or record id, that is its equivalent. The time an index took to build is the index column. DuckDB's index cell is not zero because it times a different index: the order-key index of the table new orders are written into, which the transactional workload needs and which is built while that table is still empty.",
+        "text": "Indexes on this table are matched by effect rather than by rule: ArcadeDB (embedded), ArcadeDB (server), MongoDB, PostgreSQL, Redis, SurrealDB (embedded), SurrealDB (server), and cratedb tpc build one; ArangoDB, DuckDB, and SQLite build none, because measuring it showed the index costs them or changes nothing. Where building one was a choice, the engine was timed with it and without it and the faster configuration kept; where an engine reaches these queries through its own primary key or record id, that is its equivalent. The time an index took to build is the index column. DuckDB's index cell is not zero because it times a different index: the order-key index of the table new orders are written into, which the transactional workload needs and which is built while that table is still empty.",
         "values": [
           "ArcadeDB (embedded)",
           "ArcadeDB (server)",
           "MongoDB",
           "PostgreSQL",
+          "Redis",
           "SurrealDB (embedded)",
           "SurrealDB (server)",
           "cratedb tpc",
-          "redis tpc",
           "ArangoDB",
           "DuckDB",
           "SQLite"
@@ -18329,7 +18521,8 @@
         "values": [
           "SurrealDB (server)",
           "TPC-H SF10 (60.0M line items)",
-          "2 hour"
+          "2 hour",
+          "the index build"
         ]
       },
       {
@@ -18341,9 +18534,9 @@
         ]
       },
       {
-        "text": "29 query cells on this table stopped at their per-query budget, the same for every engine here; each one's p50 and p99 are over those iterations, the first of which is the cold pass, and every other query in those cells keeps its numbers.",
+        "text": "27 query cells on this table stopped at their per-query budget, the same for every engine here; each one's p50 and p99 are over those iterations, the first of which is the cold pass, and every other query in those cells keeps its numbers.",
         "values": [
-          "29",
+          "27",
           "per-query budget"
         ]
       },
@@ -18396,14 +18589,6 @@
         ]
       },
       {
-        "text": "PostgreSQL (tuned) at TPC-H SF10 (60.0M line items): by month (95 of 100 iterations, reaching 868 s) and top parts (29 to 39, reaching 870 to 883 s).",
-        "values": [
-          "PostgreSQL (tuned)",
-          "TPC-H SF10 (60.0M line items)",
-          "by month (95 of 100 iterations, reaching 868 s) and top parts (29 to 39, reaching 870 to 883 s)"
-        ]
-      },
-      {
         "text": "PostgreSQL at TPC-H SF10 (60.0M line items): Q1 (96 of 100 iterations, reaching 865 s), by month (78, reaching 870 s), and top parts (35 to 69, reaching 864 to 883 s).",
         "values": [
           "PostgreSQL",
@@ -18441,5 +18626,12 @@
         ]
       }
     ]
+  },
+  "pending_tables": {
+    "l3d": "Still being measured at this version. This table appears here when its run finishes.",
+    "l3s": "Still being measured at this version. This table appears here when its run finishes.",
+    "l4": "Still being measured at this version. This table appears here when its run finishes.",
+    "lifecycle": "Still being measured at this version. This table appears here when its run finishes.",
+    "e4": "Still being measured at this version. This table appears here when its run finishes."
   }
 }
