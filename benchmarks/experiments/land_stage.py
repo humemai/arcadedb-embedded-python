@@ -340,8 +340,8 @@ def current_pin(payload_path=None):
 def drop_reps_above(rows, max_rep):
     """(kept, {rep: count dropped}): the rows of repetitions 1..max_rep, and how many rows of each later repetition were left out.
 
-    The page is n=3 while the comparator passes 4 and 5 append rep 4 and rep 5 rows to the same rows file on the bench host, so a
-    landing at n=3 caps the repetitions it takes. A row whose `rep` is not an integer cannot be placed under a cap: the run ends
+    The page is n=3 and stays n=3 (the n=4 and n=5 passes were dropped on 2026-11-14), but the comparator pass 4 started once and left a
+    few rep 4 rows in the same rows file on the bench host, so a landing at n=3 caps the repetitions it takes. A row whose `rep` is not an integer cannot be placed under a cap: the run ends
     instead of keeping or dropping it unseen."""
     kept, dropped = [], {}
     for r in rows:
@@ -490,8 +490,8 @@ def main():
     ap.add_argument("--apply", action="store_true", help="build, commit and push; default stops after the diff")
     ap.add_argument("--max-rep", type=int, default=0, metavar="N",
                     help="land repetitions 1..N only: rows of a later repetition are left out before the screen, the filters and the "
-                         "merge, and the count per dropped repetition is printed (the page is n=3 while the comparator passes 4 and 5 "
-                         "append to the same rows file; they land when the page moves to n=5). Off by default")
+                         "merge, and the count per dropped repetition is printed (the page is n=3 and stays n=3: the n=4 and n=5 passes were "
+                         "dropped on 2026-11-14, and the rows file holds a few rep 4 rows that never land). Off by default")
     ap.add_argument("--post1-orphans", choices=("refuse", "leave-out"), default="refuse",
                     help="what --post1-reps does with a complete set of build-only rows that has NO older wheel to merge into (a cell the "
                          "older chain never measured, e.g. the GAV default arm at l2/sf1full): refuse (default, nothing lands) or leave-out "
