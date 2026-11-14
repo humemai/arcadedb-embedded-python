@@ -367,7 +367,7 @@ def test_a_partial_native_overlay_is_refused_and_a_complete_or_absent_one_is_not
     import make_paper_tables as M
     M._refuse_partial_native(str(tmp_path), "x")                                          # none: nothing to refuse
     for arm in M.MP_INPROCESS_ARMS:
-        for b in range(1, M.MP_BUILDS + 1):
+        for b in range(1, M.mp_builds() + 1):
             (tmp_path / f"mp_{arm}_native_b{b}.json").write_text("[]")
     M._refuse_partial_native(str(tmp_path), "x")                                          # all of them
     (tmp_path / "mp_int8_native_b2.json").unlink()
