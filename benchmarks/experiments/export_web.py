@@ -611,6 +611,7 @@ DISPLAY_NAMES = {
     "postgres": "PostgreSQL", "postgres_tuned": "PostgreSQL (tuned)",
     "duckdb": "DuckDB", "questdb": "QuestDB", "sqlite": "SQLite", "mongodb": "MongoDB",
     "timescaledb": "TimescaleDB", "postgres_ts": "PostgreSQL", "postgresql": "PostgreSQL", "pgvector_dense": "pgvector", "pgvector_sparse": "pgvector", "neo4j_dense": "Neo4j", "neo4j_dense_int8": "Neo4j",
+    "redis_tpc": "Redis",
     "surrealdb_tpc": "SurrealDB (embedded)", "surrealdb_tpc_server": "SurrealDB (server)",
     "surrealdb_graph": "SurrealDB (embedded)", "surrealdb_graph_server": "SurrealDB (server)",
     "surrealdb_dense": "SurrealDB (embedded)", "surrealdb_dense_server": "SurrealDB (server)",
