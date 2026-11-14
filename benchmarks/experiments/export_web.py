@@ -1876,6 +1876,34 @@ def _declare_missing_builds(tables):
                 t["conditions"].append(note)
 
 
+_WORKLOAD_WORDS = {"oltp": "transaction", "olap": "analytics", "hybrid": "transaction", "atomicity": "atomicity"}
+
+
+def _declare_arm_runs_absences(tables):
+    """The blank cells of an arm that does not run this table's workload (runner.ARM_RUNS) are declared 'not measured', one per column.
+
+    The lane's ingest is shared, so such an arm can still print a row on the other workload's table (CrateDB: analytics only, a row on the
+    document OLTP table with ingest and nothing else). A column the row does not print is declared, with the plain fact; a column it does print
+    and every arm that runs the workload are left alone. page_check A1 reads these as the declaration of the blank."""
+    runner = _const("runner", "arm_runs")
+    arms = _const("runner", "ARM_RUNS")
+    for t in tables:
+        lane_wl = _TABLE_LANE.get(t.get("id"))
+        if not lane_wl or not lane_wl[1]:
+            continue
+        lane, wl = lane_wl
+        for e in t.get("entries", []):
+            key = str(e.get("backend_key"))
+            if e.get("outcome") or runner(lane, wl, key):
+                continue
+            ran = " and ".join(_WORKLOAD_WORDS.get(w, w) for w in arms[key][lane]["workloads"])
+            why = (f"{e['backend']} was not run on the {_WORKLOAD_WORDS.get(wl, wl)} workload: it runs the {ran} workload of this lane only.")
+            for col in t.get("columns") or []:
+                if isinstance((e.get("metrics") or {}).get(col), dict) and (e["metrics"][col] or {}).get("median") is not None:
+                    continue
+                _declare_absence(t["id"], e["backend"], col, "not measured", why)
+
+
 def _disclose_server_builds(tables):
     """Under every table that holds a native-build server arm: both server arms are upstream's official images (the JVM server image and the
     native-image server), run with the same server settings that each server reports back at start, and the one disclosed difference is the
@@ -7815,6 +7843,7 @@ def main() -> int:
             if _note not in _t["conditions"]:
                 _t["conditions"].append(_note)
     _declare_missing_builds(tables)
+    _declare_arm_runs_absences(tables)
     _disclose_server_builds(tables)
     # THE OVERRIDES A READER MEETS (CAMPAIGN section 7 row 21). PROTOCOL.md
     # section 7 lists every default this benchmark overrides, and the rows its
