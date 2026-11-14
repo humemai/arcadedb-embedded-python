@@ -1130,6 +1130,28 @@ NOT_PRINTED = [
      "milliseconds the host spent throttled during a cell, from the same "
      "counters; a non-zero value invalidates the cell rather than becoming "
      "a column"),
+    # THE FAMILIES THE FIRST 2026-11 LANDING MET (A2 had never read these rows: 157 fields).
+    (r"^build_window_",
+     "the build phase's own window, the memory, owned memory, disk, CPU and IO of the build alone, recorded beside the whole-cell figures when the "
+     "build figures are re-measured on a later wheel: the tables print the whole cell's peak memory and disk, and these stay in the rows as detail"),
+    (r"^mem_probe_gc_s$",
+     "the seconds the memory probe spent in the garbage-collection step it runs in each phase before reading the heap (the sum of the phases' gc_ms, "
+     "memory_probe.py): the cost of the measurement itself, recorded with the row and not a result"),
+    (r"^(mem|jvm|proc|disk|io)_(idle|load|index_build|index|warmup|queries|close)_",
+     "the sampled breakdown of memory, JVM heap, process, disk and IO readings by phase of the cell (idle, load, index build, warm-up, queries, close): "
+     "the tables print the cell's peak and the after-queries figures, not each phase, and the breakdown stays in the rows"),
+    (r"^arangodb_ivf_",
+     "how ArangoDB's IVF vector index was calibrated before the timed cell (the probe count it chose, the recall it reached, the queries and the time it "
+     "took): the settings of that arm, recorded with the row and not a result column"),
+    (r"^(cratedb_(heap_max_mib|processors|refresh_interval_ms|replicas|shards|translog_sync_interval_ms)|redis_(index_docs|io_threads|json_module|"
+     r"maxmemory|protocol|search_module|search_workers)|server_(cpus|max_heap_bytes))$",
+     "the settings an engine or its server ran with, read back from the engine and recorded on each row (PROTOCOL.md section 7): conditions of the "
+     "run, not results; the tables' sentences name the overrides"),
+    (r"^(oltp_warmup(_s)?|phase_probe_s|precell_gate_(max_c|temp_c|wait_s))$",
+     "the untimed warm-up before the transaction pass, the time of the phase probe and the temperature-gate readings taken before the cell started: "
+     "conditions of the run, recorded with the row, not results"),
+    (r"^(recall_target|vector_ef|vector_ef_lane)$",
+     "the retrieval settings the arm was configured with (the recall target and the vector search effort): recorded with the row, not a result column"),
 ]
 
 
