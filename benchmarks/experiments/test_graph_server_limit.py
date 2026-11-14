@@ -92,11 +92,13 @@ def test_error_1500_is_a_killed_query_and_other_errors_still_raise():
         ad.run_olap(TRI)
 
 
-def test_only_arango_mongo_and_memgraph_declare_a_server_side_limit():
-    assert all(c.SERVER_SIDE_LIMIT is True for c in (L.ArangoGraph, L.MongoGraph, L.MemgraphGraph))
+def test_only_arango_mongo_memgraph_and_pgage_declare_a_server_side_limit():
+    # PgAgeGraph joined in mmdbbench#24 (statement_timeout, test_pgage_server_limit.py); no other engine did.
+    declared = (L.ArangoGraph, L.MongoGraph, L.MemgraphGraph, L.PgAgeGraph)
+    assert all(c.SERVER_SIDE_LIMIT is True for c in declared)
     assert L.Neo4jGraph.SERVER_SIDE_LIMIT is False              # the Memgraph subclass sets it; its parent does not
     for name, cls in L.ADAPTERS.items():
-        if cls not in (L.ArangoGraph, L.MongoGraph, L.MemgraphGraph):
+        if cls not in declared:
             assert getattr(cls, "SERVER_SIDE_LIMIT", False) is False, name
     assert arango_common.is_query_killed(_Err(1500)) and not arango_common.is_query_killed(_Err(1203))
     assert not arango_common.is_query_killed(ValueError("x"))
