@@ -674,9 +674,12 @@ def main() -> int:
     print("\nno page text names the vendor's Python driver for ArcadeDB (DECISIONS #285)")
     ban_bad = _check_banned_terms(payload)
     print(f"  {ban_bad} banned term(s) in page text")
+    print("\nno page prose names a backend by its raw key (the roster's display names are the page's names)")
+    raw_bad = _check_raw_backend_keys(payload)
+    print(f"  {raw_bad} raw backend key(s) in page prose")
     return 1 if (i_bad or d_bad or a_bad or l_bad or c_bad
                  or r_bad or b_bad or m_bad or not u_ok or k_bad or o_bad or n_bad or iv_bad or ov_bad or j_bad or l_notice_bad
-                 or ban_bad) else 0
+                 or ban_bad or raw_bad) else 0
 
 
 # --------------------------------------------------------------------------
@@ -1925,6 +1928,52 @@ def _check_off_page_names(payload):
                     print(f"    OFF-PAGE {tid}: names {name!r} [{key}], which the page does not "
                           f"print: {str(text)[:100]!r}")
                     bad += 1
+    return bad
+
+
+def _prose_of(payload):
+    """(where, text) for the page prose of a payload: conditions, declared absences, pending tables, titles and the labels of the rows."""
+    for text in payload.get("conditions") or []:
+        yield "GLOBAL", str(text)
+    for t in payload.get("tables", []):
+        tid = t.get("id")
+        for key in ("title", "dataset"):
+            if isinstance(t.get(key), str):
+                yield f"{tid}.{key}", t[key]
+        for text in t.get("conditions") or []:
+            yield f"{tid}.conditions", str(text)
+        for a in t.get("declared_absences") or []:
+            yield f"{tid}.declared_absences", f"{a.get('backend')} {a.get('why')}"
+        for e in t.get("entries") or []:
+            if isinstance(e.get("backend"), str):
+                yield f"{tid}.entry label", e["backend"]
+    for tid, text in (payload.get("pending_tables") or {}).items():
+        yield f"pending {tid}", str(text)
+
+
+def _check_raw_backend_keys(payload):
+    """No backend key of the roster reaches page prose as a raw name: 'cratedb tpc' or 'cratedb_tpc' where the page says 'CrateDB'.
+
+    display_name() falls back to the key with its underscores made spaces for a key with no DISPLAY_NAMES entry, and the live page printed
+    'cratedb tpc was not run on the transaction workload'. The roster is the exporter's own (runner.LANES, runner.ARM_RUNS, DISPLAY_NAMES);
+    text in backticks is code and is not read; a form that is the arm's own display name is not a leak. Returns the bad count."""
+    import re
+    import export_web as EW
+    import runner as RN
+    keys = set(RN.ARM_RUNS) | set(EW.DISPLAY_NAMES)
+    for spec in RN.LANES.values():
+        keys |= set(spec[1])
+    forms = {}
+    for k in keys:
+        for f in (k, k.replace("_", " ")):
+            if f != EW.display_name(k):
+                forms.setdefault(f, k)
+    pat = re.compile(r"(?<![A-Za-z0-9_-])(" + "|".join(re.escape(f) for f in sorted(forms, key=len, reverse=True)) + r")(?![A-Za-z0-9_-])")
+    bad = 0
+    for where, text in _prose_of(payload):
+        for m in pat.finditer(re.sub(r"`[^`]*`", "", text)):
+            print(f"    RAW-KEY {where}: {m.group(1)!r} [{forms[m.group(1)]}] in {text[:100]!r}")
+            bad += 1
     return bad
 
 
