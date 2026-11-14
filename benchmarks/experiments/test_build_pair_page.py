@@ -379,7 +379,7 @@ def test_a_partial_native_overlay_is_refused_and_a_complete_or_absent_one_is_not
 def test_the_pinned_sparse_path_validates_each_build_and_has_no_single_build_default(monkeypatch):
     import make_paper_tables as M
 
-    def rows(build, n=5):
+    def rows(build, n=3):   # the landing's n: 3 by default (the sparse guard reads mp_builds())
         return [dict(row(build, backend="arcadedb_sparse_embedded", lane="l3s", scale=t, rep=i), engine_commit="abc123def0")
                 for t in ("tiny", "small", "medium") for i in range(n)]
     monkeypatch.setenv("BENCH_ENGINE_COMMIT", "abc123def0")
@@ -393,7 +393,7 @@ def test_the_pinned_sparse_path_validates_each_build_and_has_no_single_build_def
     monkeypatch.setenv(AI.ENV, "native")
     assert {AI.build_of(r) for rs in M._pinned_sparse_rows().values() for r in rs} == {"native"}
     monkeypatch.delenv(AI.ENV)
-    monkeypatch.setattr(M, "load_canonical", lambda *a, **k: rows("native", 3) + rows("jvm"))
+    monkeypatch.setattr(M, "load_canonical", lambda *a, **k: rows("native", 2) + rows("jvm"))
     assert M._pinned_sparse_rows(build="all") is None                                     # a short native build is not published beside a full JVM one
 
 
