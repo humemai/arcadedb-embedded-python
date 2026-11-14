@@ -437,6 +437,18 @@ def publish_branch(branch, message, site_files, tracked):
     return 0
 
 
+def apply_mp_builds(n):
+    """--mp-builds N: the dense overlay of this landing holds N builds per arm (humemai/mmdbbench#27). The environment carries it to
+    every step that counts overlay files (make_paper_tables.mp_builds() reads BENCH_MP_BUILDS), so there is one number and one
+    reader. 0, the flag's default, leaves the environment alone; a flag given wins over a BENCH_MP_BUILDS already set (it is the
+    explicit one, and this function only writes the variable: the count is read in make_paper_tables.mp_builds() alone)."""
+    if not n:
+        return
+    if n < 1:
+        sys.exit(f"REFUSING: --mp-builds {n}: builds per arm must be at least 1.")
+    os.environ["BENCH_MP_BUILDS"] = str(n)
+
+
 def main():
     # RUN UNDER THE REPOSITORY'S ENVIRONMENT, whatever interpreter started us.
     # Every step this script shells out to already uses PY; the one piece that
@@ -473,6 +485,9 @@ def main():
     ap.add_argument("--post1-reps", type=int, default=0, metavar="N",
                     help="also pull runs_page_<pin>_2611_post1.jsonl (the wheels-only rerun) and land, per cell, the rows of ONE wheel "
                          "(post1_rows.resolve at N repetitions); exits nonzero on a cell that would mix wheels or is short of repetitions. Off by default")
+    ap.add_argument("--mp-builds", type=int, default=0, metavar="N",
+                    help="builds per arm of the dense overlay this landing holds: sets BENCH_MP_BUILDS for the steps below "
+                         "(make_paper_tables.mp_builds(); humemai/mmdbbench#27). Default: BENCH_MP_BUILDS from the environment, else 5")
     ap.add_argument("--branch", default="",
                     help="with --apply: commit both repos (the bindings repo and the site) on a NEW branch of this name and push THAT "
                          "branch, never `main`; then open one pull request per repo and merge on green. Required with --apply: rows "
@@ -482,6 +497,7 @@ def main():
                          "a run with no --apply still merges: --apply governs the "
                          "publish, not the merge.")
     args = ap.parse_args()
+    apply_mp_builds(args.mp_builds)
 
     # A LANDING PUSHES A BRANCH, NEVER `main`. The refusal comes before the pull, so a forgotten flag costs nothing: the first version of
     # this check sat at step 6, after the merge into the store, the gates and the site build.

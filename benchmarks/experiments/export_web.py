@@ -1127,7 +1127,7 @@ def _dense_overlay_entries(scale="deep10m"):
     having a canonical row at a scale, and ours are in the overlay, so it
     dropped the tier without anyone deciding to.
 
-    Cold is pass 0, warm pools passes 1-4 over all five builds. Reported
+    Cold is pass 0, warm pools passes 1-4 over all the builds the overlay holds (five by default, BENCH_MP_BUILDS). Reported
     together because separating them is the point: only ArcadeDB moves.
     """
     import make_paper_tables as _MPT

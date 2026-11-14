@@ -7,6 +7,11 @@ Canonical-row rule (see .notes/bench/DECISIONS.md #44): latest row per
 Cells are median [min-max] over N=5 reps. Raw rows are never edited;
 rerun this script after a re-measure.
 
+Dense overlay build count: results/dense_mp5_<pin> holds mp_<arm>_b<k>.json files, one per build. The count is a landing
+parameter (humemai/mmdbbench#27): BENCH_MP_BUILDS, default 5, read by mp_builds() and nowhere else. A landing at n=3 sets
+BENCH_MP_BUILDS=3 (land_stage --mp-builds 3); the overlay is still complete, absent, or refused, pinned only, and only the
+number moves. The directory name keeps "mp5" whatever the count.
+
 Outputs: ../latex/tables/t{2,3,4,5}_*.tex.
 """
 import collections
@@ -944,12 +949,31 @@ def sparse_table(rows):
 MP_ARMS = ("fp32", "int8", "arcsrv", "arcsrv_int8", "milvus", "milvus_int8",
            "qdrant", "qdrant_int8", "chroma", "duckvss", "lancedb",
            "sqlitevec", "sqlitevec_int8")
-MP_BUILDS = 5
+# THE BUILD COUNT IS A LANDING PARAMETER (humemai/mmdbbench#27). The campaign lands whole passes (n=3 for every engine, then n=4,
+# then n=5), so a landing at n=3 holds three mp_<arm>_b<k>.json files per arm and a constant 5 could never pass it. BENCH_MP_BUILDS
+# says how many builds this landing holds; unset or blank means 5, so a landing at n=5 behaves as it always did. It is read HERE and
+# nowhere else: every resolver and check below calls mp_builds(), and the refusals print the number they counted against. Only
+# the number moves. The overlay is still complete, absent, or refused, pinned only, no fallback, and the required arm lists are
+# unchanged: an arm missing at any n refuses.
+MP_BUILDS_DEFAULT = 5
+
+
+def mp_builds():
+    """Builds per arm of the dense overlay this landing holds: BENCH_MP_BUILDS, else MP_BUILDS_DEFAULT (5)."""
+    raw = os.environ.get("BENCH_MP_BUILDS", "").strip()
+    if not raw:
+        return MP_BUILDS_DEFAULT
+    if not re.fullmatch(r"[0-9]+", raw) or int(raw) < 1:
+        raise SystemExit(f"BENCH_MP_BUILDS={raw!r}: builds per arm of the dense overlay must be a whole number of at least 1 "
+                         f"(unset means {MP_BUILDS_DEFAULT})")
+    return int(raw)
+
+
 # The 1M twin: the same protocol without the int8 comparator
 # arms, which exist only at 10M.
 MP_ARMS_SMALL = ("fp32", "int8", "arcsrv", "arcsrv_int8", "milvus",
                  "qdrant", "chroma", "duckvss", "lancedb", "sqlitevec")
-# Arms that JOIN as their overlay files land. An optional arm with all MP_BUILDS
+# Arms that JOIN as their overlay files land. An optional arm with all mp_builds()
 # files is published; with none it is absent; with some it REFUSES, so a publish
 # mid-run cannot show an arm built from one rep. The required lists above are
 # the arms every run has. MongoDB (MongoDB Search, dbbench:mongo-search) is
@@ -969,13 +993,14 @@ MP_ARMS_SMALL_OPTIONAL = ("milvus_int8", "qdrant_int8", "sqlitevec_int8")
 
 
 def _optional_arms_present(cand, label, arms=MP_ARMS_OPTIONAL):
+    n = mp_builds()
     present = []
     for a in arms:
-        have = [b for b in range(1, MP_BUILDS + 1) if os.path.isfile(os.path.join(cand, f"mp_{a}_b{b}.json"))]
-        if len(have) == MP_BUILDS:
+        have = [b for b in range(1, n + 1) if os.path.isfile(os.path.join(cand, f"mp_{a}_b{b}.json"))]
+        if len(have) == n:
             present.append(a)
         elif have:
-            raise SystemExit(f"{label}: optional arm {a} has {len(have)} of {MP_BUILDS} builds; "
+            raise SystemExit(f"{label}: optional arm {a} has {len(have)} of {n} builds; "
                              "a partial arm is a run in progress, not a row")
     return tuple(present)
 
@@ -1003,11 +1028,12 @@ MP_INPROCESS_ARMS = ("fp32", "int8")
 def _refuse_partial_native(cand, label, arms=MP_INPROCESS_ARMS, prefix="mp"):
     """The native build's overlay files (mp_<arm>_native_b<k>.json) are all there or none: a partial native run is a run in progress,
     and publishing it beside a complete JVM overlay would print a native arm built from fewer builds than its twin."""
-    have = {a: [b for b in range(1, MP_BUILDS + 1) if os.path.isfile(os.path.join(cand, f"{prefix}_{a}_native_b{b}.json"))]
+    n = mp_builds()
+    have = {a: [b for b in range(1, n + 1) if os.path.isfile(os.path.join(cand, f"{prefix}_{a}_native_b{b}.json"))]
             for a in arms}
-    if any(have.values()) and any(len(v) != MP_BUILDS for v in have.values()):
-        part = {a: len(v) for a, v in have.items() if len(v) != MP_BUILDS}
-        raise SystemExit(f"{label}: the native build's overlay is partial {part} of {MP_BUILDS} builds per arm; no fallback, re-run the arm")
+    if any(have.values()) and any(len(v) != n for v in have.values()):
+        part = {a: len(v) for a, v in have.items() if len(v) != n}
+        raise SystemExit(f"{label}: the native build's overlay is partial {part} of {n} builds per arm; no fallback, re-run the arm")
 
 
 def dense_mp_dir():
@@ -1018,6 +1044,7 @@ def dense_mp_dir():
     pin = os.environ.get("BENCH_ENGINE_COMMIT", "").strip()
     if not pin:
         raise SystemExit("BENCH_ENGINE_COMMIT is unset: the dense overlay is pinned only")
+    n = mp_builds()
     cand = os.path.join(RESULTS, f"dense_mp5_{pin}")
     # ABSENT IS NOT PARTIAL, and conflating them blocked the campaign's own
     # publish plan. A PARTIAL directory is the defect this function
@@ -1035,11 +1062,11 @@ def dense_mp_dir():
     # thing they should ever have differed in.
     if not os.path.isdir(cand):
         return cand
-    missing = [f"mp_{a}_b{b}.json" for a in MP_ARMS for b in range(1, MP_BUILDS + 1)
+    missing = [f"mp_{a}_b{b}.json" for a in MP_ARMS for b in range(1, n + 1)
                if not os.path.isfile(os.path.join(cand, f"mp_{a}_b{b}.json"))]
     if missing:
-        raise SystemExit(f"dense_mp5_{pin}: {len(missing)} of {len(MP_ARMS) * MP_BUILDS} files missing "
-                         f"(e.g. {missing[0]}); no fallback, re-run the arm")
+        raise SystemExit(f"dense_mp5_{pin}: {len(missing)} of {len(MP_ARMS) * n} files missing "
+                         f"(e.g. {missing[0]}) at {n} builds per arm (BENCH_MP_BUILDS, default {MP_BUILDS_DEFAULT}); no fallback, re-run the arm")
     _refuse_partial_native(cand, f"dense_mp5_{pin}")
     return cand
 
@@ -1051,14 +1078,15 @@ def dense_mp_small_dir():
     pin = os.environ.get("BENCH_ENGINE_COMMIT", "").strip()
     if not pin:
         raise SystemExit("BENCH_ENGINE_COMMIT is unset: the dense overlay is pinned only")
+    n = mp_builds()
     cand = os.path.join(RESULTS, f"dense_mp5_small_{pin}")
     if not os.path.isdir(cand):
         return cand
-    missing = [f"mp_{a}_b{b}.json" for a in MP_ARMS_SMALL for b in range(1, MP_BUILDS + 1)
+    missing = [f"mp_{a}_b{b}.json" for a in MP_ARMS_SMALL for b in range(1, n + 1)
                if not os.path.isfile(os.path.join(cand, f"mp_{a}_b{b}.json"))]
     if missing:
-        raise SystemExit(f"dense_mp5_small_{pin}: {len(missing)} of {len(MP_ARMS_SMALL) * MP_BUILDS} files missing "
-                         f"(e.g. {missing[0]}); no fallback, re-run the arm")
+        raise SystemExit(f"dense_mp5_small_{pin}: {len(missing)} of {len(MP_ARMS_SMALL) * n} files missing "
+                         f"(e.g. {missing[0]}) at {n} builds per arm (BENCH_MP_BUILDS, default {MP_BUILDS_DEFAULT}); no fallback, re-run the arm")
     return cand
 
 
@@ -1132,7 +1160,7 @@ def _dense_multipass():
             if isinstance(v, (int, float)):
                 s[k].append(v)
         # Warm pools every warm pass of every build: pass 0 is the cold one, so
-        # this is 5 builds x 4 warm passes = 20 samples, not 4.
+        # this is (builds, 5 by default) x 4 warm passes = 20 samples, not 4.
         s["warm"] += [x["p50"] for x in passes[1:] if x.get("p50") is not None]
 
     def cell(v):
