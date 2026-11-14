@@ -337,18 +337,23 @@ def current_pin(payload_path=None):
     return str(pins[0]) if len(pins) == 1 else None
 
 
-def drop_reps_above(rows, max_rep):
+# The plan is n=3 (the owner, 2026-11-14: n=4 and n=5 are dropped), so a landing takes repetitions 1..3 unless it says otherwise (--max-rep 0).
+MAX_REP_DEFAULT = 3
+
+
+def drop_reps_above(rows, max_rep, source="the rows file"):
     """(kept, {rep: count dropped}): the rows of repetitions 1..max_rep, and how many rows of each later repetition were left out.
 
     The page is n=3 and stays n=3 (the n=4 and n=5 passes were dropped on 2026-11-14), but the comparator pass 4 started once and left a
     few rep 4 rows in the same rows file on the bench host, so a landing at n=3 caps the repetitions it takes. A row whose `rep` is not an integer cannot be placed under a cap: the run ends
-    instead of keeping or dropping it unseen."""
+    instead of keeping or dropping it unseen: the message names the row number, its run id (or backend, lane and workload) and `source`."""
     kept, dropped = [], {}
-    for r in rows:
+    for i, r in enumerate(rows, 1):
         rep = r.get("rep")
         if not isinstance(rep, int) or isinstance(rep, bool):
-            raise SystemExit(f"REFUSING --max-rep {max_rep}: a row has rep={rep!r}, not an integer ({r.get('run_id') or r.get('backend')}); "
-                             f"nothing was merged.")
+            who = r.get("run_id") or "/".join(str(r.get(k)) for k in ("backend", "lane", "workload", "scale"))
+            raise SystemExit(f"REFUSING --max-rep {max_rep}: row {i} of {source} ({who}) has rep={rep!r}, not an integer; "
+                             f"nothing was merged. Fix the row, or pass --max-rep 0 to land every row as pulled.")
         if rep > max_rep:
             dropped[rep] = dropped.get(rep, 0) + 1
         else:
@@ -500,10 +505,11 @@ def main():
                     help="dense multipass arm token to pull at both sizes (e.g. neo4jvec, pgvector)")
     ap.add_argument("--message", required=True, help="one-line commit subject for both repos")
     ap.add_argument("--apply", action="store_true", help="build, commit and push; default stops after the diff")
-    ap.add_argument("--max-rep", type=int, default=0, metavar="N",
+    ap.add_argument("--max-rep", type=int, default=MAX_REP_DEFAULT, metavar="N",
                     help="land repetitions 1..N only: rows of a later repetition are left out before the screen, the filters and the "
-                         "merge, and the count per dropped repetition is printed (the page is n=3 and stays n=3: the n=4 and n=5 passes were "
-                         "dropped on 2026-11-14, and the rows file holds a few rep 4 rows that never land). Off by default")
+                         f"merge, and the count per dropped repetition is printed (default {MAX_REP_DEFAULT}: the page is n=3 and stays n=3, the n=4 and n=5 "
+                         "passes were dropped on 2026-11-14 and the rows file holds a few rep 4 rows that never land). 0 lands every repetition as "
+                         "pulled (explicit opt-out). A row whose rep is not an integer ends the run, with its row number, run id and the file")
     ap.add_argument("--post1-orphans", choices=("refuse", "leave-out"), default="refuse",
                     help="what --post1-reps does with a complete set of build-only rows that has NO older wheel to merge into (a cell the "
                          "older chain never measured, e.g. the GAV default arm at l2/sf1full): refuse (default, nothing lands) or leave-out "
@@ -647,8 +653,10 @@ def main():
     excl = {b.strip() for b in args.exclude_backends.split(",") if b.strip()}
     lanes = {l.strip() for l in args.only_lanes.split(",") if l.strip()}
     rows = [json.loads(l) for l in pulled.read_text().splitlines() if l.strip()]
+    if args.max_rep < 0:
+        raise SystemExit(f"--max-rep {args.max_rep}: a repetition cap is 1 or more, or 0 for no cap")
     if args.max_rep:
-        rows, _late = drop_reps_above(rows, args.max_rep)
+        rows, _late = drop_reps_above(rows, args.max_rep, str(pulled))
         print(f"  --max-rep {args.max_rep}: {sum(_late.values())} row(s) of later repetitions left out "
               f"({', '.join(f'rep {k}: {v}' for k, v in sorted(_late.items())) or 'none'}); {len(rows)} kept")
     if args.post1_reps:
