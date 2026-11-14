@@ -311,13 +311,13 @@ def test_clients_pgwire_at_a_large_tier_scale_selects_nothing(scale):
     assert jobs and runner.keep_clients(jobs, "pgwire") == []
 
 
-def test_the_runner_takes_clients_all_or_pgwire_and_refuses_the_rest(monkeypatch, capsys):
+def test_the_runner_takes_clients_all_lean_or_pgwire_and_refuses_the_rest(monkeypatch, capsys):
     monkeypatch.setattr(runner, "cpu_dma_latency_target", lambda: None)
-    monkeypatch.setattr(sys, "argv", ["runner.py", "--clients", "lean"])
+    monkeypatch.setattr(sys, "argv", ["runner.py", "--clients", "headline"])
     with pytest.raises(SystemExit) as stop:
         runner.main()
     assert stop.value.code == 2
-    assert "invalid choice: 'lean'" in capsys.readouterr().err                        # parsed and refused, not an unrecognized argument
+    assert "invalid choice: 'headline'" in capsys.readouterr().err                        # parsed and refused, not an unrecognized argument
 
 
 def test_the_stage_template_hands_clients_to_every_runner_call_and_keeps_the_catch_up_state_apart():
@@ -328,7 +328,7 @@ def test_the_stage_template_hands_clients_to_every_runner_call_and_keeps_the_cat
     helpers = G.rep_helpers()
     assert re.search(r"^REPSTATE=\$HOME/rep-state-2026-11-\$PIN(-jvm|-native)?\.tsv$", helpers, re.M)   # the headline's file is as it was
     assert 'case "${FOURARM_CLIENTS:-}" in' in helpers and 'CLIENTS_ARG="--clients pgwire"' in helpers and "${REPSTATE%.tsv}-pgwire.tsv" in helpers
-    assert "only pgwire" in helpers                                                      # any other value ends the stage
+    assert "only lean or pgwire" in helpers                                                      # any other value ends the stage
 
 
 def test_the_cells_log_gives_the_calls_and_the_reasons():
@@ -458,3 +458,41 @@ def test_the_export_sentence_names_the_wire_twin_only_for_clean_rows_of_the_tabl
         assert "PostgreSQL wire" not in E._arcadedb_client_note(table)
     finally:
         E._PG_TWIN_ROWS[:] = []
+
+
+# ------------------------------------------------------------------------------------------------------ --clients lean: the lean-twin-only rerun (humemai/mmdbbench#62)
+def test_clients_lean_keeps_only_the_lean_twins_at_both_tiers():
+    """The overlay files of a served ArcadeDB arm were overwritten by the headline and wire jobs of the same name (#62); the lean twin has to be
+    run again alone. It runs at every tier (the wire twin runs at the small tier only)."""
+    for scale in ("small", "deep10m"):
+        jobs = runner.build_jobs(["l3d"], ["search"], scale=scale)
+        kept = runner.keep_clients(jobs, "lean")
+        assert kept and all(j.get("http_client") == "lean" and j["run_id"].endswith("_clientlean") for j in kept), scale
+        assert "arcadedb_dense_server" in {j["backend"] for j in kept}, scale
+        assert kept == [j for j in jobs if j.get("http_client") == "lean"]                  # every lean twin build_jobs built, nothing added
+        assert not {j.get("http_client") for j in kept} & {None, "pgwire"}
+
+
+def test_the_runner_takes_clients_lean():
+    import re
+    assert runner.CLIENT_CHOICES == ("all", "lean", "pgwire")
+    src = Path(runner.__file__).read_text(encoding="utf-8")
+    assert re.search(r"CLIENT_CHOICES = \(\"all\", SENSITIVITY_CLIENT, PGWIRE_CLIENT\)", src)
+
+
+def test_the_stage_template_has_a_lean_case_with_a_rep_state_of_its_own():
+    import re
+    import subprocess
+    import make_2611_stages as G
+    helpers = G.rep_helpers()
+    assert 'lean) CLIENTS_ARG="--clients lean"; REPSTATE=${REPSTATE%.tsv}-lean.tsv ;;' in helpers
+    assert "only lean or pgwire" in helpers
+    block = re.search(r'case "\$\{FOURARM_CLIENTS:-\}" in.*?\nesac\n', helpers, re.S).group(0)
+    def run(clients):
+        out = subprocess.run(["bash", "-c", 'say(){ :; }; ID=q; REPSTATE=/x/rep-state-2026-11-abc.tsv\n' + block + 'echo "[$CLIENTS_ARG][$REPSTATE]"'],
+                             env={"FOURARM_CLIENTS": clients, "PATH": "/usr/bin:/bin"}, capture_output=True, text=True)
+        return out.returncode, out.stdout.strip()
+    assert run("") == (0, "[][/x/rep-state-2026-11-abc.tsv]")
+    assert run("lean") == (0, "[--clients lean][/x/rep-state-2026-11-abc-lean.tsv]")
+    assert run("pgwire") == (0, "[--clients pgwire][/x/rep-state-2026-11-abc-pgwire.tsv]")
+    assert run("headline")[0] == 1

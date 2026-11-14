@@ -4632,11 +4632,13 @@ def build_jobs(lanes, workloads_arg, scale=None):
     return jobs
 
 
-CLIENT_CHOICES = ("all", PGWIRE_CLIENT)
+CLIENT_CHOICES = ("all", SENSITIVITY_CLIENT, PGWIRE_CLIENT)
 
 
 def keep_clients(jobs, clients):
-    """`--clients`: "all" (the default) keeps every job, as before. "pgwire" keeps only the PostgreSQL-wire sensitivity twins (`http_client == PGWIRE_CLIENT`,
+    """`--clients`: "all" (the default) keeps every job, as before. "lean" keeps only the lean-client sensitivity twins (`http_client == "lean"`, run_id
+    ending `_clientlean`), for a rerun of the overlay files a headline or wire job of the same name overwrote (humemai/mmdbbench#62); it
+    runs at every tier. "pgwire" keeps only the PostgreSQL-wire sensitivity twins (`http_client == PGWIRE_CLIENT`,
     run_id ending `_clientpgwire`), for a twin-only catch-up of a pass whose twin cells never ran (DECISIONS #263). It filters what build_jobs built, so it
     adds nothing: no twin at a large-tier scale, none for a backend outside PGWIRE_SQL_ARMS."""
     return list(jobs) if clients == "all" else [j for j in jobs if j.get("http_client") == clients]
@@ -4653,7 +4655,7 @@ def main():
                          "lane defines, which is the only safe default since "
                          "lanes disagree on workload names")
     ap.add_argument("--clients", default="all", choices=list(CLIENT_CHOICES),
-                    help="all (default) runs every job; pgwire runs only the PostgreSQL-wire sensitivity twins "
+                    help="all (default) runs every job; lean runs only the lean-HTTP-client twins (humemai/mmdbbench#62); pgwire runs only the PostgreSQL-wire sensitivity twins "
                          "(a twin-only catch-up, DECISIONS #263). A selection with no such twin runs nothing and exits 0.")
     ap.add_argument("--scale", default="tiny", choices=list(MEM_BY_SCALE))
     ap.add_argument("--reps", type=int, default=5)

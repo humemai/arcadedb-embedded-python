@@ -1514,7 +1514,8 @@ REPSTATE=$HOME/rep-state-@INSTRUMENT@-$PIN@BUILD@.tsv
 case "${FOURARM_CLIENTS:-}" in
   "") CLIENTS_ARG="" ;;
   pgwire) CLIENTS_ARG="--clients pgwire"; REPSTATE=${REPSTATE%.tsv}-pgwire.tsv ;;
-  *) say "$ID ABORT: FOURARM_CLIENTS=${FOURARM_CLIENTS} (only pgwire)"; exit 1 ;;
+  lean) CLIENTS_ARG="--clients lean"; REPSTATE=${REPSTATE%.tsv}-lean.tsv ;;
+  *) say "$ID ABORT: FOURARM_CLIENTS=${FOURARM_CLIENTS} (only lean or pgwire)"; exit 1 ;;
 esac
 rep_done() {  # <label> <rep>: true when that repetition of the cell finished CLEAN (a fail is retried by a restart)
   grep -qxF -- "$1"$'\t'"$2"$'\t'ok "$REPSTATE" 2>/dev/null
