@@ -35,7 +35,9 @@ FAMILIES = ("arcadedb", "duckdb", "postgres", "neo4j", "mongo", "surrealdb",
             # names another engine -- pgvector and AGE are PostgreSQL
             # extensions, DuckPGQ a DuckDB one, ladybug its own engine -- so
             # each is a family in its own right rather than a qualifier.
-            "pgvector", "age", "duckpgq", "ladybug", "sqlite-vec")
+            "pgvector", "age", "duckpgq", "ladybug", "sqlite-vec",
+            # The document lane's other two comparators (2026-10-23 batch), never listed until the first 2026-11 landing met their rows.
+            "redis", "cratedb")
 
 # Deliberate splits: family -> why more than one version is correct here. An
 # entry is a DECISION, not a way to quiet the gate, and it must name two
@@ -82,6 +84,7 @@ SPELLINGS = {
     "mongo": r"mongo(?:db)?",
     "ladybug": r"ladybug(?:db)?",
     "duckdb": r"duckdb(?:[ -]vss)?",
+    "cratedb": r"crate(?:db)?",
 }
 
 # An ArcadeDB release is YY.M.P with a two-digit year in the twenties. A

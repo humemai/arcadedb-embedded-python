@@ -18,7 +18,7 @@ import export_web as EW  # noqa: E402
 
 
 def test_the_label_and_the_image_give_one_version_string():
-    for key, name, raw, image in (("redis_tpc", "Redis", "redis:8.10.2", "redis@sha256:13ad")):
+    for key, name, raw, image in (("redis_tpc", "Redis", "redis:8.10.2", "redis@sha256:13ad"),):
         assert EW.display_name(key) == name, EW.display_name(key)
         from_label = EW._engine_version(EW.display_name(key), raw)
         from_image = EW._engine_version(EW.display_name(key), raw, image=image)
