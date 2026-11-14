@@ -9,7 +9,7 @@
 
 ## What is in this repository
 
-- `benchmarks/`: the benchmark harness for ArcadeDB and its comparators, and the published results. Start with [benchmarks/README.md](benchmarks/README.md).
+- `benchmarks/`: the benchmark harness for ArcadeDB and its comparators, and the published results. Start with [benchmarks/README.md](benchmarks/README.md). The harness is copied into [humemai/mmdbbench](https://github.com/humemai/mmdbbench), this repository is retiring, and new benchmark issues go there.
 - `bindings/python/`: the source of the `arcadedb-embedded` releases up to 26.10.2.post1. It is kept for history and for the benchmark harness, and new work on the bindings goes to [ArcadeData/arcadedb-python](https://github.com/ArcadeData/arcadedb-python).
 - The rest is a fork of the ArcadeDB Java project, which this repository does not change.
 

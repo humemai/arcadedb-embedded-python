@@ -1,17 +1,21 @@
 # ArcadeDB benchmarks: harnesses and results
 
+> **Moving.** The live harness (`experiments/`) is copied into [humemai/mmdbbench](https://github.com/humemai/mmdbbench), and
+> its `experiments/PROVENANCE.md` lists the origin commits. This repository is retiring. The benchmark
+> host still runs its current stages from here. New benchmark and evidence issues go to humemai/mmdbbench.
+
 Two suites. Both reach embedded ArcadeDB through the Python package (the
 live harness's served arms reach it over HTTP instead, on a server built from
 the same upstream commit as the wheel), run every backend in Docker under the
-same CPU and memory caps, report up to five repetitions per cell (n=3 for every engine first, then n=4, then n=5), and publish the
+same CPU and memory caps, report repetitions per cell (three on the live harness, five on the frozen SciPy artifact), and publish the
 rows their numbers are computed from. They differ
 in scope and in where they publish, not in the kind of thing they measure.
 
 - `experiments/` is the **live harness**: ArcadeDB, embedded and served,
   against specialist and multi-model engines on documents,
   graph, dense and sparse vectors, time series, and cross-model queries. It
-  is what every campaign runs, and its results are the DBBench page at
-  <https://humem.ai/research/dbbench> (the first 2026-11 results are due in November 2026). The page is the living artifact, and
+  is what every campaign runs, and its results are the MMDBBench page at
+  <https://humem.ai/research/mmdbbench> (it shows the n=3 rows landed so far). The page is the living artifact, and
   every number on it is generated from the frozen rows by the exporter and
   checked by gates before it can be published; a paper written from the same
   rows pins a stable release where the page may pin a commit (DECISIONS #42).
