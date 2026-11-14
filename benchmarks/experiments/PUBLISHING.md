@@ -160,7 +160,7 @@ Every other directory under `results/` is evidence, quarantine, or output; nothi
 
 **When adding a result directory,** add it to `FEEDS`/`FEEDS_FILES` in `provenance_check.py` **or** to this section. The audit exists to catch an unaudited input to a published cell; every entry it prints that is actually fine makes the next real one easier to miss.
 
-**`evidence/`** holds tracked copies of what an upstream report cites: `results/` is untracked by design, but an upstream issue needs a stable URL. Copy, never move; `results/` stays the working store.
+**`evidence/`** (now [`experiments/evidence/` in humemai/mmdbbench](https://github.com/humemai/mmdbbench/tree/cab7f8456a758f30b48300a3d9c53bac3adc3381/experiments/evidence)) holds tracked copies of what an upstream report cites: `results/` is untracked by design, but an upstream issue needs a stable URL. Copy, never move; `results/` stays the working store.
 
 **Queue scripts.** The live chain and where finished scripts go: CAMPAIGN.md section 6; what each stage runs: `make_2611_stages.STAGES`. Every script gates on `verify_pair_c25.sh`, which sits here beside `build_matched_pair.sh` and `build_c25_wheel.sh`, the pair recipe.
 
