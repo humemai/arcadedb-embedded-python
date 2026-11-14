@@ -8,8 +8,8 @@ Cells are median [min-max] over N=5 reps. Raw rows are never edited;
 rerun this script after a re-measure.
 
 Dense overlay build count: results/dense_mp5_<pin> holds mp_<arm>_b<k>.json files, one per build. The count is a landing
-parameter (humemai/mmdbbench#27): BENCH_MP_BUILDS, default 5, read by mp_builds() and nowhere else. A landing at n=3 sets
-BENCH_MP_BUILDS=3 (land_stage --mp-builds 3); the overlay is still complete, absent, or refused, pinned only, and only the
+parameter (humemai/mmdbbench#27): BENCH_MP_BUILDS, default 3 (n=4 and n=5 are dropped, the owner 2026-11-14), read by mp_builds() and nowhere else. A landing
+at n=3 needs no variable; BENCH_MP_BUILDS=5 (land_stage --mp-builds 5) asks for five; the overlay is still complete, absent, or refused, pinned only, and only the
 number moves. The directory name keeps "mp5" whatever the count.
 
 Outputs: ../latex/tables/t{2,3,4,5}_*.tex.
@@ -949,17 +949,17 @@ def sparse_table(rows):
 MP_ARMS = ("fp32", "int8", "arcsrv", "arcsrv_int8", "milvus", "milvus_int8",
            "qdrant", "qdrant_int8", "chroma", "duckvss", "lancedb",
            "sqlitevec", "sqlitevec_int8")
-# THE BUILD COUNT IS A LANDING PARAMETER (humemai/mmdbbench#27). The campaign lands whole passes (n=3 for every engine, then n=4,
-# then n=5), so a landing at n=3 holds three mp_<arm>_b<k>.json files per arm and a constant 5 could never pass it. BENCH_MP_BUILDS
-# says how many builds this landing holds; unset or blank means 5, so a landing at n=5 behaves as it always did. It is read HERE and
+# THE BUILD COUNT IS A LANDING PARAMETER (humemai/mmdbbench#27). The campaign lands n=3 for every engine (the n=4 and n=5 passes
+# were dropped on 2026-11-14), so a landing holds three mp_<arm>_b<k>.json files per arm and a constant 5 could never pass it.
+# BENCH_MP_BUILDS says how many builds this landing holds; unset or blank means 3, and 5 is asked for by name. It is read HERE and
 # nowhere else: every resolver and check below calls mp_builds(), and the refusals print the number they counted against. Only
 # the number moves. The overlay is still complete, absent, or refused, pinned only, no fallback, and the required arm lists are
 # unchanged: an arm missing at any n refuses.
-MP_BUILDS_DEFAULT = 5
+MP_BUILDS_DEFAULT = 3
 
 
 def mp_builds():
-    """Builds per arm of the dense overlay this landing holds: BENCH_MP_BUILDS, else MP_BUILDS_DEFAULT (5)."""
+    """Builds per arm of the dense overlay this landing holds: BENCH_MP_BUILDS, else MP_BUILDS_DEFAULT (3)."""
     raw = os.environ.get("BENCH_MP_BUILDS", "").strip()
     if not raw:
         return MP_BUILDS_DEFAULT

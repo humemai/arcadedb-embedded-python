@@ -514,7 +514,7 @@ def main():
                          "(post1_rows.resolve at N repetitions); exits nonzero on a cell that would mix wheels or is short of repetitions. Off by default")
     ap.add_argument("--mp-builds", type=int, default=0, metavar="N",
                     help="builds per arm of the dense overlay this landing holds: sets BENCH_MP_BUILDS for the steps below "
-                         "(make_paper_tables.mp_builds(); humemai/mmdbbench#27). Default: BENCH_MP_BUILDS from the environment, else 5")
+                         "(make_paper_tables.mp_builds(); humemai/mmdbbench#27). Default: BENCH_MP_BUILDS from the environment, else 3")
     ap.add_argument("--branch", default="",
                     help="with --apply: commit both repos (the bindings repo and the site) on a NEW branch of this name and push THAT "
                          "branch, never `main`; then open one pull request per repo and merge on green. Required with --apply: rows "

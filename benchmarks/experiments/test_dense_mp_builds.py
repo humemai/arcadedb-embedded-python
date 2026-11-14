@@ -1,9 +1,9 @@
-"""The dense overlay's build count is a landing parameter (humemai/mmdbbench#27): `BENCH_MP_BUILDS`, default 5.
+"""The dense overlay's build count is a landing parameter (humemai/mmdbbench#27): `BENCH_MP_BUILDS`, default 3 (the owner, 2026-11-14: n=3 is the only plan, n=4 and n=5 are dropped).
 
 `make_paper_tables.dense_mp_dir` hard-coded five builds per arm, so a campaign that landed at n=3 (three `mp_<arm>_b<k>.json`
 files per arm) could never pass it. The count is now read from the environment in one place (`make_paper_tables.mp_builds()`).
-The rule is unchanged: complete, absent, or refuse, pinned only, no fallback; only the number moves. The default stays 5, so a
-landing at n=5 behaves as before, and an arm missing at any n still refuses.
+The rule is unchanged: complete, absent, or refuse, pinned only, no fallback; only the number moves. The default is 3, so a
+landing at n=3 needs no variable; BENCH_MP_BUILDS=5 still asks for five, and an arm missing at any n still refuses.
 
 Plain functions with `unittest.mock` and no pytest fixture (the style of test_land_stage_branch.py), so they run under pytest or as
 `python test_dense_mp_builds.py [name-substring ...]` from this directory. The last two of the first group and the end-to-end group
@@ -74,20 +74,22 @@ def test_three_builds_per_arm_pass_when_the_landing_says_three():
         assert M.dense_mp_small_dir() == str(small)
 
 
-def test_the_default_still_wants_five_and_names_the_count():
+def test_the_default_wants_three_and_names_the_count():
     with _landing() as (M, d):
-        _big(M, d, 3), _small(M, d, 3)
+        _big(M, d, 2), _small(M, d, 2)
         msg = _refusal(M.dense_mp_dir)
-        assert "26 of 65 files missing" in msg and "5 builds per arm" in msg and "no fallback, re-run the arm" in msg
+        assert "13 of 39 files missing" in msg and "3 builds per arm" in msg and "no fallback, re-run the arm" in msg
         msg = _refusal(M.dense_mp_small_dir)
-        assert "20 of 50 files missing" in msg and "5 builds per arm" in msg
+        assert "10 of 30 files missing" in msg and "3 builds per arm" in msg
 
 
-def test_five_builds_pass_by_default_and_when_said_explicitly():
+def test_three_builds_pass_by_default_and_five_only_when_the_landing_says_five():
     with _landing() as (M, d):
-        big, small = _big(M, d, 5), _small(M, d, 5)
+        big, small = _big(M, d, 3), _small(M, d, 3)
         assert M.dense_mp_dir() == str(big) and M.dense_mp_small_dir() == str(small)
         os.environ["BENCH_MP_BUILDS"] = "5"
+        assert "files missing" in _refusal(M.dense_mp_dir) and "5 builds per arm" in _refusal(M.dense_mp_small_dir)
+        _big(M, d, 5), _small(M, d, 5)
         assert M.dense_mp_dir() == str(big) and M.dense_mp_small_dir() == str(small)
 
 
@@ -137,7 +139,7 @@ def test_an_optional_arm_is_all_or_none_at_the_landing_count():
         (big / "mp_pgvector_b3.json").unlink()
         assert "optional arm pgvector has 2 of 3 builds" in _refusal(M.mp_arms_present, False)
         _write(big, ["pgvector"], 3)
-        os.environ.pop("BENCH_MP_BUILDS")                       # back at the default: the three files are a partial arm
+        os.environ["BENCH_MP_BUILDS"] = "5"                     # a landing at n=5: the three files are a partial arm
         assert "optional arm pgvector has 3 of 5 builds" in _refusal(M._optional_arms_present, str(big), "x", ("pgvector",))
         assert "files missing" in _refusal(M.mp_arms_present, False)    # and the required arms refuse first
 
@@ -151,7 +153,7 @@ def test_the_native_overlay_is_all_or_none_at_the_landing_count():
         msg = _refusal(M.dense_mp_dir)
         assert "partial" in msg and "of 3 builds per arm" in msg
         _write(big, M.MP_INPROCESS_ARMS, 3, "mp_{a}_native_b{b}.json")
-        os.environ.pop("BENCH_MP_BUILDS")
+        os.environ["BENCH_MP_BUILDS"] = "5"
         assert "of 5 builds per arm" in _refusal(M._refuse_partial_native, str(big), "x")
 
 
@@ -164,11 +166,13 @@ def test_a_bad_count_refuses_and_names_the_variable():
 
 def test_a_blank_count_is_the_default_and_spaces_are_trimmed():
     with _landing("") as (M, d):
+        assert M.mp_builds() == 3
+        os.environ["BENCH_MP_BUILDS"] = " 5 "
         assert M.mp_builds() == 5
         os.environ["BENCH_MP_BUILDS"] = " 3 "
         assert M.mp_builds() == 3
         os.environ.pop("BENCH_MP_BUILDS")
-        assert M.mp_builds() == M.MP_BUILDS_DEFAULT == 5
+        assert M.mp_builds() == M.MP_BUILDS_DEFAULT == 3
 
 
 def test_the_variable_is_read_in_one_place():
@@ -246,17 +250,17 @@ def _three_builds():
     return dest
 
 
-def test_the_default_refuses_the_three_build_fixture_and_names_the_count():
-    proc = _run("make_paper_tables.py", _three_builds())
+def test_a_five_build_landing_refuses_the_three_build_fixture_and_names_the_count():
+    proc = _run("make_paper_tables.py", _three_builds(), BENCH_MP_BUILDS="5")
     assert proc.returncode != 0
     assert "files missing" in proc.stderr and "5 builds per arm" in proc.stderr and "no fallback, re-run the arm" in proc.stderr
 
 
-def test_the_tables_and_the_page_land_at_three_builds_and_say_three():
+def test_the_tables_and_the_page_land_at_three_builds_by_default_and_say_three():
     res = _three_builds()
-    proc = _run("make_paper_tables.py", res, BENCH_MP_BUILDS="3")
+    proc = _run("make_paper_tables.py", res)             # no BENCH_MP_BUILDS: the default is three
     assert proc.returncode == 0, proc.stderr[-2000:]
-    proc = _run("export_web.py", res, BENCH_MP_BUILDS="3")
+    proc = _run("export_web.py", res)
     assert proc.returncode == 0, proc.stderr[-2000:]
     payload = json.loads((res / "web_benchmarks.json").read_text())
     dense = [t for t in payload["tables"] if t["id"] == "l3d"]
@@ -264,8 +268,8 @@ def test_the_tables_and_the_page_land_at_three_builds_and_say_three():
     text = " ".join(" ".join(t.get("conditions") or []) for t in dense)
     assert "over three builds" in text, text[-600:]
     assert "five builds" not in text and "over five" not in text
-    # and the export without the variable still refuses the same files
-    assert _run("export_web.py", res).returncode != 0
+    # and an export that asks for five builds still refuses the same files
+    assert _run("export_web.py", res, BENCH_MP_BUILDS="5").returncode != 0
 
 
 if __name__ == "__main__":
