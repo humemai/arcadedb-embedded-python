@@ -179,11 +179,33 @@
    collapsed table drops the borders of a sticky header cell when it scrolls.
    Text is --hm-text-sm (14px), the system's table size. Column widths are the
    page's own: the Tower sets them by column role, the website by layout, and
-   neither belongs here. */
+   neither belongs here.
+
+   The scroll cue (humem-ops#348, U1): an edge shadow on the right that
+   shows while more of the table is to the right, so a reader sees that the
+   table scrolls (the Tower's tables showed two columns on a phone and nothing
+   said there were more). Pure CSS, two background layers on the scroller. The
+   top layer is a surface-coloured cover with background-attachment: local, so
+   it moves with the content and sits at the far right end of the table: it
+   hides the shadow when the table is scrolled all the way, or does not scroll
+   at all. The layer under it is the shadow with background-attachment: scroll,
+   so it stays on the right edge of the box. The shadow is --hm-text at 22%, ink
+   at the edge, dark on light and light on dark, so it reads in both themes
+   with no token of its own. A header cell has its own fill and covers the
+   shadow, so the cue shows beside the body rows. The scroller's background is
+   background-color plus these two layers: a page that sets the background
+   shorthand on it removes the cue. Left to right pages only. */
 .hm-table-scroll {
   margin: 0 0 var(--hm-space-4);
   overflow-x: auto;
-  background: var(--hm-surface);
+  background-color: var(--hm-surface);
+  background-image:
+    linear-gradient(to left, var(--hm-surface) 50%, transparent),
+    linear-gradient(to left, color-mix(in srgb, var(--hm-text) 22%, transparent), transparent);
+  background-repeat: no-repeat;
+  background-position: right center, right center;
+  background-size: 2.5rem 100%, 1.25rem 100%;
+  background-attachment: local, scroll;
   border: 1px solid var(--hm-border);
   border-radius: var(--hm-radius-md);
 }
